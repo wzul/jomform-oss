@@ -55,6 +55,15 @@
 #                 The gate is what keeps a broken build from crash-looping prod,
 #                 so re-run WITHOUT this flag as soon as the emergency is over.
 #
+#   Before the gate takes a slot in the host gate pool it consults the per-tree
+#   result record (scripts/preflight_reuse.sh). A tree whose verdict is ALREADY
+#   recorded green is not re-gated on these bytes, and the reuse is printed
+#   loudly (which gates were remembered, and that none of them was re-run).
+#   There is deliberately NO flag for this: only a record that already covers
+#   THESE bytes under THIS environment may narrow the run, and a partial or
+#   absent record still gates in full. See docs/PREFLIGHT-REUSE.md.
+#   Override the record store with PREFLIGHT_RESULT_DIR.
+#
 # The gate inherits your environment: export JOMFORM_TEST_DATABASE_URL /
 # JOMFORM_TEST_VALKEY_URL so the DB-backed tests actually run (without them the
 # suite skips those tests, as it does on a bare checkout).
@@ -174,7 +183,11 @@ fi
 #    and its gate list is the authoritative one (`--list`) — see the derivation
 #    above rather than a copy of the names here.
 #
-#    Nothing is built or shipped unless the whole preflight is green.
+#    Nothing is built or shipped unless the whole preflight is green, where
+#    "green" is either a FULL RUN or a whole-inventory REUSE of a per-tree record
+#    that already holds an observed `pass` for every gate on THESE bytes under
+#    THIS environment fingerprint (see the reuse decision below). A partial or
+#    absent record gates in full.
 #
 #    Escape hatch: --skip-tests (or SKIP_TESTS=1) for genuine emergencies only.
 # ---------------------------------------------------------------------------
@@ -203,13 +216,80 @@ EOF
 else
   [ -x "$REPO_ROOT/scripts/preflight.sh" ] || die \
     "$REPO_ROOT/scripts/preflight.sh not found or not executable — it is the pre-build gate; restore it (git checkout -- scripts/preflight.sh) rather than building without a gate"
-  # NOTE: no --only/--skip is passed. The deploy gate always runs the FULL
-  # preflight — a reducible deploy gate is not a gate. (--skip-tests above is
-  # the single, loud, emergency-only bypass; there is deliberately no way to
-  # run *part* of the gate before shipping.)
-  run_gate_step "./scripts/preflight.sh ($GATE_INVENTORY)" \
-    bash -c "cd '$REPO_ROOT' && ./scripts/preflight.sh"
-  info "pre-build gate green: all scripts/preflight.sh gates passed"
+
+  # ---- PER-TREE RECORD: READ BEFORE JOINING THE GATE POOL --------------------
+  # The gate body runs inside a bounded host gate pool (preflight.sh's SLOT POOL,
+  # default 2 slots), and a tree that has ALREADY been gated green does not need
+  # to take a slot for a verdict that exists. scripts/preflight_reuse.sh is the
+  # consumer that answers that question, and it never gates and never takes a
+  # slot — so it is free to run here, before the pool.
+  #
+  # WHAT MAY BE SKIPPED, AND WHAT MAY NOT. Only a gate the record holds an
+  # observed `pass` for, for THIS tree (working-tree sha, not commit) under THIS
+  # environment fingerprint and inside the TTL. The three decisions:
+  #   * full    -> `--reuse-record` alone. Every gate in the inventory is a
+  #                recorded pass on THESE bytes, so the runner re-reads the record
+  #                BEFORE the pool and exits without taking a slot at all.
+  #   * partial -> `--only <PREFLIGHT_RERUN> --reuse-record`. Re-run EXACTLY the
+  #                gates the record could not vouch for; the recorded passes are
+  #                remembered, not re-run. The rerun list is never empty on this
+  #                branch (the consumer reports partial only when a gate is
+  #                missing), and if it ever were, `--only ""` degrades to a full
+  #                run — the safe direction.
+  #   * none / exit 1 / unreadable record -> gate IN FULL, exactly as before.
+  # There is deliberately NO flag for any of this and no `--skip-tests` fallback:
+  # a deploy must never be the place where a gate the tree is not known to pass is
+  # skipped, and a skipped gate must never look like a run one. `run_gate_step`
+  # prints the argv it executes (reuse flags included), the runner prints its own
+  # `==> REUSE:` line naming every remembered gate, and it never counts a
+  # remembered gate as `passed` — see docs/PREFLIGHT-REUSE.md §1-§2.
+  #
+  # ONE ARRAY FOR THE ARGV, so the label, the executed command and the closing
+  # message cannot disagree about what was run.
+  GATE_ARGV=(./scripts/preflight.sh)
+  REUSE_LINE=""
+  if [ -r "$REPO_ROOT/scripts/preflight_reuse.sh" ] && [ -r "$REPO_ROOT/scripts/gate_result.sh" ]; then
+    PREFLIGHT_REUSE_REPO="$REPO_ROOT"
+    # shellcheck source=scripts/gate_result.sh
+    . "$REPO_ROOT/scripts/gate_result.sh"
+    # shellcheck source=scripts/preflight_reuse.sh
+    . "$REPO_ROOT/scripts/preflight_reuse.sh"
+    if preflight_reuse_decision; then
+      GATE_LABEL_RECORD="$PREFLIGHT_EVIDENCE"
+      echo "==> per-tree gate record: $GATE_LABEL_RECORD"
+      echo "    record:    ${PREFLIGHT_RECORD:-none}"
+      echo "    reusable:  $PREFLIGHT_DECISION"
+      echo "    remembered (not re-run): ${PREFLIGHT_SKIP:-none}"
+      echo "    must run:  ${PREFLIGHT_RERUN:-none}"
+      echo "    host-seconds the record saves: $PREFLIGHT_REMEMBERED_SECONDS"
+      case "$PREFLIGHT_DECISION" in
+        full)
+          GATE_ARGV+=(--reuse-record)
+          REUSE_LINE="WHOLE-INVENTORY REUSE — tree $(gr_short_sha "$PREFLIGHT_TREE"), ${PREFLIGHT_REMEMBERED_SECONDS}s remembered; the runner re-reads the record before the pool and takes NO slot"
+          ;;
+        partial)
+          GATE_ARGV+=(--only "$PREFLIGHT_RERUN" --reuse-record)
+          REUSE_LINE="PARTIAL RECORD — remembered: ${PREFLIGHT_SKIP:-none}; RE-RUNNING ONLY: $PREFLIGHT_RERUN (${PREFLIGHT_REMEMBERED_SECONDS}s remembered)"
+          ;;
+      esac
+    else
+      echo "==> per-tree gate record: $PREFLIGHT_EVIDENCE"
+    fi
+  else
+    echo "==> per-tree gate record: scripts/preflight_reuse.sh and/or scripts/gate_result.sh are missing" >&2
+    echo "    — GATING IN FULL (a deploy must not skip a gate it cannot look up)." >&2
+  fi
+  [ -z "$REUSE_LINE" ] || info "reuse: $REUSE_LINE"
+  # The argv is passed as SEPARATE arguments after the `bash -c` script, so a
+  # reuse flag is never re-split or word-split: `exec "$@"` runs exactly the array
+  # this script decided on, from inside $REPO_ROOT.
+  run_gate_step "${GATE_ARGV[*]} ($GATE_INVENTORY)" \
+    bash -c "cd '$REPO_ROOT' && exec \"\$@\"" bash "${GATE_ARGV[@]}"
+  if [ "${#GATE_ARGV[@]}" -gt 1 ]; then
+    info "pre-build gate green: the per-tree record was read; the gates above are the ones it could not vouch for (the rest are REMEMBERED, and were NOT re-run)"
+  else
+    info "pre-build gate green: all scripts/preflight.sh gates passed"
+  fi
 fi
 
 # ---------------------------------------------------------------------------

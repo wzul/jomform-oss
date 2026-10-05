@@ -1,0 +1,393 @@
+#!/usr/bin/env bash
+#
+# deploy/biteproof_build_and_ship_gate.sh — prove the DEPLOY call site's reuse
+# plumbing BITES.
+#
+# THE GUARD UNDER TEST is the per-tree record read in
+# `deploy/build-and-ship.sh` § 5: before the pre-build gate joins the host gate
+# pool it consults `scripts/preflight_reuse.sh` and, on `full`, passes
+# `--reuse-record`; on `partial`, `--only <PREFLIGHT_RERUN> --reuse-record`; and
+# otherwise gates in full. Before this plumbing existed the script hardcoded the
+# bare `./scripts/preflight.sh`, so a full-green record for the shipped tree was
+# IGNORED and every deploy re-ran the whole ~15 min gate. The record for
+# v1.20.11's tree d609bd53 existed, was environment-matched, and was still not
+# consumed: measured `test` 325s + `e2e` 183s + `selftest` 174s + `web` 75s … 910s.
+#
+# WHAT IT PROVES (each is a direction a reducible deploy gate would fail):
+#
+#   case A  A tree WITH a full-green record does NOT join the pool. Driven
+#           against the REAL `scripts/preflight.sh`, the REAL consumer and a REAL
+#           record: the runner takes its pre-pool exit, so no gate-pool slot file
+#           is created, 0 gates are run, and the wall clock is seconds — not the
+#           ~15 min the same bytes cost when the record is ignored.
+#   case B  A tree with NO record still runs the FULL gate. The argv handed to
+#           `scripts/preflight.sh` carries NO reuse flag, and build-and-ship
+#           labels the run as a full run (never as a reuse).
+#   case C  A PARTIAL record re-runs ONLY the gates it could not vouch for:
+#           `--only <PREFLIGHT_RERUN> --reuse-record`, with the remembered set
+#           printed loudly and the run labelled REMEMBERED.
+#   case D  A STALE-AND-REFUSED record (wrong environment / wrong tree — the
+#           refusal `scripts/preflight.sh`'s own selftest checks 31-37 already
+#           cover) still runs the full gate at the deploy call site. Those checks
+#           are NOT duplicated here; this case drives the refusal through the
+#           deploy call site, which is the only part they cannot see.
+#
+# WHAT IS REAL AND WHAT IS STUBBED, stated because it bounds the claim:
+#   * `deploy/build-and-ship.sh` is the SHIPPED bytes, copied into that case's
+#     sandbox and asserted sha-identical to the repo file. Cases B/C/D exercise
+#     its ROUTING (which argv it builds and runs).
+#   * Cases B/C/D run in a throwaway sandbox repo whose `scripts/preflight.sh`
+#     and `scripts/preflight_reuse.sh` are stubs, so a "full gate" is a 0-second
+#     call that records the argv it was handed. They prove the call site; they do
+#     NOT re-prove the record format or the reusable-refusal rules — that is
+#     `scripts/biteproof_preflight_reuse.sh`'s job, on the real scripts.
+#   * Case A is END TO END on the real repo: the real runner, the real consumer,
+#     a real record written by the real `scripts/gate_result.sh`. It is bounded by
+#     TIMEOUT seconds so a REGRESSED plumbing fails fast instead of silently
+#     running the real ~15 min gate.
+#   * Case A needs a CLEAN working tree (build-and-ship refuses a dirty one, by
+#     design). A dirty tree is reported as a case-A setup refusal, not a bite.
+#
+# Run:  ./deploy/biteproof_build_and_ship_gate.sh
+# Exit: 0 if every case BITES, 1 otherwise.
+#
+# Nothing under the repo is mutated: every mutation lives in $WORK (a private
+# /tmp dir, removed on exit), and the shipped build-and-ship.sh is sha-checked
+# before and after. This harness therefore never takes a gate-pool slot and never
+# writes to the host record store — PREFLIGHT_RESULT_DIR and PREFLIGHT_LOCK_FILE
+# are pinned to $WORK for the whole run.
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$HERE/.." && pwd)"
+cd "$REPO_ROOT" || exit 2
+
+BUILD_SHIP="deploy/build-and-ship.sh"
+REUSE="scripts/preflight_reuse.sh"
+RESULT="scripts/gate_result.sh"
+
+# Ceiling for case A. A pre-pool reuse exit is seconds; the full gate it replaces
+# measured 910s. Anything between is a regression that must be reported, not
+# waited out.
+TIMEOUT=240
+
+PASS=0; FAIL=0
+ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
+
+WORK="$(mktemp -d /tmp/biteproof_build_and_ship.XXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+
+for f in "$BUILD_SHIP" "$REUSE" "$RESULT"; do
+  [ -f "$f" ] || { echo "FAIL: $f not found — cannot prove anything about the deploy gate" >&2; exit 2; }
+done
+
+WANT_SHIP="$(sha256sum "$BUILD_SHIP" | awk '{print $1}')"
+# Pin the fingerprint's free component for the WHOLE run, so the record case A
+# writes and the run that must consume it compute the same key whatever the
+# caller's shell carries.
+export PREFLIGHT_KEY_EXTRA=""
+mkdir -p "$WORK/bin" "$WORK/out"
+
+# ---- the docker stub -----------------------------------------------------------
+# build-and-ship calls `command -v docker`, then build / image inspect / save. The
+# stub proves a build DID (or did not) follow the gate without building an image,
+# which is what keeps this harness fast enough to re-run.
+cat > "$WORK/bin/docker" <<'DOCKER_STUB'
+#!/usr/bin/env bash
+set -uo pipefail
+log="${DOCKER_STUB_LOG:-/dev/null}"
+case "${1:-}" in
+  build) printf 'docker build %s\n' "$*" >>"$log"; exit 0 ;;
+  image) printf 'sha256:0000000000000000000000000000000000000000000000000000000000000000\n'; exit 0 ;;
+  save)  printf 'docker save %s\n' "$*" >>"$log"; cat /dev/null; exit 0 ;;
+  *)     printf 'docker %s\n' "$*" >>"$log"; exit 0 ;;
+esac
+DOCKER_STUB
+chmod +x "$WORK/bin/docker"
+
+# ---- the sandbox (cases B/C/D) -------------------------------------------------
+# A throwaway git repo holding the SHIPPED build-and-ship.sh plus stub scripts,
+# so "run the gate" is a recorded argv and nothing is built. LOCK_FILE and OUT_DIR
+# live OUTSIDE the sandbox repo: the script takes its own lock before the
+# clean-tree guard, and a lock file inside the repo would make every run dirty.
+make_sandbox() {
+  local d="$1"
+  mkdir -p "$d/scripts" "$d/deploy" "$d/api"
+  cp "$REPO_ROOT/$BUILD_SHIP" "$d/$BUILD_SHIP"
+  : > "$d/api/Dockerfile"
+  cat > "$d/scripts/gate_result.sh" <<'GR_STUB'
+gr_short_sha() { printf '%.7s\n' "$1"; }
+GR_STUB
+  cat > "$d/scripts/preflight_reuse.sh" <<'PR_STUB'
+# sandbox consumer stub: returns the decision named by STUB_REUSE_DECISION,
+# mirroring the real consumer's contract (0 = usable, 1 = gate normally).
+preflight_reuse_decision() {
+  PREFLIGHT_TREE="stubtree1234567890"
+  PREFLIGHT_RECORD="${STUB_RECORD_PATH:-<none>}"
+  PREFLIGHT_DECISION="${STUB_REUSE_DECISION:-none}"
+  PREFLIGHT_SKIP="${STUB_SKIP:-}"
+  PREFLIGHT_RERUN="${STUB_RERUN:-}"
+  PREFLIGHT_REMEMBERED_SECONDS="${STUB_SECONDS:-0}"
+  if [ "$PREFLIGHT_DECISION" = "none" ]; then
+    PREFLIGHT_EVIDENCE="no reusable record for tree stubtre — gating: ${STUB_REASON:-no record}"
+    return 1
+  fi
+  PREFLIGHT_EVIDENCE="STUB EVIDENCE: $PREFLIGHT_DECISION for tree stubtre — ${STUB_REASON:-}"
+  return 0
+}
+PR_STUB
+  cat > "$d/scripts/preflight.sh" <<'PF_STUB'
+#!/usr/bin/env bash
+set -uo pipefail
+if [ "${1:-}" = "--list" ]; then printf 'build\nvet\n'; exit 0; fi
+printf 'STUB preflight.sh argv:'; printf ' [%s]' "$@"; printf '\n'
+# One argument per line: the argv is asserted exactly, and a value that was
+# re-split or word-split shows up as extra lines. `$0` is deliberately NOT
+# recorded — bash rewrites it to an ABSOLUTE path for a `./`-relative script, so
+# it is not caller-controlled and would make an exact assertion impossible.
+if [ -n "${PREFLIGHT_ARGV_LOG:-}" ]; then
+  if [ "$#" -eq 0 ]; then
+    printf '<no-args>\n' > "$PREFLIGHT_ARGV_LOG"
+  else
+    for _a in "$@"; do printf '%s\n' "$_a"; done > "$PREFLIGHT_ARGV_LOG"
+  fi
+fi
+case " $* " in
+  *" --reuse-record "*) printf '  ==> REUSED (not re-run, recorded pass on THESE bytes): stub-remembered\n'
+                        printf '  REUSE: stub-remembered (REMEMBERED from a recorded pass, NOT re-run this time)\n' ;;
+esac
+printf 'preflight summary: STUB 1 passed, 0 failed, 0 skipped in 0s\n'
+exit "${STUB_PREFLIGHT_RC:-0}"
+PF_STUB
+  chmod +x "$d/scripts/preflight.sh"
+  git -C "$d" init -q
+  git -C "$d" add -A
+  git -C "$d" -c user.email=bite@example.invalid -c user.name=biteproof commit -qm "sandbox"
+}
+
+# run_sandbox <dir> <tag> <logfile> <argvlog> — run the shipped script in the sandbox.
+run_sandbox() {
+  local d="$1" tag="$2" log="$3" argvlog="$4" rc=0
+  ( cd "$d" && PATH="$WORK/bin:$PATH" \
+      LOCK_FILE="$WORK/$tag.lock" OUT_DIR="$WORK/out" \
+      DOCKER_STUB_LOG="$WORK/$tag.docker.log" \
+      PREFLIGHT_ARGV_LOG="$argvlog" \
+      bash "$d/$BUILD_SHIP" v9.9.9 >"$log" 2>&1 ) || rc=$?
+  return "$rc"
+}
+
+argv_of() { [ -r "$1" ] && paste -sd' ' "$1" || printf '<no argv recorded>'; }
+show() { printf '        log: %s\n' "$1"; sed 's/^/          | /' "$1" | head -n 24; }
+
+echo "biteproof: the deploy call site's per-tree record reuse"
+echo "  repo: $(pwd)"
+echo "  head: $(git rev-parse --short HEAD)"
+echo "  ship: $BUILD_SHIP (sha256 ${WANT_SHIP:0:12})"
+echo "---"
+
+# ============================================================================
+# case A — a full-green record must NOT join the pool (REAL runner, end to end)
+# ============================================================================
+echo "== case A: a full-green record does not join the gate pool (real scripts, timing) =="
+CA="$WORK/caseA"; mkdir -p "$CA/store"
+CLEAN=1
+[ -z "$(git status --porcelain)" ] || CLEAN=0
+if [ "$CLEAN" != "1" ]; then
+  bad "case A — the working tree is DIRTY, so build-and-ship refuses at the clean-tree guard and this case cannot run. Commit or stash, then re-run. (This is a setup refusal, NOT a bite.)"
+else
+  # A REAL record for THIS tree, written by the REAL gate_result.sh, under THIS
+  # environment (gr_flush keys it on gr_key, i.e. the caller's own fingerprint).
+  # PREFLIGHT_RESULT_DIR is EXPORTED so both the writer and the reader below (and
+  # the preflight child) key on the same private store, never the host's.
+  REC_DIR="$CA/store"
+  export PREFLIGHT_RESULT_DIR="$REC_DIR"
+  export PREFLIGHT_REUSE_REPO="$REPO_ROOT"
+  # shellcheck source=scripts/gate_result.sh
+  . "$REPO_ROOT/$RESULT"
+  GR_TREE="$(gr_tree_sha "$REPO_ROOT")"
+  GR_TREE_SHORT="$(gr_short_sha "$GR_TREE")"
+  GR_REPO="$REPO_ROOT"
+  GR_COMMIT="$(git rev-parse --short HEAD)"
+  GR_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+  GR_PID=$$
+  GR_GATE_NAMES=()
+  while IFS= read -r g; do [ -n "$g" ] && GR_GATE_NAMES+=("$g"); done < <(bash "$REPO_ROOT/scripts/preflight.sh" --list)
+  GR_PASSED="${#GR_GATE_NAMES[@]}"; GR_FAILED=0; GR_SKIPPED=0
+  _now="$(gr_now)"
+  for g in "${GR_GATE_NAMES[@]}"; do
+    GR_STATUS[$g]="pass"; GR_SECONDS[$g]=45; GR_AT[$g]="$_now"; GR_REUSED[$g]=false
+  done
+  if gr_flush 910; then
+    REC_FILE="$(gr_file "$GR_TREE")"
+    ok "case A — wrote a REAL full-green record for tree $(gr_short_sha "$GR_TREE") (${#GR_GATE_NAMES[@]} gates) at $REC_FILE"
+    # The REAL consumer must call it usable BEFORE the run, or the case would be
+    # measuring a refusal and calling it a bite.
+    # shellcheck source=scripts/preflight_reuse.sh
+    . "$REPO_ROOT/$REUSE"
+    preflight_reuse_decision >/dev/null 2>&1
+    if [ "${PREFLIGHT_DECISION:-}" = "full" ]; then
+      ok "case A — the REAL consumer reads it as usable: full (${PREFLIGHT_REMEMBERED_SECONDS}s remembered) — so anything below is the call site, not the record"
+    else
+      bad "case A — the record is not usable by the real consumer (decision=[${PREFLIGHT_DECISION:-}]): ${PREFLIGHT_EVIDENCE:-} — the case would prove nothing"
+    fi
+    # The gate must not take any slot in the pool: a whole-inventory reuse exits
+    # BEFORE the pool, so no slot file may be created (the slot files are
+    # `<base>.slot<N>`, derived by preflight.sh — see its SLOT POOL block).
+    A_LOCK="$CA/host-gate.lock"
+    t0="$(date +%s)"
+    CA_RC=0
+    PREFLIGHT_RESULT_DIR="$REC_DIR" \
+      PATH="$WORK/bin:$PATH" LOCK_FILE="$CA/build.lock" OUT_DIR="$CA/out" \
+      DOCKER_STUB_LOG="$CA/docker.log" \
+      PREFLIGHT_LOCK_FILE="$A_LOCK" \
+      timeout "$TIMEOUT" bash "$BUILD_SHIP" v9.9.9 >"$CA/out.log" 2>&1 || CA_RC=$?
+    t1="$(date +%s)"; a_secs=$((t1 - t0))
+    if [ "$CA_RC" -eq 124 ]; then
+      bad "case A — build-and-ship did NOT exit within ${TIMEOUT}s: with a full-green record it must exit in seconds, so the reuse plumbing is not being consulted"
+    elif [ "$CA_RC" -ne 0 ]; then
+      bad "case A — build-and-ship exited $CA_RC with a full-green record present (a reused gate must not red the deploy)"; show "$CA/out.log"
+    elif grep -q 'took NO slot and ran NO gate' "$CA/out.log" \
+         && grep -q 'summary: 0 passed' "$CA/out.log" \
+         && grep -q 'WHOLE-INVENTORY REUSE' "$CA/out.log"; then
+      ok "case A — the runner exited BEFORE the slot pool (0 gates run): '$(grep -m1 'took NO slot' "$CA/out.log" | sed 's/^ *//')'"
+    else
+      bad "case A — with a full-green record present the gate did NOT take the pre-pool reuse exit"; show "$CA/out.log"
+    fi
+    if [ ! -e "$A_LOCK" ] && [ -z "$(ls -A "$A_LOCK".slot* 2>/dev/null)" ]; then
+      ok "case A — NO gate-pool slot was taken (neither $A_LOCK nor ${A_LOCK}.slot<N> exists): this deploy never joined the pool"
+    else
+      bad "case A — a gate-pool slot EXISTS ($A_LOCK / $(ls "$A_LOCK".slot* 2>/dev/null | tr '\n' ' ')): the run joined the pool despite a full-green record"
+    fi
+    if [ -r "$CA/docker.log" ] && grep -q '^docker build' "$CA/docker.log"; then
+      ok "case A — the image build DID proceed after the reused gate (the gate did not block the release)"
+    else
+      bad "case A — no image build followed the reused gate, so the reuse did not behave as a green gate"; show "$CA/out.log"
+    fi
+    if [ "$a_secs" -lt 60 ]; then
+      ok "case A — WALL CLOCK ${a_secs}s (the same bytes re-gated in full cost a measured 910s on this host): the record removed ~$((910 - a_secs))s of serialised gate"
+    else
+      bad "case A — WALL CLOCK ${a_secs}s is NOT what a pre-pool reuse exit takes — the record did not remove the gate"
+    fi
+  else
+    bad "case A — could not write the REAL record for tree $(gr_short_sha "$GR_TREE") into $REC_DIR, so this case cannot run"
+  fi
+fi
+
+# ============================================================================
+# case B — NO record: the FULL gate runs, and is labelled a full run
+# ============================================================================
+echo "== case B: no record -> the full gate runs (no reuse flag), labelled a full run =="
+SB="$WORK/sandboxB"; make_sandbox "$SB"
+B_RC=0; run_sandbox "$SB" caseB "$WORK/caseB.log" "$WORK/caseB.argv" || B_RC=$?
+if [ "$B_RC" -ne 0 ]; then
+  bad "case B — the sandbox run exited $B_RC (the gate stub is green; a non-zero exit is the call site failing)"; show "$WORK/caseB.log"
+elif [ "$(argv_of "$WORK/caseB.argv")" != "<no-args>" ]; then
+  bad "case B — with NO record the gate was invoked with argv [$(argv_of "$WORK/caseB.argv")], so a reuse flag was passed for a tree with nothing recorded"
+elif grep -q 'all scripts/preflight.sh gates passed' "$WORK/caseB.log" \
+     && ! grep -q 'WHOLE-INVENTORY REUSE\|PARTIAL RECORD' "$WORK/caseB.log"; then
+  ok "case B — NO record: the gate ran with NO argv (no reuse flag) and the run is labelled a FULL run, never a reuse"
+else
+  bad "case B — with NO record the run was labelled as a reuse (or not labelled a full run)"; show "$WORK/caseB.log"
+fi
+
+# ============================================================================
+# case C — a PARTIAL record re-runs ONLY what it could not vouch for
+# ============================================================================
+echo "== case C: a partial record re-runs only the unvouched gates (--only <rerun> --reuse-record) =="
+make_sandbox "$WORK/sandboxC"
+export STUB_REUSE_DECISION=partial STUB_SKIP="test,web,e2e" STUB_RERUN="build,vet" STUB_SECONDS=420
+C_RC=0; run_sandbox "$WORK/sandboxC" caseC "$WORK/caseC.log" "$WORK/caseC.argv" || C_RC=$?
+unset STUB_REUSE_DECISION STUB_SKIP STUB_RERUN STUB_SECONDS
+if [ "$C_RC" -ne 0 ]; then
+  bad "case C — the sandbox run exited $C_RC (the gate stub is green)"; show "$WORK/caseC.log"
+elif [ "$(argv_of "$WORK/caseC.argv")" != "--only build,vet --reuse-record" ]; then
+  bad "case C — a PARTIAL record was NOT routed to the documented shape: argv [$(argv_of "$WORK/caseC.argv")], want [--only build,vet --reuse-record]"
+elif ! grep -q 'RE-RUNNING ONLY: build,vet' "$WORK/caseC.log"; then
+  bad "case C — the run does not say which gates it is re-running"; show "$WORK/caseC.log"
+elif ! grep -q 'remembered (not re-run): test,web,e2e' "$WORK/caseC.log"; then
+  bad "case C — the run does not name the REMEMBERED set, so a skipped gate would look identical to a run one"; show "$WORK/caseC.log"
+elif ! grep -q 'REMEMBERED, and were NOT re-run' "$WORK/caseC.log"; then
+  bad "case C — the closing line does not say the remembered gates were not re-run"; show "$WORK/caseC.log"
+else
+  ok "case C — PARTIAL: argv [./scripts/preflight.sh --only build,vet --reuse-record]; remembered [test,web,e2e] named loudly; closing says REMEMBERED, not 'all gates passed'"
+fi
+
+# ============================================================================
+# case D — a stale-and-refused record still gates in full, at the call site
+# ============================================================================
+echo "== case D: a STALE/REFUSED record still gates in full through the deploy call site =="
+make_sandbox "$WORK/sandboxD"
+export STUB_REUSE_DECISION=none \
+  STUB_REASON="the environment changed since that record (recorded key [a1] != current [b2])"
+D_RC=0; run_sandbox "$WORK/sandboxD" caseD "$WORK/caseD.log" "$WORK/caseD.argv" || D_RC=$?
+unset STUB_REUSE_DECISION STUB_REASON
+if [ "$D_RC" -ne 0 ]; then
+  bad "case D — the sandbox run exited $D_RC (the gate stub is green)"; show "$WORK/caseD.log"
+elif [ "$(argv_of "$WORK/caseD.argv")" != "<no-args>" ]; then
+  bad "case D — a REFUSED record still narrowed the run: argv [$(argv_of "$WORK/caseD.argv")] carries a reuse flag"
+elif ! grep -q 'the environment changed since that record' "$WORK/caseD.log"; then
+  bad "case D — the refusal reason was not surfaced (the lane cannot tell WHY it gated)"; show "$WORK/caseD.log"
+elif ! grep -q 'all scripts/preflight.sh gates passed' "$WORK/caseD.log"; then
+  bad "case D — the refused-record run is not labelled a FULL run"; show "$WORK/caseD.log"
+else
+  ok "case D — a record refused for a changed environment is surfaced and the deploy gates IN FULL: no argv (no reuse flag)"
+fi
+
+# ============================================================================
+# case E — the instrument's OWN bite: the pre-fix routing (the record read but
+# IGNORED at the call site) must violate the shape case C asserts. Without this
+# the four cases above could pass on a script that never consumed a record at all.
+# ============================================================================
+echo "== case E: instrument bite — the pre-fix routing (record ignored) violates case C's asserted shape =="
+SE="$WORK/sandboxE"; make_sandbox "$SE"
+# THE SABOTAGE, on the SHIPPED bytes (a copy): force the bare call at the very
+# call site, reproducing the pre-fix outcome — the record is read and then
+# IGNORED. One inserted line, anchored on the unique `run_gate_step` line, so the
+# mutation is the call-site defect and nothing else.
+awk '/^  run_gate_step "\$\{GATE_ARGV\[\*\]\}/ && !done { print "  GATE_ARGV=(./scripts/preflight.sh)"; done=1 } { print }' \
+  "$SE/$BUILD_SHIP" > "$SE/ship.mut"
+if ! grep -qF '  GATE_ARGV=(./scripts/preflight.sh)' "$SE/ship.mut"; then
+  bad "case E — the sabotage did not land in the sandbox copy, so this case proves nothing"
+else
+  mv "$SE/ship.mut" "$SE/$BUILD_SHIP"
+  # The sandbox is its own repo and build-and-ship refuses a dirty tree, so the
+  # mutation must be committed THERE before the run — otherwise the case would
+  # measure the clean-tree guard instead of the routing.
+  git -C "$SE" -c user.email=bite@example.invalid -c user.name=biteproof commit -q -am "case E mutant: pre-fix routing"
+  export STUB_REUSE_DECISION=partial STUB_SKIP="test,web,e2e" STUB_RERUN="build,vet" STUB_SECONDS=420
+  E_RC=0; run_sandbox "$SE" caseE "$WORK/caseE.log" "$WORK/caseE.argv" || E_RC=$?
+  unset STUB_REUSE_DECISION STUB_SKIP STUB_RERUN STUB_SECONDS
+  E_ARGV="$(argv_of "$WORK/caseE.argv")"
+  if [ "$E_RC" -ne 0 ]; then
+    bad "case E — the mutated sandbox exited $E_RC, so the verdict cannot be attributed to the routing"; show "$WORK/caseE.log"
+  elif [ "$E_ARGV" = "--only build,vet --reuse-record" ]; then
+    bad "case E — with the record IGNORED at the call site the argv still matched case C's assertion: case C does NOT discriminate, so the cases above could pass vacuously"
+  elif [ "$E_ARGV" != "<no-args>" ]; then
+    bad "case E — the sabotage yielded argv [$E_ARGV], not the pre-fix <no-args> shape, so it is not the mutation this case claims"
+  elif ! grep -q 'all scripts/preflight.sh gates passed' "$WORK/caseE.log"; then
+    bad "case E — the sabotaged run is not labelled as a full run (the pre-fix closing line is missing)"; show "$WORK/caseE.log"
+  else
+    ok "case E — INSTRUMENT BITES: with the record ignored at the call site a PARTIAL record yields argv [<no-args>] and the pre-fix 'all gates passed' label — exactly the shape case C rejects, so case C is not vacuous"
+  fi
+fi
+
+# ============================================================================
+# integrity — the shipped bytes were not touched by this run
+# ============================================================================
+echo "== integrity: the shipped build-and-ship.sh is byte-identical after the run =="
+GOT_SHIP="$(sha256sum "$BUILD_SHIP" | awk '{print $1}')"
+if [ "$GOT_SHIP" = "$WANT_SHIP" ]; then
+  ok "integrity — $BUILD_SHIP unchanged (sha256 ${GOT_SHIP:0:12}); every mutation lived in $WORK"
+else
+  bad "integrity — $BUILD_SHIP CHANGED during the run ($GOT_SHIP != $WANT_SHIP) — restore it before doing anything else"
+fi
+
+echo "---"
+if [ "$FAIL" -eq 0 ]; then
+  echo "biteproof: $PASS checks passed, 0 failed — the deploy call site's reuse plumbing BITES: a full-green record skips the gate pool (no slot taken, 0 gates, seconds), a missing / partial / refused record still gates in full, a partial record re-runs only the unvouched gates, and each case reports which gates were remembered rather than run"
+else
+  echo "biteproof: $PASS passed, $FAIL failed — the deploy call site does NOT hold something it claims to"
+fi
+[ "$FAIL" -eq 0 ] || exit 1

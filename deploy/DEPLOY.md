@@ -213,7 +213,14 @@ git rev-list --count main..origin/main    # how far apart are they
    Never build before the tag exists.
 2. `./deploy/build-and-ship.sh` on a clean tree (the script refuses otherwise).
    It runs `scripts/preflight.sh` itself — do not pre-check by hand and do not
-   reach for `--skip-tests`. The gate is:
+   reach for `--skip-tests`. **Before it takes a slot in the host gate pool it
+   reads the per-tree result record** (`scripts/preflight_reuse.sh`): a tree
+   already recorded green on these bytes gets `--reuse-record` (the runner exits
+   before the pool and takes no slot), a partially-recorded tree re-runs only the
+   gates the record could not vouch for (`--only <PREFLIGHT_RERUN> --reuse-record`),
+   and anything else runs the full gate. The script prints which gates were
+   REMEMBERED rather than run, and a remembered gate is never counted as passed —
+   see `docs/PREFLIGHT-REUSE.md`. The gate is:
    ```bash
    source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}   # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
    ./scripts/preflight.sh --list   # the gate inventory (authoritative)
@@ -223,7 +230,8 @@ git rev-list --count main..origin/main    # how far apart are they
                                    # tracks host load, and contended runs of the same work have
                                    # been measured at 19-23 min. Plan an incident window on the
                                    # slower number. (`webimage` adds 196s cold, ~3s warm.)
-                                   # Runs again inside build-and-ship.sh.
+                                   # Runs again inside build-and-ship.sh, or is REUSED there when
+                                   # a full-green per-tree record already covers the bytes.
    ```
    Run it standalone first if you want to see a failure before the lock is held.
 3. Ship the tarball (`SSH_HOST=... ./deploy/build-and-ship.sh` or scp manually).
