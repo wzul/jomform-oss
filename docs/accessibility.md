@@ -25,16 +25,19 @@ key public pages and **fails the gate on any critical or serious violation**:
 - `/brand`
 - `/legal/privacy`
 - `/legal/terms`
-- `/docs` and every page under `web/src/app/docs` (`/docs/builder`,
-  `/docs/customize`, `/docs/embed`, `/docs/subscriptions`, `/docs/variations`,
-  `/docs/spam-detection`, `/docs/ses-reputation`, `/docs/placeholders`,
-  `/docs/mcp`, `/docs/feedback`, `/docs/chat`). The knowledge base is public
-  and the dashboard links into it from Settings with inline "?" buttons, so it
-  is a route this scan exists for — it was outside the gate until card
-  `t_f5a8730d` extended the list, which is how serious axe violations sat on
-  `/docs/customize` (and every other docs route) unreported while the gate
-  passed 7/7. `web/src/lib/docsA11y.test.ts` fails the unit suite if a docs
-  page is missing from the scan, so a page added later cannot stay outside it.
+- `/docs` and every guide under `web/src/app/docs` — three of them are `/docs`,
+  `/docs/builder` and `/docs/customize`. **The route list is not repeated here**:
+  it is `PAGES` in `web/e2e/a11y.spec.ts`, and `web/src/lib/docsA11y.test.ts`
+  fails the unit suite when a docs page on disk is missing from it, so a
+  hand-copy of the list in prose is redundant and is the first thing to go
+  stale. The knowledge base is public and the dashboard links into it from
+  Settings with inline "?" buttons, so it is a route this scan exists for — it
+  was outside the gate until card `t_f5a8730d` extended the list, which is how
+  serious axe violations sat on `/docs/customize` (and every other docs route)
+  unreported while the gate passed 7/7. This paragraph used to name the routes
+  by hand and drifted twice (ten named while the spec listed sixteen), so
+  `web/src/lib/a11yScanProse.test.ts` now fails if a hand-written list comes
+  back.
 
 Run it locally:
 
@@ -45,10 +48,12 @@ npm run a11y          # starts the app's own server, runs axe against the pages
 ../scripts/preflight.sh --only a11y
 ```
 
-The scan lives in `web/e2e/a11y.spec.ts` (Playwright + `@axe-core/playwright`); two
-further specs (`a11y-dialogs.spec.ts`, `a11y-switcher.spec.ts`) cover authenticated
-surfaces with the same gate, and every file whose name matches `a11y*.spec.ts` is
-selected by the `a11y` project automatically.
+The scan lives in `web/e2e/a11y.spec.ts` (Playwright + `@axe-core/playwright`). The
+further `web/e2e/a11y-*.spec.ts` files — the typed-slug dialogs, the workspace
+switcher and the chat confirmation card — cover surfaces the unauthenticated
+route list above cannot reach, and every file whose name matches `a11y*.spec.ts`
+is selected by the `a11y` project automatically, so a new one is in the gate by
+its name alone. Which specs exist is `npm run a11y -- --list`, not a list here.
 Minor/moderate findings are reported for triage but do not fail the gate.
 
 ### Confirmation dialogs (also in the automated scan)
@@ -101,9 +106,9 @@ renders — a green reading over nothing), opens the menu, and:
 
 `web/scripts/a11y-switcher.mjs`, `web/scripts/a11y-drawer.mjs` and
 `web/scripts/nav-evidence.mjs` are HAND-RUN probes: they need a `SESSION` token
-and a local build, and **no gate executes them**. The switcher's coverage now
-lives in the spec above; the other two remain hand-run, and nothing here claims
-otherwise.
+and a local build, and **no gate executes them** (the switcher's own coverage is
+now the `a11y-switcher.spec.ts` spec named above; `nav-evidence.mjs` is a plain
+evidence tool with no assertion to promote).
 
 ### The builder canvas, and a CONTRAST measurement rather than a class check
 
@@ -212,9 +217,11 @@ through). The AA-safe replacement already exists and needs no new token:
 slate-50 and 7.903:1 on white, so it is safe on every light surface here.
 
 `web/e2e/form-settings-tabstrip-contrast.spec.ts` holds `/form-settings` in
-place. It is a **browser** guard, not a source grep, and it runs in the `a11y`
-gate (`npm run a11y`, the whole `web/e2e/` directory) with the API stubbed at
-the browser level, so it needs no Go server, session or database:
+place. It is a **browser** guard, not a source grep, and it runs in the `e2e`
+gate: its name does not start with `a11y`, so `playwright.config.ts` selects it
+for the `feature-e2e` project rather than the `a11y` one — both are gates in
+`scripts/preflight.sh` — with the API stubbed at the browser level, so it needs
+no Go server, session or database:
 
 1. it clicks a real tab and reads the painted foreground and the **composited**
    background out of the live DOM, resolving both by painting them onto a canvas
@@ -240,14 +247,15 @@ they only honour a comment opener outside JSX **text**: the literal route patter
 opener, which blanked 41 lines of that page (including a `</code>`) and made the
 guard report a `<code>` 180 lines away as the ancestor of unrelated spans.
 
-> The rest of the panel — the `input`/`textarea` names, the contrast tokens, the
-> ⋯ menu — is still NOT covered by the gate. Keep running the signed-in scan
+> The rest of the panel — the contrast tokens, the ⋯ menu and the choices
+> editor — is still NOT covered by the gate. Keep running the signed-in scan
 > above for those.
 >
-> **The panel's form-control NAMES are now in the gate.** Two e2e guards read the
-> name sources off the ACTUAL rendered controls (both `feature-e2e`, part of
-> `scripts/preflight.sh`): `web/e2e/builder-panel-select-names.spec.ts` for every
-> `<select>`, and `web/e2e/builder-panel-choice-names.spec.ts` (card `t_c4abb920`)
+> **The panel's form-control NAMES are now in the gate (the `e2e` one).** Two e2e
+> guards read the name sources off the ACTUAL rendered controls (both
+> `feature-e2e`, part of `scripts/preflight.sh`):
+> `web/e2e/builder-panel-select-names.spec.ts` for every `<select>`, and
+> `web/e2e/builder-panel-choice-names.spec.ts` (card `t_c4abb920`)
 > for EVERY visible `input`/`textarea`/`select` — the latter refuses a control
 > whose only name is its `placeholder`/`title`, which is exactly the class axe
 > cannot see (axe accepts a placeholder as a name, so a clean scan does not prove
@@ -255,22 +263,30 @@ guard report a `<code>` 180 lines away as the ancestor of unrelated spans.
 > unnams the controls and requires the SAME invariant to reject them, so a green
 > reading cannot be a vacuum.
 >
-> **One canvas exception, added with the AA fix.** The canvas price spans (the
-> product block's price and the `total` row) ARE in the gate now, via
-> `web/e2e/builder-canvas-price-contrast.spec.ts` — a browser MEASUREMENT of the
-> contrast ratio rather than a class check, because the failing margin is 0.008
-> (`#5e6ad2` on slate-50 is 4.492:1 where the floor is 4.5, and the same colour
-> on white is 4.700:1). Reach for that shape for a pair the source rules cannot
-> judge — `mutedText.test.ts` and `tintedSurface.test.ts` both pair a token with
-> a *named* surface (`bg-slate-50`, `bg-indigo-50`), so a token on a surface
-> neither guard models needs the measured form. The panel itself is still outside
-> the gate.
+> **Another canvas pair, measured by the same shape.** The same browser-level
+> stub pattern reaches one more authenticated surface: the **builder canvas**.
+> `web/e2e/builder-canvas-price-contrast.spec.ts` drives `/builder?form=<id>`
+> with the `/api/*` calls stubbed, so the gate reaches it with no session, no Go
+> server and no database. It is a MEASUREMENT, not a class-name assertion: it
+> reads each price span's painted colours out of the live DOM, resolves them by
+> painting them onto a canvas (Tailwind v4 emits the slate ramp as
+> `lab()`/`oklch()`, not `rgb()`), and asserts the WCAG ratio. It exists because
+> the margin it guards is 0.008 — `#5e6ad2` on slate-50 `#f8fafc` is 4.492:1
+> against the 4.5 floor, while the same colour on white is 4.700:1 — so a guard
+> that rounds, or measures on white, or trusts a class name, reports the defect
+> as a pass.
+>
+> That third shape is the one to reach for on the **surfaces the other two
+> cannot cover**: a source rule cannot see a translucent tint's composited
+> colour, and it cannot measure a margin this small.
+>
 > **This is a real gap, not a formality.** The builder's edit panel went
 > unscanned long enough to accumulate two **critical** unnamed form controls
 > (the value textarea and the conditional-logic rule picker) plus a set of
-> contrast failures the same axe run catches in a second. Before you change
-> anything under `web/src/app/builder/`, scan it signed in rather than assuming
-> the `a11y` gate above covers it:
+> contrast failures the same axe run catches in a second. Its control NAMES are
+> in the `e2e` gate now (above), but the panel's CONTRAST is not covered by any
+> spec. Before you change anything under `web/src/app/builder/`, scan it signed
+> in rather than assuming the gates above cover it:
 >
 > 1. start the Go API and build the web app against it
 >    (`JOMFORM_API_URL=<api> npm run build && JOMFORM_API_URL=<api> npm run start -- -p <port>`);
@@ -289,17 +305,17 @@ guard report a `<code>` 180 lines away as the ancestor of unrelated spans.
 > `display:none` content, which is exactly what hides it below `md`.
 >
 > **What the gate DOES reach, and how.** The block settings panel can be driven
-> from `npm run a11y` after all, without a Go server, a session or a database,
+> from the `e2e` gate after all, without a Go server, a session or a database,
 > by stubbing the handful of `/api/*` calls the builder makes at the browser
 > level (`page.route`) — the same trick `web/e2e/form-settings-status-chips.spec.ts`
-> uses. `web/e2e/builder-panel-select-names.spec.ts` does exactly that and reads
-> the live DOM: for every block type whose panel renders a `<select>` (name,
-> date, select, product) it asserts each one reports its name from a `<label
-> htmlFor>` or an aria reference, and refuses a placeholder-only name (which is
-> what axe accepts but a screen reader loses the moment you type). Prefer that
-> shape over a source-text assertion — the source grep cannot tell a sibling
-> `<label>` from an associated one, which is how three unnamed selects passed a
-> 7/7 mutation proof.
+> uses. `web/e2e/builder-panel-select-names.spec.ts` and
+> `web/e2e/builder-panel-choice-names.spec.ts` do exactly that and read
+> the live DOM: for every block type whose panel renders a control they assert
+> each one reports its name from a `<label htmlFor>` or an aria reference, and
+> refuse a placeholder-only name (which is what axe accepts but a screen reader
+> loses the moment you type). Prefer that shape over a source-text assertion —
+> the source grep cannot tell a sibling `<label>` from an associated one, which
+> is how three unnamed selects passed a 7/7 mutation proof.
 >
 
 ## Manual screen-reader checklist
