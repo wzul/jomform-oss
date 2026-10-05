@@ -152,129 +152,351 @@ const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
 //   fronted gerund      "Restoring a form is something the assistant does."
 //   appositive          "The assistant, not you, deletes the form."
 //
-// This arm closes them AND the five families the follow-up t_fa053255 measured as
-// still GREEN under the six-shape scan — counterexamples to the scope claim that
-// version's header made ("…regardless of which noun the verb hangs off"):
+// This arm closes the enumerated residue AND, as of t_b3877cfb, replaces the
+// enumeration itself with a STRUCTURAL rule. Four rounds each left a residue because
+// the scan was a closed list of surface shapes (t_48daca7f, t_5bdeda83, t_fa053255);
+// t_b3877cfb measured five more phrasings still GREEN and required that the class be
+// closed structurally rather than by an eleventh and twelfth shape.
 //
-//   genitive subject     "The assistant's job is to bin a form."
-//   it-cleft             "It is the assistant who bins a form."
-//   periphrastic passive "Binning a form is done by the assistant."
-//   appositive variant   "The assistant, rather than you, bins a form."
-//   nominal              "The assistant is the binner of a form."
+// THE RULE, in one sentence: normalise the clause, then assert the assistant is the
+// SUBJECT or the AGENT of a bin verb. That is what "credits the assistant with the
+// bin" means, and it does not depend on which surface shape carries it. The five the
+// enumerated scan missed fall out of the same rule with no new shape:
 //
-// (each scales over all four bin verbs). The scan now keys on the assistant and the
-// bin VOCABULARY appearing in the same sentence in ten shapes that credit the action:
+//   "The assistant handles the binning."           light verb + gerund -> "<assistant> bins"
+//   "Binning is what the assistant is for."         copular predication -> "<assistant> does"
+//   "It is to the assistant that a form is binned." topicalised cleft   -> agent of the passive
+//   "The binner of a form is the assistant."        agent noun subject  -> assistant is its predicate
+//   "The assistant, whose job is to bin a form …"   non-restrictive rel -> "<assistant> to bin"
 //
-//   (1) the assistant as SUBJECT of a modal/perfect/future/copula auxiliary,
-//       with a bin word anywhere later in the sentence — "the assistant
-//       can/may/will/has/is (going to|about to|able to) … trash|bin|restore|
-//       delete". The lookahead keeps the page's own DENIALS ("the assistant can
-//       never delete…", "…cannot restore…", "…does not bin…") green: an
-//       auxiliary followed by not/never is the boundary the page is allowed to
-//       state.
-//   (2) the bare finite or participial verb right on the assistant — "the
-//       assistant bins|trashes|restores|deletes|binning a form" — and the
-//       APPOSITIVE that only interposes ", not you," (or ", rather than you,")
-//       before it.
-//   (3) the assistant as the TARGET of an infinitive that lands on the bin —
-//       "ask the assistant to bin a form" / "…to move a form to the trash".
-//   (4) the PASSIVE — "a form binned|trashed|restored|deleted by the assistant".
-//   (5) the PERIPHRASTIC PASSIVE — "binning a form is done by the assistant":
-//       the agent is reached through the light verb "done by" rather than sitting
-//       right after the participle.
-//   (6) the POSSESSIVE GENITIVE — "binning a form is the assistant's job".
-//   (7) the GENITIVE SUBJECT — "the assistant's job is to bin a form": the bin
-//       word comes AFTER the possessive, so (6)'s ordering misses it.
-//   (8) the IT-CLEFT — "it is|it's the assistant who bins a form".
-//   (9) the NOMINAL — "the assistant is the binner of a form": the only bin word
-//       in the sentence is an agent NOUN, not a verb form.
-//   (10) the FRONTED GERUND — "restoring a form is something the assistant does".
+// and the mirror of the same predicate — the bin verb's subject IS the assistant
+// ("trashing a form falls to the assistant", "who bins a form is the assistant") —
+// lands in the fifth position below rather than in a shape of its own.
 //
-// RESIDUAL SCOPE, stated because this scan is an ENUMERATED list and this class has
-// now left residue three rounds running (t_48daca7f, t_5bdeda83, t_fa053255): a
-// closed list of shapes always has a next one it was not taught. Measured against
-// THIS scan, these still credit the assistant and pass GREEN:
-//   "The assistant handles the binning."      (assistant + light verb + gerund noun)
-//   "Binning is what the assistant is for."   (copular predication, no "does")
-//   "It is to the assistant that the form is binned." (topicalised cleft)
-// A structural scan — normalise the sentence, then assert the assistant is the
-// subject of a bin verb — would close the class instead of chasing shapes; until
-// then this list is the boundary of what is tested, not a proof of completeness.
+// WHAT "NORMALISE" DOES — each step is a rewrite toward the canonical subject+verb the
+// rule reads, NOT a new surface shape:
 //
-// A denial the assistant OWNS is not a claim: shapes (1), (7), (8) and (9) carry a
-// not/never lookahead, and the disowning word orders the old note named do not take
-// these shapes. So "deleting a form is yours, not the assistant's" stays green, as
-// do "the assistant cannot delete", "the assistant is not the binner", "it is not
-// the assistant who bins" and "the assistant's job is not to bin".
+//   * the appositive that disowns "you" — ", not you," / ", rather than you," /
+//     ", instead of you," — is stripped. It disowns the reader, not the assistant, so
+//     the sentence still credits the assistant.
+//   * the it-cleft and the topicalised cleft are unfolded: "it is the assistant who
+//     <v>" -> "the assistant <v>"; "it is to the assistant that <x> is binned" -> the
+//     assistant is read as the passive's agent. Their DENIALS unfold too, with the
+//     negation carried across ("it is not to the assistant that …" -> "the assistant
+//     not …"), so the denial stays GREEN.
+//   * the non-restrictive relative "the assistant, whose job is to <v>" is unfolded to
+//     "the assistant <v>".
+//   * the copular predication "what the assistant is for" is read as a light-verb
+//     predication of the bin.
+//   * an AGENT NOUN ("the binner of a form") is canonicalised to its verb, in both
+//     orders: "the binner … is the assistant" and "the assistant is the binner".
+//   * a light verb + gerund ("handles the binning", "is responsible for binning", "is
+//     tasked with trashing") collapses to the verb.
 //
-// Split out of the assertions so the bite proof below runs the IDENTICAL regex
-// against a mutated page: a proof that exercised a paraphrase of the scan would
-// prove nothing about the scan (the idiom of trashCopyClaims.test.ts's
-// scanClaims). The person-attribution sentence the fix ships ("The bin belongs
-// to you, not the assistant — deleting a form … restoring it from the trash")
-// must stay GREEN: it names the assistant only to DISOWN the action.
+// THE FIVE POSITIONS the rule reads are then (A) assistant = subject of a bin verb,
+// (B) assistant = agent of a passive, (C) assistant's ROLE = subject ("the assistant's
+// job is to bin" / "binning is the assistant's job"), (D) assistant = subject of a light
+// verb with the bin earlier, and (E) assistant = the predicate the bin verb's subject
+// lands on. See `binClaimInClause` for each.
+//
+// THE CLAUSE, NOT THE SENTENCE. That is the other half of the design: the page
+// legitimately names the assistant in one clause and the bin in another ("… it
+// requires a token the model never sees"), and a whole-sentence "assistant AND a bin
+// verb somewhere" scan is exactly what forced the enumerated shapes to keep widening
+// their windows. A clause boundary is a sentence terminator followed by whitespace, an
+// em-dash, a semicolon, or a coordinating/subordinating conjunction. A comma is NOT a
+// boundary, so an appositive or a list stays inside its sentence; the appositive is
+// stripped first, and a list carries no assistant-subject bin verb.
+//
+// A DENIAL THE ASSISTANT OWNS IS NOT A CLAIM. The page is allowed to state the
+// boundary, so a negation token (not/never/cannot/…) sitting BETWEEN the assistant and
+// the bin token disqualifies the match. That keeps "the assistant cannot delete a
+// form", "the assistant's job is not to bin a form", "it is not the assistant who
+// bins" and "deleting a form is not the assistant's job" GREEN — the disowning is the
+// bin's, not the assistant's. It does NOT fire on the person-attribution sentence
+// ("The bin belongs to you, not the assistant — deleting a form from the forms page
+// …"), because that sentence puts the assistant in an earlier clause than the bin.
+//
+// THE PRO-VERB ACROSS A CLAUSE BOUNDARY, which fixes the boundary's one cost. Because
+// the bin is a verb the first clause carries and the second clause only POINTS AT
+// ("Binning a form — the assistant does that."), a naive split loses the claim
+// entirely: the second clause has no bin for the rule to read. The fix folds it back:
+// when a clause's verb is a PRO-VERB followed by the anaphor that points at the clause
+// before it ("does|handles|performs … that|it"), the pro-verb is rewritten to that
+// clause's bin word, and the rule reads it in one clause like any other. Measured: this
+// shape was RED under the previous scan (its window crossed the em-dash, because an
+// em-dash is not a sentence terminator) and GREEN under the split, i.e. the split alone
+// REGRESSED it — it is in the BITES map below so the regression cannot come back. The
+// fold is the boundary's normalisation, not a tenth position, and it also closes the
+// same pro-verb at a semicolon or a conjunction, where the previous window crossed
+// those too.
+//
+// A REPORT IS NOT AN ACTION, the boundary the rule needs on the other side. The bin
+// token is usually a NOUN ("the trash"), so a clause merely NAMING it in what the
+// assistant reads or reports — "the assistant can tell you where the trash is" — puts
+// "assistant … trash" inside position (A)'s window while crediting the assistant with
+// nothing. When the assistant's own verb is an information verb (tell/show/list/…), the
+// bin token later in its clause is its object of knowledge, and (A) stands down; the
+// same sentence with the bin as the assistant's AGENT ("… binned by the assistant") is
+// still RED, because (B) does not depend on the verb introducing it.
+//
+// Everything a single clause can predicate of the assistant, and the one thing a
+// boundary can hide from it, is inside the five positions and the fold above, and is
+// proved by the BITES map below.
+//
+// Split out of the assertions so the bite proof below runs the IDENTICAL scan against
+// a mutated page: a proof that exercised a paraphrase would prove nothing about the
+// scan (the idiom of trashCopyClaims.test.ts's scanClaims).
 const BIN_VOCAB = String.raw`(?:bins?|binned|binning|trash(?:es|ed|ing)?|restores?|restored|restoring|deletes?|deleted|deleting)`;
-// The AGENT NOUNS for the same four actions. The NOMINAL shape (9) below credits
-// the assistant as "the binner"/"the deleter" of a form, where no verb form the
-// vocabulary above would key on appears at all.
+// The AGENT NOUNS for the same four actions — "the binner", "the deleter". They are
+// canonicalised to the verb before the rule runs, so an agent noun as the sentence's
+// subject ("the binner of a form is the assistant") credits the assistant just as the
+// verb does.
 const BIN_NOUN = String.raw`(?:binner|binners|trasher|trashers|restorer|restorers|deleter|deleters|destroyer|destroyers)`;
-// The auxiliaries that make the assistant the SUBJECT of the action — a modal, a
-// perfect (has/have/had), a copula (is/was/… going to|about to|able to) or a
-// light verb (takes|moves). `going to` is listed whole so "is going to" matches,
-// and `does`/`do`/`did` are here (not in the bare-verb shape) so "the assistant
-// does bin" cannot slip past shape (2).
-const ASSISTANT_AUX = String.raw`(?:can|may|will|would|could|should|shall|must|might|has|have|had|is|are|was|were|be|been|being|does|do|did|takes?|moves?|going\s+to|about\s+to|due\s+to|needs?\s+to|wants?\s+to)`;
-// NOT-A-DENIAL: the page is allowed to state the boundary, so an auxiliary the
-// assistant owns must not be followed by not/never (or the bare "cannot"/"never")
-// for the match to count as a claim.
-const NOT_A_DENIAL = String.raw`(?!\s*(?:,\s*)?(?:cannot|never)\b)(?!\s*(?:can|may|could|will|would|shall|should|must|might|does|do|did|is|are|was|were|has|have|had)\s+(?:not|never)\b)`;
-// The appositive "the assistant, not you, <verb>" — the clause only DISOWNS "you",
-// not the assistant, so the sentence still credits the assistant and must be RED.
-// The "rather than you"/"instead of you" variants disown "you" identically, so they
-// are the same shape. A denial the assistant OWNS is a DIFFERENT thing — "the
-// assistant is not the one who bins" — and shape (8) keys that with its own
-// lookahead, so widening this alternation does not swallow it.
-const APPOSITIVE = String.raw`(?:\s*,\s*(?:not\s+you|not\s+yourself|never\s+you|rather\s+than\s+you|instead\s+of\s+you)\s*,)?`;
-const ASSISTANT_BIN_CLAIM = new RegExp(
-  [
-    // (1) assistant as SUBJECT of a modal/perfect/future/copula auxiliary, bin word
-    // anywhere later in the sentence (allowing a ", not you," appositive between).
-    String.raw`\bassistant\b` + NOT_A_DENIAL + APPOSITIVE + String.raw`\s+(?:` + ASSISTANT_AUX + String.raw`\b\s+)[^.!?]{0,140}?` + BIN_VOCAB + String.raw`\b`,
-    // (2) the bare finite/participial verb right on the assistant (with the optional
-    // ", not you," appositive).
-    String.raw`\bassistant\b` + NOT_A_DENIAL + APPOSITIVE + String.raw`\s+` + BIN_VOCAB + String.raw`\b`,
-    // (3) the assistant as the TARGET of an infinitive that lands on the bin.
-    String.raw`\bassistant\b\s+to\b[^.!?]{0,80}?` + BIN_VOCAB + String.raw`\b`,
-    // (4) the PASSIVE — "a form binned by the assistant".
-    String.raw`\b(?:binned|trashed|restored|deleted)\s+by\s+(?:the\s+)?assistant\b`,
-    // (5) the PERIPHRASTIC PASSIVE — the gerund with "is done by the assistant".
-    //     The bare passive (4) keys on the participle right before "by"; the
-    //     gerund + "is done by" is the same agent seen through a light verb.
-    String.raw`\b(?:binning|trashing|restoring|deleting)\b[^.!?]{0,40}?\b(?:is|are|was|were|be|been|gets?|get)\s+done\s+by\s+(?:the\s+)?assistant\b`,
-    // (6) the POSSESSIVE GENITIVE — "binning a form is the assistant's job".
-    BIN_VOCAB + String.raw`\b[^.!?]{0,60}\b(?:is|was|are|were|remains?)\s+(?:the\s+|a\s+|your\s+)?assistant(?:’|')s\b`,
-    // (7) the GENITIVE SUBJECT — "the assistant's job is to bin a form". The bin
-    //     word comes AFTER the possessive here, so shape (6)'s ordering misses it.
-    //     The lookahead keeps a denial ("...is not to bin") green.
-    String.raw`\bassistant(?:’|')s\s+(?:job|task|work|role|duty|responsibility|purpose|part)\b(?!\s*(?:,\s*)?(?:is\s+)?(?:not|never)\b)[^.!?]{0,120}?` + BIN_VOCAB + String.raw`\b`,
-    // (8) the IT-CLEFT — "it is the assistant who bins a form" (and "it's …").
-    //     The lookahead keeps its denial ("it is not the assistant who bins") green.
-    String.raw`\b(?:it|this|that|which)(?:\s+is|(?:’|')s)\s+(?!\s*(?:not|never)\b)(?:the\s+|a\s+|an\s+)?assistant\b` + NOT_A_DENIAL + String.raw`[^.!?]{0,80}?` + BIN_VOCAB + String.raw`\b`,
-    // (9) the NOMINAL — "the assistant is the binner of a form", where the only bin
-    //     word in the sentence is an agent NOUN, not a verb.
-    String.raw`\bassistant\b` + NOT_A_DENIAL + String.raw`\s+(?:is|was|becomes?|remains?)\s+(?:the\s+|a\s+|an\s+)` + BIN_NOUN + String.raw`\b`,
-    // (10) the FRONTED GERUND — "restoring a form is something the assistant does".
-    BIN_VOCAB + String.raw`\b[^.!?]{0,80}\b(?:the\s+|an?\s+)?assistant\b\s+(?:does|do|did|performs?|handles?)\b`,
-  ].join("|"),
-  "i",
-);
+// The possessive-genitive ROLE words: "the assistant's job/task/role is to bin".
+const BIN_ROLE = String.raw`(?:job|task|work|role|duty|responsibility|purpose|part)`;
+// The auxiliaries that can sit between the assistant and its bin verb. Not a closed
+// set of the verb's shapes — just the words a verb phrase may open with — so the rule
+// does not have to be re-taught when a modal the copy had not used before appears.
+const ASSISTANT_AUX = String.raw`(?:can|may|will|would|could|should|shall|must|might|has|have|had|is|are|was|were|be|been|being|does|do|did|takes?|moves?|going\s+to|about\s+to|due\s+to|needs?\s+to|wants?\s+to|to)`;
+// A copula, as a word (" is") or a contraction ("'s" / "’s"), for the cleft rewrites.
+const COPULA = String.raw`(?:\s+(?:is|was|are|were)|(?:'|’)s)`;
+// The NEGATION tokens. A negation BETWEEN the assistant and the bin token is a denial
+// the assistant OWNS and disqualifies the match; see the header.
+const NEGATION = String.raw`(?:not|never|cannot|can't|won't|doesn't|don't|didn't|isn't|aren't|wasn't|weren't|hasn't|haven't|hadn't|without)`;
+/**
+ * A lazy span that refuses to cross a negation token — the between-ness is the rule,
+ * so the span IS the guard and the positions below share it. The bound (120) is the
+ * reach a single clause's verb phrase can have; it cannot cross a clause boundary
+ * because the text is split first.
+ */
+const noNeg = (span: string) => `((?:(?!\\b(?:${NEGATION})\\b)${span}){0,120}?)`;
+const HAS_NEGATION = new RegExp(`\\b(?:${NEGATION})\\b`, "i");
+// The assistant's INFORMATION verbs — the ones under which a later bin token is an
+// object of knowledge, not an action. Read at the assistant's own verb in a match (A)
+// makes; see the header's "A REPORT IS NOT AN ACTION".
+const INFO_VERB = String.raw`(?:tells?|shows?|showed|shown|lists?|listed|reads?|saw|seen|sees?|asks?|asked|says?|said|reports?|reported|knows?|knew|known|finds?|found|explains?|explained|describes?|described|answers?|answered|checks?|checked|looks?\\s+up|mentions?|mentioned)`;
+// A SUBORDINATOR right after the assistant opens a clause of its own — "ask the
+// assistant WHETHER a form is in the trash" — so the bin token beyond it is that
+// clause's, not the assistant's. Same disqualification as an information verb, same
+// reason: the assistant is named without being the actor. (Only the two subordinators
+// that cannot also be a relative pronoun: "which"/"where" would collide with a
+// relative clause and are not listed.)
+const SUBORDINATOR = String.raw`(?:whether|if)`;
+/** The token after the assistant that means it is NOT the actor of the later bin. */
+const HAS_NON_ACTION = new RegExp(`\\b(?:${INFO_VERB}|${SUBORDINATOR})\\b`, "i");
+
+// Clause boundaries, and why each is one. A sentence terminator must be followed by
+// whitespace (or end the text), so a dotted token the copy really uses — AGENTS.md,
+// jomform.com — is not torn in half. An em-dash and a semicolon start a new clause.
+// A comma does NOT (an appositive or a list stays inside its sentence).
+const CLAUSE_SPLIT = /(?<=[.!?])\s+|\s*[—;]\s*|\s+(?:and|but|so|then|while|whereas|although|though|because)\s+/i;
+
+/**
+ * Rewrite a clause toward the canonical subject+verb the rule reads. Every step is a
+ * normalisation; the rule below is the SAME subject-or-agent-of-a-bin-verb test
+ * whatever surface form arrived.
+ */
+function normaliseClause(raw: string): string {
+  let s = ` ${raw.toLowerCase()} `;
+  // the appositive that disowns "you": ", not you," / ", rather than you," ...
+  s = s.replace(/,\s*(?:not\s+you|not\s+yourself|never\s+you|rather\s+than\s+you|instead\s+of\s+you)\s*,/g, " ");
+  // the topicalised cleft: "it is to the assistant that ..." -> "the assistant ..."
+  s = s.replace(new RegExp(`\\b(?:it|this|that|there)${COPULA}\\s+to\\s+(?:the\\s+)?assistant\\b`, "g"), " the assistant");
+  // its DENIAL: "it is not to the assistant that <x> is binned" — the topicalised
+  // cleft with a negated expletive. Unfolded to "the assistant not <x>", so the
+  // negation lands between the assistant and the bin and the clause stays GREEN (a
+  // denial the assistant owns).
+  s = s.replace(
+    new RegExp(`\\b(?:it|this|that|there)${COPULA}\\s+(not\\s+|never\\s+)to\\s+(?:the\\s+)?assistant\\b`, "g"),
+    (_m: string, neg: string) => ` the assistant ${neg}`,
+  );
+  // the it-cleft: "it is the assistant who|that <v>" -> "the assistant <v>"
+  s = s.replace(
+    new RegExp(`\\b(?:it|this|that)${COPULA}\\s+(not\\s+|never\\s+)?(?:the\\s+|a\\s+|an\\s+)?assistant\\s+(?:who|that)\\b`, "g"),
+    (_m: string, neg: string) => ` the assistant ${neg || ""}`.replace(/\s+$/, ""),
+  );
+  // the non-restrictive relative: "the assistant, whose job is to <v>"
+  s = s.replace(
+    new RegExp(`\\b(the\\s+)?assistant\\s*,\\s*whose\\s+${BIN_ROLE}\\s+is\\s+(not\\s+|never\\s+)?to\\b`, "g"),
+    (_m: string, the: string, neg: string) => ` ${the || ""}assistant ${neg || ""}to`,
+  );
+  // the copular predication: "binning is what the assistant is for"
+  s = s.replace(/\bwhat\s+(?:the\s+)?assistant\s+is\s+for\b/g, "something the assistant does");
+  // an AGENT NOUN as the subject, the assistant as its predicate:
+  //   "the binner of a form is the assistant" -> "the assistant bins"
+  s = s.replace(
+    new RegExp(`\\b(?:the\\s+|an?\\s+)?${BIN_NOUN}\\b[^.!?]{0,40}?\\b(?:is|was|are|were)\\s+(not\\s+|never\\s+)?(?:the\\s+|an?\\s+)?assistant\\b`, "g"),
+    (_m: string, neg: string) => ` the assistant ${neg || ""}bins`,
+  );
+  // the assistant predicated of an AGENT NOUN: "the assistant is the binner" -> "… bins"
+  s = s.replace(
+    new RegExp(`\\bassistant\\b\\s+(?:is|was)\\s+(not\\s+|never\\s+)?(?:the\\s+|an?\\s+)?${BIN_NOUN}\\b`, "g"),
+    (_m: string, neg: string) => ` assistant ${neg || ""}bins`,
+  );
+  // a light verb + gerund collapses to the third-person verb: "handles the binning" -> "bins"
+  for (const [finite, gerund] of [["bins", "binning"], ["trashes", "trashing"], ["restores", "restoring"], ["deletes", "deleting"]]) {
+    s = s.replace(
+      new RegExp(`\\b(?:handles?|does|do|did|performs?|takes?\\s+care\\s+of|is\\s+responsible\\s+for|is\\s+tasked\\s+with|is\\s+in\\s+charge\\s+of|is\\s+for|is\\s+about)\\s+(?:the\\s+)?${gerund}\\b`, "g"),
+      finite,
+    );
+  }
+  // the relative clause "is the one who <v>" -> <v>
+  s = s.replace(new RegExp(`\\b(?:is|was|are|were)\\s+(?:the\\s+|an?\\s+)?one\\s+(?:who|that)\\s+`, "g"), " ");
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The assistant's OWN verb in a match (A) made against the normalised clause — the verb
+ * that decides whether the later bin token is an action or an object of knowledge.
+ * Returns null when the verb is the assistant's own bin verb ("the assistant bins"),
+ * which is the claim itself.
+ */
+function assistantVerb(matched: string): string | null {
+  const m = /^assistant\b\s+/i.exec(matched);
+  if (!m) return null;
+  let rest = matched.slice(m[0].length);
+  const aux = new RegExp(`^(?:${ASSISTANT_AUX})\\b\\s*`, "i").exec(rest);
+  if (aux) rest = rest.slice(aux[0].length);
+  const verb = /^[a-z]+(?:'[a-z]+\b)?/i.exec(rest);
+  return verb ? verb[0].toLowerCase() : null;
+}
+
+/**
+ * One phrasing in `clause` that credits the assistant with the bin, or null.
+ *
+ * THE RULE, in five syntactic positions — not five phrasings. Once the clause is
+ * normalised, "the assistant is the subject or the agent of a bin verb" can only be
+ * one of these, and each is a position, so a new surface phrasing lands in one of them
+ * without a new rule:
+ *   (A) the assistant is the SUBJECT of a bin verb      — "the assistant bins"
+ *   (B) the assistant is the AGENT of a passive         — "<binned> by the assistant"
+ *   (C) the assistant's ROLE is the subject             — "the assistant's job is to bin"
+ *   (D) the assistant is the subject of a LIGHT VERB    — "<binning> … the assistant does"
+ *   (E) the bin verb's SUBJECT is the assistant, the verb having moved to a later
+ *       position under a copula or a fused relative    — "the binner … is the assistant"
+ *       / "who bins a form is the assistant". (E) is the mirror of (A) and (B): the
+ *       predication is the same, read from the far end.
+ * The possessive-genitive predicate ("<binning> is the assistant's job") is (C) read
+ * from the other end and is folded into it: it is the same predication.
+ */
+function binClaimInClause(raw: string): string | null {
+  const s = normaliseClause(raw);
+  if (!/\bassistant\b/.test(s)) return null;
+  // (A) the assistant as SUBJECT of a bin verb, no negation between.
+  {
+    const m = new RegExp(`\\bassistant\\b\\s+(?:(?:${ASSISTANT_AUX})\\s+)?${noNeg("[^.!?]")}${BIN_VOCAB}\\b`, "i").exec(s);
+    if (m && !HAS_NEGATION.test(m[1])) {
+      // The assistant's OWN verb decides: under an information verb, or a subordinator
+      // opening the assistant's own clause, the later bin token is what it read or what
+      // a sub-clause says, not what it did (see the header's "A REPORT IS NOT AN
+      // ACTION"). Action verbs and every other shape are unaffected.
+      const verb = assistantVerb(m[0]);
+      if (!verb || !HAS_NON_ACTION.test(verb)) return m[0];
+    }
+  }
+  // (B) the AGENT of a passive: "<bin> by the assistant" (bare or periphrastic).
+  {
+    const m = new RegExp(`\\b${BIN_VOCAB}\\b[^.!?]{0,60}?\\bby\\s+(?:the\\s+)?assistant\\b`, "i").exec(s);
+    if (m) return m[0];
+  }
+  // (C) the GENITIVE SUBJECT and its predicate: "the assistant's job is to <bin>" /
+  //     "<bin> is the assistant's job".
+  {
+    const m = new RegExp(`\\bassistant(?:'|’)?s\\b${noNeg("[^.!?]")}${BIN_VOCAB}\\b`, "i").exec(s);
+    if (m && !HAS_NEGATION.test(m[1])) return m[0];
+    const p = new RegExp(
+      `\\b${BIN_VOCAB}\\b[^.!?]{0,60}?\\b(?:is|was|are|were|remains?)\\s+(?:not\\s+|never\\s+)?(?:the\\s+|a\\s+|your\\s+)?assistant(?:'|’)?s\\b`,
+      "i",
+    ).exec(s);
+    if (p) {
+      const before = p[0].slice(0, p[0].search(/assistant(?:'|’)?s/i));
+      if (!HAS_NEGATION.test(before)) return p[0];
+    }
+  }
+  // (E) the bin verb's SUBJECT is the assistant, the verb having moved to a later
+  //     position. The bin word before it and a finite "is the assistant" land on it:
+  //     "<binning> … IS/falls to the assistant" and "who|that <bins> … is the
+  //     assistant" (a fused relative — "who bins a form IS the assistant"). A
+  //     negation here is the assistant DISOWNING the bin ("deleting a form is NOT the
+  //     assistant's job"), so it must fall through to (C) and stay GREEN — hence no
+  //     optional negative in this pattern.
+  {
+    const m = new RegExp(
+      `\\b${BIN_VOCAB}\\b\\b[^.!?]{0,40}?\\b(?:is|was|falls?\\s+to|belongs?\\s+to)\\s+(?:the\\s+|to\\s+the\\s+)?assistant\\b`,
+      "i",
+    ).exec(s);
+    if (m) return m[0];
+  }
+  // (D) the assistant as the subject of a LIGHT VERB, the bin in an earlier position:
+  //     "<binning> … is something the assistant does".
+  {
+    const m = new RegExp(`\\b${BIN_VOCAB}\\b[^.!?]{0,80}?\\bassistant\\b\\s+(?:does|do|did|performs?|handles?)\\b`, "i").exec(s);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+// A REPORT IS NOT AN ACTION. The bin token is often a NOUN ("the trash"), so a clause
+// that merely NAMES the trash in what the assistant reads or reports — "the assistant
+// can tell you where the trash is", "a form the assistant lists may already be in the
+// trash" — puts "assistant … trash" inside position (A)'s window while crediting the
+// assistant with nothing at all. When the assistant's OWN verb is an information verb
+// (tell/show/list/read/see/ask/say/report/know/find/…), the bin noun later in its
+// clause is the assistant's object of KNOWLEDGE rather than an action of its, and the
+// match is disqualified. It is the assistant's own verb that is read, not the window:
+// a claim whose verb is an ACTION verb ("the assistant can take a form as far as the
+// trash") is untouched, and the same sentence with the bin as the assistant's AGENT
+// ("… binned by the assistant") is still RED, because (B) does not depend on the verb
+// that introduces it. Measured: both sentences above were RED under the head scan
+// (the second newly, from the structural rewrite); the shipped page carries neither.
+//
+// THE PRO-VERB ACROSS A CLAUSE BOUNDARY. A clause boundary splits the bin from the
+// word that stands for it: "Binning a form — the assistant does that." The second
+// clause alone has no bin for the rule to read, so an em-dash (or a semicolon, or a
+// conjunction) costs the shape entirely. This fold is that boundary's normalisation:
+// when a clause's only verb is a PRO-VERB ("does/do/did/performs/handles") followed by
+// the anaphor ("that"/"it") that points back at the previous clause, the pro-verb is
+// rewritten to that clause's bin word, and the rule then reads it in one clause like
+// any other. Only the anaphoric pro-verb is folded — "the assistant does that" with no
+// antecedent is not a claim about the bin, and a fresh "the assistant does <something>"
+// is untouched — and only onto the bin of the clause IMMEDIATELY before it, which is
+// the antecedent the anaphor can actually have. This is the parity the enumerated scan
+// got for free: its window `[^.!?]{0,80}` crossed the boundary because an em-dash is
+// not a sentence terminator, and the fold restores exactly that without reopening the
+// whole-sentence window the structural arm was built to close.
+const PRO_VERB = String.raw`(?:does|do|did|performs?|handles?)`;
+const ANAPHOR = String.raw`(?:that|it)`;
+/**
+ * The bin word of `clause`, or null — the antecedent the fold above carries across the
+ * boundary.
+ */
+function binWordInClause(clause: string): string | null {
+  const m = new RegExp(`\\b${BIN_VOCAB}\\b`, "i").exec(clause);
+  return m ? m[0] : null;
+}
 
 /** Every phrasing in `text` that credits the assistant with the bin, in order. */
 function assistantBinClaims(text: string): string[] {
   const out: string[] = [];
-  const re = new RegExp(ASSISTANT_BIN_CLAIM.source, "gi");
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) out.push(m[0]);
+  let prevBin: string | null = null;
+  for (const clause of text.split(CLAUSE_SPLIT)) {
+    if (!clause.trim()) continue;
+    const folded = prevBin
+      ? clause.replace(
+          new RegExp(
+            `\\bassistant\\b(\\s+(?:${ASSISTANT_AUX}))?\\s+\\b${PRO_VERB}\\b\\s+${ANAPHOR}\\b`,
+            "i",
+          ),
+          (_m, aux: string | undefined) => `assistant${aux || " "}${prevBin}`,
+        )
+      : clause;
+    const m = binClaimInClause(folded);
+    if (m) out.push(m);
+    // The antecedent for the NEXT clause: a clause with no bin resets it rather than
+    // letting a pro-verb reach back over an unrelated clause.
+    prevBin = binWordInClause(clause);
+  }
   return out;
 }
 
@@ -1518,16 +1740,22 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
   // And the page itself: no sentence may name the assistant as the AGENT that bins,
   // trashes, restores or deletes a form. The page MAY name the trash — the fix does,
   // to attribute the action to the person — so the guard keys on the assistant as
-  // the actor, not on the word "trash" appearing anywhere and NOT on adjacency. All
-  // of the infinitive ("ask the assistant to bin"), the passive ("…binned by the
+  // the actor, not on the word "trash" appearing anywhere and NOT on adjacency. The
+  // scan is STRUCTURAL (see the arm's header): it normalises each clause and asserts
+  // the assistant is the subject or the agent of a bin verb, so every phrasing below
+  // — the infinitive ("ask the assistant to bin"), the passive ("…binned by the
   // assistant"), the bare verb ("the assistant bins"), the perfect ("the assistant
   // has binned"), the periphrastic future ("the assistant is going to delete"), the
   // relative clause ("the assistant is the one who bins"), the possessive genitive
   // ("binning a form is the assistant's job"), the fronted gerund ("restoring a form
-  // is something the assistant does") and the appositive ("the assistant, not you,
-  // deletes") credit the model with the action and all must be RED (the
-  // actor-adjacency shape this replaces caught only the one phrasing the rework
-  // happened to remove).
+  // is something the assistant does"), the appositive ("the assistant, not you,
+  // deletes"), the light verb + gerund ("the assistant handles the binning"), the
+  // copular predication ("binning is what the assistant is for"), the topicalised
+  // cleft ("it is to the assistant that the form is binned"), the reversed nominal
+  // ("the binner of a form is the assistant") and the non-restrictive relative
+  // ("the assistant, whose job is to bin a form") — is RED by the same rule, not by
+  // a shape written for it (the actor-adjacency shape this replaces caught only the
+  // one phrasing the rework happened to remove).
   const credited = assistantBinClaims(docs);
   assert.deepEqual(
     credited,
@@ -1553,7 +1781,8 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
   );
 });
 
-// ── THE PROSE ARM'S OWN BITE PROOF (t_48daca7f, widened in t_5bdeda83) ────────
+// ── THE PROSE ARM'S OWN BITE PROOF (t_48daca7f; widened in t_5bdeda83, t_fa053255
+//    and t_b3877cfb) ─────────────────────────────────────────────────────────────
 //
 // The rework's prose arm shipped GREEN on the three re-wordings it existed to
 // catch, because nothing in the suite ever proved it could fail on anything but
@@ -1563,11 +1792,12 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
 // against the SHIPPED page with one phrasal injection at the anchor the QA card
 // names (docs page line 69, right after "A creation is the one shape the field-edit
 // rule does not cover,"), and every shape the previous regex missed — the three
-// from t_48daca7f, the seven the follow-up t_5bdeda83 found still GREEN, and the
-// eighteen the follow-up t_fa053255 found still GREEN — must go RED, as must the
+// from t_48daca7f, the seven the follow-up t_5bdeda83 found still GREEN, the
+// eighteen the follow-up t_fa053255 found still GREEN, and the five the follow-up
+// t_b3877cfb found still GREEN under the ten-shape scan — must go RED, as must the
 // shipped defect sentence it did catch. Nothing on disk is written: the mutation is
 // in memory, on the real page source read at module load.
-test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, both genitive orders, the gerund, both appositive variants, the it-cleft, the periphrastic passive and the nominal", () => {
+test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, both genitive orders, the gerund, both appositive variants, the it-cleft, the periphrastic passive, the nominal, the light verb + gerund, the copular predication, the topicalised cleft, the reversed nominal, the non-restrictive relative and the pro-verb across a clause boundary", () => {
   const shipped = read(DOCS_PAGE);
   const anchor = "A creation is the one shape the field-edit rule does not cover,";
   // Vacuity: if the anchor is gone the injections below land nowhere and this
@@ -1637,6 +1867,57 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "nominal · trash (AT)": "The assistant is the trasher of a form.",
     "nominal · restore (AU)": "The assistant is the restorer of a form.",
     "nominal · delete (AV)": "The assistant is the deleter of a form.",
+    // t_b3877cfb — the residue the ten shapes above still missed, each now closed by
+    // the STRUCTURAL rule rather than by a shape: the light verb + gerund (including
+    // "is responsible for"/"is tasked with"/"is in charge of"), the copular
+    // predication, the topicalised cleft, the reversed nominal (agent noun as subject)
+    // and the non-restrictive relative clause. Every one of these was measured GREEN
+    // under the previous (t_fa053255 head) scan.
+    "light verb + gerund · bin (AW)": "The assistant handles the binning.",
+    "light verb + gerund · trash (AX)": "The assistant handles the trashing.",
+    "light verb + gerund · restore (AY)": "The assistant handles the restoring.",
+    "light verb + gerund · delete (AZ)": "The assistant handles the deleting.",
+    "light verb + gerund · responsible (BA)": "The assistant is responsible for binning a form.",
+    "light verb + gerund · tasked (BB)": "The assistant is tasked with trashing a form.",
+    "light verb + gerund · in charge (BC)": "The assistant is in charge of deleting a form.",
+    "copular predication · bin (BD)": "Binning is what the assistant is for.",
+    "copular predication · trash (BE)": "Trashing is what the assistant is for.",
+    "copular predication · restore (BF)": "Restoring is what the assistant is for.",
+    "copular predication · delete (BG)": "Deleting is what the assistant is for.",
+    "topicalised cleft · bin (BH)": "It is to the assistant that the form is binned.",
+    "topicalised cleft · trash (BI)": "It is to the assistant that a form is trashed.",
+    "topicalised cleft · restore (BJ)": "It is to the assistant that a form is restored.",
+    "topicalised cleft · delete (BK)": "It is to the assistant that a form is deleted.",
+    "reversed nominal · bin (BL)": "The binner of a form is the assistant.",
+    "reversed nominal · trash (BM)": "The trasher of a form is the assistant.",
+    "reversed nominal · restore (BN)": "The restorer of a form is the assistant.",
+    "reversed nominal · delete (BO)": "The deleter of a form is the assistant.",
+    "non-restrictive relative · bin (BP)": "The assistant, whose job is to bin a form, does the rest.",
+    "non-restrictive relative · trash (BQ)": "The assistant, whose job is to trash a form, handles it.",
+    "non-restrictive relative · restore (BR)": "The assistant, whose job is to restore a form, does the rest.",
+    "non-restrictive relative · delete (BS)": "The assistant, whose job is to delete a form, does the rest.",
+    // Position (E) — the bin verb's SUBJECT is the assistant, the verb moved later.
+    // (E) also catches the FUSED relative, where the bin verb has no subject of its
+    // own and the assistant is what the whole clause predicates: "who bins a form IS
+    // the assistant".
+    "bin-verb subject · bin (BT)": "Binning a form falls to the assistant.",
+    "bin-verb subject · trash (BU)": "Trashing a form falls to the assistant.",
+    "bin-verb subject · restore (BV)": "Restoring a form falls to the assistant.",
+    "bin-verb subject · delete (BW)": "Deleting a form falls to the assistant.",
+    "fused relative · bin (BX)": "Who bins a form is the assistant.",
+    "fused relative · trash (BY)": "Who trashes a form is the assistant.",
+    "fused relative · restore (BZ)": "Who restores a form is the assistant.",
+    "fused relative · delete (CA)": "Who deletes a form is the assistant.",
+    // t_8ffff05e — the PRO-VERB across a clause boundary. This shape was caught by the
+    // enumerated scan (its window crossed the em-dash) and LOST by the structural split
+    // alone, i.e. the split REGRESSED it; the pro-verb fold above restores it. The three
+    // anaphor/verb variants the QA card names, plus the same pro-verb at the two other
+    // boundaries the old window crossed (a semicolon, a conjunction).
+    "pro-verb across · does that (CB)": "Binning a form — the assistant does that.",
+    "pro-verb across · does it (CC)": "Binning a form — the assistant does it.",
+    "pro-verb across · handles that (CD)": "Binning a form — the assistant handles that.",
+    "pro-verb across · semicolon (CE)": "Binning a form; the assistant does that.",
+    "pro-verb across · conjunction (CF)": "Binning a form is easy, and the assistant does that.",
   };
 
   const missed: string[] = [];
@@ -1696,6 +1977,26 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
       [],
       `the scan fires on the page's own DENIAL (${JSON.stringify(denial)}) — the boundary is the ` +
         `thing the page is allowed to state, so the arm must not red on it`,
+    );
+  }
+  // ...and a sentence that merely names the trash in what the assistant READS or REPORTS
+  // stays GREEN too: the bin token there is the assistant's object of knowledge, not an
+  // action of its (the header's "A REPORT IS NOT AN ACTION"). Both were RED under the
+  // head scan — the second newly, from the structural rewrite — and the shipped page
+  // carries neither, so this is the false-positive side of the same rule, pinned here so
+  // a correct future sentence that mentions the assistant and the trash is not reded.
+  for (const report of [
+    "The assistant can tell you where the trash is.",
+    "A form the assistant lists may already be in the trash.",
+    "The assistant shows you which form is in the trash.",
+    "You can ask the assistant whether a form is in the trash.",
+  ]) {
+    assert.deepEqual(
+      assistantBinClaims(report),
+      [],
+      `the scan fires on a sentence where the assistant only READS or REPORTS the bin ` +
+        `(${JSON.stringify(report)}) — the trash token is its object of knowledge, not an action, ` +
+        `and reding on it would block the page from naming the trash at all`,
     );
   }
 });
