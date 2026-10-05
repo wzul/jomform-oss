@@ -152,9 +152,18 @@ const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
 //   fronted gerund      "Restoring a form is something the assistant does."
 //   appositive          "The assistant, not you, deletes the form."
 //
-// This arm closes them: it keys on the assistant and the bin VOCABULARY
-// appearing in the same sentence in the six shapes that credit the action,
-// regardless of which noun the verb hangs off:
+// This arm closes them AND the five families the follow-up t_fa053255 measured as
+// still GREEN under the six-shape scan — counterexamples to the scope claim that
+// version's header made ("…regardless of which noun the verb hangs off"):
+//
+//   genitive subject     "The assistant's job is to bin a form."
+//   it-cleft             "It is the assistant who bins a form."
+//   periphrastic passive "Binning a form is done by the assistant."
+//   appositive variant   "The assistant, rather than you, bins a form."
+//   nominal              "The assistant is the binner of a form."
+//
+// (each scales over all four bin verbs). The scan now keys on the assistant and the
+// bin VOCABULARY appearing in the same sentence in ten shapes that credit the action:
 //
 //   (1) the assistant as SUBJECT of a modal/perfect/future/copula auxiliary,
 //       with a bin word anywhere later in the sentence — "the assistant
@@ -165,18 +174,38 @@ const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
 //       state.
 //   (2) the bare finite or participial verb right on the assistant — "the
 //       assistant bins|trashes|restores|deletes|binning a form" — and the
-//       APPOSITIVE that only interposes ", not you," before it.
+//       APPOSITIVE that only interposes ", not you," (or ", rather than you,")
+//       before it.
 //   (3) the assistant as the TARGET of an infinitive that lands on the bin —
 //       "ask the assistant to bin a form" / "…to move a form to the trash".
 //   (4) the PASSIVE — "a form binned|trashed|restored|deleted by the assistant".
-//   (5) the POSSESSIVE GENITIVE — "binning a form is the assistant's job".
-//   (6) the FRONTED GERUND — "restoring a form is something the assistant does".
+//   (5) the PERIPHRASTIC PASSIVE — "binning a form is done by the assistant":
+//       the agent is reached through the light verb "done by" rather than sitting
+//       right after the participle.
+//   (6) the POSSESSIVE GENITIVE — "binning a form is the assistant's job".
+//   (7) the GENITIVE SUBJECT — "the assistant's job is to bin a form": the bin
+//       word comes AFTER the possessive, so (6)'s ordering misses it.
+//   (8) the IT-CLEFT — "it is|it's the assistant who bins a form".
+//   (9) the NOMINAL — "the assistant is the binner of a form": the only bin word
+//       in the sentence is an agent NOUN, not a verb form.
+//   (10) the FRONTED GERUND — "restoring a form is something the assistant does".
 //
-// Shapes (5) and (6) key on a bin word before "is the assistant's" and on the
-// assistant before "does", so a sentence that DISOWNS the action without a
-// negation ("deleting a form is yours, not the assistant's") stays green: the
-// disowning form puts no bin word before "is the assistant's", nor the assistant
-// before "does".
+// RESIDUAL SCOPE, stated because this scan is an ENUMERATED list and this class has
+// now left residue three rounds running (t_48daca7f, t_5bdeda83, t_fa053255): a
+// closed list of shapes always has a next one it was not taught. Measured against
+// THIS scan, these still credit the assistant and pass GREEN:
+//   "The assistant handles the binning."      (assistant + light verb + gerund noun)
+//   "Binning is what the assistant is for."   (copular predication, no "does")
+//   "It is to the assistant that the form is binned." (topicalised cleft)
+// A structural scan — normalise the sentence, then assert the assistant is the
+// subject of a bin verb — would close the class instead of chasing shapes; until
+// then this list is the boundary of what is tested, not a proof of completeness.
+//
+// A denial the assistant OWNS is not a claim: shapes (1), (7), (8) and (9) carry a
+// not/never lookahead, and the disowning word orders the old note named do not take
+// these shapes. So "deleting a form is yours, not the assistant's" stays green, as
+// do "the assistant cannot delete", "the assistant is not the binner", "it is not
+// the assistant who bins" and "the assistant's job is not to bin".
 //
 // Split out of the assertions so the bite proof below runs the IDENTICAL regex
 // against a mutated page: a proof that exercised a paraphrase of the scan would
@@ -185,6 +214,10 @@ const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
 // to you, not the assistant — deleting a form … restoring it from the trash")
 // must stay GREEN: it names the assistant only to DISOWN the action.
 const BIN_VOCAB = String.raw`(?:bins?|binned|binning|trash(?:es|ed|ing)?|restores?|restored|restoring|deletes?|deleted|deleting)`;
+// The AGENT NOUNS for the same four actions. The NOMINAL shape (9) below credits
+// the assistant as "the binner"/"the deleter" of a form, where no verb form the
+// vocabulary above would key on appears at all.
+const BIN_NOUN = String.raw`(?:binner|binners|trasher|trashers|restorer|restorers|deleter|deleters|destroyer|destroyers)`;
 // The auxiliaries that make the assistant the SUBJECT of the action — a modal, a
 // perfect (has/have/had), a copula (is/was/… going to|about to|able to) or a
 // light verb (takes|moves). `going to` is listed whole so "is going to" matches,
@@ -197,7 +230,11 @@ const ASSISTANT_AUX = String.raw`(?:can|may|will|would|could|should|shall|must|m
 const NOT_A_DENIAL = String.raw`(?!\s*(?:,\s*)?(?:cannot|never)\b)(?!\s*(?:can|may|could|will|would|shall|should|must|might|does|do|did|is|are|was|were|has|have|had)\s+(?:not|never)\b)`;
 // The appositive "the assistant, not you, <verb>" — the clause only DISOWNS "you",
 // not the assistant, so the sentence still credits the assistant and must be RED.
-const APPOSITIVE = String.raw`(?:\s*,\s*(?:not\s+you|not\s+yourself|never\s+you)\s*,)?`;
+// The "rather than you"/"instead of you" variants disown "you" identically, so they
+// are the same shape. A denial the assistant OWNS is a DIFFERENT thing — "the
+// assistant is not the one who bins" — and shape (8) keys that with its own
+// lookahead, so widening this alternation does not swallow it.
+const APPOSITIVE = String.raw`(?:\s*,\s*(?:not\s+you|not\s+yourself|never\s+you|rather\s+than\s+you|instead\s+of\s+you)\s*,)?`;
 const ASSISTANT_BIN_CLAIM = new RegExp(
   [
     // (1) assistant as SUBJECT of a modal/perfect/future/copula auxiliary, bin word
@@ -208,11 +245,25 @@ const ASSISTANT_BIN_CLAIM = new RegExp(
     String.raw`\bassistant\b` + NOT_A_DENIAL + APPOSITIVE + String.raw`\s+` + BIN_VOCAB + String.raw`\b`,
     // (3) the assistant as the TARGET of an infinitive that lands on the bin.
     String.raw`\bassistant\b\s+to\b[^.!?]{0,80}?` + BIN_VOCAB + String.raw`\b`,
-    // (4) the PASSIVE.
+    // (4) the PASSIVE — "a form binned by the assistant".
     String.raw`\b(?:binned|trashed|restored|deleted)\s+by\s+(?:the\s+)?assistant\b`,
-    // (5) the POSSESSIVE GENITIVE — "binning a form is the assistant's job".
+    // (5) the PERIPHRASTIC PASSIVE — the gerund with "is done by the assistant".
+    //     The bare passive (4) keys on the participle right before "by"; the
+    //     gerund + "is done by" is the same agent seen through a light verb.
+    String.raw`\b(?:binning|trashing|restoring|deleting)\b[^.!?]{0,40}?\b(?:is|are|was|were|be|been|gets?|get)\s+done\s+by\s+(?:the\s+)?assistant\b`,
+    // (6) the POSSESSIVE GENITIVE — "binning a form is the assistant's job".
     BIN_VOCAB + String.raw`\b[^.!?]{0,60}\b(?:is|was|are|were|remains?)\s+(?:the\s+|a\s+|your\s+)?assistant(?:’|')s\b`,
-    // (6) the FRONTED GERUND — "restoring a form is something the assistant does".
+    // (7) the GENITIVE SUBJECT — "the assistant's job is to bin a form". The bin
+    //     word comes AFTER the possessive here, so shape (6)'s ordering misses it.
+    //     The lookahead keeps a denial ("...is not to bin") green.
+    String.raw`\bassistant(?:’|')s\s+(?:job|task|work|role|duty|responsibility|purpose|part)\b(?!\s*(?:,\s*)?(?:is\s+)?(?:not|never)\b)[^.!?]{0,120}?` + BIN_VOCAB + String.raw`\b`,
+    // (8) the IT-CLEFT — "it is the assistant who bins a form" (and "it's …").
+    //     The lookahead keeps its denial ("it is not the assistant who bins") green.
+    String.raw`\b(?:it|this|that|which)(?:\s+is|(?:’|')s)\s+(?!\s*(?:not|never)\b)(?:the\s+|a\s+|an\s+)?assistant\b` + NOT_A_DENIAL + String.raw`[^.!?]{0,80}?` + BIN_VOCAB + String.raw`\b`,
+    // (9) the NOMINAL — "the assistant is the binner of a form", where the only bin
+    //     word in the sentence is an agent NOUN, not a verb.
+    String.raw`\bassistant\b` + NOT_A_DENIAL + String.raw`\s+(?:is|was|becomes?|remains?)\s+(?:the\s+|a\s+|an\s+)` + BIN_NOUN + String.raw`\b`,
+    // (10) the FRONTED GERUND — "restoring a form is something the assistant does".
     BIN_VOCAB + String.raw`\b[^.!?]{0,80}\b(?:the\s+|an?\s+)?assistant\b\s+(?:does|do|did|performs?|handles?)\b`,
   ].join("|"),
   "i",
@@ -1512,10 +1563,11 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
 // against the SHIPPED page with one phrasal injection at the anchor the QA card
 // names (docs page line 69, right after "A creation is the one shape the field-edit
 // rule does not cover,"), and every shape the previous regex missed — the three
-// from t_48daca7f plus the seven the follow-up t_5bdeda83 found still GREEN — must
-// go RED, as must the shipped defect sentence it did catch. Nothing on disk is
-// written: the mutation is in memory, on the real page source read at module load.
-test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, the genitive, the gerund and the appositive", () => {
+// from t_48daca7f, the seven the follow-up t_5bdeda83 found still GREEN, and the
+// eighteen the follow-up t_fa053255 found still GREEN — must go RED, as must the
+// shipped defect sentence it did catch. Nothing on disk is written: the mutation is
+// in memory, on the real page source read at module load.
+test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, both genitive orders, the gerund, both appositive variants, the it-cleft, the periphrastic passive and the nominal", () => {
   const shipped = read(DOCS_PAGE);
   const anchor = "A creation is the one shape the field-edit rule does not cover,";
   // Vacuity: if the anchor is gone the injections below land nowhere and this
@@ -1561,6 +1613,30 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "appositive · bin (Y)": "The assistant, not you, bins the form.",
     "appositive · trash (Z)": "The assistant, not you, trashes the form.",
     "appositive · restore (AA)": "The assistant, not you, restores the form.",
+    // t_fa053255 — the residue the six shapes above still missed, each over its
+    // four bin verbs: the genitive SUBJECT, the it-cleft, the periphrastic passive,
+    // the ", rather than you," appositive and the NOMINAL (agent noun).
+    "genitive subject · bin (AB)": "The assistant's job is to bin a form.",
+    "genitive subject · trash (AC)": "The assistant's job is to trash a form.",
+    "genitive subject · restore (AD)": "The assistant's job is to restore a form.",
+    "genitive subject · delete (AE)": "The assistant's job is to delete a form.",
+    "it-cleft · bin (AF)": "It is the assistant who bins a form.",
+    "it-cleft · trash (AG)": "It is the assistant who trashes a form.",
+    "it-cleft · restore (AH)": "It is the assistant who restores a form.",
+    "it-cleft · delete (AI)": "It is the assistant who deletes a form.",
+    "it-cleft · contraction (AJ)": "It's the assistant who deletes a form.",
+    "periphrastic passive · bin (AK)": "Binning a form is done by the assistant.",
+    "periphrastic passive · trash (AL)": "Trashing a form is done by the assistant.",
+    "periphrastic passive · restore (AM)": "Restoring a form is done by the assistant.",
+    "periphrastic passive · delete (AN)": "Deleting a form is done by the assistant.",
+    "appositive rather-than · bin (AO)": "The assistant, rather than you, bins a form.",
+    "appositive rather-than · trash (AP)": "The assistant, rather than you, trashes a form.",
+    "appositive rather-than · restore (AQ)": "The assistant, rather than you, restores a form.",
+    "appositive rather-than · delete (AR)": "The assistant, rather than you, deletes a form.",
+    "nominal · bin (AS)": "The assistant is the binner of a form.",
+    "nominal · trash (AT)": "The assistant is the trasher of a form.",
+    "nominal · restore (AU)": "The assistant is the restorer of a form.",
+    "nominal · delete (AV)": "The assistant is the deleter of a form.",
   };
 
   const missed: string[] = [];
@@ -1594,11 +1670,26 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "the scan fires on the page's own sentence that attributes the bin to the PERSON — it names " +
       "the assistant only to disown the action, so the arm would be red on the correct copy",
   );
-  // ...and the denial shapes the page is allowed to use stay GREEN too.
+  // ...and the denial shapes the page is allowed to use stay GREEN too — including
+  // the denials the four NEW shapes (genitive subject, it-cleft, nominal, appositive)
+  // could have swallowed if their lookaheads or the appositive had been written
+  // carelessly. These are the "not/never" counterparts of the sentences above, and
+  // any widening that reds on one of them is a false positive that would block the
+  // page from stating its own boundary.
   for (const denial of [
     "The assistant cannot delete a form.",
     "The assistant can never delete or archive a form.",
     "The assistant may not restore a form.",
+    "The assistant does not bin a form.",
+    "The assistant will not trash a form.",
+    "The assistant never deletes a form.",
+    "It is not the assistant who bins a form.",
+    "It's not the assistant who deletes the form.",
+    "The assistant's job is not to bin a form.",
+    "The assistant's job is never to delete a form.",
+    "The assistant is not the binner of a form.",
+    "The assistant is not the one who deletes a form.",
+    "Deleting a form is not the assistant's job.",
   ]) {
     assert.deepEqual(
       assistantBinClaims(denial),
