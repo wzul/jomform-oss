@@ -15,7 +15,10 @@
 # the index deliberately does not link any of them (they are reached from their own
 # feature's inline "?"), so it cannot see them. Case 4 is the shape the card exists
 # to keep guarded — a NEW page appearing under app/docs with no entry — which no
-# index-scoped guard can catch. The negative control proves the reverse direction is
+# index-scoped guard can catch. Case 5 (card t_3a5aa9b5) is the shape that survived
+# even the disk arm: a NEW NESTED page, `app/docs/<seg>/<sub>/page.tsx`, whose parent
+# directory is not itself a route, so the flat one-level walk the disk arm shipped
+# with never reached it. The negative control proves the reverse direction is
 # NOT a strict equality: an entry naming a page that is not a docs route stays GREEN.
 #
 # Each case: mutate -> assert the mutation is on disk -> run the BASE guard (expect
@@ -119,26 +122,30 @@ echo "lock:   held for this worktree (${LOCK_FILE##*/})"
 
 LLMS=public/llms-full.txt
 GUARD=src/lib/llmsFullCoverage.test.ts
+# Every probe route directory this harness creates. Two shapes now: a FLAT route
+# (case 4) and a NESTED route under a parent that is NOT itself a route (case 5) —
+# the shape a flat walk cannot reach (card t_3a5aa9b5).
+PROBES="src/app/docs/t-96fb6ab1-probe src/app/docs/t-3a5aa9b5-nested"
 PROBE_ROUTE=src/app/docs/t-96fb6ab1-probe
+PROBE_NESTED=src/app/docs/t-3a5aa9b5-nested/guide/start
 
 OLD_GUARD=$(mktemp)
 LLMS_BAK=$(mktemp)
 cp "$LLMS" "$LLMS_BAK"
 LLMS_SHA=$(sha256sum "$LLMS" | cut -d' ' -f1)
-PROBE_CREATED=0
 fail=0
 
-# ONE trap: restores llms-full.txt and removes the probe route on EVERY exit,
+# ONE trap: restores llms-full.txt and removes every probe route on EVERY exit,
 # interrupts included, and removes every temp this run created (all per-run mktemp).
 OLDTMP="$GUARD.oldcheck.$$.ts"
 SKTMP="$GUARD.selfcheck_skipped.$$.ts"
 NOLOADTMP="$GUARD.selfcheck_loadfail.$$.ts"
 MISSINGTMP="$GUARD.selfcheck_missing.$$.ts"
 cleanup() {
-  local rc=$?
+  local rc=$? d
   cp "$LLMS_BAK" "$LLMS" 2>/dev/null
-  if [ "$PROBE_CREATED" = "1" ]; then rm -rf "$PROBE_ROUTE"; fi
-  rm -f "$OLD_GUARD" "$LLMS_BAK"
+  for d in $PROBES; do rm -rf "$d"; done
+  rm -f "$OLD_GUARD" "$LLMS_BAK" "$FLAT_ARM_GUARD"
   rm -f "$OLDTMP" "$SKTMP" "$NOLOADTMP" "$MISSINGTMP"
   exit "$rc"
 }
@@ -157,6 +164,28 @@ git cat-file -e "${BASE_REV}:${GUARD_IN_REPO}" 2>/dev/null || {
   exit 2
 }
 git show "${BASE_REV}:${GUARD_IN_REPO}" > "$OLD_GUARD"
+
+# The FLAT-disk-arm guard: the merged revision of this SAME guard (the disk arm added
+# by its own PR), captured before CAPABILITY refuses a base that already reads the
+# disk. Case 5 needs it because case 5's shape survived BOTH the index-scoped base and
+# the flat disk arm (card t_3a5aa9b5). Refuse by name if it cannot be read, never
+# silently fall back to a base that would make the case prove nothing.
+FLAT_ARM_GUARD=$(mktemp)
+FLAT_ARM_REF="${BITEPROOF_FLAT_ARM:-d2b9142c478804a084aa8edae783f77ad68aedda}"  # PR 972 (the flat disk arm)
+if ! git cat-file -e "${FLAT_ARM_REF}^{commit}" 2>/dev/null; then
+  echo "BITEPROOF REFUSED: cannot resolve the flat-disk-arm revision ${FLAT_ARM_REF} (set BITEPROOF_FLAT_ARM)." >&2
+  exit 2
+fi
+git cat-file -e "${FLAT_ARM_REF}:${GUARD_IN_REPO}" 2>/dev/null || {
+  echo "BITEPROOF REFUSED: ${FLAT_ARM_REF} does not carry ${GUARD_IN_REPO}." >&2
+  exit 2
+}
+git show "${FLAT_ARM_REF}:${GUARD_IN_REPO}" > "$FLAT_ARM_GUARD"
+if ! grep -qE 'readdirSync|docsRoutesOnDisk' "$FLAT_ARM_GUARD"; then
+  echo "BITEPROOF REFUSED: ${FLAT_ARM_REF} does not read the pages on disk, so it is not the" >&2
+  echo "flat disk arm case 5 must measure the old column against." >&2
+  exit 2
+fi
 
 # CAPABILITY of the base: if the base guard already reads the pages on disk, it has
 # caught up to this tree and there is no gap to reproduce — every case would print
@@ -252,10 +281,10 @@ refuse() {
   exit 2
 }
 
-check() { # check <label> <old-want> <new-want> [must-name]
-  local label="$1" old_want="$2" new_want="$3" needle="${4:-}"
+check() { # check <label> <old-want> <new-want> [must-name] [old-guard-file]
+  local label="$1" old_want="$2" new_want="$3" needle="${4:-}" old_file="${5:-$OLD_GUARD}"
   local oldtmp="$OLDTMP"
-  cp "$OLD_GUARD" "$oldtmp"
+  cp "$old_file" "$oldtmp"
   run_guard "$oldtmp"; rm -f "$oldtmp"
   [ "$VERDICT" = REFUSED ] && refuse "$label" "OLD"
   if [ "$VERDICT" != "$old_want" ]; then
@@ -314,7 +343,7 @@ done
 
 echo
 echo "== CASE 4: a NEW page on disk with no entry (the 'cannot go missing again' shape) =="
-mkdir -p "$PROBE_ROUTE" && PROBE_CREATED=1
+mkdir -p "$PROBE_ROUTE"
 printf 'export default function Probe() { return null; }\n' > "$PROBE_ROUTE/page.tsx"
 if [ -f "$PROBE_ROUTE/page.tsx" ] && ! grep -qF "jomform.com/docs/t-96fb6ab1-probe)" "$LLMS"; then
   echo "       mutation on disk: $PROBE_ROUTE/page.tsx exists with no llms-full.txt entry"
@@ -322,8 +351,28 @@ if [ -f "$PROBE_ROUTE/page.tsx" ] && ! grep -qF "jomform.com/docs/t-96fb6ab1-pro
 else
   echo "  *** MUTATION DID NOT APPLY: probe route ***"; fail=1
 fi
-rm -rf "$PROBE_ROUTE"; PROBE_CREATED=0
+rm -rf "$PROBE_ROUTE"
 echo "       probe route removed"
+
+echo
+echo "== CASE 5: a NEW NESTED page whose parent is NOT a route (card t_3a5aa9b5) =="
+# The nesting is the point: `t-3a5aa9b5-nested/` has NO page.tsx, so a walk that
+# filters on the DIRECTORY having a page.tsx never reaches guide/start/page.tsx.
+mkdir -p "$PROBE_NESTED"
+printf 'export default function Probe() { return null; }\n' > "$PROBE_NESTED/page.tsx"
+if [ -f "$PROBE_NESTED/page.tsx" ] \
+   && [ ! -f "src/app/docs/t-3a5aa9b5-nested/page.tsx" ] \
+   && ! grep -qF "jomform.com/docs/t-3a5aa9b5-nested/guide/start)" "$LLMS"; then
+  echo "       mutation on disk: $PROBE_NESTED/page.tsx exists under a non-route parent, with no entry"
+  # OLD column is the FLAT disk arm (PR 972), not origin/main's index-scoped guard:
+  # that is the revision this card found the hole in, and it must stay GREEN on a
+  # nested page — the flat walk cannot reach it.
+  check "nested page under a non-route parent" GREEN RED "/docs/t-3a5aa9b5-nested/guide/start" "$FLAT_ARM_GUARD"
+else
+  echo "  *** MUTATION DID NOT APPLY: nested probe route ***"; fail=1
+fi
+rm -rf "src/app/docs/t-3a5aa9b5-nested"
+echo "       nested probe route removed"
 
 echo
 echo "== NEGATIVE CONTROL: an entry naming a page that is NOT a docs route stays GREEN in both =="

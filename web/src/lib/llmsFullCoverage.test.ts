@@ -22,7 +22,10 @@
 //   1. (disk -> named) Every real page under app/docs is named in llms-full.txt. A
 //      new guide cannot be added without its entry, however it is reached — the
 //      check the index-scoped version could not make, and the one that would have
-//      caught /docs/builder, /docs/chat and /docs/feedback.
+//      caught /docs/builder, /docs/chat and /docs/feedback. "Every real page" is the
+//      RECURSIVE walk in docsRoutes.ts: a nested route whose parent directory is not
+//      itself a route (`app/docs/<seg>/<sub>/page.tsx`) is a page too, and the flat
+//      walk this guard carried until t_3a5aa9b5 skipped it silently.
 //   2. (index -> named) Every guide the /docs index links is named in llms-full.txt
 //      (the original check, kept: it is the reader a /docs/security-style
 //      regression hides behind).
@@ -39,9 +42,21 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import {
+  readFileSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  realpathSync,
+} from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+// The recursive `app/docs` walk, shared with sitemapCoverage.test.ts and
+// docsProseConvention.test.ts — see that file for why ONE walk (card t_3a5aa9b5).
+import { docsRoutesOnDisk } from "./docsRoutes.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
@@ -71,24 +86,16 @@ function guidePathsNamedInLlmsFull(src: string): Set<string> {
   return paths;
 }
 
-// docsRoutesOnDisk lists every real page under app/docs as `/docs` or
-// `/docs/<slug>` — the set the agent's context file must cover, regardless of
-// whether the index links the page. A directory with no `page.tsx` is not a route
-// (the filter keeps a helper directory from being reported as a missing entry).
-function docsRoutesOnDisk(): string[] {
-  const routes = existsSync(join(DOCS_DIR, "page.tsx")) ? ["/docs"] : [];
-  for (const e of readdirSync(DOCS_DIR, { withFileTypes: true })) {
-    if (!e.isDirectory()) continue;
-    if (!existsSync(join(DOCS_DIR, e.name, "page.tsx"))) continue;
-    routes.push(`/docs/${e.name}`);
-  }
-  return routes.sort();
-}
+// docsRoutesOnDisk (imported from ./docsRoutes.ts) lists every real page under
+// app/docs as `/docs` or `/docs/<slug>` — the set the agent's context file must
+// cover, regardless of whether the index links the page. The walk is RECURSIVE and
+// keys on `page.tsx`, so a nested route whose parent directory is not itself a route
+// is counted (the flat walk this file used to carry missed it — card t_3a5aa9b5).
 
 test("every docs page on disk is named in llms-full.txt (a feature-only guide cannot go missing)", () => {
   const llms = read("../../public/llms-full.txt");
 
-  const onDisk = docsRoutesOnDisk();
+  const onDisk = docsRoutesOnDisk(DOCS_DIR);
   const named = guidePathsNamedInLlmsFull(llms);
 
   // Guard against passing vacuously: the walk and the pattern must both have
@@ -207,4 +214,42 @@ test("the comparison is not vacuous: a sentinel path is absent from both sides",
     "the llms helper read `/docs` as a prefix of `/docs/sales`, so a named guide " +
       "would spuriously satisfy the bare index route",
   );
+});
+
+// The DISK walk itself is exercised on a synthetic tree, so the shape this guard
+// exists to catch is proven from the guard rather than only from the on-demand
+// bite harness (web/scripts/biteproof_llms_full_coverage.sh, case 5). The fixture
+// copies the two shapes that matter: a nested route under a parent that is NOT
+// itself a route, and the flat route beside it. Without the recursion the nested
+// route is invisible, which is exactly what happened on origin/main until
+// t_3a5aa9b5 — so this test is the regression's own tripwire if the walk is ever
+// flattened again.
+test("the disk walk reaches a nested route whose parent is not a route", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "docsRoutes-")));
+  try {
+    // A nested route under a NON-route parent: docs/probe/guides/start/page.tsx.
+    mkdirSync(join(root, "probe", "guides", "start"), { recursive: true });
+    writeFileSync(join(root, "probe", "guides", "start", "page.tsx"), "export default function P(){return null;}\n");
+    // A flat route, plus a real file directly under the root that is NOT a route.
+    mkdirSync(join(root, "flat"));
+    writeFileSync(join(root, "flat", "page.tsx"), "export default function P(){return null;}\n");
+    writeFileSync(join(root, "notaroute.tsx"), "export default function P(){return null;}\n");
+
+    const routes = docsRoutesOnDisk(root);
+    assert.ok(
+      routes.includes("/docs/probe/guides/start"),
+      `the walk did not reach the nested route /docs/probe/guides/start — it returned ` +
+        `[${routes.join(", ")}], so a nested guide can be added to app/docs with no entry ` +
+        `in llms-full.txt and this guard stays green (the t_3a5aa9b5 hole)`,
+    );
+    assert.ok(routes.includes("/docs/flat"), `the flat route /docs/flat is missing from [${routes.join(", ")}]`);
+    assert.deepEqual(
+      routes,
+      ["/docs/flat", "/docs/probe/guides/start"],
+      "the walk reported something other than the two real routes — a .tsx that is not a page.tsx " +
+        "is not a route, and neither is the non-route parent directory",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

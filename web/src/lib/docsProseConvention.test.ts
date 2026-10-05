@@ -105,24 +105,22 @@
 //   (node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
 import ts from "typescript";
+
+// The recursive `app/docs` walk, shared with llmsFullCoverage.test.ts and
+// sitemapCoverage.test.ts — see that file for why ONE walk (card t_3a5aa9b5).
+import { filesUnder } from "./docsRoutes.ts";
 
 const DOCS_DIR = fileURLToPath(new URL("../app/docs", import.meta.url));
 
-// Every .tsx under src/app/docs, including the shared layout and the docs
-// chrome island (a marker in any of them renders just as literally).
+// Every .tsx under src/app/docs, RECURSIVELY — including the shared layout and the
+// docs chrome island at the root (a marker in any of them renders just as literally)
+// and any nested route under a parent that is not itself a route (card t_3a5aa9b5;
+// the walk this file used to carry was one level deep and could not reach it).
 function docsFiles(): string[] {
-  const out: string[] = [];
-  for (const e of readdirSync(DOCS_DIR, { withFileTypes: true })) {
-    if (e.isFile() && e.name.endsWith(".tsx")) out.push(join(DOCS_DIR, e.name));
-    if (e.isDirectory() && existsSync(join(DOCS_DIR, e.name, "page.tsx"))) {
-      out.push(join(DOCS_DIR, e.name, "page.tsx"));
-    }
-  }
-  return out.sort();
+  return filesUnder(DOCS_DIR).filter((f) => f.endsWith(".tsx") && !f.endsWith(".d.ts"));
 }
 
 type Finding = { file: string; line: number; kind: string; text: string };

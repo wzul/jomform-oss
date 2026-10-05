@@ -50,9 +50,13 @@
 //   (node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+
+// The recursive `app/docs` walk, shared with llmsFullCoverage.test.ts and
+// docsProseConvention.test.ts — see that file for why ONE walk (card t_3a5aa9b5).
+import { docsRoutesOnDisk } from "./docsRoutes.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const pathOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
@@ -91,18 +95,10 @@ function parseApexPages(src: string): string[] {
 
 const APEX_PAGES = parseApexPages(SITEMAP);
 
-// Every route under app/docs that is a real page, as `/docs` or `/docs/<slug>`.
-// A directory with no `page.tsx` is not a route (no such directory exists today;
-// the filter keeps a helper directory from being reported as a missing entry).
-function docsRoutesOnDisk(): string[] {
-  const routes = existsSync(join(DOCS_DIR, "page.tsx")) ? ["/docs"] : [];
-  for (const e of readdirSync(DOCS_DIR, { withFileTypes: true })) {
-    if (!e.isDirectory()) continue;
-    if (!existsSync(join(DOCS_DIR, e.name, "page.tsx"))) continue;
-    routes.push(`/docs/${e.name}`);
-  }
-  return routes.sort();
-}
+// docsRoutesOnDisk (imported from ./docsRoutes.ts) returns every route under
+// app/docs that is a real page, as `/docs` or `/docs/<slug>`. The walk is RECURSIVE
+// and keys on `page.tsx`, so a nested route under a non-route parent is counted; it
+// used to be a flat one-level walk, which skipped it silently (card t_3a5aa9b5).
 
 // The page file an apex entry must resolve to: `/docs/x` -> app/docs/x/page.tsx,
 // `/legal/privacy` -> app/legal/privacy/page.tsx, and "" -> the landing page.
@@ -157,7 +153,7 @@ test("/docs/chat is in the sitemap (the route a crawler could not find)", () => 
 });
 
 test("every docs page on disk is in the sitemap (a new guide cannot go missing again)", () => {
-  const routes = docsRoutesOnDisk();
+  const routes = docsRoutesOnDisk(DOCS_DIR);
   // Vacuity: a walk that found nothing would satisfy the assertion below while
   // looking at no page at all. The docs tree carries 18 routes today.
   assert.ok(
