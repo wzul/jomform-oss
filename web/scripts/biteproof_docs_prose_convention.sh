@@ -278,8 +278,8 @@ run_guard() { node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "$GUARD
 # broken (the rule web/scripts/biteproof_docs_tool_claims.sh established).
 verdict() {
   local o="$1"
-  if printf '%s' "$o" | grep -qE '^ℹ fail [1-9]' && printf '%s' "$o" | grep -qE '^ℹ pass [1-9]'; then echo RED; return; fi
-  if printf '%s' "$o" | grep -qE '^ℹ pass [1-9]' && printf '%s' "$o" | grep -qE '^ℹ fail 0' && printf '%s' "$o" | grep -qE '^✔ '; then echo GREEN; return; fi
+  if grep -qE '^ℹ fail [1-9]' <<<"$o" && grep -qE '^ℹ pass [1-9]' <<<"$o"; then echo RED; return; fi
+  if grep -qE '^ℹ pass [1-9]' <<<"$o" && grep -qE '^ℹ fail 0' <<<"$o" && grep -qE '^✔ ' <<<"$o"; then echo GREEN; return; fi
   echo REFUSED
 }
 
@@ -307,7 +307,7 @@ f="src/app/docs/chat/page.tsx"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{pri
 perl -0pi -e 's/The fourth creates: upsert_form is proposable/The fourth creates: `upsert_form` is proposable/' "$f"
 grep -q 'The fourth creates: `upsert_form`' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case1=$v")
-if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'docs/chat/page.tsx'; then
+if [ "$v" = RED ] && grep -q 'docs/chat/page.tsx' <<<"$out"; then
   echo "  BITES: RED naming docs/chat/page.tsx (the exact sentence /docs/chat shipped)"
 else
   echo "  DID NOT BITE: verdict=$v (wanted RED naming docs/chat)"; printf '%s\n' "$out" | tail -20; fail=1
@@ -319,7 +319,7 @@ f="src/app/docs/security/page.tsx"; snapshot "$f"; sha="$(sha256sum "$f" | awk '
 perl -0pi -e 's/over MCP with list_trusted_devices, revoke_trusted_device/over MCP with `list_trusted_devices`, revoke_trusted_device/' "$f"
 grep -q 'with `list_trusted_devices`' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case2=$v")
-if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'docs/security/page.tsx'; then
+if [ "$v" = RED ] && grep -q 'docs/security/page.tsx' <<<"$out"; then
   echo "  BITES: RED naming docs/security/page.tsx (the guard is not anchored on one file)"
 else
   echo "  DID NOT BITE: verdict=$v (wanted RED naming docs/security)"; printf '%s\n' "$out" | tail -20; fail=1
@@ -331,7 +331,7 @@ f="src/app/docs/sales/page.tsx"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{pr
 perl -0pi -e 's/reports the mode as mode \(payment/reports the mode as `mode` (payment/' "$f"
 grep -q 'as `mode` (payment' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case3=$v")
-if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'docs/sales/page.tsx'; then
+if [ "$v" = RED ] && grep -q 'docs/sales/page.tsx' <<<"$out"; then
   echo "  BITES: RED naming docs/sales/page.tsx"
 else
   echo "  DID NOT BITE: verdict=$v (wanted RED naming docs/sales)"; printf '%s\n' "$out" | tail -20; fail=1
@@ -373,7 +373,7 @@ f="src/app/docs/layout.tsx"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print 
 perl -0pi -e 's/label: "Overview & features"/label: "Overview \& features `probe`"/' "$f"
 grep -q 'features `probe`' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case6=$v")
-if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'docs/layout.tsx'; then
+if [ "$v" = RED ] && grep -q 'docs/layout.tsx' <<<"$out"; then
   echo "  BITES: RED naming docs/layout.tsx (the walk covers the shared chrome too)"
 else
   echo "  DID NOT BITE: verdict=$v (wanted RED naming docs/layout.tsx)"; printf '%s\n' "$out" | tail -20; fail=1
@@ -388,9 +388,9 @@ restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha
 # the name rather than the count alone.
 fails_findings_only() {
   local o="$1"
-  printf '%s' "$o" | grep -qE '^ℹ fail 1$' &&
-    printf '%s' "$o" | grep -q '^✖ no /docs prose carries a backtick marker' &&
-    ! printf '%s' "$o" | grep -q '^✖ the guard is reading the real docs tree'
+  grep -qE '^ℹ fail 1$' <<<"$o" &&
+    grep -q '^✖ no /docs prose carries a backtick marker' <<<"$o" &&
+    ! grep -q '^✖ the guard is reading the real docs tree' <<<"$o"
 }
 
 # The IMPORTED-prose surface (card t_763c28c2) fails in its OWN test, not the
@@ -399,9 +399,9 @@ fails_findings_only() {
 # attribution rule is the same shape with that test's name.
 fails_imported_findings_only() {
   local o="$1"
-  printf '%s' "$o" | grep -qE '^ℹ fail 1$' &&
-    printf '%s' "$o" | grep -q '^✖ no /docs imported prose carries a backtick marker' &&
-    ! printf '%s' "$o" | grep -q '^✖ the imported-prose check is reading the real rendered data'
+  grep -qE '^ℹ fail 1$' <<<"$o" &&
+    grep -q '^✖ no /docs imported prose carries a backtick marker' <<<"$o" &&
+    ! grep -q '^✖ the imported-prose check is reading the real rendered data' <<<"$o"
 }
 
 # The i18n-LABEL surface (card t_cd81632d) fails in its OWN test too: a marker in
@@ -410,9 +410,9 @@ fails_imported_findings_only() {
 # not by the imported one.
 fails_label_findings_only() {
   local o="$1"
-  printf '%s' "$o" | grep -qE '^ℹ fail 1$' &&
-    printf '%s' "$o" | grep -q '^✖ no /docs i18n label carries a backtick marker' &&
-    ! printf '%s' "$o" | grep -q '^✖ the i18n-label check is reading the real rendered keys'
+  grep -qE '^ℹ fail 1$' <<<"$o" &&
+    grep -q '^✖ no /docs i18n label carries a backtick marker' <<<"$o" &&
+    ! grep -q '^✖ the i18n-label check is reading the real rendered keys' <<<"$o"
 }
 
 # The VACUITY BOUND for the i18n-label surface: the new leg's own vacuity test
@@ -420,7 +420,7 @@ fails_label_findings_only() {
 # nothing about the reader (the parse could have found no label at all), and a
 # GREEN would not prove the leg looked at anything.
 i18n_vacuity_ran() {
-  printf '%s' "$1" | grep -q '^✔ the i18n-label check is reading the real rendered keys'
+  grep -q '^✔ the i18n-label check is reading the real rendered keys' <<<"$1"
 }
 
 # ── the two shapes card t_8580357e widened the guard to see ───────────────────
@@ -433,7 +433,7 @@ printf 'const QA_RAWTEXT = <p>raw jsx prose with `raw_marker` inside</p>;\n' > "
 sed -i "/^import type { Metadata } from \"next\";/r $snap/p7.txt" "$f"
 grep -q 'raw jsx prose with `raw_marker` inside' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case7=$v")
-if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'docs/security/page.tsx' && printf '%s' "$out" | grep -q '\[raw JSX text\]' && fails_findings_only "$out"; then
+if [ "$v" = RED ] && grep -q 'docs/security/page.tsx' <<<"$out" && grep -q '\[raw JSX text\]' <<<"$out" && fails_findings_only "$out"; then
   echo "  BITES: RED naming docs/security/page.tsx [raw JSX text] (the JsxText hole is closed)"
 else
   echo "  DID NOT BITE: verdict=$v (wanted RED naming docs/security, [raw JSX text], one findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
@@ -449,7 +449,7 @@ printf 'const QA_ESCAPED = `prose with \\`escaped_marker\\` inside`;\n' > "$snap
 sed -i "/^import type { Metadata } from \"next\";/r $snap/p8.txt" "$f"
 grep -q 'prose with \\`escaped_marker\\` inside' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case8=$v")
-if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'docs/security/page.tsx' && printf '%s' "$out" | grep -q '\[template literal\]' && fails_findings_only "$out"; then
+if [ "$v" = RED ] && grep -q 'docs/security/page.tsx' <<<"$out" && grep -q '\[template literal\]' <<<"$out" && fails_findings_only "$out"; then
   echo "  BITES: RED naming docs/security/page.tsx [template literal] (the escaped-marker hole is closed)"
 else
   echo "  DID NOT BITE: verdict=$v (wanted RED naming docs/security, [template literal], one findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
@@ -494,7 +494,7 @@ printf 'const QA_TMPLEXPR = (x: string) => `prose ${x} with \\`te_marker\\` insi
 sed -i "/^import type { Metadata } from \"next\";/r $snap/p12.txt" "$f"
 grep -qF 'prose ${x} with \`te_marker\` inside' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case12=$v")
-if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'docs/security/page.tsx' && printf '%s' "$out" | grep -q '\[template expression\]' && printf '%s' "$out" | grep -q 'te_marker' && fails_findings_only "$out"; then
+if [ "$v" = RED ] && grep -q 'docs/security/page.tsx' <<<"$out" && grep -q '\[template expression\]' <<<"$out" && grep -q 'te_marker' <<<"$out" && fails_findings_only "$out"; then
   echo "  BITES: RED naming docs/security/page.tsx [template expression] (the TemplateExpression hole is closed)"
 else
   echo "  DID NOT BITE: verdict=$v (wanted RED naming docs/security, [template expression], one findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
@@ -532,7 +532,7 @@ f="src/lib/apiExamples.gen.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{pri
 perl -0pi -e 's/Leave slug out and it is generated/Leave `slug` out and it is generated/' "$f"
 grep -q 'Leave `slug` out' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case10=$v")
-if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'src/lib/apiExamples.gen.ts' && fails_imported_findings_only "$out"; then
+if [ "$v" = RED ] && grep -q 'src/lib/apiExamples.gen.ts' <<<"$out" && fails_imported_findings_only "$out"; then
   echo "  BITES: RED naming src/lib/apiExamples.gen.ts (the imported prose the DOCS_DIR walk cannot see)"
 else
   echo "  DID NOT BITE: verdict=$v (wanted RED naming src/lib/apiExamples.gen.ts, one imported-findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
@@ -565,7 +565,7 @@ f="src/lib/apiExamples.gen.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{pri
 perl -0pi -e 's/"title": "3\. Create a form"/"title": "3. Create a `form`"/' "$f"
 grep -q '3. Create a `form`' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case14=$v")
-if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'src/lib/apiExamples.gen.ts' && printf '%s' "$out" | grep -q '\[{e.title}\]' && fails_imported_findings_only "$out"; then
+if [ "$v" = RED ] && grep -q 'src/lib/apiExamples.gen.ts' <<<"$out" && grep -q '\[{e.title}\]' <<<"$out" && fails_imported_findings_only "$out"; then
   echo "  BITES: RED naming src/lib/apiExamples.gen.ts [{e.title}] (the example heading is prose too)"
 else
   echo "  DID NOT BITE: verdict=$v (wanted RED naming src/lib/apiExamples.gen.ts, [{e.title}], one imported-findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
@@ -577,7 +577,7 @@ f="src/lib/openapiSpec.gen.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{pri
 perl -0pi -e 's/"policy": "2 per second per IP, burst 6"/"policy": "2 per `second` per IP, burst 6"/g' "$f"
 grep -q '2 per `second` per IP' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case15=$v")
-if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'src/lib/openapiSpec.gen.ts' && printf '%s' "$out" | grep -q '\[{e.rateLimit}\]' && fails_imported_findings_only "$out"; then
+if [ "$v" = RED ] && grep -q 'src/lib/openapiSpec.gen.ts' <<<"$out" && grep -q '\[{e.rateLimit}\]' <<<"$out" && fails_imported_findings_only "$out"; then
   echo "  BITES: RED naming src/lib/openapiSpec.gen.ts [{e.rateLimit}] (the throttle policy is prose too)"
 else
   echo "  DID NOT BITE: verdict=$v (wanted RED naming src/lib/openapiSpec.gen.ts, [{e.rateLimit}], one imported-findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
@@ -618,8 +618,8 @@ f="src/components/i18nDict.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{pri
 perl -0pi -e 's/"docs\.catSecurity": \{ en: "Security",/"docs.catSecurity": { en: "Security `label_probe`",/' "$f"
 grep -qF '"docs.catSecurity": { en: "Security `label_probe`"' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case17=$v")
-if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'src/components/i18nDict.ts' && \
-   printf '%s' "$out" | grep -q 'label_probe' && fails_label_findings_only "$out" && i18n_vacuity_ran "$out"; then
+if [ "$v" = RED ] && grep -q 'src/components/i18nDict.ts' <<<"$out" && \
+   grep -q 'label_probe' <<<"$out" && fails_label_findings_only "$out" && i18n_vacuity_ran "$out"; then
   echo "  BITES: RED naming src/components/i18nDict.ts (the label the DOCS_DIR walk cannot see),"
   echo "         one failing test, and it is the label-findings rule; the vacuity bound ran GREEN"
 else
@@ -676,7 +676,7 @@ f="src/lib/openapiSpec.gen.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{pri
 perl -0pi -e 's/"tags": \[\n          "Profile"\n        \],\n        "x-jomform-access": "session"/"tags": [\n          "Pro`file"\n        ],\n        "x-jomform-access": "session"/' "$f"
 grep -q '"Pro`file"' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case19=$v")
-if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'src/lib/openapiSpec.gen.ts' && printf '%s' "$out" | grep -q '\[{group.tag}\]' && fails_imported_findings_only "$out"; then
+if [ "$v" = RED ] && grep -q 'src/lib/openapiSpec.gen.ts' <<<"$out" && grep -q '\[{group.tag}\]' <<<"$out" && fails_imported_findings_only "$out"; then
   echo "  BITES: RED naming src/lib/openapiSpec.gen.ts [{group.tag}] (the group heading is prose too)"
 else
   echo "  DID NOT BITE: verdict=$v (wanted RED naming src/lib/openapiSpec.gen.ts, [{group.tag}], one imported-findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
