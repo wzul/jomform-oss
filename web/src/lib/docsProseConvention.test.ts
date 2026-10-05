@@ -336,7 +336,7 @@ test("no /docs prose carries a backtick marker (these pages render plain text)",
   );
 });
 
-// ── the IMPORTED-prose surface (card t_763c28c2) ─────────────────────────────
+// ── the IMPORTED-prose surface (cards t_763c28c2, t_8f684cfe) ────────────────
 //
 // The walk above is scoped to src/app/docs, so it can only see prose a page
 // DECLARES itself — a `body: "…"` string, raw JSX text, or a template literal.
@@ -347,13 +347,25 @@ test("no /docs prose carries a backtick marker (these pages render plain text)",
 // reads, so the walk reported GREEN while the live page rendered 20 literal
 // backticks (measured on jomform.com 2026-10-05, fresh browser state).
 //
+// The first cut of this leg read only four fields — `{e.why}`/`{e.note}` and
+// `{e.summary}`/`{e.description}` (card t_763c28c2). It missed two more the page
+// prints as plain JSX text, which card t_8f684cfe drove RED and added:
+//   * `{e.title}`, the worked-example HEADING (api/page.tsx:139);
+//   * `{e.rateLimit}`, the throttle policy (:388 and the throttled list at :291,
+//     shaped from x-jomform-rate-limit.policy).
+// Both are imported strings in neither the page source nor the four fields above,
+// so a marker in either was invisible to this leg — measured on the t_763c28c2
+// head: a marker in an example title left the suite at 4 pass / 0 fail.
+//
 // This second surface is keyed on the RENDER SITE, not on the bare string: the
 // fields below are the ones the page PRINTS as plain text. `e.curl` is
 // deliberately NOT among them — it is rendered inside `<code>`, the supported way
 // to show code, so a backtick in a curl string (or in a `<code>` template
 // literal) is code the page means to show, exactly as the DOCS_DIR walk treats
-// it. Adding a field here that the page does not render would assert blindly;
-// the vacuity test below pins each render site against the page source.
+// it. `e.path` and `e.expectContains` are excluded for the same reason (both are
+// inside `<code>` at :377 and :146 respectively). Adding a field here that the
+// page does not render would assert blindly; the vacuity test below pins each
+// render site against the page source.
 type ImportedProse = { module: string; surface: string; field: string; text: string };
 
 function importedProseValues(): ImportedProse[] {
@@ -363,11 +375,20 @@ function importedProseValues(): ImportedProse[] {
   for (const e of apiExamples) {
     out.push({ module: EXAMPLES_MOD, surface: `docs/api example "${e.id}"`, field: "{e.why}", text: e.why });
     out.push({ module: EXAMPLES_MOD, surface: `docs/api example "${e.id}"`, field: "{e.note}", text: e.note });
+    // The example's HEADING (api/page.tsx:139, `{e.title}`) is plain JSX text
+    // too, so a marker in a title reaches the reader exactly as a marker in a
+    // note does (card t_8f684cfe). It is a separate generated field from `note`
+    // and was the one imported string the first cut of this leg never read.
+    out.push({ module: EXAMPLES_MOD, surface: `docs/api example "${e.id}"`, field: "{e.title}", text: e.title });
   }
   for (const e of specEndpoints()) {
     const where = `docs/api endpoint ${e.method} ${e.path}`;
     out.push({ module: SPEC_MOD, surface: where, field: "{e.summary}", text: e.summary });
     out.push({ module: SPEC_MOD, surface: where, field: "{e.description}", text: e.description });
+    // The THROTTLE policy (api/page.tsx:388 `rate limited: {e.rateLimit}` and the
+    // throttled list at :291) is likewise plain text; it is shaped from the
+    // contract's x-jomform-rate-limit.policy (card t_8f684cfe).
+    out.push({ module: SPEC_MOD, surface: where, field: "{e.rateLimit}", text: e.rateLimit });
   }
   return out;
 }
@@ -390,6 +411,24 @@ test("the imported-prose check is reading the real rendered data (it cannot pass
       `example "${e.id}"'s note is not among the checked values — a marker there would be invisible`,
     );
   }
+  // The two fields card t_8f684cfe added must really be in the set, keyed to the
+  // surface that renders them: the render-site loop below iterates whatever
+  // fields are present, so dropping one of these pushes would leave it passing
+  // while the field became invisible again. Asserted per-item, not by count.
+  for (const e of apiExamples) {
+    assert.ok(
+      IMPORTED_PROSE.some((p) => p.field === "{e.title}" && p.text === e.title && p.surface.includes(e.id)),
+      `example "${e.id}"'s title is not among the checked values — a marker there would be invisible`,
+    );
+  }
+  for (const e of specEndpoints()) {
+    assert.ok(
+      IMPORTED_PROSE.some(
+        (p) => p.field === "{e.rateLimit}" && p.surface.includes(`${e.method} ${e.path}`),
+      ),
+      `endpoint ${e.method} ${e.path}'s rateLimit is not among the checked values — a marker there would be invisible`,
+    );
+  }
   // Every field this file claims to cover must have a RENDER SITE in the page, or
   // the check is asserting a string nobody prints. Comments are stripped so a
   // field merely NAMED in a comment cannot satisfy this.
@@ -404,11 +443,16 @@ test("the imported-prose check is reading the real rendered data (it cannot pass
       `the page has no render site for ${field} — this check would assert a string the reader never sees`,
     );
   }
-  // And the code-sample field must be excluded, or every curl command would be
-  // reported: the page renders it inside <code>, the supported shape.
+  // And the code-sample fields must be excluded, or every curl command (and every
+  // path / expected-fragment) would be reported: the page renders all of them
+  // inside <code>, the supported shape.
   assert.ok(
     IMPORTED_PROSE.every((p) => !p.field.includes("curl")),
     "e.curl is in the imported-prose set; it is a code sample (rendered in <code>) and must not be judged as prose",
+  );
+  assert.ok(
+    IMPORTED_PROSE.every((p) => p.field !== "{e.path}" && p.field !== "{e.expectContains}"),
+    "a <code>-rendered field (e.path / e.expectContains) is in the imported-prose set; those are code samples and must not be judged as prose",
   );
 });
 

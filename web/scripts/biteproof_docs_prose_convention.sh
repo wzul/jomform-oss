@@ -50,6 +50,20 @@
 #       renders inside <code>, must stay GREEN, so the new surface does not flag
 #       every code sample.
 #
+#   CARD t_8f684cfe CLOSED THE TWO FIELDS THE t_763c28c2 LEG MISSED — the page
+#   prints two more imported strings as PLAIN JSX text, and the leg read only
+#   {e.why}/{e.note} and {e.summary}/{e.description}, so a marker in either was
+#   invisible to it (measured on the t_763c28c2 head: a marker in an example title
+#   left the suite at 4 pass / 0 fail):
+#     * CASE 14 — a marker in an example TITLE ({e.title}, the heading at
+#       api/page.tsx:139), which must be RED naming apiExamples.gen.ts.
+#     * CASE 15 — a marker in an endpoint's THROTTLE policy ({e.rateLimit}, the
+#       x-jomform-rate-limit.policy the page prints at :388 and in the throttled
+#       list at :291), which must be RED naming openapiSpec.gen.ts.
+#     * CASE 16 — the negative control: a backtick in `path`, which the page
+#       renders inside <code> like `curl`, must stay GREEN (so the surface does not
+#       flag the other code samples either).
+#
 # WHAT IT DOES
 #   It snapshots each file it mutates into a scratch dir, applies one mutation,
 #   runs the REAL guard, requires the verdict this case predicts, and restores the
@@ -337,12 +351,57 @@ else
 fi
 restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
 
+# ── the two fields the t_763c28c2 leg missed (card t_8f684cfe) ─────────────────
+# The imported leg read {e.why}/{e.note} and {e.summary}/{e.description} only, so a
+# marker in the example HEADING or in an endpoint's THROTTLE policy — both printed
+# as plain JSX text — was invisible. CASE 14 drives the title, CASE 15 the policy,
+# and CASE 16 is the negative control that keeps the widened leg from flagging the
+# other <code>-rendered code samples (path).
+echo "== CASE 14: a marker in an example TITLE ({e.title}) must be RED ==="
+f="src/lib/apiExamples.gen.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+perl -0pi -e 's/"title": "3\. Create a form"/"title": "3. Create a `form`"/' "$f"
+grep -q '3. Create a `form`' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case14=$v")
+if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'src/lib/apiExamples.gen.ts' && printf '%s' "$out" | grep -q '\[{e.title}\]' && fails_imported_findings_only "$out"; then
+  echo "  BITES: RED naming src/lib/apiExamples.gen.ts [{e.title}] (the example heading is prose too)"
+else
+  echo "  DID NOT BITE: verdict=$v (wanted RED naming src/lib/apiExamples.gen.ts, [{e.title}], one imported-findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
+echo "== CASE 15: a marker in an endpoint's THROTTLE policy ({e.rateLimit}) must be RED ==="
+f="src/lib/openapiSpec.gen.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+perl -0pi -e 's/"policy": "2 per second per IP, burst 6"/"policy": "2 per `second` per IP, burst 6"/g' "$f"
+grep -q '2 per `second` per IP' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case15=$v")
+if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'src/lib/openapiSpec.gen.ts' && printf '%s' "$out" | grep -q '\[{e.rateLimit}\]' && fails_imported_findings_only "$out"; then
+  echo "  BITES: RED naming src/lib/openapiSpec.gen.ts [{e.rateLimit}] (the throttle policy is prose too)"
+else
+  echo "  DID NOT BITE: verdict=$v (wanted RED naming src/lib/openapiSpec.gen.ts, [{e.rateLimit}], one imported-findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
+echo "== CASE 16 (negative control): a backtick inside the path CODE SAMPLE stays GREEN ==="
+f="src/lib/apiExamples.gen.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+# `path` is rendered inside <code> (api/page.tsx:377), exactly like `curl`: a
+# backtick there is code the page MEANS to show. Without this the widened imported
+# check would flag a second code-sample field.
+perl -0pi -e 's/"path": "\/v1\/rest\/keys"/"path": "\/v1\/rest\/`keys`"/' "$f"
+grep -q '/v1/rest/`keys`' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case16=$v")
+if [ "$v" = GREEN ]; then
+  echo "  CONTROL GREEN: a backtick in the path code sample is not judged as prose"
+else
+  echo "  CONTROL FAILED: verdict=$v — the imported check flagged a code sample"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
 echo "== FINAL: every mutated file restored, tree GREEN again ==="
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("final=$v")
 [ "$v" = GREEN ] || { fail=1; printf '%s\n' "$out" | tail -25; }
 
 echo
 echo "verdicts: ${VERDICTS[*]}"
-echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8|10|12)=RED')/8 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9|11|13)=GREEN')/5 CONTROLS GREEN"
+echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8|10|12|14|15)=RED')/10 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9|11|13|16)=GREEN')/6 CONTROLS GREEN"
 echo "RESULT: $([ "$fail" = 0 ] && echo 'ALL CASES OK' || echo 'FAILURES PRESENT')"
 exit "$fail"
