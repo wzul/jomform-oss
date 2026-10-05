@@ -77,6 +77,18 @@
 #       /docs page renders must stay GREEN, so the leg judges the render site rather
 #       than every `docs.*` string in the dictionary.
 #
+#   CARD t_62da3451 CLOSED ONE MORE IMPORTED STRING the t_8f684cfe leg still missed
+#   — each endpoint GROUP's HEADING (`{group.tag}` in an <h3>, api/page.tsx:368, NOT
+#   inside <code>). `group` comes from endpointsByTag(), whose tag is the contract's
+#   own `tags[]` in openapiSpec.gen.ts, so a marker in a tag reached the reader while
+#   the leg reported GREEN: measured on the #984 head (5e3b8d58, tree daa6906),
+#   editing the FIRST `"Profile"` tag left the suite at 4 pass / 0 fail:
+#     * CASE 19 — a marker in an endpoint group's TAG must be RED naming
+#       openapiSpec.gen.ts `[{group.tag}]`, one imported-findings failure. No
+#       negative control beside it: unlike curl / path, the tag has NO <code>-
+#       rendered render site (the only other use is `key={group.tag}`, an attribute),
+#       so a control would assert a shape the page does not have.
+#
 # WHAT IT DOES
 #   It snapshots each file it mutates into a scratch dir, applies one mutation,
 #   runs the REAL guard, requires the verdict this case predicts, and restores the
@@ -644,12 +656,39 @@ else
 fi
 restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
 
+# ── the endpoint GROUP HEADINGS (card t_62da3451) ─────────────────────────────
+# The imported leg read {e.why}/{e.note}/{e.title} and {e.summary}/{e.description}/
+# {e.rateLimit}, but /docs/api also prints ONE more imported string as plain JSX
+# text: each endpoint GROUP's heading, `{group.tag}` in an <h3> at api/page.tsx:368
+# (NOT inside <code>). `group` comes from endpointsByTag(), whose tag is the
+# contract's own `tags[]` in openapiSpec.gen.ts, so a marker in a tag reached the
+# reader while the leg reported GREEN — measured on the #984 head (5e3b8d58, tree
+# daa6906): editing the FIRST `"Profile"` tag left the suite at 4 pass / 0 fail.
+# CASE 19 drives that hole. There is no negative control beside it: unlike curl /
+# path, the tag has NO <code>-rendered render site — the only other use of a group
+# tag is `key={group.tag}`, an attribute the reader never sees — so a control would
+# assert a shape the page does not have.
+echo "== CASE 19: a marker in an endpoint GROUP tag ({group.tag}) must be RED ==="
+f="src/lib/openapiSpec.gen.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+# The tag line is uniquely 12-space-indented (the declared tags[] names at :8250+
+# use 6). Anchored to the session route's tag block so the substitution cannot drift
+# onto another operation.
+perl -0pi -e 's/"tags": \[\n          "Profile"\n        \],\n        "x-jomform-access": "session"/"tags": [\n          "Pro`file"\n        ],\n        "x-jomform-access": "session"/' "$f"
+grep -q '"Pro`file"' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case19=$v")
+if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'src/lib/openapiSpec.gen.ts' && printf '%s' "$out" | grep -q '\[{group.tag}\]' && fails_imported_findings_only "$out"; then
+  echo "  BITES: RED naming src/lib/openapiSpec.gen.ts [{group.tag}] (the group heading is prose too)"
+else
+  echo "  DID NOT BITE: verdict=$v (wanted RED naming src/lib/openapiSpec.gen.ts, [{group.tag}], one imported-findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
 echo "== FINAL: every mutated file restored, tree GREEN again ==="
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("final=$v")
 [ "$v" = GREEN ] || { fail=1; printf '%s\n' "$out" | tail -25; }
 
 echo
 echo "verdicts: ${VERDICTS[*]}"
-echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8|10|12|14|15|17)=RED')/11 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9|11|13|16|18)=GREEN')/7 CONTROLS GREEN"
+echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8|10|12|14|15|17|19)=RED')/12 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9|11|13|16|18)=GREEN')/7 CONTROLS GREEN"
 echo "RESULT: $([ "$fail" = 0 ] && echo 'ALL CASES OK' || echo 'FAILURES PRESENT')"
 exit "$fail"

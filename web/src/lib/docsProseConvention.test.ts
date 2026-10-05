@@ -155,7 +155,7 @@ import ts from "typescript";
 // The recursive `app/docs` walk, shared with llmsFullCoverage.test.ts and
 // sitemapCoverage.test.ts — see that file for why ONE walk (card t_3a5aa9b5).
 import { filesUnder } from "./docsRoutes.ts";
-import { apiExamples, specEndpoints } from "./openapi.ts";
+import { apiExamples, endpointsByTag, specEndpoints } from "./openapi.ts";
 // The /docs index's chrome labels. `docs.*` values reach the reader through the
 // `T` island as plain text nodes, so this is the third surface (card t_cd81632d);
 // only the keys a /docs page DECLARES it renders are judged. `Key` is re-exported
@@ -387,15 +387,29 @@ test("no /docs prose carries a backtick marker (these pages render plain text)",
 // so a marker in either was invisible to this leg — measured on the t_763c28c2
 // head: a marker in an example title left the suite at 4 pass / 0 fail.
 //
+// A THIRD imported string the page prints as plain JSX text was still missed
+// (card t_62da3451): `{group.tag}`, each endpoint GROUP's HEADING
+// (api/page.tsx:368 — an `<h3>`, NOT inside `<code>`, measured live on prod
+// 2026-10-05: all 19 tag headings have `closest("code") === null`). `group` comes
+// from `endpointsByTag()` (lib/openapi.ts:100), whose `tag` is
+// `op.tags?.[0] ?? "Other"` (:88) read from OPENAPI_SPEC — the CONTRACT's `tags[]`
+// in the generated openapiSpec.gen.ts, exactly the imported shape the six fields
+// above are. A marker there reached the reader while this leg reported GREEN —
+// measured on the #984 head (5e3b8d58, tree daa6906): editing the FIRST `"Profile"`
+// tag (openapiSpec.gen.ts:5528) so it reads with a backtick injected left the
+// suite at 4 pass / 0 fail. It is the same residual class #984 narrowed but did
+// not close, which is why this leg now reads the tag too.
+//
 // This second surface is keyed on the RENDER SITE, not on the bare string: the
 // fields below are the ones the page PRINTS as plain text. `e.curl` is
 // deliberately NOT among them — it is rendered inside `<code>`, the supported way
 // to show code, so a backtick in a curl string (or in a `<code>` template
 // literal) is code the page means to show, exactly as the DOCS_DIR walk treats
 // it. `e.path` and `e.expectContains` are excluded for the same reason (both are
-// inside `<code>` at :377 and :146 respectively). Adding a field here that the
-// page does not render would assert blindly; the vacuity test below pins each
-// render site against the page source.
+// inside `<code>` at :377 and :146 respectively). `{group.tag}` above is NOT such
+// an exclusion: the page prints it in an `<h3>` (:368), plain text. Adding a field
+// here that the page does not render would assert blindly; the vacuity test below
+// pins each render site against the page source.
 type ImportedProse = { module: string; surface: string; field: string; text: string };
 
 function importedProseValues(): ImportedProse[] {
@@ -410,6 +424,15 @@ function importedProseValues(): ImportedProse[] {
     // note does (card t_8f684cfe). It is a separate generated field from `note`
     // and was the one imported string the first cut of this leg never read.
     out.push({ module: EXAMPLES_MOD, surface: `docs/api example "${e.id}"`, field: "{e.title}", text: e.title });
+  }
+  // The endpoint GROUP HEADINGS (api/page.tsx:368, `{group.tag}` in an <h3>) come
+  // from the contract's own `tags[]`, so a marker in a tag reaches the reader as
+  // plain text exactly as a marker in a summary does (card t_62da3451). ONE value
+  // per tag, matching the ONE heading the page prints per tag — the page does not
+  // print the tag anywhere else as prose (the group's `id` is an attribute, not
+  // text), so pushing it per endpoint would judge the same string several times.
+  for (const g of endpointsByTag()) {
+    out.push({ module: SPEC_MOD, surface: `docs/api endpoint group "${g.tag}"`, field: "{group.tag}", text: g.tag });
   }
   for (const e of specEndpoints()) {
     const where = `docs/api endpoint ${e.method} ${e.path}`;
@@ -457,6 +480,17 @@ test("the imported-prose check is reading the real rendered data (it cannot pass
         (p) => p.field === "{e.rateLimit}" && p.surface.includes(`${e.method} ${e.path}`),
       ),
       `endpoint ${e.method} ${e.path}'s rateLimit is not among the checked values — a marker there would be invisible`,
+    );
+  }
+  // The endpoint GROUP HEADING card t_62da3451 added must be in the set too, keyed
+  // to the tag the page prints: the render-site loop below iterates whatever fields
+  // are present, so dropping this push would leave the test passing while the tag
+  // heading became invisible again. Asserted per-item, not by count.
+  for (const g of endpointsByTag()) {
+    assert.ok(
+      IMPORTED_PROSE.some((p) => p.field === "{group.tag}" && p.text === g.tag),
+      `the endpoint group heading "${g.tag}" is not among the checked values — a marker in a ` +
+        `contract tag would be invisible`,
     );
   }
   // Every field this file claims to cover must have a RENDER SITE in the page, or
