@@ -64,6 +64,19 @@
 #       renders inside <code> like `curl`, must stay GREEN (so the surface does not
 #       flag the other code samples either).
 #
+#   CARD t_cd81632d ADDED THE THIRD SURFACE — the /docs index's i18n CHROME LABELS,
+#   which are dictionary VALUES outside src/app/docs printed through the `T` island
+#   (src/app/docs/docsChrome.tsx: `const { t } = useI18n(); return <>{t(k)}</>` — a
+#   plain text node, no markdown renderer), so they reach the reader exactly as a
+#   body string does. The values live in src/components/i18nDict.ts, which the
+#   DOCS_DIR walk cannot reach and the imported leg does not read:
+#     * CASE 17 — a marker in a RENDERED `docs.*` value (docs.catSecurity, a key
+#       the /docs index prints via `{g.labelKey}`), which must be RED naming
+#       src/components/i18nDict.ts, with the label leg's own vacuity bound green.
+#     * CASE 18 — the negative control: a marker in a `docs.*` value whose key NO
+#       /docs page renders must stay GREEN, so the leg judges the render site rather
+#       than every `docs.*` string in the dictionary.
+#
 # WHAT IT DOES
 #   It snapshots each file it mutates into a scratch dir, applies one mutation,
 #   runs the REAL guard, requires the verdict this case predicts, and restores the
@@ -218,6 +231,25 @@ fails_imported_findings_only() {
   printf '%s' "$o" | grep -qE '^ℹ fail 1$' &&
     printf '%s' "$o" | grep -q '^✖ no /docs imported prose carries a backtick marker' &&
     ! printf '%s' "$o" | grep -q '^✖ the imported-prose check is reading the real rendered data'
+}
+
+# The i18n-LABEL surface (card t_cd81632d) fails in its OWN test too: a marker in
+# a `docs.*` value the /docs index prints through the T island is reported by
+# `no /docs i18n label carries a backtick marker`, not by the DOCS_DIR rule and
+# not by the imported one.
+fails_label_findings_only() {
+  local o="$1"
+  printf '%s' "$o" | grep -qE '^ℹ fail 1$' &&
+    printf '%s' "$o" | grep -q '^✖ no /docs i18n label carries a backtick marker' &&
+    ! printf '%s' "$o" | grep -q '^✖ the i18n-label check is reading the real rendered keys'
+}
+
+# The VACUITY BOUND for the i18n-label surface: the new leg's own vacuity test
+# must have RUN and PASSED, positively — if it did not, a RED from it would say
+# nothing about the reader (the parse could have found no label at all), and a
+# GREEN would not prove the leg looked at anything.
+i18n_vacuity_ran() {
+  printf '%s' "$1" | grep -q '^✔ the i18n-label check is reading the real rendered keys'
 }
 
 # ── the two shapes card t_8580357e widened the guard to see ───────────────────
@@ -396,12 +428,69 @@ else
 fi
 restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
 
+# ── the i18n-LABEL surface (card t_cd81632d) ──────────────────────────────────
+# The /docs index's chrome labels are not in any .tsx the DOCS_DIR walk reads: they
+# are dictionary VALUES in src/components/i18nDict.ts printed through the T island
+# (src/app/docs/docsChrome.tsx: `const { t } = useI18n(); return <>{t(k)}</>`), a
+# plain text node. Measured on this guard's own head (af607fe3, clean worktree): a
+# marker planted in `docs.catSecurity` — a key the index renders via
+# `{g.labelKey}` at page.tsx:428 — left the suite at 4 pass / 0 fail, and the guard
+# never named i18nDict.ts. CASE 17 drives that hole: a marker in a RENDERED
+# `docs.*` value must turn the guard RED naming that file. CASE 18 is the negative
+# control the card asks for: a marker in a `docs.*` value whose key the /docs pages
+# do NOT render must stay GREEN, so the new leg judges the render site (the keys
+# the page prints) rather than every `docs.*` string in the dictionary.
+echo "== CASE 17: a marker in a RENDERED i18n label value (i18nDict.ts) must be RED ==="
+f="src/components/i18nDict.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+# `docs.catSecurity` is a key the /docs index DOES render: it is declared as a
+# GROUPS `labelKey` in src/app/docs/page.tsx and printed by `<T k={g.labelKey} />`.
+perl -0pi -e 's/"docs\.catSecurity": \{ en: "Security",/"docs.catSecurity": { en: "Security `label_probe`",/' "$f"
+grep -qF '"docs.catSecurity": { en: "Security `label_probe`"' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case17=$v")
+if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'src/components/i18nDict.ts' && \
+   printf '%s' "$out" | grep -q 'label_probe' && fails_label_findings_only "$out" && i18n_vacuity_ran "$out"; then
+  echo "  BITES: RED naming src/components/i18nDict.ts (the label the DOCS_DIR walk cannot see),"
+  echo "         one failing test, and it is the label-findings rule; the vacuity bound ran GREEN"
+else
+  echo "  DID NOT BITE: verdict=$v (wanted RED naming src/components/i18nDict.ts, one label-findings"
+  echo "  failure, vacuity bound green)"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
+echo "== CASE 18 (negative control): a marker in a docs.* key NO page renders stays GREEN ==="
+f="src/components/i18nDict.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+# Measured: the 19 `docs.*` keys the dictionary ships are EXACTLY the 19 keys a
+# /docs page renders (the eight GROUPS `labelKey`s, the five QUICK_LINKS
+# `labelKey`s, and the six literal `<T k="…" />` keys), so no existing key is an
+# unrendered one. This case therefore ADDS one — a realistic "key someone added to
+# the dictionary" shape, with all five locales — plants a marker in it, and
+# requires GREEN. The new leg is keyed on the RENDER SITE, so a marker in a value
+# no /docs page prints must NOT be reported: without this control the leg would be
+# "flag every docs.* string", which is the assertion the card forbids, and its
+# coverage would grow the moment an unrelated key appeared in the dictionary.
+perl -0pi -e 's|("docs\.linkAPI": \{[^\n]*\n)|\1  "docs.qaUnrendered": { en: "QA `unrendered_probe`", ms: "QA", zh: "QA", ta: "QA", ar: "QA" },\n|' "$f"
+grep -qF '"docs.qaUnrendered": { en: "QA `unrendered_probe`"' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+# The premise, asserted rather than assumed: the probe key must really be rendered
+# NOWHERE under src/app/docs, or this control would be testing the opposite of what
+# it claims.
+if grep -rqF 'docs.qaUnrendered' src/app/docs; then
+  echo "  MUTATION DID NOT APPLY — docs.qaUnrendered is rendered by a docs page, so this is not an unrendered key"; fail=1
+fi
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case18=$v")
+if [ "$v" = GREEN ] && i18n_vacuity_ran "$out"; then
+  echo "  CONTROL GREEN: a docs.* key no /docs page renders is not asserted (the leg is keyed on the render site)"
+else
+  echo "  CONTROL FAILED: verdict=$v — the label leg flagged a key the page prints nowhere, or its"
+  echo "  vacuity bound did not run"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
 echo "== FINAL: every mutated file restored, tree GREEN again ==="
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("final=$v")
 [ "$v" = GREEN ] || { fail=1; printf '%s\n' "$out" | tail -25; }
 
 echo
 echo "verdicts: ${VERDICTS[*]}"
-echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8|10|12|14|15)=RED')/10 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9|11|13|16)=GREEN')/6 CONTROLS GREEN"
+echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8|10|12|14|15|17)=RED')/11 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9|11|13|16|18)=GREEN')/7 CONTROLS GREEN"
 echo "RESULT: $([ "$fail" = 0 ] && echo 'ALL CASES OK' || echo 'FAILURES PRESENT')"
 exit "$fail"

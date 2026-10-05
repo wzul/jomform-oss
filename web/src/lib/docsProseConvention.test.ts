@@ -97,16 +97,40 @@
 //   shape if it ever escaped a marker). It does NOT widen to a template literal
 //   merely because template literals are used to render code here.
 //
+// THE THIRD SURFACE — the /docs index's i18n CHROME LABELS (card t_cd81632d).
+//   The index renders a second kind of prose that is not in any .tsx this walk
+//   reads: its headings, category labels and quick links are dictionary VALUES
+//   printed through the `T` island (`src/app/docs/docsChrome.tsx`:
+//   `const { t } = useI18n(); return <>{t(k)}</>;` — a plain text node, with no
+//   markdown renderer), and those values live in `src/components/i18nDict.ts`.
+//   That file is outside DOCS_DIR, so the AST walk cannot reach it, and the
+//   imported leg below does not read it either (that leg reads
+//   apiExamples.gen.ts / openapiSpec.gen.ts through lib/openapi.ts). A backtick
+//   written into a `docs.*` value therefore reached the reader literally while
+//   this guard reported GREEN — measured on the card's head (af607fe3, clean
+//   worktree): a marker planted in `docs.catSecurity`, a key the index renders
+//   via `{g.labelKey}` at page.tsx:428, left the suite at 4 pass / 0 fail, and
+//   the guard never named i18nDict.ts at all. Latent rather than live (no
+//   `docs.*` value carries a backtick today), which is the same "a documented
+//   exclusion is not a proof" shape this file's own header warns about, one
+//   surface further out. The leg below is keyed on the RENDER SITE the way the
+//   imported leg is: it judges the keys a /docs page really PRINTS, and not a
+//   `docs.*` key that no page renders.
+//
 // WHAT IT DOES NOT COVER (stated honestly)
 //   * It reads the source, not the served HTML. It proves the marker is not in
 //     the text a page renders — the `body` strings, the raw JSX prose, and the
 //     template literals; that the page really prints `{p}` is pinned elsewhere
 //     (docsIndex.test.ts's render-site checks and the fact reader in
 //     web/scripts/docsFacts.mjs, which reads the BUILT page).
-//   * It is scoped to `src/app/docs`. Backticks in the chat/feedback markdown
-//     surface are CORRECT there — that text goes through Markdown.ts, which
-//     renders inline code as a `<code>` chip — so a tree-wide rule would be
-//     wrong and would start a fight with the one place backticks belong.
+//   * It is scoped to `src/app/docs` PLUS the two surfaces those pages PRINT from
+//     a module outside that directory: the imported generated prose (above) and
+//     the /docs i18n chrome labels (below). Backticks in the chat/feedback
+//     markdown surface are CORRECT there — that text goes through Markdown.ts,
+//     which renders inline code as a `<code>` chip — so a tree-wide rule would be
+//     wrong and would start a fight with the one place backticks belong. Nothing
+//     else is widened by the two render-site-keyed legs: they judge exactly the
+//     fields and the keys a /docs page declares it prints, not a module.
 //   * It does not judge other markdown markers (`**bold**`, `_italic_`, `-` list
 //     bullets) in docs prose. Measured before this guard was written: there are
 //     none in any docs `body`/`desc`/`description` string, so a rule for them
@@ -132,6 +156,12 @@ import ts from "typescript";
 // sitemapCoverage.test.ts — see that file for why ONE walk (card t_3a5aa9b5).
 import { filesUnder } from "./docsRoutes.ts";
 import { apiExamples, specEndpoints } from "./openapi.ts";
+// The /docs index's chrome labels. `docs.*` values reach the reader through the
+// `T` island as plain text nodes, so this is the third surface (card t_cd81632d);
+// only the keys a /docs page DECLARES it renders are judged. `Key` is re-exported
+// from ../components/i18n (a `.tsx` the node test runner cannot load), so the
+// dictionary itself is imported here, exactly as docsIndex.test.ts already does.
+import { DICT } from "../components/i18nDict.ts";
 
 const DOCS_DIR = fileURLToPath(new URL("../app/docs", import.meta.url));
 
@@ -470,6 +500,218 @@ test("no /docs imported prose carries a backtick marker (the api page prints it 
       `openapi_routes.go for an endpoint description) and regenerate with ` +
       `"cd api && go run ./cmd/openapi-gen". Write the name as plain words, as the rest of the tree ` +
       `does; to show code, use a template literal INSIDE <code> (the curl blocks). ` +
+      `Findings:\n  ${lines.join("\n  ")}`,
+  );
+});
+
+// ── the THIRD surface: the /docs index's i18n CHROME LABELS (card t_cd81632d) ──
+//
+// WHY THIS EXISTS. /docs renders a second kind of prose that is in no .tsx at all:
+// its page heading, its intro, its five "start here" steps, its section headings,
+// the eight category headings, the five quick-link labels and the FAQ heading are
+// DICTIONARY VALUES printed through the `T` island —
+//
+//   src/app/docs/docsChrome.tsx:  export function T({ k }) { const { t } = useI18n(); return <>{t(k)}</>; }
+//
+// — which emits the value as a plain text node, with no markdown renderer, exactly
+// as the `body: "…"` strings of the guide pages are emitted. The values live in
+// src/components/i18nDict.ts, which is OUTSIDE `DOCS_DIR`, so the AST walk above
+// cannot reach it, and the imported leg above does not read it either (that leg
+// reads apiExamples.gen.ts / openapiSpec.gen.ts through lib/openapi.ts). So a
+// backtick written into a `docs.*` label reached the reader with its markers while
+// this guard reported GREEN.
+//
+// MEASURED, not reasoned about (card t_cd81632d): on this file's own head
+// (af607fe3, clean worktree) a marker planted in `docs.catSecurity` — a key the
+// index renders through `{g.labelKey}` at page.tsx:428 — left the suite at
+// 4 pass / 0 fail, and the guard never named i18nDict.ts. The file was restored
+// byte-identically afterwards. It is LATENT rather than live today: no `docs.*`
+// value carries a backtick (measured: a grep of the `"docs.` lines for a backtick
+// returns nothing). That is the same "a documented exclusion is not a proof"
+// shape this file's own header warns about, one surface further out.
+//
+// KEYED ON THE RENDER SITE, like the imported leg and for the same reason: what
+// is judged is the value whose KEY a /docs page DECLARES it prints. A `docs.*`
+// key the pages render nowhere is NOT asserted here — asserting it would make a
+// backtick in a string no reader ever sees a failure, and it would also mean this
+// leg's coverage grew the moment an unrelated key appeared in the dictionary. The
+// vacuity test below pins each site FORM against the page source and refuses a
+// key it cannot place in one of them.
+//
+// The three forms a /docs page declares a rendered label in, all read out of the
+// page source with comments stripped (a key NAMED in a comment is not a key the
+// page prints — the same rule, and the same strip, that docsIndex.test.ts uses for
+// its own render sites, card t_7b24b035):
+//   * `<T k="docs.title" />` — a literal key on the island.
+//   * `<T k={l.labelKey} />` — a DATA key, where the page's own array declares
+//     `labelKey: "docs.linkDesign"`. The pair is the render site: the island
+//     prints whatever key the data names, so the data's key is what is judged.
+//   * `<T k={g.labelKey} />` over a `labelKey: "docs.catSecurity"` — the same
+//     shape, a different array. Both are read by matching the data form directly.
+type RenderedLabel = { key: string; file: string; site: string };
+
+// The comment forms that render nothing — the identical rule docsIndex.test.ts
+// already applies before it reads a render site: a `{/* … */}` JSX container, a
+// module-scope `/* … */` block and a `//` line. Deliberately NOT stripped: a
+// template literal, whose text really does reach the page (customize/page.tsx
+// renders through one) — instead, a render-site match that falls INSIDE a
+// template literal is refused by the vacuity test, so a key that is only sample
+// text can never be read as a label.
+function stripUnrenderedComments(src: string): string {
+  return src
+    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, " ")
+    .replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, " ")
+    .replace(/^[ \t]*\/\/.*$/gm, " ");
+}
+
+// The [start, end) ranges of the template literals in a comment-stripped source.
+// Used only to REFUSE a render-site match that sits inside one (a code sample
+// that spells a `docs.*` key is not a label the page prints). Backslash escapes
+// are honoured so an escaped backtick cannot close a span early.
+function templateSpans(src: string): [number, number][] {
+  const spans: [number, number][] = [];
+  let i = 0;
+  while (i < src.length) {
+    if (src[i] === "`") {
+      const start = i;
+      i += 1;
+      while (i < src.length && src[i] !== "`") i += src[i] === "\\" ? 2 : 1;
+      spans.push([start, i + 1]);
+      i += 1;
+      continue;
+    }
+    i += 1;
+  }
+  return spans;
+}
+
+const inTemplate = (spans: [number, number][], at: number) =>
+  spans.some(([s, e]) => at >= s && at < e);
+
+// Every label a /docs page declares it renders, read from the source. One entry
+// per (key, site); the same key from the same file twice is deduped by the caller.
+function renderedLabels(): RenderedLabel[] {
+  const out: RenderedLabel[] = [];
+  for (const file of docsFiles()) {
+    const src = stripUnrenderedComments(readFileSync(file, "utf8"));
+    const spans = templateSpans(src);
+    const rel = file.replace(DOCS_DIR, "src/app/docs");
+    for (const [re, site] of [
+      // A literal key on the island: `<T k="docs.title" />`. Both attribute forms
+      // are read — the plain one and the braced string one — because the JSX the
+      // island is used with may spell either.
+      [/<T\s+k="([^"]+)"/g, "<T k=\"…\" />"],
+      [/<T\s+k=\{\s*"([^"]+)"\s*\}/g, "<T k={\"…\"} />"],
+      // A data-declared key: `labelKey: "docs.catSecurity"` in the array the page
+      // maps over and renders with `<T k={g.labelKey} />`.
+      [/labelKey:\s*"([^"]+)"/g, "labelKey: \"…\" (rendered by <T k={…labelKey} />)"],
+    ] as const) {
+      for (const m of src.matchAll(re)) {
+        const at = m.index ?? 0;
+        // A key spelled inside a template literal is code the page SHOWS, not a
+        // label it prints. Refusing it here is what keeps this leg's coverage
+        // exactly the declared render sites.
+        if (inTemplate(spans, at)) continue;
+        out.push({ key: m[1], file: rel, site });
+      }
+    }
+  }
+  return out;
+}
+
+const RENDERED_LABELS = renderedLabels();
+const RENDERED_KEYS = [...new Set(RENDERED_LABELS.map((l) => l.key))].sort();
+const DICT_MODULE = "src/components/i18nDict.ts";
+const DICT_DOCS_KEYS = Object.keys(DICT).filter((k) => k.startsWith("docs."));
+
+// The locale values of a rendered key that carry a backtick marker.
+function labelMarkers(key: string): { lang: string; text: string }[] {
+  const entry = (DICT as Record<string, Record<string, unknown>>)[key];
+  if (!entry) return [];
+  return Object.entries(entry)
+    .filter(([, v]) => typeof v === "string" && v.includes("`"))
+    .map(([lang, v]) => ({ lang, text: v as string }));
+}
+
+const LABEL_FINDINGS = RENDERED_KEYS.map((key) => ({ key, markers: labelMarkers(key) })).filter(
+  (f) => f.markers.length > 0,
+);
+
+test("the i18n-label check is reading the real rendered keys (it cannot pass vacuously)", () => {
+  // The dictionary must really be the one that holds the /docs chrome labels — a
+  // renamed export, or a dictionary that emptied, would make the rule below pass
+  // while looking at no label at all.
+  assert.ok(
+    DICT_DOCS_KEYS.length >= 15,
+    `found only ${DICT_DOCS_KEYS.length} "docs.*" keys in ${DICT_MODULE} — the dictionary the /docs ` +
+      `index prints through <T/> is not being read, so a marker in a label would be invisible`,
+  );
+  // And the render-site parse must find the labels the page really declares. Three
+  // forms, each pinned to a REAL key, so a parse that stops reading one of them
+  // cannot pass on the strength of the others.
+  const keys = new Set(RENDERED_KEYS);
+  for (const k of ["docs.title", "docs.catSecurity", "docs.linkAPI"]) {
+    assert.ok(
+      keys.has(k),
+      `the render-site parse did not find ${k} — a /docs page declares it (a literal <T k="…"/>, a ` +
+        `GROUPS labelKey and a QUICK_LINKS labelKey respectively), so a marker in it would be invisible`,
+    );
+  }
+  // Every key the parse judged must be a `docs.*` key: the render sites are all in
+  // the docs chrome, so a parse that swept in an unrelated string (a class name, an
+  // href, a page title) has stopped being a render-site read and must fail loudly
+  // rather than assert strings nobody prints as labels.
+  const notDocs = RENDERED_KEYS.filter((k) => !k.startsWith("docs."));
+  assert.deepEqual(
+    notDocs,
+    [],
+    `the render-site parse read these as i18n labels but they are not "docs.*" keys — the parse is ` +
+      `sweeping in strings that are not labels at all:\n  ${notDocs.join("\n  ")}`,
+  );
+  // A key must be a key the dictionary HAS, or the rule below would judge nothing
+  // and the leg would be a shape that cannot fail.
+  const missing = RENDERED_KEYS.filter((k) => !DICT_DOCS_KEYS.includes(k));
+  assert.deepEqual(
+    missing,
+    [],
+    `these rendered labels are not in ${DICT_MODULE}, so t() would print the raw key and the marker ` +
+      `check above would be judging nothing:\n  ${missing.join("\n  ")}`,
+  );
+  // The render SITES must be the three forms the page uses, counted from the
+  // source: at least one literal island use and at least the two data arrays'
+  // worth of `labelKey:` declarations. A page that stopped rendering its labels
+  // through <T/> at all would satisfy the rule below vacuously.
+  const pageSrc = stripUnrenderedComments(readFileSync(join(DOCS_DIR, "page.tsx"), "utf8"));
+  assert.ok(
+    /<T\s+k=/.test(pageSrc),
+    `src/app/docs/page.tsx no longer renders any label through the <T/> island — the check below ` +
+      `would be asserting the values of labels the page does not print`,
+  );
+  const labelKeys = [...pageSrc.matchAll(/labelKey:\s*"[^"]+"/g)].length;
+  assert.ok(
+    labelKeys >= 12,
+    `found only ${labelKeys} labelKey declarations in src/app/docs/page.tsx — the GROUPS and ` +
+      `QUICK_LINKS arrays are where the category and quick-link labels are declared`,
+  );
+});
+
+test("no /docs i18n label carries a backtick marker (the T island prints it plain text)", () => {
+  const lines = LABEL_FINDINGS.flatMap((f) =>
+    f.markers.map(
+      (m) => `${DICT_MODULE}  ${f.key}  [${m.lang}]  ${JSON.stringify(m.text.slice(0, 120))}`,
+    ),
+  );
+  assert.deepEqual(
+    LABEL_FINDINGS,
+    [],
+    `these /docs i18n label values carry a backtick marker but are printed as plain text nodes — ` +
+      `src/app/docs/docsChrome.tsx renders them through the T island ` +
+      `(const { t } = useI18n(); return <>{t(k)}</>), with no markdown renderer, exactly as the ` +
+      `guide pages print their body strings, so the marker reaches the reader literally. ` +
+      `Measured on this guard's own head (af607fe3): a marker planted in docs.catSecurity, a key ` +
+      `the /docs index renders through {g.labelKey}, left the suite at 4 pass / 0 fail and this ` +
+      `file did not name ${DICT_MODULE} at all (card t_cd81632d). Write the name as plain words, ` +
+      `which is what the rest of the tree already does. ` +
       `Findings:\n  ${lines.join("\n  ")}`,
   );
 });
