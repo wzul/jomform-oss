@@ -39,8 +39,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { docsRoutesOnDisk } from "./docsRoutes.ts";
 
 const pathOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 
@@ -48,10 +49,35 @@ const SPEC = readFileSync(pathOf("../../e2e/a11y.spec.ts"), "utf8");
 const DOCS_DIR = pathOf("../app/docs");
 
 // Route -> source file. app/docs/layout.tsx is the shared chrome, not a route.
-const DOCS: { route: string; file: string }[] = readdirSync(DOCS_DIR)
-  .filter((e) => statSync(`${DOCS_DIR}/${e}`).isDirectory())
-  .map((e) => ({ route: `/docs/${e}`, file: `${DOCS_DIR}/${e}/page.tsx` }))
-  .concat({ route: "/docs", file: pathOf("../app/docs/page.tsx") })
+//
+// THE ROUTE LIST IS THE SHARED RECURSIVE WALK (card t_2cf201b8). This file used
+// to carry its own one-level `readdirSync(DOCS_DIR)` that mapped EVERY directory
+// to `<dir>/page.tsx`, which had two measured defects the sibling guards
+// (llmsFullCoverage / sitemapCoverage / docsProseConvention, fixed by t_3a5aa9b5)
+// did not have:
+//
+//   A. `app/docs/chat/zzsub/page.tsx` — a real Next route whose parent directory
+//      IS also a route — was not in `DOCS`, so its `<pre>`/`<a>`/contrast rules
+//      were never applied to it and the suite stayed 7/7 GREEN. The guard's own
+//      "every docs page is scanned" test cannot catch that, because `DOCS` is the
+//      list that omits it.
+//   B. `app/docs/zz-probe/` with NO `page.tsx` — a directory that is only a
+//      parent, or a probe left behind — crashed the four file-reading tests with
+//      `ENOENT … zz-probe/page.tsx`, because every directory was mapped to
+//      `<dir>/page.tsx` whether or not it was a route.
+//
+// `docsRoutesOnDisk` (web/src/lib/docsRoutes.ts) keys on `page.tsx` and walks
+// recursively, so a nested route under a non-route parent is counted and a
+// directory with no `page.tsx` is only ever a parent. The `/docs` index is the
+// walk's own `""` relative path; the mapping below renders it as the page file
+// the rest of this guard reads.
+const fileFor = (route: string): string =>
+  route === "/docs"
+    ? pathOf("../app/docs/page.tsx")
+    : pathOf(`../app/docs/${route.slice("/docs/".length)}/page.tsx`);
+
+const DOCS: { route: string; file: string }[] = docsRoutesOnDisk(DOCS_DIR)
+  .map((route) => ({ route, file: fileFor(route) }))
   .sort((a, b) => a.route.localeCompare(b.route));
 
 const LAYOUT_FILE = pathOf("../app/docs/layout.tsx");
