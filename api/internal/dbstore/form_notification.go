@@ -184,6 +184,12 @@ const (
 	defaultResponseNotificationName = "Admin Notification"
 )
 
+// defaultNotificationRecipient is the recipient EVERY default rule carries: the
+// merchant's account email, resolved at send time (issue #606). ONE definition,
+// because it is also what ReconcileDefault compares a stored rule against to
+// tell a default it may repair from a rule the merchant re-addressed.
+const defaultNotificationRecipient = "{admin_email}"
+
 // A RESPONSE form never records a sale — it records a submission — so a
 // sale.paid rule on it can never fire, and a sale-flavoured message would be
 // meaningless anyway: a response has no reference code, no amount and no items,
@@ -232,8 +238,101 @@ func (s *FormNotificationStore) EnsureDefault(ctx context.Context, f *Form) erro
 	name, event, subject, body := defaultNotificationFor(FormMode(f))
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO form_notifications (form_id, name, event, to_email, subject, body, is_default)
-		 SELECT $1, $2, $3, '{admin_email}', $4, $5, true
+		 SELECT $1, $2, $3, $4, $5, $6, true
 		 WHERE NOT EXISTS (SELECT 1 FROM form_notifications WHERE form_id=$1)`,
-		f.ID, name, event, subject, body)
+		f.ID, name, event, defaultNotificationRecipient, subject, body)
 	return err
+}
+
+// ReconcileDefault re-points a form's UNEDITED default notification rule onto
+// the event its CURRENT mode fires, and returns whether it changed the row.
+//
+// THE DEFECT THIS CLOSES (carded from t_f37d710d, the mode-change half of
+// #597). EnsureDefault picks the rule's event from the form's mode AT INSERT
+// TIME ONLY. A form that was created as a payment form and LATER switched to
+// response mode — the builder's "Form mode" control, a plain PATCH through
+// FormStore.Update — therefore keeps the sale.paid default it was born with,
+// and FireFormNotifications' ListByFormEvent(formID, "response.submitted")
+// matches zero rows: the merchant is never told anyone responded. Issue #597's
+// repair migration (000062) fixed the rows that existed when it ran; it cannot
+// reach a row a mode change creates afterwards.
+//
+// WHEN IT IS CALLED, and why that is the right seam: from FormStore.Update,
+// whose only callers are the surfaces that write config/theme — REST
+// PATCH /v1/rest/forms/{id}, MCP upsert_form's update path, and the
+// config-merging writers (register_form_fields, set_form_theme,
+// set_form_chip_mapping, the menu writer, and MCP's custom-HTML form, whose
+// applyCustomFormConfig is what SETS mode=response). Putting it at the store
+// seam rather than at each call site is deliberate: a caller that writes a
+// mode cannot forget to reconcile, and a future write path inherits the same
+// contract for free.
+//
+// THE SCOPE IS THE MERCHANT'S, so nothing he decided is seized. Exactly one
+// shape is touched (the same contract 000062 used, so a repaired row and a row
+// created after this release end up identical):
+//
+//   - the row must be the form's DEFAULT (`is_default`),
+//   - it must still carry the system's own bytes for the event it holds —
+//     its name, recipient, subject and body must all equal what the system
+//     wrote for the OTHER mode's default (recognised through emailtext, the
+//     same one-definition dictionary EnsureDefault writes from, so the two
+//     cannot drift),
+//   - and its event must actually be the one the form's mode can never fire.
+//
+// A merchant-authored or even partially-edited rule fails that comparison and
+// is left exactly as it is — including a rule he re-addressed to his own
+// inbox, which is why ToEmail is part of the comparison. A form with zero
+// rules stays at zero: the opt-out contract of EnsureDefault is not reversed
+// here (nothing is INSERTed), so a merchant who deleted his default rule keeps
+// silence.
+func (s *FormNotificationStore) ReconcileDefault(ctx context.Context, f *Form) (bool, error) {
+	if f == nil || f.ID == "" {
+		return false, nil
+	}
+	wantName, wantEvent, wantSubject, wantBody := defaultNotificationFor(FormMode(f))
+	// How the system's default for the OTHER mode reads. Only a row that is
+	// byte-identical to this is a default the system wrote and nobody edited.
+	otherName, otherEvent, otherSubject, otherBody := defaultNotificationFor(otherFormMode(FormMode(f)))
+	if otherEvent == wantEvent {
+		return false, nil
+	}
+	// ONE statement, so the row that is judged is the row that is written: a
+	// SELECT-then-UPDATE would leave a window in which the merchant edits his
+	// rule and this pass overwrites the edit it never saw. Every predicate in
+	// the WHERE is part of the merchant's-rule test, and the RETURNING makes the
+	// "did it change anything" answer come from the same write.
+	rows, err := s.pool.Query(ctx,
+		`UPDATE form_notifications
+		    SET event=$2, name=$3, subject=$4, body=$5, updated_at=now()
+		  WHERE form_id=$1
+		    AND is_default=true
+		    AND COALESCE(to_email,'')=$6
+		    AND name=$7 AND event=$8 AND subject=$9 AND body=$10
+		  RETURNING id`,
+		f.ID, wantEvent, wantName, wantSubject, wantBody,
+		defaultNotificationRecipient, otherName, otherEvent, otherSubject, otherBody)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	changed := false
+	for rows.Next() {
+		changed = true
+	}
+	if err := rows.Err(); err != nil {
+		return changed, err
+	}
+	return changed, nil
+}
+
+// otherFormMode returns the mode a form is NOT in, so a caller can ask what the
+// system's default reads for the mode the form has moved away from. The set of
+// modes is exactly two (see form_mode.go), and the "anything not response is
+// payment" default there is the reason this is a total function rather than a
+// switch with a third answer.
+func otherFormMode(mode string) string {
+	if mode == FormModeResponse {
+		return FormModePayment
+	}
+	return FormModeResponse
 }

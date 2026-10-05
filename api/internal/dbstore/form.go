@@ -3,6 +3,7 @@ package dbstore
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -138,10 +139,20 @@ func validFormStatus(status string) bool {
 }
 
 // FormStore wraps pgx for forms.
-type FormStore struct{ pool *pgxpool.Pool }
+type FormStore struct {
+	pool *pgxpool.Pool
+	// notifications is the store ReconcileDefault lives on. Update calls it
+	// after a config write, because a config write is the ONLY way a form's
+	// mode moves (see ReconcileDefault). It is wired by NewFormStore so no
+	// caller has to remember — a caller that could forget is exactly how the
+	// mode-change defect survived #597.
+	notifications *FormNotificationStore
+}
 
 // NewFormStore builds a FormStore.
-func NewFormStore(pool *pgxpool.Pool) *FormStore { return &FormStore{pool: pool} }
+func NewFormStore(pool *pgxpool.Pool) *FormStore {
+	return &FormStore{pool: pool, notifications: NewFormNotificationStore(pool)}
+}
 
 // formSelect builds every non-trash form read: deleted forms are
 // invisible everywhere except the explicit trash query. deleted_at is part of
@@ -286,6 +297,20 @@ func (s *FormStore) GetByIDInAccounts(ctx context.Context, accountIDs []string, 
 // operation (RenameSlug) because it must also leave the temporary 301 behind
 // for the old URL. Keeping it out means every existing caller of Update keeps
 // its exact contract and no call site needed a new argument.
+//
+// A config write is the ONLY way a form's mode moves, so this is also where the
+// form's default notification is reconciled onto the mode it now has: a form
+// switched to response mode keeps the sale.paid rule it was created with, and
+// that rule can never fire — the merchant is never told anyone responded
+// (issue #597's defect, surviving on the mode-change path; see
+// FormNotificationStore.ReconcileDefault for the scope of what it may touch).
+// It runs AFTER the write, against the stored row, so the mode it reads is the
+// mode the form now has rather than the one the caller intended.
+//
+// The reconcile is best-effort on purpose: it must never fail a save that
+// already landed. A failure to re-point a notification is a missed email, not
+// a lost form edit, and making the write answer an error it cannot undo would
+// be the worse outcome.
 func (s *FormStore) Update(ctx context.Context, accountID, id, title string, config, theme map[string]any) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET title=$3, config=COALESCE($4, config), theme=COALESCE($5, theme), updated_at=now()
@@ -299,6 +324,25 @@ func (s *FormStore) Update(ctx context.Context, accountID, id, title string, con
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrFormNotFound
+	}
+	// Only a config write can have moved the mode; a title-only save has
+	// nothing to reconcile and skips the extra read entirely.
+	if config == nil || s.notifications == nil {
+		return nil
+	}
+	if f, gerr := s.GetByID(ctx, accountID, id); gerr == nil {
+		if _, rerr := s.notifications.ReconcileDefault(ctx, f); rerr != nil {
+			// Best-effort, but never SILENT: a reconcile that stops working
+			// would leave the merchant un-notified with nothing anywhere to
+			// say so (the shape that let the original defect live through five
+			// releases). The save has already landed and cannot be unwound, so
+			// the failure is recorded rather than returned.
+			slog.Warn("form_notification_reconcile_failed", "err", rerr,
+				"form_id", id, "account", accountID)
+		}
+	} else {
+		slog.Warn("form_notification_reconcile_skip", "err", gerr,
+			"form_id", id, "account", accountID)
 	}
 	return nil
 }

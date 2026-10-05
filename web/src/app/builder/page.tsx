@@ -1870,9 +1870,26 @@ export default function Builder() {
 
         {/* ── Form mode (issue #171) ── */}
         <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-          <p className="text-xs font-medium uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
-            {t("bld.mode")}
-          </p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-medium uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
+              {t("bld.mode")}
+            </p>
+            {/* The mode decides which default notification the form gets, and
+                switching it re-points an untouched default (t_a58848bd). That is
+                not visible from two buttons labelled Payment/Response, so the
+                guide that explains it is one link away — same "?" pattern every
+                sibling control uses (issue #924: title + aria-label + new tab). */}
+            <a
+              href="/docs/email#notifications"
+              target="_blank"
+              rel="noreferrer"
+              title={t("bld.modeDocs")}
+              aria-label={t("bld.modeDocs")}
+              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[var(--jf-border)] text-[11px] font-semibold text-[var(--jf-muted)] hover:bg-slate-50 hover:text-slate-700"
+            >
+              ?
+            </a>
+          </div>
           <div className="mt-2 grid grid-cols-2 gap-1.5">
             <button
               type="button"

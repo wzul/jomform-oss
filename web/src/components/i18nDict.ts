@@ -1236,6 +1236,7 @@ export const DICT = {
   "bld.modeResponse": { en: "Response form", ms: "Borang respons", zh: "响应表单", ta: "பதில் படிவம்", ar: "نموذج الرد" },
   "bld.modePaymentHint": { en: "Collect payments with products (current behaviour).", ms: "Kutip bayaran dengan produk (tingkah laku semasa).", zh: "通过商品收款（当前行为）。", ta: "தயாரிப்புகளுடன் கட்டணங்களை வசூலிக்கவும் (தற்போதைய நடத்தை).", ar: "تحصيل المدفوعات مع المنتجات (السلوك الحالي)." },
   "bld.modeResponseHint": { en: "Collect responses only — no products, no payment.", ms: "Kutip respons sahaja — tiada produk, tiada bayaran.", zh: "仅收集响应 — 无商品、无付款。", ta: "பதில்களை மட்டும் சேகரிக்கவும் — தயாரிப்புகள் இல்லை, கட்டணம் இல்லை.", ar: "جمع الردود فقط — بدون منتجات وبدون دفع." },
+  "bld.modeDocs": { en: "How the form mode changes the default notification", ms: "Bagaimana mod borang mengubah notifikasi lalai", zh: "表单模式如何更改默认通知", ta: "படிவ பயன்முறை இயல்புநிலை அறிவிப்பை எவ்வாறு மாற்றுகிறது", ar: "كيف يغيّر وضع النموذج الإشعار الافتراضي" },
   "bld.responsesThisForm": { en: "Responses (this form)", ms: "Respons (borang ini)", zh: "响应（此表单）", ta: "பதில்கள் (இந்த படிவம்)", ar: "الردود (هذا النموذج)" },
   "bld.noResponsesForm": { en: "No responses yet for this form.", ms: "Belum ada respons untuk borang ini.", zh: "此表单暂无响应。", ta: "இந்த படிவத்திற்கு இன்னும் பதில்கள் இல்லை.", ar: "لا توجد ردود لهذا النموذج بعد." },
   "bld.loadResponsesErr": { en: "Failed to load responses.", ms: "Gagal memuatkan respons.", zh: "加载响应失败。", ta: "பதில்களை ஏற்ற முடியவில்லை.", ar: "فشل تحميل الردود." },

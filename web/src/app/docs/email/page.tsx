@@ -20,6 +20,7 @@ const SECTIONS: Section[] = [
     body: [
       "Customise the receipt email sent to buyers and per-form notification rules. Email settings are configured per workspace, and any form can override them (subject, body, receipt on/off, merchant notify) with a “use workspace default” option — resolution order is form → workspace → built-in default.",
       "Every new form also starts with a default notification to you: a payment form notifies on sale.paid, a response form on response.submitted (its message uses the responder's name and email, because a response has no sale).",
+      "Switching a form's mode re-points that default notification onto the event the new mode fires, so a form you started as an order form and later switched to responses still tells you when someone responds. Only the untouched default is moved: a rule you edited or re-addressed stays exactly as you wrote it, and a form whose rules you deleted stays silent.",
     ],
   },
   {
