@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+/* Tailwind v4 scans the source tree with its own class extractor, and that
+   extractor does NOT honour `//` line comments — so a class literal written in a
+   test's prose (e.g. the `hover:bg-[#828fff]` a guard's rationale names) is
+   compiled into a REAL utility and shipped in the page bundle, and a *working*
+   class is re-armed for anyone who later writes it on an element. Unit tests are
+   not shipped code and must never contribute a utility; exclude them from the
+   scan. (Card t_aafe45cc. Without this line the dead
+   `.hover\:bg-\[\#828fff\]:hover` utility comes straight back.) */
+@source not "../**/*.test.{ts,tsx}";
+
 /* JomForm light theme — clean, airy, indigo accent */
 :root {
   --jf-bg: #f7f8f8;
