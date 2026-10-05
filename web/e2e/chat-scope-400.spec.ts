@@ -59,6 +59,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { DICT } from "../src/components/i18nDict";
 import { WORKSPACE_SCOPE_REQUIRED_CODE, PROPOSAL_ARGS_INVALID_CODE } from "../src/lib/chatConfirm";
+import { sendChatPrompt } from "./chatComposer";
 
 const EN = {
   scopeRequired: DICT["chat.scopeRequired"].en,
@@ -233,35 +234,17 @@ async function freshState(page: Page) {
  * workspace and is told to choose one, which is the defect (t_fb393abe).
  */
 async function confirmWithoutScope(page: Page, baseURL: string | undefined, dropScope = true) {
-  await page.goto(`${baseURL}/chat`, { waitUntil: "domcontentloaded" });
-
-  const box = page.locator("#chat-input");
-  // ENABLED, not merely VISIBLE (card t_4221975d). The composer renders disabled
-  // until the availability probe answers (`page.tsx:435`:
-  // `const disabled = sending || available === false;`), and BOTH `fill` and
-  // `click` wait for the element to become editable — so the FIRST interaction
-  // issued before then is retried until the whole 60s test timeout is gone and
-  // reported as `element is not enabled` / `locator.fill: Test timeout of 60000ms
-  // exceeded`, with nothing saying the PROBE is the subject. Measured on the real
-  // spec with the availability stub stubbed away from `available:true`: the
-  // composer's own `fill` burned the full 60s (`locator.fill: Test timeout of
-  // 60000ms exceeded`, 63s wall). Asserting the state first makes that failure say
-  // what it is, and costs one wait instead of a whole test.
-  await expect(box, "the composer must be offered when the assistant is available").toBeVisible({
-    timeout: 15_000,
-  });
-  await expect(
-    box,
-    "the composer must be ENABLED when the assistant is available — it starts disabled until " +
-      "the availability probe lands, so interacting before that waits out the whole test timeout",
-  ).toBeEnabled({ timeout: 20_000 });
-  await box.fill("rename my product");
-  const send = page.getByRole("button", { name: EN.send });
-  await expect(
-    send,
-    "the Send button must be ENABLED before it is clicked — it shares the composer's disabled flag",
-  ).toBeEnabled({ timeout: 20_000 });
-  await send.click();
+  // The prologue is SHARED with the other /chat specs (e2e/chatComposer.ts, card
+  // t_b9eea741). This helper carried the identical assert-then-fill-then-assert
+  // shape that PR 950 (t_4221975d) wrote for the OTHER failure mode, and it races
+  // this one the same way: the server-rendered composer is already `enabled`
+  // (the page's `available` default is null), so a `fill` issued before React
+  // hydrates is applied to markup nothing is listening to and is discarded by
+  // hydration — leaving the Send assertion below to burn its whole timeout on a
+  // page that is in fact correct. `sendChatPrompt` waits for the availability
+  // probe's response (only reachable post-hydration) and retries the type until
+  // Send follows, so the wait is a wait and not a red.
+  await sendChatPrompt(page, baseURL, "rename my product");
 
   const card = page.locator('[class*="border-sky-200"]').filter({ hasText: PROPOSAL.title });
   await expect(card, "the proposal card must render — otherwise this test is vacuous").toHaveCount(1);

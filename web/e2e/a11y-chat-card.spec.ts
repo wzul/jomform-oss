@@ -65,6 +65,7 @@ import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import type { AxeResults, Result } from "axe-core";
 import { DICT } from "../src/components/i18nDict";
+import { sendChatPrompt } from "./chatComposer";
 
 // The gate's own rule, kept identical to e2e/a11y.spec.ts so the two cannot
 // drift: critical/serious fail, everything else is reported for triage.
@@ -173,23 +174,14 @@ const CARD = ".border-sky-200";
 
 /** Get the proposal card on screen and return its locator. */
 async function openCard(page: Page, baseURL: string | undefined) {
-  await page.goto(`${baseURL}/chat`, { waitUntil: "domcontentloaded" });
-
-  const box = page.locator("#chat-input");
-  await expect(box, "the composer must be offered when the assistant is available").toBeVisible({
-    timeout: 15_000,
-  });
-  await expect(
-    box,
-    "the composer must be ENABLED when the assistant is available — it starts disabled until the " +
-      "availability probe lands, so interacting before that waits out the whole test timeout",
-  ).toBeEnabled({ timeout: 20_000 });
-  await box.fill("rename my product");
-  const send = page.getByRole("button", { name: EN.send });
-  await expect(send, "the Send button must be ENABLED before it is clicked").toBeEnabled({
-    timeout: 20_000,
-  });
-  await send.click();
+  // The page-then-composer prologue is SHARED with the other /chat specs
+  // (e2e/chatComposer.ts, card t_b9eea741): reaching the page and typing into it
+  // before React has hydrated is what redded THIS test at 1 of 4 runs, because
+  // the server-rendered composer is already `enabled` and the `fill` that lands
+  // on it is discarded by the hydration that follows. `sendChatPrompt` waits for
+  // the availability probe's response — the one unambiguous "the page is live"
+  // signal — and retries the type until Send follows.
+  await sendChatPrompt(page, baseURL, "rename my product");
 
   const card = page.locator(CARD).filter({ hasText: PROPOSAL.title });
   // A guard whose subject never rendered passes vacuously, so the card is
