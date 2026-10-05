@@ -453,7 +453,11 @@ var blockTmpl = template.Must(template.New("blocks").
            border-top:1px dashed rgba(255,255,255,0.12); font-weight:600; }
   button { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:600;
            color:#fff; cursor:pointer; margin-top:12px; background:#5e6ad2; }
-  button:hover { background:#828fff; }
+  /* hover is #616dd5, not the old #828fff: #828fff carries this button's white
+     label at 2.87:1, below the AA 4.5:1 floor. #616dd5 is the #5e6ad2 hue one
+     lightness step up that still clears AA (white 4.51:1, measured). Card
+     t_9efae9f0; the web CTA (--jf-primary-hover in globals.css) is the same pair. */
+  button:hover { background:#616dd5; }
   /* Issue #183: optional per-workspace footer. */
   .jf-footer { max-width:480px; width:100%; margin:16px auto 0; padding:0 8px;
                color:#6b7280; font-size:12px; line-height:1.6; text-align:center;
@@ -870,7 +874,11 @@ var responseTmpl = template.Must(template.New("response").
     background:#ffffff; color:#17181c; font-size:14px; margin-bottom:10px; }
   button { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:600;
            color:#fff; cursor:pointer; margin-top:12px; background:#5e6ad2; }
-  button:hover { background:#828fff; }
+  /* hover is #616dd5, not the old #828fff: #828fff carries this button's white
+     label at 2.87:1, below the AA 4.5:1 floor. #616dd5 is the #5e6ad2 hue one
+     lightness step up that still clears AA (white 4.51:1, measured). Card
+     t_9efae9f0; the web CTA (--jf-primary-hover in globals.css) is the same pair. */
+  button:hover { background:#616dd5; }
   /* Issue #183: optional per-workspace footer. */
   .jf-footer { max-width:480px; width:100%; margin:16px auto 0; padding:0 8px;
                color:#6b7280; font-size:12px; line-height:1.6; text-align:center;

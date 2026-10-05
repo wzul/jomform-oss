@@ -92,7 +92,7 @@ function MagicLinkForm() {
             </p>
             <Link
               href="/login"
-              className="block w-full rounded-md bg-[#5e6ad2] py-2 text-center text-sm font-medium text-white transition-colors hover:bg-[#828fff]"
+              className="block w-full rounded-md bg-[#5e6ad2] py-2 text-center text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
             >
               {t("magic.goLogin")}
             </Link>

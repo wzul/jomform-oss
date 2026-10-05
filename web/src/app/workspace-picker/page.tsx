@@ -251,7 +251,7 @@ export default function WorkspacePickerPage() {
               <button
                 type="submit"
                 disabled={busy}
-                className="min-h-11 w-full rounded-md bg-[#5e6ad2] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-50"
+                className="min-h-11 w-full rounded-md bg-[#5e6ad2] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-50"
               >
                 {busy ? "…" : t("workspace.create")}
               </button>
@@ -296,7 +296,7 @@ export default function WorkspacePickerPage() {
                       <button
                         type="button"
                         onClick={() => enter(s.slug)}
-                        className="rounded-md bg-[#5e6ad2] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#828fff]"
+                        className="rounded-md bg-[#5e6ad2] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
                       >
                         {t("workspace.enter")}
                       </button>

@@ -67,7 +67,7 @@ function ResetForm() {
             </p>
             <Link
               href="/login"
-              className="block w-full rounded-md bg-[#5e6ad2] py-2 text-center text-sm font-medium text-white transition-colors hover:bg-[#828fff]"
+              className="block w-full rounded-md bg-[#5e6ad2] py-2 text-center text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
             >
               {t("login.tabLogin")}
             </Link>
@@ -104,7 +104,7 @@ function ResetForm() {
             </div>
             <button
               disabled={busy}
-              className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-60"
+              className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-60"
             >
               {busy ? "…" : t("reset.submit")}
             </button>

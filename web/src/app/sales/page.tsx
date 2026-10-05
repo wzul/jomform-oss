@@ -831,7 +831,7 @@ function SalesPageInner() {
               <button
                 onClick={captureAllPending}
                 disabled={busyRef !== null}
-                className="rounded-md bg-[#5e6ad2] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#828fff] disabled:cursor-not-allowed disabled:opacity-40"
+                className="rounded-md bg-[#5e6ad2] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {busyRef === "__all__" ? "…" : `${t("sales.captureAll")} (${rows.filter(isCapturePending).length})`}
               </button>
@@ -1043,7 +1043,7 @@ function SalesPageInner() {
                           <button
                             onClick={() => captureSale(s.ref_code)}
                             disabled={busyRef !== null}
-                            className="rounded-md bg-[#5e6ad2] px-2 py-1 text-[10px] font-medium text-white hover:bg-[#828fff] disabled:cursor-not-allowed disabled:opacity-40"
+                            className="rounded-md bg-[#5e6ad2] px-2 py-1 text-[10px] font-medium text-white hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             {busyRef === s.ref_code ? "…" : t("bld.capture")}
                           </button>

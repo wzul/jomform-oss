@@ -8,7 +8,17 @@
   --jf-text: #17181c;
   --jf-muted: #6b7280;
   --jf-primary: #5e6ad2;
-  --jf-primary-hover: #828fff;
+  /* The CTA's hover fill (card t_9efae9f0). This was #828fff, against which the
+     button's own white label measures 2.87:1 — below the AA 4.5:1 floor for
+     normal-size text, and the one state every pointer lands on before it clicks.
+     #616dd5 is the #5e6ad2 hue/chroma moved up OKLCH lightness only, and it is
+     the LIGHTEST step on that hue whose white label still clears AA: push it any
+     further and the pairing fails again (measured 4.51:1 here; the previous
+     value measured 2.87:1). It stays a LIGHTER hover than the resting fill, so
+     the three states keep their original direction — rest #5e6ad2 (4.70:1) ->
+     hover #616dd5 (4.51:1) -> pressed #454ea8 (7.22:1) — and the whole primary
+     family stays one hue line rather than becoming two. */
+  --jf-primary-hover: #616dd5;
   /* The tinted "active/selected" surface needs a darker text pair: on
      Tailwind's indigo-50 (#eef2ff) the brand indigo measures 4.20:1 and
      --jf-muted measures 4.32:1 — both below the 4.5:1 AA floor for the 14px/12px
@@ -112,15 +122,14 @@ body {
        * `:active` goes DARKER (`--jf-primary-active`, white label 7.22:1) and
          translates the box 1px down. A LIGHTER press than the hover state is
          what made the press invisible; going darker is what makes it read.
-       * `:hover` adds a shadow instead of relying only on the light colour
-         swap, so the hover is visible even before it is read as a colour. The
-         hover colour itself (`--jf-primary-hover` #828fff) is NOT changed: it
-         measures 2.87:1 against its white label, which is below AA, but it is
-         the colour 137 call sites and a dozen hand-written `#828fff` buttons
-         already share, so darkening it is a repo-wide decision (a token change
-         every button and link inherits), not this card's — the visible hover
-         feedback the card asked for is the shadow plus the cursor, and the
-         pressed state deliberately goes the other way, to a dark fill.
+       * `:hover` adds a shadow instead of relying only on the colour swap, so
+         the hover is visible even before it is read as a colour. The hover
+         COLOUR is no longer the light `--jf-primary-hover` #828fff that #987
+         deliberately left alone: #828fff carries a white label at 2.87:1, below
+         AA, and it is the one state every pointer lands on before it clicks —
+         it is now #616dd5 (white 4.51:1), the lightest step on the #5e6ad2 hue
+         that clears AA. Card t_9efae9f0; the reasoning and the measurement live
+         on the token itself at the top of this file.
        * `:disabled` keeps a not-allowed cursor and drops the press transform,
          so a disabled button cannot be pressed by look. The busy state itself
          was already the `disabled` attribute at the call site; what was missing

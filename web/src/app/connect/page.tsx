@@ -155,7 +155,7 @@ function ConnectForm() {
               <button
                 onClick={resend}
                 disabled={busy}
-                className="w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-50"
+                className="w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-50"
               >
                 {t("connect.resend")}
               </button>

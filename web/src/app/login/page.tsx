@@ -461,7 +461,7 @@ export default function Login() {
                     setMode("login");
                     setDone(false);
                   }}
-                  className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff]"
+                  className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
                 >
                   {mode === "forgot" || mode === "magic" ? t(mode === "magic" ? "login.passwordlessBack" : "login.forgotBack") : t("login.backToLogin")}
                 </button>
@@ -524,7 +524,7 @@ export default function Login() {
               </div>
               <button
                 disabled={busy || code.length !== 6}
-                className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-60"
+                className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-60"
               >
                 {busy ? "…" : t("login.totpSubmit")}
               </button>
@@ -651,7 +651,7 @@ export default function Login() {
 
               <button
                 disabled={busy}
-                className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[#828fff] disabled:opacity-60"
+                className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-60"
               >
                 {busy ? "…" : mode === "login" ? t("login.submitLogin") : mode === "register" ? t("login.submitRegister") : mode === "magic" ? t("login.continue") : t("login.forgotSubmit")}
               </button>

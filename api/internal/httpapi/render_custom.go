@@ -100,7 +100,11 @@ var customFormTmpl = template.Must(template.New("custom").Parse(`<!doctype html>
   iframe#jf-custom { width:100%; height:520px; border:0; display:block; background:#ffffff; }
   button { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:600;
            color:#fff; cursor:pointer; margin-top:12px; background:#5e6ad2; }
-  button:hover { background:#828fff; }
+  /* hover is #616dd5, not the old #828fff: #828fff carries this button's white
+     label at 2.87:1, below the AA 4.5:1 floor. #616dd5 is the #5e6ad2 hue one
+     lightness step up that still clears AA (white 4.51:1, measured). Card
+     t_9efae9f0; the web CTA (--jf-primary-hover in globals.css) is the same pair. */
+  button:hover { background:#616dd5; }
   .ok { text-align:center; padding:24px 0; }
   .ok h1 { color:#10b981; }
   .ok p { color:#6b7280; font-size:14px; }
