@@ -12,6 +12,14 @@ key public pages and **fails the gate on any critical or serious violation**:
 
 - `/login` (two-step 2FA login, passkey, magic-link, social)
 - `/landing`
+- `/mcp` — the MCP setup page. It was in **no** scan until card `t_2db0fc94`:
+  it is not a `/docs/*` route, so nothing policed it, and the axe list did not
+  name it either. It carries the second `bg-slate-900` code slab on a public
+  page (`/landing` is the other), a pairing `src/lib/emeraldText.test.ts`
+  deliberately abstains on because a class-name scan cannot composite a dark
+  background. `src/lib/a11yDarkSlabCoverage.test.ts` now fails the unit suite
+  when a route that paints text on a dark slab is neither scanned here nor
+  behind a session, so the next such page cannot sit outside the gate again.
 - `/reset-password`
 - `/magic-link`
 - `/brand`

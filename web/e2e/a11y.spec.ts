@@ -19,6 +19,17 @@ const PAGES = [
   { name: "brand", path: "/brand" },
   { name: "legal-privacy", path: "/legal/privacy" },
   { name: "legal-terms", path: "/legal/terms" },
+  // The MCP setup page (/mcp) is public and linked from the landing page's MCP
+  // section, the profile's MCP tab and the sitemap — and it was in NO scan.
+  // It is not a docs route (`/docs/mcp` is a different page and is listed
+  // below), so it matched no prefix this list polices, and a page outside every
+  // gate is a page that ships unnoticed. It is the second place a code snippet
+  // is painted on a dark `bg-slate-900` slab (`/landing` is the other), which is
+  // a pairing no class-name guard can judge without compositing a background —
+  // see `src/lib/emeraldText.test.ts`, which abstains on a dark slab precisely
+  // because the browser gate is what reads it. src/lib/a11yDarkSlabCoverage.test.ts
+  // now fails the unit suite when such a slab appears on a route this list omits.
+  { name: "mcp", path: "/mcp" },
   // t_f5a8730d / t_d768342e: the knowledge base was outside this scan entirely,
   // so a docs PR could not be checked by the a11y gate at all (PR 676 edited
   // /docs/customize and even a full `npm run a11y` never looked at it). Every
