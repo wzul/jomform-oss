@@ -17,9 +17,115 @@
 #
 # Run:  bash web/scripts/biteproof_mcp_tool_inventory.sh
 set -uo pipefail
-cd "$(dirname "$0")/.." || exit 2          # -> web/
 
-PAGE=src/app/docs/mcp/page.tsx
+# The script's OWN absolute path is resolved BEFORE the `cd` below, because the child
+# this file re-execs under the lock needs a path that survives a changed CWD — a
+# relative `$0` resolved after the `cd` names a file that is not there.
+BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+[ -n "$BITE_HOME" ] || { echo "cannot resolve the directory this script lives in" >&2; exit 2; }
+SELF="$BITE_HOME/$(basename "$0")"
+cd "$BITE_HOME/.." || exit 2               # -> web/
+
+# ---- THE FAMILY'S SHARED-INPUT LOCK (t_76b3356d) ------------------------------------
+#
+# This harness MUTATES `src/app/docs/mcp/page.tsx` and `api/internal/mcpsrv/tools.go` and
+# `mcpToolInventory.test.ts` walks the whole docs tree + the Go registry, so two runs that
+# overlap in ONE worktree read each other's mutations and print FALSE verdict lines. It is
+# the SAME shared input every /docs bite harness mutates, so the whole family takes ONE
+# lock file per worktree, `jomform-biteproof-docs-bite`, taken from before the first case
+# (which READS the page) until this process exits.
+#
+# The key is the WORKTREE (`git rev-parse --absolute-git-dir`), under a HOST-GLOBAL base
+# (`/tmp`, never `$TMPDIR`), so two lanes' cards never queue behind each other. A contended
+# run WAITS and says so rather than failing; a wait-out is exit 75. The PARENT takes it on
+# fd 9 and re-execs this script; the child inherits the open descriptor and PROVES it holds
+# it (a second take must be refused, a fresh file in the same directory must lock FINE)
+# before it prints anything.
+LOCK_BASE="${BITEPROOF_LOCK_DIR:-/tmp}"
+LOCK_WAIT="${BITEPROOF_LOCK_WAIT:-1800}"
+
+if [ "${BITEPROOF_LOCKED:-}" != "1" ]; then
+  command -v flock >/dev/null 2>&1 || {
+    echo "BITEPROOF REFUSED: flock is not installed, so this harness cannot serialise two" >&2
+    echo "runs in one worktree — and overlapping runs mutate the same docs files and print" >&2
+    echo "FALSE verdicts (t_76b3356d, reproduced). Install flock before trusting any" >&2
+    echo "verdict from it." >&2
+    exit 2
+  }
+  case "$LOCK_WAIT" in ''|*[!0-9]*)
+    echo "BITEPROOF REFUSED: BITEPROOF_LOCK_WAIT='$LOCK_WAIT' is not a whole number of seconds." >&2
+    exit 2 ;;
+  esac
+  BITE_GIT_DIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || {
+    echo "BITEPROOF REFUSED: cannot resolve this worktree's git dir (git rev-parse" >&2
+    echo "--absolute-git-dir), so there is no per-worktree key to serialise on, and an" >&2
+    echo "unserialised run prints false verdicts when a peer runs here." >&2
+    exit 2
+  }
+  BITE_KEY=$(printf '%s' "$BITE_GIT_DIR" | sha256sum | cut -c1-16)
+  LOCK_DIR="$LOCK_BASE/jomform-biteproof-docs-bite"
+  mkdir -p "$LOCK_DIR" || {
+    echo "BITEPROOF REFUSED: cannot create the lock directory $LOCK_DIR, so two runs in" >&2
+    echo "one worktree could not be serialised. Set BITEPROOF_LOCK_DIR to a writable dir." >&2
+    exit 2
+  }
+  LOCK_FILE="$LOCK_DIR/$BITE_KEY.lock"
+  export BITEPROOF_LOCKED=1 BITEPROOF_LOCK_FILE="$LOCK_FILE"
+  exec 9>"$LOCK_FILE" || {
+    echo "BITEPROOF REFUSED: cannot open the lock file $LOCK_FILE." >&2
+    exit 2
+  }
+  if ! flock -n "$LOCK_FILE" true 2>/dev/null; then
+    echo "  lock:   another /docs bite harness holds this worktree's lock — waiting up to ${LOCK_WAIT}s"
+    echo "          (the family shares its input, so concurrently they print FALSE verdicts)"
+  fi
+  flock -w "$LOCK_WAIT" -E 75 9
+  _lock_rc=$?
+  if [ "$_lock_rc" = 75 ]; then
+    echo "BITEPROOF REFUSED: could not take the per-worktree lock $LOCK_FILE within ${LOCK_WAIT}s," >&2
+    echo "so this run is NOT serialised against a peer that mutates the same docs files" >&2
+    echo "and would print false verdicts. Nothing was mutated. Re-run once the other run" >&2
+    echo "finishes, or raise the wait with BITEPROOF_LOCK_WAIT=<seconds>." >&2
+    exit 75
+  fi
+  if [ "$_lock_rc" != 0 ]; then
+    echo "BITEPROOF REFUSED: flock on $LOCK_FILE exited ${_lock_rc}, so the lock was not held" >&2
+    echo "and this run would not be serialised against a peer in the same worktree." >&2
+    exit 2
+  fi
+  bash "$SELF" "$@"
+  exit "$?"
+fi
+
+# The child. Refuse if the lock it is supposed to have inherited cannot be shown to be
+# held: an unverified lock is the same shape as an unverified verdict.
+LOCK_FILE="${BITEPROOF_LOCK_FILE:-}"
+if [ -z "$LOCK_FILE" ]; then
+  echo "BITEPROOF REFUSED: BITEPROOF_LOCKED=1 is set but BITEPROOF_LOCK_FILE is empty, so this" >&2
+  echo "run cannot show it holds the per-worktree lock. Unset both and re-run the harness." >&2
+  exit 2
+fi
+if flock -n "$LOCK_FILE" true 2>/dev/null; then
+  echo "BITEPROOF REFUSED: the per-worktree lock ($LOCK_FILE) was not held here, so this run is" >&2
+  echo "NOT serialised — a peer mutating the same docs files would give it false verdicts." >&2
+  echo "Run the harness WITHOUT BITEPROOF_LOCKED set and let it take the lock itself." >&2
+  exit 2
+fi
+LOCK_PROBE=$(mktemp "$(dirname "$LOCK_FILE")/probe.XXXXXX") || {
+  echo "BITEPROOF REFUSED: cannot create a probe file beside $LOCK_FILE, so the check above" >&2
+  echo "cannot be shown to be meaningful." >&2
+  exit 2
+}
+if ! flock -n "$LOCK_PROBE" true 2>/dev/null; then
+  echo "BITEPROOF REFUSED: flock could not lock a FRESH file ($LOCK_PROBE), so \"the lock is held\"" >&2
+  echo "above proves nothing about flock here — it would read REFUSED for any file." >&2
+  rm -f "$LOCK_PROBE"
+  exit 2
+fi
+rm -f "$LOCK_PROBE"
+echo "lock:   held for this worktree (${LOCK_FILE##*/})"
+
+PAGE="${BITEPROOF_PAGE:-src/app/docs/mcp/page.tsx}"
 TOOLS=../api/internal/mcpsrv/tools.go
 GUARD=src/lib/mcpToolInventory.test.ts
 # git's rev:path form is relative to the REPO ROOT, not this cwd — resolve it once.

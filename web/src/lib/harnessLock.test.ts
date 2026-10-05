@@ -24,9 +24,39 @@
 // runs 1s apart in ONE worktree printed 7 and 4 false `***` lines (a false
 // `baseline: NEW guard wanted GREEN, got RED` among them — the suite reading as broken)
 // against 0 for a solo run at the same base, 9 and 11 BITES instead of 13, rc=1 for both.
-// No false PASS was reachable, but the wrong verdict lines are the whole harm. Both
-// harnesses are therefore driven here, one entry per harness, and the legs are the same
-// for each.
+// No false PASS was reachable, but the wrong verdict lines are the whole harm. Every
+// harness of the family is therefore driven here, one entry per harness, and the legs are
+// the same for each.
+//
+// THE THIRD HARNESS IS THE SAME DEFECT, UNFIXED (card t_f4f4681c). The
+// prose-convention harness mutates FOUR SHARED files under `src/app/docs`
+// (`chat/page.tsx`, `security/page.tsx`, `sales/page.tsx`, `layout.tsx`) and its
+// `run_guard` reads the WHOLE tree, but it carried NO lock (`grep -c flock` was 0)
+// and this file guarded only its two siblings. Reproduced in ONE worktree on
+// `origin/main`: two runs started together printed a FALSE `6/6 HOLE cases RED,
+// 0/3 CONTROLS GREEN` (the three CONTROLS read RED because a peer's marker was on
+// disk when the guard read the tree) with both rc=1, and the collision LEFT TWO
+// PROBE MUTATIONS ON DISK — so every later `test:unit` in that tree judged a
+// mutated tree. Those are the counts the harness stood at on `origin/main` when
+// this lock was written (six HOLE / three CONTROLS); on the tree it now sits on it
+// is EIGHT HOLE / FIVE CONTROLS over the fourteen labelled cases `CASE 0`..`CASE 13`
+// (cards `t_8b3a508b` and `t_763c28c2` added CASE 10..13), and a solo run prints
+// `8/8 HOLE cases RED, 5/5 CONTROLS GREEN`.
+//
+// THE LOCK IS PER FAMILY, KEYED ON THE SHARED INPUT (card t_76b3356d). Cards
+// t_ed66094c, t_03a646e2 and t_f4f4681c each gave ONE harness a lock under its OWN
+// directory, which serialised two runs of the SAME script and left two DIFFERENT
+// harnesses of the family OVERLAPPING — and they all mutate the SAME tree. Measured
+// 3/3 rounds with prose + tool_claims started together in ONE worktree: tool_claims
+// printed 6 false `***` lines against 4 for a solo run of the same bytes, including a
+// FALSE `registered name: NEW guard wanted GREEN, got RED` on its OWN negative control
+// (a control that must stay GREEN read RED). The shared thing is the INPUT, so no
+// per-script channel could fix it. EVERY harness of the family now derives the SAME
+// lock file, `jomform-biteproof-docs-bite`, so any two of them serialise in a
+// worktree; the two that carried no lock at all (`biteproof_docs_index_comment_anchor.sh`,
+// `biteproof_mcp_tool_inventory.sh`) were given it here for the same reason. This file
+// therefore drives SIX harnesses, one entry each, and the cross-harness leg below is
+// the one that fails if the key goes back to per-script.
 //
 // WHAT THIS PINS. Every leg below RUNS the real script and reads its real exit code and
 // its real message — none of them greps the file's text, because the sharpest way to
@@ -54,6 +84,12 @@
 //      DIFFERENT worktree's key in the SAME repo and requires the run NOT to be blocked:
 //      a key that collapsed to one file per repo would make every card's lane queue
 //      behind every other card's.
+//   E. The key is the FAMILY'S, not the script's. With THIS worktree's lock held by the
+//      peer, a DIFFERENT harness of the family must ALSO be refused (exit 75, nothing
+//      run). This is the leg card t_76b3356d exists for: it fails (the peer runs its body
+//      and exits 1) if any harness goes back to a per-script directory. It asserts the
+//      shared key as a hard equality across every entry, so the property is checked, not
+//      merely documented.
 //
 // D3 IS DERIVED, NOT HARDCODED (card t_03a646e2). The first cut named
 // `<repoRoot>/.worktrees/t_ed66094c` and guarded the whole leg with `existsSync`, so on
@@ -76,9 +112,11 @@
 //
 // WHAT IT DOES NOT COVER (stated honestly): that a lock-HOLDING run produces no false
 // verdict lines is measured by each harness on a staggered pair of runs, not here. It
-// also cannot see a reader that mutates a shared page WITHOUT calling these scripts, and
-// it does not serialise two DIFFERENT harnesses against each other — the lock directory
-// is per harness, so its scope is two runs of the SAME script.
+// also cannot see a reader that mutates a shared page WITHOUT calling these scripts.
+// It DOES now serialise two DIFFERENT harnesses of the family against each other (leg E,
+// card t_76b3356d): they all key on the SAME file because they all mutate the same docs
+// tree. What it still does not serialise is a harness OUTSIDE this family (e.g.
+// `biteproof_forms_bulk_failure.sh`) that mutates a file one of these walks.
 //
 // THE FILE NAME IS LOAD-BEARING, and deliberately avoids "bite": the harness-inventory
 // guard (`api/internal/biteharness`, inside the `api test` gate) classifies any file whose
@@ -102,21 +140,82 @@ const here = dirname(fileURLToPath(import.meta.url));            // web/src/lib
 const webRoot = join(here, "..", "..");                          // web/
 const repoRoot = join(webRoot, "..");                            // repo root
 
-// One entry per harness this lock has to cover, with the lock directory that harness
-// derives. The lock directory is PER HARNESS in both scripts (as it was in the sibling
-// before card t_03a646e2), so it has to be re-derived per entry rather than shared.
-const HARNESSES = [
+// One entry per harness this lock has to cover. The lock directory is the SAME for every
+// entry — one file per worktree, keyed on the family's shared INPUT — so it is derived
+// once here and asserted identical across entries below. (Until card t_76b3356d each
+// harness carried its OWN directory, which serialised two runs of the same script but left
+// two DIFFERENT harnesses of the family overlapping; the D3 assertion below used to assert
+// that the two harnesses derive DIFFERENT files, and card t_76b3356d INVERTS it: every
+// harness derives the SAME file, because every one of them mutates the same docs tree.)
+const FAMILY_LOCK_SUBDIR = "jomform-biteproof-docs-bite";
+type HarnessEntry = {
+  label: string;
+  script: string;
+  lockSubdir: string;
+  // true when this harness MUTATES the family's shared input (files under src/app/docs).
+  // Every entry here does; the flag exists so the cross-harness leg below can state WHY a
+  // peer holding the family key must block this run, and so a future reader-only entry can
+  // be marked honestly instead of silently inheriting the claim.
+  mutatesSharedInput: boolean;
+  // How D3 reaches this harness's deterministic, node-free refusal AFTER it has taken
+  // ITS OWN (free) lock: an unresolvable base ref for the four that read one, and a
+  // missing guard path for the prose harness, and a missing PAGE for the MCP-inventory
+  // harness (checked before any base resolution). The needle is the message that proves
+  // the run got PAST the lock to that refusal, not the lock timeout.
+  d3ProbeEnv: Record<string, string>;
+  d3ProbeNeedle: RegExp;
+};
+
+const HARNESSES: HarnessEntry[] = [
   {
     label: "biteproof_docs_tool_claims.sh",
     script: join(webRoot, "scripts", "biteproof_docs_tool_claims.sh"),
-    lockSubdir: "jomform-biteproof-docs-tool-claims",
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_BASE: "refs/heads/jomform-nonexistent-probe" },
+    d3ProbeNeedle: /cannot resolve refs\/heads\/jomform-nonexistent-probe/,
   },
   {
     label: "biteproof_docs_index_render_sites.sh",
     script: join(webRoot, "scripts", "biteproof_docs_index_render_sites.sh"),
-    lockSubdir: "jomform-biteproof-docs-index-render-sites",
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_BASE: "refs/heads/jomform-nonexistent-probe" },
+    d3ProbeNeedle: /cannot resolve refs\/heads\/jomform-nonexistent-probe/,
   },
-] as const;
+  {
+    label: "biteproof_docs_prose_convention.sh",
+    script: join(webRoot, "scripts", "biteproof_docs_prose_convention.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_GUARD: join(webRoot, "scripts", ".no-such-guard-probe.ts") },
+    d3ProbeNeedle: /is missing — nothing to drive/,
+  },
+  {
+    label: "biteproof_llms_full_coverage.sh",
+    script: join(webRoot, "scripts", "biteproof_llms_full_coverage.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_BASE: "refs/heads/jomform-nonexistent-probe" },
+    d3ProbeNeedle: /cannot resolve refs\/heads\/jomform-nonexistent-probe/,
+  },
+  {
+    label: "biteproof_docs_index_comment_anchor.sh",
+    script: join(webRoot, "scripts", "biteproof_docs_index_comment_anchor.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_BASE: "refs/heads/jomform-nonexistent-probe" },
+    d3ProbeNeedle: /cannot resolve refs\/heads\/jomform-nonexistent-probe/,
+  },
+  {
+    label: "biteproof_mcp_tool_inventory.sh",
+    script: join(webRoot, "scripts", "biteproof_mcp_tool_inventory.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_PAGE: "src/app/docs/.no-such-page-probe.tsx" },
+    d3ProbeNeedle: /missing src\/app\/docs\/\.no-such-page-probe\.tsx/,
+  },
+];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -205,7 +304,7 @@ function gitCommonDirOf(worktree: string): string | undefined {
   }
 }
 
-test("both docs bite harnesses serialise on a PER-WORKTREE lock (t_ed66094c, t_03a646e2)", async (t) => {
+test("every /docs bite harness serialises on ONE per-worktree lock, keyed on the shared input (t_ed66094c, t_03a646e2, t_f4f4681c, t_76b3356d)", async (t) => {
   const imageReason = imageBuildSkipReason();
   if (imageReason) {
     t.skip(imageReason);
@@ -213,7 +312,7 @@ test("both docs bite harnesses serialise on a PER-WORKTREE lock (t_ed66094c, t_0
   }
   const gitCommonDir = gitCommonDirOf(repoRoot);
   const primaryRoot = gitCommonDir === undefined ? undefined : dirname(gitCommonDir);
-  for (const { label, script, lockSubdir } of HARNESSES) {
+  for (const { label, script, lockSubdir, d3ProbeEnv, d3ProbeNeedle } of HARNESSES) {
     assert.ok(existsSync(script), `the harness is missing at ${script}`);
 
     // A private lock base per run: this guard never touches a real lane's lock, and two
@@ -254,6 +353,43 @@ test("both docs bite harnesses serialise on a PER-WORKTREE lock (t_ed66094c, t_0
         `peer may have mutated. Got:\n${blocked.out}`,
       );
 
+      // --- E: a DIFFERENT harness of the family is refused by the SAME lock. --------
+      // THE CROSS-HARNESS LEG (card t_76b3356d). Until this card each harness keyed its
+      // lock on its OWN directory, so two runs of the same script serialised but two
+      // DIFFERENT harnesses of the family overlapped in one worktree and read each other's
+      // mutations (measured 3/3 rounds: tool_claims printed 6 false `***` lines against 4
+      // for a solo run, including a false `NEW guard wanted GREEN, got RED` on its own
+      // negative control). The family shares the SAME input — files under `src/app/docs` —
+      // so every harness must derive the SAME file. A revert to a per-script directory
+      // makes the peer's key FREE here and it runs its body (exit 1) instead of 75, so
+      // this leg is what turns RED when the shared-key change is undone.
+      const peerEntry = HARNESSES.find((h) => h.label !== label && h.mutatesSharedInput);
+      assert.ok(
+        peerEntry,
+        `no DIFFERENT harness of the family to drive — the cross-harness leg proves nothing`,
+      );
+      assert.equal(
+        peerEntry.lockSubdir, lockSubdir,
+        `${label} and ${peerEntry.label} derive DIFFERENT lock directories, so two harnesses ` +
+        `that mutate the SAME docs tree would overlap in one worktree (t_76b3356d)`,
+      );
+      const peerBlocked = run(nowait, repoRoot, peerEntry.script);
+      assert.equal(
+        peerBlocked.status, 75,
+        `${label}: while this worktree's lock is held, ${peerEntry.label} must be refused by ` +
+        `the SAME lock (the family shares its input). Got ${peerBlocked.status} — a per-script ` +
+        `key leaves them overlapping:\n${peerBlocked.out}`,
+      );
+      assert.match(
+        peerBlocked.out, /could not take the per-worktree lock/,
+        `${label}: ${peerEntry.label} was refused without naming the lock:\n${peerBlocked.out}`,
+      );
+      assert.doesNotMatch(
+        peerBlocked.out, /BITES|\*\*\*|^old guard \(/m,
+        `${label}: ${peerEntry.label} RAN while a peer held the family lock, so it would have ` +
+        `read docs files a peer may have mutated. Got:\n${peerBlocked.out}`,
+      );
+
       // --- D1/D2: the key does not depend on the caller's CWD. ---------------------
       for (const [where, cwd] of [["repo root", repoRoot], ["web/", webRoot]] as const) {
         const r = run(nowait, cwd);
@@ -288,10 +424,10 @@ test("both docs bite harnesses serialise on a PER-WORKTREE lock (t_ed66094c, t_0
           `${label}: the linked worktree and the primary tree derive the SAME lock file, so ` +
           `every card's lane would serialise behind every other card's`,
         );
-        // Hold the OTHER tree's key, then run with a ref that cannot resolve: the harness
-        // takes its own (free) lock and refuses at base resolution — a deterministic exit 2
-        // that needs no guard run. If the peer's key wrongly covered this tree, the exit
-        // code would be 75 instead.
+        // Hold the OTHER tree's key, then run with this harness's `d3ProbeEnv` — which
+        // reaches ITS OWN deterministic, node-free refusal after taking its own (free)
+        // lock. If the peer's key wrongly covered this tree, the exit code would be 75
+        // instead.
         writeFileSync(peerLock, "");
         const peerHolder = spawn("flock", [peerLock, "bash", "-c", "sleep 8"], { stdio: "ignore" });
         const peerDone = new Promise<void>((res) => peerHolder.on("close", () => res()));
@@ -299,7 +435,7 @@ test("both docs bite harnesses serialise on a PER-WORKTREE lock (t_ed66094c, t_0
           await waitUntil(() => !lockIsFree(peerLock), 5000,
             `${label}: the peer taking the other tree's lock`);
           const other = run(
-            { ...nowait, BITEPROOF_BASE: "refs/heads/jomform-nonexistent-probe" },
+            { ...nowait, ...d3ProbeEnv },
             repoRoot,
           );
           assert.equal(
@@ -308,8 +444,8 @@ test("both docs bite harnesses serialise on a PER-WORKTREE lock (t_ed66094c, t_0
             `key is not per-worktree. Got ${other.status}:\n${other.out}`,
           );
           assert.match(
-            other.out, /cannot resolve refs\/heads\/jomform-nonexistent-probe/,
-            `${label}: the run did not get as far as resolving its base, so its exit 2 proves ` +
+            other.out, d3ProbeNeedle,
+            `${label}: the run did not get as far as its own pre-guard refusal, so its exit 2 proves ` +
             `nothing about the lock. Got:\n${other.out}`,
           );
           assert.doesNotMatch(

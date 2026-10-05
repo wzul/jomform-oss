@@ -70,6 +70,19 @@
 # queue behind each other, and a contended run WAITS and says so rather than failing
 # — a refusal would turn "someone else is running it" into a red harness.
 #
+# THE KEY IS THE FAMILY'S, NOT THIS SCRIPT'S (card t_76b3356d). The lock directory
+# was once per harness (its own `jomform-biteproof-docs-tool-claims`), which
+# serialised two runs of THIS script and left two DIFFERENT harnesses of the family
+# overlapping — and they all mutate the SAME docs tree. Measured 3/3 rounds with
+# `biteproof_docs_prose_convention.sh` started together in ONE worktree: THIS harness
+# printed 6 false `***` lines against 4 for a solo run of the same bytes, including a
+# FALSE `registered name: NEW guard wanted GREEN, got RED` on its own negative control
+# (a control that must stay GREEN read RED). Every harness of the family now takes ONE
+# file, `jomform-biteproof-docs-bite`, so any two of them serialise; the two that had
+# no lock at all (comment_anchor, mcp_tool_inventory) were given the same one.
+# `web/src/lib/harnessLock.test.ts` leg E drives that cross-harness property, so a
+# revert to a per-script directory turns it RED.
+#
 # Run:  bash web/scripts/biteproof_docs_tool_claims.sh
 set -uo pipefail
 
@@ -130,7 +143,7 @@ if [ "${BITEPROOF_LOCKED:-}" != "1" ]; then
     exit 2
   }
   BITE_KEY=$(printf '%s' "$BITE_GIT_DIR" | sha256sum | cut -c1-16)
-  LOCK_DIR="$LOCK_BASE/jomform-biteproof-docs-tool-claims"
+  LOCK_DIR="$LOCK_BASE/jomform-biteproof-docs-bite"
   mkdir -p "$LOCK_DIR" || {
     echo "BITEPROOF REFUSED: cannot create the lock directory $LOCK_DIR, so two runs in" >&2
     echo "one worktree could not be serialised. Set BITEPROOF_LOCK_DIR to a writable dir." >&2
@@ -143,8 +156,8 @@ if [ "${BITEPROOF_LOCKED:-}" != "1" ]; then
     exit 2
   }
   if ! flock -n "$LOCK_FILE" true 2>/dev/null; then
-    echo "  lock:   another run of this harness holds this worktree's lock — waiting up to ${LOCK_WAIT}s"
-    echo "          (both runs mutate the same two docs pages, so concurrently they print FALSE verdicts)"
+    echo "  lock:   another /docs bite harness holds this worktree's lock — waiting up to ${LOCK_WAIT}s"
+    echo "          (the family shares its input, so concurrently they print FALSE verdicts)"
   fi
   flock -w "$LOCK_WAIT" -E 75 9
   _lock_rc=$?

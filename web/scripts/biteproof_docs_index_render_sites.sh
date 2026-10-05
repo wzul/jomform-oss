@@ -169,10 +169,17 @@ cd "$BITE_HOME/.." || exit 2                # -> web/
 # separate process must be REFUSED, and a fresh file in the same directory must lock
 # FINE — or "refused" would mean flock is inert here, not that this run holds the lock.
 #
-# The directory is per HARNESS, as in the sibling (its own
-# `jomform-biteproof-docs-tool-claims`). Two DIFFERENT harnesses of this family can
-# therefore still overlap; what this excludes is two runs of THIS script, which is
-# the shape reproduced above. Stated as a limit rather than left implicit.
+# The directory is the FAMILY'S shared one (`jomform-biteproof-docs-bite`), the same
+# file every /docs bite harness takes (card `t_76b3356d`). It used to be per HARNESS
+# (its own `jomform-biteproof-docs-index-render-sites`), which serialised two runs of
+# THIS script but left two DIFFERENT harnesses of this family overlapping — and they
+# all mutate the SAME tree. Measured 3/3 rounds with `biteproof_docs_prose_convention.sh`
+# and `biteproof_docs_tool_claims.sh` started together in ONE worktree: tool_claims
+# printed 6 false `***` lines against 4 for a solo run, including a false
+# `registered name: NEW guard wanted GREEN, got RED` on its own negative control.
+# `web/src/lib/harnessLock.test.ts` leg E drives the cross-harness property, so a
+# revert to a per-script directory turns it RED. Two lanes' cards still never
+# serialise behind each other: the key is the WORKTREE.
 LOCK_BASE="${BITEPROOF_LOCK_DIR:-/tmp}"
 LOCK_WAIT="${BITEPROOF_LOCK_WAIT:-1800}"
 
@@ -195,7 +202,7 @@ if [ "${BITEPROOF_LOCKED:-}" != "1" ]; then
     exit 2
   }
   BITE_KEY=$(printf '%s' "$BITE_GIT_DIR" | sha256sum | cut -c1-16)
-  LOCK_DIR="$LOCK_BASE/jomform-biteproof-docs-index-render-sites"
+  LOCK_DIR="$LOCK_BASE/jomform-biteproof-docs-bite"
   mkdir -p "$LOCK_DIR" || {
     echo "BITEPROOF REFUSED: cannot create the lock directory $LOCK_DIR, so two runs in" >&2
     echo "one worktree could not be serialised. Set BITEPROOF_LOCK_DIR to a writable dir." >&2
@@ -208,8 +215,8 @@ if [ "${BITEPROOF_LOCKED:-}" != "1" ]; then
     exit 2
   }
   if ! flock -n "$LOCK_FILE" true 2>/dev/null; then
-    echo "  lock:   another run of this harness holds this worktree's lock — waiting up to ${LOCK_WAIT}s"
-    echo "          (both runs mutate the same docs page, so concurrently they print FALSE verdicts)"
+    echo "  lock:   another /docs bite harness holds this worktree's lock — waiting up to ${LOCK_WAIT}s"
+    echo "          (the family shares its input, so concurrently they print FALSE verdicts)"
   fi
   flock -w "$LOCK_WAIT" -E 75 9
   _lock_rc=$?

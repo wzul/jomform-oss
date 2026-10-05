@@ -36,11 +36,15 @@
 # and REFUSES (exit 2, with the reason) instead of choosing a column.
 #
 # THE VERDICT CHANNEL IS PER-RUN and the SHARED input (llms-full.txt, for cases 1-3)
-# is serialised per worktree with a flock keyed on `git rev-parse --absolute-git-dir`,
-# under a HOST-GLOBAL base — the run it must exclude usually belongs to another
-# profile. Case 4 also creates and removes a probe route directory under app/docs, so
-# it too is inside the lock; the `trap ... EXIT` restores every mutated file and
-# removes the probe directory on every exit, interrupts included.
+# is serialised per worktree with a `flock` on `git rev-parse --absolute-git-dir`
+# under a host-global base; `trap ... EXIT` restores `llms-full.txt` and removes every
+# probe directory byte-identically on every exit. THE LOCK IS THE FAMILY'S (card
+# t_76b3356d): every /docs bite harness takes the SAME file,
+# `jomform-biteproof-docs-bite`, because they all mutate the same tree — a per-script
+# directory serialised two runs of one script and left two DIFFERENT harnesses of the
+# family overlapping (measured 3/3 rounds, 6 false `***` lines against 4 for a solo run,
+# including a false `NEW guard wanted GREEN, got RED` on tool_claims' own control).
+# Two lanes' cards still never serialise behind each other: the key is the WORKTREE.
 #
 # Run:  bash web/scripts/biteproof_llms_full_coverage.sh
 set -uo pipefail
@@ -70,7 +74,7 @@ if [ "${BITEPROOF_LOCKED:-}" != "1" ]; then
     exit 2
   }
   BITE_KEY=$(printf '%s' "$BITE_GIT_DIR" | sha256sum | cut -c1-16)
-  LOCK_DIR="$LOCK_BASE/jomform-biteproof-llms-full-coverage"
+  LOCK_DIR="$LOCK_BASE/jomform-biteproof-docs-bite"
   mkdir -p "$LOCK_DIR" || {
     echo "BITEPROOF REFUSED: cannot create the lock directory $LOCK_DIR." >&2
     exit 2
