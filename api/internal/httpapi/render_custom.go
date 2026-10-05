@@ -33,11 +33,13 @@ func (h *PublicHandlers) renderCustomForm(w http.ResponseWriter, r *http.Request
 	bodyJS, _ := json.Marshal(safeHTML)
 
 	ls := h.effectiveLangStrings(r.Context(), f)
-	themePrimary, themeBg := "", ""
+	// Card t_8f5d6fb5: same theme wiring as the block renderers — the CTA is
+	// painted from the merchant's brand colour, with hover/active/label derived
+	// from the same hue (formtheme.go). The inner iframe body is merchant HTML
+	// inside a sandbox and keeps its own styling.
+	cta := themePrimaryValues(f)
+	themeBg := ""
 	if f.Theme != nil {
-		if v, ok := f.Theme["primary"].(string); ok {
-			themePrimary = template.HTMLEscapeString(v)
-		}
 		if v, ok := f.Theme["background"].(string); ok {
 			themeBg = template.HTMLEscapeString(v)
 		}
@@ -55,8 +57,10 @@ func (h *PublicHandlers) renderCustomForm(w http.ResponseWriter, r *http.Request
 
 	if err := customFormTmpl.Execute(w, map[string]any{
 		"Slug": f.Slug, "Title": f.Title,
-		"BodyJS":       template.JS(bodyJS),
-		"ThemePrimary": themePrimary, "ThemeBg": themeBg, "LogoURL": f.LogoURL,
+		"BodyJS":  template.JS(bodyJS),
+		"ThemeBg": themeBg, "LogoURL": f.LogoURL,
+		"CtaPrimary": cta.Primary, "CtaHover": cta.Hover, "CtaActive": cta.Active,
+		"CtaLabel": cta.Label, "CtaText": cta.Text,
 		"Lang": ls.Lang,
 		"Ls":   ls,
 		// Issue #244: hidden honeypot + render-timestamp fields ride on the
@@ -83,7 +87,10 @@ var customFormTmpl = template.Must(template.New("custom").Parse(`<!doctype html>
 {{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
 <style>
-  {{if .ThemePrimary}}:root { --jf-primary: {{.ThemePrimary}}; }{{end}}
+  /* Card t_8f5d6fb5: the merchant's brand triple, same as the block renderer. */
+  :root { --jf-primary: {{.CtaPrimary}}; --jf-primary-hover: {{.CtaHover}};
+          --jf-primary-active: {{.CtaActive}}; --jf-primary-label: {{.CtaLabel}};
+          --jf-primary-text: {{.CtaText}}; }
   {{if .ThemeBg}}body { background: {{.ThemeBg}}; }{{end}}
 </style>
 <style>
@@ -98,18 +105,19 @@ var customFormTmpl = template.Must(template.New("custom").Parse(`<!doctype html>
   h1 { margin:0 0 8px; font-size:24px; letter-spacing:-0.02em; }
   .frame-wrap { border:1px solid #e6e8ec; border-radius:12px; overflow:hidden; }
   iframe#jf-custom { width:100%; height:520px; border:0; display:block; background:#ffffff; }
+  /* Card t_8f5d6fb5: the submit CTA is painted from the merchant's brand triple
+     declared above, with the label colour the derived pairing measured. */
   button { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:600;
-           color:#fff; cursor:pointer; margin-top:12px; background:#5e6ad2; }
-  /* hover is #616dd5, not the old #828fff: #828fff carries this button's white
-     label at 2.87:1, below the AA 4.5:1 floor. #616dd5 is the #5e6ad2 hue one
-     lightness step up that still clears AA (white 4.51:1, measured). Card
-     t_9efae9f0; the web CTA (--jf-primary-hover in globals.css) is the same pair. */
-  button:hover { background:#616dd5; }
+           color:var(--jf-primary-label); cursor:pointer; margin-top:12px;
+           background:var(--jf-primary);
+           transition:background .15s ease, box-shadow .15s ease; }
+  button:hover { background:var(--jf-primary-hover); box-shadow:0 2px 8px rgba(23,24,28,0.12); }
+  button:active { background:var(--jf-primary-active); }
   .ok { text-align:center; padding:24px 0; }
   .ok h1 { color:#10b981; }
   .ok p { color:#6b7280; font-size:14px; }
   .ok .msg { color:#17181c; font-size:14px; line-height:1.6; margin-top:8px; }
-  .ok .msg a { color:#4f46e5; }
+  .ok .msg a { color:var(--jf-primary-text); }
 </style></head><body>
 <div class="card">
   <h1>{{.Title}}</h1>

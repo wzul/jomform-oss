@@ -240,13 +240,17 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			globalTr = v
 		}
 	}
-	themePrimary, themeBg := "", ""
+	// Card t_8f5d6fb5: the merchant's brand colour was declared as
+	// `:root { --jf-primary }` (below) and consumed by nothing — the submit CTA
+	// was a hard-coded #5e6ad2 and the checkbox/radio accent a hard-coded
+	// #4f46e5. The CTA is now painted from the theme, and its hover/active fills
+	// are derived from the same hue so a themed button does not get an indigo
+	// hover.
+	cta := themePrimaryValues(f)
+	themeBg := ""
 	themeText, themeCardBg, themeRadius, themeFont, themeLayout, themeSpacing, themeCSS := "", "", "", "", "", "", ""
 	themeJS := ""
 	if f.Theme != nil {
-		if v, ok := f.Theme["primary"].(string); ok {
-			themePrimary = template.HTMLEscapeString(v)
-		}
 		if v, ok := f.Theme["background"].(string); ok {
 			themeBg = template.HTMLEscapeString(v)
 		}
@@ -282,14 +286,16 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	ls := h.effectiveLangStrings(r.Context(), f)
 	if err := blockTmpl.Execute(w, map[string]any{
 		"Slug": f.Slug, "Title": f.Title, "Blocks": blocks,
-		"TrackHead":    headInjection(globalTr, formTrackingHead(f)),
-		"ThemePrimary": themePrimary, "ThemeBg": themeBg, "LogoURL": f.LogoURL,
+		"TrackHead": headInjection(globalTr, formTrackingHead(f)),
+		"ThemeBg":   themeBg, "LogoURL": f.LogoURL,
 		"ThemeText": themeText, "ThemeCardBg": themeCardBg, "ThemeRadius": themeRadius,
 		"ThemeFont": themeFont, "ThemeLayout": themeLayout, "ThemeSpacing": themeSpacing,
-		"ThemeCSS": template.HTML(themeCSS),
-		"ThemeJS":  template.HTML(themeJS),
-		"Lang":     ls.Lang,
-		"Ls":       ls,
+		"ThemeCSS":   template.HTML(themeCSS),
+		"ThemeJS":    template.HTML(themeJS),
+		"CtaPrimary": cta.Primary, "CtaHover": cta.Hover, "CtaActive": cta.Active,
+		"CtaLabel": cta.Label, "CtaText": cta.Text,
+		"Lang": ls.Lang,
+		"Ls":   ls,
 		// Issue #411: Open Graph + Twitter meta for social sharing.
 		"OGMeta": h.formOGMeta(r, f),
 		// Issue #183: optional per-workspace footer.
@@ -360,7 +366,21 @@ var blockTmpl = template.Must(template.New("blocks").
 {{.OGMeta}}
 {{.TrackHead}}
 <style>
-  {{if .ThemePrimary}}:root { --jf-primary: {{.ThemePrimary}}; }{{end}}
+  /* Card t_8f5d6fb5: the merchant's brand colour lives here as a TOKEN TRIPLE
+     and every accent below consumes it. Before this, the ":root { --jf-primary }"
+     declaration had no consumer anywhere in api/ — the submit CTA was a
+     hard-coded #5e6ad2 and the checkbox/radio accent #4f46e5 — so a merchant who
+     picked a colour on /form-settings got the default indigo.
+     The triple is resolved server-side (formtheme.go): CtaPrimary is the
+     merchant's colour, CtaHover/CtaActive are the same hue and chroma at a
+     different OKLCH lightness, each measured so the button's label still clears
+     AA 4.5:1, and CtaLabel is the label colour that pairing measured.
+     Unconditional, not an if-guard on ThemePrimary: an unthemed form gets the
+     same defaults the web CTA uses (#5e6ad2 / #616dd5 / #454ea8), so there is
+     exactly one place the button's colour can come from. */
+  :root { --jf-primary: {{.CtaPrimary}}; --jf-primary-hover: {{.CtaHover}};
+          --jf-primary-active: {{.CtaActive}}; --jf-primary-label: {{.CtaLabel}};
+          --jf-primary-text: {{.CtaText}}; }
   {{if .ThemeBg}}body { background: {{.ThemeBg}}; }{{end}}
   {{if .ThemeText}}body { color: {{.ThemeText}}; }{{end}}
   {{if .ThemeFont}}body { font-family: {{.ThemeFont}}; }{{end}}
@@ -387,13 +407,13 @@ var blockTmpl = template.Must(template.New("blocks").
   .prod { display:block; padding:0; border:1px solid #e6e8ec; border-radius:14px;
           margin:0 0 12px; background:#ffffff; box-shadow:0 1px 2px rgba(23,24,28,0.04);
           transition:border-color .15s ease, box-shadow .15s ease; }
-  .prod:hover { border-color:#4f46e5; box-shadow:0 2px 8px rgba(79,70,229,0.12); }
+  .prod:hover { border-color:var(--jf-primary); box-shadow:0 2px 8px rgba(79,70,229,0.12); }
   .prod:active { background:#eef2ff; }
-  .prod:has(input[type=checkbox]:checked) { border-color:#4f46e5; box-shadow:0 2px 8px rgba(79,70,229,0.12); background:#eef2ff; }
+  .prod:has(input[type=checkbox]:checked) { border-color:var(--jf-primary); box-shadow:0 2px 8px rgba(79,70,229,0.12); background:#eef2ff; }
   .prod label { display:flex; gap:12px; align-items:center; width:100%;
                 min-height:44px; padding:12px 14px; font-size:15px; color:#17181c;
                 cursor:pointer; -webkit-tap-highlight-color:transparent; }
-  .prod input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; accent-color:#4f46e5; margin:0; }
+  .prod input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; accent-color:var(--jf-primary); margin:0; }
   /* Issue #439: product image next to the name (menu-item card).
      Issue #471: the size is merchant-configurable — data-size=small (52px,
      default) | medium (96px) | large (160px) — and the layout can be
@@ -415,15 +435,15 @@ var blockTmpl = template.Must(template.New("blocks").
      overrides UA dark defaults so Android Chrome draws a white unchecked box. */
   input[type=checkbox].extra, input[type=checkbox].p {
     -webkit-appearance:none; -moz-appearance:none; appearance:none;
-    accent-color:#4f46e5; width:20px; height:20px; flex:0 0 auto;
+    accent-color:var(--jf-primary); width:20px; height:20px; flex:0 0 auto;
     border:2px solid #d1d5db; border-radius:5px; background:#fff;
     cursor:pointer; margin:0;
   }
   input[type=checkbox].extra:checked, input[type=checkbox].p:checked {
-    border-color:#4f46e5; background:#4f46e5 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' d='M5 10l3 3 6-6'/%3E%3C/svg%3E") center/14px no-repeat;
+    border-color:var(--jf-primary); background:var(--jf-primary) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' d='M5 10l3 3l6-6'/%3E%3C/svg%3E") center/14px no-repeat;
   }
   .pname { flex:1; font-weight:500; }
-  .price { color:#4f46e5; font-weight:600; font-size:14px; white-workspace:nowrap;
+  .price { color:var(--jf-primary-text); font-weight:600; font-size:14px; white-space:nowrap;
            margin-left:auto; text-align:right; }
   /* Issue #153: variation selector inside a product block. */
   .varwrap { padding:0 14px 12px; }
@@ -435,7 +455,7 @@ var blockTmpl = template.Must(template.New("blocks").
   .chk { display:flex; align-items:center; gap:8px; font-size:14px; margin:8px 0; color:#374151; }
   .chk input[type=checkbox] { margin:0; }
   .rad { display:flex; align-items:center; gap:8px; font-size:14px; margin:8px 0; color:#374151; }
-  .rad input[type=radio] { margin:0; accent-color:#4f46e5; }
+  .rad input[type=radio] { margin:0; accent-color:var(--jf-primary); }
   input[type=text],input[type=email],input[type=tel],input[type=number],
   input[type=date],input[type=time],input[type=url],input[type=password],
   select,textarea,.coupon {
@@ -451,13 +471,19 @@ var blockTmpl = template.Must(template.New("blocks").
   hr { border:0; border-top:1px solid rgba(255,255,255,0.08); margin:16px 0; }
   .total { display:flex; justify-content:space-between; padding-top:12px; margin-top:8px;
            border-top:1px dashed rgba(255,255,255,0.12); font-weight:600; }
+  /* The submit CTA (card t_8f5d6fb5). Fill, hover and pressed all come from the
+     form's brand triple declared in the :root block above; the LABEL colour is
+     the one the derived pairing measured, so a light brand colour gets dark text
+     instead of a white label it cannot carry at AA. The three states are the
+     same construction .jf-btn-primary uses on the dashboard: rest -> hover
+     (lighter for indigo, darker for a light brand) -> pressed (darker), with a
+     shadow on hover so the hover is visible even before it is read as a colour. */
   button { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:600;
-           color:#fff; cursor:pointer; margin-top:12px; background:#5e6ad2; }
-  /* hover is #616dd5, not the old #828fff: #828fff carries this button's white
-     label at 2.87:1, below the AA 4.5:1 floor. #616dd5 is the #5e6ad2 hue one
-     lightness step up that still clears AA (white 4.51:1, measured). Card
-     t_9efae9f0; the web CTA (--jf-primary-hover in globals.css) is the same pair. */
-  button:hover { background:#616dd5; }
+           color:var(--jf-primary-label); cursor:pointer; margin-top:12px;
+           background:var(--jf-primary);
+           transition:background .15s ease, box-shadow .15s ease; }
+  button:hover { background:var(--jf-primary-hover); box-shadow:0 2px 8px rgba(23,24,28,0.12); }
+  button:active { background:var(--jf-primary-active); }
   /* Issue #183: optional per-workspace footer. */
   .jf-footer { max-width:480px; width:100%; margin:16px auto 0; padding:0 8px;
                color:#6b7280; font-size:12px; line-height:1.6; text-align:center;
@@ -466,7 +492,7 @@ var blockTmpl = template.Must(template.New("blocks").
   .jf-ftext { margin-top:4px; }
   .jf-flinks { display:flex; width:100%; gap:14px; justify-content:center;
                flex-wrap:wrap; margin-top:6px; text-align:center; }
-  .jf-flinks a { color:#4f46e5; text-decoration:none; }
+  .jf-flinks a { color:var(--jf-primary-text); text-decoration:none; }
   .jf-flinks a:hover { text-decoration:underline; }
 </style></head><body>
 <form class="card" id="of" data-slug="{{.Slug}}">
@@ -760,13 +786,14 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 			globalTr = v
 		}
 	}
-	themePrimary, themeBg := "", ""
+	// Card t_8f5d6fb5: same theme wiring as the block renderer above — the
+	// CTA is painted from the merchant's brand colour with hover/active derived
+	// from the same hue.
+	cta := themePrimaryValues(f)
+	themeBg := ""
 	themeText, themeCardBg, themeRadius, themeFont, themeLayout, themeSpacing, themeCSS := "", "", "", "", "", "", ""
 	themeJS := ""
 	if f.Theme != nil {
-		if v, ok := f.Theme["primary"].(string); ok {
-			themePrimary = template.HTMLEscapeString(v)
-		}
 		if v, ok := f.Theme["background"].(string); ok {
 			themeBg = template.HTMLEscapeString(v)
 		}
@@ -802,14 +829,16 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 	ls := h.effectiveLangStrings(r.Context(), f)
 	if err := responseTmpl.Execute(w, map[string]any{
 		"Slug": f.Slug, "Title": f.Title, "Fields": fields,
-		"TrackHead":    headInjection(globalTr, formTrackingHead(f)),
-		"ThemePrimary": themePrimary, "ThemeBg": themeBg, "LogoURL": f.LogoURL,
+		"TrackHead": headInjection(globalTr, formTrackingHead(f)),
+		"ThemeBg":   themeBg, "LogoURL": f.LogoURL,
 		"ThemeText": themeText, "ThemeCardBg": themeCardBg, "ThemeRadius": themeRadius,
 		"ThemeFont": themeFont, "ThemeLayout": themeLayout, "ThemeSpacing": themeSpacing,
-		"ThemeCSS": template.HTML(themeCSS),
-		"ThemeJS":  template.HTML(themeJS),
-		"Lang":     ls.Lang,
-		"Ls":       ls,
+		"ThemeCSS":   template.HTML(themeCSS),
+		"ThemeJS":    template.HTML(themeJS),
+		"CtaPrimary": cta.Primary, "CtaHover": cta.Hover, "CtaActive": cta.Active,
+		"CtaLabel": cta.Label, "CtaText": cta.Text,
+		"Lang": ls.Lang,
+		"Ls":   ls,
 		// Issue #411: Open Graph + Twitter meta for social sharing.
 		"OGMeta": h.formOGMeta(r, f),
 		// Issue #183: optional per-workspace footer.
@@ -839,7 +868,21 @@ var responseTmpl = template.Must(template.New("response").
 {{.OGMeta}}
 {{.TrackHead}}
 <style>
-  {{if .ThemePrimary}}:root { --jf-primary: {{.ThemePrimary}}; }{{end}}
+  /* Card t_8f5d6fb5: the merchant's brand colour lives here as a TOKEN TRIPLE
+     and every accent below consumes it. Before this, the ":root { --jf-primary }"
+     declaration had no consumer anywhere in api/ — the submit CTA was a
+     hard-coded #5e6ad2 and the checkbox/radio accent #4f46e5 — so a merchant who
+     picked a colour on /form-settings got the default indigo.
+     The triple is resolved server-side (formtheme.go): CtaPrimary is the
+     merchant's colour, CtaHover/CtaActive are the same hue and chroma at a
+     different OKLCH lightness, each measured so the button's label still clears
+     AA 4.5:1, and CtaLabel is the label colour that pairing measured.
+     Unconditional, not an if-guard on ThemePrimary: an unthemed form gets the
+     same defaults the web CTA uses (#5e6ad2 / #616dd5 / #454ea8), so there is
+     exactly one place the button's colour can come from. */
+  :root { --jf-primary: {{.CtaPrimary}}; --jf-primary-hover: {{.CtaHover}};
+          --jf-primary-active: {{.CtaActive}}; --jf-primary-label: {{.CtaLabel}};
+          --jf-primary-text: {{.CtaText}}; }
   {{if .ThemeBg}}body { background: {{.ThemeBg}}; }{{end}}
   {{if .ThemeText}}body { color: {{.ThemeText}}; }{{end}}
   {{if .ThemeFont}}body { font-family: {{.ThemeFont}}; }{{end}}
@@ -864,21 +907,27 @@ var responseTmpl = template.Must(template.New("response").
   .lbl { display:block; font-size:12px; color:#6b7280; margin:12px 0 4px; }
   .desc { display:block; font-size:12px; color:#9ca3af; margin:-2px 0 6px; }
   .chk { display:flex; align-items:center; gap:8px; font-size:14px; margin:8px 0; color:#374151; }
-  .chk input[type=checkbox] { width:18px; height:18px; accent-color:#4f46e5; margin:0; }
+  .chk input[type=checkbox] { width:18px; height:18px; accent-color:var(--jf-primary); margin:0; }
   .rad { display:flex; align-items:center; gap:8px; font-size:14px; margin:8px 0; color:#374151; }
-  .rad input[type=radio] { margin:0; accent-color:#4f46e5; }
+  .rad input[type=radio] { margin:0; accent-color:var(--jf-primary); }
   input[type=text],input[type=email],input[type=tel],input[type=number],
   input[type=date],input[type=time],input[type=url],input[type=password],
   select,textarea {
     width:100%; padding:10px 12px; border-radius:8px; border:1px solid #e6e8ec;
     background:#ffffff; color:#17181c; font-size:14px; margin-bottom:10px; }
+  /* The submit CTA (card t_8f5d6fb5). Fill, hover and pressed all come from the
+     form's brand triple declared in the :root block above; the LABEL colour is
+     the one the derived pairing measured, so a light brand colour gets dark text
+     instead of a white label it cannot carry at AA. The three states are the
+     same construction .jf-btn-primary uses on the dashboard: rest -> hover
+     (lighter for indigo, darker for a light brand) -> pressed (darker), with a
+     shadow on hover so the hover is visible even before it is read as a colour. */
   button { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:600;
-           color:#fff; cursor:pointer; margin-top:12px; background:#5e6ad2; }
-  /* hover is #616dd5, not the old #828fff: #828fff carries this button's white
-     label at 2.87:1, below the AA 4.5:1 floor. #616dd5 is the #5e6ad2 hue one
-     lightness step up that still clears AA (white 4.51:1, measured). Card
-     t_9efae9f0; the web CTA (--jf-primary-hover in globals.css) is the same pair. */
-  button:hover { background:#616dd5; }
+           color:var(--jf-primary-label); cursor:pointer; margin-top:12px;
+           background:var(--jf-primary);
+           transition:background .15s ease, box-shadow .15s ease; }
+  button:hover { background:var(--jf-primary-hover); box-shadow:0 2px 8px rgba(23,24,28,0.12); }
+  button:active { background:var(--jf-primary-active); }
   /* Issue #183: optional per-workspace footer. */
   .jf-footer { max-width:480px; width:100%; margin:16px auto 0; padding:0 8px;
                color:#6b7280; font-size:12px; line-height:1.6; text-align:center;
@@ -887,13 +936,13 @@ var responseTmpl = template.Must(template.New("response").
   .jf-ftext { margin-top:4px; }
   .jf-flinks { display:flex; width:100%; gap:14px; justify-content:center;
                flex-wrap:wrap; margin-top:6px; text-align:center; }
-  .jf-flinks a { color:#4f46e5; text-decoration:none; }
+  .jf-flinks a { color:var(--jf-primary-text); text-decoration:none; }
   .jf-flinks a:hover { text-decoration:underline; }
   .ok { text-align:center; padding:24px 0; }
   .ok h1 { color:#10b981; }
   .ok p { color:#6b7280; font-size:14px; }
   .ok .msg { color:#17181c; font-size:14px; line-height:1.6; margin-top:8px; }
-  .ok .msg a { color:#4f46e5; }
+  .ok .msg a { color:var(--jf-primary-text); }
 </style></head><body>
 <form class="card" id="of" data-slug="{{.Slug}}">
   <h1>{{.Title}}</h1>

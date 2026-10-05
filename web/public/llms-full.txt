@@ -45,7 +45,8 @@ prices, sales, refunds, analytics — without opening a dashboard.
 - [Sales, responses & analytics](https://jomform.com/docs/sales) — the Sales page, the combined
   sale+response list, the per-form counter, partial refunds, and the realtime notification beep.
 - [Customize](https://jomform.com/docs/customize) — design → AI agent → MCP flow, the restaurant
-  menu and its basket, product images, templates, custom domains, language and affiliate marketing.
+  menu and its basket, product images, templates, the brand colour on the public form, custom
+  domains, language and affiliate marketing.
 - [Subscriptions](https://jomform.com/docs/subscriptions) — recurring billing, schedule modes,
   the retry ladder and recovery.
 - [Variation products](https://jomform.com/docs/variations) — per-variation price/stock/image and

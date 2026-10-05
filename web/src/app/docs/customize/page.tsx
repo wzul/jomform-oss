@@ -171,6 +171,32 @@ export default function CustomizeDocsPage() {
         <span className="font-mono text-xs">product_image_layout</span>).
       </p>
 
+      <h2 id="brand-colour" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
+        Your brand colour on the public form
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The colour you pick under Form Settings → General (<strong>Theme colour</strong>) paints the
+        public form&apos;s own chrome: the <strong>submit button</strong> and its hover and pressed
+        states, the checkbox and radio accent, the product price text, and the footer and
+        confirmation links. It does not override anything you set in{" "}
+        <span className="font-mono text-xs">custom_css</span>, and an image or video you embed keeps
+        its own colours.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The button&apos;s text colour is chosen for you so the label always stays readable on the
+        colour you picked: a dark brand colour gets a white label and a light one gets dark text,
+        and the hover and pressed shades are derived from your colour rather than from a fixed
+        indigo. A green or amber button therefore reads as one button in three states, not as your
+        colour with an indigo hover. Each state is measured against the WCAG AA 4.5:1 floor before
+        it is used.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Set it in Form Settings → General and the button previews it immediately; over MCP the same
+        field is <span className="font-mono text-xs">theme.primary</span> through{" "}
+        <span className="font-mono text-xs">set_form_theme</span>. Leave it unset and the form uses
+        the default indigo, which is the same colour the dashboard uses.
+      </p>
+
       <h2 id="builder" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
         Building an order form
       </h2>

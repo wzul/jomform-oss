@@ -1343,7 +1343,24 @@ function FormSettingsInner() {
                         )}
                       </div>
                       <div>
-                        <label className={labelCls}>{t("bld.themeColor")}</label>
+                        <label className={`${labelCls} flex items-center gap-1.5`}>
+                          {t("bld.themeColor")}
+                          {/* Inline "?" doc link (AGENTS.md docs-parity rule 4):
+                              the colour decides the public form's button, so
+                              the rule for how it is applied — including the
+                              label colour that keeps it readable — is reachable
+                              where the choice is made. */}
+                          <a
+                            href="/docs/customize#brand-colour"
+                            title={t("fs.themeDocTitle")}
+                            aria-label={t("fs.themeDocTitle")}
+                            className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            ?
+                          </a>
+                        </label>
                         <input
                           type="color"
                           value={fsTheme}

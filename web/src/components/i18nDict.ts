@@ -1413,6 +1413,10 @@ export const DICT = {
   // (api/internal/httpapi/errcode.go) and the console translates them with
   // lib/apiErr — there is exactly one mechanism and one set of keys.
   "fs.slugDocTitle": { en: "How form URLs and slug renames work", ms: "Cara URL borang dan penamaan semula slug berfungsi", zh: "表单网址与 slug 重命名说明", ta: "படிவ URL மற்றும் slug மறுபெயரிடல் எப்படி வேலை செய்கிறது", ar: "كيف تعمل روابط النموذج وإعادة تسمية الـ slug" },
+  // Card t_8f5d6fb5: the brand colour now paints the public form's submit
+  // button, its hover/pressed states and the checkbox/radio accent, and the
+  // label colour is chosen so it stays readable on that colour.
+  "fs.themeDocTitle": { en: "How your brand colour is applied to the public form", ms: "Cara warna jenama anda digunakan pada borang awam", zh: "品牌颜色如何应用到公开表单", ta: "உங்கள் பிராண்ட் நிறம் பொது படிவத்தில் எவ்வாறு பயன்படுத்தப்படுகிறது", ar: "كيف يُطبَّق لون علامتك التجارية على النموذج العام" },
   "fs.slugHint": { en: "The URL path this form is served at (a-z, 0-9, dash; 1-40 characters). Saving a change moves the form to the new URL — the old URL keeps working through a temporary redirect, and the slug must be free in this workspace.", ms: "Laluan URL borang ini (a-z, 0-9, sengkang; 1-40 aksara). Menyimpan perubahan memindahkan borang ke URL baharu — URL lama masih berfungsi melalui ubah hala sementara, dan slug mesti belum digunakan dalam workspace ini.", zh: "此表单的网址路径（a-z、0-9、连字符；1-40 个字符）。保存后会移动到新的网址——旧网址通过临时重定向继续可用，且该 slug 必须在当前工作区中未被占用。", ta: "இந்தப் படிவம் வழங்கப்படும் URL பாதை (a-z, 0-9, கோடு; 1-40 எழுத்துகள்). சேமித்தால் படிவம் புதிய URL-க்கு நகரும் — பழைய URL தற்காலிக திருப்பிவிடல் மூலம் தொடர்ந்து வேலை செய்யும், மேலும் slug இந்த பணியிடத்தில் காலியாக இருக்க வேண்டும்.", ar: "مسار الرابط الذي يُقدَّم عليه هذا النموذج (a-z و0-9 والشرطة؛ 1-40 حرفاً). حفظ التغيير ينقل النموذج إلى الرابط الجديد — ويبقى الرابط القديم يعمل عبر إعادة توجيه مؤقتة، ويجب أن يكون الـ slug متاحاً في مساحة العمل هذه." },
   "fs.save": { en: "Save", ms: "Simpan", zh: "保存", ta: "சேமி", ar: "حفظ" },
   "fs.saved": { en: "Saved ✓", ms: "Disimpan ✓", zh: "已保存 ✓", ta: "சேமிக்கப்பட்டது ✓", ar: "تم الحفظ ✓" },
