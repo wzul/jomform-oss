@@ -149,7 +149,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
       <h2 className="text-lg font-semibold">{t("mem.title")}</h2>
       <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">{t("mem.adminOnly")}</p>
 
-      {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-600">{msg}</p>}
+      {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{msg}</p>}
       {err && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>}
 
       {/* Invite form */}

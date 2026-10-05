@@ -1198,7 +1198,7 @@ function SalesPageInner() {
                   <span className="ml-2 text-xs text-amber-600">{t("sales.unauthorized")}</span>
                 )}
                 {detail.authorized && detail.captured_at && (
-                  <span className="ml-2 text-xs text-emerald-600">{t("sales.authorized")}</span>
+                  <span className="ml-2 text-xs text-emerald-700">{t("sales.authorized")}</span>
                 )}
               </div>
 

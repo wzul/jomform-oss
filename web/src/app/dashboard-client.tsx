@@ -271,7 +271,7 @@ export default function Dashboard() {
                   {/* Issue #598: paid_count ALREADY includes confirmed sales, so
                       adding confirmed_count counted every confirmed sale twice.
                       The union is the honest figure for this label. */}
-                  <span>{t("dash.paidConfirmed")} <b className="text-emerald-600">{paidConfirmedCount(f)}</b></span>
+                  <span>{t("dash.paidConfirmed")} <b className="text-emerald-700">{paidConfirmedCount(f)}</b></span>
                   <span>{t("dash.pendingLabel")} <b>{f.pending_count}</b></span>
                   <span>{t("dash.failedLabel")} <b>{f.failed_count}</b></span>
                 </div>

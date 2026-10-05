@@ -1120,7 +1120,7 @@ export default function Settings() {
             status/error banners shown above tab content regardless of the
             active tab (Profile-style). */}
         {cfNotice && <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{cfNotice}</p>}
-        {msg && <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-600">{msg}</p>}
+        {msg && <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{msg}</p>}
         {err && <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>}
 
         {/* ── CHIP tab ── */}
@@ -1279,7 +1279,7 @@ export default function Settings() {
               </form>
               {/* Issue #322: when Cloudflare is linked, offer one-click auto-CNAME. */}
               {cfLinked && (
-                <p className="mt-2 text-xs text-emerald-600">{t("set.autoCnameHint")}</p>
+                <p className="mt-2 text-xs text-emerald-700">{t("set.autoCnameHint")}</p>
               )}
               <ul className="mt-4 space-y-2">
                 {domains.map((d: { id: string; domain: string; verified: boolean; auto_cname?: string; tls_mode?: string; tls_status?: string; tls_error?: string; tls_email?: string }) => (
@@ -1288,7 +1288,7 @@ export default function Settings() {
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{d.domain}</p>
                         {d.verified ? (
-                          <p className="text-[11px] text-emerald-600">{t("set.verified")}</p>
+                          <p className="text-[11px] text-emerald-700">{t("set.verified")}</p>
                         ) : (
                           <p className="flex items-center gap-1.5 text-[11px] text-amber-600">
                             {polling[d.id] && (
@@ -1299,14 +1299,14 @@ export default function Settings() {
                         )}
                         {/* Issue #322: per-domain auto-CNAME status. */}
                         {d.auto_cname === "created" && (
-                          <p className="text-[11px] text-emerald-600">{t("set.autoCnameStatusCreated")}</p>
+                          <p className="text-[11px] text-emerald-700">{t("set.autoCnameStatusCreated")}</p>
                         )}
                         {d.auto_cname === "failed" && (
                           <p className="text-[11px] text-red-600">{t("set.autoCnameStatusFailed")}</p>
                         )}
                         {/* Issue #397: per-domain TLS status. */}
                         {d.verified && d.tls_status === "active" && (
-                          <p className="text-[11px] text-emerald-600">{t("set.tlsStatusActive")}</p>
+                          <p className="text-[11px] text-emerald-700">{t("set.tlsStatusActive")}</p>
                         )}
                         {d.verified && d.tls_status === "pending" && (
                           <p className="text-[11px] text-amber-600">{t("set.tlsStatusPending")}</p>
@@ -1385,7 +1385,7 @@ export default function Settings() {
                           href={`https://${d.domain}`}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-xs font-semibold text-emerald-600 hover:underline"
+                          className="text-xs font-semibold text-emerald-700 hover:underline"
                         >
                           {t("set.liveLink", { domain: d.domain })}
                         </a>
@@ -1787,7 +1787,7 @@ export default function Settings() {
                                         {d.created_at ? formatDateTime(d.created_at, user?.timezone) : "—"}
                                       </td>
                                       <td className="py-1.5 pr-3 font-mono text-slate-700">{d.event}</td>
-                                      <td className={`py-1.5 pr-3 font-medium ${d.success ? "text-emerald-600" : "text-red-600"}`}>
+                                      <td className={`py-1.5 pr-3 font-medium ${d.success ? "text-emerald-700" : "text-red-600"}`}>
                                         {d.success ? t("wh.success") : t("wh.failed")}
                                       </td>
                                       <td className="py-1.5 pr-3 font-mono text-slate-500">{d.status_code ?? "—"}</td>
@@ -2490,7 +2490,7 @@ export default function Settings() {
                 </button>
               </div>
               {affErr && <p className="text-sm text-red-600">{affErr}</p>}
-              {affMsg && <p className="text-sm text-emerald-600">{affMsg}</p>}
+              {affMsg && <p className="text-sm text-emerald-700">{affMsg}</p>}
             </div>
             <div className="mt-6">
               <h3 className="text-sm font-semibold text-slate-700">{t("set.affiliatesList")}</h3>

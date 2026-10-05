@@ -130,7 +130,7 @@ export function LegalTab({ workspaceId, workspaceSlug }: { workspaceId: string; 
         {t("set.legalHelp", { workspace: workspaceSlug || "your-workspace" })}
       </p>
 
-      {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-600">{msg}</p>}
+      {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{msg}</p>}
       {err && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>}
 
       {/* Business details shared by the prompt template */}
