@@ -17,6 +17,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
+import { Switch } from "../../components/Switch";
 import { answersPreview, answerText, isResponseForm, isMixedList, responsesList, rowKey, rowKind } from "../../lib/salesRows";
 import { workspaceQuery, activeWorkspaceId, soundEnabledFromSettings, soundToggleBody } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
@@ -716,27 +717,12 @@ function SalesPageInner() {
               />
               {live ? t("sales.live") : t("sales.offline")}
             </span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={soundEnabled}
-              aria-label={t("sales.soundLabel")}
-              // Reads the workspace's stored value first: an unread switch would
-              // be showing a value the server does not hold (the bug #447 fixes),
-              // so it is disabled for the moment the read takes.
+            <Switch
+              checked={soundEnabled}
+              onChange={() => void toggleSound(!soundEnabled)}
               disabled={!soundLoaded}
-              title={soundLoaded ? t("sales.soundLabel") : t("sales.soundLoading")}
-              onClick={() => void toggleSound(!soundEnabled)}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-60 ${
-                soundEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
-                  soundEnabled ? "left-[22px]" : "left-0.5"
-                }`}
-              />
-            </button>
+              label={soundLoaded ? t("sales.soundLabel") : t("sales.soundLoading")}
+            />
             {/* AGENTS.md documentation-parity step 4: the inline "?" link next
                 to the field, pointing at the section that documents it.
                 t_d768342e: that section now lives on the sales guide page.

@@ -11,6 +11,7 @@ import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { MembersTab } from "../../components/MembersTab";
 import WorkspaceTab from "../../components/WorkspaceTab";
 import { LegalTab } from "../../components/LegalTab";
+import { Switch } from "../../components/Switch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 
 // Issue #323: the CNAME target is consistent across all custom-domain copy.
@@ -217,6 +218,10 @@ export default function Settings() {
   const [sfWorkspaceId, setSfWorkspaceId] = useState("");
   // Issue #276: per-workspace SEO indexing toggle (Storefront tab).
   const [sfIndexing, setSfIndexing] = useState(true);
+  // The Save-footer PUT's in-flight state (card t_b73eee21). Presentation only:
+  // it disables the button and is what makes the "busy" the card asks for
+  // observable. Without it a double-click fired two PUTs of the same body.
+  const [sfSaving, setSfSaving] = useState(false);
   // Issue #447: per-workspace realtime notification sound toggle (Storefront tab).
   const [sfSoundEnabled, setSfSoundEnabled] = useState(false);
   // Per-workspace AI spam-judge toggle (Storefront tab). Default
@@ -894,39 +899,55 @@ export default function Settings() {
   }
 
   // Issue #183: save the per-space public-form footer (Storefront tab).
+  //
+  // The body, the endpoint, the toggle variables and the `setMsg` strings are
+  // untouched (card t_b73eee21 is presentation). What is new is only the busy
+  // flag: without it the button could be pressed again while the PUT was still
+  // open, so one impatient double-click sent the settings twice and the second
+  // response overwrote the first message. Measured on the built page before
+  // this: two clicks in flight produced putCount 2 with no visible feedback on
+  // the button.
   async function saveStorefrontSettings() {
-    if (!sfWorkspaceId) return;
+    if (!sfWorkspaceId || sfSaving) return;
     setMsg("");
     setErr("");
-    const r = await fetch(`/api/workspaces/${sfWorkspaceId}/settings`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        business_name: sfBusinessName,
-        company_reg: sfCompanyReg,
-        contact_phone: sfContactPhone,
-        contact_address: sfContactAddress,
-        privacy_url: sfPrivacyUrl,
-        terms_url: sfTermsUrl,
-        refund_url: sfRefundUrl,
-        footer_text: sfFooterText,
-        // Issue #276: per-space SEO indexing toggle.
-        indexing: sfIndexing,
-        // Issue #447: per-space realtime notification sound toggle.
-        sound_enabled: sfSoundEnabled,
-        // Per-space AI spam-judge toggle.
-        spam_judge_enabled: sfSpamJudgeEnabled,
-        // Language placement: workspace default language for public forms
-        // (buyer-facing). Always a real code — the column is NOT NULL with a
-        // CHECK on the five locales, so "English" is sent as "en", not "".
-        default_lang: sfDefaultLang,
-      }),
-    });
-    if (r.ok) {
-      setMsg(t("set.sfSaved"));
-    } else {
-      const d = await r.json().catch(() => ({}));
-      setErr(apiErr(d, t("set.failedSave"), t));
+    setSfSaving(true);
+    try {
+      const r = await fetch(`/api/workspaces/${sfWorkspaceId}/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          business_name: sfBusinessName,
+          company_reg: sfCompanyReg,
+          contact_phone: sfContactPhone,
+          contact_address: sfContactAddress,
+          privacy_url: sfPrivacyUrl,
+          terms_url: sfTermsUrl,
+          refund_url: sfRefundUrl,
+          footer_text: sfFooterText,
+          // Issue #276: per-space SEO indexing toggle.
+          indexing: sfIndexing,
+          // Issue #447: per-space realtime notification sound toggle.
+          sound_enabled: sfSoundEnabled,
+          // Per-space AI spam-judge toggle.
+          spam_judge_enabled: sfSpamJudgeEnabled,
+          // Language placement: workspace default language for public forms
+          // (buyer-facing). Always a real code — the column is NOT NULL with a
+          // CHECK on the five locales, so "English" is sent as "en", not "".
+          default_lang: sfDefaultLang,
+        }),
+      });
+      if (r.ok) {
+        setMsg(t("set.sfSaved"));
+      } else {
+        const d = await r.json().catch(() => ({}));
+        setErr(apiErr(d, t("set.failedSave"), t));
+      }
+    } catch {
+      // A network failure must not leave the button stuck busy forever.
+      setErr(t("set.failedSave"));
+    } finally {
+      setSfSaving(false);
     }
   }
 
@@ -2054,21 +2075,15 @@ export default function Settings() {
                   <p className="text-sm font-medium">{t("set.sfIndexingTitle")}</p>
                   <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.sfIndexingHelp")}</p>
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={sfIndexing}
-                  onClick={() => setSfIndexing((v) => !v)}
-                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                    sfIndexing ? "bg-[var(--jf-primary)]" : "bg-slate-300"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
-                      sfIndexing ? "left-[22px]" : "left-0.5"
-                    }`}
-                  />
-                </button>
+                {/* Shared switch (web/src/components/Switch.tsx, card t_b73eee21):
+                    this markup used to be a hand-rolled pill here, in
+                    form-settings and in /sales, and all three copies shipped the
+                    default arrow cursor and a near-invisible OFF track. */}
+                <Switch
+                  checked={sfIndexing}
+                  onChange={() => setSfIndexing((v) => !v)}
+                  label={t("set.sfIndexingTitle")}
+                />
               </div>
               {/* Issue #447: per-workspace realtime notification sound toggle. */}
               <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
@@ -2076,21 +2091,11 @@ export default function Settings() {
                   <p className="text-sm font-medium">{t("set.sfSoundTitle")}</p>
                   <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.sfSoundHelp")}</p>
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={sfSoundEnabled}
-                  onClick={() => setSfSoundEnabled((v) => !v)}
-                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                    sfSoundEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
-                      sfSoundEnabled ? "left-[22px]" : "left-0.5"
-                    }`}
-                  />
-                </button>
+                <Switch
+                  checked={sfSoundEnabled}
+                  onChange={() => setSfSoundEnabled((v) => !v)}
+                  label={t("set.sfSoundTitle")}
+                />
               </div>
               {/* Per-workspace AI spam-judge toggle, with an inline
                   "?" doc link (AGENTS.md documentation-parity rule, step 4). */}
@@ -2110,25 +2115,26 @@ export default function Settings() {
                   </p>
                   <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.sfSpamHelp")}</p>
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={sfSpamJudgeEnabled}
-                  aria-label={t("set.sfSpamTitle")}
-                  onClick={() => setSfSpamJudgeEnabled((v) => !v)}
-                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                    sfSpamJudgeEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
-                      sfSpamJudgeEnabled ? "left-[22px]" : "left-0.5"
-                    }`}
-                  />
-                </button>
+                <Switch
+                  checked={sfSpamJudgeEnabled}
+                  onChange={() => setSfSpamJudgeEnabled((v) => !v)}
+                  label={t("set.sfSpamTitle")}
+                />
               </div>
               <div className="flex flex-wrap items-center gap-2 pt-1">
-                <button onClick={saveStorefrontSettings} className="jf-btn-primary">{t("set.sfSave")}</button>
+                {/* card t_b73eee21: the button now carries the PUT's in-flight
+                    state — `disabled` while the request is open (so a
+                    double-click cannot fire a second PUT with no feedback) and
+                    `aria-busy` so the busy state is announced, not just drawn.
+                    The label string is unchanged; the class is unchanged. */}
+                <button
+                  onClick={saveStorefrontSettings}
+                  disabled={sfSaving}
+                  aria-busy={sfSaving}
+                  className="jf-btn-primary"
+                >
+                  {t("set.sfSave")}
+                </button>
               </div>
             </div>
           </section>
@@ -2146,21 +2152,11 @@ export default function Settings() {
                   <p className="text-sm font-medium">{t("set.lpEnabledTitle")}</p>
                   <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.lpEnabledHelp")}</p>
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={lpEnabled}
-                  onClick={() => setLpEnabled((v) => !v)}
-                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                    lpEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
-                      lpEnabled ? "left-[22px]" : "left-0.5"
-                    }`}
-                  />
-                </button>
+                <Switch
+                  checked={lpEnabled}
+                  onChange={() => setLpEnabled((v) => !v)}
+                  label={t("set.lpEnabledTitle")}
+                />
               </div>
               {lpEnabled && (
                 <>

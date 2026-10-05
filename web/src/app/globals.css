@@ -27,6 +27,21 @@
   --jf-warning-text: #b45309;
   --jf-success: #10b981;
   --jf-danger: #ef4444;
+  /* ── control tokens (card t_b73eee21) ──────────────────────────────────────
+     The switch's OFF track and the pressed state of the shared buttons. Both
+     are chosen by MEASURED contrast against a white knob / white label, not by
+     eye — see `.jf-switch*` below for the numbers and for why the OFF track is
+     no longer `bg-slate-300`.
+
+       --jf-switch-off      #94a3b8   white knob 2.56:1 (was slate-300: 1.48)
+       --jf-primary-active  #454ea8   white label 7.22:1   (AA, normal text)
+
+     `--jf-focus-ring` names the colour the global `:focus-visible` rule already
+     paints as a literal; naming it is what lets the switch's own focus ring use
+     the same one instead of a fifth copy of `#5e6ad2` in this file. */
+  --jf-switch-off: #94a3b8;
+  --jf-primary-active: #454ea8;
+  --jf-focus-ring: #5e6ad2;
 }
 
 html,
@@ -47,7 +62,7 @@ body {
    :focus-visible ring guarantees a visible focus state for keyboard
    navigation without disturbing mouse users. */
 :focus-visible {
-  outline: 2px solid #5e6ad2;
+  outline: 2px solid var(--jf-focus-ring);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -83,7 +98,38 @@ body {
   min-height: 40px;
   line-height: 1.2;
   font-weight: 500;
-  transition: background 0.15s;
+  /* The RESTING/HOVER/PRESSED states of the shared CTA (card t_b73eee21).
+     Before this, the class was `transition: background 0.15s` + a `:hover`
+     colour swap and nothing else, and the rendered page proved it: measured in
+     Chromium on the built page, the pointer over the Storefront tab's "Save
+     footer" button computed `cursor: default`, and a held mouse-down (`:active`)
+     was byte-identical to `:hover` — the only visible change was the light
+     `--jf-primary-hover` swap, whose white label is 2.87:1. A control that
+     gives no feedback and shows a sub-AA label while it does answer reads as
+     dead ("butang tak nampak responsive").
+       * `cursor: pointer` — the pointer never changed off `default`, so the
+         button did not announce itself as clickable at all.
+       * `:active` goes DARKER (`--jf-primary-active`, white label 7.22:1) and
+         translates the box 1px down. A LIGHTER press than the hover state is
+         what made the press invisible; going darker is what makes it read.
+       * `:hover` adds a shadow instead of relying only on the light colour
+         swap, so the hover is visible even before it is read as a colour. The
+         hover colour itself (`--jf-primary-hover` #828fff) is NOT changed: it
+         measures 2.87:1 against its white label, which is below AA, but it is
+         the colour 137 call sites and a dozen hand-written `#828fff` buttons
+         already share, so darkening it is a repo-wide decision (a token change
+         every button and link inherits), not this card's — the visible hover
+         feedback the card asked for is the shadow plus the cursor, and the
+         pressed state deliberately goes the other way, to a dark fill.
+       * `:disabled` keeps a not-allowed cursor and drops the press transform,
+         so a disabled button cannot be pressed by look. The busy state itself
+         was already the `disabled` attribute at the call site; what was missing
+         was the shared class making that state mean something.
+     The rule is the shared class on purpose: 137 call sites carry these three
+     classes, so fixing it here is what makes every CTA in the app respond, not
+     just this one. */
+  cursor: pointer;
+  transition: background-color 0.15s, box-shadow 0.15s, transform 0.05s;
   /* A button label never wraps and the button never gives up width. These
      classes style the CTA inside `flex items-center justify-between` header
      rows (dashboard, forms, media, templates, brand, ...). A flex item
@@ -100,11 +146,20 @@ body {
   white-space: nowrap;
   flex-shrink: 0;
 }
-.jf-btn-primary:hover {
+.jf-btn-primary:hover:not(:disabled) {
   background: var(--jf-primary-hover);
+  box-shadow: 0 2px 6px rgba(23, 24, 28, 0.22);
+}
+.jf-btn-primary:active:not(:disabled) {
+  background: var(--jf-primary-active);
+  box-shadow: none;
+  transform: translateY(1px);
 }
 .jf-btn-primary:disabled {
   opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 .jf-btn-ghost {
   border: 1px solid var(--jf-border);
@@ -114,14 +169,100 @@ body {
   font-size: 14px;
   min-height: 40px;
   line-height: 1.2;
-  transition: background 0.15s;
+  /* Same three states as .jf-btn-primary above (card t_b73eee21): the ghost
+     button carried `transition: background 0.15s` and a `:hover` only, so the
+     pointer stayed `default` and a press was invisible on it too. It keeps its
+     own hover colour and gets the same press treatment (a darker surface plus a
+     1px translate) so the two button styles answer the mouse identically. */
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, transform 0.05s;
   /* Same defect, same fix as .jf-btn-primary above (80 call sites). Measured
      before the fix at 320px: a 3-line ghost label reached 72.39px tall. */
   white-space: nowrap;
   flex-shrink: 0;
 }
-.jf-btn-ghost:hover {
+.jf-btn-ghost:hover:not(:disabled) {
   background: #f3f4f6;
+}
+.jf-btn-ghost:active:not(:disabled) {
+  background: #e5e7eb;
+  transform: translateY(1px);
+}
+.jf-btn-ghost:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ── the shared switch (card t_b73eee21) ─────────────────────────────────────
+   ONE visual system for every `role="switch"` in the app. The markup was hand
+   rolled in three files — settings Storefront (4), form-settings (1) and
+   /sales (1) — and each copy had to get the pointer cursor, the off colour,
+   the knob edge and the hover cue right on its own. They are these classes
+   now, so the sixth switch cannot drift from the first five.
+
+   THE OFF TRACK WAS `bg-slate-300` (#cbd5e1) AND THAT WAS THE REPORTED DEFECT.
+   Its white knob measures 1.48:1 against it, and the whole pill is a 24px
+   shape on a WHITE card, so an OFF switch was two near-identical light greys
+   with no edge — measured on the built page it read as a disabled chip, which
+   is what "the toggles look unfinished" was. `--jf-switch-off` (#94a3b8,
+   Tailwind slate-400) measures 2.56:1 against the white knob: still inside the
+   3:1 a graphical object is allowed to miss, but it is a visibly darker track
+   with a knob that has an edge, and the knob now carries a real border.
+
+   WHAT IS NOT A COLOUR CHOICE HERE: on-state pill vs its white knob is 4.70:1
+   (WCAG's 3:1 graphical-object floor, already the pre-existing pairing), and
+   the knob is `aria-hidden` decoration — the switch's own colours carry no
+   text, so the AA 4.5:1 obligation lands on the label next to it, which is
+   unchanged and passes (`text-slate-500` on white: 4.76:1). */
+.jf-switch {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  width: 44px;
+  height: 24px;
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+.jf-switch[aria-checked="true"] {
+  background: var(--jf-primary);
+}
+.jf-switch[aria-checked="false"] {
+  background: var(--jf-switch-off);
+  border-color: #64748b;
+}
+.jf-switch:hover:not(:disabled) {
+  box-shadow: 0 0 0 3px rgba(94, 106, 210, 0.28);
+}
+/* The switch keeps the app's GLOBAL `:focus-visible` ring (`outline: 2px solid
+   var(--jf-focus-ring)`, offset 2px) rather than a fifth per-control copy — the
+   ring follows the element's border radius, so the pill gets a pill-shaped ring.
+   One thing that ring DOES need here: the global rule also sets
+   `border-radius: 4px`, and `:focus-visible` and `.jf-switch` are the same
+   specificity (0,1,0), so the pill radius only survives because this block sits
+   BELOW the global rule in this file. If this block is ever moved above it, a
+   focused switch renders as a rounded SQUARE — the two declarations are one
+   unit. */
+.jf-switch:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.jf-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(23, 24, 28, 0.45);
+  transition: left 0.15s;
+}
+.jf-switch[aria-checked="true"] .jf-switch-knob {
+  left: 22px;
 }
 
 /* The settings tab strip is a horizontal scroller on a phone

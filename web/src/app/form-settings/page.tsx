@@ -15,6 +15,7 @@ import QRCode from "qrcode";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { Switch } from "../../components/Switch";
 import MediaPicker from "../../components/MediaPicker";
 import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
 import { activeWorkspaceScope, enterWorkspace, workspaceQuery } from "../../lib/workspace";
@@ -1591,21 +1592,11 @@ function FormSettingsInner() {
                           <p className="text-sm font-medium">{t("set.menuEnabledTitle")}</p>
                           <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.menuEnabledHelp")}</p>
                         </div>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={menuEnabled}
-                          onClick={() => setMenuEnabled((v) => !v)}
-                          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                            menuEnabled ? "bg-[var(--jf-primary)]" : "bg-slate-300"
-                          }`}
-                        >
-                          <span
-                            className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
-                              menuEnabled ? "left-[22px]" : "left-0.5"
-                            }`}
-                          />
-                        </button>
+                        <Switch
+                          checked={menuEnabled}
+                          onChange={() => setMenuEnabled((v) => !v)}
+                          label={t("set.menuEnabledTitle")}
+                        />
                       </div>
 
                       {menuEnabled && (
