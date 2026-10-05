@@ -50,9 +50,9 @@
 //   all, so no comment can raise or hide a finding, and there is no strip to get
 //   wrong.
 //
-//   THREE shapes render an unescaped backtick to the reader, and all three are
-//   collected (card t_8580357e widened the second and third; the first was the
-//   only one the guard saw before):
+//   FOUR shapes render an unescaped backtick to the reader, and all four are
+//   collected (card t_8580357e widened the second and third from a
+//   string-literal-only walk; card t_8b3a508b widened the fourth):
 //     1. a `ts.StringLiteral` carrying a backtick — the `body: "…"` prose and
 //        the JSX attribute strings like `label: "…"`.
 //     2. a `ts.JsxText` carrying a backtick — RAW JSX prose, e.g.
@@ -64,6 +64,22 @@
 //        (the escaped form reaches the reader as a backtick; the author could
 //        equally have written it plainly). The guard keys on `node.text`, which
 //        decodes `\``, so an escaped marker and a plain one read alike.
+//     4. a `ts.TemplateExpression` carrying a backtick in one of its STATIC
+//        parts — a template literal WITH a `${…}` substitution, e.g.
+//        `` (x: string) => `prose ${x} with \`marker\` inside` `` (card
+//        t_8b3a508b). Its decoded static text is `node.head.text` followed by
+//        each `templateSpans[i].literal.text`; the substitution itself renders
+//        whatever the expression evaluates to, and the static parts around it
+//        reach the reader with the same literal markers shapes 1 and 3 leave.
+//        This is the shape card t_8580357e's widening could not see: it is
+//        neither a `NoSubstitutionTemplateLiteral` (it HAS substitutions) nor a
+//        string literal, so the guard reported GREEN on it while the reader saw
+//        the marker — measured on the PR #975 head (2613ce89), guard unmodified,
+//        a probe of exactly that line in docs/security/page.tsx left the suite
+//        at 2 pass / 0 fail. Latent there (an AST scan of the 20 docs `.tsx`
+//        found 14 `TemplateExpression` nodes, 0 carrying a backtick), but the
+//        same "a documented exclusion is not a proof" that left shapes 2 and 3
+//        open until they were driven.
 //
 //   THE ONE DELIBERATE EXCLUSION — a template literal inside `<code>`/`<pre>`
 //   is the SUPPORTED way to show code on /docs (api/page.tsx's curl blocks,
@@ -73,11 +89,13 @@
 //   `<code>`/`<pre>`. It is also SKIPPED EXPLICITLY when its text DOES contain a
 //   backtick inside a `<code>`/`<pre>` element, so a future sample that prints a
 //   backtick as part of the code it shows does not raise a false finding. The
-//   distinction the card named is kept: a marker in raw JSX prose is not a code
+//   exclusion covers BOTH template-literal shapes (3 and 4), because a sample
+//   that shows code with a substitution is the same supported shape. The
+//   distinction the cards named is kept: a marker in raw JSX prose is not a code
 //   sample (shape 2), and a marker in a template literal OUTSIDE `<code>`/`<pre>`
-//   is prose (shape 3, e.g. `customize/page.tsx`'s `<span>{`{id}`}</span>` shape
-//   if it ever escaped a marker). It does NOT widen to a template literal merely
-//   because template literals are used to render code here.
+//   is prose (shapes 3 and 4, e.g. `customize/page.tsx`'s `<span>{`{id}`}</span>`
+//   shape if it ever escaped a marker). It does NOT widen to a template literal
+//   merely because template literals are used to render code here.
 //
 // WHAT IT DOES NOT COVER (stated honestly)
 //   * It reads the source, not the served HTML. It proves the marker is not in
@@ -144,7 +162,7 @@ function insideCodeSample(node: ts.Node): boolean {
 }
 
 // The marker a node carries, and the node kind, with `file:line` for the
-// message. Three shapes reach the reader as plain text (header, "HOW IT
+// message. Four shapes reach the reader as plain text (header, "HOW IT
 // DECIDES"); everything else returns null.
 function markerIn(node: ts.Node): { kind: string; text: string } | null {
   // 1. A quoted string literal (`"…"` / `'…'`): the `body: "…"` prose and the
@@ -169,6 +187,20 @@ function markerIn(node: ts.Node): { kind: string; text: string } | null {
     if (!node.text.includes("`")) return null;
     if (insideCodeSample(node)) return null;
     return { kind: "template literal", text: node.text };
+  }
+  // 4. A template literal WITH a `${…}` substitution. Its static parts — the
+  //    text before the first `${…}` (`node.head.text`) and after each one
+  //    (`templateSpans[i].literal.text`) — reach the reader literally, markers
+  //    and all; the substitution itself renders whatever its expression yields.
+  //    `text` DECODES `\`` in each part, exactly as shape 3's `node.text` does.
+  //    Neither a `NoSubstitutionTemplateLiteral` (it has substitutions) nor a
+  //    string literal, so the guard reported GREEN on it while the reader saw
+  //    the marker (card t_8b3a508b). Same `<code>`/`<pre>` exclusion as shape 3.
+  if (ts.isTemplateExpression(node)) {
+    const text = [node.head.text, ...node.templateSpans.map((s) => s.literal.text)].join("");
+    if (!text.includes("`")) return null;
+    if (insideCodeSample(node)) return null;
+    return { kind: "template expression", text };
   }
   return null;
 }
@@ -210,17 +242,23 @@ test("the guard is reading the real docs tree (it cannot pass vacuously)", () =>
   // Prove the AST walk really visits prose strings rather than stopping at the
   // module scope: assert a known prose body is among the visited literals.
   const bodies: string[] = [];
-  // The two node kinds the walk was widened to (card t_8580357e) are counted
-  // too, so an emptied JsxText/NoSubstitutionTemplate branch cannot pass this
-  // test vacuously while the string-literal count stays green.
+  // The three node kinds the walk was widened to (cards t_8580357e and
+  // t_8b3a508b) are counted too, so an emptied JsxText / template-literal /
+  // TemplateExpression branch cannot pass this test vacuously while the
+  // string-literal count stays green.
   const jsxTexts: string[] = [];
   const codeSamples: string[] = [];
+  const templateExpressions: string[] = [];
   const collect = (file: string) => {
     const sf = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const visit = (n: ts.Node) => {
       if (ts.isStringLiteral(n)) bodies.push(n.text);
       if (ts.isJsxText(n)) jsxTexts.push(n.text);
       if (ts.isNoSubstitutionTemplateLiteral(n) && insideCodeSample(n)) codeSamples.push(n.text);
+      if (ts.isTemplateExpression(n)) {
+        const text = [n.head.text, ...n.templateSpans.map((s) => s.literal.text)].join("");
+        templateExpressions.push(text);
+      }
       ts.forEachChild(n, visit);
     };
     visit(sf);
@@ -253,6 +291,24 @@ test("the guard is reading the real docs tree (it cannot pass vacuously)", () =>
     codeSamples.length >= 3,
     `collected only ${codeSamples.length} code-sample template literals from the docs tree — the ` +
       `code/pre element exclusion is what keeps the supported way of showing code from being reported`,
+  );
+  // A template literal WITH a substitution (`ts.TemplateExpression`) is the
+  // FOURTH shape whose static parts reach the reader (card t_8b3a508b): if the
+  // walk stops collecting it, a marker around a `${…}` goes invisible again and
+  // the findings rule below cannot catch it. The pages use this shape today —
+  // measured 14, all trivial (`#`, `example-`, `endpoints-`, a lone space), none
+  // carrying a backtick — so the count is real, not assumed, and the named
+  // `href={`#${…}`}` anchor proves the walk reaches a real one rather than an
+  // empty branch.
+  assert.ok(
+    templateExpressions.length >= 5,
+    `collected only ${templateExpressions.length} template expressions from the docs tree — a marker around a ` +
+      `substitution would be invisible to this guard (the hole card t_8b3a508b filed)`,
+  );
+  assert.ok(
+    templateExpressions.includes("#"),
+    "no `#{…}` interpolation template expression (the docs sidebar hash hrefs) is among the visited nodes — " +
+      "the walk is not reaching template expressions",
   );
 });
 

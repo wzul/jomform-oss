@@ -29,6 +29,18 @@
 #   template literal inside a <code> element stays GREEN, because that is the
 #   supported way to show code on /docs.
 #
+#   CARD t_8b3a508b WIDENED THE GUARD A FOURTH TIME — to a template literal WITH a
+#   substitution (`ts.TemplateExpression`), the shape t_8580357e's widening could
+#   not see (it is neither a NoSubstitutionTemplateLiteral nor a string literal):
+#     * CASE 12 — a marker in the STATIC parts of a `${…}`-bearing template
+#       literal (`` (x) => `prose ${x} with \`m\` inside` ``), which reaches the
+#       reader exactly as CASE 8's shape does, must be RED naming the page with
+#       the kind `[template expression]` and one failing test (the findings rule).
+#     * CASE 13 — the negative control: the SAME escaped marker inside a <code>
+#       element stays GREEN, because the code-sample exclusion covers both
+#       template-literal shapes (a sample that shows code with a substitution is
+#       still the supported shape).
+#
 #   CARD t_763c28c2 ADDED THE SECOND SURFACE — prose IMPORTED from a generated
 #   module and printed with a JSX expression, which the DOCS_DIR walk cannot reach:
 #     * CASE 10 — a marker in web/src/lib/apiExamples.gen.ts (the /docs/api worked
@@ -244,6 +256,51 @@ else
 fi
 restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
 
+# ── the FOURTH shape card t_8b3a508b widened the guard to see ─────────────────
+# A TemplateExpression — a template literal WITH a substitution — is neither a
+# NoSubstitutionTemplateLiteral (it HAS a `${…}`) nor a string literal, so the
+# walk t_8580357e widened still reported GREEN on it while the reader saw the
+# marker (measured on the PR #975 head, guard unmodified: a probe of exactly
+# CASE 12's line left the suite at 2 pass / 0 fail). CASE 12 drives that hole;
+# CASE 13 is the negative control that keeps the code-sample exclusion covering
+# BOTH template-literal shapes.
+echo "== CASE 12: a marker in a TEMPLATE EXPRESSION (with a \${…}) must be RED =="
+f="src/app/docs/security/page.tsx"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+# The static parts around a `${x}` carry the backtick; `head` and each span
+# `literal` decode the backslash-backtick exactly as CASE 8's `node.text` does,
+# so the reader sees the marker. Inserted at module scope so it parses as TSX
+# without a render site (the AST walk covers the whole file). printf sees `\\`
+# and writes ONE backslash, so the file holds a real `\`` escape — the same
+# escaping convention CASE 8/9 use. Inside single quotes bash never expands
+# `${x}`, so the file holds a literal `${x}` the parser reads as a substitution.
+printf 'const QA_TMPLEXPR = (x: string) => `prose ${x} with \\`te_marker\\` inside`;\n' > "$snap/p12.txt"
+sed -i "/^import type { Metadata } from \"next\";/r $snap/p12.txt" "$f"
+grep -qF 'prose ${x} with \`te_marker\` inside' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case12=$v")
+if [ "$v" = RED ] && printf '%s' "$out" | grep -q 'docs/security/page.tsx' && printf '%s' "$out" | grep -q '\[template expression\]' && printf '%s' "$out" | grep -q 'te_marker' && fails_findings_only "$out"; then
+  echo "  BITES: RED naming docs/security/page.tsx [template expression] (the TemplateExpression hole is closed)"
+else
+  echo "  DID NOT BITE: verdict=$v (wanted RED naming docs/security, [template expression], one findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
+echo "== CASE 13 (negative control): a \${…} template literal inside <code> stays GREEN =="
+f="src/app/docs/security/page.tsx"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+# The code-sample exclusion must cover BOTH template-literal shapes: a sample
+# that shows code with a substitution is still the supported way to show code on
+# /docs. Without this the widening would report every interpolation that prints a
+# backtick as part of the code it shows.
+printf 'const QA_CODEBTEXPR = (n: number) => <code>{`sample ${n} with \\`marker\\``}</code>;\n' > "$snap/p13.txt"
+sed -i "/^import type { Metadata } from \"next\";/r $snap/p13.txt" "$f"
+grep -qF 'sample ${n} with \`marker\`' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case13=$v")
+if [ "$v" = GREEN ]; then
+  echo "  CONTROL GREEN: a \${…} template literal inside <code> is the supported code-sample shape"
+else
+  echo "  CONTROL FAILED: verdict=$v — the widening flagged a code sample as prose"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
 # ── the IMPORTED-prose surface (card t_763c28c2) ──────────────────────────────
 # /docs/api's prose is not in the page .tsx: it is imported from the generated
 # modules (web/src/lib/apiExamples.gen.ts, openapiSpec.gen.ts) and printed with a
@@ -286,6 +343,6 @@ out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("final=$v")
 
 echo
 echo "verdicts: ${VERDICTS[*]}"
-echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8|10)=RED')/7 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9|11)=GREEN')/4 CONTROLS GREEN"
+echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8|10|12)=RED')/8 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9|11|13)=GREEN')/5 CONTROLS GREEN"
 echo "RESULT: $([ "$fail" = 0 ] && echo 'ALL CASES OK' || echo 'FAILURES PRESENT')"
 exit "$fail"
