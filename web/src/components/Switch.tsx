@@ -32,17 +32,31 @@
 //   needed: three of the four settings switches previously had NO accessible
 //   name derived from their own heading, because the heading is a sibling `<p>`
 //   and not a `<label>`.
+//
+// TOOLTIP (`title`)
+//   `label` is the ACCESSIBLE NAME, which a sighted mouse user does not see. The
+//   hand-rolled /sales pill also carried a `title` — the hover tooltip — and in
+//   the conversion to this component it was dropped (card t_5ca04dc0, measured
+//   on the built page: `hasTitleAttr` true before, false after). The tooltip is
+//   the only place that copy was visible: before the workspace's stored value is
+//   read, /sales passed `t("sales.soundLoading")` so a mouse user hovering the
+//   DISABLED switch is told it is still loading. `title` is therefore forwarded
+//   untouched. It is optional and defaults to nothing: a switch whose heading is
+//   a visible sibling does not need one.
 
 export function Switch({
   checked,
   onChange,
   label,
+  title,
   disabled = false,
 }: {
   checked: boolean;
   onChange: () => void;
   /** Accessible name. Pass the same string the switch's visible heading uses. */
   label: string;
+  /** Hover tooltip. Optional: `label` is announced, this is what is SEEN. */
+  title?: string;
   disabled?: boolean;
 }) {
   return (
@@ -51,6 +65,7 @@ export function Switch({
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      title={title}
       disabled={disabled}
       onClick={onChange}
       className="jf-switch"

@@ -717,11 +717,18 @@ function SalesPageInner() {
               />
               {live ? t("sales.live") : t("sales.offline")}
             </span>
+            {/* Issue #447: the tooltip is RESTORED here (card t_5ca04dc0). The
+                hand-rolled pill carried a `title` and the move to the shared
+                component dropped it — `label` is the accessible NAME, not a
+                tooltip, so a sighted mouse user hovering the DISABLED switch lost
+                the one hint that the workspace's stored value is still loading.
+                The title keeps the load-dependent copy the raw markup had. */}
             <Switch
               checked={soundEnabled}
               onChange={() => void toggleSound(!soundEnabled)}
               disabled={!soundLoaded}
               label={soundLoaded ? t("sales.soundLabel") : t("sales.soundLoading")}
+              title={soundLoaded ? t("sales.soundLabel") : t("sales.soundLoading")}
             />
             {/* AGENTS.md documentation-parity step 4: the inline "?" link next
                 to the field, pointing at the section that documents it.

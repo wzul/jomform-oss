@@ -211,6 +211,54 @@ test("the component keeps the accessibility contract the raw markup had", () => 
   );
 });
 
+test("the /sales sound switch keeps its load-dependent hover tooltip (card t_5ca04dc0)", () => {
+  // THE DEFECT. The hand-rolled /sales pill carried
+  //   title={soundLoaded ? t("sales.soundLabel") : t("sales.soundLoading")}
+  // and the conversion to <Switch> dropped it: the component had no `title`
+  // prop, and `label` becomes `aria-label`, which is the accessible NAME a
+  // screen reader announces — not a tooltip a mouse user sees. Measured on the
+  // built page (fresh localStorage, /sales): `hasTitleAttr` true before the
+  // conversion, false after. The card is the restore of those two legs, so both
+  // are pinned: the component must FORWARD a title, and the page must PASS the
+  // load-dependent copy.
+  assert.match(
+    component,
+    /title\?:\s*string/,
+    "Switch.tsx declares no optional `title` prop — a call site cannot pass a tooltip at all",
+  );
+  assert.match(
+    component,
+    /title=\{title\}/,
+    "Switch.tsx declares a `title` prop but does not forward it to the <button> — the tooltip never reaches the DOM",
+  );
+  const sales = codeOnly(srcAt("app/sales/page.tsx"));
+  assert.match(
+    sales,
+    /<Switch[\s\S]*?title=\{soundLoaded \? t\("sales\.soundLabel"\) : t\("sales\.soundLoading"\)\}/,
+    "app/sales/page.tsx no longer passes the load-dependent tooltip to the sound switch — " +
+      "before the stored value is read a mouse user hovering the disabled switch loses the " +
+      'only hint that it is still loading (t("sales.soundLoading"))',
+  );
+  // IN-FILE BITE PROOF. Both assertions above are checked against a plant: strip
+  // the forward and the pass and they must stop matching. Without this, an
+  // assertion that silently matched nothing (a rename, a whitespace change) would
+  // read as a clean tree — the shape this file's header calls out.
+  const forward = /title=\{title\}/;
+  assert.equal(forward.test(component), true, "the component forward is not what is asserted");
+  assert.equal(
+    forward.test(component.replace("      title={title}\n", "")),
+    false,
+    "the component assertion does not bite: dropping `title={title}` still matches",
+  );
+  const pass = /<Switch[\s\S]*?title=\{soundLoaded \? t\("sales\.soundLabel"\) : t\("sales\.soundLoading"\)\}/;
+  assert.equal(pass.test(sales), true, "the /sales pass is not what is asserted");
+  assert.equal(
+    pass.test(sales.replace(/title=\{soundLoaded[^\n]*\n/, "")),
+    false,
+    "the /sales assertion does not bite: dropping the title prop still matches",
+  );
+});
+
 test("the shared class carries the four things the copies were missing", () => {
   const body = (name: string): string => {
     const m = css.match(new RegExp(`\\.${name}\\s*\\{([^}]*)\\}`));
