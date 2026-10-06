@@ -61,13 +61,16 @@
      eye — see `.jf-switch*` below for the numbers and for why the OFF track is
      no longer `bg-slate-300`.
 
-       --jf-switch-off      #94a3b8   white knob 2.56:1 (was slate-300: 1.48)
+       --jf-switch-off      #64748b   white knob 4.76:1   (was #94a3b8 = 2.56:1,
+                                       under the 3:1 floor of WCAG 1.4.11; and the
+                                       extra #64748b RING it used to carry made OFF
+                                       an outlined control while ON is a solid one)
        --jf-primary-active  #454ea8   white label 7.22:1   (AA, normal text)
 
      `--jf-focus-ring` names the colour the global `:focus-visible` rule already
      paints as a literal; naming it is what lets the switch's own focus ring use
      the same one instead of a fifth copy of `#5e6ad2` in this file. */
-  --jf-switch-off: #94a3b8;
+  --jf-switch-off: #64748b;
   --jf-primary-active: #454ea8;
   --jf-focus-ring: #5e6ad2;
 }
@@ -259,7 +262,14 @@ body {
 }
 .jf-switch[aria-checked="false"] {
   background: var(--jf-switch-off);
-  border-color: #64748b;
+  /* The #64748b ring that #988 shipped here is GONE. It was the tell that
+     something was wrong: ON is a SOLID fill (`--jf-primary`) and OFF was an
+     OUTLINED one, so the two states were not the same object. Both are now a
+     plain solid fill that differs only in colour, and ON/OFF is carried by hue
+     PLUS knob position — knob position is the non-colour cue WCAG 1.4.11 asks
+     for, and it was already there. The 1px the ring occupied stays reserved by
+     `.jf-switch`'s own transparent border, so the pill's box does not move. */
+  border-color: transparent;
 }
 .jf-switch:hover:not(:disabled) {
   box-shadow: 0 0 0 3px rgba(94, 106, 210, 0.28);
@@ -290,6 +300,45 @@ body {
 }
 .jf-switch[aria-checked="true"] .jf-switch-knob {
   left: 22px;
+}
+
+/* ── the "just saved" state of a primary CTA ──────────────────────────────────
+   A class that APPENDS to `.jf-btn-primary` rather than a fifth button style:
+   that class is shared by 137 call sites and owns the pressed/hover/disabled
+   states, so a per-site style would be missed by the next button.
+
+   WHY IT EXISTS: a save is confirmed by a banner at the TOP of the page, which
+   a merchant pressing "Save footer" several screens down never sees. The button
+   holds this state for 2s so the confirmation is on the control that was pressed.
+
+   THE COLOUR IS MEASURED, not picked by eye:
+     fill #047857 (emerald-700)
+       white 14px label on it ............ 5.48:1  (AA floor 4.5 — clears it)
+       the fill against the white card ... 5.48:1  (the 3:1 graphical floor)
+   `--jf-success` (#10b981) was NOT used: a white label on it is 2.54:1 and
+   fails AA for text — the same class of defect #992 fixed (text-emerald-600 ->
+   -700). That token is a marker colour, not a text background.
+
+   Hover/active are pinned to the same fill: once the save has landed the button
+   is a confirmation, not an action, so it must not light up under the pointer or
+   press down. `transition: none` because the base class animates the background
+   over 0.15s, which on a state that only lives 2s reads as the button still
+   changing colour while the label already says it is done. */
+.jf-btn-primary.jf-btn-saved {
+  background: #047857;
+  transition: none;
+  /* Carried because `buttonWrap.test.ts` requires every rendered `jf-btn*` class
+     to declare them, and this rule is discovered as one. They are a no-op here:
+     the selector needs .jf-btn-primary too, which already declares both. */
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.jf-btn-primary.jf-btn-saved:hover:not(:disabled) {
+  background: #047857;
+}
+.jf-btn-primary.jf-btn-saved:active:not(:disabled) {
+  background: #047857;
+  transform: none;
 }
 
 /* The settings tab strip is a horizontal scroller on a phone

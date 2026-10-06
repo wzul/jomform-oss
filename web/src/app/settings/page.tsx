@@ -13,6 +13,10 @@ import WorkspaceTab from "../../components/WorkspaceTab";
 import { LegalTab } from "../../components/LegalTab";
 import { Switch } from "../../components/Switch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
+// The save-confirmation toast. Rendered once for the whole page and bound to the
+// existing `msg` state, so every save that already calls setMsg announces near
+// the button that was pressed instead of only at the page top.
+import { Toast } from "../../components/Toast";
 
 // Issue #323: the CNAME target is consistent across all custom-domain copy.
 const CNAME_TARGET = "custom.jomform.com";
@@ -130,7 +134,23 @@ export default function Settings() {
   const [secretMasked, setSecretMasked] = useState("");
   const [emailFallback, setEmailFallback] = useState("");
   const [whitelist, setWhitelist] = useState<string[]>([]);
+  // The page's two message states. `msg` holds the banner/toast text and `msgOk`
+  // its TONE: several of the writers below are a FAILED save, not a
+  // confirmation (the tracking and e-Invoice PUTs, the CHIP unverified save), and
+  // the card's rule is that a failure must not be painted in success chrome nor
+  // vanish on a timer. Tone is therefore explicit state, set with the message in
+  // one call — never inferred from the string, and never left stale from a
+  // previous save.
   const [msg, setMsg] = useState("");
+  const [msgOk, setMsgOk] = useState(true);
+  const showMsgOk = useCallback((text: string) => {
+    setMsgOk(true);
+    setMsg(text);
+  }, []);
+  const showMsgFail = useCallback((text: string) => {
+    setMsgOk(false);
+    setMsg(text);
+  }, []);
   const [err, setErr] = useState("");
   const [keys, setKeys] = useState<KeyRow[]>([]);
   const [verified, setVerified] = useState(false);
@@ -190,7 +210,12 @@ export default function Settings() {
   const [cfManualErr, setCfManualErr] = useState("");
   // Issue #68: transient banner shown after the Cloudflare OAuth callback
   // redirects back to /settings?cloudflare=linked|error.
+  // The Cloudflare OAuth callback notice. It carries a SUCCESS (`connected`) and
+  // a FAILURE (`linking failed`) — the same one-state-two-tones shape the `msg`
+  // pair above exists to fix — so it carries its tone too and no failure is
+  // painted in success chrome (card t_ad2af554, acceptance item 2).
   const [cfNotice, setCfNotice] = useState("");
+  const [cfNoticeOk, setCfNoticeOk] = useState(true);
   // Issue #107: per-workspace email template + behaviour settings.
   const [emelSubject, setEmelSubject] = useState("");
   const [emelBody, setEmelBody] = useState("");
@@ -222,6 +247,12 @@ export default function Settings() {
   // it disables the button and is what makes the "busy" the card asks for
   // observable. Without it a double-click fired two PUTs of the same body.
   const [sfSaving, setSfSaving] = useState(false);
+  // The transient "Saved ✓" state of the Save-footer button. Held for 2s (the
+  // timer ref below) so the confirmation is on the control the merchant clicked,
+  // not only in the page-top banner several screens above it. The timer lives in
+  // a ref rather than state so a re-render cannot orphan it.
+  const [sfJustSaved, setSfJustSaved] = useState(false);
+  const sfSavedTimer = useRef<number | null>(null);
   // Issue #447: per-workspace realtime notification sound toggle (Storefront tab).
   const [sfSoundEnabled, setSfSoundEnabled] = useState(false);
   // Per-workspace AI spam-judge toggle (Storefront tab). Default
@@ -278,9 +309,11 @@ export default function Settings() {
     const cf = params.get("cloudflare");
     if (cf === "linked") {
       setTab("domains");
+      setCfNoticeOk(true);
       setCfNotice(t("set.cfConnected"));
     } else if (cf === "error") {
       setTab("domains");
+      setCfNoticeOk(false);
       setCfNotice(t("set.cfLinkFailed"));
     } else if (isSettingsTab(explicit)) {
       setTab(explicit);
@@ -516,7 +549,7 @@ export default function Settings() {
       body: JSON.stringify({ currency }),
     });
     if (r.ok) {
-      setMsg(t("set.currencySaved"));
+      showMsgOk(t("set.currencySaved"));
     } else {
       const d = await r.json().catch(() => ({}));
       setErr(apiErr(d, t("set.failedSave"), t));
@@ -624,7 +657,11 @@ export default function Settings() {
       // API check passed. Trust that value — never assume success.
       const d = await r.json().catch(() => ({}));
       setVerified(d.verified === true);
-      setMsg(d.verified === true ? t("set.savedCreds") : t("set.savedCredsUnverified"));
+      // A save that reached the API but whose CHIP check could not be confirmed
+      // is NOT a clean success. It is shown on the failure tone so the merchant
+      // reads the caveat on the same chrome as its meaning (the sentence itself
+      // already says the check was not confirmed).
+      (d.verified === true ? showMsgOk : showMsgFail)(t(d.verified === true ? "set.savedCreds" : "set.savedCredsUnverified"));
       await load();
     } else {
       const d = await r.json().catch(() => ({}));
@@ -635,7 +672,7 @@ export default function Settings() {
 
   async function clearCreds() {
     await fetch(`/api/rest/settings/chip${workspaceQuery()}`, { method: "DELETE" });
-    setMsg(t("set.credsCleared"));
+    showMsgOk(t("set.credsCleared"));
     await load();
   }
 
@@ -666,7 +703,7 @@ export default function Settings() {
       body: JSON.stringify({ url: editUrl, secret: editSecret, events: editEvents }),
     });
     if (r.ok) {
-      setMsg(t("set.whUpdated"));
+      showMsgOk(t("set.whUpdated"));
       setEditId(null); setEditUrl(""); setEditSecret(""); setEditEvents([]);
       load();
     } else {
@@ -718,7 +755,7 @@ export default function Settings() {
         : `/api/rest/webhooks/${webhookID}/deliveries/${row.id}/retry`;
       const r = await fetch(`${path}?workspace=${encodeURIComponent(activeWorkspaceScope())}`, { method: "POST" });
       if (r.ok) {
-        setMsg(t("wh.retryQueued"));
+        showMsgOk(t("wh.retryQueued"));
         await fetchDeliveries(webhookID);
       } else {
         const d = await r.json().catch(() => ({}));
@@ -891,7 +928,7 @@ export default function Settings() {
       }),
     });
     if (r.ok) {
-      setMsg(t("set.emelSaved"));
+      showMsgOk(t("set.emelSaved"));
     } else {
       const d = await r.json().catch(() => ({}));
       setErr(apiErr(d, t("set.failedSave"), t));
@@ -938,7 +975,16 @@ export default function Settings() {
         }),
       });
       if (r.ok) {
-        setMsg(t("set.sfSaved"));
+        showMsgOk(t("set.sfSaved"));
+        // Hold the button in its saved state for a beat. A second save inside
+        // the window must not leave the first timer to flip a NEWER label, so
+        // any pending timer is cleared before re-arming.
+        setSfJustSaved(true);
+        if (sfSavedTimer.current) window.clearTimeout(sfSavedTimer.current);
+        sfSavedTimer.current = window.setTimeout(() => {
+          setSfJustSaved(false);
+          sfSavedTimer.current = null;
+        }, 2000);
       } else {
         const d = await r.json().catch(() => ({}));
         setErr(apiErr(d, t("set.failedSave"), t));
@@ -986,7 +1032,7 @@ export default function Settings() {
       }),
     });
     if (r.ok) {
-      setMsg(t("set.lpSaved"));
+      showMsgOk(t("set.lpSaved"));
     } else {
       const d = await r.json().catch(() => ({}));
       setLpUrlErr(apiErr(d, t("set.failedSave"), t));
@@ -1048,6 +1094,12 @@ export default function Settings() {
   useEffect(() => {
     revealTab(tabStripRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? null);
   }, [revealTab, tab, visibleTabs.length]);
+
+  // Stable identity: the toast's dismiss timer is keyed on this callback, and a
+  // new function on every render would restart (or drop) the timer. It must live
+  // in the component body — a hook inside the JSX below renders conditionally and
+  // breaks the hook order.
+  const dismissMsg = useCallback(() => setMsg(""), []);
 
   return (
     <Shell active="settings">
@@ -1118,9 +1170,31 @@ export default function Settings() {
 
         {/* Issue #68: transient Cloudflare OAuth callback banner + shared
             status/error banners shown above tab content regardless of the
-            active tab (Profile-style). */}
-        {cfNotice && <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{cfNotice}</p>}
-        {msg && <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{msg}</p>}
+            active tab (Profile-style).
+            Each of the first two carries its own tone: `cfNotice` holds a
+            connected/failed pair and `msg` a saved/failed pair, and a failure
+            must not be painted in success chrome (card t_ad2af554). The emerald
+            pair is a success; a failure goes red. The ink steps are the -700
+            ones, which clear AA on their own -50 tint (red-600 is 4.36:1 on
+            red-50 and only passes on white — see card t_fc1b67f1). */}
+        {cfNotice && (
+          <p
+            className={`mt-4 rounded-lg px-3 py-2 text-sm ${
+              cfNoticeOk ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+            }`}
+          >
+            {cfNotice}
+          </p>
+        )}
+        {msg && (
+          <p
+            className={`mt-4 rounded-lg px-3 py-2 text-sm ${
+              msgOk ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+            }`}
+          >
+            {msg}
+          </p>
+        )}
         {err && <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>}
 
         {/* ── CHIP tab ── */}
@@ -1638,7 +1712,11 @@ export default function Settings() {
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ head: trackingHead }),
               });
-              setMsg(r.ok ? t("set.trackingSaved") : t("prof.failed"));
+              {/* A FAILED PUT here is a FAILURE, not a confirmation: it writes
+                  the failure tone (and the inline banner's red side) instead of
+                  borrowing the success chrome, and the toast below refuses to
+                  put it on a 6s timer (card t_ad2af554). */}
+              (r.ok ? showMsgOk : showMsgFail)(t(r.ok ? "set.trackingSaved" : "prof.failed"));
             }} className="jf-btn-primary mt-3">{t("set.saveTracking")}</button>
           </section>
         )}
@@ -1665,7 +1743,9 @@ export default function Settings() {
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ tin, msic }),
               });
-              setMsg(r.ok ? t("set.einvoiceSaved") : t("set.failedSave"));
+              {/* Same rule as the Tracking save above: the failed branch of
+                  this PUT is a failure and must not read as a success. */}
+              (r.ok ? showMsgOk : showMsgFail)(t(r.ok ? "set.einvoiceSaved" : "set.failedSave"));
             }} className="jf-btn-primary mt-3">{t("set.saveEinvoice")}</button>
           </section>
         )}
@@ -2122,18 +2202,24 @@ export default function Settings() {
                 />
               </div>
               <div className="flex flex-wrap items-center gap-2 pt-1">
-                {/* card t_b73eee21: the button now carries the PUT's in-flight
-                    state — `disabled` while the request is open (so a
-                    double-click cannot fire a second PUT with no feedback) and
-                    `aria-busy` so the busy state is announced, not just drawn.
-                    The label string is unchanged; the class is unchanged. */}
+                {/* card t_b73eee21: the button carries the PUT's in-flight state —
+                    `disabled` while the request is open (so a double-click cannot
+                    fire a second PUT with no feedback) and `aria-busy` so the
+                    busy state is announced, not just drawn.
+                    This card adds the THIRD state: a 2s "Saved ✓" on the button
+                    itself, so the confirmation is where the press happened rather
+                    than only in the page-top banner. No extra tick glyph — the
+                    label already ends in its own "✓" and rendering both gave a
+                    visible double tick. */}
                 <button
                   onClick={saveStorefrontSettings}
                   disabled={sfSaving}
                   aria-busy={sfSaving}
-                  className="jf-btn-primary"
+                  className={
+                    sfJustSaved ? "jf-btn-primary jf-btn-saved" : "jf-btn-primary"
+                  }
                 >
-                  {t("set.sfSave")}
+                  {sfJustSaved ? t("set.sfSavedShort") : t("set.sfSave")}
                 </button>
               </div>
             </div>
@@ -2513,6 +2599,22 @@ export default function Settings() {
             </div>
           </section>
         )}
+        {/* The save-confirmation toast, bound to the SAME `msg` state that paints
+            the banner above: whatever sets the message shows the toast, so this
+            is not a second success path. Dismissing clears `msg`, so the inline
+            banner goes too — one source of truth, not two.
+            It is handed the message's TONE as well as its text (`msgOk`), because
+            `msg` carries failures too (the tracking and e-Invoice PUTs, the CHIP
+            unverified save): a failure must be red-chromed and, above all, must
+            NOT auto-dismiss — the 6s timer lives in the toast and is armed only
+            for a success (card t_ad2af554, the rework of #997). The `err` banner
+            stays a separate, always-persistent inline red. */}
+        <Toast
+          message={msg}
+          ok={msgOk}
+          onDismiss={dismissMsg}
+          closeTitle={t("set.tlsCertClose")}
+        />
       </main>
     </Shell>
   );

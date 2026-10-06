@@ -88,9 +88,17 @@ test("the Save button carries the PUT's in-flight state (disabled + aria-busy)",
   // The busy state must be ANNOUNCED, not only drawn: a disabled button that
   // says nothing is the same silence the card is about, for screen readers.
   assert.match(jsx, /aria-busy=\{sfSaving\}/, "the Save-footer button does not expose its busy state via aria-busy");
-  // The label must stay the dictionary string — this card changes no copy.
-  assert.match(jsx, /\{t\("set\.sfSave"\)\}/, "the Save-footer label is no longer t(\"set.sfSave\")");
-  assert.match(jsx, /className="jf-btn-primary"/, "the Save-footer button changed class — this card is the shared class");
+  // The label must stay a dictionary string. It now has TWO states on one
+  // button — the idle `set.sfSave` and a 2s confirmation — so both are pinned.
+  // The confirmation must be a DICT key, not a literal: `t()` falls back to the
+  // key itself, so a literal would ship English to every locale silently.
+  assert.match(jsx, /\{sfJustSaved \? t\("set\.sfSavedShort"\) : t\("set\.sfSave"\)\}/,
+    "the Save-footer label is no longer the dictionary pair (idle set.sfSave / saved set.sfSavedShort)");
+  // This card ADDS a state to the shared class rather than forking it: the
+  // className is still jf-btn-primary, with the state class appended only while
+  // the save confirmation is showing.
+  assert.match(jsx, /sfJustSaved \? "jf-btn-primary jf-btn-saved" : "jf-btn-primary"/,
+    "the Save-footer button forked .jf-btn-primary instead of appending a state class");
 });
 
 test("the busy flag exists, starts off, and gates re-entry", () => {
@@ -162,8 +170,11 @@ test("the PUT contract is untouched (presentation only)", () => {
       `${setter} lost its toggle semantics — the switches are presentation only on this card`,
     );
   }
-  // The success/error strings are unchanged.
-  assert.match(settings, /setMsg\(t\("set\.sfSaved"\)\)/, "the Storefront success message changed");
+  // The success/error strings are unchanged. Keyed on the MESSAGE, not on which
+  // setter carries it: this card's rework (t_ad2af554) routed the message through
+  // `showMsgOk` so the toast could carry its tone, and the sentence itself is
+  // what this assertion is about.
+  assert.match(settings, /t\("set\.sfSaved"\)/, "the Storefront success message changed");
 });
 
 test("the shared button classes carry the pointer, the press and the disabled state", () => {

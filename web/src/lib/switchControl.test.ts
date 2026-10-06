@@ -279,7 +279,31 @@ test("the shared class carries the four things the copies were missing", () => {
     /\.jf-switch\[aria-checked="false"\]\s*\{[^}]*background:\s*var\(--jf-switch-off\)/s,
     ".jf-switch's OFF state does not use --jf-switch-off",
   );
-  assert.match(css, /--jf-switch-off:\s*#94a3b8/, "globals.css lost --jf-switch-off (#94a3b8)");
+  assert.match(
+    css,
+    /--jf-switch-off:\s*#64748b/,
+    "globals.css lost --jf-switch-off (#64748b, whose white knob is 4.76:1)",
+  );
+  assert.doesNotMatch(
+    css,
+    /--jf-switch-off:\s*#94a3b8/,
+    "--jf-switch-off is back to #94a3b8, whose white knob is 2.56:1 — under the 3:1 floor of WCAG 1.4.11",
+  );
+  // 4. the OFF rule must NOT paint its own ring. #988 shipped OFF with a
+  //    #64748b border while ON is a plain solid fill, so the two states were not
+  //    the same object. Asserted here because it is invisible to a colour check.
+  const offRule = css.match(/\.jf-switch\[aria-checked="false"\]\s*\{([^}]*)\}/s);
+  assert.ok(offRule, "no .jf-switch[aria-checked=false] rule — re-anchor this guard");
+  assert.doesNotMatch(
+    offRule![1],
+    /border-color:\s*#/,
+    ".jf-switch's OFF state paints a coloured ring again — ON is a solid fill, so the two states stop matching",
+  );
+  assert.match(
+    offRule![1],
+    /border-color:\s*transparent/,
+    ".jf-switch's OFF state must keep the 1px reserved as a transparent border, or the pill's box moves",
+  );
   assert.doesNotMatch(
     css,
     /--jf-switch-off:\s*#cbd5e1/,
