@@ -83,8 +83,24 @@
 #       which no case removes: case 4 drops only the canonicalising sed (checks
 #       35/36/37 unchanged), case 5 swaps only the anchor block for the
 #       all-or-nothing expression (checks 34/36 unchanged), case 6 removes only the
-#       scheme guard (checks 34/35/37 unchanged), and case 7 swaps only the anchor
-#       block for the unconditional step-2 strip (checks 34/35/36 unchanged).
+#       scheme guard (checks 34/35/37 unchanged), and case 7 swaps only the
+#       anchor's address test for the unconditional step-2 strip (checks 34/35/36
+#       unchanged).
+#
+#       THE ANCHOR-BLOCK SWAPS ARE NOT ENOUGH ON THEIR OWN (card t_7079d697). PR
+#       906 added a SECOND rule to the same function — the comma canonicalisation
+#       for a multi-host DSN list (card t_54342924) — and the pre-fix bodies cases
+#       5 and 7 restore do not carry it, so a swap that replaces the whole body
+#       drops that rule too and check 34's MULTI-HOST leg fires. Measured on
+#       origin/main bd26dec5 before this card: case 5 red on THREE legs and case 7
+#       on two, check 34's multi-host leg in both, which `verdict` reported as
+#       "for reasons OTHER than" their own properties, because `one server` in
+#       case 5's needle is not a substring of `SPELLING of a loopback host inside a
+#       DSN list`. Cases 5 and 7 now splice only the anchor BLOCK (case 5) and the
+#       one address-test LINE (case 7), and EACH reads the shipped component for a
+#       multi-host DSN list before the swap and requires it UNMOVED after, so the
+#       next guard to land in this function fails a case's premise instead of
+#       silently re-introducing the same unattributable red.
 #
 # WHY A SCRIPT AND NOT A PER-RUN GATE: every case mutates scripts/*.sh in place.
 # The live `selftest` gate runs against the tree under test, so it can never
@@ -397,34 +413,44 @@ restore_and_verify
 # is world-readable, and rotating such a password moves the key and silently
 # refuses a valid green record.
 #
-# SURGICAL since the branch merged card `t_7add0cfa`: replacing the WHOLE body with
-# the pre-fix function also removes the host canonicalisation, so check 34 reds as
-# well and this case's red would be unattributable. Only the anchor block is
-# swapped here; the loopback sed stays, and the value assertions below prove it.
+# SURGICAL, AND NOW SURGICAL AT THE ANCHOR BLOCK RATHER THAN AT THE FUNCTION.
+# Replacing the WHOLE body with the pre-fix function is not a re-creation of the
+# pre-fix shape on this tree: this tree's component ALSO carries the comma
+# canonicalisation for a multi-host DSN list (card `t_54342924`, PR 906), which the
+# pre-fix body does not, so the wholesale replacement reds check 34's MULTI-HOST leg
+# as well and `verdict` reports the red as "for reasons OTHER than" this case's
+# property — the exact false red this card was filed on (measured on origin/main
+# bd26dec5: the wholesale swap went red on THREE legs, check 34's multi-host leg
+# among them, and `one server` in the needle does not match `SPELLING of a loopback
+# host inside a DSN list`). The swap therefore replaces ONLY the anchor block — the
+# `case "$auth" in … esac` that decides where the userinfo ends — with the
+# all-or-nothing expression. Everything else in the function, the scheme guard and
+# the comma canonicalisation included, is carried over verbatim, and the value
+# assertions below prove it, including one on the DSN LIST.
 #
-# The body is replaced with awk rather than with a sed expression: the body carries
-# `#`, `?`, `$` and `[^@/]`, and an escaping slip there turns the case into a silent
-# no-op that reports a false green.
+# The body is written with printf and spliced with awk rather than with sed: the
+# block carries `#`, `?`, `$` and `[^@/]`, and an escaping slip there turns the case
+# into a silent no-op that reports a false green.
 echo "== case 5: the DB credential strip made all-or-nothing again (the pre-fix shape) =="
+# The SHIPPED answers for the two loopback spellings and for a multi-host DSN list,
+# read BEFORE the swap. The premise below requires the swap to leave ALL THREE
+# unchanged, so a replacement that moved any of check 34's legs fails the premise
+# instead of being counted as this case's red. `case5_plain` doubles as the
+# expected value for both, because the shipped component is one token for one
+# server however it is written — and the LIST is what PR 906 added, so it is the
+# leg a body-swap drops.
+LIST34='postgres://u:***@127.0.0.1,127.0.0.1:5432/jomform_test'
+case5_plain_shipped="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw1$(printf '\100')127.0.0.1:5432/jomform_test" bash -c ". $RESULT; gr_testdb_component")"
+case5_list_shipped="$(JOMFORM_TEST_DATABASE_URL="$LIST34" bash -c ". $RESULT; gr_testdb_component")"
 printf '%s\n' \
-  '  local url="${JOMFORM_TEST_DATABASE_URL:-}" comp auth tail' \
-  '  if [ -z "$url" ]; then printf '"'"'unset'"'"'; return 0; fi' \
-  '  case "$url" in' \
-  '    *://*) : ;;' \
-  '    *)     printf '"'"'refused'"'"'; return 0 ;;' \
-  '  esac' \
-  '  comp="${url#*://}"                       # the scheme, when there is one' \
-  '  comp="$(printf '"'"'%s'"'"' "$comp" | sed -E '"'"'s#\?.*$##; s#/$##'"'"')"' \
-  '  auth="${comp%%/*}"                       # the authority: up to the first '"'"'/'"'"'' \
-  '  tail="${comp#"$auth"}"                   # whatever follows it (path, or empty)' \
   '  comp="$(printf '"'"'%s'"'"' "$comp" | sed -E '"'"'s#^[^@/]*@##'"'"')"' \
-  '  printf '"'"'%s'"'"' "$comp" \' \
-  '    | sed -E '"'"'s#^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?(/.*)?$#loopback\2\3#'"'"'' \
   > "$WORK/case5.body"
 awk -v replfile="$WORK/case5.body" '
-  /^gr_testdb_component\(\) \{$/ { print; while ((getline l < replfile) > 0) print l; close(replfile); inbody=1; next }
+  /^gr_testdb_component\(\) \{$/ { inbody=1; print; next }
   inbody && /^\}$/ { inbody=0; print; next }
-  inbody { next }
+  inbody && /^  case "\$auth" in$/ { while ((getline l < replfile) > 0) print l; close(replfile); skip=1; next }
+  skip && /^  esac$/ { skip=0; next }
+  skip { next }
   { print }
 ' "$RESULT" > "$WORK/gate_result.mutated5" && cp "$WORK/gate_result.mutated5" "$RESULT" && chmod "$MODE_RESULT" "$RESULT"
 # The mutation is verified against THE CARD'S OWN pre-fix table, not a guess: a
@@ -436,6 +462,7 @@ case5_got_at="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw${AT5}2${AT5}127.0.0.
                 bash -c ". $RESULT; gr_testdb_component")"
 case5_got_sl="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw${SL5}2${AT5}127.0.0.1:5432/jomform_test" \
                 bash -c ". $RESULT; gr_testdb_component")"
+case5_list="$(JOMFORM_TEST_DATABASE_URL="$LIST34" bash -c ". $RESULT; gr_testdb_component")"
 if ! assert_mutated "$RESULT" 's#^[^@/]*@##'; then
   :
 elif ! bash -n "$RESULT"; then
@@ -443,8 +470,10 @@ elif ! bash -n "$RESULT"; then
 elif [ "$case5_got_at" != "2${AT5}127.0.0.1:5432/jomform_test" ] || \
      [ "$case5_got_sl" != "u1:pw${SL5}2${AT5}127.0.0.1:5432/jomform_test" ]; then
   bad "case 5 — the mutation did not reproduce the pre-fix strip (at->[$case5_got_at] slash->[$case5_got_sl]), so this case proves nothing"
-elif [ "$case5_plain" != "loopback:5432/jomform_test" ]; then
-  bad "case 5 — the mutation is NOT surgical: the host canonicalisation went with it ([$case5_plain], expected [loopback:5432/jomform_test]), so check 34 would red too and this case would be unattributable"
+elif [ "$case5_list" != "$case5_list_shipped" ]; then
+  bad "case 5 — the mutation moved check 34's MULTI-HOST leg as well (list gave [$case5_list], the shipped component for those bytes is [$case5_list_shipped]), so the red below could be about another card's property and this case would be unattributable. The swap must replace only the anchor block (card t_54342924)"
+elif [ "$case5_plain" != "$case5_plain_shipped" ] || [ "$case5_plain_shipped" != "$case5_list_shipped" ]; then
+  bad "case 5 — the mutation is NOT surgical: the single-host loopback spelling no longer matches the shipped component for the same server ([$case5_plain] / shipped [$case5_plain_shipped] / list [$case5_list_shipped]), so check 34 would red too and this case would be unattributable"
 else
   rc5=0
   selftest_run "$WORK/case5.log" || rc5=$?
@@ -452,6 +481,11 @@ else
   # checks write `CREDENTIAL`, and a lowercase needle reports the case's own red as
   # "for OTHER reasons". Check 37's (d) leg names the CREDENTIAL hole in the same
   # words, so this mutation's two attributable failures both satisfy the needle.
+  # Check 34's legs are NOT listed (card t_7079d697): the two premise assertions
+  # above fail the case outright the moment this swap moves any of them, so a
+  # `SPELLING` line here would be a needle for a state the case cannot reach — and
+  # a needle wide enough to cover a broken premise is the false-green shape this
+  # harness exists to remove.
   verdict "case 5" "$WORK/case5.log" "$rc5" "CREDENTIAL|one server|BLIND|MOVED the key|dropped the test database" \
     "with the all-or-nothing strip back, a password containing @ or / reaches the record's component and key material"
 fi
@@ -513,40 +547,38 @@ restore_and_verify
 # wrong server instead of re-gating it.
 #
 # This case is SEPARATE from case 5 on purpose, and the two discriminate: case 5
-# reverts the whole strip to the all-or-nothing expression, which leaks the
-# CREDENTIAL (check 35) but happens to keep this host; this case keeps the
-# right-anchor strip for a URL-form value (so check 35 still passes on the
-# `@`-in-password shapes) and removes ONLY the address test, which is the one
+# puts back the all-or-nothing expression, which leaks the CREDENTIAL (check 35)
+# but happens to keep this host; this case keeps the right-anchor strip and check
+# 35's `@`-in-password shapes, and removes ONLY the address test, which is the one
 # change that produces the collision check 37 measures. A case whose mutation reds
-# several checks reads as off-topic in both.
+# several checks reads as off-topic.
 #
-# SURGICAL since the merge: only the anchor block is swapped, so the loopback
-# canonicalisation stays and check 34 cannot red. Asserted by value below.
+# SURGICAL AT THE LINE, NOT AT THE BLOCK — the same correction case 5 needed (card
+# t_7079d697). This tree's component carries TWO rules the parent body did not: the
+# loopback canonicalisation (card `t_7add0cfa`, PR 863) and the comma
+# canonicalisation for a multi-host DSN list (card `t_54342924`, PR 906). Swapping
+# the whole anchor block for the parent's shape drops the second as well, so check
+# 34's MULTI-HOST leg reds and the case is reported as an unattributable red
+# (measured on origin/main bd26dec5: check 34's multi-host leg and check 37 both
+# fired on this mutation). The swap is therefore ONE LINE: `gr_is_hostport "$auth"
+# || comp="${comp##*@}"` becomes the old unconditional `comp="${comp##*@}"`, and
+# everything else — the scheme guard, step 1, the loopback sed and the comma
+# canonicalisation — is carried over verbatim. The value assertions below prove it,
+# including one on the DSN LIST.
 echo "== case 7: the step-2 strip put back unconditionally (the parent shape — different servers collapse) =="
+# The SHIPPED answers for the two loopback spellings and for a multi-host DSN list,
+# read BEFORE the swap (see case 5): all three must be UNMOVED by it, or the swap
+# moved check 34 and the case's red would be unattributable.
+LIST34_7='postgres://u:***@127.0.0.1,127.0.0.1:5432/jomform_test'
+case7_url_shipped="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw1$(printf '\100')127.0.0.1:5432/jomform_test" bash -c ". $RESULT; gr_testdb_component")"
+case7_list_shipped="$(JOMFORM_TEST_DATABASE_URL="$LIST34_7" bash -c ". $RESULT; gr_testdb_component")"
 printf '%s\n' \
-  '  local url="${JOMFORM_TEST_DATABASE_URL:-}" comp auth tail' \
-  '  if [ -z "$url" ]; then printf '"'"'unset'"'"'; return 0; fi' \
-  '  case "$url" in' \
-  '    *://*) : ;;' \
-  '    *)     printf '"'"'refused'"'"'; return 0 ;;' \
-  '  esac' \
-  '  comp="${url#*://}"                       # the scheme, when there is one' \
-  '  comp="$(printf '"'"'%s'"'"' "$comp" | sed -E '"'"'s#\?.*$##; s#/$##'"'"')"' \
-  '  auth="${comp%%/*}"                       # the authority: up to the first '"'"'/'"'"'' \
-  '  tail="${comp#"$auth"}"                   # whatever follows it (path, or empty)' \
-  '  case "$auth" in' \
-  '    *@*) comp="${auth##*@}$tail" ;;        # step 1 — the LAST @ inside the authority' \
-  '    *)   case "$comp" in' \
-  '           *@*) comp="${comp##*@}" ;;      # step 2 — the old unconditional strip' \
-  '         esac ;;' \
-  '  esac' \
-  '  printf '"'"'%s'"'"' "$comp" \' \
-  '    | sed -E '"'"'s#^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?(/.*)?$#loopback\2\3#'"'"'' \
+  '             comp="${comp##*@}" ;;      # step 2 — the old unconditional strip' \
   > "$WORK/case7.body"
 awk -v replfile="$WORK/case7.body" '
-  /^gr_testdb_component\(\) \{$/ { print; while ((getline l < replfile) > 0) print l; close(replfile); inbody=1; next }
+  /^gr_testdb_component\(\) \{$/ { inbody=1; print; next }
   inbody && /^\}$/ { inbody=0; print; next }
-  inbody { next }
+  inbody && index($0, "gr_is_hostport \"$auth\" || comp=") > 0 { while ((getline l < replfile) > 0) print l; close(replfile); next }
   { print }
 ' "$RESULT" > "$WORK/gate_result.mutated7" && cp "$WORK/gate_result.mutated7" "$RESULT" && chmod "$MODE_RESULT" "$RESULT"
 # The mutation must be verified by VALUE against the card's own before/after table,
@@ -557,19 +589,25 @@ AT7="$(printf '\100')"
 case7_A="$(JOMFORM_TEST_DATABASE_URL="postgres://hostA:5432/db${AT7}x" bash -c ". $RESULT; gr_testdb_component")"
 case7_B="$(JOMFORM_TEST_DATABASE_URL="postgres://hostB:5432/db${AT7}x" bash -c ". $RESULT; gr_testdb_component")"
 case7_url="$(JOMFORM_TEST_DATABASE_URL="postgres://u1:pw1${AT7}127.0.0.1:5432/jomform_test" bash -c ". $RESULT; gr_testdb_component")"
+case7_list="$(JOMFORM_TEST_DATABASE_URL="$LIST34_7" bash -c ". $RESULT; gr_testdb_component")"
 if ! assert_mutated "$RESULT" 'comp="${comp##*@}" ;;'; then
   :
 elif ! bash -n "$RESULT"; then
   bad "case 7 — the mutation left gate_result.sh syntactically invalid, so any red below would be a parse error rather than the strip under test"
 elif [ "$case7_A" != "x" ] || [ "$case7_B" != "x" ]; then
   bad "case 7 — the mutation did not reproduce the parent's collision (hostA->[$case7_A] hostB->[$case7_B], both expected [x]), so this case proves nothing"
-elif [ "$case7_url" != "loopback:5432/jomform_test" ]; then
-  bad "case 7 — the mutation is NOT surgical: the URL form moved too ([$case7_url] != [loopback:5432/jomform_test]), so a red below could be about another card's property and this case would be unattributable"
+elif [ "$case7_list" != "$case7_list_shipped" ]; then
+  bad "case 7 — the mutation moved check 34's MULTI-HOST leg as well (list gave [$case7_list], the shipped component for those bytes is [$case7_list_shipped]), so a red below could be about another card's property and this case would be unattributable. The swap must replace only the address-test line (card t_54342924)"
+elif [ "$case7_url" != "$case7_url_shipped" ] || [ "$case7_url_shipped" != "$case7_list_shipped" ]; then
+  bad "case 7 — the mutation is NOT surgical: the URL form moved too ([$case7_url] / shipped [$case7_url_shipped] / list [$case7_list_shipped]), so a red below could be about another card's property and this case would be unattributable"
 else
   rc7=0
   selftest_run "$WORK/case7.log" || rc7=$?
-  # Only check 37 can fire: check 35's `@`-in-password shapes still strip under this
-  # mutation (verified above), so a failure naming anything else is unattributable.
+  # Only check 37 can fire. Check 35's `@`-in-password shapes still strip under this
+  # mutation (verified above), and check 34's legs are asserted unmoved by the two
+  # premise assertions above rather than by widening this needle — a needle wide
+  # enough to cover a broken premise is the false-green shape this harness exists to
+  # remove (card t_7079d697), so a failure naming anything else is unattributable.
   verdict "case 7" "$WORK/case7.log" "$rc7" "check 37" \
     "with the step-2 strip back, three different servers collapse onto ONE component and ONE key and a record written against hostA is reused as evidence about hostB"
 fi
