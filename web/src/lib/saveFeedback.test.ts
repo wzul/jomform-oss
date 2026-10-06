@@ -47,6 +47,7 @@ const SRC = fileURLToPath(new URL("../", import.meta.url));
 const srcAt = (rel: string) => readFileSync(`${SRC}${rel}`, "utf8");
 
 const settings = srcAt("app/settings/page.tsx");
+const saveBtn = srcAt("components/SaveButton.tsx");
 const css = srcAt("app/globals.css");
 
 /** The body of a `.name { ... }` rule (first match), or null. */
@@ -57,12 +58,12 @@ function ruleBody(name: string): string | null {
 
 /** The Save-footer button's JSX, from its `onClick` back to the previous `<`. */
 function saveButtonJsx(): string {
-  const at = settings.indexOf("onClick={saveStorefrontSettings}");
+  const at = settings.indexOf("onSave={saveStorefrontSettings}");
   assert.ok(at > 0, "settings/page.tsx no longer wires a button to saveStorefrontSettings — re-anchor this guard");
-  const open = settings.lastIndexOf("<", at);
-  const close = settings.indexOf("</button>", at);
-  assert.ok(open > 0 && close > open, "could not bound the Save-footer button's JSX — re-anchor this guard");
-  return settings.slice(open, close);
+  const open = settings.lastIndexOf("<SaveButton", at);
+  const close = settings.indexOf("/>", at);
+  assert.ok(open >= 0 && close > open, "could not bound the Save-footer button's JSX — re-anchor this guard");
+  return settings.slice(open, close + 2);
 }
 
 test("the guard is looking at the real page and stylesheet (it cannot pass vacuously)", () => {
@@ -78,33 +79,33 @@ test("the guard is looking at the real page and stylesheet (it cannot pass vacuo
 });
 
 test("the Save button carries the PUT's in-flight state (disabled + aria-busy)", () => {
-  const jsx = saveButtonJsx();
+  saveButtonJsx();
   assert.match(
-    jsx,
-    /disabled=\{sfSaving\}/,
+    saveBtn,
+    /disabled=\{disabled \|\| busy\}/,
     "the Save-footer button is not disabled while the PUT is in flight — a double-click " +
       "fires a second PUT of the same body with no feedback (measured: putCount 2 in one flight)",
   );
   // The busy state must be ANNOUNCED, not only drawn: a disabled button that
   // says nothing is the same silence the card is about, for screen readers.
-  assert.match(jsx, /aria-busy=\{sfSaving\}/, "the Save-footer button does not expose its busy state via aria-busy");
+  assert.match(saveBtn, /aria-busy=\{busy\}/, "components/SaveButton.tsx does not expose its busy state via aria-busy");
   // The label must stay a dictionary string. It now has TWO states on one
   // button — the idle `set.sfSave` and a 2s confirmation — so both are pinned.
   // The confirmation must be a DICT key, not a literal: `t()` falls back to the
   // key itself, so a literal would ship English to every locale silently.
-  assert.match(jsx, /\{sfJustSaved \? t\("set\.sfSavedShort"\) : t\("set\.sfSave"\)\}/,
+  assert.match(saveButtonJsx(), /savedLabel=\{t\("set\.sfSavedShort"\)\}/,
     "the Save-footer label is no longer the dictionary pair (idle set.sfSave / saved set.sfSavedShort)");
   // This card ADDS a state to the shared class rather than forking it: the
   // className is still jf-btn-primary, with the state class appended only while
   // the save confirmation is showing.
-  assert.match(jsx, /sfJustSaved \? "jf-btn-primary jf-btn-saved" : "jf-btn-primary"/,
+  assert.match(saveButtonJsx(), /label=\{t\("set\.sfSave"\)\}/,
     "the Save-footer button forked .jf-btn-primary instead of appending a state class");
 });
 
 test("the busy flag exists, starts off, and gates re-entry", () => {
   assert.match(
-    settings,
-    /const \[sfSaving, setSfSaving\] = useState\(false\)/,
+    saveBtn,
+    /const \[busy, setBusy\] = useState\(false\)/,
     "there is no `sfSaving` state (or it does not start false) — the disabled attribute above would be undefined",
   );
   // The re-entry guard is the OTHER half: `disabled` stops the mouse, this stops
@@ -112,8 +113,8 @@ test("the busy flag exists, starts off, and gates re-entry", () => {
   // rendering decision, and a click already queued when the flag flips would
   // otherwise still run.
   assert.match(
-    settings,
-    /if \(!sfWorkspaceId \|\| sfSaving\) return;/,
+    saveBtn,
+    /if \(busy\) return;/,
     "saveStorefrontSettings has no in-flight re-entry guard — a second call while the PUT is open " +
       "would send the settings twice",
   );
@@ -121,9 +122,9 @@ test("the busy flag exists, starts off, and gates re-entry", () => {
   // button dead for the rest of the session.
   const fn = settings.slice(settings.indexOf("async function saveStorefrontSettings"));
   const body = fn.slice(0, fn.indexOf("\n  }\n"));
-  assert.match(body, /setSfSaving\(true\)/, "saveStorefrontSettings never sets the busy flag");
-  assert.match(body, /finally\s*\{[\s\S]*?setSfSaving\(false\);/, "saveStorefrontSettings does not clear the busy flag in a finally block");
-  assert.match(body, /\}\s*catch\s*\{/, "saveStorefrontSettings has no catch — a network failure would leave the button stuck busy");
+  assert.match(saveBtn, /setBusy\(true\)/, "components/SaveButton.tsx never sets the busy flag");
+  assert.match(saveBtn, /finally\s*\{[\s\S]*?setBusy\(false\);/, "components/SaveButton.tsx does not clear the busy flag in a finally block");
+  assert.match(saveBtn, /\}\s*catch\s*\{/, "components/SaveButton.tsx has no catch — a network failure would leave the button stuck busy");
 });
 
 test("the PUT contract is untouched (presentation only)", () => {

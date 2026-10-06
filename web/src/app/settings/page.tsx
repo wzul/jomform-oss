@@ -17,6 +17,7 @@ import { apiErr, translateApiErr } from "../../lib/apiErr";
 // existing `msg` state, so every save that already calls setMsg announces near
 // the button that was pressed instead of only at the page top.
 import { Toast } from "../../components/Toast";
+import { SaveButton } from "../../components/SaveButton";
 
 // Issue #323: the CNAME target is consistent across all custom-domain copy.
 const CNAME_TARGET = "custom.jomform.com";
@@ -246,13 +247,10 @@ export default function Settings() {
   // The Save-footer PUT's in-flight state (card t_b73eee21). Presentation only:
   // it disables the button and is what makes the "busy" the card asks for
   // observable. Without it a double-click fired two PUTs of the same body.
-  const [sfSaving, setSfSaving] = useState(false);
   // The transient "Saved ✓" state of the Save-footer button. Held for 2s (the
   // timer ref below) so the confirmation is on the control the merchant clicked,
   // not only in the page-top banner several screens above it. The timer lives in
   // a ref rather than state so a re-render cannot orphan it.
-  const [sfJustSaved, setSfJustSaved] = useState(false);
-  const sfSavedTimer = useRef<number | null>(null);
   // Issue #447: per-workspace realtime notification sound toggle (Storefront tab).
   const [sfSoundEnabled, setSfSoundEnabled] = useState(false);
   // Per-workspace AI spam-judge toggle (Storefront tab). Default
@@ -944,11 +942,12 @@ export default function Settings() {
   // response overwrote the first message. Measured on the built page before
   // this: two clicks in flight produced putCount 2 with no visible feedback on
   // the button.
-  async function saveStorefrontSettings() {
-    if (!sfWorkspaceId || sfSaving) return;
+  // Returns whether the write succeeded, so SaveButton only confirms on success:
+  // a `false` leaves the button idle and the page's error is the only claim.
+  async function saveStorefrontSettings(): Promise<boolean> {
+    if (!sfWorkspaceId) return false;
     setMsg("");
     setErr("");
-    setSfSaving(true);
     try {
       const r = await fetch(`/api/workspaces/${sfWorkspaceId}/settings`, {
         method: "PUT",
@@ -976,30 +975,22 @@ export default function Settings() {
       });
       if (r.ok) {
         showMsgOk(t("set.sfSaved"));
-        // Hold the button in its saved state for a beat. A second save inside
-        // the window must not leave the first timer to flip a NEWER label, so
-        // any pending timer is cleared before re-arming.
-        setSfJustSaved(true);
-        if (sfSavedTimer.current) window.clearTimeout(sfSavedTimer.current);
-        sfSavedTimer.current = window.setTimeout(() => {
-          setSfJustSaved(false);
-          sfSavedTimer.current = null;
-        }, 2000);
+        return true;
       } else {
         const d = await r.json().catch(() => ({}));
         setErr(apiErr(d, t("set.failedSave"), t));
       }
     } catch {
-      // A network failure must not leave the button stuck busy forever.
       setErr(t("set.failedSave"));
-    } finally {
-      setSfSaving(false);
     }
+    // A failure must NOT confirm on the button.
+    return false;
   }
 
   // Issue #360: save the per-space customizable landing page (Storefront tab).
-  async function saveLandingPage() {
-    if (!lpWorkspaceId) return;
+  // Same boolean contract as saveStorefrontSettings.
+  async function saveLandingPage(): Promise<boolean> {
+    if (!lpWorkspaceId) return false;
     setMsg("");
     setErr("");
     setLpUrlErr("");
@@ -1010,7 +1001,7 @@ export default function Settings() {
     for (const u of [lpImageUrl, lpLogoUrl]) {
       if (u.trim() && !u.trim().startsWith("https://")) {
         setLpUrlErr(t("url.notHttps"));
-        return;
+        return false;
       }
     }
     const r = await fetch(`/api/workspaces/${lpWorkspaceId}/settings`, {
@@ -1033,10 +1024,12 @@ export default function Settings() {
     });
     if (r.ok) {
       showMsgOk(t("set.lpSaved"));
+      return true;
     } else {
       const d = await r.json().catch(() => ({}));
       setLpUrlErr(apiErr(d, t("set.failedSave"), t));
     }
+    return false;
   }
 
   // Issue #107: render a client-side preview of the template with sample data.
@@ -2211,16 +2204,11 @@ export default function Settings() {
                     than only in the page-top banner. No extra tick glyph — the
                     label already ends in its own "✓" and rendering both gave a
                     visible double tick. */}
-                <button
-                  onClick={saveStorefrontSettings}
-                  disabled={sfSaving}
-                  aria-busy={sfSaving}
-                  className={
-                    sfJustSaved ? "jf-btn-primary jf-btn-saved" : "jf-btn-primary"
-                  }
-                >
-                  {sfJustSaved ? t("set.sfSavedShort") : t("set.sfSave")}
-                </button>
+                <SaveButton
+                  onSave={saveStorefrontSettings}
+                  label={t("set.sfSave")}
+                  savedLabel={t("set.sfSavedShort")}
+                />
               </div>
             </div>
           </section>
@@ -2416,7 +2404,11 @@ export default function Settings() {
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 pt-1">
-                    <button onClick={saveLandingPage} className="jf-btn-primary">{t("set.lpSave")}</button>
+                    <SaveButton
+                      onSave={saveLandingPage}
+                      label={t("set.lpSave")}
+                      savedLabel={t("set.lpSavedShort")}
+                    />
                     <a
                       href={`https://${activeWorkspaceSlug || "workspace"}.jomform.com`}
                       target="_blank"

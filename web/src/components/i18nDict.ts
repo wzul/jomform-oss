@@ -902,6 +902,10 @@ export const DICT = {
   "set.lpFormAdd": { en: "Add form block", ms: "Tambah blok borang", zh: "添加表单块", ta: "படிவத் தொகுதி சேர்", ar: "إضافة مربع نموذج" },
   "set.lpSave": { en: "Save landing page", ms: "Simpan landing page", zh: "保存落地页", ta: "லேண்டிங் பக்கத்தைச் சேமி", ar: "حفظ صفحة الهبوط" },
   "set.lpSaved": { en: "Landing page saved ✓", ms: "Landing page disimpan ✓", zh: "落地页已保存 ✓", ta: "லேண்டிங் பக்கம் சேமிக்கப்பட்டது ✓", ar: "تم حفظ صفحة الهبوط ✓" },
+  // The short form for the BUTTON's saved state, as set.sfSavedShort is for
+  // the footer. The full "Landing page saved ✓" (set.lpSaved) is the toast text;
+  // putting it on the button would widen it mid-press.
+  "set.lpSavedShort": { en: "Saved ✓", ms: "Disimpan ✓", zh: "已保存 ✓", ta: "சேமிக்கப்பட்டது ✓", ar: "تم الحفظ ✓" },
   "set.lpPreview": { en: "Preview", ms: "Pratonton", zh: "预览", ta: "மாதிரிக்காட்சி", ar: "معاينة" },
   // Issue #438: QR ordering flow — restaurant-menu landing template.
   "set.menuTitle": { en: "Restaurant menu (QR ordering)", ms: "Menu restoran (pesanan QR)", zh: "餐厅菜单（二维码点餐）", ta: "உணவக மெனு (QR ஆர்டர்)", ar: "قائمة المطعم (طلب QR)" },
