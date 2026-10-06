@@ -435,7 +435,26 @@ function FormSettingsInner() {
   const [form, setForm] = useState<FormDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+  // The page's one message state, and its TONE. `msg` carries both outcomes —
+  // every save on this page writes a confirmation on success and a failure
+  // sentence when the API refuses (`apiErr(...)`, `publishErrorText(...)`, the
+  // `fs.*Fail` keys) — so the tone travels WITH the text, the rule /settings
+  // established (card t_ad2af554). Before this, "Saved ✓" and "Failed" were the
+  // same indigo 12px line with no fill and no icon: a merchant whose form
+  // settings were NOT written saw nothing that read as a failure
+  // (card t_c88c854d). Painted from this state alone, never from the sentence,
+  // and never left stale — the source guard
+  // (src/lib/actionFailureTone.test.ts) enforces that on every writer below.
   const [msg, setMsg] = useState("");
+  const [msgOk, setMsgOk] = useState(true);
+  const showMsgOk = useCallback((text: string) => {
+    setMsgOk(true);
+    setMsg(text);
+  }, []);
+  const showMsgFail = useCallback((text: string) => {
+    setMsgOk(false);
+    setMsg(text);
+  }, []);
 
   // Issue #438: QR ordering flow — QR generation for the form's public URL.
   const [qrTable, setQrTable] = useState("");
@@ -753,7 +772,7 @@ function FormSettingsInner() {
       // a payload it ignored, so the page showed "Saved ✓" while the form kept
       // its old slug.
       const d = await r.json().catch(() => null);
-      setMsg(apiErr(d, t("prof.failed"), t));
+      showMsgFail(apiErr(d, t("prof.failed"), t));
       return;
     }
     // Apply status (draft | private | published).
@@ -772,7 +791,7 @@ function FormSettingsInner() {
       const d = await sr.json().catch(() => ({}));
       const outcome = publishOutcome({ ok: false, status: sr.status, body: d }, "");
       if (outcome.kind !== "needs_ack") {
-        setMsg(publishErrorText(outcome, t("prof.failed"), t));
+        showMsgFail(publishErrorText(outcome, t("prof.failed"), t));
         return;
       }
       // The refusal's text is localized (the API's own prose for it is Malay and
@@ -786,11 +805,11 @@ function FormSettingsInner() {
       if (!retry.ok) {
         const rd = await retry.json().catch(() => ({}));
         const ro = publishOutcome({ ok: false, status: retry.status, body: rd }, "");
-        setMsg(publishErrorText(ro, t("prof.failed"), t));
+        showMsgFail(publishErrorText(ro, t("prof.failed"), t));
         return;
       }
     }
-    setMsg(t("fs.saved"));
+    showMsgOk(t("fs.saved"));
     void load();
   }
 
@@ -812,7 +831,8 @@ function FormSettingsInner() {
           order_form_slug: menuOrderFormSlug,
         }),
       });
-      setMsg(r.ok ? t("fs.menuSaved") : t("prof.failed"));
+      if (r.ok) showMsgOk(t("fs.menuSaved"));
+      else showMsgFail(t("prof.failed"));
     } finally {
       setMenuSaving(false);
     }
@@ -864,7 +884,7 @@ function FormSettingsInner() {
       setFsLogoErr(apiErr(d, t("prof.failed"), t));
       return;
     }
-    setMsg(t("fs.saved"));
+    showMsgOk(t("fs.saved"));
   }
 
   // Issue #179: save the form's confirmations. The default confirmation is
@@ -877,7 +897,8 @@ function FormSettingsInner() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirmations: confs }),
     });
-    setMsg(r.ok ? t("fs.saved") : t("prof.failed"));
+    if (r.ok) showMsgOk(t("fs.saved"));
+    else showMsgFail(t("prof.failed"));
     if (r.ok) void load();
   }
 
@@ -912,7 +933,8 @@ function FormSettingsInner() {
         limit_message: rsLimitMsg,
       }),
     });
-    setMsg(r.ok ? t("fs.saved") : t("prof.failed"));
+    if (r.ok) showMsgOk(t("fs.saved"));
+    else showMsgFail(t("prof.failed"));
   }
 
   function openNewNotification() {
@@ -975,10 +997,10 @@ function FormSettingsInner() {
       body: JSON.stringify(payload),
     });
     if (!r.ok) {
-      setMsg(t("fs.notifFail"));
+      showMsgFail(t("fs.notifFail"));
       return;
     }
-    setMsg(t("fs.notifSaved"));
+    showMsgOk(t("fs.notifSaved"));
     closeEditor();
     void load();
   }
@@ -989,7 +1011,8 @@ function FormSettingsInner() {
     const r = await fetch(`/api/rest/forms/${formId}/notifications/${n.id}${workspaceQuery()}`, {
       method: "DELETE",
     });
-    setMsg(r.ok ? t("fs.notifDeleted") : t("fs.notifFail"));
+    if (r.ok) showMsgOk(t("fs.notifDeleted"));
+    else showMsgFail(t("fs.notifFail"));
     if (r.ok) {
       if (editing?.id === n.id) closeEditor();
       void load();
@@ -1008,7 +1031,8 @@ function FormSettingsInner() {
         email_fallback: ovFallback,
       }),
     });
-    setMsg(r.ok ? t("fs.chipSaved") : t("fs.chipFail"));
+    if (r.ok) showMsgOk(t("fs.chipSaved"));
+    else showMsgFail(t("fs.chipFail"));
     if (r.ok) {
       setOvSecret("");
       setChipConfigured(true);
@@ -1019,7 +1043,8 @@ function FormSettingsInner() {
     setMsg("");
     if (!formId) return;
     const r = await fetch(`/api/rest/forms/${formId}/chip-override${workspaceQuery()}`, { method: "DELETE" });
-    setMsg(r.ok ? t("fs.chipCleared") : t("prof.failed"));
+    if (r.ok) showMsgOk(t("fs.chipCleared"));
+    else showMsgFail(t("prof.failed"));
     if (r.ok) {
       setOvBrand("");
       setOvSecret("");
@@ -1047,10 +1072,10 @@ function FormSettingsInner() {
       setWhUrl("");
       setWhSecret("");
       setWhEvents([...WEBHOOK_EVENTS]);
-      setMsg(t("fs.webhookAdded"));
+      showMsgOk(t("fs.webhookAdded"));
       void load();
     } else {
-      setMsg(t("fs.webhookFail"));
+      showMsgFail(t("fs.webhookFail"));
     }
   }
 
@@ -1058,7 +1083,8 @@ function FormSettingsInner() {
     setMsg("");
     const sp = activeWorkspaceScope();
     const r = await fetch(`/api/rest/webhooks/${id}${sp ? `?workspace=${encodeURIComponent(sp)}` : ""}`, { method: "DELETE" });
-    setMsg(r.ok ? t("fs.webhookDeleted") : t("prof.failed"));
+    if (r.ok) showMsgOk(t("fs.webhookDeleted"));
+    else showMsgFail(t("prof.failed"));
     if (r.ok) void load();
   }
 
@@ -1081,7 +1107,8 @@ function FormSettingsInner() {
         })),
       }),
     });
-    setMsg(r.ok ? t("fs.chipFeedsSaved") : t("fs.chipFeedsFail"));
+    if (r.ok) showMsgOk(t("fs.chipFeedsSaved"));
+    else showMsgFail(t("fs.chipFeedsFail"));
     if (r.ok) {
       // Clear the secret inputs so a re-save doesn't re-encrypt a stale key.
       setFeeds((prev) => prev.map((f) => ({ ...f, secret_key: "" })));
@@ -1116,7 +1143,7 @@ function FormSettingsInner() {
         }),
       });
       if (r.ok) {
-        setMsg(t("fs.emelSaved"));
+        showMsgOk(t("fs.emelSaved"));
         await load();
       } else {
         const d = await r.json().catch(() => ({}));
@@ -1139,7 +1166,7 @@ function FormSettingsInner() {
         method: "DELETE",
       });
       if (r.ok) {
-        setMsg(t("fs.emelCleared"));
+        showMsgOk(t("fs.emelCleared"));
         await load();
       } else {
         const d = await r.json().catch(() => ({}));
@@ -1254,7 +1281,28 @@ function FormSettingsInner() {
 
             {loading && <p className="mt-6 text-sm text-[var(--jf-muted)]">{t("fs.loading")}</p>}
             {err && <p className="mt-6 text-sm text-red-400">{err}</p>}
-            {msg && <p className="mt-3 text-xs text-[var(--jf-primary)]">{msg}</p>}
+            {/* The page's save feedback. ONE state (`msg`) carries BOTH outcomes
+                — every save below writes a confirmation on success and a
+                failure sentence when the API refuses — so its TONE is painted
+                from `msgOk`, never from the sentence. Before this, "Saved ✓"
+                and "Failed" were the same indigo 12px line: a merchant whose
+                settings were NOT written saw nothing that read as a failure
+                (card t_c88c854d). A failure is red-filled AND a live
+                `role="alert"`, so it is announced as well as seen. */}
+            {msg && (
+              <p
+                data-testid="action-msg"
+                data-tone={msgOk ? "success" : "failure"}
+                role={msgOk ? undefined : "alert"}
+                className={`mt-3 inline-block rounded-md px-2.5 py-1.5 text-xs ${
+                  msgOk
+                    ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border border-red-200 bg-red-50 font-medium text-red-700"
+                }`}
+              >
+                {msg}
+              </p>
+            )}
 
             {!loading && !err && (
               <div className="mt-6 max-w-2xl space-y-6">

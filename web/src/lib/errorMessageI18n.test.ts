@@ -377,9 +377,14 @@ test("the sales capture refusal is fixed too (the guard's other finding)", () =>
   // allowlisted — a class guard that exempts a live instance of its own class
   // proves nothing.
   const sales = readFileSync(`${SRC}app/sales/page.tsx`, "utf8");
+  // The SETTER is deliberately not pinned: the refusal carries a failure tone
+  // since card t_c88c854d (`showMsgFail(t(...))`), and this assertion is about
+  // the SENTENCE being a dictionary key rather than the Malay prose. Pinning
+  // `showMsgFail` here too would make a future, equally-valid tone change look
+  // like a translation regression.
   assert.match(
     sales,
-    /setMsg\(t\("sales\.captureInvalid"\)\)/,
+    /(?:showMsgFail|setMsg)\(t\("sales\.captureInvalid"\)\)/,
     "the capture-amount refusal is no longer translated",
   );
   const malay = sales

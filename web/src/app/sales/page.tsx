@@ -220,7 +220,26 @@ function SalesPageInner() {
 
   // actions
   const [busyRef, setBusyRef] = useState<string | null>(null);
+  // The page's one message state, and its TONE. `msg` carries both outcomes —
+  // every action below writes a confirmation on success and a failure sentence
+  // when the API refuses (the confirm / capture / release / refund / bulk-capture
+  // endpoints) — so the tone has to travel WITH the text, exactly as /settings
+  // does it (settings's `showMsgOk`/`showMsgFail`, card t_ad2af554). Before this,
+  // a failed refund and a successful refund were the same indigo 12px sentence
+  // with no fill and no icon: a merchant scanning for a failure saw nothing that
+  // read as one. Never inferred from the string, and never left stale — every
+  // non-empty writer sets both in one call, which the source guard
+  // (src/lib/actionFailureTone.test.ts) enforces.
   const [msg, setMsg] = useState("");
+  const [msgOk, setMsgOk] = useState(true);
+  const showMsgOk = useCallback((text: string) => {
+    setMsgOk(true);
+    setMsg(text);
+  }, []);
+  const showMsgFail = useCallback((text: string) => {
+    setMsgOk(false);
+    setMsg(text);
+  }, []);
 
   // row detail drawer
   const [detail, setDetail] = useState<Sale | null>(null);
@@ -465,8 +484,12 @@ function SalesPageInner() {
       const r = await fetch(`/api/rest/sales/${encodeURIComponent(ref)}/confirm${workspaceQuery()}`, {
         method: "POST",
       });
-      setMsg(r.ok ? `${ref} ✓` : apiErr(await r.json().catch(() => ({})), t("sales.confirmFail"), t));
-      if (r.ok) await loadSales(safePage);
+      if (r.ok) {
+        showMsgOk(`${ref} ✓`);
+        await loadSales(safePage);
+      } else {
+        showMsgFail(apiErr(await r.json().catch(() => ({})), t("sales.confirmFail"), t));
+      }
     } finally {
       setBusyRef(null);
     }
@@ -482,7 +505,7 @@ function SalesPageInner() {
     if (rm !== "") {
       const rmNum = Number(rm);
       if (!Number.isFinite(rmNum) || rmNum <= 0) {
-        setMsg(t("sales.captureInvalid"));
+        showMsgFail(t("sales.captureInvalid"));
         return;
       }
       body = JSON.stringify({ amount_sen: Math.round(rmNum * 100) });
@@ -496,8 +519,12 @@ function SalesPageInner() {
         ...(body ? { body } : {}),
       });
       const d = await r.json().catch(() => ({}));
-      setMsg(r.ok ? `${t("bld.capture")} ${ref} ✓` : apiErr(d, `Capture gagal ${ref}.`, t));
-      if (r.ok) await loadSales(safePage);
+      if (r.ok) {
+        showMsgOk(`${t("bld.capture")} ${ref} ✓`);
+        await loadSales(safePage);
+      } else {
+        showMsgFail(apiErr(d, `Capture gagal ${ref}.`, t));
+      }
     } finally {
       setBusyRef(null);
     }
@@ -513,8 +540,12 @@ function SalesPageInner() {
         method: "POST",
       });
       const d = await r.json().catch(() => ({}));
-      setMsg(r.ok ? `Authorization ${ref} released. ✓` : apiErr(d, `Release gagal ${ref}.`, t));
-      if (r.ok) await loadSales(safePage);
+      if (r.ok) {
+        showMsgOk(`Authorization ${ref} released. ✓`);
+        await loadSales(safePage);
+      } else {
+        showMsgFail(apiErr(d, `Release gagal ${ref}.`, t));
+      }
     } finally {
       setBusyRef(null);
     }
@@ -539,13 +570,13 @@ function SalesPageInner() {
     if (rm !== "") {
       const rmNum = Number(rm);
       if (!Number.isFinite(rmNum) || rmNum <= 0) {
-        setMsg(t("sales.refundInvalid"));
+        showMsgFail(t("sales.refundInvalid"));
         return;
       }
       // Client-side guard mirroring the server rule so the merchant gets an
       // immediate answer; the server is still the authority.
       if (Math.round(rmNum * 100) > outstanding) {
-        setMsg(t("sales.refundInvalid"));
+        showMsgFail(t("sales.refundInvalid"));
         return;
       }
       body = JSON.stringify({ amount_sen: Math.round(rmNum * 100) });
@@ -560,8 +591,12 @@ function SalesPageInner() {
         ...(body ? { body } : {}),
       });
       const d = await r.json().catch(() => ({}));
-      setMsg(r.ok ? `${t("sales.refund")} ${ref} ✓` : apiErr(d, `Refund gagal ${ref}.`, t));
-      if (r.ok) await loadSales(safePage);
+      if (r.ok) {
+        showMsgOk(`${t("sales.refund")} ${ref} ✓`);
+        await loadSales(safePage);
+      } else {
+        showMsgFail(apiErr(d, `Refund gagal ${ref}.`, t));
+      }
     } finally {
       setBusyRef(null);
     }
@@ -583,16 +618,21 @@ function SalesPageInner() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setMsg(apiErr(d, t("bld.bulkCaptureFail"), t));
+        showMsgFail(apiErr(d, t("bld.bulkCaptureFail"), t));
         return;
       }
-      setMsg(
+      // Bulk capture is PARTIAL by design — the response carries how many
+      // succeeded and how many did not — so a mixed outcome is reported with the
+      // failure tone: some authorizations are still uncaptured and the merchant
+      // has to look at each status. Only an all-captured run is a success.
+      const summary =
         t("bld.bulkCaptureDone", {
           captured: String(d.captured),
           requested: String(d.requested),
           failed: String(d.failed),
-        }) + (d.failed ? t("bld.bulkCaptureCheck") : " ✓"),
-      );
+        }) + (d.failed ? t("bld.bulkCaptureCheck") : " ✓");
+      if (d.failed) showMsgFail(summary);
+      else showMsgOk(summary);
       await loadSales(safePage);
     } finally {
       setBusyRef(null);
@@ -846,7 +886,26 @@ function SalesPageInner() {
           </div>
         </div>
 
-        {msg && <p className="mt-3 text-xs text-[var(--jf-primary)]">{msg}</p>}
+        {/* The page's action feedback. ONE state (`msg`) carries BOTH outcomes,
+            so its TONE is painted from `msgOk` — never from the sentence. A
+            failed refund and a successful refund used to be the same indigo
+            12px line with no fill and no icon (card t_c88c854d). A failure is
+            red-filled AND a live `role="alert"`, so it is announced as well as
+            seen; a success keeps the app's plain confirmation styling. */}
+        {msg && (
+          <p
+            data-testid="action-msg"
+            data-tone={msgOk ? "success" : "failure"}
+            role={msgOk ? undefined : "alert"}
+            className={`mt-3 inline-block rounded-md px-2.5 py-1.5 text-xs ${
+              msgOk
+                ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                : "border border-red-200 bg-red-50 font-medium text-red-700"
+            }`}
+          >
+            {msg}
+          </p>
+        )}
 
         {/* Table */}
         <div className="jf-card mt-4 overflow-x-auto">

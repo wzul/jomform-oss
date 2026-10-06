@@ -52,7 +52,22 @@ function SpamPageInner() {
   const [checking, setChecking] = useState(true);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  // The un-spam feedback and its TONE. Both writers below put a confirmation
+  // here on success and `spam.unspamFail` when the API refuses, so the tone
+  // travels with the text (the rule /settings established, card t_ad2af554).
+  // Painted from this state alone — never guessed from the sentence — so a
+  // failed un-spam reads as a failure and a successful one does not
+  // (card t_c88c854d).
   const [msg, setMsg] = useState("");
+  const [msgOk, setMsgOk] = useState(true);
+  const showMsgOk = useCallback((text: string) => {
+    setMsgOk(true);
+    setMsg(text);
+  }, []);
+  const showMsgFail = useCallback((text: string) => {
+    setMsgOk(false);
+    setMsg(text);
+  }, []);
 
   // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
   const goToLogin = useCallback(() => {
@@ -111,10 +126,10 @@ function SpamPageInner() {
         method: "POST",
       });
       if (r.ok) {
-        setMsg(t("spam.unspammed"));
+        showMsgOk(t("spam.unspammed"));
         setSubs((prev) => prev.filter((s) => s.id !== id));
       } else {
-        setMsg(t("spam.unspamFail"));
+        showMsgFail(t("spam.unspamFail"));
       }
     } finally {
       setBusy(null);
@@ -129,10 +144,10 @@ function SpamPageInner() {
         method: "POST",
       });
       if (r.ok) {
-        setMsg(t("spam.unspammed"));
+        showMsgOk(t("spam.unspammed"));
         setSales((prev) => prev.filter((s) => s.ref_code !== ref));
       } else {
-        setMsg(t("spam.unspamFail"));
+        showMsgFail(t("spam.unspamFail"));
       }
     } finally {
       setBusy(null);
@@ -172,7 +187,25 @@ function SpamPageInner() {
           </button>
         </div>
 
-        {msg && <p className="mt-3 text-xs text-[var(--jf-primary)]">{msg}</p>}
+        {/* The un-spam feedback. ONE state carries a confirmation AND a
+            failure, so the TONE is painted from `msgOk` (never the sentence):
+            a failed un-spam is red-filled and a live `role="alert"`, a
+            successful one is not (card t_c88c854d). The `err` banner below
+            stays a separate, persistent red for a failed LOAD. */}
+        {msg && (
+          <p
+            data-testid="action-msg"
+            data-tone={msgOk ? "success" : "failure"}
+            role={msgOk ? undefined : "alert"}
+            className={`mt-3 inline-block rounded-md px-2.5 py-1.5 text-xs ${
+              msgOk
+                ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                : "border border-red-200 bg-red-50 font-medium text-red-700"
+            }`}
+          >
+            {msg}
+          </p>
+        )}
         {err && (
           <p role="alert" className="mt-3 text-xs text-red-500">
             {err}
