@@ -21,42 +21,106 @@
 // stylesheet or an empty non-shipped corpus is an ERROR, never a silent pass —
 // the same contract `docs-facts` uses.
 //
-// WHAT IT COVERS. `web/src/**` (shipped, minus CSS — Tailwind does not scan CSS)
-// is the shipped corpus; the non-shipped corpus is `web/e2e/**`, `*.test.ts(x)`,
-// **`web/scripts/**` and the web-root build configs** (`package.json`,
-// `next.config.mjs`, `postcss.config.mjs`, `playwright.config.ts`) — the second
-// half added by card t_bc75e313. Tailwind's extractor reads the WHOLE build tree
-// as plain text and `web/` is that tree, so a class literal in a `scripts/*.sh`
-// helper or a root config compiles into a real utility just like a test's prose
-// does. Measured: appending a hover-prefixed arbitrary-value background literal
-// to `web/scripts/operator-bite.sh` and rebuilding emitted that utility into the
-// built CSS (+55 B, 61256 -> 61311; 669 -> 670 classes), and the
-// pre-t_bc75e313 guard printed `ok` at exit 0. `scripts/**` is not
-// excluded from the scan (option (a)); it is BLAMED (option (b)), because a
-// helper's literal is dead weight on every page and excluding a whole directory
-// from a scan is the silent, hard-to-re-measure half of the two. A class that is
-// BOTH in a test/script and in real app code is not a violation, by design — the
-// corpus split cannot and should not change it.
+// WHAT IT COVERS (card t_682ebba5 — this half used to be a hand-written list)
+//
+// The corpora are the SHAPE OF THE TREE, not a list of names. `web/src/**`
+// (shipped, minus CSS) is the shipped corpus; everything ELSE the tree holds is
+// the non-shipped corpus — `web/e2e/**`, `*.test.ts(x)`, `web/scripts/**`, the
+// build configs, `web/public/**`, `web/.gitignore`, `web/Dockerfile` — because
+// the question this check asks is "must this file be able to contribute a
+// utility?" and for every one of those the answer is no.
+//
+// WHY THE LIST HAD TO GO. It named four root configs by hand
+// (`package.json`, `next.config.mjs`, `postcss.config.mjs`,
+// `playwright.config.ts`), so a class literal in any OTHER file Tailwind reads
+// shipped a real utility while the guard printed `ok`. Measured on the
+// t_bc75e313 head: a hover-prefixed arbitrary-value literal appended to
+// `web/Dockerfile` rebuilt the bundle 61329 -> 61384 B (670 -> 671 classes) with
+// the literal emitted, and the driver exited 0. `web/tsconfig.json` is the same
+// shape (measured: both literals in the bundle, driver exit 0). The by-name list
+// is exactly what drifts, so the corpus is now derived from the tree.
+//
+// WHAT THE WALK MIRRORS (Tailwind's own rule, measured rather than assumed;
+// docs: https://tailwindcss.com/docs/detecting-classes-in-source-files#which-files-are-scanned
+// — "Tailwind will scan every file in your project … except: files in your
+// .gitignore; files in node_modules; binary files; CSS files; common package
+// manager lock files"):
+//
+//   shape                              Tailwind   this corpus
+//   src/app/page.tsx (real code)        scanned    SHIPPED
+//   src/lib/x.test.ts                   excluded   non-shipped
+//   e2e/x.spec.ts                       excluded   non-shipped
+//   scripts/*.sh, *.mjs                 scanned    non-shipped
+//   web/Dockerfile (no extension)       scanned    non-shipped   <- was in NO corpus
+//   web/tsconfig.json, .gitignore       scanned    non-shipped   <- tsconfig.json was in NO corpus
+//   public/**/*.{txt,json,svg}          scanned    non-shipped   <- was in NO corpus
+//   public/**/*.png (binary)            excluded   not read
+//   a *.css file                        excluded   not read
+//   package-lock.json                   excluded   not read
+//   next-env.d.ts (gitignored)          excluded   non-shipped
+//
+// The measured column is a real `next build` per row (cards t_bc75e313 and
+// t_682ebba5): the literal in `Dockerfile`, `tsconfig.json`, `public/robots.txt`,
+// `public/og-default.svg` and a dot-file each reached `.next/static/chunks/*.css`;
+// the same literal in a `.png`, in an unimported `.css` and in `package-lock.json`
+// did not. Note the last row: `next-env.d.ts` is generated, so it stays in the
+// corpus even though Tailwind skips it — an over-inclusive corpus can only BLAME
+// one file too many (loudly, and visible), never clear a real violation.
+//
+// `@source not` (excluding a directory from the scan) is deliberately NOT used
+// for these files: the decision recorded for this guard is blame, not exclude —
+// the bundle is the thing a reader can measure, and an exclusion is the silent
+// half of the two.
 //
 // Run with:
 //   npm run build                       (this runs after `next build`)
 //   node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/cssScanScope.mjs
 
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
-import { dirname, join, resolve, relative } from "node:path";
+import { execFileSync } from "node:child_process";
+import { dirname, join, resolve, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { classLiterals, cssSelectorLiterals, deadUtilities } from "../src/lib/cssScanScope.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(here, "..");
 
+/** Exported so `src/lib/cssScanScope.test.ts` can name the same tree this driver
+ *  walks, rather than recomputing the web root from its own location (a test
+ *  that hardcodes `../../` silently checks a different tree if this file moves). */
+export { webRoot };
+
+/** Directories Tailwind's walker never descends into: dependencies, build
+ *  output, and VCS metadata (the `.git` half of "files in your .gitignore" —
+ *  nothing under it is ever a source). */
+const SKIP_DIRS = new Set(["node_modules", ".next", ".git"]);
+
+/** Tailwind does not scan CSS files (the docs' "Which files are scanned" lists
+ *  CSS as excluded), so globals.css's own prose must not count as a *shipped*
+ *  source for a class literal its comment names — nor as a non-shipped one. */
+const CSS_FILE = /\.css$/;
+
+/** A unit test — non-shipped even though it lives under `src/`. */
+const TEST_FILE = /\.test\.tsx?$/;
+
+/** Package-manager lock files, which Tailwind skips (docs, and measured: a class
+ *  literal in `web/package-lock.json` never reached the bundle). Matched on the
+ *  basename so a nested lock file is covered too. */
+const LOCK_FILE =
+  /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.ya?ml|bun\.lockb?|deno\.lock)$/;
+
+/** Path relative to the web root, always `/`-separated (the keys the tests and
+ *  the messages use, on every platform). */
+const relOf = (p) => relative(webRoot, p).split(sep).join("/");
+
+/** Every file under `dir` whose path passes `keep`, minus `SKIP_DIRS`. */
 function walk(dir, keep) {
   const out = [];
   const stack = [dir];
   while (stack.length > 0) {
     const cur = stack.pop();
     for (const name of readdirSync(cur)) {
-      if (name === "node_modules" || name === ".next" || name === ".git") continue;
+      if (SKIP_DIRS.has(name)) continue;
       const p = join(cur, name);
       if (statSync(p).isDirectory()) stack.push(p);
       else if (keep(p)) out.push(p);
@@ -65,77 +129,108 @@ function walk(dir, keep) {
   return out;
 }
 
-function readAll(paths) {
-  const map = new Map();
-  for (const p of paths) {
-    try {
-      map.set(relative(webRoot, p), readFileSync(p, "utf8"));
-    } catch {
-      /* unreadable/binary — ignore */
-    }
-  }
-  return map;
-}
+/** Every file under `dir`, minus `SKIP_DIRS`. Absolute paths. */
+const walkTree = (dir) => walk(dir, () => true);
 
-function cssFiles() {
-  const staticDir = join(webRoot, ".next/static");
-  if (!existsSync(staticDir)) return [];
-  return walk(staticDir, (p) => p.endsWith(".css"));
+/**
+ * The text of a file, or null when Tailwind would not read it as text.
+ *
+ * "Binary" is judged the way git's and Tailwind's walkers judge it — a NUL byte
+ * in the content — and NOT by extension: measured, `public/brand/icon.svg` (text
+ * XML) IS scanned and a `.png` is not, so an extension rule would be wrong in
+ * both directions. `null` also covers an unreadable file: it is not a source
+ * this check can judge, and guessing at it would invent a literal.
+ */
+function readSource(path) {
+  let buf;
+  try {
+    buf = readFileSync(path);
+  } catch {
+    return null;
+  }
+  if (buf.includes(0)) return null;
+  return buf.toString("utf8");
 }
 
 /**
- * Assemble the source corpora this check decides on, from the real `web/` tree.
+ * The paths git IGNORES, asked of git — the walker's ignore crate and this check
+ * then agree by construction rather than by two implementations of the same
+ * rules. ONE process for the whole tree (`--stdin -z`: NUL-delimited in, NUL-
+ * delimited out, so a path with a space or a quote cannot shift the answer).
  *
- * EXPORTED for `src/lib/cssScanScope.test.ts` (card t_bc75e313): the decision in
- * `deadUtilities` was already proven on fixtures, but WHICH FILES it is handed
- * was not — so deleting `web/scripts/**` (or a root config) from `nonShipped`
- * left every unit test green while the gap this card is about came straight
- * back. The test calls this and asserts a script-sourced literal is reported and
- * an `src`-sourced one is not, so the corpus ASSEMBLY is the thing pinned.
+ * Returns null when the question CANNOT be asked: no git on PATH, or not a work
+ * tree — the shape `nextManagedFiles.test.ts` also skips on, and the one the web
+ * IMAGE is (it ships no git and no `.git`; `next build` runs `npm run build`
+ * inside it). Null means "no filtering is possible here", never "nothing is
+ * ignored": the corpus then keeps every file it can read, which can only blame
+ * one file too many, never clear a real violation.
+ */
+function gitIgnoredPaths(paths) {
+  if (paths.length === 0) return new Set();
+  try {
+    const out = execFileSync("git", ["-C", webRoot, "check-ignore", "--stdin", "-z"], {
+      input: paths.join("\0"),
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    return new Set(out.split("\0").filter(Boolean));
+  } catch (err) {
+    // Exit 1 with no output is `check-ignore`'s "no path matched a rule" answer,
+    // not a failure. Anything else (128 = not a work tree, ENOENT = no git on
+    // PATH) means the rule set is unknowable here.
+    if (err && err.status === 1 && !String(err.stdout ?? "")) return new Set();
+    return null;
+  }
+}
+
+/**
+ * Assemble the source corpora this check decides on, from the real `web/` tree
+ * and by Tailwind's own "which files are scanned" rule (see the header).
  *
- * @returns shipped (real code), nonShipped (tests, e2e, scripts, root configs)
- *          and the stylesheet whose own selectors are the third, "defined" corpus.
+ * EXPORTED for `src/lib/cssScanScope.test.ts` (cards t_bc75e313, t_682ebba5):
+ * the decision in `deadUtilities` was already proven on fixtures, but WHICH FILES
+ * it is handed was not — so deleting `web/scripts/**`, a root config or (before
+ * this card) `web/Dockerfile` from `nonShipped` left every fixture test green
+ * while the gap came straight back. The test calls this and asserts a literal
+ * sourced only from one of those files is reported and an `src`-sourced one is
+ * not, so the corpus ASSEMBLY is the thing pinned.
+ *
+ * @returns shipped (real code), nonShipped (every other readable file in the
+ *          tree), the stylesheet whose own selectors are the third, "defined"
+ *          corpus, and the git-ignored set (`null` when git could not answer).
  */
 export function sourceCorpus() {
-  const srcDir = join(webRoot, "src");
-  const e2eDir = join(webRoot, "e2e");
-  const scriptsDir = join(webRoot, "scripts");
-  const isTest = (p) => /\.test\.tsx?$/.test(p);
-  // Tailwind does NOT scan CSS files (docs: "Which files are scanned" lists CSS
-  // as excluded), so globals.css's own prose never reaches the bundle and must
-  // not be counted as a *shipped* source for a class literal its comment names.
-  const isCss = (p) => p.endsWith(".css");
+  const allFiles = walkTree(webRoot);
+  const rels = allFiles.map(relOf);
+  const ignored = gitIgnoredPaths(rels);
 
-  const srcFiles = existsSync(srcDir) ? walk(srcDir, () => true) : [];
-  const e2eFiles = existsSync(e2eDir) ? walk(e2eDir, () => true) : [];
-  const scriptFiles = existsSync(scriptsDir) ? walk(scriptsDir, () => true) : [];
+  const shipped = new Map();
+  const nonShipped = new Map();
+  for (let i = 0; i < allFiles.length; i++) {
+    const rel = rels[i];
+    // Tailwind cannot read these as source at all, so they are in neither corpus.
+    if (CSS_FILE.test(rel) || LOCK_FILE.test(rel)) continue;
+    // A file git ignores is not source. `null` (no git, no work tree) keeps it.
+    if (ignored !== null && ignored.has(rel)) continue;
+    const text = readSource(allFiles[i]);
+    if (text === null) continue; // binary or unreadable
+    if (rel.startsWith("src/") && !TEST_FILE.test(rel)) shipped.set(rel, text);
+    else nonShipped.set(rel, text);
+  }
 
-  // The web-root build files Tailwind's plain-text extractor also reads (build
-  // context = repo root, so `web/` IS the tree it scans). Listed BY NAME, not
-  // globbed with `*.mjs`: a glob would sweep in this very script, and the point
-  // is the four files a build consults — not "every file at the web root".
-  const rootConfigFiles = ["package.json", "next.config.mjs", "postcss.config.mjs", "playwright.config.ts"]
-    .map((name) => join(webRoot, name))
-    .filter(existsSync);
-
-  const shipped = readAll(srcFiles.filter((p) => !isTest(p) && !isCss(p)));
-  const nonShipped = readAll(
-    [...srcFiles.filter(isTest), ...e2eFiles, ...scriptFiles, ...rootConfigFiles].filter(
-      (p) => !isCss(p),
-    ),
-  );
-  const stylesheetPath = join(srcDir, "app/globals.css");
+  const stylesheetPath = join(webRoot, "src/app/globals.css");
   const stylesheet = existsSync(stylesheetPath) ? readFileSync(stylesheetPath, "utf8") : "";
-  return { shipped, nonShipped, stylesheet };
+  return { shipped, nonShipped, stylesheet, ignored };
 }
 
 // ------------------------------------------------------------------- the run
 
 function main() {
-  const css = cssFiles();
+  const staticDir = join(webRoot, ".next/static");
+  const css = existsSync(staticDir) ? walk(staticDir, (p) => p.endsWith(".css")) : [];
   if (css.length === 0) {
     console.error(
-      `css-scan-scope: no CSS under ${join(webRoot, ".next/static")} — next build wrote nothing, ` +
+      `css-scan-scope: no CSS under ${staticDir} — next build wrote nothing, ` +
         `so there is no bundle to check. This runs AFTER 'next build'; refusing rather than ` +
         `reporting a vacuous pass.`,
     );
@@ -152,9 +247,17 @@ function main() {
   }
   if (nonShipped.size === 0) {
     console.error(
-      "css-scan-scope: found NO non-shipped source files (web/e2e/**, *.test.ts(x), " +
-        "web/scripts/** or the web-root build configs) — the corpus this check blames is " +
-        "empty, so the check would pass vacuously. Refusing.",
+      "css-scan-scope: found NO non-shipped source files — every file outside web/src/** is the " +
+        "corpus this check blames, so an empty one means the walk is not seeing this tree (a " +
+        "wrong root, an unreadable tree) and the check would pass vacuously. Refusing.",
+    );
+    process.exit(1);
+  }
+  if (shipped.size === 0) {
+    console.error(
+      "css-scan-scope: found NO shipped source files under web/src/** — without them every " +
+        "emitted class looks like it came only from a non-shipped file, so this is a broken " +
+        "walk, not a clean bundle. Refusing.",
     );
     process.exit(1);
   }
@@ -166,9 +269,9 @@ function main() {
     console.error(
       `css-scan-scope: the BUILT CSS carries ${violations.length} utility(ies) whose only source ` +
         `is a non-shipped file. Tailwind scans its whole build tree as plain text, so a class ` +
-        `literal written in a test's prose, a build script or a config is compiled into a REAL ` +
-        `utility and shipped on every page. Remove the literal from the non-shipped source (or, ` +
-        `for a test/e2e file, widen the \`@source not\` lines in web/src/app/globals.css):\n` +
+        `literal written in a test's prose, a build script, a Dockerfile or a config is compiled ` +
+        `into a REAL utility and shipped on every page. Remove the literal from the non-shipped ` +
+        `source (or, for a test/e2e file, widen the \`@source not\` lines in web/src/app/globals.css):\n` +
         violations
           .map((v) => `  .${v.literal}\n      only in: ${v.sources.join(", ")}`)
           .join("\n"),
@@ -179,8 +282,7 @@ function main() {
   const classes = [...classLiterals(bundle)].length;
   console.log(
     `css-scan-scope: ok — ${classes} class(es) in ${css.length} built CSS file(s); none sourced ` +
-      `only from web/e2e/**, *.test.ts(x), web/scripts/** or the web-root build configs ` +
-      `(${nonShipped.size} non-shipped, ${shipped.size} shipped)`,
+      `only from a file outside web/src/** (${nonShipped.size} non-shipped, ${shipped.size} shipped)`,
   );
 }
 

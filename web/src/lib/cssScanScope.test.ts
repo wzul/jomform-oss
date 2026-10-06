@@ -7,16 +7,19 @@
 //   npm run test:unit
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   classLiterals,
   cssSelectorLiterals,
   occursAsClass,
   deadUtilities,
 } from "./cssScanScope.ts";
-// The build-time driver, imported for its `sourceCorpus`. The corpus it assembles
-// was the uncovered half of this guard (card t_bc75e313); see the two tests at
-// the bottom. `allowJs: true` in web/tsconfig.json types the import.
-import { sourceCorpus } from "../../scripts/cssScanScope.mjs";
+// The build-time driver, imported for its `sourceCorpus` and `webRoot`. The
+// corpus it assembles was the uncovered half of this guard (cards t_bc75e313,
+// t_682ebba5); see the tests at the bottom. `allowJs: true` in web/tsconfig.json
+// types the import.
+import { sourceCorpus, webRoot } from "../../scripts/cssScanScope.mjs";
 
 test("classLiterals de-escapes an emitted utility back to the literal Tailwind matched", () => {
   // The escaped form is what the bundle literally contains; the unescaped form
@@ -114,77 +117,209 @@ test("a utility sourced from neither corpus is skipped, not reported", () => {
 
 // ------------------------------------------- the corpus the DRIVER assembles
 //
-// Cards t_850589b5/t_bc75e313. The tests above prove the DECISION bites, but
-// they hand `deadUtilities` a fixture corpus, so they cannot see WHICH FILES the
-// build-time driver actually feeds it. That is the gap this card was: Tailwind
-// scans the whole `web/` tree (build context = repo root), so a class literal in
-// `web/scripts/**` — or in a web-root build config — compiles into a real
-// utility and ships, while the driver's non-shipped corpus named neither. Delete
-// `scripts/**` (or a root config) from `sourceCorpus()` and only the two tests
-// below go red; every fixture test above stays green.
+// Cards t_850589b5/t_bc75e313/t_682ebba5. The tests above prove the DECISION
+// bites, but they hand `deadUtilities` a fixture corpus, so they cannot see WHICH
+// FILES the build-time driver actually feeds it. That is the gap these cards
+// were, in two rounds:
 //
-// `sourceCorpus()` is the real function `scripts/cssScanScope.mjs` runs, so this
-// pins the wiring end to end: the corpora it hands the decision are the ones the
-// driver uses, and they now include the two groups this card added.
+//   * t_bc75e313: the driver's non-shipped corpus was tests + e2e only, so a
+//     literal in `web/scripts/**` or in a web-root config shipped silently;
+//   * t_682ebba5: the fix for that named four root configs BY HAND, so a literal
+//     in `web/Dockerfile` or `web/tsconfig.json` — scanned by Tailwind, absent
+//     from every corpus — still shipped silently (measured: bundle 61329 -> 61384
+//     B, the literal in `.next/static/chunks/*.css`, driver exit 0).
+//
+// So the corpus is now derived from the TREE by Tailwind's own "which files are
+// scanned" rule, and these tests pin that shape rather than a list of names: any
+// file outside `web/src/**` that Tailwind reads is non-shipped, whatever it is
+// called. `sourceCorpus()` is the real function `scripts/cssScanScope.mjs` runs,
+// so this pins the wiring end to end.
 
-test("the driver's non-shipped corpus includes web/scripts/** and the web-root build configs", () => {
+test("the driver's non-shipped corpus is the whole tree outside src, not a list of names", () => {
   const { shipped, nonShipped } = sourceCorpus();
   const paths = [...nonShipped.keys()];
-  assert.ok(
-    paths.some((p) => p.startsWith("scripts/")),
-    "web/scripts/** is not in the driver's non-shipped corpus — a class literal in a build " +
-      "helper (e.g. biteproof_*.sh) would be compiled into the bundle and the check would call " +
-      "it clean, which is exactly card t_bc75e313. Sampled non-shipped paths: " +
-      paths.slice(0, 10).join(", "),
-  );
-  for (const cfg of ["next.config.mjs", "postcss.config.mjs", "package.json", "playwright.config.ts"]) {
+
+  // Each of these was a measured gap: a class literal in it reached the built CSS
+  // while the guard printed `ok`. They are different SHAPES on purpose — no
+  // extension, a root `.json`, a dotfile, a text file under `public/` — because
+  // the previous fix failed by enumerating names instead of shapes.
+  for (const rel of [
+    "scripts/operator-bite.sh", // t_bc75e313: a build helper
+    "next.config.mjs", // t_bc75e313: a root config
+    "package.json",
+    "postcss.config.mjs",
+    "playwright.config.ts",
+    "Dockerfile", // t_682ebba5: extensionless, was in NO corpus
+    "tsconfig.json", // t_682ebba5: root json, was in NO corpus
+    "public/llms.txt", // t_682ebba5: text shipped as a static asset
+    "public/og-default.svg", // t_682ebba5: text XML (measured: scanned)
+  ]) {
+    if (!existsSync(join(webRoot, rel))) continue; // the tree may drop one; the split below still guards
     assert.ok(
-      paths.includes(cfg),
-      `${cfg} is not in the driver's non-shipped corpus — Tailwind reads the web root too, so a ` +
-        `class literal in it ships. Card t_bc75e313.`,
+      paths.includes(rel),
+      `${rel} is not in the driver's non-shipped corpus — Tailwind scans the whole web/ tree, ` +
+        `so a class literal in it is compiled into the bundle and this check would call it clean. ` +
+        `Cards t_bc75e313/t_682ebba5. Sampled non-shipped paths: ${paths.slice(0, 12).join(", ")}`,
     );
   }
-  // The split must stay a split: a script/config literal is NOT shipped code, and
-  // the shipped corpus must not have quietly absorbed the scripts tree.
-  assert.equal(
-    [...shipped.keys()].some((p) => p.startsWith("scripts/")),
-    false,
-    "web/scripts/** appeared in the SHIPPED corpus — a helper's literal would then be cleared " +
-      "as if real code named it",
-  );
+
+  // The split must stay a split: a config/script/public literal is NOT shipped
+  // code, and the shipped corpus must not have quietly absorbed those trees.
+  for (const prefix of ["scripts/", "e2e/", "public/", "Dockerfile", "tsconfig.json"]) {
+    assert.equal(
+      [...shipped.keys()].some((p) => p === prefix || p.startsWith(prefix)),
+      false,
+      `${prefix} appeared in the SHIPPED corpus — its literal would then be cleared as if real ` +
+        `code named it, which is exactly the class of bug this check exists for`,
+    );
+  }
+
+  // ... and the files Tailwind CANNOT read must be in NEITHER corpus, so the
+  // driver is not blaming a `.css` or a lock file the scanner never opened.
+  for (const rel of ["package-lock.json", "src/app/globals.css"]) {
+    if (!existsSync(join(webRoot, rel))) continue;
+    assert.equal(paths.includes(rel), false, `${rel} must not be in the non-shipped corpus`);
+    assert.equal([...shipped.keys()].includes(rel), false, `${rel} must not be in the shipped corpus`);
+  }
+
   assert.ok(shipped.size > 0 && nonShipped.size > 0);
 });
 
-test("the corpus the driver assembles makes a scripts-only utility a VIOLATION", () => {
-  // The same literal card t_bc75e313 measured: present ONLY in a `scripts/*.sh`
-  // corpus entry. With the driver's real corpora it must be reported — and the
-  // identical utility must be cleared when real `src` code names it (the second
-  // assertion), so the check is not simply "report everything".
+test("the shipped corpus is src minus its tests, and every non-shipped file is outside it", () => {
   const { shipped, nonShipped } = sourceCorpus();
-  const literal = "hover:bg-[#c3d4e5]";
-  const css = `.hover\\:bg-\\[\\#c3d4e5\\]:hover{background-color:#c3d4e5}`;
 
-  const scriptsOnly = new Map([
-    ["scripts/operator-bite.sh", `<div className="${literal}">`],
-    ...nonShipped,
-  ]);
-  const reported = deadUtilities(css, shipped, scriptsOnly).map((v) => v.literal);
-  assert.deepEqual(
-    reported,
-    [literal],
-    "a utility named only by a web/scripts/** file was NOT reported — the gap card t_bc75e313 " +
-      "is about is open again",
+  // Shipped = real app code: `src/**` and not a test. Nothing else may qualify,
+  // or a class only a test/script/config names would be cleared as "real code".
+  for (const p of shipped.keys()) {
+    assert.ok(
+      p.startsWith("src/"),
+      `${p} is in the SHIPPED corpus but is not under src/ — a non-shipped literal would be ` +
+        `cleared by it`,
+    );
+    assert.equal(
+      /\.test\.tsx?$/.test(p),
+      false,
+      `${p} is a unit test and must not be shipped code`,
+    );
+  }
+  // Every `src` test file is non-shipped (the exclusion in globals.css relies on
+  // the same split), and the two corpora are disjoint.
+  const srcTests = [...nonShipped.keys()].filter((p) => p.startsWith("src/"));
+  assert.ok(srcTests.length >= 40, `expected the src test files in nonShipped, found ${srcTests.length}`);
+  for (const p of srcTests) assert.match(p, /\.test\.tsx?$/, `${p} is under src/ and non-shipped, so it must be a test file`);
+  for (const p of shipped.keys()) {
+    assert.equal(nonShipped.has(p), false, `${p} is in BOTH corpora — the split is not a split`);
+  }
+});
+
+test("the corpus the driver assembles makes a Dockerfile- or tsconfig-only utility a VIOLATION", () => {
+  // The two literals card t_682ebba5 measured: each present ONLY in one of the
+  // two scanned-but-unlisted files the hand-written corpus never named. They are
+  // DIFFERENT shapes — `Dockerfile` has no extension, `tsconfig.json` is a
+  // web-root `.json` — so both are exercised: fixing this by name would otherwise
+  // pass for one and fail for the other, which is how the previous fix broke.
+  const { shipped, nonShipped } = sourceCorpus();
+  // The ESCAPED CSS form each literal emits (`:`/`[`/`#`/`]` backslash-escaped,
+  // plus the trailing `:hover` pseudo that is not part of the class). Written out
+  // rather than built by a replace chain so the fixture cannot drift from the
+  // real emitted shape these tests are standing in for.
+  const emitted: Record<string, string> = {
+    "hover:bg-[#f0a1b2]": ".hover\\:bg-\\[\\#f0a1b2\\]:hover{background-color:#f0a1b2}",
+    "hover:bg-[#f0b2c3]": ".hover\\:bg-\\[\\#f0b2c3\\]:hover{background-color:#f0b2c3}",
+  };
+  for (const [file, literal] of [
+    ["Dockerfile", "hover:bg-[#f0a1b2]"],
+    ["tsconfig.json", "hover:bg-[#f0b2c3]"],
+  ] as const) {
+    const css = emitted[literal];
+    const inFile = new Map([[file, `<div className="${literal}">`], ...nonShipped]);
+    assert.deepEqual(
+      deadUtilities(css, shipped, inFile).map((v) => v.literal),
+      [literal],
+      `a utility named only by web/${file} was NOT reported — the gap card t_682ebba5 is about is ` +
+        `open again`,
+    );
+    // ... and the same utility must be CLEARED once real app code names it, so
+    // this is not simply "report everything".
+    assert.deepEqual(
+      deadUtilities(css, new Map([["src/app/foo.tsx", `<div className="${literal}">`]]), inFile),
+      [],
+      `a utility that BOTH web/${file} and real app code name must stay clean — the corpus split ` +
+        `is not allowed to change a class real code uses`,
+    );
+  }
+});
+
+test("a binary file in the tree is in neither corpus, and its bytes are not read as text", () => {
+  // Tailwind does not scan binary files, and neither may this corpus. The failure
+  // mode is silent and one-directional: reading a PNG as text can only ADD
+  // literals that were never scanned, so it over-blames a file that cannot have
+  // caused a utility — and (mutation D of this card's table) NO other test in this
+  // file goes red for it. Hence this one.
+  const { shipped, nonShipped } = sourceCorpus();
+  const png = "public/brand/icon-512.png";
+  if (!existsSync(join(webRoot, png))) {
+    console.log(`  (skipped: ${png} not present in this tree)`);
+    return;
+  }
+  // Assert the FIXTURE still has the property the rule is about, so a future
+  // text-only PNG makes this test say so instead of passing vacuously.
+  assert.ok(
+    readFileSync(join(webRoot, png)).includes(0),
+    `${png} contains no NUL byte, so it no longer exercises the binary rule — pick another fixture`,
+  );
+  assert.equal(shipped.has(png), false, `${png} is binary and must not be shipped code`);
+  assert.equal(nonShipped.has(png), false, `${png} is binary and must not be blamed for a literal`);
+});
+
+test("a git-ignored file is in neither corpus when git can answer, and never silently shipped", () => {
+  // Tailwind's first exclusion is "files in your .gitignore", so the corpus must
+  // not carry one: `web/next-env.d.ts` is `.gitignore`d (and IS scanned by
+  // Tailwind — it is excluded by the ignore rule, not by a binary/extension
+  // filter), so a literal in it cannot reach the bundle and must not be blamed.
+  //
+  // TWO ENVIRONMENTS, because this runs in both: the tree can BE asked (a
+  // checkout with git) or it cannot (the shipping IMAGE — `node:24-alpine` with
+  // no git installed, which `npm run build` runs inside; the webimage gate caught
+  // this exact assumption). When it cannot, the driver's contract is to keep the
+  // file as source — over-blame, never clear — so a gitignored literal is still
+  // REPORTED if it ships, which is fail-closed and is what is asserted here.
+  //
+  // SKIPPED when the fixture is absent: `npm run test:unit` runs BEFORE
+  // `next build`, so on a clean checkout the generated file may not exist yet.
+  // That is the fixture missing, not the assertion failing.
+  const { shipped, nonShipped, ignored } = sourceCorpus();
+  const ignoredPath = "next-env.d.ts";
+  if (!existsSync(join(webRoot, ignoredPath))) {
+    console.log(`  (skipped: ${ignoredPath} not present in this tree — it is generated by next build)`);
+    return;
+  }
+  assert.equal(
+    shipped.has(ignoredPath),
+    false,
+    `${ignoredPath} is a generated file and must never be read as SHIPPED code, or a literal in ` +
+      `it would be cleared as if real app code named it`,
   );
 
-  const cleared = deadUtilities(
-    css,
-    new Map([["src/app/foo.tsx", `<div className="${literal}">`]]),
-    scriptsOnly,
-  );
-  assert.deepEqual(
-    cleared,
-    [],
-    "a utility that BOTH a script and real app code name must stay clean — the corpus split is " +
-      "not allowed to change a class real code uses",
-  );
+  if (ignored === null) {
+    // No git here (the image). The rule set is unknowable, so the file stays in
+    // the non-shipped corpus and a literal sourced only from it is REPORTED.
+    const literal = "hover:bg-[#f0c3d4]";
+    const css = ".hover\\:bg-\\[\\#f0c3d4\\]:hover{background-color:#f0c3d4}";
+    assert.ok(
+      nonShipped.has(ignoredPath),
+      `git could not answer AND ${ignoredPath} was dropped from the corpus — an unreadable rule ` +
+        `set must over-blame, never silently clear a file`,
+    );
+    assert.deepEqual(
+      deadUtilities(css, shipped, nonShipped).map((v) => v.literal),
+      [literal],
+      `with no git to ask, a literal sourced only from ${ignoredPath} must still be reported`,
+    );
+    return;
+  }
+
+  // Git answered: the ignore rule is applied, so the file is in NEITHER corpus.
+  assert.ok(ignored.has(ignoredPath), `git did not report ${ignoredPath} as ignored`);
+  assert.equal(nonShipped.has(ignoredPath), false, `${ignoredPath} is git-ignored and must not be blamed`);
 });
