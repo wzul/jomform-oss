@@ -1452,7 +1452,18 @@ function FormSettingsInner() {
                             a preview of the current logo. A paste-URL
                             fallback is available inside the picker for power
                             users who want an external image. */}
-                        <div className="mt-1 flex items-center gap-3">
+                        {/* Card t_fbfe40ca: `flex-wrap` because the button below now
+                            actually applies `.jf-btn-primary` (it used to carry the
+                            undefined `jf-btn`, so its label WRAPPED and it never
+                            pushed anything). With the shared class in force the
+                            label is `white-space: nowrap` (the #655 fix for the
+                            header rows) and the button is `flex-shrink: 0`, so at
+                            320px this row measured 222.27px wide — 7px past the
+                            viewport, scrolling the whole page sideways. Wrapping
+                            the row is the same remedy, for the same reason, that
+                            the /form-settings header cluster and the /templates
+                            action group already use. */}
+                        <div className="mt-1 flex flex-wrap items-center gap-3">
                           {fsLogo ? (
                             /* eslint-disable-next-line @next/next/no-img-element */
                             <img
@@ -1469,7 +1480,7 @@ function FormSettingsInner() {
                             <button
                               type="button"
                               onClick={() => setLogoPickerOpen(true)}
-                              className="jf-btn px-3 py-1.5 text-xs"
+                              className="jf-btn-primary jf-cta-wrap px-3 py-1.5 text-xs"
                             >
                               {t("mediaPicker.choose")}
                             </button>
@@ -1538,7 +1549,7 @@ function FormSettingsInner() {
                               type="button"
                               onClick={generateQR}
                               disabled={!form?.url || qrBusy}
-                              className="jf-btn px-3 py-1.5 text-xs"
+                              className="jf-btn-primary px-3 py-1.5 text-xs"
                             >
                               {qrBusy ? "…" : t("fs.qrGenerate")}
                             </button>
@@ -1650,7 +1661,7 @@ function FormSettingsInner() {
                                           setMenuPickerCatIndex(-1);
                                           setMenuPickerOpen(true);
                                         }}
-                                        className="jf-btn-outline px-2 py-1 text-[11px]"
+                                        className="jf-btn-ghost px-2 py-1 text-[11px]"
                                       >
                                         {t("set.menuChangeBestSeller")}
                                       </button>
@@ -1752,7 +1763,7 @@ function FormSettingsInner() {
                                             setMenuPickerCatIndex(i);
                                             setMenuPickerOpen(true);
                                           }}
-                                          className="jf-btn-outline px-2.5 py-1 text-[11px]"
+                                          className="jf-btn-ghost px-2.5 py-1 text-[11px]"
                                         >
                                           + {t("set.menuPickProducts")}
                                         </button>
@@ -1762,7 +1773,7 @@ function FormSettingsInner() {
                                   <button
                                     type="button"
                                     onClick={() => setMenuCategories((arr) => [...arr, { name: "", product_ids: [] }])}
-                                    className="jf-btn-outline"
+                                    className="jf-btn-ghost"
                                   >
                                     + {t("set.menuCatAdd")}
                                   </button>
@@ -1807,7 +1818,7 @@ function FormSettingsInner() {
                                             {f && (
                                               <a
                                                 href={`/builder?form=${f.id}`}
-                                                className="jf-btn-outline px-2.5 py-1 text-[11px]"
+                                                className="jf-btn-ghost px-2.5 py-1 text-[11px]"
                                               >
                                                 {t("set.menuOrderFormEdit")}
                                               </a>
@@ -1884,7 +1895,7 @@ function FormSettingsInner() {
                               {t("fs.save")}
                             </button>
                             {form?.url && (
-                              <a href={form.url} target="_blank" rel="noreferrer" className="jf-btn-outline">
+                              <a href={form.url} target="_blank" rel="noreferrer" className="jf-btn-ghost">
                                 {t("set.menuPreview")}
                               </a>
                             )}

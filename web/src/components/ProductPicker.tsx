@@ -213,7 +213,7 @@ export default function ProductPicker({
                 {t("set.menuPickerClear")}
               </button>
             )}
-            <button type="button" onClick={onClose} className="jf-btn-outline px-3 py-1.5 text-xs">
+            <button type="button" onClick={onClose} className="jf-btn-ghost px-3 py-1.5 text-xs">
               {t("set.menuPickerCancel")}
             </button>
             <button

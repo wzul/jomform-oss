@@ -2360,7 +2360,7 @@ export default function Settings() {
                           <button
                             type="button"
                             onClick={() => setLpCtas((arr) => arr.filter((_, j) => j !== i))}
-                            className="jf-btn-outline shrink-0"
+                            className="jf-btn-ghost shrink-0"
                           >
                             ✕
                           </button>
@@ -2369,7 +2369,7 @@ export default function Settings() {
                       <button
                         type="button"
                         onClick={() => setLpCtas((arr) => [...arr, { label: "", form_slug: "" }])}
-                        className="jf-btn-outline"
+                        className="jf-btn-ghost"
                       >
                         + {t("set.lpCtaAdd")}
                       </button>
@@ -2400,7 +2400,7 @@ export default function Settings() {
                           <button
                             type="button"
                             onClick={() => setLpForms((arr) => arr.filter((_, j) => j !== i))}
-                            className="jf-btn-outline shrink-0"
+                            className="jf-btn-ghost shrink-0"
                           >
                             ✕
                           </button>
@@ -2409,7 +2409,7 @@ export default function Settings() {
                       <button
                         type="button"
                         onClick={() => setLpForms((arr) => [...arr, { label: "", form_slug: "" }])}
-                        className="jf-btn-outline"
+                        className="jf-btn-ghost"
                       >
                         + {t("set.lpFormAdd")}
                       </button>
@@ -2421,7 +2421,7 @@ export default function Settings() {
                       href={`https://${activeWorkspaceSlug || "workspace"}.jomform.com`}
                       target="_blank"
                       rel="noreferrer"
-                      className="jf-btn-outline"
+                      className="jf-btn-ghost"
                     >
                       {t("set.lpPreview")}
                     </a>

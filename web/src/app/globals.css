@@ -224,6 +224,32 @@ body {
   transform: none;
 }
 
+/* A shared CTA whose LOCALIZED LABEL may be wider than the space it is given
+   (card t_fbfe40ca).
+   `.jf-btn-primary` is `white-space: nowrap` + `flex-shrink: 0` on purpose: its
+   137 call sites are mostly the action in a non-wrapping `flex items-center
+   justify-between` header row, and before #655 a long label deformed those
+   buttons (a 3-line label measured 72.39px tall at 320px). That default cannot
+   fit EVERY container, and measurement is what shows it:
+   /form-settings gives the logo picker a 272px column, and the Tamil
+   `mediaPicker.choose` ("Choose from media library") measures 281.91px as ONE
+   line — 11px wider than the column, so the DOCUMENT scrolled sideways by that
+   much at 320px. Tailwind cannot fix it: a utility of equal specificity loses
+   to this unlayered rule (measured — `whitespace-normal`, `px-2`,
+   `text-[11px]` all landed on the element and the computed `white-space`
+   stayed `nowrap` at padding 18px / font-size 14px).
+   So one call site opts back into wrapping, through a class rather than an
+   inline style, and the rule outranks the base one by SPECIFICITY
+   (0,2,0 > 0,1,0) rather than by order.
+   Deliberately NOT named `jf-btn*`: `web/src/lib/buttonWrap.test.ts` requires
+   every class the app renders under that prefix to declare `white-space:
+   nowrap` AND `flex-shrink: 0`, and this one exists to relax exactly those. */
+.jf-btn-primary.jf-cta-wrap {
+  white-space: normal;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
 /* ── the shared switch (card t_b73eee21) ─────────────────────────────────────
    ONE visual system for every `role="switch"` in the app. The markup was hand
    rolled in three files — settings Storefront (4), form-settings (1) and

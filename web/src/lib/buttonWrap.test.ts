@@ -36,6 +36,31 @@
 //   either one can be deleted without this file noticing if only the other is
 //   asserted.
 //
+// AND, SINCE CARD t_fbfe40ca, THAT THE CLASS IS DEFINED AT ALL
+//   The same walk had a second, larger hole: it read SEVEN hand-named files and
+//   then EXCUSED the very tokens it was asked about.
+//
+//     * The seven files were dashboard-client, forms, media, templates,
+//       settings, brand-client and Shell. The defect lived in three of them
+//       (media, form-settings, settings) and in TWO IT COULD NOT SEE AT ALL —
+//       `components/MediaPicker.tsx` and `components/ProductPicker.tsx`. A walk
+//       with a manifest is a walk a NEW file can step outside, which is the one
+//       thing this guard exists to prevent.
+//     * `body === null` (the class has no rule in globals.css) was not a
+//       failure: it was `continue`-d past for the two names
+//       `jf-btn` / `jf-btn-outline`, on the reasoning that an unstyled hook
+//       "cannot wrap, so a missing rule is not this defect". True about
+//       wrapping, and exactly why the page shipped the defect — five `jf-btn`
+//       sites and eleven `jf-btn-outline` sites rendered with no background, no
+//       border and `cursor: default`, and this test was green.
+//
+//   Measured, not read: with the carded byte restored at
+//   `app/media/page.tsx` ("jf-btn px-4 py-2 text-sm disabled:opacity-50", the
+//   /media primary action), the pre-fix guard at `origin/main` reports
+//   `tests 5 / pass 5 / fail 0` — it is green on the exact tree the card was
+//   filed about. This version reports `fail 1` naming
+//   `.jf-btn is rendered at app/media/page.tsx:410, components/MediaPicker.tsx:139`.
+//
 // Run with:
 //
 //   npm run test:unit
@@ -44,6 +69,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { codeOnly, jsxTags, readSource, tsxFiles } from "./jsxSource.ts";
 
 const css = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
@@ -53,22 +79,50 @@ function ruleBody(name: string): string | null {
   return m ? m[1] : null;
 }
 
-/** Every `jf-btn*` class the app actually uses in JSX/TSX classNames. */
-function usedBtnClasses(): string[] {
-  const out = new Set<string>();
-  for (const rel of [
-    "../app/dashboard-client.tsx",
-    "../app/forms/page.tsx",
-    "../app/media/page.tsx",
-    "../app/templates/page.tsx",
-    "../app/settings/page.tsx",
-    "../app/brand/brand-client.tsx",
-    "../components/Shell.tsx",
-  ]) {
-    const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
-    for (const m of src.matchAll(/jf-btn[a-z-]*/g)) out.add(m[0]);
+/** `/abs/web/src/`, the root every relative path below is resolved against. */
+const SRC = fileURLToPath(new URL("../", import.meta.url));
+
+/**
+ * Every `jf-btn*` class the app actually renders, from every `.tsx` under
+ * `web/src`, mapped to the `file:line` of each site.
+ *
+ * WHY A TREE WALK AND NOT A FILE LIST. This used to read seven hand-named
+ * files, and the two the defect lived in were not among them: `MediaPicker.tsx`
+ * and `ProductPicker.tsx` carry 3 of the 5 undefined `jf-btn` call sites, and
+ * the file list could not see them — which is the half of this defect a
+ * per-call-site fix would have left in place.
+ *
+ * WHY `className` AND NOT A TEXT MATCH. `jf-btn` is also the PREFIX of the
+ * builder's `id`/`htmlFor` values (`jf-blk-<blockid>-<key>`,
+ * `jf-cond-<blockid>`, `jf-block-value` in `src/app/builder/page.tsx`). Those
+ * are element ids, not classes, and a raw text scan reports them as undefined
+ * classes on every run. Reading the JSX tags gives the class lists and nothing
+ * else.
+ */
+function usedBtnClasses(): Map<string, string[]> {
+  const byCls = new Map<string, string[]>();
+  for (const rel of tsxFiles(SRC)) {
+    const src = readSource(`${SRC}${rel}`);
+    const code = codeOnly(src);
+    for (const e of jsxTags(code)) {
+      for (const variant of e.tag.variants) {
+        for (const raw of variant.split(/\s+/)) {
+          // The shared tag scanner reads a class list that may arrive through an
+          // expression, and a template literal's closing brace can end up glued
+          // to the last token (`… jf-btn-primary}`). Braces and quotes are never
+          // part of a class, so drop them; every real token is unchanged.
+          const cls = raw.replace(/[^A-Za-z0-9_\-:[\]/.%#!(),]+/g, "");
+          if (!/^jf-btn(-|$)/.test(cls)) continue;
+          const line = src.slice(0, e.tag.openIdx).split("\n").length;
+          const at = `${rel}:${line}`;
+          const sites = byCls.get(cls) ?? [];
+          if (!sites.includes(at)) sites.push(at);
+          byCls.set(cls, sites);
+        }
+      }
+    }
   }
-  return [...out].sort();
+  return byCls;
 }
 
 const CLASSES = ["jf-btn-primary", "jf-btn-ghost"] as const;
@@ -110,21 +164,24 @@ test("the same two properties are on every jf-btn* class the app uses", () => {
   // This is a class defect, not one button: the three classes carry 137 call
   // sites. Any button class the app actually renders must carry the guard, so a
   // future `.jf-btn-*` addition cannot silently re-create the wrap.
-  for (const cls of usedBtnClasses()) {
+  const used = usedBtnClasses();
+  assert.ok(
+    used.has("jf-btn-primary") && used.has("jf-btn-ghost"),
+    "the walk found neither shared button class — it is not reading the tree, " +
+      "so a green here would prove nothing",
+  );
+  for (const [cls, sites] of used) {
     const body = ruleBody(cls);
-    if (body === null) {
-      // `.jf-btn` and `.jf-btn-outline` are used in JSX with no rule of their
-      // own (they are unstyled hooks; only the padding utilities on their
-      // className give them a shape). They cannot wrap for the same reason a
-      // plain <button> cannot be given one by this stylesheet, so a missing
-      // rule is not this defect — but it must stay a deliberate omission, and
-      // this assertion documents it.
-      assert.ok(
-        cls === "jf-btn" || cls === "jf-btn-outline",
-        `.${cls} is used in the app but has no rule in globals.css and is not one of the two known unstyled hooks`,
-      );
-      continue;
-    }
+    assert.ok(
+      body,
+      `.${cls} is rendered at ${sites.join(", ")} but has NO rule in globals.css. ` +
+        `A jf-btn* token is a hook for a rule in this stylesheet, not a Tailwind ` +
+        `utility — an undefined one renders as plain text (measured on /media in ` +
+        `v1.20.37: "jf-btn px-4 py-2 text-sm" computed backgroundColor ` +
+        `rgba(0,0,0,0), border 0px and cursor:default, so the page's primary ` +
+        `action read as bare text while its sibling on /forms read as a filled ` +
+        `button). Give it a rule here, or use a class that has one.`,
+    );
     assert.match(body, /white-space:\s*nowrap\s*;/, `.${cls} is a rendered button class without \`white-space: nowrap\``);
     assert.match(body, /flex-shrink:\s*0\s*;/, `.${cls} is a rendered button class without \`flex-shrink: 0\``);
   }

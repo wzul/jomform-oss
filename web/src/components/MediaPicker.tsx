@@ -140,7 +140,7 @@ export default function MediaPicker({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
-              className="jf-btn px-3 py-1.5 text-xs disabled:opacity-50"
+              className="jf-btn-primary px-3 py-1.5 text-xs disabled:opacity-50"
             >
               {uploading ? t("media.uploading") : `+ ${t("mediaPicker.uploadNew")}`}
             </button>
@@ -188,7 +188,7 @@ export default function MediaPicker({
                   setUrlErr("");
                   onSelect(v);
                 }}
-                className="jf-btn mt-2 px-3 py-1.5 text-xs"
+                className="jf-btn-primary mt-2 px-3 py-1.5 text-xs"
               >
                 {t("mediaPicker.useUrl")}
               </button>
