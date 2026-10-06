@@ -1012,6 +1012,24 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
                 min-height:44px; padding:12px 14px; font-size:15px; color:#17181c;
                 cursor:pointer; -webkit-tap-highlight-color:transparent; }
   .prod input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; accent-color:var(--jf-primary); margin:0; }
+  /* Card t_4861f7d8 / issue #471: the product photo. This LAST-RESORT layout
+     used to render no img element at all, so the merchant settings
+     product_image_size and product_image_layout — set on /form-settings and
+     applied by the block renderer — died here. Same rule set and same defaults
+     as render_blocks.go: 52px thumbnail at thumbnail-left (the pre-#471 look),
+     merchant-configurable to medium (96px) / large (160px), or no image at
+     all under hidden. */
+  .pimg { width:52px; height:52px; flex:0 0 52px; border-radius:10px;
+          object-fit:cover; background:#f3f4f6; }
+  .pimg[data-size=medium] { width:96px; height:96px; flex-basis:96px; }
+  .pimg[data-size=large] { width:160px; height:160px; flex-basis:160px; }
+  /* Issue #471: image-top — a full-width photo above the name/price row (the
+     restaurant menu-card look). */
+  .prod.menu-card label { flex-direction:column; align-items:stretch; gap:10px; }
+  .prod.menu-card .pimg { width:100%; height:auto; flex-basis:auto; aspect-ratio:16/9; }
+  .prod.menu-card .pimg[data-size=medium] { aspect-ratio:3/2; }
+  .prod.menu-card .pimg[data-size=large] { aspect-ratio:4/3; }
+  .prod.menu-card .prow { display:flex; align-items:center; gap:12px; width:100%; }
   .pname { flex:1; font-weight:500; }
   .price { color:var(--jf-primary-text); font-weight:600; white-space:nowrap; margin-left:auto; text-align:right; }
   input[type=text], input[type=email], input[type=tel] {
@@ -1042,8 +1060,8 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
     <h1>{{.Title}}</h1>
     <p class="sub">{{.Description}}</p>
     {{range .Products}}
-    <div class="prod">
-      <label><input type="checkbox" class="p" data-id="{{.ID}}" data-price="{{.PriceSen}}" data-name="{{.Name}}"><span class="pname">{{.Name}}</span><span class="price">RM{{div100 .PriceSen}}</span></label>
+    <div class="prod{{if .ImgTop}} menu-card{{end}}">
+      <label>{{if .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Name}}" data-base="{{.BaseImage}}">{{end}}<span class="prow">{{end}}<input type="checkbox" class="p" data-id="{{.ID}}" data-price="{{.PriceSen}}" data-name="{{.Name}}">{{if not .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Name}}" data-base="{{.BaseImage}}">{{end}}{{end}}<span class="pname">{{.Name}}</span><span class="price">RM{{div100 .PriceSen}}</span>{{if .ImgTop}}</span>{{end}}</label>
     </div>
     {{end}}
     <label class="sub">{{.Ls.NameLabel}}</label>
@@ -1068,6 +1086,17 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
     </div>{{end}}
   </footer>{{end}}
 <script>
+// Card t_4861f7d8 / issue #471: product image variant fallback, the same rule
+// the block renderer ships. A larger size points the <img> at the medium/full
+// media variant (#382); an image uploaded before #382 has no generated
+// variants, so a 404 on that variant falls back to the full-size base image
+// (data-base) — one attempt only, so a genuinely broken URL cannot loop.
+document.querySelectorAll('img.pimg[data-base]').forEach(function(im){
+  im.addEventListener('error',function(){
+    var base=im.getAttribute('data-base');
+    if(base&&im.getAttribute('src')!==base){im.setAttribute('src',base);}
+  },{once:true});
+});
 const boxes = document.querySelectorAll('.p');
 function update() {
   let total = 0;
@@ -1107,6 +1136,19 @@ type tmplProduct struct {
 	ID       string
 	Name     string
 	PriceSen int64
+	// Card t_4861f7d8: the product photo on the LAST-RESORT layout. Issue
+	// #471's `product_image_size` / `product_image_layout` are merchant
+	// settings on /form-settings that the block renderer applies
+	// (render_blocks.go) and this surface used to drop: formTmpl rendered no
+	// <img> at all, so a merchant who saved "large / image-top" on a
+	// block-less payment form got the setting applied to nothing. Image is
+	// the resolved media VARIANT, BaseImage the full-size URL the client-side
+	// fallback rewrites to, ImgSize the data-size value (small|medium|large)
+	// and ImgTop the menu-card placement (photo above the name row).
+	Image     string
+	BaseImage string
+	ImgSize   string
+	ImgTop    bool
 }
 
 // redirectToRenamedForm answers a rename's OLD URL with its temporary 301,
@@ -1194,12 +1236,6 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
 	var cfg struct {
 		Description string `json:"description"`
-		Products    []struct {
-			ID       string `json:"id"`
-			Name     string `json:"name"`
-			PriceSen int64  `json:"price_sen"`
-			Active   bool   `json:"active"`
-		} `json:"products"`
 	}
 	if raw, merr := json.Marshal(f.Config); merr == nil {
 		_ = json.Unmarshal(raw, &cfg)
@@ -1207,17 +1243,51 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 	// Issue #461: resolve the rendered product name/price LIVE from the products
 	// table (the config order still decides which products appear and in what
 	// order). The snapshot is the fallback for an archived/deleted product.
-	live := productMapByID(h.liveProductsForForm(r.Context(), f))
+	// Card t_4861f7d8: the resolver also carries the product's FIRST image, so
+	// the photo below comes from the same live row the name and price do.
+	resolver := newProductResolver(configProductSnapshots(f.Config), h.liveProductsForForm(r.Context(), f))
+
+	// Card t_4861f7d8 / issue #471: the product photo size + layout the merchant
+	// chose on Form Settings -> General (or MCP set_form_theme). The block
+	// renderer has applied these since #471; THIS layout read f.Theme only for
+	// `primary`, so `product_image_size` / `product_image_layout` reached the row
+	// and died here — a block-less payment form rendered no product photo and
+	// applied the saved setting to nothing. Resolved with the same helpers and
+	// the same pre-#471 defaults (small thumbnail, left of the name), so an
+	// unset or stale value degrades to that look instead of breaking the render.
+	imgSize := ProductImageSizeSmall
+	if v, ok := f.Theme["product_image_size"].(string); ok {
+		imgSize = productImageSizeOrDefault(v)
+	}
+	imgLayout := ProductImageLayoutThumbnailLeft
+	if v, ok := f.Theme["product_image_layout"].(string); ok {
+		imgLayout = productImageLayoutOrDefault(v)
+	}
+	imgHidden := imgSize == ProductImageSizeHidden
+	menuCard := imgLayout == ProductImageLayoutImageTop
+
 	var prods []tmplProduct
-	for _, p := range cfg.Products {
+	for _, p := range configProductSnapshots(f.Config) {
 		if p.ID == "" {
 			continue
 		}
-		name, price := p.Name, p.PriceSen
-		if lp, ok := live[p.ID]; ok {
-			name, price = lp.Name, lp.PriceSen
+		name, price, image, ok := resolver.resolve(p.ID)
+		if !ok {
+			name, price, image = p.Name, p.PriceSen, firstImage(p.Images)
 		}
-		prods = append(prods, tmplProduct{ID: p.ID, Name: name, PriceSen: price})
+		prod := tmplProduct{ID: p.ID, Name: name, PriceSen: price}
+		// Issue #471: the photo the block renderer paints. Image is the media
+		// variant matching the chosen size, BaseImage the full-size URL the
+		// client-side fallback rewrites to; both stay empty when the merchant
+		// chose hidden or the product has no image, so an image-less product
+		// still renders a plain checkbox row.
+		if !imgHidden && image != "" {
+			prod.Image = productImageForSize(image, imgSize)
+			prod.BaseImage = image
+			prod.ImgSize = imgSize
+			prod.ImgTop = menuCard
+		}
+		prods = append(prods, prod)
 	}
 	cta := themePrimaryValues(f)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
