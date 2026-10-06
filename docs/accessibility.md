@@ -20,6 +20,16 @@ key public pages and **fails the gate on any critical or serious violation**:
   background. `src/lib/a11yDarkSlabCoverage.test.ts` now fails the unit suite
   when a route that paints text on a dark slab is neither scanned here nor
   behind a session, so the next such page cannot sit outside the gate again.
+  The one route class that guard cannot judge itself is a **dynamic** route
+  (`/products/[id]`-style segments, card `t_70a79006`): a `[id]` directory is not
+  a path a static list can spell, so no entry above can name it. A dark-slab page
+  there is therefore pinned by hand in `PINNED_DYNAMIC_CARRIERS` inside that
+  guard — the set is empty today (measured: the only dynamic route sources are a
+  route handler, which paints nothing, and a wrapper whose slab lives on a
+  component that declares the session chrome, so it is judged by the
+  behind-a-session arm instead), and any
+  new one fails the unit suite until it is pinned or gated. Stated here because an
+  unstated blind spot reads exactly like coverage.
 - `/reset-password`
 - `/magic-link`
 - `/brand`
