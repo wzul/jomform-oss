@@ -1,5 +1,5 @@
 // Regression guard for "the built CSS still ships a dead utility from a class
-// literal written in a comment" (card t_aafe45cc).
+// literal written in a comment" (cards t_aafe45cc, t_850589b5).
 //
 // THE DEFECT, AND WHY IT IS A SOURCE-CONTRACT TEST
 //   Tailwind v4 (`@import "tailwindcss"` in `app/globals.css`, config
@@ -22,23 +22,36 @@
 //   `text-emerald-700`, `jf-btn-primary`, `hover:bg-indigo-50/40` all still emit).
 //   The class-set diff of the two builds is in PR for t_aafe45cc.
 //
+//   THE SAME MECHANISM REACHES A SECOND TREE (card t_850589b5). The first
+//   pattern is scoped to `web/src`, so the Playwright specs under `web/e2e` were
+//   never excluded and their prose was still compiled: measured on the PR #994
+//   head bundle, `.bg-red-700` and `.bg-sky-600` came solely from
+//   `a11y-chat-card.spec.ts` (an a11y contrast table) and `.m-1`/`.m-2`/`.m-3`
+//   from a fixture's message ids in `feedback-notify-marker.spec.ts`. A SECOND
+//   `@source not` line excludes that tree. So "every class literal a guard's prose
+//   names" was true only for `src` specs until this card; both patterns are pinned
+//   below.
+//
 // WHY THE FIX IS A SCAN EXCLUSION AND NOT A REWORDED COMMENT
 //   Rewording one comment fixes the one literal and leaves the mechanism: the
 //   next `text-red-600` or `left-[22px]` written in a guard's rationale ships a
-//   real utility again, silently. Unit tests are not shipped code and their
-//   strings must never generate a class, so the scan is narrowed once, here.
-//   `@source not` is the documented Tailwind v4.1+ mechanism for exactly this
-//   (docs: Detecting classes in source files -> "Ignoring specific paths").
-//   The pattern is relative to this stylesheet, so `..` is `web/src` and
-//   `../**/*.test.{ts,tsx}` is every `src/lib/*.test.ts`.
+//   real utility again, silently. Unit tests and e2e specs are not shipped code
+//   and their strings must never generate a class, so the scan is narrowed once,
+//   here. `@source not` is the documented Tailwind v4.1+ mechanism for exactly
+//   this (docs: Detecting classes in source files -> "Ignoring specific paths").
+//   Both patterns are relative to THIS stylesheet (`web/src/app/`), so
+//   `../**/*.test.{ts,tsx}` is every `src/**/*.test.ts` and `../../e2e/…` is the
+//   `web/e2e` tree.
 //
 // THE STATED LIMIT
-//   This guard pins the DIRECTIVE, not the emitted bundle: it does not run a
-//   Next build (there is no build step inside `npm run test:unit`). It cannot
-//   see a `*.test.tsx` that does not exist yet, and a class that is both in a
-//   test AND in real app code is unaffected by the exclusion by design. What it
-//   makes impossible is the failure this card was: the exclusion being deleted
-//   or reworded, so the old dead utility silently returns.
+//   This guard pins the two DIRECTIVES, not the emitted bundle: it does not run a
+//   Next build (there is no build step inside `npm run test:unit`). It cannot see
+//   a `*.test.tsx` that does not exist yet, and a class that is both in a test AND
+//   in real app code is unaffected by the exclusion by design. What it makes
+//   impossible is the failure these cards were: an exclusion being deleted or
+//   reworded, so the old dead utility silently returns. The EMITTED bundle is
+//   checked by `scripts/cssScanScope.mjs`, which `npm run build` runs after
+//   `next build` — this guard and that check are the two halves.
 //
 // Run with:
 //   npm run test:unit
@@ -51,39 +64,66 @@ import { join } from "node:path";
 
 const css = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
 
-/** The exact directive this card's fix depends on. */
-const EXCLUSION = '@source not "../**/*.test.{ts,tsx}";';
+/** The directive card t_aafe45cc's fix depends on (the `web/src` unit tests). */
+const SRC_EXCLUSION = '@source not "../**/*.test.{ts,tsx}";';
+/** The directive card t_850589b5's fix depends on (the `web/e2e` specs). */
+const E2E_EXCLUSION = '@source not "../../e2e/**/*.spec.{ts,tsx}";';
 
-test("unit tests are excluded from Tailwind's scan (the fix for this card)", () => {
+test("unit tests under src are excluded from Tailwind's scan (card t_aafe45cc)", () => {
   // The directive, verbatim. A reworded or glob-widened pattern fails here on
   // purpose: the value being pinned is the one measured to drop the dead
   // utilities, and `@source not` order/scope is subtle enough that an "equivalent"
   // rewrite is worth a re-measure, not a silent swap.
   assert.ok(
-    css.includes(EXCLUSION),
-    `globals.css no longer excludes test files from Tailwind's scan — the dead ` +
-      `\`.hover\\:bg-\\[\\#828fff\\]:hover\` utility (and every class literal a guard's ` +
-      `prose names) will be compiled back into the shipped bundle. Expected the line:\n  ${EXCLUSION}`,
+    css.includes(SRC_EXCLUSION),
+    `globals.css no longer excludes src test files from Tailwind's scan — the dead ` +
+      `\`.hover\\:bg-\\[\\#828fff\\]:hover\` utility will be compiled back into the ` +
+      `shipped bundle. Expected the line:\n  ${SRC_EXCLUSION}`,
   );
 });
 
-test("the exclusion is scoped to the Tailwind stylesheet it is written in", () => {
-  // `@source not` is resolved relative to the stylesheet, so it only means
-  // "every src/lib/*.test.ts" while globals.css is the file that imports
-  // Tailwind. If the import ever moves, this pattern points at the wrong root
-  // and the guard above would pass while nothing was excluded.
+test("the e2e specs are excluded from Tailwind's scan (card t_850589b5)", () => {
+  // The second non-shipped tree. Its prose shipped `.bg-red-700`, `.bg-sky-600`
+  // and `.m-1`/`.m-2`/`.m-3` (see the header) until this line existed; deleting
+  // it brings all five back.
+  assert.ok(
+    css.includes(E2E_EXCLUSION),
+    `globals.css no longer excludes the web/e2e specs from Tailwind's scan — the ` +
+      `\`.bg-red-700\`, \`.bg-sky-600\` and \`.m-1\`/\`.m-2\`/\`.m-3\` utilities sourced only ` +
+      `from e2e prose will be compiled back into the shipped bundle. Expected the line:\n  ` +
+      E2E_EXCLUSION,
+  );
+});
+
+test("the exclusions are scoped to the Tailwind stylesheet they are written in", () => {
+  // `@source not` is resolved relative to the stylesheet, so a pattern only means
+  // what this card measured while globals.css is the file that imports Tailwind.
+  // If the import ever moves, the patterns point at the wrong root and the guards
+  // above would pass while nothing was excluded.
   assert.match(
     css,
     /@import\s+"tailwindcss";/,
-    "globals.css no longer opens with `@import \"tailwindcss\"` — the @source not pattern is " +
-      "relative to this stylesheet, so its scope is no longer what this card measured",
+    "globals.css no longer opens with `@import \"tailwindcss\"` — the @source not patterns are " +
+      "relative to this stylesheet, so their scope is no longer what these cards measured",
   );
-  // The import must come before the negative rule, matching the documented shape
-  // (@source rules are collected after the import they scope).
+  // Each negative rule must come before `@import` (the documented shape: @source
+  // rules are collected after the import they scope).
+  const importAt = css.indexOf('@import "tailwindcss";');
+  for (const [label, exclusion] of [
+    ["src test", SRC_EXCLUSION],
+    ["e2e spec", E2E_EXCLUSION],
+  ] as const) {
+    assert.ok(
+      importAt < css.indexOf(exclusion),
+      `the ${label} @source not line now precedes \`@import "tailwindcss"\` — re-check that the ` +
+        `exclusion still applies to the utility layer before trusting it`,
+    );
+  }
+  // Both patterns must be present as a set: a tree that dropped one of them is
+  // exactly the half-coverage these guards exist to prevent.
   assert.ok(
-    css.indexOf('@import "tailwindcss";') < css.indexOf(EXCLUSION),
-    "the @source not line now precedes `@import \"tailwindcss\"` — re-check that the exclusion " +
-      "still applies to the utility layer before trusting it",
+    css.indexOf(SRC_EXCLUSION) !== css.indexOf(E2E_EXCLUSION),
+    "the two @source not lines collapsed into one — the scan now covers only one tree",
   );
 });
 
@@ -113,5 +153,19 @@ test("there really are test files under src for the exclusion to cover", () => {
     tests.length >= 40,
     `the walk found only ${tests.length} *.test.ts files under web/src — the @source not pattern ` +
       `protects a tree this guard can no longer see, so re-anchor it`,
+  );
+});
+
+test("there really are e2e specs for the e2e exclusion to cover", () => {
+  // The same no-op check for the second tree: `web/e2e` (where globals.css's
+  // `../../e2e` resolves) must actually hold `*.spec.ts` files, or the exclusion
+  // protects nothing and the guard above is checking a directive that is dead.
+  const e2e = fileURLToPath(new URL("../../e2e", import.meta.url)); // web/e2e/
+  const specs = readdirSync(e2e).filter((n) => /\.spec\.tsx?$/.test(n));
+  assert.ok(
+    specs.length >= 10,
+    `the walk found only ${specs.length} *.spec.ts files under web/e2e — the ` +
+      `\`../../e2e/**/*.spec.{ts,tsx}\` pattern protects a tree this guard can no longer see, ` +
+      `so re-anchor it`,
   );
 });

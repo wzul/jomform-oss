@@ -7,8 +7,16 @@
    class is re-armed for anyone who later writes it on an element. Unit tests are
    not shipped code and must never contribute a utility; exclude them from the
    scan. (Card t_aafe45cc. Without this line the dead
-   `.hover\:bg-\[\#828fff\]:hover` utility comes straight back.) */
+   `.hover\:bg-\[\#828fff\]:hover` utility comes straight back.)
+
+   The same extractor also reads `web/e2e/*.spec.ts` — a SECOND non-shipped tree
+   the first pattern does not reach (it is scoped to `web/src`). Card t_850589b5:
+   `bg-red-700` / `bg-sky-600` were emitted solely from `a11y-chat-card.spec.ts`
+   prose, and `m-1` / `m-2` / `m-3` from a fixture's message ids in
+   `feedback-notify-marker.spec.ts`. Both patterns are resolved relative to THIS
+   stylesheet (`web/src/app/`), so the e2e tree is `../../e2e`, not `../e2e`. */
 @source not "../**/*.test.{ts,tsx}";
+@source not "../../e2e/**/*.spec.{ts,tsx}";
 
 /* JomForm light theme — clean, airy, indigo accent */
 :root {
