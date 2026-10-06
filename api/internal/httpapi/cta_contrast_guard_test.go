@@ -583,6 +583,62 @@ func ctaButtonRules(body string) []string {
 	return out
 }
 
+// drawnCtaSurface reports whether a Go-rendered page literal draws a CTA at all:
+// a `<form>` element, or a submit button. This is the surface predicate Rule B
+// judges on — deliberately NOT the CTA rule's selector name (see
+// merchantCtaSurfaceVerdict).
+//
+// The predicate is intentionally kept as narrow as the card that wrote Rule B
+// defined it (t_d48f0930: "ANY `<!doctype html` literal that draws a <form> or a
+// submit button"). Widening it to, say, "any <button> or any class=cta" was
+// measured and rejected in card t_ff9cde8b: it would newly judge
+// `landingPageTmpl` (public.go), which draws its CTA as an `<a class="cta">`
+// anchor with no form and themes it through `.Lp.PrimaryColor` — a surface the
+// card puts explicitly out of scope. A false positive there is a guard nobody
+// can satisfy, which is worse than a documented boundary.
+func drawnCtaSurface(body string) bool {
+	return strings.Contains(body, "<form ") || strings.Contains(body, `type="submit"`)
+}
+
+// merchantCtaSurfaceVerdict judges ONE Go-rendered page literal against Rule B
+// and returns (exempt, violation). A pure function of (name, body) so the bite
+// case below can drive it with a FIXTURE page: a guard whose bite can only be
+// shown by editing the tree is bite-provable only on a tree somebody was
+// willing to break.
+//
+// exempt is true for a recorded platform page (ctaExemptPageLiterals), keyed on
+// the literal's file plus content unique to that page. violation is "" for a
+// page that draws no CTA, for an exempt page, and for a page that consumes the
+// token; it is the failure text otherwise.
+//
+// WHAT CHANGED AND WHY (card t_ff9cde8b). This used to require the page to carry
+// a rule matched by ctaRuleRes — bare `button`, `.cta`, `.paybtn`, `.baropen` —
+// and `continue`d otherwise, so a form that painted its submit button through
+// an UNLISTED selector (`.buy`, `.submit`, `#go`, an inline `style=`) was
+// skipped: indistinguishable, at the guard level, from a correctly themed page.
+// That is the same "no token declared" defect class Rule B exists to close,
+// exactly one selector name away from being invisible again — and the selector
+// name is the one thing a NEW template is free to choose, so it cannot also be
+// the gate. The fix drops that gate: drawing a form / submit button is now
+// sufficient to be judged. ctaRuleRes survives as the narrower set
+// TestNoRenderedTemplateHardCodesTheCtaFill needs, because that arm inspects the
+// rule BODIES of a token-declaring template.
+func merchantCtaSurfaceVerdict(name, body string) (exempt bool, violation string) {
+	if !drawnCtaSurface(body) {
+		return false, ""
+	}
+	file := strings.SplitN(name, " #", 2)[0]
+	for _, p := range ctaExemptPageLiterals {
+		if file == p.file && strings.Contains(body, p.marker) {
+			return true, ""
+		}
+	}
+	if !ctaTokenUseRe.MatchString(body) {
+		return false, fmt.Sprintf("%s draws a CTA (a <form> or a submit button) and never consumes var(--jf-primary) — the merchant's brand colour cannot reach this surface, and no platform exemption covers it (card t_d48f0930's defect)", name)
+	}
+	return false, ""
+}
+
 // literalCtaFill returns the literal fill a rule body paints, including the
 // pre-token gradient form (`linear-gradient(90deg,#6366f1,#8b5cf6)`) that card
 // t_d48f0930 removed from the legacy layout. "" when the rule paints no literal.
@@ -654,25 +710,17 @@ func TestGoRenderedMerchantFormCtasConsumeTheBrandToken(t *testing.T) {
 		exempt[p.file+"\x00"+p.marker] = true
 	}
 	for name, body := range literals {
-		if !strings.Contains(body, "<form ") && !strings.Contains(body, "type=\"submit\"") {
-			continue
-		}
-		file := strings.SplitN(name, " #", 2)[0]
-		var recorded bool
-		for _, p := range ctaExemptPageLiterals {
-			if file == p.file && strings.Contains(body, p.marker) {
-				recorded = true
-				sawExempt[p.file+"\x00"+p.marker] = true
+		wasExempt, violation := merchantCtaSurfaceVerdict(name, body)
+		if wasExempt {
+			file := strings.SplitN(name, " #", 2)[0]
+			for _, p := range ctaExemptPageLiterals {
+				if file == p.file && strings.Contains(body, p.marker) {
+					sawExempt[p.file+"\x00"+p.marker] = true
+				}
 			}
 		}
-		if recorded {
-			continue
-		}
-		if len(ctaButtonRules(body)) == 0 {
-			continue // no CTA rule of its own to judge
-		}
-		if !ctaTokenUseRe.MatchString(body) {
-			t.Errorf("%s renders a form (or a submit button) and never consumes var(--jf-primary) — the merchant's brand colour cannot reach this surface, and no platform exemption covers it (card t_d48f0930's defect)", name)
+		if violation != "" {
+			t.Error(violation)
 		}
 	}
 	// A recorded exemption that no longer matches a page is dead licence: it
@@ -681,6 +729,41 @@ func TestGoRenderedMerchantFormCtasConsumeTheBrandToken(t *testing.T) {
 		if !sawExempt[key] {
 			file, marker, _ := strings.Cut(key, "\x00")
 			t.Errorf("the platform exemption for %s (marker %q) matched no Go-rendered page — a stale exemption is a licence nobody re-read", file, marker)
+		}
+	}
+
+	// BITE — Rule B's recognition MUST NOT be gated on the CTA rule's SELECTOR
+	// NAME. Card t_ff9cde8b measured the hole: at PR #1001's head, this arm
+	// PASSED (rc=0) on a literal that draws `<form id="of"><button class="buy"
+	// type="submit">` and paints `.buy { background:#123456 }` with no
+	// `var(--jf-primary)` anywhere, because `.buy` is not in ctaRuleRes and the
+	// old loop `continue`d — while flipping ONLY the selector name to `.cta`
+	// reddened it at the exact assertion above. Identical page, one selector
+	// name apart, one judged and one invisible.
+	//
+	// The page is injected here as a FIXTURE, through the same function the loop
+	// above calls, so the bite does not depend on a later author's willingness
+	// to break the tree: the "before" shape is asserted to violate and the
+	// "after" shape is asserted not to, and the two differ ONLY in the selector
+	// name. If Rule B ever re-introduces a name-based gate, the first case goes
+	// green and this test fails.
+	{
+		const (
+			unlistedSelectorPage = `<!doctype html><html><head><style>
+  .buy { color:#fff; background:#123456; }
+</style></head><body><form id="of"><button class="buy" type="submit">Go</button></form></body></html>`
+			listedSelectorPage = `<!doctype html><html><head><style>
+  :root { --jf-primary: #5e6ad2; }
+  .cta { color:#fff; background:var(--jf-primary); }
+</style></head><body><form id="of"><button class="cta" type="submit">Go</button></form></body></html>`
+		)
+		if _, v := merchantCtaSurfaceVerdict("zz_fixture.go #1", unlistedSelectorPage); v == "" {
+			t.Errorf("Rule B judged a form page whose CTA is painted through an UNLISTED selector (`.buy`) as clean — " +
+				"drawing a form / submit button must be sufficient to be judged, or the selector name is a blind spot (card t_ff9cde8b)")
+		}
+		if _, v := merchantCtaSurfaceVerdict("zz_fixture.go #1", listedSelectorPage); v != "" {
+			t.Errorf("Rule B rejected a themed form page that consumes var(--jf-primary) via a LISTED selector — "+
+				"the bite case above cannot be trusted if its control case fails: %s", v)
 		}
 	}
 
