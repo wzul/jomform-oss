@@ -938,6 +938,39 @@ var formFuncs = template.FuncMap{
 	},
 }
 
+// legacyFormView is the payload the LAST-RESORT product-checkbox layout
+// (formTmpl) is rendered with. It is a named type rather than an anonymous
+// struct so the renderer and the tests that drive formTmpl cannot drift: the
+// language-placement, footer and table-number tests each used to hand-copy this
+// field list, which meant a new field broke them (or, worse, went unnoticed).
+type legacyFormView struct {
+	Slug, Title, Description string
+	Products                 []tmplProduct
+	// Issue #411: Open Graph + Twitter meta for social sharing.
+	OGMeta template.HTML
+	// Issue #183: optional per-workspace footer.
+	Footer footerInfo
+	// Issue #244: hidden honeypot + render-timestamp fields.
+	AntiSpam template.HTML
+	// Issue #276: noindex on jomform.com subdomains / when the workspace opts
+	// out of indexing.
+	NoIndex bool
+	// Issue #456: postMessage auto-height for the iframe embed. No-op on a
+	// direct visit (the script only runs when framed). template.HTML so the
+	// <script> block is emitted verbatim.
+	HeightJS template.HTML
+	// Language placement: the resolved buyer-facing language (per-form
+	// config.lang ?? workspace default ?? "en") and its chrome strings. The
+	// legacy layout used to be hardcoded Malay regardless of the workspace.
+	Lang string
+	Ls   langStrings
+	// Card t_d48f0930: the merchant's brand triple. This layout was the one Go
+	// form renderer that never read f.Theme at all — its button was a
+	// hard-coded indigo→violet gradient and its accents a hard-coded #4f46e5.
+	// The same resolved triple the other three renderers paint (formtheme.go).
+	CtaPrimary, CtaHover, CtaActive, CtaLabel, CtaText string
+}
+
 var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doctype html>
 <html lang="{{.Lang}}">
 <head>
@@ -947,6 +980,19 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
 <title>{{.Title}}</title>
 {{.OGMeta}}
 <style>
+  /* Card t_d48f0930: this LAST-RESORT layout (the form has no builder blocks,
+     is not response-mode and has no enabled menu) was the one Go form renderer
+     that never read the merchant's theme at all — its button was a hard-coded
+     indigo→violet gradient, and the checkbox accent, price text and footer
+     links were a hard-coded #4f46e5, while formTmpl declared no brand token.
+     It now declares the same triple the other three renderers paint
+     (formtheme.go) and every accent consumes it, so a merchant colour reaches
+     this surface too. The label colour is the one the derived pairing MEASURED
+     against the fill at AA, not an assumed white: #f59e0b carries white at
+     2.15:1, so a light brand colour gets ink text here as well. */
+  :root { --jf-primary: {{.CtaPrimary}}; --jf-primary-hover: {{.CtaHover}};
+          --jf-primary-active: {{.CtaActive}}; --jf-primary-label: {{.CtaLabel}};
+          --jf-primary-text: {{.CtaText}}; }
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
   body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -959,23 +1005,24 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
   .prod { display:block; padding:0; border:1px solid #e6e8ec; border-radius:14px;
           margin:0 0 12px; background:#ffffff; box-shadow:0 1px 2px rgba(23,24,28,0.04);
           transition:border-color .15s ease, box-shadow .15s ease; }
-  .prod:hover { border-color:#4f46e5; box-shadow:0 2px 8px rgba(79,70,229,0.12); }
+  .prod:hover { border-color:var(--jf-primary); box-shadow:0 2px 8px rgba(79,70,229,0.12); }
   .prod:active { background:#eef2ff; }
-  .prod:has(input[type=checkbox]:checked) { border-color:#4f46e5; box-shadow:0 2px 8px rgba(79,70,229,0.12); background:#eef2ff; }
+  .prod:has(input[type=checkbox]:checked) { border-color:var(--jf-primary); box-shadow:0 2px 8px rgba(79,70,229,0.12); background:#eef2ff; }
   .prod label { display:flex; gap:12px; align-items:center; width:100%;
                 min-height:44px; padding:12px 14px; font-size:15px; color:#17181c;
                 cursor:pointer; -webkit-tap-highlight-color:transparent; }
-  .prod input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; accent-color:#4f46e5; margin:0; }
+  .prod input[type=checkbox] { width:20px; height:20px; flex:0 0 auto; accent-color:var(--jf-primary); margin:0; }
   .pname { flex:1; font-weight:500; }
-  .price { color:#4f46e5; font-weight:600; white-workspace:nowrap; margin-left:auto; text-align:right; }
+  .price { color:var(--jf-primary-text); font-weight:600; white-space:nowrap; margin-left:auto; text-align:right; }
   input[type=text], input[type=email], input[type=tel] {
     width:100%; padding:11px 14px; margin:6px 0 14px; border-radius:10px;
     border:1px solid #e6e8ec; background:#ffffff; color:#17181c; font-size:14px; }
   label.top { font-size:12px; color:#8b93a7; }
   button { width:100%; padding:13px; border:0; border-radius:12px; font-size:15px;
-           font-weight:600; color:white; cursor:pointer; margin-top:8px;
-           background:linear-gradient(90deg,#6366f1,#8b5cf6); }
-  button:hover { filter:brightness(1.1); }
+           font-weight:600; color:var(--jf-primary-label); cursor:pointer; margin-top:8px;
+           background:var(--jf-primary); }
+  button:hover { background:var(--jf-primary-hover); }
+  button:active { background:var(--jf-primary-active); }
   .total { display:flex; justify-content:space-between; padding-top:12px;
            border-top:1px dashed #e6e8ec; margin-top:6px; font-weight:600; }
   /* Issue #183: optional per-workspace footer. */
@@ -986,7 +1033,7 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
   .jf-ftext { margin-top:4px; }
   .jf-flinks { display:flex; width:100%; gap:14px; justify-content:center;
                flex-wrap:wrap; margin-top:6px; text-align:center; }
-  .jf-flinks a { color:#4f46e5; text-decoration:none; }
+  .jf-flinks a { color:var(--jf-primary-text); text-decoration:none; }
   .jf-flinks a:hover { text-decoration:underline; }
 </style>
 </head>
@@ -1172,39 +1219,20 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 		}
 		prods = append(prods, tmplProduct{ID: p.ID, Name: name, PriceSen: price})
 	}
-	type view struct {
-		Slug, Title, Description string
-		Products                 []tmplProduct
-		// Issue #411: Open Graph + Twitter meta for social sharing.
-		OGMeta template.HTML
-		// Issue #183: optional per-workspace footer.
-		Footer footerInfo
-		// Issue #244: hidden honeypot + render-timestamp fields.
-		AntiSpam template.HTML
-		// Issue #276: noindex on jomform.com subdomains / when the workspace opts
-		// out of indexing.
-		NoIndex bool
-		// Issue #456: postMessage auto-height for the iframe embed. No-op on a
-		// direct visit (the script only runs when framed). template.HTML so the
-		// <script> block is emitted verbatim.
-		HeightJS template.HTML
-		// Language placement: the resolved buyer-facing language (per-form
-		// config.lang ?? workspace default ?? "en") and its chrome strings. The
-		// legacy layout used to be hardcoded Malay regardless of the workspace.
-		Lang string
-		Ls   langStrings
-	}
+	cta := themePrimaryValues(f)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	ls := h.effectiveLangStrings(r.Context(), f)
-	if err := formTmpl.Execute(w, view{
+	if err := formTmpl.Execute(w, legacyFormView{
 		Slug: f.Slug, Title: f.Title, Description: cfg.Description, Products: prods,
-		OGMeta:   h.formOGMeta(r, f),
-		Footer:   h.workspaceFooter(r.Context(), f),
-		AntiSpam: template.HTML(antiSpamRenderFields()),
-		NoIndex:  h.formNoIndex(r, f),
-		HeightJS: template.HTML(iframeHeightJS),
-		Lang:     ls.Lang,
-		Ls:       ls,
+		OGMeta:     h.formOGMeta(r, f),
+		Footer:     h.workspaceFooter(r.Context(), f),
+		AntiSpam:   template.HTML(antiSpamRenderFields()),
+		NoIndex:    h.formNoIndex(r, f),
+		HeightJS:   template.HTML(iframeHeightJS),
+		Lang:       ls.Lang,
+		Ls:         ls,
+		CtaPrimary: cta.Primary, CtaHover: cta.Hover, CtaActive: cta.Active,
+		CtaLabel: cta.Label, CtaText: cta.Text,
 	}); err != nil {
 		slog.Error("form_render", "err", err)
 	}
@@ -1997,7 +2025,7 @@ var landingPageTmpl = template.Must(template.New("workspace-landing").Parse(`<!d
   .banner { width:100%; max-height:420px; object-fit:cover; border-radius:20px;
             margin:28px 0 0; display:{{if .Lp.ImageURL}}block{{else}}none{{end}}; }
   .body { margin-top:28px; font-size:17px; line-height:1.7; color:#3f434a;
-          white-workspace:pre-wrap; }
+          white-space:pre-wrap; }
   .ctas { display:flex; flex-wrap:wrap; gap:12px; margin-top:28px; }
   .cta { background:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; color:#fff;
          font-weight:600; text-decoration:none; padding:14px 26px; border-radius:12px;

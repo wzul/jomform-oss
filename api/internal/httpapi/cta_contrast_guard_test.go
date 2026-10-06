@@ -1,6 +1,6 @@
 package httpapi
 
-// The public (Go-rendered) form's submit CTA, in all three renderers.
+// The public (Go-rendered) form's submit CTA, in all four renderers.
 //
 // HISTORY — two cards, one subject.
 //
@@ -198,10 +198,17 @@ func themedForm(slug, primary string, config map[string]any) *dbstore.Form {
 	}
 }
 
-// rendererCases drives the three PUBLIC call sites — not the templates by hand —
+// rendererCases drives the FOUR PUBLIC call sites — not the templates by hand —
 // so a missing map entry or a dropped rule at the call site is a red, which is
 // exactly the shape this card's defect had (the token was declared and the
 // consumer was never wired).
+//
+// The fourth is card t_d48f0930's surface: the LAST-RESORT product-checkbox
+// layout (`renderLegacy` → `formTmpl`), reached when a published payment form
+// carries no builder blocks, is not response-mode and has no enabled menu. It
+// was the one Go form renderer that read `f.Theme` zero times; driving it here
+// means a merchant colour that stops reaching it is a red, not a silent
+// default.
 func rendererCases() []rendererCase {
 	blockCfg := map[string]any{"blocks": []any{map[string]any{"type": "text", "value": "Hello"}}}
 	respCfg := map[string]any{
@@ -214,6 +221,15 @@ func rendererCases() []rendererCase {
 			"html":   `<input type="text" name="name">`,
 			"fields": []any{map[string]any{"field_id": "name", "type": "text", "label": "Name"}},
 		},
+	}
+	// A `{description, products[]}` config with NO `blocks` key is the shape
+	// `serveForm` falls through on: `renderBlocks` returns false and
+	// `renderLegacy` takes the page (public.go, the `h.renderLegacy` tail).
+	legacyCfg := map[string]any{
+		"description": "Order something",
+		"products": []any{map[string]any{
+			"id": "p1", "name": "Item", "price_sen": 2500, "active": true,
+		}},
 	}
 	return []rendererCase{
 		{"block product form (render_blocks.go:blockTmpl)", func(t *testing.T, primary string) string {
@@ -241,6 +257,20 @@ func rendererCases() []rendererCase {
 			if !h.renderCustomForm(rec, req, themedForm("custom", primary, customCfg)) {
 				t.Fatal("renderCustomForm returned false for a custom-HTML form")
 			}
+			return rec.Body.String()
+		}},
+		{"legacy product-checkbox form (public.go:renderLegacy/formTmpl)", func(t *testing.T, primary string) string {
+			h := &PublicHandlers{}
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", "http://demo.jomform.com/legacy", nil)
+			f := themedForm("legacy", primary, legacyCfg)
+			// Asserted, not assumed: this form must really fall THROUGH the
+			// block renderer, or the case would be rendering the block layout
+			// and calling it legacy.
+			if h.renderBlocks(httptest.NewRecorder(), httptest.NewRequest("GET", "http://demo.jomform.com/legacy", nil), f) {
+				t.Fatal("renderBlocks handled a form with no blocks — this case is no longer the legacy path")
+			}
+			h.renderLegacy(rec, req, f)
 			return rec.Body.String()
 		}},
 	}
@@ -453,60 +483,275 @@ func renderedStylesheets(t *testing.T) map[string]string {
 	return out
 }
 
-// TestNoRenderedTemplateHardCodesTheCtaFill is the narrowed source scan. It
-// covers the one thing a render assertion cannot: a NEW Go-rendered FORM
-// stylesheet (a fourth template, or a second copy inside an existing one) that
-// paints the CTA from a literal instead of consuming `var(--jf-primary)`.
+// ── source scan: the "no token declared" hole ────────────────────────────────
+
+// formTemplateLiterals returns every `<!doctype html` raw-string literal in the
+// package's Go sources, keyed "<file> #<n>" so a failure names the site by
+// content rather than by a line that rots. The extraction is by backtick
+// pairing: in these files a backtick only ever DELIMITS a raw string (none
+// occurs inside one, and a `//` comment carrying one is never on a line that
+// also carries a delimiter), so an odd index opens a literal and the next even
+// one closes it.
+//
+// Literal scope — not FILE scope — is the whole point. public.go holds BOTH the
+// legacy merchant form template and the private gate's own `fmt.Fprintf` page;
+// a file-scoped scan cannot tell the merchant's form from the platform page that
+// shares the file, which is how the gate's fixed `#5e6ad2` button reads as a
+// violation of a merchant-form rule it was never subject to.
+func formTemplateLiterals(t *testing.T) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for path, src := range renderedStylesheets(t) {
+		parts := strings.Split(src, "`")
+		n := 0
+		for i := 1; i+1 < len(parts); i += 2 {
+			body := parts[i]
+			if !strings.Contains(body, "<!doctype html") {
+				continue
+			}
+			n++
+			out[fmt.Sprintf("%s #%d", path, n)] = body
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("found no Go-rendered page literal in the package — the extraction is not looking at the sources it was written for, so a green run proves nothing")
+	}
+	return out
+}
+
+// merchantFormTemplates identifies the four Go-rendered merchant form pages
+// inside their own literal, by a marker only that template carries. Each marker
+// is asserted to match EXACTLY ONE literal, so a renamed field fails loudly
+// instead of quietly dropping a surface out of the scan.
+var merchantFormTemplates = []struct {
+	name, file, marker string
+}{
+	{"formTmpl (legacy product-checkbox layout)", "public.go", "{{.Ls.NameLabel}}"},
+	{"blockTmpl (block product form)", "render_blocks.go", `<button type="submit" form="of">`},
+	{"responseTmpl (response-only form)", "render_blocks.go", `type="submit">{{$.Ls.SubmitResponse}}`},
+	{"customFormTmpl (custom-HTML form)", "render_custom.go", `id="jf-submit"`},
+}
+
+// ctaExemptPageLiterals are Go-rendered pages that draw a submit button and are
+// NOT judged by the merchant brand-token rule, because they either carry no
+// merchant theme at all or consume it through a DIFFERENT (equally valid)
+// mechanism. Each entry is a recorded DECISION, keyed on content unique to that
+// page so the exemption cannot silently widen, and it is asserted to still match
+// a page so the exemption cannot rot into dead licence:
+//
+//	public.go / renderPrivateGate — the private-form password gate. It is rendered
+//	BEFORE the merchant's theme is consulted and is platform chrome; theming only
+//	its button while its card, background and type stay platform-default would be
+//	a half-themed page rather than a fix. Same ruling as the exemption PR #996's
+//	guard already records for this surface.
+//
+//	menu.go / menuPageTmpl — the restaurant menu. It DOES consume the merchant
+//	colour, through its own `.Th.PrimaryColor` / `{{else}}#4f46e5{{end}}` pair
+//	(formMenuTheme, menu.go), which predates the token triple and themes far more
+//	than the CTA. This card does not re-plumb that mechanism; the entry records
+//	that the surface is themed rather than forgotten.
+var ctaExemptPageLiterals = []struct {
+	file, marker, why string
+}{
+	{
+		"public.go", "function unlock(e)",
+		"renderPrivateGate — platform password gate, no merchant theme on that page",
+	},
+	{
+		"menu.go", ".Th.PrimaryColor",
+		"menuPageTmpl — themed through the menu's own .Th.PrimaryColor mechanism",
+	},
+}
+
+// ctaButtonRules returns the body of every CTA rule in ONE template literal: a
+// bare `button` selector, plus the class-based CTA selectors the Go templates
+// paint a fill on (`.cta`, `.paybtn`, `.baropen`). Scoping to the literal is
+// what keeps the gate's own `button{…}` rule out of a merchant-form rule that
+// was never about it.
+var ctaRuleRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?m)^\s*button\s*\{([^}]*)\}`),
+	regexp.MustCompile(`(?m)^\s*\.(?:cta|paybtn|baropen)\s*\{([^}]*)\}`),
+}
+
+func ctaButtonRules(body string) []string {
+	var out []string
+	for _, re := range ctaRuleRes {
+		for _, m := range re.FindAllStringSubmatch(body, -1) {
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+// literalCtaFill returns the literal fill a rule body paints, including the
+// pre-token gradient form (`linear-gradient(90deg,#6366f1,#8b5cf6)`) that card
+// t_d48f0930 removed from the legacy layout. "" when the rule paints no literal.
+func literalCtaFill(body string) string {
+	return ctaLiteralFillRe.FindString(body)
+}
+
+var ctaLiteralFillRe = regexp.MustCompile(`background(?:-image)?\s*:\s*(?:linear-gradient\([^)]*#[0-9a-fA-F]{3,6}[^)]*\)|#[0-9a-fA-F]{3,6})`)
+
+// ctaTokenUseRe is the merchant brand token, consumed.
+var ctaTokenUseRe = regexp.MustCompile(`var\(\s*--jf-primary\s*\)`)
+
+// TestGoRenderedMerchantFormCtasConsumeTheBrandToken is the arm card t_d48f0930
+// asks for. `TestNoRenderedTemplateHardCodesTheCtaFill` below is gated on a
+// `:root { --jf-primary … }` DECLARATION, so a template that declares the token
+// nowhere is SKIPPED rather than reported — and that "no token declared" hole is
+// exactly where this card's defect lived (the legacy `formTmpl` had a
+// hard-coded indigo→violet CTA gradient and declared nothing).
+//
+// The rule here is the DUAL of that one and needs no declaration to fire: every
+// Go-rendered MERCHANT FORM literal must consume `var(--jf-primary)` and must
+// paint no literal CTA fill. A fourth merchant form template is therefore caught
+// by the package-wide sweep below rather than surviving because nobody added it
+// to a list.
+func TestGoRenderedMerchantFormCtasConsumeTheBrandToken(t *testing.T) {
+	literals := formTemplateLiterals(t)
+
+	// Rule A — the four known merchant forms, each located by its own marker.
+	var consumers int
+	for _, mt := range merchantFormTemplates {
+		var matched []string
+		for _, body := range literals {
+			if strings.Contains(body, mt.marker) {
+				matched = append(matched, body)
+			}
+		}
+		if len(matched) != 1 {
+			t.Errorf("%s: its marker %q matched %d page literals, want exactly 1 — a renamed field must not quietly drop this surface out of the scan", mt.name, mt.marker, len(matched))
+			continue
+		}
+		body := matched[0]
+		if !ctaTokenUseRe.MatchString(body) {
+			t.Errorf("%s (%s) renders a form and never consumes var(--jf-primary) — the merchant's brand colour cannot reach this surface (card t_d48f0930's defect)", mt.name, mt.file)
+			continue
+		}
+		rules := ctaButtonRules(body)
+		if len(rules) == 0 {
+			t.Errorf("%s (%s) consumes the brand token but emits no CTA rule — the guard cannot see the button this token is for", mt.name, mt.file)
+			continue
+		}
+		consumers++
+		for _, rule := range rules {
+			if fill := literalCtaFill(rule); fill != "" {
+				t.Errorf("%s (%s) paints a CTA from the literal `%s` — the CTA must paint the merchant's colour", mt.name, mt.file, fill)
+			}
+		}
+	}
+	if consumers != len(merchantFormTemplates) {
+		t.Fatalf("only %d of %d Go-rendered merchant form templates were scanned — a green run here would prove nothing about the other %d", consumers, len(merchantFormTemplates), len(merchantFormTemplates)-consumers)
+	}
+
+	// Rule B — the package-wide sweep that closes the hole for good: ANY
+	// `<!doctype html` literal that draws a <form> or a submit button must
+	// consume the brand token, unless it is a recorded platform page. A NEW
+	// merchant form template is therefore RED on arrival instead of invisible.
+	exempt := map[string]bool{}
+	sawExempt := map[string]bool{}
+	for _, p := range ctaExemptPageLiterals {
+		exempt[p.file+"\x00"+p.marker] = true
+	}
+	for name, body := range literals {
+		if !strings.Contains(body, "<form ") && !strings.Contains(body, "type=\"submit\"") {
+			continue
+		}
+		file := strings.SplitN(name, " #", 2)[0]
+		var recorded bool
+		for _, p := range ctaExemptPageLiterals {
+			if file == p.file && strings.Contains(body, p.marker) {
+				recorded = true
+				sawExempt[p.file+"\x00"+p.marker] = true
+			}
+		}
+		if recorded {
+			continue
+		}
+		if len(ctaButtonRules(body)) == 0 {
+			continue // no CTA rule of its own to judge
+		}
+		if !ctaTokenUseRe.MatchString(body) {
+			t.Errorf("%s renders a form (or a submit button) and never consumes var(--jf-primary) — the merchant's brand colour cannot reach this surface, and no platform exemption covers it (card t_d48f0930's defect)", name)
+		}
+	}
+	// A recorded exemption that no longer matches a page is dead licence: it
+	// would silently stop covering anything while still looking like a decision.
+	for key := range exempt {
+		if !sawExempt[key] {
+			file, marker, _ := strings.Cut(key, "\x00")
+			t.Errorf("the platform exemption for %s (marker %q) matched no Go-rendered page — a stale exemption is a licence nobody re-read", file, marker)
+		}
+	}
+
+	// The two colours this card removed from the legacy layout, asserted gone as
+	// FILLS specifically (the rationale comments name them on purpose, so a bare
+	// mention is not the defect — a `background:` of one is).
+	for path, src := range renderedStylesheets(t) {
+		for _, fill := range []string{"linear-gradient(90deg,#6366f1,#8b5cf6)", "accent-color:#4f46e5"} {
+			if strings.Contains(src, fill) {
+				t.Errorf("%s still carries `%s` — the legacy layout's fixed indigo accent (card t_d48f0930)", path, fill)
+			}
+		}
+	}
+}
+
+// TestNoRenderedTemplateHardCodesTheCtaFill is the declaration-gated source
+// scan. It covers the one thing a render assertion cannot: a NEW Go-rendered
+// MERCHANT FORM stylesheet (a fourth template, or a second copy inside an
+// existing one) that paints the CTA from a literal instead of consuming
+// `var(--jf-primary)`.
 //
 // The rule is "declares the brand token ⇒ consumes it", which is exactly the
-// defect shape this card found (three templates declared `--jf-primary` and
-// consumed it nowhere). A platform page that paints its own fixed button —
-// renderPrivateGate's unlock prompt, which never reads the merchant's theme at
-// all and declares no token — is deliberately NOT in scope: it is not the
-// merchant's form, and theming only its button while its card, background and
-// type stay platform-default would be a half-themed page rather than a fix.
-// That surface is out of scope for this card and is recorded here so the
-// exemption is a decision, not an oversight.
+// defect shape this arm was written for (three templates declared `--jf-primary`
+// and consumed it nowhere). It is scoped to the template LITERAL, not the file:
+// public.go holds both the legacy merchant form and the private gate's page, so
+// a file-scoped scan judged the gate's platform button by a merchant-form rule.
+//
+// The declaration gate left a real hole — a template that declared no token was
+// skipped rather than reported — and that hole is where card t_d48f0930's legacy
+// layout lived until it was themed.
+// TestGoRenderedMerchantFormCtasConsumeTheBrandToken above is the arm that
+// closes it: it fires on a merchant form literal with no declaration at all.
 func TestNoRenderedTemplateHardCodesTheCtaFill(t *testing.T) {
+	literals := formTemplateLiterals(t)
+
 	var declaring, consumers int
-	for path, src := range renderedStylesheets(t) {
+	for name, body := range literals {
 		// A declaration, not a mention: the token must be SET inside a `:root`
 		// block to a value (a template action or a hex). The doc comments in this
 		// package name `--jf-primary: …` on purpose and must not count.
-		declaresToken := regexp.MustCompile(`:root\s*\{[^}]*--jf-primary\s*:\s*(?:#|\{\{)`).MatchString(src)
-		if !declaresToken {
+		if !regexp.MustCompile(`:root\s*\{[^}]*--jf-primary\s*:\s*(?:#|\{\{)`).MatchString(body) {
 			continue
 		}
 		declaring++
-		rules := buttonRe.FindAllStringSubmatch(src, -1)
+		rules := ctaButtonRules(body)
 		if len(rules) == 0 {
-			t.Errorf("%s declares --jf-primary but emits no CTA rule — the guard cannot see the button this token is for", path)
+			t.Errorf("%s declares --jf-primary but emits no CTA rule — the guard cannot see the button this token is for", name)
 			continue
 		}
-		for _, m := range rules {
-			body := m[1]
-			if !strings.Contains(body, "var(--jf-primary") {
-				t.Errorf("%s renders a submit button that does not consume var(--jf-primary) (body: %q) — a token with no consumer is card t_8f5d6fb5's defect", path, strings.Join(strings.Fields(body), " "))
+		for _, rule := range rules {
+			if !strings.Contains(rule, "var(--jf-primary") {
+				t.Errorf("%s renders a submit button that does not consume var(--jf-primary) (rule: %q) — a token with no consumer is card t_8f5d6fb5's defect", name, strings.Join(strings.Fields(rule), " "))
 				continue
 			}
 			consumers++
-			if fc := backgroundColorRe.FindStringSubmatch(body); fc != nil {
+			if fc := backgroundColorRe.FindStringSubmatch(rule); fc != nil {
 				if hardCodedFillRe.MatchString("background: " + strings.TrimSpace(fc[1])) {
-					t.Errorf("%s renders a submit button whose fill is the literal `%s` — the CTA must paint the merchant's colour", path, strings.TrimSpace(fc[1]))
+					t.Errorf("%s renders a submit button whose fill is the literal `%s` — the CTA must paint the merchant's colour", name, strings.TrimSpace(fc[1]))
 				}
 			}
 		}
 	}
 	// Non-vacuity, both directions: if the rule were renamed or the token
 	// stopped being declared, "no offenders" above must not read as a pass.
-	if declaring < 2 {
-		t.Fatalf("only %d Go source(s) declare the brand token inside a :root block; render_blocks.go and render_custom.go both must", declaring)
+	if declaring < 3 {
+		t.Fatalf("only %d Go-rendered page literal(s) declare the brand token inside a :root block; public.go (formTmpl), render_blocks.go (blockTmpl + responseTmpl) and render_custom.go (customFormTmpl) all must", declaring)
 	}
-	// Three CTA rules are the three merchant templates: the block product form
-	// and the response-only form in render_blocks.go, the custom-HTML form in
-	// render_custom.go.
-	if consumers < 3 {
-		t.Fatalf("found %d rendered CTA rules consuming var(--jf-primary), want the three merchant form templates — the rule is not looking at the stylesheet it was written for, so a green run proves nothing", consumers)
+	// Five CTA rules are the four merchant templates, one of which (the block
+	// product form) paints both a `button` and a `.cta`-style rule.
+	if consumers < 4 {
+		t.Fatalf("found %d rendered CTA rules consuming var(--jf-primary), want the four merchant form templates — the rule is not looking at the stylesheet it was written for, so a green run proves nothing", consumers)
 	}
 
 	// #991's fill is gone as a FILL (the rationale comments name it on purpose,

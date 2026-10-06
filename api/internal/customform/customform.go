@@ -174,7 +174,7 @@ func buildSanitizer() *bluemonday.Policy {
 		"border", "border-radius", "width", "height", "max-width", "max-height",
 		"min-width", "min-height", "display", "flex", "flex-direction", "gap",
 		"align-items", "justify-content", "position", "top", "right", "bottom", "left",
-		"float", "opacity", "cursor", "box-shadow", "overflow", "white-workspace",
+		"float", "opacity", "cursor", "box-shadow", "overflow", "white-space",
 		"vertical-align", "z-index",
 	).Globally()
 
@@ -222,7 +222,7 @@ func buildStyleSanitizer() *bluemonday.Policy {
 		"border", "border-radius", "width", "height", "max-width", "max-height",
 		"min-width", "min-height", "display", "flex", "flex-direction", "gap",
 		"align-items", "justify-content", "position", "top", "right", "bottom", "left",
-		"float", "opacity", "cursor", "box-shadow", "overflow", "white-workspace",
+		"float", "opacity", "cursor", "box-shadow", "overflow", "white-space",
 		"vertical-align", "z-index",
 	).Globally()
 	return p

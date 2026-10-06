@@ -139,6 +139,29 @@ func TestSanitizeStyleAllowsSafeCSSOnly(t *testing.T) {
 	}
 }
 
+// TestSanitizeStyleKeepsWhiteSpace guards a misspelt CSS property in the
+// allowlist: the list carried `white-workspace` — a property that does not exist
+// (the real one, per MDN, is `white-space`) — so a power user's
+// `white-space:pre-wrap` was silently stripped from their inline style. Nothing
+// caught it because the allowlist was only ever asserted on properties that do
+// exist; a misspelt entry is invisible until someone uses the property it was
+// meant to allow.
+func TestSanitizeStyleKeepsWhiteSpace(t *testing.T) {
+	out := SanitizeStyle("white-space:pre-wrap")
+	if !strings.Contains(out, "white-space") {
+		t.Errorf("white-space was stripped from an inline style (out: %q) — the allowlist must name the real CSS property, not `white-workspace`", out)
+	}
+	// The misspelt property must not be what makes it through.
+	if strings.Contains(out, "white-workspace") {
+		t.Errorf("the allowlist emitted the misspelt property name: %q", out)
+	}
+	for _, want := range []string{"white-space:nowrap", "white-space:pre"} {
+		if got := SanitizeStyle(want); !strings.Contains(got, "white-space") {
+			t.Errorf("%q did not survive sanitizing: %q", want, got)
+		}
+	}
+}
+
 func TestScanCustomJSBlocksMaliciousAllowsBenign(t *testing.T) {
 	// Malicious: dynamic code execution / obfuscation / external loads.
 	for _, js := range []string{

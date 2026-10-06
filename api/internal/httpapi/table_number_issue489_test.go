@@ -76,18 +76,7 @@ func TestIssue489EveryOrderBodyEchoesTableNumber(t *testing.T) {
 		}},
 		{"legacy product form (public.go)", func(t *testing.T) string {
 			var buf bytes.Buffer
-			if err := formTmpl.Execute(&buf, struct {
-				Slug, Title, Description string
-				Products                 []tmplProduct
-				OGMeta                   template.HTML
-				Footer                   footerInfo
-				AntiSpam                 template.HTML
-				NoIndex                  bool
-				HeightJS                 template.HTML
-				// Language placement: <html lang> + translated chrome.
-				Lang string
-				Ls   langStrings
-			}{
+			if err := formTmpl.Execute(&buf, legacyFormView{
 				Slug: "demo", Title: "Demo", Description: "desc",
 				Products: []tmplProduct{{ID: "p1", Name: "Item", PriceSen: 100}},
 				OGMeta:   template.HTML(""),

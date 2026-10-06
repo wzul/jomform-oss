@@ -40,7 +40,6 @@ package httpapi
 import (
 	"bytes"
 	"context"
-	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -110,21 +109,13 @@ func TestLanguagePlacementEveryDictionaryHasTheNewChromeStrings(t *testing.T) {
 // ── renderer: legacy product layout ──────────────────────────────────────────
 
 // legacyFormBody renders the legacy product layout through the REAL formTmpl
-// for the given resolved language, the same way renderLegacy feeds it.
+// for the given resolved language, the same way renderLegacy feeds it. The
+// payload is legacyFormView (the renderer's own type), so a field added to the
+// layout cannot leave this helper handing the template a stale struct.
 func legacyFormBody(lang string) string {
 	var buf bytes.Buffer
 	ls := langStringsForCode(lang)
-	err := formTmpl.Execute(&buf, struct {
-		Slug, Title, Description string
-		Products                 []tmplProduct
-		OGMeta                   template.HTML
-		Footer                   footerInfo
-		AntiSpam                 template.HTML
-		NoIndex                  bool
-		HeightJS                 template.HTML
-		Lang                     string
-		Ls                       langStrings
-	}{
+	err := formTmpl.Execute(&buf, legacyFormView{
 		Slug: "demo", Title: "Demo", Description: "desc",
 		Products: []tmplProduct{{ID: "p1", Name: "Item", PriceSen: 100}},
 		Footer:   footerInfo{},
@@ -176,17 +167,7 @@ func TestLegacyProductLayoutFollowsWorkspaceLanguage(t *testing.T) {
 func TestLegacyProductLayoutFooterLinksFollowLanguage(t *testing.T) {
 	var buf bytes.Buffer
 	ls := langStringsForCode("en")
-	err := formTmpl.Execute(&buf, struct {
-		Slug, Title, Description string
-		Products                 []tmplProduct
-		OGMeta                   template.HTML
-		Footer                   footerInfo
-		AntiSpam                 template.HTML
-		NoIndex                  bool
-		HeightJS                 template.HTML
-		Lang                     string
-		Ls                       langStrings
-	}{
+	err := formTmpl.Execute(&buf, legacyFormView{
 		Slug: "demo", Title: "Demo", Description: "desc",
 		Products: []tmplProduct{{ID: "p1", Name: "Item", PriceSen: 100}},
 		Footer: footerInfo{

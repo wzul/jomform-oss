@@ -47,19 +47,7 @@ func TestBlockFormRendersNoFooter(t *testing.T) {
 
 func TestLegacyFormRendersNoFooter(t *testing.T) {
 	var buf bytes.Buffer
-	err := formTmpl.Execute(&buf, struct {
-		Slug, Title, Description string
-		Products                 []tmplProduct
-		OGMeta                   template.HTML
-		Footer                   footerInfo
-		AntiSpam                 template.HTML
-		NoIndex                  bool
-		// Issue #456: postMessage auto-height reporter.
-		HeightJS template.HTML
-		// Language placement: <html lang> + the translated chrome strings.
-		Lang string
-		Ls   langStrings
-	}{
+	err := formTmpl.Execute(&buf, legacyFormView{
 		Slug: "demo", Title: "Demo", Description: "desc",
 		Products: []tmplProduct{{ID: "p1", Name: "Item", PriceSen: 100}},
 		OGMeta:   template.HTML(""),
