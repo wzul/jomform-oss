@@ -462,3 +462,94 @@ func TestReconcileDefaultReportsWhetherItChangedTheRow(t *testing.T) {
 		t.Errorf("a second ReconcileDefault on the same form reported a change — the rule was moved twice")
 	}
 }
+
+// TestModeChangeRePointsARelabelledDefault pins the direction the follow-up card
+// `t_4f439f55` settled: the rule's NAME is a dashboard label, not a decision
+// about the message, so a merchant who renamed his default and THEN switched the
+// form's mode must still end up with a rule that fires.
+//
+// THE GAP THIS CLOSES. The reconcile used to require `AND name=$7` in its WHERE
+// while migration 000062 — the contract it claims to match — has no `name`
+// predicate at all (it SETS the name). So the reconcile was STRICTER than the
+// migration: a re-labelled default was repaired by 000062 but left dead by the
+// reconcile, and the merchant who renamed the rule and then switched payment →
+// response kept an enabled `is_default` `sale.paid` rule on a form that records
+// submissions. `ListByFormEvent(formID, "response.submitted")` matched zero rows
+// and he was never told anyone responded — the identical symptom this file
+// exists to close, reachable by one extra sequence.
+//
+// The write path is the real one: the Name field in form settings posts through
+// `PUT .../notifications/{id}` → `FormNotificationStore.Update`, which — like
+// this test — never sets `is_default`, so the row stays the system's default and
+// only its label moved.
+func TestModeChangeRePointsARelabelledDefault(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	forms := NewFormStore(p)
+	notif := NewFormNotificationStore(p)
+	acc := uniqueAccount(t, ctx, p)
+
+	f := seedDefaultNotification(t, ctx, forms, notif, acc, "mc-relabel-"+acc[:8],
+		map[string]any{"mode": "payment", "blocks": []any{}})
+	rules, err := notif.ListByForm(ctx, f.ID)
+	if err != nil {
+		t.Fatalf("list rules: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("pre-condition: want 1 default rule, got %d (%+v)", len(rules), rules)
+	}
+	// The merchant renames the label and touches nothing else. Every other byte
+	// stays the system's, which is exactly what makes the row still his default.
+	const merchantLabel = "Pesanan masuk"
+	if err := notif.Update(ctx, f.ID, rules[0].ID, &FormNotification{
+		Name: merchantLabel, Event: rules[0].Event, ToEmail: rules[0].ToEmail,
+		Subject: rules[0].Subject, Body: rules[0].Body, Enabled: true,
+	}); err != nil {
+		t.Fatalf("merchant renames the default's label: %v", err)
+	}
+	relabelled, err := notif.ListByForm(ctx, f.ID)
+	if err != nil {
+		t.Fatalf("list rules after rename: %v", err)
+	}
+	if relabelled[0].Name != merchantLabel || !relabelled[0].IsDefault {
+		t.Fatalf("pre-condition: the rename did not land on an is_default row: %+v", relabelled[0])
+	}
+
+	// Now the mode moves. The unedited-bytes default must be re-pointed even
+	// though its label is no longer the system's.
+	if err := forms.Update(ctx, acc, f.ID, f.Title,
+		map[string]any{"mode": "response", "blocks": []any{}}, nil); err != nil {
+		t.Fatalf("switch to response mode: %v", err)
+	}
+	stored, err := forms.GetByID(ctx, acc, f.ID)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if FormMode(stored) != FormModeResponse {
+		t.Fatalf("stored mode = %q, want response", FormMode(stored))
+	}
+
+	live := requireLiveNotificationForMode(t, ctx, notif, stored)
+	if len(live) != 1 {
+		t.Fatalf("want exactly 1 live rule, got %d (%+v) — a re-labelled default was left dead "+
+			"by the mode change (card t_4f439f55)", len(live), live)
+	}
+	if live[0].Event != NotifyEventResponseSubmitted {
+		t.Fatalf("live rule event = %q, want %q", live[0].Event, NotifyEventResponseSubmitted)
+	}
+	// The label the merchant typed must not be left on a rule that now says
+	// something else: the SET re-points the name with the event, so the label and
+	// the event cannot disagree in the dashboard.
+	wantName, _, _, _ := defaultNotificationFor(FormModeResponse)
+	if live[0].Name != wantName {
+		t.Errorf("the re-pointed rule kept the merchant's stale label %q; want the system's %q for "+
+			"the event it now fires", live[0].Name, wantName)
+	}
+	all, err := notif.ListByForm(ctx, f.ID)
+	if err != nil {
+		t.Fatalf("list all rules: %v", err)
+	}
+	if len(all) != 1 {
+		t.Errorf("the reconcile must MOVE the default, not add a second rule; got %d (%+v)", len(all), all)
+	}
+}

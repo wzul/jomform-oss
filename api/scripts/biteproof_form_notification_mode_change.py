@@ -10,6 +10,7 @@ Guards under proof (all in api/internal/dbstore/form_notification_mode_change_te
   TestModeChangeLeavesAMerchantAuthoredRuleAlone
   TestModeChangeKeepsAnOptedOutFormSilent
   TestModeChangeIsIdempotentAndQuietWhenAlreadyCorrect
+  TestModeChangeRePointsARelabelledDefault
 
 THE DEFECT (card t_a58848bd, found by QA on t_f37d710d): EnsureDefault picks a
 form's default notification event from the form's mode AT INSERT TIME ONLY, so a
@@ -35,6 +36,10 @@ not arbitrary breakage:
      overwritten, which is worse than the bug it fixes: his words go out.
   E  Drop the to_email predicate                    - a default re-addressed to
      the merchant's own inbox is taken away from it.
+  F  Restore the NAME predicate (the pre-follow-up code, card t_4f439f55)  - the
+     reconcile becomes STRICTER than 000062 (which never constrained the name),
+     so a merchant who re-labelled his default and then switched the mode is
+     left dead: the exact symptom, reachable by one extra sequence.
 
 The CONTROL (unmutated tree) must be GREEN over the full package first, or every
 red below is unmeasurable. Two refusals are built in, both measured rather than
@@ -72,6 +77,7 @@ GUARDS = [
     "TestModeChangeLeavesAMerchantAuthoredRuleAlone",
     "TestModeChangeKeepsAnOptedOutFormSilent",
     "TestModeChangeIsIdempotentAndQuietWhenAlreadyCorrect",
+    "TestModeChangeRePointsARelabelledDefault",
 ]
 
 
@@ -147,9 +153,8 @@ MUTATIONS = [
     (
         "D: the subject/body half of the template-match predicate is dropped, so a merchant-EDITED default is overwritten",
         NOTIF_GO,
-        "		    AND name=$7 AND event=$8 AND subject=$9 AND body=$10\n",
-        "		    AND name=$7 AND event=$8 AND (subject=$9 OR $9 IS NOT NULL)"
-        " AND (body=$10 OR $10 IS NOT NULL)\n",
+        "		    AND event=$7 AND subject=$8 AND body=$9\n",
+        "		    AND event=$7 AND (subject=$8 OR $8 IS NOT NULL) AND (body=$9 OR $9 IS NOT NULL)\n",
         [
             "TestModeChangeLeavesAMerchantEditedDefaultAlone",
             "TestModeChangeLeavesReAddressedDefaultAlone",
@@ -161,6 +166,14 @@ MUTATIONS = [
         "		    AND COALESCE(to_email,'')=$6\n",
         "		    AND (COALESCE(to_email,'')=$6 OR $6 IS NOT NULL)\n",
         ["TestModeChangeLeavesReAddressedDefaultAlone"],
+    ),
+    (
+        "F: the NAME predicate is restored (the pre-follow-up code), so a re-labelled default is left dead and the "+
+        "reconcile is stricter than 000062, which never constrained the name",
+        NOTIF_GO,
+        "		    AND event=$7 AND subject=$8 AND body=$9\n",
+        "		    AND name=$3 AND event=$7 AND subject=$8 AND body=$9\n",
+        ["TestModeChangeRePointsARelabelledDefault"],
     ),
 ]
 

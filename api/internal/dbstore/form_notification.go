@@ -273,11 +273,27 @@ func (s *FormNotificationStore) EnsureDefault(ctx context.Context, f *Form) erro
 //
 //   - the row must be the form's DEFAULT (`is_default`),
 //   - it must still carry the system's own bytes for the event it holds —
-//     its name, recipient, subject and body must all equal what the system
-//     wrote for the OTHER mode's default (recognised through emailtext, the
-//     same one-definition dictionary EnsureDefault writes from, so the two
-//     cannot drift),
+//     its recipient, subject and body must all equal what the system wrote for
+//     the OTHER mode's default (recognised through emailtext, the same
+//     one-definition dictionary EnsureDefault writes from, so the two cannot
+//     drift),
 //   - and its event must actually be the one the form's mode can never fire.
+//
+// THE NAME IS NOT PART OF THAT COMPARISON, and that is deliberate (card
+// `t_4f439f55`). `name` is a label in the dashboard's rule list, not a decision
+// about the MESSAGE — the recipient, subject and body are — and 000062 never
+// constrained it either: the migration SETS `name = 'Admin Notification'` and
+// its WHERE carries no `name` predicate, so it repaired a re-labelled default
+// and this reconcile has to agree with it. Comparing the name made the reconcile
+// STRICTER than the migration it claims to match, and the gap was reachable: a
+// merchant who renamed the rule (form settings → the rule's Name field → PUT
+// .../notifications/{id}, which never sets is_default) and THEN switched the
+// form's mode kept a dead `sale.paid` rule on a response form, so the merchant
+// was never told anyone responded — the exact symptom this reconcile exists to
+// close. A row the merchant re-labelled is still the system's rule by every
+// other compared byte; the SET re-points the event and restores the system's own
+// name for that event with it, so the label and the event cannot end up
+// disagreeing.
 //
 // A merchant-authored or even partially-edited rule fails that comparison and
 // is left exactly as it is — including a rule he re-addressed to his own
@@ -290,9 +306,11 @@ func (s *FormNotificationStore) ReconcileDefault(ctx context.Context, f *Form) (
 		return false, nil
 	}
 	wantName, wantEvent, wantSubject, wantBody := defaultNotificationFor(FormMode(f))
-	// How the system's default for the OTHER mode reads. Only a row that is
-	// byte-identical to this is a default the system wrote and nobody edited.
-	otherName, otherEvent, otherSubject, otherBody := defaultNotificationFor(otherFormMode(FormMode(f)))
+	// How the system's default for the OTHER mode reads for the bytes this
+	// actually compares: recipient, subject and body. The name is deliberately
+	// not one of them (see THE NAME IS NOT PART OF THAT COMPARISON above); the
+	// SET re-points it to wantName, so it is discarded here rather than tested.
+	_, otherEvent, otherSubject, otherBody := defaultNotificationFor(otherFormMode(FormMode(f)))
 	if otherEvent == wantEvent {
 		return false, nil
 	}
@@ -307,10 +325,10 @@ func (s *FormNotificationStore) ReconcileDefault(ctx context.Context, f *Form) (
 		  WHERE form_id=$1
 		    AND is_default=true
 		    AND COALESCE(to_email,'')=$6
-		    AND name=$7 AND event=$8 AND subject=$9 AND body=$10
+		    AND event=$7 AND subject=$8 AND body=$9
 		  RETURNING id`,
 		f.ID, wantEvent, wantName, wantSubject, wantBody,
-		defaultNotificationRecipient, otherName, otherEvent, otherSubject, otherBody)
+		defaultNotificationRecipient, otherEvent, otherSubject, otherBody)
 	if err != nil {
 		return false, err
 	}

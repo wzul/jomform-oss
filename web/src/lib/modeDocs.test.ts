@@ -121,4 +121,24 @@ test("the destination really declares the anchor the form-mode link points at", 
       "default notification — the surface would link a merchant to a section that does not answer the " +
       "question the link was added for",
   );
+  // The SCOPE the reconcile actually applies (card t_4f439f55): the label is a
+  // dashboard name, not a decision about the message, so renaming it does NOT opt
+  // the rule out — the recipient/subject/body do. If the prose stopped saying so,
+  // the page would promise an opt-out the store does not honour (or, read the
+  // other way, the reconcile would look like it was seizing an edited rule).
+  assert.ok(
+    /renaming the label alone does not opt the rule out/i.test(EMAIL_DOCS),
+    "the /docs/email notifications section no longer states that renaming a rule's LABEL does not opt it out " +
+      "of the mode-change reconcile — the page would then contradict the store, which compares the " +
+      "recipient/subject/body and deliberately not the name",
+  );
+  // And it must say what the label IS, so the reader is not left thinking the
+  // reconcile ignores the field entirely: a re-pointed default takes the
+  // system's own label for the event it now fires.
+  assert.ok(
+    /The label is a dashboard name, not a decision about the message/.test(EMAIL_DOCS),
+    "the /docs/email notifications section no longer explains that the rule's label is a dashboard name " +
+      "rather than a decision about the message — the sentence that makes the label's exclusion from the " +
+      "reconcile comparison legible is gone",
+  );
 });
