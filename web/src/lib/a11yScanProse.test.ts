@@ -10,9 +10,9 @@
 //     `/docs/mcp`, `/docs/feedback`, `/docs/chat`)
 //
 // while `web/e2e/a11y.spec.ts` — the list the `a11y` gate actually runs — held
-// fourteen. The prose named TEN and omitted /docs/workspaces, /docs/sales,
-// /docs/email and /docs/security; on the rebased tree it omitted /docs/activity
-// and /docs/api as well. It had drifted at least twice before:
+// eighteen. The prose named twelve and omitted /docs/workspaces, /docs/sales,
+// /docs/email, /docs/security, /docs/activity and /docs/api. It had drifted at
+// least twice before:
 // `git log -S'/docs/workspaces' -- web/e2e/a11y.spec.ts` -> 2089b6fb,
 // `-S'/docs/activity'` -> 48943425, `-S'/docs/api'` -> 171ca95a — cards that
 // updated the spec and not the prose, because nothing connects the two.
@@ -223,8 +223,8 @@ test("the scanned-pages list does not hand-enumerate the docs routes", (t) => {
     `${routes.length} docs routes are spelled out in the scanned-pages list of ` +
       `docs/accessibility.md: ${routes.join(", ")}. The scanned list is PAGES in ` +
       `web/e2e/a11y.spec.ts, and web/src/lib/docsA11y.test.ts fails when a docs page on ` +
-      `disk is missing from it — a copy here is redundant and is what drifted twice (ten ` +
-      `named while the spec listed fourteen). Name at most ${MAX_EXAMPLE_ROUTES} as ` +
+      `disk is missing from it — a copy here is redundant and is what drifted twice ` +
+      `(twelve named while the spec listed eighteen). Name at most ${MAX_EXAMPLE_ROUTES} as ` +
       `examples and point at the spec instead.`,
   );
 });

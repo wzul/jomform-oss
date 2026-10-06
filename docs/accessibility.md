@@ -45,7 +45,7 @@ key public pages and **fails the gate on any critical or serious violation**:
   was outside the gate until card `t_f5a8730d` extended the list, which is how
   serious axe violations sat on `/docs/customize` (and every other docs route)
   unreported while the gate passed 7/7. This paragraph used to name the routes
-  by hand and drifted twice (ten named while the spec listed sixteen), so
+  by hand and drifted twice (twelve named while the spec listed eighteen), so
   `web/src/lib/a11yScanProse.test.ts` now fails if a hand-written list comes
   back.
 
