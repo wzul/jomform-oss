@@ -21,14 +21,18 @@
 // source text Tailwind matched):
 //   - a class the stylesheet's OWN rules declare (`selectorDefined`) → fine;
 //   - present in a SHIPPED file → fine; a real class in real code may be emitted;
-//   - otherwise, present in a NON-SHIPPED file (a `*.test.ts(x)` or `web/e2e/**`)
-//     → VIOLATION: the bundle carries a utility only a test names;
+//   - otherwise, present in a NON-SHIPPED file (a `*.test.ts(x)`, `web/e2e/**`,
+//     a `web/scripts/**` helper or a web-root build config) → VIOLATION: the
+//     bundle carries a utility that only a non-shipped file names;
 //   - present in neither → skipped. Tailwind defaults, arbitrary values and
-//     config/script literals are outside this scope.
+//     literals no file carries are outside this scope.
 //
-// WHAT IT DOES NOT COVER. Only the corpora it is handed are searched, so it
-// says nothing about a class literal in a config or a build script, and a class
-// that is BOTH in a test and in real app code is not a violation by design.
+// WHAT IT COVERS. Only the corpora it is handed are searched. The driver feeds
+// four non-shipped groups — tests, e2e specs, `web/scripts/**` and the web-root
+// build configs (card t_bc75e313 added the last two, because Tailwind scans the
+// whole `web/` build tree) — so a class sourced ONLY from a test, a build script
+// or a config is a violation; one that is BOTH in a non-shipped file and in real
+// app code is not, by design.
 
 // A tail of characters Tailwind can put in a class, in the ESCAPED form it emits
 // in CSS (`.hover\:bg-\[\#828fff\]:hover`).
