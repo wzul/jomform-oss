@@ -2035,13 +2035,63 @@ fi
 #     usefulness". The TTL is read from PREFLIGHT_RESULT_TTL (the same variable
 #     the runner honours), so this measures the real horizon logic and not a
 #     hardcoded window.
+#
+#     THE RECORD'S AGE IS PINNED BY THE FIXTURE, NOT BY ELAPSING WALL-CLOCK TIME
+#     (card t_491cbf28). This check used to write a record with one real run and
+#     read it back under `PREFLIGHT_RESULT_TTL=1`, relying on the second (equally
+#     real) invocation to have spent more than a second before it read — and a real
+#     invocation runs whatever the SELECTED GATE is, so the window it had to
+#     outlast was one gate's own runtime (`$probe_gate` is `build`, first in
+#     `--list`). Nothing guaranteed that window: when the read landed INSIDE the 1s
+#     horizon the record was still fresh, the refusal came from the RED-verdict
+#     branch instead of the horizon, the message did not match and the check
+#     reported `bad` for a defect that was not there. Measured: it reddened a real
+#     full preflight run on a loaded host (tree 42d7ed7d, `selftest` failed on this
+#     one assertion, 84/1) and passed solo on the same bytes — a flake in the only
+#     merge gate this repo has. The horizon is a function of (finished_at, TTL) and
+#     both are the FIXTURE's to set, so the record is hand-written with a
+#     `finished_at` two hours in the past — exactly as check 20 hand-writes one to
+#     pin the on-disk shape — and the verdict can no longer be won by a fast read
+#     or lost by a slow host.
+#
+#     AND THE REFUSAL IS ATTRIBUTED, NOT MERELY COUNTED. A refusal for ANY reason
+#     satisfies a bare `rc -ne 0`, which is how a record that is unusable for some
+#     other cause would read as "the horizon refused it" — the false-green shape
+#     this file keeps finding. So the second leg reads the SAME aged record under a
+#     horizon that CONTAINS it (the documented 86400s default) and requires it to be
+#     REUSED: a record refused under the 1s horizon but refused again under 86400
+#     would be a broken fixture, and this check would say so instead of passing.
 if [ -n "$probe_tree" ]; then
   rec="$(gr_file "$probe_tree")"
+  # A real run materialises the record for the key's sake ONLY: the fixture must
+  # carry the fingerprint the runner computes for itself, or the read refuses for a
+  # moved key (a different, uninteresting reason) instead of for the horizon. The
+  # run's own verdict is irrelevant — the file is rewritten wholesale below.
   PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" >/dev/null 2>&1
+  key="$(gr_read_field "$rec" key)"
+  parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
+  aged="$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n    "%s": { "status": "pass", "seconds": 3, "at": "%s", "reused": false }\n  },\n  "runs": 1,\n  "verdict": "green",\n  "finished_at": "%s"\n}\n' \
+    "$probe_tree" "$key" "$parts" "$probe_gate" "$aged" "$aged" > "$rec"
+  # The fixture IS the check: assert the observed pass landed before reading, or a
+  # lost entry would make both legs agree for no reason (the same guard check 23
+  # applies to its own hand-written record).
+  fixture_pass="$(gr_gate_status "$rec" "$probe_gate")"
   out=$(PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_RESULT_TTL=1 ./scripts/preflight.sh --only "$probe_gate" --reuse-record 2>&1)
   rc=$?
-  if [ $rc -ne 0 ] && grep -q 'older than the 1s horizon' <<<"$out"; then
-    ok "a record past its TTL is refused (a cached pass does not outlive its usefulness)"
+  if [ "$fixture_pass" != "pass" ]; then
+    bad "check 22's fixture did not land ($probe_gate=$fixture_pass) — the horizon assertion below would be about a record this check never wrote"
+  elif [ $rc -ne 0 ] && grep -q 'older than the 1s horizon' <<<"$out"; then
+    # THE ATTRIBUTION LEG. Same bytes, same key, same tree — a horizon wide enough
+    # to contain the 2h-old record. A record that is unusable for any OTHER reason
+    # refuses here too, so this leg cannot pass on a fixture that merely looks stale.
+    reused_out=$(PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_RESULT_TTL=86400 ./scripts/preflight.sh --only "$probe_gate" --reuse-record 2>&1)
+    reused_rc=$?
+    if [ $reused_rc -eq 0 ] && grep -q 'REUSED' <<<"$reused_out" && ! grep -q 'gate \[' <<<"$reused_out"; then
+      ok "a record past its TTL is refused naming the horizon, and the SAME record inside a wider horizon is reused without running a gate (so the refusal is the horizon, not the fixture)"
+    else
+      bad "the aged fixture is refused under a 1s horizon but NOT reusable under 86400s (rc=$reused_rc) — the record is unusable for a reason other than the horizon, so the refusal above does not evidence the horizon logic: [$(printf '%s' "$reused_out" | tail -n 1)]"
+    fi
   else
     bad "a stale record must be refused, got rc=$rc [$(printf '%s' "$out" | tail -n 1)]"
   fi

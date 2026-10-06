@@ -575,6 +575,33 @@ else
 fi
 restore_and_verify
 
+# --- case 8: THE TTL HORIZON KILLED. gr_ttl stops reading PREFLIGHT_RESULT_TTL and
+# always answers the 86400 default, so "do not let a cached pass outlive its
+# usefulness" is unenforced and a stale record is handed back as fresh. This is the
+# property check 22 exists to pin (card t_491cbf28), and the case is what proves the
+# check still bites after that card made it deterministic: the check's fixture now
+# ages the record ITSELF, so a horizon that ignores the TTL can no longer be caught
+# by the wall clock — only by the assertion.
+echo "== case 8: the TTL horizon killed (gr_ttl ignores PREFLIGHT_RESULT_TTL) =="
+sed -i "s|^gr_ttl() {.*|gr_ttl() { printf '%s\\\\n' 86400; }|" "$RESULT"
+chmod "$MODE_RESULT" "$RESULT"
+if ! assert_mutated "$RESULT" "gr_ttl() { printf '%s\\n' 86400; }"; then
+  :
+elif ! bash -n "$RESULT"; then
+  bad "case 8 — the mutation left gate_result.sh syntactically invalid, so any red below would be a parse error rather than the horizon under test"
+elif [ "$(PREFLIGHT_RESULT_TTL=1 bash -c ". $RESULT; gr_ttl")" != "86400" ]; then
+  bad "case 8 — the mutated gr_ttl still honours PREFLIGHT_RESULT_TTL (answered [$(PREFLIGHT_RESULT_TTL=1 bash -c ". $RESULT; gr_ttl")] for TTL=1), so the horizon was never killed and this case proves nothing"
+else
+  rc8=0
+  selftest_run "$WORK/case8.log" || rc8=$?
+  # ONLY check 22 can fire: the horizon is the sole reader of gr_ttl's answer, and
+  # the other record checks key on the tree, the fingerprint and the verdict, none
+  # of which this mutation touches (measured: 84 passed, this one failure).
+  verdict "case 8" "$WORK/case8.log" "$rc8" "stale record must be refused" \
+    "with the TTL horizon killed, an aged record is reused instead of refused and check 22 reds naming exactly that"
+fi
+restore_and_verify
+
 # --- the tree must be as dirty as it was found: a case that leaked a mutation past
 # its restore would poison every lane after it, and the sha checks above cannot see
 # an ADDED file.
@@ -588,7 +615,7 @@ fi
 
 echo "---"
 if [ "$FAIL" -eq 0 ]; then
-  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, hashing the test-DB host's SPELLING into it, putting the all-or-nothing credential strip or the unconditional step-2 strip back, or removing the scheme guard that refuses an un-strippable DSN, each turns the REAL selftest gate red, naming that property"
+  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, hashing the test-DB host's SPELLING into it, putting the all-or-nothing credential strip or the unconditional step-2 strip back, removing the scheme guard that refuses an un-strippable DSN, or killing the TTL horizon each turns the REAL selftest gate red, naming that property"
 else
   echo "biteproof: $PASS passed, $FAIL failed — a reuse guard does NOT hold something it claims to"
 fi
