@@ -6,7 +6,8 @@
 # "the guard is green today" but "the guard could not see this CLASS, and now it
 # can". Both directions are driven on the SAME planted slab:
 #
-#   * the guard as it shipped (`origin/main` bytes) over a dark slab at
+#   * the guard as it shipped BEFORE the fix (the PINNED revision
+#     `BITEPROOF_PREFIX_REV`, default 01752e75 / v1.20.39) over a dark slab at
 #     `app/probe-dyn/[id]/page.tsx`  -> GREEN  (the hole: judged by NEITHER layer)
 #   * this tree's guard over the same slab -> RED, naming the route and the token
 #   * CONTROL: the same slab at a STATIC route -> RED under BOTH guards, so the
@@ -94,20 +95,35 @@ GUARD_REPO="web/$GUARD"          # the same path as git sees it, from the repo r
 SPEC=src/lib/jsxSource.ts
 [ -f "$GUARD" ] || { echo "missing $GUARD — is this the right worktree?" >&2; exit 2; }
 
-# The guard as it SHIPPED on origin/main, dropped beside the real one so its
-# relative `../` paths still resolve to this tree's `web/src`. A copy that cannot
-# be made (no origin/main, or the file is newer than the ref) is a REFUSAL: a
-# missing "old" column is not a pass.
+# The guard as it shipped BEFORE the dynamic-route fix, dropped beside the real
+# one so its relative `../` paths still resolve to this tree's `web/src`.
+#
+# The revision is PINNED, not read from `origin/main` (card t_ea652b97). It used to
+# be `origin/main`, and that made this harness permanently un-runnable the moment
+# its own fix merged: after PR #1003 (3e27fac9) `origin/main` IS the post-fix
+# commit, so the CAPABILITY check below refused on main for ever, and the row in
+# BITE-HARNESSES.md advertised an evidence line nothing on main could reproduce.
+# A pinned revision keeps the bite reproducible after the merge — the same shape
+# `biteproof_llms_full_coverage.sh` uses for its flat-disk-arm column. Point it at
+# the parent of the fix if the guard is ever re-cut, or override it here.
+PREFIX_REF="${BITEPROOF_PREFIX_REV:-01752e75201360596ff136f95a2608c83fc5679e}"   # v1.20.39 (pre-fix)
+PREFIX_REV=$(git rev-parse "${PREFIX_REF}^{commit}" 2>/dev/null) || {
+  echo "BITEPROOF REFUSED: cannot resolve the pinned pre-fix revision ${PREFIX_REF} (set" >&2
+  echo "BITEPROOF_PREFIX_REV to a revision that carries ${GUARD_REPO})." >&2
+  exit 2
+}
 OLD_GUARD=src/lib/.biteproof-prefix-guard.ts
-if ! git show "origin/main:$GUARD_REPO" > "$OLD_GUARD" 2>/dev/null; then
-  echo "BITEPROOF REFUSED: cannot read $GUARD_REPO from origin/main, so the PRE-FIX column (the" >&2
-  echo "hole this harness exists to show) cannot be driven." >&2
+if ! git show "${PREFIX_REV}:${GUARD_REPO}" > "$OLD_GUARD" 2>/dev/null; then
+  echo "BITEPROOF REFUSED: cannot read $GUARD_REPO from the pinned revision ${PREFIX_REF}" >&2
+  echo "($PREFIX_REV), so the PRE-FIX column (the hole this harness exists to show) cannot" >&2
+  echo "be driven." >&2
   rm -f "$OLD_GUARD"
   exit 2
 fi
 if grep -q 'PINNED_DYNAMIC_CARRIERS' "$OLD_GUARD"; then
-  echo "BITEPROOF REFUSED: origin/main's guard ALREADY carries the dynamic-route rule, so the" >&2
-  echo "pre-fix column would agree with this tree's and prove nothing (the base moved)." >&2
+  echo "BITEPROOF REFUSED: the pinned pre-fix revision (${PREFIX_REF} ${PREFIX_REV:0:12}) ALREADY" >&2
+  echo "carries the dynamic-route rule, so the pre-fix column would agree with this tree's and" >&2
+  echo "prove nothing. Point BITEPROOF_PREFIX_REV at a revision BEFORE the fix." >&2
   rm -f "$OLD_GUARD"
   exit 2
 fi
@@ -115,15 +131,31 @@ OLD_SHA=$(sha256sum "$OLD_GUARD" | cut -d' ' -f1)
 GUARD_SHA_BEFORE=$(sha256sum "$GUARD" | cut -d' ' -f1)
 
 DYN_DIR='src/app/probe-dyn/[id]'
+DYN_PARENT='src/app/probe-dyn'          # the route's parent, removed AFTER DYN_DIR
 DYN_PAGE="$DYN_DIR/page.tsx"
 ST_DIR=src/app/probe-static
 ST_PAGE="$ST_DIR/page.tsx"
 
 fail=0
+# The removal is a NAMED function so the stray check below can run AFTER it (card
+# t_ea652b97). The check used to run BEFORE the trap's cleanup, so a path that the
+# trap was about to remove read as a survivor — and, in the other direction, the
+# trap's `"$DYN_DIR/.."` rmdir never resolved at all, so an empty
+# `src/app/probe-dyn/` outlived every run while the check printed a clean tree.
+remove_probes() {
+  rm -f "$DYN_PAGE" "$ST_PAGE" "$OLD_GUARD"
+  # The parent is named by its OWN variable and NOT as `"$DYN_DIR/.."`: rmdir
+  # resolves its operands left to right, so by the time the `..` form ran,
+  # `probe-dyn/[id]` was already gone and `probe-dyn/[id]/..` no longer RESOLVED —
+  # measured in a real run and isolated: `rmdir: failed to remove '…/[id]/..':
+  # Directory not empty`. `${DYN_DIR%/[id]}` is NOT the fix either: in a parameter
+  # expansion the pattern is a GLOB and `[id]` is a bracket expression matching one
+  # `i` or `d`, so it strips nothing.
+  rmdir "$DYN_DIR" "$DYN_PARENT" "$ST_DIR" 2>/dev/null
+}
 cleanup() {
   local rc=$?
-  rm -f "$DYN_PAGE" "$ST_PAGE" "$OLD_GUARD"
-  rmdir "$DYN_DIR" "$DYN_DIR/.." "$ST_DIR" 2>/dev/null
+  remove_probes
   exit "$rc"
 }
 trap cleanup EXIT
@@ -209,12 +241,34 @@ rm -f "$OLD_GUARD"
 
 # Nothing this run planted may survive: the tree must be byte-identical where it
 # started, or every later `test:unit` in this worktree judges a mutated tree.
+#
+# THE REMOVAL RUNS HERE, not only from the EXIT trap (card t_ea652b97). The check
+# used to run while the probe paths were still on disk, so it could not tell a real
+# leak from work the trap was about to do; and the trap's removal was itself broken
+# (see remove_probes). Removing first and checking second is the only order in which
+# this assertion is about the harness rather than about the check's own position.
+remove_probes
+
+# `git status --porcelain` is the FIRST leg, but it is BLIND to an empty directory
+# (git tracks no empty dir): it reported nothing for a surviving `probe-dyn/`, which
+# is exactly the leak this harness had — an empty `src/app/probe-dyn/` outlived every
+# run while this check printed a clean tree. The DIRECTORY leg below is the one that
+# sees it.
 STRAY=$(git status --porcelain -- "$DYN_PAGE" "$ST_PAGE" "$OLD_GUARD" "$DYN_DIR" "$ST_DIR")
-if [ -n "$STRAY" ]; then
-  echo "  *** A PROBE SURVIVED THE RUN: ***"; echo "$STRAY"; fail=1
+LEFT=''
+for d in "$DYN_PARENT" "$DYN_DIR" "$ST_DIR"; do
+  [ -e "$d" ] && LEFT="$LEFT$d"$'\n'
+done
+[ -e "$OLD_GUARD" ] && LEFT="$LEFT$OLD_GUARD"$'\n'
+if [ -n "$STRAY" ] || [ -n "$LEFT" ]; then
+  echo "  *** A PROBE SURVIVED THE RUN: ***"
+  [ -n "$STRAY" ] && echo "$STRAY"
+  [ -n "$LEFT" ] && { echo "  (paths that still EXIST — git does not report an empty directory):"; printf '%s' "$LEFT"; }
+  fail=1
 else
   echo
-  echo "cleanup: no probe left behind (git status clean for every planted path)"
+  echo "cleanup: no probe left behind (git status clean for every planted path, and not one of"
+  echo "         $DYN_PARENT, $DYN_DIR, $ST_DIR, $OLD_GUARD still exists)"
 fi
 # And the guard itself must be byte-identical: this harness drives it, never edits
 # it, so any change means the run modified its own subject.
