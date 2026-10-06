@@ -207,8 +207,13 @@ test("production keeps the immutable header", async () => {
     "public, max-age=31536000, immutable",
     "a BUILT image has content-hashed filenames, so /_next/static/* must stay long-lived. " +
       "The same staging hostname can serve a built image, and losing this to fix the dev " +
-      "case would trade one caching defect for another. See " +
-      "web/src/lib/staticAssetCache.test.ts for the built-image side of this contract.",
+      "case would trade one caching defect for another. This value is what the config " +
+      "DECLARES; the half a READER is served — the header a running built server answers " +
+      "with, and that the rule is scoped to /_next/static and not to documents — is " +
+      "measured against the real server in web/e2e/static-asset-cache.spec.ts (card " +
+      "t_d101a943). This comment used to point at web/src/lib/staticAssetCache.test.ts, " +
+      "which has never existed in this repo: a pointer to a guard that is not there reads " +
+      "as coverage and is worse than naming no guard at all.",
   );
 });
 
