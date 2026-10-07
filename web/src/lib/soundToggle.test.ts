@@ -26,8 +26,10 @@
 //      cross-language like spamJudgeToggle.test.ts / salesRows.test.ts do. A
 //      rename on either side would silently save nothing.
 //   4. A failed write REVERTS the switch, so it never displays a value the
-//      server does not hold. This is the "honest failure" half of the card and
-//      is the second way the switch can lie.
+//      server does not hold — AND the revert is reported through the FAILURE
+//      tone (`showMsgFail`), never the success one. This is the "honest failure"
+//      half of the card and is the second way the switch can lie: it can revert
+//      correctly and still tell the merchant the save SUCCEEDED (t_6923cccb).
 //   5. The workspace id is resolved from the session's workspace list, because
 //      the settings endpoint is keyed by workspace ID while every list fetch on
 //      the page is scoped by SLUG. Without the id the write cannot address the
@@ -73,6 +75,28 @@ const DOCS_PAGE = "../app/docs/page.tsx";
 const GUIDE_PAGE = "../app/docs/sales/page.tsx";
 const FIELD = "sound_enabled";
 const SETTINGS_PATH = "/api/workspaces/${soundWorkspaceId}/settings";
+
+/**
+ * The brace-balanced body of the function whose source starts at `signature`
+ * (the signature through its closing `}`).
+ *
+ * Needed for the TONE assertion below: the existing
+ * `sales.slice(sales.indexOf(...))` idiom runs to the END of the file, so it
+ * also swallows every LATER action's own `showMsgOk(...)` (`confirmSale`,
+ * `captureSale`, `refundSale`, …). A negative `!/showMsgOk(/` on that slice
+ * would red the CURRENT, correct tree. The tone rule is about `toggleSound`
+ * alone, so the assertion is scoped to its own body.
+ */
+function functionBody(src: string, signature: string): string {
+  const at = src.indexOf(signature);
+  assert.ok(at >= 0, `could not find \`${signature}\` in app/sales/page.tsx`);
+  let depth = 0;
+  for (let i = src.indexOf("{", at); i < src.length; i += 1) {
+    if (src[i] === "{") depth += 1;
+    else if (src[i] === "}" && --depth === 0) return src.slice(at, i + 1);
+  }
+  throw new Error(`unbalanced braces after \`${signature}\` — re-anchor this guard`);
+}
 
 test("the guard is looking at real files (it cannot pass vacuously)", () => {
   assert.ok(
@@ -208,7 +232,7 @@ test("the write is addressed to the ACTIVE workspace (id, not the slug)", () => 
 });
 
 test("a FAILED write reverts the switch and surfaces the failure", () => {
-  const toggle = sales.slice(sales.indexOf("async function toggleSound"));
+  const toggle = functionBody(sales, "async function toggleSound");
   assert.ok(
     toggle.includes("setSoundEnabled(previous)"),
     "toggleSound does not restore the previous value when the write fails — the " +
@@ -225,6 +249,38 @@ test("a FAILED write reverts the switch and surfaces the failure", () => {
     /showMsgFail\(t\("sales\.soundSaveFail"\)\)|showMsgFail\(message\)/,
     "toggleSound reverts silently — a failed save must be visible to the merchant",
   );
+  // ...AND IT MUST KEEP THE FAILURE TONE (t_6923cccb). Everything above pins the
+  // SENTENCE and its CHANNEL; none of it pins the TONE, so the mutant
+  // `showMsgFail(message)` → `showMsgOk(message)` on the reverted-write line was
+  // GREEN across this file, `errReachability.test.ts` AND
+  // `actionFailureTone.test.ts` (measured 14/14 + 6/6 at 6d512bb1) — a merchant
+  // whose write was lost was painted an emerald success banner (#ecfdf5 /
+  // #007a55, no `role="alert"`, `data-tone="success"`). That is the exact
+  // user-visible regression of t_bfe1cda5, and it has to red HERE, in the fast
+  // unit suite, not only in the slower e2e spec (which does catch it —
+  // `e2e/action-failure-tone.spec.ts`: "Expected #fef2f2 Received #ecfdf5").
+  //
+  // Asserted by its WRITER, anchored on the revert → writer SEQUENCE (the shape
+  // `actionFailureTone.test.ts` uses), so it cannot be satisfied by the
+  // `showMsgFail` call in the no-workspace branch above it. The two lines are
+  // adjacent in toggleSound.
+  assert.match(
+    toggle,
+    /setSoundEnabled\(previous\);\s*showMsgFail\(message\);/,
+    "the reverted write is not reported through showMsgFail — the failure path can be " +
+      "relabelled a SUCCESS banner (showMsgOk) with every other assertion in this file " +
+      "still green (t_6923cccb)",
+  );
+  // ...and the wrong tone must not appear ANYWHERE in toggleSound: `showMsgOk`
+  // sets the page's tone state TRUE, so the failure banner renders green with
+  // `data-tone="success"`. Scoped to the function body — a whole-file scan would
+  // instead catch the page's OTHER actions, which correctly call showMsgOk.
+  assert.doesNotMatch(
+    toggle,
+    /showMsgOk\(/,
+    "toggleSound calls showMsgOk — a failed save would be painted as a SUCCESS " +
+      "(t_6923cccb, measured pre-fix: emerald #ecfdf5, data-tone=success)",
+  );
   assert.ok(
     !/setErr\(/.test(toggle),
     "toggleSound reports its failure through `err`, whose only render sites sit inside the empty-table " +
@@ -238,6 +294,35 @@ test("a FAILED write reverts the switch and surfaces the failure", () => {
     toggle,
     /soundWriteSeq\.current/,
     "toggleSound has no write sequencing — a stale failure could revert a newer click",
+  );
+});
+
+test("the tone rule would fail on the wrong-tone mutant (in-file bite proof)", () => {
+  // The exact mutant t_6923cccb is about: the reverted-write line, with its
+  // writer changed to the SUCCESS tone. The two assertions above must reject it
+  // — asserted here so the guard proves its own bite without anyone having to
+  // mutate the tree and re-run.
+  const mutant =
+    "    if (seq !== soundWriteSeq.current) return;\n" +
+    "    setSoundEnabled(previous);\n" +
+    "    showMsgOk(message);\n";
+  assert.doesNotMatch(
+    mutant,
+    /setSoundEnabled\(previous\);\s*showMsgFail\(message\);/,
+    "the sequence assertion ACCEPTED the wrong-tone mutant — the guard would stay green on a " +
+      "failed save painted as a success (t_6923cccb)",
+  );
+  assert.match(
+    mutant,
+    /showMsgOk\(/,
+    "the negative assertion cannot see the wrong tone in the mutant — the guard is blind to it",
+  );
+  // ...and the guard must ACCEPT the real, correct shape: the regex is anchored
+  // on the two adjacent lines, so a correct body passes.
+  assert.match(
+    mutant.replace("showMsgOk(message);", "showMsgFail(message);"),
+    /setSoundEnabled\(previous\);\s*showMsgFail\(message\);/,
+    "the sequence assertion rejected the CORRECT reverted write — it would red on the fix it guards",
   );
 });
 
