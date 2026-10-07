@@ -19,6 +19,13 @@ package httpapi
 // resolution, the view field, the template — is a red. The second is the
 // DB-free template-level guard for the three shapes the first cannot express
 // without a fixture each: hidden, an unknown value, and an image-less product.
+//
+// Card t_5d97a38e closed a gap in that split: `hidden` was only guarded by the
+// DB-free helper (`productImageForSize(hidden) == ""`), one layer away from the
+// renderer. Dropping the `!imgHidden` short-circuit in renderLegacy left the
+// whole suite green while a merchant-chosen `hidden` shipped a photo. The
+// `hidden` row below now drives the real mux, so the render path itself is the
+// thing that fails when the short-circuit goes.
 
 import (
 	"context"
@@ -125,6 +132,11 @@ func legacyImageBody(t *testing.T, h *PublicHandlers, host, formSlug string) str
 // A green suite on the broken shape proves nothing, so each case asserts on the
 // emitted attribute values (the resolved variant URL, the data-size the CSS
 // keys on, and the menu-card class) rather than on "the page rendered".
+//
+// wantSize == ProductImageSizeHidden is the render-path case for a merchant who
+// hid the photo: no image row at all. Its assertions differ from the visible
+// cases on purpose (there is no src, class or data-size attribute to assert), so
+// it carries the dedicated `hidden` branch in the body below.
 func TestLegacyFormAppliesProductImageSettings(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -138,6 +150,7 @@ func TestLegacyFormAppliesProductImageSettings(t *testing.T) {
 		{"large / image-top — the card's own reported case", "large", "image-top", "-full.jpg", "large", true},
 		{"small / thumbnail-left — membe/new-form's saved setting", "small", "thumbnail-left", "-thumbnail.jpg", "small", false},
 		{"medium / thumbnail-left", "medium", "thumbnail-left", "-medium.jpg", "medium", false},
+		{"hidden — the merchant hid the photo, so the render path paints none", ProductImageSizeHidden, "image-top", "", ProductImageSizeHidden, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			theme := map[string]any{"primary": "#5e6ad2"}
@@ -149,6 +162,25 @@ func TestLegacyFormAppliesProductImageSettings(t *testing.T) {
 			}
 			h, host, formSlug, image := legacyImageFixture(t, theme)
 			body := legacyImageBody(t, h, host, formSlug)
+
+			// The hidden row is the card t_5d97a38e case: the `!imgHidden`
+			// short-circuit in renderLegacy must keep the image out of the
+			// render path, not just out of the DB-free helper.
+			if tc.wantSize == ProductImageSizeHidden {
+				if n := strings.Count(body, `class="pimg"`); n != 0 {
+					t.Fatalf("hidden: rendered %d product images, want 0 — the merchant hid the product photo and the renderer painted %d (card t_5d97a38e)\nbody:\n%s", n, n, body)
+				}
+				if strings.Contains(body, `data-size="`) {
+					t.Error("hidden: a data-size attribute reached the markup — no product image should have been rendered")
+				}
+				if strings.Contains(body, `class="prod menu-card"`) {
+					t.Error("hidden: the image-top menu-card layout was applied even though the photo is hidden")
+				}
+				if !strings.Contains(body, "Nasi Lemak") {
+					t.Error("hidden: the product name went missing — hiding the photo must not hide the row")
+				}
+				return
+			}
 
 			// 1. The product photo reaches the page at all.
 			if n := strings.Count(body, `class="pimg"`); n != 1 {
