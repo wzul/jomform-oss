@@ -55,8 +55,21 @@
 // lock file, `jomform-biteproof-docs-bite`, so any two of them serialise in a
 // worktree; the two that carried no lock at all (`biteproof_docs_index_comment_anchor.sh`,
 // `biteproof_mcp_tool_inventory.sh`) were given it here for the same reason. This file
-// therefore drives SIX harnesses, one entry each, and the cross-harness leg below is
+// therefore drives EIGHT harnesses, one entry each, and the cross-harness leg below is
 // the one that fails if the key goes back to per-script.
+//
+// THE TWO ENTRIES CARD t_df41e675 ADDED make the list EIGHT (it was six): the save-button
+// harness this PR added (`biteproof_save_button.sh`) and its already-on-main sibling
+// (`biteproof_settings_tabs.sh`) both mutate SHARED sources and shipped with NO lock
+// (`grep -c flock` was 0 in both). The save-button one rewrites
+// `src/components/SaveButton.tsx`, `src/app/settings/page.tsx` and
+// `src/components/i18nDict.ts`; the settings-tabs one rewrites that SAME `settings/page.tsx`
+// byte for byte, and `i18nDict.ts` is also mutated by the prose harness's CASE 17 above — so
+// all three overlap. Measured pre-fix: two concurrent runs of the save-button harness in ONE
+// worktree, 12 rounds, 9 of 12 rounds printed a FALSE verdict line or left a source holding a
+// peer's bytes, every round still printing `all sources restored byte-identically`. They now
+// take the SAME family key, which is why they are entries here rather than a sentence in the
+// "does not cover" paragraph below.
 //
 // WHAT THIS PINS. Every leg below RUNS the real script and reads its real exit code and
 // its real message — none of them greps the file's text, because the sharpest way to
@@ -115,8 +128,14 @@
 // also cannot see a reader that mutates a shared page WITHOUT calling these scripts.
 // It DOES now serialise two DIFFERENT harnesses of the family against each other (leg E,
 // card t_76b3356d): they all key on the SAME file because they all mutate the same docs
-// tree. What it still does not serialise is a harness OUTSIDE this family (e.g.
-// `biteproof_forms_bulk_failure.sh`) that mutates a file one of these walks.
+// tree. It also now covers the two settings-side harnesses (card t_df41e675, entries 7
+// and 8) because they mutate the same shared sources. What it still does not serialise
+// is a harness OUTSIDE this family (e.g. `biteproof_forms_bulk_failure.sh`, which mutates
+// `src/app/forms/page.tsx`, or `biteproof_next_managed_files.sh` / `operator-bite.sh`,
+// which mutate `next.config.mjs` / `i18nDict.ts` but take no lock) that mutates a file
+// one of these walks. Those three are outside the family and are NOT entries here: none
+// of them takes a lock at all, so an entry would have to assert a lock that does not
+// exist.
 //
 // THE FILE NAME IS LOAD-BEARING, and deliberately avoids "bite": the harness-inventory
 // guard (`api/internal/biteharness`, inside the `api test` gate) classifies any file whose
@@ -152,10 +171,11 @@ type HarnessEntry = {
   label: string;
   script: string;
   lockSubdir: string;
-  // true when this harness MUTATES the family's shared input (files under src/app/docs).
-  // Every entry here does; the flag exists so the cross-harness leg below can state WHY a
-  // peer holding the family key must block this run, and so a future reader-only entry can
-  // be marked honestly instead of silently inheriting the claim.
+  // true when this harness MUTATES the family's shared input (files under src/app/docs, or
+  // the settings/component sources the two card-t_df41e675 entries mutate). Every entry here
+  // does; the flag exists so the cross-harness leg below can state WHY a peer holding the
+  // family key must block this run, and so a future reader-only entry can be marked honestly
+  // instead of silently inheriting the claim.
   mutatesSharedInput: boolean;
   // How D3 reaches this harness's deterministic, node-free refusal AFTER it has taken
   // ITS OWN (free) lock: an unresolvable base ref for the four that read one, and a
@@ -214,6 +234,40 @@ const HARNESSES: HarnessEntry[] = [
     mutatesSharedInput: true,
     d3ProbeEnv: { BITEPROOF_PAGE: "src/app/docs/.no-such-page-probe.tsx" },
     d3ProbeNeedle: /missing src\/app\/docs\/\.no-such-page-probe\.tsx/,
+  },
+  // CARD t_df41e675 ADDED THESE TWO, and the reason is the same one leg E exists for: they
+  // mutate the SAME shared sources the rest of the family does, and they shipped with NO
+  // lock (`grep -c flock` was 0 in both). `biteproof_save_button.sh` rewrites
+  // src/components/SaveButton.tsx, src/app/settings/page.tsx and src/components/i18nDict.ts;
+  // `biteproof_settings_tabs.sh` rewrites that SAME settings/page.tsx byte for byte — so those
+  // two overlap with EACH OTHER, and `i18nDict.ts` is also mutated by
+  // `biteproof_docs_prose_convention.sh` (its CASE 17), which already carries the family key.
+  // Measured pre-fix on `biteproof_save_button.sh`: two concurrent runs in ONE worktree, 12
+  // rounds, 9 of 12 rounds printed a FALSE verdict line (`DID NOT BITE — missing dict key`,
+  // `— forked base class`, `— false return ignored`, `— rejection treated as success`,
+  // `— no unmount cleanup`, `— no success boolean from the handler`) or left a source holding a
+  // peer's bytes, EVERY round still printing `all sources restored byte-identically`. The
+  // per-run `mktemp -d` the save-button harness shipped fixed only the BACKUP path; the restore
+  // still wrote the shared file in place, which is the same half PR #1013/t_d101a943 fixed for
+  // `biteproof_dev_hosts.sh`. `settings_tabs` had the worse shape: a HOST-GLOBAL
+  // `/tmp/biteproof-dc06.<name>.bak`, so a peer overwrote this run's own backups. Both now
+  // take the family key (they share input with the family, so they must serialise against it),
+  // which is why they belong in THIS list rather than the "does not cover" paragraph.
+  {
+    label: "biteproof_save_button.sh",
+    script: join(webRoot, "scripts", "biteproof_save_button.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_GUARD: join(webRoot, "scripts", ".no-such-guard-probe.ts") },
+    d3ProbeNeedle: /is missing — nothing to drive/,
+  },
+  {
+    label: "biteproof_settings_tabs.sh",
+    script: join(webRoot, "scripts", "biteproof_settings_tabs.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_SPEC: join(webRoot, "scripts", ".no-such-spec-probe.ts") },
+    d3ProbeNeedle: /is missing — nothing to drive/,
   },
 ];
 
@@ -317,8 +371,24 @@ test("every /docs bite harness serialises on ONE per-worktree lock, keyed on the
 
     // A private lock base per run: this guard never touches a real lane's lock, and two
     // concurrent runs of THIS guard cannot collide either.
+    //
+    // THE INHERITED LOCK STATE IS STRIPPED (card t_df41e675). This guard is itself run BY a
+    // harness that holds the family lock and exports `BITEPROOF_LOCKED=1` /
+    // `BITEPROOF_LOCK_FILE` — `biteproof_settings_tabs.sh` runs `npm run build` (=
+    // `test:unit` = this file) from inside its lock block. A spawned harness that inherits
+    // that state takes the CHILD path and skips its own lock take, so leg A read exit 2
+    // (the harness ran past its lock block to an unrelated refusal) where it requires 75 —
+    // measured, the whole `web` gate went red with `biteproof_docs_tool_claims.sh: ... must
+    // exit 75 ... Got 2`. A guard whose verdicts depend on the lock state of whoever
+    // spawned it is the same unverified-lock shape this family's rule removes. `delete`
+    // (not `= ""`) so `BITEPROOF_LOCKED` is genuinely absent for a leg that wants the
+    // harness to take the lock itself; leg B re-adds both explicitly, and the `env -u`
+    // in the harness that spawned us keeps its own children clean too.
     const base = mkdtempSync(join(tmpdir(), "biteguard-"));
-    const env = { ...process.env, BITEPROOF_LOCK_DIR: base };
+    const inherited = { ...process.env };
+    delete inherited.BITEPROOF_LOCKED;
+    delete inherited.BITEPROOF_LOCK_FILE;
+    const env = { ...inherited, BITEPROOF_LOCK_DIR: base };
     const ours = lockFileFor(repoRoot, base, lockSubdir);
     const nowait = { ...env, BITEPROOF_LOCK_WAIT: "0" };
     const run = (e: NodeJS.ProcessEnv, cwd = repoRoot, s = script) => runHarness(e, cwd, s);

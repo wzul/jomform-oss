@@ -11,21 +11,156 @@
 # The page-side cases rebuild the app first: the spec measures the BUILT page,
 # and `npm run a11y` alone would judge the previous build.
 #
+# WHY THIS TAKES THE FAMILY'S LOCK AND A PER-RUN BACKUP (card t_df41e675)
+#
+# This harness rewrites src/app/settings/page.tsx IN PLACE and `run_case` reads it
+# — and web/scripts/biteproof_save_button.sh (which landed on main with PR #1017)
+# mutates that SAME file, byte for byte, plus src/components/SaveButton.tsx and
+# src/components/i18nDict.ts. Neither took a lock (`grep -c flock` was 0 in both),
+# and this file's backup path was the HOST-GLOBAL `/tmp/biteproof-dc06.<name>.bak`,
+# so two runs in one worktree overwrote each other's backups AND each other's
+# sources: a peer's restore lands under this run's feet mid-case, and this run then
+# attributes the peer's bytes, or its own, to the wrong sabotage. Measured on
+# biteproof_save_button.sh's pre-fix bytes — two concurrent runs in ONE worktree, 12
+# rounds — 9 of 12 rounds printed a FALSE verdict line or left the tree holding a
+# peer's bytes, every round still printing "all sources restored byte-identically".
+#
+# Both halves are required, the same pair card t_d101a943 gave
+# biteproof_dev_hosts.sh:
+#   1. The backup is a per-run `mktemp -d`, so one run can never restore another
+#      run's bytes — that is the half that fixes the CROSS-worktree case.
+#   2. The run takes the FAMILY's per-worktree `flock`, keyed on
+#      `git rev-parse --absolute-git-dir`, under a HOST-GLOBAL `/tmp` base (never
+#      `$TMPDIR`: the run this must exclude usually belongs to another PROFILE, and
+#      a per-profile TMPDIR would put the two runs in different directories and
+#      serialise nothing). Two lanes' cards therefore never queue behind each other;
+#      only two runs that mutate the SAME worktree serialise.
+# The PARENT takes the lock on fd 9 and re-execs this script; the child inherits the
+# open descriptor, so the lock is held for exactly as long as the copy that mutates
+# anything lives, and the `trap ... EXIT` releases it as surely as it restores the
+# sources. The child PROVES it holds the lock before it prints a verdict. A contended
+# run WAITS and says so, a wait-out is exit 75, and a missing `flock` is exit 2
+# rather than silently degrading to "no lock".
+#
 # Run:  bash web/scripts/biteproof_settings_tabs.sh
 # Env:  A11Y_PORT (default 3320) — the spec starts its own server there.
 set -uo pipefail
-cd "$(dirname "$0")/.." || exit 2
 
-SPEC=e2e/settings-tabs.spec.ts
+# The script's OWN absolute path is resolved BEFORE the `cd` below, because the
+# child this file re-execs under the lock needs a path that survives a changed CWD.
+BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+[ -n "$BITE_HOME" ] || { echo "cannot resolve the directory this script lives in" >&2; exit 2; }
+SELF="$BITE_HOME/$(basename "$0")"
+cd "$BITE_HOME/.." || exit 2                # -> web/
+
+SPEC="${BITEPROOF_SPEC:-e2e/settings-tabs.spec.ts}"
 PAGE=src/app/settings/page.tsx
 CSS=src/app/globals.css
 PLAYWRIGHT=./node_modules/.bin/playwright
 export A11Y_PORT="${A11Y_PORT:-3320}"
 
+# ---- PER-WORKTREE LOCK (card t_df41e675) ----------------------------------
+LOCK_BASE="${BITEPROOF_LOCK_DIR:-/tmp}"
+LOCK_WAIT="${BITEPROOF_LOCK_WAIT:-1800}"
+
+if [ "${BITEPROOF_LOCKED:-}" != "1" ]; then
+  command -v flock >/dev/null 2>&1 || {
+    echo "BITEPROOF REFUSED: flock is not installed, so this harness cannot serialise two" >&2
+    echo "runs in one worktree — and two runs mutate and restore src/app/settings/page.tsx" >&2
+    echo "(shared with web/scripts/biteproof_save_button.sh) under each other's feet, which" >&2
+    echo "prints false verdicts (t_df41e675). Install flock before trusting any verdict from it." >&2
+    exit 2
+  }
+  case "$LOCK_WAIT" in ''|*[!0-9]*)
+    echo "BITEPROOF REFUSED: BITEPROOF_LOCK_WAIT='$LOCK_WAIT' is not a whole number of seconds." >&2
+    exit 2 ;;
+  esac
+  BITE_GIT_DIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || {
+    echo "BITEPROOF REFUSED: cannot resolve this worktree's git dir (git rev-parse" >&2
+    echo "--absolute-git-dir), so there is no per-worktree key to serialise on, and an" >&2
+    echo "unserialised pair of runs prints false verdicts (t_df41e675)." >&2
+    exit 2
+  }
+  BITE_KEY=$(printf '%s' "$BITE_GIT_DIR" | sha256sum | cut -c1-16)
+  LOCK_DIR="$LOCK_BASE/jomform-biteproof-docs-bite"
+  mkdir -p "$LOCK_DIR" || {
+    echo "BITEPROOF REFUSED: cannot create the lock directory $LOCK_DIR, so two runs in" >&2
+    echo "one worktree could not be serialised. Set BITEPROOF_LOCK_DIR to a writable dir." >&2
+    exit 2
+  }
+  LOCK_FILE="$LOCK_DIR/$BITE_KEY.lock"
+  export BITEPROOF_LOCKED=1 BITEPROOF_LOCK_FILE="$LOCK_FILE"
+  exec 9>"$LOCK_FILE" || {
+    echo "BITEPROOF REFUSED: cannot open the lock file $LOCK_FILE." >&2
+    exit 2
+  }
+  if ! flock -n "$LOCK_FILE" true 2>/dev/null; then
+    echo "  lock:   another bite harness holds this worktree's lock — waiting up to ${LOCK_WAIT}s"
+    echo "          (they mutate the same settings page, so concurrently they print FALSE verdicts)"
+  fi
+  flock -w "$LOCK_WAIT" -E 75 9
+  _lock_rc=$?
+  if [ "$_lock_rc" = 75 ]; then
+    echo "BITEPROOF REFUSED: could not take the per-worktree lock $LOCK_FILE within ${LOCK_WAIT}s," >&2
+    echo "so this run is NOT serialised against a peer mutating the same settings page and" >&2
+    echo "would either read its mutation or overwrite the page with its own backup." >&2
+    echo "Nothing was mutated. Re-run once the other run finishes, or raise the wait with" >&2
+    echo "BITEPROOF_LOCK_WAIT=<seconds>." >&2
+    exit 75
+  fi
+  if [ "$_lock_rc" != 0 ]; then
+    echo "BITEPROOF REFUSED: flock on $LOCK_FILE exited ${_lock_rc}, so the lock was not held" >&2
+    echo "and this run would not be serialised against a peer in the same worktree." >&2
+    exit 2
+  fi
+  bash "$SELF" "$@"
+  exit "$?"
+fi
+
+# The child. Refuse if the lock it is supposed to have inherited cannot be shown to
+# be held: an unverified lock is the same shape as an unverified verdict.
+LOCK_FILE="${BITEPROOF_LOCK_FILE:-}"
+if [ -z "$LOCK_FILE" ]; then
+  echo "BITEPROOF REFUSED: BITEPROOF_LOCKED=1 is set but BITEPROOF_LOCK_FILE is empty, so this" >&2
+  echo "run cannot show it holds the per-worktree lock. Unset both and re-run the harness." >&2
+  exit 2
+fi
+if flock -n "$LOCK_FILE" true 2>/dev/null; then
+  echo "BITEPROOF REFUSED: the per-worktree lock ($LOCK_FILE) was not held here, so this run is" >&2
+  echo "NOT serialised — a peer mutating the same settings page would give it false verdicts" >&2
+  echo "and could be left restoring this run's bytes. Unset BITEPROOF_LOCKED and let the" >&2
+  echo "harness take the lock itself." >&2
+  exit 2
+fi
+LOCK_PROBE=$(mktemp "$(dirname "$LOCK_FILE")/probe.XXXXXX") || {
+  echo "BITEPROOF REFUSED: cannot create a probe file beside $LOCK_FILE, so the check above" >&2
+  echo "cannot be shown to be meaningful." >&2
+  exit 2
+}
+if ! flock -n "$LOCK_PROBE" true 2>/dev/null; then
+  echo "BITEPROOF REFUSED: flock could not lock a FRESH file ($LOCK_PROBE), so \"the lock is held\"" >&2
+  echo "above proves nothing about flock here — it would read REFUSED for any file." >&2
+  rm -f "$LOCK_PROBE"
+  exit 2
+fi
+rm -f "$LOCK_PROBE"
+echo "lock:   held for this worktree (${LOCK_FILE##*/})"
+
+# The spec to drive. Overridable so a leg of web/src/lib/harnessLock.test.ts can
+# reach this harness's own deterministic, node-free refusal AFTER it has taken its
+# lock (point this at a path that does not exist), which is how that file proves the
+# key is per-worktree without running the suite. Default is the real spec.
+[ -f "$SPEC" ] || { echo "harness: $SPEC is missing — nothing to drive" >&2; exit 2; }
+
+# PER-RUN scratch: the backup path used to be the HOST-GLOBAL
+# `/tmp/biteproof-dc06.<name>.bak`, so a concurrent run overwrote this run's backups
+# and this run's restore then wrote the PEER's bytes back as if they were its own.
+SNAP="$(mktemp -d)" || { echo "cannot create a per-run scratch dir" >&2; exit 2; }
+
 restore() {
   for f in "$SPEC" "$PAGE" "$CSS"; do
-    if [ -f "/tmp/biteproof-dc06.$(basename "$f").bak" ]; then
-      cp "/tmp/biteproof-dc06.$(basename "$f").bak" "$f"
+    if [ -f "$SNAP/$(basename "$f").orig" ]; then
+      cp "$SNAP/$(basename "$f").orig" "$f"
     fi
   done
   # THE BUILD TOO, NOT ONLY THE SOURCES (card t_22b560cb). Three of the four cases mutate
@@ -41,11 +176,13 @@ restore() {
     rebuild >/dev/null 2>&1 || echo "   WARNING: could not rebuild after restore — .next may still be a sabotage build" >&2
   fi
 }
-trap restore EXIT
+cleanup() { local rc=$?; restore; rm -rf "$SNAP"; exit "$rc"; }
+trap cleanup EXIT
 
 fail=0
 for f in "$SPEC" "$PAGE" "$CSS"; do
-  cp "$f" "/tmp/biteproof-dc06.$(basename "$f").bak"
+  [ -f "$f" ] || { echo "missing $f — is this the right worktree?" >&2; exit 2; }
+  cp "$f" "$SNAP/$(basename "$f").orig"
 done
 sha_before=""
 for f in "$SPEC" "$PAGE" "$CSS"; do sha_before="$sha_before$(sha256sum "$f")
@@ -53,8 +190,17 @@ for f in "$SPEC" "$PAGE" "$CSS"; do sha_before="$sha_before$(sha256sum "$f")
 
 rebuild() {
   echo "   (next build — the spec measures the BUILT page)"
-  if ! npm run build >/tmp/biteproof-dc06-build.log 2>&1; then
-    echo "   BUILD FAILED — see /tmp/biteproof-dc06-build.log"
+  # THE LOCK ENV MUST NOT LEAK INTO THE BUILD (card t_df41e675). `npm run build`
+  # runs `test:unit`, which runs `web/src/lib/harnessLock.test.ts`, and that guard
+  # SPAWNS this family's harnesses. This process holds the family lock and exported
+  # `BITEPROOF_LOCKED=1` / `BITEPROOF_LOCK_FILE`, so without this strip every harness
+  # the guard spawns inherits them and takes the CHILD path instead of its own lock
+  # take — measured: leg A read exit 2 (the harness ran past its lock block to an
+  # unrelated refusal) where it requires 75, so the whole `web` gate went red with
+  # `biteproof_docs_tool_claims.sh: ... must exit 75 ... Got 2`. `env -u` removes
+  # exactly those two variables and nothing else.
+  if ! env -u BITEPROOF_LOCKED -u BITEPROOF_LOCK_FILE npm run build >"$SNAP/build.log" 2>&1; then
+    echo "   BUILD FAILED — see $SNAP/build.log"
     return 1
   fi
 }
@@ -131,11 +277,11 @@ run_case "1. strip class back to flex flex-wrap" \
 
 run_case "2. the reveal disabled (RULE 6's wait must not rescue it)" \
   "not even after waiting for the reveal to land" yes \
-  "perl -0pi -e 's/el\.scrollIntoView\(\{ block: \"nearest\", inline: \"nearest\", behavior: \"instant\" \}\);/if (true) return;/' $PAGE && grep -q 'if (true) return;' $PAGE"
+  "perl -0pi -e 's/el\\.scrollIntoView\\(\\{ block: \\\"nearest\\\", inline: \\\"nearest\\\", behavior: \\\"instant\\\" \\}\\);/if (true) return;/' $PAGE && grep -q 'if (true) return;' $PAGE"
 
 run_case "3. the inset focus-ring rule dropped" \
   "focus ring of" yes \
-  "perl -0pi -e 's/\.jf-tabstrip \[role=\"tab\"\]:focus-visible \{/.jf-tabstrip-dropped [role=\"tab\"]:focus-visible {/' $CSS && grep -q 'jf-tabstrip-dropped' $CSS"
+  "perl -0pi -e 's/\\.jf-tabstrip \\[role=\\\"tab\\\"\\]:focus-visible \\{/.jf-tabstrip-dropped [role=\\\"tab\\\"]:focus-visible {/' $CSS && grep -q 'jf-tabstrip-dropped' $CSS"
 
 # ---------------------------------------------------------------------------
 # The tab-count wait this card rewrote. Its whole point is that a session that
@@ -146,7 +292,7 @@ run_case "3. the inset focus-ring rule dropped" \
 # ---------------------------------------------------------------------------
 run_case "4. a bundle that never resolves the admin role fails at the count wait" \
   "did not resolve the admin role" no \
-  "perl -0pi -e 's/slug: \"demo\", role: \"admin\"/slug: \"demo\", role: \"member\"/' $SPEC && grep -q 'role: \"member\"' $SPEC && ! grep -q 'role: \"admin\"' $SPEC"
+  "perl -0pi -e 's/slug: \\\"demo\\\", role: \\\"admin\\\"/slug: \\\"demo\\\", role: \\\"member\\\"/' $SPEC && grep -q 'role: \\\"member\\\"' $SPEC && ! grep -q 'role: \\\"admin\\\"' $SPEC"
 
 # ---------------------------------------------------------------------------
 # The last case does not rebuild (its sabotage is in the spec, not the page), so
