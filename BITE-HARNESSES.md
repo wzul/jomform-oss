@@ -209,12 +209,15 @@ apart, because the two are not the same claim:
   the scheme guard kept in each, so their `EXIT=0` is evidence about the cases as
   they stood, not about these bytes.
 
-  The union's own case count is **8** (`case 0` the control, plus cases 1-7): this
-  branch contributes case 6, and cases 4, 5, 6 and 7 are each surgical — each
-  replaces only the inner body carrying its own rule and asserts by VALUE that the
-  other rules still answer as this tree answers them, including the scheme guard,
-  which no case removes. That is what keeps a red attributable now that four
-  guards share the one `gr_testdb_component`.
+  The script's case count is **9** (`case 0` the control, plus cases 1-8): the union
+  re-cut of PR 865 (card `t_77f24357`) brought cases 0-7 — case 6 among them — and
+  case 8 (card `t_491cbf28`, the check-22 card) was added after the re-cut. Case 8 is
+  not one of the surgical cases below, since it kills the TTL horizon rather than
+  touching `gr_testdb_component`. Cases 4, 5, 6 and
+  7 are each surgical — each replaces only the inner body carrying its own rule and
+  asserts by VALUE that the other rules still answer as this tree answers them,
+  including the scheme guard, which no case removes. That is what keeps a red
+  attributable now that four guards share the one `gr_testdb_component`.
 
   Two traps measured while adding case 5, both now in the script: a needle that
   does not match the check's own CASE (check 35 writes `CREDENTIAL`, a lowercase
