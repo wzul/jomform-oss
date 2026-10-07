@@ -391,6 +391,12 @@ export default function Builder() {
       // (TemplateByIDForAccount), so another account's template — or a gallery
       // template — fails as 404 instead of opening read-only-able.
       const r = await runLoad(
+        // The response is a JSON document read field-by-field (mode, blocks,
+        // chip_mapping, products, …), so its shape is genuinely open here.
+        // `Record<string, unknown>` is not a stricter version of this — it makes
+        // every read a type error (measured: 8 TS2345/TS2339s in `next build`),
+        // which is why the `any` is load-bearing rather than lazy.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         () => fetchJson<Record<string, any>>(`${loadPath(resolved)(id)}${workspaceQuery()}`),
         { onUnauth: goToLogin, message: t(resolved.kind === "template" ? "tplmg.editLoadFail" : "bld.formLoadFail") },
       );

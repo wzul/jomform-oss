@@ -12,7 +12,7 @@ theoretical failure — `t_59df76bb` (dev) blocked on exactly this, and the same
 class of edit has been attempted repeatedly (`t_7f89fdf4`, `t_14d9456f`,
 `t_fe89f2f6`, `t_a170e5de`, `t_0060e4f0`). Every gate-table update therefore
 became a human-only edit, which is why the table fell **five** gates behind the
-runner at one point. It is level again (measured 2026-10-03: 17 rows for 17 gates
+runner at one point. It is level again (measured 2026-10-07: 18 rows for 18 gates
 from `scripts/preflight.sh --list`), and the `selftest` gate compares the two so it
 cannot drift silently — but the history is why the table lives here.
 
@@ -43,10 +43,11 @@ nothing proves nothing.
 | `test` | api | `cd api && go test ./... -race -count=1 -timeout 30m` | regressions **and data races**. The `-timeout` is an explicit per-package ceiling (30m, overridable with `API_TEST_TIMEOUT`): without it every package inherits Go's 10m default and `internal/httpapi` — the largest package, whose cost tracks host load — is reported as `panic: test timed out after 10m0s` for a package that is green (measured: pristine main rc=1 at 601.195s, green rc=0 at 620.593s on the same host). A `panic: test timed out` red cannot be told from a hung test. The `selftest` gate asserts this budget is present, that `API_TEST_TIMEOUT` reaches the argv, and that a stripped copy goes RED |
 | `govuln` | api | `govulncheck ./...` | known CVEs reachable from the module graph |
 | `web` | web | `cd web && npm run build` | `test:unit` (incl. the cross-language Go-contract guards) then the Next build |
+| `lint` | web | `cd web && npm run lint` | `eslint .` over the whole web tree — the errors only (`--max-warnings` is not set, so the advisory tail stays advisory). Nothing checked the web tree for anything but types and the unit tests until this gate; the tooling is eslint 9 + `eslint-config-next` with a flat config at `web/eslint.config.mjs`. `eslint .` exits non-zero on an error, which is what makes it a gate rather than a report. The React Compiler diagnostics that `eslint-config-next` 16 pulls in are off per-rule with the reason at each line (no compiler is configured here) |
 | `webimage` | web | `docker build -f web/Dockerfile .` (cache-only) | the **shipping web artifact** — no other gate built it, so a tree could be green while `docker build -f web/Dockerfile .` died |
 | `a11y` | web | `cd web && npm run a11y` | axe-core critical/serious violations — the axe family only (playwright project `a11y`, `a11y*.spec.ts`, 29 tests) |
 | `e2e` | web | `cd web && npm run e2e` | the feature end-to-end specs under `web/e2e/` (playwright project `feature-e2e`, 134 tests: a binned workspace restores, a refused bulk publish keeps its sentence, a stale workspace slug does not bounce the dashboard, …). These ran inside `a11y` until the split, which is why the split also added this gate — moving them out without a new owner would have been a silent coverage loss |
-| `npmaudit` | web | `cd web && npm audit --audit-level=high` | high/critical npm advisories |
+| `npmaudit` | web | `cd web && npm run audit:gate` | high/critical npm advisories — `npm audit --audit-level=high` PLUS a narrow, self-expiring exception list (`web/npm-audit-exceptions.json`, read by `web/scripts/npm-audit-gate.mjs`). An advisory NOT named in that file fails here with npm's own report; an exception with no `expires` is refused, an expired one fails, and a no-longer-reported one is printed as STALE. The one entry is `braces@3.0.3` (GHSA-vfj7-8cjw-p6xm), reached only through the DEV-ONLY eslint toolchain, with NO published fixed release (`npm view braces@3.0.4` is a 404; npm's only suggestion is a downgrade of `eslint-config-next`) |
 | `gitleaks` | secrets | `gitleaks detect` over the **full git history** | committed secrets (repo may go public) |
 | `monitor` | watchdog | `deploy/monitoring/jomform-watch_test.sh` | the uptime watchdog alerts on a failure, stays quiet on a success, and never reports green when it has no way to alert |
 | `tmpkey` | helper | `deploy/tmp-apikey_test.sh` | the temp-API-key helper cannot carry a psql tag in the key id, deletes by exact name, and treats a surviving row as a failure |

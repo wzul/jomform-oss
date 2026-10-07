@@ -7,7 +7,7 @@
 // GET/PATCH/DELETE /v1/workspaces/{id}/members).
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useI18n } from "./i18n";
+import { useI18n, type Key } from "./i18n";
 import { fetchJson, runLoad } from "../lib/wsfetch";
 import { apiErr, translateApiErr } from "../lib/apiErr";
 
@@ -16,9 +16,9 @@ type Invite = { id: string; email: string; role: string; created_at?: string };
 
 const ROLES = ["read_only", "manage", "admin"] as const;
 
-function roleLabel(t: (k: any) => string, role: string): string {
+function roleLabel(t: (k: Key) => string, role: string): string {
   if (role === "owner") return t("role.owner");
-  return t(`role.${role}` as any) || role;
+  return t(`role.${role}` as Key) || role;
 }
 
 export function MembersTab({ workspaceId }: { workspaceId: string }) {
@@ -193,7 +193,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
             {busy ? "…" : t("mem.invite")}
           </button>
         </div>
-        <p className="mt-1 text-[11px] text-[var(--jf-muted)]">{t(`role.hint.${role}` as any)}</p>
+        <p className="mt-1 text-[11px] text-[var(--jf-muted)]">{t(`role.hint.${role}` as Key)}</p>
       </form>
 
       {/* Members list */}

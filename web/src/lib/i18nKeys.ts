@@ -297,7 +297,7 @@ function stringAt(src: string, spans: Spans, start: number): string | null {
 
 /** Drop a trailing TypeScript cast: `as Key`, `as const`, `as import("…").Key`. */
 function stripCast(src: string, start: number, end: number): [number, number] {
-  let s = start;
+  const s = start;
   let e = end;
   for (;;) {
     const text = src.slice(s, e);
@@ -307,7 +307,6 @@ function stripCast(src: string, start: number, end: number): [number, number] {
     while (e > s && isSpace(src[e - 1])) e--;
   }
 }
-
 /**
  * Every dictionary key the argument expression spanning [start,end) can produce,
  * or null when the key is runtime-only. `end` is the index of the closing `)`.

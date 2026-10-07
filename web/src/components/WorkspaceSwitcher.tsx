@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useI18n } from "./i18n";
+import { useI18n, type Key } from "./i18n";
 import { WORKSPACE_NAME_MAX_CHARS } from "../lib/workspaceIdentity";
 import type { WorkspaceRow } from "./session";
 import { createWorkspace } from "../lib/workspace";
@@ -93,7 +93,7 @@ export function WorkspaceSwitcher({
   function roleLabel(role?: string): string {
     if (!role) return "";
     if (role === "owner") return t("role.owner");
-    return t(`role.${role}` as any) || role;
+    return t(`role.${role}` as Key) || role;
   }
 
   async function createWorkspaceSubmit(e: React.FormEvent) {

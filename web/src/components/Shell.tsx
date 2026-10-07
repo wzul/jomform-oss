@@ -21,6 +21,127 @@ import { clearPerUserStorage, clearUnknownWorkspaceScope, enterWorkspace, publis
 // it is the account block at the bottom of both surfaces, which is a link to
 // /profile (the email was already shown there, and the block looked clickable
 // without being it).
+
+// ── module-scope components ─────────────────────────────────────────────────
+//
+// WHY THESE LIVE HERE AND NOT INSIDE `Shell` (react-hooks/static-components).
+// `UserAvatar` and `NavList` used to be declared in the component body, so every
+// render produced a NEW component type. React compares element types by
+// identity, so a fresh type means the whole subtree UNMOUNTS and REMOUNTS on
+// each render — the avatar image reloads, the nav loses its DOM state. The rule
+// reports that ("Cannot create components during render") and the fix it asks
+// for is exactly this: declare once at module scope and pass the props in.
+// Nothing about the rendered output changes; only the identity does, and that is
+// the point.
+
+type NavItem = { key: string; href: string; label: string; icon: string };
+type NavGroup = { id: string; labelKey: Key; items: NavItem[] };
+
+/** The user's face: their uploaded avatar, or the initial-letter circle when
+ *  there is no `avatar_url` or the image failed to load. */
+function UserAvatar({
+  url,
+  name,
+  email,
+  initial,
+  failed,
+  onFail,
+  className,
+}: {
+  url?: string;
+  name?: string;
+  email: string;
+  initial: string;
+  failed: boolean;
+  onFail: () => void;
+  className: string;
+}) {
+  if (url && !failed) {
+    // A remote avatar URL is user content, so `next/image` would need a
+    // configured loader/remotePatterns; this stays a plain <img> (the
+    // eslint-disable is intentional, not an oversight).
+    // eslint-disable-next-line @next/next/no-img-element
+    return (
+      <img
+        src={url}
+        alt={name || email}
+        onError={onFail}
+        className={`${className} object-cover`}
+      />
+    );
+  }
+  return (
+    <div className={`${className} flex items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary)]`}>
+      {initial}
+    </div>
+  );
+}
+
+/** The ONE nav list, rendered by both surfaces (the desktop <aside> and the
+ *  mobile drawer).
+ *
+ *  Each group is a <ul> named by its own visible label via aria-labelledby, so
+ *  a screen reader announces "Build, list, 4 items" instead of a flat run of 13
+ *  links with no structure. The label is a plain <p>, not a heading: the
+ *  sidebar is not part of the document outline and a heading here would sit
+ *  before the page's own <h1>.
+ *
+ *  `idPrefix` keeps the label ids unique — the desktop <aside> stays in the DOM
+ *  (hidden by `hidden md:flex`) while the drawer is open on a narrow viewport. */
+function NavList({
+  groups,
+  active,
+  t,
+  idPrefix,
+  touch,
+  onNavigate,
+}: {
+  groups: NavGroup[];
+  active: string;
+  t: (k: Key) => string;
+  idPrefix: string;
+  touch?: boolean;
+  onNavigate?: () => void;
+}) {
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g.id} className={touch ? "mb-1" : "mb-0.5"}>
+          <p
+            id={`${idPrefix}-grp-${g.id}`}
+            className={`px-3 pb-1 text-xs font-medium uppercase tracking-wide text-[var(--jf-muted)] ${touch ? "pt-3" : "pt-4"}`}
+          >
+            {t(g.labelKey)}
+          </p>
+          <ul aria-labelledby={`${idPrefix}-grp-${g.id}`} className="space-y-0.5">
+            {g.items.map((n) => (
+              <li key={n.key}>
+                <Link
+                  href={n.href}
+                  onClick={onNavigate}
+                  aria-current={active === n.key ? "page" : undefined}
+                  // ONE row class for both surfaces. Mobile audit: drawer rows
+                  // measured 40px tall (py-2.5), under the 44x44 tap floor —
+                  // `min-h-11` is what raises them, and it is harmless on the
+                  // desktop rows, which already measured 44px (py-3).
+                  className={`flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-3 text-sm transition-colors ${
+                    active === n.key
+                      ? "bg-indigo-50 font-medium text-[var(--jf-primary-on-tint)]"
+                      : "text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-text)]"
+                  }`}
+                >
+                  <span className="w-4 text-center text-xs opacity-70">{n.icon}</span>
+                  {n.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </>
+  );
+}
+
 export function Shell({
   children,
   active,
@@ -44,29 +165,6 @@ export function Shell({
   // Avatar can change after a profile edit; reset the failure flag when the
   // URL changes so a new image isn't stuck hidden behind a stale onError.
   useEffect(() => setImgFailed(false), [user?.avatar_url]);
-
-  // Renders the user's face: uploaded avatar when set and not failed, else the
-  // initial-letter circle.
-  function UserAvatar({ className }: { className: string }) {
-    const url = user?.avatar_url;
-    if (url && !imgFailed) {
-      // eslint-disable-next-line @next/next/no-img-element
-      return (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={url}
-          alt={user?.name || user?.email || ""}
-          onError={() => setImgFailed(true)}
-          className={`${className} object-cover`}
-        />
-      );
-    }
-    return (
-      <div className={`${className} flex items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary)]`}>
-        {initial}
-      </div>
-    );
-  }
 
   // Issue #104: mobile drawer keyboard + focus management. When the drawer
   // opens, move focus to the close button; trap Tab inside the drawer; close
@@ -183,9 +281,6 @@ export function Shell({
     window.location.href = "/login";
   }
 
-  type NavItem = { key: string; href: string; label: string; icon: string };
-  type NavGroup = { id: string; labelKey: Key; items: NavItem[] };
-
   // The destinations, grouped by what the user is doing — not an arbitrary
   // list of 13 rows. Every destination is kept; only the shape changed, so no
   // URL moves and no docs deep link breaks.
@@ -261,58 +356,6 @@ export function Shell({
     );
   }
 
-  // The ONE nav list. Both surfaces render this, so a future reorder, rename or
-  // extra destination is a single edit — the two-surface duplication is what let
-  // `Profile` appear as its own row in both places at once.
-  //
-  // Each group is a <ul> named by its own visible label via aria-labelledby, so
-  // a screen reader announces "Build, list, 4 items" instead of a flat run of 13
-  // links with no structure. The label is a plain <p>, not a heading: the
-  // sidebar is not part of the document outline and a heading here would sit
-  // before the page's own <h1>.
-  //
-  // `idPrefix` keeps the label ids unique — the desktop <aside> stays in the DOM
-  // (hidden by `hidden md:flex`) while the drawer is open on a narrow viewport.
-  function NavList({ idPrefix, touch, onNavigate }: { idPrefix: string; touch?: boolean; onNavigate?: () => void }) {
-    return (
-      <>
-        {navGroups.map((g) => (
-          <div key={g.id} className={touch ? "mb-1" : "mb-0.5"}>
-            <p
-              id={`${idPrefix}-grp-${g.id}`}
-              className={`px-3 pb-1 text-xs font-medium uppercase tracking-wide text-[var(--jf-muted)] ${touch ? "pt-3" : "pt-4"}`}
-            >
-              {t(g.labelKey)}
-            </p>
-            <ul aria-labelledby={`${idPrefix}-grp-${g.id}`} className="space-y-0.5">
-              {g.items.map((n) => (
-                <li key={n.key}>
-                  <Link
-                    href={n.href}
-                    onClick={onNavigate}
-                    aria-current={active === n.key ? "page" : undefined}
-                    // ONE row class for both surfaces. Mobile audit: drawer rows
-                    // measured 40px tall (py-2.5), under the 44x44 tap floor —
-                    // `min-h-11` is what raises them, and it is harmless on the
-                    // desktop rows, which already measured 44px (py-3).
-                    className={`flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-3 text-sm transition-colors ${
-                      active === n.key
-                        ? "bg-indigo-50 font-medium text-[var(--jf-primary-on-tint)]"
-                        : "text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-text)]"
-                    }`}
-                  >
-                    <span className="w-4 text-center text-xs opacity-70">{n.icon}</span>
-                    {n.label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
-      </>
-    );
-  }
-
   return (
     <div className="flex min-h-screen">
       {/* Issue #104: skip-to-content link for keyboard / screen-reader users. */}
@@ -333,7 +376,7 @@ export function Shell({
           </span>
         </div>
         <nav className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-          <NavList idPrefix="nav-desktop" />
+          <NavList groups={navGroups} active={active} t={t} idPrefix="nav-desktop" />
         </nav>
         {/* user card — flex-none at the bottom of the full-height aside (always
             visible). The avatar + name + email ARE the Profile destination: the
@@ -350,7 +393,15 @@ export function Shell({
             }`}
           >
             {/* Issue #133: uploaded profile picture, falling back to the initial letter. */}
-            <UserAvatar className="h-8 w-8 rounded-full" />
+            <UserAvatar
+              url={user?.avatar_url}
+              name={user?.name}
+              email={user?.email || ""}
+              initial={initial}
+              failed={imgFailed}
+              onFail={() => setImgFailed(true)}
+              className="h-8 w-8 rounded-full"
+            />
             <span className="min-w-0 flex-1">
               {/* Mobile audit / sidebar width: this text used to be `truncate`, so
                   the user's own email rendered as "owner00@example.c…" and
@@ -463,7 +514,14 @@ export function Shell({
                   dialog (the desktop <aside> has one and the drawer must not
                   silently lose it). */}
               <nav className="min-h-0 flex-1 overflow-y-auto p-3" aria-label="Navigation menu">
-                <NavList idPrefix="nav-mobile" touch onNavigate={() => setMenuOpen(false)} />
+                <NavList
+                  groups={navGroups}
+                  active={active}
+                  t={t}
+                  idPrefix="nav-mobile"
+                  touch
+                  onNavigate={() => setMenuOpen(false)}
+                />
               </nav>
               {/* account footer: the Profile destination (see the desktop block
                   above). border-t keeps it reading as the drawer's account
@@ -478,7 +536,15 @@ export function Shell({
                   }`}
                 >
                   {/* Issue #133: profile picture or initial-letter fallback. */}
-                  <UserAvatar className="h-8 w-8 rounded-full" />
+                  <UserAvatar
+                    url={user?.avatar_url}
+                    name={user?.name}
+                    email={user?.email || ""}
+                    initial={initial}
+                    failed={imgFailed}
+                    onFail={() => setImgFailed(true)}
+                    className="h-8 w-8 rounded-full"
+                  />
                   <span className="min-w-0 flex-1">
                     <span className="block break-words text-sm">{user?.name || user?.email || "…"}</span>
                     {user?.name && (

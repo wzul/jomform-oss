@@ -129,9 +129,9 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
         aria-label="JomForm site"
         className="flex items-center justify-between border-b border-slate-100 px-5 py-3"
       >
-        <a href="/" className="text-sm font-medium text-slate-600 hover:text-slate-900">
+        <Link href="/" className="text-sm font-medium text-slate-600 hover:text-slate-900">
           ← Back to JomForm
-        </a>
+        </Link>
         <span className="text-sm font-semibold text-slate-900">JomForm Docs</span>
       </nav>
 

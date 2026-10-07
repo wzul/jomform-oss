@@ -121,6 +121,10 @@ export default function ProductEditor({ productId }: { productId?: string }) {
       // found", which hid an expired session behind a 404-shaped message.
       // Now 401/403 → /login and a genuine 404 keeps the not-found copy.
       const r = await runLoad(
+        // A JSON product document read field-by-field below; see the same note
+        // in builder/page.tsx — `Record<string, unknown>` turns every read into
+        // a type error rather than tightening anything.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         () => fetchJson<Record<string, any>>(`/api/rest/products/${productId}${workspaceQuery()}`),
         { onUnauth: goToLogin, message: t("prod.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
       );

@@ -853,6 +853,13 @@ export default function ProfilePage() {
                 <li className="text-sm text-[var(--jf-muted)]">{t("prof.noLinked")}</li>
               )}
             </ul>
+            {/* An OAUTH AUTHORIZE URL, not a Next page: the API route answers
+                with a 302 to Google. A `next/link` client-side transition cannot
+                follow a cross-origin redirect to an OAuth consent screen — the
+                browser has to make the request — so `<a>` is correct here and the
+                rule is a false positive (it sees a path under the route
+                catch-all and calls it a page). */}
+            {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a href="/api/auth/oauth/google" className="jf-btn-ghost mt-3 inline-block">
               {t("prof.linkGoogle")}
             </a>

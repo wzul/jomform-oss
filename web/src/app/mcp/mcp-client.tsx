@@ -5,6 +5,7 @@
 // button, per-client config examples, the OAuth 2.1 flow, example commands
 // and troubleshooting. Reachable pre-login (no session guard).
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useI18n } from "../../components/i18n";
 
 const SERVER_URL = "https://mcp.jomform.com/mcp";
@@ -77,9 +78,9 @@ export default function McpPage() {
     <main className="min-h-screen bg-white">
       {/* top bar */}
       <nav className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
-        <a href="/" className="text-sm font-medium text-slate-600 hover:text-slate-900">
+        <Link href="/" className="text-sm font-medium text-slate-600 hover:text-slate-900">
           {t("mcp.backHome")}
-        </a>
+        </Link>
         <div className="flex overflow-hidden rounded-md border border-slate-200 text-xs">
           {(["en", "ms", "zh", "ta", "ar"] as const).map((l) => (
             <button

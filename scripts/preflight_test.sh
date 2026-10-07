@@ -1374,9 +1374,10 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
   case "$1" in
     build|vet|test|govuln) printf '%s\n' 'api/*' ;;
     web)      printf '%s\n' 'web/package.json' 'web/src/*' 'web/next.config.mjs' 'web/tsconfig.json' 'web/scripts/web-deps-check.mjs' ;;
+    lint)     printf '%s\n' 'web/eslint.config.mjs' 'web/package.json' ;;
     a11y)     printf '%s\n' 'web/e2e/a11y*.spec.ts' 'web/playwright.config.ts' ;;
     e2e)      printf '%s\n' 'web/e2e/*.spec.ts' 'web/playwright.config.ts' ;;
-    npmaudit) printf '%s\n' 'web/package.json' 'web/package-lock.json' ;;
+    npmaudit) printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor)  printf '%s\n' 'deploy/monitoring/*' ;;
     tmpkey)   printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
     backup)   printf '%s\n' 'deploy/backup/*' ;;

@@ -188,7 +188,11 @@ export default function TemplatesPage() {
     }
   }
 
-  async function useTemplate(id: string) {
+  // NOT a React hook, and it must not LOOK like one: `rules-of-hooks` reads any
+  // call whose name starts with `use` as a hook, so `useTemplate(...)` inside an
+  // onClick was reported as "cannot be called inside a callback". It is a plain
+  // async request handler, so the name says what it does.
+  async function applyTemplate(id: string) {
     setBusy(true);
     setErr("");
     try {
@@ -376,7 +380,7 @@ export default function TemplatesPage() {
                       {t("tplmg.edit")}
                     </a>
                     <button
-                      onClick={() => void useTemplate(tpl.id)}
+                      onClick={() => void applyTemplate(tpl.id)}
                       disabled={busy}
                       className="jf-btn-ghost min-h-[44px] sm:min-h-10 disabled:opacity-50"
                     >

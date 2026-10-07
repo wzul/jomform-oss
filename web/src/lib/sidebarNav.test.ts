@@ -224,7 +224,11 @@ test("both surfaces render ONE list", () => {
   );
   assert.match(
     shell,
-    /<NavList idPrefix="nav-mobile" touch onNavigate=\{\(\) => setMenuOpen\(false\)\}/,
+    // The drawer's call site is SPREAD over lines (its props grew when the list
+    // moved to module scope), so this anchor spans whitespace instead of one
+    // physical line. The property is unchanged: the drawer renders the shared
+    // list WITH close-on-navigate and its own id prefix.
+    /<NavList\b[\s\S]{0,160}?idPrefix="nav-mobile"[\s\S]{0,160}?\bonNavigate=\{\(\) => setMenuOpen\(false\)\}/,
     "the drawer must render the same list with close-on-navigate (tapping a destination closes the drawer)",
   );
   // Distinct id prefixes: the desktop <aside> stays in the DOM (hidden by
@@ -241,8 +245,14 @@ test("the account block's own text is readable (no truncated email)", () => {
   // Measured before: the sidebar is 224px wide and the email rendered as
   // "owner00@example.c…" — unreadable on a touch device, because the
   // `title` tooltip that carried the full value is hover-only.
-  const avatarNeedle = '<UserAvatar className="h-8 w-8 rounded-full" />';
-  const at = shell.indexOf(avatarNeedle);
+  //
+  // The avatar needle is the ELEMENT NAME plus its class, not the whole tag: the
+  // account block passes its url/name/email/initial/failed/onFail props now (it
+  // used to close over them), so the compact `<UserAvatar className="…" />`
+  // spelling no longer exists and a full-tag anchor would fail here for a reason
+  // unrelated to this guard.
+  const avatarNeedle = "UserAvatar";
+  const at = shell.indexOf(`<${avatarNeedle}`);
   assert.ok(at !== -1, "the account block lost its avatar — re-anchor this guard");
   const block = shell.slice(at);
   // Comment-stripped for the ABSENCE check: the block's own comment quotes the

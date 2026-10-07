@@ -90,7 +90,11 @@ export default function TemplatePicker({
 
   if (!open) return null;
 
-  async function useTemplate(slug: string, title: string) {
+  // NOT React hooks, and they must not LOOK like ones: `rules-of-hooks` reads any
+  // call whose name starts with `use` as a hook, so calling these from an onClick
+  // was reported as "React Hook cannot be called inside a callback". They are
+  // plain async request handlers, so the names say what they do.
+  async function applyTemplate(slug: string, title: string) {
     setUsing(slug);
     setErr("");
     try {
@@ -114,7 +118,7 @@ export default function TemplatePicker({
   }
 
   // Issue #457: clone one of the merchant's own templates by id.
-  async function useOwnTemplate(id: string, title: string) {
+  async function applyOwnTemplate(id: string, title: string) {
     setUsing(id);
     setErr("");
     try {
@@ -205,7 +209,7 @@ export default function TemplatePicker({
               </div>
               <div className="mb-3 flex-1" />
               <button
-                onClick={() => void useOwnTemplate(tpl.id, tpl.title)}
+                onClick={() => void applyOwnTemplate(tpl.id, tpl.title)}
                 disabled={using !== null}
                 className="jf-btn-primary w-full py-2 text-xs disabled:opacity-50"
               >
@@ -239,7 +243,7 @@ export default function TemplatePicker({
                 {tpl.description || ""}
               </p>
               <button
-                onClick={() => void useTemplate(tpl.slug, tpl.title)}
+                onClick={() => void applyTemplate(tpl.slug, tpl.title)}
                 disabled={using !== null}
                 className="jf-btn-primary w-full py-2 text-xs disabled:opacity-50"
               >

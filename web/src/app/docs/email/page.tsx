@@ -45,7 +45,7 @@ export default function EmailDocsPage() {
     <div className="max-w-3xl">
       <h1 className="text-3xl font-bold tracking-tight text-slate-900">Email &amp; notifications</h1>
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        Receipts and notifications: how a form overrides the workspace's email settings, what a new
+        Receipts and notifications: how a form overrides the workspace&apos;s email settings, what a new
         form starts with, the placeholders you can use, and how delivery is tracked.
       </p>
 

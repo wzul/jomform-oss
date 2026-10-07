@@ -31,6 +31,39 @@ type Product = {
 type SortKey = "name" | "price_sen" | "created_at";
 type SortDir = "asc" | "desc";
 
+/** A sortable column header for the product list.
+ *
+ *  MODULE SCOPE, DELIBERATELY (react-hooks/static-components). This was declared
+ *  inside the page component, so every render produced a NEW component type and
+ *  React unmounted/remounted each header cell (three of them) on every state
+ *  change — re-creating DOM nodes for a `<th>` that never needed to move. The
+ *  rule reports exactly that; deriving `active` from props is the fix it asks for. */
+function SortHeader({
+  label,
+  k,
+  sortKey,
+  sortDir,
+  onToggle,
+}: {
+  label: string;
+  k: SortKey;
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onToggle: (k: SortKey) => void;
+}) {
+  const active = sortKey === k;
+  return (
+    <button
+      onClick={() => onToggle(k)}
+      className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] hover:text-[var(--jf-primary)]"
+      aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+    >
+      {label}
+      <span className="text-[10px]">{active ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}</span>
+    </button>
+  );
+}
+
 // A row in the Trash view (GET /api/rest/products/trash). `can_purge` is false
 // when the product has a sale or a subscription — those are the two obstacles
 // the server refuses on, so the button is withheld rather than failing on click.
@@ -198,26 +231,6 @@ export default function Products() {
       setSortKey(key);
       setSortDir(key === "name" ? "asc" : "desc");
     }
-  }
-
-  function SortHeader({
-    label,
-    k,
-  }: {
-    label: string;
-    k: SortKey;
-  }) {
-    const active = sortKey === k;
-    return (
-      <button
-        onClick={() => toggleSort(k)}
-        className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] hover:text-[var(--jf-primary)]"
-        aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
-      >
-        {label}
-        <span className="text-[10px]">{active ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}</span>
-      </button>
-    );
   }
 
   // ── selection ────────────────────────────────────────────────────────────
@@ -848,7 +861,7 @@ export default function Products() {
                   )}
                 </th>
                 <th className="px-2 py-3">
-                  <SortHeader label={t("prod.name")} k="name" />
+                  <SortHeader label={t("prod.name")} k="name" sortKey={sortKey} sortDir={sortDir} onToggle={toggleSort} />
                 </th>
                 <th className="hidden px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] sm:table-cell">
                   {t("prod.type")}
@@ -857,13 +870,13 @@ export default function Products() {
                   {t("prod.stockShort")}
                 </th>
                 <th className="px-2 py-3">
-                  <SortHeader label={t("prod.price")} k="price_sen" />
+                  <SortHeader label={t("prod.price")} k="price_sen" sortKey={sortKey} sortDir={sortDir} onToggle={toggleSort} />
                 </th>
                 <th className="px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
                   {t("dash.status")}
                 </th>
                 <th className="hidden px-2 py-3 sm:table-cell">
-                  <SortHeader label={t("prod.date")} k="created_at" />
+                  <SortHeader label={t("prod.date")} k="created_at" sortKey={sortKey} sortDir={sortDir} onToggle={toggleSort} />
                 </th>
                 <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
                   {t("bld.actions")}

@@ -6,11 +6,13 @@
     "dev": "next dev",
     "build": "npm run test:unit && next build && npm run docs:facts && npm run css:scan-scope",
     "start": "next start",
+    "lint": "eslint .",
     "test:unit": "node scripts/web-deps-check.mjs && node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts",
     "docs:facts": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/docsFacts.mjs",
     "css:scan-scope": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/cssScanScope.mjs",
     "a11y": "playwright test --project=a11y",
     "e2e": "playwright test --project=feature-e2e",
+    "audit:gate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/npm-audit-gate.mjs",
     "a11y:install": "playwright install chromium"
   },
   "dependencies": {
@@ -28,6 +30,8 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.8",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.9.0"
   }

@@ -20,7 +20,7 @@
 // flag, and a truly empty list gets its own message.
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useI18n } from "../../components/i18n";
+import { useI18n, type Key } from "../../components/i18n";
 import type { WorkspaceRow } from "../../components/session";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { createWorkspace, enterWorkspace } from "../../lib/workspace";
@@ -50,7 +50,7 @@ export default function WorkspacePickerPage() {
   function roleLabel(role?: string): string {
     if (!role) return "";
     if (role === "owner") return t("role.owner");
-    return t(`role.${role}` as any) || role;
+    return t(`role.${role}` as Key) || role;
   }
 
   // 401/403 → the session is gone; bounce to /login. Mirrors the existing

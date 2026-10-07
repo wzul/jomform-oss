@@ -231,8 +231,17 @@ test("the page-shell tap targets are at least 44px tall", () => {
   );
   assert.match(
     shell,
-    /<NavList idPrefix="nav-mobile" touch onNavigate=\{\(\) => setMenuOpen\(false\)\}/,
+    // The drawer's call site is SPREAD over lines (its props grew), so the
+    // anchor spans whitespace rather than requiring one physical line. The
+    // property it pins is unchanged: the drawer renders the shared list WITH
+    // close-on-navigate and its own id prefix.
+    /<NavList\b[\s\S]{0,160}?idPrefix="nav-mobile"[\s\S]{0,160}?\bonNavigate=\{\(\) => setMenuOpen\(false\)\}/,
     "the mobile drawer no longer renders the shared NavList with close-on-navigate — the drawer copy is back",
+  );
+  assert.match(
+    shell,
+    /<NavList\b[\s\S]{0,160}?idPrefix="nav-mobile"[\s\S]{0,160}?\btouch\b/,
+    "the drawer NavList lost its `touch` prop — the drawer rows would fall back to the desktop spacing (measured under the 44px tap floor)",
   );
   // The page's primary recovery action, in both the card list and the table.
   const requeues = [...adminPage.matchAll(/onClick=\{\(\) => requeue\(d\.dedup_key\)\}[\s\S]{0,200}?className="([^"]*)"/g)].map(

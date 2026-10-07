@@ -109,7 +109,7 @@ const money = (sen: number) =>
 // that blocks audio (or an error) is silently ignored.
 function playBeep() {
   try {
-    const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+    const Ctx = window.AudioContext || (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctx) return;
     const ctx = new Ctx();
     const now = ctx.currentTime;

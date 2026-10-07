@@ -29,6 +29,7 @@
 #                         hang, it stops the hang being confused with host load.)
 #              govuln     govulncheck over the module graph (CVE scan)
 #   web        build      cd web && npm run build   (runs test:unit first)
+#              lint       cd web && npm run lint    (eslint . — repo-wide)
 #              webimage   docker build -f web/Dockerfile . — the web IMAGE
 #                         build, i.e. the only command that produces the
 #                         shipping web artifact. Until this line existed no gate
@@ -48,6 +49,14 @@
 #              a11y       cd web && npm run a11y    (axe-core family only)
 #              e2e        cd web && npm run e2e     (the feature specs under web/e2e)
 #              npmaudit   cd web && npm audit --audit-level=high
+#   lint       web        cd web && npm run lint    (eslint 9 + eslint-config-next
+#                         flat config — the compiler-diagnostic rules that have no
+#                         compiler here are off per-rule with the reason at each
+#                         line; everything else that catches a real defect is on.
+#                         `eslint .` EXITS NON-ZERO on an error, which is what
+#                         makes this a gate rather than a report. ~46s on this
+#                         host. Before it existed nothing checked the web tree
+#                         for anything but types and the unit tests.)
 #   secrets    gitleaks   full-history secret scan (not just the tip)
 #   monitor    watchdog   deploy/monitoring/jomform-watch_test.sh — proves the
 #                         uptime watchdog ALERTS on a failure and stays quiet on
@@ -232,7 +241,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet gofmt test govuln web webimage a11y e2e npmaudit gitleaks monitor tmpkey backup prunewt refguard selftest)
+GATE_NAMES=(build vet gofmt test govuln web lint webimage a11y e2e npmaudit gitleaks monitor tmpkey backup prunewt refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -479,8 +488,8 @@ pw_pathspec_v() {
 pw_declared() {
   case "$1" in
     build|vet|test|govuln) printf '%s\n' 'api/*' ;;
-    web|a11y|e2e)          printf '%s\n' 'web/*' ;;
-    npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' ;;
+    web|a11y|e2e|lint)    printf '%s\n' 'web/*' ;;
+    npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor|tmpkey|backup|prunewt|refguard) printf '%s\n' 'deploy/*' 'scripts/*' ;;
     selftest)              printf '%s\n' 'scripts/*' 'GATE-INVENTORY.md' ;;
     gitleaks)              printf '%s\n' '*' ;;
@@ -496,9 +505,10 @@ pw_sources() {
   case "$1" in
     build|vet|test|govuln) printf '%s\n' 'api/*' ;;
     web)                   printf '%s\n' 'web/package.json' 'web/src/*' 'web/next.config.mjs' 'web/tsconfig.json' 'web/scripts/web-deps-check.mjs' ;;
+    lint)                  printf '%s\n' 'web/eslint.config.mjs' 'web/package.json' ;;
     a11y)                  printf '%s\n' 'web/e2e/a11y*.spec.ts' 'web/playwright.config.ts' ;;
     e2e)                   printf '%s\n' 'web/e2e/*.spec.ts' 'web/playwright.config.ts' ;;
-    npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' ;;
+    npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor)               printf '%s\n' 'deploy/monitoring/*' ;;
     tmpkey)                printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
     backup)                printf '%s\n' 'deploy/backup/*' ;;
@@ -1951,7 +1961,7 @@ fi
 # proves nothing.
 # ---------------------------------------------------------------------------
 preflight_env() {
-  local need_api="$1" need_web="$2" need_a11y="$3" need_docker="$4"
+  local need_api="$1" need_web="$2" need_a11y="$3" need_docker="$4" need_lint="$5"
 
   if [ "$need_api" = 1 ]; then
     [ -n "${JOMFORM_TEST_DATABASE_URL:-}" ] || die \
@@ -1985,6 +1995,15 @@ preflight_env() {
   if [ "$need_a11y" = 1 ]; then
     [ -x "$REPO_ROOT/web/node_modules/.bin/playwright" ] || die \
       "web/node_modules/.bin/playwright is missing — seed web/node_modules first: cd web && npm ci"
+  fi
+
+  # `lint` — `eslint` is a DEV dependency, so a tree with the four runtime deps
+  # but no dev deps would run `npm run lint` and get "eslint: not found" from
+  # npm rather than a verdict. Refused loudly, like every other prerequisite:
+  # a linter that did not run must never read as a lint that passed.
+  if [ "$need_lint" = 1 ]; then
+    [ -x "$REPO_ROOT/web/node_modules/.bin/eslint" ] || die \
+      "web/node_modules/.bin/eslint is missing — the lint gate would report nothing (npm exits non-zero with 'eslint: not found' rather than linting). Seed it with: cd web && npm ci"
   fi
 
   # `webimage` — the one gate that covers the SHIPPING artifact, so a host that
@@ -2149,23 +2168,28 @@ summary() {
 }
 
 # --- which gates are selected, for the env preflight ------------------------
-g_build=0; g_vet=0; g_test=0; g_govuln=0; g_web=0; g_webimage=0; g_a11y=0; g_npmaudit=0; g_gitleaks=0
+g_build=0; g_vet=0; g_test=0; g_govuln=0; g_web=0; g_lint=0; g_webimage=0; g_a11y=0; g_npmaudit=0; g_gitleaks=0
 selected build    && g_build=1
 selected vet      && g_vet=1
 selected test     && g_test=1
 selected govuln   && g_govuln=1
 selected web      && g_web=1
+selected lint     && g_lint=1
 selected webimage && g_webimage=1
 selected a11y     && g_a11y=1
 selected npmaudit && g_npmaudit=1
 selected gitleaks && g_gitleaks=1
 
-need_api=0; need_web=0; need_a11y=0; need_docker=0
+need_api=0; need_web=0; need_a11y=0; need_docker=0; need_lint=0
 if [ $g_build = 1 ] || [ $g_vet = 1 ] || [ $g_test = 1 ] || [ $g_govuln = 1 ]; then need_api=1; fi
 if [ $g_web = 1 ]; then need_web=1; fi
 if [ $g_a11y = 1 ]; then need_a11y=1; need_web=1; fi
 if [ $g_webimage = 1 ]; then need_docker=1; fi
-preflight_env "$need_api" "$need_web" "$need_a11y" "$need_docker"
+# `lint` reads web/eslint.config.mjs and web/package.json but runs eslint from
+# web/node_modules — it does NOT need the full `web` build. Keeping them separate
+# means a lint failure is reported as a lint failure, not as a failed build.
+if [ $g_lint = 1 ]; then need_lint=1; fi
+preflight_env "$need_api" "$need_web" "$need_a11y" "$need_docker" "$need_lint"
 
 # ---------------------------------------------------------------------------
 # api/build — the module still compiles.
@@ -2304,6 +2328,27 @@ run govuln "cd api && govulncheck ./... (module graph CVE scan)" \
 # ---------------------------------------------------------------------------
 run web "cd web && npm run build (runs test:unit, then next build)" \
   bash -c "cd '$REPO_ROOT/web' && npm run build"
+
+# ---------------------------------------------------------------------------
+# web/lint — `eslint .` over the whole web tree.
+#
+# WHY IT IS A GATE AND NOT A SCRIPT NOBODY RUNS. web/package.json once declared
+# `"lint": "next lint"` and Next 16 removed the command, so the script failed on
+# every run and nothing noticed because NOTHING CALLED IT — no gate, no Makefile
+# target, no doc. web/src/lib/webScripts.test.ts now pins the wiring; this is the
+# other half, the part that makes the wiring mean something. The tooling (eslint
+# 9 + eslint-config-next, flat config in web/eslint.config.mjs) did not exist in
+# the repo at all before this gate.
+#
+# `eslint .` EXITS 1 on an error, which is the whole point: a lint gate that
+# reports and exits 0 is a report, not a gate. `--max-warnings 0` is deliberately
+# NOT set — the 65 remaining warnings are the advisory tail (unused vars,
+# `window.location.href` navigation, a jsx-a11y advisory) and turning them into a
+# hard stop would make every unrelated PR red for noise. The `lint` gate fails on
+# ERRORS; the warnings stay visible in the gate output for whoever wants them.
+# ---------------------------------------------------------------------------
+run lint "cd web && npm run lint (eslint ., repo-wide; fails on errors)" \
+  bash -c "cd '$REPO_ROOT/web' && npm run lint"
 
 # ---------------------------------------------------------------------------
 # web/webimage — the web IMAGE build: the only command that produces the web
@@ -2448,9 +2493,20 @@ run e2e "cd web && npm run e2e (the feature specs under web/e2e)" e2e_run
 
 # ---------------------------------------------------------------------------
 # web/npmaudit — fail on high/critical advisories. Never `|| true`.
+#
+# The command is NOT a bare `npm audit` any more: it is the audit PLUS a narrow,
+# self-expiring exception list (web/npm-audit-exceptions.json, read by
+# web/scripts/npm-audit-gate.mjs). The reason is concrete: the `lint` gate's
+# toolchain pulls `braces@3.0.3`, whose advisory has no published fixed release
+# (`npm view braces@3.0.4` is a 404), so the alternative to naming it is not
+# adding the linter at all. The wrapper keeps the gate's default intact — an
+# advisory NOT named in that file still fails here with npm's own report — and
+# adds the two properties an allowlist needs to not rot: an exception without an
+# `expires` date is REFUSED, an expired one FAILS, and one that is no longer
+# reported is printed as STALE.
 # ---------------------------------------------------------------------------
-run npmaudit "cd web && npm audit --audit-level=high" \
-  bash -c "cd '$REPO_ROOT/web' && npm audit --audit-level=high"
+run npmaudit "cd web && npm run audit:gate (npm audit --audit-level=high + time-boxed exceptions)" \
+  bash -c "cd '$REPO_ROOT/web' && npm run audit:gate"
 
 # ---------------------------------------------------------------------------
 # secrets/gitleaks — FULL history, not just the tip. In CI that was

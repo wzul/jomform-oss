@@ -1601,7 +1601,12 @@ export default function Settings() {
                   the /form-settings header cluster (PR 673); measured on the built
                   page before: documentElement scrollWidth 446 vs clientWidth 320. */}
               <div className="mt-3 flex flex-wrap gap-2">
+                {/* Cloudflare's authorize URL, not a Next page: the API route
+                    answers with a redirect to Cloudflare's consent screen, which
+                    a `next/link` client-side transition cannot follow. `<a>` is
+                    correct; the rule is a false positive on the API routes. */}
                 {!cfLinked && (
+                  /* eslint-disable-next-line @next/next/no-html-link-for-pages */
                   <a href="/api/cf/start" className="jf-btn-primary inline-block">
                     {t("set.cfLogin")}
                   </a>
@@ -1721,7 +1726,7 @@ export default function Settings() {
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.trackingTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted-on-tint)]">
-              {t("set.trackingHelp")} <code className="rounded bg-slate-100 px-1">&lt;script src="https://…"&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
+              {t("set.trackingHelp")} <code className="rounded bg-slate-100 px-1">&lt;script src=&quot;https://…&quot;&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
             </p>
             <textarea value={trackingHead} onChange={(e) => setTrackingHead(e.target.value)} rows={4}
               className="jf-input mt-3 max-w-xl font-mono text-xs"

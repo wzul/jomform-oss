@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useI18n } from "../../components/i18n";
 import { resolvePostLogin } from "../../lib/postLogin";
 import { b64url, fromB64url } from "../../lib/webauthn";
@@ -225,8 +226,8 @@ export default function Login() {
     setBusy(false);
 
     if (r.ok) {
-      const okBody = await r.json().catch(() => ({}));
-      if (mode === "register" && (okBody as any).email_verification === "required") {
+      const okBody = (await r.json().catch(() => ({}))) as { email_verification?: string };
+      if (mode === "register" && okBody.email_verification === "required") {
         setDone(true);
         setError("");
         return;
@@ -333,7 +334,7 @@ export default function Login() {
       opts.challenge = fromB64url(opts.challenge);
       const cred = await navigator.credentials.get({ publicKey: opts }) as PublicKeyCredential;
       if (!cred) { setError(t("login.passkeyUnsupported")); setBusy(false); return; }
-      const resp = (cred as any).response;
+      const resp = cred.response as AuthenticatorAssertionResponse;
       // Every binary field below MUST be base64url: go-webauthn decodes them
       // with base64.RawURLEncoding, so standard base64 (what `btoa` emits) is
       // rejected as "response tidak sah". See lib/webauthn.ts.
@@ -375,13 +376,13 @@ export default function Login() {
       <div className="relative w-full max-w-sm">
         {/* logo — issue #436: clicking the JF logo returns to the home/landing page */}
         <div className="mb-8 text-center">
-          <a
+          <Link
             href="/"
             aria-label={t("login.backToHome")}
             className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#5e6ad2] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)] transition-opacity hover:opacity-90"
           >
             JF
-          </a>
+          </Link>
           <h1 className="text-xl font-semibold text-[var(--jf-text)]" style={{ letterSpacing: "-0.02em" }}>
             {step === 2
               ? t("login.totpTitle")
@@ -723,12 +724,12 @@ export default function Login() {
 
         {/* issue #436: subtle back-to-home link below the login card */}
         <p className="mt-4 text-center">
-          <a
+          <Link
             href="/"
             className="text-xs font-medium text-[#62666d] transition-colors hover:text-[#5e6ad2]"
           >
             {t("login.backToHome")}
-          </a>
+          </Link>
         </p>
       </div>
     </main>

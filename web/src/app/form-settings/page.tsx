@@ -750,7 +750,7 @@ function FormSettingsInner() {
     theme.product_image_size = fsImgSize;
     theme.product_image_layout = fsImgLayout;
     const payload = { slug: slug.toLowerCase().replace(/[^a-z0-9-]/g, "-"), title, theme };
-    let id = formId;
+    const id = formId;
     if (!id) return;
     const r = await fetch(`/api/rest/forms/${id}${workspaceQuery()}`, {
       method: "PATCH",
