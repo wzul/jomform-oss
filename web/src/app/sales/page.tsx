@@ -437,15 +437,28 @@ function SalesPageInner() {
   // request. If the write fails the toggle is REVERTED and the failure is shown:
   // a switch that silently displays a value the server does not hold is the bug
   // being fixed.
+  //
+  // WHY THE FAILURE GOES TO `showMsgFail` AND NOT TO `err` (t_bfe1cda5)
+  //   `err` is the page's LOAD error; both of its render sites sit inside the
+  //   empty-table branch (`rows.length === 0` under `!checking`, see the tbody
+  //   below) — the load error is exactly the state that leaves the table empty,
+  //   so that is a correct place for it. A SAVE failure is not: this switch lives
+  //   in the page HEADER, and with any row on the table — the normal state — the
+  //   empty branch never renders, so a failed sound save used to reach `err` and
+  //   then NOTHING on screen. Measured on the built page (card t_bfe1cda5): the
+  //   switch flipped back (`aria-checked` false → false) and the failure sentence
+  //   was in ZERO elements. The page's message banner (`msg` + the tone pair)
+  //   renders unconditionally, so the failure lands where the merchant can see
+  //   it, is announced (`role="alert"`), and wears the failure chrome.
   async function toggleSound(next: boolean) {
     const previous = soundEnabled;
-    setErr("");
+    setMsg("");
     setSoundEnabled(next);
     if (!soundWorkspaceId) {
       // No workspace to write to (session still resolving): leaving the flip in
       // place would be exactly the silent lie this card is about.
       setSoundEnabled(previous);
-      setErr(t("sales.soundSaveFail"));
+      showMsgFail(t("sales.soundSaveFail"));
       return;
     }
     const seq = ++soundWriteSeq.current;
@@ -465,7 +478,7 @@ function SalesPageInner() {
     // A newer click owns the state now; its own write decides the outcome.
     if (seq !== soundWriteSeq.current) return;
     setSoundEnabled(previous);
-    setErr(message);
+    showMsgFail(message);
   }
 
   // Auth bounce via router (client transition), not a full reload.

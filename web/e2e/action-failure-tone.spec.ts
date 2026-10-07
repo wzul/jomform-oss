@@ -280,6 +280,87 @@ test("CONTROL: a SUCCESSFUL refund on /sales does NOT wear the failure chrome", 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// /sales — a FAILED workspace-settings save from the HEADER sound switch
+// (card t_bfe1cda5, follow-up to t_c88c854d)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// THE DEFECT THIS ARM PINS
+//   The sound switch lives in the page HEADER, but its save failure was written
+//   to `err` — the page's LOAD error, whose only render sites sit inside the
+//   empty-table branch (`!checking && rows.length === 0`). With a row on the
+//   table (the normal state) the switch flipped back and NO failure was rendered
+//   anywhere. Measured on the pre-fix build:
+//
+//     /sales sound PUT 500 -> aria-checked before=false after=false
+//     /sales sound PUT 500 -> elements carrying the failure sentence: {"hit":[],"switches":1}
+//
+//   The row is therefore part of the fixture, not decoration: with an EMPTY
+//   table the old `err` banner WOULD render and this arm would pass on the
+//   broken code. One row is what separates the two builds.
+
+/** The switch's settings route, with the PUT status under test. */
+async function stubSalesSound(page: Page, putStatus: number) {
+  const json = jsonOf();
+  await stubCommon(page, json);
+  await page.route(/(.*)\/api\/rest\/sales(\?.*)?$/, (r) =>
+    r.fulfill(json(200, { items: [SALE], page: 1, limit: 15, total: 1 }) as never),
+  );
+  await page.route(/(.*)\/api\/workspaces\/[^/]+\/settings(\?.*)?$/, (r) => {
+    if (r.request().method() === "PUT") {
+      return r.fulfill(json(putStatus, putStatus === 200 ? { ok: true } : {}) as never);
+    }
+    return r.fulfill(json(200, { sound_enabled: false }) as never);
+  });
+}
+
+/** Drive `/sales` → the header sound switch, with ONE sale row on the table. */
+async function driveSalesSound(page: Page, putStatus: number) {
+  await freshState(page);
+  await stubSalesSound(page, putStatus);
+  await page.goto("/sales", { waitUntil: "domcontentloaded" });
+  await expect(page.locator("html"), "the reading is the ENGLISH default").toHaveAttribute("lang", "en");
+  // The row must be there: this is the state in which the old `err` banner could
+  // NOT render, i.e. the state the card was filed on.
+  await expect(
+    page.locator("tr", { hasText: SALE.ref_code }),
+    "the sale row must render — with an EMPTY table the old banner would have shown and this arm would pass on the broken build",
+  ).toBeVisible({ timeout: 45_000 });
+  const sw = page.getByRole("switch");
+  await expect(sw, "the sound switch must be enabled once the setting has loaded").toBeEnabled({
+    timeout: 45_000,
+  });
+  await expect(sw, "the switch starts OFF").toHaveAttribute("aria-checked", "false");
+  await sw.click();
+}
+
+test("a FAILED sound-setting save on /sales reaches a visible failure banner (t_bfe1cda5)", async ({ page }) => {
+  test.setTimeout(120_000);
+  await driveSalesSound(page, 500);
+  // The handler took the failure path: the optimistic flip was REVERTED.
+  await expect(
+    page.getByRole("switch"),
+    "the switch did not flip back — the failed save was not handled",
+  ).toHaveAttribute("aria-checked", "false", { timeout: 30_000 });
+  const r = await settledReading(page);
+  console.log(`/sales sound PUT 500 -> switch aria-checked=${await page.getByRole("switch").getAttribute("aria-checked")} banner=${JSON.stringify(r)}`);
+  expectFailure(r, "/sales sound PUT 500", DICT["sales.soundSaveFail"].en);
+});
+
+test("CONTROL: a SUCCESSFUL sound-setting save on /sales renders no failure banner (t_bfe1cda5)", async ({ page }) => {
+  test.setTimeout(120_000);
+  await driveSalesSound(page, 200);
+  // The flip STAYS on, and the page must NOT claim a failure.
+  await expect(
+    page.getByRole("switch"),
+    "a successful save must leave the switch on",
+  ).toHaveAttribute("aria-checked", "true", { timeout: 30_000 });
+  await expect(
+    page.locator('[data-testid="action-msg"][data-tone="failure"]'),
+    "a successful sound save rendered a FAILURE banner — the control that keeps the reading above honest",
+  ).toHaveCount(0);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // /spam — a FAILED un-spam vs a successful one
 // ─────────────────────────────────────────────────────────────────────────────
 const SPAM_SUB = {

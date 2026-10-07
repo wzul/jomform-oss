@@ -214,11 +214,21 @@ test("a FAILED write reverts the switch and surfaces the failure", () => {
     "toggleSound does not restore the previous value when the write fails — the " +
       "switch would keep showing a value the server does not hold",
   );
-  // The reverted state must be reported, not silent.
+  // The reverted state must be reported, not silent — and it must reach a
+  // banner that actually RENDERS with rows on the table. `err` is the page's
+  // LOAD error and its only render sites sit inside the empty-table branch, so
+  // routing the save failure there made it invisible in the normal state
+  // (card t_bfe1cda5, measured: `hit: []`). The failure now goes through the
+  // page's message banner.
   assert.match(
     toggle,
-    /setErr\(t\("sales\.soundSaveFail"\)\)|setErr\(message\)/,
+    /showMsgFail\(t\("sales\.soundSaveFail"\)\)|showMsgFail\(message\)/,
     "toggleSound reverts silently — a failed save must be visible to the merchant",
+  );
+  assert.ok(
+    !/setErr\(/.test(toggle),
+    "toggleSound reports its failure through `err`, whose only render sites sit inside the empty-table " +
+      "branch — with a row on the table the message is invisible (card t_bfe1cda5)",
   );
   // Both failure shapes: a rejected HTTP response and a network failure.
   assert.match(toggle, /if \(r\.ok\) return;/, "toggleSound ignores a non-ok response");
