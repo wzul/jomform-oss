@@ -213,6 +213,44 @@ layout in the chain paints a light surface over its `{children}` — which is th
 case for the dashboard pages, and what keeps the tab-strip defect at 4.48:1
 reported.
 
+### The red/sky failure family, and the two shapes it is judged on
+
+`web/src/lib/dangerText.test.ts` is the sibling rule for the **red and sky text
+family** (`text-red-50..950`, `text-sky-50..950`) — the load-failure sentence, a
+refused destructive action, an expired-link notice. Two of its properties are
+worth stating because a token that reads as "obviously fine" on white is neither
+of them:
+
+* **The surface is the NEAREST light surface the text is painted on.** CSS paints
+  through the innermost background between the text and the page, so a token
+  nested inside two surfaces is judged against the inner one. Reading the
+  *outermost* one is a 0.3:1 error in both directions and it is how a real site
+  hid: the `/chat` confirmation card's failure footer sits on the card's own
+  `bg-sky-50` tint, where `text-red-600` is **4.474:1** — under AA — but the
+  ancestor chain's outermost surface is the `bg-white` transcript wrapper around
+  it, where the same token reads 4.770:1 and passes (card `t_624b7275`).
+* **A translucent LIGHT tint is judged at its OPAQUE base, not skipped.** A
+  source scan cannot composite an alpha, so the two honest options are to abstain
+  or to judge the base the class names. This guard judges the base, because
+  abstaining is what let `/settings`' webhook-delivery cells hide: they are
+  `text-red-600` on `bg-red-50/60`, which reads **4.511:1** on the tint but
+  **4.360:1** on the `bg-red-50` it names — the entire margin over the 4.5 floor
+  is 0.011, carried by the `/60`, and dropping it would have been invisible to
+  every gate (card `t_624b7275`).
+
+`text-red-700` (#c10007) is the token both sites now use: 5.87:1 on `bg-red-50`,
+6.02:1 on the `bg-sky-50` card, 6.42:1 on white. It is the step the whole
+failure family moved to, and it clears the floor on every surface in the list.
+
+Two boundaries, stated so the rule is not over-claimed: a saturated fill such as
+`bg-red-500/10` is **not** a light surface, so the login / workspace-picker /
+magic-link / connect banners keep their alpha with the browser (the two specs that
+paint them assert the measured ratio), and a DARK slab, an overlay or a gradient
+is left to `web/e2e/a11y.spec.ts`. The `/chat` card is the one site in this
+family the `a11y` gate renders: `web/e2e/a11y-chat-card.spec.ts` measures the
+failure footer's painted colour and the card's tint, so the source rule and the
+browser agree on it.
+
 ### `--jf-primary` on a non-white surface (browser guard)
 
 The base brand token `--jf-primary` (#5e6ad2) passes AA on white (4.700:1) and

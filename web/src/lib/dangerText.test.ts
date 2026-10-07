@@ -82,15 +82,28 @@
 //
 // WHAT IT DELIBERATELY DOES NOT DO
 //
-//   * It does not judge `bg-red-*` / `border-red-*` — a fill or a border is not
+//   * It does NOT judge `bg-red-*` / `border-red-*` — a fill or a border is not
 //     text. `bg-red-500` status DOTS (media, settings) and every `border-red-200`
 //     banner edge are untouched.
-//   * It does not judge a token against a surface it cannot SEE. A token whose
-//     nearest background comes from a translucent composite (`bg-red-500/10`,
-//     `bg-black/40`), an overlay, a gradient or a media query is left to the
-//     browser: a source scan cannot composite it. The `text-red-700` inside the
-//     `bg-red-500/10` login/workspace-picker/legal banners is that shape and is
-//     measured in the live DOM, not here.
+//   * It does not judge a token against a surface it cannot SEE — a DARK slab
+//     (`bg-slate-900`), an overlay (`bg-black/40`), a gradient, or a media
+//     query. A source scan cannot composite those, so the token is left to the
+//     browser gate instead.
+//   * It DOES judge a translucent LIGHT tint (`bg-red-50/60`) — at its OPAQUE
+//     base. That is the one alpha shape this guard refuses to abstain on, and the
+//     reason is measured: a `text-red-600` on `bg-red-50/60` reads 4.511:1 on the
+//     tint but 4.360:1 on the `bg-red-50` it names, so the whole margin over AA is
+//     carried by the `/60` and a later edit that drops it is invisible to every
+//     gate (t_624b7275).
+//   * It still does NOT judge the `bg-red-500/10` failure banners (login,
+//     workspace-picker, magic-link, connect, reset-password). A 500-step fill is
+//     not one of the LIGHT surfaces above, so those tokens are not attributed to
+//     `bg-red-500` — the alpha composite stays with the browser, and the two
+//     specs that PAINT those banners assert their measured ratio
+//     (`e2e/load-failure-legibility.spec.ts`). That is a deliberate boundary, not
+//     an oversight: adding a saturated `bg-red-500` to this list would judge a
+//     status-dot fill as if it were a surface, and nothing on the tree today
+//     needs it.
 //   * It does not flag a token whose own class list already paints a surface this
 //     guard cannot resolve — a DARK slab (`bg-slate-900`) or a gradient. Both are
 //     read by the browser gate instead (`a11yDarkSlabCoverage.test.ts` fails the
@@ -239,18 +252,32 @@ const SURFACES: Record<string, RGB> = (() => {
 })();
 
 const LIGHT_SURFACE_RE =
-  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50|emerald-50|emerald-100|red-50|sky-50|amber-50)|bg-\[var\(--jf-(?:surface|bg|danger-bg)\)\]|jf-card|jf-input)$/;
+  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50|emerald-50|emerald-100|red-50|sky-50|amber-50)|bg-\[var\(--jf-(?:surface|bg|danger-bg)\)\]|jf-card|jf-input)(?:\/\d+)?$/;
 
 /**
  * `jf-card` / `jf-input` resolve to the same white surface, and
  * `bg-[var(--jf-danger-bg)]` is the same `#fef2f2` as `bg-red-50`, so each pair
  * is compared under one name and the per-token `bad` sets stay keyed on one entry
  * per surface.
+ *
+ * A TRANSLUCENT LIGHT TINT (`bg-red-50/60`, `bg-indigo-50/50`, `bg-amber-50/50`)
+ * canonicalises to its OPAQUE base, and that is a deliberate change of rule
+ * rather than a rounding choice. A source scan cannot composite the alpha — the
+ * browser decides the pixel — so the two honest options are to abstain or to
+ * judge the base the class names. Abstaining is what let `bg-red-50/60` hide: a
+ * `text-red-600` there reads **4.511:1** on the tint but only **4.360:1** on the
+ * `bg-red-50` it names, and the 0.011 of margin over AA is carried entirely by
+ * the `/60`, which any later edit can drop with every gate still green (card
+ * t_624b7275). For these ten tints the opaque step is the DARKEST member of
+ * `{tint, white, --jf-bg}` — measured, not assumed — so it is also the STRICTEST
+ * bound for a dark text token: judging it there can only refuse a pairing that
+ * would fail once the alpha moved, never pass one that ships below AA.
  */
 function canonicalSurface(cls: string): string {
-  if (cls === "jf-card" || cls === "jf-input") return "bg-white";
-  if (cls === "bg-[var(--jf-danger-bg)]") return "bg-red-50";
-  return cls;
+  const bare = cls.replace(/\/\d+$/, "");
+  if (bare === "jf-card" || bare === "jf-input") return "bg-white";
+  if (bare === "bg-[var(--jf-danger-bg)]") return "bg-red-50";
+  return bare;
 }
 
 const STATE_RE = /^((?:[a-z-]+:)*)/;
@@ -438,23 +465,34 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
     );
     if (ownBackgrounds.length > 0 && !ownBackgrounds.some((b) => LIGHT_SURFACE_RE.test(b))) continue;
 
+    // The NEAREST surface ancestor wins, not the outermost one. CSS paints
+    // through the innermost opaque background between the text and the page, so
+    // taking the first match mis-attributes any token nested inside two surfaces.
+    // Measured on this tree: the `text-red-600` in the /chat card footer sits on
+    // the card's own `bg-sky-50` (4.474:1, BELOW AA) but the outermost surface in
+    // its ancestor chain is the `bg-white` wrapper around the transcript, so the
+    // guard read 4.77:1 and abstained — which is how this site reached the tree
+    // with the guard green (t_624b7275). The same `.find()` shape is still in
+    // `emeraldText.test.ts:402` and `mutedText.test.ts:419`.
     const surfaceEl = ancestorsAt(events, owner.openIdx)
       .filter((t) => t !== owner)
-      .find((t) =>
+      .filter((t) =>
         t.variants.some((v) =>
           v.split(/\s+/).some((cls) => {
             const [s] = splitState(cls);
             return s === "" && LIGHT_SURFACE_RE.test(cls);
           }),
         ),
-      );
+      )
+      .at(-1);
     const surfaces = surfaceEl
       ? surfaceEl.variants.flatMap((v) =>
           v
             .split(/\s+/)
             .map((cls) => splitState(cls))
             .filter(([, bareCls]) => bareCls && LIGHT_SURFACE_RE.test(bareCls))
-            .map(([s, bareCls]) => (s === "" ? canonicalSurface(bareCls) : "")),
+            .map(([s, bareCls]) => (s === "" ? canonicalSurface(bareCls) : ""))
+            .filter(Boolean),
         )
       : (layoutSurface ? [layoutSurface] : [PAGE_BG]);
     const bad = TEXT_TOKENS[tok].bad.filter((b) => surfaces.includes(b));
@@ -601,6 +639,58 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
         `and it has no AA-safe use on any surface this app paints`,
     );
   }
+
+  // The two shapes this card ADDED to the rule must still be seen, or a later
+  // edit can turn both fixes into a silent abstention and the site they were
+  // written for reaches the tree with this guard green (which is exactly how the
+  // /chat footer and the /settings `/60` cell got here).
+  //
+  // (1) A translucent LIGHT tint is judged at its opaque base, not skipped.
+  const tinted = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="jf-card">',
+      '      <tr className="bg-red-50/60">',
+      '        <td className="text-red-600">Failed</td>',
+      "      </tr>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  assert.ok(
+    tinted.some((f) => f.includes("text-red-600") && f.includes("bg-red-50")),
+    `a text-red-600 on bg-red-50/60 (4.360:1 on the surface it names) must be ` +
+      `reported; the guard abstained instead: ${JSON.stringify(tinted)}`,
+  );
+
+  // (2) The NEAREST surface ancestor is the one the text is painted on, not the
+  //     outermost — the /chat footer's exact shape (a sky-50 card inside a white
+  //     wrapper). 4.474:1 on the card, 4.770:1 on the wrapper, so an outermost
+  //     attribution reads it as legal.
+  const nested = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="bg-white">',
+      '      <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs">',
+      '        <p className="mt-2 font-medium text-red-600">The change could not be applied.</p>',
+      "      </div>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  assert.ok(
+    nested.some((f) => f.includes("text-red-600") && f.includes("bg-sky-50")),
+    `a text-red-600 inside an inner bg-sky-50 card must be attributed to the CARD ` +
+      `(4.474:1), not to the outermost bg-white wrapper (4.770:1): ${JSON.stringify(nested)}`,
+  );
 });
 
 // ─── the inherited shape, against a real defect this rule is FOR ─────────────

@@ -79,6 +79,8 @@ function blockersOf(results: AxeResults): Result[] {
 /** WCAG 2.x AA floor, and the pre-fix value the tool name measured at. */
 const AA_FLOOR = 4.5;
 const PRE_FIX_TOOL_RATIO = 3.24;
+/** Tailwind v4's `text-red-700` — the failure ink, 6.023:1 on the sky-50 tint. */
+const RED_700 = "#c10007";
 
 const EN = {
   title: DICT["chat.title"].en,
@@ -447,6 +449,54 @@ test.describe("the /chat confirmation card clears AA on its own tint", () => {
       `the failure badge measures ${pill.ratio.toFixed(3)}:1 (fg=${pill.fg} on bg=${pill.bg}) — ` +
         `under the ${AA_FLOOR}:1 AA floor. white on bg-red-500 (#ef4444) is 3.76:1; bg-red-600 ` +
         `(#dc2626) is 4.83:1 and bg-red-700 (#b91c1c) is 6.47:1.`,
+    ).toBeGreaterThanOrEqual(AA_FLOOR);
+  });
+
+  test("the FAILED card's own footer sentence clears AA on the card's tint", async ({ page, baseURL }) => {
+    // The card reaches this state through the SAME refused decision as the pill
+    // above, but the sentence is a different node with a different colour: it is
+    // the card's `chat.confirmFail` line, painted DIRECTLY on the card's
+    // `bg-sky-50` tint (`chat/page.tsx`, the `state === "failed"` branch).
+    //
+    // WHY THIS IS HERE AND NOT IN THE SOURCE GUARD ALONE (card t_624b7275). That
+    // footer shipped as `text-red-600`, which is 4.474:1 on `#f0f9ff` — under AA.
+    // The repo-wide source rule (`src/lib/dangerText.test.ts`) missed it because
+    // it attributed a token to the OUTERMOST light surface in the ancestor chain,
+    // and this sentence is nested inside a `bg-white` transcript wrapper, so the
+    // rule read 4.770:1 and abstained. Both halves were fixed there; this spec is
+    // the browser half, because it is the measurement that cannot be satisfied by
+    // a class name and it is the gate that actually renders this card.
+    //
+    // The card's tint is asserted (not just the ratio) so a footer that silently
+    // moved to an opaque white surface would not pass the ratio check for the
+    // wrong reason — on THIS card the surface IS the defect.
+    await stubAPI(page, 500);
+    await freshState(page);
+    const card = await openCard(page, baseURL);
+
+    await card.getByRole("button", { name: EN.confirm }).click();
+    await expect(
+      card,
+      "the refused confirmation must render the card's failure footer",
+    ).toContainText(DICT["chat.confirmFail"].en, { timeout: 20_000 });
+
+    const footer = await measure(page, `${CARD} p.text-red-700, ${CARD} p.text-red-600`, 0, "failure footer");
+    console.log(
+      `chat card FAILED-footer contrast: fg=${footer.fg} on bg=${footer.bg} — ${footer.ratio.toFixed(3)}:1`,
+    );
+    expect(footer.text, "the node measured must be the failure sentence").toBe(DICT["chat.confirmFail"].en);
+    expect(footer.bg, `the failure sentence is painted on ${footer.bg}, not the card's sky-50 tint`).toBe(
+      "#f0f9ff",
+    );
+    expect(
+      footer.fg,
+      `the failure sentence is ${footer.fg}; text-red-600 (#e7000b) measures 4.474:1 on this tint and ` +
+        `is UNDER AA — it must be text-red-700 (#c10007, 6.023:1).`,
+    ).toBe(RED_700);
+    expect(
+      footer.ratio,
+      `the failure sentence measures ${footer.ratio.toFixed(3)}:1 (fg=${footer.fg} on bg=${footer.bg}) — ` +
+        `under the ${AA_FLOOR}:1 AA floor.`,
     ).toBeGreaterThanOrEqual(AA_FLOOR);
   });
 });

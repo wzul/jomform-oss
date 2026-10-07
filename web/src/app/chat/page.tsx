@@ -674,8 +674,19 @@ export default function ChatPage() {
                             buttons are gone (nothing was attempted and the refusal
                             is not retryable unchanged), and NOTHING here tells the
                             user to try the same action again. */}
+                        {/* The footer's ink is the family's DARKER step for a
+                            measured reason: this sentence is painted on the
+                            card's own sky-50 tint, where the 600 step measures
+                            4.474:1 — under AA — while the white transcript
+                            wrapper around the card would read 4.770:1 and hide
+                            it. The 700 step is 6.023:1 on this tint. The
+                            class literals are deliberately NOT spelled out
+                            here: a class name written in a shipped comment is
+                            still compiled into the bundle by Tailwind's
+                            extractor (card t_850589b5). See
+                            web/src/lib/dangerText.test.ts and card t_624b7275. */}
                         {state === "failed" && (
-                          <p className="mt-2 font-medium text-red-600">{t("chat.confirmFail")}</p>
+                          <p className="mt-2 font-medium text-red-700">{t("chat.confirmFail")}</p>
                         )}
                       </div>
                     );

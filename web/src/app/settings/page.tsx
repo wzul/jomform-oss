@@ -1891,11 +1891,11 @@ export default function Settings() {
                                         {d.created_at ? formatDateTime(d.created_at, user?.timezone) : "—"}
                                       </td>
                                       <td className="py-1.5 pr-3 font-mono text-slate-700">{d.event}</td>
-                                      <td className={`py-1.5 pr-3 font-medium ${d.success ? "text-emerald-700" : "text-red-600"}`}>
+                                      <td className={`py-1.5 pr-3 font-medium ${d.success ? "text-emerald-700" : "text-red-700"}`}>
                                         {d.success ? t("wh.success") : t("wh.failed")}
                                       </td>
                                       <td className="py-1.5 pr-3 font-mono text-slate-500">{d.status_code ?? "—"}</td>
-                                      <td className="py-1.5 pr-3 font-mono text-red-600">{d.error || "—"}</td>
+                                      <td className="py-1.5 pr-3 font-mono text-red-700">{d.error || "—"}</td>
                                       {/* Issue #197: manual retry of a failed delivery (or dead-lettered retry). */}
                                       <td className="py-1.5">
                                         {!d.success && (
