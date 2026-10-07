@@ -471,7 +471,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
         {savedFlash && (
           <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{savedFlash}</p>
         )}
-        {error && <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
+        {error && <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
 
         <form onSubmit={save} className="jf-card mt-6 max-w-2xl space-y-5 p-6">
           {/* name + description */}

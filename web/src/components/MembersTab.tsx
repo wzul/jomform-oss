@@ -150,7 +150,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
       <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">{t("mem.adminOnly")}</p>
 
       {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{msg}</p>}
-      {err && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>}
+      {err && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{err}</p>}
 
       {/* Invite form */}
       <form onSubmit={invite} className="mt-4">
@@ -241,7 +241,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
                 <button
                   disabled={m.role === "owner"}
                   onClick={() => removeMember(m.user_id, m.name || m.email)}
-                  className="text-xs text-slate-500 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="text-xs text-slate-500 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {t("mem.remove")}
                 </button>
@@ -270,7 +270,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
               </div>
               <button
                 onClick={() => cancelInvite(inv.id)}
-                className="text-xs text-slate-500 hover:text-red-500"
+                className="text-xs text-slate-500 hover:text-red-700"
               >
                 {t("mem.cancelInvite")}
               </button>

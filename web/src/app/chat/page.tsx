@@ -688,7 +688,7 @@ export default function ChatPage() {
           </div>
 
           {err && (
-            <p role="alert" className="px-4 text-xs text-red-500">
+            <p role="alert" className="px-4 text-xs text-red-700">
               {err}
             </p>
           )}

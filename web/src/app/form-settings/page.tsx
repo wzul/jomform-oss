@@ -1280,7 +1280,7 @@ function FormSettingsInner() {
             </nav>
 
             {loading && <p className="mt-6 text-sm text-[var(--jf-muted)]">{t("fs.loading")}</p>}
-            {err && <p className="mt-6 text-sm text-red-400">{err}</p>}
+            {err && <p className="mt-6 text-sm text-red-700">{err}</p>}
             {/* The page's save feedback. ONE state (`msg`) carries BOTH outcomes
                 — every save below writes a confirmation on success and a
                 failure sentence when the API refuses — so its TONE is painted
@@ -1491,7 +1491,7 @@ function FormSettingsInner() {
                             at the field, instead of a silently broken image
                             on the buyer's page. */}
                         {fsLogoErr && (
-                          <p className="mt-1 rounded-md bg-red-50 px-2 py-1 text-[11px] font-medium text-red-600">
+                          <p className="mt-1 rounded-md bg-red-50 px-2 py-1 text-[11px] font-medium text-red-700">
                             {fsLogoErr}
                           </p>
                         )}
@@ -1798,7 +1798,7 @@ function FormSettingsInner() {
                                                     )
                                                   )
                                                 }
-                                                className="text-[var(--jf-muted)] hover:text-red-500"
+                                                className="text-[var(--jf-muted)] hover:text-red-700"
                                               >
                                                 ✕
                                               </button>
@@ -2012,7 +2012,7 @@ function FormSettingsInner() {
                                 <button
                                   onClick={() => removeConfirmation(i)}
                                   disabled={!canWrite}
-                                  className="jf-btn-ghost px-2 py-1 text-xs text-red-500"
+                                  className="jf-btn-ghost px-2 py-1 text-xs text-red-700"
                                 >
                                   {t("fs.confDelete")}
                                 </button>
@@ -2335,7 +2335,7 @@ function FormSettingsInner() {
                               <button onClick={() => openEditNotification(n)} disabled={!canWrite} className="jf-btn-ghost px-2 py-1 text-xs">
                                 {t("fs.notifEdit")}
                               </button>
-                              <button onClick={() => deleteNotification(n)} disabled={!canWrite} className="jf-btn-ghost px-2 py-1 text-xs text-red-500">
+                              <button onClick={() => deleteNotification(n)} disabled={!canWrite} className="jf-btn-ghost px-2 py-1 text-xs text-red-700">
                                 {t("fs.notifDelete")}
                               </button>
                             </div>
@@ -2541,7 +2541,7 @@ function FormSettingsInner() {
                               <button
                                 onClick={() => removeChipFeed(f.id)}
                                 disabled={!canWrite}
-                                className="text-[11px] text-red-400 hover:text-red-600"
+                                className="text-[11px] text-red-700 hover:text-red-800"
                               >
                                 {t("fs.chipFeedRemove")}
                               </button>
@@ -2693,7 +2693,7 @@ function FormSettingsInner() {
                               <p className="mt-0.5 text-[11px] text-[var(--jf-muted)]">{(wh.events || []).join(", ")}</p>
                             </div>
                             <button onClick={() => deleteFormWebhook(wh.id)} disabled={!canWrite}
-                              className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>
+                              className="shrink-0 text-xs text-slate-500 hover:text-red-700">✕</button>
                           </li>
                         ))}
                       </ul>

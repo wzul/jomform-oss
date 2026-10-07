@@ -258,7 +258,7 @@ export default function TemplatePicker({
           )}
         </div>
 
-        {err && <p className="border-t border-[var(--jf-border)] px-5 py-2 text-xs text-red-500">{err}</p>}
+        {err && <p className="border-t border-[var(--jf-border)] px-5 py-2 text-xs text-red-700">{err}</p>}
       </div>
     </div>
   );

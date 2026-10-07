@@ -131,7 +131,7 @@ export function LegalTab({ workspaceId, workspaceSlug }: { workspaceId: string; 
       </p>
 
       {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{msg}</p>}
-      {err && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>}
+      {err && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{err}</p>}
 
       {/* Business details shared by the prompt template */}
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">

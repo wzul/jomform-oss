@@ -366,7 +366,7 @@ export function Shell({
           </Link>
           <button
             onClick={signOut}
-            className="mt-1 flex min-h-11 w-full items-center rounded-md px-2 text-sm text-[var(--jf-muted)] hover:bg-slate-50 hover:text-red-500"
+            className="mt-1 flex min-h-11 w-full items-center rounded-md px-2 text-sm text-[var(--jf-muted)] hover:bg-slate-50 hover:text-red-700"
           >
             {t("nav.signout")}
           </button>

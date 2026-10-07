@@ -758,7 +758,7 @@ export default function AdminPage() {
               </h2>
               <p className="mb-3 text-sm text-[var(--jf-muted)]">{t("admin.deadLettersHint")}</p>
               {deadErr && (
-                <p className="mb-2 text-sm text-red-600">{deadErr}</p>
+                <p className="mb-2 text-sm text-red-700">{deadErr}</p>
               )}
               {!dead || dead.items.length === 0 ? (
                 <p className="text-sm text-[var(--jf-muted)]">{t("admin.deadLettersNone")}</p>

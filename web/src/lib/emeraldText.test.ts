@@ -43,10 +43,10 @@
 //                              `--jf-muted` on `bg-indigo-50`).
 //     * THIS FILE (`emeraldText.test.ts`) owns the EMERALD/success family
 //                              (`text-emerald-50..950`).
-//     * t_0fdbe189's guard     owns the red/sky family (`text-red-500`,
-//                              `text-sky-600`). That card and this one are
-//                              deliberately separate PRs: one family, one census,
-//                              one guard, so each diff stays reviewable.
+//     * dangerText.test.ts     owns the red/sky family (`text-red-400..600`,
+//                              `text-sky-600`) — card t_5c17adc9, which landed the
+//                              guard card t_0fdbe189's design assumed but never
+//                              shipped.
 //
 // WHY THE RULE IS DERIVED FROM THE THEME, NOT A REMEMBERED HEX
 //

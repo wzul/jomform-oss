@@ -510,7 +510,7 @@ export default function MediaPage() {
         )}
 
         {error && (
-          <p role="alert" className="mt-3 text-sm text-red-600">
+          <p role="alert" className="mt-3 text-sm text-red-700">
             {error}
             {/* Issue #503: a failed load gets an action, not a dead end. */}
             <button
@@ -774,7 +774,7 @@ export default function MediaPage() {
                     <button
                       onClick={() => deleteItem(detail)}
                       disabled={deleting}
-                      className="ml-auto rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-40"
+                      className="ml-auto rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-40"
                     >
                       {t("media.delete")}
                     </button>
@@ -819,7 +819,7 @@ export default function MediaPage() {
                   type="button"
                   onClick={() => void purge()}
                   disabled={purgeBusy}
-                  className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-40"
+                  className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-40"
                 >
                   {t("media.purge")}
                 </button>

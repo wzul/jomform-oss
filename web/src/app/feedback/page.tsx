@@ -290,7 +290,7 @@ export default function FeedbackPage() {
                 <p className="mt-1 text-[11px] text-[var(--jf-muted)]">{t("fb.navHint")}</p>
               </div>
               {formErr && (
-                <p role="alert" className="text-xs text-red-500">{formErr}</p>
+                <p role="alert" className="text-xs text-red-700">{formErr}</p>
               )}
               {formMsg && <p className="text-xs text-[var(--jf-primary)]">{formMsg}</p>}
               <button
@@ -310,7 +310,7 @@ export default function FeedbackPage() {
             </h2>
 
             {listErr && (
-              <p role="alert" className="mt-3 text-xs text-red-500">
+              <p role="alert" className="mt-3 text-xs text-red-700">
                 {listErr}
                 <button
                   type="button"
@@ -355,7 +355,7 @@ export default function FeedbackPage() {
             )}
 
             {threadErr && (
-              <p role="alert" className="mt-3 text-xs text-red-500">{threadErr}</p>
+              <p role="alert" className="mt-3 text-xs text-red-700">{threadErr}</p>
             )}
 
             {/* ── the selected thread + its two-way conversation ── */}

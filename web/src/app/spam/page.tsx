@@ -207,7 +207,7 @@ function SpamPageInner() {
           </p>
         )}
         {err && (
-          <p role="alert" className="mt-3 text-xs text-red-500">
+          <p role="alert" className="mt-3 text-xs text-red-700">
             {err}
             {/* Issue #503: a failed load gets an action, not a dead end. */}
             <button

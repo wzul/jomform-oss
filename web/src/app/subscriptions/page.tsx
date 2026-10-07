@@ -216,7 +216,7 @@ export default function Subscriptions() {
           </span>
         </div>
         {error && (
-          <p role="alert" className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
+          <p role="alert" className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
             {error}
             {/* Issue #503: a failed load gets an action, not a dead end. */}
             <button
@@ -316,7 +316,7 @@ export default function Subscriptions() {
                             onClick={() => updateCardOne(sub)}
                             disabled={busyId === sub.id}
                             title={t("sub.updateCard")}
-                            className="jf-btn-ghost px-2.5 py-1 text-xs text-sky-600 hover:bg-sky-50 disabled:opacity-50"
+                            className="jf-btn-ghost px-2.5 py-1 text-xs text-sky-700 hover:bg-sky-50 disabled:opacity-50"
                           >
                             {busyId === sub.id ? "…" : t("sub.updateCard")}
                           </button>

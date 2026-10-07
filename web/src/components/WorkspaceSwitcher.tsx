@@ -250,7 +250,7 @@ export function WorkspaceSwitcher({
                     onSetDefault("");
                     setOpen(false);
                   }}
-                  className="min-h-11 w-full rounded-md px-2.5 py-1.5 text-left text-sm text-[var(--jf-muted)] hover:bg-slate-50 hover:text-red-500"
+                  className="min-h-11 w-full rounded-md px-2.5 py-1.5 text-left text-sm text-[var(--jf-muted)] hover:bg-slate-50 hover:text-red-700"
                 >
                   {t("workspace.clearDefault")}
                 </button>
@@ -310,7 +310,7 @@ export function WorkspaceSwitcher({
                   </span>
                   {t("workspace.whichNames")}
                 </a>
-                {error && <p className="text-sm text-red-500">{error}</p>}
+                {error && <p className="text-sm text-red-700">{error}</p>}
                 <div className="flex gap-1.5">
                   <button
                     type="submit"

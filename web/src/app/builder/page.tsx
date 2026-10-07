@@ -1821,7 +1821,7 @@ export default function Builder() {
               />
             )}
           </div>
-          {loadErr && <p className="mt-4 text-center text-xs text-red-400">{loadErr}</p>}
+          {loadErr && <p className="mt-4 text-center text-xs text-red-700">{loadErr}</p>}
           {/* Issue #457: save-as-template feedback. */}
           {tplMsg && <p className="mt-2 text-center text-xs text-[var(--jf-muted)]">{tplMsg}</p>}
         </section>
@@ -2103,7 +2103,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
         <div>
           <p className="mb-1 text-xs text-[var(--jf-muted)]">
             {block.value || "Field"}
-            {block.required && <span className="text-red-400"> *</span>}
+            {block.required && <span className="text-red-700"> *</span>}
           </p>
           <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 text-xs text-[var(--jf-muted-on-tint)]">
             {(block.choices || []).map((c) => c.label).filter(Boolean).join(", ") || "Select…"}
@@ -2116,7 +2116,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
         <div>
           <p className="mb-1 text-xs text-[var(--jf-muted)]">
             {block.value || "Field"}
-            {block.required && <span className="text-red-400"> *</span>}
+            {block.required && <span className="text-red-700"> *</span>}
           </p>
           <div className="space-y-1">
             {(block.choices || []).map((c, i) => (
@@ -2149,7 +2149,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
         <div>
           <p className="mb-1 text-xs text-[var(--jf-muted)]">
             {block.value || "Field"}
-            {block.required && <span className="text-red-400"> *</span>}
+            {block.required && <span className="text-red-700"> *</span>}
           </p>
           <div className="h-8 rounded-md border border-[var(--jf-border)] bg-slate-50" />
         </div>

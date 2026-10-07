@@ -506,7 +506,7 @@ export default function ProfilePage() {
                     />
                   </label>
                   {(avatarUrl || avatarPreview) && (
-                    <button onClick={removeAvatar} className="self-start px-2 text-sm text-red-500 hover:underline">
+                    <button onClick={removeAvatar} className="self-start px-2 text-sm text-red-700 hover:underline">
                       {t("prof.removeAvatar")}
                     </button>
                   )}
@@ -698,7 +698,7 @@ export default function ProfilePage() {
                     // server-side, so refresh the management list too.
                     loadTrust();
                   }}
-                  className="ml-2 px-4 py-2 text-sm text-red-500 hover:underline"
+                  className="ml-2 px-4 py-2 text-sm text-red-700 hover:underline"
                 >{t("prof.disable2fa")}</button>
               )}
               {/* Issue #63: trust this device status + forget control. */}
@@ -712,7 +712,7 @@ export default function ProfilePage() {
                       const r = await fetch("/api/auth/trust/forget", { method: "POST" });
                       if (r.ok) { setTrustedUntil(""); loadTrust(); }
                     }}
-                    className="text-[13px] text-red-500 hover:underline"
+                    className="text-[13px] text-red-700 hover:underline"
                   >{t("prof.forgetDevice")}</button>
                 </div>
               )}
@@ -761,7 +761,7 @@ export default function ProfilePage() {
                               if (r.ok) { setMsg(t("prof.revoked")); loadTrust(); }
                               else { setErr(t("prof.failed")); }
                             }}
-                            className="text-[13px] text-red-500 hover:underline"
+                            className="text-[13px] text-red-700 hover:underline"
                           >{t("prof.revoke")}</button>
                         </li>
                       ))}
@@ -773,7 +773,7 @@ export default function ProfilePage() {
                         if (r.ok) { setMsg(t("prof.revoked")); setTrustedUntil(""); loadTrust(); }
                         else { setErr(t("prof.failed")); }
                       }}
-                      className="mt-4 px-4 py-2 text-sm text-red-500 hover:underline"
+                      className="mt-4 px-4 py-2 text-sm text-red-700 hover:underline"
                     >{t("prof.revokeAll")}</button>
                   </>
                 )}
@@ -818,7 +818,7 @@ export default function ProfilePage() {
                         await fetch(`/api/auth/passkeys/${k.id}`, { method: "DELETE" });
                         load();
                       }}
-                      className="text-red-500 hover:underline"
+                      className="text-red-700 hover:underline"
                     >{t("prof.remove")}</button>
                   </li>
                 ))}
@@ -846,7 +846,7 @@ export default function ProfilePage() {
                     <p className="text-[11px] text-[var(--jf-muted)]">{t("prof.linked")} {l.linked_at ? formatDate(l.linked_at, sessionUser?.timezone) : ""}</p>
                   </div>
                   <button onClick={async () => { await fetch(`/api/auth/social/${l.provider}`, { method: "DELETE" }); load(); }}
-                    className="text-xs text-slate-500 hover:text-red-500">{t("prof.unlink")}</button>
+                    className="text-xs text-slate-500 hover:text-red-700">{t("prof.unlink")}</button>
                 </li>
               ))}
               {social.length === 0 && (
@@ -932,7 +932,7 @@ export default function ProfilePage() {
                       await fetch(`/api/auth/mcp-agents/${encodeURIComponent(a.client_id)}`, { method: "DELETE" });
                       load();
                     }}
-                    className="text-xs text-slate-500 hover:text-red-500"
+                    className="text-xs text-slate-500 hover:text-red-700"
                   >
                     {t("set.revoke")}
                   </button>

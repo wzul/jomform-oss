@@ -1188,7 +1188,7 @@ export default function Settings() {
             {msg}
           </p>
         )}
-        {err && <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{err}</p>}
+        {err && <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{err}</p>}
 
         {/* ── CHIP tab ── */}
         {tab === "chip" && (
@@ -1418,7 +1418,7 @@ export default function Settings() {
                             setDomains((prev) => prev.filter((x) => x.id !== d.id));
                             await refreshDomains();
                           }}
-                          className="text-xs text-slate-500 hover:text-red-500"
+                          className="text-xs text-slate-500 hover:text-red-700"
                         >{t("set.remove")}</button>
                       </div>
                     </div>
@@ -1608,7 +1608,7 @@ export default function Settings() {
                       href="https://dash.cloudflare.com/profile/api-tokens"
                       target="_blank"
                       rel="noreferrer"
-                      className="text-sky-600 underline"
+                      className="text-sky-700 underline"
                     >
                       {t("set.cfApiTokensLink")}
                     </a>
@@ -1831,7 +1831,7 @@ export default function Settings() {
                             {open ? t("wh.hideHistory") : t("wh.showHistory")}
                           </button>
                           <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}${workspaceQuery()}`, { method: "DELETE" }); load(); }}
-                            className="shrink-0 text-xs text-slate-500 hover:text-red-500">✕</button>
+                            className="shrink-0 text-xs text-slate-500 hover:text-red-700">✕</button>
                         </div>
                       </div>
                       {/* Issue #130: expandable delivery history for this webhook. */}
@@ -2285,7 +2285,7 @@ export default function Settings() {
                       the fields, instead of a silently broken storefront
                       image. */}
                   {lpUrlErr && (
-                    <p className="max-w-xl rounded-md bg-red-50 px-2 py-1.5 text-xs font-medium text-red-600">
+                    <p className="max-w-xl rounded-md bg-red-50 px-2 py-1.5 text-xs font-medium text-red-700">
                       {lpUrlErr}
                     </p>
                   )}

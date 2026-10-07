@@ -300,7 +300,7 @@ export default function TemplatesPage() {
 
         {msg && <p className="mt-4 text-sm text-emerald-700">{msg}</p>}
         {err && (
-          <p role="alert" className="mt-4 text-sm text-red-500">
+          <p role="alert" className="mt-4 text-sm text-red-700">
             {err}
             {/* Issue #503: a failed load gets an action, not a dead end. */}
             <button

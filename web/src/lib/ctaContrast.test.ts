@@ -42,14 +42,16 @@
 //   STATED LIMIT (measured, not hypothetical): this sweep judges only pairings
 //   whose fill it can RESOLVE (a literal, a `--jf-*` token, `white`/`black`, or a
 //   Tailwind palette colour read from the installed theme) and only when the
-//   label is white. Four OTHER sub-AA hover pairs exist in the tree and are NOT
+//   label is white. The OTHER sub-AA hover pairs that exist in the tree are NOT
 //   this card's defect and are NOT judged here — they carry a coloured label, not
-//   a white one, and each is a separate finding:
-//       components/Shell.tsx:369      text-[--jf-muted] hover:text-red-500 on slate-50   3.64
-//       components/WorkspaceSwitcher.tsx:253  same shape                                 3.64
-//       components/WorkspaceSwitcher.tsx:265  hover:text-[--jf-primary] on slate-50     4.49
-//       media / products / templates  text-red-600 hover:bg-red-50                      4.36
-//       templates / TemplatePicker    text-[--jf-muted] hover:bg-slate-100              4.41
+//   a white one. The red ones are owned by the red/sky family guard
+//   (`dangerText.test.ts`, card t_5c17adc9) and are listed here by SHAPE, with no
+//   class literal: this tree compiles a class named in a comment into a real
+//   utility (see `tailwindScanScope.test.ts`), so a census written as classes
+//   here would ship them. The two that remain are a muted token and a base
+//   indigo token, neither of which the red/sky rule judges:
+//       components/WorkspaceSwitcher.tsx   a base-token hover on bg-slate-50     4.49
+//       templates / TemplatePicker         muted token on bg-slate-100           4.41
 //
 // Run with:
 //   npm run test:unit
