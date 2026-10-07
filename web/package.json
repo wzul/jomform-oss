@@ -6,7 +6,6 @@
     "dev": "next dev",
     "build": "npm run test:unit && next build && npm run docs:facts && npm run css:scan-scope",
     "start": "next start",
-    "lint": "next lint",
     "test:unit": "node scripts/web-deps-check.mjs && node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts",
     "docs:facts": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/docsFacts.mjs",
     "css:scan-scope": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/cssScanScope.mjs",
