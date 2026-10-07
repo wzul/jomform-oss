@@ -149,6 +149,67 @@ async function freshState(page: Page) {
   });
 }
 
+/**
+ * The banner must be ON SCREEN before it is measured, and this is the whole
+ * difference between a guard and a flake (card t_12d4f812, measured).
+ *
+ * `measure()` runs immediately after `goto(..., { waitUntil: "networkidle" })`.
+ * networkidle says only that the NETWORK went quiet for 500ms — Playwright
+ * documents it as DISCOURAGED for readiness for this exact reason ("rely on web
+ * assertions to assess readiness instead") — and on a contended host the CLIENT
+ * work that paints this banner is starved well past that moment. Measured on
+ * 6 cores with 6 concurrent runners + 6 CPU spinners, pairing each round's
+ * networkidle timestamp against the moment the banner actually appeared, over
+ * 24 rounds: the banner was up when networkidle resolved in 15, and in 6 it
+ * arrived 0.9s-48.9s AFTER it. Those are exactly the `measure()` presence
+ * throws ("no <p> reading …") with the page still on `Loading…` or its bare
+ * shell — the shape this card reports (11/36 runs at that contention, and 0 of
+ * them a colour mismatch: the ratio assertions never got to run).
+ *
+ * So wait for the banner, THEN measure. The bite is preserved, and deliberately:
+ * the wait is BOUNDED, so a banner that genuinely never renders still reds the
+ * spec — as this timeout, which names the sentence and the page state, instead
+ * of as a presence error inside `measure()`. `measure()` keeps its own positive
+ * assertion; it is what locates the exact element and then checks the colour and
+ * the ratio on the pixel it is painted on.
+ *
+ * 45s is not invented: it is the page-ready budget every sibling spec that waits
+ * on these two pages already uses (`form-settings-tabstrip-contrast`,
+ * `form-settings-status-chips`, `form-settings-header-actions`,
+ * `builder-publish-panel` — all `toBeVisible({ timeout: 45_000 })`). The worst
+ * banner latency measured in the real gate is ~15s, so this is ~3x headroom,
+ * and it sits well inside `test.setTimeout(120_000)`.
+ */
+async function waitForBanner(page: Page, text: string) {
+  try {
+    await page.locator(`p:text-is(${JSON.stringify(text)})`).first().waitFor({ state: "visible", timeout: 45_000 });
+  } catch {
+    // A bounded wait is only as good as what it reports when it expires, so name
+    // the page and WHICH way it failed: the sentence absent (the error state was
+    // never reached) versus present but not visible (painted off-screen or
+    // hidden). Those are different defects and the bare timeout cannot tell them
+    // apart.
+    const where = page.url();
+    const seen = await page
+      .evaluate(
+        (needle) =>
+          [...document.querySelectorAll("p")]
+            .filter((p) => (p.textContent || "").trim() === needle)
+            .map((p) => getComputedStyle(p as HTMLElement).display),
+        text,
+      )
+      .catch(() => null);
+    throw new Error(
+      `the load-failure banner ${JSON.stringify(text)} was not visible within 45s (page at ${where}): ` +
+        (seen === null
+          ? "the page is gone"
+          : seen.length === 0
+            ? "the error state was never reached — no <p> carries that sentence"
+            : `a matching <p> exists but is not visible (display: ${JSON.stringify(seen)})`),
+    );
+  }
+}
+
 const json = (body: unknown) => ({
   status: 200,
   contentType: "application/json",
@@ -187,6 +248,7 @@ test("/form-settings: a failed LOAD is legible on the page it is painted on", as
 
   await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "networkidle" });
 
+  await waitForBanner(page, "Failed to load form settings.");
   const banner = await measure(page, "Failed to load form settings.");
   console.log(
     `/form-settings load-failure banner: fg=${banner.fg} on bg=${banner.bg} — ${banner.ratio}:1 ` +
@@ -223,6 +285,7 @@ test("/builder: a failed LOAD is legible on the surface it is painted on", async
   // take the NEW path, which renders the canvas immediately.
   await page.goto("/builder?new=1", { waitUntil: "networkidle" });
 
+  await waitForBanner(page, "We couldn't load your products. Please try again.");
   const banner = await measure(page, "We couldn't load your products. Please try again.");
   console.log(
     `/builder load-failure banner: fg=${banner.fg} on bg=${banner.bg} — ${banner.ratio}:1 ` +
