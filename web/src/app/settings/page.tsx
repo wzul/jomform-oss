@@ -989,6 +989,25 @@ export default function Settings() {
 
   // Issue #360: save the per-space customizable landing page (Storefront tab).
   // Same boolean contract as saveStorefrontSettings.
+  //
+  // THE THROWN/network FAILURE (card t_9fad3d6a). The `fetch` used to sit
+  // OUTSIDE a `try`. A rejection — lost connectivity, an aborted request — then
+  // propagated out of this function, `SaveButton`'s own `catch` read it as "not
+  // saved" (correct: the button stays idle), and NOTHING wrote the page's error
+  // state, so the merchant was told nothing at all. Measured in a real browser
+  // with the PUT aborted at the browser level: button idle, `banners after: []`,
+  // `toast after: null`, no page error, and no new text anywhere on the page.
+  // They could not tell "saved" from "not saved".
+  //
+  // The catch writes the SAME element and the SAME sentence as this handler's
+  // own HTTP-refusal branch below (`setLpUrlErr` with `set.failedSave`), so a
+  // refused request and a request that never arrived answer identically, in the
+  // one place the merchant is looking: the red banner at the landing fields,
+  // immediately above the button they pressed. `setErr` was the alternative —
+  // it is what the sibling footer handler uses — but on this page `err` renders
+  // in the banner at the very TOP of a 2600-line page, several screens from the
+  // button, which is exactly the distance this tab's SaveButton/Toast work
+  // (PR #1017) exists to remove.
   async function saveLandingPage(): Promise<boolean> {
     if (!lpWorkspaceId) return false;
     setMsg("");
@@ -1004,31 +1023,38 @@ export default function Settings() {
         return false;
       }
     }
-    const r = await fetch(`/api/workspaces/${lpWorkspaceId}/settings`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        landing_page: {
-          enabled: lpEnabled,
-          hero: lpHero,
-          subtitle: lpSubtitle,
-          body: lpBody,
-          image_url: lpImageUrl,
-          primary_color: lpPrimaryColor,
-          background_color: lpBackgroundColor,
-          logo_url: lpLogoUrl,
-          ctas: lpCtas,
-          forms: lpForms,
-        },
-      }),
-    });
-    if (r.ok) {
-      showMsgOk(t("set.lpSaved"));
-      return true;
-    } else {
-      const d = await r.json().catch(() => ({}));
-      setLpUrlErr(apiErr(d, t("set.failedSave"), t));
+    try {
+      const r = await fetch(`/api/workspaces/${lpWorkspaceId}/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          landing_page: {
+            enabled: lpEnabled,
+            hero: lpHero,
+            subtitle: lpSubtitle,
+            body: lpBody,
+            image_url: lpImageUrl,
+            primary_color: lpPrimaryColor,
+            background_color: lpBackgroundColor,
+            logo_url: lpLogoUrl,
+            ctas: lpCtas,
+            forms: lpForms,
+          },
+        }),
+      });
+      if (r.ok) {
+        showMsgOk(t("set.lpSaved"));
+        return true;
+      } else {
+        const d = await r.json().catch(() => ({}));
+        setLpUrlErr(apiErr(d, t("set.failedSave"), t));
+      }
+    } catch {
+      // A request that never arrived is a FAILED SAVE, and it must be on screen:
+      // the button correctly stays idle, so this message is the only claim.
+      setLpUrlErr(t("set.failedSave"));
     }
+    // A failure must NOT confirm on the button.
     return false;
   }
 
