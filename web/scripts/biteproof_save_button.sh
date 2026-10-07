@@ -281,6 +281,70 @@ open(p,"w",encoding="utf-8").write(s)
 PY
 out=$(run_guard); expect_red "forked base class" "$out"; restore_all
 
+echo "case 10: the landing save's THROWN/network failure goes silent again (card t_9fad3d6a)"
+# THE PROPERTY THIS DRIVES — the guard's assertion "a THROWN/network failure on
+# the landing save must reach the page": `await fetch(...)` must sit INSIDE a `try`
+# whose `catch` writes `setLpUrlErr(t("set.failedSave"))`. Without it a rejected or
+# aborted request propagates out of `saveLandingPage`, SaveButton's own catch keeps
+# the button idle (which is correct) and NOTHING writes the page's error state —
+# measured with the landing PUT aborted at the browser level: button idle,
+# `banners []`, `toast null`, no new page text, so the merchant could not tell
+# "saved" from "not saved". The rendered half is the `e2e` gate's
+# `web/e2e/settings-landing-network-failure.spec.ts`; this is the source half.
+#
+# THE REVERT IS THE CARDED SHAPE, BYTE FOR BYTE: the fix's `    try {` opener and
+# its whole `    } catch { … }` clause, both removed.
+#
+# WHY IT IS SCOPED, AND WHY AN UNANCHORED REPLACE IS NOT EQUIVALENT: settings/page.tsx
+# holds 13 `    try {` and 6 `    } catch {`, and the FIRST `    try {` is the
+# localStorage effect at ~:291 — so a bare replace on `    try {` strips the wrong
+# block, leaves the page with a `catch` and no `try`, and the build dies at
+# `./src/app/settings/page.tsx:292 Error: Expected ',', got 'catch'`, which is a
+# crash where this case needs a guard red. Each anchor below carries the handler's
+# OWN indentation plus either the landing PUT it encloses or the failure sentence
+# its catch writes, so each matches exactly once.
+mut_rc=0
+python3 - "${FILES[settings]}" <<'PY' || mut_rc=$?
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+try_opener = ('    try {\n'
+              '      const r = await fetch(`/api/workspaces/${lpWorkspaceId}/settings`, {')
+catch_clause = ('    } catch {\n'
+                '      // A request that never arrived is a FAILED SAVE, and it must be on screen:\n'
+                '      // the button correctly stays idle, so this message is the only claim.\n'
+                '      setLpUrlErr(t("set.failedSave"));\n'
+                '    }\n')
+for name, anchor in (("the handler's try opener + the landing PUT", try_opener),
+                     ("the fix's catch clause", catch_clause)):
+    n = s.count(anchor)
+    if n != 1:
+        print("HARNESS BUG: mutation anchor (%s) matches %d times, expected 1" % (name, n))
+        sys.exit(2)
+s = s.replace(try_opener, '    const r = await fetch(`/api/workspaces/${lpWorkspaceId}/settings`, {')
+s = s.replace(catch_clause, "")
+open(p, "w", encoding="utf-8").write(s)
+PY
+if [ "$mut_rc" != 0 ]; then
+  # A mutation that never landed would measure an UNMUTATED file, whose guard is
+  # GREEN — the case would then read as "DID NOT BITE" and blame the guard for a
+  # harness bug. Named, and counted as a failure, rather than silently verdicted.
+  echo "  ❌ HARNESS BUG — a case-10 mutation anchor did not match exactly once, so nothing was"
+  echo "     mutated and this case would have measured the real (unmutated) file. Re-anchor it."
+  fail=1; restore_all
+else
+  out=$(run_guard)
+  expect_red "the landing save's thrown failure goes silent again" "$out"
+  # The RED must NAME this property: a red for any other reason (a broken edit, a
+  # sibling assertion) is not a bite for the assertion this case drives. HERE-STRING,
+  # never a pipe — see the header for the SIGPIPE-141 measurement.
+  if ! grep -q '^✖ a THROWN/network failure on the landing save must reach the page' <<<"$out"; then
+    echo "  ❌ the RED did not name the thrown-failure guard — this case's bite is unattributable"
+    fail=1
+  fi
+  restore_all
+fi
+
 echo
 bad=0
 for k in "${!FILES[@]}"; do
@@ -288,6 +352,6 @@ for k in "${!FILES[@]}"; do
   [ "$now" = "${SUM[$k]}" ] || { echo "❌ ${FILES[$k]} NOT restored"; bad=1; }
 done
 [ $bad -eq 0 ] && echo "all sources restored byte-identically" || fail=1
-echo "BITES: ${bites}/10 sabotages turned the guard RED"
+echo "BITES: ${bites}/11 sabotages turned the guard RED"
 echo "RESULT: $([ $fail -eq 0 ] && echo 'ALL CASES BIT — exit 0' || echo 'A CASE DID NOT BITE — exit 1')"
 exit $fail
