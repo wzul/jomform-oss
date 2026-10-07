@@ -27,13 +27,28 @@
 //
 // WHAT THIS FILE PINS, AND WHY NEITHER LIST IS HARDCODED
 //   1. GENERAL — for every step of every `web/package.json` script whose command
-//      is `next`, the subcommand must be one the INSTALLED cli registers. That set
-//      is read from the running `next --help` (measured: exit 0, ~0.2s, 11
+//      RESOLVES to `next`, the subcommand must be one the INSTALLED cli registers.
+//      That set is read from the running `next --help` (measured: exit 0, ~0.2s, 11
 //      commands), never written here, so a future Next that drops a command turns
 //      this red naming the script — and a Next that re-adds one is not refused.
 //      Only a WORD that is already a known subcommand, or a plausible name, is
 //      judged: `next` alone (help) and `next <directory>` are out of scope,
 //      because a bare directory argument and a subcommand are the same shape.
+//
+//      The command is resolved THROUGH the wrappers that only LAUNCH it — `npx`
+//      (and `npm exec`/`npm x`), `pnpx`, `pnpm exec`/`pnpm dlx`, `bunx`/`bun x`,
+//      `yarn exec`/`yarn dlx`, `env`, and an explicit `node_modules/.bin/next`
+//      path — so a step that reaches the SAME cli one wrapper out is judged the
+//      same (card t_266bec68). Measured BEFORE that fix, on the head this guard
+//      shipped at, by mutation with `web/package.json` restored byte-identically
+//      each time (md5 8cfe24f0 before and after): `"lint": "npx next lint"` and
+//      `"lint": "./node_modules/.bin/next lint"` were both GREEN (MISSED) while
+//      the bare `"lint": "next lint"` was RED — and both MISSED shapes still exit
+//      1 with `Invalid project directory provided, no such directory: <web>/lint`,
+//      so they are the same live failure, not a theoretical one. This matters
+//      more now than it did before the fix: the script is gone, so the most
+//      natural re-introduction (`npx next lint`, which is what most Next 15-era
+//      docs and muscle memory produce) is exactly the shape that was unwatched.
 //   2. SPECIFIC — every `npm run <name>` the repo hands a reader must name a
 //      script web/package.json defines. The referenced set is DERIVED by walking
 //      the tree for `npm run` (measured: a11y, build, dev, docs:facts, e2e, start,
@@ -49,6 +64,12 @@
 //   * `next --help` names the commands the cli REGISTERS. It is not a proof that
 //     a command succeeds for this app — that is the `web` gate's job for
 //     `next build`, and nothing's for the rest.
+//   * A step it cannot read as command words is NOT judged, and that is the safe
+//     direction (not judged rather than guessed wrong) but it is still a gap: a
+//     quoted command (`sh -c "next lint"` reads as command `sh`, not `next`), a
+//     pipeline or a command substitution, and a launcher flag that takes a
+//     SEPARATE value (`env -u NAME next lint` leaves `NAME` in the command slot).
+//     `npm run <script>` steps are test 2's subject, not this one's.
 //   * The walk skips node_modules/.git/.next/out/coverage and build-output `bin/`,
 //     and does not follow symlinks, so a reference in a generated or ignored
 //     directory is not scanned.
@@ -126,25 +147,89 @@ function stepsOf(script: string): string[] {
 }
 
 /**
- * The command a step runs, with leading `VAR=value` assignments removed, plus its
- * arguments. Quote-free on purpose: every script in this manifest is simple, and
- * a step this cannot read (a quoted command, a pipeline) yields a command word
- * that will not match `next`, so it is simply not judged — the safe direction.
+ * Command words (and the two-word forms) that only LAUNCH the command that
+ * follows them, so a `next` behind one is the SAME binary reached another way.
+ *
+ * Each is a real way to run the binary installed in `node_modules/.bin`, which is
+ * what `npm run` puts on PATH: `npx` (`npm exec`'s shorthand) and `npm exec`/
+ * `npm x`, `pnpx` and `pnpm exec`/`pnpm dlx`, `bunx`/`bun x`, `yarn exec`/`yarn
+ * dlx`, and `env`, which execs the command it is given.
+ *
+ * Longest forms first, so `npm exec` is matched before a bare `npm` prefix ever
+ * could be — a bare `npm` is deliberately NOT a launcher: `npm run <script>` is
+ * test 2's subject, and skipping `npm` would read `npm run lint` as a `next` step.
  */
-function commandOf(step: string): { cmd: string; args: string[] } {
-  const toks = step.split(/\s+/).filter((t) => t.length > 0 && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
-  return { cmd: toks[0] ?? "", args: toks.slice(1) };
+const LAUNCH_PREFIXES: readonly string[][] = [
+  ["npm", "exec"],
+  ["npm", "x"],
+  ["pnpm", "exec"],
+  ["pnpm", "dlx"],
+  ["yarn", "exec"],
+  ["yarn", "dlx"],
+  ["bun", "x"],
+  ["npx"],
+  ["pnpx"],
+  ["bunx"],
+  ["env"],
+];
+
+/**
+ * Is this token the `next` cli — by bare name, or by a `node_modules/.bin/next`
+ * path (`./node_modules/.bin/next`, an absolute one, another tree's)?
+ *
+ * A WHOLE-token match, never a substring: `next-intl`, `next-auth` and `eslint`
+ * are different programs and must not be judged as this cli, so the wrapper rule
+ * cannot widen into "anything with `next` in it".
+ */
+function isNextWord(token: string): boolean {
+  return token === "next" || /(?:^|\/)node_modules\/\.bin\/next$/.test(token);
 }
 
-test("no web script invokes a `next` subcommand this tree's cli does not have", () => {
-  const commands = nextCommands();
+/**
+ * The command a step runs, with leading `VAR=value` assignments and any launcher
+ * prefix removed, plus its arguments.
+ *
+ * Quote-free on purpose: every script in this manifest is simple, and a step this
+ * cannot read (a quoted command, a pipeline, a command substitution) yields a
+ * command word that will not match `next`, so it is simply not judged — the safe
+ * direction. A launcher's own `-`-flags are skipped with it (`npx --yes next
+ * lint`); a flag that takes a SEPARATE value (`env -u NAME …`) leaves its value in
+ * the command slot, which does not match `next` and is therefore not judged
+ * rather than guessed at — the same safe direction.
+ */
+function commandOf(step: string): { cmd: string; args: string[] } {
+  const toks = step
+    .split(/\s+/)
+    .filter((t) => t.length > 0 && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
+  let i = 0;
+  for (;;) {
+    const prefix = LAUNCH_PREFIXES.find((p) => p.every((w, k) => toks[i + k] === w));
+    if (!prefix) break;
+    i += prefix.length;
+    while (i < toks.length && toks[i].startsWith("-")) i += 1;
+  }
+  return { cmd: toks[i] ?? "", args: toks.slice(i + 1) };
+}
+
+/**
+ * Every `scripts[name]` step that delegates to a `next` subcommand the installed
+ * cli does not register.
+ *
+ * Split out of test 1 so the wrapper cases below drive the SAME walk over fixture
+ * scripts instead of re-implementing it — a second resolver written for the tests
+ * could agree with itself while disagreeing with the guard.
+ */
+function nextSubcommandOffenders(
+  source: Record<string, string>,
+  commands: Set<string>,
+): string[] {
   const offenders: string[] = [];
-  for (const [name, script] of Object.entries(scripts)) {
+  for (const [name, script] of Object.entries(source)) {
     for (const step of stepsOf(script)) {
       const { cmd, args } = commandOf(step);
       // `next` is the only command whose SUBCOMMAND is a name this tree can lose.
       // A bare `next` (help) and a directory argument are out of scope.
-      if (cmd !== "next") continue;
+      if (!isNextWord(cmd)) continue;
       const sub = args[0];
       if (!sub || !/^[a-z][a-z0-9-]*$/.test(sub)) continue;
       if (commands.has(sub)) continue;
@@ -154,6 +239,11 @@ test("no web script invokes a `next` subcommand this tree's cli does not have", 
       );
     }
   }
+  return offenders;
+}
+
+test("no web script invokes a `next` subcommand this tree's cli does not have", () => {
+  const offenders = nextSubcommandOffenders(scripts, nextCommands());
   assert.deepEqual(
     offenders,
     [],
@@ -161,6 +251,69 @@ test("no web script invokes a `next` subcommand this tree's cli does not have", 
       "script fails instead of doing its job (this is the `\"lint\": \"next lint\"` defect of Next 16, " +
       "which exits 1 with 'Invalid project directory provided, no such directory: <web>/lint'):\n" +
       offenders.join("\n"),
+  );
+});
+
+test("a `next <sub>` is judged through the wrappers that only launch it", () => {
+  const commands = nextCommands();
+  // The premise of every case below is asserted rather than assumed: `lint` is not
+  // a subcommand this cli registers, so reaching it — however the step is spelled
+  // — is the dead command the guard exists to stop. A Next that re-adds `lint`
+  // would make these cases prove nothing, and must say so instead of passing.
+  assert.equal(
+    commands.has("lint"),
+    false,
+    "this cli now registers a `lint` subcommand, so the cases below no longer describe a dead " +
+      `command — pick another subcommand for them. Have: ${[...commands].sort().join(", ")}`,
+  );
+
+  const judge = (step: string) => nextSubcommandOffenders({ probe: step }, commands).length > 0;
+
+  // [a step as a script writes it, must it be JUDGED, why]
+  const cases: Array<[string, boolean, string]> = [
+    // The two shapes measured MISSED on the head this guard shipped at, by
+    // mutation with the manifest restored byte-identically (card t_266bec68):
+    // the same defect one wrapper out.
+    ["npx next lint", true, "`npx` is transparent — the same cli runs"],
+    ["./node_modules/.bin/next lint", true, "an explicit .bin path is the same cli"],
+    // The rest of the launcher surface: each is a real way a step reaches the
+    // binary `npm run` puts on PATH.
+    ["npx --yes next lint", true, "a launcher's own flag is skipped with the launcher"],
+    ["npm exec next lint", true, "`npm exec` is what `npx` abbreviates"],
+    ["env next lint", true, "`env` execs the command it is given"],
+    ["node_modules/.bin/next lint", true, "the .bin path without the `./`"],
+    ["cd . && next lint", true, "stepsOf splits `&&`, so the `next lint` step is judged alone"],
+    ["cd web && npx next lint", true, "a `cd` prefix AND a launcher"],
+    // Controls: the shapes the guard already caught must STAY caught, or the
+    // resolution above would be a rewrite that lost the original teeth.
+    ["next lint", true, "the original shape (control)"],
+    ["next  lint", true, "double space (control)"],
+    // The other direction, and the reason this is a resolution and not "red
+    // anything near a launcher": a REGISTERED subcommand stays quiet.
+    ["npx next build", false, "`build` IS a subcommand of this cli"],
+    ["./node_modules/.bin/next start", false, "`start` IS a subcommand of this cli"],
+    // Not judged, deliberately — the safe direction, and the reason the wrapper
+    // rule is a whole-token match.
+    ["npx some-other-linter lint", false, "another tool's `lint`, not this cli"],
+    ["npx next-lint", false, "`next-lint` is a different binary, not this cli"],
+    ["sh -c \"next lint\"", false, "a quoted command — the command word reads `sh`, not `next`"],
+  ];
+
+  const wrong = cases
+    .filter(([step, want]) => judge(step) !== want)
+    .map(
+      ([step, want, why]) =>
+        `  \`${step}\` -> ${judge(step) ? "judged" : "not judged"}, wanted ` +
+        `${want ? "judged" : "not judged"} (${why})`,
+    );
+  assert.deepEqual(
+    wrong,
+    [],
+    "the wrapper resolution does not judge the way this file's header says it does. A `next ... " +
+      "lint` step is the Next-16 dead command whether or not a launcher sits in front of it; the " +
+      "two MISSED shapes at the top of the case list are the coverage gap card t_266bec68 " +
+      "measured:\n" +
+      wrong.join("\n"),
   );
 });
 
