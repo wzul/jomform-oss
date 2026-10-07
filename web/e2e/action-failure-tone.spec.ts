@@ -361,6 +361,93 @@ test("CONTROL: a SUCCESSFUL sound-setting save on /sales renders no failure bann
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// /sales — a MIXED bulk-capture vs an all-captured one (card t_0863b3ca)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// THE DECISION THIS ARM PINS (PR #1012's own judgement call)
+//   Bulk capture is PARTIAL by design: the endpoint answers with how many
+//   authorizations it captured and how many it did not, and the page reports the
+//   mixed outcome with the FAILURE tone — some authorizations are still
+//   uncaptured and the merchant has to read each status. Only an all-captured run
+//   is a success. The card that filed this arm (t_0863b3ca, follow-up to the QA
+//   card t_98be596e) measured that this decision had no guard: neutralising it by
+//   VALUE —
+//
+//     web/src/app/sales/page.tsx:647
+//     -      if (d.failed) showMsgFail(summary);
+//     +      if (false) showMsgFail(summary);
+//
+//   — put a mixed run back on the SUCCESS banner while the shipped source guard
+//   printed `6/6 pass` and this spec had no arm that would have driven it. The
+//   `showMsgFail` CALL was still there for the scan to find; only the condition
+//   deciding it had been hollowed out, which is why the source guard now reads
+//   the CONDITION and why this arm measures the rendered result of both outcomes.
+//
+//   The CONTROL is not decoration here either — it is what makes the failure arm
+//   non-vacuous: on the mutation the CONTROL still passes (an all-captured run was
+//   always a success), so a red failure arm cannot be an artefact of "the banner
+//   is always red".
+
+/** A capture-PENDING sale: `skip_capture` with no `captured_at` (issue #12). */
+const CAPTURE_PENDING_SALE = {
+  ...SALE,
+  ref_code: "SALE-TONE-CAP",
+  status: "authorized",
+  skip_capture: true,
+};
+
+/** The bulk-capture outcome under test, as the endpoint reports it. */
+type CaptureOutcome = { captured: number; requested: number; failed: number };
+
+async function stubSalesBulkCapture(page: Page, outcome: CaptureOutcome) {
+  const json = jsonOf();
+  await stubCommon(page, json);
+  await page.route(/(.*)\/api\/workspaces\/[^/]+\/settings(\?.*)?$/, (r) =>
+    r.fulfill(json(200, { sound_enabled: false }) as never),
+  );
+  await page.route(/(.*)\/api\/rest\/sales(\?.*)?$/, (r) =>
+    r.fulfill(json(200, { items: [CAPTURE_PENDING_SALE], page: 1, limit: 15, total: 1 }) as never),
+  );
+  await page.route(/(.*)\/api\/rest\/sales\/bulk-capture(\?.*)?$/, (r) => r.fulfill(json(200, outcome) as never));
+}
+
+/** Drive `/sales` → the header's "Capture all pending" button → the banner. */
+async function driveSalesBulkCapture(page: Page, outcome: CaptureOutcome) {
+  await freshState(page);
+  await stubSalesBulkCapture(page, outcome);
+  answerDialogs(page, "");
+  await page.goto("/sales", { waitUntil: "domcontentloaded" });
+  await expect(page.locator("html"), "the reading is the ENGLISH default").toHaveAttribute("lang", "en");
+  await expect(
+    page.locator("tr", { hasText: CAPTURE_PENDING_SALE.ref_code }),
+    "the capture-pending row must render before its action can be driven",
+  ).toBeVisible({ timeout: 45_000 });
+  // The button only renders when the page finds a capture-pending row, so its
+  // presence is also the fixture's own proof that `isCapturePending` matched.
+  await page.getByRole("button", { name: `${DICT["sales.captureAll"].en} (1)` }).click();
+}
+
+test("a MIXED bulk-capture on /sales is red-filled and a live alert (t_0863b3ca)", async ({ page }) => {
+  test.setTimeout(120_000);
+  await driveSalesBulkCapture(page, { captured: 0, requested: 1, failed: 1 });
+  const r = await settledReading(page);
+  console.log(`/sales bulk-capture failed=1 -> ${JSON.stringify(r)}`);
+  expectFailure(r, "/sales bulk-capture failed=1", "Captured 0/1");
+  expect(r.text, "/sales bulk-capture failed=1: the mixed run must say to check each status").toContain(
+    "1 failed",
+  );
+});
+
+test("CONTROL: an ALL-CAPTURED bulk-capture on /sales is a success (t_0863b3ca)", async ({ page }) => {
+  test.setTimeout(120_000);
+  await driveSalesBulkCapture(page, { captured: 1, requested: 1, failed: 0 });
+  const r = await settledReading(page);
+  console.log(`/sales bulk-capture failed=0 -> ${JSON.stringify(r)}`);
+  expectSuccess(r, "/sales bulk-capture failed=0", "Captured 1/1");
+  expect(r.text, "/sales bulk-capture failed=0: an all-captured run is the success arm").toContain("0 failed");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // /spam — a FAILED un-spam vs a successful one
 // ─────────────────────────────────────────────────────────────────────────────
 const SPAM_SUB = {

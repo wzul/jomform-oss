@@ -42,7 +42,28 @@
 //   3. the element that renders `{msg}` branches its class list on the tone,
 //      with a `bg-red-50` failure fill and an emerald success branch;
 //   4. a failure is a live `role="alert"`, and the element exposes its tone
-//      (`data-tone`) so the rendered result is observable.
+//      (`data-tone`) so the rendered result is observable;
+//   5. WHERE the tone CHOICE is a decision (`showMsgOk` on one branch,
+//      `showMsgFail` on the other), the condition deciding it is the API
+//      response — never a statically constant expression, and on /sales'
+//      PARTIAL bulk-capture the failure branch is the `d.failed` one.
+//
+// WHY RULE 5 EXISTS (card t_0863b3ca, follow-up to the QA card t_98be596e)
+//   Rules 1–4 pin the MECHANISM: the tone state, the pair, the fill, the ARIA.
+//   None of them reads WHICH branch of a `d.failed ? … : …` carries the failure,
+//   so the judgement PR #1012 made — a mixed bulk-capture run is a FAILURE, only
+//   an all-captured run is a success — could be neutralised by VALUE and every
+//   gate stayed green. Measured on the merged tree e53bf391 (2026-10-07):
+//
+//     web/src/app/sales/page.tsx:647
+//     -      if (d.failed) showMsgFail(summary);
+//     +      if (false) showMsgFail(summary);
+//
+//   A mixed outcome reported SUCCESS again and this file still printed
+//   `tests 6 / pass 6 / fail 0`, because the `showMsgFail` CALL was still there
+//   for rule 2 to find — only the condition had been hollowed out. Deleting a
+//   call is not the only way to remove a tone; making its guard unreachable is
+//   the same defect with every string this file grepped for still in place.
 //
 // WHY A SOURCE SCAN AND NOT THE BROWSER SPEC ALONE
 //   `web/e2e/action-failure-tone.spec.ts` measures the RENDERED result on the
@@ -61,6 +82,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import ts from "typescript";
 import { codeOnly } from "./jsxSource.ts";
 
 const SRC = fileURLToPath(new URL("../", import.meta.url)); // web/src/
@@ -81,6 +103,11 @@ function tsxFiles(): string[] {
 
 const FILES = tsxFiles();
 const CODE_OF = new Map(FILES.map((rel) => [rel, codeOnly(readFileSync(`${SRC}${rel}`, "utf8"))]));
+// The raw source, for the one reader below that needs a real AST: a tone
+// CHOICE is a control-flow fact (`which branch runs`), which only a parser can
+// answer — a regex over `codeOnly` cannot tell a condition from a string that
+// looks like one.
+const RAW_OF = new Map(FILES.map((rel) => [rel, readFileSync(`${SRC}${rel}`, "utf8")]));
 
 /** A page/component that renders a `msg` state at all. */
 const MSG_RENDERERS = FILES.filter((rel) => /const \[msg, setMsg\] = useState\(/.test(CODE_OF.get(rel)!));
@@ -200,6 +227,120 @@ const computedToned = MSG_RENDERERS.filter((rel) => failureWriters(CODE_OF.get(r
  * obligations below are asserted only for the three pages this card changed.
  */
 const OWNS_BANNER_ARIA = ["app/form-settings/page.tsx", "app/sales/page.tsx", "app/spam/page.tsx"];
+
+/**
+ * A site where the code CHOOSES which tone to report. Two shapes, both read off
+ * the AST because the answer is a control-flow fact:
+ *
+ *   * a branch — `if (cond) showMsgFail(x); else showMsgOk(y);` (36 of these);
+ *   * a SELECTED setter — `(cond ? showMsgOk : showMsgFail)(t(…))`, which is how
+ *     /settings writes its credential and tracking saves.
+ *
+ * A site counts only when BOTH tones appear at it. That is what makes it a
+ * decision rather than one of the many bare guards (`if (!r.ok) showMsgFail(…)`)
+ * whose branch is the failure by construction and which therefore cannot be
+ * hollowed out by flipping a condition.
+ */
+type ToneChoice = {
+  line: number;
+  /** the condition expression itself — what the constant check judges */
+  condNode: ts.Node;
+  cond: string;
+  /** the setters reachable on each side of the condition (branch shape), or the
+   *  setter each arm of the ternary IS. */
+  then: Set<"showMsgOk" | "showMsgFail">;
+  else: Set<"showMsgOk" | "showMsgFail">;
+};
+
+/** The tone setters CALLED anywhere inside a subtree (the branch shape). */
+function settersCalledIn(node: ts.Node | undefined): Set<"showMsgOk" | "showMsgFail"> {
+  const out = new Set<"showMsgOk" | "showMsgFail">();
+  if (!node) return out;
+  const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      const e = n.expression;
+      if (ts.isIdentifier(e) && (e.text === "showMsgOk" || e.text === "showMsgFail")) out.add(e.text);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return out;
+}
+
+/** The tone setter an expression IS, not one it calls (the ternary's branches). */
+function setterNamed(node: ts.Node | undefined): "showMsgOk" | "showMsgFail" | null {
+  if (!node) return null;
+  if (ts.isIdentifier(node)) {
+    return node.text === "showMsgOk" || node.text === "showMsgFail" ? node.text : null;
+  }
+  if (ts.isParenthesizedExpression(node)) return setterNamed(node.expression);
+  return null;
+}
+
+/**
+ * Is this condition STATICALLY constant? That is the mutation the card is about:
+ * `if (false)` / `if (0)` / `if (!1)` / `if ("")` is not a decision at all — one
+ * branch is dead code that no build error and no gate can see.
+ *
+ * `true`/`false` are keywords, every other primitive is the generic
+ * `LiteralToken` family. Deliberately NOT attempted: a whole-expression constant
+ * folder (`1 > 2`, `SOME_ENV && false`). Flagging those needs a semantic
+ * evaluation this file cannot do, and a check that only ever sees the literal
+ * form is honest about it in the failure message rather than guessing.
+ */
+function isConstantCondition(node: ts.Node): boolean {
+  if (!ts.isExpression(node)) return false;
+  if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) return true;
+  if (ts.isNumericLiteral(node) || ts.isBigIntLiteral(node)) return true;
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return true;
+  // `!0` / `!1` — the minifier's spelling of `true` / `false`.
+  if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) {
+    return ts.isNumericLiteral(node.operand);
+  }
+  return false;
+}
+
+/** Every tone CHOICE in one page, in source order. */
+function toneChoices(rel: string): ToneChoice[] {
+  return toneChoicesFrom(RAW_OF.get(rel) ?? "");
+}
+
+/** The same reader, against a source string (so the bite proofs can drive it). */
+function toneChoicesFrom(src: string): ToneChoice[] {
+  const sf = ts.createSourceFile("guard.tsx", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const out: ToneChoice[] = [];
+  const lineAt = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const text = (n: ts.Node) => n.getText(sf).replace(/\s+/g, " ");
+  const visit = (n: ts.Node): void => {
+    if (ts.isIfStatement(n)) {
+      const then = settersCalledIn(n.thenStatement);
+      const else_ = settersCalledIn(n.elseStatement);
+      if (then.size > 0 && else_.size > 0) {
+        out.push({ line: lineAt(n), condNode: n.expression, cond: text(n.expression), then, else: else_ });
+      }
+    }
+    if (ts.isConditionalExpression(n)) {
+      const t = setterNamed(n.whenTrue);
+      const f = setterNamed(n.whenFalse);
+      if (t && f && t !== f) {
+        out.push({
+          line: lineAt(n),
+          condNode: n.condition,
+          cond: text(n.condition),
+          then: new Set([t]),
+          else: new Set([f]),
+        });
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+const CHOICES_OF = new Map(FILES.map((rel) => [rel, toneChoices(rel)]));
+const ALL_CHOICES = FILES.flatMap((rel) => CHOICES_OF.get(rel)!.map((c) => ({ rel, ...c })));
+
 
 test("the walk found the app and the pages this rule is about (it cannot pass vacuously)", () => {
   assert.ok(FILES.length >= 40, `the walk found only ${FILES.length} .tsx files under web/src — it is not reading the app`);
@@ -411,4 +552,158 @@ test("the guard would fail on the code it replaced (in-file bite proof)", () => 
     0,
     "showMsgFail(...) was read as a bare setMsg — the rule cannot tell them apart",
   );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rule 5 — a tone CHOICE must be a real decision (card t_0863b3ca)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The /sales PARTIAL bulk-capture decision, as PR #1012 left it. The page is
+ * partial BY DESIGN: `d.failed > 0` is a FAILURE (some authorizations are still
+ * uncaptured and the merchant has to read each status), only `d.failed === 0` is
+ * a success. This is the writer whose guard this card is about, and it is pinned
+ * here rather than derived, for the same reason the other lists are: a change to
+ * it is a DELIBERATE edit to this file with a reason, not a silent drift.
+ */
+const SALES_TONE_CHOICES: { line: number; cond: string; fail: "then" | "else"; ok: "then" | "else" }[] = [
+  { line: 647, cond: "d.failed", fail: "then", ok: "else" },
+];
+
+test("the tone-choice walk found the app, and it reads both shapes (it cannot pass vacuously)", () => {
+  // A file whose only tone writers are ONE tone (a bare `if (!r.ok) showMsgFail`)
+  // is not a decision and must not be reported as one — that is the shape most of
+  // the tree has, and reporting it would make this rule fire everywhere and be
+  // switched off.
+  assert.ok(
+    ALL_CHOICES.length >= 15,
+    `the walk found only ${ALL_CHOICES.length} tone CHOICES under web/src — expected 15+ (measured 19 ` +
+      `on the merged tree: 16 branches plus /settings' 3 selected setters). Found: ` +
+      `${JSON.stringify(ALL_CHOICES.map((c) => `${c.rel}:${c.line}`))}`,
+  );
+  for (const rel of PINNED_TONED) {
+    assert.ok(
+      CHOICES_OF.get(rel)!.length > 0,
+      `src/${rel} has no tone CHOICE any more — every failure is now unconditional, or the ` +
+        `reader stopped seeing this page (re-anchor it rather than trusting the pass)`,
+    );
+  }
+  // BOTH shapes, read from sources this test writes, so neither can rot away
+  // unnoticed: the branch form and the selected-setter form.
+  const branch = toneChoicesFrom('if (d.failed) showMsgFail(s); else showMsgOk(s);');
+  assert.equal(branch.length, 1, "the branch shape was not read as a tone choice");
+  assert.equal(branch[0].cond, "d.failed", "the branch shape's condition was mis-read");
+  assert.ok(branch[0].then.has("showMsgFail"), "the failure branch was not read as the `then` side");
+  assert.ok(branch[0].else.has("showMsgOk"), "the success branch was not read as the `else` side");
+  const sel = toneChoicesFrom('(r.ok ? showMsgOk : showMsgFail)(t("x"));');
+  assert.equal(sel.length, 1, "the selected-setter shape was not read as a tone choice");
+  assert.equal(sel[0].cond, "r.ok", "the selected-setter condition was mis-read");
+  assert.ok(sel[0].then.has("showMsgOk"), "the selected-setter's success arm was not read");
+  assert.ok(sel[0].else.has("showMsgFail"), "the selected-setter's failure arm was not read");
+  // ...and a ONE-TONE guard is not a choice.
+  assert.equal(
+    toneChoicesFrom('if (!r.ok) showMsgFail(s);').length,
+    0,
+    "a bare `if (!r.ok) showMsgFail(…)` was read as a tone CHOICE — this rule would fire on the " +
+      "whole tree and have to be switched off",
+  );
+});
+
+test("no tone choice is decided by a CONSTANT condition (t_0863b3ca)", () => {
+  const offenders: string[] = [];
+  for (const rel of FILES) {
+    for (const c of CHOICES_OF.get(rel)!) {
+      // The condition node itself: a constant makes one whole branch unreachable,
+      // so the code no longer CHOOSES a tone at all.
+      if (isConstantCondition(c.condNode)) {
+        offenders.push(
+          `src/${rel}:${c.line} — the tone of a ${c.then.has("showMsgFail") ? "failure" : "success"}/` +
+            `${c.else.has("showMsgOk") ? "success" : "failure"} pair is decided by the CONSTANT ` +
+            `condition \`${c.cond}\`. One branch is dead code, so the other outcome can never be ` +
+            `reported — and every string this guard greps for is still present. This is the shape ` +
+            `measured on the merged tree: \`if (d.failed) showMsgFail(summary);\` → ` +
+            `\`if (false) showMsgFail(summary);\`, which left this file 6/6 green. Decide the tone on ` +
+            `the RESPONSE that carries the outcome, not on a literal.`,
+        );
+      }
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `A tone CHOICE decided by a constant is not a decision (card t_0863b3ca):\n  ${offenders.join("\n  ")}`,
+  );
+});
+
+test("/sales' mixed bulk-capture reports the FAILURE tone on the `d.failed` branch (t_0863b3ca)", () => {
+  const choices = CHOICES_OF.get("app/sales/page.tsx")!;
+  const offenders: string[] = [];
+  for (const pinned of SALES_TONE_CHOICES) {
+    // Matched on the CONDITION, not the line: a line number is a fact about a
+    // revision, and this page is edited constantly (it moved by 200 lines
+    // between the pre-fix and merged trees this card measured).
+    const hits = choices.filter((c) => c.cond === pinned.cond);
+    if (hits.length === 0) {
+      offenders.push(
+        `app/sales/page.tsx — no tone choice on \`${pinned.cond}\` any more. PR #1012's decision was ` +
+          `"a mixed bulk-capture run (d.failed > 0) is a FAILURE; only an all-captured run is a ` +
+          `success". If that decision was dropped, the mixed summary now wears the SUCCESS banner and ` +
+          `the merchant is told a partial capture worked. If the DECISION MOVED (a different variable, ` +
+          `an extracted helper), move this row in the same edit.`,
+      );
+      continue;
+    }
+    const hit = hits[0];
+    if (!hit.then.has("showMsgFail") || !hit.else.has("showMsgOk")) {
+      offenders.push(
+        `app/sales/page.tsx:${hit.line} — \`${pinned.cond}\` chooses the WRONG tone: ` +
+          `then=[${[...hit.then].join(",")}] else=[${[...hit.else].join(",")}]. A mixed run must report ` +
+          `the FAILURE tone (showMsgFail on the \`d.failed\` branch); only an all-captured run is a ` +
+          `success.`,
+      );
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `The /sales bulk-capture tone decision is unguarded (card t_0863b3ca):\n  ${offenders.join("\n  ")}`,
+  );
+});
+
+test("rule 5 bites on the exact mutation the card measured (in-file bite proof)", () => {
+  // THE mutation, verbatim from the card: the failure call is still THERE, only
+  // its condition is hollowed out. A guard that greps for `showMsgFail(` sees
+  // nothing wrong — which is why this one reads the condition.
+  const mutated = 'if (false) showMsgFail(summary);\nelse showMsgOk(summary);';
+  const read = toneChoicesFrom(mutated);
+  assert.equal(read.length, 1, "the mutated writer was not read at all — the guard cannot bite on it");
+  assert.ok(
+    isConstantCondition(read[0].condNode),
+    "the constant condition `false` was NOT flagged — this is the exact mutation that shipped green",
+  );
+  // ...and the SHIPPED code is not flagged, or the guard would red on main.
+  const shipped = 'if (d.failed) showMsgFail(summary);\nelse showMsgOk(summary);';
+  const shippedRead = toneChoicesFrom(shipped);
+  assert.equal(shippedRead.length, 1, "the shipped writer was not read as a tone choice");
+  assert.ok(
+    !isConstantCondition(shippedRead[0].condNode),
+    "the shipped `d.failed` condition was flagged as constant — the guard reds on its own fix",
+  );
+  // The rest of the constant spellings, so a rewrite of the mutation cannot slip
+  // through: `!1` is what a minifier emits, `0`/`""` are what a careless edit
+  // leaves behind.
+  for (const c of ["false", "true", "0", "1", '""', "!0", "!1"]) {
+    const rows = toneChoicesFrom(`if (${c}) showMsgFail(s); else showMsgOk(s);`);
+    assert.ok(
+      isConstantCondition(rows[0].condNode),
+      `\`if (${c})\` was not read as a CONSTANT condition`,
+    );
+  }
+  for (const c of ["d.failed", "r.ok", "!r.ok", 'outcome.kind !== "needs_ack"']) {
+    const rows = toneChoicesFrom(`if (${c}) showMsgFail(s); else showMsgOk(s);`);
+    assert.ok(
+      !isConstantCondition(rows[0].condNode),
+      `the real condition \`${c}\` was read as constant — the rule would fire on the whole tree`,
+    );
+  }
 });
