@@ -158,8 +158,27 @@ echo "lock:   held for this worktree (${LOCK_FILE##*/})"
 SNAP="$(mktemp -d)" || { echo "cannot create a per-run scratch dir" >&2; exit 2; }
 
 restore() {
+  # WHICH SOURCES MAKE THE BUILD STALE (card t_cd035f15). Only `$PAGE` and `$CSS` are
+  # BUILD INPUTS — the spec (`$SPEC`) is not read by `next build` at all, which is why
+  # case 4 sabotages only the spec and never rebuilds. So reverting a source is what
+  # makes a rebuild NECESSARY, and it is necessary only for a build input whose bytes on
+  # disk still differ from the clean snapshot. Rebuilding "just in case" on every
+  # restore is what made the harness run `next build` TWICE at the end of a normal run:
+  # the trailer's rebuild put the clean build back, then the EXIT trap's `restore`
+  # rebuilt the same bytes AGAIN, and the second build started after the harness's last
+  # printed line — so a caller that read the log and returned saw a worktree whose
+  # `.next` was still being rewritten.
+  #
+  # `cmp` compares the file BEFORE the `cp` below, and it is asked only of the build
+  # inputs. A stale one (`build_input_stale=1`) forces the rebuild exactly as before;
+  # nothing else does, unless the last build FAILED (`BUILD_OK=0`), in which case this
+  # still retries — a failed build is the one case where `.next` is not to be trusted.
+  local build_input_stale=0
   for f in "$SPEC" "$PAGE" "$CSS"; do
     if [ -f "$SNAP/$(basename "$f").orig" ]; then
+      case "$f" in
+        "$PAGE"|"$CSS") cmp -s "$SNAP/$(basename "$f").orig" "$f" || build_input_stale=1 ;;
+      esac
       cp "$SNAP/$(basename "$f").orig" "$f"
     fi
   done
@@ -173,7 +192,9 @@ restore() {
   #
   # `rebuild` may not exist yet when the trap fires on an early exit, so this checks.
   if declare -F rebuild >/dev/null 2>&1; then
-    rebuild >/dev/null 2>&1 || echo "   WARNING: could not rebuild after restore — .next may still be a sabotage build" >&2
+    if [ "$build_input_stale" = 1 ] || [ "${BUILD_OK:-0}" != 1 ]; then
+      rebuild >/dev/null 2>&1 || echo "   WARNING: could not rebuild after restore — .next may still be a sabotage build" >&2
+    fi
   fi
 }
 cleanup() { local rc=$?; restore; rm -rf "$SNAP"; exit "$rc"; }
@@ -199,10 +220,18 @@ rebuild() {
   # unrelated refusal) where it requires 75, so the whole `web` gate went red with
   # `biteproof_docs_tool_claims.sh: ... must exit 75 ... Got 2`. `env -u` removes
   # exactly those two variables and nothing else.
+  #
+  # `BUILD_OK` records whether the LAST build succeeded, so `restore` can tell "the
+  # clean build is already on disk" from "no build of this tree has run yet or the
+  # last one failed" (card t_cd035f15). It is left unset until a build actually
+  # starts, and `restore` treats unset as not-ok — an exit before the first build
+  # leaves `.next` unknown, which must still be rebuilt.
+  BUILD_OK=0
   if ! env -u BITEPROOF_LOCKED -u BITEPROOF_LOCK_FILE npm run build >"$SNAP/build.log" 2>&1; then
     echo "   BUILD FAILED — see $SNAP/build.log"
     return 1
   fi
+  BUILD_OK=1
 }
 
 # args: <case name> <expected failure text> <rebuild:yes|no> <mutation shell>

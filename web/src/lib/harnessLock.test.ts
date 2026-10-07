@@ -545,9 +545,19 @@ test("every /docs bite harness serialises on ONE per-worktree lock, keyed on the
       // else, so the leg runs on every host. `PATH=/usr/bin:/bin` never covered the
       // refusal anywhere flock ships in those directories — which is every host here,
       // so the refusal was unpinned while appearing covered.
+      //
+      // THE TOOL LIST MUST COVER THE HARNESS'S PRE-LOCK PROLOGUE, NOT JUST ITS LOCK
+      // BLOCK (card `t_cd035f15`). Every entry above resolves `SELF` with
+      // `basename "$0"` BEFORE it tests `command -v flock`, so with `basename` absent
+      // the run died at its own line 67/53 (`basename: command not found`) and only
+      // THEN reached the refusal this leg names — the assertion below was satisfied by
+      // a harness that had already failed for an unrelated reason, so the leg did not
+      // isolate the missing-`flock` condition it claims to. The absence of a
+      // `command not found` line is asserted after the refusal (below) so the leg can
+      // only pass when the refusal is the run's FIRST failure, not its second.
       const noFlockPath = mkdtempSync(join(tmpdir(), "bite-nopath-"));
       try {
-        for (const tool of ["bash", "dirname", "pwd", "mktemp", "sha256sum", "cut", "git"]) {
+        for (const tool of ["bash", "basename", "dirname", "pwd", "mktemp", "sha256sum", "cut", "git"]) {
           const which = spawnSync("bash", ["-c", `command -v ${tool}`], { encoding: "utf8" });
           const at = which.stdout.trim();
           if (which.status === 0 && at !== "") {
@@ -569,6 +579,18 @@ test("every /docs bite harness serialises on ONE per-worktree lock, keyed on the
         assert.match(
           noFlock.out, /flock is not installed/,
           `${label}: the refusal must name the missing tool. Got:\n${noFlock.out}`,
+        );
+        // THE REFUSAL MUST BE THE RUN'S FIRST FAILURE. Without this, the leg above is
+        // satisfied by a harness that already died earlier on a tool the scratch PATH
+        // forgot — which is exactly what `basename` was (card `t_cd035f15`): the run
+        // printed `basename: command not found` and only THEN the flock refusal, so the
+        // leg passed while measuring a harness that could not even resolve `SELF`. A
+        // scratch PATH missing any tool the pre-lock prologue calls turns this red.
+        assert.doesNotMatch(
+          noFlock.out, /command not found/,
+          `${label}: the scratch PATH is missing a tool this harness needs BEFORE its ` +
+          `flock check, so this leg is not isolating the missing-flock condition it ` +
+          `names — the refusal it asserts came second:\n${noFlock.out}`,
         );
       } finally {
         rmSync(noFlockPath, { recursive: true, force: true });
