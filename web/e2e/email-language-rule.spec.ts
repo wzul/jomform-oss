@@ -200,7 +200,23 @@ test.describe("email subject/body per-field rule is stated where it applies", ()
     await page.getByRole("button", { name: "Notifications", exact: true }).click();
 
     const RULE = 'a[href="/docs/customize#language"]';
-    const before = await page.locator(RULE).count();
+
+    // `before` must be the SETTLED count of the receipt fields' own links, not a
+    // one-shot read of the locator (card t_373a0b5c).
+    //
+    // Those two links arrive with the email-settings fetch, a tick after the
+    // Notifications tab's render commits. A bare `count()` here can therefore land
+    // on 0 while the DOM is about to carry 2, and the delta below then reads
+    // `after - before` = 4 - 0 and asserts 4 — the exact false RED the `e2e` gate
+    // produced on a loaded host (measured 4-of-8 under load; the read at the old
+    // :203 saw 0 while the very next 25ms sample already saw 2). Waiting for the
+    // settled base removes the window; it is a wait on real elements, not a longer
+    // sleep and not a retried delta.
+    const base = await expectLinksBeside(
+      page, RULE, 2,
+      "the receipt fields' own two language links must settle before the panel is opened",
+    );
+    const before = await base.count();
 
     // Open the rule editor. The label is a dictionary string, so match the EN
     // dictionary's own words rather than a hand-typed one.
@@ -212,18 +228,32 @@ test.describe("email subject/body per-field rule is stated where it applies", ()
     await expect(panelSubject).toHaveCount(1, { timeout: 15_000 });
     await expect(panelSubject.locator(RULE)).toHaveCount(1);
 
-    // BOTH fields in the panel got one, so the delta is exactly two.
-    const after = await page.locator(RULE).count();
+    // …and the panel's OWN Body label carries one too. The panel's half is asserted
+    // WHERE IT LIVES (one link inside each panel label) rather than inferred from a
+    // page-wide delta alone: a link that landed outside the panel, or a genuinely
+    // missing one, still fails here. The sentence in this label is unique to the
+    // rule editor's placeholders field, so it cannot re-point at the receipt
+    // Body label above.
+    const panelBody = page.locator("label", { hasText: "A response form has no sale" });
+    await expect(panelBody).toHaveCount(1, { timeout: 15_000 });
+    await expect(panelBody.locator(RULE)).toHaveCount(1);
+
+    // BOTH fields in the panel got one, so the delta is exactly two. Both operands
+    // are settled: `before` was awaited above, and `after` is read only after the
+    // panel's own two labels each proved they carry a link.
+    const after = await base.count();
     expect(after - before, `the rule editor added ${after - before} language-rule link(s), want 2 ` +
       `(one on Subject, one on Body)`).toBe(2);
 
     // …and they carry the localised explanation, so a missing dictionary entry
-    // cannot pass as a rendered link.
-    const titles = await page.locator(RULE).evaluateAll(
-      (els) => els.slice(-2).map((e) => e.getAttribute("title") ?? ""),
-    );
+    // cannot pass as a rendered link. Read from the panel's two labels (settled),
+    // not from the page-wide locator's last two in DOM order.
+    const titles = [
+      await panelSubject.locator(RULE).getAttribute("title"),
+      await panelBody.locator(RULE).getAttribute("title"),
+    ];
     for (const t of titles) {
-      expect(t, `a rule-editor language link has title ${JSON.stringify(t)}`).toContain("judged separately");
+      expect(t ?? "", `a rule-editor language link has title ${JSON.stringify(t)}`).toContain("judged separately");
     }
 
     // The placeholder link is a DIFFERENT affordance and survives beside it.
