@@ -1,0 +1,196 @@
+// Regression guard for card t_48319be9: the session bootstrap read must NOT
+// decide the visitor is ANONYMOUS when it simply did not get an answer.
+//
+// THE DEFECT (reproduced deterministically in a real browser before this file —
+// see the reproduction note below). `web/src/components/session.tsx`'s
+// SessionProvider flipped `anon` when the `dashboard-bundle` read settled as
+// `null`, and `fetchBundle` returned `null` for EVERY failure — a non-OK status
+// (including a 5xx) and a fetch that rejected. Worse, an explicit 5s WEDGE
+// collapsed the still-in-flight state into that same `null`:
+//
+//   const timer = window.setTimeout(() => {
+//     setBundle((prev) => (prev === undefined ? null : prev));
+//   }, 5000);
+//
+// whose comment said it existed "so a hung request can never leave the app stuck
+// on the loading screen". So a bundle read that is merely SLOW (a starved main
+// thread on a contended host — the gate runs 6 playwright workers + CPU spinners
+// on 6 cores) or a bundle read that FAILS (a 5xx, a dropped connection) was
+// reported to every page as a confirmed sign-out, and fifteen pages run
+// `if (anon) router.replace("/landing")`. The page under test was gone — not a
+// missing banner on it.
+//
+// MEASURED, NOT INFERRED (this is the repro the fix was proven against):
+// stubbing `dashboard-bundle` to answer **200** but only after 9s puts `/chat`
+// at `http://127.0.0.1:<port>/landing` on the pre-fix bytes — the 5s wedge fires
+// first, `anon` flips, the page navigates away, and when the real 200 arrives
+// later it cannot navigate back. On the fixed bytes the same 9s read keeps the
+// page on `/chat` and it renders. `session.tsx` was changed to reach `null`
+// ONLY from an authoritative refusal (a 401, or a 403 with no tenancy code — the
+// identical rule `wsfetch.isUnauthStatus` applies on every page) and to expose a
+// distinct `sessionError` fault state, which the dashboard shows as a retry.
+//
+// WHY A BROWSER SPEC AND NOT A SOURCE GUARD. The defect is a RACE and a
+// NAVIGATION, not a wrong string at a call site: the failing source
+// (`bundle === null → anon → router.replace`) reads correctly in isolation, and
+// it is the same source that must keep working for a genuine 401 (the CONTROL
+// below). Only a real build shows the final URL.
+//
+// The API is stubbed at the browser level (the pattern every sibling spec here
+// uses), so the gate needs nothing but the build it is already serving.
+import { test, expect, type Page } from "@playwright/test";
+
+import { DICT } from "../src/components/i18nDict";
+
+const EN = {
+  // The dashboard's own heading — the page the visitor asked for.
+  dashTitle: DICT["dash.title"].en,
+  // The fault sentence + the retry action the fixed build offers.
+  sessionUnavailable: DICT["common.sessionUnavailable"].en,
+  retry: DICT["common.retry"].en,
+  // The landing hero heading, which the anon fallback renders. Its presence is
+  // what "the visitor was treated as anonymous" looks like on screen.
+  landHero1: DICT["land.hero1"].en,
+} as const;
+
+/** The slug the browser holds — the read is scoped to it, so the URL is real. */
+const WS = "ws-a";
+
+const BUNDLE = {
+  me: { id: "u1", email: "merchant@example.com", name: "Merchant", lang: "", is_super_admin: false },
+  workspaces: [{ id: "ws-id-a", name: "Real", slug: WS, role: "admin" }],
+  chip_status: null,
+  keys: [],
+  domains: [],
+  webhooks: [],
+  social: [],
+  einvoice: null,
+  products: [],
+  summary: { counts: {}, revenue_sen: 0 },
+  sales: { items: [], page: 1, limit: 20, total: 0 },
+  form_analytics: [],
+  product_analytics: [],
+};
+
+const json = (status: number, body: unknown) => ({
+  status,
+  contentType: "application/json",
+  body: JSON.stringify(body),
+});
+
+/**
+ * A fresh visitor state (English, one selected workspace). Storage is cleared
+ * first: this browser keeps localStorage between runs on this host, and a
+ * `jf_lang` left behind by an earlier card would render the page in a locale
+ * this file never asserts.
+ */
+async function freshState(page: Page, base: string, opts: { sessionCookie?: boolean } = {}) {
+  await page.addInitScript(() => {
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+      localStorage.setItem("jf_workspace", "ws-a");
+      localStorage.setItem("jf_lang", "en");
+    } catch {
+      /* storage unavailable */
+    }
+  });
+  // `app/page.tsx` is a SERVER component that decides from the presence of the
+  // session cookie: without it, `/` is served as the landing page before any
+  // client code runs. `/` renders the dashboard (and its retry surface) only for
+  // a visitor whose browser carries the cookie, so a test that drives `/` must
+  // set one. The VALUE is irrelevant — the server page tests presence — and the
+  // bundle read is stubbed below.
+  if (opts.sessionCookie) {
+    await page.context().addCookies([{ name: "jf_session", value: "e2e-test", url: base }]);
+  }
+  // Catch-all FIRST — Playwright resolves matching routes in reverse
+  // registration order, so the specific routes below win.
+  await page.route(/(.*)\/api\/.*$/, (r) => r.fulfill(json(200, {})));
+  await page.route(/(.*)\/api\/rest\/chat(\?.*)?$/, (r) =>
+    r.fulfill(json(200, { available: true, limits: { messages_per_hour: 60, max_message_chars: 2000 } })),
+  );
+  await page.route(/(.*)\/api\/auth\/profile$/, (r) => r.fulfill(json(200, { lang: "" })));
+}
+
+/**
+ * The wedge the fix removed fired at 5000ms. A read that answers at 8000ms is
+ * therefore past ANY fixed wedge of that order: on the pre-fix build the page
+ * has already navigated away by then, and on the fixed build it has not. The
+ * delay is the reproduction, not a convenience — it is what makes the test
+ * bite deterministically instead of only under host contention.
+ */
+const SLOW_MS = 8_000;
+
+test("a SLOW dashboard-bundle read does not bounce the page to /landing", async ({ page, baseURL }) => {
+  test.setTimeout(120_000);
+  await freshState(page, baseURL!);
+  // The bundle answers 200 — a VALID session, just late. This is the contended
+  // host: the client is starved, the server is fine (the spec stubs it 200).
+  await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, async (r) => {
+    await new Promise((res) => setTimeout(res, SLOW_MS));
+    await r.fulfill(json(200, BUNDLE));
+  });
+
+  await page.goto(`${baseURL}/chat`, { waitUntil: "domcontentloaded" });
+
+  // Wait past the old wedge window so a pre-fix build has had its chance to
+  // navigate. Then the real assertion is the FINAL state, once the (late) 200
+  // lands: the page the visitor asked for, rendered.
+  await page.waitForTimeout(SLOW_MS + 4_000);
+  expect(
+    page.url(),
+    "a SLOW (but valid) session read redirected the page — this is the reported bounce to /landing (t_48319be9)",
+  ).toContain("/chat");
+  await expect(page.locator("#chat-input")).toBeVisible({ timeout: 15_000 });
+  console.log(`OBSERVED slow-bundle finalUrl=${page.url()}`);
+});
+
+test("a FAILED dashboard-bundle read shows a retry instead of signing the visitor out", async ({ page, baseURL }) => {
+  test.setTimeout(120_000);
+  await freshState(page, baseURL!, { sessionCookie: true });
+  // The bundle answers 500 — the server is broken, the visitor is NOT anonymous.
+  // It keeps failing until the RETRY, so a successful background read cannot
+  // paper over the fault (the bootstrap issues more than one read as the
+  // workspace state settles, and the dashboard would otherwise render itself).
+  let recovered = false;
+  await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, (r) =>
+    recovered ? r.fulfill(json(200, BUNDLE)) : r.fulfill(json(500, { error: "boom" })),
+  );
+
+  await page.goto(`${baseURL}/`, { waitUntil: "domcontentloaded" });
+
+  // A fault is NOT a sign-out: the dashboard says so and offers the retry.
+  await expect(page.getByText(EN.sessionUnavailable, { exact: true })).toBeVisible({ timeout: 20_000 });
+  // ...and it did NOT serve the landing page (the pre-fix shape).
+  expect(
+    await page.getByRole("heading", { level: 1, name: EN.landHero1, exact: false }).count(),
+    "a FAILED (5xx) bundle read served the landing page — the visitor was treated as anonymous (t_48319be9)",
+  ).toBe(0);
+
+  // The retry re-attempts the bootstrap and the dashboard renders for real.
+  recovered = true;
+  await page.getByRole("button", { name: EN.retry, exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: EN.dashTitle, exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+  expect(page.url(), "the retry must not have navigated away").not.toContain("/landing");
+  console.log(`OBSERVED failed-bundle finalUrl=${page.url()}`);
+});
+
+test("CONTROL: an authoritative 401 STILL bounces to /landing", async ({ page, baseURL }) => {
+  test.setTimeout(120_000);
+  await freshState(page, baseURL!);
+  // The other half of the hazard. The fix narrowed `anon` to an AUTHORITATIVE
+  // refusal; a 401 is one, and it must keep its old, wanted behaviour — a fix
+  // that swallowed every failure would leave an expired session on a dead
+  // dashboard.
+  await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, (r) =>
+    r.fulfill(json(401, { error: "tidak log masuk" })),
+  );
+
+  await page.goto(`${baseURL}/chat`, { waitUntil: "domcontentloaded" });
+  await page.waitForURL(/\/landing/, { timeout: 20_000 });
+  expect(page.url()).toContain("/landing");
+  console.log(`OBSERVED control=401 finalUrl=${page.url()}`);
+});

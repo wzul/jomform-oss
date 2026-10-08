@@ -253,6 +253,11 @@ export const DICT = {
   // otherwise get no signal at all that the page is still loading.
   "common.loading": { en: "Loading…", ms: "Memuatkan…", zh: "正在加载…", ta: "ஏற்றுகிறது…", ar: "جارٍ التحميل…" },
   "common.retry": { en: "Retry", ms: "Cuba semula", zh: "重试", ta: "மீண்டும் முயற்சி", ar: "إعادة المحاولة" },
+  // Card t_48319be9: the session bootstrap read did not produce an answer (a
+  // fault — a 5xx or a dropped connection), which is NOT the same as being signed
+  // out, so the app says what happened and offers a retry instead of silently
+  // bouncing the merchant to the landing page.
+  "common.sessionUnavailable": { en: "We couldn't start your session. Please try again.", ms: "Kami tidak dapat memulakan sesi anda. Sila cuba lagi.", zh: "无法启动您的会话。请重试。", ta: "உங்கள் அமர்வைத் தொடங்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر بدء جلستك. يرجى المحاولة مرة أخرى." },
   // Issue #503 (audit): the same visible-failure text for the other list pages
   // that used to swallow a non-ok response into an empty list.
   "forms.loadFail": { en: "We couldn't load your forms. Please try again.", ms: "Kami tidak dapat memuatkan borang anda. Sila cuba lagi.", zh: "无法加载您的表单。请重试。", ta: "உங்கள் படிவங்களை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تحميل نماذجك. يرجى المحاولة مرة أخرى." },

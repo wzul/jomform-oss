@@ -36,7 +36,7 @@ import {
   publishWorkspaceScope,
 } from "../lib/workspace";
 import { isScopeRefusal } from "../lib/apiErr";
-import { readErrorBody } from "../lib/wsfetch";
+import { isUnauthStatus, readErrorBody } from "../lib/wsfetch";
 
 export type SessionUser = {
   id?: string;
@@ -107,14 +107,24 @@ type SessionCtx = {
   // bundle so the UI can gate actions by role.
   role: string;
   // undefined = fetch still in flight (callers may show their own shell);
-  // null = confirmed anonymous (401 / wedge timeout) — the auth gate.
+  // null = confirmed anonymous (an AUTHORITATIVE 401/uncoded-403, never a wedge
+  // timeout — see BundleRead in this file, card t_48319be9) — the auth gate.
   bundle: BundleData | null | undefined;
   // true once the fetch settled with no session (401) — auth gate.
   anon: boolean;
+  // true when the bootstrap read produced NO answer (a 5xx or a dropped
+  // connection) — a FAULT, never a sign-out. A page showing its loading state
+  // reads this to also offer retry(); it must NOT be treated as "no session"
+  // (card t_48319be9, and the reason the old 5s wedge was wrong).
+  sessionError: boolean;
   // reload() re-fetches the bundle for the current workspace (e.g. after a
   // profile update or a workspace switch).
   reload: () => void;
-};
+  // retry() re-attempts the bootstrap after a FAULT. Distinct from reload(): it
+  // exists for the unresolved case, so a caller can recover without assuming an
+  // anonymous session (t_48319be9).
+  retry: () => void;
+}
 
 const SessionContext = createContext<SessionCtx>({
   user: null,
@@ -123,23 +133,70 @@ const SessionContext = createContext<SessionCtx>({
   role: "",
   bundle: undefined,
   anon: false,
+  sessionError: false,
   reload: () => {},
+  retry: () => {},
 });
 
 // Workspace-keyed bundle cache (issue #158): the cache key is the active
 // workspace slug, so switching workspaces never serves another workspace's
 // cached data.
-const bundleCache = new Map<string, BundleData | null>();
-const inflightByWorkspace = new Map<string, Promise<BundleData | null>>();
+//
+// The cache holds only a SETTLED ANSWER — a signed-in payload or a confirmed
+// anonymous one. An UNKNOWN failure (a 5xx, a dropped connection, a non-JSON
+// body) is deliberately never cached: it is not an answer, and caching it would
+// make a transient fault permanent for the workspace until a reload cleared it.
+const bundleCache = new Map<string, BundleRead>();
+const inflightByWorkspace = new Map<string, Promise<BundleRead>>();
 
-async function fetchBundle(workspace: string): Promise<BundleData | null> {
+/**
+ * The result of one `dashboard-bundle` read, BEFORE it becomes the context's
+ * `bundle` (card t_48319be9).
+ *
+ * THE THREE STATES ARE NOT INTERCHANGEABLE. The context exposes `bundle` as
+ * `undefined` (still loading) / `BundleData` (signed in) / `null` (confirmed
+ * anonymous), and every dashboard page reads `anon` (bundle === null) as its
+ * SIGN-OUT gate (`if (anon) router.replace("/landing")`). So `error` must never
+ * be folded into `null`:
+ *
+ *   * a starved host can lose a fixed race the user never notices (measured on
+ *     the gate's own topology: 1-2 in 36 contended runs), and
+ *   * a 5xx or a dropped connection is a FAULT, not a sign-out.
+ *
+ * Folding either into `null` bounced every page to `/landing` — a logout the
+ * server never asked for, which is exactly the reported defect. `null` is
+ * therefore reached ONLY from an authoritative refusal (a 401, or a 403 with no
+ * tenancy code — the same rule `wsfetch.isUnauthStatus` applies everywhere
+ * else); everything else is `error`, which leaves the app on its loading state
+ * and lets the retry below try again.
+ */
+type BundleRead =
+  | { kind: "session"; data: BundleData }
+  | { kind: "anon" }
+  | { kind: "error" };
+
+function fetchBundle(workspace: string): Promise<BundleRead> {
   const key = workspace || "__default__";
-  if (bundleCache.has(key)) return bundleCache.get(key) ?? null;
+  const cached = bundleCache.get(key);
+  if (cached) return Promise.resolve(cached);
   if (!inflightByWorkspace.has(key)) {
     const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
-    const p = (async (): Promise<BundleData | null> => {
-      const r = await fetch(`/api/rest/dashboard-bundle${q}`);
-      if (r.ok) return r.json();
+    const p = (async (): Promise<BundleRead> => {
+      let r: Response;
+      try {
+        r = await fetch(`/api/rest/dashboard-bundle${q}`);
+      } catch {
+        // The request never got a response (offline, DNS, abort). NOT anonymous.
+        return { kind: "error" };
+      }
+      if (r.ok) {
+        try {
+          return { kind: "session", data: (await r.json()) as BundleData };
+        } catch {
+          // A 200 that is not JSON is a broken read, not a session.
+          return { kind: "error" };
+        }
+      }
       // THE SCOPE REFUSAL OF THE BUNDLE ITSELF (t_da4b2031). A stale
       // `jf_workspace` makes THIS request carry a slug the session cannot
       // resolve, and the server answers 403 `workspace notFound`. Resolving
@@ -162,16 +219,19 @@ async function fetchBundle(workspace: string): Promise<BundleData | null> {
         dropCurrentWorkspaceScope();
         return fetchBundle("");
       }
-      return null;
+      const body = await readErrorBody(r);
+      // ONLY a refusal the transport layer calls a dead session is the server
+      // saying "you are anonymous"; every other non-OK status is a fault.
+      return isUnauthStatus(r.status, body) ? { kind: "anon" } : { kind: "error" };
     })()
-      .then((d) => {
-        bundleCache.set(key, d);
+      .then((res) => {
+        if (res.kind !== "error") bundleCache.set(key, res);
         inflightByWorkspace.delete(key);
-        return d;
+        return res;
       })
-      .catch(() => {
+      .catch((): BundleRead => {
         inflightByWorkspace.delete(key);
-        return null;
+        return { kind: "error" };
       });
     inflightByWorkspace.set(key, p);
   }
@@ -182,6 +242,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [workspace, setWorkspace] = useState<string>("");
   const [bundle, setBundle] = useState<BundleData | null | undefined>(undefined);
   const [mounted, setMounted] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
+  // `sessionError` is the state the 5s wedge used to collapse into `anon`
+  // (card t_48319be9): the bootstrap read produced NO answer (a 5xx or a dropped
+  // connection). It is true ONLY for that fault — not while a read is in flight
+  // and not for a confirmed-anonymous 401 — so a page can offer retry() without
+  // mistaking a slow session for a signed-out one.
+  const [sessionError, setSessionError] = useState(false);
   const reloadNonce = useRef(0);
 
   // Resolve the active workspace from the SESSION-CONFIRMED scope (t_da4b2031),
@@ -266,22 +333,24 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const key = workspace || "__default__";
-    if (bundleCache.has(key)) {
-      setBundle(bundleCache.get(key) ?? null);
+    const settled = bundleCache.get(key);
+    if (settled) {
+      setBundle(settled.kind === "session" ? settled.data : null);
+      setSessionError(false);
       return;
     }
-    // Issue #48 wedge guard: if the bundle hasn't resolved in ~5s, treat the
-    // visitor as anonymous so a hung request can never leave the app stuck on
-    // the loading screen. A late success below overrides this null.
-    const timer = window.setTimeout(() => {
-      setBundle((prev) => (prev === undefined ? null : prev));
-    }, 5000);
-    fetchBundle(workspace).then((d) => {
-      window.clearTimeout(timer);
-      setBundle(d ?? null);
+    // The three settled states map onto the context EXACTLY (card t_48319be9):
+    //   session → the payload,  anon → null (the auth gate),
+    //   error   → undefined (unresolved — NOT a sign-out) with sessionError true,
+    // so the loading branch can offer a retry instead of hanging on "…" forever
+    // (the reason the 5s wedge existed) — WITHOUT inventing an anonymous session
+    // to pay for it.
+    setSessionError(false);
+    fetchBundle(workspace).then((res) => {
+      setBundle(res.kind === "session" ? res.data : res.kind === "anon" ? null : undefined);
+      setSessionError(res.kind === "error");
     });
-    return () => window.clearTimeout(timer);
-  }, [workspace]);
+  }, [workspace, retryNonce]);
 
   // Issue #69: reload() (used after session-rotating actions like 2FA enable /
   // disable / password change) must keep showing the PREVIOUS bundle until the
@@ -295,12 +364,25 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     inflightByWorkspace.delete(key);
     reloadNonce.current += 1;
     const nonce = reloadNonce.current;
-    fetchBundle(workspace).then((d) => {
+    fetchBundle(workspace).then((res) => {
       if (nonce !== reloadNonce.current) return; // superseded by a newer reload
-      if (d) setBundle(d);
-      // d == null (401 / wedge / failure) → keep the previous bundle rather
-      // than blanking the app shell during a session rotation.
+      if (res.kind === "session") setBundle(res.data);
+      else if (res.kind === "anon") setBundle(null);
+      // `error` (fault / offline) → keep the previous bundle rather than
+      // blanking the app shell during a session rotation.
     });
+  }, [workspace]);
+
+  // retry() re-attempts the bootstrap after a FAULT (an `error` read, not a
+  // confirmed-anonymous one). It drops only the in-flight entry — an `error` was
+  // never cached — and bumps the nonce the bootstrap effect is keyed on, so the
+  // retry re-fetches whichever workspace is active now (t_48319be9).
+  const retry = useCallback(() => {
+    const key = workspace || "__default__";
+    bundleCache.delete(key);
+    inflightByWorkspace.delete(key);
+    setSessionError(false);
+    setRetryNonce((n: number) => n + 1);
   }, [workspace]);
 
   const user = bundle?.me ?? null;
@@ -317,7 +399,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const role = activeWorkspace?.role || "";
 
   return (
-    <SessionContext.Provider value={{ user, workspaces, workspace, role, bundle, anon: mounted && bundle === null, reload }}>
+    <SessionContext.Provider
+      value={{ user, workspaces, workspace, role, bundle, anon: mounted && bundle === null, sessionError, reload, retry }}
+    >
       {children}
     </SessionContext.Provider>
   );

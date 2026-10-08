@@ -70,7 +70,7 @@ export default function Dashboard() {
   // Issue #29: me + landing data (products, summary, sales, analytics) all
   // come from the single dashboard-bundle round-trip fetched once per
   // session — the 914ms me→5-fetch waterfall is gone.
-  const { bundle, anon, role, workspace } = useSession();
+  const { bundle, anon, sessionError, retry, role, workspace } = useSession();
   // Issue #163: read_only members see no write actions (confirm sale).
   const canWrite = role !== "read_only";
   const [products, setProducts] = useState<Product[]>([]);
@@ -156,10 +156,28 @@ export default function Dashboard() {
   }
 
   // Issue #48: resolve anon BEFORE the loading shell so an anonymous visitor
-  // (401 / session expired / wedge timeout) lands on the Landing page instead
+  // (an authoritative 401 on the session) lands on the Landing page instead
   // of hanging on the spinner. `bundle` stays undefined while loading.
+  //
+  // Card t_48319be9: an UNRESOLVED bundle after the read settled (`sessionError`)
+  // is a FAULT (5xx / dropped connection), not a sign-out — so it is shown as a
+  // failure with a retry, never as the landing page. The old 5s wedge collapsed
+  // this state into `anon`, which is what bounced a slow (but valid) session to
+  // /landing under contention.
   if (anon) return <Landing />;
   if (!ready) {
+    if (sessionError) {
+      return (
+        <main className="flex min-h-screen items-center justify-center px-6 text-center">
+          <div>
+            <p className="text-sm text-[var(--jf-muted)]">{t("common.sessionUnavailable")}</p>
+            <button type="button" className="jf-btn-primary mt-4" onClick={retry}>
+              {t("common.retry")}
+            </button>
+          </div>
+        </main>
+      );
+    }
     return <main className="flex min-h-screen items-center justify-center text-[var(--jf-muted)]">…</main>;
   }
 
