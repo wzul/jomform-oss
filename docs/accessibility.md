@@ -138,6 +138,39 @@ cover**: a source rule can only composite a translucent tint against one fixed
 backdrop (`--jf-bg`), not the real stack of surfaces beneath it, and it cannot
 measure a margin this small.
 
+### A dashboard page with a TABLE — `/products` (card t_3fbc6953)
+
+The **products page** is scannable by the same browser-level stub pattern, and
+until card `t_3fbc6953` it was scanned by nothing: `a11y.spec.ts` lists public
+routes, and none of the `a11y-*.spec.ts` siblings visited a dashboard page with a
+table. The gate recorded `pass` while the live `/products` (the served v1.20.62
+bundle) carried **four** critical axe-core 4.13.0 nodes:
+
+- `aria-allowed-attr` ×3 — `aria-sort` was written on the `<button>` inside each
+  sortable `<th>`. The attribute is supported by the roles `columnheader` and
+  `rowheader` only, so it was both an axe violation and invisible to assistive
+  technology as a sort state. `SortHeader` now renders the `<th>` itself and puts
+  the state there, exactly as the
+  [W3C ARIA APG sortable-table pattern](https://www.w3.org/WAI/ARIA/apg/patterns/table/examples/sortable-table/)
+  does; the inactive columns omit the attribute rather than carrying
+  `aria-sort="none"`, and the ▲/▼ glyph is `aria-hidden` so it stays out of the
+  button's accessible name.
+- `select-name` ×1 — the create row's `<select>` had no accessible name (no
+  wrapped or explicit `<label>`, no `aria-label`, no `aria-labelledby`). It and
+  the other controls in that row are named with the same `aria-label={t(...)}`
+  shape the two filter selects already used.
+
+`web/e2e/a11y-products.spec.ts` reaches `/products` with `/api/*` stubbed (no Go
+server, no session, no database), asserts the page and its product rows really
+rendered **before** scanning (a scan of the loading shell proves nothing), then
+pins the two defects by name — `button[aria-sort]` must be zero, the sorted `<th>`
+must carry the state and it must MOVE on a sort click, every `<select>` must have
+a non-empty accessible name — and runs a full-page axe scan failing on
+critical/serious. A `button[aria-sort]` regression, or an unlabelled control
+added to that page, now reds `npm run a11y` instead of shipping unseen. Other
+table pages (`/sales`, `/forms`, `/media`) remain on the manual checklist below;
+the pattern here is what to copy when one of them is gated.
+
 
 > **Do not reuse a running server.** `web/playwright.config.ts` sets
 > `reuseExistingServer` to **false** unless `A11Y_REUSE_SERVER=1`. With a
@@ -156,11 +189,15 @@ measure a margin this small.
 > cookie from the Go API. The `web/e2e/a11y.spec.ts` gate covers the public
 > routes only; the dashboard's own colours are measured out-of-band against a
 > standalone build with a real session cookie, and held in place by the source
-> guard documented below rather than by the gate. Two exceptions ARE scanned —
-> the pair of typed-slug confirmation dialogs, and the canvas price spans (see
-> "Confirmation dialogs" and "The builder canvas" above) — because stubbing the
+> guard documented below rather than by the gate. Three exceptions ARE scanned —
+> the pair of typed-slug confirmation dialogs, the canvas price spans and the
+> `/products` table with its create row (see "Confirmation dialogs", "The builder
+> canvas" and "A dashboard page with a TABLE" above) — because stubbing the
 > session-dependent fetch at the browser level puts the real component in the
-> browser without needing a credential.
+> browser without needing a credential. The `/products` entry exists because that
+> page carried two critical axe violations while this note described the surface
+> as covered out-of-band (card t_3fbc6953); the other dashboard pages with a table
+> (`/sales`, `/forms`, `/media`) are still measured out-of-band.
 
 ### Muted text and AA (source guard)
 

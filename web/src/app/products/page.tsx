@@ -37,30 +37,62 @@ type SortDir = "asc" | "desc";
  *  inside the page component, so every render produced a NEW component type and
  *  React unmounted/remounted each header cell (three of them) on every state
  *  change — re-creating DOM nodes for a `<th>` that never needed to move. The
- *  rule reports exactly that; deriving `active` from props is the fix it asks for. */
+ *  rule reports exactly that; deriving `active` from props is the fix it asks for.
+ *
+ *  IT RENDERS THE `<th>` ITSELF, and that is load-bearing (card t_3fbc6953).
+ *  The header cell used to be the caller's `<th>` with this component's
+ *  `<button>` inside it, and the sort STATE was written on the button:
+ *
+ *      <th><button aria-sort="ascending">Name</button></th>
+ *
+ *  `aria-sort` is supported by the roles `columnheader` and `rowheader` ONLY —
+ *  a `<button>` supports neither — so axe-core 4.13.0 reported three
+ *  `aria-allowed-attr` CRITICAL nodes on the live `/products`
+ *  ("aria-sort is not supported by the role button"), and the attribute was
+ *  invisible to assistive technology as a sort state. Because the `<th>` was
+ *  rendered by the caller, moving the attribute could only be done by moving
+ *  the ownership of the cell — so this component owns it now, and the state,
+ *  the icon and the button all live together inside it:
+ *
+ *      <th aria-sort="ascending"><button>Name <span/></button></th>
+ *
+ *  Reference: the W3C ARIA APG sortable-table pattern
+ *  https://www.w3.org/WAI/ARIA/apg/patterns/table/examples/sortable-table/
+ *  and https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Reference/Attributes/aria-sort
+ *  Both put `aria-sort` on the `<th>` and the `<button>` inside it, and both
+ *  scope it to the CURRENTLY sorted column — which is why the inactive columns
+ *  omit the attribute instead of carrying `aria-sort="none"` (they had `"none"`
+ *  before, on the button, which was wrong twice over).
+ *
+ *  The direction glyph is `aria-hidden` so it stays out of the button's
+ *  accessible name (`"Price (RM)"`, not `"Price (RM) ▼"`), as the APG example
+ *  does. */
 function SortHeader({
   label,
   k,
   sortKey,
   sortDir,
   onToggle,
+  className,
 }: {
   label: string;
   k: SortKey;
   sortKey: SortKey;
   sortDir: SortDir;
   onToggle: (k: SortKey) => void;
+  className: string;
 }) {
   const active = sortKey === k;
   return (
-    <button
-      onClick={() => onToggle(k)}
-      className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] hover:text-[var(--jf-primary)]"
-      aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
-    >
-      {label}
-      <span className="text-[10px]">{active ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}</span>
-    </button>
+    <th className={className} aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : undefined}>
+      <button
+        onClick={() => onToggle(k)}
+        className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] hover:text-[var(--jf-primary)]"
+      >
+        {label}
+        <span className="text-[10px]" aria-hidden="true">{active ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}</span>
+      </button>
+    </th>
   );
 }
 
@@ -641,13 +673,22 @@ export default function Products() {
           <input value={name} onChange={(e) => setName(e.target.value)} required placeholder={t("prod.name")} className="jf-input min-w-48 flex-1" />
           <input value={price} onChange={(e) => setPrice(e.target.value)} required type="number" step="0.01" min="0" placeholder={t("prod.price")} className="jf-input w-32" />
           <input value={stock} onChange={(e) => setStock(e.target.value)} type="number" min="0" placeholder={t("prod.stock")} className="jf-input w-40" />
-          <select value={type} onChange={(e) => setType(e.target.value)} className="jf-input w-36">
+          {/* The create row's controls are named with the SAME shape the filter
+              selects below use (`aria-label={t(...)}`), because a `<select>`
+              with only `<option>` children has no accessible name: axe-core
+              reports `select-name` (CRITICAL — "Element does not have an
+              implicit (wrapped) <label> / explicit <label> / aria-label /
+              aria-labelledby") on the live /products create row. The three
+              selects that carried only a `title` answered the label rule with a
+              lesser advisory and are labelled properly here for the same
+              reason (card t_3fbc6953). */}
+          <select value={type} onChange={(e) => setType(e.target.value)} className="jf-input w-36" aria-label={t("prod.type")}>
             <option value="one_time">{t("prod.oneTime")}</option>
             <option value="subscription">{t("prod.subscription")}</option>
           </select>
           {type === "subscription" && (
             <>
-              <select value={period} onChange={(e) => setPeriod(e.target.value)} className="jf-input w-32">
+              <select value={period} onChange={(e) => setPeriod(e.target.value)} className="jf-input w-32" aria-label={t("prod.billingPeriod")}>
                 <option value="month">{t("prod.monthly")}</option>
                 <option value="year">{t("prod.yearly")}</option>
               </select>
@@ -659,6 +700,7 @@ export default function Products() {
                 step="1"
                 placeholder={t("prod.trial")}
                 title={t("prod.trial")}
+                aria-label={t("prod.trial")}
                 className="jf-input w-36"
               />
               <select
@@ -666,6 +708,7 @@ export default function Products() {
                 onChange={(e) => setChargesMode(e.target.value as "infinite" | "fixed")}
                 className="jf-input w-40"
                 title={t("prod.billingCount")}
+                aria-label={t("prod.billingCount")}
               >
                 <option value="infinite">{t("prod.chargesInfinite")}</option>
                 <option value="fixed">{t("prod.chargesFixed")}</option>
@@ -675,6 +718,7 @@ export default function Products() {
                 onChange={(e) => setSchedMode(e.target.value)}
                 className="jf-input w-56"
                 title={t("prod.scheduleMode")}
+                aria-label={t("prod.scheduleMode")}
               >
                 <option value="from_payment">{t("prod.schedFromPayment")}</option>
                 <option value="catch_up">{t("prod.schedCatchUp")}</option>
@@ -689,6 +733,7 @@ export default function Products() {
                   step="1"
                   placeholder={t("prod.chargesN")}
                   title={t("prod.chargesN")}
+                  aria-label={t("prod.chargesN")}
                   className="jf-input w-24"
                 />
               )}
@@ -860,24 +905,18 @@ export default function Products() {
                     />
                   )}
                 </th>
-                <th className="px-2 py-3">
-                  <SortHeader label={t("prod.name")} k="name" sortKey={sortKey} sortDir={sortDir} onToggle={toggleSort} />
-                </th>
+                <SortHeader label={t("prod.name")} k="name" sortKey={sortKey} sortDir={sortDir} onToggle={toggleSort} className="px-2 py-3" />
                 <th className="hidden px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] sm:table-cell">
                   {t("prod.type")}
                 </th>
                 <th className="hidden px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] sm:table-cell">
                   {t("prod.stockShort")}
                 </th>
-                <th className="px-2 py-3">
-                  <SortHeader label={t("prod.price")} k="price_sen" sortKey={sortKey} sortDir={sortDir} onToggle={toggleSort} />
-                </th>
+                <SortHeader label={t("prod.price")} k="price_sen" sortKey={sortKey} sortDir={sortDir} onToggle={toggleSort} className="px-2 py-3" />
                 <th className="px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
                   {t("dash.status")}
                 </th>
-                <th className="hidden px-2 py-3 sm:table-cell">
-                  <SortHeader label={t("prod.date")} k="created_at" sortKey={sortKey} sortDir={sortDir} onToggle={toggleSort} />
-                </th>
+                <SortHeader label={t("prod.date")} k="created_at" sortKey={sortKey} sortDir={sortDir} onToggle={toggleSort} className="hidden px-2 py-3 sm:table-cell" />
                 <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
                   {t("bld.actions")}
                 </th>
@@ -887,9 +926,19 @@ export default function Products() {
               {pageRows.map((p) => (
                 <tr
                   key={p.id}
-                  className={`border-b border-[var(--jf-border)] last:border-0 ${
-                    p.active ? "" : "opacity-60"
-                  }`}
+                  // NO `opacity-60` ON AN ARCHIVED ROW (card t_3fbc6953). It was
+                  // the whole-row "this is archived" signal, and it is a
+                  // contrast defect: `opacity` composites the row's text towards
+                  // whatever is behind it, so `--jf-primary` (4.70:1 on white)
+                  // and `--jf-muted` (4.83:1) both fell to roughly 1.6:1. The
+                  // page's own new a11y scan reports it as a serious
+                  // `color-contrast` node the moment `/products` is rendered in
+                  // a browser — the class of defect a source guard cannot see.
+                  // The archived state is already carried by the Status column's
+                  // own chip ("Archived", with its own tinted surface) and by
+                  // `prod.inactiveNote` in the editor, so the row keeps its
+                  // AA-safe tokens and no longer fades.
+                  className="border-b border-[var(--jf-border)] last:border-0"
                 >
                   <td className="hidden px-4 py-3 sm:table-cell">
                     {canWrite && (
