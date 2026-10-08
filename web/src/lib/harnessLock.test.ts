@@ -55,7 +55,7 @@
 // lock file, `jomform-biteproof-docs-bite`, so any two of them serialise in a
 // worktree; the two that carried no lock at all (`biteproof_docs_index_comment_anchor.sh`,
 // `biteproof_mcp_tool_inventory.sh`) were given it here for the same reason. This file
-// therefore drives EIGHT harnesses, one entry each, and the cross-harness leg below is
+// therefore drives TEN harnesses, one entry each, and the cross-harness leg below is
 // the one that fails if the key goes back to per-script.
 //
 // THE TWO ENTRIES CARD t_df41e675 ADDED make the list EIGHT (it was six): the save-button
@@ -128,13 +128,12 @@
 // also cannot see a reader that mutates a shared page WITHOUT calling these scripts.
 // It DOES now serialise two DIFFERENT harnesses of the family against each other (leg E,
 // card t_76b3356d): they all key on the SAME file because they all mutate the same docs
-// tree. It also now covers the two settings-side harnesses (card t_df41e675, entries 7
-// and 8) because they mutate the same shared sources. What it still does not serialise
-// is a harness OUTSIDE this family (e.g. `biteproof_forms_bulk_failure.sh`, which mutates
-// `src/app/forms/page.tsx`, or `biteproof_next_managed_files.sh` / `operator-bite.sh`,
-// which mutate `next.config.mjs` / `i18nDict.ts` but take no lock) that mutates a file
-// one of these walks. Those three are outside the family and are NOT entries here: none
-// of them takes a lock at all, so an entry would have to assert a lock that does not
+// tree. It also now covers the two settings-side harnesses (card t_df41e675) and the
+// forms / next-config pair (card t_f6408658) — entries 7..10 — because they mutate the
+// same shared sources. What it still does not serialise is a harness OUTSIDE this family
+// (e.g. `operator-bite.sh`, which mutates `i18nDict.ts` but takes no lock) that mutates a
+// file one of these walks. `operator-bite.sh` is outside the family and is NOT an entry
+// here: it takes no lock at all, so an entry would have to assert a lock that does not
 // exist.
 //
 // THE FILE NAME IS LOAD-BEARING, and deliberately avoids "bite": the harness-inventory
@@ -226,6 +225,29 @@ const HARNESSES: HarnessEntry[] = [
     mutatesSharedInput: true,
     d3ProbeEnv: { BITEPROOF_BASE: "refs/heads/jomform-nonexistent-probe" },
     d3ProbeNeedle: /cannot resolve refs\/heads\/jomform-nonexistent-probe/,
+  },
+  {
+    // Card t_f6408658. Mutates web/next.config.mjs, web/.gitignore and
+    // web/tsconfig.json in place, and web/scripts/biteproof_dev_hosts.sh mutates
+    // next.config.mjs too — so it must hold the FAMILY key, not its own.
+    label: "biteproof_next_managed_files.sh",
+    script: join(webRoot, "scripts", "biteproof_next_managed_files.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    // A missing config file: refused AFTER the lock is taken, before any node run.
+    d3ProbeEnv: { BITEPROOF_CONFIG: "next.config.mjs.not-a-real-file" },
+    d3ProbeNeedle: /BITEPROOF REFUSED: next\.config\.mjs\.not-a-real-file is missing/,
+  },
+  {
+    // Card t_f6408658. Mutates src/app/forms/page.tsx in place; nothing else in
+    // the family does, but it shares the family's /tmp lock DIRECTORY and the
+    // same "restore from a fixed name" hazard, so it takes the same key.
+    label: "biteproof_forms_bulk_failure.sh",
+    script: join(webRoot, "scripts", "biteproof_forms_bulk_failure.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_PAGE: "src/app/forms/.no-such-page-probe.tsx" },
+    d3ProbeNeedle: /BITEPROOF REFUSED: src\/app\/forms\/\.no-such-page-probe\.tsx is missing/,
   },
   {
     label: "biteproof_mcp_tool_inventory.sh",

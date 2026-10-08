@@ -22,13 +22,123 @@
 #
 # Run:  bash web/scripts/biteproof_next_managed_files.sh
 set -uo pipefail
+
+# The script's OWN absolute path is resolved BEFORE any `cd`, because the child
+# this file re-execs under the lock needs a path that survives a changed CWD.
+BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+[ -n "$BITE_HOME" ] || { echo "cannot resolve the directory this script lives in" >&2; exit 2; }
+SELF="$BITE_HOME/$(basename "$0")"
+
+# ---- PER-WORKTREE LOCK (card t_df41e675) ----------------------------------
+LOCK_BASE="${BITEPROOF_LOCK_DIR:-/tmp}"
+LOCK_WAIT="${BITEPROOF_LOCK_WAIT:-1800}"
+
+if [ "${BITEPROOF_LOCKED:-}" != "1" ]; then
+  command -v flock >/dev/null 2>&1 || {
+    echo "BITEPROOF REFUSED: flock is not installed, so this harness cannot serialise two" >&2
+    echo "runs in one worktree — and two runs mutate and restore src/components/SaveButton.tsx," >&2
+    echo "src/app/settings/page.tsx (shared with biteproof_settings_tabs.sh) and" >&2
+    echo "src/components/i18nDict.ts under each other's feet, which prints false verdicts" >&2
+    echo "(t_df41e675, reproduced: 9 of 12 rounds). Install flock before trusting any" >&2
+    echo "verdict from it." >&2
+    exit 2
+  }
+  case "$LOCK_WAIT" in ''|*[!0-9]*)
+    echo "BITEPROOF REFUSED: BITEPROOF_LOCK_WAIT='$LOCK_WAIT' is not a whole number of seconds." >&2
+    exit 2 ;;
+  esac
+  BITE_GIT_DIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || {
+    echo "BITEPROOF REFUSED: cannot resolve this worktree's git dir (git rev-parse" >&2
+    echo "--absolute-git-dir), so there is no per-worktree key to serialise on, and an" >&2
+    echo "unserialised pair of runs prints false verdicts (t_df41e675)." >&2
+    exit 2
+  }
+  BITE_KEY=$(printf '%s' "$BITE_GIT_DIR" | sha256sum | cut -c1-16)
+  LOCK_DIR="$LOCK_BASE/jomform-biteproof-docs-bite"
+  mkdir -p "$LOCK_DIR" || {
+    echo "BITEPROOF REFUSED: cannot create the lock directory $LOCK_DIR, so two runs in" >&2
+    echo "one worktree could not be serialised. Set BITEPROOF_LOCK_DIR to a writable dir." >&2
+    exit 2
+  }
+  LOCK_FILE="$LOCK_DIR/$BITE_KEY.lock"
+  export BITEPROOF_LOCKED=1 BITEPROOF_LOCK_FILE="$LOCK_FILE"
+  exec 9>"$LOCK_FILE" || {
+    echo "BITEPROOF REFUSED: cannot open the lock file $LOCK_FILE." >&2
+    exit 2
+  }
+  if ! flock -n "$LOCK_FILE" true 2>/dev/null; then
+    echo "  lock:   another bite harness holds this worktree's lock — waiting up to ${LOCK_WAIT}s"
+    echo "          (they mutate the same shared sources, so concurrently they print FALSE verdicts)"
+  fi
+  flock -w "$LOCK_WAIT" -E 75 9
+  _lock_rc=$?
+  if [ "$_lock_rc" = 75 ]; then
+    echo "BITEPROOF REFUSED: could not take the per-worktree lock $LOCK_FILE within ${LOCK_WAIT}s," >&2
+    echo "so this run is NOT serialised against a peer mutating the same shared sources and" >&2
+    echo "would either read its mutation or overwrite a source with its own backup." >&2
+    echo "Nothing was mutated. Re-run once the other run finishes, or raise the wait with" >&2
+    echo "BITEPROOF_LOCK_WAIT=<seconds>." >&2
+    exit 75
+  fi
+  if [ "$_lock_rc" != 0 ]; then
+    echo "BITEPROOF REFUSED: flock on $LOCK_FILE exited ${_lock_rc}, so the lock was not held" >&2
+    echo "and this run would not be serialised against a peer in the same worktree." >&2
+    exit 2
+  fi
+  bash "$SELF" "$@"
+  exit "$?"
+fi
+# The child. Refuse if the lock it is supposed to have inherited cannot be shown to
+# be held: an unverified lock is the same shape as an unverified verdict.
+LOCK_FILE="${BITEPROOF_LOCK_FILE:-}"
+if [ -z "$LOCK_FILE" ]; then
+  echo "BITEPROOF REFUSED: BITEPROOF_LOCKED=1 is set but BITEPROOF_LOCK_FILE is empty, so this" >&2
+  echo "run cannot show it holds the per-worktree lock. Unset both and re-run the harness." >&2
+  exit 2
+fi
+if flock -n "$LOCK_FILE" true 2>/dev/null; then
+  echo "BITEPROOF REFUSED: the per-worktree lock ($LOCK_FILE) was not held here, so this run is" >&2
+  echo "NOT serialised — a peer mutating the same shared sources would give it false verdicts" >&2
+  echo "and could be left restoring this run's bytes. Unset BITEPROOF_LOCKED and let the" >&2
+  echo "harness take the lock itself." >&2
+  exit 2
+fi
+LOCK_PROBE=$(mktemp "$(dirname "$LOCK_FILE")/probe.XXXXXX") || {
+  echo "BITEPROOF REFUSED: cannot create a probe file beside $LOCK_FILE, so the check above" >&2
+  echo "cannot be shown to be meaningful." >&2
+  exit 2
+}
+if ! flock -n "$LOCK_PROBE" true 2>/dev/null; then
+  echo "BITEPROOF REFUSED: flock could not lock a FRESH file ($LOCK_PROBE), so \"the lock is held\"" >&2
+  echo "above proves nothing about flock here — it would read REFUSED for any file." >&2
+  rm -f "$LOCK_PROBE"
+  exit 2
+fi
+rm -f "$LOCK_PROBE"
+echo "lock:   held for this worktree (${LOCK_FILE##*/})"
+
 cd "$(dirname "$0")/.." || exit 2
 
-CONFIG=next.config.mjs
-GITIGNORE=.gitignore
-TSCONFIG=tsconfig.json
+CONFIG=${BITEPROOF_CONFIG:-next.config.mjs}
+GITIGNORE=${BITEPROOF_GITIGNORE:-.gitignore}
+TSCONFIG=${BITEPROOF_TSCONFIG:-tsconfig.json}
 # Bare names: this script cds into web/, and a git pathspec is cwd-relative.
 MANAGED=(next-env.d.ts AGENTS.md CLAUDE.md)
+
+# PER-RUN, and created HERE — in the child, after the lock — not on the parent path
+# before it (card t_4a599d51). On the parent path the `mktemp -d` was never
+# referenced again: the parent took the lock, re-exec'd the child (which created,
+# used and removed its OWN scratch dir) and exited, so EVERY invocation leaked one
+# directory into $TMPDIR — and a concurrency battery watching for a dirty tree read
+# that leftover as corruption. Every other locked harness of the family already
+# creates its per-run temp on the child path; this is the same shape.
+TMP="$(mktemp -d)" || { echo "cannot create a per-run scratch dir" >&2; exit 2; }
+# The trap goes on IMMEDIATELY, not at the case-6 block far below, because this
+# child has several refusals between here and there (the git-work-tree check, the
+# missing-config check) that each `exit 2` — and every one of them would leak $TMP
+# with the trap not yet installed. `trap - EXIT` at the end still disarms it, but
+# only AFTER the explicit `rm -rf "$TMP"` on the success path.
+trap 'rm -rf "$TMP"' EXIT
 
 # Case 0: is this the one environment the suite's tracked check may skip?
 #
@@ -68,10 +178,14 @@ if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then
   exit 2
 fi
 
+for f in "$CONFIG" "$GITIGNORE" "$TSCONFIG"; do
+  [ -f "$f" ] || { echo "BITEPROOF REFUSED: $f is missing — nothing to mutate." >&2; exit 2; }
+done
+
 fail=0
 for f in "$CONFIG" "$GITIGNORE" "$TSCONFIG"; do
-  cp "$f" "/tmp/biteproof.$(basename "$f").bak"
-  sha256sum "$f" | cut -d' ' -f1 > "/tmp/biteproof.$(basename "$f").sha"
+  cp "$f" "$TMP/$(basename "$f").bak"
+  sha256sum "$f" | cut -d' ' -f1 > "$TMP/$(basename "$f").sha"
 done
 
 # The tracked/ignored state the tree must be back in at the end (usually empty).
@@ -82,7 +196,7 @@ present_before="no"
 run_case() {
   local name="$1" expect_line="$2"
   local out rc
-  out=$(npm run test:unit 2>&1); rc=$?
+  out=$(env -u BITEPROOF_LOCKED -u BITEPROOF_LOCK_FILE -u BITEPROOF_LOCK_DIR npm run test:unit 2>&1); rc=$?
   # FIRST: did the suite RUN at all? (card t_05d31dbd)
   #
   # `test:unit` starts with web/scripts/web-deps-check.mjs, which REFUSES in a tree
@@ -123,8 +237,8 @@ run_case() {
 
 restore() {
   for f in $CONFIG $GITIGNORE $TSCONFIG; do
-    cp "/tmp/biteproof.$(basename "$f").bak" "$f"
-    want=$(cat "/tmp/biteproof.$(basename "$f").sha")
+    cp "$TMP/$(basename "$f").bak" "$f"
+    want=$(cat "$TMP/$(basename "$f").sha")
     got=$(sha256sum "$f" | cut -d' ' -f1)
     if [ "$want" != "$got" ]; then echo "RESTORE MISMATCH $f"; fail=1; fi
   done
@@ -206,7 +320,7 @@ fi
 # breaking it: removing web/../.git here would take the whole suite down with it.
 # Nothing in this repo is mutated by this case.
 PROBE="$(mktemp -d "${TMPDIR:-/tmp}/biteproof-skip.XXXXXX")"
-trap 'rm -rf "$PROBE"' EXIT
+trap 'rm -rf "$PROBE" "$TMP"' EXIT
 
 echo "== case 6: a checkout that lost its git metadata (the shape the skip used to accept) =="
 # This script cds into web/, so the repo-root entries are `../<name>`.
@@ -221,7 +335,7 @@ if [ "$(cd "$PROBE/web" && git rev-parse --is-inside-work-tree 2>/dev/null)" = "
   echo "SKIPPING case 6: the probe somehow landed inside a work tree, so it does not test the skip"
   fail=1
 else
-  probe_out="$(cd "$PROBE/web" && node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+  probe_out="$(cd "$PROBE/web" && env -u BITEPROOF_LOCKED -u BITEPROOF_LOCK_FILE -u BITEPROOF_LOCK_DIR node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
     src/lib/nextManagedFiles.test.ts 2>&1)"
   probe_rc=$?
   if [ "$probe_rc" -eq 0 ]; then
@@ -237,6 +351,10 @@ else
   fi
 fi
 rm -rf "$PROBE"
+# `trap - EXIT` cancels EVERY trap, so the per-run TMP is removed here
+# explicitly — leaving it to a trap that is then disarmed left the directory
+# behind on every run (caught by a concurrency battery reading it as a dirty tree).
+rm -rf "$TMP"
 trap - EXIT
 
 if [ "$fail" -ne 0 ]; then echo "BITE PROOF FAILED"; exit 1; fi
