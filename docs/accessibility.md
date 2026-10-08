@@ -134,9 +134,11 @@ margin it guards is 0.008 — `#5e6ad2` on slate-50 `#f8fafc` is 4.492:1 against
 measures on white, or trusts a class name, reports the defect as a pass.
 
 That third shape is the one to reach for on the **surfaces the other two cannot
-cover**: a source rule can only composite a translucent tint against one fixed
-backdrop (`--jf-bg`), not the real stack of surfaces beneath it, and it cannot
-measure a margin this small.
+cover**: a source rule composites a translucent tint against the **darkest opaque
+surface this app paints** that is darker than the tint (falling back to
+`--jf-bg`), not the real stack beneath a given site, and it takes the conservative
+side of the composited pixel's 8-bit rounding — it still cannot measure a margin
+this small, so the browser specs above remain the backstop.
 
 ### A dashboard page with a TABLE — `/products` (card t_3fbc6953)
 
@@ -281,9 +283,9 @@ of them:
   ancestor chain's outermost surface is the `bg-white` transcript wrapper around
   it, where the same token reads 4.770:1 and passes (card `t_624b7275`).
 * **A translucent LIGHT tint is judged at its OPAQUE base *and* at the composite
-  over the page background — the minimum of the two.** A source scan cannot see
-  the real backdrop, so the two honest options are to abstain or to judge a named
-  surface. This guard judges BOTH, because each one alone let a site hide:
+  — the minimum of the two.** A source scan cannot see the real backdrop, so the
+  two honest options are to abstain or to judge a named surface. This guard judges
+  BOTH, because each one alone let a site hide:
   - `/settings`' webhook-delivery cells are `text-red-600` on `bg-red-50/60`,
     which reads **4.511:1** on the tint but **4.360:1** on the `bg-red-50` it
     names — the entire margin over the 4.5 floor is 0.011, carried by the `/60`,
@@ -296,25 +298,50 @@ of them:
     the page (under AA). Judging only the base passed that pairing. Card
     `t_8c10928a`.
 
-  For the seven tints darker than `--jf-bg` the opaque base *is* the minimum
-  over alpha, so the composite can only be lighter — which is why the two shapes
+  **The composite is judged against the DARKEST surface, not `--jf-bg`, and on
+  the DARKER side of the 8-bit rounding** (card `t_fea22a0b`, two corrections of
+  what this section used to claim):
+  - *Backdrop.* `--jf-bg` is the LIGHTEST realistic backdrop, so a tint over a
+    darker surface composites darker and can be sub-AA where the `--jf-bg`
+    composite passes. `text-red-600` on `bg-slate-50/20` is **4.4859:1** over
+    `--jf-bg` but **3.9817:1** over `bg-slate-200`, and on `bg-slate-50/10`
+    **4.4470** vs **3.9123** (measured in Chromium). The guard therefore
+    composites against the darkest opaque surface in the list below that is
+    darker than the tint — `bg-slate-200` today — and the finding names it
+    (`… over bg-slate-200`).
+  - *Rounding.* The composited pixel is not reproducible in a source scan: the
+    browser blends a PREMULTIPLIED 8-bit tint (rounding the alpha and the
+    premultiplied source before the sum), so it lands one 8-bit step off the
+    model. The best model that can be written here still mismatches the browser's
+    pixel on ~34% of (tint, alpha) pairs (585/891 over `--jf-bg`), and the old
+    bare-`contrast` model PASSED a pairing the browser paints sub-AA — measured:
+    `text-red-600` on `bg-slate-50/30` is **4.4859:1** in the browser where the
+    guard read **4.5139:1** and passed. The guard now evaluates the ratio on the
+    modelled pixel AND on the pixel one step toward the token, and refuses if
+    EITHER is sub-AA.
+
+  For the seven tints darker than `--jf-bg` the opaque base *is* the minimum over
+  alpha, so the composite can only be lighter — which is why the two shapes
   cannot overlap and why the bound is a genuine tightening rather than a
   behaviour change: `text-red-700` and `text-sky-700` clear AA on every tint AND
-  every composite (worst **5.2085:1** and **4.7502:1**), so this guard's census
-  and the repo-wide rule are unchanged by it.
+  every `--jf-bg` composite (worst **5.2085:1** and **4.7502:1**), so this
+  guard's census and the repo-wide rule are unchanged by it.
 
 `text-red-700` (#c10007) is the token both sites now use: 5.87:1 on `bg-red-50`,
 6.02:1 on the `bg-sky-50` card, 6.42:1 on white. It is the step the whole
 failure family moved to, and it clears the floor on every surface in the list.
 
-Two boundaries, stated so the rule is not over-claimed: a saturated fill such as
-`bg-red-500/10` is **not** a light surface, so the login / workspace-picker /
-magic-link / connect banners keep their alpha with the browser (the two specs that
-paint them assert the measured ratio), and a DARK slab, an overlay or a gradient
-is left to `web/e2e/a11y.spec.ts`. The `/chat` card is the one site in this
-family the `a11y` gate renders: `web/e2e/a11y-chat-card.spec.ts` measures the
-failure footer's painted colour and the card's tint, so the source rule and the
-browser agree on it.
+Two boundaries, stated so the rule is not over-claimed, and each PINNED by a
+fixture in `web/src/lib/dangerText.test.ts` rather than left implied: a saturated
+fill such as `bg-red-500/10` is **not** a light surface, so the login /
+workspace-picker / magic-link / connect banners keep their alpha with the browser
+(the two specs that paint them assert the measured ratio); and a translucent
+**white** (`bg-white/95`, the builder header) is not a light *tint*, so it too is
+left to the browser. A DARK slab, an overlay or a gradient is likewise left to
+`web/e2e/a11y.spec.ts`. The `/chat` card is the one site in this family the `a11y`
+gate renders: `web/e2e/a11y-chat-card.spec.ts` measures the failure footer's
+painted colour and the card's tint, so the source rule and the browser agree on
+it.
 
 ### `--jf-primary` on a non-white surface (browser guard)
 

@@ -90,16 +90,25 @@
 //     query. A source scan cannot composite those, so the token is left to the
 //     browser gate instead.
 //   * It DOES judge a translucent LIGHT tint (`bg-red-50/60`) — at its OPAQUE
-//     base AND at the composite over the page background. That is the one alpha
-//     shape this guard refuses to abstain on, and the reason is measured twice:
-//     a `text-red-600` on `bg-red-50/60` reads 4.511:1 on the tint but 4.360:1
-//     on the `bg-red-50` it names, so the whole margin over AA is carried by the
-//     `/60` and a later edit that drops it is invisible to every gate
-//     (t_624b7275); and for a tint LIGHTER than `--jf-bg` (slate-50, emerald-50,
-//     amber-50) the OPAQUE base reads legal while some `bg-<tint>/n` reads under
-//     AA, so the base alone would pass a pairing that ships below AA
-//     (t_8c10928a). The guard takes the MINIMUM of the two — see the
-//     `canonicalSurface` note for the exact numbers.
+//     base AND at the composite. That is the one alpha shape this guard refuses
+//     to abstain on, and the reason is measured twice: a `text-red-600` on
+//     `bg-red-50/60` reads 4.511:1 on the tint but 4.360:1 on the `bg-red-50` it
+//     names, so the whole margin over AA is carried by the `/60` and a later edit
+//     that drops it is invisible to every gate (t_624b7275); and for a tint
+//     LIGHTER than `--jf-bg` (slate-50, emerald-50, amber-50) the OPAQUE base
+//     reads legal while some `bg-<tint>/n` reads under AA, so the base alone
+//     would pass a pairing that ships below AA (t_8c10928a). The guard takes the
+//     MINIMUM of the opaque base and the composite — see the `compositeBackdrop`
+//     note for the exact numbers.
+//   * The COMPOSITE itself is a bound, not a faithful blend, and it says so. It
+//     is measured against the DARKEST opaque surface this app paints that is
+//     darker than the tint (falling back to `--jf-bg`), because a tint over a
+//     darker surface composites darker and can be sub-AA where the `--jf-bg`
+//     composite passes (t_fea22a0b defect 2); and it takes the conservative side
+//     of the residual 8-bit rounding ambiguity, because a source scan cannot
+//     reproduce the browser's premultiplied 8-bit blend (t_fea22a0b defect 1) —
+//     see the `shiftToward` note. Both backdrops and both sides are named in the
+//     finding, so the guard never implies a "worst case" it did not judge.
 //   * It still does NOT judge the `bg-red-500/10` failure banners (login,
 //     workspace-picker, magic-link, connect, reset-password). A 500-step fill is
 //     not one of the LIGHT surfaces above, so those tokens are not attributed to
@@ -108,7 +117,7 @@
 //     (`e2e/load-failure-legibility.spec.ts`). That is a deliberate boundary, not
 //     an oversight: adding a saturated `bg-red-500` to this list would judge a
 //     status-dot fill as if it were a surface, and nothing on the tree today
-//     needs it.
+//     needs it. It is pinned as an abstention by a fixture, not left implied.
 //   * It does not flag a token whose own class list already paints a surface this
 //     guard cannot resolve — a DARK slab (`bg-slate-900`) or a gradient. Both are
 //     read by the browser gate instead (`a11yDarkSlabCoverage.test.ts` fails the
@@ -160,11 +169,46 @@ function contrast(a: RGB, b: RGB): number {
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 /**
+ * Move every channel of a composited pixel ONE 8-bit step TOWARD the token it is
+ * measured against. `conservativeContrast` uses this to take the dark corner of
+ * the pixel's +/-1 rounding box.
+ *
+ * WHY A +/-1 SHADOW IS NEEDED AT ALL (measured, not assumed)
+ *
+ *   A composited pixel is NOT reproducible in this file. The browser blends in
+ *   PREMULTIPLIED 8-bit — a translucent `oklch(slate-50 / 30%)` is resolved to
+ *   `rgb(248 250 252 / 0.3)`, then rounded at two points (alpha and the
+ *   premultiplied source) before the sum — whereas the guard's source scan can
+ *   only resolve the theme's `oklch()` to sRGB and blend that. Rasterised in
+ *   Chromium 145 through `foreignObject` and compared against every model that
+ *   can be written here (float blend, round-the-8-bit-tint blend, premultiplied
+ *   with the alpha quantised to 8 bits, rounded or not): the BEST model still
+ *   mismatches the browser on ~34% of (tint, alpha) pixels — 585/891 on
+ *   `--jf-bg` — which is why the honest bound is not a faithful blend but the
+ *   conservative side of the residual ambiguity.
+ *
+ *   The ambiguity is at most one 8-bit step per channel, and its worst verdict
+ *   case is a pixel DARKER than the model (a lighter pixel cannot lower the
+ *   token's ratio). `conservativeContrast` therefore evaluates the ratio on the
+ *   modelled pixel AND on the pixel one step toward the token, and reports the
+ *   LOWER — the corner that a rounded-down renderer would paint.
+ */
+function shiftToward(px: RGB, token: RGB, step = 1): RGB {
+  return [0, 1, 2].map((i) => (token[i] < px[i] ? px[i] - step : token[i] > px[i] ? px[i] + step : px[i])) as RGB;
+}
+function conservativeContrast(token: RGB, px: RGB, step = 1): number {
+  return Math.min(contrast(token, px), contrast(token, shiftToward(px, token, step)));
+}
+/**
  * Source-over compositing of a translucent surface (`fg`, alpha `0..1`) onto the
  * backdrop `bg` it is painted over, in the sRGB the browser blends in. A source
- * scan cannot see the real backdrop, so the guard fixes it to the app's page
- * background (`--jf-bg`) — see the `canonicalSurface` note below for which tints
- * this changes the verdict on and which it does not.
+ * scan cannot see the real backdrop, so the guard fixes it — see `surfaceColor`
+ * for which tint / backdrop pairs actually change a verdict.
+ *
+ * This is a MODEL, not the browser's pixel: it resolves the tint's `oklch()` to
+ * sRGB and blends that, while the browser blends a premultiplied 8-bit tint that
+ * can land one step away (see `shiftToward`). Callers must judge the result
+ * through `conservativeContrast`, never with a bare `contrast`.
  */
 function compositeOver(fg: RGB, bg: RGB, alpha: number): RGB {
   return [0, 1, 2].map((i) => Math.round(bg[i] + (fg[i] - bg[i]) * alpha)) as RGB;
@@ -289,25 +333,26 @@ const LIGHT_SURFACE_RE =
  * t_624b7275).
  *
  * THE OPAQUE BASE IS NOT ALWAYS THE STRICTEST BOUND — so the rule takes the
- * MINIMUM of the opaque base and the composite over the page background.
+ * MINIMUM of the opaque base and the composite (see `compositeBackdrop` for how
+ * the composite's backdrop and rounding are chosen).
  *
  * This comment used to claim that the opaque step is "the DARKEST member of
  * {tint, white, --jf-bg}" and therefore the strictest bound. Re-derived from the
- * installed theme, that is FALSE for three of these ten tints, which are lighter
+ * installed theme, that is FALSE for three of these tints, which are lighter
  * than `--jf-bg` (lum 0.93686): `bg-slate-50` #f8fafc 0.95356, `bg-emerald-50`
  * #ecfdf5 0.94676, `bg-amber-50` #fffbeb 0.96253. Contrast is likewise not
  * monotonic across alpha over a DARKER backdrop, so for exactly those three the
  * opaque base reads LEGAL while some `bg-<tint>/n` reads UNDER AA:
  *
- *   text-red-600 on bg-slate-50   opaque 4.5589:1, worst /n 4.4831:1 (/1)
- *   text-red-600 on bg-emerald-50 opaque 4.5280:1, worst /n 4.4748:1 (/5)
- *   text-red-600 on bg-amber-50   opaque 4.5997:1, worst /n 4.4803:1 (/4)
+ *   text-red-600 on bg-slate-50   opaque 4.5589:1, composite over --jf-bg 4.4831:1 (/1), over bg-slate-200 3.9171:1 (/10)
+ *   text-red-600 on bg-emerald-50 opaque 4.5280:1, composite over --jf-bg 4.4748:1 (/5), over bg-slate-200 3.9096:1 (/10)
+ *   text-red-600 on bg-amber-50   opaque 4.5997:1, composite over --jf-bg 4.4803:1 (/4), over bg-slate-200 3.9219:1 (/10)
  *
- * For the other seven tints the opaque base is the minimum over alpha (they are
- * darker than `--jf-bg`, so the composite can only lighten toward it), which is
- * why the two shapes below cannot overlap and why this rule adds no false
- * refusal for the replacement tokens: `text-red-700` and `text-sky-700` clear AA
- * on every opaque tint AND on every composite (worst 5.2085:1 and 4.7502:1), so
+ * For the other tints the opaque base is the minimum over alpha (they are darker
+ * than `--jf-bg`, so the composite can only lighten toward it), which is why the
+ * two shapes cannot overlap and why this rule adds no false refusal for the
+ * replacement tokens: `text-red-700` and `text-sky-700` clear AA on every opaque
+ * tint AND on every composite over `--jf-bg` (worst 5.2085:1 and 4.7502:1), so
  * the census and the repo-wide rule are unchanged by the bound.
  */
 function canonicalSurface(cls: string): string {
@@ -318,21 +363,49 @@ function canonicalSurface(cls: string): string {
 }
 
 /**
- * The colour a LIGHT surface class actually paints, as measured. For a
- * translucent class (`bg-red-50/60`) that is the source-over composite of the
- * tint onto `--jf-bg`: a source scan cannot see the real backdrop, so the page
- * background is the fixed, worst-case stand-in. This is the colour `contrast`
- * must be asked about; `canonicalSurface` gives the opaque name, which alone
- * over-claims for slate-50 / emerald-50 / amber-50.
+ * The colour a translucent LIGHT surface composite is measured on: the
+ * source-over composite of the tint (`tintClass`, alpha from `bg-<tint>/n`) onto
+ * the DARKEST opaque surface in `SURFACES` that is strictly darker than the
+ * tint's own opaque base, falling back to the page background `--jf-bg`.
+ *
+ * WHY NOT A FIXED BACKDROP
+ *
+ *   The page background is not the worst-case backdrop. A tint darker than
+ *   `--jf-bg` composites to a LIGHTER pixel over it and a DARKER one over a
+ *   darker surface, and the darker composite can be sub-AA where the `--jf-bg`
+ *   one passes (measured in Chromium: `text-red-600` on `bg-slate-50/20` is
+ *   4.4859:1 over `--jf-bg` but **3.9817:1** over `bg-slate-200`, and on
+ *   `bg-slate-50/10` 4.4470 vs **3.9123**). `SURFACES` is exactly the set of
+ *   opaque surfaces this app paints, so compositing against the darkest one a
+ *   site could sit on is the conservative bound. The backdrop actually used is
+ *   resolved once here and named in the finding, so the "worst case" the guard
+ *   claims is the case it shows — never an implied one it did not judge.
  */
-function surfaceColor(cls: string): RGB | null {
-  const m = LIGHT_SURFACE_RE.exec(cls);
+function compositeBackdrop(tintClass: string): RGB | null {
+  const m = LIGHT_SURFACE_RE.exec(tintClass);
   if (!m) return null;
   const name = canonicalSurface(m[2]);
   const opaque = SURFACES[name];
   if (!opaque) return null;
   if (m[3] === undefined) return opaque;
-  return compositeOver(opaque, SURFACES["bg-[var(--jf-bg)]"], Number(m[3]) / 100);
+  const alpha = Number(m[3]) / 100;
+  const darker = Object.entries(SURFACES)
+    .filter(([, s]) => luminance(s) < luminance(opaque))
+    .sort((a, b) => luminance(a[1]) - luminance(b[1]));
+  const backdrop = darker.length > 0 ? darker[0][1] : SURFACES["bg-[var(--jf-bg)]"];
+  return compositeOver(opaque, backdrop, alpha);
+}
+
+/** The backdrop `compositeBackdrop` chose for a translucent class, for the finding. */
+function compositeBackdropName(tintClass: string): string {
+  const m = LIGHT_SURFACE_RE.exec(tintClass);
+  if (!m) return "bg-[var(--jf-bg)]";
+  const opaque = SURFACES[canonicalSurface(m[2])];
+  if (!opaque) return "bg-[var(--jf-bg)]";
+  const darker = Object.entries(SURFACES)
+    .filter(([, s]) => luminance(s) < luminance(opaque))
+    .sort((a, b) => luminance(a[1]) - luminance(b[1]));
+  return darker.length > 0 ? darker[0][0] : "bg-[var(--jf-bg)]";
 }
 
 const STATE_RE = /^((?:[a-z-]+:)*)/;
@@ -402,19 +475,29 @@ const paletteKey = (tok: string) => tok.replace(/^text-/, "");
 
 /**
  * The translucent-tint counterpart of `TEXT_TOKENS[tok].bad`: the `bg-<tint>/n`
- * classes a token fails AA on ONCE COMPOSITED over `--jf-bg`. It ADDS the three
- * tints lighter than `--jf-bg` (slate-50, emerald-50, amber-50), where the opaque
- * base reads legal and only the composite is under AA; for the seven darker tints
- * the opaque verdict already covers it, so this list can only be a subset of
- * theirs. Never fires for `text-red-700` / `text-sky-700` (their worst composite
- * is 5.2085:1 / 4.7502:1), which is why the bound adds no false refusal.
+ * classes a token fails AA on ONCE COMPOSITED, judged with the conservative
+ * contrast of `compositeBackdrop`.
+ *
+ * It catches the three tints lighter than `--jf-bg` (slate-50, emerald-50,
+ * amber-50), where the opaque base reads legal and only the composite is under
+ * AA (t_8c10928a); the 0.03-wide alpha bands `bg-red-50/60` hides in (t_624b7275);
+ * and — new here — a tint over a DARKER surface, which the `--jf-bg` composite
+ * under-bounds. It never fires for `text-red-700` / `text-sky-700` on any
+ * `--jf-bg` composite (worst 5.2085:1 / 4.7502:1), but it does fire for them
+ * over a darker backdrop where they genuinely are sub-AA — a real tightening,
+ * not a false refusal.
+ *
+ * The finding names the backdrop actually composited (`over bg-slate-200`), so
+ * the case the guard refused on is the case it prints.
  */
 function translucentFailures(cls: string, rgb: RGB): string[] {
   const alpha = /\/(\d+)$/.exec(cls);
   if (!alpha) return [];
-  const comp = surfaceColor(cls);
-  if (!comp || contrast(rgb, comp) >= 4.5) return [];
-  return [`${canonicalSurface(cls.replace(/\/\d+$/, ""))}/${alpha[1]}`];
+  const comp = compositeBackdrop(cls);
+  if (!comp || conservativeContrast(rgb, comp) >= 4.5) return [];
+  const where = compositeBackdropName(cls);
+  const suffix = where === "bg-[var(--jf-bg)]" ? "" : ` over ${where}`;
+  return [`${canonicalSurface(cls.replace(/\/\d+$/, ""))}/${alpha[1]}${suffix}`];
 }
 
 // ─── rule (a): one class list paints both a surface and a forbidden token ────
@@ -762,12 +845,12 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
     );
   }
 
-  // The three shapes this card ADDED to the rule must still be seen, or a later
-  // edit can turn a fix into a silent abstention and the site it was written for
-  // reaches the tree with this guard green (which is exactly how the /chat footer
-  // and the /settings `/60` cell got here).
+  // The shapes this rule must still SEE must be pinned, or a later edit can turn a
+  // fix into a silent abstention and the site it was written for reaches the tree
+  // with this guard green (which is exactly how the /chat footer and the /settings
+  // `/60` cell got here).
   //
-  // (1) A translucent LIGHT tint is judged at its opaque base, not skipped.
+  // (1) A translucent LIGHT tint is judged at its composite, not skipped.
   const tinted = findingsIn(
     "fixture.tsx",
     [
@@ -814,19 +897,55 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
       `(4.474:1), not to the outermost bg-white wrapper (4.770:1): ${JSON.stringify(nested)}`,
   );
 
-  // (3) A tint LIGHTER than the page background is not bounded by its opaque
-  //     base. `bg-slate-50` #f8fafc (lum 0.95356) is lighter than `--jf-bg`
-  //     #f7f8f8 (0.93686), so `text-red-600` reads 4.5589:1 on the opaque tint
-  //     (LEGAL) but 4.4831:1 on `bg-slate-50/20` composited over the page
-  //     (UNDER AA). Judging the opaque base — what this rule used to do, calling
-  //     it "the strictest bound" — silently passed the /20 shape. Same for
-  //     emerald-50 (4.5280 -> 4.4748) and amber-50 (4.5997 -> 4.4803).
-  const lighterTint = findingsIn(
+  // (3) A tint over a DARKER resolvable surface is judged against THAT surface,
+  //     not against the page background. `bg-slate-50/75` over `--jf-bg` reads
+  //     4.5560:1 for text-red-600 — LEGAL — but the darkest surface this app
+  //     paints, `bg-slate-200` (lum 0.80173), reads 4.3592:1, UNDER AA. Naming
+  //     only the `--jf-bg` composite under-bounds the real pixel (t_fea22a0b
+  //     defect 2). The rule resolves the darkest surface in SURFACES and the
+  //     finding names it. (This alpha is chosen so the site passes on `--jf-bg`:
+  //     a lower one like /20 is under AA on BOTH backdrops, so it would not pin
+  //     the backdrop choice — it fires whichever one is used.)
+  const darkerBackdrop = findingsIn(
     "fixture.tsx",
     [
       "export function P() {",
       "  return (",
-      '    <div className="bg-slate-50/20">',
+      '    <div className="bg-slate-200">',
+      '      <div className="bg-slate-50/75">',
+      '        <span className="text-red-600">Failed</span>',
+      "      </div>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  assert.ok(
+    darkerBackdrop.some(
+      (f) => f.includes("text-red-600") && f.includes("bg-slate-50/75") && f.includes("over bg-slate-200"),
+    ),
+    `a text-red-600 on bg-slate-50/75 must be judged against the darker surface it sits ` +
+      `on (4.359:1), not against --jf-bg (4.556:1), and the finding must name the ` +
+      `backdrop: ${JSON.stringify(darkerBackdrop)}`,
+  );
+
+  // (5) The 8-bit rounding ambiguity — the shadow ONLY, with the backdrop choice
+  //     held fixed. Here `bg-slate-50/93` composited over the darkest surface is
+  //     #f6f9fb, 4.5114:1 with the ROUNDED pixel (PASS); the same pixel one 8-bit
+  //     step down (`#f5f8fa`) is 4.4723:1, UNDER AA. The browser's premultiplied
+  //     8-bit blend really does land on either side (measured in Chromium 145:
+  //     the model is 4.486:1 at /30 where a bare `contrast` read 4.514:1 and
+  //     PASSED — a real sub-AA miss), so a correct guard must refuse the darker
+  //     corner. This alpha is the one where the SHADOW is the whole reason the
+  //     fixture fires: the plain rounded ratio passes, so a model that drops
+  //     `conservativeContrast` passes this pairing the browser can paint sub-AA.
+  const roundingShadow = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="bg-slate-50/93">',
       '      <span className="text-red-600">Failed</span>',
       "    </div>",
       "  );",
@@ -835,16 +954,17 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
     ].join("\n"),
   );
   assert.ok(
-    lighterTint.some((f) => f.includes("text-red-600") && f.includes("bg-slate-50/20")),
-    `a text-red-600 on bg-slate-50/20 composited over --jf-bg is 4.483:1 — UNDER AA — ` +
-      `while the opaque bg-slate-50 is 4.559:1 and passes; the rule must judge the ` +
-      `composite and report it (t_8c10928a): ${JSON.stringify(lighterTint)}`,
+    roundingShadow.some((f) => f.includes("text-red-600") && f.includes("bg-slate-50/93")),
+    `text-red-600 on bg-slate-50/93 is 4.5114:1 on the ROUNDED pixel (PASS) but 4.4723:1 ` +
+      `one 8-bit step down (UNDER AA), which is the side the browser can paint; the ` +
+      `conservative bound must refuse it: ${JSON.stringify(roundingShadow)}`,
   );
 
-  // …and the bound must NOT fire for the replacement tokens: text-red-700 and
-  // text-sky-700 clear AA on every tint AND every composite (worst 5.2085:1 and
-  // 4.7502:1), so the same markup with the token this family actually ships is
-  // legal and must stay unreported.
+  // …and the bound must NOT fire for the replacement tokens on the composites the
+  // app actually paints: text-red-700 and text-sky-700 clear AA on every tint and
+  // every composite over --jf-bg (worst 5.2085:1 and 4.7502:1), so the same
+  // markup with the token this family actually ships is legal and must stay
+  // unreported.
   const lighterTintSafe = findingsIn(
     "fixture.tsx",
     [
@@ -861,13 +981,14 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
   assert.deepEqual(
     lighterTintSafe,
     [],
-    `text-red-700 clears AA on bg-slate-50/20 over --jf-bg (5.32:1); the new composite ` +
-      `bound must not refuse it: ${JSON.stringify(lighterTintSafe)}`,
+    `text-red-700 clears AA on bg-slate-50/20 (6.04:1 over --jf-bg, 5.35:1 over the ` +
+      `darker bg-slate-200); the composite bound must not refuse it: ${JSON.stringify(lighterTintSafe)}`,
   );
 
   // (4) The SAME element may paint the tint and the token together
   //     (`bg-slate-50/20 text-red-600`); shape (a) must judge the composite too,
-  //     or a class list that carries both re-opens the hole fixture (3) closes.
+  //     or a class list that carries both re-opens the hole the ancestor shape
+  //     covers.
   const sameElement = findingsIn(
     "fixture.tsx",
     [
@@ -881,8 +1002,60 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
   );
   assert.ok(
     sameElement.some((f) => f.includes("text-red-600") && f.includes("bg-slate-50/20")),
-    `a same-element bg-slate-50/20 + text-red-600 (4.483:1 composited) must be reported ` +
-      `by shape (a), not only by the ancestor shape: ${JSON.stringify(sameElement)}`,
+    `a same-element bg-slate-50/20 + text-red-600 (4.486:1 over --jf-bg, 3.987:1 over the ` +
+      `darker bg-slate-200) must be reported by shape (a), not only by the ancestor ` +
+      `shape: ${JSON.stringify(sameElement)}`,
+  );
+});
+
+// ─── the deliberate abstentions, pinned so they stay deliberate ──────────────
+//
+// The composite bound must NOT reach into two shapes it does not model. Left
+// implicit, either could be read as an oversight; pinned, a change to one is a
+// visible failing fixture instead of a silent widening of the rule.
+
+test("the composite bound abstains on a saturated translucent fill, and says so", () => {
+  // `bg-red-500/10` (login / workspace-picker / magic-link / connect banners) is a
+  // SATURATED fill, not a light surface, so it is not in the list the composite
+  // bound knows. The token keeps its alpha and the ratio stays with the browser
+  // gate that paints it (`e2e/load-failure-legibility.spec.ts`) —
+  // `docs/accessibility.md` states this boundary, and this fixture makes it a
+  // tested one.
+  assert.deepEqual(
+    translucentFailures("bg-red-500/10", PALETTE.get("red-600")!),
+    [],
+    `the composite bound must not treat a saturated fill as a surface: ` +
+      `${JSON.stringify(translucentFailures("bg-red-500/10", PALETTE.get("red-600")!))}`,
+  );
+  const abstained = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="jf-card">',
+      '      <p className="rounded bg-red-500/10 text-red-600">Failed</p>',
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    abstained,
+    [],
+    `a text-red-600 on bg-red-500/10 is the documented abstention; if the guard started ` +
+      `reporting one, the abstention is no longer the documented one: ${JSON.stringify(abstained)}`,
+  );
+});
+
+test("a translucent WHITE surface is not a light tint and is left to the browser", () => {
+  // `bg-white/95` (the builder header) is not in LIGHT_SURFACE_RE — a translucent
+  // WHITE is a different shape from a light TINT, and the guard abstains rather
+  // than compositing it as if it were one. Pinned so the abstention is recorded.
+  assert.deepEqual(
+    translucentFailures("bg-white/95", PALETTE.get("red-600")!),
+    [],
+    `bg-white/95 must not be judged as a light tint: ${JSON.stringify(translucentFailures("bg-white/95", PALETTE.get("red-600")!))}`,
   );
 });
 
