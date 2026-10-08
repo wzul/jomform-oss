@@ -55,7 +55,7 @@
 // lock file, `jomform-biteproof-docs-bite`, so any two of them serialise in a
 // worktree; the two that carried no lock at all (`biteproof_docs_index_comment_anchor.sh`,
 // `biteproof_mcp_tool_inventory.sh`) were given it here for the same reason. This file
-// therefore drives TEN harnesses, one entry each, and the cross-harness leg below is
+// therefore drives ELEVEN harnesses, one entry each, and the cross-harness leg below is
 // the one that fails if the key goes back to per-script.
 //
 // THE TWO ENTRIES CARD t_df41e675 ADDED make the list EIGHT (it was six): the save-button
@@ -144,6 +144,32 @@
 // and `next.config.mjs` (t_f6408658) and `src/components/i18nDict.ts` (t_76a02798) — are
 // all entries now, which is why each of those cards had to make its harness take the key.
 //
+// THE HOLD IS BOUNDED, NOT A `sleep`, AND EVERY AWAIT SETTLES (card t_9044e3f2). The
+// first cut held each worktree lock with `flock <lock> bash -c 'sleep 8'` and awaited
+// the holder's `close` with a bare `new Promise(res => holder.on("close", res))`. Two
+// problems, one of them the whole reason this paragraph exists:
+//
+//   1. The hold was a fixed 8s timer — held long after the leg it guards had finished —
+//      and this file drives ELEVEN harnesses, so the sleeps alone were 100s+ of the
+//      suite. The holder is now `flock <lock> -c cat`, which blocks on the inherited
+//      stdin until `release()` closes it, so the hold lasts EXACTLY the leg and carries
+//      no timer. `release()` also WAITS for the lock to read free (a `waitUntil`, the
+//      same bounded poll the TAKE uses) before the leg continues, so the release is
+//      observed rather than assumed.
+//   2. `close` can never fire for a child whose stdio a grandchild inherited, while the
+//      child's OWN handle is released at `exit` — so a close-only await is an await that
+//      may never settle, and if the loop is otherwise empty `node --test` drains and
+//      CANCELLED the whole file: measured on this tree as `cancelled 1` with
+//      `'Promise resolution is still pending but the event loop has already resolved'`
+//      (nodejs/node#49952). That is a `cancelled`, not a `fail` — every assertion had
+//      already passed — but `npm run test:unit` exits non-zero on it and it sits inside
+//      the `web` gate, so an intermittent cancellation could red a full preflight for a
+//      file whose verdicts were all correct. The holder's end-of-life is therefore
+//      awaited on `exit` OR `close` OR `error`, whichever fires FIRST, and bounded — so
+//      no leg can leave an unresolved promise behind it, and the file cannot hang.
+// The `-c cat` holder also cannot be left un-reaped by a grandchild holding stdio: its
+// stdout/stderr are the null device, so there is no pipe for `close` to wait on.
+//
 // THE FILE NAME IS LOAD-BEARING, and deliberately avoids "bite": the harness-inventory
 // guard (`api/internal/biteharness`, inside the `api test` gate) classifies any file whose
 // BASENAME contains "bite" case-insensitively as a manual bite harness and fails the build
@@ -157,6 +183,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -362,6 +389,69 @@ async function waitUntil(cond: () => boolean, timeoutMs: number, what: string): 
   assert.fail(`${what} did not happen within ${timeoutMs}ms`);
 }
 
+// Settle when ANY of a child's end-of-life events fires — WHICHEVER IS FIRST (card
+// t_9044e3f2). `close` is the LAST of the three: node defers it until the child's
+// stdio is idle, and a backgrounded grandchild can inherit the pipe and hold `close`
+// off indefinitely — while the child's OWN handle is released at `exit`. So a
+// `close`-only await is an await that may never settle, and when the loop then has
+// nothing else to keep it alive `node --test` records
+// `Promise resolution is still pending but the event loop has already resolved` as a
+// CANCELLATION of the whole file, not a failure (nodejs/node#49952) — every assertion
+// already passed, but `npm run test:unit` still exits non-zero inside the `web` gate.
+// `exit` (and `error`, for a spawn that never starts) settle it first in every case
+// this file creates, so no leg can leave an unresolved promise behind it.
+function settleOnEnd(child: ChildProcess): Promise<void> {
+  return new Promise((res) => {
+    child.once("close", () => res());
+    child.once("exit", () => res());
+    child.once("error", () => res());
+  });
+}
+
+// Take a worktree lock with a SEPARATE process and return its lifetime as a handle.
+// The holder is `flock <lock> -c cat`: `cat` blocks on the stdin this spawn hands it,
+// so the lock is held exactly until `release()` ends that stdin (measured: `free`
+// flips false on spawn and true on `end()`). It is deliberately NOT
+// `bash -c 'sleep N'` — a fixed timer holds the lock long after the leg it guards has
+// finished (the file drives eleven harnesses, so the sleeps alone were 100s+ of the
+// suite), and `cat` gives no grandchild a stdio pipe to inherit, so `close` cannot be
+// left pending behind one.
+async function hold(
+  lock: string,
+  label: string,
+  timeoutMs = 5000,
+): Promise<{ release: () => Promise<void> }> {
+  const holder = spawn("flock", [lock, "-c", "cat"], {
+    stdio: ["pipe", "ignore", "ignore"],
+  });
+  const ended = settleOnEnd(holder);
+  // The take is OBSERVED, not assumed — the same bounded poll the release uses. The
+  // premise is asserted, not inferred from a timer: if the holder never takes the lock
+  // in `timeoutMs`, the leg it guards would pass vacuously.
+  try {
+    await waitUntil(() => !lockIsFree(lock), timeoutMs, `${label}: the holder taking the lock`);
+  } catch (err) {
+    holder.stdin?.destroy();
+    holder.kill("SIGKILL");
+    await ended;
+    throw err;
+  }
+  return {
+    release: async () => {
+      // Deterministic, not a timer: end stdin -> `cat` sees EOF -> flock releases. The
+      // release is then WAITED for, so the next leg's premise ("the lock is free") is
+      // observed rather than raced.
+      holder.stdin?.end();
+      try {
+        await waitUntil(() => lockIsFree(lock), timeoutMs, `${label}: the holder releasing the lock`);
+      } finally {
+        holder.kill("SIGKILL");
+        await ended;
+      }
+    },
+  };
+}
+
 // THE ONE LEGITIMATE SKIP, asserted positively rather than inferred from a failed
 // command: `web/Dockerfile` runs `npm run build` (= this suite) inside
 // `node:24-alpine`, which ships no git, on a build context whose root has no `.git`
@@ -453,13 +543,13 @@ test("every /docs bite harness serialises on ONE per-worktree lock, keyed on the
       writeFileSync(ours, "");
       assert.ok(lockIsFree(ours), `${label}: the lock must be free before leg A (premise of this leg)`);
 
-      // The holder runs `sleep` as a CHILD, which inherits the locked descriptor — so the
-      // hold lasts until that child exits, not until flock is signalled. Both are awaited
-      // before leg B for that reason: killing flock alone leaves the lock held (measured),
-      // and it silently turned leg B into a full run of the harness's body.
-      const holder = spawn("flock", [ours, "bash", "-c", "sleep 8"], { stdio: "ignore" });
-      const holderDone = new Promise<void>((res) => holder.on("close", () => res()));
-      await waitUntil(() => !lockIsFree(ours), 5000, `${label}: the holder taking the lock`);
+      // The holder blocks on its inherited stdin, so it holds the lock for exactly the
+      // span of this leg and carries NO timer (card t_9044e3f2; the old `sleep 8` was a
+      // fixed hold that outlived the leg and made this file one of the slowest in the
+      // suite). Its release is awaited before leg B for the reason the old comment gave
+      // and this one keeps: killing the holder alone leaves the lock held (measured), and
+      // that silently turned leg B into a full run of the harness's body.
+      const holder = await hold(ours, label);
 
       // --- A: a peer holds the lock and the wait is 0 -> refuse, do not run. --------
       const blocked = run(nowait);
@@ -527,8 +617,7 @@ test("every /docs bite harness serialises on ONE per-worktree lock, keyed on the
           `${label}: started from ${where}, the refusal lost its reason:\n${r.out}`);
       }
 
-      await holderDone;
-      await waitUntil(() => lockIsFree(ours), 5000, `${label}: the holder releasing the lock`);
+      await holder.release();
 
       // --- D3: a DIFFERENT worktree in the same repo is NOT serialised against this. -
       // Runs only once `ours` is free, so the ONLY lock held is the other tree's: if the
@@ -554,11 +643,8 @@ test("every /docs bite harness serialises on ONE per-worktree lock, keyed on the
         // lock. If the peer's key wrongly covered this tree, the exit code would be 75
         // instead.
         writeFileSync(peerLock, "");
-        const peerHolder = spawn("flock", [peerLock, "bash", "-c", "sleep 8"], { stdio: "ignore" });
-        const peerDone = new Promise<void>((res) => peerHolder.on("close", () => res()));
+        const peerHolder = await hold(peerLock, `${label}: the peer`);
         try {
-          await waitUntil(() => !lockIsFree(peerLock), 5000,
-            `${label}: the peer taking the other tree's lock`);
           const other = run(
             { ...nowait, ...d3ProbeEnv },
             repoRoot,
@@ -578,7 +664,7 @@ test("every /docs bite harness serialises on ONE per-worktree lock, keyed on the
             `${label}: this worktree queued behind another tree's lock:\n${other.out}`,
           );
         } finally {
-          await peerDone;
+          await peerHolder.release();
         }
       }
 
@@ -692,5 +778,111 @@ test("the image-build skip fires only on the image build, never on a repo withou
     );
   } finally {
     rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+// THE CANCELLATION ITSELF, PINNED (card t_9044e3f2). The card was filed because
+// `npm run test:unit` intermittently printed `cancelled 1` for the file above with
+// `'Promise resolution is still pending but the event loop has already resolved'` — a
+// CANCELLATION of the whole file, not a failed assertion. The mechanism is node's
+// own: `close` is deferred until a child's stdio is idle and a backgrounded grandchild
+// can inherit that pipe and hold `close` off, while the child's OWN handle is released
+// at `exit` — so a `close`-only await can never settle, and when the loop has nothing
+// else `node --test` cancels the file (nodejs/node#49952). This drives that exact shape
+// against `settleOnEnd`, the helper the holders above now use.
+//
+// It is a HAZARD pin, not a reproduction of the original sighting: the sighting could
+// not be reproduced here (25 runs of an isolated replica of the pre-fix holder, ~275
+// holder cycles, 0 cancellations — the pre-fix holder's stdio was `ignore` and its
+// `close` always fired). What is pinned is the CLASS the fix removes: an await that a
+// future edit could leave unresolved for ever, which node reports as a cancellation.
+// `sleep 20` below (not a shorter sleep) so the grandchild reliably outlives the 1500ms
+// bounds even on a loaded host; the detached group is killed in the `finally`.
+test("settleOnEnd settles on `exit` even when `close` is held off by a grandchild's stdio (t_9044e3f2)", async (t) => {
+  // SAME SKIP AS THE REST OF THE FILE, and for a measured reason: in the image build
+  // (`web/Dockerfile` -> `npm run build` = this suite, node:24-alpine, no repo root)
+  // there is no `bash` on PATH, so the spawn ERROR fires immediately and `close` comes
+  // right after it — the premise below ("`close` is delayed") does NOT hold there and
+  // this test would red the `webimage` gate. Measured: the first cut of this test had
+  // no skip and `webimage` failed on exactly this assertion (actual 'close', 51ms).
+  const imageReason = imageBuildSkipReason();
+  if (imageReason) {
+    t.skip(imageReason);
+    return;
+  }
+  const child = spawn("bash", ["-c", "(sleep 20 &); exit 0"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+  });
+  child.stdout?.resume();
+  child.stderr?.resume();
+  try {
+    // Register BOTH before the child can exit: `settleOnEnd` must be live when `exit`
+    // fires, or it would only ever hear the deferred `close`.
+    const ended = settleOnEnd(child);
+    const closeOnly = new Promise<string>((res) => child.once("close", () => res("close")));
+
+    const closed = await Promise.race([closeOnly, sleep(1500).then(() => "timeout")]);
+    assert.equal(
+      closed, "timeout",
+      "the premise of this test did not hold: `close` fired within 1500ms, so a " +
+      "close-only await would have settled and this test would prove nothing about the " +
+      "hazard it exists to pin",
+    );
+
+    const settled = await Promise.race([
+      ended.then(() => "settled"),
+      sleep(1500).then(() => "timeout"),
+    ]);
+    assert.equal(
+      settled, "settled",
+      "settleOnEnd did not settle on `exit`/`error` while `close` was held off — a " +
+      "`close`-only await is unresolved here, and that is exactly the shape node cancels " +
+      "the whole file over: 'Promise resolution is still pending but the event loop has " +
+      "already resolved' (nodejs/node#49952)",
+    );
+  } finally {
+    try {
+      process.kill(-child.pid!, "SIGKILL"); // the detached group, grandchild included
+    } catch { /* the group may already be gone */ }
+  }
+});
+
+// `hold()` TAKES AND RELEASES, AND BOTH ARE OBSERVED (card t_9044e3f2). The holders in
+// the file above now go through `hold`, whose release is deterministic (end stdin ->
+// `cat` sees EOF -> flock frees) rather than a fixed `sleep`. This drives it once in
+// isolation so the take/release contract is pinned even if the legs above change.
+test("hold() takes and releases a worktree lock, observed not timed (t_9044e3f2)", async (t) => {
+  const imageReason = imageBuildSkipReason();
+  if (imageReason) {
+    t.skip(imageReason);
+    return;
+  }
+  const haveFlock = spawnSync("bash", ["-c", "command -v flock"], { encoding: "utf8" }).status === 0;
+  assert.ok(
+    haveFlock,
+    "flock is not on PATH, so hold() cannot be driven — this guard, and the lock it " +
+    "belongs to, are meaningless without it (the same premise leg C asserts)",
+  );
+
+  const base = mkdtempSync(join(tmpdir(), "bitehold-"));
+  try {
+    const lock = join(base, "x.lock");
+    writeFileSync(lock, "");
+    assert.ok(lockIsFree(lock), "premise: the lock is free before hold()");
+    const held = await hold(lock, "the hold() premise");
+    assert.ok(
+      !lockIsFree(lock),
+      "hold() returned without the lock being TAKEN — its take is a bounded, observed " +
+      "poll, so this is a real failure, not a slow host",
+    );
+    await held.release();
+    assert.ok(
+      lockIsFree(lock),
+      "hold().release() returned without the lock being FREE — the release must end the " +
+      "holder's stdin and then WAIT for the lock to read free, not assume it",
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
   }
 });
