@@ -323,7 +323,7 @@ of them:
     pixel AND on the pixel one step toward the token, and refuses if EITHER is
     sub-AA.
 
-  For the seven tints darker than `--jf-bg` the opaque base *is* the minimum over
+  For the six tints darker than `--jf-bg` the opaque base *is* the minimum over
   alpha OVER `--jf-bg`, so the composite over it can only be lighter. That no
   longer holds with the darker backdrop — there the composite is DARKER than the
   opaque base, so the opaque base is no longer the minimum and the two shapes CAN
