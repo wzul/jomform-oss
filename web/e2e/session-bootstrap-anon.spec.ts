@@ -30,6 +30,18 @@
 // identical rule `wsfetch.isUnauthStatus` applies on every page) and to expose a
 // distinct `sessionError` fault state, which the dashboard shows as a retry.
 //
+// FOLLOW-UP (card t_f955c2f3). #1041 removed the 5s wedge, and with it the only
+// bound the read had: a `dashboard-bundle` that is ACCEPTED and then never
+// answers neither resolves nor rejects, so `sessionError` (which is set only
+// when the read SETTLES as an error) stayed false for ever and the retry was
+// never offered — the wedge had bounded this state, to the wrong outcome, and
+// the fix removed the bound without adding a right one. `session.tsx` now arms
+// an `AbortController` for the read, so a non-answering request aborts into the
+// same `catch {}` as a dropped connection and reports the FAULT. The arms below
+// cover the remaining `BundleRead` error producers: the REJECTED fetch
+// (`route.abort()`), a 200 that is not JSON, and — the card's own defect — a
+// read that never settles at all.
+//
 // WHY A BROWSER SPEC AND NOT A SOURCE GUARD. The defect is a RACE and a
 // NAVIGATION, not a wrong string at a call site: the failing source
 // (`bundle === null → anon → router.replace`) reads correctly in isolation, and
@@ -122,6 +134,16 @@ async function freshState(page: Page, base: string, opts: { sessionCookie?: bool
  */
 const SLOW_MS = 8_000;
 
+/**
+ * The bound the read now carries (card t_f955c2f3): `BUNDLE_READ_TIMEOUT_MS`
+ * in `web/src/components/session.tsx`. Restated here on purpose — the arm below
+ * waits it out, so if the constant moves this number is what has to move with
+ * it, and the failure is a visible timing miss rather than a silently skipped
+ * check. It is asserted to be well above the LEGITIMATE slow arm above (8s):
+ * the bound must catch a read that will never answer, not a slow one.
+ */
+const BOUND_MS = 20_000;
+
 test("a SLOW dashboard-bundle read does not bounce the page to /landing", async ({ page, baseURL }) => {
   test.setTimeout(120_000);
   await freshState(page, baseURL!);
@@ -176,6 +198,103 @@ test("a FAILED dashboard-bundle read shows a retry instead of signing the visito
   });
   expect(page.url(), "the retry must not have navigated away").not.toContain("/landing");
   console.log(`OBSERVED failed-bundle finalUrl=${page.url()}`);
+});
+
+test("a REJECTED dashboard-bundle read shows a retry instead of signing the visitor out", async ({ page, baseURL }) => {
+  test.setTimeout(120_000);
+  await freshState(page, baseURL!, { sessionCookie: true });
+  // The fetch REJECTS (offline / DNS failure / transport abort) — the third
+  // `BundleRead` error producer, and the one whose `catch {}` the fix's own
+  // comment names. `route.abort()` makes the request fail at the transport, so
+  // the read settles as `{kind:"error"}`, which is a FAULT: it must be retryable
+  // and must never be read as an anonymous session.
+  let recovered = false;
+  await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, (r) =>
+    recovered ? r.fulfill(json(200, BUNDLE)) : r.abort("failed"),
+  );
+
+  await page.goto(`${baseURL}/`, { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByText(EN.sessionUnavailable, { exact: true })).toBeVisible({ timeout: 20_000 });
+  expect(
+    await page.getByRole("heading", { level: 1, name: EN.landHero1, exact: false }).count(),
+    "a REJECTED (transport failure) bundle read served the landing page — the visitor was treated as anonymous (t_f955c2f3)",
+  ).toBe(0);
+
+  recovered = true;
+  await page.getByRole("button", { name: EN.retry, exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: EN.dashTitle, exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+  expect(page.url(), "the retry must not have navigated away").not.toContain("/landing");
+  console.log(`OBSERVED rejected-bundle finalUrl=${page.url()}`);
+});
+
+test("a 200 dashboard-bundle read that is NOT JSON shows a retry instead of signing the visitor out", async ({ page, baseURL }) => {
+  test.setTimeout(120_000);
+  await freshState(page, baseURL!, { sessionCookie: true });
+  // The read SETTLES 200 but the body is not JSON, so `await r.json()` throws —
+  // the fourth `BundleRead` error producer (`catch {}` around the parse). A
+  // broken body is a broken READ, not an anonymous session: it must retry.
+  let recovered = false;
+  await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, (r) =>
+    recovered
+      ? r.fulfill(json(200, BUNDLE))
+      : r.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><p>proxy</p>" }),
+  );
+
+  await page.goto(`${baseURL}/`, { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByText(EN.sessionUnavailable, { exact: true })).toBeVisible({ timeout: 20_000 });
+  expect(
+    await page.getByRole("heading", { level: 1, name: EN.landHero1, exact: false }).count(),
+    "a NON-JSON 200 bundle read served the landing page — the visitor was treated as anonymous (t_f955c2f3)",
+  ).toBe(0);
+
+  recovered = true;
+  await page.getByRole("button", { name: EN.retry, exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: EN.dashTitle, exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+  console.log(`OBSERVED non-json-bundle finalUrl=${page.url()}`);
+});
+
+test("a HUNG dashboard-bundle read is BOUNDED — the retry appears instead of hanging for ever", async ({ page, baseURL }) => {
+  test.setTimeout(120_000);
+  await freshState(page, baseURL!, { sessionCookie: true });
+  // The read that neither resolves nor rejects: the route handler never settles,
+  // so the request hangs with no HTTP response. Before the bound (`t_f955c2f3`)
+  // `fetchBundle` never settled, `bundle` stayed `undefined`, `sessionError`
+  // stayed false, and the visitor sat on the loading shell with NO retry for
+  // ever. The bound has to settle this as a FAULT.
+  let recovered = false;
+  await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, async (r) => {
+    if (recovered) {
+      await r.fulfill(json(200, BUNDLE));
+      return;
+    }
+    // Never settles: no fulfill, no abort, no continue.
+    await new Promise(() => {});
+  });
+
+  await page.goto(`${baseURL}/`, { waitUntil: "domcontentloaded" });
+
+  // Before the bound, this text NEVER appears (measured: still absent after 14s
+  // and after 60s on the #1041 bytes). The wait is the bound plus slack.
+  await expect(page.getByText(EN.sessionUnavailable, { exact: true })).toBeVisible({
+    timeout: BOUND_MS + 15_000,
+  });
+  expect(
+    page.url(),
+    "a HUNG bundle read left the page — it must stay put and offer the retry",
+  ).not.toContain("/landing");
+
+  recovered = true;
+  await page.getByRole("button", { name: EN.retry, exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: EN.dashTitle, exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+  console.log(`OBSERVED hung-bundle finalUrl=${page.url()}`);
 });
 
 test("CONTROL: an authoritative 401 STILL bounces to /landing", async ({ page, baseURL }) => {

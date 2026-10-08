@@ -175,18 +175,49 @@ type BundleRead =
   | { kind: "anon" }
   | { kind: "error" };
 
+/**
+ * The upper bound on ONE `dashboard-bundle` read (card t_f955c2f3).
+ *
+ * #1041 removed the old 5s wedge — correctly, because that wedge bounded the
+ * still-in-flight state by CALLING it anonymous — but it left the read with no
+ * bound of any kind. A `fetch` the network accepts and then never answers (a TCP
+ * connection held open, a half-dead proxy, a hung server) neither RESOLVES nor
+ * REJECTS: `fetchBundle` never settles, so `bundle` stays `undefined` and
+ * `sessionError` is never set. The visitor sits on the loading shell for ever
+ * and the retry the fixed build added for a failed read is never offered.
+ * Measured on the #1041 bytes: `/chat` with a never-answering
+ * `dashboard-bundle` stayed unresolved with no retry however long it was driven.
+ *
+ * So the read is bounded by an `AbortController` whose abort lands in the SAME
+ * `catch` as a dropped connection — an `error` read, never `anon` (a read that
+ * produced NO answer is not a sign-out, which is the whole point of #1041).
+ *
+ * 20s, not the old 5s: the guard's own slow arm answers at 8s and that is a
+ * LEGITIMATE session, so the bound must sit well above any real read — its job
+ * is to catch a read that will never answer, not a slow one.
+ */
+const BUNDLE_READ_TIMEOUT_MS = 20_000;
+
 function fetchBundle(workspace: string): Promise<BundleRead> {
   const key = workspace || "__default__";
   const cached = bundleCache.get(key);
   if (cached) return Promise.resolve(cached);
   if (!inflightByWorkspace.has(key)) {
     const q = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
+    // The bound, armed BEFORE the request (see BUNDLE_READ_TIMEOUT_MS). The
+    // timer is cleared when the whole chain SETTLES below — not when the fetch
+    // returns — because the body read can stall too (a server that sends its
+    // headers and then stops talking hangs `await r.json()` just as well), and
+    // the abort has to reach that path as an `error` read as well.
+    const ac = new AbortController();
+    const timer = window.setTimeout(() => ac.abort(), BUNDLE_READ_TIMEOUT_MS);
     const p = (async (): Promise<BundleRead> => {
       let r: Response;
       try {
-        r = await fetch(`/api/rest/dashboard-bundle${q}`);
+        r = await fetch(`/api/rest/dashboard-bundle${q}`, { signal: ac.signal });
       } catch {
-        // The request never got a response (offline, DNS, abort). NOT anonymous.
+        // The request never got a response (offline, DNS, abort, or the bound
+        // above firing). NOT anonymous.
         return { kind: "error" };
       }
       if (r.ok) {
@@ -225,11 +256,15 @@ function fetchBundle(workspace: string): Promise<BundleRead> {
       return isUnauthStatus(r.status, body) ? { kind: "anon" } : { kind: "error" };
     })()
       .then((res) => {
+        window.clearTimeout(timer);
         if (res.kind !== "error") bundleCache.set(key, res);
         inflightByWorkspace.delete(key);
         return res;
       })
       .catch((): BundleRead => {
+        // The chain itself threw. Clear the bound so it cannot abort a later
+        // read on the shared signal, and report the fault the same way.
+        window.clearTimeout(timer);
         inflightByWorkspace.delete(key);
         return { kind: "error" };
       });
