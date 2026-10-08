@@ -416,21 +416,30 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
       }),
     );
     if (ownIsBad) continue; // already (a)
+    // The NEAREST surface ancestor wins, not the outermost one. CSS paints
+    // through the innermost opaque background between the text and the page, so
+    // taking the first match mis-attributes any token nested inside two surfaces.
+    // `dangerText.test.ts` hit a real site this way (the /chat card footer, card
+    // t_624b7275); this guard carried the same `.find()` shape and takes `.at(-1)`
+    // for the same reason. The nested fixture below pins it in BOTH directions:
+    // nearest is what stops an inner `bg-slate-100` being read as the `bg-white`
+    // card behind it (where `--jf-muted` reads 4.83:1 and passes) and what stops
+    // an inner `bg-white` being read as the `bg-[var(--jf-bg)]` region behind it
+    // (where `text-slate-500` reads 4.48:1 and would be a false positive).
     const surfaceEl = ancestorsAt(events, owner.openIdx)
       .filter((t) => t !== owner)
-      .find((t) =>
+      .filter((t) =>
         t.variants.some((v) =>
           v.split(/\s+/).some((cls) => {
             const [s] = splitState(cls);
             return s === "" && LIGHT_SURFACE_RE.test(cls);
           }),
         ),
-      );
+      )
+      .at(-1);
     // Which of the surfaces that ancestor declares is the token painted on? The
-    // nearest one wins, but the ancestor list is outermost-first, so take the
-    // LAST surface in every variant it declares. With no surface ancestor, the
-    // surface is whatever the page's layout chain paints (nearest first), and
-    // only failing that is it the app page background.
+    // nearest one wins, but the ancestor's class list is not ordered by paint
+    // order, so take the LAST surface in every variant it declares.
     const layoutSurface = ambientSurfaces[0];
     const surfaces = surfaceEl
       ? surfaceEl.variants.flatMap((v) =>
@@ -612,6 +621,71 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
     `only ${mutedUses} uses of text-[var(--jf-muted)] — if the token was renamed, re-anchor this ` +
       `guard (a renamed token is invisible to a rule keyed on the class string)`,
   );
+
+  // The NEAREST surface ancestor is the one the text is painted on, not the
+  // outermost — the same `.find()` shape the red/sky rule carried until it hid the
+  // /chat card footer (card t_624b7275). The two fixtures below pin the corrected
+  // read in BOTH directions, because which way an outermost read errs depends on
+  // the pair: it hides a failing inner surface, and it invents a failure for a
+  // token that is only inside a passing inner one. `--jf-muted` is 4.83:1 on white
+  // (passing) and 4.41:1 on slate-100 (failing); `text-slate-500` is 4.76:1 on
+  // white (passing) and 4.48:1 on `--jf-bg` (failing).
+  //
+  // Both directions report through ONE assertion so a regression names them
+  // together: an outermost read fails on both counts, and either failure alone
+  // would leave the other unpinned.
+  const problems: string[] = [];
+
+  // (1) An inner tint must be reported at ITS OWN ratio, not the white card's.
+  const innerTint = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="jf-card">',
+      '      <code className="inline-block bg-slate-100 px-1">',
+      '        <span className="text-[var(--jf-muted)]">ID</span>',
+      "      </code>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (!innerTint.some((f) => f.includes("text-[var(--jf-muted)]") && f.includes("bg-slate-100"))) {
+    problems.push(
+      `a --jf-muted token inside an inner bg-slate-100 must be attributed to the TINT ` +
+        `(4.41:1, under AA), not to the jf-card behind it (4.83:1, passing): ${JSON.stringify(innerTint)}`,
+    );
+  }
+
+  // (2) …and an inner PASSING surface must not inherit the page background's
+  //     failure. `text-slate-500` is under AA on `--jf-bg`, so reading the outer
+  //     region here would be a FALSE positive — the other direction of the same
+  //     flaw.
+  const innerWhite = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="bg-[var(--jf-bg)]">',
+      '      <div className="bg-white p-2">',
+      '        <span className="text-slate-500">a summary</span>',
+      "      </div>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (innerWhite.length !== 0) {
+    problems.push(
+      `a text-slate-500 on an inner bg-white card PASSES (4.76:1) and must not be reported ` +
+        `against the bg-[var(--jf-bg)] region behind it (4.48:1): ${JSON.stringify(innerWhite)}`,
+    );
+  }
+
+  assert.deepEqual(problems, [], problems.join("\n"));
 });
 
 // ─── the lexer, against the defect that made this guard mis-report ──────────

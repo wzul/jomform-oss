@@ -399,16 +399,27 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
     );
     if (ownBackgrounds.length > 0 && !ownBackgrounds.some((b) => LIGHT_SURFACE_RE.test(b))) continue;
 
+    // The NEAREST surface ancestor wins, not the outermost one. CSS paints
+    // through the innermost opaque background between the text and the page, so
+    // taking the first match mis-attributes any token nested inside two surfaces
+    // — an inner tint read as the wrapper behind it. `dangerText.test.ts` hit the
+    // real site (the /chat card footer, card t_624b7275); this guard carried the
+    // same `.find()` shape and takes `.at(-1)` for the same reason, with the
+    // nested fixture below pinning it. (An outermost read is wrong in BOTH
+    // directions: it can also report a token against a surface it is not painted
+    // on, e.g. `text-emerald-700` inside a `bg-slate-200` chip within a white
+    // card, which this guard measures at 4.35:1 on the chip and 5.36:1 on white.)
     const surfaceEl = ancestorsAt(events, owner.openIdx)
       .filter((t) => t !== owner)
-      .find((t) =>
+      .filter((t) =>
         t.variants.some((v) =>
           v.split(/\s+/).some((cls) => {
             const [s] = splitState(cls);
             return s === "" && LIGHT_SURFACE_RE.test(cls);
           }),
         ),
-      );
+      )
+      .at(-1);
     const surfaces = surfaceEl
       ? surfaceEl.variants.flatMap((v) =>
           v
@@ -551,6 +562,34 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
       `${gone} is back in the app — this is the class card t_fc1b67f1 removed`,
     );
   }
+
+  // The NEAREST surface ancestor is the one the text is painted on, not the
+  // outermost. This guard carried the same `.find()` shape as the red/sky rule —
+  // which hid the /chat card footer on a `bg-sky-50` it cannot clear (card
+  // t_624b7275) — and the fixture below pins the corrected read, so a revert to
+  // an outermost attribution is visible here. `text-emerald-700` PASSES on the
+  // white wrapper (5.36:1) and FAILS on the `bg-slate-200` chip nested inside it
+  // (4.35:1), so an outermost read reports nothing at all.
+  const nested = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="bg-white">',
+      '      <div className="rounded bg-slate-200 px-2 py-0.5">',
+      '        <span className="text-emerald-700">Paid</span>',
+      "      </div>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  assert.ok(
+    nested.some((f) => f.includes("text-emerald-700") && f.includes("bg-slate-200")),
+    `a text-emerald-700 inside an inner bg-slate-200 chip must be attributed to the CHIP ` +
+      `(4.351:1, under AA), not to the outermost bg-white wrapper (5.364:1, passing): ${JSON.stringify(nested)}`,
+  );
 });
 
 // ─── the inherited shape, against a real defect this rule is FOR ─────────────

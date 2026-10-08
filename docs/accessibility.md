@@ -213,6 +213,19 @@ layout in the chain paints a light surface over its `{children}` — which is th
 case for the dashboard pages, and what keeps the tab-strip defect at 4.48:1
 reported.
 
+**The surface is the NEAREST one, across all three colour guards.** CSS paints
+through the innermost opaque background between the text and the page, so a token
+nested inside two surfaces must be judged against the inner one. All three source
+rules (`dangerText.test.ts`, `emeraldText.test.ts`, `mutedText.test.ts`) take the
+last light-surface ancestor for this reason, and each pins the shape with a
+fixture. Reading the *outermost* surface instead errs in **both** directions, and
+the guards measure both: it hides a failure (`text-emerald-700` inside a
+`bg-slate-200` chip within a white card is 4.35:1 — under AA — but the wrapper
+reads 5.36:1 and passes) and it invents one (`text-slate-500` on an inner
+`bg-white` card is 4.76:1 and passes, while the `bg-[var(--jf-bg)]` region behind
+it reads 4.48:1). The outermost read is how the `/chat` card footer hid: see the
+red/sky family below.
+
 ### The red/sky failure family, and the two shapes it is judged on
 
 `web/src/lib/dangerText.test.ts` is the sibling rule for the **red and sky text
