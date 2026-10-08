@@ -227,22 +227,39 @@ test("the outcome message is set AFTER the reload that resets it", () => {
   //
   // The RETRY path reloads through `loadFeedbackThread` (it needs the thread back
   // to check the marker — see the next test), which resets the same state.
+  //
+  // The window is wide enough to reach the LAST writer on each path: card
+  // t_01385c19 added the `kind === "ok"` branch, so the retry's outcome write now
+  // sits after the error branch AND the marker branch (measured offsets from the
+  // mapping call: reply 401 → 1199, retry 820 → 1768). A tighter window would
+  // report "the outcome message is never set" for a page that sets it.
   for (const [fn, reload] of [
     ["replyResult", "await openFeedback(fbOpenId)"],
     ["retryResult", "await loadFeedbackThread(fbOpenId)"],
   ] as const) {
     const call = page.indexOf(`${fn}(notification)`);
     assert.ok(call > 0, `${fn} is not called`);
-    const window = page.slice(call, call + 1400);
+    const window = page.slice(call, call + 3200);
     const openAt = window.indexOf(reload);
-    const msgAt = window.indexOf("setFbActionErr(t(result.messageKey as Key))");
+    const errAt = window.indexOf("setFbActionErr(t(result.messageKey as Key))");
+    const markAt = window.indexOf("hasNotifyFailure(reloaded)");
+    const msgAt = window.indexOf("setFbMsg(t(result.messageKey as Key))");
     assert.ok(openAt >= 0, `${fn}: no reload (${reload}) after the outcome mapping`);
-    assert.ok(msgAt >= 0, `${fn}: the outcome message is never set`);
+    assert.ok(errAt >= 0, `${fn}: the outcome message is never set`);
+    assert.ok(msgAt >= 0, `${fn}: the success message is never set`);
     assert.ok(
-      openAt < msgAt,
+      openAt < errAt && openAt < msgAt,
       `${fn}: the outcome message is set BEFORE the reload, which resets that state — ` +
         "the admin sees no outcome for a reply that was stored",
     );
+    if (fn === "retryResult") {
+      assert.ok(markAt >= 0, "retryResult: the marker check is gone from the retry path");
+      assert.ok(
+        openAt < markAt,
+        "retryResult: the marker is checked before the reload that produces the thread — " +
+          "the value it reads is not the one the retry left behind",
+      );
+    }
   }
 });
 
@@ -257,7 +274,10 @@ test("a retry that left the marker set cannot also claim it was sent", () => {
   // thread that came back from the reload.
   const call = page.indexOf("retryResult(notification)");
   assert.ok(call > 0, "the retry does not map the outcome field");
-  const window = page.slice(call, call + 1600);
+  // Wide enough to reach the marker check AND the writers after it (card
+  // t_01385c19 added a branch between them); measured, the last writer sits 2859
+  // bytes past the mapping call.
+  const window = page.slice(call, call + 3200);
 
   assert.match(
     window,
@@ -275,14 +295,25 @@ test("a retry that left the marker set cannot also claim it was sent", () => {
   // Both branches must exist and the success copy must be the LAST resort: the
   // marker check lives INSIDE the branch that precedes it, and the success copy is
   // what that branch falls through to.
-  const errBranchAt = window.indexOf('if (result.kind === "error")');
+  //
+  // THE ORDER CHANGED IN CARD t_01385c19, deliberately. It used to be
+  // `error` → marker → success, and the marker branch printed
+  // `afb.notifyRetryStillMarked` ("Re-sent — but the thread still records a
+  // failure…"), which CLAIMS a re-send happened. A retry whose outcome is
+  // `unconfirmed` — `skipped`, no recipient configured, nothing enqueued — reached
+  // that branch first, so the console asserted "Re-sent" for an attempt that sent
+  // nothing (measured in the browser: the `skipped` arm rendered the "Re-sent"
+  // wording before this fix). The not-ok outcomes must therefore be decided FIRST,
+  // leaving the "Re-sent" caveat to the paths where a re-send really happened.
+  const notOkBranchAt = window.indexOf('if (result.kind !== "ok")');
   const markerBranchAt = window.indexOf("else if (reloaded &&");
   const markerAt = window.indexOf("hasNotifyFailure(reloaded)");
   const doneAt = window.indexOf("setFbMsg(t(result.messageKey as Key))");
-  assert.ok(errBranchAt >= 0, "the error branch is missing");
+  assert.ok(notOkBranchAt >= 0, "the not-ok (failure) branch is missing");
   assert.ok(
-    markerBranchAt > errBranchAt,
-    "the marker branch must be checked AFTER the error branch (an error is an error regardless of the marker)",
+    markerBranchAt > notOkBranchAt,
+    "the marker branch must be checked AFTER the not-ok branch: `afb.notifyRetryStillMarked` says " +
+      "\"Re-sent\", which is false for a retry that sent nothing (card t_01385c19)",
   );
   assert.ok(
     markerAt > markerBranchAt,

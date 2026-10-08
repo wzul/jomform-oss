@@ -509,10 +509,18 @@ export default function AdminPage() {
       // console showed the admin no outcome at all.
       await openFeedback(fbOpenId);
       await loadFeedback(fbPage, fbFilter);
-      if (result.kind === "error") {
-        setFbActionErr(t(result.messageKey as Key));
-      } else {
+      // THE TONE TRAVELS WITH THE OUTCOME (card t_01385c19). `replyResult`
+      // returns three kinds, not two, and only `ok` is a delivery: a reply whose
+      // delivery status was NOT confirmed comes back as `unconfirmed`, whose
+      // sentence says so ("The delivery status … was not confirmed — check the
+      // thread before assuming the filer was told"). This branch used to read
+      // `else`, so every caveat landed on the emerald success line while the
+      // genuinely-error keys got the red banner beside it — "nothing was sent"
+      // painted as a success. Only `ok` may use the success line.
+      if (result.kind === "ok") {
         setFbMsg(t(result.messageKey as Key));
+      } else {
+        setFbActionErr(t(result.messageKey as Key));
       }
     } catch {
       setFbActionErr(t("afb.replyFail"));
@@ -562,11 +570,34 @@ export default function AdminPage() {
       // a marker still set means the success message must not be shown.
       const reloaded = await loadFeedbackThread(fbOpenId);
       await loadFeedback(fbPage, fbFilter);
-      if (result.kind === "error") {
+      // THE TONE TRAVELS WITH THE OUTCOME, AND ONLY A DELIVERY IS A CONFIRMATION
+      // (card t_01385c19). Three states, in this order for a reason:
+      //
+      //   * NOT `ok` → the outcome's OWN sentence is the truth. `error` is the
+      //     send that failed; `unconfirmed` is the retry that sent NOTHING
+      //     (`afb.notifyRetrySkipped` — no recipient configured, so no email was
+      //     queued) or whose delivery status could not be confirmed. These are
+      //     statements that the mail did NOT go out, and they must reach the red
+      //     `role="alert"` line. THEY COME FIRST: `afb.notifyRetryStillMarked`
+      //     says "Re-sent — …", which is a claim that a re-send HAPPENED, so it
+      //     may only be used when the retry really queued a mail. With an
+      //     `unconfirmed`/`skipped` outcome and a marker still set, the honest
+      //     sentence is the outcome's ("Nothing was sent …"), not the "Re-sent"
+      //     caveat (measured in the browser: the marker branch first rendered the
+      //     "Re-sent" wording for a `skipped` retry that enqueued nothing).
+      //   * `ok` + the marker still set → the delivery left the process but the
+      //     thread still records a failure, so say what is still true. A failure
+      //     statement, so it is red/live, not emerald.
+      //   * `ok` + no marker → a genuine confirmation, on the emerald line.
+      //
+      // The success line is therefore reachable ONLY for `ok`; the pre-fix code
+      // sent both non-ok kinds there through a two-way `else`, which read
+      // "Nothing was sent" in the same chrome as "Notification sent again."
+      if (result.kind !== "ok") {
         setFbActionErr(t(result.messageKey as Key));
       } else if (reloaded && hasNotifyFailure(reloaded)) {
         // A delivery that did not clear the marker: say what is still true.
-        setFbMsg(t("afb.notifyRetryStillMarked"));
+        setFbActionErr(t("afb.notifyRetryStillMarked"));
       } else {
         setFbMsg(t(result.messageKey as Key));
       }
@@ -1330,9 +1361,30 @@ export default function AdminPage() {
                           })}
                         </ul>
 
-                        {fbMsg && <p className="mt-3 text-sm text-emerald-700">{fbMsg}</p>}
+                        {/* The section's two outcome lines, and they are TWO
+                            lines on purpose (card t_01385c19). `fbMsg` is the
+                            emerald success line and `fbActionErr` is the red
+                            `role="alert"` failure line; the delivery outcome
+                            decides which, and only a delivery (`kind "ok"`,
+                            or `none` on the retry) may reach the success line.
+                            A reply whose delivery was NOT confirmed, a retry
+                            that sent nothing, and a retry that did not clear
+                            the thread's marker are all failure STATEMENTS and
+                            are written to `fbActionErr`. `data-testid` +
+                            `data-tone` are what let the e2e arm read the
+                            rendered tone rather than trusting the sentence. */}
+                        {fbMsg && (
+                          <p data-testid="afb-msg" data-tone="success" className="mt-3 text-sm text-emerald-700">{fbMsg}</p>
+                        )}
                         {fbActionErr && (
-                          <p role="alert" className="mt-3 break-words text-sm text-red-600">{fbActionErr}</p>
+                          <p
+                            data-testid="afb-msg"
+                            data-tone="failure"
+                            role="alert"
+                            className="mt-3 break-words text-sm text-red-600"
+                          >
+                            {fbActionErr}
+                          </p>
                         )}
 
                         <div className="mt-4">

@@ -439,4 +439,217 @@ test.describe("admin feedback: the notification-failure marker", () => {
     }
     expect(blockers, "the notification-failure banner must have no critical/serious axe violations").toEqual([]);
   });
+
+  // ── the OUTCOME's tone, not just its sentence (card t_01385c19) ─────────────
+  //
+  // THE DEFECT THESE ARMS PIN
+  //   The Feedback section has TWO outcome lines: `fbMsg` (plain emerald text —
+  //   the success line) and `fbActionErr` (a red `role="alert"`). Both writers
+  //   branched on `result.kind === "error"` FIRST and sent everything else — the
+  //   `unconfirmed` half of `replyResult`/`retryResult` — to the success line, and
+  //   the retry's own "still records a failure" caveat went there too. So an
+  //   operator read a statement that the mail did NOT go out in the same chrome
+  //   the console uses for "Notification sent again."
+  //
+  //   The spec above proves the marker's banner; these arms prove the TONE of the
+  //   outcome line, which is what the card is about, and the UNIT guard
+  //   (src/lib/adminFeedbackTone.test.ts) stops the writer coming back. Neither
+  //   half is sufficient: the scan cannot read a computed ink or an ARIA role,
+  //   and this file cannot see the writer nobody drove. The DELIVERED control is
+  //   not decoration — it is what proves the probe can tell the two apart, so a
+  //   red failure reading cannot be a "this line is always red" artefact.
+
+  /** The two outcome inks as the browser resolves them. */
+  const EMERALD_700 = "#007a55";
+  const RED_600 = "#e7000b";
+
+  type AfbReading = { present: boolean; text: string; ink: string; tone: string; role: string };
+
+  /**
+   * The outcome line's rendered shape, read out of the live DOM. `getComputedStyle`
+   * returns whatever colour space Tailwind emitted (a `lab(...)` for the v4 ramps),
+   * so the ink is round-tripped through a canvas exactly as
+   * action-failure-tone.spec.ts does.
+   */
+  async function afbReading(page: Page): Promise<AfbReading> {
+    return page.evaluate(`(() => {
+      const el = document.querySelector('[data-testid="afb-msg"]');
+      if (!el) return { present: false, text: "", ink: "", tone: "", role: "" };
+      const cv = document.createElement("canvas");
+      cv.width = cv.height = 1;
+      const ctx = cv.getContext("2d", { willReadFrequently: true });
+      const hex = (css) => {
+        ctx.clearRect(0, 0, 1, 1);
+        ctx.fillStyle = css;
+        ctx.fillRect(0, 0, 1, 1);
+        const d = ctx.getImageData(0, 0, 1, 1).data;
+        return "#" + [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, "0")).join("");
+      };
+      return {
+        present: true,
+        text: (el.textContent || "").trim(),
+        ink: hex(getComputedStyle(el).color),
+        tone: el.getAttribute("data-tone") || "",
+        role: el.getAttribute("role") || "",
+      };
+    })()`) as Promise<AfbReading>;
+  }
+
+  /** Wait for the outcome line, then read it. There is exactly ONE at a time. */
+  async function settledAfbReading(page: Page): Promise<AfbReading> {
+    await page.waitForSelector('[data-testid="afb-msg"]', { timeout: 30_000 });
+    await expect(page.locator('[data-testid="afb-msg"]')).toHaveCount(1);
+    const r = await afbReading(page);
+    expect(r.text, "the outcome line rendered empty — there is nothing to judge").not.toBe("");
+    return r;
+  }
+
+  /** Open /admin against a fresh state and open the thread named by `subject`. */
+  async function openThread(page: Page, subject: RegExp) {
+    await page.goto("/login", { waitUntil: "domcontentloaded" });
+    await page.evaluate(() => window.localStorage.clear());
+    await page.context().clearCookies();
+    await stubAdmin(page);
+    await page.goto("/admin", { waitUntil: "domcontentloaded" });
+    // The ENGLISH default, stated explicitly: a leftover jf_lang has already
+    // produced a false reading on this board.
+    await expect(page.locator("html")).toHaveAttribute("lang", "en");
+    const row = page.getByRole("button", { name: subject });
+    await expect(row).toBeVisible();
+    await row.click();
+  }
+
+  test("a reply whose delivery was NOT confirmed is red and live, NOT the success line", async ({ page }) => {
+    // The reply stored, the `notification` field absent (an older server, or a
+    // proxy that stripped it). `replyResult` returns `unconfirmed` — the sentence
+    // says the status was not confirmed — and that is where the pre-fix code sent
+    // it to emerald.
+    await openThread(page, /Sihat/);
+    await page.route("**/api/admin/feedback/*/messages", (r) =>
+      r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({}) }),
+    );
+    await page.locator("#afb-reply").fill("We are looking into this for you now.");
+    await page.getByRole("button", { name: "Send reply" }).click();
+
+    const r = await settledAfbReading(page);
+    console.log(`/admin reply unconfirmed -> ${JSON.stringify(r)}`);
+    expect(r.text, "the unconfirmed reply's own sentence").toContain("was not confirmed");
+    expect(
+      r.tone,
+      `the unconfirmed reply is on the ${r.tone || "untoned"} line (ink ${r.ink}). It says the delivery ` +
+        `was NOT confirmed, so it must not wear the success chrome the console uses for a delivery`,
+    ).toBe("failure");
+    expect(r.role, "a statement that the mail did not go out must be a live alert region").toBe("alert");
+    expect(r.ink, "the failure line's measured ink").toBe(RED_600);
+  });
+
+  test("a retry that sent NOTHING is red and live, NOT the success line", async ({ page }) => {
+    // `skipped` is the admin lane's no-op exit: no recipient configured, so no job
+    // was enqueued and no mail will arrive. "Notification sent again." would be a
+    // claim no delivery backs — the exact false-positive the marker exists for.
+    await openThread(page, /Pembayaran tersekat/);
+    await page.route("**/api/admin/feedback/*/notify", (r) =>
+      r.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ notification: "skipped", status: "retried" }),
+      }),
+    );
+    await page
+      .getByRole("alert")
+      .filter({ hasText: "Notification not delivered" })
+      .getByRole("button", { name: "Send the notification again" })
+      .click();
+
+    const r = await settledAfbReading(page);
+    console.log(`/admin retry skipped -> ${JSON.stringify(r)}`);
+    expect(r.text, "the retry that sent nothing says so").toContain("Nothing was sent");
+    expect(
+      r.tone,
+      `a retry that enqueued nothing is on the ${r.tone || "untoned"} line (ink ${r.ink}) — it must not ` +
+        `read as "Notification sent again."`,
+    ).toBe("failure");
+    expect(r.role, "a retry that sent nothing must be a live alert region").toBe("alert");
+    expect(r.ink, "the failure line's measured ink").toBe(RED_600);
+  });
+
+  test("the retry's marker-still-set caveat is red and live, NOT the success line", async ({ page }) => {
+    // The delivery left the process but the thread still records a failure. Its
+    // sentence ("... the thread still records a failure, so it was not delivered to
+    // everyone") used to be printed on the success line, directly above a banner
+    // saying the filer was not told.
+    await openThread(page, /Pembayaran tersekat/);
+    await page.route("**/api/admin/feedback/*/notify", (r) =>
+      r.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ notification: "queued", status: "retried" }),
+      }),
+    );
+    await page
+      .getByRole("alert")
+      .filter({ hasText: "Notification not delivered" })
+      .getByRole("button", { name: "Send the notification again" })
+      .click();
+
+    const r = await settledAfbReading(page);
+    console.log(`/admin retry marker-still-set -> ${JSON.stringify(r)}`);
+    expect(r.text, "the caveat's own sentence").toContain("still records a failure");
+    expect(
+      r.tone,
+      `the "still records a failure" caveat is on the ${r.tone || "untoned"} line (ink ${r.ink})`,
+    ).toBe("failure");
+    expect(r.role, "the caveat must be a live alert region, not a quiet confirmation").toBe("alert");
+    expect(r.ink, "the failure line's measured ink").toBe(RED_600);
+    // …and it does not claim the notification was delivered.
+    await expect(page.getByText("Notification sent again.")).toHaveCount(0);
+  });
+
+  test("CONTROL: a DELIVERED retry that cleared the marker uses the success line", async ({ page }) => {
+    // The retry's genuine-success arm, exactly the sibling of the "still marked"
+    // arm above: the job was queued AND the thread comes back with no marker, so
+    // "Notification sent again." is true and must keep the app's emerald
+    // confirmation chrome. This is what makes the three failure arms non-vacuous:
+    // a red reading above cannot be a "this line is always red" artefact.
+    await openThread(page, /Pembayaran tersekat/);
+    // After the retry the detail read answers a thread with the marker CLEARED —
+    // the server state a successful re-send produces (and the reason the success
+    // copy is gated on the reloaded thread at all).
+    let cleared = false;
+    await page.route("**/api/admin/feedback/*", (r) => {
+      const url = new URL(r.request().url());
+      const id = url.pathname.split("/").pop();
+      if (id !== MARKED.id && id !== HEALTHY.id) {
+        return r.fallback();
+      }
+      const th = cleared ? HEALTHY : MARKED;
+      return r.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ thread: th, messages: [] }),
+      });
+    });
+    await page.route("**/api/admin/feedback/*/notify", (r) => {
+      cleared = true;
+      return r.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ notification: "queued", status: "retried" }),
+      });
+    });
+    await page
+      .getByRole("alert")
+      .filter({ hasText: "Notification not delivered" })
+      .getByRole("button", { name: "Send the notification again" })
+      .click();
+
+    const r = await settledAfbReading(page);
+    console.log(`/admin retry delivered + cleared -> ${JSON.stringify(r)}`);
+    expect(r.text, "a delivered retry's confirmation").toContain("Notification sent again.");
+    expect(r.tone, "a DELIVERED retry is a success and must keep the success line").toBe("success");
+    expect(r.role, "a success is not a live alert region").toBe("");
+    expect(r.ink, "the success line's measured ink").toBe(EMERALD_700);
+    // …and the failure banner is gone, because the marker really was cleared.
+    await expect(page.getByRole("alert").filter({ hasText: "Notification not delivered" })).toHaveCount(0);
+  });
 });
