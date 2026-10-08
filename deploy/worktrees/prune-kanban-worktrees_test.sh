@@ -136,7 +136,10 @@ git -C "$REPO" branch -q wt/t_00000004-local "$LOCAL_SHA"
 #   t_00000005 dirty             pushed, with uncommitted changes        -> KEEP (UNSAFE)
 #   t_00000006 fresh             pushed, card completed 5 min ago        -> KEEP (age)
 #   t_00000007 open              pushed, card still running              -> KEEP (status)
-#   t_00000008 busy              pushed, live worker process             -> KEEP (process)
+#   <this run's worker id>       pushed, live worker process             -> KEEP (process)
+#     Its id is derived from this run's PID (`t_0000<4 hex>`) rather than a fixed
+#     constant, so a CONCURRENT copy of this suite (whose stand-in shares the same
+#     argv shape) cannot be mistaken for this run's worker — see section 6.
 #   t_00000009 unknowable        pushed, no card to read                 -> KEEP (status)
 #   t_00000010 orphan            commit on NO ref at all, clean, old     -> KEEP (at-risk)
 #   t_00000010 is the readable at-risk case: nothing under refs/ holds its
@@ -145,11 +148,15 @@ git -C "$REPO" branch -q wt/t_00000004-local "$LOCAL_SHA"
 #   must be a card the script CAN read, or the run is a failure (exit 1) instead.
 for spec in "t_00000001:$MERGED_SHA" "t_00000002:$MIRROR_SHA" "t_00000003:$PUSHED_SHA" \
             "t_00000004:$LOCAL_SHA" "t_00000005:$PUSHED_SHA" "t_00000006:$PUSHED_SHA" \
-            "t_00000007:$PUSHED_SHA" "t_00000008:$PUSHED_SHA" "t_00000009:$PUSHED_SHA" \
+            "t_00000007:$PUSHED_SHA" "t_00000009:$PUSHED_SHA" \
             "t_00000010:$ORPHAN_SHA"; do
   id="${spec%%:*}"; sha="${spec#*:}"
   git -C "$REPO" worktree add -q --detach "$REPO/.worktrees/$id" "$sha"
 done
+# The live-worker case's worktree, on this run's PID-derived id (a valid `t_<8 hex>`
+# name, so the pruner's extraction and the card fixture see a normal sandbox card).
+WORKER_TASK="$(printf 't_%08x' $$)"
+git -C "$REPO" worktree add -q --detach "$REPO/.worktrees/$WORKER_TASK" "$PUSHED_SHA"
 # The DIRTY case: a change to a TRACKED file, which is what `git status
 # --porcelain` reports. (The proof-of-survival below is the worktree DIRECTORY,
 # not an untracked file — an untracked marker would make every case dirty.)
@@ -300,22 +307,100 @@ printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/t_00000009"
 #    though the work is durable and the card is old. The card is made terminal
 #    FIRST (it was unreadable above, which is a different guard), and the second
 #    run is the one that must keep it.
-printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/t_00000008"
-env bash -c 'exec -a "work kanban task t_00000008" sleep 40' &
+#
+#    THE STAND-IN'S TASK ID IS UNIQUE TO THIS RUN (card t_48f08867). The guard
+#    matches a WHOLE process-table pattern, and this suite's sandbox task ids used to
+#    be the same constants in every copy, so a peer run at its own live-worker stage
+#    put a byte-identical argv (`work kanban task t_00000008`) on the shared table.
+#    This run's "worker gone -> must be removed" step then saw the PEER and
+#    false-KEEPed — reported by QA as `with the worker gone, that same worktree is
+#    removed (want 'no', got 'yes')`, reproduced deterministically here by starting a
+#    peer stand-in before the run (1/1). The id below is derived from this run's PID,
+#    so a peer's stand-in can never satisfy this run's pattern. It is still a valid
+#    `t_<8 hex>` id, so the pruner's name->task extraction and the card fixture are
+#    unchanged.
+WORKER_PAT="work kanban task $WORKER_TASK"
+printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$WORKER_TASK"
+env bash -c "exec -a \"$WORKER_PAT\" sleep 40" &
 WORKER_PID=$!
 sleep 0.6
-check "the stand-in worker process is matchable by the script's own guard" "yes" \
-  "$(pgrep -f "work kanban task t_00000008" >/dev/null 2>&1 && echo yes || echo no)"
+# The assertion that a match is genuinely visible — with a plain, non-early-exiting
+# grep, so the sanity check cannot itself be a false miss (which is the bug below).
+check "the stand-in worker process is visible in the process table" "yes" \
+  "$(ps -eo args= 2>/dev/null | grep -F -- "$WORKER_PAT" >/dev/null 2>&1 && echo yes || echo no)"
 : >"$LOG"
 run_prune --min-age-hours 24 >/dev/null 2>&1
-check "a worktree with a live worker process SURVIVES" "yes" "$(survives t_00000008)"
-contains "the live-process refusal is logged" "$(cat "$LOG")" "KEEP  t_00000008 (worker process alive)"
+check "a worktree with a live worker process SURVIVES" "yes" "$(survives "$WORKER_TASK")"
+contains "the live-process refusal is logged" "$(cat "$LOG")" "KEEP  $WORKER_TASK (worker process alive)"
 kill "$WORKER_PID" 2>/dev/null
 wait "$WORKER_PID" 2>/dev/null
 # ... and it is only the process holding it: with the process gone, the same
-# worktree is removable, so the guard is not simply refusing everything.
+# worktree is removable, so the guard is not simply refusing everything. A peer
+# run's stand-in carries a different pid-derived id, so it cannot keep this one alive.
 run_prune --min-age-hours 24 >/dev/null 2>&1
-check "with the worker gone, that same worktree is removed" "no" "$(survives t_00000008)"
+check "with the worker gone, that same worktree is removed" "no" "$(survives "$WORKER_TASK")"
+
+# 6b. THE BITE for the process-scan predicate (card t_48f08867). The guard reads the
+#     process table through a scanner-excluding predicate. The version that shipped
+#     used `… | grep -vE … | grep -Fq` under `set -uo pipefail`, which reports a
+#     MATCH as a MISS: `grep -Fq` exits at its FIRST match while the upstream `grep`
+#     is still writing its next stdio block, the writer takes SIGPIPE (141), and
+#     pipefail fails the WHOLE pipeline for a search that plainly matched. That is
+#     the gate's data-loss direction — a live worker's worktree pruned — and it bites
+#     as a function of table SIZE, which is why a loaded full preflight reds while the
+#     isolated run (73/0) does not. Measured on this host: 0/400 misses at 377 procs,
+#     197/400 at 978, 343/400 at 2395.
+#     The table is SYNTHESISED by a stub `ps` on PATH, so this is deterministic and
+#     load-independent: it reproduces the exact byte shape (the match EARLY, > one
+#     stdio block after it) that a real loaded table has. Three checks:
+#       (i)   the pre-fix predicate, kept verbatim as a CONTROL, mis-reads it;
+#       (ii)  the SCRIPT'S OWN has_process_matching reads it correctly;
+#       (iii) the scanner exclusion that has always been there still holds, and a
+#             real worker's argv still matches.
+STUBDIR="$SB/stub"; mkdir -p "$STUBDIR"
+cat >"$STUBDIR/ps" <<'STUB'
+#!/usr/bin/env bash
+# A synthetic `ps -eo args=` table. $JF_STUB_PS_ROWS (one argv per line) is printed
+# FIRST — the match early, which is the shape that starves an early-exiting reader —
+# then FAR more than a Linux pipe buffer (64K) of argv after it. That margin is what
+# makes the control below deterministic rather than racy: a writer that still has
+# 64K+ to send cannot finish before the reader exits, so it MUST block and then take
+# SIGPIPE once the reader is gone. Below ~64K the writer can finish first and the
+# pre-fix pipeline spuriously reads as a match.
+[ -n "${JF_STUB_PS_ROWS:-}" ] && printf '%s\n' "$JF_STUB_PS_ROWS"
+_i=0; while [ "$_i" -lt 2000 ]; do
+  printf 'worker-proc-%d --flag 0123456789 abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789\n' "$_i"
+  _i=$((_i+1))
+done
+STUB
+chmod +x "$STUBDIR/ps"
+GUARD_PAT="work kanban task t_bite0001"
+SCANNER_EXCLUDE='^[[:space:]]*([^[:space:]]*/)?(pgrep|pkill|ps|grep|awk|sed)([[:space:]]|$)'
+# The pre-fix predicate, verbatim (the `t_f454cd2b` shape), kept as a control so the
+# bite below can never claim to matter without showing the disagreement — the same
+# discipline as the `old_durable` control earlier in this file.
+old_matching_pipe() { grep -vE "$SCANNER_EXCLUDE" | grep -Fq -- "$GUARD_PAT"; }
+guard_via_script() { # <rows> — the script's own predicate, against the stub table
+  env JF_PRUNE_LIB_ONLY=1 JF_STUB_PS_ROWS="$1" PATH="$STUBDIR:$PATH" \
+    bash -c ". '$SCRIPT'; has_process_matching '$GUARD_PAT'; echo \$?" 2>/dev/null | sed -n '$p'
+}
+# Premise, measured: the synthesised table really is larger than a Linux pipe buffer,
+# otherwise the control below would not bite for the reason it claims.
+check "the synthetic table is larger than a Linux pipe buffer (so an early-exiting reader MUST starve the writer)" "yes" \
+  "$( [ "$( "$STUBDIR/ps" | wc -c )" -gt 65536 ] && echo yes || echo no )"
+if JF_STUB_PS_ROWS="$GUARD_PAT" "$STUBDIR/ps" | old_matching_pipe; then
+  bad "control: the pre-fix '… | grep -vE … | grep -Fq' predicate was expected to report this early match as a MISS (SIGPIPE under pipefail), but it MATCHED — the bite for the process scan is no longer live"
+else
+  ok "control: the pre-fix '… | grep -vE … | grep -Fq' predicate reports a MATCH as a MISS on an early match (SIGPIPE/pipefail)"
+fi
+check "the script's predicate reads that SAME early-match table correctly" "0" "$(guard_via_script "$GUARD_PAT")"
+# ...the scanner exclusion must survive the rewrite: a table whose only matching row
+# is a peer's SCANNER argv is NOT a live worker.
+check "a scanner's own argv is still not a worker" "1" \
+  "$(guard_via_script "pgrep -f $GUARD_PAT")"
+# ...and a real worker's argv must still match.
+check "...while a real worker's argv still matches" "0" \
+  "$(guard_via_script "hermes -p jf-dev work kanban task t_bite0001")"
 
 # 7. The STRAY loop (outside .worktrees, no card reference) carries the same
 #    correction. Strays are judged by the directory's mtime, so both are aged.

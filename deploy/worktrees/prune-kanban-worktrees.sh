@@ -187,13 +187,32 @@ mirror_note() { # <repo> <head> -> " [ignoring non-remote-tracking ref(s): a,b]"
 # `hermes … work kanban task <id>` or `exec -a "work kanban task <id>" …`, i.e.
 # none of these. `$$` is skipped so this script's own call site (which carries the
 # pattern) cannot match itself.
+#
+# WHY ONE `awk` AND NOT `… | grep -vE … | grep -Fq` (card t_48f08867). That pipeline
+# reported a MATCH as a MISS, and this is the gate's data-loss direction: a false
+# miss means a worktree held by a LIVE worker is pruned. The cause is a pipe, not a
+# pattern: `ps` lists by pid ASCENDING, so a stand-in started early sits early in the
+# stream; `grep -Fq` exits at its FIRST match while the upstream `grep -vE` is still
+# writing its next stdio block, the writer takes SIGPIPE (141), and under
+# `set -uo pipefail` the failed writer fails the WHOLE pipeline (`$?` = 141) for a
+# search that plainly matched. Measured on this host, the pruner's own predicate
+# against a live stand-in that a plain `grep` can see:
+#
+#   377 procs   0 /  400 misses     (the isolated case: green, 73/0)
+#   978 procs  197 /  400 misses    (49%)
+#  2395 procs  343 /  400 misses    (86%)
+#
+# which is exactly the observed shape: green in isolation, red under a loaded full
+# preflight, and one real gate run captured red at 1-in-6 with host churn. `awk`
+# reads its whole input before `END` decides, so there is no early reader and no
+# SIGPIPE, and the scanner exclusion is an awk pattern instead of a second `grep`.
+# `-v` (not string concatenation) keeps a pattern with regex metacharacters literal.
 has_process_matching() { # <pattern>
-  local pat="$1"
-  # The line's FIRST token is the executable, so naming the scanners there removes
-  # a scanner's own argv without touching a worker that merely mentions a path.
-  ps -eo args= 2>/dev/null \
-    | grep -vE '^[[:space:]]*([^[:space:]]*/)?(pgrep|pkill|ps|grep|awk|sed)([[:space:]]|$)' \
-    | grep -Fq -- "$pat"
+  ps -eo args= 2>/dev/null | awk -v pat="$1" '
+    $0 !~ /^[[:space:]]*([^[:space:]]*\/)?(pgrep|pkill|ps|grep|awk|sed)([[:space:]]|$)/ \
+      && index($0, pat) > 0 { found = 1 }
+    END { exit(found ? 0 : 1) }
+  '
 }
 
 main() {
