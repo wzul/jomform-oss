@@ -42,6 +42,17 @@
 // (`route.abort()`), a 200 that is not JSON, and — the card's own defect — a
 // read that never settles at all.
 //
+// FOLLOW-UP (card t_d1c9a43a). #1041 put the fault + retry surface on ONE route:
+// `/` (dashboard-client.tsx). Every OTHER dashboard route read `anon` from
+// useSession() and nothing else, so a settled fault left `bundle === undefined`
+// and the route sat on its loading branch — a sentence-less "…" with no control
+// (measured on the released build: faultSentence=0 retryBtn=0 on /chat, /forms,
+// /settings, /products, /sales, against faultSentence=1 retryBtn=1 on `/`). The
+// surface now lives in the app chrome (Shell), which shows it INSTEAD of the
+// page's content when the bootstrap faulted — so it covers every route that
+// renders inside the shell, including ones added later. The coverage arm at the
+// bottom of this file drives the same settled 5xx on /chat and /forms.
+//
 // WHY A BROWSER SPEC AND NOT A SOURCE GUARD. The defect is a RACE and a
 // NAVIGATION, not a wrong string at a call site: the failing source
 // (`bundle === null → anon → router.replace`) reads correctly in isolation, and
@@ -50,13 +61,15 @@
 //
 // The API is stubbed at the browser level (the pattern every sibling spec here
 // uses), so the gate needs nothing but the build it is already serving.
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 
 import { DICT } from "../src/components/i18nDict";
 
 const EN = {
   // The dashboard's own heading — the page the visitor asked for.
   dashTitle: DICT["dash.title"].en,
+  // The /forms page's own heading — the second route the coverage arm recovers.
+  formsTitle: DICT["forms.title"].en,
   // The fault sentence + the retry action the fixed build offers.
   sessionUnavailable: DICT["common.sessionUnavailable"].en,
   retry: DICT["common.retry"].en,
@@ -312,4 +325,133 @@ test("CONTROL: an authoritative 401 STILL bounces to /landing", async ({ page, b
   await page.waitForURL(/\/landing/, { timeout: 20_000 });
   expect(page.url()).toContain("/landing");
   console.log(`OBSERVED control=401 finalUrl=${page.url()}`);
+});
+
+// ── THE COVERAGE ARM (card t_d1c9a43a) ───────────────────────────────────────
+//
+// THE DEFECT THIS PINS. The fault + retry surface #1041 added lived on ONE
+// route: `/` (dashboard-client.tsx:169). Every other dashboard route read `anon`
+// from useSession() and nothing else, so on a settled fault `bundle` stayed
+// `undefined`, the route sat on its own loading branch, and the visitor got a
+// sentence-less "…" with no control. Measured on the FROZEN release build
+// (v1.20.75 = tree 3308cc72) with `dashboard-bundle` → 500, goto(), wait 8s:
+//
+//   PROBE /chat     settled-5xx faultSentence=0 retryBtn=0 landH1=0
+//   PROBE /forms    settled-5xx faultSentence=0 retryBtn=0 landH1=0
+//   PROBE /settings settled-5xx faultSentence=0 retryBtn=0 landH1=0
+//   PROBE /products settled-5xx faultSentence=0 retryBtn=0 landH1=0
+//   PROBE /sales    settled-5xx faultSentence=0 retryBtn=0 landH1=0
+//
+// `/` under the identical probe read faultSentence=1 retryBtn=1 — the contrast,
+// and why the committed guard's 5xx arm (which drives `/`) could not see this.
+//
+// `/chat` is not incidental: it is the exact route the slow-read claim above is
+// asserted on, and the route the deploy lane's own acceptance drove. The fix
+// moved the surface into the app chrome (Shell), so this arm drives the SAME
+// settled fault on two routes the defect was measured on — one whose loading
+// branch is `PageLoading` (/forms) and one whose whole content is the chat box
+// (/chat) — and asserts the surface on both, plus that the retry recovers.
+
+/**
+ * Drive one route's settled-5xx fault: the sentence must appear, the retry must
+ * be offered, the landing page must NOT be served, and pressing the retry must
+ * actually recover the page the visitor asked for.
+ *
+ * The bundle keeps failing until `recovered` flips, so a successful background
+ * read cannot paper over the fault (the bootstrap issues more than one read as
+ * the workspace state settles).
+ */
+async function settledFaultOn(page: Page, baseURL: string, route: string, recoveredPage: Locator) {
+  let recovered = false;
+  await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, (r) =>
+    recovered ? r.fulfill(json(200, BUNDLE)) : r.fulfill(json(500, { error: "boom" })),
+  );
+
+  await page.goto(`${baseURL}${route}`, { waitUntil: "domcontentloaded" });
+
+  await expect(
+    page.getByText(EN.sessionUnavailable, { exact: true }),
+    `a settled 5xx on ${route} showed NO fault sentence — this is the un-Shell'd "…" the visitor could not act ` +
+      `on (card t_d1c9a43a): the route stayed on its loading branch and never read sessionError`,
+  ).toBeVisible({ timeout: 20_000 });
+  await expect(
+    page.getByRole("button", { name: EN.retry, exact: true }),
+    `a settled 5xx on ${route} offered no way to retry — the visitor's only recovery was a manual reload`,
+  ).toBeVisible();
+  // A fault is NOT a sign-out, on this route exactly as on `/`.
+  expect(
+    await page.getByRole("heading", { level: 1, name: EN.landHero1, exact: false }).count(),
+    `a settled 5xx on ${route} served the landing page — the visitor was treated as anonymous (t_48319be9)`,
+  ).toBe(0);
+  expect(page.url(), `a settled 5xx on ${route} navigated away from the route`).toContain(route);
+
+  // The retry re-attempts the bootstrap and the route renders for real.
+  recovered = true;
+  await page.getByRole("button", { name: EN.retry, exact: true }).click();
+  await expect(recoveredPage, `the retry on ${route} did not recover the page`).toBeVisible({
+    timeout: 20_000,
+  });
+  expect(page.url(), "the retry must not have navigated away").not.toContain("/landing");
+  expect(
+    await page.getByText(EN.sessionUnavailable, { exact: true }).count(),
+    `the fault surface is still on screen after a successful retry on ${route}`,
+  ).toBe(0);
+  console.log(`OBSERVED settled-5xx route=${route} finalUrl=${page.url()}`);
+}
+
+test("a settled 5xx on /chat shows the fault + retry (not only on /)", async ({ page, baseURL }) => {
+  test.setTimeout(120_000);
+  await freshState(page, baseURL!, { sessionCookie: true });
+  await settledFaultOn(page, baseURL!, "/chat", page.locator("#chat-input"));
+});
+
+test("a settled 5xx on /forms shows the fault + retry (not only on /)", async ({ page, baseURL }) => {
+  test.setTimeout(120_000);
+  await freshState(page, baseURL!, { sessionCookie: true });
+  // The recovered page is identified by its own heading — NOT by a bare
+  // `<main>`, because the fault surface renders a <main> too and matching one
+  // would let this arm pass on its own loading state.
+  await settledFaultOn(
+    page,
+    baseURL!,
+    "/forms",
+    page.getByRole("heading", { level: 1, name: EN.formsTitle, exact: true }),
+  );
+});
+
+test("a HUNG bundle read on /chat is BOUNDED into the fault + retry", async ({ page, baseURL }) => {
+  test.setTimeout(120_000);
+  await freshState(page, baseURL!, { sessionCookie: true });
+  // The OTHER path into the same state, and the one the deploy lane measured on
+  // live prod for this card: a read that is ACCEPTED and then never answers. The
+  // 20s bound (`t_f955c2f3`) aborts it into `sessionError` — so the bound does
+  // NOT by itself make these routes recoverable, because (before this card) they
+  // never read `sessionError`. Measured on the released build: `/chat` hung 45s
+  // (> the bound) read fault=False retryBtn=0 with the "…" identity.
+  let recovered = false;
+  await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, async (r) => {
+    if (recovered) {
+      await r.fulfill(json(200, BUNDLE));
+      return;
+    }
+    // Never settles: no fulfill, no abort, no continue.
+    await new Promise(() => {});
+  });
+
+  await page.goto(`${baseURL}/chat`, { waitUntil: "domcontentloaded" });
+
+  // Before this card, this text NEVER appeared on /chat (the bound fired into a
+  // state the route did not read). The wait is the bound plus slack.
+  await expect(page.getByText(EN.sessionUnavailable, { exact: true })).toBeVisible({
+    timeout: BOUND_MS + 15_000,
+  });
+  expect(
+    page.url(),
+    "a HUNG bundle read left /chat — it must stay put and offer the retry",
+  ).not.toContain("/landing");
+
+  recovered = true;
+  await page.getByRole("button", { name: EN.retry, exact: true }).click();
+  await expect(page.locator("#chat-input")).toBeVisible({ timeout: 20_000 });
+  console.log(`OBSERVED hung-5xx route=/chat finalUrl=${page.url()}`);
 });

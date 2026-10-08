@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useI18n, type Key } from "./i18n";
 import { useSession } from "./session";
+import { SessionFault } from "./SessionFault";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { clearPerUserStorage, clearUnknownWorkspaceScope, enterWorkspace, publishWorkspaceScope } from "../lib/workspace";
 
@@ -149,7 +150,7 @@ export function Shell({
   children: React.ReactNode;
   active: "dashboard" | "forms" | "templates" | "products" | "sales" | "spam" | "deliveries" | "activity" | "subscriptions" | "settings" | "profile" | "media" | "feedback" | "chat" | "admin";
 }) {
-  const { user, workspaces, reload, bundle } = useSession();
+  const { user, workspaces, reload, bundle, sessionError } = useSession();
   const [workspace, setWorkspace] = useState<string>("");
   const [menuOpen, setMenuOpen] = useState(false);
   const { t } = useI18n();
@@ -560,7 +561,31 @@ export function Shell({
           </div>
         )}
 
-        <div id="main-content" className="flex flex-1 flex-col">{children}</div>
+        <div id="main-content" className="flex flex-1 flex-col">
+          {/* A SETTLED SESSION-BOOTSTRAP FAULT REPLACES THE CONTENT, NOT THE
+              CHROME (card t_d1c9a43a). Every dashboard route renders its tree
+              inside this shell, so this is the ONE place that can offer the
+              fault + retry the visitor needs wherever they landed: before this,
+              only `/` (dashboard-client.tsx) read `sessionError`, and every
+              other route sat on its own loading branch — an un-Shell'd "…" with
+              no sentence and no control. A route cannot forget a rule it does
+              not have to remember, and a new page is covered the moment it
+              renders inside the shell.
+
+              IT IS KEYED ON `sessionError`, NEVER ON `anon`: `anon` is the
+              authoritative-401 gate, and folding it in here would replace the
+              wanted /landing bounce with a dead page whose Retry can never
+              succeed (the whole reason #1041 split the two states —
+              src/components/session.tsx). `sessionError` is true ONLY for a
+              read that produced NO answer (5xx / dropped connection / non-JSON
+              200 / the bounded hung read), so an anonymous visitor never
+              reaches this branch.
+
+              The sidebar and the topbar stay mounted on purpose: the fault is
+              about the page's data, and unmounting the chrome is the "reads as
+              a full page reload" defect `PageLoading` exists to prevent. */}
+          {sessionError ? <SessionFault /> : children}
+        </div>
       </div>
     </div>
   );

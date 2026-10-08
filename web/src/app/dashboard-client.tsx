@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Shell } from "../components/Shell";
+import { SessionFault } from "../components/SessionFault";
 import { useI18n } from "../components/i18n";
 import { useSession } from "../components/session";
 import { activeWorkspaceScope, workspaceQuery } from "../lib/workspace";
@@ -70,7 +71,7 @@ export default function Dashboard() {
   // Issue #29: me + landing data (products, summary, sales, analytics) all
   // come from the single dashboard-bundle round-trip fetched once per
   // session — the 914ms me→5-fetch waterfall is gone.
-  const { bundle, anon, sessionError, retry, role, workspace } = useSession();
+  const { bundle, anon, sessionError, role, workspace } = useSession();
   // Issue #163: read_only members see no write actions (confirm sale).
   const canWrite = role !== "read_only";
   const [products, setProducts] = useState<Product[]>([]);
@@ -166,18 +167,11 @@ export default function Dashboard() {
   // /landing under contention.
   if (anon) return <Landing />;
   if (!ready) {
-    if (sessionError) {
-      return (
-        <main className="flex min-h-screen items-center justify-center px-6 text-center">
-          <div>
-            <p className="text-sm text-[var(--jf-muted)]">{t("common.sessionUnavailable")}</p>
-            <button type="button" className="jf-btn-primary mt-4" onClick={retry}>
-              {t("common.retry")}
-            </button>
-          </div>
-        </main>
-      );
-    }
+    // A settled session-bootstrap FAULT is rendered by the ONE shared surface
+    // (card t_d1c9a43a) — the same component the app chrome shows on every other
+    // dashboard route, so the sentence and the retry cannot drift between `/`
+    // and the rest of the app. See components/SessionFault.tsx.
+    if (sessionError) return <SessionFault />;
     return <main className="flex min-h-screen items-center justify-center text-[var(--jf-muted)]">…</main>;
   }
 

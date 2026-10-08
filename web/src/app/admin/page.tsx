@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
+import { SessionFault } from "../../components/SessionFault";
 import { Markdown } from "../../components/Markdown";
 import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
@@ -218,7 +219,7 @@ function StatCard({ label, value, sub }: { label: string; value: string | number
 export default function AdminPage() {
   const { t } = useI18n();
   const router = useRouter();
-  const { user, anon, bundle } = useSession();
+  const { user, anon, bundle, sessionError } = useSession();
   const [data, setData] = useState<Overview | null>(null);
   const [err, setErr] = useState("");
 
@@ -638,6 +639,15 @@ export default function AdminPage() {
     // thread whenever the list reloads and discard a draft reply.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Card t_d1c9a43a: a SETTLED session-bootstrap FAULT is not a permission
+  // refusal. `user` comes from the bundle, so a fault leaves it null and
+  // `!isSuperAdmin` is TRUE — the page would otherwise tell a super-admin they
+  // are forbidden (with no way out) for a read the server never answered. The
+  // fault surface is offered instead, and it can actually recover.
+  if (sessionError) {
+    return <SessionFault />;
+  }
 
   if (anon || !isSuperAdmin) {
     return (
