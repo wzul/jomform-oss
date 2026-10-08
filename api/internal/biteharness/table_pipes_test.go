@@ -1,32 +1,41 @@
 package biteharness
 
-// Markdown-table pipe guard (card t_1ef82657).
+// Markdown-table pipe guard (card t_1ef82657; leading-pipe hole closed by t_44dedf7c).
 //
 // THE DEFECT CLASS. A raw `|` inside a markdown table cell ENDS that cell, even
 // inside a backticked code span: GFM spec 4.10, Example 200 — "Include a pipe in
 // a cell's content by escaping it, including inside other inline spans". Three
-// rows of BITE-HARNESSES.md carry unescaped in-code pipes (a shell `||`, a
-// `printf ... | grep -q`) and publish a broken table to GitHub while every gate
-// stays green, because the file is markdown and no gate renders it. The inventory
+// rows of BITE-HARNESSES.md carried unescaped in-code pipes (a shell `||`, a
+// `printf ... | grep -q`) and published a broken table to GitHub while every gate
+// stayed green, because the file is markdown and no gate renders it. The inventory
 // guard in inventory_test.go splits each row on `|` and reads column 1 only, so
-// it passes on those rows too (measured on origin/main a1311c24:
-// `go test ./internal/biteharness/ -count=1` -> ok).
+// it passed on those rows too.
 //
 // This is a CLASS, not three accidents: measured on origin/main a1311c24, three
-// rows break the harness table (line 37 = 8 unescaped pipes, line 38 = 7, line
-// 53 = 7) against a header of 5, and three separate cards fix them one line each.
-// Nothing checked the count, which is why it kept happening.
+// rows broke the harness table against a 4-column header, and three separate cards
+// fixed them one line each. Nothing checked the cell count, which is why it kept
+// happening.
 //
-// WHAT THIS ADDS: a source-side count of UNESCAPED pipes per row (a pipe preceded
-// by an odd number of backslashes is escaped and is not a separator), required to
-// equal the row's OWN table header — derived from the header, never hardcoded, so
-// a table with a different column count needs no edit here.
+// WHAT THIS ADDS: a source-side CELL count per row (cells are separated by
+// UNESCAPED pipes — a pipe preceded by an odd number of backslashes is escaped and
+// is content), required to equal the row's OWN table header — derived from the
+// header, never hardcoded, so a table with a different column count needs no edit.
+//
+// THE METRIC IS CELLS, NOT RAW PIPES (card t_44dedf7c). GFM 4.10 lets a row OMIT
+// its leading and trailing pipe ("use of leading and trailing pipes may be
+// inconsistent", Example 199: the data row `bar | baz` is a table row). The
+// pre-fix guard keyed table detection on `strings.HasPrefix(line, "|")`, so such a
+// row was invisible — never even counted. Comparing a raw unescaped-pipe count
+// cannot fix this: omitting the leading pipe removes one pipe, so a broken 6-pipe
+// row becomes a 5-pipe row that equals a 5-pipe header and stays green. The cell
+// count is leading-pipe-independent (`| a | b |` and `a | b` are both 2 cells) and
+// is the quantity the defect actually changes, so the guard compares THAT.
 //
 // The COUNT is the check that fires. A RENDER-side "cell count != header"
 // assertion does NOT: GitHub normalises an over-long row to the header's cell
 // count by dropping the overflow (measured — 0 of 33 rendered rows differ from the
 // header, before AND after the fixes), so that assertion stays green on a broken
-// table. The source-side count fires on all three.
+// table. The source-side count fires.
 
 import (
 	"os"
@@ -40,53 +49,35 @@ import (
 // `dashboard -> tool` lines, not a `| ... |` table, so it has no cell to split.
 var pipeTables = []string{inventoryFile, "GATE-INVENTORY.md"}
 
-// pendingPipeFix pins rows that are KNOWN broken on this tree, each to the exact
-// unescaped-pipe count it carries today AND the change that fixes it, so this
-// guard can land and bite BEFORE those changes land. It is the same shape, and the
-// same measured compromise, as notYetOnMain in inventory_test.go: the alternative —
-// refusing the guard until the three sibling rows are fixed — blocks a one-file
-// test on three separate open PRs.
-//
-// The count is pinned, not just the name, so the pin cannot hide a WORSE defect: a
-// pinned row whose count changed at all (a fourth pipe added, a partial fix) is no
-// longer the known state and fails. A pinned row whose fix has LANDED is INERT, not
-// RED (the same choice notYetOnMain documents): the pin stops matching and removing
-// it is optional. What is NOT tolerated is a broken row that is not pinned at its
-// current count — that is a NEW instance of the class and fails. Measured on
-// origin/main a1311c24 these are exactly the three mismatched rows (37: 8, 38: 7,
-// 53: 7).
+// A pinned row is a harness name plus the exact CELL count it currently carries.
 type pinnedRow struct {
 	pipes int
 	why   string
 }
 
+// pendingPipeFix pins rows that are KNOWN broken on this tree, each to the exact
+// CELL count it carries today AND the change that fixes it, so this guard can land
+// and bite BEFORE those changes land. It is the same shape, and the same measured
+// compromise, as notYetOnMain in inventory_test.go: the alternative — refusing the
+// guard until a sibling row is fixed — blocks a one-file test on another open PR.
+// The count is pinned, not just the name, so the pin cannot hide a WORSE defect: a
+// pinned row whose count changed at all (another in-cell pipe, a partial fix) is no
+// longer the known state and fails. A pinned row whose fix has LANDED is INERT, not
+// RED (the same choice notYetOnMain documents): the pin stops matching and removing
+// it is optional. What is NOT tolerated is a broken row that is not pinned at its
+// current count — that is a NEW instance of the class and fails.
+//
+// Measured on origin/main cfbaa439 with the cell metric: exactly one row is
+// mismatched — `web/scripts/biteproof_docs_prose_convention.sh` at 6 cells against
+// the harness table's 4-cell header. The two pins this map carried before
+// (`biteproof_dev_hosts.sh`, `biteproof_preflight_reuse.sh`) are gone because their
+// fixes LANDED (#1029, #1037); their rows now carry the header's count.
 var pendingPipeFix = map[string]pinnedRow{
-	"web/scripts/biteproof_dev_hosts.sh":             {8, "fixed by PR #1029 (card t_fefdcaef): row 37, 8 unescaped pipes vs 5"},
-	"web/scripts/biteproof_docs_prose_convention.sh": {7, "fixed by card t_6cb58b07 (open): row 38, 7 unescaped pipes vs 5"},
-	"scripts/biteproof_preflight_reuse.sh":           {7, "fixed by PR #1037 (card t_a3928797): row 53, 7 unescaped pipes vs 5"},
+	"web/scripts/biteproof_docs_prose_convention.sh": {6, "fixed by card t_6cb58b07 (open): 6 cells — two in-cell pipes each split a cell — against the 4-cell header"},
 }
 
-// unescapedPipes counts bare `|` in s: a pipe preceded by an odd number of
-// backslashes is escaped (`\|`) and is cell CONTENT, not a separator.
-func unescapedPipes(s string) int {
-	n, back := 0, 0
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '\\':
-			back++
-			continue
-		case '|':
-			if back%2 == 0 {
-				n++
-			}
-		}
-		back = 0
-	}
-	return n
-}
-
-// pipeMismatch is a data row whose unescaped-pipe count differs from its table's
-// header. header/line are 1-based line numbers for the message.
+// pipeMismatch is a data row whose CELL count differs from its table's header.
+// header/line are 1-based line numbers for the message.
 type pipeMismatch struct {
 	line   int
 	text   string
@@ -95,27 +86,121 @@ type pipeMismatch struct {
 	header int
 }
 
-// scanTablePipes walks markdown lines and, per table whose rows start with `|`,
-// compares every data row's unescaped-pipe count to that table's own header. A
-// non-`|` line ends the current table, so a file with several tables (the
-// inventory carries a harness table and a cost table) is handled per table. The
-// separator row (`|---|---|`) has the header's own count by construction and is
-// therefore never a mismatch. tables and rows are returned so a truncated or
-// mis-shaped parse can be told apart from a clean one instead of passing
-// vacuously.
+// splitUnescapedPipes splits s on UNESCAPED pipes: a pipe preceded by an odd
+// number of backslashes is escaped (`\|`) and stays in its cell, so a backticked
+// shell `|` written as `\|` is content rather than a cell boundary.
+func splitUnescapedPipes(s string) []string {
+	var parts []string
+	var b strings.Builder
+	back := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			back++
+			b.WriteByte(s[i])
+			continue
+		case '|':
+			if back%2 == 0 {
+				parts = append(parts, b.String())
+				b.Reset()
+			} else {
+				b.WriteByte(s[i])
+			}
+		default:
+			b.WriteByte(s[i])
+		}
+		back = 0
+	}
+	parts = append(parts, b.String())
+	return parts
+}
+
+// cellCount splits a markdown table row into cells by GFM 4.10's rule: cells are
+// separated by pipes, and ONE EMPTY boundary cell at each end — present only when
+// the row carries that pipe — is dropped. That is what makes a row's cell count
+// independent of whether its leading pipe was written, which GFM 4.10 explicitly
+// allows ("use of leading and trailing pipes may be inconsistent", Example 199).
+// Measured against the spec's own examples: header `| abc | defghi |` -> 2; the
+// leading-pipe-less delimiter `:-: | -----------:` -> 2; `| bar | baz |` -> 2 and
+// `bar | baz` -> 2.
+//
+// It is a CELL count, not the raw unescaped-pipe count the guard used before.
+// Dropping a leading pipe removes one pipe, so a raw count is not comparable
+// across the conventions GFM allows — the pre-fix no-leading-pipe row the card
+// names (6 unescaped pipes -> 5 once its leading pipe is gone) would compare
+// EQUAL to a 5-pipe header and stay green, which is exactly the hole being
+// closed. The cell count is the quantity the defect actually changes.
+func cellCount(row string) int {
+	parts := splitUnescapedPipes(row)
+	for len(parts) > 0 && strings.TrimSpace(parts[0]) == "" {
+		parts = parts[1:]
+	}
+	for len(parts) > 0 && strings.TrimSpace(parts[len(parts)-1]) == "" {
+		parts = parts[:len(parts)-1]
+	}
+	return len(parts)
+}
+
+// isBlockStart reports whether a line begins a block-level structure that ENDS an
+// open table even when it carries a pipe (GFM 4.10: "The table is broken at the
+// first empty line, or beginning of another block-level structure"). Only the
+// shapes that plausibly follow one of these tables are covered — an ATX heading,
+// a block quote, a fenced code block. A line with no pipe at all closes the table
+// by the row test itself, so it needs no entry here.
+func isBlockStart(line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" {
+		return false
+	}
+	switch t[0] {
+	case '#', '>':
+		return true
+	}
+	return strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")
+}
+
+// scanTablePipes walks markdown lines and, per table, compares every DATA row's
+// cell count to that table's own header. Tables are located by their DELIMITER
+// row — GFM 4.10 defines a table as a header row, a delimiter row and data rows —
+// so the header is the line immediately above the delimiter, and detection does
+// NOT depend on the header's leading pipe.
+//
+// A ROW, while a table is open, is any line that carries a pipe and is not blank
+// and not a block start. That is the GFM 4.10 rule for a data row, and it makes
+// the leading pipe OPTIONAL (Example 199's `bar | baz` is a row) — the pre-fix
+// guard keyed on `HasPrefix(line, "|")` instead, so a row pasted without its
+// leading pipe was never even counted. The table ends at the first blank line, a
+// line with no pipe, or a block start (a heading, a quote, a fence), which is how
+// a table that runs off its end is separated from the prose below it — the two
+// pipe-carrying prose lines BITE-HARNESSES.md keeps below its harness table are
+// behind a blank line, not inside it.
+//
+// The row walk deliberately keys on `Contains(line, "|")` rather than on the cell
+// count: a pipe-less line is treated as the table's end even though GFM would read
+// it as a one-cell row (Example 202), because a guard that walked pipe-less prose
+// as rows would report phantom cells from ordinary paragraphs.
+//
+// tables and rows are returned so a truncated or mis-shaped parse can be told
+// apart from a clean one instead of passing vacuously.
 func scanTablePipes(lines []string) (mismatches []pipeMismatch, tables, rows int) {
 	target, headerLine := -1, 0
 	for i, l := range lines {
-		if !strings.HasPrefix(l, "|") {
-			target = -1
-			continue
-		}
-		c := unescapedPipes(l)
+		t := strings.TrimSpace(l)
 		if target < 0 {
-			target, headerLine = c, i+1
-			tables++
+			// A delimiter row with no open table opens one whose header is the
+			// line above it. Without a header that is itself a table row this is
+			// not a table (a bare `---` is a thematic break, not a table).
+			if isDelimRow(t) && i > 0 && cellCount(lines[i-1]) >= 2 {
+				target, headerLine = cellCount(lines[i-1]), i
+				tables++
+			}
 			continue
 		}
+		if t == "" || !strings.Contains(t, "|") || isBlockStart(t) {
+			target = -1 // the table ended
+			continue
+		}
+		c := cellCount(t)
 		rows++
 		if c != target {
 			mismatches = append(mismatches, pipeMismatch{line: i + 1, text: l, got: c, want: target, header: headerLine})
@@ -126,13 +211,10 @@ func scanTablePipes(lines []string) (mismatches []pipeMismatch, tables, rows int
 
 // harnessNameOf returns the first backticked token of a row's first column — the
 // harness path the inventory guard also keys on — so a pin names a row and not a
-// line number that moves under it.
+// line number that moves under it. The first column is read through firstColumn,
+// so a row that omits its leading pipe still names its harness.
 func harnessNameOf(row string) string {
-	parts := strings.Split(strings.TrimSpace(row), "|")
-	if len(parts) < 2 {
-		return ""
-	}
-	spans := backtickRe.FindAllStringSubmatch(parts[1], -1)
+	spans := backtickRe.FindAllStringSubmatch(firstColumn(row), -1)
 	if len(spans) == 0 {
 		return ""
 	}
@@ -140,9 +222,9 @@ func harnessNameOf(row string) string {
 }
 
 // toleratedByPin reports whether a mismatch is EXACTLY the known-broken state a pin
-// records — same harness name, same unescaped-pipe count. A row that is pinned but
-// whose count has moved (a fourth pipe added, a partial fix) is NOT tolerated, so a
-// pin cannot hide a worse defect than the one it names.
+// records — same harness name, same CELL count. A row that is pinned but whose
+// count has moved (another in-cell pipe, a partial fix) is NOT tolerated, so a pin
+// cannot hide a worse defect than the one it names.
 func toleratedByPin(m pipeMismatch) (pinnedRow, bool) {
 	name := harnessNameOf(m.text)
 	if name == "" {
@@ -156,8 +238,8 @@ func toleratedByPin(m pipeMismatch) (pinnedRow, bool) {
 }
 
 // TestMarkdownTableRowsHaveUniformPipeCounts is the guard: every table row of
-// pipeTables must carry the same unescaped-pipe count as its own header, except
-// the rows pinned in pendingPipeFix at exactly their recorded count.
+// pipeTables must carry the same cell count as its own header, except the rows
+// pinned in pendingPipeFix at exactly their recorded count.
 func TestMarkdownTableRowsHaveUniformPipeCounts(t *testing.T) {
 	root := repoRoot(t)
 	totalTables, totalRows, tolerated := 0, 0, 0
@@ -176,21 +258,23 @@ func TestMarkdownTableRowsHaveUniformPipeCounts(t *testing.T) {
 		totalRows += rows
 		for _, m := range mismatches {
 			if pin, ok := toleratedByPin(m); ok {
-				t.Logf("%s:%d: known-broken row tolerated at its pinned count (got %d, header line %d is %d): %s",
+				t.Logf("%s:%d: known-broken row tolerated at its pinned count (got %d cells, header line %d is %d): %s",
 					rel, m.line, m.got, m.header, m.want, pin.why)
 				tolerated++
 				continue
 			}
-			t.Errorf("%s:%d: row has %d unescaped pipes but its header (line %d) has %d — a raw `|` "+
+			t.Errorf("%s:%d: row splits into %d cells but its header (line %d) has %d — a raw `|` "+
 				"inside a backticked code span ENDS the cell (GFM 4.10, Example 200), so GitHub publishes a "+
-				"broken table. Escape every in-cell pipe as `\\|` (change nothing else). Row: %.140q",
+				"broken table. Escape every in-cell pipe as `\\|` (change nothing else). A leading pipe is "+
+				"NOT required (GFM 4.10, Example 199) and this row's count is measured without assuming one. "+
+				"Row: %.140q",
 				rel, m.line, m.got, m.header, m.want, m.text)
 		}
 	}
 	if totalTables == 0 {
 		t.Fatalf("no markdown table found in %v", pipeTables)
 	}
-	t.Logf("%d table(s), %d rows checked for a uniform unescaped-pipe count (%d known-broken rows tolerated)",
+	t.Logf("%d table(s), %d rows checked for a uniform cell count (%d known-broken rows tolerated)",
 		totalTables, totalRows, tolerated)
 }
 
@@ -205,7 +289,7 @@ func TestPendingPipeFixEntriesAreStillListed(t *testing.T) {
 	}
 	listed := map[string]bool{}
 	for _, l := range strings.Split(string(raw), "\n") {
-		if !strings.HasPrefix(l, "|") {
+		if !strings.Contains(l, "|") {
 			continue
 		}
 		if n := harnessNameOf(l); n != "" {
@@ -223,14 +307,21 @@ func TestPendingPipeFixEntriesAreStillListed(t *testing.T) {
 
 // TestTablePipeDetectorBites proves the detector catches the class, on fixtures
 // that reproduce the two idioms that actually broke the table — so reverting the
-// fix (or adding a fourth unescaped pipe) is caught, and a correctly escaped row
+// fix (or adding another in-cell pipe) is caught, and a correctly escaped row
 // stays green. It reads no file: the frozen fixtures cannot rot when the real rows
 // are fixed.
+//
+// Every case is a table of header + delimiter + one data row, so the delimiter
+// anchors the table (the fix's detection rule). The last two cases are the SAME
+// row with and without its leading pipe and with the same over-count, proving the
+// cell metric is leading-pipe-independent: both must be reported, or the guard is
+// again blind to the no-leading-pipe convention GFM 4.10 allows.
 func TestTablePipeDetectorBites(t *testing.T) {
 	header := "| Harness | Proves | Cases | Wall time here |"
-	if got := unescapedPipes(header); got != 5 {
-		t.Fatalf("fixture header has %d unescaped pipes, want 5 — the fixture is wrong, not the code", got)
+	if got := cellCount(header); got != 4 {
+		t.Fatalf("fixture header splits into %d cells, want 4 — the fixture is wrong, not the code", got)
 	}
+	delim := "|---|---|---|---|"
 	cases := []struct {
 		name   string
 		row    string
@@ -248,12 +339,27 @@ func TestTablePipeDetectorBites(t *testing.T) {
 			`| ` + "`api/scripts/biteproof_a.py`" + ` | a\| b | 1 | 1s |`, false},
 		{"TWO backslashes leave the pipe a SEPARATOR (even -> extra cell)",
 			`| ` + "`api/scripts/biteproof_b.py`" + ` | a\\| b | 1 | 1s |`, true},
+		{"an over-count row WITHOUT a leading pipe is still a table row and is caught (the hole)",
+			"`api/scripts/biteproof_nolead_b.py` | probe `a | b` | also `c | d` | 2s |", true},
+		{"the SAME over-count WITH a leading pipe (the control it must match)",
+			"| `api/scripts/biteproof_nolead_a.py` | probe `a | b` | also `c | d` | 2s |", true},
+		{"a no-leading-pipe row at the header count stays green",
+			"`api/scripts/biteproof_ok.py` | probe `a` | nothing | 2s |", false},
+	}
+	// The two no-leading-pipe rows above must measure the SAME cell count as their
+	// leading-pipe twins, or the fixture does not prove independence.
+	if a, b := cellCount("`api/scripts/biteproof_nolead_b.py` | probe `a | b` | also `c | d` | 2s |"),
+		cellCount("| `api/scripts/biteproof_nolead_a.py` | probe `a | b` | also `c | d` | 2s |"); a != b || a != 6 {
+		t.Fatalf("fixture rows measure %d and %d cells, want both 6 — the fixture does not isolate the leading pipe", a, b)
 	}
 	for _, c := range cases {
-		got, tables, _ := scanTablePipes([]string{header, c.row})
+		got, tables, rows := scanTablePipes([]string{header, delim, c.row})
 		if tables != 1 {
 			t.Errorf("%s: scan found %d tables, want 1", c.name, tables)
 			continue
+		}
+		if rows != 1 {
+			t.Errorf("%s: scan counted %d data rows, want 1 — the delimiter row must not be counted as data", c.name, rows)
 		}
 		if c.broken != (len(got) == 1) {
 			t.Errorf("%s: %q -> mismatches=%d (broken=%v), want broken=%v",
@@ -262,13 +368,52 @@ func TestTablePipeDetectorBites(t *testing.T) {
 	}
 }
 
+// TestTablePipesNeedsADelimiterAndClosesOnABlock pins the two directions the fix
+// must NOT weaken: a table is not opened without its delimiter row, and an open
+// table still CLOSES at a blank line, a block start, or a pipe-less line — so a
+// pipe-carrying PROSE line below a table cannot be walked as a phantom row. Each
+// case is the harness table followed by the line under test, and asserts on the
+// row COUNT so a closed table is told apart from a mismatch that merely vanished.
+func TestTablePipesNeedsADelimiterAndClosesOnABlock(t *testing.T) {
+	header := "| Harness | Proves | Cases | Wall time here |"
+	delim := "|---|---|---|---|"
+	row := "| `api/scripts/biteproof_x.py` | x | 1 | 1s |"
+	cases := []struct {
+		name      string
+		lines     []string
+		wantTable int
+		wantRows  int
+	}{
+		{"two header-shaped lines with NO delimiter are not a table",
+			[]string{header, row}, 0, 0},
+		{"a table opens on its delimiter and counts only the data rows",
+			[]string{header, delim, row}, 1, 1},
+		{"a BLANK line closes the table; a pipe-carrying prose line below is not a row",
+			[]string{header, delim, row, "", "legs: `a | b` then `c | d` prose"}, 1, 1},
+		{"a HEADING closes the table even when it carries a pipe",
+			[]string{header, delim, row, "## a | b heading"}, 1, 1},
+		{"a pipe-less line closes the table",
+			[]string{header, delim, row, "bar"}, 1, 1},
+		{"a fenced code block closes the table",
+			[]string{header, delim, row, "```", "x | y", "```"}, 1, 1},
+	}
+	for _, c := range cases {
+		got, tables, rows := scanTablePipes(c.lines)
+		if tables != c.wantTable || rows != c.wantRows || len(got) != 0 {
+			t.Errorf("%s: tables=%d rows=%d mismatches=%d, want tables=%d rows=%d mismatches=0",
+				c.name, tables, rows, len(got), c.wantTable, c.wantRows)
+		}
+	}
+}
+
 // TestPipePinCannotHideAWorseDefect proves the pinned-count rule: a pinned row
 // tolerated at exactly the count recorded in pendingPipeFix, but a pinned row whose
-// count has MOVED — one more unescaped pipe, or a partial fix that left another
-// cell split — is not tolerated. Without this, a pin would be a name-based blanket
-// over a row and could hide a worse defect on it.
+// count has MOVED — one more in-cell pipe, or a partial fix that left another cell
+// split — is not tolerated. Without this, a pin would be a name-based blanket over a
+// row and could hide a worse defect on it.
 func TestPipePinCannotHideAWorseDefect(t *testing.T) {
-	const harness = "web/scripts/biteproof_dev_hosts.sh"
+	const harness = "web/scripts/biteproof_docs_prose_convention.sh"
+	const headerCells = 4 // the harness table's header carries 4 columns
 	pin, ok := pendingPipeFix[harness]
 	if !ok {
 		t.Fatalf("fixture assumes %s is pinned; the map moved, fix the fixture", harness)
@@ -279,12 +424,12 @@ func TestPipePinCannotHideAWorseDefect(t *testing.T) {
 		wantOK bool
 	}{
 		{"exactly the pinned count", pin.pipes, true},
-		{"one MORE unescaped pipe", pin.pipes + 1, false},
+		{"one MORE in-cell pipe", pin.pipes + 1, false},
 		{"a partial fix, one fewer", pin.pipes - 1, false},
-		{"back to the header count (the fix landed)", 5, false},
+		{"back to the header count (the fix landed)", headerCells, false},
 	}
 	for _, c := range cases {
-		m := pipeMismatch{line: 1, got: c.got, want: 5, header: 1, text: "| `" + harness + "` | x | y | z |"}
+		m := pipeMismatch{line: 1, got: c.got, want: headerCells, header: 1, text: "| `" + harness + "` | x | y | z |"}
 		if _, ok := toleratedByPin(m); ok != c.wantOK {
 			t.Errorf("%s: toleratedByPin(got=%d) = %v, want %v — a pin must match the recorded count exactly",
 				c.name, c.got, ok, c.wantOK)

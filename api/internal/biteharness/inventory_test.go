@@ -94,6 +94,38 @@ var harnessMarkRe = regexp.MustCompile(`(?i)bite`)
 // backtickRe captures a backticked span in the table's FIRST column.
 var backtickRe = regexp.MustCompile("`([^`]+)`")
 
+// tableDelimRe matches a markdown table DELIMITER row: nothing but pipes, dashes,
+// colons and spaces, and at least one dash (`|---|---|`, `|:--|--:|`). GFM 4.10
+// uses this row — not a leading `|` — to decide where a table BEGINS: "The table
+// is broken at the first empty line, or beginning of another block-level
+// structure" and the header is "the line immediately preceding" the delimiter.
+// Keying table detection on a leading pipe (the pre-fix shape) hid every table
+// row whose leading pipe was omitted.
+var tableDelimRe = regexp.MustCompile(`^[\s|:-]*-[\s|:-]*$`)
+
+// isDelimRow reports whether a line is a table delimiter row. It also requires a
+// pipe, so a bare `---` (a setext heading underline or a thematic break) is NOT
+// a table row.
+func isDelimRow(line string) bool {
+	t := strings.TrimSpace(line)
+	return strings.Contains(t, "|") && tableDelimRe.MatchString(t)
+}
+
+// firstColumn returns a markdown table row's first cell. GFM 4.10 allows a row
+// whose leading pipe is OMITTED — Example 199's data row `bar | baz` renders as
+// `<td>bar</td><td>baz</td>` — so the first cell is text up to the first `|`:
+// parts[1] when the leading pipe is present, parts[0] when it is absent. Keying
+// on `cols[1]` unconditionally (the pre-fix shape) read a no-leading-pipe row's
+// SECOND column as its first.
+func firstColumn(row string) string {
+	t := strings.TrimSpace(row)
+	parts := strings.Split(t, "|")
+	if strings.HasPrefix(t, "|") && len(parts) >= 2 {
+		return parts[1]
+	}
+	return parts[0]
+}
+
 // notYetOnMain are harnesses that are REGISTERED here before the PR that lands
 // them has merged. They are allowed to be absent from the tree (that is the
 // whole point of an entry) and their row is checked normally the moment the file
@@ -198,6 +230,13 @@ func discoverHarnesses(t *testing.T, root string) ([]string, int) {
 // document also carries a cost table) cannot be mistaken for harness rows, and
 // the parse cannot wander into prose.
 //
+// "Not a table row" for the ROW WALK is any line with no pipe (a blank line, a
+// heading, a prose line): such a line closes the table. A row that simply OMITS
+// its leading pipe is still a row — GFM 4.10 permits it (Example 199) — so only
+// the ROW walk keys on `HasPrefix(line, "|")`. The HEADER must still carry the
+// leading pipe and read `Harness` in its first column, which keeps header
+// detection unambiguous among the prose that also carries pipes.
+//
 // Prose above and below the table is ignored, and so is every other column — a
 // backticked command in "Proves" is not a row.
 //
@@ -237,20 +276,16 @@ func documentedHarnesses(t *testing.T, path string) []string {
 	}
 
 	var docs []string
-	sepRe := regexp.MustCompile(`^\|[\s:|-]+\|$`)
 	for i := header + 1; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(trimmed, "|") {
-			break // the table ended
+		line := lines[i]
+		if !strings.Contains(line, "|") {
+			break // the table ended (a blank line, a heading, a prose line)
 		}
-		if sepRe.MatchString(trimmed) {
+		trimmed := strings.TrimSpace(line)
+		if isDelimRow(trimmed) {
 			continue
 		}
-		cols := strings.Split(trimmed, "|")
-		if len(cols) < 2 {
-			t.Fatalf("%s:%d: malformed table row %q", path, i+1, trimmed)
-		}
-		first := cols[1]
+		first := firstColumn(trimmed)
 		spans := backtickRe.FindAllStringSubmatch(first, -1)
 		if len(spans) == 0 {
 			t.Fatalf("%s:%d: table row %q names no harness (the first column must be "+
@@ -262,6 +297,10 @@ func documentedHarnesses(t *testing.T, path string) []string {
 			t.Fatalf("%s:%d: row %q names %q, which is not a repo-relative path with a "+
 				"directory in it", path, i+1, trimmed, name)
 		}
+		// The column count is checked on the row WITH its leading pipe restored,
+		// so a row that merely omitted that pipe cannot pass the full-row shape
+		// by counting one column fewer.
+		cols := strings.Split("|"+trimmed, "|")
 		if len(cols) < 5 {
 			t.Fatalf("%s:%d: row %q has %d columns, want the full "+
 				"| Harness | Proves | Cases | Wall time | row — a placeholder row states "+
