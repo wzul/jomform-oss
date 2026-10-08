@@ -2456,7 +2456,10 @@ a11y_port_release() {
 #
 # WHAT THIS GATE IS, AND WHAT IT USED TO BE. `npm run a11y` is `playwright test`
 # and playwright's `testDir` is `./e2e`, so this gate used to run the WHOLE
-# directory: 29 axe tests plus 134 feature end-to-end tests — a gate whose name
+# directory: 36 axe tests plus 164 feature end-to-end tests (both counts MEASURED
+# from each gate's own summary line on 2026-10-08 at commit 0c074d20 — 164 of the
+# e2e run passes and 2 self-skip; re-measure when either family grows, because a
+# typed number is what rots) — a gate whose name
 # said accessibility and whose body was mostly not. The feature specs were not
 # lost by the split; they are owned by the `e2e` gate below, and the selftest
 # asserts every spec belongs to exactly one family so a new spec cannot fall
