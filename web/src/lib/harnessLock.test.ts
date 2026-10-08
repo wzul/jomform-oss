@@ -130,11 +130,19 @@
 // card t_76b3356d): they all key on the SAME file because they all mutate the same docs
 // tree. It also now covers the two settings-side harnesses (card t_df41e675) and the
 // forms / next-config pair (card t_f6408658) — entries 7..10 — because they mutate the
-// same shared sources. What it still does not serialise is a harness OUTSIDE this family
-// (e.g. `operator-bite.sh`, which mutates `i18nDict.ts` but takes no lock) that mutates a
-// file one of these walks. `operator-bite.sh` is outside the family and is NOT an entry
-// here: it takes no lock at all, so an entry would have to assert a lock that does not
-// exist.
+// same shared sources, and `operator-bite.sh` (card t_76a02798) because it rewrites
+// `src/components/i18nDict.ts` — the SAME file `biteproof_docs_prose_convention.sh`
+// (CASE 17/18) and `biteproof_save_button.sh` (case 6) rewrite. That last entry is the
+// fix for a measured defect, not a tidy-up: with no lock, 10 concurrent rounds against
+// `biteproof_save_button.sh` in ONE worktree printed 13 false
+// `*** GREEN — THE GUARD DID NOT BITE ***` lines from this harness (7x its "Arabic left
+// English-only" case, 6x "Tamil loses the legal name" — exactly the two cases that touch
+// the dict) and a false `❌ DID NOT BITE` in 10/10 peer runs, while every round still
+// reported a clean tree and exited 0. What it still does not serialise is a harness
+// OUTSIDE this family that takes no lock and mutates a file one of these walks. There is
+// none left at the time of writing: the three that shipped unlocked — `src/app/forms/page.tsx`
+// and `next.config.mjs` (t_f6408658) and `src/components/i18nDict.ts` (t_76a02798) — are
+// all entries now, which is why each of those cards had to make its harness take the key.
 //
 // THE FILE NAME IS LOAD-BEARING, and deliberately avoids "bite": the harness-inventory
 // guard (`api/internal/biteharness`, inside the `api test` gate) classifies any file whose
@@ -289,6 +297,31 @@ const HARNESSES: HarnessEntry[] = [
     lockSubdir: FAMILY_LOCK_SUBDIR,
     mutatesSharedInput: true,
     d3ProbeEnv: { BITEPROOF_SPEC: join(webRoot, "scripts", ".no-such-spec-probe.ts") },
+    d3ProbeNeedle: /is missing — nothing to drive/,
+  },
+  // CARD t_76a02798 ADDED THIS ONE. `operator-bite.sh` rewrites src/components/i18nDict.ts
+  // IN PLACE (its cases 5 and 7) and its guard reads that file in those very cases, so it
+  // overlaps with TWO family entries above: `biteproof_docs_prose_convention.sh` (CASE
+  // 17/18 plant and restore markers in the same dict) and `biteproof_save_button.sh`
+  // (case 6 deletes a dict key). It shipped with NO lock (`grep -c flock` was 0). Measured
+  // on the pre-fix bytes: this harness and `biteproof_save_button.sh` run concurrently in
+  // ONE worktree, 10 rounds — 13 FALSE `*** GREEN — THE GUARD DID NOT BITE ***` lines, all
+  // of them the two dict cases (7x "Arabic left English-only", 6x "Tamil loses the legal
+  // name"), against 0 in a solo run; and 10/10 of the peer's runs printed a false
+  // `❌ DID NOT BITE` (`BITES: 5..8/11`), because this harness's own `git checkout -- src/`
+  // restore landed mid-peer-case. Every one of those rounds still printed
+  // `final tracked state: (clean)` / `all sources restored byte-identically`, i.e. the tree
+  // looked perfect while both verdicts were wrong. It now takes the family key, so leg E
+  // refuses it while any other family entry holds the same file.
+  {
+    label: "operator-bite.sh",
+    script: join(webRoot, "scripts", "operator-bite.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    // The refusal this entry's D3 probe reaches is the same pre-lock one the two
+    // save/settings entries use: a guard path that does not exist. It is node-free, and
+    // `operator-bite.sh` resolves it AFTER its lock block and its dirty-tree precondition.
+    d3ProbeEnv: { BITEPROOF_GUARD: join(webRoot, "scripts", ".no-such-guard-probe.ts") },
     d3ProbeNeedle: /is missing — nothing to drive/,
   },
 ];
