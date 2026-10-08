@@ -232,9 +232,11 @@ const OWNS_BANNER_ARIA = ["app/form-settings/page.tsx", "app/sales/page.tsx", "a
  * A site where the code CHOOSES which tone to report. Two shapes, both read off
  * the AST because the answer is a control-flow fact:
  *
- *   * a branch — `if (cond) showMsgFail(x); else showMsgOk(y);` (36 of these);
+ *   * a branch — `if (cond) showMsgFail(x); else showMsgOk(y);` (16 of these);
  *   * a SELECTED setter — `(cond ? showMsgOk : showMsgFail)(t(…))`, which is how
- *     /settings writes its credential and tracking saves.
+ *     /settings writes its credential (662) and tracking/e-invoice (1743, 1772)
+ *     saves — the ONLY three in tree, and all three on /settings, not
+ *     /form-settings, whose nine tone choices are all `if` branches.
  *
  * A site counts only when BOTH tones appear at it. That is what makes it a
  * decision rather than one of the many bare guards (`if (!r.ok) showMsgFail(…)`)
@@ -589,7 +591,10 @@ test("the tone-choice walk found the app, and it reads both shapes (it cannot pa
     );
   }
   // BOTH shapes, read from sources this test writes, so neither can rot away
-  // unnoticed: the branch form and the selected-setter form.
+  // unnoticed: the branch form and the selected-setter form. (This is the
+  // READER being pinned, on synthetic input; the shapes' real population is what
+  // the ALL_CHOICES assertion above counts — 16 branch sites plus the 3
+  // selected-setter sites on /settings.)
   const branch = toneChoicesFrom('if (d.failed) showMsgFail(s); else showMsgOk(s);');
   assert.equal(branch.length, 1, "the branch shape was not read as a tone choice");
   assert.equal(branch[0].cond, "d.failed", "the branch shape's condition was mis-read");
