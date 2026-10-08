@@ -89,6 +89,26 @@
 #       rendered render site (the only other use is `key={group.tag}`, an attribute),
 #       so a control would assert a shape the page does not have.
 #
+#   CARD t_d1221e35 CLOSED THE LAST PLAIN-TEXT STRING IN THE ENDPOINT REFERENCE'S
+#   SPAN BLOCK — the ACCESS label, `{e.access}` in a <span> at api/page.tsx:379 (NOT
+#   inside <code> — measured live on prod 2026-10-05: it renders READ with
+#   closest("code") === null), printed once per endpoint. `e.access` is
+#   `op["x-jomform-access"] ?? "read"` (lib/openapi.ts:89) out of the SAME generated
+#   contract the tag / rateLimit fields come from, so a marker in it reached the
+#   reader while the leg reported GREEN: measured on this card's parent head (tree
+#   09796a85), editing the FIRST `"x-jomform-access": "read"` left the suite at
+#   **6 pass / 0 fail**:
+#     * CASE 20 — a marker in the ACCESS label must be RED naming
+#       openapiSpec.gen.ts `[{e.access}]`, one imported-findings failure.
+#     * CASE 21 — a marker in the METHOD badge (`{e.method}` at :375, the other
+#       plain-text string in the same <span> block) must be RED naming
+#       openapiSpec.gen.ts `[{e.method}]`. Its value is an object KEY of the
+#       contract's `paths` map, so a marker there would have to come from the
+#       generator rather than the contract writer — a lower-risk surface, but the
+#       same plain-text render shape, so the whole span block is covered. Neither
+#       case has a negative control: unlike curl / path, neither field is rendered
+#       inside <code>, so a control would assert a shape the page does not have.
+#
 # WHAT IT DOES
 #   It snapshots each file it mutates into a scratch dir, applies one mutation,
 #   runs the REAL guard, requires the verdict this case predicts, and restores the
@@ -109,10 +129,12 @@
 #   later `npm run test:unit` in that tree judged a mutated tree until they were
 #   restored by hand. A solo run on the same bytes prints `6/6 HOLE cases RED,
 #   3/3 CONTROLS GREEN` / `ALL CASES OK` — the counts the harness stood at when
-#   this lock landed; on the tree this lock now sits on (cards `t_8b3a508b` and
-#   `t_763c28c2` added CASE 10..13) it is EIGHT HOLE / FIVE CONTROLS over the
-#   fourteen labelled cases `CASE 0`..`CASE 13`, and the `BITES:` line below
-#   prints `8/8 HOLE cases RED, 5/5 CONTROLS GREEN`.
+#   this lock landed. Since then the cases have grown (cards `t_8b3a508b` and
+#   `t_763c28c2` added CASE 10..13; `t_8f684cfe` CASE 14..16; `t_cd81632d` CASE
+#   17/18; `t_62da3451` CASE 19; `t_d1221e35` CASE 20/21), so the tree this lock
+#   now sits on is FOURTEEN HOLE / SEVEN CONTROLS over the labelled cases
+#   `CASE 0`..`CASE 21`, and the `BITES:` line below prints
+#   `14/14 HOLE cases RED, 7/7 CONTROLS GREEN`.
 #
 #   It now takes the family's per-worktree `flock`, by the same mechanism: keyed
 #   by `git rev-parse --absolute-git-dir` (one value per worktree, stable from any
@@ -683,12 +705,59 @@ else
 fi
 restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
 
+# ── the plain-text span block: the ACCESS label and the METHOD badge (t_d1221e35) ──
+# /docs/api's endpoint reference prints ONE more imported string as plain JSX text
+# per endpoint than the fields the leg read after t_62da3451: the ACCESS label,
+# `{e.access}` in a <span> at api/page.tsx:379 (NOT inside <code> — measured live
+# on prod 2026-10-05: the label renders READ with closest("code") === null).
+# `e.access` is `op["x-jomform-access"] ?? "read"` (lib/openapi.ts:89) out of the
+# SAME generated contract the tag / rateLimit fields come from, so a marker in it
+# reaches the reader while the leg reported GREEN — measured on this card's parent
+# head (tree 09796a85): editing the FIRST `"x-jomform-access": "read"` left the
+# suite at **6 pass / 0 fail**. CASE 20 drives that hole. The METHOD badge
+# (`{e.method}` at :375, the other plain-text string in the same <span> block) is
+# the value of an object KEY of the contract's `paths` map, so a marker there would
+# have to come from the generator rather than the contract writer — a lower-risk
+# surface, but the same plain-text render shape, so CASE 21 drives it too and the
+# whole span block is covered. Neither has a negative control beside it: unlike
+# curl / path, {e.access} and {e.method} have NO <code>-rendered render site, so a
+# control would assert a shape the page does not have.
+echo "== CASE 20: a marker in the ACCESS label ({e.access}) must be RED =="
+f="src/lib/openapiSpec.gen.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+# Anchored to the FIRST operation's whole tail block (its summary + tags +
+# x-jomform-access) so the substitution cannot drift onto one of the 38 other
+# `"x-jomform-access": "read"` lines.
+perl -0pi -e 's/"summary": "Per-form entry counts and money",\n        "tags": \[\n          "Analytics"\n        \],\n        "x-jomform-access": "read"/"summary": "Per-form entry counts and money",\n        "tags": [\n          "Analytics"\n        ],\n        "x-jomform-access": "re`ad"/' "$f"
+grep -q '"x-jomform-access": "re`ad"' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case20=$v")
+if [ "$v" = RED ] && grep -q 'src/lib/openapiSpec.gen.ts' <<<"$out" && grep -q '\[{e.access}\]' <<<"$out" && fails_imported_findings_only "$out"; then
+  echo "  BITES: RED naming src/lib/openapiSpec.gen.ts [{e.access}] (the access label is prose too)"
+else
+  echo "  DID NOT BITE: verdict=$v (wanted RED naming src/lib/openapiSpec.gen.ts, [{e.access}], one imported-findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
+echo "== CASE 21: a marker in the METHOD badge ({e.method}) must be RED =="
+f="src/lib/openapiSpec.gen.ts"; snapshot "$f"; sha="$(sha256sum "$f" | awk '{print $1}')"
+# The method is an object KEY of the contract's `paths` map (lib/openapi.ts:79,
+# `Object.keys(item)`, upper-cased here), so the marker goes in the KEY. Anchored
+# to the first path entry, which is unique.
+perl -0pi -e 's/"\/v1\/rest\/analytics\/forms": \{\n      "get": \{/"\/v1\/rest\/analytics\/forms": {\n      "g`et": {/' "$f"
+grep -q '"g`et": {' "$f" || { echo "  MUTATION DID NOT APPLY — re-anchor this case"; fail=1; }
+out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("case21=$v")
+if [ "$v" = RED ] && grep -q 'src/lib/openapiSpec.gen.ts' <<<"$out" && grep -q '\[{e.method}\]' <<<"$out" && fails_imported_findings_only "$out"; then
+  echo "  BITES: RED naming src/lib/openapiSpec.gen.ts [{e.method}] (the method badge is prose too)"
+else
+  echo "  DID NOT BITE: verdict=$v (wanted RED naming src/lib/openapiSpec.gen.ts, [{e.method}], one imported-findings failure)"; printf '%s\n' "$out" | tail -20; fail=1
+fi
+restore "$f"; echo "  restored, sha $(sha256sum "$f" | awk '{print $1}') == $sha"
+
 echo "== FINAL: every mutated file restored, tree GREEN again ==="
 out="$(run_guard)"; v="$(verdict "$out")"; VERDICTS+=("final=$v")
 [ "$v" = GREEN ] || { fail=1; printf '%s\n' "$out" | tail -25; }
 
 echo
 echo "verdicts: ${VERDICTS[*]}"
-echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8|10|12|14|15|17|19)=RED')/12 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9|11|13|16|18)=GREEN')/7 CONTROLS GREEN"
+echo "BITES: $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(1|2|3|6|7|8|10|12|14|15|17|19|20|21)=RED')/14 HOLE cases RED, $(printf '%s\n' "${VERDICTS[@]}" | grep -cE '^case(4|5|9|11|13|16|18)=GREEN')/7 CONTROLS GREEN"
 echo "RESULT: $([ "$fail" = 0 ] && echo 'ALL CASES OK' || echo 'FAILURES PRESENT')"
 exit "$fail"

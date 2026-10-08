@@ -400,6 +400,20 @@ test("no /docs prose carries a backtick marker (these pages render plain text)",
 // suite at 4 pass / 0 fail. It is the same residual class #984 narrowed but did
 // not close, which is why this leg now reads the tag too.
 //
+// A FOURTH imported string (card t_d1221e35): the ACCESS label
+// (api/page.tsx:379 — `{e.access}` in a `<span>`, NOT inside `<code>`, measured
+// live on prod 2026-10-05: it renders READ with `closest("code") === null`),
+// printed once per endpoint. `e.access` is `op["x-jomform-access"] ?? "read"`
+// (lib/openapi.ts:89) from the SAME generated contract (120 occurrences), the same
+// imported shape `{group.tag}` and `{e.rateLimit}` are — yet a marker in it was
+// invisible to this leg. Measured on this card's parent head (tree 09796a85):
+// editing the FIRST `"x-jomform-access": "read"` (openapiSpec.gen.ts:731) to
+// `"re\`ad"` left the suite at **6 pass / 0 fail**. The METHOD badge in the same
+// `<span>` block ({e.method}, api/page.tsx:375) is judged alongside it — its value
+// is an object KEY of the contract's `paths` map rather than a generated string
+// field, so a marker there would have to come from the generator, but the render
+// site is the same plain-text shape and the whole span block is now covered.
+//
 // This second surface is keyed on the RENDER SITE, not on the bare string: the
 // fields below are the ones the page PRINTS as plain text. `e.curl` is
 // deliberately NOT among them — it is rendered inside `<code>`, the supported way
@@ -442,6 +456,24 @@ function importedProseValues(): ImportedProse[] {
     // throttled list at :291) is likewise plain text; it is shaped from the
     // contract's x-jomform-rate-limit.policy (card t_8f684cfe).
     out.push({ module: SPEC_MOD, surface: where, field: "{e.rateLimit}", text: e.rateLimit });
+    // The ACCESS label (api/page.tsx:379, `{e.access}` in a <span>, NOT inside
+    // <code> — measured live on prod 2026-10-05: the label renders READ with
+    // closest("code") === null) is printed once per endpoint, plain text. It comes
+    // from the contract's own `x-jomform-access` (lib/openapi.ts:89,
+    // `op["x-jomform-access"] ?? "read"`) in openapiSpec.gen.ts — the same
+    // imported shape {e.summary} and {e.rateLimit} are — so a marker in it reaches
+    // the reader exactly as a marker in a summary does. Card t_d1221e35 drove this
+    // RED: on the parent head, editing the FIRST `"x-jomform-access": "read"` left
+    // the suite at 6 pass / 0 fail while this leg never named the field.
+    out.push({ module: SPEC_MOD, surface: where, field: "{e.access}", text: e.access });
+    // The METHOD badge (api/page.tsx:375, `{e.method}` in a <span>, NOT inside
+    // <code>) is the other plain-text imported string in the same span block
+    // (card t_d1221e35). Its value is an object KEY of the contract's `paths` map
+    // (lib/openapi.ts:79, `Object.keys(item)`, upper-cased), so a marker there
+    // would have to come from the generator rather than the contract writer — a
+    // lower-risk surface than {e.access}, but the same class: an imported string
+    // the page prints as plain text, so it is judged here too.
+    out.push({ module: SPEC_MOD, surface: where, field: "{e.method}", text: e.method });
   }
   return out;
 }
@@ -480,6 +512,27 @@ test("the imported-prose check is reading the real rendered data (it cannot pass
         (p) => p.field === "{e.rateLimit}" && p.surface.includes(`${e.method} ${e.path}`),
       ),
       `endpoint ${e.method} ${e.path}'s rateLimit is not among the checked values — a marker there would be invisible`,
+    );
+  }
+  // The ACCESS label and the METHOD badge (card t_d1221e35) must really be in the
+  // set too, exactly as the tag/title/rateLimit fields above: the render-site loop
+  // below iterates whatever fields are present, so dropping either push would leave
+  // the suite passing while the field became invisible again — the hole this card
+  // closed (measured on the parent head: a marker in `x-jomform-access` left the
+  // suite at 6 pass / 0 fail). Asserted per-item against the surface that renders
+  // it, not by count.
+  for (const e of specEndpoints()) {
+    assert.ok(
+      IMPORTED_PROSE.some(
+        (p) => p.field === "{e.access}" && p.text === e.access && p.surface.includes(`${e.method} ${e.path}`),
+      ),
+      `endpoint ${e.method} ${e.path}'s access label is not among the checked values — a marker there would be invisible`,
+    );
+    assert.ok(
+      IMPORTED_PROSE.some(
+        (p) => p.field === "{e.method}" && p.text === e.method && p.surface.includes(`${e.method} ${e.path}`),
+      ),
+      `endpoint ${e.method} ${e.path}'s method badge is not among the checked values — a marker there would be invisible`,
     );
   }
   // The endpoint GROUP HEADING card t_62da3451 added must be in the set too, keyed
