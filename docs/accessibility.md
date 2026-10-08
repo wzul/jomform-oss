@@ -134,8 +134,9 @@ margin it guards is 0.008 — `#5e6ad2` on slate-50 `#f8fafc` is 4.492:1 against
 measures on white, or trusts a class name, reports the defect as a pass.
 
 That third shape is the one to reach for on the **surfaces the other two cannot
-cover**: a source rule cannot see a translucent tint's composited colour, and it
-cannot measure a margin this small.
+cover**: a source rule can only composite a translucent tint against one fixed
+backdrop (`--jf-bg`), not the real stack of surfaces beneath it, and it cannot
+measure a margin this small.
 
 
 > **Do not reuse a running server.** `web/playwright.config.ts` sets
@@ -242,14 +243,28 @@ of them:
   `bg-sky-50` tint, where `text-red-600` is **4.474:1** — under AA — but the
   ancestor chain's outermost surface is the `bg-white` transcript wrapper around
   it, where the same token reads 4.770:1 and passes (card `t_624b7275`).
-* **A translucent LIGHT tint is judged at its OPAQUE base, not skipped.** A
-  source scan cannot composite an alpha, so the two honest options are to abstain
-  or to judge the base the class names. This guard judges the base, because
-  abstaining is what let `/settings`' webhook-delivery cells hide: they are
-  `text-red-600` on `bg-red-50/60`, which reads **4.511:1** on the tint but
-  **4.360:1** on the `bg-red-50` it names — the entire margin over the 4.5 floor
-  is 0.011, carried by the `/60`, and dropping it would have been invisible to
-  every gate (card `t_624b7275`).
+* **A translucent LIGHT tint is judged at its OPAQUE base *and* at the composite
+  over the page background — the minimum of the two.** A source scan cannot see
+  the real backdrop, so the two honest options are to abstain or to judge a named
+  surface. This guard judges BOTH, because each one alone let a site hide:
+  - `/settings`' webhook-delivery cells are `text-red-600` on `bg-red-50/60`,
+    which reads **4.511:1** on the tint but **4.360:1** on the `bg-red-50` it
+    names — the entire margin over the 4.5 floor is 0.011, carried by the `/60`,
+    and dropping it would have been invisible to every gate (card `t_624b7275`).
+  - For a tint *lighter* than `--jf-bg` (`bg-slate-50` #f8fafc lum 0.95356 vs
+    `--jf-bg` #f7f8f8 lum 0.93686, and the same for `bg-emerald-50` #ecfdf5 and
+    `bg-amber-50` #fffbeb) the OPAQUE base is the *lighter* of the two, so it is
+    **not** the strictest bound: `text-red-600` reads **4.5589:1** on the opaque
+    `bg-slate-50` (legal) but **4.4831:1** on `bg-slate-50/20` composited over
+    the page (under AA). Judging only the base passed that pairing. Card
+    `t_8c10928a`.
+
+  For the seven tints darker than `--jf-bg` the opaque base *is* the minimum
+  over alpha, so the composite can only be lighter — which is why the two shapes
+  cannot overlap and why the bound is a genuine tightening rather than a
+  behaviour change: `text-red-700` and `text-sky-700` clear AA on every tint AND
+  every composite (worst **5.2085:1** and **4.7502:1**), so this guard's census
+  and the repo-wide rule are unchanged by it.
 
 `text-red-700` (#c10007) is the token both sites now use: 5.87:1 on `bg-red-50`,
 6.02:1 on the `bg-sky-50` card, 6.42:1 on white. It is the step the whole
@@ -338,8 +353,9 @@ guard report a `<code>` 180 lines away as the ancestor of unrelated spans.
 > as a pass.
 >
 > That third shape is the one to reach for on the **surfaces the other two
-> cannot cover**: a source rule cannot see a translucent tint's composited
-> colour, and it cannot measure a margin this small.
+> cannot cover**: a source rule can only composite a translucent tint against
+> one fixed backdrop (`--jf-bg`), not the real stack of surfaces beneath it, and
+> it cannot measure a margin this small.
 >
 > **This is a real gap, not a formality.** The builder's edit panel went
 > unscanned long enough to accumulate two **critical** unnamed form controls

@@ -90,11 +90,16 @@
 //     query. A source scan cannot composite those, so the token is left to the
 //     browser gate instead.
 //   * It DOES judge a translucent LIGHT tint (`bg-red-50/60`) — at its OPAQUE
-//     base. That is the one alpha shape this guard refuses to abstain on, and the
-//     reason is measured: a `text-red-600` on `bg-red-50/60` reads 4.511:1 on the
-//     tint but 4.360:1 on the `bg-red-50` it names, so the whole margin over AA is
-//     carried by the `/60` and a later edit that drops it is invisible to every
-//     gate (t_624b7275).
+//     base AND at the composite over the page background. That is the one alpha
+//     shape this guard refuses to abstain on, and the reason is measured twice:
+//     a `text-red-600` on `bg-red-50/60` reads 4.511:1 on the tint but 4.360:1
+//     on the `bg-red-50` it names, so the whole margin over AA is carried by the
+//     `/60` and a later edit that drops it is invisible to every gate
+//     (t_624b7275); and for a tint LIGHTER than `--jf-bg` (slate-50, emerald-50,
+//     amber-50) the OPAQUE base reads legal while some `bg-<tint>/n` reads under
+//     AA, so the base alone would pass a pairing that ships below AA
+//     (t_8c10928a). The guard takes the MINIMUM of the two — see the
+//     `canonicalSurface` note for the exact numbers.
 //   * It still does NOT judge the `bg-red-500/10` failure banners (login,
 //     workspace-picker, magic-link, connect, reset-password). A 500-step fill is
 //     not one of the LIGHT surfaces above, so those tokens are not attributed to
@@ -153,6 +158,16 @@ function luminance([r, g, b]: RGB): number {
 function contrast(a: RGB, b: RGB): number {
   const la = luminance(a), lb = luminance(b);
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+/**
+ * Source-over compositing of a translucent surface (`fg`, alpha `0..1`) onto the
+ * backdrop `bg` it is painted over, in the sRGB the browser blends in. A source
+ * scan cannot see the real backdrop, so the guard fixes it to the app's page
+ * background (`--jf-bg`) — see the `canonicalSurface` note below for which tints
+ * this changes the verdict on and which it does not.
+ */
+function compositeOver(fg: RGB, bg: RGB, alpha: number): RGB {
+  return [0, 1, 2].map((i) => Math.round(bg[i] + (fg[i] - bg[i]) * alpha)) as RGB;
 }
 function hexToRgb(hex: string): RGB | null {
   const h = hex.replace("#", "");
@@ -251,8 +266,11 @@ const SURFACES: Record<string, RGB> = (() => {
   return out;
 })();
 
+// The trailing `(\d+)` captures the alpha of a translucent tint (`bg-red-50/60`),
+// so the same rule can judge the class's OPAQUE base AND the colour it actually
+// paints over the page background. An opaque class leaves the group undefined.
 const LIGHT_SURFACE_RE =
-  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50|emerald-50|emerald-100|red-50|sky-50|amber-50)|bg-\[var\(--jf-(?:surface|bg|danger-bg)\)\]|jf-card|jf-input)(?:\/\d+)?$/;
+  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50|emerald-50|emerald-100|red-50|sky-50|amber-50)|bg-\[var\(--jf-(?:surface|bg|danger-bg)\)\]|jf-card|jf-input)(?:\/(\d+))?$/;
 
 /**
  * `jf-card` / `jf-input` resolve to the same white surface, and
@@ -268,16 +286,53 @@ const LIGHT_SURFACE_RE =
  * `text-red-600` there reads **4.511:1** on the tint but only **4.360:1** on the
  * `bg-red-50` it names, and the 0.011 of margin over AA is carried entirely by
  * the `/60`, which any later edit can drop with every gate still green (card
- * t_624b7275). For these ten tints the opaque step is the DARKEST member of
- * `{tint, white, --jf-bg}` — measured, not assumed — so it is also the STRICTEST
- * bound for a dark text token: judging it there can only refuse a pairing that
- * would fail once the alpha moved, never pass one that ships below AA.
+ * t_624b7275).
+ *
+ * THE OPAQUE BASE IS NOT ALWAYS THE STRICTEST BOUND — so the rule takes the
+ * MINIMUM of the opaque base and the composite over the page background.
+ *
+ * This comment used to claim that the opaque step is "the DARKEST member of
+ * {tint, white, --jf-bg}" and therefore the strictest bound. Re-derived from the
+ * installed theme, that is FALSE for three of these ten tints, which are lighter
+ * than `--jf-bg` (lum 0.93686): `bg-slate-50` #f8fafc 0.95356, `bg-emerald-50`
+ * #ecfdf5 0.94676, `bg-amber-50` #fffbeb 0.96253. Contrast is likewise not
+ * monotonic across alpha over a DARKER backdrop, so for exactly those three the
+ * opaque base reads LEGAL while some `bg-<tint>/n` reads UNDER AA:
+ *
+ *   text-red-600 on bg-slate-50   opaque 4.5589:1, worst /n 4.4831:1 (/1)
+ *   text-red-600 on bg-emerald-50 opaque 4.5280:1, worst /n 4.4748:1 (/5)
+ *   text-red-600 on bg-amber-50   opaque 4.5997:1, worst /n 4.4803:1 (/4)
+ *
+ * For the other seven tints the opaque base is the minimum over alpha (they are
+ * darker than `--jf-bg`, so the composite can only lighten toward it), which is
+ * why the two shapes below cannot overlap and why this rule adds no false
+ * refusal for the replacement tokens: `text-red-700` and `text-sky-700` clear AA
+ * on every opaque tint AND on every composite (worst 5.2085:1 and 4.7502:1), so
+ * the census and the repo-wide rule are unchanged by the bound.
  */
 function canonicalSurface(cls: string): string {
   const bare = cls.replace(/\/\d+$/, "");
   if (bare === "jf-card" || bare === "jf-input") return "bg-white";
   if (bare === "bg-[var(--jf-danger-bg)]") return "bg-red-50";
   return bare;
+}
+
+/**
+ * The colour a LIGHT surface class actually paints, as measured. For a
+ * translucent class (`bg-red-50/60`) that is the source-over composite of the
+ * tint onto `--jf-bg`: a source scan cannot see the real backdrop, so the page
+ * background is the fixed, worst-case stand-in. This is the colour `contrast`
+ * must be asked about; `canonicalSurface` gives the opaque name, which alone
+ * over-claims for slate-50 / emerald-50 / amber-50.
+ */
+function surfaceColor(cls: string): RGB | null {
+  const m = LIGHT_SURFACE_RE.exec(cls);
+  if (!m) return null;
+  const name = canonicalSurface(m[2]);
+  const opaque = SURFACES[name];
+  if (!opaque) return null;
+  if (m[3] === undefined) return opaque;
+  return compositeOver(opaque, SURFACES["bg-[var(--jf-bg)]"], Number(m[3]) / 100);
 }
 
 const STATE_RE = /^((?:[a-z-]+:)*)/;
@@ -342,6 +397,26 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
   return out;
 })();
 
+/** `text-red-600` -> the `red-600` palette key it measures. */
+const paletteKey = (tok: string) => tok.replace(/^text-/, "");
+
+/**
+ * The translucent-tint counterpart of `TEXT_TOKENS[tok].bad`: the `bg-<tint>/n`
+ * classes a token fails AA on ONCE COMPOSITED over `--jf-bg`. It ADDS the three
+ * tints lighter than `--jf-bg` (slate-50, emerald-50, amber-50), where the opaque
+ * base reads legal and only the composite is under AA; for the seven darker tints
+ * the opaque verdict already covers it, so this list can only be a subset of
+ * theirs. Never fires for `text-red-700` / `text-sky-700` (their worst composite
+ * is 5.2085:1 / 4.7502:1), which is why the bound adds no false refusal.
+ */
+function translucentFailures(cls: string, rgb: RGB): string[] {
+  const alpha = /\/(\d+)$/.exec(cls);
+  if (!alpha) return [];
+  const comp = surfaceColor(cls);
+  if (!comp || contrast(rgb, comp) >= 4.5) return [];
+  return [`${canonicalSurface(cls.replace(/\/\d+$/, ""))}/${alpha[1]}`];
+}
+
 // ─── rule (a): one class list paints both a surface and a forbidden token ────
 
 function surfacesFor(variant: string, state: string): string[] {
@@ -354,6 +429,25 @@ function surfacesFor(variant: string, state: string): string[] {
     if (!m) continue;
     if (s === state) inState.push(canonicalSurface(m[2]));
     else if (s === "") bare.push(canonicalSurface(m[2]));
+  }
+  return inState.length > 0 ? inState : bare;
+}
+
+/**
+ * The RAW translucent surface classes in a variant (`bg-slate-50/20`), in the
+ * given state. They are kept uncanonicalised because the ALPHA is what
+ * `surfaceColor` composites; each one is then judged by `translucentFailures`.
+ */
+function translucentSurfacesFor(variant: string, state: string): string[] {
+  const inState: string[] = [];
+  const bare: string[] = [];
+  for (const cls of variant.split(/\s+/)) {
+    const [s, bareCls] = splitState(cls);
+    if (!bareCls) continue;
+    const m = LIGHT_SURFACE_RE.exec(cls);
+    if (!m || m[3] === undefined) continue;
+    if (s === state) inState.push(cls);
+    else if (s === "") bare.push(cls);
   }
   return inState.length > 0 ? inState : bare;
 }
@@ -398,12 +492,19 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
       }
       for (const state of states) {
         const surfaces = surfacesFor(v, state);
-        if (surfaces.length === 0) continue;
+        const translucent = translucentSurfacesFor(v, state);
+        if (surfaces.length === 0 && translucent.length === 0) continue;
         for (const tok of tokensIn(v, state)) {
+          const rgb = PALETTE.get(paletteKey(tok));
+          if (!rgb) continue;
           const bad = TEXT_TOKENS[tok].bad.filter((b) => surfaces.includes(b));
-          if (bad.length === 0) continue;
+          // The opaque verdict is not the whole bound. A translucent tint on this
+          // SAME element (`bg-slate-50/20`) can be under AA where its opaque base
+          // is legal, so its composited ratio is asked too.
+          const all = [...bad, ...translucent.flatMap((cls) => translucentFailures(cls, rgb))];
+          if (all.length === 0) continue;
           findings.push(
-            `${rel}:${lineAt(e.tag.openIdx)} — <${e.tag.name}> paints ${tok} on ${bad.join(" / ")}` +
+            `${rel}:${lineAt(e.tag.openIdx)} — <${e.tag.name}> paints ${tok} on ${all.join(" / ")}` +
               `${state ? ` (in the ${state} state)` : ""}: ${TEXT_TOKENS[tok].note}; use text-red-700 / text-sky-700`,
           );
         }
@@ -444,7 +545,13 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
       v.split(/\s+/).some((cls) => {
         const [s, bareCls] = splitState(cls);
         if (!bareCls || !LIGHT_SURFACE_RE.test(cls)) return false;
-        return tokensIn(v, s).length > 0;
+        return tokensIn(v, s).some((tk) => {
+          const rgb = PALETTE.get(paletteKey(tk));
+          if (!rgb) return false;
+          const opaque = TEXT_TOKENS[tk].bad.filter((b) => surfacesFor(v, s).includes(b));
+          const comp = translucentSurfacesFor(v, s).flatMap((c) => translucentFailures(c, rgb));
+          return opaque.length > 0 || comp.length > 0;
+        });
       }),
     );
     if (ownIsBad) continue; // already (a)
@@ -495,7 +602,17 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
             .filter(Boolean),
         )
       : (layoutSurface ? [layoutSurface] : [PAGE_BG]);
-    const bad = TEXT_TOKENS[tok].bad.filter((b) => surfaces.includes(b));
+    // The ancestor may be a TRANSLUCENT tint (`bg-slate-50/20`), where the
+    // opaque base is legal but the composite over `--jf-bg` is not. Judging only
+    // the base is exactly the hole this card closes.
+    const translucent = surfaceEl
+      ? surfaceEl.variants.flatMap((v) => translucentSurfacesFor(v, ""))
+      : [];
+    const rgb = PALETTE.get(paletteKey(tok));
+    const bad = [
+      ...TEXT_TOKENS[tok].bad.filter((b) => surfaces.includes(b)),
+      ...(rgb ? translucent.flatMap((cls) => translucentFailures(cls, rgb)) : []),
+    ];
     if (bad.length === 0) continue;
     const where = surfaceEl
       ? `inside <${surfaceEl.name}> which paints`
@@ -519,14 +636,19 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
           .filter(([s, bareCls]) => s === "" && bareCls && LIGHT_SURFACE_RE.test(bareCls))
           .map(([, bareCls]) => canonicalSurface(bareCls)),
       );
-      if (childSurfaces.length === 0) continue;
+      const childTranslucent = child.variants.flatMap((v) => translucentSurfacesFor(v, ""));
+      if (childSurfaces.length === 0 && childTranslucent.length === 0) continue;
       const nearest = events
         .filter((e) => e.open && e.tag.openIdx <= child.openIdx && e.tag.closeIdx > child.openIdx && declaresTextColour(e.tag))
         .pop()?.tag;
       if (nearest !== owner) continue;
       const okBehind = TEXT_TOKENS[tok].bad.every((b) => !pageSurfaces.includes(b));
       if (!okBehind) continue;
-      const bad2 = TEXT_TOKENS[tok].bad.filter((b) => childSurfaces.includes(b));
+      const rgbB2 = PALETTE.get(paletteKey(tok));
+      const bad2 = [
+        ...TEXT_TOKENS[tok].bad.filter((b) => childSurfaces.includes(b)),
+        ...(rgbB2 ? childTranslucent.flatMap((cls) => translucentFailures(cls, rgbB2)) : []),
+      ];
       if (bad2.length === 0) continue;
       findings.push(
         `${rel}:${lineAt(child.openIdx)} — ${tok} inherited into <${child.name}> which paints ` +
@@ -640,10 +762,10 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
     );
   }
 
-  // The two shapes this card ADDED to the rule must still be seen, or a later
-  // edit can turn both fixes into a silent abstention and the site they were
-  // written for reaches the tree with this guard green (which is exactly how the
-  // /chat footer and the /settings `/60` cell got here).
+  // The three shapes this card ADDED to the rule must still be seen, or a later
+  // edit can turn a fix into a silent abstention and the site it was written for
+  // reaches the tree with this guard green (which is exactly how the /chat footer
+  // and the /settings `/60` cell got here).
   //
   // (1) A translucent LIGHT tint is judged at its opaque base, not skipped.
   const tinted = findingsIn(
@@ -690,6 +812,77 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
     nested.some((f) => f.includes("text-red-600") && f.includes("bg-sky-50")),
     `a text-red-600 inside an inner bg-sky-50 card must be attributed to the CARD ` +
       `(4.474:1), not to the outermost bg-white wrapper (4.770:1): ${JSON.stringify(nested)}`,
+  );
+
+  // (3) A tint LIGHTER than the page background is not bounded by its opaque
+  //     base. `bg-slate-50` #f8fafc (lum 0.95356) is lighter than `--jf-bg`
+  //     #f7f8f8 (0.93686), so `text-red-600` reads 4.5589:1 on the opaque tint
+  //     (LEGAL) but 4.4831:1 on `bg-slate-50/20` composited over the page
+  //     (UNDER AA). Judging the opaque base — what this rule used to do, calling
+  //     it "the strictest bound" — silently passed the /20 shape. Same for
+  //     emerald-50 (4.5280 -> 4.4748) and amber-50 (4.5997 -> 4.4803).
+  const lighterTint = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="bg-slate-50/20">',
+      '      <span className="text-red-600">Failed</span>',
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  assert.ok(
+    lighterTint.some((f) => f.includes("text-red-600") && f.includes("bg-slate-50/20")),
+    `a text-red-600 on bg-slate-50/20 composited over --jf-bg is 4.483:1 — UNDER AA — ` +
+      `while the opaque bg-slate-50 is 4.559:1 and passes; the rule must judge the ` +
+      `composite and report it (t_8c10928a): ${JSON.stringify(lighterTint)}`,
+  );
+
+  // …and the bound must NOT fire for the replacement tokens: text-red-700 and
+  // text-sky-700 clear AA on every tint AND every composite (worst 5.2085:1 and
+  // 4.7502:1), so the same markup with the token this family actually ships is
+  // legal and must stay unreported.
+  const lighterTintSafe = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="bg-slate-50/20">',
+      '      <span className="text-red-700">Retry</span>',
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    lighterTintSafe,
+    [],
+    `text-red-700 clears AA on bg-slate-50/20 over --jf-bg (5.32:1); the new composite ` +
+      `bound must not refuse it: ${JSON.stringify(lighterTintSafe)}`,
+  );
+
+  // (4) The SAME element may paint the tint and the token together
+  //     (`bg-slate-50/20 text-red-600`); shape (a) must judge the composite too,
+  //     or a class list that carries both re-opens the hole fixture (3) closes.
+  const sameElement = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <p className="bg-slate-50/20 text-red-600">Failed</p>',
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  assert.ok(
+    sameElement.some((f) => f.includes("text-red-600") && f.includes("bg-slate-50/20")),
+    `a same-element bg-slate-50/20 + text-red-600 (4.483:1 composited) must be reported ` +
+      `by shape (a), not only by the ancestor shape: ${JSON.stringify(sameElement)}`,
   );
 });
 
