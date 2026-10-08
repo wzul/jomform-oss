@@ -274,6 +274,31 @@ export function isScopeRefusal(body: unknown): boolean {
 }
 
 /**
+ * The `?workspace=` slug a scope-refusal BODY names, or "" when it names none.
+ *
+ * WHY THE BODY HAS TO CARRY THIS (card t_1cfb4044). A scope refusal is only ever
+ * a fact about ONE slug: the one that request was sent with. The client that
+ * reads the refusal must therefore know WHICH slug was refused, or it can only
+ * act on the assumption that it is the slug it is holding now — and that
+ * assumption is false for every refusal that lands late, after the session has
+ * already reconciled the scope (see the stale-slug race documented on
+ * `dropWorkspaceScopeIfCurrent` in lib/workspace.ts). An unroutable "the scope is
+ * wrong" is what let a 403 for a slug that had already been replaced wipe the
+ * replacement.
+ *
+ * The API does not return the slug in the response today (`scopeOr403` writes
+ * the prose and the code only), so this reads `workspace` when a caller has it
+ * and returns "" otherwise. "" means "unattributed", and the caller treats that
+ * as the conservative case rather than as "no slug" — never as a licence to act.
+ * Reading the field here means the day the API starts naming the slug, the
+ * client needs no change.
+ */
+export function workspaceScopeOf(body: unknown): string {
+  const ws = (body as { workspace?: unknown } | null | undefined)?.workspace;
+  return typeof ws === "string" ? ws : "";
+}
+
+/**
  * True when the parsed body carries a NON-empty `error` string. Used only by
  * the source guard (src/lib/apiErr.test.ts) and by tests that need to prove a
  * payload really is a server-prose response; the dashboard must not use it to

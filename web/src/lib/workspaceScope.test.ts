@@ -77,6 +77,7 @@ import {
   clearUnknownWorkspaceScope,
   createWorkspace,
   dropCurrentWorkspaceScope,
+  dropWorkspaceScopeIfCurrent,
   enterWorkspace,
   publishWorkspaceScope,
   resetConfirmedWorkspaceScope,
@@ -317,6 +318,93 @@ test("enterWorkspace publishes a scope that every fetch then uses, and notifies 
     "after a switch the next fetch still carried the PREVIOUS workspace's slug",
   );
   assert.deepEqual(events, ["jf:workspace-changed"]);
+});
+
+test("dropWorkspaceScopeIfCurrent does NOT drop a slug that has already been replaced (t_1cfb4044)", () => {
+  // THE RACE THIS CARD CHARACTERISES. A page fires its first scoped request on
+  // mount; the session bundle (UNSCOPED, so never refused) answers while that
+  // request is still in flight and the `[bundle]` effect reconciles the scope
+  // onto a workspace the caller really has; the refusal for the ORIGINAL slug
+  // then resolves. The drop must be a no-op by then — the refused slug is not the
+  // scope in use any more, and acting on it wipes the value that was just
+  // published, leaving `jf_workspace` unset for good.
+  //
+  // Measured on this card's tree: `/chat` with a stale slug polled
+  // localStorage.getItem("jf_workspace") and read null at 30s (12+ times the
+  // spec's 10s budget), so this is the mechanism, not a tight timeout.
+  const { store, events } = withStore({ jf_workspace: "ws-a" }, () => {
+    setConfirmedWorkspaceScope("ws-a");
+    dropWorkspaceScopeIfCurrent("ws-gone");
+  });
+  assert.equal(
+    store.get("jf_workspace"),
+    "ws-a",
+    "a refusal for a slug that had ALREADY been replaced wiped the reconciled workspace — this is the " +
+      "stale-slug race (t_1cfb4044): nothing re-publishes the value, so every later request goes unscoped",
+  );
+  assert.deepEqual(
+    events,
+    [],
+    "an out-of-date refusal still notified the session context, so the page re-fetches for a scope it " +
+      "did not lose",
+  );
+  assert.equal(
+    withStore({ jf_workspace: "ws-a" }, () => {
+      setConfirmedWorkspaceScope("ws-a");
+      dropWorkspaceScopeIfCurrent("ws-gone");
+      return workspaceQuery();
+    }).result,
+    "?workspace=ws-a",
+    "the reconciled scope stopped reaching the wire — the page would load with no workspace at all",
+  );
+});
+
+test("dropWorkspaceScopeIfCurrent still drops the slug the refusal IS about", () => {
+  // The other direction, and the pre-fix behaviour it must not lose: while the
+  // refused slug is still the one in use, the refusal is current information and
+  // the slug must stop being sent — or the very next request repeats the 403.
+  const { store, events } = withStore({ jf_workspace: "ws-gone" }, () => {
+    setConfirmedWorkspaceScope("ws-gone");
+    dropWorkspaceScopeIfCurrent("ws-gone");
+  });
+  assert.equal(store.get("jf_workspace"), undefined, "the current, refusing slug is still stored");
+  assert.deepEqual(events, ["jf:workspace-changed"]);
+  assert.equal(
+    withStore({ jf_workspace: "ws-gone" }, () => {
+      setConfirmedWorkspaceScope("ws-gone");
+      dropWorkspaceScopeIfCurrent("ws-gone");
+      return workspaceQuery();
+    }).result,
+    "",
+    "a rejected slug is still sent on the next request — the refusal would repeat forever",
+  );
+});
+
+test("dropWorkspaceScopeIfCurrent treats an UNATTRIBUTED refusal conservatively", () => {
+  // "" is not "no scope" — it is "the caller cannot say which slug was refused",
+  // and the safe reading of that is "it might be the current one". A fix that
+  // treated a missing attribution as a licence to act would silently stop
+  // un-sending a slug that IS stale, which is the original sign-out defect.
+  const { store } = withStore({ jf_workspace: "ws-gone" }, () => {
+    setConfirmedWorkspaceScope("ws-gone");
+    dropWorkspaceScopeIfCurrent("");
+  });
+  assert.equal(
+    store.get("jf_workspace"),
+    undefined,
+    "an unattributed refusal no longer dropped the current slug — a stale scope would keep being sent",
+  );
+});
+
+test("dropCurrentWorkspaceScope stays the unconditional form", () => {
+  // It is the wrapper with no slug to attribute (WorkspaceTab's rename path holds
+  // no refusal body, and the slug there is the one the user just acted on), so it
+  // must keep meaning exactly what it meant before.
+  const { store } = withStore({ jf_workspace: "ws-a" }, () => {
+    setConfirmedWorkspaceScope("ws-a");
+    dropCurrentWorkspaceScope();
+  });
+  assert.equal(store.get("jf_workspace"), undefined);
 });
 
 test("clearUnknownWorkspaceScope empties the confirmed scope too, not only storage", () => {

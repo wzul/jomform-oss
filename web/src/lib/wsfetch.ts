@@ -20,8 +20,8 @@
 //   2xx            → the parsed payload
 //   network / bad JSON → the error message too
 
-import { isScopeRefusal } from "./apiErr.ts";
-import { dropCurrentWorkspaceScope } from "./workspace.ts";
+import { isScopeRefusal, workspaceScopeOf } from "./apiErr.ts";
+import { dropWorkspaceScopeIfCurrent } from "./workspace.ts";
 
 export type LoadFailureKind =
   // The session is no longer valid (401, or an uncoded 403): the user must
@@ -99,17 +99,42 @@ export function classifyLoadError(err: unknown): { kind: LoadFailureKind; status
 export class HttpError extends Error {
   status: number;
   body: unknown;
-  constructor(status: number, body?: unknown) {
+  /**
+   * The `?workspace=` slug the failed request WAS SENT WITH, when the caller
+   * knows it (card t_1cfb4044). A scope refusal is a fact about one slug, and
+   * runLoad must route it to the slug it is about — see `dropWorkspaceScopeIfCurrent`
+   * in lib/workspace.ts for the race an unattributed refusal causes.
+   *
+   * "" = unattributed, which the drop treats as "possibly the current one".
+   */
+  scopeSlug: string;
+  constructor(status: number, body?: unknown, scopeSlug = "") {
     super(`HTTP ${status}`);
     this.name = "HttpError";
     this.status = status;
     this.body = body;
+    this.scopeSlug = scopeSlug;
   }
 }
 
 /** The parsed error body carried by a thrown HttpError, or undefined. */
 export function errorBodyOf(err: unknown): unknown {
   return (err as { body?: unknown } | null | undefined)?.body;
+}
+
+/**
+ * The `?workspace=` slug a thrown load error is ABOUT, or "" when the caller
+ * cannot say (card t_1cfb4044).
+ *
+ * Two sources, in order: the HttpError's own `scopeSlug` (set by fetchOrThrow
+ * from the refusal body or the request url), then the body's `workspace` field
+ * for an HttpError built by hand. "" is not "no scope" — it is "unattributed",
+ * and the drop it feeds treats it conservatively.
+ */
+export function errorScopeSlug(err: unknown): string {
+  const own = (err as { scopeSlug?: unknown } | null | undefined)?.scopeSlug;
+  if (typeof own === "string" && own !== "") return own;
+  return workspaceScopeOf(errorBodyOf(err));
 }
 
 /**
@@ -123,7 +148,15 @@ export function errorBodyOf(err: unknown): unknown {
  */
 export async function fetchOrThrow(input: string, init?: RequestInit): Promise<Response> {
   const r = await fetch(input, init);
-  if (!r.ok) throw new HttpError(r.status, await readErrorBody(r));
+  if (!r.ok) {
+    const body = await readErrorBody(r);
+    // The slug is attributed from the BODY when the server names it and from the
+    // REQUEST otherwise (card t_1cfb4044): the body is authoritative — it says
+    // which scope was actually refused — while the request url says which scope
+    // was asked for. They agree in every case where both exist; the url is the
+    // fallback for the API as it stands today, which does not name it.
+    throw new HttpError(r.status, body, workspaceScopeOf(body) || scopeSlugOfRequest(r));
+  }
   return r;
 }
 
@@ -133,6 +166,27 @@ export async function readErrorBody(r: Response): Promise<unknown> {
     return await r.clone().json();
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * The `?workspace=` slug this Response was REQUESTED with, or "" when it carried
+ * none (card t_1cfb4044).
+ *
+ * `fetch` does not expose the request URL on the Response in every runtime, but
+ * `Response.url` is the FINAL url of the response, and for these same-origin calls
+ * it is the request url. It is read defensively: an empty or unparsable url
+ * attributes nothing, which the drop treats as the conservative case rather than
+ * as a licence to act.
+ */
+export function scopeSlugOfRequest(r: Response): string {
+  const url = r.url || "";
+  const m = /[?&]workspace=([^&]*)/.exec(url);
+  if (!m) return "";
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return m[1];
   }
 }
 
@@ -168,11 +222,16 @@ export async function classifyResponseFailure(r: Response): Promise<LoadFailureK
  * A 403 that NAMES the tenancy code (`workspace.notFound`) is the "scope"
  * outcome, not "unauth": it means the request's `?workspace=` is not one the
  * caller has, which is a stale localStorage value rather than a dead session
- * (t_da4b2031). `onUnauth` is NOT called for it, and `dropCurrentWorkspaceScope`
- * removes the slug and notifies the session so the page refetches — so the
- * merchant is never bounced to /login for their own stale selection. The
- * localized tenancy sentence is rendered in place, which is why the outcome still
- * carries `error`.
+ * (t_da4b2031). `onUnauth` is NOT called for it, and the stale slug is removed
+ * and the session notified so the page refetches — so the merchant is never
+ * bounced to /login for their own stale selection. The localized tenancy sentence
+ * is rendered in place, which is why the outcome still carries `error`.
+ *
+ * The slug that is removed is the one the FAILED REQUEST was sent with, not
+ * whichever slug happens to be current when the refusal lands (t_1cfb4044): by
+ * the time a slow refusal resolves the session may already have reconciled onto a
+ * real workspace, and an unattributed drop would wipe it. See
+ * `dropWorkspaceScopeIfCurrent`.
  *
  * Issue #6177: when the server's failure body carries a machine error `code`
  * the caller understands (`opts.errorKey`), that localized message is rendered
@@ -198,7 +257,16 @@ export async function runLoad<T>(
     // The scope refusal is handled ONCE, here: the slug is provably not the
     // caller's (the server just said so), so it must not be sent again, and the
     // page must not sit on an error for a scope it has already discarded.
-    if (kind === "scope") dropCurrentWorkspaceScope();
+    //
+    // ROUTED TO THE SLUG IT IS ABOUT (card t_1cfb4044). The refusal is a fact
+    // about the scope the failed request was SENT with, and between that send and
+    // this landing the session may already have reconciled onto a workspace the
+    // caller really has. Dropping unconditionally would then destroy a value
+    // somebody else had just validated — the intermittent `/chat` failure this
+    // card characterises. `dropWorkspaceScopeIfCurrent("")` (the no-slug-known
+    // case) keeps the old unconditional behaviour, so a caller that cannot
+    // attribute the refusal still un-sends a slug that is stale.
+    if (kind === "scope") dropWorkspaceScopeIfCurrent(errorScopeSlug(err));
     let message = opts.message;
     if (opts.errorKey) {
       const translated = opts.errorKey(errorBodyOf(err));

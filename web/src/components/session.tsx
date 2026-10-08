@@ -32,7 +32,7 @@ import {
 import {
   activeWorkspaceScope,
   clearUnknownWorkspaceScope,
-  dropCurrentWorkspaceScope,
+  dropWorkspaceScopeIfCurrent,
   publishWorkspaceScope,
 } from "../lib/workspace";
 import { isScopeRefusal } from "../lib/apiErr";
@@ -247,7 +247,11 @@ function fetchBundle(workspace: string): Promise<BundleRead> {
       // The recursion is depth 1: an UNSCOPED request can never be a scope
       // refusal (resolveAccountScope only rejects a slug that was sent).
       if (r.status === 403 && isScopeRefusal(await readErrorBody(r))) {
-        dropCurrentWorkspaceScope();
+        // ROUTED TO THE SLUG THIS REQUEST CARRIED (t_1cfb4044): the refusal is
+        // about `q`'s slug, and the unscoped re-fetch below is the correction —
+        // an unconditional drop here could wipe a scope another path had already
+        // reconciled while this read was in flight.
+        dropWorkspaceScopeIfCurrent(workspace);
         return fetchBundle("");
       }
       const body = await readErrorBody(r);

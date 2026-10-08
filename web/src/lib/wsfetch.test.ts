@@ -28,6 +28,11 @@ import {
   isUnauthStatus,
   runLoad,
 } from "./wsfetch.ts";
+import {
+  resetConfirmedWorkspaceScope,
+  setConfirmedWorkspaceScope,
+  workspaceQuery,
+} from "./workspace.ts";
 
 const MESSAGE = "Something went wrong loading your workspaces.";
 
@@ -333,6 +338,90 @@ test("runLoad keeps the session on a tenancy refusal and never calls onUnauth", 
     "an uncoded 403 stopped redirecting to /login — a genuine authorization refusal would be treated as " +
       "a stale workspace",
   );
+});
+
+test("runLoad routes a refusal to the slug it is ABOUT, not to the current one (t_1cfb4044)", async () => {
+  // THE RACE, executed through the shared wrapper every dashboard page uses.
+  // Sequence on a stale jf_workspace:
+  //   1. the page fires its first scoped request carrying `ws-gone`;
+  //   2. the session bundle (UNSCOPED, so never refused) answers while that
+  //      request is still in flight and the `[bundle]` effect reconciles the
+  //      scope onto `ws-a`, a workspace the caller really has;
+  //   3. the refusal for `ws-gone` finally lands.
+  // The drop must be a no-op at (3). The pre-fix code dropped unconditionally and
+  // wiped `ws-a`; nothing re-publishes it, so `jf_workspace` stayed unset and
+  // every later request went out UNscoped. Measured: the spec's 10s poll read
+  // null, and it was still null at 30s.
+  const store = new Map<string, string>([["jf_workspace", "ws-a"]]);
+  const g = globalThis as unknown as Record<string, unknown>;
+  const prev = { window: g.window, localStorage: g.localStorage };
+  g.window = { dispatchEvent: () => true };
+  g.localStorage = {
+    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  try {
+    // The session has already reconciled: `ws-a` is the confirmed scope.
+    setConfirmedWorkspaceScope("ws-a");
+    const outcome = await runLoad(
+      () => Promise.reject(new HttpError(403, scopeRefusalBody(), "ws-gone")),
+      { onUnauth: () => {}, message: MESSAGE },
+    );
+    assert.equal(outcome.ok === false && outcome.kind, "scope");
+    assert.equal(
+      store.get("jf_workspace"),
+      "ws-a",
+      "a refusal for a slug that had already been replaced wiped the reconciled workspace — this is the " +
+        "stale-slug race (t_1cfb4044)",
+    );
+    assert.equal(
+      workspaceQuery(),
+      "?workspace=ws-a",
+      "the reconciled scope stopped reaching the wire, so the page loads with no workspace at all",
+    );
+  } finally {
+    resetConfirmedWorkspaceScope();
+    g.window = prev.window;
+    g.localStorage = prev.localStorage;
+  }
+});
+
+test("runLoad still drops the slug the refusal IS about, and an unattributed one", async () => {
+  // The two directions the routing must NOT lose:
+  //   * `ws-gone` refused while it is STILL the scope in use → dropped, or the
+  //     next request repeats the 403 forever;
+  //   * a refusal with no slug known (a hand-built HttpError, an older caller) →
+  //     dropped, because "unattributed" is not "not mine".
+  const cases: { name: string; slug: string; err: () => HttpError }[] = [
+    { name: "attributed to the current slug", slug: "ws-gone", err: () => new HttpError(403, scopeRefusalBody(), "ws-gone") },
+    { name: "unattributed", slug: "ws-gone", err: () => new HttpError(403, scopeRefusalBody()) },
+  ];
+  for (const c of cases) {
+    const store = new Map<string, string>([["jf_workspace", "ws-gone"]]);
+    const g = globalThis as unknown as Record<string, unknown>;
+    const prev = { window: g.window, localStorage: g.localStorage };
+    g.window = { dispatchEvent: () => true };
+    g.localStorage = {
+      getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    };
+    try {
+      setConfirmedWorkspaceScope("ws-gone");
+      await runLoad(() => Promise.reject(c.err()), { onUnauth: () => {}, message: MESSAGE });
+      assert.equal(
+        store.get("jf_workspace"),
+        undefined,
+        `${c.name}: the stale slug survived the refusal — the very next request would carry it again`,
+      );
+      assert.equal(workspaceQuery(), "", `${c.name}: a rejected slug is still sent on the next request`);
+    } finally {
+      resetConfirmedWorkspaceScope();
+      g.window = prev.window;
+      g.localStorage = prev.localStorage;
+    }
+  }
 });
 
 test("an error carrying a status is classified from that status", () => {

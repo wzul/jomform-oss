@@ -172,13 +172,50 @@ export function confirmedWorkspaceScope(): string | null {
 // us it is not ours. It is the authoritative form of the reconciliation: it does
 // not need the workspace list, so it also works when the request that failed was
 // the one fetching that list.
-export function dropCurrentWorkspaceScope(): void {
-  publishWorkspaceScope(""); // notifies the session context when it changes
+//
+// WHY IT TAKES THE REFUSED SLUG (card t_1cfb4044). This used to take nothing and
+// drop unconditionally, which is only correct while the refused slug and the
+// CURRENT one are the same value. They routinely are not: a page fires its first
+// scoped request on mount, the session bundle (an UNSCOPED request, so it is
+// never refused) answers while that scoped request is still in flight, and the
+// `[bundle]` effect in components/session.tsx reconciles the scope onto the
+// workspace the caller really has. The refusal for the ORIGINAL slug then
+// resolves — after the reconciliation — and the old unconditional drop wiped the
+// freshly published slug, leaving `jf_workspace` unset. Nothing re-publishes it
+// (the bundle is cached under the reconciled key and the effect has already
+// run), so the value stays unset and every later request goes out UNSCOPED. That
+// is the intermittent failure measured on this card: `/chat` with a stale slug
+// polled `localStorage.getItem("jf_workspace")` and read `null` at 30s, long past
+// the spec's 10s budget, so it was never a timing budget.
+//
+// So the drop is ROUTED: it applies only while the refused slug is still the one
+// in use. By the time it is not, the refusal is stale information about a scope
+// the session has already replaced, and acting on it can only destroy a value
+// somebody else validated.
+//
+// `refused` is the slug the refused request WAS SENT WITH (see
+// apiErr.workspaceScopeOf for how a body can name it). "" means the caller cannot
+// attribute the refusal, and the conservative reading is "it might be the current
+// one" — the pre-fix behaviour, kept so the fix cannot silently stop un-sending a
+// slug that IS stale.
+export function dropWorkspaceScopeIfCurrent(refused: string): void {
+  if (refused === "" || refused === activeWorkspaceScope()) {
+    publishWorkspaceScope(""); // notifies the session context when it changes
+  }
   try {
     localStorage.removeItem("jf_space");
   } catch {
     // storage unavailable — ignore
   }
+}
+
+// dropCurrentWorkspaceScope is the unattributed form: the server refused
+// whichever scope was in use, so it is dropped unconditionally. Kept for the call
+// sites that hold no refusal body to attribute (see WorkspaceTab's rename path —
+// there the slug being dropped is the one the user just acted on, so the
+// pre-fix reading is the true one).
+export function dropCurrentWorkspaceScope(): void {
+  dropWorkspaceScopeIfCurrent("");
 }
 
 /** Test-only: clear the module-level confirmed scope between cases. */

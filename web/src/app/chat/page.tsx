@@ -49,10 +49,16 @@ import { Shell } from "../../components/Shell";
 import { Markdown } from "../../components/Markdown";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
-import { fetchJson, runLoad, classifyResponseFailure, classifyStatus } from "../../lib/wsfetch";
+import {
+  fetchJson,
+  runLoad,
+  classifyResponseFailure,
+  classifyStatus,
+  scopeSlugOfRequest,
+} from "../../lib/wsfetch";
 import { translateApiErr } from "../../lib/apiErr";
 import { confirmDecisionFor } from "../../lib/chatConfirm";
-import { dropCurrentWorkspaceScope, workspaceQuery } from "../../lib/workspace";
+import { dropWorkspaceScopeIfCurrent, workspaceQuery } from "../../lib/workspace";
 
 type Turn = { role: "user" | "assistant"; content: string };
 
@@ -366,7 +372,12 @@ export default function ChatPage() {
         // does for a page load: publishWorkspaceScope("") drops it and notifies,
         // so the next request is scoped to whatever workspace the session then
         // publishes rather than repeating a refusal the server already answered.
-        dropCurrentWorkspaceScope();
+        //
+        // ROUTED TO THE SLUG THIS REQUEST CARRIED (t_1cfb4044), not to whatever
+        // is current: this send awaited a response, and the session may have
+        // reconciled the scope while it was in flight. An unconditional drop
+        // would wipe the reconciled value and leave every later request unscoped.
+        dropWorkspaceScopeIfCurrent(scopeSlugOfRequest(r));
       }
       if (failure === "unauth") {
         goToLogin();
