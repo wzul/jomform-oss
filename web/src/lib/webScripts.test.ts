@@ -37,11 +37,12 @@
 //
 //      The command is resolved THROUGH the wrappers that only LAUNCH it — `npx`
 //      (and `npm exec`/`npm x`), `pnpx`, `pnpm exec`/`pnpm dlx`, `bunx`/`bun x`,
-//      `yarn exec`/`yarn dlx`, `env`, and an explicit `node_modules/.bin/next`
-//      path — so a step that reaches the SAME cli one wrapper out is judged the
-//      same (card t_266bec68). Measured BEFORE that fix, on the head this guard
-//      shipped at, by mutation with `web/package.json` restored byte-identically
-//      each time (md5 8cfe24f0 before and after): `"lint": "npx next lint"` and
+//      `yarn exec`/`yarn dlx`, `env`, `node`, and an explicit
+//      `node_modules/.bin/next` path — so a step that reaches the SAME cli one
+//      wrapper out is judged the same (cards t_266bec68, t_1ecbb32c). Measured
+//      BEFORE that fix, on the head this guard shipped at, by mutation with
+//      `web/package.json` restored byte-identically each time (md5 8cfe24f0
+//      before and after): `"lint": "npx next lint"` and
 //      `"lint": "./node_modules/.bin/next lint"` were both GREEN (MISSED) while
 //      the bare `"lint": "next lint"` was RED — and both MISSED shapes still exit
 //      1 with `Invalid project directory provided, no such directory: <web>/lint`,
@@ -49,6 +50,21 @@
 //      more now than it did before the fix: the script is gone, so the most
 //      natural re-introduction (`npx next lint`, which is what most Next 15-era
 //      docs and muscle memory produce) is exactly the shape that was unwatched.
+//
+//      `node_modules/.bin/next` is itself a SYMLINK, so the resolution does not
+//      stop at the symlink spelling: it is judged at the file it points at too
+//      (`node_modules/next/dist/bin/next`, next's own declared `bin`), because
+//      naming the target runs the SAME cli and the SAME dead command. Measured
+//      on this tree (card t_1ecbb32c), mutating `"lint"` next to `"start"` with
+//      the manifest restored byte-identically each time (md5 144542c1804ea50f5a8ad5fc59eb393d
+//      before and after): `"lint": "node node_modules/next/dist/bin/next lint"`,
+//      `"lint": "./node_modules/next/dist/bin/next lint"` and
+//      `"lint": "./node_modules/.bin/../next/dist/bin/next lint"` were all GREEN
+//      (MISSED), while `"lint": "./node_modules/.bin/next lint"` was already RED.
+//      The MISSED shapes reach the same live failure: `node
+//      node_modules/next/dist/bin/next lint` exits 1 with `Invalid project
+//      directory provided, no such directory: <web>/lint`, one resolution step
+//      deeper than the symlink the card before this one fixed.
 //   2. SPECIFIC — every `npm run <name>` the repo hands a reader must name a
 //      script web/package.json defines. The referenced set is DERIVED by walking
 //      the tree for `npm run` (measured: a11y, build, dev, docs:facts, e2e, start,
@@ -70,6 +86,15 @@
 //     pipeline or a command substitution, and a launcher flag that takes a
 //     SEPARATE value (`env -u NAME next lint` leaves `NAME` in the command slot).
 //     `npm run <script>` steps are test 2's subject, not this one's.
+//   * `node <file>` is judged when the FILE is this cli (`node
+//     node_modules/next/dist/bin/next lint`). It is NOT a general "any `node`
+//     step" rule: a step whose `node` target is anything else — a helper script
+//     (`node scripts/web-deps-check.mjs`), or a path that merely ends in `next`
+//     without the `.../next/dist/bin/next` shape — is left unjudged, the safe
+//     direction. A path spelled with a SYMLINK the guard cannot see (a `.bin`
+//     entry of another name, say) is therefore not resolved — only the two
+//     spellings next actually ships (`.bin/next` and its `dist/bin/next` target)
+//     are.
 //   * The walk skips node_modules/.git/.next/out/coverage and build-output `bin/`,
 //     and does not follow symlinks, so a reference in a generated or ignored
 //     directory is not scanned.
@@ -153,7 +178,10 @@ function stepsOf(script: string): string[] {
  * Each is a real way to run the binary installed in `node_modules/.bin`, which is
  * what `npm run` puts on PATH: `npx` (`npm exec`'s shorthand) and `npm exec`/
  * `npm x`, `pnpx` and `pnpm exec`/`pnpm dlx`, `bunx`/`bun x`, `yarn exec`/`yarn
- * dlx`, and `env`, which execs the command it is given.
+ * dlx`, `env`, which execs the command it is given, and `node`, which runs the
+ * file it is given — and `node_modules/.bin/next` IS a JS file
+ * (`node_modules/next/dist/bin/next`, `#!/usr/bin/env node`), so `node
+ * node_modules/…/next` is one more spelling of the same cli (card t_1ecbb32c).
  *
  * Longest forms first, so `npm exec` is matched before a bare `npm` prefix ever
  * could be — a bare `npm` is deliberately NOT a launcher: `npm run <script>` is
@@ -171,18 +199,34 @@ const LAUNCH_PREFIXES: readonly string[][] = [
   ["pnpx"],
   ["bunx"],
   ["env"],
+  ["node"],
 ];
 
 /**
- * Is this token the `next` cli — by bare name, or by a `node_modules/.bin/next`
- * path (`./node_modules/.bin/next`, an absolute one, another tree's)?
+ * Is this token the `next` cli — by bare name, by a `node_modules/.bin/next`
+ * path (`./node_modules/.bin/next`, an absolute one, another tree's), or by the
+ * file that path RESOLVES to, `node_modules/next/dist/bin/next`?
+ *
+ * The dist spelling is the same cli: `node_modules/.bin/next` is a symlink to
+ * it, and `node_modules/next/package.json` declares `"bin": {"next":
+ * "./dist/bin/next"}`, so naming either reaches one binary (card t_1ecbb32c).
+ * The tail `next/dist/bin/next` is matched on a `/` boundary (or at the start),
+ * which is what makes the three measured MISSED spellings judge alike —
+ * `node_modules/next/dist/bin/next`, `./…`, and `node_modules/.bin/../next/dist/
+ * bin/next` (the `..` spelling, which the shell would normalize to the first).
  *
  * A WHOLE-token match, never a substring: `next-intl`, `next-auth` and `eslint`
  * are different programs and must not be judged as this cli, so the wrapper rule
- * cannot widen into "anything with `next` in it".
+ * cannot widen into "anything with `next` in it". The same care is why the
+ * dist arm is anchored on the full `next/dist/bin/next` tail: a `next-intl` path
+ * ends in `/bin/next-intl`, not `/bin/next`.
  */
 function isNextWord(token: string): boolean {
-  return token === "next" || /(?:^|\/)node_modules\/\.bin\/next$/.test(token);
+  return (
+    token === "next" ||
+    /(?:^|\/)node_modules\/\.bin\/next$/.test(token) ||
+    /(?:^|\/)next\/dist\/bin\/next$/.test(token)
+  );
 }
 
 /**
@@ -276,6 +320,13 @@ test("a `next <sub>` is judged through the wrappers that only launch it", () => 
     // the same defect one wrapper out.
     ["npx next lint", true, "`npx` is transparent — the same cli runs"],
     ["./node_modules/.bin/next lint", true, "an explicit .bin path is the same cli"],
+    // ... and the file that path is a SYMLINK TO. Measured MISSED on the head
+    // this card fixed, by the same mutation method (card t_1ecbb32c): naming
+    // `next/dist/bin/next` runs one identical binary and one identical dead
+    // command, so the resolution must not stop at the symlink spelling.
+    ["node node_modules/next/dist/bin/next lint", true, "`node` runs the CLI file; the resolved dist path is the same cli"],
+    ["./node_modules/next/dist/bin/next lint", true, "the dist path without the `node` launcher (it is an executable script)"],
+    ["./node_modules/.bin/../next/dist/bin/next lint", true, "the `.bin` symlink spelled with a `..` that resolves to the same dist file"],
     // The rest of the launcher surface: each is a real way a step reaches the
     // binary `npm run` puts on PATH.
     ["npx --yes next lint", true, "a launcher's own flag is skipped with the launcher"],
@@ -292,10 +343,13 @@ test("a `next <sub>` is judged through the wrappers that only launch it", () => 
     // anything near a launcher": a REGISTERED subcommand stays quiet.
     ["npx next build", false, "`build` IS a subcommand of this cli"],
     ["./node_modules/.bin/next start", false, "`start` IS a subcommand of this cli"],
+    ["node node_modules/next/dist/bin/next build", false, "`build` IS a subcommand of this cli, reached by its resolved path"],
     // Not judged, deliberately — the safe direction, and the reason the wrapper
     // rule is a whole-token match.
     ["npx some-other-linter lint", false, "another tool's `lint`, not this cli"],
     ["npx next-lint", false, "`next-lint` is a different binary, not this cli"],
+    ["node node_modules/next-intl/dist/bin/next-intl lint", false, "`next-intl` has its OWN dist path — the dist arm must not match it"],
+    ["node scripts/web-deps-check.mjs", false, "`node <script>` is not this cli"],
     ["sh -c \"next lint\"", false, "a quoted command — the command word reads `sh`, not `next`"],
   ];
 
@@ -311,8 +365,9 @@ test("a `next <sub>` is judged through the wrappers that only launch it", () => 
     [],
     "the wrapper resolution does not judge the way this file's header says it does. A `next ... " +
       "lint` step is the Next-16 dead command whether or not a launcher sits in front of it; the " +
-      "two MISSED shapes at the top of the case list are the coverage gap card t_266bec68 " +
-      "measured:\n" +
+      "MISSED shapes at the top of the case list are the coverage gaps cards t_266bec68 (the " +
+      "`npx` / `.bin` wrappers) and t_1ecbb32c (the `.bin` SYMLINK's own resolved target, " +
+      "`node_modules/next/dist/bin/next`) measured:\n" +
       wrong.join("\n"),
   );
 });
