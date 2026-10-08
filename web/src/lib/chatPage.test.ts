@@ -240,9 +240,32 @@ const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
 // same sentence with the bin as the assistant's AGENT ("… binned by the assistant") is
 // still RED, because (B) does not depend on the verb introducing it.
 //
-// Everything a single clause can predicate of the assistant, and the one thing a
-// boundary can hide from it, is inside the five positions and the fold above, and is
-// proved by the BITES map below.
+// THE VERB ALONE IS NOT THE REPORT, the boundary this arm's information-verb paragraph
+// needs. "A REPORT IS NOT AN ACTION" was first read on the assistant's own verb alone,
+// and the verb alone cannot tell a report from a claim: "the assistant tells you where
+// the trash is" and "the assistant tells you IT BINS a form" carry the SAME verb, and the
+// second credits the assistant with the bin inside the clause the first only points at.
+// Measured (t_9717fec1): reading the verb alone suppressed seven genuine claims the head
+// scan caught — "tells you it bins", "reports that it deleted", "says it can trash",
+// "shows you it can delete", "tells you it has binned", "explains that it restores",
+// "mentions it deletes". So the guard now reads the REPORTED CLAUSE too: the information
+// verb stands (A) down only when nothing after it puts the assistant back in the bin
+// verb's subject position, which is the object-of-knowledge reading the paragraph above
+// describes. A bin token the assistant is merely the REPORTER of still stands (A) down —
+// see `assistantBinsInsideReport`.
+//
+// What is NOT decided, stated rather than implied: an information verb whose OBJECT is a
+// bin GERUND — "the assistant reports deleting a form". The same string also carries the
+// reading "the assistant says binning a form is easy", in which the gerund is the subject
+// of a clause of its own and credits the assistant with nothing, and telling those two
+// apart needs a parse of the reported clause rather than a token test. It is a residual,
+// not a position, and the shipped page carries neither reading.
+//
+// Everything a single clause can PREDICATE of the assistant — including the reported
+// clause of an information verb that puts the assistant back in the bin verb's subject
+// position — is inside the five positions and the fold above, and is proved by the BITES
+// map below. The one thing a boundary can HIDE from it is the report/reference reading
+// named above, which is decided inside position (A) rather than by a position of its own.
 //
 // Split out of the assertions so the bite proof below runs the IDENTICAL scan against
 // a mutated page: a proof that exercised a paraphrase would prove nothing about the
@@ -358,8 +381,56 @@ function assistantVerb(matched: string): string | null {
   let rest = matched.slice(m[0].length);
   const aux = new RegExp(`^(?:${ASSISTANT_AUX})\\b\\s*`, "i").exec(rest);
   if (aux) rest = rest.slice(aux[0].length);
-  const verb = /^[a-z]+(?:'[a-z]+\b)?/i.exec(rest);
+  const verb = /^[a-z]+(?:'[a-z]+\\b)?/i.exec(rest);
   return verb ? verb[0].toLowerCase() : null;
+}
+
+/** The copulas: an auxiliary that can make the bin token a PASSIVE on the thing. */
+const COPULA_AUX = /^(?:is|are|was|were|be|been|being)$/;
+
+/**
+ * Does the clause the assistant's information verb REPORTS put the assistant back in the
+ * bin verb's subject position — "the assistant tells you IT BINS a form"? True means the
+ * information verb is the REPORTER of a claim rather than a report ABOUT the bin, so
+ * position (A)'s match is the claim itself (the header's "THE VERB ALONE IS NOT THE
+ * REPORT").
+ *
+ * The reported clause is read as the same canonical subject+verb shape position (A) reads
+ * on the assistant itself, with the assistant's PRONOUN (or the noun again) as its
+ * subject, and the bin token must be its VERB — which is what separates the claim from
+ * the report/reference the same verb can introduce:
+ *
+ *   "tells you IT BINS a form"        -> the assistant is the subject of `bins`  -> claim
+ *   "reports that THE ASSISTANT deleted a form"                      -> claim
+ *   "tells you WHERE the trash is"    -> an OBJECT follows the verb  -> report, stands down
+ *   "tells you WHICH form is in the trash"                           -> report, stands down
+ *   "lists may already be in the trash"                              -> report, stands down
+ *
+ * The copula is the one aux that cannot be taken at face value: "it IS BINNED" / "it is in
+ * the trash" is a PASSIVE on the thing, not an action of the assistant's, while "it IS
+ * BINNING" is the progressive claim — so a copula admits the `-ing` form only.
+ */
+function assistantBinsInsideReport(matched: string): boolean {
+  const info = new RegExp(`\\b(?:${INFO_VERB})\\b`, "i").exec(matched);
+  if (!info) return false;
+  // The clause the verb reports: strip the "that" that introduces it and the "you" the
+  // assistant reports TO ("tells YOU it bins" — that "you" is an indirect object, not the
+  // reported clause's subject), in either order.
+  let rest = matched.slice(info.index + info[0].length);
+  for (let i = 0; i < 3; i++) {
+    const stripped = rest.replace(/^\s+(?:that|you|the\s+person)\b/i, "");
+    if (stripped === rest) break;
+    rest = stripped;
+  }
+  const claim = new RegExp(
+    `^\\s+(?:it|they|he|she|the\\s+assistant)\\b(\\s+(?:${ASSISTANT_AUX}))?\\s+(${BIN_VOCAB})\\b`,
+    "i",
+  ).exec(rest);
+  if (!claim) return false;
+  const aux = (claim[1] ?? "").trim().toLowerCase();
+  const bin = claim[2].toLowerCase();
+  // A copula before a non-progressive form is the passive ("it is binned"), not a claim.
+  return !COPULA_AUX.test(aux) || /ing$/.test(bin);
 }
 
 /**
@@ -390,9 +461,12 @@ function binClaimInClause(raw: string): string | null {
       // The assistant's OWN verb decides: under an information verb, or a subordinator
       // opening the assistant's own clause, the later bin token is what it read or what
       // a sub-clause says, not what it did (see the header's "A REPORT IS NOT AN
-      // ACTION"). Action verbs and every other shape are unaffected.
+      // ACTION"). Action verbs and every other shape are unaffected. The verb alone is
+      // not the report, though: an information verb that REPORTS a clause putting the
+      // assistant back in the bin verb's subject position ("tells you IT BINS a form")
+      // is reporting a claim, not naming the bin (see `assistantBinsInsideReport`).
       const verb = assistantVerb(m[0]);
-      if (!verb || !HAS_NON_ACTION.test(verb)) return m[0];
+      if (!verb || !HAS_NON_ACTION.test(verb) || assistantBinsInsideReport(m[0])) return m[0];
     }
   }
   // (B) the AGENT of a passive: "<bin> by the assistant" (bare or periphrastic).
@@ -450,6 +524,16 @@ function binClaimInClause(raw: string): string | null {
 // ("… binned by the assistant") is still RED, because (B) does not depend on the verb
 // that introduces it. Measured: both sentences above were RED under the head scan
 // (the second newly, from the structural rewrite); the shipped page carries neither.
+//
+// ...BUT THE VERB ALONE IS NOT THE REPORT (t_9717fec1). "The assistant tells you where
+// the trash is" and "the assistant tells you IT BINS a form" carry the same information
+// verb and only the second claims the bin, so standing (A) down on the verb alone
+// suppressed seven genuine claims the head scan caught (the header's "THE VERB ALONE IS
+// NOT THE REPORT"). The reported clause is therefore read too, by
+// `assistantBinsInsideReport`: a bin token the assistant is merely the REPORTER of — an
+// object of knowledge, or a clause ABOUT the bin — still stands (A) down, while a
+// reported clause that puts the assistant back in the bin verb's subject position is the
+// claim the sentence carries and (A) holds.
 //
 // THE PRO-VERB ACROSS A CLAUSE BOUNDARY. A clause boundary splits the bin from the
 // word that stands for it: "Binning a form — the assistant does that." The second
@@ -1797,7 +1881,7 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
 // t_b3877cfb found still GREEN under the ten-shape scan — must go RED, as must the
 // shipped defect sentence it did catch. Nothing on disk is written: the mutation is
 // in memory, on the real page source read at module load.
-test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, both genitive orders, the gerund, both appositive variants, the it-cleft, the periphrastic passive, the nominal, the light verb + gerund, the copular predication, the topicalised cleft, the reversed nominal, the non-restrictive relative and the pro-verb across a clause boundary", () => {
+test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, both genitive orders, the gerund, both appositive variants, the it-cleft, the periphrastic passive, the nominal, the light verb + gerund, the copular predication, the topicalised cleft, the reversed nominal, the non-restrictive relative, the pro-verb across a clause boundary and the claim reported inside an information verb's clause", () => {
   const shipped = read(DOCS_PAGE);
   const anchor = "A creation is the one shape the field-edit rule does not cover,";
   // Vacuity: if the anchor is gone the injections below land nowhere and this
@@ -1918,6 +2002,21 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "pro-verb across · handles that (CD)": "Binning a form — the assistant handles that.",
     "pro-verb across · semicolon (CE)": "Binning a form; the assistant does that.",
     "pro-verb across · conjunction (CF)": "Binning a form is easy, and the assistant does that.",
+    // t_9717fec1 — the reported claim. Every one of these is a genuine claim (the
+    // assistant IS the binner) that sits INSIDE the clause an information verb
+    // reports, and every one was GREEN at the fix 09e2e6f0 because the information-verb
+    // guard read the assistant's own verb alone and stood position (A) down. The head
+    // scan 3542c039 caught all seven; the guard now reads the reported clause too
+    // (`assistantBinsInsideReport`) and catches them again. The seven are pinned here,
+    // not merely named in the header, because removing that one clause in the guard is
+    // the mutation that reds them — see the mutation note after this map.
+    "reported claim · tells/object (CG)": "The assistant tells you it bins a form.",
+    "reported claim · reports/that (CH)": "The assistant reports that it deleted a form.",
+    "reported claim · says/modal (CI)": "The assistant says it can trash a form.",
+    "reported claim · shows/you+modal (CJ)": "The assistant shows you it can delete a form.",
+    "reported claim · tells/perfect (CK)": "The assistant tells you it has binned a form.",
+    "reported claim · explains/that (CL)": "The assistant explains that it restores a form.",
+    "reported claim · mentions/object (CM)": "The assistant mentions it deletes forms.",
   };
 
   const missed: string[] = [];
@@ -1937,6 +2036,18 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     `the prose arm did not go RED on these phrasings, so a copy that credits the assistant with ` +
       `the bin would ship GREEN (the defect this card fixes):\n  ${missed.join("\n  ")}`,
   );
+
+  // THE BITE, measured rather than asserted. The `reported claim` cases (CG-CM) are the
+  // seven t_9717fec1 sentences, and the mutation that reds them is the one clause this
+  // card added to position (A): dropping `|| assistantBinsInsideReport(m[0])` from the
+  // guard restores the fix 09e2e6f0's behaviour and all seven come back GREEN — measured
+  // on this file, the whole BITES map's other 60-odd cases staying green and ONLY the
+  // seven reported-claim rows entering `missed`. In the other direction, widening
+  // `assistantBinsInsideReport` to "an information verb followed by a bin anywhere"
+  // reds the report controls below (`assistant can tell you where the trash`), i.e. the
+  // clamp is what keeps the claim from swallowing the report. Both runs were done by
+  // hand on this file and are why the seven rows and the three added report controls
+  // are pinned rather than named in prose.
 
   // And the POSITIVE CONTROL must not be what carries the detection: the person-
   // attribution sentence the fix ships (which names the assistant only to disown
@@ -1985,11 +2096,22 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
   // head scan — the second newly, from the structural rewrite — and the shipped page
   // carries neither, so this is the false-positive side of the same rule, pinned here so
   // a correct future sentence that mentions the assistant and the trash is not reded.
+  //
+  // t_9717fec1 added the three below. They are the SAME shape one step further in:
+  // the assistant's information verb reports a clause, but that clause is about the
+  // bin rather than putting the assistant back in the bin verb's subject position
+  // ("the form is in the trash", "the trash is empty", "binning a form is easy").
+  // The clamp that catches a reported CLAIM must not swallow these, and these three
+  // are what reds if `assistantBinsInsideReport` is widened to "information verb …
+  // bin anywhere".
   for (const report of [
     "The assistant can tell you where the trash is.",
     "A form the assistant lists may already be in the trash.",
     "The assistant shows you which form is in the trash.",
     "You can ask the assistant whether a form is in the trash.",
+    "The assistant tells you the form is in the trash.",
+    "The assistant says the trash is empty.",
+    "The assistant says binning a form is easy.",
   ]) {
     assert.deepEqual(
       assistantBinClaims(report),
