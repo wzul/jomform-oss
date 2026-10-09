@@ -254,6 +254,32 @@ const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
 // describes. A bin token the assistant is merely the REPORTER of still stands (A) down —
 // see `assistantBinsInsideReport`.
 //
+// THE INFORMATION VERB BEHIND AN AUXILIARY CHAIN, and the infinitive that keeps the catch
+// (t_b0bf328c). "A REPORT IS NOT AN ACTION" reads the assistant's own verb, so the verb has
+// to come out of the verb PHRASE, not out of its last auxiliary: the words in `ASSISTANT_AUX`
+// STACK ("has been telling", "will be telling", "is going to tell"), and a reader that strips
+// at most ONE of them returns "been"/"be"/"going" — no information verb — so a pure report
+// behind a two- or three-word chain was red. `assistantVerb` now strips the WHOLE chain, so
+// the report stands down. The same strip would have removed a genuine CATCH the parent's own
+// auxiliary-blindness was holding: "the assistant has been asked TO BIN a form" reads the
+// auxiliary on the parent (no information verb, (A) holds, red), and recognising "asked"
+// stands (A) down unless the BARE BIN INFINITIVE after it is read back as the claim position
+// (A)'s infinitive shape already catches ("ask the assistant to bin") — `binInfinitiveAfterVerb`
+// is that read. Measured over this card's battery: on the stacked base the fix reds 0 of the
+// report controls and 6 genuinely-RED claim classes are held (not lost); on `main`, where
+// #1069's verb-alone stand-down is absent, the same strip would remove those catches outright —
+// this card is only safe stacked on the parent, exactly like t_31293346.
+//
+// RE-CUT ONTO `main` (t_cee3d61f). That stacked-base measurement is the HISTORIC one and is left
+// as it was written; its "only safe stacked" conclusion held because both of this card's
+// prerequisites were absent from the `main` of that day. Both have landed since — #1069's
+// verb-alone stand-down and #1073's particle group — so the cut is re-derived on today's `main`
+// rather than retargeted, and the reader keeps #1073's `(?:\s+up\b)?` tail as well as the list
+// keeps its `(?:looks?|looked|looking)\s+up` group, because the #1074 head predated #1073 and a
+// naive re-cut drops both. Re-measured on these bytes: 0 catches removed over the claim battery
+// (identical to the #1074 head, both 208 RED) and the 140 report sentences that battery reds on
+// today's `main` are all GREEN here.
+//
 // THE GERUND THE INFORMATION VERB REPORTS (t_7b69a77a), the boundary one position over,
 // now decided rather than documented. An information verb's OBJECT can be a bin GERUND —
 // "the assistant reports deleting a form" — and the reported clause puts no assistant
@@ -324,6 +350,18 @@ const BIN_ROLE = String.raw`(?:job|task|work|role|duty|responsibility|purpose|pa
 // The auxiliaries that can sit between the assistant and its bin verb. Not a closed
 // set of the verb's shapes — just the words a verb phrase may open with — so the rule
 // does not have to be re-taught when a modal the copy had not used before appears.
+//
+// AN AUXILIARY CHAIN, NOT ONE AUXILIARY (t_b0bf328c). These words STACK: a modal over a
+// perfect over a progressive (“has been telling”, “will be telling”), a modal over the
+// periphrastic future (“is going to tell”), a perfect over a passive (“has been asked”).
+// `assistantVerb` below strips the WHOLE chain, because reading the verb after only the
+// FIRST auxiliary returns the chain’s last auxiliary — “been” for “has been telling”,
+// “be” for “will be telling”, “going” for “is going to tell” — and none of those is an
+// information verb, so a pure REPORT behind a chain was read as an ACTION and red. The
+// single-auxiliary shapes (“has told you”, “can tell you”) were already GREEN, which is
+// why the gap was invisible. The strip is safe in ONE direction on purpose: no information
+// verb is a member of this set (the two sets do not intersect), so consuming every
+// auxiliary can only ever expose a real verb token, never swallow one.
 const ASSISTANT_AUX = String.raw`(?:can|may|will|would|could|should|shall|must|might|has|have|had|is|are|was|were|be|been|being|does|do|did|takes?|moves?|going\s+to|about\s+to|due\s+to|needs?\s+to|wants?\s+to|to)`;
 // A copula, as a word (" is") or a contraction ("'s" / "’s"), for the cleft rewrites.
 const COPULA = String.raw`(?:\s+(?:is|was|are|were)|(?:'|’)s)`;
@@ -560,19 +598,56 @@ function normaliseClause(raw: string): string {
 }
 
 /**
+ * The assistant's verb phrase in a match (A): the WHOLE auxiliary chain stripped, then the
+ * verb token, then whatever follows it. ONE reader, so `assistantVerb` and the bare-infinitive
+ * check below (`binInfinitiveAfterVerb`) cannot drift in how they strip a chain.
+ *
+ * The auxiliary chain is stripped WHOLE (t_b0bf328c). `ASSISTANT_AUX` is a set of words that
+ * STACK, so a verb phrase may open with two or three of them ("has been telling", "will be
+ * telling", "is going to tell"). Reading the verb after only the FIRST auxiliary returns the
+ * chain's last auxiliary — "been", "be", "going" — and HAS_NON_ACTION reads none of those as
+ * an information verb, so a pure REPORT behind a chain was red. One token is not the verb
+ * phrase; the chain is. The strip is safe in ONE direction on purpose: no information verb is
+ * a member of that set (the two sets do not intersect), so consuming every auxiliary can only
+ * expose a real verb token, never swallow one.
+ */
+function assistantVerbPhrase(matched: string): { verb: string; after: string } | null {
+  const m = /^assistant\b\s+/i.exec(matched);
+  if (!m) return null;
+  let rest = matched.slice(m[0].length);
+  const chain = new RegExp(`^(?:(?:${ASSISTANT_AUX})\\b\\s*)+`, "i").exec(rest);
+  if (chain) rest = rest.slice(chain[0].length);
+  const verb = /^[a-z]+(?:'[a-z]+\b)?(?:\s+up\b)?/i.exec(rest);
+  if (!verb) return null;
+  return { verb: verb[0].toLowerCase(), after: rest.slice(verb[0].length) };
+}
+
+/**
  * The assistant's OWN verb in a match (A) made against the normalised clause — the verb
  * that decides whether the later bin token is an action or an object of knowledge.
  * Returns null when the verb is the assistant's own bin verb ("the assistant bins"),
  * which is the claim itself.
  */
 function assistantVerb(matched: string): string | null {
-  const m = /^assistant\b\s+/i.exec(matched);
-  if (!m) return null;
-  let rest = matched.slice(m[0].length);
-  const aux = new RegExp(`^(?:${ASSISTANT_AUX})\\b\\s*`, "i").exec(rest);
-  if (aux) rest = rest.slice(aux[0].length);
-  const verb = /^[a-z]+(?:'[a-z]+\b)?(?:\s+up\b)?/i.exec(rest);
-  return verb ? verb[0].toLowerCase() : null;
+  return assistantVerbPhrase(matched)?.verb ?? null;
+}
+
+/**
+ * True when the assistant's verb phrase is followed by a BARE BIN INFINITIVE — "has been
+ * asked TO BIN a form", "can be told TO DELETE a form". There the bin token is the
+ * information verb's own COMPLEMENT and the assistant is the one who would bin it, which is
+ * the claim position (A)'s infinitive shape already catches from the other end ("ask the
+ * assistant to bin a form"). It matters only because the CHAIN strip above exposes the
+ * information verb behind its auxiliaries: on the parent tree ("has been asked to bin") the
+ * chain read the auxiliary "been", which is no information verb, so position (A) held and
+ * the claim was red; recognising the verb without this check would green it, i.e. lose the
+ * catch. The "you" that makes it a report ("tells YOU to bin") is not a bare infinitive and
+ * lands here as false, so the stand-down is unchanged for it.
+ */
+function binInfinitiveAfterVerb(matched: string): boolean {
+  const phrase = assistantVerbPhrase(matched);
+  if (!phrase) return false;
+  return new RegExp(`^\\s+to\\s+${BIN_VOCAB}\\b`, "i").test(phrase.after);
 }
 
 /** The copulas: an auxiliary that can make the bin token a PASSIVE on the thing. */
@@ -727,9 +802,18 @@ function binClaimInClause(raw: string, det: string = DET, contracted: boolean = 
       // ACTION"). Action verbs and every other shape are unaffected. The verb alone is
       // not the report, though: an information verb that REPORTS a clause putting the
       // assistant back in the bin verb's subject position ("tells you IT BINS a form")
-      // is reporting a claim, not naming the bin (see `assistantBinsInsideReport`).
+      // is reporting a claim, not naming the bin (see `assistantBinsInsideReport`), and
+      // an information verb followed by a BARE BIN INFINITIVE ("has been asked TO BIN")
+      // is the claim position (A)'s infinitive shape, not a report (see
+      // `binInfinitiveAfterVerb`).
       const verb = assistantVerb(m[0]);
-      if (!verb || !HAS_NON_ACTION.test(verb) || assistantBinsInsideReport(m[0], s, det, contracted)) return m[0];
+      if (
+        !verb ||
+        !HAS_NON_ACTION.test(verb) ||
+        binInfinitiveAfterVerb(m[0]) ||
+        assistantBinsInsideReport(m[0], s, det, contracted)
+      )
+        return m[0];
     }
   }
   // (B) the AGENT of a passive: "<bin> by the assistant" (bare or periphrastic).
@@ -2343,6 +2427,24 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "contracted subject · they've been trashing (DN)": "The assistant says they've been trashing forms.",
     "contracted subject · he's been deleting (DO)": "The assistant reports that he's been deleting forms.",
     "contracted subject · we've been restoring (DP)": "The assistant explains that we've been restoring a form.",
+    // t_b0bf328c — the SAME auxiliary chain on the CLAIM side, i.e. the catches the chain
+    // strip must NOT lose. A chain is not only a report's shape: an information verb behind
+    // its auxiliaries can carry a BARE BIN INFINITIVE ("has been asked TO BIN"), and there
+    // the assistant IS the one who would bin, which position (A)'s infinitive shape already
+    // catches from the other end ("ask the assistant to bin"). These were RED on main (the
+    // chain read the auxiliary, no information verb) and would green the moment the chain
+    // strip recognised the verb without the companion check (`binInfinitiveAfterVerb`) — so
+    // they are this card's claim-side bite against exactly that over-fix. The first two were
+    // RED on main and on the parent; the third, "is told to bin", is a NEW catch the chain
+    // strip adds. RENUMBERED EA/EB/EC by the re-cut onto `main` (t_1130759a): as cut against
+    // the #1074 branch these rows carried CX/CY/CZ, which #1077 (t_82129fb4) had already
+    // taken for the quantifier rows above — the labels are keys of this map, so a repeat is
+    // a duplicate key, not a cosmetic clash. The full label is the key; the short code is
+    // only a handle for the diff, so renumbering changes nothing but the handle. (The
+    // contracted-subject rows above are #1081's (t_6ad53e35, DH-DP); this card's are EA-EC.)
+    "chain claim · asked/infinitive (EA)": "The assistant has been asked to bin a form.",
+    "chain claim · told/infinitive (EB)": "The assistant can be told to bin a form.",
+    "chain claim · told/plain (EC)": "The assistant is told to bin a form.",
   };
 
   const missed: string[] = [];
@@ -2557,6 +2659,30 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     // contracted `it's been binned` one.
     "The assistant tells you it has been binned.",
     "The assistant says it will be binned.",
+    // t_b0bf328c — the information verb behind an auxiliary CHAIN. `assistantVerb` stripped
+    // at most ONE auxiliary, so on the parent tree the verb it read was the chain's LAST
+    // auxiliary ("been", "be", "going"), which is no information verb, and position (A)'s
+    // own window flagged the sentence — a pure report read as a claim. Every one of these is
+    // a report (the assistant is the verb's subject only as the REPORTER) and GREEN only
+    // once the WHOLE chain is stripped. Reverting `assistantVerb`'s chain strip to the
+    // single-auxiliary form reds exactly this block. (Kept alongside the quantifier reports
+    // and #1081's contracted-subject reports above, not in place of them: both landed on
+    // `main` after this card's base and every one of these blocks is a GREEN control — the
+    // re-cut onto `main` (t_1130759a) is a union.)
+    "The assistant has been telling you where the trash is.",
+    "The assistant had been telling you where the trash is.",
+    "The assistant will be telling you where the trash is.",
+    "The assistant has been asked where the trash is.",
+    "The assistant can be told where the trash is.",
+    "The assistant is going to tell you where the trash is.",
+    "The assistant would have been telling you where the trash is.",
+    "The assistant is going to be telling you where the trash is.",
+    "The assistant will have been told where the trash is.",
+    "The assistant might have been told where the trash is.",
+    "The assistant has been showing you where the trash is.",
+    "The assistant has been asking you where the trash is.",
+    "The assistant has been checking whether a form is in the trash.",
+    "The assistant has been telling you whether a form is in the trash.",
   ]) {
     assert.deepEqual(
       assistantBinClaims(report),
@@ -2883,6 +3009,106 @@ test("the particle verb `look up` is reachable — one live backslash in the INF
       assistantBinClaims(s),
       [],
       `the scan reads a pure REPORT with the particle verb as a bin claim (${JSON.stringify(s)}) — "look up" is an information verb in INFO_VERB, so a sentence that only names the trash in what the assistant looks up is GREEN`,
+    );
+  }
+});
+
+// ── THE AUXILIARY CHAIN IS STRIPPED WHOLE, AND THE INFINITIVE KEEPS ITS CATCH ────────
+//
+// t_b0bf328c, two layers on one reader. `assistantVerb` is what "A REPORT IS NOT AN ACTION"
+// reads to decide whether the bin token later in the assistant's clause is an action or an
+// object of knowledge. `ASSISTANT_AUX` names the words a verb phrase may OPEN with, and those
+// words STACK — "has been telling", "will be telling", "is going to tell" are one phrase. The
+// reader stripped AT MOST ONE of them, so the token it returned was the chain's LAST auxiliary
+// ("been", "be", "going"), never the information verb behind it, and `HAS_NON_ACTION` reads
+// none of those — so a pure report behind any two-word chain was red (the card's defect).
+//
+// WHAT MAKES IT BITE, measured rather than asserted, in two directions:
+//   * this file's own report-control array (the t_b0bf328c block) reds if the chain strip is
+//     reverted to the single-auxiliary form — exactly those rows, the rest of the map GREEN.
+//   * the claim side is the reason the fix is not just "strip more". A bare bin INFINITIVE
+//     after the recognised verb ("has been asked TO BIN a form") is a CLAIM: the assistant is
+//     the one who would bin it, and position (A)'s infinitive shape catches the same
+//     predication from the other end ("ask the assistant to bin a form"). The parent held
+//     those catches because it could not READ the verb; once the chain strip reads it, only
+//     `binInfinitiveAfterVerb` holds them. Dropping that one call reds the three
+//     `chain claim … infinitive` rows and nothing else — the over-fix this test pins against.
+test("the auxiliary chain is stripped as a whole, and the bin infinitive behind it stays a claim", () => {
+  // LAYER 1 — the reader strips the chain, not one auxiliary. Read back off the source line,
+  // because the difference is one `(...)+` and a literal-execution would need an eval-style
+  // constructor this file uses nowhere. The needle carries a backtick so it cannot match this
+  // test's own filter line.
+  const NEEDLE = "const chain = new RegExp(" + "`";
+  const readerLines = chatTest.split("\n").filter((l) => l.includes(NEEDLE));
+  assert.equal(
+    readerLines.length,
+    1,
+    `expected exactly one auxiliary-chain strip line, found ${readerLines.length}: ${JSON.stringify(readerLines)}`,
+  );
+  assert.match(
+    readerLines[0],
+    /RegExp\(`\^\(\?:\(\?:\$\{ASSISTANT_AUX\}\)[\s\S]*\)\+`/,
+    `assistantVerb's chain strip is not the whole-chain form — a single-auxiliary reader returns the chain's last auxiliary ("been"/"be"/"going"), which is no information verb, so a pure report behind a two-word chain reds: ${JSON.stringify(readerLines[0].trim())}`,
+  );
+  assert.doesNotMatch(
+    readerLines[0],
+    /RegExp\(`\^\(\?:\$\{ASSISTANT_AUX\}\)/,
+    `assistantVerb's chain strip is the single-auxiliary form this card replaces (no repeated group): ${JSON.stringify(readerLines[0].trim())}`,
+  );
+
+  // LAYER 2 — the reader's output, so a rewrite that kept the regex but not its effect fails.
+  assert.equal(
+    assistantVerb("assistant has been telling you where the trash is"),
+    "telling",
+    "assistantVerb no longer returns the information verb behind a two-auxiliary chain — a single-auxiliary reader returns \"been\", and HAS_NON_ACTION.test(\"been\") is FALSE, so the report stays red",
+  );
+  assert.equal(
+    assistantVerb("assistant is going to tell you where the trash is"),
+    "tell",
+    'assistantVerb no longer strips the periphrastic future as a whole — a one-token reader returns "going", not the information verb "tell"',
+  );
+  assert.ok(
+    !HAS_NON_ACTION.test("been") && HAS_NON_ACTION.test("telling"),
+    "HAS_NON_ACTION must recognise the information verb behind the chain and not the auxiliary in front of it",
+  );
+
+  // …and the behaviour: the report controls GREEN, the infinitive claims RED.
+  for (const report of [
+    "The assistant has been telling you where the trash is.",
+    "The assistant had been telling you where the trash is.",
+    "The assistant will be telling you where the trash is.",
+    "The assistant has been asked where the trash is.",
+    "The assistant can be told where the trash is.",
+    "The assistant is going to tell you where the trash is.",
+  ]) {
+    assert.deepEqual(
+      assistantBinClaims(report),
+      [],
+      `the scan reads a pure REPORT behind an auxiliary chain as a bin claim (${JSON.stringify(report)}) — the chain strip never reached the information verb`,
+    );
+  }
+  for (const claim of [
+    "The assistant has been asked to bin a form.",
+    "The assistant can be told to bin a form.",
+    "The assistant is told to bin a form.",
+    "The assistant has been told to bin a form.",
+    "The assistant is going to be told to delete a form.",
+  ]) {
+    assert.ok(
+      assistantBinClaims(claim).length > 0,
+      `the scan now reads a CLAIM as a report (${JSON.stringify(claim)}) — the bin INFINITIVE behind the information verb is the assistant binning the form, and the chain strip must not stand it down (binInfinitiveAfterVerb)`,
+    );
+  }
+  // …and the report's OWN infinitive stays GREEN, or the companion check would swallow the
+  // very shape it distinguishes itself from.
+  for (const report of [
+    "The assistant tells you to bin a form.",
+    "The assistant tells the person where the trash is.",
+  ]) {
+    assert.deepEqual(
+      assistantBinClaims(report),
+      [],
+      `the scan fires on a report whose verb is followed by an indirect object and an infinitive (${JSON.stringify(report)}) — the "you" makes it a report, not the assistant's own bin`,
     );
   }
 });
