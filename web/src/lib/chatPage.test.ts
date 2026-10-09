@@ -291,6 +291,18 @@ const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
 // structural rule: 0 NEW false positives vs origin/main over a 22464-sentence report corpus
 // that includes the non-curated predicates the first cut reded.
 //
+// THE PAST-TENSE CLASS IS FIXED (t_31293346, re-cut onto main by t_aaf569ee). The header
+// paragraph ABOVE this note used to end by naming the "has/had told you" subject-gerund
+// strings as still RED — the one class the guard's own window red, because the information
+// verb's PAST-tense form was not in `INFO_VERB`, so `assistantBinsInsideReport` never ran
+// for it and position (A) held. That was a second, independent defect, closed by widening
+// `INFO_VERB` to every surface form of the verb (the missing past, and the progressive):
+// those strings now stand down like the present-tense ones, and the past/perfect/
+// progressive report rows are pinned in the report controls below. See the `INFO_VERB`
+// comment. (The paragraph above already withdrew the OLDER claim that the past-tense class
+// was the only red class; both facts — that the class was red, and that it is now fixed —
+// are true of different rules.)
+//
 // Everything a single clause can PREDICATE of the assistant — including the reported
 // clause of an information verb that puts the assistant back in the bin verb's subject
 // position, and the bin gerund such a verb reports — is inside the five positions and the
@@ -329,7 +341,25 @@ const HAS_NEGATION = new RegExp(`\\b(?:${NEGATION})\\b`, "i");
 // The assistant's INFORMATION verbs — the ones under which a later bin token is an
 // object of knowledge, not an action. Read at the assistant's own verb in a match (A)
 // makes; see the header's "A REPORT IS NOT AN ACTION".
-const INFO_VERB = String.raw`(?:tells?|shows?|showed|shown|lists?|listed|reads?|saw|seen|sees?|asks?|asked|says?|said|reports?|reported|knows?|knew|known|finds?|found|explains?|explained|describes?|described|answers?|answered|checks?|checked|(?:looks?|looked|looking)\s+up|mentions?|mentioned)`;
+const INFO_VERB = String.raw`(?:tells?|told|telling|shows?|showed|shown|showing|lists?|listed|listing|reads?|reading|saw|seen|sees?|seeing|asks?|asked|asking|says?|said|saying|reports?|reported|reporting|knows?|knew|known|knowing|finds?|found|finding|explains?|explained|explaining|describes?|described|describing|answers?|answered|answering|checks?|checked|checking|(?:looks?|looked|looking)\s+up|mentions?|mentioned|mentioning)`;
+// THE VERB'S TENSE IS PART OF THE VERB (t_31293346, re-cut t_aaf569ee). This list is
+// read where the assistant's OWN verb decides whether a later bin token is an action or
+// an object of knowledge, so every surface form of the verb has to be in it — not just
+// the forms a present-tense sentence happens to use. It shipped with the present-simple
+// and third-person forms (`tells?`, `shows?`, `reports?`, …) plus a few irregular pasts,
+// so a pure REPORT in the PAST or the PERFECT — "the assistant has told you where the
+// trash is" — or in the PROGRESSIVE — "the assistant is telling you where the trash is"
+// — was read as if `told`/`telling` were an ACTION verb: position (A)'s own window
+// (`assistant` + up to 120 chars + a bin token) flagged the sentence and the
+// information-verb guard never stood it down. That is a false positive that blocks the
+// page from stating a fact about the bin. The gap was invisible because the shapes the
+// guard's own controls use are present-tense. Widened here: `told` (the missing
+// irregular past) and the `-ing` form of every listed verb — leaving the particle
+// alternative exactly as this file's `look up` fix writes it. Measured with the scan
+// extracted from THIS file, over a 420-sentence report battery (60 verb phrases x 7
+// readings): false positives on the report readings go 119 -> 0, with 0 new false
+// negatives and 0 catches removed (a 138-sentence object-gerund claim battery stays
+// 138/138 RED).
 // A SUBORDINATOR right after the assistant opens a clause of its own — "ask the
 // assistant WHETHER a form is in the trash" — so the bin token beyond it is that
 // clause's, not the assistant's. Same disqualification as an information verb, same
@@ -2146,6 +2176,20 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "gerund object · describes (CP)": "The assistant describes deleting a form.",
     "gerund object · reports-from (CQ)": "The assistant reports deleting a form from the forms page.",
     "gerund object · mentions-restore (CR)": "The assistant mentions restoring a form.",
+    // t_31293346 — the SAME reported claims with the information verb's TENSE changed
+    // (past / perfect / progressive), the class the widening adds to `INFO_VERB`. These
+    // are genuine claims and must stay RED; they are pinned here because they are the
+    // positive control for the widening's OTHER direction: a mutation that made
+    // `assistantBinsInsideReport` stand the reported clause down unconditionally (or
+    // that read the new `-ing` forms as an ACTION verb) turns these green, and nothing
+    // else in the map covers the new verb forms. CS-CU put the assistant's pronoun back
+    // in the bin verb's subject position (the t_9717fec1 shape); CV-CW are the bin
+    // gerund the verb reports (the t_7b69a77a shape).
+    "tense claim · told/pronoun (CS)": "The assistant told you it bins a form.",
+    "tense claim · is telling/pronoun (CT)": "The assistant is telling you it can trash a form.",
+    "tense claim · has told/pronoun (CU)": "The assistant has told you it deleted a form.",
+    "tense claim · told/gerund-object (CV)": "The assistant told you deleting a form.",
+    "tense claim · is reporting/gerund-object (CW)": "The assistant is reporting deleting a form.",
   };
 
   const missed: string[] = [];
@@ -2263,6 +2307,34 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "The assistant mentions binning a form is easy.",
     "The assistant tells you restoring a form is possible.",
     "The assistant describes binning a form as easy.",
+    // t_31293346 — the information verb in the PAST, the PERFECT and the PROGRESSIVE.
+    // The list was read only at the verb's present-simple / third-person surface, so
+    // these forms were read as ACTION verbs and red (the card's defect). Every one is
+    // a pure report: the assistant is the verb's subject only as the REPORTER, and the
+    // bin token later in its clause is its object of knowledge. They are the report
+    // side of the same widening the `tense claim` rows CS-CW are the claim side of —
+    // revert `INFO_VERB` and every one of these reds again.
+    "The assistant told you where the trash is.",
+    "The assistant told you the form is in the trash.",
+    "The assistant told you nothing about the trash.",
+    "The assistant had told you where the trash is.",
+    "The assistant has told you the form is in the trash.",
+    "The assistant has told you binning a form is easy.",
+    "The assistant is telling you where the trash is.",
+    "The assistant is showing you which form is in the trash.",
+    "The assistant is listing the trash.",
+    "The assistant is reading where the trash is.",
+    "The assistant is seeing the trash.",
+    "The assistant is asking where the trash is.",
+    "The assistant is saying the trash is empty.",
+    "The assistant is reporting that the form is in the trash.",
+    "The assistant is knowing the trash.",
+    "The assistant is finding the trash.",
+    "The assistant is explaining where the trash is.",
+    "The assistant is describing the trash.",
+    "The assistant is answering where the trash is.",
+    "The assistant is checking where the trash is.",
+    "The assistant is mentioning the trash.",
     // t_255182df — the false positive this rework closes, pinned so it cannot reopen. The
     // rule's first cut read the predicate off a curated list of finite verbs, so a genuine
     // SUBJECT-gerund report whose predicate was a real finite verb OUTSIDE it was read as
