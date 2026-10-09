@@ -329,6 +329,23 @@ const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
 // was the only red class; both facts — that the class was red, and that it is now fixed —
 // are true of different rules.)
 //
+// THE REPORTED CLAUSE'S AUXILIARY IS A CHAIN TOO (t_d7178bff). The past-tense paragraph
+// above fixed the information verb's form; this closes the SAME reader's other half, one
+// axis over. The reported clause's reader (`assistantBinsInsideReport`) accepted AT MOST ONE
+// auxiliary between its subject pronoun and the bin verb, so a reported CLAIM whose verb
+// phrase carries a chain had no match at all and was read as a report — a false NEGATIVE,
+// the opposite direction from t_b0bf328c's false positive and at a different call site. The
+// seven the card names were measured GREEN on main, on the stacked base and on t_b0bf328c's
+// head: \"tells you it has been binning\", \"will be deleting\", \"is going to delete\",
+// \"reports that it has been trashing\", \"says it has been restoring\", \"mentions it had been
+// deleting\", \"explains that it is about to bin\". The single-auxiliary shapes were caught
+// and hid it — they are the reader's own controls. Measured with the scan extracted from this
+// file: a 420-sentence claim battery (7 information verbs x 10 chains x 4 bin verbs) goes
+// 280 missed -> 0, and a 616-sentence report battery gains 0 false positives. The group now
+// takes the WHOLE chain and the copula is tested against its LAST auxiliary — the only one
+// the passive/progressive distinction reads — so \"… it has been BINNED\" stays a report while
+// \"… it has been BINNING\" is the claim; testing the chain as an ATOM would red the passive.
+//
 // Everything a single clause can PREDICATE of the assistant — including the reported
 // clause of an information verb that puts the assistant back in the bin verb's subject
 // position, and the bin gerund such a verb reports — is inside the five positions and the
@@ -2233,7 +2250,7 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
 // t_b3877cfb found still GREEN under the ten-shape scan — must go RED, as must the
 // shipped defect sentence it did catch. Nothing on disk is written: the mutation is
 // in memory, on the real page source read at module load.
-test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, both genitive orders, the gerund, both appositive variants, the it-cleft, the periphrastic passive, the nominal, the light verb + gerund, the copular predication, the topicalised cleft, the reversed nominal, the non-restrictive relative, the pro-verb across a clause boundary, the claim reported inside an information verb's clause and the bin gerund such a verb reports", () => {
+test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, both genitive orders, the gerund, both appositive variants, the it-cleft, the periphrastic passive, the nominal, the light verb + gerund, the copular predication, the topicalised cleft, the reversed nominal, the non-restrictive relative, the pro-verb across a clause boundary, the claim reported inside an information verb's clause, the bin gerund such a verb reports and a claim behind an auxiliary chain inside the reported clause", () => {
   const shipped = read(DOCS_PAGE);
   const anchor = "A creation is the one shape the field-edit rule does not cover,";
   // Vacuity: if the anchor is gone the injections below land nowhere and this
@@ -2369,6 +2386,23 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "reported claim · tells/perfect (CK)": "The assistant tells you it has binned a form.",
     "reported claim · explains/that (CL)": "The assistant explains that it restores a form.",
     "reported claim · mentions/object (CM)": "The assistant mentions it deletes forms.",
+    // t_d7178bff — the SAME reported-claim reader (t_9717fec1's seven rows above), with an
+    // auxiliary CHAIN in the reported clause's verb phrase. The reader accepted AT MOST ONE
+    // auxiliary between the clause's subject pronoun and the bin verb, so a claim whose verb
+    // phrase carries a chain had no match at all: after the single auxiliary the next token is
+    // another auxiliary ("been"/"be"/"going"/"about"), not the bin verb, so the reader returned
+    // false and a genuine claim was read as a report — the opposite direction from the parent
+    // card's false positive, at this call site. The single-auxiliary shapes above were caught
+    // and hid it. These seven are the shapes the card names, one per chain; the mutation that
+    // reds them is reverting the chain group to its single-auxiliary form (see the note after
+    // this map).
+    "chain claim · has been binning (DQ)": "The assistant tells you it has been binning a form.",
+    "chain claim · will be deleting (DR)": "The assistant tells you it will be deleting a form.",
+    "chain claim · is going to delete (DS)": "The assistant tells you it is going to delete a form.",
+    "chain claim · has been trashing (DT)": "The assistant reports that it has been trashing forms.",
+    "chain claim · has been restoring (DU)": "The assistant says it has been restoring a form.",
+    "chain claim · had been deleting (DV)": "The assistant mentions it had been deleting forms.",
+    "chain claim · is about to bin (DW)": "The assistant explains that it is about to bin a form.",
     // t_7b69a77a — the bin GERUND the information verb reports, one position over from
     // the seven above. Every one of these is a genuine claim (the assistant IS the
     // deleter) with no assistant pronoun in the reported clause, and every one was GREEN
@@ -2499,12 +2533,22 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
   // so the passive/progressive distinction has to read it. Both mutations were run by hand on
   // this file.
   //
-  // This card's diff also carries the bare-subject arm's auxiliary group as a CHAIN
-  // (PR #1078's change, which has landed as a sibling; the two are not independent for the
-  // lines this reader shares). The chain is what lets the card's own contracted-perfect rows
-  // (`it's been binning`) read, and the bare chain claims of #1078 are therefore red on this
-  // branch too — its `chain claim` rows (DA-DG) are pinned in #1078's hunk at this same map
-  // tail, so the two will merge as one contiguous block.
+  // This reader also carries the bare-subject arm's auxiliary group as a CHAIN (t_d7178bff's
+  // change; the two are not independent for the lines this reader shares). The chain is what
+  // lets the card's own contracted-perfect rows (`it's been binning`) read, and the bare
+  // chain claims of #1078 are therefore red here too — its `chain claim` rows are pinned in
+  // the same map at this tail, numbered DQ-DW so they collide with neither the contracted
+  // rows' DH-DP above nor the quantifier rows' DA-DC.
+  //
+  // t_d7178bff's seven `chain claim` rows (DQ-DW) bite the same way, on the chain axis this
+  // sibling adds: reverting the reported-clause reader's auxiliary group to its
+  // single-auxiliary form (`(\s+(?:${ASSISTANT_AUX}))?`) returns exactly those seven to GREEN
+  // while the whole rest of the map — including the single-auxiliary controls CG-CM and the
+  // copula-passive report controls above — stays green. In the other direction, testing the
+  // chain as a whole ATOM instead of taking its LAST auxiliary (`COPULA_AUX.test(chain)` in
+  // place of `COPULA_AUX.test(chain.split(/\s+/).pop())`) reds the five `has been binned`
+  // report controls in the report array above, and nothing else — that is the passive reading
+  // the last-token test exists to keep. Both mutations were run by hand on this file.
 
   // And the POSITIVE CONTROL must not be what carries the detection: the person-
   // attribution sentence the fix ships (which names the assistant only to disown
@@ -2658,10 +2702,14 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "The assistant explains that she's been trashed.",
     "The assistant tells you you're binning a form.",
     "The assistant tells you you're deleting forms.",
-    // The BARE-subject chain passive, pinned here because this card's diff carries the
-    // chain group for BOTH arms (see the note after the BITES map): the last-auxiliary
-    // copula test has to keep `it has been binned` a report, exactly as it keeps the
-    // contracted `it's been binned` one.
+    // t_d7178bff — the BARE-subject CHAIN passives, the report READING of a reported clause
+    // the chain reader must NOT red: the chain ends in a COPULA before a PASSIVE, so "… it
+    // has been BINNED" is a passive on the thing (a report), while "… it has been BINNING" is
+    // the progressive claim (the chain rows DQ-DW). They differ only by the auxiliary chain's
+    // LAST token plus the bin form, so they are the positive control for the chain reader's
+    // copula test: a mutation that tests the chain as a whole ATOM (so no chain ever reads as
+    // a copula) turns every one of these RED — the unsafe direction this card must not open.
+    // All were GREEN on main and stay GREEN here — measured, not reasoned.
     "The assistant tells you it has been binned.",
     "The assistant says it will be binned.",
     // t_b0bf328c — the information verb behind an auxiliary CHAIN. `assistantVerb` stripped
@@ -2688,6 +2736,10 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "The assistant has been asking you where the trash is.",
     "The assistant has been checking whether a form is in the trash.",
     "The assistant has been telling you whether a form is in the trash.",
+    "The assistant tells you it had been trashed.",
+    "The assistant says it will be restored.",
+    "The assistant reports that it is going to be deleted.",
+    "The assistant explains that it is about to be binned.",
   ]) {
     assert.deepEqual(
       assistantBinClaims(report),
