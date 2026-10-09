@@ -411,8 +411,17 @@ const DET = `(?:${QUANT_DET}|${ARTICLE_DET})`;
  * below can run the REAL rule with the quantifier handling removed: the card's mutation is
  * "drop the quantifier handling", and reverting `DET` to this set is that mutation verbatim
  * rather than a paraphrase of it.
+ *
+ * GROUPED, and it must be. The pre-fix `DET` was itself the grouped alternation
+ * `(?:the|a|an|…|any)`, and `npObj` composes the determiner as `(?:${det}\s+)?[a-z]+`. An
+ * UNGROUPED article set (`the|a|an|…|any`) would let the `\s+` bind to the LAST alternative
+ * only (`any`), so for every other article/possessive/demonstrative the determiner would not
+ * be consumed and the phrase would leave the very phantom predication this card is about —
+ * i.e. the "pre-fix" oracle would not be the pre-fix rule. Measured on the 480-claim corpus
+ * (6 info verbs x 4 bin gerunds x 20 objects): ungrouped disagrees with the real pre-fix scan
+ * on 140/480 rows, grouped on 0/480.
  */
-const DET_WITHOUT_QUANT = ARTICLE_DET;
+const DET_WITHOUT_QUANT = `(?:${ARTICLE_DET})`;
 /** The prepositions that can open a phrase that continues the gerund's noun phrase. */
 const G_PREP = `(?:from|to|into|out\\s+of|onto|upon|in|on|at|with|for|about|by|via|through|across|under|over|within|without|before|after|during|against|between|among|of)`;
 // The gerund's OWN OBJECT — one common noun, the shape the object reading uses
