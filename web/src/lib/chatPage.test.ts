@@ -329,7 +329,7 @@ const HAS_NEGATION = new RegExp(`\\b(?:${NEGATION})\\b`, "i");
 // The assistant's INFORMATION verbs — the ones under which a later bin token is an
 // object of knowledge, not an action. Read at the assistant's own verb in a match (A)
 // makes; see the header's "A REPORT IS NOT AN ACTION".
-const INFO_VERB = String.raw`(?:tells?|shows?|showed|shown|lists?|listed|reads?|saw|seen|sees?|asks?|asked|says?|said|reports?|reported|knows?|knew|known|finds?|found|explains?|explained|describes?|described|answers?|answered|checks?|checked|looks?\\s+up|mentions?|mentioned)`;
+const INFO_VERB = String.raw`(?:tells?|shows?|showed|shown|lists?|listed|reads?|saw|seen|sees?|asks?|asked|says?|said|reports?|reported|knows?|knew|known|finds?|found|explains?|explained|describes?|described|answers?|answered|checks?|checked|(?:looks?|looked|looking)\s+up|mentions?|mentioned)`;
 // A SUBORDINATOR right after the assistant opens a clause of its own — "ask the
 // assistant WHETHER a form is in the trash" — so the bin token beyond it is that
 // clause's, not the assistant's. Same disqualification as an information verb, same
@@ -487,7 +487,7 @@ function assistantVerb(matched: string): string | null {
   let rest = matched.slice(m[0].length);
   const aux = new RegExp(`^(?:${ASSISTANT_AUX})\\b\\s*`, "i").exec(rest);
   if (aux) rest = rest.slice(aux[0].length);
-  const verb = /^[a-z]+(?:'[a-z]+\b)?/i.exec(rest);
+  const verb = /^[a-z]+(?:'[a-z]+\b)?(?:\s+up\b)?/i.exec(rest);
   return verb ? verb[0].toLowerCase() : null;
 }
 
@@ -2241,6 +2241,15 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
   // `assistantBinsInsideReport` is widened to "information verb … bin anywhere", or if
   // `reportedGerundIsSubject`'s predicate reading is dropped (the gerund rows after the
   // first two are the subject-gerund CONTROLS for exactly that mutation).
+  //
+  // t_687e46a3 added the last four. `look(s) up` is an information verb in this file's
+  // own `INFO_VERB` list, but it is a PARTICLE verb: the assistant's verb in a match (A)
+  // is the two words "look up", and only a reader that keeps the particle can see it.
+  // Each of these was RED before this card — measured with the scan extracted from this
+  // file — because `looks?\\s+up` was written with TWO backslashes inside a `String.raw`
+  // template (a dead alternative: a literal backslash then `s+` then `up`, which no
+  // sentence contains), and because `assistantVerb` read one token
+  // ("looks"/"looked"/"looking"), so the fixed pattern alone was still unreachable.
   for (const report of [
     "The assistant can tell you where the trash is.",
     "A form the assistant lists may already be in the trash.",
@@ -2266,6 +2275,11 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "The assistant tells you restoring a form brings it back.",
     "The assistant reports that deleting a form frees up space.",
     "The assistant mentions that binning a form hides it from the dashboard.",
+    // t_687e46a3 — the particle-verb reports (see the comment above).
+    "The assistant looks up where the trash is.",
+    "The assistant looked up where the trash is.",
+    "The assistant is looking up where the trash is.",
+    "The assistant can look up where the trash is.",
   ]) {
     assert.deepEqual(
       assistantBinClaims(report),
@@ -2324,6 +2338,69 @@ test("the assistant-verb contraction tail is a word boundary, not an escaped bac
       `that is a literal backslash followed by "b", so the optional group can never match and ` +
       `the tail is dead code: ${JSON.stringify(tail[0].trim())}`,
   );
+});
+
+// ── THE PARTICLE VERB `look up` (t_687e46a3) ─────────────────────────────────
+//
+// THE DEFECT, two layers on one arm. `INFO_VERB` lists the assistant's information
+// verbs; one of them is the PARTICLE verb "look up". Two INDEPENDENT faults kept it
+// dead on main, both measured with the scan extracted from this file:
+//
+//   1. the alternative was written `looks?\\s+up` with TWO backslashes inside a
+//      `String.raw` template. String.raw keeps both, so the branch is `look(s)?` +
+//      `\\` + `s+` + `up` — a literal backslash then `s+`, which no sentence can
+//      contain, so the alternative matched nothing.
+//   2. `assistantVerb` read ONE token, so the assistant's verb came back as
+//      "looks"/"looked"/"looking" and `HAS_NON_ACTION.test("looks")` is FALSE: even
+//      with (1) repaired, the two-word verb is unreachable by the guard.
+//
+// So a pure REPORT with the particle verb was RED (read as a claim): "The assistant
+// looks up where the trash is." -> a bin claim. The four sentences are in the arm's
+// report-control array above; this test pins the two layers that make them GREEN, and
+// that neither layer alone is enough.
+test("the particle verb `look up` is reachable — one live backslash in the INFO_VERB alternative, and a verb reader that keeps the particle", () => {
+  // LAYER 1 — the escaping, read back off the assignment line.
+  const infoLine = chatTest.split("\n").filter((l) => l.trim().startsWith("const INFO_VERB = "));
+  assert.equal(
+    infoLine.length,
+    1,
+    `expected exactly one INFO_VERB assignment line, found ${infoLine.length}: ${JSON.stringify(infoLine)}`,
+  );
+  const line = infoLine[0];
+  assert.ok(
+    line.includes("(?:looks?|looked|looking)\\s+up"),
+    `INFO_VERB's particle alternative is not the one-backslash form — inside String.raw \`\\s\` is the whitespace escape, and two backslashes make it a dead branch that matches nothing: ${JSON.stringify(line.trim())}`,
+  );
+  assert.ok(
+    !line.includes("(?:looks?|looked|looking)\\\\s+up") && !line.includes("looks?\\\\s+up"),
+    `INFO_VERB's particle alternative carries an escaped backslash again (the dead branch this card fixes): ${JSON.stringify(line.trim())}`,
+  );
+
+  // LAYER 2 — the reader keeps the particle, so HAS_NON_ACTION sees the verb, not its
+  // bare stem. This is the half that a fixed pattern alone does NOT provide.
+  assert.equal(
+    assistantVerb("assistant looks up where the trash is"),
+    "looks up",
+    'assistantVerb no longer returns the whole particle verb — a one-token reader returns "looks", and HAS_NON_ACTION.test("looks") is FALSE, so the two-word verb stays unreachable even with the pattern repaired',
+  );
+  assert.ok(
+    !HAS_NON_ACTION.test("looks") && HAS_NON_ACTION.test("looks up"),
+    "HAS_NON_ACTION must recognise the particle verb and not its bare stem — otherwise layer 1 alone would leave the sentence RED",
+  );
+
+  // …and the behaviour, so this test bites on its own as well as via the report array.
+  for (const s of [
+    "The assistant looks up where the trash is.",
+    "The assistant looked up where the trash is.",
+    "The assistant is looking up where the trash is.",
+    "The assistant can look up where the trash is.",
+  ]) {
+    assert.deepEqual(
+      assistantBinClaims(s),
+      [],
+      `the scan reads a pure REPORT with the particle verb as a bin claim (${JSON.stringify(s)}) — "look up" is an information verb in INFO_VERB, so a sentence that only names the trash in what the assistant looks up is GREEN`,
+    );
+  }
 });
 
 test("every chat dictionary key defines all five locales", () => {
