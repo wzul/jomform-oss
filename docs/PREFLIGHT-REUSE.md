@@ -140,6 +140,11 @@ it is not what a merger needs when it decides to squash.
 #   exit 0 -> a record exists; use the printed PREFLIGHT_SKIP / PREFLIGHT_RERUN
 #   exit 1 -> no usable record; gate normally
 
+# The same question about an EXPLICIT tree — the tree you just pushed, or the bytes
+# a bite mutation is about, i.e. bytes that are no longer in your working tree.
+# `--tree <sha>` and `--tree=<sha>` both reach the DECISION (not just --show).
+./scripts/preflight_reuse.sh --tree <tree-sha>
+
 ./scripts/preflight_reuse.sh --show            # the raw record (evidence)
 ./scripts/preflight_reuse.sh --report 24       # the MEASURED saving, last 24h
 
@@ -200,7 +205,12 @@ reads the evidence and not just the verdict.
 6. **A reuse answers the question it was asked.** A run with `--only <subset>`
    reuses (and ledgers) only the gates in that subset; the runner passes its own
    selection to the consumer, so a one-gate run can never report — or claim the
-   saving for — the whole inventory.
+   saving for — the whole inventory. The TREE half of the same rule: `--tree <sha>`
+   reaches the DECISION, and the printed `PREFLIGHT_TREE` and evidence line name
+   that tree. A lane asking about bytes that are no longer in its working tree —
+   the tree it just pushed, or the tree a bite mutation is about — must not be
+   answered about the working tree instead (that silently wrong answer cost a full
+   gate run for bytes already vouched for; card `t_912df3a4`).
 7. **A gate the caller skipped is not a reuse.** Before the reuse decision, the
    vouched set is compared against what this run was actually going to execute.
    A record may vouch for `monitor` while the run is `--only vet`; naming

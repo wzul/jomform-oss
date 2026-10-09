@@ -109,6 +109,21 @@
 # the REAL selftest end to end — the alternative is a second copy of the checks,
 # which is a guard that can drift from the one it claims to back.
 #
+#   40. THE DOCUMENTED `--tree <sha>` MUST REACH THE DECISION, NOT JUST `--show`
+#       (card t_912df3a4). `scripts/preflight_reuse.sh --tree <sha>` is documented
+#       as "decide for an explicit tree" — the shape a lane needs for bytes that
+#       are no longer in its working tree (the tree it just pushed, or the tree
+#       before/after a bite mutation). The decide path accepted the flag and
+#       DROPPED it, so the answer, and the tree named in the exit-1
+#       PREFLIGHT_EVIDENCE line, were about the WORKING tree (measured: `--tree
+#       <sha>` -> "no reusable record for tree <worktree short sha>", rc=1, while
+#       `--show --tree <sha>` on the same bytes said `reusable: YES`). It failed
+#       SAFE — rc=1 means "gate normally" — but the lane paid a full gate run (the
+#       host-wide pool's waiter measures 50-86 minutes) for bytes already vouched
+#       for. Guard: the decide branch wires `--tree` into `PREFLIGHT_TREE`, and
+#       `selftest` check 40 pins it on a record for a tree that is NOT the working
+#       tree. Case 9 below removes exactly that wiring.
+#
 # Run:  ./scripts/biteproof_preflight_reuse.sh
 # Exit: 0 if every case BITES, 1 otherwise.
 #
@@ -132,6 +147,11 @@ bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
 
 RUNNER="scripts/preflight.sh"
 RESULT="scripts/gate_result.sh"
+# The CONSUMER is a subject too, since card t_912df3a4: the documented
+# `--tree <sha>` reached `--show` but never the DECISION, so the decide path
+# answered about the WORKING tree. Case 9 sabotages that wiring, so this file is
+# backed up, mode-tracked and restored byte-identically exactly like the other two.
+REUSE="scripts/preflight_reuse.sh"
 WORK="$(mktemp -d /tmp/biteproof_preflight_reuse.XXXXXX)"
 
 # This harness must never queue on (or hold) the production gate lock: it is not a
@@ -142,14 +162,16 @@ export PREFLIGHT_LOCK_FILE="${PREFLIGHT_LOCK_FILE:-/tmp/biteproof_preflight_reus
 export PREFLIGHT_RESULT_DIR="$WORK/gate-results"
 mkdir -p "$PREFLIGHT_RESULT_DIR"
 
-for f in "$RUNNER" "$RESULT"; do
+for f in "$RUNNER" "$RESULT" "$REUSE"; do
   [ -f "$f" ] || { echo "FAIL: $f not found — cannot prove anything about the guards" >&2; exit 2; }
 done
 
 cp "$RUNNER" "$WORK/preflight.sh.orig"
 cp "$RESULT" "$WORK/gate_result.sh.orig"
+cp "$REUSE" "$WORK/preflight_reuse.sh.orig"
 WANT_RUNNER="$(sha256sum "$RUNNER" | awk '{print $1}')"
 WANT_RESULT="$(sha256sum "$RESULT" | awk '{print $1}')"
+WANT_REUSE="$(sha256sum "$REUSE" | awk '{print $1}')"
 # THE MODE IS PART OF THE SOURCE. A mutation written through a temp file (`awk >
 # tmp; mv tmp src`) replaces the file and the exec bit is LOST — and the selftest
 # refuses a preflight.sh that is not executable, so every case AFTER the first
@@ -157,11 +179,13 @@ WANT_RESULT="$(sha256sum "$RESULT" | awk '{print $1}')"
 # first run. So the mode is recorded here and re-applied on every restore.
 MODE_RUNNER="$(stat -c '%a' "$RUNNER")"
 MODE_RESULT="$(stat -c '%a' "$RESULT")"
+MODE_REUSE="$(stat -c '%a' "$REUSE")"
 
 STATUS_BEFORE="$(git status --porcelain | sort)"
 restore() {
   cp "$WORK/preflight.sh.orig" "$RUNNER"; chmod "$MODE_RUNNER" "$RUNNER"
   cp "$WORK/gate_result.sh.orig" "$RESULT"; chmod "$MODE_RESULT" "$RESULT"
+  cp "$WORK/preflight_reuse.sh.orig" "$REUSE"; chmod "$MODE_REUSE" "$REUSE"
 }
 cleanup() { restore; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -170,11 +194,14 @@ trap cleanup EXIT
 # after it, so the restore is asserted, not assumed.
 restore_and_verify() {
   restore
-  local a b; a="$(sha256sum "$RUNNER" | awk '{print $1}')"; b="$(sha256sum "$RESULT" | awk '{print $1}')"
-  if [ "$a" = "$WANT_RUNNER" ] && [ "$b" = "$WANT_RESULT" ]; then
-    ok "both sources restored byte-identically (preflight.sh ${a:0:12}, gate_result.sh ${b:0:12})"
+  local a b c
+  a="$(sha256sum "$RUNNER" | awk '{print $1}')"
+  b="$(sha256sum "$RESULT" | awk '{print $1}')"
+  c="$(sha256sum "$REUSE" | awk '{print $1}')"
+  if [ "$a" = "$WANT_RUNNER" ] && [ "$b" = "$WANT_RESULT" ] && [ "$c" = "$WANT_REUSE" ]; then
+    ok "all three sources restored byte-identically (preflight.sh ${a:0:12}, gate_result.sh ${b:0:12}, preflight_reuse.sh ${c:0:12})"
   else
-    bad "SOURCES WERE NOT RESTORED byte-identically (preflight.sh $a vs $WANT_RUNNER, gate_result.sh $b vs $WANT_RESULT) — restore them from $WORK BY HAND before doing anything else"
+    bad "SOURCES WERE NOT RESTORED byte-identically (preflight.sh $a vs $WANT_RUNNER, gate_result.sh $b vs $WANT_RESULT, preflight_reuse.sh $c vs $WANT_REUSE) — restore them from $WORK BY HAND before doing anything else"
   fi
 }
 
@@ -220,7 +247,7 @@ verdict() {
 echo "biteproof: the per-tree gate result record's four safety guards"
 echo "  repo: $(pwd)"
 echo "  head: $(git rev-parse --short HEAD)"
-echo "  srcs: $RUNNER (sha256 ${WANT_RUNNER:0:12}), $RESULT (sha256 ${WANT_RESULT:0:12})"
+echo "  srcs: $RUNNER (sha256 ${WANT_RUNNER:0:12}), $RESULT (sha256 ${WANT_RESULT:0:12}), $REUSE (sha256 ${WANT_REUSE:0:12})"
 echo "---"
 
 # --- case 0: THE CONTROL. The healthy tree must pass the whole selftest, so a red
@@ -640,6 +667,102 @@ else
 fi
 restore_and_verify
 
+# --- case 9: THE `--tree` WIRING REMOVED FROM THE DECIDE PATH (the pre-fix shape,
+# card t_912df3a4). `scripts/preflight_reuse.sh --tree <sha>` is documented as
+# "decide for an explicit tree"; the decide path accepted the flag and dropped it,
+# so the decision fell back to the WORKING tree and both the answer and the tree
+# named in the exit-1 PREFLIGHT_EVIDENCE line were about a tree the caller had not
+# asked about.
+#
+# THE FIXTURE IS A RECORD FOR A TREE THAT IS NOT THE WORKING TREE, and that is the
+# whole point: a `--tree` naming the working tree is answered IDENTICALLY by the
+# pre-fix and the fixed path, which is measured how the defect survived
+# `selftest` check 24 (its `--tree "$probe_tree"` happens to name the sandbox's
+# working tree). The mutation is a ONE-LINE DELETE reproducing the pre-fix bytes,
+# and it is verified three ways BEFORE it spends a selftest run: the wiring line is
+# gone, the file differs from the shipped bytes by exactly that one line, and the
+# mutated consumer reproduces the defect BY VALUE on the fixture — while
+# `--show --tree` still answers `reusable: YES`, so the red below can only be about
+# the decide wiring and not about a consumer that stopped working.
+echo "== case 9: the decide path drops --tree again (the pre-fix shape) =="
+other9="$(printf 'biteproof_preflight_reuse case 9' | sha256sum | cut -c1-40)"
+work9="$( ( . "$RESULT"; gr_tree_sha "$REPO_ROOT" ) )"
+case9_dir="$WORK/case9-records"; mkdir -p "$case9_dir"
+gates9=()
+while IFS= read -r g; do [ -n "$g" ] && gates9+=("$g"); done < <("$RUNNER" --list 2>/dev/null)
+if [ -z "$work9" ] || [ "$other9" = "$work9" ] || [ "${#gates9[@]}" -eq 0 ]; then
+  bad "case 9 — the fixture cannot discriminate the flag (working tree [$work9], fixture tree [$other9], ${#gates9[@]} gates from --list), so this case would prove nothing"
+else
+  # The record, written by hand for the fixture tree under the same environment
+  # fingerprint the reader below will compute (PREFLIGHT_KEY_EXTRA=probe9).
+  (
+    . "$RESULT"
+    export PREFLIGHT_RESULT_DIR="$case9_dir" PREFLIGHT_KEY_EXTRA=probe9 PREFLIGHT_REUSE_REPO="$REPO_ROOT"
+    rec="$(gr_file "$other9")"
+    {
+      printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+        "$other9" "$(gr_key "$REPO_ROOT")" "$(gr_json_escape "$(gr_key_parts "$REPO_ROOT")")"
+      printf '%s\n' "${gates9[@]}" | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
+        | sed '$ s/,$//'
+      printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe9.log",\n  "finished_at": "%s"\n}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$rec"
+  )
+  # THE SHIPPED DIRECTION, read before the sabotage: on THIS fixture the shipped
+  # decide path answers about the fixture tree. Without this leg a fixture that
+  # nothing can answer would make the mutated leg below look like the wiring.
+  case9_shipped="$(PREFLIGHT_RESULT_DIR="$case9_dir" PREFLIGHT_KEY_EXTRA=probe9 bash "$REUSE" --tree "$other9" 2>&1)"; case9_shipped_rc=$?
+  case9_ship_show="$(PREFLIGHT_RESULT_DIR="$case9_dir" PREFLIGHT_KEY_EXTRA=probe9 bash "$REUSE" --show --tree "$other9" 2>&1)"
+  if [ "$case9_shipped_rc" -ne 0 ] || ! grep -qxF "PREFLIGHT_TREE=$other9" <<<"$case9_shipped"; then
+    bad "case 9 — the SHIPPED consumer does not answer about the fixture tree (rc=$case9_shipped_rc), so the fixture is unusable and the mutated leg would prove nothing: [$(printf '%s' "$case9_shipped" | tr '\n' ' ')]"
+  elif ! grep -qxF -- '--- reusable: YES' <<<"$case9_ship_show"; then
+    bad "case 9 — the fixture record is not reusable under the shipped bytes (--show said [$(printf '%s' "$case9_ship_show" | tail -n 1)]), so a refusal after the sabotage would not be the flag being dropped"
+  else
+    # The one-line delete that IS the pre-fix shape: the wiring line, gone.
+    WIRE9='      if [ -n "$PR_TREE" ]; then PREFLIGHT_TREE="$PR_TREE"; fi'
+    awk -v drop="$WIRE9" '$0 == drop { next } { print }' "$REUSE" > "$WORK/preflight_reuse.mutated9" \
+      && cp "$WORK/preflight_reuse.mutated9" "$REUSE" && chmod "$MODE_REUSE" "$REUSE"
+    if [ "$(grep -cF 'PREFLIGHT_TREE="$PR_TREE"' "$REUSE")" != "0" ]; then
+      bad "case 9 — the wiring line is still present after the mutation, so the pre-fix shape was not reproduced"
+    elif [ "$(diff "$WORK/preflight_reuse.sh.orig" "$REUSE" | grep -c '^[<>]')" != "1" ]; then
+      bad "case 9 — the mutation is NOT surgical ($(diff "$WORK/preflight_reuse.sh.orig" "$REUSE" | grep -c '^[<>]') changed lines, want 1), so a red below could be about something other than the --tree wiring"
+    elif ! bash -n "$REUSE"; then
+      bad "case 9 — the mutation left preflight_reuse.sh syntactically invalid, so any red below would be a parse error rather than the wiring under test"
+    else
+      # The FALLBACK the mutated run will actually take is the working tree of the
+      # MUTATED file — the sabotage changes a tracked file, so it moves the tree sha
+      # (measured: the pre-mutation sha was named by nothing, and the assertion below
+      # read as "did not reproduce the defect" on a mutation that had reproduced it
+      # exactly). Re-read it here rather than reusing the pre-mutation value.
+      work9_mut="$( ( . "$RESULT"; gr_tree_sha "$REPO_ROOT" ) )"
+      case9_mut="$(PREFLIGHT_RESULT_DIR="$case9_dir" PREFLIGHT_KEY_EXTRA=probe9 bash "$REUSE" --tree "$other9" 2>&1)"; case9_mut_rc=$?
+      case9_mut_show="$(PREFLIGHT_RESULT_DIR="$case9_dir" PREFLIGHT_KEY_EXTRA=probe9 bash "$REUSE" --show --tree "$other9" 2>&1)"
+      if [ -z "$work9_mut" ] || [ "$work9_mut" = "$other9" ]; then
+        bad "case 9 — the mutated working tree could not be identified ([$work9_mut] vs fixture [$other9]), so the fallback this case measures cannot be asserted"
+      elif grep -qxF "PREFLIGHT_TREE=$other9" <<<"$case9_mut"; then
+        bad "case 9 — the mutated decide path STILL answers about the fixture tree, so the wiring was never removed and this case proves nothing: [$(printf '%s' "$case9_mut" | tr '\n' ' ')]"
+      elif [ "$case9_mut_rc" -eq 0 ] || ! grep -qF "for tree $(printf '%.7s' "$work9_mut")" <<<"$case9_mut"; then
+        bad "case 9 — the mutation did not reproduce the defect: the decide path must fall back to the WORKING tree ($(printf '%.7s' "$work9_mut")) and refuse, got rc=$case9_mut_rc [$(printf '%s' "$case9_mut" | tr '\n' ' ')]"
+      elif ! grep -qxF -- '--- reusable: YES' <<<"$case9_mut_show"; then
+        bad "case 9 — the mutation broke MORE than the decide wiring: the SAME fixture is no longer reusable through --show ([$(printf '%s' "$case9_mut_show" | tail -n 1)]), so a red below would be unattributable"
+      else
+        rc9=0
+        selftest_run "$WORK/case9.log" || rc9=$?
+        # ONLY check 40 can fire: it is the one check that asks the decide path
+        # about a tree that is not the working tree, and check 24's `--tree` (which
+        # the broken fallback answers identically) is asserted UNMOVED by the
+        # shipped-direction leg above rather than by widening this needle — a needle
+        # wide enough to accept a broken premise is the false-green shape this
+        # harness exists to remove.
+        verdict "case 9" "$WORK/case9.log" "$rc9" \
+          "must decide about the tree it was given|--tree=<sha> spelling is the same flag" \
+          "with the decide wiring removed, the consumer answers about the WORKING tree instead of the tree it was given"
+      fi
+    fi
+  fi
+fi
+restore_and_verify
+
 # --- the tree must be as dirty as it was found: a case that leaked a mutation past
 # its restore would poison every lane after it, and the sha checks above cannot see
 # an ADDED file.
@@ -653,7 +776,7 @@ fi
 
 echo "---"
 if [ "$FAIL" -eq 0 ]; then
-  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, hashing the test-DB host's SPELLING into it, putting the all-or-nothing credential strip or the unconditional step-2 strip back, removing the scheme guard that refuses an un-strippable DSN, or killing the TTL horizon each turns the REAL selftest gate red, naming that property"
+  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, hashing the test-DB host's SPELLING into it, putting the all-or-nothing credential strip or the unconditional step-2 strip back, removing the scheme guard that refuses an un-strippable DSN, killing the TTL horizon, or dropping the documented \`--tree\` wiring from the consumer's decide path each turns the REAL selftest gate red, naming that property"
 else
   echo "biteproof: $PASS passed, $FAIL failed — a reuse guard does NOT hold something it claims to"
 fi

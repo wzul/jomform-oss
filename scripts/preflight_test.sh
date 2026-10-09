@@ -3452,6 +3452,80 @@ case "$s39_out" in
     ;;
 esac
 
+# 40. `--tree <sha>` MUST REACH THE DECISION, NOT JUST `--show` (card t_912df3a4).
+#     `scripts/preflight_reuse.sh --tree <sha>` is documented as "decide for an
+#     explicit tree", and a lane needs exactly that for bytes that are no longer
+#     in its working tree: the tree it just pushed, or the tree before/after a
+#     bite mutation. The decide path accepted the flag and DROPPED it — the
+#     decision fell back to the WORKING tree, so both the answer and the tree
+#     named in the exit-1 PREFLIGHT_EVIDENCE line were about a tree the caller had
+#     not asked about (measured: `--tree <sha>` -> "no reusable record for tree
+#     <worktree short sha>", rc=1, while `--show --tree <sha>` on the same bytes
+#     said `reusable: YES`). It failed SAFE — rc=1 means "gate normally", so it
+#     could not hand out a pass for ungated bytes — but it cost the lane a full
+#     gate run (the host-wide pool's waiter measures 50-86 minutes) for bytes that
+#     were already vouched for.
+#
+#     THE FIXTURE MUST NAME A TREE THAT IS NOT THE WORKING TREE, or this check
+#     would pass on the pre-fix script: check 24's `--tree "$probe_tree"` happens
+#     to name exactly the tree the broken fallback answers about (the sandbox
+#     working tree), which is measured why the defect survived a check that
+#     already passed a `--tree` through the consumer. So a record is hand-written
+#     here for a DIFFERENT tree sha, and the check asserts the discriminating
+#     premise — the record IS green under the current inventory and environment,
+#     and WITHOUT the flag the consumer answers about the working tree — before it
+#     asserts anything about the flag. A red here can then only be the flag.
+if [ -n "$probe_tree" ]; then
+  # Derived, not invented: the same bytes give the same fixture tree on every run.
+  other40="$(printf 'preflight_test check 40' | sha256sum | cut -c1-40)"
+  work40="$(gr_tree_sha "$SB")"
+  rec40="$(gr_file "$other40")"
+  key40="$(PREFLIGHT_KEY_EXTRA=probe40 gr_key "$SB")"
+  parts40="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe40 gr_key_parts "$SB")")"
+  {
+    printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+      "$other40" "$key40" "$parts40"
+    # shellcheck disable=SC2086  # deliberate word splitting on the newline-separated inventory
+    printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
+      | sed '$ s/,$//'
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe40.log",\n  "finished_at": "%s"\n}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$rec40"
+  # The hand-written gates block is the whole fixture, so assert it landed as
+  # intended BEFORE reading anything from the runs below.
+  fixture40_pass=0
+  # shellcheck disable=SC2086
+  for g in $GATES; do
+    [ "$(gr_gate_status "$rec40" "$g")" = "pass" ] && fixture40_pass=$((fixture40_pass+1))
+  done
+  show40="$(PREFLIGHT_KEY_EXTRA=probe40 ./scripts/preflight_reuse.sh --show --tree "$other40" 2>&1)"
+  dec40="$(PREFLIGHT_KEY_EXTRA=probe40 ./scripts/preflight_reuse.sh --tree "$other40" 2>&1)"; rc40=$?
+  dec40eq="$(PREFLIGHT_KEY_EXTRA=probe40 ./scripts/preflight_reuse.sh "--tree=$other40" 2>&1)"; rc40eq=$?
+  noflag40="$(PREFLIGHT_KEY_EXTRA=probe40 ./scripts/preflight_reuse.sh 2>&1)"; nrc40=$?
+  if [ "$other40" = "$work40" ]; then
+    bad "check 40's fixture is VACUOUS: the fabricated tree sha equals the sandbox working tree ($work40), which is exactly the tree the pre-fix fallback answers about"
+  elif [ -z "$work40" ]; then
+    bad "check 40 cannot identify the sandbox working tree, so the fallback it must discriminate against (the WORKING tree) cannot be asserted"
+  elif [ "$fixture40_pass" != "$NGATES" ]; then
+    bad "check 40's fixture did not land: only $fixture40_pass of $NGATES gate entries are 'pass' in $rec40, so a 'none' from the decide path would not evidence anything about the flag"
+  elif ! grep -qxF -- '--- reusable: YES' <<<"$show40"; then
+    bad "check 40's fixture record is not reusable under the CURRENT inventory and environment (--show said [$(printf '%s' "$show40" | tail -n 1)]), so 'none' from the decide path would not be the flag being dropped"
+  elif grep -qF "$other40" <<<"$noflag40"; then
+    bad "check 40's premise is broken: WITHOUT --tree the consumer already answered about $other40, so this fixture does not discriminate the flag"
+  elif ! grep -qF "for tree $(printf '%.7s' "$work40")" <<<"$noflag40"; then
+    bad "check 40's premise is broken: WITHOUT --tree (rc=$nrc40) the consumer did not answer about the WORKING tree ($work40), so the fallback this check discriminates is not the one under test: [$(printf '%s' "$noflag40" | tr '\n' ' ')]"
+  elif [ "$rc40" -ne 0 ] || \
+       ! grep -qxF "PREFLIGHT_TREE=$other40" <<<"$dec40" || \
+       ! grep -qxF "PREFLIGHT_DECISION=full" <<<"$dec40" || \
+       ! grep -qF "tree $(printf '%.7s' "$other40")" <<<"$dec40"; then
+    bad "check 40 — \`--tree <sha>\` must decide about the tree it was given: rc=$rc40 [$(printf '%s' "$dec40" | tr '\n' ' ')] (expected rc=0, PREFLIGHT_TREE=$other40, PREFLIGHT_DECISION=full, and the evidence naming tree $(printf '%.7s' "$other40"))"
+  elif [ "$rc40eq" -ne 0 ] || ! grep -qxF "PREFLIGHT_TREE=$other40" <<<"$dec40eq"; then
+    bad "check 40 — the \`--tree=<sha>\` spelling is the same flag and must answer the same: rc=$rc40eq [$(printf '%s' "$dec40eq" | tr '\n' ' ')]"
+  else
+    ok "check 40 — \`--tree <sha>\` decides about THAT tree (both spellings: rc=0, PREFLIGHT_DECISION=full, PREFLIGHT_TREE=$other40, evidence naming tree $(printf '%.7s' "$other40")) on a record green under the current inventory and environment, while the same command without the flag answers about the WORKING tree ($work40)"
+  fi
+fi
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

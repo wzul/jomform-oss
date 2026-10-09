@@ -262,6 +262,21 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
       pr_show
       ;;
     decide)
+      # THE EXPLICIT --tree REACHES THE DECISION, not just --show. `--tree <sha>`
+      # is documented above as "decide for an explicit tree", and the library
+      # answers about `PREFLIGHT_TREE` — so without this wiring the flag was
+      # accepted, documented, and then silently dropped: the decision fell back to
+      # the WORKING tree, and its answer (and the tree named in the exit-1
+      # PREFLIGHT_EVIDENCE line) was about a tree the caller had not asked about.
+      # Measured on a record that IS green under the current inventory and
+      # environment: `--tree <sha>` -> "no reusable record for tree <worktree
+      # short sha>", rc=1, while `--show --tree <sha>` on the same bytes said
+      # `reusable: YES`. The defect failed SAFE (rc=1 means "gate normally"), but
+      # it cost the lane a full gate run for bytes that were already vouched for.
+      # An explicit --tree wins over an inherited PREFLIGHT_TREE; an empty one
+      # means "this shell did not ask for a tree", so the library's own fallback
+      # (the working tree) still applies.
+      if [ -n "$PR_TREE" ]; then PREFLIGHT_TREE="$PR_TREE"; fi
       if preflight_reuse_decision; then
         echo "$PREFLIGHT_EVIDENCE"
         echo "PREFLIGHT_DECISION=$PREFLIGHT_DECISION"
