@@ -569,6 +569,49 @@ function assistantVerb(matched: string): string | null {
 /** The copulas: an auxiliary that can make the bin token a PASSIVE on the thing. */
 const COPULA_AUX = /^(?:is|are|was|were|be|been|being)$/;
 
+// ── THE REPORTED CLAUSE'S CONTRACTED SUBJECT (t_6ad53e35) ────────────────────
+//
+// The reported clause's reader read its SUBJECT as a bare pronoun or the noun
+// (`it|they|he|she|the assistant`) and then required WHITESPACE before the verb phrase.
+// A CONTRACTED subject is one token that carries BOTH the pronoun and the copula or
+// auxiliary, so `it's` / `they're` / `he's` / `we're` / `you're` / `it's been` /
+// `they've been` matched none of the alternatives: the `\b` after `it` holds (an
+// apostrophe is a non-word char) but the next token is `'s`, not whitespace, so the
+// required `\s+` before the verb group failed and the reader returned false. A genuine
+// CLAIM whose reported clause contracts its subject was therefore read as a report — a
+// false NEGATIVE. Measured on the extracted scan: a 192-sentence battery (6 information
+// verbs x 8 contracted subjects x 4 bin gerunds) is 192 missed / 0 caught, while the same
+// frame with the subject uncontracted is caught.
+//
+// THE CONTRACTION IS NOT A WHITESPACE TOKEN, so the reader is a SECOND alternation rather
+// than a widened pronoun list: the subject may be the bare form, or one of these
+// contractions as a single token, and only then is the whitespace-separated verb group
+// read. The cores are the pronouns this reader already treats as standing for the
+// assistant (`it|they|he|she`, and `the assistant` itself when bare) plus `we`, which the
+// card's own sentence calls a claim ("the assistant mentions WE'RE restoring a form" — the
+// assistant among the actors). `you` is deliberately NOT a core: a `you` in the reported
+// clause is the person the assistant reports TO ("tells you YOU are deleting a form"), and
+// the addressee strip above already consumes it — which is also why extending the
+// alternation with `you` changes nothing (measured: the mutation is a no-op). The
+// un-contracted `we`/`you` twins are left out for the same reason one token over: they are
+// the addressee or the assistant's "we", not the assistant, and reding them is the false
+// positive the contraction-only arm exists to avoid (measured: adding bare `we` reds the
+// "tells you we are deleting" control).
+//
+// THE CONTRACTION CARRIES THE AUXILIARY TOO. `it's` is `it is` OR `it has`, so the
+// copula test (which admits the `-ing` form only) cannot read the whitespace group alone
+// — `it's` has no whitespace group — or `it's binning` would be read as a CLAIM and the
+// report `it's binned` as a claim too. The contraction's own lexical core is folded onto
+// the front of the chain the reader tests, so the last auxiliary before the bin verb is
+// still the token the passive/progressive distinction reads. `'s`/`'re`/`'ve` all open
+// with a copula or `have`, which is why folding them in cannot red a progressive claim.
+/** The pronoun cores a contracted reported-clause subject can carry. */
+const CONTRACTED_SUBJ = String.raw`it|they|he|she|we`;
+/** A contracted subject as ONE token: the pronoun plus `'s` / `'re` / `'ve`. */
+const CONTRACTION = String.raw`(?:${CONTRACTED_SUBJ})(?:'|\u2019)(?:s|re|ve)\b`;
+/** The auxiliary core a `'s` / `'re` / `'ve` contraction folds into its verb chain. */
+const CONTRACTION_CORE: Record<string, string> = { s: "is", re: "are", ve: "have" };
+
 /**
  * Does the clause the assistant's information verb REPORTS put the assistant back in the
  * bin verb's subject position — "the assistant tells you IT BINS a form"? True means the
@@ -591,7 +634,7 @@ const COPULA_AUX = /^(?:is|are|was|were|be|been|being)$/;
  * the trash" is a PASSIVE on the thing, not an action of the assistant's, while "it IS
  * BINNING" is the progressive claim — so a copula admits the `-ing` form only.
  */
-function assistantBinsInsideReport(matched: string, fullClause: string = matched, det: string = DET): boolean {
+function assistantBinsInsideReport(matched: string, fullClause: string = matched, det: string = DET, contracted: boolean = true): boolean {
   const info = new RegExp(`\\b(?:${INFO_VERB})\\b`, "i").exec(fullClause);
   if (!info) return false;
   // The clause the verb reports: strip the "that" that introduces it and the "you" the
@@ -614,12 +657,31 @@ function assistantBinsInsideReport(matched: string, fullClause: string = matched
   if (new RegExp(`^\\s+(?:the\\s+)?${BIN_GERUND}\\b`, "i").test(rest)) {
     return !reportedGerundIsSubject(rest, det);
   }
+  // THE SUBJECT IS A BARE PRONOUN OR ITS CONTRACTION (t_6ad53e35). The second alternation
+  // is the contracted subject as ONE token (`it's`, `they're`, `he's`, `we're`, `you're`)
+  // — see the note above `CONTRACTION`. It is taken only when `contracted` is true, which is
+  // what lets this test's pre-fix reader (`assistantBinClaims(s, DET, false)`) run the
+  // shipped rule with exactly that arm removed. Its whitespace-verb group is the same chain
+  // the bare subject takes, so a contracted perfect (`it's been binning`) reads exactly like
+  // `it has been binning`, and the contraction's own lexical core (`is`/`are`/`have`) is
+  // folded onto the front of the chain the copula test below reads.
+  const subject = contracted
+    ? `(?:(?:${CONTRACTION})|(?:it|they|he|she|the\\s+assistant)\\b)`
+    : `(?:it|they|he|she|the\\s+assistant)\\b`;
   const claim = new RegExp(
-    `^\\s+(?:it|they|he|she|the\\s+assistant)\\b(\\s+(?:${ASSISTANT_AUX}))?\\s+(${BIN_VOCAB})\\b`,
+    `^\\s+${subject}((?:\\s+(?:${ASSISTANT_AUX}))*)\\s+(${BIN_VOCAB})\\b`,
     "i",
   ).exec(rest);
   if (!claim) return false;
-  const aux = (claim[1] ?? "").trim().toLowerCase();
+  // The chain's LAST auxiliary is the one before the bin verb. (A repeated capturing group
+  // would hold only its last iteration, so the chain is captured in full and its final
+  // token taken here.) A contraction carries its auxiliary INSIDE the subject token, so it
+  // is folded on first — otherwise `it's binning` (the progressive claim) would have no
+  // auxiliary to test and read as a bare copula-less claim, reding the report direction.
+  const contractedHit = contracted ? new RegExp(`^\\s+(${CONTRACTION})\\b`, "i").exec(rest) : null;
+  const core = contractedHit ? (CONTRACTION_CORE[contractedHit[1].toLowerCase().slice(-2).replace(/['\u2019]/, "")] ?? "") : "";
+  const chain = `${core} ${(claim[1] ?? "").trim()}`.trim().toLowerCase();
+  const aux = chain ? chain.split(/\s+/).pop()! : "";
   const bin = claim[2].toLowerCase();
   // A copula before a non-progressive form is the passive ("it is binned"), not a claim.
   return !COPULA_AUX.test(aux) || /ing$/.test(bin);
@@ -643,7 +705,7 @@ function assistantBinsInsideReport(matched: string, fullClause: string = matched
  * The possessive-genitive predicate ("<binning> is the assistant's job") is (C) read
  * from the other end and is folded into it: it is the same predication.
  */
-function binClaimInClause(raw: string, det: string = DET): string | null {
+function binClaimInClause(raw: string, det: string = DET, contracted: boolean = true): string | null {
   const s = normaliseClause(raw);
   if (!/\bassistant\b/.test(s)) return null;
   // (A) the assistant as SUBJECT of a bin verb, no negation between.
@@ -658,7 +720,7 @@ function binClaimInClause(raw: string, det: string = DET): string | null {
       // assistant back in the bin verb's subject position ("tells you IT BINS a form")
       // is reporting a claim, not naming the bin (see `assistantBinsInsideReport`).
       const verb = assistantVerb(m[0]);
-      if (!verb || !HAS_NON_ACTION.test(verb) || assistantBinsInsideReport(m[0], s, det)) return m[0];
+      if (!verb || !HAS_NON_ACTION.test(verb) || assistantBinsInsideReport(m[0], s, det, contracted)) return m[0];
     }
   }
   // (B) the AGENT of a passive: "<bin> by the assistant" (bare or periphrastic).
@@ -753,7 +815,7 @@ function binWordInClause(clause: string): string | null {
 }
 
 /** Every phrasing in `text` that credits the assistant with the bin, in order. */
-function assistantBinClaims(text: string, det: string = DET): string[] {
+function assistantBinClaims(text: string, det: string = DET, contracted: boolean = true): string[] {
   const out: string[] = [];
   let prevBin: string | null = null;
   for (const clause of text.split(CLAUSE_SPLIT)) {
@@ -767,7 +829,7 @@ function assistantBinClaims(text: string, det: string = DET): string[] {
           (_m, aux: string | undefined) => `assistant${aux || " "}${prevBin}`,
         )
       : clause;
-    const m = binClaimInClause(folded, det);
+    const m = binClaimInClause(folded, det, contracted);
     if (m) out.push(m);
     // The antecedent for the NEXT clause: a clause with no bin resets it rather than
     // letting a pro-verb reach back over an unrelated clause.
@@ -2252,6 +2314,26 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "gerund object · quantifier-a-few (DA)": "The assistant describes restoring a few forms.",
     "gerund object · quantifier-whole (DB)": "The assistant explains deleting the whole form.",
     "gerund object · quantifier-entire (DC)": "The assistant reports binning an entire form.",
+    // t_6ad53e35 — the reported clause's CONTRACTED SUBJECT. The reader read the subject as
+    // a BARE pronoun (or the noun) and then required whitespace before the verb phrase, so a
+    // subject that contracts the pronoun with its copula/auxiliary into ONE token (`it's`,
+    // `they're`, `he's`, `we're`, `you're`) matched nothing and the claim was read as a
+    // report — a false negative. These rows are the contracted twins of the reported-claim
+    // rows CG-CM (and, for the last four, of the t_d7178bff `chain claim` class, since a
+    // contraction can open a chain: `it's been …`, `they've been …`). The mutation that reds
+    // them is reverting the reader's subject to the bare alternation; see the note after
+    // this map. A contraction is ALSO the auxiliary (`it's` = `it is`/`it has`), so the
+    // contracted PASSIVES are pinned as report controls in the array below — they are what
+    // reds if the contraction's core is not folded onto the chain the copula test reads.
+    "contracted subject · it's binning (DH)": "The assistant tells you it's binning a form.",
+    "contracted subject · they're binning (DI)": "The assistant says they're binning forms.",
+    "contracted subject · he's deleting (DJ)": "The assistant reports that he's deleting a form.",
+    "contracted subject · she's trashing (DK)": "The assistant explains that she's trashing a form.",
+    "contracted subject · we're restoring (DL)": "The assistant mentions we're restoring a form.",
+    "contracted subject · it's been binning (DM)": "The assistant tells you it's been binning a form.",
+    "contracted subject · they've been trashing (DN)": "The assistant says they've been trashing forms.",
+    "contracted subject · he's been deleting (DO)": "The assistant reports that he's been deleting forms.",
+    "contracted subject · we've been restoring (DP)": "The assistant explains that we've been restoring a form.",
   };
 
   const missed: string[] = [];
@@ -2289,6 +2371,24 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
   // possible`), i.e. the predicate reading is what keeps the claim from swallowing a
   // report that happens to use the same gerund. All runs were done by hand on this file;
   // they are why these rows and controls are pinned rather than named in prose.
+  //
+  // t_6ad53e35's nine `contracted subject` rows (DH-DP) bite on this card's axis: reverting
+  // the reported-clause reader's subject to the bare alternation (`it|they|he|she|the
+  // assistant`, no contraction arm) returns exactly those nine to GREEN while the whole rest
+  // of the map stays green — the bare-subject rows CG-CM are the controls that hid the gap.
+  // In the other direction, NOT folding the contraction's lexical core onto the chain the
+  // copula test reads (`COPULA_AUX.test(chain)` with `chain` built from the whitespace group
+  // alone) reds the contracted PASSIVE report controls added to the array below
+  // (`it's binned`, `they're trashed`) and nothing else: the contraction IS the auxiliary,
+  // so the passive/progressive distinction has to read it. Both mutations were run by hand on
+  // this file.
+  //
+  // This card's diff also carries the bare-subject arm's auxiliary group as a CHAIN
+  // (PR #1078's change, which has landed as a sibling; the two are not independent for the
+  // lines this reader shares). The chain is what lets the card's own contracted-perfect rows
+  // (`it's been binning`) read, and the bare chain claims of #1078 are therefore red on this
+  // branch too — its `chain claim` rows (DA-DG) are pinned in #1078's hunk at this same map
+  // tail, so the two will merge as one contiguous block.
 
   // And the POSITIVE CONTROL must not be what carries the detection: the person-
   // attribution sentence the fix ships (which names the assistant only to disown
@@ -2428,6 +2528,26 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "The assistant mentions that trashing the whole form hides it from the dashboard.",
     "The assistant says binning each form is permanent.",
     "The assistant says deleting no form is possible.",
+    // t_6ad53e35 — the CONTRACTED-subject reports, which must stay GREEN. The four PASSIVES
+    // are the unsafe direction of the fix — a contraction carries the auxiliary too
+    // (`it's binned` = `it is binned`, a passive on the thing), so reding them is the false
+    // positive the contraction's folded core exists to prevent. The two ADDRESSEE clauses
+    // are the other edge: `you're` behind the `you` the assistant reports TO is the PERSON,
+    // not the assistant, and `you` is deliberately not a contraction core for exactly this
+    // reason. (`we're` is NOT here: the card's own "the assistant mentions WE'RE restoring a
+    // form" is a claim, so `we` IS a core — see the note above `CONTRACTED_SUBJ`.)
+    "The assistant tells you it's binned.",
+    "The assistant says they're trashed.",
+    "The assistant reports that he's been deleted.",
+    "The assistant explains that she's been trashed.",
+    "The assistant tells you you're binning a form.",
+    "The assistant tells you you're deleting forms.",
+    // The BARE-subject chain passive, pinned here because this card's diff carries the
+    // chain group for BOTH arms (see the note after the BITES map): the last-auxiliary
+    // copula test has to keep `it has been binned` a report, exactly as it keeps the
+    // contracted `it's been binned` one.
+    "The assistant tells you it has been binned.",
+    "The assistant says it will be binned.",
   ]) {
     assert.deepEqual(
       assistantBinClaims(report),
@@ -2530,6 +2650,119 @@ test("the quantifier-determiner object is caught by the SHIPPED determiner set a
       `the pre-fix scan reds a quantifier-object REPORT (${JSON.stringify(s)}) — this is the ` +
         `t_255182df false-positive class and must be GREEN in both determiner sets`,
     );
+  }
+});
+
+// ── THE REPORTED CLAUSE'S CONTRACTED SUBJECT (t_6ad53e35) ────────────────────
+//
+// THE DEFECT this test guards. `assistantBinsInsideReport` read the reported clause's
+// SUBJECT as a BARE pronoun — `it|they|he|she` — or the noun `the assistant`, and then
+// required WHITESPACE before the verb phrase. A subject that contracts the pronoun with its
+// copula or auxiliary into ONE token matched none of them: the `\b` after `it` holds (an
+// apostrophe is a non-word char) but the next token is `'s`, not whitespace, so the
+// `\s+` before the verb group failed, the reader returned false, and a genuine CLAIM whose
+// reported clause contracts its subject was read as a report. Measured with the scan
+// extracted from this file: a 192-sentence battery (6 information verbs x 8 contracted
+// subjects x 4 bin gerunds) is 192 missed / 0 caught at the pre-fix head, while the SAME
+// frame with the subject uncontracted is caught. That is a false negative — the unsafe
+// direction — and it is the axis t_d7178bff did NOT touch (its rows are the bare-subject
+// chain claims).
+//
+// WHY IT IS PROVED HERE AND NOT MERELY ASSERTED. The nine `contracted subject` rows DH-DP in
+// the BITES map above are pinned, so a regression reds THIS suite — but a map row and a
+// guard can drift apart silently (the map judges the SHIPPED page plus an injected sentence,
+// a different code path from the scan's own reading of a bare claim). This test runs the
+// REAL scan directly, and the pre-fix behaviour is measured by running the shipped subject
+// alternation without the contraction arm (`assistantBinClaims(s, DET, false)`), i.e. the
+// pre-fix rule verbatim rather than a paraphrase of it (the file's own doctrine: see the
+// note above `BIN_VOCAB`). Both directions are pinned: the shipped reader catches every
+// contracted claim, the pre-fix reader misses every one, and the report controls — the
+// contracted PASSIVES and the addressee/person clauses — stay GREEN in BOTH, so the test
+// also fails if the contraction's folded core is dropped (reding the passives) or if the
+// contraction arm is widened to the un-contracted `we`/`you`.
+test("the contracted reported-clause subject is caught by the SHIPPED reader and lost by the pre-fix one (t_6ad53e35)", () => {
+  const verbs = ["tells you", "reports that", "says", "explains that", "mentions", "describes"];
+  const subjects = ["it's", "they're", "he's", "she's", "we're", "it's been", "they've been", "he's been"];
+  const gerunds = ["binning a form", "trashing forms", "restoring a form", "deleting a form"];
+  const claims: string[] = [];
+  for (const v of verbs) for (const s of subjects) for (const g of gerunds) claims.push(`The assistant ${v} ${s} ${g}.`);
+
+  // Vacuity: the pre-fix reader must actually differ from the shipped one, or the bite below
+  // asserts nothing. (The same sentence with an uncontracted subject IS caught, which is why
+  // the gap hid.)
+  assert.deepEqual(
+    assistantBinClaims("The assistant tells you it is binning a form.", DET, true),
+    assistantBinClaims("The assistant tells you it is binning a form.", DET, false),
+    "sanity: the uncontracted control changed under the pre-fix reader — the contraction arm " +
+      "is meant to be the ONLY difference, so this test reads the wrong scan",
+  );
+  assert.deepEqual(
+    assistantBinClaims("The assistant tells you it's binning a form.", DET, false),
+    [],
+    "the pre-fix reader (no contraction arm) already catches a contracted subject, so this test pins no defect",
+  );
+
+  const shippedMissed: string[] = [];
+  for (const s of claims) if (assistantBinClaims(s).length === 0) shippedMissed.push(s);
+  assert.deepEqual(
+    shippedMissed,
+    [],
+    `the SHIPPED reader misses a claim whose reported clause contracts its subject, so a copy ` +
+      `that credits the assistant with the bin ships GREEN (the defect this card fixes):\n  ${shippedMissed.join("\n  ")}`,
+  );
+
+  // The bite: the SAME 192-sentence battery read by the pre-fix subject alternation.
+  const preFixMissed = claims.filter((s) => assistantBinClaims(s, DET, false).length === 0);
+  assert.deepEqual(
+    preFixMissed,
+    claims,
+    `the pre-fix reader did not lose EVERY contracted claim, so some are carried by something ` +
+      `other than the contraction arm and this test does not pin the card's defect:\n` +
+      `  still caught without the arm: ${JSON.stringify(claims.filter((s) => assistantBinClaims(s, DET, false).length > 0))}`,
+  );
+
+  // …and the OTHER direction: the contraction arm must not swallow a REPORT. A contraction
+  // carries the auxiliary too, so `it's binned` is the PASSIVE on the thing; reding it (by
+  // dropping the folded core) would trade this false negative for a false positive.
+  const reports = [
+    "The assistant tells you it's binned.",
+    "The assistant says they're trashed.",
+    "The assistant reports that he's been deleted.",
+    "The assistant explains that she's been trashed.",
+    "The assistant tells you it's been binned.",
+    "The assistant tells you you're binning a form.",
+    "The assistant tells you you're deleting forms.",
+  ];
+  for (const s of reports) {
+    // The pre-fix reader must ALSO keep these green — they are reports in BOTH subject
+    // alternations, so a test that only ran the shipped one would not prove the arm is
+    // report-safe.
+    assert.deepEqual(
+      assistantBinClaims(s),
+      [],
+      `the SHIPPED scan reds a contracted-subject REPORT (${JSON.stringify(s)}) — a contraction ` +
+        `that carries a copula before a participle is the passive on the thing, not a claim, and ` +
+        `the addressee reading is the person, not the assistant`,
+    );
+    assert.deepEqual(
+      assistantBinClaims(s, DET, false),
+      [],
+      `the pre-fix scan reds a contracted-subject REPORT (${JSON.stringify(s)}) — a control both ` +
+        `readers must keep GREEN`,
+    );
+  }
+
+  // The UNCONTRACTED `we`/`you` twins of the two claims the card names are REPORTS, not
+  // claims, in both readers: `we`/`you` only stand for the assistant when the pronoun is
+  // CONTRACTED (the card's "we're" is the assistant among the actors), so the un-contracted
+  // form is left out of the alternation on purpose. These pin that boundary.
+  for (const s of [
+    "The assistant tells you we are deleting a form.",
+    "The assistant says we are restoring a form.",
+    "The assistant reports that you are trashing a form.",
+  ]) {
+    assert.deepEqual(assistantBinClaims(s), [], `the SHIPPED scan reds the un-contracted twin (${JSON.stringify(s)})`);
+    assert.deepEqual(assistantBinClaims(s, DET, false), [], `the pre-fix scan reds the un-contracted twin (${JSON.stringify(s)})`);
   }
 });
 
