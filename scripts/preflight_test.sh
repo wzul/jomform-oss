@@ -911,8 +911,18 @@ s16_gofmt_label='cd api && test -z "$(gofmt -l .)"'
 # NO `2>/dev/null` on any redirection-only `exec` here either: it would apply to
 # the SHELL, not to a command (that mistake made 21 checks in this file report an
 # empty output while the exit code still changed).
+# `$1` (optional) is a READINESS SENTINEL path: the holder writes it only after
+# BOTH slots are held and the premise probe below has proved a fresh take is
+# refused — i.e. the moment the pool is genuinely full for anyone else. The
+# caller waits on that file instead of a fixed sleep (card t_458c2578): a
+# `sleep 1` was a start BUDGET, not a guarantee, so on a loaded host the holder's
+# two `flock` takes could take longer than 1s, the subject then started against a
+# not-yet-full pool, took the free slot, answered rc=0, and the check reported a
+# spurious RED about the cap. The sentinel turns that race into a wait, and it is
+# written HERE (after the probe) rather than at the start, so its presence is
+# evidence the pool is full and not merely that the subshell has been scheduled.
 pool_hold() {
-  local n fd
+  local ready="${1:-}" n fd
   for n in $(seq 1 "$default_count"); do
     fd=""
     exec {fd}>>"$pool_lock.slot$n" || return 1
@@ -930,12 +940,33 @@ pool_hold() {
     return 2
   fi
   exec {probe}>&-
+  [ -n "$ready" ] && : >"$ready"
   sleep 4
 }
+# Wait, BOUNDED, for a holder's readiness sentinel (card t_458c2578). 0 = the
+# sentinel appeared (pool full, premise proved); 1 = the holder exited WITHOUT
+# writing it (its `pool_hold` returned 1 or 2); 2 = neither within the bound. The
+# caller must treat 1/2 as "the holder failed to fill the pool" and report THAT,
+# rather than running the subject against a pool that may be empty and
+# mis-attributing the result — which is the second half of the defect the fixed
+# `sleep 1` caused.
+wait_pool_hold_ready() {  # $1 sentinel path, $2 holder pid
+  local sentinel="$1" holder="$2" deadline
+  deadline=$(( $(date +%s) + 15 ))
+  while [ ! -f "$sentinel" ]; do
+    kill -0 "$holder" 2>/dev/null || return 1
+    [ "$(date +%s)" -lt "$deadline" ] || return 2
+    sleep 0.1
+  done
+  return 0
+}
 s16_out=""
-pool_hold &
+s16_ready="$SB_STATE/s16b.ready"
+rm -f "$s16_ready"
+pool_hold "$s16_ready" &
 s16_holder=$!
-sleep 1
+s16_ready_rc=0
+wait_pool_hold_ready "$s16_ready" "$s16_holder" || s16_ready_rc=$?
 # WAIT=0 so the assertion cannot hang the self-test: a runner that (wrongly)
 # proceeds answers immediately, and one that waits exits 74 immediately.
 # `env -u` for the inheritance markers: the guard at the top of this file clears
@@ -950,8 +981,23 @@ s16_gate_ran=0
 grep -qF "$s16_gofmt_label" <<<"$s16_out" && s16_gate_ran=1
 s16_waited=0
 grep -q "all ${default_count} gate slot(s) busy" <<<"$s16_out" && s16_waited=1
-wait "$s16_holder" 2>/dev/null
-if [ "$s16_rc" -eq 0 ]; then
+s16_hold_rc=0
+wait "$s16_holder" 2>/dev/null; s16_hold_rc=$?
+# THE HOLDER IS CHECKED, and this is the SECOND half of the flake (card
+# t_458c2578). `wait … 2>/dev/null` used to discard the holder's status, so when
+# `pool_hold` returned non-zero — 1 if it could not take a slot, 2 if its own
+# premise probe found slot1 still takeable — this check ran the subject against a
+# pool that was NOT full and reported whatever came back, mis-attributing a
+# broken HOLDER to the runner under test. The subject must not be read at all when
+# the premise failed; a holder that did not fill the pool proves nothing about the
+# runner. Reported as its own clear red (a `bad`), never as a silent pass-through.
+if [ "$s16_ready_rc" -eq 1 ]; then
+  bad "16b: the pool HOLDER exited without filling the pool (pool_hold rc=$s16_hold_rc — its slot take or premise probe failed), so the subject run cannot be attributed to a full pool — nothing about the runner's cap is measured by this run"
+elif [ "$s16_ready_rc" -eq 2 ]; then
+  bad "16b: the pool HOLDER did not report the pool full within 15s (pool_hold rc=$s16_hold_rc) while the host is loaded — raising a fixed start budget would not fix this (that was the old bug); the host could not schedule two flock takes in 15s, so the check cannot measure the runner here"
+elif [ "$s16_hold_rc" -ne 0 ]; then
+  bad "16b: the pool HOLDER wrote its readiness sentinel but then returned rc=$s16_hold_rc (pool_hold should hold for its sleep and return 0) — the holder's own premise is not trustworthy, so the runner's rc is not a statement about the cap"
+elif [ "$s16_rc" -eq 0 ]; then
   bad "16b does not bite: with all $default_count slot(s) held the run COMPLETED (rc=0) instead of waiting — the pool is not capping, so two lanes would run at once with no bound (output: [$(printf '%s' "$s16_out" | grep -E 'slots:|gate \[gofmt\]|summary' | tr '\n' ' ')]"
 elif [ "$s16_gate_ran" -ne 0 ]; then
   bad "16b does not bite: the run reported it was waiting for a slot AND executed the gate — the cap is not real (output: [$(printf '%s' "$s16_out" | grep -E 'slots:|gate \[gofmt\]' | tr '\n' ' ')]"
@@ -982,6 +1028,15 @@ fi
 #      reachable by waking on the freed slot.
 s16c_hold=12
 s16c_wait=8
+# The filler's READINESS SENTINEL, the same mechanism 16b uses (card t_458c2578).
+# `sleep 0.5` used to be a start BUDGET for the subject: if the host was loaded
+# and the filler had not taken its slots yet, the subject started against a FREE
+# pool, took a slot, ran its gate and answered rc=0 — 16c then reported the green
+# it is meant to be unable to report without a slot-1-only wait being wrong. The
+# sentinel, written AFTER the filler holds every slot, makes the subject's start
+# wait for a full pool rather than hope for it.
+s16c_ready="$SB_STATE/s16c.ready"
+rm -f "$s16c_ready"
 (
   # FIXED DESCRIPTOR NUMBERS, closed by NUMBER — no `eval`, and no descriptor this
   # shell might already be using. `eval "exec \${var}>&-"` looks like the obvious
@@ -997,6 +1052,7 @@ s16c_wait=8
     flock -o -n "$((100+n))" || exit 1
   done
   echo "16c: all $default_count slot(s) held"
+  : >"$s16c_ready"
   sleep 2
   # Free every slot EXCEPT slot 1, so slot 1 is the last to free — for longer than
   # the waiter's whole budget. That is the ordering a slot-1-only wait is blind to.
@@ -1007,7 +1063,8 @@ s16c_wait=8
   sleep "$s16c_hold"
 ) &
 s16c_filler=$!
-sleep 0.5
+s16c_ready_rc=0
+wait_pool_hold_ready "$s16c_ready" "$s16c_filler" || s16c_ready_rc=$?
 s16c_start=$(date +%s)
 # `env -u` for the inheritance markers, exactly as 16b/16e do: this is the check
 # that measures the TAKE and the WAIT, so an inherited marker must not short-circuit it.
@@ -1023,7 +1080,13 @@ s16c_elapsed=$(( $(date +%s) - s16c_start ))
 # refused) would then be measuring a leaked holder. Letting the hold expire closes
 # the descriptors with it; the hold is bounded and short.
 wait "$s16c_filler" 2>/dev/null
-if [ "$s16c_rc" -eq 0 ] && grep -qF "$s16_gofmt_label" <<<"$s16c_out"; then
+# The SAME holder premise as 16b/16e (card t_458c2578): the filler's status used
+# to be discarded, and its readiness wait is what guarantees the subject started
+# against a FULL pool. If the filler never took its slots, a rc=0 subject proves
+# nothing about the wait — report that, never the green it would otherwise read as.
+if [ "$s16c_ready_rc" -ne 0 ]; then
+  bad "16c: the pool HOLDER did not fill the pool within 15s (readiness rc=$s16c_ready_rc), so a rc=$s16c_rc subject cannot be read as 'the wait watches every slot' — the pool it was measured against was not full"
+elif [ "$s16c_rc" -eq 0 ] && grep -qF "$s16_gofmt_label" <<<"$s16c_out"; then
   if [ "$s16c_elapsed" -lt "$s16c_hold" ]; then
     ok "16c BITES: with only slot1 held and slot 2..$default_count freed, the run RUNS its gate in ${s16c_elapsed}s (rc=0, gate executed) — the wait watches EVERY slot, not slot 1 alone (it cannot have waited for slot1, held for ${s16c_hold}s)"
   else
@@ -1107,18 +1170,28 @@ sed 's/^PREFLIGHT_SLOT_COUNT="\${PREFLIGHT_SLOT_COUNT:-2}"/PREFLIGHT_SLOT_COUNT=
 if ! grep -qF 'PREFLIGHT_SLOT_COUNT="${PREFLIGHT_SLOT_COUNT:-1}"' "$SB/scripts/preflight_slotmut.sh"; then
   bad "16e's mutation did not land (the default slot count is no longer the literal 2 this check rewrites) — the case would have reported a false green"
 else
-  pool_hold &
+  s16e_ready="$SB_STATE/s16e.ready"
+  rm -f "$s16e_ready"
+  pool_hold "$s16e_ready" &
   s16e_holder=$!
-  sleep 1
+  s16e_ready_rc=0
+  wait_pool_hold_ready "$s16e_ready" "$s16e_holder" || s16e_ready_rc=$?
   s16e_out="$( (cd "$LIVE_ROOT" && env -u PREFLIGHT_SLOT_COUNT \
       -u PREFLIGHT_SLOT_FD -u PREFLIGHT_SLOT_HOLDER -u PREFLIGHT_SLOT_N -u PREFLIGHT_SLOT_LOCK \
       PREFLIGHT_RESULT_DIR="$SB_STATE/pool-results" PREFLIGHT_RESULT_TTL=1 \
       PREFLIGHT_LOCK_FILE="$pool_lock" PREFLIGHT_LOCK_WAIT=0 \
       bash "$SB/scripts/preflight_slotmut.sh" --only gofmt 2>&1) )"
   s16e_rc=$?
-  wait "$s16e_holder" 2>/dev/null
+  s16e_hold_rc=0
+  wait "$s16e_holder" 2>/dev/null; s16e_hold_rc=$?
   s16e_slots="$(sed -n 's/.*all \([0-9]*\) gate slot(s) busy.*/\1/p' <<<"$s16e_out" | sed -n '1p')"
-  if [ "$s16e_slots" = "1" ]; then
+  # The SAME holder premise as 16b (card t_458c2578): with the holder's status
+  # discarded, a pool_hold that failed to fill the pool made the subject run
+  # against a free slot, and the "all N busy" line then came from a DIFFERENT
+  # state than the check intends — so the count read off it proves nothing.
+  if [ "$s16e_ready_rc" -ne 0 ] || [ "$s16e_hold_rc" -ne 0 ]; then
+    bad "16e: the pool HOLDER did not fill the pool (readiness rc=$s16e_ready_rc, pool_hold rc=$s16e_hold_rc), so the count read off the subject is not a statement about a 1-slot pool's cap"
+  elif [ "$s16e_slots" = "1" ]; then
     ok "16e BITES: a copy that defaults to a 1-slot pool reports \"all 1 gate slot(s) busy\" (rc=$s16e_rc), so checks 16b/16c read the cap from the script under test and a silent return to the single lock goes RED"
   else
     bad "16e does not bite: a copy defaulting to a 1-slot pool did not report a 1-slot pool (read [$s16e_slots], shipped default $default_count) — the cap is not read from the script under test, so a wrong cap would pass"
