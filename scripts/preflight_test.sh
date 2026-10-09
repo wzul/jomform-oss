@@ -85,22 +85,25 @@
 # finds the live sites belongs here rather than in a card body. Run it and read
 # every hit that is not a comment:
 #
-#   git grep -nE '\| *grep +(-[a-zA-Z]*q|.*-m *1)|\|[[:space:]]*head[[:space:]]+-n?1\b' \
+#   git grep -nE '\| *grep +(-[a-zA-Z]*q|.*-m *1)|\|[[:space:]]*head[[:space:]]+-n?[[:space:]]*1\b' \
 #     -- '*.sh' '*.py' '*.mjs' '*.js' '*.ts' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'
 #
-# The `\|[[:space:]]*head[[:space:]]+-n?1` alternative is LOAD-BEARING, and it was
+# The `\|[[:space:]]*head[[:space:]]+-n?[[:space:]]*1\b` alternative is LOAD-BEARING, and it was
 # ABSENT from the sweep that closed cards t_7953b76a / t_39b04c34. That recipe was
 # `'\| *grep +(-[a-zA-Z]*q|.*-m *1)'`, which matches `grep -q` / `grep -m1` but NOT
 # `| head -n1` — even though the class named in this very paragraph says `| head -n1`
 # "has the identical shape". Two live `| head -n1` sites then survived in
 # `deploy/backup/jomform-backup.sh` (`env_value`, `container_for`) while that sweep
-# reported itself complete; card t_0633ea1d fixed them. `-n?1` also matches the
-# `head -1` spelling that `deploy/tmp-apikey.sh` documents.
+# reported itself complete; card t_0633ea1d fixed them. `-n?[[:space:]]*1\b` also
+# matches the `head -1` spelling that `deploy/tmp-apikey.sh` documents, and the
+# SPACED `head -n 1` that the earlier `-n?1` MISSED (card t_809575fc): the recipe
+# and this file's own self-scan now carry the identical alternative, so a
+# reader's sweep and the file's own scan cannot disagree on what a live site is.
 #
-# TWO HONEST LIMITS OF THAT RECIPE, stated so its output is not over-read:
+# FOUR HONEST LIMITS OF THAT RECIPE, stated so its output is not over-read:
 #   1. `… | grep -q .` (a bare dot, no flag letter) is NOT matched by the
 #      `+(-[a-zA-Z]*q|…)` branch; check 10's old shape is found by reading for it.
-#   2. It is a SHAPE detector, not a verdict: `|[[:space:]]*head[[:space:]]+-n?1`
+#   2. It is a SHAPE detector, not a verdict: `|[[:space:]]*head[[:space:]]+-n?[[:space:]]*1\b`
 #      matches every `| head -1`, so a hit whose writer has no PROCESS (a
 #      here-string — `… <<<"$out" | head -1`) cannot SIGPIPE anything and is
 #      display formatting, as is a writer whose output is a handful of lines.
@@ -113,6 +116,11 @@
 #      reports a line that has no reader and nothing to SIGPIPE (measured on
 #      `if [ "$a" = b ] || grep -q x f; then` — one hit, no pipe). Read the HIT
 #      before believing it; a genuine site is `writer | grep -q`, never `|| grep`.
+#   4. The `1\b` anchor means a MULTI-line reader (`| head -n 10`) is NOT matched:
+#      the alternative names the ONE-line spellings (`head -n1`, `head -n 1`,
+#      `head -1`). That is a stated scope, not an oversight — a `| head -n 10`
+#      early-exit reader is the same shape, so it is a deliberate omission you
+#      still have to read for by eye.
 #
 # THIS FILE IS NOT THE ONLY ONE — that claim was false when it was written (card
 # t_5058fb49). At the time, live non-comment sites still existed in files that
@@ -1897,16 +1905,46 @@ fi
 # pinned the mention and not the recipe. Same trap in miniature as the file's own
 # "a pin that pins itself is not a pin".
 recipe_line="$(sed -n '/^#   git grep -nE /p' "$SELF" | sed -n '1p')"
+selfscan_line="$(sed -n '/^self_sites=/p' "$SELF" | sed -n '1p')"
 # The needle is the alternative as it must appear in a live ERE. Assembled from two
 # pieces for the same reason the file assembles other literals: a single literal
 # here would also match this check's own source text.
-recipe_needle='\|[[:space:]]*head'"[[:space:]]+-n?1"
+#
+# It carries `[[:space:]]*` between `-n?` and `1` (card t_809575fc). The earlier
+# `-n?1` matched `head -n1` and `head -1` but NOT the spaced `head -n 1`, while
+# this file's own self-scan (line ~1878) DID — so a reader running the documented
+# recipe would miss a spelling the file's own scan still saw, the exact drift
+# (recipe read as complete while a spelling it names goes unfound) the sibling card
+# t_0633ea1d closed for the `-n1` spelling.
+recipe_needle='\|[[:space:]]*head'"[[:space:]]+-n?[[:space:]]*1"
+# The recipe ERE itself, lifted from between the quotes on the command line. The
+# check EXECUTES it (below) rather than only grepping for the needle, so what is
+# pinned is the SPELLINGS the recipe finds, not the shape of its text: a
+# needle-only check stays green on a recipe that names the alternative but has
+# dropped a token, which is precisely the class this file exists to catch.
+recipe_ere="$(printf '%s\n' "$recipe_line" | sed -n "s/^#   git grep -nE '\(.*\)' \\\\\$/\1/p")"
+# The one-line spellings the recipe MUST cover, held WITHOUT the pipe so no single
+# line of this check matches the very self-scan it pins (`writer | ` is joined at
+# run time, and a here-string writer has no process for the recipe to flag).
+head_spellings=('head -n1' 'head -n 1' 'head -1')
 if [ -z "$recipe_line" ]; then
   bad "the header's sweep recipe command is gone — nothing in this file tells a reader how to find a writer-into-head site"
-elif grep -qF "$recipe_needle" <<<"$recipe_line"; then
-  ok "the header's sweep recipe still carries the trailing-head alternative (the omission that let two live sites survive the earlier sweep)"
-else
+elif [ -z "$recipe_ere" ]; then
+  bad "cannot lift the sweep recipe's own ERE from its command line — the extraction this check needs has rotted, so the check would pass without testing anything ([$recipe_line])"
+elif ! grep -qF "$recipe_needle" <<<"$recipe_line"; then
   bad "the header's sweep recipe no longer covers a trailing 'head -1' — the recipe would again be read as complete while writer-into-head sites stay live (deploy/backup/jomform-backup.sh env_value/container_for were exactly that): [$recipe_line]"
+elif ! grep -qF "$recipe_needle" <<<"$selfscan_line"; then
+  bad "this file's own self-scan no longer carries the same trailing-head alternative, so the recipe and the scan it is checked against have drifted apart: [$selfscan_line]"
+else
+  missed=""
+  for _sp in "${head_spellings[@]}"; do
+    grep -qE "$recipe_ere" <<<"writer | $_sp" || missed="${missed}[writer | $_sp] "
+  done
+  if [ -z "$missed" ]; then
+    ok "the header's sweep recipe covers every one-line trailing-head spelling the file's own self-scan does ('head -n1', 'head -n 1', 'head -1'), so a reader's sweep and the in-file scan cannot disagree on what a live site is"
+  else
+    bad "the header's sweep recipe MISSES a trailing-head spelling this file's own self-scan still finds, so a reader running the documented sweep would report it complete with a live site standing: $missed"
+  fi
 fi
 out_rc="$(test_rc_and_argv banana)"; rc="${out_rc%%$'\t'*}"; argv="${out_rc##*$'\t'}"
 if [ "$rc" != 0 ] && grep -q 'is not a Go duration' "$SB/budget.out" && [ -z "$argv" ]; then
