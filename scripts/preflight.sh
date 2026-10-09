@@ -2418,14 +2418,29 @@ A11Y_RESERVE_PID=""
 a11y_port_reserve() {  # sets A11Y_RESERVED_PORT / A11Y_RESERVE_PID
   A11Y_RESERVED_PORT=""
   A11Y_RESERVE_PID=""
-  local candidate
+  local candidate ss_out
+  # NOT `ss … | grep -q LISTEN`. This gate runs under `set -uo pipefail`, and `grep -q`
+  # exits at its first match; if `ss` is still writing, it takes SIGPIPE and the
+  # pipeline reports 141 although grep MATCHED. MEASURED HONESTLY (card t_39b04c34):
+  # the invocation below is FILTERED (`sport = :$candidate`), so it prints a single
+  # LISTEN row and `ss` writes it in one write() that lands in the pipe buffer before
+  # the reader can exit — 0/1500 non-zero on this host, and strace shows one write(1).
+  # So this is a PREVENTIVE conversion, not a reproduced flake: it removes the shape so
+  # that a future change (a candidate whose port carries a LISTEN plus sibling rows, or
+  # a dropped filter) cannot reintroduce the flake here. The same class DOES reproduce
+  # for real in `deploy/backup/jomform-backup.sh`'s `rclone | grep -qx` (224/1500 at
+  # three remotes) and `web/scripts/operator-bite.sh`'s `echo | grep -qE` (1/1500),
+  # where the writers emit more than one write(). A here-string has no writer process,
+  # so there is nothing left to signal, and the change is free and provably correct.
   for candidate in $(seq 3100 3140); do
-    if ! ss -lntn "sport = :$candidate" 2>/dev/null | grep -q LISTEN; then
+    ss_out="$(ss -lntn "sport = :$candidate" 2>/dev/null || :)"
+    if ! grep -q LISTEN <<<"$ss_out"; then
       if command -v nc >/dev/null 2>&1; then
         nc -l -p "$candidate" >/dev/null 2>&1 &
         A11Y_RESERVE_PID=$!
         sleep 0.3
-        if ss -lntn "sport = :$candidate" 2>/dev/null | grep -q LISTEN; then
+        ss_out="$(ss -lntn "sport = :$candidate" 2>/dev/null || :)"
+        if grep -q LISTEN <<<"$ss_out"; then
           A11Y_RESERVED_PORT="$candidate"
           return 0
         fi

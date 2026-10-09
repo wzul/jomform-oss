@@ -187,7 +187,14 @@ run_case() {
 echo "### baseline — the guard must be GREEN here (this is the fix as committed)"
 BASE=$(node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "$GUARD" 2>&1)
 echo "$BASE" | grep -E '^ℹ (tests|pass|fail)'
-if echo "$BASE" | grep -qE '^ℹ fail [1-9]'; then
+# Here-string, not `echo "$BASE" | grep -qE …` (card t_39b04c34). Under this file's
+# `set -uo pipefail`, `grep -q` exits at its first match while `echo` is still writing
+# BASE (a real node --test output for a failing guard is >2 KB), so echo takes SIGPIPE,
+# the pipeline reports 141 although grep MATCHED, and this baseline check aborts a
+# harness whose guard is genuinely red. Measured on this host, the real shape:
+# 1/1500 non-zero with the match on the FIRST matching line, 0/1500 with it last.
+# A here-string has no writer process, so there is nothing left to signal.
+if grep -qE '^ℹ fail [1-9]' <<<"$BASE"; then
   echo "ABORT: baseline is not green — commit the fix first (this script restores with git checkout)."
   exit 1
 fi

@@ -234,6 +234,12 @@ echo "--- the durability predicate: the old one, and this script's ---"
 
 # 1. The control: the pre-fix predicate, verbatim, kept here so the suite can
 #    never claim the fix matters without showing the disagreement.
+#
+#    The `grep -q .` here is the pre-fix shape being PRESERVED, so it is left as a
+#    pipe on purpose (card t_39b04c34): the fix under control is the VERDICT rule
+#    below, not this reader. It is a display of the old predicate on the sandbox's
+#    handful of refs — no assertion depends on its exit status — so the SIGPIPE
+#    false-negative this card fixes elsewhere cannot silently corrupt a check here.
 old_durable() { git -C "$REPO" branch -r --contains "$1" 2>/dev/null | grep -q . && echo pushed-branch || echo UNSAFE; }
 check "control: 'git branch -r --contains' calls the mirror-only commit pushed-branch" \
   "pushed-branch" "$(old_durable "$MIRROR_SHA")"

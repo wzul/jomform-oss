@@ -321,7 +321,19 @@ container_for() {
 require_remote() {
   command -v rclone >/dev/null 2>&1 || { echo "rclone is not installed"; return 1; }
   [ -r "$RCLONE_CONFIG" ] || { echo "rclone config not readable at $RCLONE_CONFIG"; return 1; }
-  rclone --config "$RCLONE_CONFIG" listremotes | grep -qx "${REMOTE}:" \
+  # NOT `rclone … listremotes | grep -qx`. This script runs under `set -Eeuo pipefail`,
+  # and `grep -qx` exits at its first match; `rclone` prints one line per configured
+  # remote with a separate write(), so on a config with more than one remote the
+  # writer is still writing when grep is done, takes SIGPIPE, and the pipeline reports
+  # 141 although grep MATCHED. Measured on this host, the real shape against a stub
+  # `listremotes`: 224/1500 non-zero at THREE remotes (48 bytes of output) and
+  # 1448/1500 at 900 — the reader exits before the first write() even completes, so
+  # this is not a "tiny window" the output size protects. A false negative here says
+  # "the configured remote is not configured" and fails the backup closed for a remote
+  # that IS configured. Capture the writer's output and grep a here-string.
+  local remotes
+  remotes="$(rclone --config "$RCLONE_CONFIG" listremotes 2>/dev/null || :)"
+  grep -qx "${REMOTE}:" <<<"$remotes" \
     || { echo "rclone remote '${REMOTE}:' is not configured"; return 1; }
 }
 

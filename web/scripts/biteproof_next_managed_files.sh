@@ -297,7 +297,17 @@ restore_tracking
 
 echo "== case 5: /next-env.d.ts rule negated by a later ! line =="
 printf '!/next-env.d.ts\n' >> "$GITIGNORE"
-grep -c "^!" "$GITIGNORE" | grep -qx 1 || { echo "the negation did not apply"; exit 2; }
+# Capture the count, then test — not `grep -c "^!" "$GITIGNORE" | grep -qx 1`
+# (card t_39b04c34). This file runs under `set -uo pipefail`; the reader `grep -qx`
+# exits at its first match while the writer `grep -c` may still be reading the file,
+# so the pipeline can report 141 although the count IS 1 and the case would abort with
+# "the negation did not apply" on a negation that DID apply. Measured on this host on a
+# realistic 404-line .gitignore: 0/3000, because GNU grep writes a two-byte "1\n" in a
+# single write() that lands before the reader can exit — but the shape is the same one
+# this card fixes at the sites where the writer is multi-write, and capturing first is
+# free and provably correct.
+neg_count="$(grep -c "^!" "$GITIGNORE")"
+[ "$neg_count" -eq 1 ] || { echo "the negation did not apply"; exit 2; }
 run_case "ignore rule negated" "git does not ignore next-env.d.ts"
 
 restore
