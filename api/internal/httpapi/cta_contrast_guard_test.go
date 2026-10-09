@@ -44,6 +44,13 @@ package httpapi
 //     web/src/app/globals.css, read here), so the two cannot drift apart;
 //   * no Go-rendered stylesheet paints a hard-coded CTA fill, and the
 //     pre-#991 fill #828fff is gone as a fill everywhere;
+//   * the brand colour as TEXT — `--jf-primary-text`, the token the price, the
+//     footer links and the confirmation link paint — clears AA on the surface
+//     those texts actually land on, the selected-card tint `#eef2ff`, for every
+//     brand colour AND the unthemed default, and the derivation's own
+//     `surfaceTint` is that painted surface (card t_48c36a54: before that guard
+//     nothing in the repo read this token at all, so the comment claiming the
+//     4.5 floor was measured there had no test behind it);
 //   * a non-vacuity floor, so a renamed rule cannot read as a pass.
 
 import (
@@ -842,6 +849,321 @@ func TestNoRenderedTemplateHardCodesTheCtaFill(t *testing.T) {
 	for path, src := range renderedStylesheets(t) {
 		if regexp.MustCompile(`background\s*:\s*#828fff`).MatchString(src) {
 			t.Errorf("%s still paints `background:#828fff` — that is #991's defect: a white label measures 2.87:1 on it", path)
+		}
+	}
+}
+
+// ── the brand colour as TEXT: price, footer links, confirmation link ─────────
+//
+// Card t_48c36a54. `--jf-primary-text` is painted as TEXT on the form's own
+// surfaces — `.price` (render_blocks.go:446, public.go:1034), `.jf-flinks a`
+// (render_blocks.go:495/:939, public.go:1054) and `.ok .msg a`
+// (render_blocks.go:945, render_custom.go:120) — and it is the token
+// `formtheme.go` derives as `d.textOn(surfaceTint)`, whose own comment says it
+// is measured against the darkest of those surfaces: the selected-card tint
+// `#eef2ff` that `.prod:has(input[type=checkbox]:checked)` paints.
+//
+// Nothing measured that pairing. The arms above pin the CTA triple
+// (`--jf-primary`, `-hover`, `-active`) and the button's label, and never read
+// `--jf-primary-text` — `grep -rn "jf-primary-text" api/ web/ --include=*_test.go`
+// returned 0. So a future change to the derivation or to the tint could drop a
+// price tag or a footer link below AA with every gate still green, and the 4.5
+// floor the comment claims was enforced by nothing.
+//
+// The values are sound today — a sweep of all 4096 colours of a 16^3 RGB lattice
+// through the shipped derivation found 0 below 4.5:1, minimum 4.500:1 — which is
+// exactly why the missing guard was non-blocking. The point of this section is
+// that the floor is now enforced rather than asserted in a comment.
+
+// selectedCardTint is the surface the guard measures the text token against: the
+// selected product card's tint, painted by
+// `.prod:has(input[type=checkbox]:checked) { … background:#eef2ff }` in the two
+// renderers that carry a product card. It is the surface `surfaceTint`
+// (formtheme.go:106) names.
+const selectedCardTint = "#eef2ff"
+
+// pageSurface is the other surface the token's text lands on: the form page's own
+// background (`--jf-bg` #f7f8f8), which the footer links sit on. It is lighter
+// than the tint, so the tint is the conservative of the two to measure.
+const pageSurface = "#f7f8f8"
+
+var (
+	// The selected-card rule, whose background is the tint.
+	cardTintRuleRe = regexp.MustCompile(`(?m)^\s*\.prod:has\(input\[type=checkbox\]:checked\)\s*\{([^}]*)\}`)
+	// The token, consumed as a text colour.
+	textTokenPaintRe = regexp.MustCompile(`color\s*:\s*var\(\s*--jf-primary-text\s*\)`)
+	// The price rule — the text that lands on the tint.
+	priceRuleRe = regexp.MustCompile(`(?m)^\s*\.price\s*\{([^}]*)\}`)
+)
+
+// formTextTokenVerdict judges ONE rendered stylesheet for the text token:
+//
+//	declared   --jf-primary-text must exist and be a hex (a renamed token is a
+//	           failure, not an absent check);
+//	painted    the stylesheet must consume it as a text colour (a token no rule
+//	           paints is a colour no buyer's eye ever sees);
+//	measured   the value must clear AA on the selected-card tint.
+//
+// A pure function of the rendered HTML, so the bite case in
+// TestPublicFormTextTokenVerdictBites can drive it with a FIXTURE page instead of
+// depending on a later author's willingness to break the tree — the same shape
+// merchantCtaSurfaceVerdict uses.
+func formTextTokenVerdict(html string) (token string, ratio float64, violation string) {
+	res, err := newCSSResolver(html)
+	if err != nil {
+		return "", 0, fmt.Sprintf("the rendered page carries no `:root` token block to read: %v", err)
+	}
+	token = res.vars["jf-primary-text"]
+	if token == "" {
+		return "", 0, "the stylesheet declares no --jf-primary-text — the price, the footer links and the confirmation link have no token for their text colour, and a renamed token must read as a failure here rather than as a pass"
+	}
+	if !textTokenPaintRe.MatchString(html) {
+		return token, 0, "declares --jf-primary-text but no rule paints `color:var(--jf-primary-text)` — the derivation is measuring a colour no text on the page uses"
+	}
+	ratio, err = contrastRatio(token, selectedCardTint)
+	if err != nil {
+		return token, 0, fmt.Sprintf("measuring the text token against the tint: %v", err)
+	}
+	if ratio < 4.5 {
+		return token, ratio, fmt.Sprintf("the text token %s measures %.3f:1 on the selected-card tint %s — below the AA 4.5:1 floor the derivation claims (formtheme.go textOn(surfaceTint)); a selected product's price and the footer links are painted this colour", token, ratio, selectedCardTint)
+	}
+	return token, ratio, ""
+}
+
+// TestThemedPublicFormTextTokenClearsAAOnTheSelectedCardTint is the guard card
+// t_48c36a54 asks for: the rendered `--jf-primary-text` of EVERY Go-rendered
+// public form, for every brand colour AND the unthemed default, clears AA on the
+// card tint the code claims to derive it against.
+func TestThemedPublicFormTextTokenClearsAAOnTheSelectedCardTint(t *testing.T) {
+	// The unthemed default is a CASE (`""`), not an omission: it is the render a
+	// form with no theme column gets, and its margin is the thinnest of the set
+	// — #5964cc on the tint measures 4.559:1, down from the 5.623:1 the literal
+	// #4f46e5 it replaced scored.
+	colours := append(append([]string{}, brandColours...), "")
+	cases := rendererCases()
+	var read, painted int
+	for _, rc := range cases {
+		for _, primary := range colours {
+			html := rc.render(t, primary)
+			token, _, violation := formTextTokenVerdict(html)
+			if token != "" {
+				read++
+			}
+			if token != "" && textTokenPaintRe.MatchString(html) {
+				painted++
+			}
+			if violation != "" {
+				t.Errorf("%s / theme %q: %s", rc.name, primary, violation)
+			}
+		}
+	}
+	// Non-vacuity, both directions: a renamed token and a renamed paint rule must
+	// each leave this run red rather than silently measuring nothing.
+	want := len(cases) * len(colours)
+	if read != want {
+		t.Fatalf("only %d of %d rendered pages declare --jf-primary-text — the guard is not reading the stylesheets it was written for, so a green run would prove nothing", read, want)
+	}
+	if painted != want {
+		t.Fatalf("only %d of %d rendered pages paint var(--jf-primary-text) — a renamed paint rule must not read as a pass", painted, want)
+	}
+}
+
+// TestPublicFormTextTokenIsMeasuredAgainstThePaintedCardSurface ties the
+// derivation's assumed surface to the one the page actually paints. The
+// assertion above measures the token against the constant `#eef2ff`; this one
+// proves that constant IS the surface in the rendered stylesheet AND that the
+// text landing on it is painted with the token — so `surfaceTint` drifting away
+// from the CSS, or `.price` dropping the token, is a red here.
+func TestPublicFormTextTokenIsMeasuredAgainstThePaintedCardSurface(t *testing.T) {
+	// The derivation's own surface must be the tint the guard measures against.
+	if got := hexOf(surfaceTint); !strings.EqualFold(got, selectedCardTint) {
+		t.Fatalf("formtheme.go derives the text colour against surfaceTint %s while this guard measures %s — the surface the token is derived against and the surface it is measured on are not the same one", got, selectedCardTint)
+	}
+	var tinted, priced int
+	for _, rc := range rendererCases() {
+		html := rc.render(t, "")
+		m := cardTintRuleRe.FindStringSubmatch(html)
+		if m == nil {
+			// The response-only and custom-HTML renderers carry no product card,
+			// so they paint no selected-card tint; their text token is still
+			// judged above.
+			continue
+		}
+		bg := backgroundColorRe.FindStringSubmatch(m[1])
+		if bg == nil {
+			t.Errorf("%s: the selected-card rule carries no `background:` — the guard cannot see the surface the price text sits on", rc.name)
+			continue
+		}
+		tinted++
+		paintedTint := strings.TrimSpace(bg[1])
+		if !strings.EqualFold(paintedTint, hexOf(surfaceTint)) {
+			t.Errorf("%s: the page paints the selected-card tint %s while formtheme.go derives the text token against surfaceTint %s — the derivation is measuring a surface this page does not paint", rc.name, paintedTint, hexOf(surfaceTint))
+		}
+		pm := priceRuleRe.FindStringSubmatch(html)
+		if pm == nil {
+			t.Errorf("%s: paints a selected-card tint but emits no `.price` rule — the text this token exists for is gone, and re-anchor this guard", rc.name)
+			continue
+		}
+		if !textTokenPaintRe.MatchString(pm[1]) {
+			t.Errorf("%s: the `.price` rule is %q — it does not paint var(--jf-primary-text), so the price on the tint is no longer the colour the derivation measured", rc.name, strings.Join(strings.Fields(pm[1]), " "))
+			continue
+		}
+		priced++
+	}
+	// Non-vacuity: the surface has to be found, or the measurement above is about
+	// nothing. The block product form and the legacy product-checkbox form both
+	// paint it.
+	if tinted < 2 {
+		t.Fatalf("only %d renderer(s) paint the selected-card tint %s — the guard did not find the surface the text token is measured against", tinted, selectedCardTint)
+	}
+	if priced != tinted {
+		t.Fatalf("only %d of %d renderers that paint the tint also paint `.price` with var(--jf-primary-text)", priced, tinted)
+	}
+}
+
+// TestPublicFormTextTokenTintIsTheBindingSurface pins WHY the tint is the surface
+// to measure on, and reproduces the card's own numbers: the unthemed default
+// (#5964cc at 4.559:1, thinnest margin) and the live themed forms. It also
+// asserts the premise the measurement rests on — the base brand colour scores
+// worse on the tint than on the page's white, and for the default (and the
+// tightest colour in the set) it clears white while failing the tint, so the tint
+// alone is what forces those derivations to move.
+func TestPublicFormTextTokenTintIsTheBindingSurface(t *testing.T) {
+	for _, p := range []struct {
+		name, primary, wantText string
+		wantRatio               float64
+		// tintDecides marks the colours whose base clears AA on the page's
+		// lightest surface and fails it on the tint — the tint alone is what
+		// forces those derivations to move.
+		tintDecides bool
+	}{
+		{"the unthemed default / the form-settings starting colour", defaultPrimary, "#5964cc", 4.559, true},
+		{"the tightest colour in the set — #e11d48 clears white, only the tint decides", "#e11d48", "#db1143", 4.500, true},
+		{"a live themed form (event-registration)", "#f59e0b", "#ab5900", 4.514, false},
+		{"a live themed form (donation)", "#10b981", "#007f4c", 4.536, false},
+	} {
+		cta := resolveThemeCta(p.primary)
+		if !strings.EqualFold(cta.Text, p.wantText) {
+			t.Errorf("%s (%s): the derivation resolves the text token to %s, not the card's %s", p.name, p.primary, cta.Text, p.wantText)
+		}
+		got, err := contrastRatio(cta.Text, selectedCardTint)
+		if err != nil {
+			t.Fatalf("%s: %v", p.name, err)
+		}
+		if math.Abs(got-p.wantRatio) > 0.01 {
+			t.Errorf("%s (%s -> %s): this tree measures %.3f:1 on the tint, the card measured %.3f:1", p.name, p.primary, cta.Text, got, p.wantRatio)
+		}
+		if got < 4.5 {
+			t.Errorf("%s (%s -> %s): %.3f:1 on the tint %s — below the AA 4.5:1 floor", p.name, p.primary, cta.Text, got, selectedCardTint)
+		}
+		// The premise, asserted rather than assumed.
+		onWhite, err := contrastRatio(p.primary, white)
+		if err != nil {
+			t.Fatalf("%s: %v", p.name, err)
+		}
+		onTint, err := contrastRatio(p.primary, selectedCardTint)
+		if err != nil {
+			t.Fatalf("%s: %v", p.name, err)
+		}
+		if onTint >= onWhite {
+			t.Errorf("premise: %s measures %.3f:1 on white and %.3f:1 on the tint — the tint is not the worse of the two surfaces for this colour", p.primary, onWhite, onTint)
+		}
+		if p.tintDecides {
+			if onWhite < 4.5 {
+				t.Errorf("premise: %s does not clear AA on white either (%.3f:1), so the tint would not be the one deciding this colour — use a colour that clears white and fails only the tint", p.primary, onWhite)
+			}
+			if onTint >= 4.5 {
+				t.Errorf("premise: %s already clears AA on the tint (%.3f:1), so the tint does not bind for it", p.primary, onTint)
+			}
+		}
+	}
+
+	// The tint must be darker than the page surface, or measuring on the tint
+	// would be the optimistic of the two choices rather than the conservative one.
+	lt, err := hexLuminance(selectedCardTint)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	lb, err := hexLuminance(pageSurface)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if lt >= lb {
+		t.Fatalf("the selected-card tint %s (luminance %.4f) is not darker than the page surface %s (%.4f) — the guard's whole premise is that the tint is the darkest surface the token is painted on", selectedCardTint, lt, pageSurface, lb)
+	}
+	// And it must be the worst-scoring of the two for every brand colour.
+	for _, primary := range brandColours {
+		cta := resolveThemeCta(primary)
+		onTint, err := contrastRatio(cta.Text, selectedCardTint)
+		if err != nil {
+			t.Fatalf("%s: %v", primary, err)
+		}
+		onPage, err := contrastRatio(cta.Text, pageSurface)
+		if err != nil {
+			t.Fatalf("%s: %v", primary, err)
+		}
+		if onTint > onPage+1e-9 {
+			t.Errorf("%s -> %s scores %.3f:1 on the tint but %.3f:1 on the page surface — the tint is not the binding surface for this colour", primary, cta.Text, onTint, onPage)
+		}
+	}
+}
+
+// TestPublicFormTextTokenVerdictBites proves the assertion above can fail. Every
+// page here is a FIXTURE handed to the same function the guard calls, so the bite
+// does not depend on someone being willing to break the tree first — the pattern
+// merchantCtaSurfaceVerdict's bite case uses.
+func TestPublicFormTextTokenVerdictBites(t *testing.T) {
+	const (
+		// What the token is worth if `textOn(surfaceTint)` is dropped and the
+		// base brand colour is painted instead: #5e6ad2 on the tint is 4.203:1
+		// — the exact shape of a price that fell below AA while every gate
+		// stayed green.
+		underivedTokenPage = `<!doctype html><html><head><style>
+  :root { --jf-primary: #5e6ad2; --jf-primary-text: #5e6ad2; }
+  .prod:has(input[type=checkbox]:checked) { background:#eef2ff; }
+  .price { color:var(--jf-primary-text); }
+</style></head><body><div class="prod"><span class="price">RM 25.00</span></div></body></html>`
+		// The token renamed away: the declaration the guard reads is gone.
+		renamedTokenPage = `<!doctype html><html><head><style>
+  :root { --jf-primary: #5e6ad2; --jf-primary-txt: #5964cc; }
+  .price { color:var(--jf-primary-txt); }
+</style></head><body><span class="price">RM 25.00</span></body></html>`
+		// Declared, measured — and painted by nothing.
+		unpaintedTokenPage = `<!doctype html><html><head><style>
+  :root { --jf-primary: #5e6ad2; --jf-primary-text: #5964cc; }
+  .price { color:#111111; }
+</style></head><body><span class="price">RM 25.00</span></body></html>`
+		// The shipped shape, as a control: the derivation's own answer on the
+		// tint (4.559:1), painted by the price.
+		goodTokenPage = `<!doctype html><html><head><style>
+  :root { --jf-primary: #5e6ad2; --jf-primary-text: #5964cc; }
+  .prod:has(input[type=checkbox]:checked) { background:#eef2ff; }
+  .price { color:var(--jf-primary-text); }
+</style></head><body><div class="prod"><span class="price">RM 25.00</span></div></body></html>`
+	)
+	for _, c := range []struct {
+		name, page string
+		mustFail   bool
+		needle     string
+	}{
+		{"the derivation dropped, the base colour painted on the tint", underivedTokenPage, true, "4.5:1 floor"},
+		{"the token renamed", renamedTokenPage, true, "declares no --jf-primary-text"},
+		{"the token declared but painted by no rule", unpaintedTokenPage, true, "no rule paints"},
+		{"the shipped shape (control)", goodTokenPage, false, ""},
+	} {
+		token, ratio, violation := formTextTokenVerdict(c.page)
+		if c.mustFail {
+			if violation == "" {
+				t.Errorf("%s: formTextTokenVerdict judged the page clean (%s on the tint = %.3f:1) — the guard would not catch this shape", c.name, token, ratio)
+				continue
+			}
+			if !strings.Contains(violation, c.needle) {
+				t.Errorf("%s: the verdict did not name %q: %s", c.name, c.needle, violation)
+			}
+			continue
+		}
+		if violation != "" {
+			t.Errorf("%s: formTextTokenVerdict rejected the shipped shape — the failing cases above cannot be trusted if this one fails: %s", c.name, violation)
 		}
 	}
 }
