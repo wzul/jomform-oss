@@ -351,6 +351,25 @@ const HARNESSES: HarnessEntry[] = [
     d3ProbeEnv: { BITEPROOF_GUARD: join(webRoot, "scripts", ".no-such-guard-probe.ts") },
     d3ProbeNeedle: /is missing — nothing to drive/,
   },
+  // CARD t_18750b46 ADDED THIS ONE. `biteproof_docs_a11y.sh` creates and removes probe
+  // ROUTE DIRECTORIES under `src/app/docs` (a nested route under a route parent, a nested
+  // route under a non-route parent, a non-route directory) and reads them back through the
+  // real guard — the SAME shared input the rest of the family mutates, so it takes the
+  // family key. It is read-only with respect to every tracked file (its restore step is a
+  // `git status --porcelain` over `src/app/docs` and the guard required to be empty), but a
+  // peer mid-case would still have a probe directory on disk while this one walked the tree,
+  // which is exactly the false-verdict shape the family key removes. Its D3 probe reaches a
+  // node-free refusal AFTER its lock block and BEFORE any node run: the flat (pre-fix) arm is
+  // derived from git, so an unresolvable `BITEPROOF_FLAT_ARM` exits 2 there. (The running
+  // count in the header comment above lags this list; it has grown since t_df41e675.)
+  {
+    label: "biteproof_docs_a11y.sh",
+    script: join(webRoot, "scripts", "biteproof_docs_a11y.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_FLAT_ARM: "refs/heads/jomform-nonexistent-probe" },
+    d3ProbeNeedle: /cannot resolve BITEPROOF_FLAT_ARM=refs\/heads\/jomform-nonexistent-probe/,
+  },
 ];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
