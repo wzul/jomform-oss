@@ -1,4 +1,10 @@
-FROM golang:1.27-alpine AS build
+# Pinned to the patch release that clears the GO-2026-6617 class of stdlib
+# advisories (net/http HPACK, html/template, crypto/tls, mime/multipart,
+# os — all "Fixed in go1.27.2"). api/go.mod carries `toolchain go1.27.2` for
+# the host gates, but this image runs GOTOOLCHAIN=local (its own
+# /usr/local/go/go.env), so a `toolchain` line is IGNORED here and only the
+# base image decides which stdlib the shipped binary is built against.
+FROM golang:1.27.2-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
