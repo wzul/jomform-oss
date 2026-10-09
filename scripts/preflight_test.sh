@@ -3526,6 +3526,99 @@ if [ -n "$probe_tree" ]; then
   fi
 fi
 
+# 41. `--show`'s EXIT STATUS IS PART OF ITS ANSWER (card t_c0022f86). The file's
+#     own USAGE contract says exit 0 = reusable, 1 = not reusable ("no record,
+#     wrong tree, stale, or the environment changed") — and the EXECUTED `--show`
+#     printed "no record at <file>" and exited 0. `pr_show` itself DID return 1
+#     (its "no record" and "cannot identify the working tree" returns predate this
+#     card, and leg (8) below is that third return), but the `show)` branch called
+#     it and DROPPED the status: the sourced-only `if` at the bottom of the file
+#     is FALSE when executed, and a false `if` is what the shell leaves as the
+#     script's status. Measured on this check's own parent revision, in this
+#     repository's worktree:
+#       out=$(bash scripts/preflight_reuse.sh --show --tree $FAB 2>&1); echo $?
+#       -> "no record at /var/lib/jomform/gate/5f704744….json", rc=0
+#     while `pr_show` sourced on the same tree returned 1. So the machine-readable
+#     half of the tool said "yes" to a caller whose own output said there was
+#     nothing there.
+#
+#     THE FIX IS THAT THE STATUS REPEATS THE VERDICT, which is why this check is
+#     discriminating rather than "always 1": a hand-written full-green fixture must
+#     exit 0 with `reusable: YES`, the SAME record read under a changed fingerprint
+#     must exit 1 with `reusable: NO`, and every shape with nothing to show must
+#     exit 1 with its own message. Legs (4)/(5) pin the two spellings the USAGE
+#     advertises, and leg (8) drives the third return in an UNBORN repo — all three
+#     "nothing to show" returns ride the one propagation line.
+if [ -n "$probe_tree" ]; then
+  other41="$(printf 'preflight_test check 41' | sha256sum | cut -c1-40)"
+  absent41="$(printf 'preflight_test check 41 absent' | sha256sum | cut -c1-40)"
+  work41="$(gr_tree_sha "$SB")"
+  rec41="$(gr_file "$other41")"
+  key41="$(PREFLIGHT_KEY_EXTRA=probe41 gr_key "$SB")"
+  parts41="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe41 gr_key_parts "$SB")")"
+  {
+    printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+      "$other41" "$key41" "$parts41"
+    # shellcheck disable=SC2086  # deliberate word splitting on the newline-separated inventory
+    printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
+      | sed '$ s/,$//'
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe41.log",\n  "finished_at": "%s"\n}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$rec41"
+  # The hand-written gates block is the whole fixture: assert that it LANDED (every
+  # inventory gate `pass`) before reading anything out of the runs below, or a
+  # `reusable: NO` there would not evidence the status carrying the verdict.
+  fixture41_pass=0
+  # shellcheck disable=SC2086
+  for g in $GATES; do
+    [ "$(gr_gate_status "$rec41" "$g")" = "pass" ] && fixture41_pass=$((fixture41_pass+1))
+  done
+  show_yes="$(PREFLIGHT_KEY_EXTRA=probe41 ./scripts/preflight_reuse.sh --show --tree "$other41" 2>&1)"; rc_yes=$?
+  show_yes_eq="$(PREFLIGHT_KEY_EXTRA=probe41 ./scripts/preflight_reuse.sh --show --tree="$other41" 2>&1)"; rc_yes_eq=$?
+  show_env="$(PREFLIGHT_KEY_EXTRA=probe41-bumped ./scripts/preflight_reuse.sh --show --tree "$other41" 2>&1)"; rc_env=$?
+  show_none="$(PREFLIGHT_KEY_EXTRA=probe41 ./scripts/preflight_reuse.sh --show --tree "$absent41" 2>&1)"; rc_none=$?
+  show_none_eq="$(PREFLIGHT_KEY_EXTRA=probe41 ./scripts/preflight_reuse.sh --show --tree="$absent41" 2>&1)"; rc_none_eq=$?
+  # The WORKING tree with no record — the exact shape the card was filed from.
+  rm -f "$(gr_file "$probe_tree")"
+  show_work="$(PREFLIGHT_KEY_EXTRA=probe41 ./scripts/preflight_reuse.sh --show 2>&1)"; rc_work=$?
+  show_work_empty="$(PREFLIGHT_KEY_EXTRA=probe41 ./scripts/preflight_reuse.sh --show --tree "" 2>&1)"; rc_work_empty=$?
+  # The THIRD way of having nothing to show: a repo with no HEAD at all, so the
+  # working tree cannot be identified. Built OUTSIDE the sandbox repo (it is host
+  # state, like the record store) so planting it cannot move the tree sha that this
+  # check and its siblings read.
+  unborn41="$SB_STATE/unborn41"
+  mkdir -p "$unborn41/scripts"
+  cp "$SB"/scripts/*.sh "$unborn41/scripts/" 2>/dev/null
+  git -C "$unborn41" init -q . 2>/dev/null
+  show_unborn="$(cd "$unborn41" && PREFLIGHT_KEY_EXTRA=probe41 bash ./scripts/preflight_reuse.sh --show 2>&1)"; rc_unborn=$?
+  if [ "$other41" = "$work41" ]; then
+    bad "check 41's fixture is VACUOUS: the fabricated tree sha equals the sandbox working tree ($work41), so the reusable/missing legs could not tell a record from no record"
+  elif [ -z "$work41" ]; then
+    bad "check 41 cannot identify the sandbox working tree, so the 'no record for the WORKING tree' leg cannot be asserted at all"
+  elif [ "$fixture41_pass" != "$NGATES" ]; then
+    bad "check 41's fixture did not land: only $fixture41_pass of $NGATES gate entries are 'pass' in $rec41, so a 'reusable: NO' below would not evidence the status carrying the verdict"
+  elif [ "$rc_yes" -ne 0 ] || ! grep -qxF -- '--- reusable: YES' <<<"$show_yes"; then
+    bad "check 41 — a record that IS reusable must exit 0 and say so: rc=$rc_yes [$(printf '%s' "$show_yes" | tail -n 1)] (the status must repeat the verdict, so it cannot be 'always 1')"
+  elif [ "$rc_yes_eq" -ne 0 ] || ! grep -qxF -- '--- reusable: YES' <<<"$show_yes_eq"; then
+    bad "check 41 — the \`--tree=<sha>\` spelling is the same flag and must answer the same: rc=$rc_yes_eq [$(printf '%s' "$show_yes_eq" | tail -n 1)]"
+  elif [ "$rc_env" -ne 1 ] || ! grep -qxF -- '--- reusable: NO' <<<"$show_env" || \
+       ! grep -qF 'the environment changed since that record' <<<"$show_env"; then
+    bad "check 41 — a record that is NOT reusable must exit 1 (it just printed 'reusable: NO'): rc=$rc_env [$(printf '%s' "$show_env" | tail -n 2 | tr '\n' '|')]"
+  elif [ "$rc_none" -ne 1 ] || ! grep -qxF "no record at $(gr_file "$absent41")" <<<"$show_none"; then
+    bad "check 41 — \`--show --tree <sha>\` with no record must exit 1 and say which record is missing: rc=$rc_none [$show_none]"
+  elif [ "$rc_none_eq" -ne 1 ] || ! grep -qxF "no record at $(gr_file "$absent41")" <<<"$show_none_eq"; then
+    bad "check 41 — the \`--tree=<sha>\` spelling must exit 1 on the same missing record: rc=$rc_none_eq [$show_none_eq]"
+  elif [ "$rc_work" -ne 1 ] || ! grep -qxF "no record at $(gr_file "$probe_tree")" <<<"$show_work"; then
+    bad "check 41 — \`--show\` for the WORKING tree with no record must exit 1 (the card's own shape: the process reported success on a message that said the record was missing): rc=$rc_work [$(printf '%s' "$show_work" | tail -n 2 | tr '\n' '|')]"
+  elif [ "$rc_work_empty" -ne 1 ] || ! grep -qxF "no record at $(gr_file "$probe_tree")" <<<"$show_work_empty"; then
+    bad "check 41 — \`--show --tree \"\"\` falls back to the working tree and must exit 1 there too: rc=$rc_work_empty [$(printf '%s' "$show_work_empty" | tail -n 2 | tr '\n' '|')]"
+  elif [ "$rc_unborn" -ne 1 ] || ! grep -qxF 'cannot identify the working tree' <<<"$show_unborn"; then
+    bad "check 41 — a tree that cannot be identified is the third 'nothing to show' return and must exit 1: rc=$rc_unborn [$show_unborn]"
+  else
+    ok "check 41 — \`--show\`'s exit status repeats the verdict it printed: rc=0 + 'reusable: YES' on a full-green record for an explicit tree (both spellings), rc=1 + 'reusable: NO' on the SAME record under a changed fingerprint, and rc=1 with its own message for every shape that has nothing to show (no record for the given tree, no record for the WORKING tree, an empty --tree, and a tree that cannot be identified)"
+  fi
+fi
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

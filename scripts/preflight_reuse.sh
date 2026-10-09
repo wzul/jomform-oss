@@ -30,7 +30,9 @@
 # USAGE
 #   scripts/preflight_reuse.sh                  # decide for the working tree
 #   scripts/preflight_reuse.sh --tree <sha>     # decide for an explicit tree
-#   scripts/preflight_reuse.sh --show           # print the record (evidence)
+#   scripts/preflight_reuse.sh --show           # print the record (evidence);
+#                                               # rc 0 when it is reusable, 1
+#                                               # when it is not or there is none
 #   scripts/preflight_reuse.sh --report [hours] # the reuse ledger, real files
 #   scripts/preflight_reuse.sh --help
 #
@@ -45,8 +47,19 @@
 # files rather than an estimate.
 #
 # EXIT CODES
-#   0  reusable (the decision is in the printed variables / stdout)
-#   1  not reusable — no record, wrong tree, stale, or the environment changed
+#   0  reusable (the decision is in the printed variables / stdout). `--show`
+#      uses the same word for the same thing: the record it printed is reusable
+#      for this tree under the CURRENT inventory and environment.
+#   1  not reusable — no record, wrong tree, stale, or the environment changed.
+#      `--show` exits 1 whenever it has nothing reusable to show: no record for
+#      the tree, a tree that could not be identified, or a record that is not
+#      reusable. The status is the machine-readable half of the answer, so it
+#      REPEATS the verdict the tool printed instead of reporting success on a
+#      message that says the record is missing. A PARTIAL record is `reusable:
+#      NO` here and exits 1, while the DECIDE path calls it `partial` and exits
+#      0: `--show` answers "is this record reusable", the decide path answers
+#      "what may I skip". Both directions fail SAFE — rc=1 means "gate
+#      normally", never "you may skip a gate you did not earn".
 #   2  usage error
 
 EXIT_UNUSED=""
@@ -219,6 +232,12 @@ pr_report() {
 }
 
 # ---- show: the raw evidence a human reads ------------------------------------
+# EXIT STATUS IS PART OF THE ANSWER (card t_c0022f86): 0 when the record it
+# printed is reusable for this tree under the CURRENT inventory and environment,
+# 1 otherwise — no record at all, a tree that could not be identified, or a
+# record that exists but is not reusable. It REPEATS the `reusable:` line above,
+# so the machine-readable half of the tool can never say "yes" while the printed
+# half says the record is missing, stale, red, or partial.
 pr_show() {
   local tree="${PR_SHOW_TREE:-$PR_TREE}"
   [ -n "$tree" ] || tree="$(gr_tree_sha "${PREFLIGHT_REUSE_REPO:-$PWD}")" || {
@@ -234,9 +253,11 @@ pr_show() {
   local reason
   if reason="$(gr_reusable "$tree" "${PREFLIGHT_GATE_NAMES[@]}" 2>&1)"; then
     echo "--- reusable: YES"
+    return 0
   else
     echo "--- reusable: NO"
     echo "    $reason"
+    return 1
   fi
 }
 
@@ -259,7 +280,23 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
       pr_report "$PR_REPORT_HOURS"
       ;;
     show)
-      pr_show
+      # THE RECORD'S STATUS IS THE PROCESS'S STATUS (card t_c0022f86). `pr_show`
+      # returns non-zero when it has nothing reusable to show — the "no record at
+      # <file>" return, the "cannot identify the working tree" return, and the
+      # "reusable: NO" return — and this branch used to CALL it and drop that
+      # status: the sourced-only `if` at the bottom of this file is FALSE when
+      # executed, and a false `if` is what the shell leaves as the script's
+      # status, so `--show` exited 0 on the message "no record at <file>". A
+      # consumer that reads the exit code (the machine-readable half) was told
+      # "yes" when there was nothing there at all. Measured on these bytes before
+      # the fix:
+      #   out=$(bash scripts/preflight_reuse.sh --show --tree $FAB 2>&1); echo $?
+      #   -> "no record at /var/lib/jomform/gate/5f704744….json", rc=0
+      #      (and `pr_show` itself returned 1 when sourced — the intent was
+      #      already in the function; it just never reached the caller).
+      # The propagation is ONE line on purpose: it is the whole defect, so the
+      # bite below can restore the pre-fix shape by deleting exactly it.
+      pr_show || exit $?
       ;;
     decide)
       # THE EXPLICIT --tree REACHES THE DECISION, not just --show. `--tree <sha>`

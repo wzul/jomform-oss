@@ -146,6 +146,14 @@ it is not what a merger needs when it decides to squash.
 ./scripts/preflight_reuse.sh --tree <tree-sha>
 
 ./scripts/preflight_reuse.sh --show            # the raw record (evidence)
+#   exit 0 -> the record it printed IS reusable for this tree under the current
+#             inventory and environment: its last line says `reusable: YES`
+#   exit 1 -> there is nothing reusable to show: no record for the tree, a tree
+#             that could not be identified, or a record that is not reusable
+#             (stale, environment changed, a gate holding `fail`, or a gate no run
+#             ever observed — a PARTIAL record reads `reusable: NO` here). The
+#             status repeats the printed verdict, so a machine reading only the
+#             exit code is never told "yes" while the output says otherwise.
 ./scripts/preflight_reuse.sh --report 24       # the MEASURED saving, last 24h
 
 # Full green already on record: nothing to run.

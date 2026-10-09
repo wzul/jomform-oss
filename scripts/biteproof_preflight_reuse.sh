@@ -124,6 +124,21 @@
 #       `selftest` check 40 pins it on a record for a tree that is NOT the working
 #       tree. Case 9 below removes exactly that wiring.
 #
+#   41. THE `--show` EXIT STATUS MUST CARRY THE ANSWER (card t_c0022f86).
+#       `scripts/preflight_reuse.sh --show` printed "no record at <file>" and exited
+#       0: the `show)` branch CALLED `pr_show` and dropped the status it returned
+#       (the sourced-only `if` at the bottom of the file is FALSE when executed, and
+#       a false `if` is what the shell leaves as the script's status), so the
+#       machine-readable half of the tool said "yes" to a caller whose own output
+#       said there was nothing there (measured: `--show --tree <no record>` ->
+#       "no record at …/5f704744….json", rc=0, while `pr_show` itself returned 1 when
+#       sourced). The fix makes the status REPEAT the verdict: 0 only when the record
+#       it printed is reusable, 1 for no record / an unidentifiable tree / a record
+#       that is not reusable. Guards: `selftest` check 41 (all three "nothing to
+#       show" returns, both flag spellings, and the reusable direction, so the check
+#       cannot be satisfied by "always 1"), and cases 10 and 11 below, which remove
+#       the propagation and the verdict branch's return one at a time.
+#
 # Run:  ./scripts/biteproof_preflight_reuse.sh
 # Exit: 0 if every case BITES, 1 otherwise.
 #
@@ -763,6 +778,153 @@ else
 fi
 restore_and_verify
 
+# ---- cases 10 and 11: the consumer's `--show` STATUS CHANNEL (card t_c0022f86) --
+# Both cases need the same fixture: a FULL-GREEN record for a tree that is NOT the
+# working tree, written by hand under the fingerprint the reader will compute — the
+# property under test is the READER's status, so no gate may run.
+BP_GATES=()
+while IFS= read -r g; do [ -n "$g" ] && BP_GATES+=("$g"); done < <("$RUNNER" --list 2>/dev/null)
+fixture_record() { # <tree> <dir> <key-extra> — a by-hand full-green record
+  local tree="$1" dir="$2" extra="$3"
+  (
+    . "$RESULT"
+    export PREFLIGHT_RESULT_DIR="$dir" PREFLIGHT_KEY_EXTRA="$extra" PREFLIGHT_REUSE_REPO="$REPO_ROOT"
+    rec="$(gr_file "$tree")"
+    {
+      printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+        "$tree" "$(gr_key "$REPO_ROOT")" "$(gr_json_escape "$(gr_key_parts "$REPO_ROOT")")"
+      printf '%s\n' "${BP_GATES[@]}" | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
+        | sed '$ s/,$//'
+      printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/biteproof-fixture.log",\n  "finished_at": "%s"\n}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$rec"
+  )
+}
+
+# --- case 10: THE `--show` STATUS CHANNEL REMOVED — the pre-fix shape (card
+# t_c0022f86). `scripts/preflight_reuse.sh --show` printed "no record at <file>" and
+# exited 0, because the `show)` branch CALLED `pr_show` and dropped the status it
+# returned: the sourced-only `if` at the bottom of that file is FALSE when executed,
+# and a false `if` is what the shell leaves as the script's status. The
+# machine-readable half of the tool therefore said "yes" to a caller whose own
+# output said there was nothing there — measured on the parent revision, in a
+# worktree:
+#     --show --tree <no record>  ->  "no record at …/5f704744….json", rc=0
+#     (and `pr_show` itself returned 1 when sourced: the intent was already in the
+#      function, it just never reached the caller)
+# The mutation is a ONE-LINE SUBSTITUTION putting `pr_show` back where the fix
+# propagates it. Both directions are read BY VALUE before a selftest run is spent:
+# the mutated consumer exits 0 again on a MISSING record (the defect, reproduced),
+# while on the record that IS reusable it still exits 0 and prints `reusable: YES` —
+# so a red below can only be about the status channel and not about a consumer that
+# stopped working.
+echo "== case 10: the --show status channel removed (the pre-fix shape) =="
+other10="$(printf 'biteproof_preflight_reuse case 10' | sha256sum | cut -c1-40)"
+absent10="$(printf 'biteproof_preflight_reuse case 10 absent' | sha256sum | cut -c1-40)"
+work10="$( ( . "$RESULT"; gr_tree_sha "$REPO_ROOT" ) )"
+case10_dir="$WORK/case10-records"; mkdir -p "$case10_dir"
+if [ -z "$work10" ] || [ "$other10" = "$work10" ] || [ "$absent10" = "$work10" ] || [ "${#BP_GATES[@]}" -eq 0 ]; then
+  bad "case 10 — the fixture cannot discriminate (working tree [$work10], fixture tree [$other10], absent tree [$absent10], ${#BP_GATES[@]} gates from --list), so this case would prove nothing"
+else
+  fixture_record "$other10" "$case10_dir" probe10
+  case10_ship_yes="$(PREFLIGHT_RESULT_DIR="$case10_dir" PREFLIGHT_KEY_EXTRA=probe10 bash "$REUSE" --show --tree "$other10" 2>&1)"; case10_ship_yes_rc=$?
+  case10_ship_no="$(PREFLIGHT_RESULT_DIR="$case10_dir" PREFLIGHT_KEY_EXTRA=probe10 bash "$REUSE" --show --tree "$absent10" 2>&1)"; case10_ship_no_rc=$?
+  if [ "$case10_ship_yes_rc" -ne 0 ] || ! grep -qxF -- '--- reusable: YES' <<<"$case10_ship_yes"; then
+    bad "case 10 — the fixture record is not reusable under the SHIPPED bytes (rc=$case10_ship_yes_rc, [$(printf '%s' "$case10_ship_yes" | tail -n 1)]), so a red below would not be about the status channel"
+  elif [ "$case10_ship_no_rc" -ne 1 ] || ! grep -qF 'no record at ' <<<"$case10_ship_no"; then
+    bad "case 10 — the SHIPPED consumer does not refuse a missing record (rc=$case10_ship_no_rc [$(printf '%s' "$case10_ship_no" | tr '\n' ' ')]), so there is no defect here to reproduce"
+  else
+    PROP10='      pr_show || exit $?'
+    NEW10='      pr_show'
+    awk -v a="$PROP10" -v b="$NEW10" '$0 == a { print b; next } { print }' "$REUSE" > "$WORK/preflight_reuse.mutated10" \
+      && cp "$WORK/preflight_reuse.mutated10" "$REUSE" && chmod "$MODE_REUSE" "$REUSE"
+    if [ "$(grep -cF -- "$PROP10" "$REUSE")" != "0" ]; then
+      bad "case 10 — the propagation line is still present after the mutation, so the pre-fix shape was not reproduced"
+    elif [ "$(diff "$WORK/preflight_reuse.sh.orig" "$REUSE" | grep -c '^[<>]')" != "2" ]; then
+      bad "case 10 — the mutation is NOT surgical ($(diff "$WORK/preflight_reuse.sh.orig" "$REUSE" | grep -c '^[<>]') changed lines, want 2: the one line replaced), so a red below could be about something other than the status channel"
+    elif ! bash -n "$REUSE"; then
+      bad "case 10 — the mutation left preflight_reuse.sh syntactically invalid, so any red below would be a parse error rather than the status channel"
+    else
+      case10_mut_yes="$(PREFLIGHT_RESULT_DIR="$case10_dir" PREFLIGHT_KEY_EXTRA=probe10 bash "$REUSE" --show --tree "$other10" 2>&1)"; case10_mut_yes_rc=$?
+      case10_mut_no="$(PREFLIGHT_RESULT_DIR="$case10_dir" PREFLIGHT_KEY_EXTRA=probe10 bash "$REUSE" --show --tree "$absent10" 2>&1)"; case10_mut_no_rc=$?
+      if [ "$case10_mut_yes_rc" -ne 0 ] || ! grep -qxF -- '--- reusable: YES' <<<"$case10_mut_yes"; then
+        bad "case 10 — the mutation broke MORE than the status channel: the SAME fixture is no longer reusable through --show (rc=$case10_mut_yes_rc, [$(printf '%s' "$case10_mut_yes" | tail -n 1)]), so a red below would be unattributable"
+      elif [ "$case10_mut_no_rc" -ne 0 ]; then
+        bad "case 10 — the mutation did NOT reproduce the defect: a missing record must exit 0 again (the card's shape, 'the process reports success on a message that says the record is missing'), got rc=$case10_mut_no_rc [$(printf '%s' "$case10_mut_no" | tr '\n' ' ')]"
+      else
+        rc10=0
+        selftest_run "$WORK/case10.log" || rc10=$?
+        # ONLY check 41 can fire: it is the one check that reads `--show`'s exit
+        # status at all (no other check, and no lane in this repo, branches on it),
+        # and the mutated consumer is healthy in every other direction as the legs
+        # above assert by value.
+        verdict "case 10" "$WORK/case10.log" "$rc10" \
+          "check 41" \
+          "with the status channel removed, \`--show\` reports success for a record that is missing and check 41 reds naming exactly that"
+      fi
+    fi
+  fi
+fi
+restore_and_verify
+
+# --- case 11: THE VERDICT NO LONGER REACHES THE STATUS (card t_c0022f86). The
+# propagation alone is not the whole property: the fix also makes `pr_show` RETURN
+# the verdict it printed — the "reusable: NO" branch used to fall off the end of the
+# function (status 0), so a record that EXISTS but is stale, red, partial, or
+# observed under a changed fingerprint printed `reusable: NO` and still reported
+# success. That is the same lie one layer down, and nothing else in the harness
+# drives it: case 10 removes the whole channel, which reds check 41 too, so without
+# this case the verdict half of the property would be a guard with no sabotage.
+# The mutation is a ONE-LINE SUBSTITUTION of that branch's `return 1` for the
+# pre-fix fall-through, and the case reads the SAME fixture under a BUMPED
+# fingerprint BY VALUE before it spends a selftest run: shipped exits 1 with
+# `reusable: NO`, the mutant exits 0 on the identical output.
+echo "== case 11: the printed verdict no longer reaches the exit status =="
+other11="$(printf 'biteproof_preflight_reuse case 11' | sha256sum | cut -c1-40)"
+work11="$( ( . "$RESULT"; gr_tree_sha "$REPO_ROOT" ) )"
+case11_dir="$WORK/case11-records"; mkdir -p "$case11_dir"
+if [ -z "$work11" ] || [ "$other11" = "$work11" ] || [ "${#BP_GATES[@]}" -eq 0 ]; then
+  bad "case 11 — the fixture cannot discriminate (working tree [$work11], fixture tree [$other11], ${#BP_GATES[@]} gates from --list), so this case would prove nothing"
+else
+  fixture_record "$other11" "$case11_dir" probe11
+  case11_ship="$(PREFLIGHT_RESULT_DIR="$case11_dir" PREFLIGHT_KEY_EXTRA=probe11-bumped bash "$REUSE" --show --tree "$other11" 2>&1)"; case11_ship_rc=$?
+  if [ "$case11_ship_rc" -ne 1 ] || ! grep -qxF -- '--- reusable: NO' <<<"$case11_ship"; then
+    bad "case 11 — the SHIPPED consumer must exit 1 when the record it printed is not reusable (rc=$case11_ship_rc, [$(printf '%s' "$case11_ship" | tail -n 2 | tr '\n' '|')]), so there is no defect here to reproduce"
+  else
+    NOECHO='    echo "--- reusable: NO"'
+    RET11='    return 1'
+    NEW11='    return 0'
+    awk -v e="$NOECHO" -v a="$RET11" -v b="$NEW11" \
+      '$0 == e { seen=1 } seen && $0 == a { print b; seen=0; next } { print }' \
+      "$REUSE" > "$WORK/preflight_reuse.mutated11" \
+      && cp "$WORK/preflight_reuse.mutated11" "$REUSE" && chmod "$MODE_REUSE" "$REUSE"
+    if [ "$(grep -A2 -F -- "$NOECHO" "$REUSE" | tail -n 1)" != "$NEW11" ]; then
+      bad "case 11 — the verdict branch's return was not rewritten (the third line after [$NOECHO] is not [$NEW11] but [$(grep -A2 -F -- "$NOECHO" "$REUSE" | tail -n 1)]), so the pre-fix fall-through was not reproduced"
+    elif [ "$(diff "$WORK/preflight_reuse.sh.orig" "$REUSE" | grep -c '^[<>]')" != "2" ]; then
+      bad "case 11 — the mutation is NOT surgical ($(diff "$WORK/preflight_reuse.sh.orig" "$REUSE" | grep -c '^[<>]') changed lines, want 2: the one line replaced), so a red below could be about something other than the verdict reaching the status"
+    elif ! bash -n "$REUSE"; then
+      bad "case 11 — the mutation left preflight_reuse.sh syntactically invalid, so any red below would be a parse error rather than the verdict reaching the status"
+    else
+      case11_mut="$(PREFLIGHT_RESULT_DIR="$case11_dir" PREFLIGHT_KEY_EXTRA=probe11-bumped bash "$REUSE" --show --tree "$other11" 2>&1)"; case11_mut_rc=$?
+      case11_mut_yes="$(PREFLIGHT_RESULT_DIR="$case11_dir" PREFLIGHT_KEY_EXTRA=probe11 bash "$REUSE" --show --tree "$other11" 2>&1)"; case11_mut_yes_rc=$?
+      if [ "$case11_mut_yes_rc" -ne 0 ] || ! grep -qxF -- '--- reusable: YES' <<<"$case11_mut_yes"; then
+        bad "case 11 — the mutation broke MORE than the verdict branch: the SAME record under the ORIGINAL fingerprint is no longer reusable through --show (rc=$case11_mut_yes_rc, [$(printf '%s' "$case11_mut_yes" | tail -n 1)]), so a red below would be unattributable"
+      elif ! grep -qxF -- '--- reusable: NO' <<<"$case11_mut"; then
+        bad "case 11 — the mutation changed MORE than the exit status: the record is no longer reported as 'reusable: NO' at all ([$(printf '%s' "$case11_mut" | tail -n 2 | tr '\n' '|')])"
+      elif [ "$case11_mut_rc" -ne 0 ]; then
+        bad "case 11 — the mutation did NOT reproduce the defect: with the verdict branch falling through, the process must report success on its own 'reusable: NO' again, got rc=$case11_mut_rc"
+      else
+        rc11=0
+        selftest_run "$WORK/case11.log" || rc11=$?
+        verdict "case 11" "$WORK/case11.log" "$rc11" \
+          "check 41" \
+          "with the verdict branch falling through, \`--show\` exits 0 while printing 'reusable: NO' and check 41 reds naming exactly that"
+      fi
+    fi
+  fi
+fi
+restore_and_verify
+
 # --- the tree must be as dirty as it was found: a case that leaked a mutation past
 # its restore would poison every lane after it, and the sha checks above cannot see
 # an ADDED file.
@@ -776,7 +938,7 @@ fi
 
 echo "---"
 if [ "$FAIL" -eq 0 ]; then
-  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, hashing the test-DB host's SPELLING into it, putting the all-or-nothing credential strip or the unconditional step-2 strip back, removing the scheme guard that refuses an un-strippable DSN, killing the TTL horizon, or dropping the documented \`--tree\` wiring from the consumer's decide path each turns the REAL selftest gate red, naming that property"
+  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, hashing the test-DB host's SPELLING into it, putting the all-or-nothing credential strip or the unconditional step-2 strip back, removing the scheme guard that refuses an un-strippable DSN, killing the TTL horizon, dropping the documented \`--tree\` wiring from the consumer's decide path, dropping the consumer's \`--show\` status channel, or letting its printed verdict fall through to status 0 each turns the REAL selftest gate red, naming that property"
 else
   echo "biteproof: $PASS passed, $FAIL failed — a reuse guard does NOT hold something it claims to"
 fi
