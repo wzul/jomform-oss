@@ -373,15 +373,60 @@ const HAS_NON_ACTION = new RegExp(`\\b(?:${INFO_VERB}|${SUBORDINATOR})\\b`, "i")
 // form". Only the `-ing` forms: the NOUN reading ("the trash") is handled by the
 // information-verb paragraph, and a gerund is what can be either an object or a subject.
 const BIN_GERUND = `(?:binning|trashing|restoring|deleting)`;
-/** The determiners that can open the gerund's object. */
-const DET = `(?:the|a|an|your|my|his|her|its|their|our|this|that|these|those|some|any)`;
+/**
+ * The QUANTIFIER determiners — the class t_82129fb4 adds to `DET`.
+ *
+ * Two shapes, because a quantifier can stand alone ("deleting EVERY form") or follow an
+ * article that it belongs with ("deleting THE WHOLE form", "an ENTIRE form", "A FEW
+ * forms"). Both are determiners and both are listed BEFORE the article alternatives in
+ * `DET`, so the compound wins the alternation: if `the` matched first, the quantifier word
+ * would fall through to the bare `[a-z]+` and the defect would simply reappear one token
+ * over. Named and set apart so the bite test below can run the shipped rule with exactly
+ * this class removed (`DET_WITHOUT_QUANT`) and show the rows it guards return GREEN.
+ */
+const QUANT_DET = `(?:the|an?)\\s+(?:whole|entire|other|same|few|little|lot|couple|number|majority|handful|dozen|rest|remainder)|every|each|all|both|no|many|several|most|whole|entire|one|two|three|four|five|six|seven|eight|nine|ten|few|little|much|other|same|various|numerous|countless`;
+/** The articles, possessives and demonstratives — `DET`'s non-quantifier half. */
+const ARTICLE_DET = `the|a|an|your|my|his|her|its|their|our|this|that|these|those|some|any`;
+/**
+ * The determiners that can open the gerund's object — the QUANTIFIERS above, then the
+ * articles, possessives and demonstratives.
+ *
+ * THE QUANTIFIERS ARE DETERMINERS TOO (t_82129fb4). Their absence was the defect: with no
+ * alternative for every|each|all|both|no|many|…, `NP_OBJ`'s optional determiner matched
+ * nothing and the bare `[a-z]+` ate the QUANTIFIER as if it were the object noun —
+ * "deleting EVERY form" consumed "deleting every", left " form." behind as a phantom
+ * predication, and the rule read the gerund as a SUBJECT and stood the claim down. That is
+ * a false negative (the claim goes GREEN), so no report was ever newly red on it and it
+ * slipped through; it is a gap against the pre-rework branch ef3af046, which caught all of
+ * them. Measured on the extracted scan: the 480-sentence object-claim corpus goes from
+ * 240 missed at the pre-fix head to 0 here, with 0 catches lost and 0 NEW report-side
+ * false positives (an 11760-sentence report corpus built from the quantifier objects and
+ * predicates OUTSIDE the pre-rework curated list stays 0/11760 red, exactly as on
+ * origin/main).
+ */
+const DET = `(?:${QUANT_DET}|${ARTICLE_DET})`;
+/**
+ * The pre-fix determiner set — the articles, possessives and demonstratives WITHOUT the
+ * quantifiers, i.e. exactly `DET` before t_82129fb4. Kept (not deleted) so the bite test
+ * below can run the REAL rule with the quantifier handling removed: the card's mutation is
+ * "drop the quantifier handling", and reverting `DET` to this set is that mutation verbatim
+ * rather than a paraphrase of it.
+ */
+const DET_WITHOUT_QUANT = ARTICLE_DET;
 /** The prepositions that can open a phrase that continues the gerund's noun phrase. */
 const G_PREP = `(?:from|to|into|out\\s+of|onto|upon|in|on|at|with|for|about|by|via|through|across|under|over|within|without|before|after|during|against|between|among|of)`;
 // The gerund's OWN OBJECT — one common noun, the shape the object reading uses
 // ("a form", "forms", "the trash"). Held to ONE noun on purpose: a second noun here is
 // indistinguishable from the reported clause's finite verb ("… a form CONTINUES"), and
 // reading that verb as part of the object would green a genuine claim.
-const NP_OBJ = `(?:${DET}\\s+)?[a-z]+`;
+//
+// A FUNCTION OF THE DETERMINER CLASS, not a constant, so the bite test below can rebuild the
+// gerund phrase from a determiner set with the QUANTIFIERS removed and run the REAL rule on
+// it. The mutation the card names is exactly "drop the quantifier handling" (t_82129fb4),
+// and a proof that paraphrased the rule would prove nothing about the scan — the file's own
+// doctrine (see the note above `BIN_VOCAB`). The default argument is the shipped `DET`, so
+// every production call site is unchanged.
+const npObj = (det: string) => `(?:${det}\\s+)?[a-z]+`;
 // The noun phrase INSIDE a prepositional phrase, where a compound is unambiguous because
 // the preposition already opened a phrase ("… from the forms PAGE"). One or two nouns.
 const NP_PP = `(?:${DET}\\s+)?[a-z]+(?:\\s+[a-z]+)?`;
@@ -432,9 +477,9 @@ const AMBIGUOUS_VERB = `(?:is|are|was|were|becomes?|remains?|seems?|appears?|loo
  * "reports deleting works" (a report) and "reports deleting forms" (a claim) differ only by
  * the token's identity. Every clause with more than that token is list-free.
  */
-function reportedGerundIsSubject(rest: string): boolean {
+function reportedGerundIsSubject(rest: string, det: string = DET): boolean {
   // The gerund and its noun phrase: the gerund, an optional one-noun object, any PPs.
-  const phrase = new RegExp(`${GER_HEAD}(?:\\s+${NP_OBJ})?(?:${GER_PP})*`, "i").exec(rest);
+  const phrase = new RegExp(`${GER_HEAD}(?:\\s+${npObj(det)})?(?:${GER_PP})*`, "i").exec(rest);
   if (!phrase) return false;
   // Whatever the gerund phrase does not account for is a PREDICATION of it: the reported
   // clause has a verb of its own, so the gerund is that clause's SUBJECT (a report). Only
@@ -546,7 +591,7 @@ const COPULA_AUX = /^(?:is|are|was|were|be|been|being)$/;
  * the trash" is a PASSIVE on the thing, not an action of the assistant's, while "it IS
  * BINNING" is the progressive claim — so a copula admits the `-ing` form only.
  */
-function assistantBinsInsideReport(matched: string, fullClause: string = matched): boolean {
+function assistantBinsInsideReport(matched: string, fullClause: string = matched, det: string = DET): boolean {
   const info = new RegExp(`\\b(?:${INFO_VERB})\\b`, "i").exec(fullClause);
   if (!info) return false;
   // The clause the verb reports: strip the "that" that introduces it and the "you" the
@@ -567,7 +612,7 @@ function assistantBinsInsideReport(matched: string, fullClause: string = matched
   // credits the assistant, so the claim holds. This is read from the FULL clause, not the
   // match: the match ends at the bin token, so it cannot see the predicate that decides.
   if (new RegExp(`^\\s+(?:the\\s+)?${BIN_GERUND}\\b`, "i").test(rest)) {
-    return !reportedGerundIsSubject(rest);
+    return !reportedGerundIsSubject(rest, det);
   }
   const claim = new RegExp(
     `^\\s+(?:it|they|he|she|the\\s+assistant)\\b(\\s+(?:${ASSISTANT_AUX}))?\\s+(${BIN_VOCAB})\\b`,
@@ -598,7 +643,7 @@ function assistantBinsInsideReport(matched: string, fullClause: string = matched
  * The possessive-genitive predicate ("<binning> is the assistant's job") is (C) read
  * from the other end and is folded into it: it is the same predication.
  */
-function binClaimInClause(raw: string): string | null {
+function binClaimInClause(raw: string, det: string = DET): string | null {
   const s = normaliseClause(raw);
   if (!/\bassistant\b/.test(s)) return null;
   // (A) the assistant as SUBJECT of a bin verb, no negation between.
@@ -613,7 +658,7 @@ function binClaimInClause(raw: string): string | null {
       // assistant back in the bin verb's subject position ("tells you IT BINS a form")
       // is reporting a claim, not naming the bin (see `assistantBinsInsideReport`).
       const verb = assistantVerb(m[0]);
-      if (!verb || !HAS_NON_ACTION.test(verb) || assistantBinsInsideReport(m[0], s)) return m[0];
+      if (!verb || !HAS_NON_ACTION.test(verb) || assistantBinsInsideReport(m[0], s, det)) return m[0];
     }
   }
   // (B) the AGENT of a passive: "<bin> by the assistant" (bare or periphrastic).
@@ -708,7 +753,7 @@ function binWordInClause(clause: string): string | null {
 }
 
 /** Every phrasing in `text` that credits the assistant with the bin, in order. */
-function assistantBinClaims(text: string): string[] {
+function assistantBinClaims(text: string, det: string = DET): string[] {
   const out: string[] = [];
   let prevBin: string | null = null;
   for (const clause of text.split(CLAUSE_SPLIT)) {
@@ -722,7 +767,7 @@ function assistantBinClaims(text: string): string[] {
           (_m, aux: string | undefined) => `assistant${aux || " "}${prevBin}`,
         )
       : clause;
-    const m = binClaimInClause(folded);
+    const m = binClaimInClause(folded, det);
     if (m) out.push(m);
     // The antecedent for the NEXT clause: a clause with no bin resets it rather than
     // letting a pro-verb reach back over an unrelated clause.
@@ -2190,6 +2235,23 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "tense claim · has told/pronoun (CU)": "The assistant has told you it deleted a form.",
     "tense claim · told/gerund-object (CV)": "The assistant told you deleting a form.",
     "tense claim · is reporting/gerund-object (CW)": "The assistant is reporting deleting a form.",
+    // t_82129fb4 — the QUANTIFIER-DETERMINER object. The gerund's object opens with a
+    // quantifier (every|each|all|both|no|many|several|most|a few|one|the whole|an entire),
+    // which `DET` did not list, so the bare `[a-z]+` ate the QUANTIFIER as if it were the
+    // object noun, the rest of the noun phrase was left as a phantom predication, and the
+    // rule read the gerund as a SUBJECT and stood the claim down — a false negative (the
+    // claim went GREEN). `DET` now carries the quantifier class; the rows below are the
+    // claim side of it, and dropping that class from `DET` returns exactly these to GREEN
+    // (see the bite proof after this map). Two shapes are covered: a STANDALONE quantifier
+    // and the article+quantifier compound ("the whole", "an entire", "a few"), whose
+    // compound alternative must precede the bare article in `DET` or the defect reappears
+    // one token over.
+    "gerund object · quantifier-every (CX)": "The assistant reports deleting every form.",
+    "gerund object · quantifier-all (CY)": "The assistant reports binning all forms.",
+    "gerund object · quantifier-no (CZ)": "The assistant mentions trashing no form.",
+    "gerund object · quantifier-a-few (DA)": "The assistant describes restoring a few forms.",
+    "gerund object · quantifier-whole (DB)": "The assistant explains deleting the whole form.",
+    "gerund object · quantifier-entire (DC)": "The assistant reports binning an entire form.",
   };
 
   const missed: string[] = [];
@@ -2352,6 +2414,20 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "The assistant looked up where the trash is.",
     "The assistant is looking up where the trash is.",
     "The assistant can look up where the trash is.",
+    // t_82129fb4 — the QUANTIFIER-object REPORT, the control the quantifier widening must
+    // not swallow. Same quantifier objects as the claim rows CX-DC, but the reported clause
+    // is headed by a bin GERUND that is the clause's SUBJECT and has a predicate of its own,
+    // so the rule must still read the predication and stand the claim down. Predicates are
+    // OUTSIDE the pre-rework curated list on purpose (the t_255182df class): the reading
+    // comes from the clause's SHAPE, so it cannot depend on which verb carries the
+    // predication. A `DET` that over-consumed — eating the predication as part of the noun
+    // phrase — would red these instead.
+    "The assistant explains that deleting every form removes it from the list.",
+    "The assistant tells you restoring all forms brings them back.",
+    "The assistant reports that binning a few forms frees up space.",
+    "The assistant mentions that trashing the whole form hides it from the dashboard.",
+    "The assistant says binning each form is permanent.",
+    "The assistant says deleting no form is possible.",
   ]) {
     assert.deepEqual(
       assistantBinClaims(report),
@@ -2359,6 +2435,100 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
       `the scan fires on a sentence where the assistant only READS or REPORTS the bin ` +
         `(${JSON.stringify(report)}) — the trash token is its object of knowledge, not an action, ` +
         `and reding on it would block the page from naming the trash at all`,
+    );
+  }
+});
+
+// ── THE QUANTIFIER OBJECT'S OWN BITE (t_82129fb4) ────────────────────────────
+//
+// THE DEFECT this test guards: `DET` listed the articles, possessives and demonstratives
+// but none of the QUANTIFIER determiners (every|each|all|both|no|many|several|most|a few|
+// one|the whole|an entire|…). For an object-gerund CLAIM whose object opens with one, the
+// optional determiner matched nothing, the bare `[a-z]+` ate the QUANTIFIER as if it were
+// the object noun, and the rest of the noun phrase (" form.") stayed in the clause as a
+// PHANTOM predication — so `reportedGerundIsSubject` read the gerund as a SUBJECT and stood
+// the claim down. The claim went GREEN: a false negative, i.e. a copy that credits the
+// assistant with the bin would ship past the scan.
+//
+// WHY IT IS PROVED HERE AND NOT MERELY ASSERTED. The rows CX-DC above are pinned in the
+// BITES map, so a regression reds THIS suite — but a map row and a guard can drift apart
+// silently (the map judges the SHIPPED page plus an injected sentence, a different code
+// path from the scan's own reading of a bare claim). This test closes that gap by running
+// the REAL scan with the quantifier handling REMOVED: `assistantBinClaims` is parameterised
+// on its determiner class, and `DET_WITHOUT_QUANT` is exactly `DET` before this card — so
+// `assistantBinClaims(sentence, DET_WITHOUT_QUANT)` IS the pre-fix rule, not a paraphrase
+// of it (the file's own doctrine: see the note above `BIN_VOCAB`). Both directions are
+// pinned: the shipped `DET` catches every row, the pre-fix `DET` misses every row, and the
+// report controls stay GREEN in BOTH — so the test would also fail if the quantifier class
+// were widened to eat the predication.
+test("the quantifier-determiner object is caught by the SHIPPED determiner set and lost by the pre-fix one (t_82129fb4)", () => {
+  // The claim side: a quantifier object, the assistant IS the deleter.
+  const claims = [
+    "The assistant reports deleting every form.",
+    "The assistant reports binning all forms.",
+    "The assistant mentions trashing no form.",
+    "The assistant describes restoring a few forms.",
+    "The assistant explains deleting the whole form.",
+    "The assistant reports binning an entire form.",
+    "The assistant mentions deleting each form.",
+    "The assistant says trashing both forms.",
+    "The assistant reports restoring many forms.",
+    "The assistant describes deleting most forms.",
+    "The assistant reports deleting one form.",
+    "The assistant says binning several forms.",
+  ];
+  // The report side: the SAME quantifier objects, but the gerund is the reported clause's
+  // SUBJECT with a predicate of its own, so BOTH determiner sets must stand the claim down.
+  const reports = [
+    "The assistant explains that deleting every form removes it from the list.",
+    "The assistant tells you restoring all forms brings them back.",
+    "The assistant reports that binning a few forms frees up space.",
+    "The assistant mentions that trashing the whole form hides it from the dashboard.",
+    "The assistant says binning each form is permanent.",
+  ];
+
+  const shippedMissed: string[] = [];
+  for (const s of claims) if (assistantBinClaims(s).length === 0) shippedMissed.push(s);
+  assert.deepEqual(
+    shippedMissed,
+    [],
+    `the SHIPPED determiner set misses a quantifier-determiner object, so a claim that credits ` +
+      `the assistant with the bin ships GREEN (the defect this card fixes):\n  ${shippedMissed.join("\n  ")}`,
+  );
+
+  // The bite: revert `DET` to its pre-card value and the SAME rows go GREEN. Vacuity first —
+  // if the mutation did not change the pattern, everything below asserts nothing.
+  assert.notEqual(
+    DET,
+    DET_WITHOUT_QUANT,
+    "DET and DET_WITHOUT_QUANT are identical, so removing the quantifier class is a no-op and " +
+      "this test would pass while proving nothing",
+  );
+  const preFixMissed = claims.filter((s) => assistantBinClaims(s, DET_WITHOUT_QUANT).length === 0);
+  assert.deepEqual(
+    preFixMissed,
+    claims,
+    `the pre-fix determiner set did not lose EVERY quantifier row, so some of them are carried ` +
+      `by something other than the quantifier class and this test does not pin the card's defect:\n` +
+      `  still caught without the quantifiers: ${JSON.stringify(
+        claims.filter((s) => assistantBinClaims(s, DET_WITHOUT_QUANT).length > 0),
+      )}`,
+  );
+
+  // …and the OTHER direction: the quantifier class must not swallow a REPORT. Both sets must
+  // stand these down, or the widening would trade this false negative for a false positive.
+  for (const s of reports) {
+    assert.deepEqual(
+      assistantBinClaims(s),
+      [],
+      `the SHIPPED scan reds a quantifier-object REPORT (${JSON.stringify(s)}) — the quantifier ` +
+        `class is over-consuming, eating the predication that makes the gerund a subject`,
+    );
+    assert.deepEqual(
+      assistantBinClaims(s, DET_WITHOUT_QUANT),
+      [],
+      `the pre-fix scan reds a quantifier-object REPORT (${JSON.stringify(s)}) — this is the ` +
+        `t_255182df false-positive class and must be GREEN in both determiner sets`,
     );
   }
 });
