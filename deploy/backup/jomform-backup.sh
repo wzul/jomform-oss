@@ -100,9 +100,23 @@ syslog_alert() {
 
 # Read KEY=VALUE from the compose env file without exporting anything else.
 env_value() {
-  local key="$1"
+  local key="$1" matches value
   [ -r "$ENV_FILE" ] || return 0
-  sed -n "s/^${key}=//p" "$ENV_FILE" | head -n1 | tr -d '"'"'"'\r'
+  # NOT `sed -n … | head -n1 | tr …`. This script runs under
+  # `set -Eeuo pipefail`, and `head -n1` exits at its first line: `sed` is then
+  # still writing, takes SIGPIPE (141), and pipefail makes the PIPELINE 141 even
+  # though head got its line. MEASURED HONESTLY (card t_0633ea1d): this is a
+  # PREVENTIVE conversion, not a reproduced flake. A compose env file has one
+  # matching line, and against that shape the pipeline is 0/100 non-zero; the
+  # abort needs the writer to exceed the 64KB pipe buffer (~4000 matching lines),
+  # and at that size it is 100/100 with rc=141. It is worth removing because the
+  # call site reaches errexit: `alert_email` is invoked as a simple command from
+  # top level, so a 141 here aborts the run before the SES keys are read. Capture
+  # the whole match set, then index the first line from a here-string (a
+  # here-string has no writer process, so there is nothing left to signal).
+  matches="$(sed -n "s/^${key}=//p" "$ENV_FILE")"
+  value="$(tr -d '"'"'"'\r' <<<"${matches%%$'\n'*}")"
+  printf '%s' "$value"
 }
 
 # Email the super-admins directly over SESv2.
@@ -315,7 +329,16 @@ enforce_test_seam() {
 # Resolve containers by compose label: container names carry a project prefix
 # and an index that changes on recreate.
 container_for() {
-  docker ps --filter "label=$1" --format '{{.Names}}' | head -n1
+  local names
+  # NOT `docker ps … | head -n1`. Same `set -Eeuo pipefail` early-exit-reader
+  # class as `env_value` above. MEASURED HONESTLY (card t_0633ea1d): PREVENTIVE,
+  # not a reproduced flake — with one matching container it is 0/100 non-zero,
+  # and the abort needs the writer to exceed the 64KB pipe buffer; measured at
+  # that size it is 100/100 with rc=141. Converted for the same reason as
+  # `env_value`, and the value has no newline (a container name), so the capture
+  # IS the first line.
+  names="$(docker ps --filter "label=$1" --format '{{.Names}}')"
+  printf '%s' "${names%%$'\n'*}"
 }
 
 require_remote() {

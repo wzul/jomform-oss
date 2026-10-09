@@ -81,6 +81,39 @@
 # and `web/scripts/biteproof_next_managed_files.sh` carry the same note after being
 # bitten by it.
 #
+# THE SWEEP RECIPE (card t_0633ea1d). The rule is repo-wide, so the recipe that
+# finds the live sites belongs here rather than in a card body. Run it and read
+# every hit that is not a comment:
+#
+#   git grep -nE '\| *grep +(-[a-zA-Z]*q|.*-m *1)|\|[[:space:]]*head[[:space:]]+-n?1\b' \
+#     -- '*.sh' '*.py' '*.mjs' '*.js' '*.ts' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'
+#
+# The `\|[[:space:]]*head[[:space:]]+-n?1` alternative is LOAD-BEARING, and it was
+# ABSENT from the sweep that closed cards t_7953b76a / t_39b04c34. That recipe was
+# `'\| *grep +(-[a-zA-Z]*q|.*-m *1)'`, which matches `grep -q` / `grep -m1` but NOT
+# `| head -n1` — even though the class named in this very paragraph says `| head -n1`
+# "has the identical shape". Two live `| head -n1` sites then survived in
+# `deploy/backup/jomform-backup.sh` (`env_value`, `container_for`) while that sweep
+# reported itself complete; card t_0633ea1d fixed them. `-n?1` also matches the
+# `head -1` spelling that `deploy/tmp-apikey.sh` documents.
+#
+# TWO HONEST LIMITS OF THAT RECIPE, stated so its output is not over-read:
+#   1. `… | grep -q .` (a bare dot, no flag letter) is NOT matched by the
+#      `+(-[a-zA-Z]*q|…)` branch; check 10's old shape is found by reading for it.
+#   2. It is a SHAPE detector, not a verdict: `|[[:space:]]*head[[:space:]]+-n?1`
+#      matches every `| head -1`, so a hit whose writer has no PROCESS (a
+#      here-string — `… <<<"$out" | head -1`) cannot SIGPIPE anything and is
+#      display formatting, as is a writer whose output is a handful of lines.
+#      Separate a real site by its WRITER, not by the pattern: `git grep … | head
+#      -1`, `sed … | head -1`, `docker ps … | head -1` and `rclone … | head -1`
+#      are the class (a separate writer process, output that can exceed the 64KB
+#      pipe buffer); `… <<<"$out" | sort -u | head -1` is not.
+#   3. The `grep` branch ALSO matches a logical OR: `… || grep -q x` is not a pipe
+#      at all, but the pattern is unanchored, so it matches the SECOND `|` and
+#      reports a line that has no reader and nothing to SIGPIPE (measured on
+#      `if [ "$a" = b ] || grep -q x f; then` — one hit, no pipe). Read the HIT
+#      before believing it; a genuine site is `writer | grep -q`, never `|| grep`.
+#
 # THIS FILE IS NOT THE ONLY ONE — that claim was false when it was written (card
 # t_5058fb49). At the time, live non-comment sites still existed in files that
 # preflight gates EXECUTE, so "the sweep is complete" was already untrue. What is
@@ -1839,7 +1872,10 @@ fi
 #
 # The scan skips comment lines and any line mentioning "header" (this block and its
 # two messages necessarily quote the pattern), so it counts live shell sites only.
-self_sites="$(grep -nE 'printf .*\| *grep +-[a-zA-Z]*q|\|[[:space:]]*head[[:space:]]+-n[[:space:]]*1' "$SELF" 2>/dev/null \
+# `-n?1` (card t_0633ea1d): the original `-n[[:space:]]*1` matched `head -n1` and
+# `head -n 1` but NOT `head -1`, which is the same early-exit reader and the
+# spelling this file's own sweep recipe is documented against.
+self_sites="$(grep -nE 'printf .*\| *grep +-[a-zA-Z]*q|\|[[:space:]]*head[[:space:]]+-n?[[:space:]]*1' "$SELF" 2>/dev/null \
   | grep -vE '^[0-9]+:[[:space:]]*#' \
   | grep -v 'grep -nE' \
   | grep -v '…' || true)"
@@ -1847,6 +1883,30 @@ if [ -z "$self_sites" ]; then
   ok "the header's own claim holds: this file contains NO live \`printf … | grep -q\` site (nor \`| head -n1\`), so the sentence is true rather than remembered"
 else
   bad "the header says this file has no \`printf … | grep -q\` site, but a live one is back — the claim and the file disagree:\n$self_sites"
+fi
+# The HEADER'S OWN SWEEP RECIPE, checked (card t_0633ea1d). The header documents a
+# repo-wide recipe to find this class, and the recipe that closed the two earlier
+# sweep cards omitted the `| head -n1` alternative its own paragraph names — which
+# is how two live sites in deploy/backup/jomform-backup.sh survived that sweep. A
+# recipe nothing reads is the rot this repo has been bitten by repeatedly, so it is
+# pinned here: drop the alternative from the recipe COMMAND and the run says so.
+#
+# The pin reads the RECIPE LINE, not the header block. An earlier draft of this
+# check grepped the whole header, which the two prose paragraphs that NAME the
+# alternative also satisfy — so it stayed green with the command deleted, i.e. it
+# pinned the mention and not the recipe. Same trap in miniature as the file's own
+# "a pin that pins itself is not a pin".
+recipe_line="$(sed -n '/^#   git grep -nE /p' "$SELF" | sed -n '1p')"
+# The needle is the alternative as it must appear in a live ERE. Assembled from two
+# pieces for the same reason the file assembles other literals: a single literal
+# here would also match this check's own source text.
+recipe_needle='\|[[:space:]]*head'"[[:space:]]+-n?1"
+if [ -z "$recipe_line" ]; then
+  bad "the header's sweep recipe command is gone — nothing in this file tells a reader how to find a writer-into-head site"
+elif grep -qF "$recipe_needle" <<<"$recipe_line"; then
+  ok "the header's sweep recipe still carries the trailing-head alternative (the omission that let two live sites survive the earlier sweep)"
+else
+  bad "the header's sweep recipe no longer covers a trailing 'head -1' — the recipe would again be read as complete while writer-into-head sites stay live (deploy/backup/jomform-backup.sh env_value/container_for were exactly that): [$recipe_line]"
 fi
 out_rc="$(test_rc_and_argv banana)"; rc="${out_rc%%$'\t'*}"; argv="${out_rc##*$'\t'}"
 if [ "$rc" != 0 ] && grep -q 'is not a Go duration' "$SB/budget.out" && [ -z "$argv" ]; then
