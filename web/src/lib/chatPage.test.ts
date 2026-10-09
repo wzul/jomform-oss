@@ -711,12 +711,37 @@ const COPULA_AUX = /^(?:is|are|was|were|be|been|being)$/;
 // the front of the chain the reader tests, so the last auxiliary before the bin verb is
 // still the token the passive/progressive distinction reads. `'s`/`'re`/`'ve` all open
 // with a copula or `have`, which is why folding them in cannot red a progressive claim.
+//
+// THE MODAL CONTRACTIONS `'d` (had OR would) AND `'ll` (will) ARE THE SAME CLASS ONE OVER
+// (t_7cae27c8). They contract a MODAL or `had`, not the copula, so they were missed by the
+// same shape of gap: `he'd been deleting` is `he had been deleting` and `it'll be binning`
+// is `it will be binning` — both genuine CLAIMS the reader read as a report. Measured on
+// the live tree: the contracted form is GREEN while its uncontracted twin is RED, across
+// six information verbs x five pronouns x the claim shapes, while the passives and the
+// addressee stay GREEN. The un-contracted twins are caught by the BARE arm, so the miss is
+// the contraction token alone — the identical false negative t_6ad53e35 fixed for
+// `'s`/`'re`/`'ve`, one contraction class over.
+//
+// `'d` IS AMBIGUOUS — had OR would — AND THE AMBIGUITY IS INERT HERE. The folded core is
+// read only by the copula test, and neither reading is a copula (`had`, `would`, `will` are
+// all outside `COPULA_AUX`; pinned by this file's own test), so one representative suffices:
+// the reading that decides a passive (`it'd been binned` = `it had been binned`) comes from
+// the `been`, never from the core. What the fold still has to get right is the chain's LAST
+// token in the two shapes a modal contraction opens — `it'd BE binning` (would + progressive
+// = claim) and `he'd BEEN deleted` (had + passive = report) — and the EMPTY chain (`it'd bin
+// a form`: no auxiliary between the contraction and the verb), where the core alone is the
+// last token and, being a modal rather than a copula, leaves it the claim.
 /** The pronoun cores a contracted reported-clause subject can carry. */
 const CONTRACTED_SUBJ = String.raw`it|they|he|she|we`;
-/** A contracted subject as ONE token: the pronoun plus `'s` / `'re` / `'ve`. */
-const CONTRACTION = String.raw`(?:${CONTRACTED_SUBJ})(?:'|\u2019)(?:s|re|ve)\b`;
-/** The auxiliary core a `'s` / `'re` / `'ve` contraction folds into its verb chain. */
-const CONTRACTION_CORE: Record<string, string> = { s: "is", re: "are", ve: "have" };
+/** A contracted subject as ONE token: the pronoun plus `'s` / `'re` / `'ve` / `'d` / `'ll`. */
+const CONTRACTION = String.raw`(?:${CONTRACTED_SUBJ})(?:'|\u2019)(?:s|re|ve|d|ll)\b`;
+/**
+ * The auxiliary core a contraction folds into its verb chain. `'ll` is `will`; `'d` is
+ * `had` OR `would`, and the two are indistinguishable to the only reader of this map (the
+ * copula test) because neither is a copula — so `had` is the representative (see the note
+ * above `CONTRACTION`).
+ */
+const CONTRACTION_CORE: Record<string, string> = { s: "is", re: "are", ve: "have", d: "had", ll: "will" };
 
 /**
  * Does the clause the assistant's information verb REPORTS put the assistant back in the
@@ -2484,6 +2509,26 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "chain claim · asked/infinitive (EA)": "The assistant has been asked to bin a form.",
     "chain claim · told/infinitive (EB)": "The assistant can be told to bin a form.",
     "chain claim · told/plain (EC)": "The assistant is told to bin a form.",
+    // t_7cae27c8 — the SAME contracted-subject class one contraction over: `'d` (had OR
+    // would) and `'ll` (will). A modal contraction carries a modal or `had`, not the copula,
+    // so it matched neither the alternation nor the core map, and the claim was read as a
+    // report — measured on the live tree: the contracted form GREEN while its uncontracted
+    // twin (`he HAD been deleting`) is RED. EJ is the EMPTY-chain shape (no auxiliary
+    // between the contraction and the verb), which the folded core alone decides; that the
+    // ambiguity of `'d` (had OR would) cannot move it is pinned by this card's own test —
+    // neither reading is a copula, so the ACTIVE reading is the same under either. These
+    // rows bite like DH-DP: reverting the reader's subject to the bare alternation returns
+    // them to GREEN while the rest of the map stays green. RENUMBERED ED-EJ by the re-cut
+    // onto `main` (t_1db00e1d): DQ-DW belongs to the `chain claim` class and this card's own
+    // cut had claimed the same seven slots, so one side had to move — see the note at the
+    // map's tail, which says which class owns which handles.
+    "contracted 'd subject · he'd deleting (ED)": "The assistant tells you he'd been deleting forms.",
+    "contracted 'd subject · it'd binning (EE)": "The assistant tells you it'd been binning a form.",
+    "contracted 'd subject · we'd restoring (EF)": "The assistant mentions we'd been restoring a form.",
+    "contracted 'll subject · it'll binning (EG)": "The assistant tells you it'll be binning a form.",
+    "contracted 'll subject · they'll deleting (EH)": "The assistant says they'll be deleting forms.",
+    "contracted 'll subject · she'll trashing (EI)": "The assistant explains that she'll be trashing a form.",
+    "contracted 'd subject · it'd bare-verb (EJ)": "The assistant reports that it'd bin a form.",
   };
 
   const missed: string[] = [];
@@ -2549,6 +2594,22 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
   // place of `COPULA_AUX.test(chain.split(/\s+/).pop())`) reds the five `has been binned`
   // report controls in the report array above, and nothing else — that is the passive reading
   // the last-token test exists to keep. Both mutations were run by hand on this file.
+  //
+  // t_7cae27c8's seven `contracted 'd / 'll subject` rows (ED-EJ) bite the same way, one
+  // contraction class over: the same revert returns them to GREEN as well (the whole rest of
+  // the map staying green), which is the same measurement that proves the arm — not something
+  // else in the reader — carries them, and the contracted `'d`/`'ll` PASSIVES added to the
+  // report array below are the other direction's controls (`it'd been binned` would red if
+  // the folded core, not the `been`, decided the chain).
+  //
+  // THE HANDLES SAY WHICH CLASS OWNS WHAT, one code per class and no code naming two. THIS
+  // card's rows were cut as DQ-DW — the very seven slots the `chain claim` rows of #1078 had
+  // already taken on `main` — so the re-cut onto `main` RENUMBERS this card's seven to ED-EJ,
+  // the first free code past EC, which is the shape the t_1130759a re-cut used when it moved
+  // the t_b0bf328c rows off CX-CZ and onto EA-EC rather than into a gap its base still had.
+  // Nothing else moved: `chain claim` (t_d7178bff, #1085) keeps DQ-DW, the contracted copula
+  // rows (t_6ad53e35) keep DH-DP, the quantifier rows keep CX-DC, and the infinitive chain
+  // claims (t_b0bf328c) keep EA-EC.
 
   // And the POSITIVE CONTROL must not be what carries the detection: the person-
   // attribution sentence the fix ships (which names the assistant only to disown
@@ -2740,6 +2801,20 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "The assistant says it will be restored.",
     "The assistant reports that it is going to be deleted.",
     "The assistant explains that it is about to be binned.",
+    // t_7cae27c8 — the same controls for the `'d` / `'ll` contractions. The four PASSIVES are
+    // this class's unsafe direction: a modal contraction can carry `had` (`it'd been binned`
+    // = `it had been binned`), so the `been` is the last auxiliary before the participle and
+    // the sentence is a report on the thing. The two ADDRESSEE clauses are the other edge —
+    // `you` is deliberately not a contraction core, so `you'd`/`you'll` behind the `you` the
+    // assistant reports TO stays the person. The asymmetry with the ACTIVE `it'd BINNED`
+    // (pinned in this card's own test: no auxiliary, so the core is a modal and the perfect
+    // is the claim, exactly as the bare `it has binned` row CK is) is the point of both.
+    "The assistant tells you it'd been binned.",
+    "The assistant says they'll be trashed.",
+    "The assistant reports that he'd been deleted.",
+    "The assistant explains that she'll be trashed.",
+    "The assistant tells you you'd been binning a form.",
+    "The assistant tells you you'll be binning a form.",
   ]) {
     assert.deepEqual(
       assistantBinClaims(report),
@@ -2975,6 +3050,167 @@ test("the contracted reported-clause subject is caught by the SHIPPED reader and
   ]) {
     assert.deepEqual(assistantBinClaims(s), [], `the SHIPPED scan reds the un-contracted twin (${JSON.stringify(s)})`);
     assert.deepEqual(assistantBinClaims(s, DET, false), [], `the pre-fix scan reds the un-contracted twin (${JSON.stringify(s)})`);
+  }
+});
+
+// ── THE MODAL CONTRACTIONS `'d` / `'ll` IN THE REPORTED CLAUSE (t_7cae27c8) ──
+//
+// THE DEFECT this test guards, one contraction class over from t_6ad53e35's `'s`/`'re`/`'ve`.
+// The contracted-subject arm listed only the copula/`have` contractions, so a reported
+// clause whose subject contracts a MODAL (`'ll` = will) or `had`/`would` (`'d`) into its one
+// token matched neither the alternation nor the core map: `The assistant tells you he'd been
+// deleting forms.` was read as a REPORT while its uncontracted twin (`he HAD been deleting`)
+// was read as the claim it is — the unsafe direction, the same shape as #1081's gap.
+// Measured on the live tree with the scan extracted from this file: contracted GREEN,
+// uncontracted RED, across six information verbs x five pronouns x the claim shapes below.
+//
+// WHY IT IS PROVED HERE AND NOT MERELY ASSERTED: as for t_6ad53e35, the pre-fix behaviour is
+// the shipped rule with exactly the contraction arm removed (`assistantBinClaims(s, DET,
+// false)`), not a paraphrase of it. Both directions are pinned: the shipped reader catches
+// every contracted claim, the pre-fix reader misses every one, the UNCONTRACTED twins are
+// caught by BOTH (which is why the gap hid — the twin is carried by the bare arm), and the
+// reports (the contracted passives, the addressee) stay GREEN in BOTH. The `'d` ambiguity is
+// pinned too, since had/would is the one thing this contraction has that `'s`/`'ll` do not.
+test("a reported-clause subject contracted with 'd or 'll is caught by the SHIPPED reader and lost by the pre-fix one (t_7cae27c8)", () => {
+  const verbs = ["tells you", "reports that", "says", "explains that", "mentions", "describes"];
+  const pronouns = ["it", "they", "he", "she", "we"];
+  // A claim behind a modal contraction: `'d`/`'ll` + BE + gerund (would/will progressive) and
+  // `'d` + BEEN + gerund (had perfect). `'ll been` is not English, so the perfect shape is
+  // `'d`-only.
+  const shapes: Array<[string, string]> = [
+    ["'d", "be"],
+    ["'d", "been"],
+    ["'ll", "be"],
+  ];
+  const gerunds = ["binning a form", "trashing forms", "restoring a form", "deleting a form"];
+  const claims: string[] = [];
+  for (const v of verbs) {
+    for (const p of pronouns) {
+      for (const [contr, aux] of shapes) {
+        for (const g of gerunds) claims.push(`The assistant ${v} ${p}${contr} ${aux} ${g}.`);
+      }
+    }
+  }
+
+  // Vacuity: the pre-fix reader must actually differ from the shipped one, or the bite below
+  // asserts nothing. The same sentences with an UNCONTRACTED subject change NOTHING under the
+  // pre-fix reader — the contraction arm is the only difference between the two readers, so
+  // the twins are the control that hid this gap.
+  for (const s of [
+    "The assistant tells you it would be binning a form.",
+    "The assistant tells you it had been binning a form.",
+    "The assistant says they will be deleting forms.",
+  ]) {
+    assert.deepEqual(
+      assistantBinClaims(s, DET, true),
+      assistantBinClaims(s, DET, false),
+      `sanity: the uncontracted control changed under the pre-fix reader — the contraction arm ` +
+        `is meant to be the ONLY difference, so this test reads the wrong scan (${JSON.stringify(s)})`,
+    );
+    assert.notDeepEqual(
+      assistantBinClaims(s),
+      [],
+      `the SHIPPED reader misses the UNCONTRACTED twin (${JSON.stringify(s)}) — the twin is carried ` +
+        `by the bare-subject arm, so a scanner that misses it is broken for a reason other than ` +
+        `the contraction token this card pins`,
+    );
+  }
+  assert.deepEqual(
+    assistantBinClaims("The assistant tells you he'd been deleting forms.", DET, false),
+    [],
+    "the pre-fix reader (no contraction arm) already catches a `'d` subject, so this test pins no defect",
+  );
+  assert.deepEqual(
+    assistantBinClaims("The assistant tells you it'll be binning a form.", DET, false),
+    [],
+    "the pre-fix reader (no contraction arm) already catches a `'ll` subject, so this test pins no defect",
+  );
+
+  const shippedMissed = claims.filter((s) => assistantBinClaims(s).length === 0);
+  assert.deepEqual(
+    shippedMissed,
+    [],
+    `the SHIPPED reader misses a claim whose reported clause contracts its subject with 'd or 'll ` +
+      `(${claims.length} sentences), so a copy that credits the assistant with the bin ships GREEN ` +
+      `(the defect this card fixes):\n  ${shippedMissed.slice(0, 12).join("\n  ")}`,
+  );
+
+  // The bite: the SAME battery read by the pre-fix subject alternation.
+  const preFixMissed = claims.filter((s) => assistantBinClaims(s, DET, false).length === 0);
+  assert.deepEqual(
+    preFixMissed,
+    claims,
+    `the pre-fix reader did not lose EVERY contracted claim, so some are carried by something ` +
+      `other than the contraction arm and this test does not pin the card's defect:\n` +
+      `  still caught without the arm: ` +
+      JSON.stringify(claims.filter((s) => assistantBinClaims(s, DET, false).length > 0).slice(0, 12)),
+  );
+
+  // The TYPOGRAPHIC APOSTROPHE is the same token — the alternation accepts either — so a copy
+  // pasted out of a word processor is caught too (and missed by the pre-fix reader as well).
+  const typographic = "The assistant tells you he\u2019d been deleting forms.";
+  assert.notDeepEqual(
+    assistantBinClaims(typographic),
+    [],
+    "a `'d` subject written with the typographic apostrophe is read as a report — the alternation covers both apostrophes",
+  );
+  assert.deepEqual(
+    assistantBinClaims(typographic, DET, false),
+    [],
+    "the pre-fix reader catches the typographic-apostrophe claim, so this row pins no defect",
+  );
+
+  // THE `'d` READING IS AMBIGUOUS — had OR would — AND THE FOLD IS SAFE UNDER EITHER, because
+  // the core is read only by the copula test and NEITHER READING IS A COPULA. Pinned, so the
+  // representative `CONTRACTION_CORE` picks cannot silently become one (which would start
+  // reading a modal contraction as the passive).
+  assert.ok(
+    !COPULA_AUX.test("had") && !COPULA_AUX.test("would") && !COPULA_AUX.test("will"),
+    "a `'d`/`'ll` core is in COPULA_AUX — folding one onto the chain could read a modal " +
+      "contraction as the copula, which is the ambiguity the core's representative rests on",
+  );
+  // …and the two shapes the ambiguity could break, measured. The EMPTY chain (no auxiliary
+  // between the contraction and the verb) is decided by the core alone, and a modal is not a
+  // copula, so it is the ACTIVE perfect — the claim, exactly as the bare `it has binned` row
+  // CK reads. The PASSIVE is decided one token later by the `been`, so it stays GREEN.
+  assert.notDeepEqual(
+    assistantBinClaims("The assistant tells you it'd bin a form."),
+    [],
+    "the empty chain behind a `'d` contraction reads as a report — the core is a modal " +
+      "(`had`/`would`), not a copula, so this sentence credits the assistant with the bin and " +
+      "must be RED, exactly as the bare `it has binned` row is",
+  );
+  assert.deepEqual(
+    assistantBinClaims("The assistant tells you it'd been binned."),
+    [],
+    "`it'd been binned` is read as a claim — the contraction carries `had` and the `been` is " +
+      "the last auxiliary before the participle, so this is the PASSIVE on the thing (a report)",
+  );
+
+  // …and the OTHER direction: the arm must not swallow a report. A contraction that carries a
+  // copula or `had` before a participle is the passive on the thing, and `you` — deliberately
+  // not a contraction core — stays the person the assistant reports TO.
+  const reports = [
+    "The assistant tells you it'd been binned.",
+    "The assistant says they'll be trashed.",
+    "The assistant reports that he'd been deleted.",
+    "The assistant explains that she'll be trashed.",
+    "The assistant tells you you'd been binning a form.",
+    "The assistant tells you you'll be binning a form.",
+  ];
+  for (const s of reports) {
+    assert.deepEqual(
+      assistantBinClaims(s),
+      [],
+      `the SHIPPED scan reds a contracted-subject REPORT (${JSON.stringify(s)}) — a modal ` +
+        `contraction before a participle is the passive on the thing, and the addressee reading ` +
+        `is the person, not the assistant`,
+    );
+    assert.deepEqual(
+      assistantBinClaims(s, DET, false),
+      [],
+      `the pre-fix scan reds a contracted-subject REPORT (${JSON.stringify(s)}) — a control both readers must keep GREEN`,
+    );
   }
 });
 
