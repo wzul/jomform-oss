@@ -218,49 +218,180 @@ test("the marker carries the retry control, and the retry hits the real route", 
   );
 });
 
-test("the outcome message is set AFTER the reload that resets it", () => {
-  const page = read(PAGE);
-  // `openFeedback` resets fbMsg/fbActionErr (it makes switching threads safe),
-  // so setting the outcome before awaiting the reload leaves the admin with
-  // NOTHING on screen — the reply reaches the server and no outcome is shown.
-  // The browser proof caught this; the guard pins the ordering.
-  //
-  // The RETRY path reloads through `loadFeedbackThread` (it needs the thread back
-  // to check the marker — see the next test), which resets the same state.
-  //
-  // The window is wide enough to reach the LAST writer on each path: card
-  // t_01385c19 added the `kind === "ok"` branch, so the retry's outcome write now
-  // sits after the error branch AND the marker branch (measured offsets from the
-  // mapping call: reply 401 → 1199, retry 820 → 1768). A tighter window would
-  // report "the outcome message is never set" for a page that sets it.
-  for (const [fn, reload] of [
-    ["replyResult", "await openFeedback(fbOpenId)"],
-    ["retryResult", "await loadFeedbackThread(fbOpenId)"],
-  ] as const) {
-    const call = page.indexOf(`${fn}(notification)`);
-    assert.ok(call > 0, `${fn} is not called`);
-    const window = page.slice(call, call + 3200);
+// THE ORDERING RULE, as a pure function of the source so the guard can be shown
+// to BITE (the in-file proof below feeds it the pre-fix shape).
+//
+// `openFeedback`/`loadFeedbackThread` reset fbMsg/fbActionErr as their first act
+// (synchronous, before their first await — it is what makes switching threads
+// safe). React batches a write that precedes that await into the same render as
+// the reset, so a success write placed BEFORE the reload is swallowed and the DOM
+// only ever shows the clear. Measured in prod on the status path: `POST …/status`
+// returned 200 and no `afb-msg` node rendered at all.
+//
+// Each entry names its anchor (the call whose body is being read), the reload it
+// must write after, the SUCCESS writer, and — where the path has an
+// outcome-mapping error writer — that writer too. The status path's failure
+// writer is an early RETURN (`!r.ok` → red, no reload at all), so it is
+// deliberately not in the required set: it does not race the reset.
+type OrderingPath = {
+  name: string;
+  anchor: string;
+  reload: string;
+  msg: string;
+  /** An outcome-mapping failure writer that must also follow the reload. */
+  err?: string;
+  /** The marker check the retry must make on the RELOADED thread. */
+  marker?: string;
+};
+
+const ORDERING_PATHS: OrderingPath[] = [
+  {
+    name: "replyResult",
+    anchor: "replyResult(notification)",
+    reload: "await openFeedback(fbOpenId)",
+    err: "setFbActionErr(t(result.messageKey as Key))",
+    msg: "setFbMsg(t(result.messageKey as Key))",
+  },
+  {
+    name: "retryResult",
+    anchor: "retryResult(notification)",
+    reload: "await loadFeedbackThread(fbOpenId)",
+    err: "setFbActionErr(t(result.messageKey as Key))",
+    msg: "setFbMsg(t(result.messageKey as Key))",
+    marker: "hasNotifyFailure(reloaded)",
+  },
+  {
+    // The third writer of the SAME defect (card t_fb9942b7): a page-local
+    // confirmation (`afb.statusSet`), reached through the same `openFeedback`
+    // reload. Absent from this guard before, so the reordering could sit here
+    // with every gate green — which is exactly what shipped.
+    name: "setFeedbackStatus",
+    anchor: "feedback/${encodeURIComponent(fbOpenId)}/status",
+    reload: "await openFeedback(fbOpenId)",
+    msg: 'setFbMsg(t("afb.statusSet"))',
+  },
+];
+
+/**
+ * The paths in `src` whose outcome write lands BEFORE the reload that resets it
+ * (or whose anchor/reload/writer is missing). Empty means the ordering holds.
+ *
+ * The window is wide enough to reach the LAST writer on each path: card
+ * t_01385c19 added the `kind === "ok"` branch, so the retry's outcome write now
+ * sits after the error branch AND the marker branch (measured offsets from the
+ * mapping call: reply 401 → 1199, retry 820 → 1768). A tighter window would
+ * report "the outcome message is never set" for a page that sets it.
+ */
+function orderingOffenders(src: string): string[] {
+  const bad: string[] = [];
+  for (const { name, anchor, reload, msg, err, marker } of ORDERING_PATHS) {
+    const call = src.indexOf(anchor);
+    if (call <= 0) {
+      bad.push(`${name}: not called (anchor \`${anchor}\` not found)`);
+      continue;
+    }
+    const window = src.slice(call, call + 3200);
     const openAt = window.indexOf(reload);
-    const errAt = window.indexOf("setFbActionErr(t(result.messageKey as Key))");
-    const markAt = window.indexOf("hasNotifyFailure(reloaded)");
-    const msgAt = window.indexOf("setFbMsg(t(result.messageKey as Key))");
-    assert.ok(openAt >= 0, `${fn}: no reload (${reload}) after the outcome mapping`);
-    assert.ok(errAt >= 0, `${fn}: the outcome message is never set`);
-    assert.ok(msgAt >= 0, `${fn}: the success message is never set`);
-    assert.ok(
-      openAt < errAt && openAt < msgAt,
-      `${fn}: the outcome message is set BEFORE the reload, which resets that state — ` +
-        "the admin sees no outcome for a reply that was stored",
-    );
-    if (fn === "retryResult") {
-      assert.ok(markAt >= 0, "retryResult: the marker check is gone from the retry path");
-      assert.ok(
-        openAt < markAt,
-        "retryResult: the marker is checked before the reload that produces the thread — " +
-          "the value it reads is not the one the retry left behind",
+    const msgAt = window.indexOf(msg);
+    const errAt = err ? window.indexOf(err) : -1;
+    if (openAt < 0) bad.push(`${name}: no reload (${reload}) after the outcome mapping`);
+    if (msgAt < 0) bad.push(`${name}: the success message (${msg}) is never set`);
+    if (err && errAt < 0) bad.push(`${name}: the outcome message (${err}) is never set`);
+    if (openAt >= 0 && msgAt >= 0 && openAt > msgAt) {
+      bad.push(
+        `${name}: the outcome message is set BEFORE the reload, which resets that state — ` +
+          "the admin sees no outcome for an action that was stored",
       );
     }
+    if (err && openAt >= 0 && errAt >= 0 && openAt > errAt) {
+      bad.push(
+        `${name}: the outcome message is set BEFORE the reload, which resets that state — ` +
+          "the admin sees no outcome for a reply that was stored",
+      );
+    }
+    if (marker) {
+      const markAt = window.indexOf(marker);
+      if (markAt < 0) bad.push(`${name}: the marker check (${marker}) is gone from the retry path`);
+      else if (openAt >= 0 && openAt > markAt) {
+        bad.push(
+          `${name}: the marker is checked before the reload that produces the thread — ` +
+            "the value it reads is not the one the retry left behind",
+        );
+      }
+    }
   }
+  return bad;
+}
+
+test("the outcome message is set AFTER the reload that resets it", () => {
+  const page = read(PAGE);
+  assert.deepEqual(
+    orderingOffenders(page),
+    [],
+    "An outcome write must land AFTER the reload that resets the message state " +
+      "(`openFeedback`/`loadFeedbackThread` clear fbMsg/fbActionErr before their first await, and " +
+      "React batches a write that precedes that await into the same render). A success write placed " +
+      "BEFORE the reload is swallowed and the operator gets no outcome at all — measured in prod on " +
+      "the status path (card t_fb9942b7).",
+  );
+});
+
+test("the ordering guard bites on the code it replaced (in-file proof)", () => {
+  // The exact pre-fix status handler: the success write before the reload. The
+  // same reader the assertion above uses must REJECT it — without this, a scan
+  // that matched nothing (a renamed anchor, a deleted handler) would read as a
+  // clean page and the guard would be worthless.
+  const preFixStatus = [
+    "const setFeedbackStatus = useCallback(async (status: string) => {",
+    "  if (!fbOpenId) return;",
+    "  try {",
+    "    const r = await fetch(`/api/admin/feedback/${encodeURIComponent(fbOpenId)}/status`, {",
+    '      method: "POST",',
+    "    });",
+    "    if (!r.ok) {",
+    '      setFbActionErr(t("afb.statusFail"));',
+    "      return;",
+    "    }",
+    '    setFbMsg(t("afb.statusSet"));',
+    "    await openFeedback(fbOpenId);",
+    "    await loadFeedback(fbPage, fbFilter);",
+    "  } catch {",
+    '    setFbActionErr(t("afb.statusFail"));',
+    "  }",
+    "}, []);",
+  ].join("\n");
+  assert.ok(
+    orderingOffenders(preFixStatus).some((o) => o.startsWith("setFeedbackStatus:")),
+    "the pre-fix status handler (setFbMsg before the reload) was read as correct — the guard cannot " +
+      "bite on the very shape card t_fb9942b7 was filed for",
+  );
+
+  // …and the fixed shape is accepted, so the guard pins the rule and not a
+  // spelling.
+  const fixedStatus = [
+    "const setFeedbackStatus = useCallback(async (status: string) => {",
+    "  if (!fbOpenId) return;",
+    "  try {",
+    "    const r = await fetch(`/api/admin/feedback/${encodeURIComponent(fbOpenId)}/status`, {",
+    '      method: "POST",',
+    "    });",
+    "    if (!r.ok) {",
+    '      setFbActionErr(t("afb.statusFail"));',
+    "      return;",
+    "    }",
+    "    await openFeedback(fbOpenId);",
+    "    await loadFeedback(fbPage, fbFilter);",
+    '    setFbMsg(t("afb.statusSet"));',
+    "  } catch {",
+    '    setFbActionErr(t("afb.statusFail"));',
+    "  }",
+    "}, []);",
+  ].join("\n");
+  assert.deepEqual(
+    orderingOffenders(fixedStatus).filter((o) => o.startsWith("setFeedbackStatus:")),
+    [],
+    "the FIXED status handler is flagged by its own guard",
+  );
 });
 
 test("a retry that left the marker set cannot also claim it was sent", () => {

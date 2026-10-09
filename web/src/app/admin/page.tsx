@@ -627,9 +627,17 @@ export default function AdminPage() {
         setFbActionErr(t("afb.statusFail"));
         return;
       }
-      setFbMsg(t("afb.statusSet"));
+      // SAME ORDERING RULE AS THE REPLY AND RETRY PATHS (card t_fb9942b7).
+      // `openFeedback` reloads through `loadFeedbackThread`, which resets fbMsg
+      // and fbActionErr (it is what makes switching threads safe). React batches
+      // a write that precedes the await into the same render as that reset, so
+      // the DOM only ever saw the clear: the status POST returned 200 and the
+      // operator got NO outcome line at all (measured in the browser: the
+      // `afb-msg` node appeared zero times across the whole action). The
+      // confirmation therefore goes AFTER the reload, or it is swallowed by it.
       await openFeedback(fbOpenId);
       await loadFeedback(fbPage, fbFilter);
+      setFbMsg(t("afb.statusSet"));
     } catch {
       setFbActionErr(t("afb.statusFail"));
     } finally {

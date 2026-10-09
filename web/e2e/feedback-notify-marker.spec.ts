@@ -605,6 +605,56 @@ test.describe("admin feedback: the notification-failure marker", () => {
     await expect(page.getByText("Notification sent again.")).toHaveCount(0);
   });
 
+  // ── the STATUS change's own confirmation (card t_fb9942b7) ──────────────────
+  //
+  // THE DEFECT THIS PINS
+  //   Changing the open thread's status through the page's own `<select>` fired
+  //   the POST, the thread reloaded, and the operator got NO outcome line at all
+  //   (neither red nor emerald). `setFeedbackStatus` wrote `afb.statusSet` BEFORE
+  //   awaiting the reload, and `loadFeedbackThread` clears fbMsg as its first
+  //   synchronous act — React batched the write and the reset into one render, so
+  //   the DOM only ever saw the clear. Measured on prod v1.20.94: a MutationObserver
+  //   on `document.body` recorded the `afb-msg` node appearing ZERO times across
+  //   the whole status action while the network log showed `POST …/status -> 200`.
+  //   The reply and retry paths were reordered to write after the reload; the
+  //   status path was never touched.
+  //
+  //   The unit guard (src/lib/feedbackNotify.test.ts) pins the source ordering;
+  //   this arm proves what an operator actually reads, which no source scan can.
+  test("a status change shows the emerald confirmation AFTER the reload", async ({ page }) => {
+    await openThread(page, /Pembayaran tersekat/);
+    // The status POST returns 200 and the thread reload follows. The stub answers
+    // only the POST; the detail read (`**/api/admin/feedback/*`) still serves
+    // MARKED through stubAdmin, so the reload really happens and really resets the
+    // message state — which is the whole mechanism under test.
+    await page.route("**/api/admin/feedback/*/status", (r) =>
+      r.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "resolved" }),
+      }),
+    );
+
+    // Guard the premise: the confirmation node does not exist before the action,
+    // so a reading below cannot be a leftover from opening the thread.
+    await expect(page.locator('[data-testid="afb-msg"]')).toHaveCount(0);
+
+    await page.getByLabel("Status").selectOption("resolved");
+
+    const r = await settledAfbReading(page);
+    console.log(`/admin status change -> ${JSON.stringify(r)}`);
+    expect(r.text).toBe("Status updated.");
+    expect(
+      r.tone,
+      `the status confirmation is on the ${r.tone || "untoned"} line (ink ${r.ink}). A 200 on ` +
+        `POST …/status must render the emerald outcome line, not nothing — the pre-fix handler wrote ` +
+        `it before the reload that clears it (card t_fb9942b7)`,
+    ).toBe("success");
+    // A confirmation is not a live alert region.
+    expect(r.role, "a success is not a live alert region").toBe("");
+    expect(r.ink, "the success line's measured ink").toBe(EMERALD_700);
+  });
+
   test("CONTROL: a DELIVERED retry that cleared the marker uses the success line", async ({ page }) => {
     // The retry's genuine-success arm, exactly the sibling of the "still marked"
     // arm above: the job was queued AND the thread comes back with no marker, so
