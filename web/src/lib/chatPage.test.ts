@@ -381,7 +381,7 @@ function assistantVerb(matched: string): string | null {
   let rest = matched.slice(m[0].length);
   const aux = new RegExp(`^(?:${ASSISTANT_AUX})\\b\\s*`, "i").exec(rest);
   if (aux) rest = rest.slice(aux[0].length);
-  const verb = /^[a-z]+(?:'[a-z]+\\b)?/i.exec(rest);
+  const verb = /^[a-z]+(?:'[a-z]+\b)?/i.exec(rest);
   return verb ? verb[0].toLowerCase() : null;
 }
 
@@ -2121,6 +2121,55 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
         `and reding on it would block the page from naming the trash at all`,
     );
   }
+});
+
+// ── THE CONTRACTION TAIL IS A WORD BOUNDARY, NOT AN ESCAPED BACKSLASH ────────
+//
+// Found while verifying PR #1063 (jf-qa card t_27dc1253): that PR's diff rewrote
+// assistantVerb's contraction tail `\b` as `\\b`. Both COMPILE, so nothing objected.
+// Inside a regex LITERAL `\\b` is a literal backslash followed by `b` — dead, never
+// matching — so the optional group fails and the verb is truncated at the apostrophe:
+// assistantVerb("assistant doesn't bin a form") returned "doesn", not "doesn't", and
+// the same for 11 of the 12 contractions this file's own NEGATION list names
+// (won't/isn't/hasn't/don't/didn't/…; measured, not reasoned about). The suite stayed
+// GREEN at 23/23 on that, because nothing in it reads the exact token: the only
+// consumer is HAS_NON_ACTION, which reads "doesn" and "doesn't" identically. So the
+// drift was invisible, and stayed invisible until a later check reads the token — at
+// which point it is wrong with no test to catch it. This is that test.
+//
+// WHAT IS PINNED IS THE LITERAL, deliberately rather than as a shortcut: the literal
+// is what drifted and what the one-char revert restores, and the two forms are one
+// keystroke apart. Executing the shipped literal here would need an eval-style
+// constructor this file uses nowhere (and eslint refuses), while re-authoring the
+// pattern in the test would assert a COPY instead of the line under test. The
+// property asserted is the card's own — "the line no longer differs from main's" —
+// made executable: one backslash before the `b`, never two.
+test("the assistant-verb contraction tail is a word boundary, not an escaped backslash", () => {
+  // The assignment line is the ONLY line whose trimmed text starts with the literal's
+  // head, so the selector cannot match this test's own search line (which merely
+  // mentions that head mid-expression).
+  const tail = chatTest
+    .split("\n")
+    .filter((l) => l.trim().startsWith("const verb = /^[a-z]+"));
+  assert.equal(
+    tail.length,
+    1,
+    `expected exactly one assistantVerb contraction-tail line, found ${tail.length}: ` +
+      `${JSON.stringify(tail)}`,
+  );
+  // One backslash before `b` — the word boundary that lets the contraction match…
+  assert.ok(
+    tail[0].includes("(?:'[a-z]+\\b)?"),
+    `assistantVerb's contraction tail is not a word boundary, so every contraction token is ` +
+      `truncated at the apostrophe ("doesn't" → "doesn"): ${JSON.stringify(tail[0].trim())}`,
+  );
+  // …and never two, which is an escaped backslash and matches no contraction at all.
+  assert.ok(
+    !tail[0].includes("(?:'[a-z]+\\\\b)?"),
+    `assistantVerb's contraction tail carries an escaped backslash — inside a regex LITERAL ` +
+      `that is a literal backslash followed by "b", so the optional group can never match and ` +
+      `the tail is dead code: ${JSON.stringify(tail[0].trim())}`,
+  );
 });
 
 test("every chat dictionary key defines all five locales", () => {
