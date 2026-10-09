@@ -254,18 +254,49 @@ const goChatTools = read("../../../api/internal/mcpsrv/chat_tools.go");
 // describes. A bin token the assistant is merely the REPORTER of still stands (A) down —
 // see `assistantBinsInsideReport`.
 //
-// What is NOT decided, stated rather than implied: an information verb whose OBJECT is a
-// bin GERUND — "the assistant reports deleting a form". The same string also carries the
-// reading "the assistant says binning a form is easy", in which the gerund is the subject
-// of a clause of its own and credits the assistant with nothing, and telling those two
-// apart needs a parse of the reported clause rather than a token test. It is a residual,
-// not a position, and the shipped page carries neither reading.
+// THE GERUND THE INFORMATION VERB REPORTS (t_7b69a77a), the boundary one position over,
+// now decided rather than documented. An information verb's OBJECT can be a bin GERUND —
+// "the assistant reports deleting a form" — and the reported clause puts no assistant
+// pronoun back in the bin verb's subject position, so the clause reading above stood the
+// claim down. It is a genuine claim (the assistant IS the deleter) that the head scan
+// 3542c039 caught and t_9717fec1's guard lost, measured on the same extracted scans. The
+// same string also carries the opposite reading — "the assistant says binning a form is
+// easy", in which the gerund is the SUBJECT of a clause of its own and credits the
+// assistant with nothing — so the two are told apart by the gerund's ROLE in the reported
+// clause, resolved in `reportedGerundIsSubject`: the gerund is the information verb's
+// OBJECT (the claim) when nothing predicates of it, and the clause's SUBJECT (a report)
+// when the reported clause has anything of its own after the gerund phrase.
+//
+// WHAT THE ROLE READING GOT WRONG FIRST (t_255182df, this rework). The first cut decided
+// the role from a curated 47-item list of finite verbs, and its handoff declared "0 NEW
+// false positive" — measured over a corpus that only carried predicates FROM that list, so
+// the claim was true of the corpus and false of the rule. A genuine SUBJECT-gerund REPORT
+// whose predicate was a real finite verb OUTSIDE the list — "binning a form REMOVES it from
+// the list", "restoring a form BRINGS it back" — was read as the information verb's object
+// and RED, exactly as "… deleting a form" (a claim) is. That is the UNSAFE direction, and
+// it was structurally identical to this rule's OWN accepted control below ("explains
+// that binning a form IS permanent"): the same shape, split only by whether the predicate
+// happened to be curated. Over a 2784-sentence report corpus of that shape the first cut
+// reded 2784 where origin/main reds 0. The role is now read from the clause's SHAPE — the
+// gerund phrase is consumed and anything left over is the predication — so the rule fails
+// toward the REPORT reading whenever a predication is present, whatever verb carries it.
+// Only a clause that is the gerund phrase and nothing else ("reports deleting forms", the
+// claim, vs "reports deleting works", the report) still needs a verb list, because there
+// the two readings differ by the token's identity alone; see `AMBIGUOUS_VERB`.
+//
+// The header's earlier claim that the ONLY subject-gerund strings the rule reds are the
+// "has/had told you" PAST-tense class was FALSE and is withdrawn: the first cut reded that
+// class AND every non-curated-predicate report above, and the past-tense class is not red
+// by this rule at all (it is caught by the report paragraph's own window). Measured on the
+// structural rule: 0 NEW false positives vs origin/main over a 22464-sentence report corpus
+// that includes the non-curated predicates the first cut reded.
 //
 // Everything a single clause can PREDICATE of the assistant — including the reported
 // clause of an information verb that puts the assistant back in the bin verb's subject
-// position — is inside the five positions and the fold above, and is proved by the BITES
-// map below. The one thing a boundary can HIDE from it is the report/reference reading
-// named above, which is decided inside position (A) rather than by a position of its own.
+// position, and the bin gerund such a verb reports — is inside the five positions and the
+// fold above, and is proved by the BITES map below. The report/reference reading the
+// boundary exists to protect is STILL decided inside position (A) rather than by a
+// position of its own, and its own controls are pinned below.
 //
 // Split out of the assertions so the bite proof below runs the IDENTICAL scan against
 // a mutated page: a proof that exercised a paraphrase would prove nothing about the
@@ -308,6 +339,81 @@ const INFO_VERB = String.raw`(?:tells?|shows?|showed|shown|lists?|listed|reads?|
 const SUBORDINATOR = String.raw`(?:whether|if)`;
 /** The token after the assistant that means it is NOT the actor of the later bin. */
 const HAS_NON_ACTION = new RegExp(`\\b(?:${INFO_VERB}|${SUBORDINATOR})\\b`, "i");
+// The bin GERUNDS, for the reported clause that is headed by one — "reports deleting a
+// form". Only the `-ing` forms: the NOUN reading ("the trash") is handled by the
+// information-verb paragraph, and a gerund is what can be either an object or a subject.
+const BIN_GERUND = `(?:binning|trashing|restoring|deleting)`;
+/** The determiners that can open the gerund's object. */
+const DET = `(?:the|a|an|your|my|his|her|its|their|our|this|that|these|those|some|any)`;
+/** The prepositions that can open a phrase that continues the gerund's noun phrase. */
+const G_PREP = `(?:from|to|into|out\\s+of|onto|upon|in|on|at|with|for|about|by|via|through|across|under|over|within|without|before|after|during|against|between|among|of)`;
+// The gerund's OWN OBJECT — one common noun, the shape the object reading uses
+// ("a form", "forms", "the trash"). Held to ONE noun on purpose: a second noun here is
+// indistinguishable from the reported clause's finite verb ("… a form CONTINUES"), and
+// reading that verb as part of the object would green a genuine claim.
+const NP_OBJ = `(?:${DET}\\s+)?[a-z]+`;
+// The noun phrase INSIDE a prepositional phrase, where a compound is unambiguous because
+// the preposition already opened a phrase ("… from the forms PAGE"). One or two nouns.
+const NP_PP = `(?:${DET}\\s+)?[a-z]+(?:\\s+[a-z]+)?`;
+/**
+ * A prepositional phrase continuing the gerund's noun phrase — the adjunct an
+ * OBJECT-reading clause hangs off it ("deleting a form FROM THE FORMS PAGE"). Consumed as
+ * part of the gerund's phrase so a trailing adjunct is not mistaken for the predication
+ * that decides the gerund's role; any number of them, because an object reading may carry
+ * more than one.
+ */
+const GER_PP = `\\s+${G_PREP}\\s+${NP_PP}`;
+/** The gerund heading the reported clause: "deleting a form", "the binning". */
+const GER_HEAD = `^\\s+(?:the\\s+)?${BIN_GERUND}\\b`;
+// The finite verbs that are ALSO plural nouns — "works", "counts", "matters". For a clause
+// that is the gerund phrase and nothing else the only token that can make the gerund a
+// SUBJECT is one of these ("reports deleting WORKS" = deleting works, a report), while a
+// plain plural object ("reports deleting FORMS") leaves the gerund the information verb's
+// object (the claim). The two readings are the same shape, so THAT shape alone is resolved
+// from the list; every longer clause is resolved structurally, above, with no list at all.
+const AMBIGUOUS_VERB = `(?:is|are|was|were|becomes?|remains?|seems?|appears?|looks?|sounds?|can|will|would|shall|should|may|might|must|has|have|had|does|do|did|means?|matters?|helps?|needs?|takes?|makes?|lets?|wastes?|causes?|leaves?|requires?|involves?|creates?|costs?|gives?|keeps?|stays?|turns?|gets?|works?|counts?|depends?|differs?|varies?|lasts?|holds?|stands?|applies?|fits?|fails?|passes?|brings?|removes?|deletes?|bins?|trashes?|restores?)`;
+/**
+ * The reported clause HEADED BY A BIN GERUND, and the gerund's role in it — the decision
+ * t_7b69a77a needed (the header's "THE GERUND THE INFORMATION VERB REPORTS"). `rest` is
+ * the text after the information verb. True means the gerund is the reported clause's
+ * SUBJECT (a report about the bin, nothing predicated of the assistant), so position (A)
+ * stands down; false means no such predication was read, i.e. the gerund is the
+ * information verb's OBJECT and the assistant IS the deleter, which is the claim.
+ *
+ * The gerund is the SUBJECT when the reported clause PREDICATES something of it — when the
+ * clause does not END at the gerund phrase. So the role is decided STRUCTURALLY, not from a
+ * curated list of finite verbs: the gerund and its own noun phrase (its object and any
+ * adjunct PPs) are consumed, and whatever is left is the predication. Anything left over —
+ * "… IS permanent", "… REMOVES it from the list", "… BRINGS it back" — makes the gerund a
+ * subject; nothing left over ("… deleting a form FROM THE FORMS PAGE") leaves it the
+ * information verb's object.
+ *
+ * WHY NOT A LIST OF FINITE VERBS (t_255182df). The first cut of this rule read the
+ * predicate off a curated 47-item list, so a reported clause whose predicate was a real
+ * finite verb OUTSIDE it — "binning a form REMOVES it from the list" — was read as the
+ * information verb's object and reded a genuine report. That is the UNSAFE direction: a
+ * list can only ever name the predicates already seen, and the copy it has not seen is
+ * exactly the copy it must not block. So the predicate is now the clause's SHAPE — whatever
+ * trails the gerund phrase — and the rule fails toward the report reading whenever a
+ * predication is present.
+ *
+ * The one shape SHAPE cannot decide is a clause that is the gerund phrase and nothing else:
+ * `AMBIGUOUS_VERB` above is the finite-verb list kept for exactly that shape, because
+ * "reports deleting works" (a report) and "reports deleting forms" (a claim) differ only by
+ * the token's identity. Every clause with more than that token is list-free.
+ */
+function reportedGerundIsSubject(rest: string): boolean {
+  // The gerund and its noun phrase: the gerund, an optional one-noun object, any PPs.
+  const phrase = new RegExp(`${GER_HEAD}(?:\\s+${NP_OBJ})?(?:${GER_PP})*`, "i").exec(rest);
+  if (!phrase) return false;
+  // Whatever the gerund phrase does not account for is a PREDICATION of it: the reported
+  // clause has a verb of its own, so the gerund is that clause's SUBJECT (a report). Only
+  // trailing punctuation is not a predication.
+  const remainder = rest.slice(phrase[0].length).replace(/[\s.,;:!?\u2014-]+/g, "");
+  if (remainder.length > 0) return true;
+  // Nothing after the gerund phrase: the ambiguous one-token clause (§ AMBIGUOUS_VERB).
+  return new RegExp(`${GER_HEAD}\\s+${AMBIGUOUS_VERB}\\s*[.!?]*$`, "i").test(rest);
+}
 
 // Clause boundaries, and why each is one. A sentence terminator must be followed by
 // whitespace (or end the text), so a dotted token the copy really uses — AGENTS.md,
@@ -410,17 +516,28 @@ const COPULA_AUX = /^(?:is|are|was|were|be|been|being)$/;
  * the trash" is a PASSIVE on the thing, not an action of the assistant's, while "it IS
  * BINNING" is the progressive claim — so a copula admits the `-ing` form only.
  */
-function assistantBinsInsideReport(matched: string): boolean {
-  const info = new RegExp(`\\b(?:${INFO_VERB})\\b`, "i").exec(matched);
+function assistantBinsInsideReport(matched: string, fullClause: string = matched): boolean {
+  const info = new RegExp(`\\b(?:${INFO_VERB})\\b`, "i").exec(fullClause);
   if (!info) return false;
   // The clause the verb reports: strip the "that" that introduces it and the "you" the
   // assistant reports TO ("tells YOU it bins" — that "you" is an indirect object, not the
   // reported clause's subject), in either order.
-  let rest = matched.slice(info.index + info[0].length);
+  let rest = fullClause.slice(info.index + info[0].length);
   for (let i = 0; i < 3; i++) {
     const stripped = rest.replace(/^\s+(?:that|you|the\s+person)\b/i, "");
     if (stripped === rest) break;
     rest = stripped;
+  }
+  // THE GERUND THE INFORMATION VERB REPORTS (t_7b69a77a). A bin GERUND is the reported
+  // clause's OBJECT when nothing predicates of it — "reports deleting a form", where the
+  // assistant IS the deleter (the claim) — and its SUBJECT when something does — "says
+  // binning a form is easy", where the assistant is the reporter (a report). The role is
+  // resolved from the reported clause, in `reportedGerundIsSubject` above; a gerund that
+  // heads the clause with nothing predicated of it is the information verb's object, which
+  // credits the assistant, so the claim holds. This is read from the FULL clause, not the
+  // match: the match ends at the bin token, so it cannot see the predicate that decides.
+  if (new RegExp(`^\\s+(?:the\\s+)?${BIN_GERUND}\\b`, "i").test(rest)) {
+    return !reportedGerundIsSubject(rest);
   }
   const claim = new RegExp(
     `^\\s+(?:it|they|he|she|the\\s+assistant)\\b(\\s+(?:${ASSISTANT_AUX}))?\\s+(${BIN_VOCAB})\\b`,
@@ -466,7 +583,7 @@ function binClaimInClause(raw: string): string | null {
       // assistant back in the bin verb's subject position ("tells you IT BINS a form")
       // is reporting a claim, not naming the bin (see `assistantBinsInsideReport`).
       const verb = assistantVerb(m[0]);
-      if (!verb || !HAS_NON_ACTION.test(verb) || assistantBinsInsideReport(m[0])) return m[0];
+      if (!verb || !HAS_NON_ACTION.test(verb) || assistantBinsInsideReport(m[0], s)) return m[0];
     }
   }
   // (B) the AGENT of a passive: "<bin> by the assistant" (bare or periphrastic).
@@ -1881,7 +1998,7 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
 // t_b3877cfb found still GREEN under the ten-shape scan — must go RED, as must the
 // shipped defect sentence it did catch. Nothing on disk is written: the mutation is
 // in memory, on the real page source read at module load.
-test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, both genitive orders, the gerund, both appositive variants, the it-cleft, the periphrastic passive, the nominal, the light verb + gerund, the copular predication, the topicalised cleft, the reversed nominal, the non-restrictive relative, the pro-verb across a clause boundary and the claim reported inside an information verb's clause", () => {
+test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, both genitive orders, the gerund, both appositive variants, the it-cleft, the periphrastic passive, the nominal, the light verb + gerund, the copular predication, the topicalised cleft, the reversed nominal, the non-restrictive relative, the pro-verb across a clause boundary, the claim reported inside an information verb's clause and the bin gerund such a verb reports", () => {
   const shipped = read(DOCS_PAGE);
   const anchor = "A creation is the one shape the field-edit rule does not cover,";
   // Vacuity: if the anchor is gone the injections below land nowhere and this
@@ -2017,6 +2134,18 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "reported claim · tells/perfect (CK)": "The assistant tells you it has binned a form.",
     "reported claim · explains/that (CL)": "The assistant explains that it restores a form.",
     "reported claim · mentions/object (CM)": "The assistant mentions it deletes forms.",
+    // t_7b69a77a — the bin GERUND the information verb reports, one position over from
+    // the seven above. Every one of these is a genuine claim (the assistant IS the
+    // deleter) with no assistant pronoun in the reported clause, and every one was GREEN
+    // at the fix 09e2e6f0 (and at this branch before the gerund rule). The head scan
+    // 3542c039 caught all five; `reportedGerundIsSubject` now resolves the gerund's role
+    // and catches them again. The five are pinned here because removing the gerund clause
+    // from `assistantBinsInsideReport` is the mutation that reds them.
+    "gerund object · reports (CN)": "The assistant reports deleting a form.",
+    "gerund object · mentions (CO)": "The assistant mentions deleting forms.",
+    "gerund object · describes (CP)": "The assistant describes deleting a form.",
+    "gerund object · reports-from (CQ)": "The assistant reports deleting a form from the forms page.",
+    "gerund object · mentions-restore (CR)": "The assistant mentions restoring a form.",
   };
 
   const missed: string[] = [];
@@ -2038,16 +2167,22 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
   );
 
   // THE BITE, measured rather than asserted. The `reported claim` cases (CG-CM) are the
-  // seven t_9717fec1 sentences, and the mutation that reds them is the one clause this
-  // card added to position (A): dropping `|| assistantBinsInsideReport(m[0])` from the
+  // seven t_9717fec1 sentences, and the mutation that reds them is the one clause that
+  // card added to position (A): dropping `|| assistantBinsInsideReport(m[0], s)` from the
   // guard restores the fix 09e2e6f0's behaviour and all seven come back GREEN — measured
   // on this file, the whole BITES map's other 60-odd cases staying green and ONLY the
-  // seven reported-claim rows entering `missed`. In the other direction, widening
+  // seven reported-claim rows entering `missed`. t_7b69a77a's five `gerund object` rows
+  // (CN-CR) bite the same way: deleting the gerund clause from `assistantBinsInsideReport`
+  // (the `BIN_GERUND` test + `reportedGerundIsSubject` call) returns all five to GREEN
+  // while the whole rest of the map stays green. In the other direction, widening
   // `assistantBinsInsideReport` to "an information verb followed by a bin anywhere"
-  // reds the report controls below (`assistant can tell you where the trash`), i.e. the
-  // clamp is what keeps the claim from swallowing the report. Both runs were done by
-  // hand on this file and are why the seven rows and the three added report controls
-  // are pinned rather than named in prose.
+  // reds the report controls below (`assistant can tell you where the trash`), and
+  // resolving the reported gerund as an object UNCONDITIONALLY — dropping the
+  // `reportedGerundIsSubject` predicate reading — reds the subject-gerund controls
+  // (`assistant says binning a form is easy`, `… tells you restoring a form is
+  // possible`), i.e. the predicate reading is what keeps the claim from swallowing a
+  // report that happens to use the same gerund. All runs were done by hand on this file;
+  // they are why these rows and controls are pinned rather than named in prose.
 
   // And the POSITIVE CONTROL must not be what carries the detection: the person-
   // attribution sentence the fix ships (which names the assistant only to disown
@@ -2097,13 +2232,15 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
   // carries neither, so this is the false-positive side of the same rule, pinned here so
   // a correct future sentence that mentions the assistant and the trash is not reded.
   //
-  // t_9717fec1 added the three below. They are the SAME shape one step further in:
-  // the assistant's information verb reports a clause, but that clause is about the
-  // bin rather than putting the assistant back in the bin verb's subject position
-  // ("the form is in the trash", "the trash is empty", "binning a form is easy").
-  // The clamp that catches a reported CLAIM must not swallow these, and these three
-  // are what reds if `assistantBinsInsideReport` is widened to "information verb …
-  // bin anywhere".
+  // t_9717fec1 added the three below, and t_7b69a77a the rest. They are the same shape
+  // one step further in: the assistant's information verb reports a clause, but that
+  // clause is about the bin rather than putting the assistant back in the bin verb's
+  // subject position ("the form is in the trash", "the trash is empty"), OR it is headed
+  // by a bin GERUND that is that clause's SUBJECT ("binning a form is easy"). The clamp
+  // that catches a reported CLAIM must not swallow these, and they are what reds if
+  // `assistantBinsInsideReport` is widened to "information verb … bin anywhere", or if
+  // `reportedGerundIsSubject`'s predicate reading is dropped (the gerund rows after the
+  // first two are the subject-gerund CONTROLS for exactly that mutation).
   for (const report of [
     "The assistant can tell you where the trash is.",
     "A form the assistant lists may already be in the trash.",
@@ -2112,6 +2249,23 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
     "The assistant tells you the form is in the trash.",
     "The assistant says the trash is empty.",
     "The assistant says binning a form is easy.",
+    "The assistant explains that binning a form is permanent.",
+    "The assistant reports that binning a form is easy.",
+    "The assistant mentions binning a form is easy.",
+    "The assistant tells you restoring a form is possible.",
+    "The assistant describes binning a form as easy.",
+    // t_255182df — the false positive this rework closes, pinned so it cannot reopen. The
+    // rule's first cut read the predicate off a curated list of finite verbs, so a genuine
+    // SUBJECT-gerund report whose predicate was a real finite verb OUTSIDE it was read as
+    // the information verb's object and RED (the unsafe direction). These are that class:
+    // the same "information verb + that + bin gerund + object + predicate" shape as the
+    // accepted control above, distinguished only by the predicate's identity. The rule now
+    // decides on the clause's SHAPE, so all four are GREEN for the same reason as
+    // "… IS permanent" — the gerund phrase ends before the clause does.
+    "The assistant explains that binning a form removes it from the list.",
+    "The assistant tells you restoring a form brings it back.",
+    "The assistant reports that deleting a form frees up space.",
+    "The assistant mentions that binning a form hides it from the dashboard.",
   ]) {
     assert.deepEqual(
       assistantBinClaims(report),
