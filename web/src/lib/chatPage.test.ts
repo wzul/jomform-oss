@@ -458,6 +458,11 @@ const DET = `(?:${QUANT_DET}|${ARTICLE_DET})`;
  * i.e. the "pre-fix" oracle would not be the pre-fix rule. Measured on the 480-claim corpus
  * (6 info verbs x 4 bin gerunds x 20 objects): ungrouped disagrees with the real pre-fix scan
  * on 140/480 rows, grouped on 0/480.
+ *
+ * The grouping is ASSERTED, not only documented: the t_82129fb4 test below requires an
+ * article-object claim the real pre-fix scan CAUGHT to be caught by THIS oracle, so reverting
+ * the value to the ungrouped `ARTICLE_DET` reds the suite instead of passing silently
+ * (t_93ef586c).
  */
 const DET_WITHOUT_QUANT = `(?:${ARTICLE_DET})`;
 /** The prepositions that can open a phrase that continues the gerund's noun phrase. */
@@ -2786,6 +2791,26 @@ test("the quantifier-determiner object is caught by the SHIPPED determiner set a
         `t_255182df false-positive class and must be GREEN in both determiner sets`,
     );
   }
+
+  // THE ORACLE'S GROUPING (t_93ef586c). Everything above is a proof about the SCAN only if
+  // `DET_WITHOUT_QUANT` IS the pre-fix rule; an UNGROUPED article set (`the|a|…|any`) is a
+  // PARAPHRASE of it, and the paraphrase fails in the same direction as the defect. `npObj`
+  // composes the determiner as `(?:${det}\s+)?[a-z]+`, so an ungrouped set binds the `\s+`
+  // to the LAST alternative only (`any`): for every other article/possessive/demonstrative
+  // the determiner is not consumed, the phrase leaves the phantom predication this card is
+  // about, and the "pre-fix" arm silently loses claims the real pre-fix scan CAUGHT — the
+  // test stays green while proving the opposite. Pinned SEMANTICALLY (a shape check would
+  // pin syntax instead): these article-object claims are all four CAUGHT by the real pre-fix
+  // scan — measured against `1d9fa4a6`'s own grouped `DET` — and an ungrouped oracle returns
+  // `[]` on every one of them.
+  const preFixCaught = ["a form", "any form", "some form", "those forms"].map(
+    (o) => `The assistant reports deleting ${o}.`,
+  );
+  for (const s of preFixCaught)
+    assert.ok(
+      assistantBinClaims(s, DET_WITHOUT_QUANT).length > 0,
+      `the "pre-fix" oracle misses ${JSON.stringify(s)}, so it is NOT the pre-fix rule`,
+    );
 });
 
 // ── THE REPORTED CLAUSE'S CONTRACTED SUBJECT (t_6ad53e35) ────────────────────
