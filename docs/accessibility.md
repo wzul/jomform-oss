@@ -349,10 +349,12 @@ any other light surface — against the darkest surface darker than white
 strictly *darker* than white, so compositing white toward it can only land the
 pixel between the two — still light, never darker than the base — so the
 composite can never under-bound. A DARK slab, an overlay or a gradient is
-likewise left to `web/e2e/a11y.spec.ts`. The `/chat` card is the one site in this
-family the `a11y` gate renders: `web/e2e/a11y-chat-card.spec.ts` measures the
-failure footer's painted colour and the card's tint, so the source rule and the
-browser agree on it.
+likewise left to `web/e2e/a11y.spec.ts`. The `/chat` surface is the one site in
+this family the `a11y` gate renders: `web/e2e/a11y-chat-card.spec.ts` measures the
+failure footer's painted colour and the card's tint, and — since card
+`t_53c75f82` — the page-level `role="alert"` as well, whose ink is painted on the
+chat pane's white rather than on the card's tint, so the source rule and the
+browser agree on both.
 
 ### `--jf-primary` on a non-white surface (browser guard)
 

@@ -57,6 +57,24 @@
 //   `e2e/a11y-dialogs.spec.ts` use) puts the real component in a real browser
 //   with no Go server, no session cookie and no credential.
 //
+// THE SECOND SUBJECT IN THIS FILE: THE PAGE-LEVEL ALERT (card t_53c75f82)
+//   The same class of defect as the card above, one node away, and OUTSIDE the
+//   card subtree every arm of this file used to be scoped to
+//   (`.border-sky-200`):
+//
+//     web/src/app/chat/page.tsx:713
+//       {err && <p role="alert" className="px-4 text-xs text-red-700">}
+//
+//   It carries the page's failure copy (chat.fail, chat.scopeRequired,
+//   chat.rateLimited, chat.confirmFail) and it is painted on the chat PANE —
+//   the opaque `bg-white` at `page.tsx:493` — which is a different backdrop
+//   from the card's sky-50 tint that the arms above measure. It shipped as
+//   `text-red-500` (#fb2c36): 3.808:1 on that pane at 12px, under the AA floor,
+//   while the card's own axe scan could not reach it. The pre-fix value is
+//   pinned below (PRE_FIX_ALERT_RATIO) so a regression cannot round into a pass,
+//   and the scan is scoped to the ALERT itself, so this arm cannot be satisfied
+//   by the card's clean region (or the reverse).
+//
 // Run with:
 //
 //   npm run a11y                                      # the whole family (this file included)
@@ -81,6 +99,15 @@ const AA_FLOOR = 4.5;
 const PRE_FIX_TOOL_RATIO = 3.24;
 /** Tailwind v4's `text-red-700` — the failure ink, 6.023:1 on the sky-50 tint. */
 const RED_700 = "#c10007";
+/**
+ * What the page-level alert measured BEFORE this card: `text-red-500`
+ * (#fb2c36) on the chat pane's white, at its 12px size (card t_53c75f82,
+ * t_2846f44b comment #2847). Pinned as a floor so a green run has to have
+ * MEASURED better than the defect, not merely cleared 4.5.
+ */
+const PRE_FIX_ALERT_RATIO = 3.808;
+/** The chat pane's opaque white — the surface the page-level alert is on. */
+const PANE_WHITE = "#ffffff";
 
 const EN = {
   title: DICT["chat.title"].en,
@@ -126,7 +153,7 @@ const BUNDLE = {
 };
 
 /** Every call the page makes, with the proposal on the reply. */
-async function stubAPI(page: Page, decisionStatus = 200) {
+async function stubAPI(page: Page, decisionStatus = 200, replyStatus = 200) {
   const json = (body: unknown) => ({
     status: 200,
     contentType: "application/json",
@@ -138,10 +165,19 @@ async function stubAPI(page: Page, decisionStatus = 200) {
   await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, (r) => r.fulfill(json(BUNDLE)));
   await page.route(/(.*)\/api\/auth\/me$/, (r) => r.fulfill(json(BUNDLE.me)));
   await page.route(/(.*)\/api\/auth\/profile$/, (r) => r.fulfill(json({ lang: "" })));
+  // `replyStatus` is the MESSAGE path, not the decision path: it is what puts the
+  // PAGE-LEVEL alert on screen (a refused reply is one of the four `setErr`
+  // call sites, `page.tsx:298`), with no card in the transcript.
   await page.route(/(.*)\/api\/rest\/chat(\?.*)?$/, (r) =>
     r.request().method() === "GET"
       ? r.fulfill(json({ available: true, limits: { messages_per_hour: 60, max_message_chars: 2000 } }))
-      : r.fulfill(json({ reply: "Here is the change I would make.", proposals: [PROPOSAL] })),
+      : replyStatus === 200
+        ? r.fulfill(json({ reply: "Here is the change I would make.", proposals: [PROPOSAL] }))
+        : r.fulfill({
+            status: replyStatus,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "ralat dalaman" }),
+          }),
   );
   // The decision route, so the card can be settled into its OTHER badge states.
   await page.route(/(.*)\/api\/rest\/chat\/(confirm|cancel)(\?.*)?$/, (r) =>
@@ -174,6 +210,12 @@ async function freshState(page: Page) {
 /** The card, by the class its own markup carries. */
 const CARD = ".border-sky-200";
 
+/**
+ * The PAGE-LEVEL alert (card t_53c75f82), by the role its own markup carries —
+ * `page.tsx:713`, outside the card subtree this file's card arms scan.
+ */
+const ALERT = 'p[role="alert"]';
+
 /** Get the proposal card on screen and return its locator. */
 async function openCard(page: Page, baseURL: string | undefined) {
   // The page-then-composer prologue is SHARED with the other /chat specs
@@ -196,6 +238,29 @@ async function openCard(page: Page, baseURL: string | undefined) {
   await expect(card.locator("dt"), "the card's field rows must render").toHaveCount(2);
   await expect(card.getByText(PROPOSAL.tool), "the card's tool name must render").toBeVisible();
   return card;
+}
+
+/**
+ * The PAGE-LEVEL alert (card t_53c75f82), on screen in its ordinary failure
+ * state, returned as a locator.
+ *
+ * The alert renders only while `err` is set, and the reply path is one of the
+ * four call sites that set it — so the reply request is refused (500) and no
+ * card is involved. `p[role="alert"]` is the page's ONLY alert (`page.tsx:713`;
+ * nothing in Shell.tsx renders one), and the COPY is asserted rather than
+ * assumed: the same element also carries chat.scopeRequired / chat.rateLimited /
+ * chat.confirmFail, and an arm that silently measured a different sentence would
+ * be reported under this test's name.
+ */
+async function openAlert(page: Page, baseURL: string | undefined) {
+  await sendChatPrompt(page, baseURL, "rename my product");
+  const alert = page.locator(ALERT);
+  await expect(
+    alert,
+    "the page-level alert must render — otherwise this file proves nothing about it",
+  ).toHaveCount(1, { timeout: 20_000 });
+  await expect(alert, "the alert must carry the reply-failure copy").toHaveText(DICT["chat.fail"].en);
+  return alert;
 }
 
 type Measure = {
@@ -497,6 +562,131 @@ test.describe("the /chat confirmation card clears AA on its own tint", () => {
       footer.ratio,
       `the failure sentence measures ${footer.ratio.toFixed(3)}:1 (fg=${footer.fg} on bg=${footer.bg}) — ` +
         `under the ${AA_FLOOR}:1 AA floor.`,
+    ).toBeGreaterThanOrEqual(AA_FLOOR);
+  });
+});
+
+// ── THE PAGE-LEVEL ALERT (card t_53c75f82) ──────────────────────────────────
+// The card's own axe scan is scoped to `.border-sky-200`, so the sentence the
+// page shows when a request is refused — rendered OUTSIDE that subtree, on the
+// chat pane's white — was judged by neither the axe gate nor any other browser
+// arm (the repo-wide unit guard `src/lib/dangerText.test.ts` reads SOURCE and
+// attributes a surface to it; it cannot see the painted pixel, and it abstains
+// on a surface it cannot resolve). These two arms are the browser half: one puts
+// the alert INSIDE an axe context, the other measures the node on the backdrop
+// it is actually painted on. Both are scoped to the alert, so neither can be
+// satisfied by the card's clean region.
+test.describe("the /chat PAGE-LEVEL alert clears AA on the pane it is painted on", () => {
+  test("the alert is inside the axe context, and axe finds no critical/serious violation", async ({
+    page,
+    baseURL,
+  }) => {
+    // The reply is refused (500): the page's `err` state, and therefore the
+    // page-level alert, with no card in the transcript.
+    await stubAPI(page, 200, 500);
+    await freshState(page);
+    const alert = await openAlert(page, baseURL);
+    await expect(alert).toBeVisible();
+
+    // `.include(ALERT)` is the context the pre-fix value (#fb2c36) was invisible
+    // in. axe THROWS when an included context is absent, so this cannot pass
+    // vacuously — and the alert's presence and copy are asserted above anyway.
+    const results = await new AxeBuilder({ page }).include(ALERT).analyze();
+    const blockers = blockersOf(results);
+
+    // The numbers are the acceptance evidence for this card, not just pass/fail.
+    console.log(
+      `chat page-level alert axe: ${blockers.length} critical/serious violation(s)\n` +
+        blockers
+          .map(
+            (v) =>
+              `  - ${v.id} (${v.impact}): ${v.help}\n` +
+              v.nodes
+                .map((n) => `      ${n.target.join(" ")} — ${n.failureSummary?.split("\n")[0] ?? ""}`)
+                .join("\n"),
+          )
+          .join("\n"),
+    );
+
+    // Non-vacuity, TWICE. (a) The rule that RAN is asserted: a scan that
+    // analysed nothing must not read as a clean alert. (b) The rule must have
+    // JUDGED THIS NODE and passed it: axe resolves a contrast verdict per
+    // element, and an element it cannot resolve lands in `incomplete` — which is
+    // an abstention, not a clearance. Without (b) this arm would be green on a
+    // node axe never decided anything about.
+    const contrast = [...results.passes, ...results.incomplete, ...results.violations].filter(
+      (v) => v.id === "color-contrast",
+    );
+    expect(
+      contrast.length,
+      "the color-contrast rule did not run over the alert at all — a scan that analysed nothing " +
+        "cannot be read as a clean alert",
+    ).toBeGreaterThan(0);
+    const alertText = DICT["chat.fail"].en;
+    const judgedPass = results.passes
+      .filter((v) => v.id === "color-contrast")
+      .flatMap((v) => v.nodes)
+      .filter((n) => (n.html ?? "").includes(alertText));
+
+    // The claim itself, asserted FIRST so the pre-fix value reds naming the
+    // contrast violation (axe judges each element, and a sub-AA alert lands
+    // here as a `serious` color-contrast violation).
+    expect(blockers, "the page-level alert must have no critical/serious axe violations").toEqual([]);
+
+    // …and a clearance is not an abstention: axe resolves a contrast verdict per
+    // element, and an element it cannot resolve lands in `incomplete`. Without
+    // this leg the arm would be green on a node axe never decided anything about.
+    expect(
+      judgedPass.length,
+      `axe reported NO PASSING color-contrast judgement for the alert itself. Nodes axe returned ` +
+        `for this context: ${contrast
+          .flatMap((v) => v.nodes)
+          .map((n) => `${n.target.join(" ")}${(n.failureSummary ?? "").split("\n")[0] ? ` (${(n.failureSummary ?? "").split("\n")[0]})` : ""}`)
+          .join(" | ")} — an alert axe abstained on (incomplete) is not one axe cleared.`,
+    ).toBeGreaterThan(0);
+  });
+
+  test("the alert MEASURES above the AA floor on the pixel it is painted on", async ({ page, baseURL }) => {
+    test.setTimeout(120_000);
+    await stubAPI(page, 200, 500);
+    await freshState(page);
+    await openAlert(page, baseURL);
+
+    const alert = await measure(page, ALERT, 0, "page alert");
+    console.log(
+      `chat page-level alert contrast: text=${JSON.stringify(alert.text)} fg=${alert.fg} ` +
+        `on bg=${alert.bg} opacity=${alert.opacity} at ${alert.fontSize} — ${alert.ratio.toFixed(3)}:1`,
+    );
+
+    expect(alert.text, "the node measured must be the reply-failure copy").toBe(DICT["chat.fail"].en);
+    // The SURFACE is pinned, not only the ratio: this alert is painted on the
+    // chat pane, and a value that moved to a translucent or differently-coloured
+    // surface would then be measured against the wrong backdrop.
+    expect(
+      alert.bg,
+      `the alert is painted on ${alert.bg}, not the chat pane's opaque white (page.tsx:493)`,
+    ).toBe(PANE_WHITE);
+    // The INK is pinned too: `text-red-600` (#e7000b) clears this white pane at
+    // 4.770:1 (the theme-derived table in src/lib/dangerText.test.ts) but is
+    // 4.474:1 on a sky-50 tint, so only the darkest step is safe for a
+    // text-only token that can be moved onto a tint; `text-red-500` (#fb2c36) is
+    // the pre-fix value and is under AA on this pane at its 12px size.
+    expect(
+      alert.fg,
+      `the alert's ink is ${alert.fg}; text-red-700 (#c10007) is the shipped step for this family, ` +
+        `and the pre-fix text-red-500 (#fb2c36) measured ${PRE_FIX_ALERT_RATIO}:1 on this pane.`,
+    ).toBe(RED_700);
+    expect(
+      alert.ratio,
+      `the alert measured ${alert.ratio.toFixed(3)}:1, which is NOT above the pre-fix ` +
+        `${PRE_FIX_ALERT_RATIO}:1 — re-measure before believing a green run`,
+    ).toBeGreaterThan(PRE_FIX_ALERT_RATIO);
+    // Exact comparison, never a rounded one: this repo has shipped a defect
+    // 0.008 under the floor (card t_e0784043).
+    expect(
+      alert.ratio,
+      `the page-level alert measures ${alert.ratio.toFixed(3)}:1 (fg=${alert.fg} on bg=${alert.bg}, ` +
+        `${alert.fontSize}) — under the ${AA_FLOOR}:1 AA floor.`,
     ).toBeGreaterThanOrEqual(AA_FLOOR);
   });
 });
