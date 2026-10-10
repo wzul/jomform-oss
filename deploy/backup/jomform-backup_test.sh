@@ -129,11 +129,25 @@ while [ "\$#" -gt 0 ]; do
   args+=("\$1"); shift
 done
 set -- "\${args[@]:-}"
+# A WRITE must carry --s3-no-check-bucket. The R2 token is scoped to ONE bucket,
+# so ListBuckets is denied; rclone cannot confirm the bucket exists, concludes it
+# is missing and calls CreateBucket, which the token is not allowed to do, so
+# EVERY write fails closed. The stub models that REAL failure (10/10 against the
+# live bucket, rclone 1.75.2 and 1.60.1) so the suite bites when the flag is
+# dropped. Read commands do not need it and are not gated.
+NO_CHECK=0
+for a in "\${args[@]:-}"; do [ "\$a" = "--s3-no-check-bucket" ] && NO_CHECK=1; done
 cmd="\${1:-}"; shift || true
 case "\$cmd" in
   listremotes)
-    if [ "\$MODE" = "no-remote" ]; then echo "other:"; else echo "googldrive:"; fi ;;
+    if [ "\$MODE" = "no-remote" ]; then echo "other:"; else echo "r2jomform:"; fi ;;
   copy)
+    # Record every write invocation so a case can assert the flag was carried.
+    printf 'copy %s\\n' "\$*" >>"$CASE_DIR/rclone-writes.log"
+    if [ "\$NO_CHECK" = "0" ]; then
+      echo 'Failed to copy: failed to prepare upload: operation error S3: CreateBucket, https response error StatusCode: 403, api error AccessDenied: Access Denied' >&2
+      exit 1
+    fi
     if [ "\$MODE" = "copy-fail" ]; then
       # Real rclone errors carry double quotes; an unescaped copy of this text
       # into the status JSON would make the file unparseable.
@@ -166,6 +180,11 @@ case "\$cmd" in
     # A server-side copy reads the source from the REMOTE and writes the
     # destination on the REMOTE — neither path is a local file. The modelled
     # remote is $CASE_DIR/remote, addressed by basename.
+    printf 'copyto %s\\n' "\$*" >>"$CASE_DIR/rclone-writes.log"
+    if [ "\$NO_CHECK" = "0" ]; then
+      echo 'Failed to copy: failed to prepare upload: operation error S3: CreateBucket, https response error StatusCode: 403, api error AccessDenied: Access Denied' >&2
+      exit 1
+    fi
     src="\${1:-}"; dest="\${2:-}"
     mkdir -p "$CASE_DIR/remote"
     # STUB_COPYTO_SILENT_NAME names one DESTINATION whose copy silently stores
@@ -261,8 +280,19 @@ case "\$cmd" in
     else
       echo "[]"
     fi ;;
-  lsf) exit 0 ;;
-  deletefile) exit 0 ;;
+  # lsf <remote-path> — the modelled remote is ONE flat directory of basenames
+  # ($CASE_DIR/remote), whatever tier path is passed; prune_remote applies its
+  # own regex filter. Listing the real set is what lets a retention case assert
+  # what was kept, instead of prune silently seeing an empty directory.
+  lsf)
+    if [ -d "$CASE_DIR/remote" ]; then
+      ls -1 "$CASE_DIR/remote" 2>/dev/null || true
+    fi
+    exit 0 ;;
+  # deletefile <remote-path> — remove the modelled object.
+  deletefile)
+    rm -f "$CASE_DIR/remote/\$(basename "\${1:-}")" 2>/dev/null || true
+    exit 0 ;;
   about) exit 0 ;;
 esac
 exit 0
@@ -306,7 +336,7 @@ run_backup_script() {
       JFBACKUP_LOG_FILE="$RUN_LOG" \
       JFBACKUP_LOCK_FILE="$CASE_DIR/lock" \
       JFBACKUP_ENV_FILE="$CASE_DIR/env" \
-      JFBACKUP_REMOTE="googldrive" \
+      JFBACKUP_REMOTE="r2jomform" \
       JFBACKUP_REMOTE_ROOT="jfbackup-test" \
       RCLONE_CONFIG="$CASE_DIR/rclone.conf" \
       "${extra[@]}" \
@@ -315,7 +345,7 @@ run_backup_script() {
 }
 teardown_case() { rm -rf "$CASE_DIR"; }
 
-touch_rclone_conf() { echo '[googldrive]' >"$CASE_DIR/rclone.conf"; }
+touch_rclone_conf() { echo '[r2jomform]' >"$CASE_DIR/rclone.conf"; }
 
 # install_system_path_without_rclone <mirror-dir>
 # <mirror-dir> becomes a PATH DIRECTORY carrying the six directories the script
@@ -371,86 +401,133 @@ assert_path_without_rclone() { # label mirror [extra-dir...]
   return 1
 }
 
-# ---------------------------------------------------------- monthly helpers
-# Names the script will use for THIS day, spelled exactly as the script does
-# (`date -u +%Y-%m-%d`). Note that JFBACKUP_DAY_OF_MONTH only drives the
-# promotion gate, not the file names, so a run on the 20th still produces
-# jomform-daily-<20th>; the digest comparison below is against that object.
+# ---------------------------------------------------------- tier helpers
+# Names the script will use for THIS day, spelled exactly as the script does.
+# JFBACKUP_DAY_OF_MONTH / JFBACKUP_DAY_OF_WEEK only drive the promotion GATES,
+# not the file names, so a run on the 20th still produces jomform-daily-<20th>;
+# the digest comparisons below are against that object.
 daily_name() { date -u +%Y-%m-%d; }
+weekly_name() { date -u +%G-W%V; }
 monthly_name() { date -u +%Y-%m; }
+tier_name() { # monthly|weekly -> the tier's date-stamped name suffix
+  case "$1" in
+    monthly) monthly_name ;;
+    weekly)  weekly_name ;;
+    *) echo "unknown tier: $1" >&2; return 1 ;;
+  esac
+}
 
-# check_isolated — the honest form of the card's acceptance: take the monthly
-# pair the promotion produced, copy it into a directory that holds NOTHING else,
-# and run a real `sha256sum -c`.
+# check_isolated <label> <expect> [tier]
+# The honest form of the card's acceptance: take the tier pair the promotion
+# produced, copy it into a directory that holds NOTHING else, and run a real
+# `sha256sum -c`.
 #
 # The staged daily objects are deleted first, modelling local retention having
 # pruned them (the dump script prunes local staging at the end of every run, so
-# by the time a human reaches for the monthly copy the daily file is long gone).
+# by the time a human reaches for the tier copy the daily file is long gone).
 # Without that step the check is not truthful: an absolute staging path in the
 # sidecar still RESOLVES on this host, so `sha256sum -c` would pass on the very
 # sidecar this card is about. That is exactly what a first attempt at this test
 # did — it went green against the defect.
-#   $1 label  $2 expect: pass|fail
 check_isolated() {
-  local label="$1" expect="$2" mn vdir
-  mn="jomform-monthly-$(monthly_name).dump.gz"
+  local label="$1" expect="$2" tier="${3:-monthly}"
+  local tn vdir got
+  tn="jomform-$tier-$(tier_name "$tier").dump.gz"
   vdir="$(mktemp -d)"
-  cp "$CASE_DIR/remote/$mn" "$CASE_DIR/remote/$mn.sha256" "$vdir/" 2>/dev/null
-  if [ ! -f "$vdir/$mn.sha256" ]; then
-    bad "$label: no monthly sidecar at $CASE_DIR/remote/$mn.sha256 (nothing was written)"
+  cp "$CASE_DIR/remote/$tn" "$CASE_DIR/remote/$tn.sha256" "$vdir/" 2>/dev/null
+  if [ ! -f "$vdir/$tn.sha256" ]; then
+    bad "$label: no $tier sidecar at $CASE_DIR/remote/$tn.sha256 (nothing was written)"
     rm -rf "$vdir"; return
   fi
   rm -f "$CASE_DIR/stage/jomform-daily-"*.dump.gz "$CASE_DIR/stage/jomform-daily-"*.dump.gz.sha256
-  if (cd "$vdir" && sha256sum -c "$mn.sha256" >/dev/null 2>&1); then
+  if (cd "$vdir" && sha256sum -c "$tn.sha256" >/dev/null 2>&1); then
     got=pass
   else
     got=fail
   fi
   if [ "$got" = "$expect" ]; then
-    ok "$label: sha256sum -c $got on the isolated monthly pair, as required"
+    ok "$label: sha256sum -c $got on the isolated $tier pair, as required"
   else
-    bad "$label: sha256sum -c $got but must be $expect (sidecar: $(cat "$vdir/$mn.sha256"))"
+    bad "$label: sha256sum -c $got but must be $expect (sidecar: $(cat "$vdir/$tn.sha256"))"
   fi
   rm -rf "$vdir"
 }
 
-# verify_monthly_pair — the acceptance the card states, for a run that is meant
-# to be CORRECT. Content assertions first, then the real checksum run.
-verify_monthly_pair() {
-  local label="$1" vdir dn mn want got
+# verify_tier_pair <label> <tier>
+# The acceptance the card states, for a run that is meant to be CORRECT. Content
+# assertions first, then the media archive asserted present (a tier restore that
+# cannot render customer media is the defect this half closes), then the real
+# checksum run.
+verify_tier_pair() {
+  local label="$1" tier="$2"
+  local vdir dn tn want got
   dn="jomform-daily-$(daily_name).dump.gz"
-  mn="jomform-monthly-$(monthly_name).dump.gz"
+  tn="jomform-$tier-$(tier_name "$tier").dump.gz"
   want="$(cut -d' ' -f1 "$CASE_DIR/remote/$dn.sha256" 2>/dev/null)"
+  if [ ! -f "$CASE_DIR/remote/jomform-$tier-$(tier_name "$tier")-media.tar.gz" ]; then
+    bad "$label: no $tier media archive on the remote — a tier restore could not render customer media"
+  fi
   vdir="$(mktemp -d)"
-  cp "$CASE_DIR/remote/$mn" "$CASE_DIR/remote/$mn.sha256" "$vdir/" 2>/dev/null
-  if [ ! -f "$vdir/$mn.sha256" ]; then
-    bad "$label: no monthly sidecar at $CASE_DIR/remote/$mn.sha256 (nothing was written)"
+  cp "$CASE_DIR/remote/$tn" "$CASE_DIR/remote/$tn.sha256" "$vdir/" 2>/dev/null
+  if [ ! -f "$vdir/$tn.sha256" ]; then
+    bad "$label: no $tier sidecar at $CASE_DIR/remote/$tn.sha256 (nothing was written)"
     rm -rf "$vdir"; return
   fi
   # An absolute staging path is the defect itself: it only ever resolved on the
   # host that produced the dump, and stops resolving the moment local retention
   # prunes the daily file.
-  if grep -qE '(^|[[:space:]])/' "$vdir/$mn.sha256"; then
-    bad "$label: monthly sidecar carries an absolute path: $(cat "$vdir/$mn.sha256")"
+  if grep -qE '(^|[[:space:]])/' "$vdir/$tn.sha256"; then
+    bad "$label: $tier sidecar carries an absolute path: $(cat "$vdir/$tn.sha256")"
   fi
-  if grep -qF "$dn" "$vdir/$mn.sha256"; then
-    bad "$label: monthly sidecar still names the DAILY object ($dn)"
+  if grep -qF "$dn" "$vdir/$tn.sha256"; then
+    bad "$label: $tier sidecar still names the DAILY object ($dn)"
   fi
-  if ! grep -qF "  $mn" "$vdir/$mn.sha256"; then
-    bad "$label: monthly sidecar does not name $mn: $(cat "$vdir/$mn.sha256")"
+  if ! grep -qF "  $tn" "$vdir/$tn.sha256"; then
+    bad "$label: $tier sidecar does not name $tn: $(cat "$vdir/$tn.sha256")"
   fi
-  # The copy is server-side, so the monthly digest must equal the daily one.
-  got="$(cut -d' ' -f1 "$vdir/$mn.sha256")"
-  assert_eq "$label: monthly digest equals the daily digest" "$want" "$got"
+  # The copy is server-side, so the tier digest must equal the daily one.
+  got="$(cut -d' ' -f1 "$vdir/$tn.sha256")"
+  assert_eq "$label: $tier digest equals the daily digest" "$want" "$got"
   rm -rf "$vdir"
-  check_isolated "$label" pass
+  check_isolated "$label" pass "$tier"
+}
+
+# verify_monthly_pair <label> — the monthly tier's spelling of the above.
+verify_monthly_pair() { verify_tier_pair "$1" monthly; }
+
+# daily_files — how many objects matching a tier's prefix are on the modelled
+# remote. prune_remote keeps min(total, keep) FILES, and one backup SET is 3
+# files, so a "kept N sets" assertion is this count over 3.
+tier_file_count() {
+  ls -1 "$CASE_DIR/remote" 2>/dev/null | grep -c "^jomform-$1-" || true
+}
+
+# seed_sets <tier> <count>
+# Put <count> whole backup SETS (dump + sidecar + media, 3 files each) on the
+# modelled remote, dated 1999 so every one of them sorts OLDER than the run's own
+# daily set. Retention is then asserted on the kept SETS, not merely on "some
+# files remain".
+seed_sets() {
+  local t="$1" n="$2" i d
+  mkdir -p "$CASE_DIR/remote"
+  for i in $(seq 1 "$n"); do
+    # zero-padded so a string `sort -r` orders the SETS by day (without it,
+    # `-9` sorts above `-30` and the "newest set" assertion would measure the
+    # harness's own naming, not retention).
+    d="$(printf '%02d' "$i")"
+    printf 'old' >"$CASE_DIR/remote/jomform-$t-1999-01-$d.dump.gz"
+    printf 'old' >"$CASE_DIR/remote/jomform-$t-1999-01-$d.dump.gz.sha256"
+    printf 'old' >"$CASE_DIR/remote/jomform-$t-1999-01-$d-media.tar.gz"
+  done
 }
 
 # promote_and_verify — run a full backup with the 1st-of-month branch driven on,
 # then verify the pair. This is the case that would have caught the defect.
 promote_and_verify() {
   local label="$1"; shift
-  rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok --)"
+  # DAY_OF_WEEK=3 keeps this a purely monthly run even on a Sunday, so the
+  # monthly assertions cannot be satisfied by the weekly tier's objects.
+  rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok --)"
   assert_eq "$label: exit code" "exit=0" "$rc"
   assert_contains "$label: promotion ran" "first of month: promoting to" "$RUN_LOG"
   assert_contains "$label: promotion reported ok" "monthly copy ok" "$RUN_LOG"
@@ -472,17 +549,20 @@ import sys
 path, marker = sys.argv[1], sys.argv[2]
 src = open(path).read()
 # The digest re-read this card added, as shipped...
-fixed = '''    elif ! PROMOTE_VERIFY_ERR="$(verify_remote_digest "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz" "$digest" 2>&1)"; then
-      FAIL_DETAIL="monthly dump verification failed: $PROMOTE_VERIFY_ERR"
-      log ERROR "$FAIL_DETAIL"
-      monthly_ok=0
+fixed = '''    elif ! PROMOTE_VERIFY_ERR="$(verify_remote_digest "$dump_dest" "$digest" 2>&1)"; then
+      PROMOTE_DETAIL="$tier dump verification failed: $PROMOTE_VERIFY_ERR"
+      log ERROR "$PROMOTE_DETAIL"
+      tier_ok=0
     else
-      log INFO "verified $MONTHLY_DIR/$MONTHLY_NAME.dump.gz"
+      log INFO "verified $dump_dest"
 '''
 # ...replaced by trusting the copyto's exit status, which is the pre-fix shape:
 # the copy command's exit status says nothing about the destination object, and
 # the promotion is reported without anything having read the promoted dump.
+# (The `else log INFO` line is kept so the branch still parses and still LIES
+# that the object was verified.)
 broken = '''    else
+      log INFO "verified $dump_dest"
 '''
 if src.count(fixed) != 1:
     open(marker, 'w').write('NOTFOUND count=%d' % src.count(fixed))
@@ -503,7 +583,7 @@ setup_case; touch_rclone_conf
 rc="$(run_backup STUB_RCLONE_MODE=ok --)"
 assert_eq "exit code" "exit=0" "$rc"
 assert_contains "log says OK" "jomform-backup OK" "$RUN_LOG"
-assert_contains "upload verified" "verified googldrive:jfbackup-test/daily/" "$RUN_LOG"
+assert_contains "upload verified" "verified r2jomform:jfbackup-test/daily/" "$RUN_LOG"
 assert_contains "status file OK" '"status": "OK"' "$CASE_DIR/state/last-run.json"
 if [ -f "$CASE_DIR/state/last-failure.json" ]; then bad "no last-failure.json on success"; else ok "no last-failure.json on success"; fi
 teardown_case
@@ -554,7 +634,13 @@ rc="$(run_backup STUB_RCLONE_MODE=no-remote --)"
 assert_eq "exit code" "exit=1" "$rc"
 assert_contains "log names the remote" "rclone remote unavailable" "$RUN_LOG"
 assert_contains "alert body warns about same-host dump" "not an offsite backup" "$RUN_LOG"
-assert_contains "token fix is named" "rclone config reconnect googldrive:" "$RUN_LOG"
+# An S3 remote has NO OAuth token to reconnect: the old Drive remedy told an
+# operator to run `rclone config reconnect <remote>:`, which does not exist for
+# R2. The hint must name the real remedy instead — a NEW R2 API token written
+# into rclone.conf — and must not send them to a command that cannot work.
+assert_contains "the R2 credential remedy is named" "issue a NEW R2 API token" "$RUN_LOG"
+assert_contains "the credentials file is named" "/root/.config/rclone/rclone.conf" "$RUN_LOG"
+assert_not_contains "no OAuth reconnect hint (an S3 remote has none)" "rclone config reconnect" "$RUN_LOG"
 teardown_case
 
 echo "case: rclone missing entirely -> the dump still happens and the run FAILS loudly"
@@ -623,7 +709,7 @@ env -i \
     JFBACKUP_LOG_FILE="$run_log" \
     JFBACKUP_LOCK_FILE="$CASE_DIR/lock" \
     JFBACKUP_ENV_FILE="$CASE_DIR/env" \
-    JFBACKUP_REMOTE="googldrive" \
+    JFBACKUP_REMOTE="r2jomform" \
     JFBACKUP_REMOTE_ROOT="jfbackup-test" \
     RCLONE_CONFIG="$CASE_DIR/rclone.conf" \
     STUB_RCLONE_MODE=ok \
@@ -723,7 +809,7 @@ env -i \
     JFBACKUP_LOG_FILE="$run_log" \
     JFBACKUP_LOCK_FILE="$CASE_DIR/lock" \
     JFBACKUP_ENV_FILE="$CASE_DIR/env" \
-    JFBACKUP_REMOTE=googldrive \
+    JFBACKUP_REMOTE=r2jomform \
     JFBACKUP_REMOTE_ROOT=jfbackup-test \
     RCLONE_CONFIG="$CASE_DIR/rclone.conf" \
     STUB_RCLONE_MODE=ok \
@@ -771,7 +857,7 @@ echo "case: the monthly sidecar write exits 0 and stores NOTHING -> the run FAIL
 # Drive — a monthly dump with no verifiable checksum, which is the artifact the
 # sidecar exists to prevent. The stub drops exactly one named object's stream.
 setup_case; touch_rclone_conf
-rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok \
   STUB_SILENT_NAME="jomform-monthly-$(monthly_name).dump.gz.sha256" --)"
 assert_eq "exit code" "exit=1" "$rc"
 assert_contains "log names the sidecar verification" "monthly sidecar verification failed" "$RUN_LOG"
@@ -795,7 +881,7 @@ echo "case: the sidecar lands but its stored CONTENT differs -> the run FAILS"
 # digest would be an unusable sidecar. It names the SIDECAR, so the dump the
 # promotion re-reads is not the object this case corrupts.
 setup_case; touch_rclone_conf
-rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok \
   STUB_CAT_CORRUPT_NAME="jomform-monthly-$(monthly_name).dump.gz.sha256" --)"
 assert_eq "exit code" "exit=1" "$rc"
 assert_contains "log names the content mismatch" "remote content mismatch" "$RUN_LOG"
@@ -806,7 +892,7 @@ echo "case: the sidecar upload command fails -> the run FAILS (uploads_ok=0), no
 # The other half of the rule: a promotion whose sidecar never left the host must
 # not be reported as a healthy run with an unverifiable monthly copy.
 setup_case; touch_rclone_conf
-rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok \
   STUB_FAIL_NAME="jomform-monthly-$(monthly_name).dump.gz.sha256" --)"
 assert_eq "exit code" "exit=1" "$rc"
 assert_contains "log names the failed sidecar upload" "monthly sidecar upload failed" "$RUN_LOG"
@@ -823,7 +909,7 @@ echo "case: the promoted monthly dump write exits 0 and stores NOTHING -> the ru
 # exactly one named destination's copy, so the daily uploads still land and the
 # run reaches the promotion.
 setup_case; touch_rclone_conf
-rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok \
   STUB_COPYTO_SILENT_NAME="jomform-monthly-$(monthly_name).dump.gz" --)"
 assert_eq "exit code" "exit=1" "$rc"
 assert_contains "log names the dump verification" "monthly dump verification failed" "$RUN_LOG"
@@ -854,7 +940,7 @@ echo "case: the promoted dump lands as DIFFERENT bytes under the right name -> t
 # catch it too, but what the script actually compares here is the DIGEST of the
 # promoted object against the digest the copy was given.
 setup_case; touch_rclone_conf
-rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok \
   STUB_COPYTO_CORRUPT_NAME="jomform-monthly-$(monthly_name).dump.gz" --)"
 assert_eq "exit code" "exit=1" "$rc"
 assert_contains "log names the dump verification" "monthly dump verification failed" "$RUN_LOG"
@@ -880,7 +966,7 @@ echo "case: the promotion's OWN copyto FAILS -> the run FAILS, and no sidecar is
 # upload phase: the failure must be the PROMOTION's, reported as such, and it must
 # not leave a sidecar vouching for a dump that was never copied.
 setup_case; touch_rclone_conf
-rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok \
   STUB_COPYTO_FAIL_NAME="jomform-monthly-$(monthly_name).dump.gz" --)"
 assert_eq "exit code" "exit=1" "$rc"
 assert_contains "log names the failed promotion" "monthly dump copy failed" "$RUN_LOG"
@@ -955,6 +1041,148 @@ else
 fi
 teardown_case
 
+echo "case: weekly promotion runs on Sunday (UTC) and promotes dump + sidecar + media"
+# The weekly tier is new. It is built the SAME way as the monthly one (a shared
+# promote_tier) and is held to the same rule: nothing is reported until the
+# promoted object has been re-read — never a promotion that was not re-read.
+setup_case; touch_rclone_conf
+rc="$(run_backup JFBACKUP_DAY_OF_WEEK=7 JFBACKUP_DAY_OF_MONTH=20 STUB_RCLONE_MODE=ok --)"
+assert_eq "exit code" "exit=0" "$rc"
+assert_contains "weekly promotion ran" "sunday (UTC): promoting to" "$RUN_LOG"
+assert_contains "weekly promotion reported ok" "weekly copy ok" "$RUN_LOG"
+wn="jomform-weekly-$(weekly_name).dump.gz"
+for f in "$wn" "$wn.sha256" "jomform-weekly-$(weekly_name)-media.tar.gz"; do
+  assert_file "weekly object on the remote: $f" "$CASE_DIR/remote/$f"
+done
+verify_tier_pair "weekly promotion" weekly
+teardown_case
+
+echo "case: no weekly promotion on a day that is not Sunday (the gate holds)"
+setup_case; touch_rclone_conf
+rc="$(run_backup JFBACKUP_DAY_OF_WEEK=3 JFBACKUP_DAY_OF_MONTH=20 STUB_RCLONE_MODE=ok --)"
+assert_eq "exit code" "exit=0" "$rc"
+if grep -q "sunday (UTC): promoting to" "$RUN_LOG"; then
+  bad "promoted weekly on a Wednesday — the Sunday gate is gone"
+else
+  ok "no weekly promotion on a non-Sunday"
+fi
+assert_no_file "no weekly dump object written on a non-Sunday" \
+  "$CASE_DIR/remote/jomform-weekly-$(weekly_name).dump.gz"
+teardown_case
+
+echo "case: with NO DAY_OF_WEEK override the script promotes iff today really is Sunday"
+# Same discipline as the monthly seam: the expectation is computed from the real
+# `date -u +%u`, so a hard-coded weekly gate is caught whatever day this runs on.
+setup_case; touch_rclone_conf
+rc="$(run_backup STUB_RCLONE_MODE=ok --)"
+assert_eq "exit code" "exit=0" "$rc"
+if [ "$(date -u +%u)" = "7" ]; then
+  assert_contains "it IS Sunday: real weekly promotion ran" "sunday (UTC): promoting to" "$RUN_LOG"
+  verify_tier_pair "unset weekly override" weekly
+else
+  if grep -q "sunday (UTC): promoting to" "$RUN_LOG"; then
+    bad "promoted weekly with NO override on $(date -u +%u) — the seam bypasses the real date"
+  else
+    ok "no weekly promotion with no override on $(date -u +%u) (real date respected)"
+  fi
+fi
+teardown_case
+
+echo "case: the monthly promotion also promotes the media archive (a monthly restore must render media)"
+# Behaviour change: a monthly SET now carries the -media.tar.gz too. Without it
+# a monthly restore rebuilds the rows but renders no customer media.
+setup_case; touch_rclone_conf
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok --)"
+assert_eq "exit code" "exit=0" "$rc"
+mm="jomform-monthly-$(monthly_name)-media.tar.gz"
+assert_file "monthly media archive on the remote" "$CASE_DIR/remote/$mm"
+if cmp -s "$CASE_DIR/remote/$mm" "$CASE_DIR/remote/jomform-daily-$(daily_name)-media.tar.gz"; then
+  ok "the promoted monthly media archive is byte-identical to the daily one"
+else
+  bad "the promoted monthly media archive differs from the daily archive"
+fi
+teardown_case
+
+echo "case: every rclone WRITE carries --s3-no-check-bucket (the bucket-scoped token cannot CreateBucket)"
+# The R2 token is scoped to ONE bucket, so ListBuckets is denied; without this
+# flag rclone cannot confirm the bucket exists, calls CreateBucket (403) and
+# EVERY write fails — the backup fails every night. This run exercises both write
+# shapes (the daily `copy` and the promotion's server-side `copyto`), and the
+# stub logs each invocation, so the assertion covers all of them.
+setup_case; touch_rclone_conf
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=7 STUB_RCLONE_MODE=ok --)"
+assert_eq "exit code" "exit=0" "$rc"
+assert_file "the write log recorded invocations" "$CASE_DIR/rclone-writes.log"
+writes="$(wc -l <"$CASE_DIR/rclone-writes.log" 2>/dev/null | tr -d ' ')"
+flagged="$(grep -c -- '--s3-no-check-bucket' "$CASE_DIR/rclone-writes.log" 2>/dev/null || true)"
+if [ "${writes:-0}" -ge 6 ] && [ "${writes:-0}" = "${flagged:-0}" ]; then
+  ok "all ${writes} write invocations carried --s3-no-check-bucket"
+else
+  bad "a write invocation did not carry --s3-no-check-bucket (writes=$writes flagged=$flagged): $(grep -v -- '--s3-no-check-bucket' "$CASE_DIR/rclone-writes.log" 2>/dev/null | tr '\n' ' ')"
+fi
+teardown_case
+
+echo "case: an rclone write WITHOUT --s3-no-check-bucket FAILS exactly as the real bucket does"
+# The shape a future edit silently re-introduces: drop the flag and the nightly
+# backup fails EVERY night. The stub models the real backend (CreateBucket ->
+# AccessDenied), so a copy of the script with the flag removed must go red.
+setup_case; touch_rclone_conf
+cp "$SCRIPT" "$CASE_DIR/noflag.sh"
+python3 - "$CASE_DIR/noflag.sh" "$CASE_DIR/bite-applied.txt" <<'PY'
+import sys
+path, marker = sys.argv[1], sys.argv[2]
+src = open(path).read()
+old = ' --s3-no-check-bucket'
+n = src.count(old)
+assert n >= 1, "anchor not found: --s3-no-check-bucket"
+open(path, "w").write(src.replace(old, ""))
+open(marker, "w").write("APPLIED removed=%d" % n)
+PY
+if grep -q '^APPLIED removed=' "$CASE_DIR/bite-applied.txt" 2>/dev/null; then
+  ok "the flag was dropped from every write ($(cat "$CASE_DIR/bite-applied.txt"))"
+else
+  bad "the flag-removal sabotage did not apply: $(cat "$CASE_DIR/bite-applied.txt" 2>/dev/null)"
+fi
+if bash -n "$CASE_DIR/noflag.sh"; then ok "the flagless copy still parses"; else bad "the flagless copy does not parse"; fi
+rc="$(run_backup_script "$CASE_DIR/noflag.sh" STUB_RCLONE_MODE=ok --)"
+assert_eq "exit code" "exit=1" "$rc"
+assert_contains "the write fails with the backend's own error" "AccessDenied" "$RUN_LOG"
+assert_contains "the CreateBucket attempt is named" "CreateBucket" "$RUN_LOG"
+assert_contains "the run fails loudly" "jomform-backup FAILED" "$RUN_LOG"
+teardown_case
+
+echo "case: retention keeps 7 daily / 4 weekly / 6 monthly SETS and prunes the rest"
+# prune_remote keeps the newest N FILES; one backup SET is 3 files, so the tier
+# budgets are 21 / 12 / 18. Whole sets are seeded OLDER than the run's own daily
+# set (year 1999), so the newest sets are the ones kept.
+setup_case; touch_rclone_conf
+seed_sets daily 30
+seed_sets weekly 18
+seed_sets monthly 24
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=20 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok LC_ALL=C --)"
+assert_eq "exit code" "exit=0" "$rc"
+assert_eq "daily files kept (7 sets x 3)" "21" "$(tier_file_count daily)"
+assert_eq "weekly files kept (4 sets x 3)" "12" "$(tier_file_count weekly)"
+assert_eq "monthly files kept (6 sets x 3)" "18" "$(tier_file_count monthly)"
+assert_eq "daily SETS kept (files / 3)" "7" "$(( $(tier_file_count daily) / 3 ))"
+assert_file "the newest seeded daily set survives" "$CASE_DIR/remote/jomform-daily-1999-01-30.dump.gz"
+assert_no_file "the oldest seeded daily set was pruned" "$CASE_DIR/remote/jomform-daily-1999-01-01.dump.gz"
+teardown_case
+
+echo "case: JFBACKUP_KEEP_DAILY / _WEEKLY / _MONTHLY overrides are honoured"
+setup_case; touch_rclone_conf
+seed_sets daily 30
+seed_sets weekly 18
+seed_sets monthly 24
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=20 JFBACKUP_DAY_OF_WEEK=3 \
+  JFBACKUP_KEEP_DAILY=3 JFBACKUP_KEEP_WEEKLY=6 JFBACKUP_KEEP_MONTHLY=9 \
+  STUB_RCLONE_MODE=ok LC_ALL=C --)"
+assert_eq "exit code" "exit=0" "$rc"
+assert_eq "daily override keeps 3 files (1 set)" "3" "$(tier_file_count daily)"
+assert_eq "weekly override keeps 6 files (2 sets)" "6" "$(tier_file_count weekly)"
+assert_eq "monthly override keeps 9 files (3 sets)" "9" "$(tier_file_count monthly)"
+teardown_case
+
 echo "case: the monthly case BITES — restore the pre-fix behaviour and it goes RED"
 # A monthly assertion that can never fail is decoration, and the suite that
 # shipped this defect had none at all. This re-runs the promotion against a
@@ -973,11 +1201,11 @@ import sys
 path, marker = sys.argv[1], sys.argv[2]
 src = open(path).read()
 # The block this fix introduced, as shipped...
-fixed = '''      printf '%s  %s\\n' "$digest" "$MONTHLY_NAME.dump.gz" >"$sidecar_tmp"'''
+fixed = '''    printf '%s  %s\\n' "$digest" "$tier_name.dump.gz" >"$sidecar_tmp"'''
 # ...replaced by the pre-fix behaviour: the DAILY sidecar verbatim, so the
 # monthly object's sidecar names the daily staging path (and its absolute path
 # stops resolving as soon as local retention prunes the daily file).
-broken = '''      cp "$STAGE_DIR/$DAILY_NAME.dump.gz.sha256" "$sidecar_tmp"'''
+broken = '''    cp "$STAGE_DIR/$DAILY_NAME.dump.gz.sha256" "$sidecar_tmp"'''
 if src.count(fixed) != 1:
     open(marker, 'w').write('NOTFOUND count=%d' % src.count(fixed))
     sys.exit(3)
@@ -988,7 +1216,7 @@ sab_status="$(cat "$CASE_DIR/bite-applied.txt" 2>/dev/null)"
 assert_eq "sabotage applied to the copy (NOTFOUND means this case proves nothing)" "APPLIED" "$sab_status"
 if bash -n "$CASE_DIR/bite-target.sh"; then ok "the sabotaged copy still parses"; else bad "the sabotaged copy does not parse"; fi
 sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" \
-  JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok --)"
+  JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok --)"
 # The pre-fix script reported a healthy run: that is what made the defect silent.
 assert_eq "the pre-fix script still reports SUCCESS (it never noticed)" "exit=0" "$sab_rc"
 dn="jomform-daily-$(daily_name).dump.gz"
@@ -1019,7 +1247,7 @@ setup_case; touch_rclone_conf
 sab_status="$(sabotage_promoted_dump_verification)"
 assert_eq "sabotage applied to the copy (NOTFOUND means this case proves nothing)" "APPLIED" "$sab_status"
 if bash -n "$CASE_DIR/bite-target.sh"; then ok "the sabotaged copy still parses"; else bad "the sabotaged copy does not parse"; fi
-sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok \
   STUB_COPYTO_SILENT_NAME="jomform-monthly-$(monthly_name).dump.gz" --)"
 # The pre-fix shape reports success and never notices: that is what made it silent.
 assert_eq "RED as required: without the re-read the silent-drop copy reports SUCCESS" "exit=0" "$sab_rc"
@@ -1041,7 +1269,7 @@ setup_case; touch_rclone_conf
 sab_status="$(sabotage_promoted_dump_verification)"
 assert_eq "sabotage applied to the copy (NOTFOUND means this case proves nothing)" "APPLIED" "$sab_status"
 if bash -n "$CASE_DIR/bite-target.sh"; then ok "the sabotaged copy still parses"; else bad "the sabotaged copy does not parse"; fi
-sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok \
   STUB_COPYTO_CORRUPT_NAME="jomform-monthly-$(monthly_name).dump.gz" --)"
 assert_eq "RED as required: without the re-read the truncated copy reports SUCCESS" "exit=0" "$sab_rc"
 assert_contains "RED as required: and it called the month healthy" "monthly copy ok" "$RUN_LOG"
@@ -1057,7 +1285,7 @@ echo "case: the copyto-FAILURE case BITES — drop the branch's own failure mark
 # Measured honestly, because the mutation does NOT leave the run green: the
 # promoted-dump re-read (added for the sibling defect) catches the absent object
 # as well, so the sabotaged run is still exit=1 and still writes last-failure.json.
-# What the branch's own `monthly_ok=0` decides is therefore not the exit code but
+# What the branch's own failure mark decides is therefore not the exit code but
 # the VERDICT: with it gone, FAIL_DETAIL is overwritten by the re-read's message
 # and the record a human reads names the re-read instead of the copy that broke.
 # That is the assertion this bite is driven at — and why the new case asserts the
@@ -1069,13 +1297,13 @@ python3 - "$CASE_DIR/bite-target.sh" "$CASE_DIR/bite-applied.txt" <<'PY'
 import sys
 path, marker = sys.argv[1], sys.argv[2]
 src = open(path).read()
-# The branch as shipped: it logs the failure AND marks the month failed...
-fixed = '''    log ERROR "monthly dump copy failed: $FAIL_DETAIL"
-    monthly_ok=0
+# The branch as shipped: it logs the failure AND marks the tier failed...
+fixed = '''    log ERROR "$tier dump copy failed: $PROMOTE_DETAIL"
+    tier_ok=0
 '''
 # ...replaced by the log line alone, so the failure of the copy command no
 # longer reaches the run's own verdict.
-broken = '''    log ERROR "monthly dump copy failed: $FAIL_DETAIL"
+broken = '''    log ERROR "$tier dump copy failed: $PROMOTE_DETAIL"
 '''
 if src.count(fixed) != 1:
     open(marker, 'w').write('NOTFOUND count=%d' % src.count(fixed))
@@ -1086,7 +1314,7 @@ PY
 sab_status="$(cat "$CASE_DIR/bite-applied.txt" 2>/dev/null)"
 assert_eq "sabotage applied to the copy (NOTFOUND means this case proves nothing)" "APPLIED" "$sab_status"
 if bash -n "$CASE_DIR/bite-target.sh"; then ok "the sabotaged copy still parses"; else bad "the sabotaged copy does not parse"; fi
-sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok \
   STUB_COPYTO_FAIL_NAME="jomform-monthly-$(monthly_name).dump.gz" --)"
 # Still a failed run: the promoted-dump re-read catches the copy that stored
 # nothing. Asserted, not assumed — and it is why the bite below is aimed at the
@@ -1136,7 +1364,7 @@ run_backup_unset() {
     "JFBACKUP_LOG_FILE=$RUN_LOG"
     "JFBACKUP_LOCK_FILE=$CASE_DIR/lock"
     "JFBACKUP_ENV_FILE=$CASE_DIR/env"
-    "JFBACKUP_REMOTE=googldrive"
+    "JFBACKUP_REMOTE=r2jomform"
     "JFBACKUP_REMOTE_ROOT=jfbackup-test"
     "RCLONE_CONFIG=$CASE_DIR/rclone.conf"
   )
@@ -1194,12 +1422,17 @@ PY
 # run_installed [env assignments] -- [script args]
 # Runs the installed-shape copy with NO trigger knob set, so the only thing that
 # can move off its installed value is what an operator edits into the cron line.
+#
+# `-u RCLONE_CONFIG` is load-bearing: an installed host has no RCLONE_CONFIG in
+# its environment, and this host EXPORTS one. Left inherited, that value differs
+# from the copy's rewritten RCLONE_CONFIG_DEFAULT and the run is misclassified as
+# a hand-run for a knob nobody moved — a red that measures the host, not the guard.
 run_installed() {
   local extra=() args=()
   while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do extra+=("$1"); shift; done
   [ "$#" -gt 0 ] && shift
   args=("$@")
-  env ${extra[@]+"${extra[@]}"} \
+  env -u RCLONE_CONFIG ${extra[@]+"${extra[@]}"} \
       bash "$CASE_DIR/jomform-backup-installed.sh" \
       ${args[@]+"${args[@]}"} >>"$RUN_LOG" 2>&1
   echo "exit=$?"
@@ -1238,7 +1471,7 @@ rc="$(run_backup_unset JFBACKUP_REMOTE_ROOT STUB_RCLONE_MODE=no-remote --)"
 assert_eq "exit code" "exit=1" "$rc"
 assert_contains "one line names the missing variable" "JFBACKUP_REMOTE_ROOT" "$RUN_LOG"
 assert_contains "log says it refused" "refusing a partial-override run" "$RUN_LOG"
-assert_contains "names the production folder it would have fallen back to" "jomform-backups" "$RUN_LOG"
+assert_contains "names the production folder it would have fallen back to" "jomform-backup" "$RUN_LOG"
 assert_no_file "no dump was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
 assert_same_listing "$before" "$CASE_DIR/stage"
 assert_not_contains "no alert email was attempted" "[JomForm]" "$RUN_LOG"
@@ -1299,7 +1532,7 @@ echo "case: the SAME destination-only run with all three legs provided proceeds"
 # has to still work, or the guard is a ban on hand-runs rather than a seam.
 setup_case; touch_rclone_conf
 install_backup_copy "$CASE_DIR/stage" "$CASE_DIR/state" "$RUN_LOG" "$CASE_DIR/lock" "$CASE_DIR/env" "$CASE_DIR/rclone.conf"
-rc="$(run_installed JFBACKUP_ENV_FILE="$CASE_DIR/env" JFBACKUP_REMOTE=googldrive JFBACKUP_REMOTE_ROOT=scratch-root -- --local-only)"
+rc="$(run_installed JFBACKUP_ENV_FILE="$CASE_DIR/env" JFBACKUP_REMOTE=r2jomform JFBACKUP_REMOTE_ROOT=scratch-root -- --local-only)"
 assert_eq "exit code" "exit=0" "$rc"
 assert_not_contains "the seam did not fire" "refusing a partial-override run" "$RUN_LOG"
 assert_file "dump was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
@@ -1322,7 +1555,7 @@ rc="$(run_backup_unset "JFBACKUP_ENV_FILE JFBACKUP_REMOTE JFBACKUP_REMOTE_ROOT" 
 assert_eq "exit code" "exit=0" "$rc"
 assert_contains "warns the hatch was used" "JFBACKUP_ALLOW_UNSAFE=1" "$RUN_LOG"
 assert_contains "names the credential file reached" "/opt/jomform/.env" "$RUN_LOG"
-assert_contains "names the production remote reached" "googldrive:jomform-backups" "$RUN_LOG"
+assert_contains "names the production remote reached" "r2jomform:jomform-backup" "$RUN_LOG"
 assert_contains "syslog carries the unsafe override too" "unsafe override allowed" "$CASE_DIR/alerts.log"
 assert_file "dump was taken" "$CASE_DIR/stage/jomform-daily-$(date -u +%Y-%m-%d).dump.gz"
 teardown_case
@@ -1468,7 +1701,7 @@ rc="$(run_installed \
   JFBACKUP_LOG_FILE="$RUN_LOG" \
   JFBACKUP_LOCK_FILE="$CASE_DIR/scratch-lock" \
   JFBACKUP_ENV_FILE="$CASE_DIR/env" \
-  JFBACKUP_REMOTE=googldrive \
+  JFBACKUP_REMOTE=r2jomform \
   JFBACKUP_REMOTE_ROOT=jfbackup-test \
   -- --local-only)"
 assert_eq "named STATE_DIR: exit code" "exit=0" "$rc"
@@ -1489,7 +1722,7 @@ rc="$(run_installed \
   JFBACKUP_LOG_FILE="$RUN_LOG" \
   JFBACKUP_LOCK_FILE="$CASE_DIR/scratch-lock" \
   JFBACKUP_ENV_FILE="$CASE_DIR/env" \
-  JFBACKUP_REMOTE=googldrive \
+  JFBACKUP_REMOTE=r2jomform \
   JFBACKUP_REMOTE_ROOT=jfbtest-scratch \
   -- --local-only)"
 assert_eq "omitted STATE_DIR: exit code (the seam is satisfied, so it runs)" "exit=0" "$rc"
@@ -1567,24 +1800,22 @@ import sys
 path, marker = sys.argv[1], sys.argv[2]
 src = open(path).read()
 # The verification this card added, as shipped...
-fixed = '''      elif ! SIDECAR_ERR="$(verify_remote "$sidecar_tmp" \\
-          "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>&1)"; then
-        FAIL_DETAIL="monthly sidecar verification failed: $SIDECAR_ERR"
-        log ERROR "$FAIL_DETAIL"
-        monthly_ok=0
-      elif ! SIDECAR_ERR="$(verify_remote_content "$sidecar_tmp" \\
-          "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>&1)"; then
-        FAIL_DETAIL="monthly sidecar verification failed: $SIDECAR_ERR"
-        log ERROR "$FAIL_DETAIL"
-        monthly_ok=0
-      else
-        log INFO "verified $MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256"
-      fi'''
+fixed = '''    elif ! SIDECAR_ERR="$(verify_remote "$sidecar_tmp" "$sidecar_dest" 2>&1)"; then
+      PROMOTE_DETAIL="$tier sidecar verification failed: $SIDECAR_ERR"
+      log ERROR "$PROMOTE_DETAIL"
+      tier_ok=0
+    elif ! SIDECAR_ERR="$(verify_remote_content "$sidecar_tmp" "$sidecar_dest" 2>&1)"; then
+      PROMOTE_DETAIL="$tier sidecar verification failed: $SIDECAR_ERR"
+      log ERROR "$PROMOTE_DETAIL"
+      tier_ok=0
+    else
+      log INFO "verified $sidecar_dest"
+    fi'''
 # ...replaced by trusting the upload's exit status alone, which is exactly the
-# shape the card reported: "monthly copy ok" for a sidecar that is not in Drive.
-broken = '''      else
-        log INFO "uploaded $MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256"
-      fi'''
+# shape the card reported: "monthly copy ok" for a sidecar that is not on the remote.
+broken = '''    else
+      log INFO "uploaded $sidecar_dest"
+    fi'''
 if src.count(fixed) != 1:
     open(marker, 'w').write('NOTFOUND count=%d' % src.count(fixed))
     sys.exit(3)
@@ -1596,12 +1827,12 @@ assert_eq "sabotage applied to the copy (NOTFOUND means this case proves nothing
 if bash -n "$CASE_DIR/bite-target.sh"; then ok "the sabotaged copy still parses"; else bad "the sabotaged copy does not parse"; fi
 # Same silent-drop remote as the case above: the sidecar's stream is discarded
 # while every other object lands, which is the failure the re-read exists for.
-sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 JFBACKUP_DAY_OF_WEEK=3 STUB_RCLONE_MODE=ok \
   STUB_SILENT_NAME="jomform-monthly-$(monthly_name).dump.gz.sha256" --)"
 # The pre-fix shape reports success and never notices: that is what made it silent.
 assert_eq "RED as required: without the re-read the run reports SUCCESS" "exit=0" "$sab_rc"
 assert_contains "RED as required: and it claimed the sidecar was uploaded" \
-  "uploaded googldrive:jfbackup-test/monthly/" "$RUN_LOG"
+  "uploaded r2jomform:jfbackup-test/monthly/" "$RUN_LOG"
 if [ -e "$CASE_DIR/remote/jomform-monthly-$(monthly_name).dump.gz.sha256" ]; then
   bad "the sabotaged run left a sidecar on the remote — the stub is wrong, not the proof"
 else

@@ -145,7 +145,7 @@ old="  if [ -z \"${JFBACKUP_ENV_FILE:-}\" ]; then"
 assert old in s, "anchor not found"
 open(p,"w").write(s.replace(old,"  if false; then # SABOTAGE: ENV_FILE leg removed",1))'
 
-# 3. The REMOTE_ROOT leg removed: the production Drive half.
+# 3. The REMOTE_ROOT leg removed: the production R2 half.
 bite "seam stops testing JFBACKUP_REMOTE_ROOT (the production Drive half)" \
   python3 -c 'import os
 p=os.environ["MUTATE_TARGET"]; s=open(p).read()
@@ -409,7 +409,7 @@ PY
 # The remote check disabled: a missing or expired remote no longer stops the run
 # before it uploads into nowhere.
 bite_py "disabled remote check" \
-  'log names the remote|alert body warns about same-host dump|token fix is named' <<'PY'
+  'log names the remote|alert body warns about same-host dump|the R2 credential remedy is named' <<'PY'
 import os
 p = os.environ["MUTATE_TARGET"]
 s = open(p).read()
@@ -475,25 +475,27 @@ assert old in s, "anchor not found"
 new="# SABOTAGE: cron entry deleted"
 open(p,"w").write(s.replace(old,new,1))'
 
-# The monthly sidecar write failure no longer counted: the sidecar never lands on
-# the remote, but the run reports a healthy month with an unverifiable monthly
-# copy (exit 0, no `last-failure.json`).
+# The monthly gate's failure no longer counted: a failed monthly promotion does
+# not fail the run, which reports a healthy month with an unverifiable (or absent)
+# monthly copy (exit 0, no `last-failure.json`).
 #
-# The anchor is the four-line monthly block, NOT the bare `    uploads_ok=0`: that
-# string occurs three times in the script (the two daily loops at :580 and :586,
-# and the monthly gate at :629), so `replace(..., 1)` silently lands on the DAILY
-# site and leaves the monthly one unmutated — which is exactly how this path came
-# to be claimed as covered while nothing anywhere mutated it. This block is the
-# only occurrence, so a future edit that moves or rewrites the monthly gate makes
-# this mutation ABORT rather than quietly mutate the daily path instead.
-bite_py "monthly sidecar write failure returning a healthy run" \
+# The anchor is the monthly gate's own FAIL_DETAIL + uploads_ok block, which is
+# the only occurrence carrying "monthly promotion failed": the weekly gate is
+# separate now, so a future edit that moves or rewrites the monthly block makes
+# this mutation ABORT rather than quietly mutate the weekly path instead.
+bite_py "monthly promotion failure returning a healthy run" \
   'log marks FAILED|last-failure.json written' <<'PY'
 import os
 p = os.environ["MUTATE_TARGET"]
 s = open(p).read()
-old = "  else\n    uploads_ok=0\n  fi\nfi"
+old = '''    FAIL_DETAIL="${PROMOTE_DETAIL:-monthly promotion failed}"
+    log ERROR "$FAIL_DETAIL"
+    uploads_ok=0
+'''
 assert old in s, "anchor not found"
-new = "  else\n    : # SABOTAGE: monthly write failure swallowed\n  fi\nfi"
+new = '''    FAIL_DETAIL="${PROMOTE_DETAIL:-monthly promotion failed}"
+    log ERROR "$FAIL_DETAIL"
+'''
 open(p, "w").write(s.replace(old, new, 1))
 PY
 
@@ -618,6 +620,135 @@ old = 'STAGE_DIR="${JFBACKUP_STAGE_DIR:-$STAGE_DIR_DEFAULT}"'
 assert old in s, "anchor not found"
 new = 'STAGE_DIR="$STAGE_DIR_DEFAULT"  # SABOTAGE: knob ignored'
 open(p, "w").write(s.replace(old, new, 1))
+PY
+
+# =============================================================================
+# R2 port, weekly tier and retention — the assertions THIS change adds
+# =============================================================================
+echo
+echo "### R2 writes and the R2 credential remedy"
+
+# Every rclone WRITE must carry --s3-no-check-bucket. The R2 token is scoped to
+# ONE bucket, so ListBuckets is denied; without the flag rclone concludes the
+# bucket is missing, calls CreateBucket (403) and EVERY write fails — the backup
+# fails every night. This is the single most valuable assertion in the change:
+# without it a future edit silently re-introduces a backup that never uploads.
+bite_py "rclone write missing --s3-no-check-bucket (the bucket token cannot CreateBucket)" \
+  'upload verified|log says OK|every write carried|the flag was dropped' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = " --s3-no-check-bucket"
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, ""))
+PY
+
+# The Drive remedy (`rclone config reconnect <remote>:`) does not exist for an S3
+# remote. Put it back and the alert sends an operator to a command that cannot
+# work, while the real R2 remedy goes unnamed.
+bite_py "the Drive OAuth reconnect hint restored in place of the R2 remedy" \
+  'the R2 credential remedy is named|no OAuth reconnect hint' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '''The S3 credentials for the '${REMOTE}:' remote live in /root/.config/rclone/rclone.conf
+(mode 600). An S3 remote has no OAuth token to reconnect: if uploads fail with an
+auth error, issue a NEW R2 API token in the Cloudflare dashboard (Object Read & Write
+on the '$REMOTE_ROOT' bucket) and write its Access Key ID / Secret Access Key into
+that config, then re-run the backup.'''
+assert old in s, "anchor not found"
+new = 'If the token has expired, re-run: rclone config reconnect ${REMOTE}:'
+open(p, "w").write(s.replace(old, new, 1))
+PY
+
+echo
+echo "### weekly tier and media promotion"
+
+# The weekly gate disabled: the weekly tier never builds.
+bite_py "weekly gate disabled (the weekly tier never builds)" \
+  'weekly promotion ran|weekly object on the remote|weekly promotion reported ok' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = 'if [ "$DAY_OF_WEEK" = "7" ]; then'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, 'if false; then # SABOTAGE: weekly gate disabled', 1))
+PY
+
+# The weekly gate always on: it promotes every night, duplicating the tier's slot.
+bite_py "weekly gate always on (promotes every night)" \
+  'no weekly promotion on a non-Sunday|no weekly dump object written on a non-Sunday' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = 'if [ "$DAY_OF_WEEK" = "7" ]; then'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, 'if true; then # SABOTAGE: weekly gate always on', 1))
+PY
+
+# The media archive no longer promoted into a tier: a tier restore rebuilds the
+# rows but renders no customer media. Covers BOTH tiers (promote_tier is shared).
+bite_py "media archive no longer promoted into a tier" \
+  'media archive|media\.tar\.gz|byte-identical' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = 'if [ "$tier_ok" = "1" ] && [ -f "$media_local" ]; then'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, 'if false; then # SABOTAGE: media not promoted', 1))
+PY
+
+echo
+echo "### retention budgets and overrides"
+
+bite_py "daily retention budget reverted (KEEP_DAILY 21 -> 30)" \
+  'daily files kept|daily SETS kept' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = 'KEEP_DAILY="${JFBACKUP_KEEP_DAILY:-21}"'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, 'KEEP_DAILY="${JFBACKUP_KEEP_DAILY:-30}" # SABOTAGE', 1))
+PY
+
+bite_py "weekly retention budget reverted (KEEP_WEEKLY 12 -> 4)" \
+  'weekly files kept' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = 'KEEP_WEEKLY="${JFBACKUP_KEEP_WEEKLY:-12}"'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, 'KEEP_WEEKLY="${JFBACKUP_KEEP_WEEKLY:-4}" # SABOTAGE', 1))
+PY
+
+bite_py "monthly retention budget reverted (KEEP_MONTHLY 18 -> 12)" \
+  'monthly files kept' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = 'KEEP_MONTHLY="${JFBACKUP_KEEP_MONTHLY:-18}"'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, 'KEEP_MONTHLY="${JFBACKUP_KEEP_MONTHLY:-12}" # SABOTAGE', 1))
+PY
+
+bite_py "weekly prune call removed (weekly sets are never pruned)" \
+  'weekly files kept|weekly override keeps' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = "prune_remote \"$WEEKLY_DIR/\" \"$KEEP_WEEKLY\" '^jomform-weekly-'"
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, ': # SABOTAGE: weekly prune removed', 1))
+PY
+
+bite_py "KEEP_* overrides ignored (the budget is hard-coded)" \
+  'daily override keeps|weekly override keeps|monthly override keeps' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = 'KEEP_DAILY="${JFBACKUP_KEEP_DAILY:-21}"'
+assert old in s, "anchor not found"
+open(p, "w").write(s.replace(old, 'KEEP_DAILY="21" # SABOTAGE: override ignored', 1))
 PY
 
 rm -rf "$WORK"

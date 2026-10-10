@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# JomForm nightly backup: Postgres dump + media volume -> Google Drive via rclone.
+# JomForm nightly backup: Postgres dump + media volume -> Cloudflare R2 via rclone.
 #
 # Installed on the production host OUTSIDE the checkout (default /usr/local/bin).
-# The rclone config and its OAuth token are NEVER part of this repository:
+# The rclone config and its S3 credentials are NEVER part of this repository:
 # they live at /root/.config/rclone/rclone.conf (mode 600) and the repo may go
 # public, with gitleaks scanning the full history.
 #
@@ -43,8 +43,11 @@ export PATH
 # ---------------------------------------------------------------- configuration
 # The installed values, named, so the fail-closed seam below can tell "this is
 # the cron job" from "somebody is running this by hand".
-REMOTE_DEFAULT="googldrive"
-REMOTE_ROOT_DEFAULT="jomform-backups"
+# REMOTE is an rclone S3 remote (provider=Cloudflare) and REMOTE_ROOT is its
+# BUCKET, so the durable prefix is r2jomform:jomform-backup and the tier layout
+# under it (daily/weekly/monthly) is unchanged.
+REMOTE_DEFAULT="r2jomform"
+REMOTE_ROOT_DEFAULT="jomform-backup"
 RCLONE_CONFIG_DEFAULT="/root/.config/rclone/rclone.conf"
 ENV_FILE_DEFAULT="/opt/jomform/.env"
 STAGE_DIR_DEFAULT="/var/backups/jomform"
@@ -60,8 +63,9 @@ STAGE_DIR="${JFBACKUP_STAGE_DIR:-$STAGE_DIR_DEFAULT}"
 STATE_DIR="${JFBACKUP_STATE_DIR:-$STATE_DIR_DEFAULT}"
 LOG_FILE="${JFBACKUP_LOG_FILE:-$LOG_FILE_DEFAULT}"
 LOCK_FILE="${JFBACKUP_LOCK_FILE:-$LOCK_FILE_DEFAULT}"
-KEEP_DAILY="${JFBACKUP_KEEP_DAILY:-30}"
-KEEP_MONTHLY="${JFBACKUP_KEEP_MONTHLY:-12}"
+KEEP_DAILY="${JFBACKUP_KEEP_DAILY:-21}"
+KEEP_WEEKLY="${JFBACKUP_KEEP_WEEKLY:-12}"
+KEEP_MONTHLY="${JFBACKUP_KEEP_MONTHLY:-18}"
 MEDIA_ENABLED="${JFBACKUP_MEDIA_ENABLED:-1}"
 PG_SERVICE_LABEL="com.docker.compose.service=postgres"
 MINIO_SERVICE_LABEL="com.docker.compose.service=minio"
@@ -70,11 +74,19 @@ HOSTNAME_S="$(hostname)"
 STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 DAILY_NAME="jomform-daily-$(date -u +%Y-%m-%d)"
 MONTHLY_NAME="jomform-monthly-$(date -u +%Y-%m)"
+# ISO year-week (%G-W%V) rather than a calendar week, so the name sorts
+# correctly across a year boundary — prune_remote keeps the newest names by
+# `sort -r`, and a name like jomform-weekly-2026-01 would otherwise sort below
+# jomform-weekly-2025-52 and be kept forever while the newer week was pruned.
+WEEKLY_NAME="jomform-weekly-$(date -u +%G-W%V)"
 # Test seam. The monthly promotion only runs on the 1st, so without an override
 # the promotion branch could never execute in the test suite — which is how a
 # monthly sidecar that fails `sha256sum -c` shipped with every case green. The
 # harness sets JFBACKUP_DAY_OF_MONTH to drive that branch; production never does.
 DAY_OF_MONTH="${JFBACKUP_DAY_OF_MONTH:-$(date -u +%d)}"
+# Same seam for the weekly tier: it promotes on SUNDAY (UTC), i.e. when
+# `date -u +%u` is 7, which is otherwise untestable on any other day.
+DAY_OF_WEEK="${JFBACKUP_DAY_OF_WEEK:-$(date -u +%u)}"
 LOCAL_ONLY=0
 NO_MEDIA=0
 RESTORE_FILE=""
@@ -234,7 +246,7 @@ trap cleanup EXIT
 # A backup run that has moved ANY knob off its installed value is not the cron
 # job, it is a hand-run. On 2026-09-19 such a run (three knobs set, two
 # forgotten) read the real SES credentials out of /opt/jomform/.env and mailed the
-# real super-admin inbox while writing into the production Drive folder. Safety
+# real super-admin inbox while writing into the production R2 backup. Safety
 # there came from the caller remembering; this makes it come from the script.
 #
 # `JFBACKUP_STAGE_DIR=...` etc. is the signal, and it has to cover every knob
@@ -469,8 +481,15 @@ verify_remote_digest() {
 
 upload_file() {
   local local_file="$1" dest_dir="$2"
+  # --s3-no-check-bucket is REQUIRED, not cosmetic. The R2 token is scoped to
+  # ONE bucket, so ListBuckets is denied (403); rclone cannot confirm the bucket
+  # exists, concludes it is missing and calls CreateBucket — which the token is
+  # not allowed to do — so EVERY upload fails closed with
+  # "operation error S3: CreateBucket ... AccessDenied". This flag tells rclone
+  # to skip the existence check and write straight into the bucket. It is a
+  # property of the token's least privilege, not of any rclone version.
   rclone --config "$RCLONE_CONFIG" copy "$local_file" "$dest_dir" \
-    --drive-use-trash=false --retries 3 --low-level-retries 5
+    --s3-no-check-bucket --retries 3 --low-level-retries 5
 }
 
 # Prune a remote directory to the newest N matching files.
@@ -489,6 +508,119 @@ prune_remote() {
       || log WARN "retention: could not delete $dir$f"
   done <<<"$listing"
   log INFO "retention: $dir kept $(( total < keep ? total : keep )) of $total"
+}
+
+# promote_tier <tier> <dest_dir> <tier_name>
+# Promote the current daily dump, its sidecar and the media archive into a tier
+# directory by SERVER-SIDE rclone copyto (no re-upload), re-reading every
+# promoted object before it is reported. Shared by the weekly and monthly tiers
+# so the two cannot drift apart.
+#
+# Why every write is re-read: `copyto`'s exit status describes the COMMAND, not
+# the destination object, so an rclone that exits 0 having stored nothing — or
+# having stored different bytes under the right name — reports a healthy copy.
+# The dump is re-read and its digest compared with the daily sidecar's digest (a
+# server-side copy does not change the bytes, and that digest is the one the tier
+# sidecar names). The media archive is re-read with verify_remote against the
+# LOCAL staged media file, which is the bytes the copy was given.
+#
+# The tier sidecar is GENERATED here, never copied from the daily object: the
+# daily sidecar's content names the DAILY staging path, so a verbatim copy leaves
+# `sha256sum -c <tier>.dump.gz.sha256` failing on a perfectly good dump, and that
+# path stops existing once local retention prunes the daily file. The digest is
+# identical either way (the copy is server-side); only the name differs, and it
+# is a bare basename so it resolves beside the object wherever the pair is
+# downloaded.
+#
+# On failure PROMOTE_DETAIL names the step that broke and the function returns
+# non-zero. Nothing is written past the failed step, so a tier sidecar is never
+# left vouching for a dump nobody read.
+promote_tier() {
+  local tier="$1" dest_dir="$2" tier_name="$3"
+  local dump_src="$DAILY_DIR/$DAILY_NAME.dump.gz"
+  local media_src="$DAILY_DIR/$DAILY_NAME-media.tar.gz"
+  local media_local="$STAGE_DIR/$DAILY_NAME-media.tar.gz"
+  local local_sidecar="$STAGE_DIR/$DAILY_NAME.dump.gz.sha256"
+  local dump_dest="$dest_dir/$tier_name.dump.gz"
+  local media_dest="$dest_dir/$tier_name-media.tar.gz"
+  local sidecar_dest="$dest_dir/$tier_name.dump.gz.sha256"
+  local digest="" tier_ok=1
+  local PROMOTE_ERR PROMOTE_VERIFY_ERR SIDECAR_ERR sidecar_dir sidecar_tmp
+  PROMOTE_DETAIL=""
+  PROMOTE_DIGEST=""
+
+  # 1. the dump: server-side copy, then re-read against the digest the tier
+  #    sidecar will name. The re-read runs BEFORE any sidecar exists.
+  #    --s3-no-check-bucket is required on this WRITE for the same reason it is
+  #    on upload_file: the bucket-scoped token cannot CreateBucket.
+  if ! PROMOTE_ERR="$(rclone --config "$RCLONE_CONFIG" copyto "$dump_src" "$dump_dest" --s3-no-check-bucket 2>&1)"; then
+    PROMOTE_DETAIL="$(printf '%s' "$PROMOTE_ERR" | tr '\n' ' ' | cut -c1-300)"
+    log ERROR "$tier dump copy failed: $PROMOTE_DETAIL"
+    tier_ok=0
+  fi
+  if [ "$tier_ok" = "1" ]; then
+    digest="$(cut -d' ' -f1 "$local_sidecar" 2>/dev/null || true)"
+    if [ -z "$digest" ]; then
+      PROMOTE_DETAIL="$tier sidecar: no digest in $local_sidecar"
+      log ERROR "$PROMOTE_DETAIL"
+      tier_ok=0
+    elif ! PROMOTE_VERIFY_ERR="$(verify_remote_digest "$dump_dest" "$digest" 2>&1)"; then
+      PROMOTE_DETAIL="$tier dump verification failed: $PROMOTE_VERIFY_ERR"
+      log ERROR "$PROMOTE_DETAIL"
+      tier_ok=0
+    else
+      log INFO "verified $dump_dest"
+    fi
+  fi
+
+  # 2. the media archive, so a tier restore can render customer media and not
+  #    only rebuild the rows that point at it. Re-read against the local staged
+  #    archive (size + MD5), which is the bytes the copy was given.
+  if [ "$tier_ok" = "1" ] && [ -f "$media_local" ]; then
+    if ! PROMOTE_ERR="$(rclone --config "$RCLONE_CONFIG" copyto "$media_src" "$media_dest" --s3-no-check-bucket 2>&1)"; then
+      PROMOTE_DETAIL="$tier media copy failed: $(printf '%s' "$PROMOTE_ERR" | tr '\n' ' ' | cut -c1-300)"
+      log ERROR "$PROMOTE_DETAIL"
+      tier_ok=0
+    elif ! PROMOTE_VERIFY_ERR="$(verify_remote "$media_local" "$media_dest" 2>&1)"; then
+      PROMOTE_DETAIL="$tier media verification failed: $PROMOTE_VERIFY_ERR"
+      log ERROR "$PROMOTE_DETAIL"
+      tier_ok=0
+    else
+      log INFO "verified $media_dest"
+    fi
+  fi
+
+  # 3. the sidecar: generated from the digest and uploaded through upload_file so
+  #    it gets the same post-upload re-read as every other object in this script.
+  #    Written LAST, only once the dump it describes has been read back.
+  if [ "$tier_ok" = "1" ]; then
+    # The temp file must carry the DESTINATION's basename: rclone copy takes the
+    # object's name from the source path, so a bare mktemp name would upload the
+    # right bytes under a garbage name.
+    sidecar_dir="$(mktemp -d)"
+    sidecar_tmp="$sidecar_dir/$tier_name.dump.gz.sha256"
+    printf '%s  %s\n' "$digest" "$tier_name.dump.gz" >"$sidecar_tmp"
+    if ! upload_file "$sidecar_tmp" "$dest_dir"; then
+      PROMOTE_DETAIL="$tier sidecar upload failed: $sidecar_dest"
+      log ERROR "$PROMOTE_DETAIL"
+      tier_ok=0
+    elif ! SIDECAR_ERR="$(verify_remote "$sidecar_tmp" "$sidecar_dest" 2>&1)"; then
+      PROMOTE_DETAIL="$tier sidecar verification failed: $SIDECAR_ERR"
+      log ERROR "$PROMOTE_DETAIL"
+      tier_ok=0
+    elif ! SIDECAR_ERR="$(verify_remote_content "$sidecar_tmp" "$sidecar_dest" 2>&1)"; then
+      PROMOTE_DETAIL="$tier sidecar verification failed: $SIDECAR_ERR"
+      log ERROR "$PROMOTE_DETAIL"
+      tier_ok=0
+    else
+      log INFO "verified $sidecar_dest"
+    fi
+    rm -rf "$sidecar_dir"
+  fi
+
+  [ "$tier_ok" = "1" ] || return 1
+  PROMOTE_DIGEST="$digest"
+  return 0
 }
 
 # -------------------------------------------------------------------- pg_dump
@@ -547,7 +679,7 @@ do_media() {
 }
 
 # ------------------------------------------------------------------- retention
-# Local staging keeps 3 days; Drive is the durable copy.
+# Local staging keeps 3 days; R2 is the durable copy.
 prune_local() {
   local f
   for f in $(ls -1t "$STAGE_DIR"/jomform-daily-* 2>/dev/null | tail -n +7); do
@@ -618,7 +750,7 @@ done
 
 # Fail closed before ANY work: no mkdir, no lock, no dump, no upload, no email.
 # A partial-override run must not reach production credentials or the production
-# Drive folder, so this runs above everything that could touch them.
+# R2 backup, so this runs above everything that could touch them.
 enforce_test_seam
 
 mkdir -p "$STAGE_DIR" "$STATE_DIR"
@@ -649,7 +781,7 @@ if ! do_dump; then
   fail "pg_dump failed"
   alert_email "[JomForm] Backup FAILED on $HOSTNAME_S — dump" \
     "The nightly Postgres dump did not complete at $STAMP on $HOSTNAME_S.
-No new backup exists in Google Drive. Investigate: tail -n 100 $LOG_FILE"
+No new backup exists in Cloudflare R2. Investigate: tail -n 100 $LOG_FILE"
   exit 1
 fi
 
@@ -671,17 +803,22 @@ fi
 # ---- upload
 if ! REMOTE_ERR="$(require_remote)"; then
   fail "rclone remote unavailable: $REMOTE_ERR"
-  alert_email "[JomForm] Backup FAILED on $HOSTNAME_S — Google Drive remote unavailable" \
+  alert_email "[JomForm] Backup FAILED on $HOSTNAME_S — Cloudflare R2 remote unavailable" \
     "The dump was written locally ($STAGE_DIR) but could NOT be uploaded at $STAMP.
 
 $REMOTE_ERR
 
 A local dump on the same host as the database is not an offsite backup.
-If the token has expired, re-run: rclone config reconnect ${REMOTE}:"
+The S3 credentials for the '${REMOTE}:' remote live in /root/.config/rclone/rclone.conf
+(mode 600). An S3 remote has no OAuth token to reconnect: if uploads fail with an
+auth error, issue a NEW R2 API token in the Cloudflare dashboard (Object Read & Write
+on the '$REMOTE_ROOT' bucket) and write its Access Key ID / Secret Access Key into
+that config, then re-run the backup."
   exit 1
 fi
 
 DAILY_DIR="$REMOTE:$REMOTE_ROOT/daily"
+WEEKLY_DIR="$REMOTE:$REMOTE_ROOT/weekly"
 MONTHLY_DIR="$REMOTE:$REMOTE_ROOT/monthly"
 
 uploads_ok=1
@@ -708,87 +845,28 @@ for f in "$STAGE_DIR/$DAILY_NAME.dump.gz" "$STAGE_DIR/$DAILY_NAME.dump.gz.sha256
   log INFO "verified $DAILY_DIR/$(basename "$f")"
 done
 
-# Monthly copy on the 1st. rclone server-side copy, so no re-upload.
+# Promotion. Sundays (UTC) build the weekly tier; the 1st builds the monthly
+# tier. Both are rclone server-side copies into the tier directory, done by the
+# SAME function and held to the same rule: every promoted object is re-read
+# before it is reported. Neither re-uploads, so the bytes are the daily ones.
 if [ "$DAY_OF_MONTH" = "01" ]; then
   log INFO "first of month: promoting to $MONTHLY_DIR/$MONTHLY_NAME.dump.gz"
-  monthly_ok=1
-  if ! PROMOTE_ERR="$(rclone --config "$RCLONE_CONFIG" copyto \
-      "$DAILY_DIR/$DAILY_NAME.dump.gz" "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz" 2>&1)"; then
-    FAIL_DETAIL="$(printf '%s' "$PROMOTE_ERR" | tr '\n' ' ' | cut -c1-300)"
-    log ERROR "monthly dump copy failed: $FAIL_DETAIL"
-    monthly_ok=0
-  fi
-  # The sidecar is written HERE, not copied from the daily object. The daily
-  # sidecar's content is "<digest>  /var/backups/jomform/jomform-daily-<date>.dump.gz"
-  # because it was produced by `sha256sum "$out"`; copying that file verbatim
-  # leaves the monthly artifact with a sidecar naming the DAILY path, so
-  # `sha256sum -c jomform-monthly-<ym>.dump.gz.sha256` fails on a perfectly good
-  # dump and the path stops existing once local retention prunes the daily file.
-  # Same digest (the copy is server-side, so the bytes are identical), monthly
-  # name, bare basename so it resolves beside the object in any directory the
-  # reader downloaded the pair into.
-  #
-  # The upload goes to a LOCAL temp file and is then `copy`d like every other
-  # upload in this script, so it gets the same post-upload re-read. A piped
-  # `rcat` was the one write in this script whose exit status was trusted: an
-  # rclone that consumes stdin, exits 0 and stores nothing reported a healthy
-  # monthly copy whose sidecar was never in Drive.
-  #
-  # The promotion's OWN write — the dump copied by the `copyto` above — is now
-  # covered the same way, and it needs to be: `copyto`'s exit status describes
-  # the command, not the destination object. An rclone that exits 0 having stored
-  # nothing, or having stored different bytes under the monthly name, used to
-  # reach this block and be reported as a healthy month. The digest the daily
-  # sidecar carries is the digest of the bytes that were promoted (a server-side
-  # copy does not change them) and is the digest the monthly sidecar below names,
-  # so re-reading the promoted object and comparing it against that digest pins
-  # the pair together with no new tool.
-  if [ "$monthly_ok" = "1" ]; then
-    local_sidecar="$STAGE_DIR/$DAILY_NAME.dump.gz.sha256"
-    digest="$(cut -d' ' -f1 "$local_sidecar" 2>/dev/null || true)"
-    if [ -z "$digest" ]; then
-      FAIL_DETAIL="monthly sidecar: no digest in $local_sidecar"
-      log ERROR "$FAIL_DETAIL"
-      monthly_ok=0
-    # Re-read the promoted DUMP before the sidecar is written: a sidecar sitting
-    # next to a dump nobody read is what makes a corrupt pair look complete.
-    elif ! PROMOTE_VERIFY_ERR="$(verify_remote_digest "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz" "$digest" 2>&1)"; then
-      FAIL_DETAIL="monthly dump verification failed: $PROMOTE_VERIFY_ERR"
-      log ERROR "$FAIL_DETAIL"
-      monthly_ok=0
-    else
-      log INFO "verified $MONTHLY_DIR/$MONTHLY_NAME.dump.gz"
-      # The temp file must carry the DESTINATION's basename: rclone copy takes
-      # the object's name from the source path, so a bare mktemp name would
-      # upload the right bytes under a garbage name.
-      sidecar_dir="$(mktemp -d)"
-      sidecar_tmp="$sidecar_dir/$MONTHLY_NAME.dump.gz.sha256"
-      # The exact bytes the rcat used to send: the digest from the daily
-      # sidecar, two spaces, the monthly basename.
-      printf '%s  %s\n' "$digest" "$MONTHLY_NAME.dump.gz" >"$sidecar_tmp"
-      if ! upload_file "$sidecar_tmp" "$MONTHLY_DIR"; then
-        FAIL_DETAIL="monthly sidecar upload failed: $MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256"
-        log ERROR "$FAIL_DETAIL"
-        monthly_ok=0
-      elif ! SIDECAR_ERR="$(verify_remote "$sidecar_tmp" \
-          "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>&1)"; then
-        FAIL_DETAIL="monthly sidecar verification failed: $SIDECAR_ERR"
-        log ERROR "$FAIL_DETAIL"
-        monthly_ok=0
-      elif ! SIDECAR_ERR="$(verify_remote_content "$sidecar_tmp" \
-          "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256" 2>&1)"; then
-        FAIL_DETAIL="monthly sidecar verification failed: $SIDECAR_ERR"
-        log ERROR "$FAIL_DETAIL"
-        monthly_ok=0
-      else
-        log INFO "verified $MONTHLY_DIR/$MONTHLY_NAME.dump.gz.sha256"
-      fi
-      rm -rf "$sidecar_dir"
-    fi
-  fi
-  if [ "$monthly_ok" = "1" ]; then
-    log INFO "monthly copy ok (sha256 $digest, sidecar names $MONTHLY_NAME.dump.gz)"
+  if promote_tier monthly "$MONTHLY_DIR" "$MONTHLY_NAME"; then
+    log INFO "monthly copy ok (sha256 $PROMOTE_DIGEST, sidecar names $MONTHLY_NAME.dump.gz)"
   else
+    FAIL_DETAIL="${PROMOTE_DETAIL:-monthly promotion failed}"
+    log ERROR "$FAIL_DETAIL"
+    uploads_ok=0
+  fi
+fi
+
+if [ "$DAY_OF_WEEK" = "7" ]; then
+  log INFO "sunday (UTC): promoting to $WEEKLY_DIR/$WEEKLY_NAME.dump.gz"
+  if promote_tier weekly "$WEEKLY_DIR" "$WEEKLY_NAME"; then
+    log INFO "weekly copy ok (sha256 $PROMOTE_DIGEST, sidecar names $WEEKLY_NAME.dump.gz)"
+  else
+    FAIL_DETAIL="${PROMOTE_DETAIL:-weekly promotion failed}"
+    log ERROR "$FAIL_DETAIL"
     uploads_ok=0
   fi
 fi
@@ -796,7 +874,7 @@ fi
 if [ "$uploads_ok" != "1" ]; then
   fail "upload or verification failed${FAIL_DETAIL:+: $FAIL_DETAIL}"
   alert_email "[JomForm] Backup FAILED on $HOSTNAME_S — upload" \
-    "pg_dump succeeded locally but the Google Drive upload/verification failed at $STAMP.
+    "pg_dump succeeded locally but the Cloudflare R2 upload/verification failed at $STAMP.
 Local dump: $STAGE_DIR/$DAILY_NAME.dump.gz ($PG_BYTES bytes)
 Last run: $STATE_DIR/last-run.json
 Log: tail -n 200 $LOG_FILE"
@@ -804,7 +882,16 @@ Log: tail -n 200 $LOG_FILE"
 fi
 
 # ---- retention
+# 7 daily / 4 weekly / 6 monthly backup SETS. prune_remote counts FILES and one
+# set is 3 files (dump, sidecar, media), so the file budgets are 21 / 12 / 18.
+# R2 has NO object versioning and no S3 Object Lock: GetBucketVersioning,
+# PutBucketVersioning and the Object Lock headers are all listed as NOT
+# implemented on Cloudflare's "S3 API compatibility" page. An overwrite therefore
+# destroys the previous object outright, and this retention window IS the version
+# history — R2's free tier (10 GB/month) makes the extra dailies cost nothing, so
+# the window is kept generous on purpose rather than trimmed to save space.
 prune_remote "$DAILY_DIR/" "$KEEP_DAILY" '^jomform-daily-'
+prune_remote "$WEEKLY_DIR/" "$KEEP_WEEKLY" '^jomform-weekly-'
 prune_remote "$MONTHLY_DIR/" "$KEEP_MONTHLY" '^jomform-monthly-'
 prune_local
 

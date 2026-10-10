@@ -1,8 +1,9 @@
-# Automated Postgres + media backups to Google Drive
+# Automated Postgres + media backups to Cloudflare R2
 
-The production database is dumped nightly, gzipped, uploaded to Google Drive and
-verified by re-reading the uploaded object. A restore drill is a first-class mode
-because **a backup that has never been restored is not a backup**.
+The production database is dumped nightly, gzipped, uploaded to Cloudflare R2
+(over rclone's `s3` backend) and verified by re-reading the uploaded object. A
+restore drill is a first-class mode because **a backup that has never been
+restored is not a backup**.
 
 This directory is the source of truth for the script that runs on the host. The
 script is copied to `/usr/local/bin/jomform-backup.sh` and driven by a root cron
@@ -12,14 +13,31 @@ entry; it does **not** run out of the checkout.
 
 | Artifact | Path on the host | Uploaded to |
 |---|---|---|
-| Postgres dump (custom format, `pg_dump -Fc`, gzipped) | `/var/backups/jomform/jomform-daily-<UTC date>.dump.gz` | `googldrive:jomform-backups/daily/` |
-| Checksum of the dump | same path + `.sha256` | `googldrive:jomform-backups/daily/` |
-| MinIO media volume (`/data`, tar+gzip) | `/var/backups/jomform/jomform-daily-<UTC date>-media.tar.gz` | `googldrive:jomform-backups/daily/` |
+| Postgres dump (custom format, `pg_dump -Fc`, gzipped) | `/var/backups/jomform/jomform-daily-<UTC date>.dump.gz` | `r2jomform:jomform-backup/daily/` |
+| Checksum of the dump | same path + `.sha256` | `r2jomform:jomform-backup/daily/` |
+| MinIO media volume (`/data`, tar+gzip) | `/var/backups/jomform/jomform-daily-<UTC date>-media.tar.gz` | `r2jomform:jomform-backup/daily/` |
 
-Retention: **30 daily** and **12 monthly**. The monthly copy is promoted on the
-1st of each month by a server-side `rclone copyto` (no re-upload) into
-`googldrive:jomform-backups/monthly/`. Local staging keeps the most recent 3 days of
-dumps; Drive is the durable copy.
+Retention: **7 daily**, **4 weekly** and **6 monthly** backup **sets**. One set is
+three files — the dump, its `.sha256` sidecar and the `-media.tar.gz` archive — and
+`prune_remote` counts **files**, so the file budgets are **21 / 12 / 18**.
+
+The weekly set is promoted every **Sunday (UTC)**; the monthly set on the **1st**
+of each month. Both are promoted by a server-side `rclone copyto` (no re-upload)
+into `r2jomform:jomform-backup/weekly/` and `r2jomform:jomform-backup/monthly/`,
+and both promote **all three** artifacts — the dump, its sidecar and the media
+archive — so a weekly or monthly restore can render customer media, not only
+rebuild the rows that point at it. The weekly name is the **ISO year-week**
+(`jomform-weekly-<YYYY>-W<WW>`, `date -u +%G-W%V`) rather than a calendar week, so
+it sorts correctly across a year boundary — `prune_remote` keeps the newest names
+by `sort -r`, and a name like `2026-W01` must not sort below `2025-W52`. Local
+staging keeps the most recent 3 days of dumps; R2 is the durable copy.
+
+R2 has **no object versioning and no S3 Object Lock** — Cloudflare's "S3 API
+compatibility" page lists `GetBucketVersioning`, `PutBucketVersioning` and the
+Object Lock headers as **not implemented**. An overwrite therefore destroys the
+previous object outright, so **this retention window IS the version history**, and
+R2's free tier (10 GB/month) makes the extra dailies cost nothing rather than
+being trimmed to save space.
 
 The monthly pair is `jomform-monthly-<YYYY-MM>.dump.gz` plus a
 `.dump.gz.sha256` sidecar whose **content names the monthly object**:
@@ -37,15 +55,16 @@ change the bytes); only the name differs, and the name is a bare basename so it
 resolves beside the object wherever the pair is downloaded to.
 
 The promotion is verified before it is reported: the promoted dump is re-read and
-its digest compared with the one this sidecar names, and the sidecar is written
-only once that comparison has passed. A monthly dump that is not in Drive, or is
-not the bytes that were promoted, therefore fails the run — and gets no sidecar,
-so nothing makes the pair look verified.
+its digest compared with the one this sidecar names, the promoted media archive is
+re-read and its size and hash compared with the local staged archive, and the
+sidecar is written only once those comparisons have passed. A monthly dump that is
+not on the remote, or is not the bytes that were promoted, therefore fails the
+run — and gets no sidecar, so nothing makes the pair look verified.
 
 Verify a monthly copy by downloading the pair and checking it:
 
 ```bash
-rclone copy googldrive:jomform-backups/monthly/jomform-monthly-<YYYY-MM>.dump.gz* /tmp/
+rclone copy r2jomform:jomform-backup/monthly/jomform-monthly-<YYYY-MM>.dump.gz* /tmp/
 cd /tmp && sha256sum -c jomform-monthly-<YYYY-MM>.dump.gz.sha256
 ```
 
@@ -61,53 +80,86 @@ dropping it from the archive.
 
 ## The rclone remote
 
-The remote and its OAuth token live **outside this repository**, at
+The remote and its S3 credentials live **outside this repository**, at
 `/root/.config/rclone/rclone.conf` with mode `600`. This repository may become
-public and `gitleaks` scans the full git history, so the token must never be
+public and `gitleaks` scans the full git history, so the credentials must never be
 committed, copied into a worktree, or pasted into a PR.
 
-The remote is named **`googldrive`**, and the name is load-bearing rather than
-cosmetic: it is the script's installed default (`REMOTE_DEFAULT` in
-`jomform-backup.sh`), so the cron job resolves `googldrive:` unless
-`JFBACKUP_REMOTE` overrides it. A remote created under any other name —
-`gdrive` is the name this page used to give — is not the one the job reaches,
-and every nightly run then fails with *"didn't find section in config file"*.
-Use the same name in every command below, including the `reconnect` that fixes
-an expired token.
+The remote is named **`r2jomform`** and uses rclone's **`s3` backend with
+`provider = Cloudflare`**. For an S3 remote `REMOTE_ROOT` is the **bucket**,
+`jomform-backup`, so the durable prefix is `r2jomform:jomform-backup` and the
+`daily/` `weekly/` `monthly/` layout under it is unchanged from the Drive era. The
+name is load-bearing rather than cosmetic: `r2jomform` is the script's installed
+default (`REMOTE_DEFAULT`), so the cron job resolves `r2jomform:` unless
+`JFBACKUP_REMOTE` overrides it. A remote created under any other name is not the
+one the job reaches, and every nightly run then fails with *"didn't find section in
+config file"*.
 
-Configure it with the **`drive.file` scope, never the default full `drive`
-scope**:
+The concrete R2 facts, so the config is reproducible:
 
-```bash
-rclone config create googldrive drive scope drive.file
+- **Endpoint**: `https://7d89f41b310291c98f383d10c698e29f.r2.cloudflarestorage.com`
+- **Region**: `auto` (R2 only has `auto`; an empty value and the `us-east-1` alias
+  both resolve to it)
+- **Bucket**: `jomform-backup`, location APAC, and **PRIVATE** — no public access
+- **Credentials**: one R2 **Account API token scoped to the single bucket**
+  `jomform-backup`, with only **Object Read & Write**
+
+The least-privilege reasoning here is the point, and it is not the Drive page's old
+`drive.file`-scope argument: the token grants access to **one bucket and nothing
+else in the account**, so root on the production host yields one backup bucket —
+not the whole R2 account. (A bucket-scoped S3 token does have a cost on the read
+path: it cannot `ListBuckets`. See the write caveat below.)
+
+The config section, for reference (the secret itself never lives in this repo):
+
+```ini
+[r2jomform]
+type = s3
+provider = Cloudflare
+access_key_id = <R2 token Access Key ID>
+secret_access_key = <R2 token Secret Access Key>
+endpoint = https://7d89f41b310291c98f383d10c698e29f.r2.cloudflarestorage.com
+region = auto
 ```
 
-`drive.file` grants access **only to files this application itself creates**. It
-cannot read, modify or delete anything else in the account. Without it, anyone
-who obtains root on the production host gains write access to the entire Drive
-rather than to one backup folder. The trade-off, stated honestly: rclone can no
-longer see files it did not create, so seeding the destination by hand, or
-restoring from a dump somebody uploaded manually, is not possible — for an
-automated backup destination that is the correct trade.
+### `--s3-no-check-bucket` is REQUIRED on every write
 
-The OAuth handshake needs a human: it opens a browser and asks for the account's
-consent. It cannot be completed by an agent. When the token expires the job
-raises an alert and the fix is one command:
+Because the token is scoped to **one** bucket, `ListBuckets` is **denied (403)**.
+rclone then cannot confirm the bucket exists, concludes it is missing, and calls
+`CreateBucket` — which the token is **not** allowed to do — so **every upload fails
+closed**, 10 runs out of 10, on rclone 1.75.2 and 1.60.1 alike:
 
-```bash
-rclone config reconnect googldrive:
+```
+Failed to copy: failed to prepare upload: operation error S3: CreateBucket,
+https response error StatusCode: 403 ... api error AccessDenied
 ```
 
-Verify the scope took effect rather than assuming it:
+This is a property of the token's least privilege, not of any rclone version, and
+it is **not** fixed by retries. The script therefore passes `--s3-no-check-bucket`
+on **every rclone write**: `upload_file`'s `copy`, and the tier promotion's
+server-side `copyto` (weekly and monthly). Read operations (`lsjson`, `lsf`,
+`hashsum`, `cat`, `deletefile`) do not need it. The equivalent remote-config option
+is `no_check_bucket = true`, but the flag is kept in the script **on purpose** — the
+rclone config lives outside the repo and must not be load-bearing, or a re-created
+config would silently break every backup. The suite models this failure, so
+dropping the flag turns it red.
+
+There is **no OAuth token to reconnect** for an S3 remote — `rclone config
+reconnect` is a Drive remedy and does not exist here. If uploads fail with an auth
+error, issue a **new R2 API token** in the Cloudflare dashboard (Object Read & Write
+on the `jomform-backup` bucket) and write its Access Key ID / Secret Access Key into
+`/root/.config/rclone/rclone.conf`. The failure alert names exactly this remedy.
+
+Verify the remote is reachable and scoped as expected rather than assuming it:
 
 ```bash
-grep '^scope' /root/.config/rclone/rclone.conf      # must print: scope = drive.file
-rclone lsd googldrive:                            # lists only what this job created
+rclone lsjson r2jomform:jomform-backup/daily/            # lists what the job uploaded
+grep -E '^\[r2jomform\]|^provider|^endpoint|^region' /root/.config/rclone/rclone.conf
 ```
 
-With `drive.file`, `rclone lsd googldrive:` listing only the `jomform-backups`
-folder is the expected and correct output. Other folders in the account are
-invisible to this remote by design — that is the scope working, not a fault.
+A one-bucket token listing only the job's own artifacts is the expected and correct
+output; other buckets in the account are invisible to it by design — that is the
+scoping working, not a fault.
 
 ## Install on the host
 
@@ -119,7 +171,7 @@ install -d -m 0700 /var/backups/jomform /var/lib/jomform-backup
 Then add the cron entry (this is the only scheduled job for this purpose):
 
 ```cron
-# JomForm nightly backup -> Google Drive. Logs to /var/log/jomform-backup.log.
+# JomForm nightly backup -> Cloudflare R2. Logs to /var/log/jomform-backup.log.
 17 2 * * * /usr/local/bin/jomform-backup.sh >> /var/log/jomform-backup.log 2>&1
 ```
 
@@ -173,7 +225,7 @@ the lock and the status file still land wherever the run's knobs point.
 
 The script is installed **outside** the checkout and reads its credentials from
 `/opt/jomform/.env` (real SES keys, real `SUPER_ADMIN_EMAILS`) and its
-destination from `JFBACKUP_REMOTE_ROOT` (the production Drive folder). An ad-hoc
+destination from `JFBACKUP_REMOTE_ROOT` (the production R2 backup). An ad-hoc
 run that sets some knobs and forgets others therefore silently reaches production
 credentials and production storage. That is not hypothetical: on 2026-09-19 two
 hand-runs set `JFBACKUP_STAGE_DIR`/`_STATE_DIR`/`_LOG_FILE`, forgot
@@ -229,7 +281,7 @@ JFBACKUP_STATE_DIR=/tmp/jfbtest/state \
 JFBACKUP_LOG_FILE=/tmp/jfbtest/run.log \
 JFBACKUP_LOCK_FILE=/tmp/jfbtest/lock \
 JFBACKUP_ENV_FILE=/tmp/jfbtest/env \
-JFBACKUP_REMOTE=googldrive \
+JFBACKUP_REMOTE=r2jomform \
 JFBACKUP_REMOTE_ROOT=jfbtest-scratch \
   /usr/local/bin/jomform-backup.sh --local-only
 ```
@@ -264,7 +316,7 @@ writing into the very paths it exists to stay out of.
 What the guard *does* enforce is narrower, and it is stated above: a run that moved any of
 those knobs must **explicitly provide** `JFBACKUP_ENV_FILE`, `JFBACKUP_REMOTE` and
 `JFBACKUP_REMOTE_ROOT`, so that a run cannot reach the production credentials or the production
-Drive folder **by omission**. That is a test on what the caller provided, not a check that the
+R2 backup **by omission**. That is a test on what the caller provided, not a check that the
 run is contained, and it is deliberately not a licence to run against the installed script
 without the block above.
 
@@ -309,12 +361,18 @@ loud in four independent places:
 
 **"Exited 0" is not "uploaded".** After every upload the remote object is
 re-read and its size and hash compared against the local file. An upload that
-returns success but leaves nothing in Drive fails the run. The monthly promotion
-is a write of its own and is held to the same rule: the promoted dump is re-read
-and its digest compared with the digest the monthly sidecar names, **before** that
-sidecar is written — so a `copyto` that stored nothing, or stored other bytes
-under the monthly name, fails the run instead of shipping a pair that looks
-complete.
+returns success but leaves nothing on the remote fails the run. Each tier
+promotion (weekly **and** monthly) is a write of its own and is held to the same
+rule: the promoted dump is re-read and its digest compared with the digest the tier
+sidecar names, and the promoted media archive is re-read and compared with the
+local staged archive, **before** that sidecar is written — so a `copyto` that
+stored nothing, or stored other bytes under the tier name, fails the run instead of
+shipping a set that looks complete.
+
+Every rclone **write** carries `--s3-no-check-bucket`. The R2 token is scoped to
+one bucket, so it cannot `ListBuckets`; without the flag rclone calls `CreateBucket`
+(403, `AccessDenied`) and **every write fails** — the backup would fail every
+night. The stub models that real failure, so dropping the flag turns the suite red.
 
 The last run's outcome is also written to `/var/lib/jomform-backup/last-run.json`
 (`/var/lib/jomform-backup/last-failure.json` on failure) so the state can be
@@ -335,7 +393,7 @@ sent; a failing run does not retry in a tight loop because the lock file
 
 ## Tested failure paths
 
-Every one of these is exercised by `jomform-backup_test.sh` (255 assertions,
+Every one of these is exercised by `jomform-backup_test.sh` (293 assertions,
 stubbed `rclone`/`docker`, no network and no database required) and every one of
 them is additionally proven to *bite* by sabotaging the script and requiring the
 suite to go red:
@@ -355,14 +413,14 @@ counted as caught, so the harness cannot inflate its own coverage:
 bash deploy/backup/jomform-backup_bite.sh
 ```
 
-It applies **twenty-nine** sabotages in four groups. Thirteen target the script's
+It applies **thirty-nine** sabotages in six groups. Thirteen target the script's
 failure handling: removed hash verification, removed post-upload verification,
 the `FAILED` line downgraded to `WARN`, removed empty-archive guard, unescaped
 status JSON, ignored restore failure, upload failure returning exit 0, a backend
 exposing no hash degrading to a size-only check, the `rclone is not installed`
 check removed, disabled remote check, a removed cron `PATH` pin (the bullet for
 it is in the list above), a restore drill writing the backup job's status, and
-the monthly sidecar write failure reported as a healthy run.
+the monthly promotion failure reported as a healthy run.
 Nine more mutate the fail-closed seam: the seam never called, the
 `JFBACKUP_ENV_FILE` leg removed (the credential half that actually mailed the
 real inbox), the `JFBACKUP_REMOTE_ROOT` leg removed, the refusal moved below the
@@ -376,10 +434,19 @@ and the entry deleted outright (leaving the assertion nothing to read). Both are
 needed because that assertion once grepped README **line 8**, a prose sentence
 naming the same script path, so it read prose instead of the cron entry and
 reported `ok` whatever the entry set.
-The last five mutate **containment** rather than the seam, which is the
+Five mutate **containment** rather than the seam, which is the
 distinction the hand-run section is built on: the README's recipe dropping a knob,
 the suite's own helper dropping one, the false "property of the script" sentence
 being restored, and the script ignoring a named `STATE_DIR` or `STAGE_DIR`.
+Ten are added by the R2 port and the weekly tier, and they are the ones that pin
+the behaviour a future edit would most plausibly lose: **every write missing
+`--s3-no-check-bucket`** (the CreateBucket/AccessDenied failure — the most
+valuable one here), the Drive OAuth `reconnect` hint restored in place of the R2
+credential remedy, the **weekly gate** disabled and separately forced always-on,
+the **media archive no longer promoted** into a tier, the daily / weekly / monthly
+**retention budgets** each reverted to the old value, the **weekly prune call
+removed**, and the `JFBACKUP_KEEP_*` **overrides ignored** (the budget
+hard-coded).
 
 **That harness runs inside a private mount namespace** (`unshare -m`, with a
 tmpfs over each installed-default path), and **refuses to run without one**. Two
@@ -391,26 +458,29 @@ not hypothetical: the containment group leaked into the agent host's
 and had to be hand-remediated. The wrapper is what makes this harness safe to
 keep, and removing it would reintroduce that leak.
 
-The monthly path has **four** sabotages that live **inside the suite** rather
+The promotion path has **five** sabotages that live **inside the suite** rather
 than in this harness, and they are named here so "the sabotages above" is never
 read as covering them: the verbatim daily sidecar copy, the removal of the
 sidecar's post-upload re-read, the removal of the promoted dump's re-read
 (run twice, once per shape — a copy that stored nothing and a copy
-that stored a truncated object; `sabotage_promoted_dump_verification`), and the
-removal of the promotion's own `monthly_ok=0` in its copy-failure branch (the
-mutation leaves the run failing — the promoted-dump re-read catches the absent
-object too — so the assertions it turns red are the ones on the **verdict**:
-the `FAILED` record and the status detail must still name the copy that broke,
-not the re-read that noticed afterwards). Each runs
+that stored a truncated object; `sabotage_promoted_dump_verification`), the
+removal of the promotion's own failure mark (`tier_ok=0`) in its copy-failure
+branch (the mutation leaves the run failing — the promoted-dump re-read catches
+the absent object too — so the assertions it turns red are the ones on the
+**verdict**: the `FAILED` record and the status detail must still name the copy
+that broke, not the re-read that noticed afterwards), and the **R2
+`--s3-no-check-bucket` removal** (a copy of the script with the flag stripped must
+go red against the stub's modelled CreateBucket/AccessDenied). Each runs
 against a copy of the script inside a temp dir, so the tracked file is never
-written to. The sidecar *write failure* half IS mutated by this harness, but only
-since that mutation was anchored on the monthly block itself: it used to anchor on
-the bare `    uploads_ok=0`, which occurs three times in `jomform-backup.sh` (the
-two daily loops and the monthly gate), so `replace(..., 1)` landed on the
-**daily** site and left this path unmutated while the README claimed the harness
-covered it. The case does bite either way — mutate the monthly gate alone and the
-suite goes red on that case's own `exit=1` / `FAILED` / `last-failure.json`
-assertions — so the gap was in what the harness applied, never in the assertion.
+written to. The promotion-failure half IS also mutated by this harness (the
+"monthly promotion failure returning a healthy run" mutation), and that mutation
+is anchored on the monthly gate's own `FAIL_DETAIL` + `uploads_ok=0` block — the
+only occurrence carrying "monthly promotion failed", since the weekly gate is a
+separate block now — so a future edit that moves or rewrites the monthly gate
+makes it ABORT rather than quietly mutate the weekly path instead. It used to
+anchor on the bare `    uploads_ok=0`, which occurs three times in
+`jomform-backup.sh`, so `replace(..., 1)` landed on a daily site and left the path
+unmutated while the README claimed the harness covered it.
 
 Three of those twelve were **not** caught when this harness was first written
 against the suite, and the suite grew the assertions they need rather than the
@@ -502,8 +572,32 @@ resolves nothing).
   be on the remote, so the case cannot pass on a run that failed before the
   promotion. Driven by the stub's `STUB_COPYTO_FAIL_NAME` (it fails exactly one
   named destination's copy; a case dir is never left behind), and an in-suite
-  sabotage named above removes the branch's `monthly_ok=0` and requires the suite
+  sabotage named above removes the branch's failure mark and requires the suite
   to go red on the verdict assertions.
+- **The weekly tier** — promoted every **Sunday (UTC)** (`date -u +%u` = 7),
+  driven in the suite by the `JFBACKUP_DAY_OF_WEEK` seam the same way the monthly
+  gate is driven by `JFBACKUP_DAY_OF_MONTH`. A case asserts it promotes on Sunday
+  and produces the dump + sidecar + media under `jomform-weekly-<YYYY>-W<WW>` (the
+  ISO year-week, so it sorts across a year boundary), a case asserts it does
+  **not** promote on another day, and a case with the override unset asserts the
+  real date is respected (so the seam is not a way to promote every night).
+- **A tier set must carry the media archive** — the monthly (and now weekly)
+  promotion promotes the `-media.tar.gz` too and re-reads it, so a tier restore can
+  render customer media rather than only rebuild the rows that point at it. The
+  case asserts the archive is on the remote and byte-identical to the daily one;
+  removing the media promotion turns it red.
+- **Retention keeps whole sets** — the daily/weekly/monthly tiers keep the newest
+  **21 / 12 / 18** FILES, i.e. **7 / 4 / 6** three-file sets. The case seeds whole
+  sets older than the run's own daily set and asserts the kept counts, the newest
+  set surviving and the oldest pruned; the `JFBACKUP_KEEP_DAILY` / `_WEEKLY` /
+  `_MONTHLY` overrides are exercised too.
+- **Every rclone write carries `--s3-no-check-bucket`** — the bucket-scoped R2
+  token cannot `ListBuckets`, so without the flag rclone calls `CreateBucket` (403,
+  `AccessDenied`) and every write fails. The stub models that real failure, and a
+  copy of the script with the flag stripped must go red; separately, a run that
+  spans both write shapes (the daily `copy` and the promotion's `copyto`) asserts
+  that **every** write invocation carried the flag. This is the assertion that
+  stops a future edit silently re-introducing a backup that fails every night.
 - **A partial override refuses before doing any work** — with `JFBACKUP_STAGE_DIR`
   (or any other location knob) set and `JFBACKUP_ENV_FILE`, `JFBACKUP_REMOTE` or
   `JFBACKUP_REMOTE_ROOT` missing, the run exits non-zero naming the missing
@@ -531,9 +625,10 @@ deliberately sabotaged script for each of: removed hash verification, removed
 post-upload verification, the `FAILED` line downgraded to `WARN`, removed
 empty-archive guard, unescaped status JSON, ignored restore failure, upload
 failure returning exit 0, disabled remote check, a removed cron `PATH` pin,
-a restore drill writing the backup job's status, and the monthly sidecar copied
-verbatim from the daily object (the last one is done inside the suite itself, on
-a copy of the script in a temp dir).
+a restore drill writing the backup job's status, the tier sidecar copied
+verbatim from the daily object, and an rclone write with `--s3-no-check-bucket`
+stripped (the last two are done inside the suite itself, on a copy of the script
+in a temp dir).
 
 The fail-closed test seam above has its own bite proof, which mutates the seam
 one part at a time in a throwaway copy of this directory and requires the suite
@@ -544,18 +639,17 @@ unparseable, is reported as an abort rather than counted):
 bash deploy/backup/jomform-backup_bite.sh
 ```
 
-It covers: the seam never called, the `JFBACKUP_ENV_FILE` leg removed (the
-credential half that actually mailed the real inbox), the
-`JFBACKUP_REMOTE_ROOT` leg removed, the refusal moved below the mkdir+lock (so
-only the ordering assertions can catch it), the refusal also sending the alert
-email, the escape hatch defaulting to ON, the location knobs no longer being
-watched, and the destination knobs no longer being watched (the shape a
-destination-only run produces).
+It covers, in addition to the seam: the R2/weekly/retention groups named above —
+every write missing `--s3-no-check-bucket`, the Drive `reconnect` hint restored in
+place of the R2 remedy, the weekly gate disabled and separately forced always-on,
+the media archive no longer promoted into a tier, each retention budget reverted to
+its old value, the weekly prune call removed, and the `JFBACKUP_KEEP_*` overrides
+ignored.
 
 ### Running the suite needs nothing but bash
 
 It stubs `docker` and `rclone` on the `PATH` it hands the script, so it runs on a
-laptop, in a worktree, or on the production host without touching Drive.
+laptop, in a worktree, or on the production host without touching R2.
 
 ### This suite is a preflight gate (`backup`)
 
@@ -574,9 +668,10 @@ ungated. `scripts/preflight_test.sh` check 2 now fails if the gate is advertised
 has no `run backup` call site (verified by de-wiring it: `listed but never run:
 [backup]`).
 
-The **bite proof** (`jomform-backup_bite.sh`, ~8 minutes) is deliberately *not* a
-per-run gate — 8 minutes on every merge is how a gate gets skipped. Run it on demand
-whenever the seam or the failure paths change:
+The **bite proof** (`jomform-backup_bite.sh`, ~42 minutes — 39 mutations, each a
+full suite run) is deliberately *not* a per-run gate: 42 minutes on every merge is
+how a gate gets skipped. Run it on demand whenever the seam or the failure paths
+change:
 
 ```bash
 bash deploy/backup/jomform-backup_bite.sh
