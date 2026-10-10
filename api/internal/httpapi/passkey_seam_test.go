@@ -311,18 +311,18 @@ func newPasskeyRegistrationFixture(t *testing.T, h *RESTHandlers, ah *AuthHandle
 	// standard-base64 spelling reliably carries `+` and `/`, and which differs
 	// between the two arms so the Save upsert cannot mask a failure.
 	authn.id = credID
-	// The AAGUID a REAL browser sends, read back from a Chromium virtual
-	// authenticator during the card's verification run (authData[37:53] of the
-	// attested credential data was 01020304050607080102030405060708, with
-	// UP|AT flags and a 164-byte authData). It is used verbatim rather than an
-	// invented UUID because the shape matters: `PasskeyStore.Save` writes
-	// `string(AAGUID)` into a TEXT column, so an AAGUID carrying a byte >= 0x80
-	// is refused by Postgres (SQLSTATE 22021) — a SEPARATE defect, filed on its
-	// own card, and folding it in here would make this guard fail for a reason
-	// that is not the encoding it exists to pin.
+	// The AAGUID a REAL browser sends: Chrome's own, whose first byte is 0xad,
+	// i.e. not valid UTF-8. It cannot be taken from the browser: Chrome's VIRTUAL
+	// authenticator ignores a requested aaguid and attests its own all-ASCII
+	// default, which is exactly the one shape the old write path could store.
+	// `string(AAGUID)` reinterpreted the raw bytes as text, so Postgres refused
+	// the INSERT with SQLSTATE 22021 for every real authenticator (Chrome 0xad,
+	// Google Password Manager 0x9d, Windows Hello 0x98, and the spec's all-zero
+	// none-attestation value 0x00); the all-ASCII default is why this stayed
+	// hidden. The byte-exact assertion below is what pins it.
 	aaguid := []byte{
-		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+		0xad, 0xce, 0x00, 0x02, 0x35, 0xbc, 0xc6, 0x0a,
+		0x64, 0x8b, 0x0b, 0x25, 0xf1, 0xf0, 0x55, 0x03,
 	}
 	return passkeyRegistrationFixture{
 		authn: authn, cose: cose, key: st.Key,
@@ -481,17 +481,25 @@ func TestPasskeyRegistrationAcceptsStandardBase64(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read back credentials: %v", err)
 			}
-			found := false
-			for _, c := range creds {
+			var stored *webauthn.Credential
+			for i, c := range creds {
 				if string(c.ID) == string(fx.authn.id) {
-					found = true
+					stored = &creds[i]
 					break
 				}
 			}
-			if !found {
+			if stored == nil {
 				t.Fatalf("register/finish answered 200 but stored no credential for the authenticator "+
 					"(have %d row(s)) — a 200 that persists nothing is the shape this guard exists to catch",
 					len(creds))
+			}
+			// The AAGUID must survive the round trip BYTE-EXACT. The fixture's
+			// first byte is 0xad, so a write path that reinterprets the raw bytes
+			// as text either fails the INSERT outright or stores a mangled value;
+			// asserting only that a row exists would miss both.
+			if !bytes.Equal(stored.Authenticator.AAGUID, fx.aaguid) {
+				t.Fatalf("the stored AAGUID is %x, want %x — the 16 raw bytes did not survive the "+
+					"Save/read round trip", stored.Authenticator.AAGUID, fx.aaguid)
 			}
 		})
 	}

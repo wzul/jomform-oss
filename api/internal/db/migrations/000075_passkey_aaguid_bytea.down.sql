@@ -1,0 +1,47 @@
+-- Reverts passkeys.aaguid to TEXT, the type 000013 declared, and NOTHING is
+-- thrown away in the process.
+--
+-- A WebAuthn AAGUID is 16 raw bytes and a stored value is routinely not valid
+-- UTF-8, but the conversion below is a LOSSLESS text spelling of a bytea:
+-- encode(bytea,'escape') is reversible with decode(text,'escape'). Measured on a
+-- live Postgres for the shapes a real system holds — Chrome's adce0002-…
+-- (0xad), the all-zero AAGUID the spec defines for none-attestation, an
+-- all-ASCII one, and one made entirely of backslashes — every row came back
+-- byte-exact.
+--
+-- This file used to blank every row first:
+--
+--     UPDATE passkeys SET aaguid = '\x'::bytea;   -- REMOVED
+--
+-- on the stated grounds that a value whose bytes are not valid UTF-8 "cannot be
+-- expressed as text at all". That reason is false (the expression below is
+-- exactly reversible) and the UPDATE was the thing destroying the data: it
+-- emptied EVERY row, the all-ASCII and all-zero ones included. Measured before
+-- the fix: 0 of 4 rows preserved, i.e. a rollback wiped the authenticator
+-- identity of every registered passkey.
+--
+-- ROLLBACK CONTRACT — what this file does and does not preserve:
+--
+--   * It preserves the bytes, as the escape spelling, for every row. To read a
+--     value out after running this file:
+--
+--         SELECT decode(aaguid, 'escape') FROM passkeys;
+--
+--     — exact for every row, whatever its bytes.
+--
+--   * It does not make a later roll-FORWARD byte-exact. The up migration
+--     converts with convert_to(aaguid,'UTF8'), which is correct for the rows it
+--     was written for — the legacy pre-bytea TEXT values, which could only ever
+--     be all-ASCII, because the TEXT column refused anything with a byte >= 0x80
+--     (SQLSTATE 22021). For a row THIS file converted, convert_to stores the
+--     escape spelling's own bytes rather than the AAGUID, so a roll-forward of
+--     such a row has to convert with decode(aaguid,'escape'). Measured on the
+--     same four shapes: convert_to restored 2 of 5 rows, decode(…,'escape')
+--     restored 5 of 5.
+--
+-- So: reverting the type is safe, and the bytes stay recoverable; re-applying
+-- the up migration after a revert is only byte-exact for rows the down file
+-- did not touch.
+ALTER TABLE passkeys ALTER COLUMN aaguid DROP DEFAULT;
+ALTER TABLE passkeys ALTER COLUMN aaguid TYPE TEXT USING encode(aaguid, 'escape');
+ALTER TABLE passkeys ALTER COLUMN aaguid SET DEFAULT '';

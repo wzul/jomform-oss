@@ -39,13 +39,32 @@ func NewPasskeyStore(pool *pgxpool.Pool) *PasskeyStore {
 }
 
 // Save inserts or updates a credential.
+//
+// The AAGUID is written as the 16 raw bytes it is. It used to be written with
+// string(c.Authenticator.AAGUID) — the raw bytes reinterpreted as text — which
+// Postgres refuses (SQLSTATE 22021, `invalid byte sequence for encoding "UTF8"`)
+// for every REAL authenticator: Chrome's AAGUID starts with 0xad, Google
+// Password Manager's with 0x9d, Windows Hello's with 0x98, and even the
+// all-zero AAGUID the spec defines for none-attestation is rejected. Only an
+// all-ASCII AAGUID — i.e. a test virtual authenticator — could be stored, which
+// is why this stayed hidden. Passing the bytes is required by the column type
+// too: aaguid is BYTEA as of 000075, and a Go string sent as a text-format
+// parameter fails the same way.
 func (s *PasskeyStore) Save(ctx context.Context, userID string, c webauthn.Credential) error {
+	// A credential whose authenticator attested no AAGUID — a hand-built one, or
+	// the spec's all-zero value reduced to a nil slice — stores the empty byte
+	// string, never NULL: the column is NOT NULL DEFAULT '\x', and the
+	// string-typed write this replaced stored "" for the same case.
+	aaguid := c.Authenticator.AAGUID
+	if aaguid == nil {
+		aaguid = []byte{}
+	}
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO passkeys (id, user_id, public_key, attestation, transport, flags, sign_count, aaguid)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		 ON CONFLICT (id) DO UPDATE SET public_key=EXCLUDED.public_key, sign_count=EXCLUDED.sign_count`,
 		c.ID, userID, c.PublicKey, c.AttestationType,
-		joinTransport(c.Transport), 0, c.Authenticator.SignCount, string(c.Authenticator.AAGUID))
+		joinTransport(c.Transport), 0, c.Authenticator.SignCount, aaguid)
 	return err
 }
 
