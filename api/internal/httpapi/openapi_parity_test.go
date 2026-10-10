@@ -23,10 +23,14 @@
 //	     the doc's claim is checked against requireWriteScope/requireWriteRole/
 //	     requireAdminRole rather than trusted. A route that becomes admin-only
 //	     stops matching its `write` entry → RED. And every gate a contracted
-//	     handler calls must itself be classified, because a gate missing from
+//	     handler REACHES must itself be classified, because a gate missing from
 //	     the classifier does not fail — it reports the route as `read`, which is
 //	     how a route that refuses readonly keys was published as a read
-//	     (t_e9562a9c).
+//	     (t_e9562a9c). Those gates are found by PROPERTY (a helper that writes a
+//	     403 and reaches the API-key scope axis — actx.KeyScopes), not by their
+//	     spelling: the earlier name match saw only gates called `require*`, so
+//	     the same refusal under any other name slid back onto the silent default
+//	     (t_e37418be).
 //
 //	  4. Every rate limit is asserted in BOTH directions, because the honest
 //	     fact about this API is that almost nothing is throttled and that is the
@@ -57,6 +61,9 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -310,18 +317,23 @@ func handlerBody(t *testing.T, handler string) string {
 // repeats ("a readonly key is refused on writes with 403"), so it is checked,
 // not trusted.
 //
-// The classification is by NAME, one case per named gate, in order of strength:
-// every gate this package uses to refuse a caller must appear here, because a
-// gate that is missing from the switch does not fail — it silently falls through
+// The classification is data (classifierGates, ordered by strength), applied to
+// the gate the handler names — or, when it names none, to the gate it REACHES
+// through a helper. Every gate this package uses to refuse a caller must appear
+// there, because a gate that is missing does not fail — it silently falls through
 // to `read`, which is how GET /v1/rest/settings/webhook-key was published as a
 // read while its handler called requireWriteScope and answered a readonly key
 // with 403 (card t_e9562a9c). requireWriteScope was already named in this file's
 // header comment as one of the checked gates; it was not in the switch, so the
 // guard accepted the false label and rejected the true one.
+//
+// The completeness of the table is the other test's job
+// (TestHandlerAccessClassifierKnowsEveryNamedGate); this one only applies it.
 func TestOpenAPIAccessMatchesTheHandlerGate(t *testing.T) {
+	p := parseRESTPackage(t)
 	for _, d := range sortedRouteDocs() {
 		body := handlerBody(t, d.Handler)
-		actual := classifyHandlerAccess(t, d.Handler, body)
+		actual := classifyHandlerAccess(t, p, d.Handler, body)
 		if actual != d.Access {
 			t.Errorf("%s %s (%s): documented access %q but the handler's gate is %q.\n"+
 				"Fix whichever is wrong — the docs must not promise a weaker or stronger gate "+
@@ -330,46 +342,108 @@ func TestOpenAPIAccessMatchesTheHandlerGate(t *testing.T) {
 	}
 }
 
+// classifierGate is one entry of the classifier's data: a gate this package
+// applies and the access level a route that calls it must be published with.
+type classifierGate struct {
+	Name   string // the call a handler makes, e.g. h.requireWriteRole(…)
+	Access string
+	Why    string
+}
+
+// classifierGates is the ONE place the gate→access mapping lives, declared as
+// data rather than as the cases of a switch so the completeness guard can be
+// exhaustive over it without re-listing the names — a second, hand-kept list is
+// exactly the drift this file exists to catch.
+//
+// ORDER IS MEANINGFUL: strongest first, and classifyHandlerAccess returns the
+// first match, because a handler that calls two gates must be published as the
+// strongest one it applies (a handler matching two is reported separately).
+var classifierGates = []classifierGate{
+	{
+		Name:   "requireAdminRole",
+		Access: AccessAdmin,
+		Why:    "the write gate plus the admin role in the ?workspace= scope",
+	},
+	{
+		Name:   "requireWriteRole",
+		Access: AccessWrite,
+		Why:    "the write gate plus the manage-or-admin role in the ?workspace= scope",
+	},
+	{
+		Name:   "requireWriteScope",
+		Access: AccessWrite,
+		Why: "the API-key scope gate on its own: a readonly key is refused with 403 even " +
+			"though the handler only reads. It is not a full write (no ?workspace= role " +
+			"axis), but it is the strongest gate the handler applies, and `read` would " +
+			"promise the page's \"any authenticated key (readonly or readwrite)\" — which " +
+			"is exactly the false claim this entry exists to stop.",
+	},
+}
+
 // classifyHandlerAccess returns the access level a handler's own source applies,
-// by looking for the named gate it calls. It is a function (not an inline
-// switch) so TestHandlerAccessClassifierKnowsEveryNamedGate can assert that
-// every gate a contracted handler calls is classified — a new gate added to
-// rest_scope.go must not be able to arrive as an unlabelled `read` default.
-func classifyHandlerAccess(t *testing.T, handler, body string) string {
+// by looking for the gate it calls. It is a function (not an inline switch) so
+// TestHandlerAccessClassifierKnowsEveryNamedGate can assert that every gate a
+// contracted handler reaches is classified — a new gate added to rest_scope.go
+// must not be able to arrive as an unlabelled `read` default.
+//
+// The gates themselves are data (classifierGates); this loop only applies them in
+// order of strength. The fallback is deliberately `read`, and it is safe only
+// because TestHandlerAccessClassifierKnowsEveryNamedGate fails the build when a
+// contracted handler reaches a refusal this table does not hold (t_e37418be).
+func classifyHandlerAccess(t *testing.T, p *restPackage, handler, body string) string {
 	t.Helper()
-	switch {
-	case strings.Contains(body, "requireAdminRole("):
-		return AccessAdmin
-	case strings.Contains(body, "requireWriteRole("):
-		return AccessWrite
-	case strings.Contains(body, "requireWriteScope("):
-		// The API-key scope gate on its own: a readonly key is refused with
-		// 403 even though the handler only reads. It is not a full write (no
-		// ?workspace= role axis), but it is the strongest gate the handler
-		// applies, and `read` would promise the page's "any authenticated key
-		// (readonly or readwrite)" — which is exactly the false claim this
-		// case exists to stop.
-		return AccessWrite
-	case refusesAPIKey(t, handler, body):
+	for _, g := range classifierGates {
+		if strings.Contains(body, g.Name+"(") {
+			return g.Access
+		}
+	}
+	// A gate the handler does not name but REACHES is still the gate the route
+	// answers with: a handler that hands the request to a helper which refuses
+	// has that helper's gate, and the published level must not promise a weaker
+	// one. Checked second, so every route that names its gate directly — the set
+	// the contract was written against — keeps exactly the answer it had.
+	if p != nil {
+		reached := p.reachable(handler)
+		for _, g := range classifierGates {
+			if reached[g.Name] {
+				return g.Access
+			}
+		}
+	}
+	if refusesAPIKey(t, handler, body) {
 		// A route that acts on a PERSON refuses an API key outright: its
 		// handler demands a session user and answers 401 without one.
 		return AccessSession
-	default:
-		return AccessRead
 	}
+	return AccessRead
 }
 
 // TestHandlerAccessClassifierKnowsEveryNamedGate is the direction that keeps the
 // classifier honest, and it is scoped to the handlers this contract actually
-// describes: for every contracted route, every `require*` gate its handler calls
-// must be one classifyHandlerAccess recognises, and a handler must not match two
-// of them at once.
+// describes: for every contracted route, every gate its handler reaches must be
+// one classifyHandlerAccess knows, and a handler must not match two of them at
+// once.
+//
+// (The test's NAME is historical — t_e37418be kept it because the card and the
+// guard it replaces are referred to by it. It is no longer about names; see HOW.)
 //
 // WHY it is needed: an unrecognised gate does not fail the parity test — the
 // route is silently reported as `read`, which is exactly how a route that answers
 // a readonly key with 403 came to be published as a read (card t_e9562a9c).
-// Without this, adding a fifth named write gate to rest_scope.go would put every
-// route using it back on that default, and nothing would go red.
+//
+// HOW the gates are found — by PROPERTY, not by spelling (card t_e37418be). The
+// version this replaced matched `require[A-Za-z]+` in the handler's source, so a
+// refusal helper under any other name was invisible and the silent `read` default
+// came straight back: a helper called enforceKeyWriteScope with requireWriteScope's
+// own body, made a handler's only gate, kept every access guard green while the
+// wire 403'd a readonly key AND minted it a keypair. The gate set now comes from
+// apiKeyScopeRefusalGates (writes a 403 + reaches the API-key scope axis), and the
+// `require*` name scan is kept only as a second, cheaper net for a gate that does
+// not (yet) write a 403.
+//
+// Reachability, not just the direct call, is what the refusal check uses: a
+// handler that hands the request to a local helper which then refuses is gated by
+// that helper, and the route's label has to answer for it.
 //
 // The scope stops at this contract on purpose. The package also has gates for the
 // older /v1/* surface (requireWorkspaceAdmin gates /v1/workspaces/*,
@@ -378,27 +452,35 @@ func classifyHandlerAccess(t *testing.T, handler, body string) string {
 // them instead of measuring them would be the restatement-of-the-thing shape this
 // file already avoids.
 func TestHandlerAccessClassifierKnowsEveryNamedGate(t *testing.T) {
-	classified := []string{"requireAdminRole", "requireWriteRole", "requireWriteScope"}
-	gateRe := regexp.MustCompile(`\b(require[A-Za-z]+)\(`)
+	p := parseRESTPackage(t)
+	refusals := apiKeyScopeRefusalGates(t, p)
+	known := map[string]bool{}
+	for _, g := range classifierGates {
+		known[g.Name] = true
+	}
+	namedRe := regexp.MustCompile(`^require[A-Za-z]+$`)
 
 	var unclassified []string
 	ambiguous := []string{}
 	checked := 0
 	for _, d := range sortedRouteDocs() {
-		body := handlerBody(t, d.Handler)
-		called := map[string]bool{}
-		for _, m := range gateRe.FindAllStringSubmatch(body, -1) {
-			called[m[1]] = true
+		if len(p.funcs[d.Handler]) == 0 {
+			t.Fatalf("contracted handler %s (%s %s) is not a function declared in the package — "+
+				"this guard cannot check it", d.Handler, d.Method, d.Path)
 		}
-		matched := []string{}
-		for _, name := range classified {
-			if called[name] {
+		direct := p.edges[d.Handler]
+		// Ambiguity is measured on DIRECT calls: a handler that calls two
+		// classified gates is classified by the table's order rather than by its
+		// own strongest gate. (Gates delegate to each other, so the REACHABLE set
+		// legitimately contains several — see the refusal check below.)
+		var matched []string
+		for name := range direct {
+			if known[name] {
 				matched = append(matched, name)
 			}
 		}
+		sort.Strings(matched)
 		if len(matched) > 1 {
-			// The switch is ordered by strength, so a handler calling two gates
-			// is classified by the first — which may not be its strongest.
 			ambiguous = append(ambiguous, fmt.Sprintf("%s %s (%s) calls %v",
 				d.Method, d.Path, d.Handler, matched))
 			continue
@@ -406,8 +488,18 @@ func TestHandlerAccessClassifierKnowsEveryNamedGate(t *testing.T) {
 		if len(matched) == 1 {
 			checked++
 		}
-		for name := range called {
-			if !strings.Contains(strings.Join(classified, " "), name) {
+		// (a) every refusal helper the route DEPENDS ON must be classified.
+		for name := range p.reachable(d.Handler) {
+			if !refusals[name] || known[name] {
+				continue
+			}
+			unclassified = append(unclassified, fmt.Sprintf(
+				"%s %s (%s) reaches refusal helper %s (%s)",
+				d.Method, d.Path, d.Handler, name, p.file[name]))
+		}
+		// (b) the name scan, kept from the version this card replaced.
+		for name := range direct {
+			if namedRe.MatchString(name) && !known[name] {
 				unclassified = append(unclassified,
 					fmt.Sprintf("%s %s (%s) → %s", d.Method, d.Path, d.Handler, name))
 			}
@@ -416,15 +508,15 @@ func TestHandlerAccessClassifierKnowsEveryNamedGate(t *testing.T) {
 	sort.Strings(unclassified)
 	sort.Strings(ambiguous)
 	if len(unclassified) > 0 {
-		t.Errorf("these contracted handlers call a gate classifyHandlerAccess does not know:\n  %s\n"+
-			"An unclassified gate does not fail the parity test — the route is reported as `read`, "+
-			"and a route that refuses a readonly key would be published as one that does not. "+
-			"Add a case for each gate (with its access level) in openapi_parity_test.go.",
-			strings.Join(unclassified, "\n  "))
+		t.Errorf("these contracted handlers depend on a gate classifyHandlerAccess does not "+
+			"know:\n  %s\nAn unclassified gate does not fail the parity test — the route is "+
+			"reported as `read`, and a route that refuses a readonly key would be published "+
+			"as one that does not. Add a case for each gate (with its access level) to "+
+			"classifierGates in openapi_parity_test.go.", strings.Join(unclassified, "\n  "))
 	}
 	if len(ambiguous) > 0 {
 		t.Errorf("these handlers match more than one classified gate, so they are classified by "+
-			"the switch's order rather than by their own strongest gate:\n  %s",
+			"the table's order rather than by their own strongest gate:\n  %s",
 			strings.Join(ambiguous, "\n  "))
 	}
 	// A run that found no gate at all would make every loop above vacuous.
@@ -433,8 +525,212 @@ func TestHandlerAccessClassifierKnowsEveryNamedGate(t *testing.T) {
 			"moved, so this guard would pass for the wrong reason",
 			checked, len(sortedRouteDocs()))
 	}
-	t.Logf("checked %d contracted handlers across %d routes; %d classified gates in use",
-		checked, len(sortedRouteDocs()), len(classified))
+	t.Logf("checked %d contracted handlers across %d routes; %d refusal helpers discovered, "+
+		"%d classified gates in use", checked, len(sortedRouteDocs()), len(refusals),
+		len(classifierGates))
+}
+
+// ── the gate discovery: a gate is a property of a helper's body ──────────────
+//
+// WHY IT IS NOT A NAME MATCH (card t_e37418be). This guard used to look for gates
+// spelled `require*`, so it was blind to the same refusal under any other name: a
+// helper called enforceKeyWriteScope with requireWriteScope's own body, made a
+// handler's only gate, left every access guard green while the wire refused a
+// readonly key with 403 and minted one anyway — the t_e9562a9c defect, one rename
+// away. The discovery is therefore driven by what a helper DOES.
+//
+// A GATE is a function in this package that
+//
+//	(1) writes http.StatusForbidden, and
+//	(2) reads actx.KeyScopes — the readonly/readwrite API-key scope axis —
+//	    directly, or through a function that does.
+//
+// (2) is transitive on purpose: a gate that delegates its scope test to a helper
+// still refuses a readonly key. requireResolvedWorkspaceScope is NOT one of these,
+// and that is correct rather than an omission: it refuses a SESSION caller whose
+// ?workspace= cannot be resolved and explicitly exempts API keys (actx.ViaAPIKey),
+// so it never refuses a readonly key and a route whose strongest gate is it is
+// honestly published as `read`.
+//
+// Excluded from the set: the contracted route handlers themselves. A handler is
+// what the contract LABELS; it is not a gate the classifier has to hold, and
+// counting it would report every handler that both delegates and writes its own
+// 403 as an unclassifiable gate.
+
+// restPackage is this package's own source, parsed into the call graph the gate
+// discovery needs. It reads the syntax tree, not the text: a name in a comment or
+// a string is not a call, and whether a helper refuses a caller is a property of
+// its body rather than of its spelling.
+type restPackage struct {
+	// funcs maps a function name to its declarations. A name can carry more than
+	// one declaration (two receivers in one package), and the union is what the
+	// call graph needs — a call to the name can reach either body.
+	funcs map[string][]*ast.FuncDecl
+	file  map[string]string          // name → the file it is declared in, for failures
+	edges map[string]map[string]bool // name → package functions it calls directly
+	sel   map[string]map[string]bool // name → the `x.Y` selectors appearing in its body
+}
+
+// parseRESTPackage parses every non-test .go file of this package. Failing to
+// parse is fatal: a guard that silently saw fewer functions would find fewer
+// gates, which is the only direction that matters here.
+func parseRESTPackage(t *testing.T) *restPackage {
+	t.Helper()
+	dir := filepath.Join(rootDir, "api", "internal", "httpapi")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("openapi access guard: cannot list the httpapi package: %v", err)
+	}
+	p := &restPackage{
+		funcs: map[string][]*ast.FuncDecl{},
+		file:  map[string]string{},
+		edges: map[string]map[string]bool{},
+		sel:   map[string]map[string]bool{},
+	}
+	declared := map[string]bool{}
+	fset := token.NewFileSet()
+	var parsed []*ast.File
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, perr := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, parser.SkipObjectResolution)
+		if perr != nil {
+			t.Fatalf("openapi access guard: cannot parse %s: %v", e.Name(), perr)
+		}
+		parsed = append(parsed, f)
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Name == nil {
+				continue
+			}
+			p.funcs[fd.Name.Name] = append(p.funcs[fd.Name.Name], fd)
+			if _, seen := p.file[fd.Name.Name]; !seen {
+				p.file[fd.Name.Name] = e.Name()
+			}
+			declared[fd.Name.Name] = true
+		}
+	}
+	if len(p.funcs) < 500 {
+		t.Fatalf("parsed only %d functions from the httpapi package — the parse anchor moved, "+
+			"so the gate discovery would find nothing and this guard would pass for the wrong "+
+			"reason", len(p.funcs))
+	}
+	for _, f := range parsed {
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Name == nil || fd.Body == nil {
+				continue
+			}
+			self := fd.Name.Name
+			if p.edges[self] == nil {
+				p.edges[self] = map[string]bool{}
+			}
+			if p.sel[self] == nil {
+				p.sel[self] = map[string]bool{}
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.CallExpr:
+					switch fn := x.Fun.(type) {
+					case *ast.Ident:
+						if declared[fn.Name] {
+							p.edges[self][fn.Name] = true
+						}
+					case *ast.SelectorExpr:
+						// h.requireWriteScope(…) and the package-level helpers
+						// (scopeOr403(…)) both arrive here.
+						if declared[fn.Sel.Name] {
+							p.edges[self][fn.Sel.Name] = true
+						}
+					}
+				case *ast.SelectorExpr:
+					// Only one-level selectors are recorded, which is all the
+					// discovery needs: http.StatusForbidden / actx.KeyScopes.
+					if id, ok := x.X.(*ast.Ident); ok {
+						p.sel[self][id.Name+"."+x.Sel.Name] = true
+					}
+				}
+				return true
+			})
+		}
+	}
+	return p
+}
+
+// reachable returns every function in this package `start` can reach through its
+// own calls, `start` itself included.
+func (p *restPackage) reachable(start string) map[string]bool {
+	out := map[string]bool{start: true}
+	for changed := true; changed; {
+		changed = false
+		for from := range out {
+			for to := range p.edges[from] {
+				if !out[to] {
+					out[to] = true
+					changed = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+// apiKeyScopeRefusalGates returns the names of this package's refusal helpers, by
+// the body property described in the section comment above. The names are the
+// classifier's INPUT — they are never used to decide what a gate does.
+func apiKeyScopeRefusalGates(t *testing.T, p *restPackage) map[string]bool {
+	t.Helper()
+	// (2) as a fixpoint: who reads the scope axis, directly or by delegating.
+	readsScope := map[string]bool{}
+	for name := range p.funcs {
+		if p.sel[name]["actx.KeyScopes"] {
+			readsScope[name] = true
+		}
+	}
+	if len(readsScope) == 0 {
+		t.Fatalf("no function in the httpapi package reads actx.KeyScopes — the discovery " +
+			"anchor moved, so this guard would find no gate at all and pass vacuously")
+	}
+	for changed := true; changed; {
+		changed = false
+		for name := range p.funcs {
+			if readsScope[name] {
+				continue
+			}
+			for callee := range p.edges[name] {
+				if readsScope[callee] {
+					readsScope[name] = true
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	gates := map[string]bool{}
+	for name := range p.funcs {
+		if p.sel[name]["http.StatusForbidden"] && readsScope[name] {
+			gates[name] = true
+		}
+	}
+	// A contracted handler is what the contract labels, not a gate.
+	for _, d := range restRouteDocs {
+		delete(gates, d.Handler)
+	}
+	// ANCHOR, not classification: the predicate above is "the helper that answers
+	// a readonly key with 403". If the parse stopped finding requireWriteScope —
+	// the one helper that reads actx.KeyScopes today — every answer below would be
+	// a meaningless pass, so its absence is reported rather than tolerated. (The
+	// same anchor shape the mcpsrv scope-gate guard uses for this gate.)
+	if !gates["requireWriteScope"] {
+		t.Errorf("the discovery did not find requireWriteScope, which writes a 403 and reads "+
+			"actx.KeyScopes (%s) — the predicate is broken, not the code", p.file["requireWriteScope"])
+	}
+	if len(gates) == 0 {
+		t.Fatalf("found no API-key scope refusal helper in the package — the guard would pass " +
+			"vacuously")
+	}
+	return gates
 }
 
 // refusesAPIKey reports whether a handler turns away a request with no session
