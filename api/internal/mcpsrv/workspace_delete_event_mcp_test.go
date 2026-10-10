@@ -21,6 +21,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/testdb"
 )
@@ -349,5 +351,192 @@ func TestMCPDeleteWorkspaceHistoryNeverLandsOnAStrangerAccount(t *testing.T) {
 		t.Errorf("history rows on the caller's OWN live account %s = %d, want 1 — the call must be "+
 			"recorded on a live account of the caller's, never on the binned one and never on a "+
 			"stranger's", survivorAccID, inSurvivor)
+	}
+}
+
+// mcpRescopeToStrangerAccount re-resolves the fixture's call scope as if the
+// agent had passed `account_id=<the stranger's account>` — the EXACT argument
+// shape the card measured. resolveScope accepts it (accountAccessible admits
+// owner OR member), which is the whole point: the scope names an account the
+// caller does not own.
+//
+// It asserts the shape rather than assuming it: the resolution must name the
+// stranger's account and the caller must not own it. If either stops holding the
+// test has stopped reproducing the defect, so it fails loudly here instead of
+// passing quietly.
+func mcpRescopeToStrangerAccount(
+	t *testing.T, srv *Server, callCtx context.Context, pool *pgxpool.Pool, userID, strangerAccID string,
+) context.Context {
+	t.Helper()
+	scope, err := srv.resolveScope(callCtx, []byte(`{"account_id":"`+strangerAccID+`"}`))
+	if err != nil {
+		t.Fatalf("resolveScope(account_id=%s) = %v — the caller only MEMBERS that workspace, and "+
+			"accountAccessible admits a member, so the resolution must succeed; without it the "+
+			"fixture is not the defect shape", strangerAccID, err)
+	}
+	if len(scope.Accounts) != 1 || scope.Accounts[0] != strangerAccID {
+		t.Fatalf("call scope = %v, want exactly the stranger's account %s", scope.Accounts, strangerAccID)
+	}
+	acc, err := dbstore.NewAccountStore(pool).ByID(context.Background(), strangerAccID)
+	if err != nil || acc == nil {
+		t.Fatalf("read stranger account %s: %v", strangerAccID, err)
+	}
+	if acc.OwnerUserID == userID {
+		t.Fatalf("the caller OWNS the stranger's account %s; the fixture is not cross-tenant", strangerAccID)
+	}
+	return withCallScope(callCtx, scope)
+}
+
+// mcpBinnedAndRecorded drives the delete of the caller's OWN workspace, asserts
+// the workspace really went to the bin (otherwise the test proves nothing), then
+// records the history row the way addTool does after the handler returns.
+func mcpBinnedAndRecorded(
+	t *testing.T, srv *Server, callCtx context.Context, pool *pgxpool.Pool, doomedID, doomedSlug string,
+) {
+	t.Helper()
+	ctx := context.Background()
+	if _, out, err := srv.deleteWorkspaceMCP(callCtx, nil, deleteWorkspaceIn{
+		WorkspaceID: doomedID, ConfirmSlug: doomedSlug,
+	}); err != nil || out["status"] != "trashed" {
+		t.Fatalf("delete_workspace: err=%v out=%v", err, out)
+	}
+	var binned int
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM workspaces WHERE id=$1 AND deleted_at IS NOT NULL`, doomedID).Scan(&binned); err != nil {
+		t.Fatalf("count workspaces: %v", err)
+	}
+	if binned != 1 {
+		t.Fatal("the workspace was not trashed, so this test proves nothing")
+	}
+	srv.recordMCPEvent(callCtx, "delete_workspace", false)
+}
+
+// mcpHistoryRead reads mcp.tool_call history through the ACCOUNT scope — the
+// same filter an account-scoped history read uses — and returns the total.
+func mcpHistoryRead(t *testing.T, pool *pgxpool.Pool, accountID string) int64 {
+	t.Helper()
+	_, total, err := dbstore.NewEventStore(pool).List(context.Background(), dbstore.EventFilter{
+		AccountIDs: []string{accountID}, EventName: "mcp.tool_call", Page: 1, Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("read mcp.tool_call history for account %s: %v", accountID, err)
+	}
+	return total
+}
+
+// TestMCPDeleteWorkspaceHistoryScopedToAStrangerAccountStaysOwned is the MCP
+// twin of TestRESTWorkspaceDeleteEventScopedToAStrangersWorkspaceStaysOwned: the
+// RESOLVED-account half of the cross-tenant mis-attribution.
+//
+// Shape: the caller OWNS two workspaces and is a plain MEMBER of a stranger's
+// older one; the call is scoped by `account_id=<the stranger's account>`, which
+// resolveScope accepts because accountAccessible admits a member. The call then
+// deletes the caller's OWN workspace, so nothing of the stranger's is touched —
+// the stranger's account enters through the call scope alone. It survives the
+// call, so an existence-only guard accepts it as the attribution target and the
+// caller's own delete_workspace row lands in the STRANGER's account-scoped
+// history: the stranger reads the caller's tool calls, the caller reads nothing.
+//
+// Tenancy, not existence, has to decide. The resolved scope account may be used
+// only when the caller OWNS it; otherwise the fallback (the caller's own
+// surviving account) applies and the stranger's history stays empty.
+func TestMCPDeleteWorkspaceHistoryScopedToAStrangerAccountStaysOwned(t *testing.T) {
+	requireTestDB(t)
+	ctx := context.Background()
+	pool := testdb.Open(t)
+	srv, callCtx, userID, _, survivorAccID, doomedID, doomedSlug, strangerAccID :=
+		mcpDeleteEventFixtureWithStranger(t, "accscope")
+
+	callCtx = mcpRescopeToStrangerAccount(t, srv, callCtx, pool, userID, strangerAccID)
+	mcpBinnedAndRecorded(t, srv, callCtx, pool, doomedID, doomedSlug)
+
+	// The stranger's account-scoped history — what the stranger's own Activity
+	// view reads — must be untouched.
+	if n := mcpHistoryRead(t, pool, strangerAccID); n != 0 {
+		t.Errorf("the caller's delete_workspace history row landed on the STRANGER's account %s "+
+			"(%d row(s)) — the caller only MEMBERS that workspace, so a scope that resolved to it "+
+			"is REACHABILITY, not a tenancy to file events in", strangerAccID, n)
+	}
+	// The faithful home is the caller's own surviving account.
+	if n := mcpHistoryRead(t, pool, survivorAccID); n != 1 {
+		t.Errorf("mcp.tool_call rows on the caller's OWN surviving account %s = %d, want 1 — the "+
+			"caller still owns a live account, so that is where its history belongs", survivorAccID, n)
+	}
+	// Exactly one row for the call in total: never filed twice, never filed
+	// anywhere other than the caller's own surviving account.
+	var rows int
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM events WHERE event_name='mcp.tool_call' AND user_id=$1`, userID).
+		Scan(&rows); err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if rows != 1 {
+		t.Errorf("mcp.tool_call rows for the caller = %d, want exactly 1 — one per call", rows)
+	}
+	var accountID, propsAccount string
+	if err := pool.QueryRow(ctx,
+		`SELECT account_id, properties->>'account_id' FROM events WHERE event_name='mcp.tool_call'
+		   AND user_id=$1`, userID).Scan(&accountID, &propsAccount); err != nil {
+		t.Fatalf("read event account: %v", err)
+	}
+	if accountID != survivorAccID {
+		t.Errorf("the history row is attributed to %s, want the caller's own surviving account %s",
+			accountID, survivorAccID)
+	}
+	if propsAccount != accountID {
+		t.Errorf("properties.account_id = %s but the row's account_id = %s — they must agree",
+			propsAccount, accountID)
+	}
+}
+
+// TestMCPUnscopedHistoryEventNeverLandsOnAMemberStrangerAccount covers the same
+// branch through the scope route that needs NO explicit argument at all.
+//
+// An unscoped call resolves to every account across the user's accessible
+// workspaces — Workspaces.ByMember, which is owned OR JOINED, ordered by
+// workspace created_at. The fixture's stranger workspace is the oldest, so
+// cs.Accounts[0] is the stranger's account for a plain, unscoped tool call: the
+// default shape every connected agent uses. It survives the call, so an
+// existence-only guard files the caller's own delete_workspace history in the
+// stranger's account without the caller ever naming it.
+//
+// Ownership is the decider here too, so the row lands on the caller's own
+// surviving account and the stranger's history stays empty.
+func TestMCPUnscopedHistoryEventNeverLandsOnAMemberStrangerAccount(t *testing.T) {
+	requireTestDB(t)
+	ctx := context.Background()
+	pool := testdb.Open(t)
+	srv, callCtx, userID, _, survivorAccID, doomedID, doomedSlug, strangerAccID :=
+		mcpDeleteEventFixtureWithStranger(t, "unscoped")
+
+	// No workspace_id / account_id: the unscoped resolution.
+	scope, err := srv.resolveScope(callCtx, []byte(`{}`))
+	if err != nil {
+		t.Fatalf("resolveScope(unscoped): %v", err)
+	}
+	// Precondition, asserted rather than assumed: the unscoped scope's FIRST
+	// account is the stranger's. If ByMember ordering ever changes, this test
+	// stops reproducing the defect, so fail loudly here.
+	if len(scope.Accounts) == 0 || scope.Accounts[0] != strangerAccID {
+		t.Fatalf("unscoped call scope = %v, want the stranger's account %s first (ByMember orders "+
+			"by workspace created_at and the stranger's workspace is the oldest)", scope.Accounts, strangerAccID)
+	}
+	if acc, err := dbstore.NewAccountStore(pool).ByID(ctx, strangerAccID); err != nil || acc == nil {
+		t.Fatalf("read stranger account %s: %v", strangerAccID, err)
+	} else if acc.OwnerUserID == userID {
+		t.Fatalf("the caller OWNS the stranger's account %s; the fixture is not cross-tenant", strangerAccID)
+	}
+	callCtx = withCallScope(callCtx, scope)
+
+	mcpBinnedAndRecorded(t, srv, callCtx, pool, doomedID, doomedSlug)
+
+	if n := mcpHistoryRead(t, pool, strangerAccID); n != 0 {
+		t.Errorf("an UNSCOPED call's delete_workspace history row landed on the STRANGER's account %s "+
+			"(%d row(s)) — the unscoped scope is ordered by workspace age, so a workspace the caller "+
+			"merely MEMBERS can head it", strangerAccID, n)
+	}
+	if n := mcpHistoryRead(t, pool, survivorAccID); n != 1 {
+		t.Errorf("mcp.tool_call rows on the caller's OWN surviving account %s = %d, want 1",
+			survivorAccID, n)
 	}
 }

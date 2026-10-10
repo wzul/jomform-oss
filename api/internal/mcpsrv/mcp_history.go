@@ -49,13 +49,39 @@ func zero[T any]() T { var z T; return z }
 // (issue #195). The agent name comes from the AuthIdentity (OAuth client_name
 // or API-key name). Best-effort — never breaks the primary tool call.
 //
-// The attribution account must still EXIST when the row lands:
-// events.account_id is `REFERENCES accounts(id) ON DELETE CASCADE`, so an event
-// written for an account the same call destroyed is refused by Postgres
-// (SQLSTATE 23503) — and because recording is best-effort that refusal is
-// swallowed to a log line. delete_workspace is exactly that case (it removes the
-// account its own call scope names), so the account is re-resolved against what
-// survives instead of being trusted blindly.
+// The account the row is attributed to must pass TWO independent tests, and the
+// per-call scope account is no exception:
+//
+// TENANCY. It must be an account the caller OWNS. The scope comes from
+// resolveScope → accountAccessible, which admits owner OR MEMBER, so "the call
+// resolved to that account" is evidence of REACHABILITY only. An agent that
+// passes account_id=<a stranger's account it merely MEMBERS> gets a call scope
+// naming the stranger's account; a call that then touches nothing of the
+// stranger's — deleting the caller's OWN workspace, say — would file the
+// caller's mcp.tool_call row inside the STRANGER's account-scoped history. The
+// stranger reads the caller's tool calls out of their own history and the
+// caller cannot see them at all. Attribution must never leave the caller's own
+// tenancy, and a stranger's account is not a tenancy to file our events in just
+// because a scope resolved to it.
+//
+// SURVIVAL. It must still be usable as an attribution target when the row
+// lands: events.account_id is `REFERENCES accounts(id) ON DELETE CASCADE`, so
+// an event written for an account the same call destroyed is refused by
+// Postgres (SQLSTATE 23503) — and because recording is best-effort that refusal
+// is swallowed to a log line. delete_workspace is exactly that case (it removes
+// the account its own call scope names). Under the trash the row survives, so
+// existence is not the question either: the account must not be parked on a
+// workspace that is in the bin, because `mcp.tool_call` history is read through
+// the account scope and a row inside the binned workspace would never show up in
+// the caller's own history.
+//
+// Either test failing hands the decision to survivingAccountFor (itself
+// owned-and-live only), and the row is skipped with a stated log line when the
+// caller owns nothing usable.
+//
+// The same decision shape as the REST twin — RESTHandlers.auditAccountAfterDelete
+// asks ownsAccount AND accountIsLive before using its resolved account — so the
+// two transports cannot drift apart on the same question.
 func (s *Server) recordMCPEvent(ctx context.Context, tool string, failed bool) {
 	if s.deps.Events == nil {
 		return
@@ -65,15 +91,15 @@ func (s *Server) recordMCPEvent(ctx context.Context, tool string, failed bool) {
 		return
 	}
 	// Use the per-call resolved account for the history row so a user-level
-	// agent's calls are attributed to the workspace they acted on (issue #307).
+	// agent's calls are attributed to the workspace they acted on (issue #307) —
+	// but only when that account is the caller's OWN and still usable. Anything
+	// else (a scope that only reached it through membership, the bin, or a row
+	// this call destroyed) falls back to an account of the caller's own.
 	accountID := id.AccountID
 	if cs := callScopeFrom(ctx); cs != nil && len(cs.Accounts) > 0 {
 		accountID = cs.Accounts[0]
 	}
-	// Never attribute an event to the row this call destroyed (or to anything
-	// else gone): fall back to an account the user still has, and skip the
-	// history row entirely when there is none.
-	if !s.accountSurvives(ctx, accountID) {
+	if !s.ownsAccount(ctx, s.userIDFor(ctx), accountID) || !s.accountSurvives(ctx, accountID) {
 		accountID = s.survivingAccountFor(ctx)
 	}
 	if accountID == "" {
@@ -124,6 +150,40 @@ func (s *Server) accountSurvives(ctx context.Context, accountID string) bool {
 	}
 	live, err := s.deps.Workspaces.AccountIsLive(ctx, accountID)
 	return err == nil && live
+}
+
+// ownsAccount reports whether accountID is an account the caller OWNS.
+//
+// Ownership is the test, not mere accessibility: resolveScope accepts a
+// workspace/account the caller merely BELONGS to (accountAccessible walks
+// Workspaces.ByMember), so "this call resolved to that account" is evidence of
+// REACHABILITY and nothing more — a member scoping to a stranger's account
+// resolves to the stranger's account. `mcp.tool_call` rows are account-scoped,
+// so filing one there would put the caller's own history where the caller reads
+// nothing and the stranger reads the caller's calls.
+//
+// This is deliberately a separate question from survival (accountSurvives).
+// Under the trash a stranger's account is still live, so survival alone would
+// accept it; and the caller's OWN account may be binned by the very call being
+// recorded, so ownership alone is not enough either. Both are asked and both
+// must hold.
+//
+// A store error is treated as "not owned": the caller then falls back rather
+// than filing its event in a tenancy it cannot prove.
+func (s *Server) ownsAccount(ctx context.Context, userID, accountID string) bool {
+	if accountID == "" || userID == "" || s.deps == nil || s.deps.Accounts == nil {
+		return false
+	}
+	accs, err := s.deps.Accounts.ByOwner(ctx, userID)
+	if err != nil {
+		return false
+	}
+	for _, a := range accs {
+		if a != nil && a.ID == accountID {
+			return true
+		}
+	}
+	return false
 }
 
 // survivingAccountFor returns an account the caller still has, preferring any
