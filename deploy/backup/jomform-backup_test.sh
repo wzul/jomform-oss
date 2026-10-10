@@ -175,6 +175,15 @@ case "\$cmd" in
     if [ -n "\${STUB_COPYTO_SILENT_NAME:-}" ] && [ "\$(basename "\$dest")" = "\$STUB_COPYTO_SILENT_NAME" ]; then
       exit 0
     fi
+    # STUB_COPYTO_FAIL_NAME is the OTHER failure shape on this path: the copy
+    # command itself reports an error for one destination and exits non-zero
+    # (the provider's text on stderr, as real rclone prints it) while every other
+    # object still lands — so a case can drive the promotion's own copy-failure
+    # branch with healthy daily uploads ahead of it.
+    if [ -n "\${STUB_COPYTO_FAIL_NAME:-}" ] && [ "\$(basename "\$dest")" = "\$STUB_COPYTO_FAIL_NAME" ]; then
+      echo 'Failed to copy: googleapi: Error 403: The user has exceeded their Drive storage quota for "0AIx\\" files.' >&2
+      exit 1
+    fi
     if [ -f "$CASE_DIR/remote/\$(basename "\$src")" ]; then
       # STUB_COPYTO_CORRUPT_NAME stores DIFFERENT bytes under the right name:
       # the truncated server-side copy the sibling-gap probe reproduced, where
@@ -862,6 +871,54 @@ else
 fi
 teardown_case
 
+echo "case: the promotion's OWN copyto FAILS -> the run FAILS, and no sidecar is written"
+# The other failure mode of the promotion's write. The two cases above drive a
+# `copyto` that exits 0 and lies about the object; this one drives a `copyto` that
+# reports a failure of its own (the provider's error text, non-zero exit) — the
+# branch at jomform-backup.sh:715-720 that nothing exercised. The daily trio is
+# uploaded normally by the stub, so the run reaches the promotion with a healthy
+# upload phase: the failure must be the PROMOTION's, reported as such, and it must
+# not leave a sidecar vouching for a dump that was never copied.
+setup_case; touch_rclone_conf
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+  STUB_COPYTO_FAIL_NAME="jomform-monthly-$(monthly_name).dump.gz" --)"
+assert_eq "exit code" "exit=1" "$rc"
+assert_contains "log names the failed promotion" "monthly dump copy failed" "$RUN_LOG"
+assert_contains "log carries the provider's own error text" \
+  "Failed to copy: googleapi: Error 403: The user has exceeded their Drive storage quota for" "$RUN_LOG"
+assert_contains "log marks FAILED" "jomform-backup FAILED" "$RUN_LOG"
+# The failure has to survive into the run's VERDICT, not only into its log. The
+# promoted-dump re-read below this branch overwrites FAIL_DETAIL when this branch
+# leaves the month marked ok, so without it the record a human reads names the
+# re-read instead of the copy that actually broke — and that is the shape the
+# bite case below requires the suite to catch.
+assert_contains "the FAILED record carries the copy failure" \
+  "jomform-backup FAILED: upload or verification failed: Failed to copy: googleapi: Error 403" "$RUN_LOG"
+assert_contains "status detail carries the provider's own text" \
+  "upload or verification failed: Failed to copy: googleapi: Error 403" "$CASE_DIR/state/last-run.json"
+assert_contains "status file FAILED" '"status": "FAILED"' "$CASE_DIR/state/last-run.json"
+# The provider's message carries double quotes; an unescaped copy of it into the
+# status JSON would leave the file unparseable, which is the one thing a status
+# reader cannot recover from.
+assert_json_valid "status file stays parseable with the provider's quotes" "$CASE_DIR/state/last-run.json"
+assert_file "last-failure.json written" "$CASE_DIR/state/last-failure.json"
+# The failure is the promotion's, not the run's: the daily objects the earlier
+# phase verified must still be on the remote, or the case would be measuring a
+# broken stub instead of the failure it claims.
+dn="jomform-daily-$(daily_name).dump.gz"
+for f in "$dn" "$dn.sha256" "jomform-daily-$(daily_name)-media.tar.gz"; do
+  assert_file "daily object still uploaded: $f" "$CASE_DIR/remote/$f"
+done
+# And the whole point: nothing on the remote claims a monthly copy exists. No
+# dump — and no sidecar either, because the sidecar is written only once the
+# promoted dump has been read back, so a failed copy can never be dressed as a
+# verified pair.
+assert_no_file "no monthly dump on the remote after a failed copy" \
+  "$CASE_DIR/remote/jomform-monthly-$(monthly_name).dump.gz"
+assert_no_file "no monthly sidecar written for a copy that failed" \
+  "$CASE_DIR/remote/jomform-monthly-$(monthly_name).dump.gz.sha256"
+teardown_case
+
 echo "case: no promotion on a day that is not the 1st (the gate still holds)"
 setup_case; touch_rclone_conf
 rc="$(run_backup JFBACKUP_DAY_OF_MONTH=20 STUB_RCLONE_MODE=ok --)"
@@ -989,6 +1046,68 @@ sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 
 assert_eq "RED as required: without the re-read the truncated copy reports SUCCESS" "exit=0" "$sab_rc"
 assert_contains "RED as required: and it called the month healthy" "monthly copy ok" "$RUN_LOG"
 check_isolated "pre-fix truncated promotion" fail
+teardown_case
+
+echo "case: the copyto-FAILURE case BITES — drop the branch's own failure mark and it goes RED"
+# The case above is only worth its assertions if they can fail. This puts the
+# pre-fix shape back into a COPY of the script inside the case dir (the tracked
+# file is never written to): the copyto-failure branch keeps its log line but
+# stops marking the month as failed.
+#
+# Measured honestly, because the mutation does NOT leave the run green: the
+# promoted-dump re-read (added for the sibling defect) catches the absent object
+# as well, so the sabotaged run is still exit=1 and still writes last-failure.json.
+# What the branch's own `monthly_ok=0` decides is therefore not the exit code but
+# the VERDICT: with it gone, FAIL_DETAIL is overwritten by the re-read's message
+# and the record a human reads names the re-read instead of the copy that broke.
+# That is the assertion this bite is driven at — and why the new case asserts the
+# provider's text in the FAILED record and in the status detail, not only in the
+# branch's own log line (which survives the mutation untouched).
+setup_case; touch_rclone_conf
+cp "$SCRIPT" "$CASE_DIR/bite-target.sh"
+python3 - "$CASE_DIR/bite-target.sh" "$CASE_DIR/bite-applied.txt" <<'PY'
+import sys
+path, marker = sys.argv[1], sys.argv[2]
+src = open(path).read()
+# The branch as shipped: it logs the failure AND marks the month failed...
+fixed = '''    log ERROR "monthly dump copy failed: $FAIL_DETAIL"
+    monthly_ok=0
+'''
+# ...replaced by the log line alone, so the failure of the copy command no
+# longer reaches the run's own verdict.
+broken = '''    log ERROR "monthly dump copy failed: $FAIL_DETAIL"
+'''
+if src.count(fixed) != 1:
+    open(marker, 'w').write('NOTFOUND count=%d' % src.count(fixed))
+    sys.exit(3)
+open(path, 'w').write(src.replace(fixed, broken))
+open(marker, 'w').write('APPLIED')
+PY
+sab_status="$(cat "$CASE_DIR/bite-applied.txt" 2>/dev/null)"
+assert_eq "sabotage applied to the copy (NOTFOUND means this case proves nothing)" "APPLIED" "$sab_status"
+if bash -n "$CASE_DIR/bite-target.sh"; then ok "the sabotaged copy still parses"; else bad "the sabotaged copy does not parse"; fi
+sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+  STUB_COPYTO_FAIL_NAME="jomform-monthly-$(monthly_name).dump.gz" --)"
+# Still a failed run: the promoted-dump re-read catches the copy that stored
+# nothing. Asserted, not assumed — and it is why the bite below is aimed at the
+# verdict's DETAIL rather than at the exit code, which this mutation does not move.
+assert_eq "with the failure mark gone the run still fails (the re-read catches it)" "exit=1" "$sab_rc"
+# The branch's own log line survives — it is the MARK that was removed, not the
+# message — so an assertion on that line alone would not bite; this is the case's
+# control, stated rather than left implicit.
+assert_contains "the branch's own log line survives the mutation (control)" \
+  "monthly dump copy failed" "$RUN_LOG"
+# RED as required: the copy failure no longer reaches the run's verdict. Both the
+# FAILED record and the machine-readable detail now name the re-read instead, so
+# the new case's `FAILED record carries the copy failure` /
+# `status detail carries the provider's own text` assertions are the load-bearing
+# ones, and this mutation turns them red.
+assert_not_contains "RED as required: the FAILED record no longer carries the copy failure" \
+  "jomform-backup FAILED: upload or verification failed: Failed to copy" "$RUN_LOG"
+assert_not_contains "RED as required: the status detail no longer carries the provider's text" \
+  "upload or verification failed: Failed to copy" "$CASE_DIR/state/last-run.json"
+assert_contains "the sabotaged run reports the re-read's failure in the verdict instead" \
+  "jomform-backup FAILED: upload or verification failed: monthly dump verification failed" "$RUN_LOG"
 teardown_case
 
 # ---------------------------------------------------------------------------

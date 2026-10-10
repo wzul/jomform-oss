@@ -326,7 +326,7 @@ sent; a failing run does not retry in a tight loop because the lock file
 
 ## Tested failure paths
 
-Every one of these is exercised by `jomform-backup_test.sh` (234 assertions,
+Every one of these is exercised by `jomform-backup_test.sh` (255 assertions,
 stubbed `rclone`/`docker`, no network and no database required) and every one of
 them is additionally proven to *bite* by sabotaging the script and requiring the
 suite to go red:
@@ -382,12 +382,17 @@ not hypothetical: the containment group leaked into the agent host's
 and had to be hand-remediated. The wrapper is what makes this harness safe to
 keep, and removing it would reintroduce that leak.
 
-The monthly path has **three** sabotages that live **inside the suite** rather
+The monthly path has **four** sabotages that live **inside the suite** rather
 than in this harness, and they are named here so "the sabotages above" is never
 read as covering them: the verbatim daily sidecar copy, the removal of the
-sidecar's post-upload re-read, and the removal of the promoted dump's re-read
-(the last is run twice, once per shape — a copy that stored nothing and a copy
-that stored a truncated object; `sabotage_promoted_dump_verification`). Each runs
+sidecar's post-upload re-read, the removal of the promoted dump's re-read
+(run twice, once per shape — a copy that stored nothing and a copy
+that stored a truncated object; `sabotage_promoted_dump_verification`), and the
+removal of the promotion's own `monthly_ok=0` in its copy-failure branch (the
+mutation leaves the run failing — the promoted-dump re-read catches the absent
+object too — so the assertions it turns red are the ones on the **verdict**:
+the `FAILED` record and the status detail must still name the copy that broke,
+not the re-read that noticed afterwards). Each runs
 against a copy of the script inside a temp dir, so the tracked file is never
 written to. The sidecar *write failure* half IS mutated by this harness, but only
 since that mutation was anchored on the monthly block itself: it used to anchor on
@@ -475,6 +480,21 @@ resolves nothing).
   in-suite sabotages above) and require the run to report a healthy month again —
   one of them then runs this README's own `sha256sum -c` on the truncated pair and
   requires it to **fail**, which is the reader's view of the defect.
+- **The promotion's own `copyto` fails** — the second failure mode of the
+  promotion's write, and the one nothing exercised until now: the copy command
+  reports an error of its own (the provider's text on stderr, non-zero exit) while
+  the daily trio has already uploaded. The run exits non-zero with
+  `"status": "FAILED"` and a `last-failure.json`, the log carries
+  `monthly dump copy failed` **and** the provider's own message, both the `FAILED`
+  record and the status detail still name the copy that broke, and nothing on the
+  remote claims a monthly copy exists — neither the dump nor a sidecar, because the
+  sidecar is written only once the promoted dump has been read back, so a failed
+  copy can never be dressed as a verified pair. The daily objects are asserted to
+  be on the remote, so the case cannot pass on a run that failed before the
+  promotion. Driven by the stub's `STUB_COPYTO_FAIL_NAME` (it fails exactly one
+  named destination's copy; a case dir is never left behind), and an in-suite
+  sabotage named above removes the branch's `monthly_ok=0` and requires the suite
+  to go red on the verdict assertions.
 - **A partial override refuses before doing any work** — with `JFBACKUP_STAGE_DIR`
   (or any other location knob) set and `JFBACKUP_ENV_FILE`, `JFBACKUP_REMOTE` or
   `JFBACKUP_REMOTE_ROOT` missing, the run exits non-zero naming the missing
