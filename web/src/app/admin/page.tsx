@@ -1255,7 +1255,20 @@ export default function AdminPage() {
                             <span className="block truncate text-sm font-medium">
                               {th.subject || t("fb.noSubject")}
                             </span>
-                            <span className="mt-0.5 block break-all text-xs text-[var(--jf-muted)]">
+                            {/* Card t_2f2ad15a. The sub-line sits on a
+                                CONDITIONAL surface — `bg-indigo-50/25` when this
+                                thread is selected, white when it is not — and
+                                the tint's alpha and the ground behind it are
+                                both outside a text token's control. Measured:
+                                --jf-muted 4.505:1 at /25 over --jf-bg (and
+                                4.463:1 on the /40 composite this row carried
+                                before that, below AA for this 12px line);
+                                --jf-muted-on-tint 5.574:1 at /25, 5.522:1 at
+                                /40, 5.982:1 on white — it passes in BOTH states
+                                of this row, which is why the sidebar's own
+                                sub-line uses it too. Guarded by
+                                web/e2e/a11y-admin-feedback-row.spec.ts. */}
+                            <span className="mt-0.5 block break-all text-xs text-[var(--jf-muted-on-tint)]">
                               {th.user_email} · {formatDateTime(th.last_activity_at)} ·{" "}
                               {t("fb.messages", { n: th.message_count })}
                             </span>
