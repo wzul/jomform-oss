@@ -870,9 +870,17 @@ func (s *WorkspaceStore) AccessByID(ctx context.Context, workspaceID, userID str
 // treated as an admin (the migration backfills owners as admin members, and
 // new workspaces add the owner as a member at creation), so a workspace created
 // before the backfill still resolves correctly.
+//
+// The account id is COALESCEd to an empty string because an account-less
+// workspace is a real state (000024_space_accounts only backfilled spaces that
+// lacked one, and the delete tests create workspaces with no accounts row
+// directly). The LEFT JOIN
+// emits NULL for it, and a strict scan into *string fails the WHOLE call — every
+// row, not just that one — which reads downstream as "workspace not found"
+// (403) instead of "workspace with no accounts yet".
 func (s *WorkspaceStore) access(ctx context.Context, where string, key, userID string) (WorkspaceAccess, bool, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT sp.id, sp.name, sp.slug, sp.owner_user_id, a.id, COALESCE(m.role, '')
+		SELECT sp.id, sp.name, sp.slug, sp.owner_user_id, COALESCE(a.id::text, ''), COALESCE(m.role, '')
 		FROM workspaces sp
 		LEFT JOIN accounts a ON a.workspace_id = sp.id
 		LEFT JOIN workspace_members m ON m.workspace_id = sp.id AND m.user_id = $2
@@ -1592,9 +1600,18 @@ func (s *WorkspaceStore) ContentCounts(ctx context.Context, workspaceID, exemptK
 // can go, and a binned workspace is not one of them — sending them there would
 // show an empty dashboard with no way to explain why. The trash has its own
 // read (ListTrashed), which is what the dashboard's trash view uses.
+//
+// An ACCOUNT-LESS workspace is INCLUDED, with an empty Accounts slice. It is a
+// real state (see WorkspaceStore.access) and it must not be allowed to take the
+// caller's whole listing down: the LEFT JOIN emits NULL for it, and a strict
+// scan into *string used to fail the entire query with
+// `cannot scan NULL into *string`, so ONE account-less workspace made ByMember
+// return (nil, err) — which resolveSessionAccount reads as "no workspaces" (401
+// for a signed-in user), and isLastWorkspace reads as "last workspace" (every
+// delete refused).
 func (s *WorkspaceStore) ByMember(ctx context.Context, userID string) ([]WorkspaceAccess, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT sp.id, sp.name, sp.slug, sp.owner_user_id, COALESCE(m.role, ''), a.id
+		SELECT sp.id, sp.name, sp.slug, sp.owner_user_id, COALESCE(m.role, ''), COALESCE(a.id::text, '')
 		FROM workspaces sp
 		LEFT JOIN workspace_members m ON m.workspace_id = sp.id AND m.user_id = $1
 		LEFT JOIN accounts a ON a.workspace_id = sp.id
