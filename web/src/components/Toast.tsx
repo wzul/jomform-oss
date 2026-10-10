@@ -34,6 +34,22 @@
 // instead of the actual message ("Footer saved ✓"). The region's content IS the
 // announcement; the only other accessible name needed is the close button's.
 //
+// ONE LIVE REGION, NOT TWO (follow-up t_c4bff404). The positioner wrapper used to
+// carry `aria-live="polite"` as well as the inner `role="status"`. A status role
+// ALREADY implies `aria-live="polite"` (and `aria-atomic="true"` — WAI-ARIA 1.2
+// §5.2.9 "Implicit Value for Role"), so that pair was two nested live regions
+// wrapped around one message and a screen reader could announce the same sentence
+// twice — the redundancy the label argument above rejects, one level down. The
+// live region is the status element; the wrapper is only a positioner and must
+// stay inert. Measured on the built page in Chromium (fresh EN storage state, a
+// 500 forced on the tracking PUT, `Accessibility.getFullAXTree`): the pre-fix
+// tree exposed the toast as TWO live nodes — the wrapper (`live=polite`,
+// `atomic=false`) and the status element (`live=polite`, `atomic=true`) — and the
+// same pair came out of the DOM scan; after the change the toast's accessible
+// chain holds exactly one, the status element, with `role=status` / `live=polite`
+// / `atomic=true` unchanged through the implicit mapping. So nothing stopped
+// being announced; one of the two announcements went away.
+//
 // The 6s timer is re-armed per message and cleared on unmount, so saving twice
 // cannot leave a stale timer dismissing a newer toast.
 
@@ -65,7 +81,6 @@ export function Toast({
   return (
     <div
       className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center px-4 pb-4 sm:justify-end sm:pr-6"
-      aria-live="polite"
     >
       <div
         role="status"

@@ -29,6 +29,16 @@
 // the absent-`aria-label` item was unmet and the pre-fix label could come back
 // unnoticed.
 //
+// ONE LIVE REGION (t_c4bff404). This file now also pins the OTHER redundancy in
+// that component: the positioner wrapper carried `aria-live="polite"` while the
+// toast carried `role="status"`, and a status role already implies
+// `aria-live="polite"` — two nested live regions around one message, which a
+// screen reader can announce twice. The pre-fix shape was present at #997
+// (`git show 01752e75:web/src/components/Toast.tsx` lines 68/71), so it is a
+// follow-up, not a rework. The live-region count is asserted on the component's
+// JSX (below) and re-measured in the real DOM and the browser's accessible tree by
+// `web/e2e/settings-toast-failure.spec.ts`.
+//
 // Run with:
 //   npm run test:unit
 //   (node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts)
@@ -52,14 +62,43 @@ const settings = srcAt("app/settings/page.tsx");
  * The OPENING TAG of the element carrying `attr`, sliced from the `<` that opens
  * it to the `>` that closes it — so a sibling's attributes cannot satisfy a
  * check aimed at this element. Returns null when the attribute is absent.
+ *
+ * COMMENTS ARE NOT CODE (t_c4bff404). This used to scan the whole file, so a
+ * comment that MENTIONED an attribute was read as the element itself: the new
+ * prose above explaining the two live regions quotes `role="status"`, and the
+ * guard then sliced from a `<` in the prose and reported that the component no
+ * longer renders a status region. Line comments are dropped before the search;
+ * the attributes judged here are always real JSX.
  */
 function openingTagWith(src: string, attr: string): string | null {
-  const at = src.indexOf(attr);
+  const code = src
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("//"))
+    .join("\n");
+  const at = code.indexOf(attr);
   if (at < 0) return null;
-  const open = src.lastIndexOf("<", at);
-  const close = src.indexOf(">", at);
+  const open = code.lastIndexOf("<", at);
+  const close = code.indexOf(">", at);
   if (open < 0 || close < 0) return null;
-  return src.slice(open, close + 1);
+  return code.slice(open, close + 1);
+}
+
+/** Every OPENING tag in a JSX slice: `<` to the first `>`, self-closing included. */
+function openingTags(jsx: string): string[] {
+  return [...jsx.matchAll(/<[A-Za-z][^>]*>/g)].map((m) => m[0]);
+}
+
+/**
+ * The live regions a JSX slice declares, one entry per ELEMENT: an explicit
+ * `aria-live` attribute, or one of the roles whose aria-live has an implicit
+ * value — `status`, `alert`, `log`, `marquee`, `timer` (WAI-ARIA 1.2 §5.2.9
+ * "Implicit Value for Role"). An element carrying BOTH counts once, because the
+ * count is the number of regions that can announce the message.
+ */
+function liveRegions(jsx: string): string[] {
+  return openingTags(jsx).filter(
+    (t) => /aria-live/.test(t) || /role="(status|alert|log|marquee|timer)"/.test(t),
+  );
 }
 
 test("the guard is looking at the real files (it cannot pass vacuously)", () => {
@@ -97,12 +136,48 @@ test("the status region has NO aria-label (a label REPLACES the announced conten
       "filed for). The close button's own aria-label is fine and is a DIFFERENT element.",
   );
   // The region must still be a live region, or the message is only visible, never
-  // announced. Both halves are asserted because either one alone is not enough.
+  // announced — and `role="status"` IS the live region: its aria-live is the
+  // implicit `polite` and its aria-atomic the implicit `true` (WAI-ARIA 1.2
+  // §5.2.9 "Implicit Value for Role", https://www.w3.org/TR/wai-aria-1.2/#status).
+  // The test below asserts there is exactly ONE live region and that this element
+  // is it.
   assert.match(tag!, /role="status"/, "the region lost role=\"status\"");
-  assert.match(
-    toast,
-    /aria-live="polite"/,
-    "the toast lost aria-live=\"polite\" — a status region with no live announcement is silent to a screen reader",
+});
+
+test("the toast is ONE live region, not two nested ones (t_c4bff404)", () => {
+  // The pre-fix shape hung `aria-live="polite"` on the positioner wrapper
+  // (Toast.tsx:68) as well as `role="status"` on the toast itself (Toast.tsx:71).
+  // `role="status"` ALREADY implies `aria-live="polite"` (and `aria-atomic="true"`
+  // — WAI-ARIA 1.2 `status`), so that pair was two nested live regions around one
+  // message: a screen reader can announce the same sentence twice, once from the
+  // status node and once from its explicit-live ancestor. That is the same
+  // redundancy class as the aria-label the test above refuses, one level down.
+  //
+  // `lastIndexOf`: the render return is the last `return (` in the file
+  // (`return () => window.clearTimeout(id)` is an earlier one), so the slice below
+  // is the component's JSX alone.
+  const jsx = toast.slice(toast.lastIndexOf("return ("));
+  const regions = liveRegions(jsx);
+  assert.equal(
+    regions.length,
+    1,
+    `components/Toast.tsx declares ${regions.length} live regions for one message, expected exactly 1:\n` +
+      regions.map((t) => `    ${t}`).join("\n") +
+      `\nA nested pair (aria-live on the positioner wrapper + role="status" on the toast) can announce the ` +
+      `same message twice. Keep role="status" on the toast and leave the wrapper inert (card t_c4bff404).`,
+  );
+  const only = regions[0]!;
+  assert.match(only, /data-testid="save-toast"/, "the one live region must be the TOAST, not its wrapper");
+  assert.match(only, /role="status"/, "the one live region must still carry role=\"status\"");
+  // Name the wrapper explicitly too, so the failure points at the line to delete
+  // rather than at "some element somewhere in the file".
+  const wrapper = openingTags(jsx).find((t) => /pointer-events-none fixed/.test(t));
+  assert.ok(wrapper, "the toast's positioner wrapper is gone — re-anchor this guard");
+  assert.doesNotMatch(
+    wrapper!,
+    /aria-live/,
+    "the positioner wrapper carries its own aria-live on top of the toast's role=\"status\" — two live " +
+      "regions for one message (the carded defect t_c4bff404)",
   );
 });
 
@@ -243,5 +318,37 @@ test("the guard would fail on the code it replaced (in-file bite proof)", () => 
     preFixCall,
     /showMsgOk : showMsgFail/,
     "the pre-fix tracking call was read as choosing a tone — the guard is not looking at the real shape",
+  );
+  // 4. The pre-fix TWO-LIVE-REGION shape (t_c4bff404): the positioner wrapper's
+  //    explicit aria-live PLUS the toast's role="status". The count guard must see
+  //    two elements here, and one in the de-duplicated shape — otherwise the rule
+  //    is one-sided and a counter that always returned 1 would read as clean.
+  const preFixLive =
+    '<div className="pointer-events-none fixed inset-x-0 bottom-0" aria-live="polite">' +
+    '<div role="status" data-testid="save-toast" className="bg-red-50">';
+  assert.equal(
+    liveRegions(preFixLive).length,
+    2,
+    'the pre-fix shape (wrapper aria-live="polite" + role="status") was not counted as TWO live ' +
+      "regions — this guard would not have caught the defect it was written for",
+  );
+  const fixedLive = '<div className="pointer-events-none fixed inset-x-0 bottom-0">' + '<div role="status" data-testid="save-toast">';
+  assert.equal(
+    liveRegions(fixedLive).length,
+    1,
+    'the de-duplicated shape (role="status" alone) must count as ONE live region, not two or zero',
+  );
+  // ...and a role-less node with an explicit aria-live is still one region, so the
+  // rule is about live regions, not about the word "status".
+  assert.equal(liveRegions('<div aria-live="assertive">').length, 1, "an explicit aria-live element must count");
+  assert.equal(liveRegions('<div className="bg-red-50">').length, 0, "a plain element must not count");
+  // 5. A COMMENT that mentions an attribute is not the element (t_c4bff404). The
+  //    scan must skip line comments, or prose about `role="status"` hides the real
+  //    region and every assertion aimed at it fails on the documentation.
+  const commented = '// the toast carries role="status" and nothing else\n<div role="status" data-testid="save-toast">';
+  assert.match(
+    openingTagWith(commented, 'role="status"') ?? "",
+    /^<div /,
+    "openingTagWith read the attribute out of a COMMENT instead of the JSX element below it",
   );
 });

@@ -29,6 +29,15 @@
 //
 // The API is stubbed at the browser level (a real HTTP 500 is fulfilled), so the
 // gate needs nothing but the build it is already serving.
+//
+// ONE LIVE REGION, NOT TWO (t_c4bff404). The last test here is a different
+// question about the same toast: the pre-fix component hung `aria-live="polite"`
+// on the positioner wrapper AND `role="status"` on the toast, and a status role
+// ALREADY implies `aria-live="polite"` (WAI-ARIA 1.2 §5.2.9 "Implicit Value for
+// Role", https://www.w3.org/TR/wai-aria-1.2/#status). Two nested live regions can
+// announce the same sentence twice. Attribute scans can read that shape, but only
+// the browser can say which nodes it exposes as live regions in the accessible
+// tree a screen reader consumes — so it is measured here, before and after.
 import { test, expect, type Page } from "@playwright/test";
 import { DICT } from "../src/components/i18nDict";
 
@@ -110,6 +119,126 @@ async function banners(page: Page) {
     green: [...document.querySelectorAll("p")].filter((p) => /bg-emerald-50/.test(p.className)).map((p) => p.textContent.trim()),
     red:   [...document.querySelectorAll("p")].filter((p) => /bg-red-50/.test(p.className) && !p.closest('[data-testid="save-toast"]')).map((p) => p.textContent.trim()),
   }))()`) as Promise<{ green: string[]; red: string[] }>;
+}
+
+type LiveRegion = {
+  tag: string;
+  role: string;
+  ariaLive: string | null;
+  ariaAtomic: string | null;
+  ariaLabel: string | null;
+  testid: string;
+  text: string;
+};
+
+/**
+ * Every element that is a LIVE REGION around the toast, read from the real DOM:
+ * the toast itself, every ancestor of it up to <body>, and its whole subtree.
+ *
+ * A live region is an element carrying an explicit `aria-live` attribute, or one
+ * whose ROLE has an implicit aria-live value — `status`, `alert`, `log`,
+ * `marquee`, `timer` (WAI-ARIA 1.2 §5.2.9). One entry per ELEMENT, because the
+ * number of elements is the number of regions that can announce the message.
+ */
+async function toastLiveRegions(page: Page) {
+  return page.evaluate(`(() => {
+    const IMPLICIT = ["status", "alert", "log", "marquee", "timer"];
+    const isLive = (el) => el.hasAttribute("aria-live") || IMPLICIT.includes(el.getAttribute("role") || "");
+    const describe = (el) => ({
+      tag: el.tagName.toLowerCase(),
+      role: el.getAttribute("role") || "",
+      ariaLive: el.getAttribute("aria-live"),
+      ariaAtomic: el.getAttribute("aria-atomic"),
+      ariaLabel: el.getAttribute("aria-label"),
+      testid: el.getAttribute("data-testid") || "",
+      text: (el.textContent || "").trim().slice(0, 60),
+    });
+    const toast = document.querySelector('[data-testid="save-toast"]');
+    if (!toast) return { present: false };
+    const around = [];
+    for (let el = toast; el && el !== document.body; el = el.parentElement) {
+      if (isLive(el)) around.push(describe(el));
+    }
+    for (const el of toast.querySelectorAll("*")) if (isLive(el)) around.push(describe(el));
+    return {
+      present: true,
+      around,
+      toast: describe(toast),
+      toastButtons: [...toast.querySelectorAll("button")].map((b) => b.getAttribute("aria-label") || (b.textContent || "").trim()),
+    };
+  })()`) as Promise<{
+    present: boolean;
+    around?: LiveRegion[];
+    toast?: LiveRegion;
+    toastButtons?: string[];
+  }>;
+}
+
+/**
+ * What the BROWSER says about the toast, from its own accessible tree — the
+ * `live` / `atomic` properties a screen reader consumes, not the attributes this
+ * page wrote. The toast's DOM node is resolved to a backend node id so the AX
+ * node is the toast itself and not some other live region on the page.
+ *
+ * `liveChain` is the toast's AX node plus every AX ANCESTOR of it with a `live`
+ * property != "off": the pre-fix shape put the wrapper in that chain, which is
+ * exactly the second announcement. `liveSubtree` is the same for its descendants.
+ * `documentLive` is the whole page, for the record — this page has other live
+ * regions of its own (an `alert`), so the count that matters is the chain's.
+ */
+async function toastAX(page: Page) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Accessibility.enable");
+  await cdp.send("DOM.enable");
+  const doc = (await cdp.send("DOM.getDocument")) as { root: { nodeId: number } };
+  const { nodeId } = (await cdp.send("DOM.querySelector", {
+    nodeId: doc.root.nodeId,
+    selector: '[data-testid="save-toast"]',
+  })) as { nodeId: number };
+  const { node } = (await cdp.send("DOM.describeNode", { nodeId })) as {
+    node: { backendNodeId: number };
+  };
+  type AxNode = {
+    nodeId: string;
+    parentId?: string;
+    childIds?: string[];
+    backendDOMNodeId?: number;
+    role?: { value?: string };
+    name?: { value?: string };
+    properties?: { name: string; value: { value?: unknown } }[];
+  };
+  const { nodes } = (await cdp.send("Accessibility.getFullAXTree")) as { nodes: AxNode[] };
+  const prop = (n: AxNode, name: string) => n.properties?.find((p) => p.name === name)?.value?.value;
+  const isLive = (n: AxNode) => prop(n, "live") !== undefined && prop(n, "live") !== "off";
+  const label = (n: AxNode) => ({
+    role: n.role?.value ?? "",
+    name: (n.name?.value ?? "").slice(0, 60),
+    live: prop(n, "live"),
+    atomic: prop(n, "atomic"),
+  });
+  const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+  const mine = nodes.find((n) => n.backendDOMNodeId === node.backendNodeId);
+  const liveChain: ReturnType<typeof label>[] = [];
+  for (let n = mine; n; n = n.parentId ? byId.get(n.parentId) : undefined) {
+    if (isLive(n)) liveChain.push(label(n));
+  }
+  const liveSubtree: ReturnType<typeof label>[] = [];
+  const walk = (ids: string[] | undefined) => {
+    for (const id of ids ?? []) {
+      const n = byId.get(id);
+      if (!n) continue;
+      if (isLive(n)) liveSubtree.push(label(n));
+      walk(n.childIds);
+    }
+  };
+  if (mine) walk(mine.childIds);
+  return {
+    found: !!mine,
+    toast: mine ? label(mine) : null,
+    liveChain,
+    liveSubtree,
+    documentLive: nodes.filter(isLive).map(label),
+  };
 }
 
 type Site = { tab: string; button: string; failure: string };
@@ -239,4 +368,89 @@ test("CONTROL: a SUCCESSFUL save still auto-dismisses, on success chrome", async
     goneAt,
     "a SUCCESS must still auto-dismiss (measured ~6s): if it never does, the failure tests above are meaningless",
   ).toBeGreaterThan(0);
+});
+
+test("the toast is ONE live region — not a live region nested inside another (t_c4bff404)", async ({ page }) => {
+  test.setTimeout(120_000);
+
+  // Fresh profile state again: this is a different question about the toast, but
+  // it must see the same English default and the same stubbed 500.
+  await page.addInitScript(() => {
+    try {
+      localStorage.clear();
+      localStorage.setItem("jf_workspace", "demo");
+      localStorage.setItem("jf_lang", "en");
+    } catch {}
+  });
+  await page.context().clearCookies();
+  await stubAPI(page, 500);
+
+  await page.goto("/settings?tab=tracking", { waitUntil: "domcontentloaded" });
+  await expect(page.locator("html"), "the reading is the ENGLISH default").toHaveAttribute("lang", "en");
+  const button = page.getByRole("button", { name: DICT["set.saveTracking"].en, exact: true });
+  await expect(button, "the Save button must be reachable").toBeVisible({ timeout: 45_000 });
+  await button.click();
+  await expect(
+    page.locator('[data-testid="save-toast"]'),
+    "the failed save must render a toast for this probe to measure",
+  ).toBeVisible({ timeout: 15_000 });
+
+  const regions = await toastLiveRegions(page);
+  const ax = await toastAX(page);
+  console.log("live-region probe (DOM):", JSON.stringify(regions, null, 2));
+  console.log("live-region probe (accessible tree):", JSON.stringify(ax, null, 2));
+
+  expect(regions.present, "the toast must be in the DOM").toBe(true);
+  // ---- THE CARDED DEFECT: one message, exactly ONE live region --------------
+  // `around` is the toast, its ancestors up to <body>, and its subtree. The
+  // pre-fix shape put an aria-live="polite" on the positioner wrapper as well as
+  // role="status" on the toast, so this counted 2 and a screen reader could
+  // announce the message twice.
+  const around = regions.around ?? [];
+  expect(
+    around.length,
+    `one message, ONE live region: the toast plus its ancestors and subtree declares ${around.length} — ` +
+      `${JSON.stringify(around)}. A nested pair (aria-live on the positioner wrapper + role="status" on the ` +
+      `toast) can announce the same sentence twice.`,
+  ).toBe(1);
+  expect(around[0]?.testid, "the single live region must be the TOAST itself, not its wrapper").toBe("save-toast");
+  expect(around[0]?.role, 'the single live region must carry role="status"').toBe("status");
+
+  // ---- Acceptance item 4 of t_bc97048a, re-measured AFTER the change --------
+  // role=status + no aria-label + only a Close button. The `aria-live=polite`
+  // half of that item is no longer an ATTRIBUTE — it is the implicit value of the
+  // status role (WAI-ARIA 1.2 §5.2.9) — so it is asserted where it is real: the
+  // browser's own accessible tree, below.
+  expect(regions.toast?.role, "acceptance item 4: role=status").toBe("status");
+  expect(
+    regions.toast?.ariaLabel,
+    "acceptance item 4: no aria-label — a label on a live region REPLACES the announced message",
+  ).toBeNull();
+  expect(regions.toastButtons, "acceptance item 4: the only control in the region is Close").toEqual([
+    DICT["set.tlsCertClose"].en,
+  ]);
+
+  // ---- The announcement itself must survive the de-duplication -------------
+  expect(ax.found, "the toast must have a node in the browser's accessible tree").toBe(true);
+  expect(
+    ax.toast,
+    `the toast's AX node must still be a live region, and still polite: role="status" implies ` +
+      `aria-live=polite (WAI-ARIA 1.2 §5.2.9), so removing the wrapper's redundant attribute must not ` +
+      `silence it. Measured: ${JSON.stringify(ax.toast)}`,
+  ).toEqual(expect.objectContaining({ role: "status", live: "polite", atomic: true }));
+  // ...and the browser must expose that ONE live node for this message: the toast
+  // itself, with no live AX ancestor above it and no live AX descendant inside it.
+  // Pre-fix the wrapper sat in this chain (a second `live=polite` node), which is
+  // the double announcement in the browser's own model of the page.
+  expect(
+    ax.liveChain.length,
+    `the toast's AX chain holds ${ax.liveChain.length} live node(s) — ${JSON.stringify(ax.liveChain)}. ` +
+      `Exactly one (the toast) is the de-duplicated shape; an aria-live ancestor adds a second ` +
+      `announcement of the same message.`,
+  ).toBe(1);
+  expect(ax.liveChain[0]?.role, "the one live AX node in the chain must be the status toast").toBe("status");
+  expect(
+    ax.liveSubtree,
+    `a live region inside the toast would announce separately too: ${JSON.stringify(ax.liveSubtree)}`,
+  ).toEqual([]);
 });
