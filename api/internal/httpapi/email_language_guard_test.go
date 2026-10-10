@@ -21,12 +21,18 @@
 //  2. TRANSPORT — every email-carrying Job literal must carry a `Lang:`. Without
 //     it the message is branded in the wrong language even when its text is
 //     right, because the branded wrapper takes its <html lang="…"> from there.
-//  3. RENDER — every send through a mailer field must pass a resolved language
-//     as its 4th argument — both families: the `…Sender` receipts path and the
-//     `…Mailer` fields (VerifyMailer, AuthMailer, Mailer, …) the auth, invite
-//     and feedback paths deliver through. These are the calls that hand text to
-//     the branded wrapper, and so the place where "what the recipient reads" and
-//     "what the client is told it is" could disagree.
+//  3. RENDER — every send through a mailer must pass a resolved language as its
+//     4th argument. The mailers themselves are recognised by TYPE, not by the
+//     name of the field they are reached through: `email.Sender` (the receipts
+//     path) and the `VerifyMailer` interface (the auth, invite and feedback
+//     paths) are one branded wrapper, and the fields holding them happen to be
+//     called `Sender`, `Mailer`, `VerifyMailer`, `AuthMailer`. A new field
+//     NAME, or a receiver reached through a local variable, must not fall out
+//     of the guard — so the matcher keys on the declared type and on the email
+//     send SIGNATURE, and a differently-named field holding a mailer is
+//     examined exactly like the four that exist today. These are the calls that
+//     hand text to the branded wrapper, and so the place where "what the
+//     recipient reads" and "what the client is told it is" could disagree.
 //
 // The analyzer reports anything it cannot resolve instead of skipping it, and it
 // carries floors on what it found. A guard that silently stops covering its
@@ -81,9 +87,11 @@ const (
 	minScannedFiles  = 100 // the api module has well over 200 non-test .go files
 	minResolvedSites = 10  // email content sites that DO resolve through the dictionary
 	// minSenderSites is the same idea for the render half: the repo sends through
-	// 9 `…Sender` sites and 9 `…Mailer` sites. A matcher that recognised only one
-	// family would still pass the no-empty-language check on the other family by
-	// never looking at it, so the count of sites it DID match is asserted.
+	// 9 sites reached through an `…Sender` field and 9 through a `…Mailer` field
+	// (plus the sender's own two internal delegations, which the type-based
+	// matcher also sees). A matcher that recognised only one family would still
+	// pass the no-empty-language check on the other by never looking at it, so
+	// the count of sites it DID match is asserted.
 	// 18 is the current truth, kept as a floor: adding an email raises it, and a
 	// matcher that loses a family fails instead of going quiet.
 	minSenderSites = 18
@@ -125,6 +133,12 @@ type funcInfo struct {
 	emailParams map[string]bool
 	// calls are the calls made from this function, for cross-function resolution.
 	calls []callSite
+	// mailerIdents are the identifiers in this function whose current value is a
+	// mailer: a parameter or method receiver DECLARED as a mailer type, or a
+	// local assigned from a mailer-valued expression. It is what lets the
+	// matcher see `m := h.Mailer; m.Send(…)`, where the receiver is an ident
+	// and carries no field name at all.
+	mailerIdents map[string]bool
 }
 
 // callSite is one call expression inside a function.
@@ -141,6 +155,15 @@ type analyzer struct {
 	allFuncs    []*funcInfo
 	// resolvedParams caches a parameter's resolution, once computed.
 	resolvedParams map[string]resolvedValue
+	// parsed is every file the walker read. The type-based pass needs the whole
+	// module at once (a field's declared type may be declared in another
+	// package), so the ASTs are kept rather than streamed.
+	parsed []*parsedFile
+	byPath map[string]*parsedFile
+	// mailers is the module-wide type picture: which TYPES carry the email-send
+	// API, and which struct fields hold one of them, whatever those fields are
+	// called. See buildMailerIndex.
+	mailers *mailerIndex
 
 	// Findings.
 	copyOutsideDict        []site
@@ -181,6 +204,7 @@ func newAnalyzer(t *testing.T) *analyzer {
 		inDictFile:     map[string]bool{},
 		funcsByName:    map[string][]*funcInfo{},
 		resolvedParams: map[string]resolvedValue{},
+		byPath:         map[string]*parsedFile{},
 	}
 
 	werr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -203,6 +227,9 @@ func newAnalyzer(t *testing.T) *analyzer {
 		}
 		a.filesScanned++
 		a.inDictFile[path] = isDictionaryFile(path)
+		pf := newParsedFile(path, file)
+		a.parsed = append(a.parsed, pf)
+		a.byPath[path] = pf
 		a.indexFile(path, file)
 		return nil
 	})
@@ -289,8 +316,14 @@ func (a *analyzer) indexFile(path string, file *ast.File) {
 // because of iteration order. Phase 1 makes every function's locals and call
 // sites final; phase 2 then resolves against that finished picture.
 func (a *analyzer) walk() {
+	// Phase 0: the module-wide TYPE picture. It has to be complete before any
+	// function is judged, because whether a receiver is a mailer depends on a
+	// type declaration that may live in another package.
+	a.buildMailerIndex()
+
 	// Phase 1: assignments and call sites, for every function.
 	for _, fi := range a.allFuncs {
+		a.markMailerIdents(fi)
 		inDict := a.inDictFile[fi.file]
 		ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
 			switch node := n.(type) {
@@ -317,7 +350,7 @@ func (a *analyzer) walk() {
 					a.checkJobLiteral(fi, node, inDict)
 				}
 			case *ast.CallExpr:
-				if name, ok := senderSendCall(node); ok {
+				if name, ok := a.senderSendCall(fi, node); ok {
 					a.senderSites++
 					if !passesLang(node) {
 						a.senderCallsWithoutLang = append(a.senderCallsWithoutLang, site{
@@ -654,40 +687,350 @@ func calledFunctionName(call *ast.CallExpr) string {
 	return ""
 }
 
-// senderSendCall recognises an email send through the SES sender — the four
-// methods that hand text to the branded wrapper — and returns a name for the
-// error message.
-//
-// The receiver is recognised by the SHAPE of the field it is reached through,
-// not by the type behind it: a `…Sender` field (`d.Pay.Receipts.Sender`) or any
-// `…Mailer` field (`VerifyMailer`, `AuthMailer`, `Mailer`). The distinction is
-// not incidental — both are the same `email.Sender` handed to the same branded
-// wrapper, reached through two field names, and a matcher that knew only one of
-// them left every site in the other family unchecked while still reporting
-// green. An unrelated type's Send is still not swept in: the receiver must be a
-// field SELECTOR ending in one of those two names, so `w.handler.Send(ctx, job)`
-// and a local variable's Send are not matched.
-func senderSendCall(call *ast.CallExpr) (string, bool) {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return "", false
-	}
-	switch sel.Sel.Name {
-	case "Send", "SendReceipt", "SendWithAttachment", "SendReceiptWithAttachment":
-	default:
-		return "", false
-	}
-	recv, ok := sel.X.(*ast.SelectorExpr)
-	if !ok || !isSenderFieldName(recv.Sel.Name) {
-		return "", false
-	}
-	return "…" + recv.Sel.Name + "." + sel.Sel.Name, true
+// ---------------------------------------------------------------------------
+// Which receivers are mailers — decided by TYPE, never by field name.
+// ---------------------------------------------------------------------------
+
+// sendMethodNames are the methods that hand rendered text to the branded
+// wrapper: the entry points to the mailer API, not a naming rule for whatever
+// the mailer happens to be reached through.
+var sendMethodNames = map[string]bool{
+	"Send":                      true,
+	"SendReceipt":               true,
+	"SendWithAttachment":        true,
+	"SendReceiptWithAttachment": true,
 }
 
-// isSenderFieldName reports whether a receiver field name belongs to the mailer
-// family the guard covers.
-func isSenderFieldName(field string) bool {
-	return field == "Sender" || strings.HasSuffix(field, "Mailer")
+// parsedFile is one parsed source file plus the facts the type pass needs in
+// order to name a type the same way from every file: its package clause and the
+// local alias of each import.
+type parsedFile struct {
+	path        string
+	file        *ast.File
+	pkgName     string
+	importNames map[string]string
+}
+
+// newParsedFile records a file's package name and import aliases, so a type
+// written `em.Sender` in one file and `email.Sender` in another still
+// canonicalises to ONE name.
+func newParsedFile(path string, f *ast.File) *parsedFile {
+	pf := &parsedFile{
+		path:        path,
+		file:        f,
+		pkgName:     f.Name.Name,
+		importNames: map[string]string{},
+	}
+	for _, imp := range f.Imports {
+		p, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		canonical := p
+		if i := strings.LastIndex(canonical, "/"); i >= 0 {
+			canonical = canonical[i+1:]
+		}
+		alias := canonical
+		if imp.Name != nil {
+			alias = imp.Name.Name
+		}
+		if alias == "_" || alias == "." || alias == "" {
+			continue
+		}
+		pf.importNames[alias] = canonical
+	}
+	return pf
+}
+
+// canonicalTypeName renders a type expression as `<package>.<Type>`, resolving
+// the file's import aliases. A type declared in the file's OWN package is
+// qualified with that package's name, which is what makes a field's declared
+// type comparable with the type's declaration in a different file.
+func canonicalTypeName(expr ast.Expr, pf *parsedFile) (string, bool) {
+	switch e := expr.(type) {
+	case *ast.StarExpr:
+		return canonicalTypeName(e.X, pf)
+	case *ast.ParenExpr:
+		return canonicalTypeName(e.X, pf)
+	case *ast.IndexExpr:
+		return canonicalTypeName(e.X, pf)
+	case *ast.SelectorExpr:
+		id, ok := e.X.(*ast.Ident)
+		if !ok {
+			return "", false
+		}
+		name := pf.importNames[id.Name]
+		if name == "" {
+			name = id.Name
+		}
+		return name + "." + e.Sel.Name, true
+	case *ast.Ident:
+		return pf.pkgName + "." + e.Name, true
+	}
+	return "", false
+}
+
+// mailerIndex is the module-wide TYPE picture the render matcher works from.
+type mailerIndex struct {
+	// types are the canonical names of the types that CARRY the mailer API:
+	// `email.Sender` and the `VerifyMailer` interface. Nothing here mentions a
+	// field name.
+	types map[string]bool
+	// pkgs are the packages declaring one of those types, so a constructor in
+	// such a package (`email.New`) is recognised as producing a mailer.
+	pkgs map[string]bool
+	// fieldNames are the struct field names whose DECLARED TYPE is one of those
+	// types — `Sender`, `Mailer`, `VerifyMailer`, `AuthMailer` today, and
+	// whatever a newly added one is called tomorrow.
+	fieldNames map[string]bool
+}
+
+// buildMailerIndex derives the mailer types, their packages, and every struct
+// field holding one, from the module source.
+func (a *analyzer) buildMailerIndex() {
+	a.mailers = &mailerIndex{
+		types:      map[string]bool{},
+		pkgs:       map[string]bool{},
+		fieldNames: map[string]bool{},
+	}
+	for _, pf := range a.parsed {
+		for _, decl := range pf.file.Decls {
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				// A method on a named type that declares an email-shaped send.
+				if d.Name == nil || d.Recv == nil || len(d.Recv.List) == 0 ||
+					!sendMethodNames[d.Name.Name] || !emailSendShape(d.Type.Params) {
+					continue
+				}
+				if key, ok := canonicalTypeName(d.Recv.List[0].Type, pf); ok {
+					a.mailers.types[key] = true
+				}
+			case *ast.GenDecl:
+				// An interface that requires an email-shaped send.
+				for _, spec := range d.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					it, ok := ts.Type.(*ast.InterfaceType)
+					if !ok || it.Methods == nil || !interfaceSendsEmail(it) {
+						continue
+					}
+					a.mailers.types[pf.pkgName+"."+ts.Name.Name] = true
+				}
+			}
+		}
+	}
+	for key := range a.mailers.types {
+		if i := strings.Index(key, "."); i > 0 {
+			a.mailers.pkgs[key[:i]] = true
+		}
+	}
+	// And now the FIELDS, keyed on the type they are declared with: a field is
+	// a mailer field however it is named, as long as it holds a mailer.
+	for _, pf := range a.parsed {
+		ast.Inspect(pf.file, func(n ast.Node) bool {
+			st, ok := n.(*ast.StructType)
+			if !ok || st.Fields == nil {
+				return true
+			}
+			for _, f := range st.Fields.List {
+				key, ok := canonicalTypeName(f.Type, pf)
+				if !ok || !a.mailers.types[key] {
+					continue
+				}
+				for _, name := range f.Names {
+					if name.Name != "_" {
+						a.mailers.fieldNames[name.Name] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+}
+
+// emailSendShape reports whether a method's parameter list is an email send: a
+// recipient, a subject and a body, all three strings. This — a signature, not a
+// receiver's name — is what keeps an unrelated `Send(ctx, job)` out of the
+// guard.
+func emailSendShape(params *ast.FieldList) bool {
+	if params == nil {
+		return false
+	}
+	var types []string
+	for _, f := range params.List {
+		n := len(f.Names)
+		if n == 0 {
+			n = 1 // an unnamed parameter still occupies a position
+		}
+		for i := 0; i < n; i++ {
+			types = append(types, exprStringRender(f.Type))
+		}
+	}
+	return len(types) >= 3 && types[0] == "string" && types[1] == "string" && types[2] == "string"
+}
+
+// interfaceSendsEmail reports whether an interface requires an email-shaped
+// send method.
+func interfaceSendsEmail(it *ast.InterfaceType) bool {
+	for _, m := range it.Methods.List {
+		ft, ok := m.Type.(*ast.FuncType)
+		if !ok {
+			continue
+		}
+		for _, name := range m.Names {
+			if sendMethodNames[name.Name] && emailSendShape(ft.Params) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// markMailerIdents records the identifiers inside one function whose value is a
+// mailer: a parameter or method receiver DECLARED as a mailer type, and a local
+// assigned from a mailer-valued expression. It resolves to a fixpoint, so
+// `a := b; b := h.Mailer` and the same pair in the other order agree.
+func (a *analyzer) markMailerIdents(fi *funcInfo) {
+	fi.mailerIdents = map[string]bool{}
+	pf := a.byPath[fi.file]
+	if pf == nil {
+		return
+	}
+	mark := func(fl *ast.FieldList) {
+		if fl == nil {
+			return
+		}
+		for _, f := range fl.List {
+			key, ok := canonicalTypeName(f.Type, pf)
+			if !ok || !a.mailers.types[key] {
+				continue
+			}
+			for _, n := range f.Names {
+				fi.mailerIdents[n.Name] = true
+			}
+		}
+	}
+	mark(fi.decl.Recv)
+	mark(fi.decl.Type.Params)
+
+	for round := 0; round < 4; round++ {
+		changed := false
+		ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
+			switch stmt := n.(type) {
+			case *ast.AssignStmt:
+				for i, lhs := range stmt.Lhs {
+					id, ok := lhs.(*ast.Ident)
+					if !ok || id.Name == "_" || fi.mailerIdents[id.Name] || len(stmt.Rhs) == 0 {
+						continue
+					}
+					rhs := stmt.Rhs[0]
+					if len(stmt.Rhs) > 1 && i < len(stmt.Rhs) {
+						rhs = stmt.Rhs[i]
+					}
+					if a.isMailerExpr(fi, pf, rhs) {
+						fi.mailerIdents[id.Name] = true
+						changed = true
+					}
+				}
+			case *ast.ValueSpec:
+				for i, name := range stmt.Names {
+					if name.Name == "_" || fi.mailerIdents[name.Name] {
+						continue
+					}
+					mailer := false
+					switch {
+					case len(stmt.Values) > i:
+						mailer = a.isMailerExpr(fi, pf, stmt.Values[i])
+					case stmt.Type != nil:
+						key, ok := canonicalTypeName(stmt.Type, pf)
+						mailer = ok && a.mailers.types[key]
+					}
+					if mailer {
+						fi.mailerIdents[name.Name] = true
+						changed = true
+					}
+				}
+			}
+			return true
+		})
+		if !changed {
+			break
+		}
+	}
+}
+
+// isMailerExpr reports whether an expression's value is a mailer: a field whose
+// declared type is one, an identifier already known to hold one, a composite
+// literal or conversion of the type itself, or a constructor of the package
+// that declares it.
+func (a *analyzer) isMailerExpr(fi *funcInfo, pf *parsedFile, expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.SelectorExpr:
+		if _, ok := e.X.(*ast.Ident); ok && a.mailers.fieldNames[e.Sel.Name] {
+			return true
+		}
+		key, ok := canonicalTypeName(e, pf) // a qualified type: email.Sender(x)
+		return ok && a.mailers.types[key]
+	case *ast.Ident:
+		return fi.mailerIdents[e.Name]
+	case *ast.CompositeLit:
+		key, ok := canonicalTypeName(e.Type, pf)
+		return ok && a.mailers.types[key]
+	case *ast.CallExpr:
+		if key, ok := canonicalTypeName(e.Fun, pf); ok && a.mailers.types[key] {
+			return true // a conversion
+		}
+		if sel, ok := e.Fun.(*ast.SelectorExpr); ok {
+			if id, ok := sel.X.(*ast.Ident); ok && a.mailers.pkgs[pf.importNames[id.Name]] {
+				return true // a constructor in the mailer's own package
+			}
+		}
+		return false
+	case *ast.UnaryExpr:
+		return a.isMailerExpr(fi, pf, e.X)
+	case *ast.ParenExpr:
+		return a.isMailerExpr(fi, pf, e.X)
+	}
+	return false
+}
+
+// senderSendCall recognises an email send through a mailer — the four methods
+// that hand text to the branded wrapper — and returns a name for the error
+// message.
+//
+// The receiver is recognised by its TYPE, not by the name of the field it is
+// reached through. `email.Sender` (the receipts path) and the `VerifyMailer`
+// interface (the auth, invite and feedback paths) are the same branded wrapper,
+// and the fields holding them are called `Sender`, `Mailer`, `VerifyMailer` and
+// `AuthMailer` — but a matcher that keyed on those names would wave through a
+// field called `InviteSender`, or a receiver reached through a local variable
+// (which carries no field name at all), while still reporting green. So a field
+// is matched against the types the module DECLARES as mailers, and an
+// identifier is matched when it holds one.
+//
+// An unrelated type's Send is still not swept in: `w.handler.Send(ctx, job)`
+// fails the email signature (its first parameter is not a string), so `Handler`
+// is not a mailer type and `handler` is not a mailer field.
+func (a *analyzer) senderSendCall(fi *funcInfo, call *ast.CallExpr) (string, bool) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || !sendMethodNames[sel.Sel.Name] {
+		return "", false
+	}
+	switch recv := sel.X.(type) {
+	case *ast.SelectorExpr:
+		if !a.mailers.fieldNames[recv.Sel.Name] {
+			return "", false
+		}
+		return "…" + recv.Sel.Name + "." + sel.Sel.Name, true
+	case *ast.Ident:
+		if !fi.mailerIdents[recv.Name] {
+			return "", false
+		}
+		return "…" + recv.Name + "." + sel.Sel.Name, true
+	}
+	return "", false
 }
 
 // passesLang reports whether a sender call supplies a language. All four senders
@@ -825,19 +1168,22 @@ func TestEveryQueuedEmailDeclaresItsLanguage(t *testing.T) {
 // the wrapper defaults and the message declares the wrong language to the client.
 //
 // The floor below is what keeps this honest. An empty-language check is only as
-// wide as its matcher, and the matcher once recognised one field name out of two:
-// every `…Mailer` site was unchecked while the suite stayed green. Counting the
-// sites it DID recognise fails a matcher that goes narrow again, even though a
-// narrow matcher reports no findings at all.
+// wide as its matcher, and the matcher once recognised one field name out of
+// two: every `…Mailer` site was unchecked while the suite stayed green — and it
+// then recognised only by NAME, so a mailer reached through a differently-named
+// field, or through a local variable, was invisible. Counting the sites it DID
+// recognise fails a matcher that goes narrow again, even though a narrow matcher
+// reports no findings at all.
 func TestEveryEmailSendPassesAResolvedLanguage(t *testing.T) {
 	a := newAnalyzer(t)
 	a.walk()
 
 	if a.senderSites < minSenderSites {
 		t.Fatalf("recognised only %d email send site(s) (expected at least %d) — the render "+
-			"matcher has lost part of its subject (the `…Sender` and `…Mailer` families both "+
-			"send through the branded wrapper), so this guard would pass over whatever it no "+
-			"longer matches", a.senderSites, minSenderSites)
+			"matcher has lost part of its subject (an `email.Sender` or a `VerifyMailer` "+
+			"reached through ANY field name, or through a local variable, sends through the "+
+			"branded wrapper), so this guard would pass over whatever it no longer matches",
+			a.senderSites, minSenderSites)
 	}
 	if len(a.senderCallsWithoutLang) > 0 {
 		t.Fatalf("%d email send(s) pass no language to the branded wrapper:\n%s",
