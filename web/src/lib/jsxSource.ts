@@ -1038,3 +1038,148 @@ export function descendantsAt(events: Event[], owner: Tag): Tag[] {
   return out;
 }
 
+// ─── the tinted-surface rule (ONE implementation, two guards) ────────────────
+//
+// "A BASE text token must not be painted on the TINTED surface" is a per-STATE
+// question, and that is the whole reason the rule lives here instead of inside a
+// guard: `tintedSurface.test.ts` applies it repo-wide by walking `web/src`, and
+// `sidebarNav.test.ts` applies it to the dashboard chrome. Both call
+// `tintedSurfaceFindings` below, so the two cannot disagree about one class list.
+//
+// They did disagree, and this module is the fix for it (card t_306dcc1e). The
+// chrome copy treated a class list as a flat SET — ANY base token anywhere in it
+// plus ANY `bg-indigo-50` anywhere in it was a finding — so the outline-button
+// shape
+//
+//     `text-[var(--jf-primary)] hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]`
+//
+// was reported as a defect even though the hover state overrides the TEXT as well
+// as the surface. Measured on that row: the base token rests on white at 4.70:1
+// and the hovered text is the on-tint token at 7.07:1 — both clear the 4.5:1
+// floor, and the repo-wide guard was green on exactly the same bytes. A scoped
+// rule that is red where the repo-wide rule is green is worse than no rule: it
+// sends a lane hunting a contrast defect that is not there, and its message then
+// quotes a ratio (4.20:1) for a pairing that never renders at that site.
+
+/**
+ * A SOLID indigo-50 tint class, with its state prefix split out: "" for the
+ * resting state, "hover" / "focus" / "md:hover" … for a state-qualified one.
+ *
+ * Translucent tints (`bg-indigo-50/40`) and `bg-indigo-100` are deliberately NOT
+ * matched: they composite to different surfaces and are tracked separately.
+ */
+export const SOLID_TINT_RE = /^((?:[a-z-]+:)*)bg-indigo-50$/;
+
+/** The states ("", "hover", …) in which a class list paints a solid tint. */
+export function tintStates(variant: string): string[] {
+  return variant
+    .split(/\s+/)
+    .map((cls) => SOLID_TINT_RE.exec(cls)?.[1])
+    .filter((s): s is string => s !== undefined);
+}
+
+/** Any text token declared through a `--jf-*` custom property, base or on-tint. */
+const JF_TEXT_RE = /^((?:[a-z-]+:)*)text-\[var\(--jf-[a-z-]+\)\]$/;
+/** The two BASE tokens (the on-tint pair deliberately does not match). */
+const BASE_JF_TEXT_RE = /^text-\[var\(--jf-(?:primary|muted)\)\]$/;
+
+/**
+ * The base tokens this class list paints ON the tint, in that state.
+ *
+ * State-aware, because "painted on the tint" is a per-state question:
+ *
+ *   `bg-indigo-50 text-[var(--jf-primary)]`
+ *     resting state is tinted and its text is the base token -> DEFECT.
+ *
+ *   `text-[var(--jf-primary)] hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]`
+ *     the resting text is on white, where the base token passes (4.70:1), and
+ *     the hover state overrides BOTH the surface and the text -> fixed. Flagging
+ *     this would be wrong, and it is the shape the outline buttons use.
+ *
+ *   `text-[var(--jf-primary)] hover:bg-indigo-50`   (no text override)
+ *     the bare token is still what is painted while hovered -> DEFECT.
+ *
+ * So: if the variant declares ANY text token in that state, only the
+ * state-qualified ones count and a base token among them is the defect;
+ * otherwise the bare tokens are still in effect and they count.
+ */
+export function baseTokensOnTint(variant: string, state: string): string[] {
+  const inState: { cls: string; base: boolean }[] = [];
+  const bare: { cls: string; base: boolean }[] = [];
+  for (const cls of variant.split(/\s+/)) {
+    const m = JF_TEXT_RE.exec(cls);
+    if (!m) continue;
+    const entry = { cls, base: BASE_JF_TEXT_RE.test(cls) };
+    if (m[1] === state) inState.push(entry);
+    else if (m[1] === "") bare.push(entry);
+  }
+  const effective = inState.length > 0 ? inState : bare;
+  return effective.filter((e) => e.base).map((e) => e.cls);
+}
+
+/**
+ * Findings for one file: shape (a) same class list, shape (b) inherited.
+ *
+ * `rel` is used only to label a finding (`<file>:<line>`); it is the caller's
+ * name for the file, not a path this function reads.
+ */
+export function tintedSurfaceFindings(rel: string, src: string): string[] {
+  const code = codeOnly(src);
+  const events = jsxTags(code);
+  const findings: string[] = [];
+
+  // (a) Same element: one class list that renders BOTH a tint and, in the state
+  //     that tint applies, a base token. This is the shape the page-level chips
+  //     have (`bg-indigo-50 text-[var(--jf-primary)]`), and also the shape a
+  //     hover-tinted button has when it does NOT override its text on hover
+  //     (`text-[…primary] hover:bg-indigo-50`) — the base token is what is
+  //     painted while the tint is showing, which is the same AA obligation.
+  //     A state-qualified on-tint override clears it (baseTokensOnTint).
+  for (const e of events) {
+    for (const v of e.tag.variants) {
+      const states = tintStates(v);
+      if (states.length === 0) continue;
+      const toks = [...new Set(states.flatMap((s) => baseTokensOnTint(v, s)))];
+      if (toks.length === 0) continue;
+      const line = code.slice(0, e.tag.openIdx).split("\n").length;
+      findings.push(
+        `${rel}:${line} — <${e.tag.name}> paints ${toks.join(" + ")} on bg-indigo-50`,
+      );
+    }
+  }
+
+  // (b) Inherited: the token sits on a descendant of a tinted element, so it is
+  //     painted on the tint even though its own class list is clean.
+  //
+  //     The token is attributed to the element that OWNS it (the tag whose
+  //     attribute list contains the offset). A token written in the same
+  //     element's className was already reported by (a) — reporting it again
+  //     as "inherited" would double-count one site.
+  //
+  //     An ancestor only counts here when its tint is UNQUALIFIED, because the
+  //     descendant's token and the ancestor's tint would have to be in the same
+  //     state to overlap and a source scan cannot pair states across elements.
+  //     That keeps this shape a real defect (the switcher's sub-line on a
+  //     resting tint) and not a guess.
+  const TOKEN_RE = /text-\[var\(--jf-(?:primary|muted)\)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = TOKEN_RE.exec(code))) {
+    const owner = events.find((e) => e.tag.attrStart < m!.index && m!.index < e.tag.attrEnd)?.tag;
+    if (!owner) continue;
+    const ownIsBad = owner.variants.some((v) => tintStates(v).some((s) => baseTokensOnTint(v, s).length > 0));
+    if (ownIsBad) continue; // already (a)
+    const tintedEl = ancestorsAt(events, owner.openIdx).find(
+      (t) => t !== owner && t.variants.some((v) => tintStates(v).includes("")),
+    );
+    if (!tintedEl) continue;
+    const line = code.slice(0, m.index).split("\n").length;
+    findings.push(
+      `${rel}:${line} — ${m[0]} is inside <${tintedEl.name}> which paints bg-indigo-50`,
+    );
+  }
+
+  // A finding must be reported once per site, not once per variant.
+  return [...new Set(findings)];
+}
+
+

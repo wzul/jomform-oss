@@ -89,126 +89,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { codeOnly, jsxTags, ancestorsAt, tsxFiles } from "./jsxSource.ts";
+import { codeOnly, jsxTags, tsxFiles, tintedSurfaceFindings } from "./jsxSource.ts";
 
 const SRC = fileURLToPath(new URL("../", import.meta.url)); // web/src/
 
-/** True when a single class token paints a SOLID indigo-50 tint (any state). */
-function paintsTint(cls: string): boolean {
-  // `bg-indigo-50`, `hover:bg-indigo-50`, `focus:bg-indigo-50`, `md:bg-indigo-50`
-  // ... but NOT `bg-indigo-50/40` (translucent) and NOT `bg-indigo-100`.
-  return TINT_RE.test(cls);
-}
-
-// Solid-tint class with its state prefix split out: "" for the resting state,
-// "hover" / "focus" / "md:hover"... for a state-qualified one.
-const TINT_RE = /^((?:[a-z-]+:)*)bg-indigo-50$/;
-// Any text token declared through a --jf-* custom property, base or on-tint.
-const ANY_JF_TEXT_RE = /^((?:[a-z-]+:)*)text-\[var\(--jf-[a-z-]+\)\]$/;
-// The two BASE tokens (the on-tint pair deliberately does not match).
-const BASE_JF_TEXT_RE = /^text-\[var\(--jf-(?:primary|muted)\)\]$/;
-
-/**
- * The base tokens this class list paints ON the tint.
- *
- * State-aware, because "painted on the tint" is a per-state question:
- *
- *   `bg-indigo-50 text-[var(--jf-primary)]`
- *     resting state is tinted and its text is the base token -> DEFECT.
- *
- *   `text-[var(--jf-primary)] hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]`
- *     the resting text is on white, where the base token passes (4.70:1), and
- *     the hover state overrides BOTH the surface and the text -> fixed. Flagging
- *     this would be wrong, and it is the shape the outline buttons use.
- *
- *   `text-[var(--jf-primary)] hover:bg-indigo-50`   (no text override)
- *     the bare token is still what is painted while hovered -> DEFECT.
- *
- * So: if the variant declares ANY text token in that state, only the
- * state-qualified ones count and a base token among them is the defect;
- * otherwise the bare tokens are still in effect and they count.
- */
-function baseTokensOnTint(variant: string, state: string): string[] {
-  const inState: { cls: string; base: boolean }[] = [];
-  const bare: { cls: string; base: boolean }[] = [];
-  for (const cls of variant.split(/\s+/)) {
-    const m = ANY_JF_TEXT_RE.exec(cls);
-    if (!m) continue;
-    const entry = { cls, base: BASE_JF_TEXT_RE.test(cls) };
-    if (m[1] === state) inState.push(entry);
-    else if (m[1] === "") bare.push(entry);
-  }
-  const effective = inState.length > 0 ? inState : bare;
-  return effective.filter((e) => e.base).map((e) => e.cls);
-}
-
-/** Findings for one file: shape (a) same class list, shape (b) inherited. */
-function findingsIn(rel: string, src: string): string[] {
-  const code = codeOnly(src);
-  const events = jsxTags(code);
-  const findings: string[] = [];
-
-  // (a) Same element: one class list that renders BOTH a tint and, in the state
-  //     that tint applies, a base token. This is the shape the page-level chips
-  //     have (`bg-indigo-50 text-[var(--jf-primary)]`), and also the shape a
-  //     hover-tinted button has when it does NOT override its text on hover
-  //     (`text-[…primary] hover:bg-indigo-50`) — the base token is what is
-  //     painted while the tint is showing, which is the same AA obligation.
-  //     A state-qualified on-tint override clears it (baseTokensOnTint).
-  for (const e of events) {
-    for (const v of e.tag.variants) {
-      const tintStates = v
-        .split(/\s+/)
-        .map((cls) => TINT_RE.exec(cls)?.[1])
-        .filter((s): s is string => s !== undefined);
-      if (tintStates.length === 0) continue;
-      const toks = [...new Set(tintStates.flatMap((s) => baseTokensOnTint(v, s)))];
-      if (toks.length === 0) continue;
-      const line = code.slice(0, e.tag.openIdx).split("\n").length;
-      findings.push(
-        `${rel}:${line} — <${e.tag.name}> paints ${toks.join(" + ")} on bg-indigo-50`,
-      );
-    }
-  }
-
-  // (b) Inherited: the token sits on a descendant of a tinted element, so it is
-  //     painted on the tint even though its own class list is clean.
-  //
-  //     The token is attributed to the element that OWNS it (the tag whose
-  //     attribute list contains the offset). A token written in the same
-  //     element's className was already reported by (a) — reporting it again as
-  //     "inherited" would double-count one site.
-  //
-  //     An ancestor only counts here when its tint is UNQUALIFIED, because the
-  //     descendant's token and the ancestor's tint would have to be in the same
-  //     state to overlap and a source scan cannot pair states across elements.
-  //     That keeps this shape a real defect (the switcher's sub-line on a
-  //     resting tint) and not a guess.
-  const TOKEN_RE = /text-\[var\(--jf-(?:primary|muted)\)\]/g;
-  let m: RegExpExecArray | null;
-  while ((m = TOKEN_RE.exec(code))) {
-    const owner = events.find((e) => e.tag.attrStart < m!.index && m!.index < e.tag.attrEnd)?.tag;
-    if (!owner) continue;
-    const ownIsBad = owner.variants.some((v) =>
-      v.split(/\s+/).some((cls) => {
-        const s = TINT_RE.exec(cls)?.[1];
-        return s !== undefined && baseTokensOnTint(v, s).length > 0;
-      }),
-    );
-    if (ownIsBad) continue; // already (a)
-    const tintedEl = ancestorsAt(events, owner.openIdx).find(
-      (t) => t !== owner && t.variants.some((v) => v.split(/\s+/).some((cls) => TINT_RE.exec(cls)?.[1] === "")),
-    );
-    if (!tintedEl) continue;
-    const line = code.slice(0, m.index).split("\n").length;
-    findings.push(
-      `${rel}:${line} — ${m[0]} is inside <${tintedEl.name}> which paints bg-indigo-50`,
-    );
-  }
-
-  // A finding must be reported once per site, not once per variant.
-  return [...new Set(findings)];
-}
+// The RULE itself — which base tokens a class list paints on a SOLID
+// `bg-indigo-50` tint, per state, and the (a) same-element / (b) inherited
+// findings it produces — lives in `./jsxSource.ts` as `tintedSurfaceFindings`.
+// It used to be defined here AND, in a flattened state-UNaware form, in
+// `sidebarNav.test.ts`; the two then disagreed about one class list (card
+// t_306dcc1e). One implementation, called by both guards, is the property that
+// makes that impossible rather than merely fixed.
 
 const FILES = tsxFiles(SRC);
 
@@ -289,7 +180,7 @@ function unreadableSites(): Array<{ rel: string; line: number; tag: string; expr
 function allFindings(): string[] {
   const out: string[] = [];
   for (const rel of FILES) {
-    out.push(...findingsIn(rel, readFileSync(`${SRC}${rel}`, "utf8")));
+    out.push(...tintedSurfaceFindings(rel, readFileSync(`${SRC}${rel}`, "utf8")));
   }
   return out;
 }
@@ -443,7 +334,7 @@ test("the shapes that used to be skipped are all caught (in-file bite proof)", (
 
   const missed: string[] = [];
   for (const c of cases) {
-    const found = findingsIn("fixture.tsx", c.src.join("\n"));
+    const found = tintedSurfaceFindings("fixture.tsx", c.src.join("\n"));
     if (!found.some((f) => f.includes("paints text-[var(--jf-primary)] on bg-indigo-50"))) {
       missed.push(`${c.name} — reported ${JSON.stringify(found)}`);
     }
@@ -479,7 +370,7 @@ test("the shapes that used to be skipped are all caught (in-file bite proof)", (
   ];
   const wrong: string[] = [];
   for (const c of negatives) {
-    const found = findingsIn("fixture.tsx", c.src.join("\n"));
+    const found = tintedSurfaceFindings("fixture.tsx", c.src.join("\n"));
     if (found.length > 0) wrong.push(`${c.name} — ${JSON.stringify(found)}`);
   }
   assert.deepEqual(wrong, [], `these are NOT defects and must not be reported:\n  ${wrong.join("\n  ")}`);
