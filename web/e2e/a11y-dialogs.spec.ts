@@ -30,7 +30,15 @@
 // reachable at all — a selector that stops matching FAILS rather than skipping,
 // because a guard that silently passes when its subject vanished is the exact
 // hole this card is about — and (2) scanned in isolation with the repo's own
-// axe-core, failing on critical/serious. The isolation is deliberate:
+// axe-core, failing on critical/serious. The confirm button's disabled state is
+// asserted at three points, not one: EMPTY (on open), a WRONG slug of the same
+// length (still disabled), and the EXACT slug (enabled). Until card t_b2463a72
+// only the EMPTY state was measured while the message and the docs claimed "the
+// exact slug", so a confirm armed by any non-empty text — `typed.trim().length
+// === 0` in place of the slug comparison on either dialog — shipped green; both
+// halves of the boundary are what make that regression fail now.
+//
+// The isolation is deliberate:
 // `AxeBuilder().include()` scopes axe to the dialog subtree, and axe THROWS
 // ("No elements found for include in page Context") when that subtree is not
 // there, so the scan cannot pass vacuously. The structural assertions are not
@@ -80,6 +88,11 @@ const EN = {
 const WORKSPACE_ID = "ws1";
 const FORM_SLUG = "tee-2026";
 const WS_SLUG = "demo";
+// Wrong slugs of the SAME length as the real ones — the confirm must not arm on
+// "something was typed", and a length-only comparison must be caught too. The
+// lengths are tied to the real slugs in `assertDialogContract`.
+const FORM_WRONG_SLUG = "xxxxxxxx";
+const WS_WRONG_SLUG = "xxxx";
 
 const BUNDLE = {
   me: { id: "u1", email: "merchant@example.com", name: "Merchant", lang: "", is_super_admin: true },
@@ -195,8 +208,25 @@ async function scanDialog(page: Page, name: string) {
  */
 async function assertDialogContract(
   page: Page,
-  opts: { title: string; fieldLabel: string; inputId: string; confirmName: string },
+  opts: {
+    title: string;
+    fieldLabel: string;
+    inputId: string;
+    confirmName: string;
+    /** The real slug the server will be asked to confirm. */
+    slug: string;
+    /** A different slug of the SAME length — see the boundary assertion below. */
+    wrongSlug: string;
+  },
 ) {
+  // The harness' own invariant: if `wrongSlug` were a different length, a gate
+  // that compared only `typed.length === slug.length` would arm the confirm and
+  // this guard would not see it. Asserting it here keeps a later edit to the
+  // constants from quietly weakening the test.
+  expect(
+    opts.wrongSlug.length,
+    "wrongSlug must be the same length as the real slug for the boundary assertion to bite",
+  ).toBe(opts.slug.length);
   const dialog = page.locator('[role="dialog"]');
   await expect(dialog, "exactly one dialog is open").toHaveCount(1);
   await expect(dialog).toBeVisible();
@@ -222,7 +252,30 @@ async function assertDialogContract(
   // scoping it also asserts the button really is inside the dialog.
   const confirm = dialog.getByRole("button", { name: opts.confirmName });
   await expect(confirm).toBeVisible();
+
+  // (1) EMPTY — nothing typed. Kept: it is the state the dialog opens in, and a
+  // confirm that was armed unconditionally fails here.
   await expect(confirm, "confirm must be disabled until the exact slug is typed").toBeDisabled();
+
+  // (2) A WRONG SLUG OF THE SAME LENGTH. This is the boundary that actually
+  // guards the write, and (1) never reaches it: the two implementations compare
+  // `typed.trim()` against the real slug (`WorkspaceTab.tsx` canDelete,
+  // `forms/page.tsx` purge), so a regression that arms the button for any
+  // non-empty text — the shape measured shipping green on both dialogs —
+  // passes (1) and destroys the wrong workspace / permanently purges the wrong
+  // form's CASCADE children. Same length on purpose: a length-only comparison
+  // must be caught too.
+  await input.fill(opts.wrongSlug);
+  await expect(
+    confirm,
+    `confirm must stay disabled for a wrong slug (typed "${opts.wrongSlug}", the real slug is "${opts.slug}")`,
+  ).toBeDisabled();
+
+  // (3) THE EXACT SLUG arms it. The other side of the boundary: without this a
+  // permanently-disabled confirm would satisfy (1) and (2) and the dialog would
+  // be a dead end no test noticed.
+  await input.fill(opts.slug);
+  await expect(confirm, "confirm must be enabled once the exact slug is typed").toBeEnabled();
 
   // Escape closes the dialog — the only keyboard way out of these modals.
   await page.keyboard.press("Escape");
@@ -246,6 +299,8 @@ test.describe("a11y: typed-slug confirmation dialogs", () => {
       fieldLabel: EN.wsConfirmFieldLabel,
       inputId: "ws-confirm-slug",
       confirmName: DICT["ws.confirmButton"].en,
+      slug: WS_SLUG,
+      wrongSlug: WS_WRONG_SLUG,
     });
   });
 
@@ -266,6 +321,8 @@ test.describe("a11y: typed-slug confirmation dialogs", () => {
       fieldLabel: EN.purgeConfirmFieldLabel,
       inputId: "purge-confirm-slug",
       confirmName: EN.purgeButton,
+      slug: FORM_SLUG,
+      wrongSlug: FORM_WRONG_SLUG,
     });
   });
 

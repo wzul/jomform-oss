@@ -86,9 +86,14 @@ subtree is absent, so the test cannot go green by quietly matching nothing.
 
 Pinned per dialog: `role="dialog"` + `aria-modal="true"` + an `aria-labelledby`
 that resolves to the shipped heading, focus in the confirm field on open, the
-confirm button disabled until the exact slug is typed, Escape closes, and zero
-critical/serious axe violations within the dialog. A regression there now fails
-`npm run a11y` instead of passing unseen.
+confirm button's disabled state at the boundary that actually guards the write —
+disabled with the field empty, **still disabled for a wrong slug of the same
+length**, and enabled only for the **exact** slug — Escape closes, and zero
+critical/serious axe violations within the dialog. The three slug states are one
+boundary: card `t_b2463a72` measured that only the empty state was ever checked,
+so a confirm that armed on any non-empty text (`typed.trim().length === 0` in
+place of the slug comparison) shipped green on both dialogs. A regression there
+now fails `npm run a11y` instead of passing unseen.
 
 ### The workspace switcher's tinted active item
 
