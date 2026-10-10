@@ -20,9 +20,10 @@ export const metadata: Metadata = {
 // nothing).
 //
 // NOTE for anyone editing these comments: src/lib/docsToolClaims.test.ts scans
-// this file for a name presented as a tool, so an identifier in brackets a few
-// words after the word "tool"/"tools" reads as a phantom claim. Keep card ids and
-// issue references out of a bracketed aside right after that word.
+// this file for a name presented as a tool, so a SNAKE_CASE identifier in brackets
+// a few words after the word "tool"/"tools" is read as a claim and must be a
+// registered tool. Ordinary prose and a card id in brackets there are fine — that
+// shape is strict, and it skips this repo's card-id spelling (card t_3926a5dd).
 const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: string }[] }[] = [
   {
     group: "Forms",

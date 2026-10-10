@@ -14,12 +14,16 @@
 //
 // WHAT IT GUARDS:
 //   1. A name the docs CALL a tool must be a name the Go registry actually registers.
-//      Four phrasings, two name shapes each: "as the X tool" / "X, the tool that …",
-//      with X either snake_case (strict, no stoplist needed) or any single-word
-//      identifier (loose, stoplisted against real prose — see PROSE_WORDS), plus the
-//      parenthetical form "… the MCP tool <phrase> (X)". That last one is the phrasing
-//      the page's own HEADER COMMENT shipped the false claim in, and a comment is in
-//      scope because this guard reads whole file text.
+//      Five phrasings, named for the name shape they carry: "as the X tool" / "X, the
+//      tool that …" in both a strict form (X is snake_case, no stoplist needed) and a
+//      loose one (X is any lower-case identifier, stoplisted against real prose — see
+//      PROSE_WORDS), plus the parenthetical form "… the MCP tool <phrase> (X)", which is
+//      strict — X must be snake_case, and this repo's card-id spelling is skipped as a
+//      citation — because in a bracket position a bare English word and a name are
+//      structurally identical (card t_3926a5dd; the shape's own note below carries the
+//      measurement). The parenthetical is the phrasing the page's own HEADER COMMENT
+//      shipped the false claim in, and a comment is in scope because this guard reads
+//      whole file text.
 //   2. The two exact sentences that shipped the false claim cannot come back.
 //   3. The chat page keeps saying the lane is in-app / NOT an MCP tool, so a
 //      silent deletion of the correction fails here.
@@ -67,7 +71,14 @@
 // DESCRIPTION is accurate, only that the tool exists. And the loose shapes cover
 // the phrasings named above, not every way English can call something a tool: a
 // new wording ("the deleteall helper") is still a copy defect this guard cannot
-// see. It narrows the mouth of the hole; it does not close the class.
+// see. The parenthetical shape has a spelling gap of its own, deliberately
+// (card t_3926a5dd): a SINGLE-WORD tool name in brackets ("… the MCP tool the lane
+// pairs with (deleteall)") is NOT read as a claim, because at that position a bare
+// English word cannot be told from a name — the loose spelling read four forms of
+// non-claim (three of ordinary prose plus a card id) as phantoms, which is the defect
+// that narrowed it, and the spelling is the only signal left. The single-word claim
+// stays covered in the two positions where the sentence itself says "this is a tool".
+// It narrows the mouth of the hole; it does not close the class.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -83,6 +94,7 @@ const MCP_DIR = dir("../../../api/internal/mcpsrv/");
 const PARITY_MD = "../../../MCP-PARITY.md";
 const TOOL_REFERENCE_PAGE = "../app/docs/mcp/page.tsx";
 const CHAT_DOCS_PAGE = "../app/docs/chat/page.tsx";
+const ACTIVITY_DOCS_PAGE = "../app/docs/activity/page.tsx";
 
 // Every docs page in the tree, recursively — a new /docs/<x> page is covered by
 // this guard the day it lands, without editing this file.
@@ -172,10 +184,55 @@ const REGISTERED = registeredTools();
 // "the MCP tool the proposal lane pairs with (propose_write)". The guard reads whole
 // file text, so a comment was already in scope and needed covering, not a new scope. The
 // window is bounded at 60 chars — measured against the real form, where "tool" sits 33
-// chars before the "(" of the name, even when the comment wraps onto the next line —
-// and it matches nothing in the shipped docs corpus today.
+// chars before the "(" of the name, even when the comment wraps onto the next line.
+//
+// IT CARRIES THE STRICT NAME SHAPE, and that is a measurement, not a style choice (card
+// t_3926a5dd, whose defect report is QA card t_c016f6e3). It shipped carrying BARE_NAME,
+// so ANY lower-case word in brackets within 60 chars after "tool"/"tools" read as a tool
+// name the docs claim — and it reported a phantom for three forms of ordinary English,
+// each reproduced against this file as it stood:
+//
+//   "// the tool (deprecated) is no longer listed"   -> claimed "deprecated"
+//   "This page describes the MCP tools (overview) …"  -> claimed "overview"
+//   '// words after the word "tool(s)" reads as …'    -> claimed "s"
+//
+// None of those is a near-miss of a claim; they are shapes English produces — a gloss,
+// an appositive, a plural marker — and at that position the SPELLING is the only signal
+// that separates a name from a gloss: "the tool (deprecated)" and a hypothetical
+// "the tool (deleteall)" differ in nothing else, so any rule that reads the second as a
+// claim reads the first as one too. snake_case is what is left: English prose does not
+// put snake_case in brackets, and every registered name is snake_case (asserted by the
+// parenthetical test below, so a bare-word tool fails there with what to do about it).
+// The loose single-word claim stays covered where the sentence structure itself says
+// "this is a tool" — "as the X tool" and "X, the tool that" — and the spelling gap this
+// leaves is stated under WHAT IT DOES NOT COVER.
+//
+// THE STRICT SHAPE IS NOT ENOUGH ON ITS OWN, which was measured rather than assumed: a
+// KANBAN CARD ID is spelled `t_` + 8 hex, which is snake_case, so it matches both name
+// shapes — on this tree "// these tools (t_cde2e73a) are added to the registry here"
+// still read as `presents "t_cde2e73a" as a tool`. A bracketed aside is exactly where a
+// docs comment cites a card, so the shape also SKIPS this repo's card-id spelling
+// (CARD_ID below, asserted never to match a registered name). The card's own quoted
+// sentence — "// registry (t_cde2e73a). Keep it in step when tools are added or
+// changed" — reads GREEN either way, because its bracket follows "registry" and the
+// word "tools" comes later with no bracket after it (QA card t_c016f6e3 re-measured
+// that, correcting the defect report).
+//
+// The shape is NOT dead on the real corpus, which the note here used to get wrong ("it
+// matches nothing in the shipped docs corpus today"): /docs/activity renders "the MCP
+// tool reference (list_events)", the one parenthetical claim the shipped docs carry, and
+// the parenthetical test below pins it, so narrowing this shape to the spelling the docs
+// actually write is measured rather than assumed.
 const TOOLNAME = String.raw`[a-z][a-z0-9]*(?:_[a-z0-9]+)+`;
 const BARE_NAME = String.raw`[a-z][a-z0-9_]*`;
+
+// The identifier spellings this repo uses for something that is NOT a tool. A kanban card
+// id is the one that reaches the docs corpus: comments cite cards, a citation is often a
+// bracketed aside, and `t_cde2e73a` is snake_case — so the strict capture cannot tell it
+// from a tool name and the shape needs this exclusion to stop reading citations as claims.
+// It cannot hide a real tool: a registered name matching it fails the parenthetical test
+// below (`CARD_ID`), which is the same both-directions check PROSE_WORDS carries.
+const CARD_ID = /^t_[0-9a-f]{8}$/;
 
 // Words the loose shape matches on real prose. Keep this list measured, not guessed:
 // add an entry only for a word that actually appears in a docs page, and never one that
@@ -183,16 +240,23 @@ const BARE_NAME = String.raw`[a-z][a-z0-9_]*`;
 const PROSE_WORDS = new Set(["a", "an", "no", "one", "own"]);
 
 // Named so a failure can say WHICH shape caught a name, and so the load-bearing test
-// below can point at one shape by name instead of by index.
-const CLAIM_SHAPES: { shape: string; re: RegExp }[] = [
+// below can point at one shape by name instead of by index. `skip` is a per-shape
+// exclusion for a spelling that cannot be a tool name at all — the parenthetical carries
+// one, because a bracketed aside is where the docs cite a card (see CARD_ID).
+const CLAIM_SHAPES: { shape: string; re: RegExp; skip?: (name: string) => boolean }[] = [
   { shape: "as-the-tool/strict", re: new RegExp(String.raw`\bas (?:the )?(${TOOLNAME}) tool\b`, "gi") },
   { shape: "comma-the-tool/strict", re: new RegExp(String.raw`\b(${TOOLNAME}),? the tool (?:that|which|for)\b`, "gi") },
   { shape: "as-the-tool/loose", re: new RegExp(String.raw`\bas (?:the )?(${BARE_NAME}) tool\b`, "gi") },
   { shape: "comma-the-tool/loose", re: new RegExp(String.raw`\b(${BARE_NAME}),? the tool (?:that|which|for)\b`, "gi") },
   // The parenthetical: the docs name a tool, then give the name in brackets a few
-  // words later. This is the one shape that fired nowhere in the shipped corpus, and
-  // the one that pins the header-comment form the original defect shipped in.
-  { shape: "parenthetical", re: new RegExp(String.raw`\btools?\b[^()]{0,60}?\((${BARE_NAME})\)`, "gi") },
+  // words later. It pins the header-comment form the original defect shipped in, and it
+  // is the one shape whose name is in a GLOSS position — which is why it is strict,
+  // skips a card-id citation, and neither of the others does (see the note above it).
+  {
+    shape: "parenthetical/strict",
+    re: new RegExp(String.raw`\btools?\b[^()]{0,60}?\((${TOOLNAME})\)`, "gi"),
+    skip: (name) => CARD_ID.test(name),
+  },
 ];
 
 // Every name a page CLAIMS is a tool, with the offset it was found at and the shape
@@ -202,10 +266,11 @@ const CLAIM_SHAPES: { shape: string; re: RegExp }[] = [
 function namesClaimedAsTools(src: string): { name: string; index: number; shape: string }[] {
   const out: { name: string; index: number; shape: string }[] = [];
   const seen = new Set<string>();
-  for (const { shape, re } of CLAIM_SHAPES) {
+  for (const { shape, re, skip } of CLAIM_SHAPES) {
     for (const m of src.matchAll(re)) {
       const name = m[1];
       if (PROSE_WORDS.has(name)) continue;
+      if (skip?.(name)) continue;
       const at = m.index ?? 0;
       const key = `${at}:${name}`;
       if (seen.has(key)) continue;
@@ -221,7 +286,9 @@ function namesClaimedAsTools(src: string): { name: string; index: number; shape:
 function namesClaimedByShape(shape: string, src: string): string[] {
   const found = CLAIM_SHAPES.find((s) => s.shape === shape);
   assert.ok(found, `no claim shape named ${JSON.stringify(shape)} — the test is stale`);
-  return [...src.matchAll(found!.re)].map((m) => m[1]).filter((n) => !PROSE_WORDS.has(n));
+  return [...src.matchAll(found!.re)]
+    .map((m) => m[1])
+    .filter((n) => !PROSE_WORDS.has(n) && !found!.skip?.(n));
 }
 
 // A tool name as it appears anywhere in docs prose or in a tool-reference entry.
@@ -465,6 +532,90 @@ test("the prose scan does not mistake a field or a phrase for a tool name", () =
   assert.ok(names.length > 0, "the prose name matcher found nothing in the chat docs");
 });
 
+test("the parenthetical shape is strict, and the spelling is what keeps it off prose", () => {
+  // WHY THIS TEST EXISTS (card t_3926a5dd, whose defect report is QA card t_c016f6e3).
+  // The parenthetical shape shipped carrying BARE_NAME, so anything in brackets after the
+  // word "tool"/"tools" was reported as a tool the docs claim and the registry does not
+  // have. It has TWO faces, and this test covers both: ordinary English (a gloss, an
+  // appositive, a plural marker), which the STRICT spelling keeps out, and a kanban card
+  // id, which is snake_case and so reaches even the strict capture — that one is skipped
+  // as a citation. Each aside below was measured red against the shipped shape; the first
+  // three were real drafts that had to be reworded purely to appease the pattern.
+  const BRACKET_ASIDES = [
+    "// the tool (deprecated) is no longer listed",
+    "This page describes the MCP tools (overview) of the assistant.",
+    '// words after the word "tool(s)" reads as a phantom claim',
+    // The citation face. The card that filed this defect could not write its own card id
+    // in brackets after the word "tools" — measured on this tree after the strict capture
+    // landed, before the shape skipped the spelling.
+    "// these tools (t_cde2e73a) are added to the registry here",
+  ];
+  for (const text of BRACKET_ASIDES) {
+    assert.deepEqual(
+      namesClaimedByShape("parenthetical/strict", text),
+      [],
+      `the parenthetical shape claims a name inside ${JSON.stringify(text)} — a bracket after ` +
+        'the word "tool" holding something that is not a tool name is an aside, not a claim, ' +
+        "and reading it as one is the false positive card t_3926a5dd fixed",
+    );
+    assert.deepEqual(
+      namesClaimedAsTools(text).map((c) => c.name),
+      [],
+      `${JSON.stringify(text)} is read as presenting a tool — but it is an aside, so ` +
+        'the guard\'s message ("presents … as a tool, but no such tool is registered") would ' +
+        "be about a claim nobody made",
+    );
+  }
+  // The asides are load-bearing, not decoration: under the loose spelling the shape
+  // shipped with, every one IS claimed, with exactly these names — so a phrase that is
+  // quiet for some unrelated reason cannot let the legs above pass vacuously, and the
+  // card id's capture is recorded as the thing the strict spelling alone did NOT fix.
+  // Asserted on the shape's own anchor and window: if BARE_NAME or the window is ever
+  // moved, re-derive this against the shipped form rather than deleting the leg.
+  const LOOSE_PARENTHETICAL = new RegExp(String.raw`\btools?\b[^()]{0,60}?\((${BARE_NAME})\)`, "gi");
+  assert.deepEqual(
+    BRACKET_ASIDES.flatMap((t) => [...t.matchAll(LOOSE_PARENTHETICAL)].map((m) => m[1])),
+    ["deprecated", "overview", "s", "t_cde2e73a"],
+    "the measured asides no longer reproduce the false positive under the loose spelling, so " +
+      "they no longer show what keeps this guard off asides that are not claims",
+  );
+  // The other half, and the reason this is a narrowing rather than a deletion: the shape
+  // still catches the phrasing it exists for on the REAL corpus. /docs/activity renders
+  // "the MCP tool reference (list_events)", and a walk of every docs page found exactly
+  // this one parenthetical site — so it is the shape's live coverage, not a hypothetical.
+  const activity = read(ACTIVITY_DOCS_PAGE);
+  assert.ok(
+    namesClaimedByShape("parenthetical/strict", activity).includes("list_events"),
+    '/docs/activity no longer has its parenthetical claim ("the MCP tool reference ' +
+      '(list_events)") read as a claim — the strict shape has gone blind to the one ' +
+      "parenthetical site the shipped docs corpus has",
+  );
+  // And the strict spelling is compatible with the registry by construction: every
+  // registered name is snake_case, so no registered tool is unreachable from this shape.
+  // A registered bare-word tool would turn the spelling rule into a hole, so it fails
+  // HERE, with the fix, rather than silently inside the shape.
+  const notStrict = [...REGISTERED].filter((n) => !new RegExp(`^${TOOLNAME}$`).test(n));
+  assert.deepEqual(
+    notStrict,
+    [],
+    `registered MCP tool(s) ${JSON.stringify(notStrict)} are not snake_case, so a ` +
+      'parenthetical claim of one ("… the MCP tool … (<name>)") is invisible to the strict ' +
+      "parenthetical shape — give that spelling its own shape, or widen the capture with the " +
+      "measurement showing it does not read prose as a claim",
+  );
+  // So is the citation exclusion: a registered tool spelled like a card id would be
+  // invisible to the parenthetical shape, which is the hole CARD_ID must never open. Same
+  // both-directions check the stoplist carries.
+  const idSpelled = [...REGISTERED].filter((n) => CARD_ID.test(n));
+  assert.deepEqual(
+    idSpelled,
+    [],
+    `registered MCP tool(s) ${JSON.stringify(idSpelled)} are spelled like a kanban card id, so ` +
+      "the parenthetical shape's citation exclusion would hide a real tool — rename the `CARD_ID` " +
+      "exclusion (or the tool) rather than leaving a registration the guard cannot see",
+  );
+});
+
 test("every claim shape is load-bearing, and the guard catches what it missed", () => {
   // WHY THIS TEST EXISTS. The two coverage gaps this file was fixed for were only ever
   // measured with a mutation applied by hand and the guard re-run — which proves the
@@ -498,13 +649,13 @@ test("every claim shape is load-bearing, and the guard catches what it missed", 
       // as the real header comment was.
       label: "parenthetical, one line",
       text: "// It documents the MCP tool the proposal lane pairs with (propose_write).",
-      by: "parenthetical",
+      by: "parenthetical/strict",
       name: "propose_write",
     },
     {
       label: "parenthetical, wrapped across two comment lines",
       text: "// It documents the MCP tool the proposal lane pairs with\n// (propose_write), the reversible set it may prepare,",
-      by: "parenthetical",
+      by: "parenthetical/strict",
       name: "propose_write",
     },
     {

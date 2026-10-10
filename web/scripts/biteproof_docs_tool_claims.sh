@@ -1,16 +1,37 @@
 #!/usr/bin/env bash
-# Bite proof for web/src/lib/docsToolClaims.test.ts (card t_2e9f9c68).
+# Bite proof for web/src/lib/docsToolClaims.test.ts.
 #
-# WHAT THIS PROVES, and why it is a script rather than more assertions: each case below
-# is a phrasing the guard MISSED. The proof has to be a comparison — the guard as it
-# stands on `origin/main` (the base this branch is rebased onto) must stay GREEN on the
-# mutated tree, and the guard in this working tree must go RED and name the phantom. A
-# test inside the guard cannot show that, because it can only exercise the guard's OWN
-# rules, not the absence of them.
+# WHAT THIS PROVES, and why it is a script rather than more assertions: a comparison of the
+# guard as it stands on `origin/main` (the base this branch is rebased onto) against the
+# guard in this working tree, on a mutated docs page. A test inside the guard cannot show
+# that, because it can only exercise the guard's OWN rules, not the absence of them.
 #
-# Each case: mutate -> assert the mutation is really on disk -> run the OLD guard (expect
-# GREEN, i.e. the hole) -> run the NEW guard (expect RED, naming the offender) -> restore
-# the page byte-identically (re-checked with sha256).
+# TWO DIRECTIONS are driven here, and they are not the same claim:
+#
+#   * FALSE POSITIVE (card t_3926a5dd) — OLD RED, NEW GREEN: the shipped guard reports a
+#     tool the docs claim and the registry does not have, for a bracketed ASIDE after the
+#     word "tool"/"tools" within 60 chars. Four measured forms: the three English ones —
+#     "the tool (deprecated)", "the MCP tools (overview)", the literal "tool(s)" — and a
+#     KANBAN CARD ID, "these tools (t_cde2e73a) are added to the registry here", which is
+#     snake_case and so reached even the strict capture (that one is skipped as a citation
+#     now, and the harness drives it because the strict spelling alone did not close it).
+#     The old column must also NAME the aside's word, because a red for any other reason is
+#     not this defect. The harm in this direction is a red that is WRONG, not a hole, which
+#     is why the old column is what has to be green in a fixed tree.
+#   * GAP — OLD GREEN, NEW RED: the base guard misses a phrasing this tree catches. This is
+#     the direction every earlier case in this file drove.
+#
+# THE GAP CASES THIS PROOF WAS BUILT FOR CAN NO LONGER REPRODUCE THEIR PREMISE, and they are
+# not deleted for it (card t_3926a5dd): their phrasings were gaps against a guard that
+# predates #819, and `origin/main` now carries that fix, so BOTH columns catch them. They are
+# still the guard's coverage claims — a shape that stopped catching them would be a hole
+# nobody measured — so they are driven as REGRESSION cases instead: OLD RED, NEW RED, with
+# the new column naming the offender. `check` prints which direction it read, so a case whose
+# premise has moved cannot pass as the other kind; a stale premise reads as a `***` line, not
+# as a verdict (measured before this change: 4 such lines, `fail=1`, on the unmutated tree).
+#
+# Each case: mutate -> assert the mutation is really on disk -> run the OLD guard -> run the
+# NEW guard -> restore the page byte-identically (re-checked with sha256).
 #
 # The OLD column is read from `origin/main`, not a pinned commit hash. A hash rots: this
 # proof originally anchored on 2172312, whose guard reads `tools.go` alone and is RED on
@@ -423,8 +444,8 @@ refuse() { # refuse <label> <column> — the guard did not run: no verdict, no f
   exit 2
 }
 
-check() { # check <label> <old-want> <new-want> [must-name]
-  local label="$1" old_want="$2" new_want="$3" needle="${4:-}"
+check() { # check <label> <old-want> <new-want> [must-name] [old-must-name]
+  local label="$1" old_want="$2" new_want="$3" needle="${4:-}" old_needle="${5:-}"
   # The temp copy MUST keep a .ts extension: node strips types by extension, and a .mjs
   # copy of the guard dies with `SyntaxError: Unexpected token ':'` on its first type
   # annotation — which reads as a failing guard rather than a harness bug. It lives beside
@@ -432,24 +453,47 @@ check() { # check <label> <old-want> <new-want> [must-name]
   local oldtmp="$OLDTMP"
   cp "$OLD_GUARD" "$oldtmp"
   run_guard "$oldtmp"; rm -f "$oldtmp"
+  # The old column's output has to be kept: run_guard overwrites $VERDICT_OUT below, and the
+  # FALSE POSITIVE cases prove the defect by grepping the OLD failure for the prose word it
+  # reported. (A local, not a command substitution — run_guard inside `$( )` is a subshell
+  # and its VERDICT would not come back; see the channel note at the top.)
+  local old_out="$VERDICT_OUT"
   [ "$VERDICT" = REFUSED ] && refuse "$label" "OLD"
   if [ "$VERDICT" != "$old_want" ]; then
-    echo "  *** ${label}: OLD guard wanted ${old_want}, got ${VERDICT} — the case does not reproduce the gap ***"
-    grep -E '^ℹ (pass|fail)' <<<"$VERDICT_OUT" | head -2; fail=1
+    echo "  *** ${label}: OLD guard wanted ${old_want}, got ${VERDICT} — the case does not reproduce its premise ***"
+    grep -E '^ℹ (pass|fail)' <<<"$old_out" | head -2; fail=1
+  elif [ -n "$old_needle" ] && ! grep -qF "$old_needle" <<<"$old_out"; then
+    echo "  *** ${label}: OLD guard ${VERDICT} but its failure does not name ${old_needle} ***"
+    grep -F 'presents' <<<"$old_out" | head -2; fail=1
   elif [ "$label" = "baseline" ]; then
     echo "  ok   baseline: old guard ${VERDICT}, as expected"
+  elif [ "$old_want" != "$new_want" ] && [ "$old_want" = "RED" ]; then
+    echo "  ok   ${label}: old guard RED — the false positive reproduces (it reported a claim nobody made)"
+  elif [ "$old_want" = "$new_want" ] && [ "$old_want" = "RED" ]; then
+    echo "  ok   ${label}: old guard RED — caught by BOTH columns, so this claim was not narrowed away"
+  elif [ "$old_want" = "$new_want" ]; then
+    echo "  ok   ${label}: old guard GREEN — quiet in both columns (control)"
   else
-    echo "  ok   ${label}: old guard ${VERDICT} — the gap reproduces (it missed this)"
+    echo "  ok   ${label}: old guard GREEN — the gap reproduces (it missed this)"
   fi
 
   run_guard "$GUARD"
   [ "$VERDICT" = REFUSED ] && refuse "$label" "NEW"
   if [ "$VERDICT" != "$new_want" ]; then
     echo "  *** ${label}: NEW guard wanted ${new_want}, got ${VERDICT} ***"
-    grep -E '^ℹ (pass|fail)' <<<"$VERDICT_OUT" | head -2; fail=1
+    grep -E '^ℹ (pass|fail)' <<<"$VERDICT_OUT" | head -2
+    # WHAT the new column reported, not only that it was red: on a FALSE POSITIVE case a red
+    # new column has to be the guard reading the prose as a phantom, and seeing the message
+    # is what separates that from a red for an unrelated reason (a stale mutation, a broken
+    # guard, an edit that took this case with it).
+    grep -F 'presents' <<<"$VERDICT_OUT" | head -2; fail=1
   elif [ -n "$needle" ] && ! grep -qF "$needle" <<<"$VERDICT_OUT"; then
     echo "  *** ${label}: NEW guard ${VERDICT} but the failure does not name ${needle} ***"
     grep -F 'presents' <<<"$VERDICT_OUT" | head -2; fail=1
+  elif [ "$new_want" = "GREEN" ] && [ "$old_want" = "RED" ] && [ -n "$old_needle" ]; then
+    echo "  FIXED ${label}: old guard RED naming ${old_needle}, new guard GREEN — the false positive is gone"
+  elif [ "$new_want" = "GREEN" ] && [ "$old_want" = "RED" ]; then
+    echo "  QUIET ${label}: old guard RED, new guard GREEN — this form is deliberately not caught any more (stated gap)"
   else
     echo "  BITES ${label}: new guard ${VERDICT}${needle:+, naming $needle}"
   fi
@@ -480,30 +524,86 @@ echo
 echo "== baseline (no mutation) =="
 check "baseline" GREEN GREEN
 
+# ---- THE DEFECT THIS PROOF IS ABOUT (card t_3926a5dd) --------------------------
+#
+# Ordinary English that puts a lower-case word in brackets within the shape's 60-char
+# window after "tool"/"tools". Each of the three was a real draft on the filed card that had
+# to be reworded purely to appease the pattern, and each is the same phrase the guard's own
+# test ("the parenthetical shape is strict, and the spelling is what keeps it off prose")
+# asserts must stay quiet — the two instruments read the same three forms, one by running the
+# shipped guard on them and one by running this tree's.
+#
+# The direction is the INVERSE of the cases below: OLD RED (it reported a claim nobody made),
+# NEW GREEN — and the old column must NAME the prose word, because a red for another reason
+# would not be this defect.
 echo
-echo "== CASE 1: Gap 1 — underscore-free name in the shipped phrasing =="
+echo "== FALSE POSITIVE 1: a gloss in brackets after the word 'tool' =="
+mutate '// QA: the tool (deprecated) is no longer listed'
+assert_applied '(deprecated) is no longer listed' && {
+  check "prose gloss (deprecated)" RED GREEN '' 'presents "deprecated" as a tool'; }
+restore_page
+
+echo
+echo "== FALSE POSITIVE 2: a gloss in brackets after the word 'tools' =="
+mutate '// QA: This page describes the MCP tools (overview) of the assistant.'
+assert_applied 'tools (overview) of the assistant' && {
+  check "prose gloss (overview)" RED GREEN '' 'presents "overview" as a tool'; }
+restore_page
+
+echo
+echo "== FALSE POSITIVE 3: the literal English plural marker 'tool(s)' =="
+mutate '// QA: words after the word "tool(s)" reads as a phantom claim'
+assert_applied '"tool(s)" reads as a phantom claim' && {
+  check "plural marker (s)" RED GREEN '' 'presents "s" as a tool'; }
+restore_page
+
+echo
+echo "== FALSE POSITIVE 4: a KANBAN CARD ID in brackets after the word 'tools' =="
+# The face the STRICT spelling alone does not close: a card id is `t_` + 8 hex, which is
+# snake_case, so it reached the strict capture too (measured on the fixed tree before the
+# shape skipped the spelling). A bracketed aside is exactly where a docs comment cites a
+# card, and the card that filed this defect could not write its own id there.
+mutate '// QA: these tools (t_cde2e73a) are added to the registry here'
+assert_applied 'tools (t_cde2e73a) are added' && {
+  check "card-id citation (t_cde2e73a)" RED GREEN '' 'presents "t_cde2e73a" as a tool'; }
+restore_page
+
+echo
+echo "== STATED GAP: a SINGLE-WORD parenthetical claim is deliberately not caught (t_3926a5dd) =="
+# Not a control and not a fix. The narrowing above trades this form away, because at the
+# bracket position a bare English word and a name are structurally identical — see the
+# guard's own note and its WHAT IT DOES NOT COVER paragraph. Driven here so the trade is a
+# measured line of output rather than a sentence in a comment: the shipped guard reports the
+# phantom, this tree's guard does not.
+mutate '// QA: the MCP tool the proposal lane pairs with (deleteall).'
+assert_applied 'pairs with (deleteall)' && {
+  check "single-word parenthetical not caught (stated gap)" RED GREEN; }
+restore_page
+
+echo
+echo "== REGRESSION: the underscore-free name in the shipped phrasing is caught by BOTH =="
 mutate '// QA: the assistant can delete every product as the deleteall tool.'
 assert_applied 'as the deleteall tool' && {
-  check "single-word phantom" GREEN RED 'presents "deleteall" as a tool'; }
+  check "single-word phantom" RED RED 'presents "deleteall" as a tool'; }
 restore_page
 
 echo
-echo "== CASE 2: Gap 2 — the header-comment parenthetical (one line) =="
+echo "== REGRESSION: the header-comment parenthetical is caught by BOTH (strict spelling) =="
 mutate '// QA: this page documents the MCP tool the proposal lane pairs with (propose_write).'
 assert_applied 'pairs with (propose_write)' && {
-  check "header-comment parenthetical" GREEN RED 'presents "propose_write" as a tool'; }
+  check "header-comment parenthetical" RED RED 'presents "propose_write" as a tool'; }
 restore_page
 
 echo
-echo "== CASE 3: Gap 2 authentic shape — the parenthetical WRAPPED onto the next line =="
+echo "== REGRESSION: the same parenthetical WRAPPED onto the next line =="
 mutate '// QA: the MCP tool the proposal lane pairs with
 // (propose_write), the reversible set it may prepare,'
 assert_applied '(propose_write), the reversible set' && {
-  check "parenthetical wrapped across lines" GREEN RED 'presents "propose_write" as a tool'; }
+  check "parenthetical wrapped across lines" RED RED 'presents "propose_write" as a tool'; }
 restore_page
 
 echo
-echo "== CASE 4: Gap 1 on a DIFFERENT docs page (the walk covers the whole tree) =="
+echo "== REGRESSION: the same on a DIFFERENT docs page (the walk covers the whole tree) =="
 # The mutated copy goes through a per-run mktemp, not a fixed /tmp/e (the same
 # host-global channel as the verdict file: two overlapping runs would clobber it
 # mid-mutation and the case would then read the other run's page).
@@ -511,10 +611,11 @@ TMP_E=$(mktemp)
 awk 'NR==2{print "// QA: the snippet is generated as the uploadpic tool."} {print}' "$EMBED" > "$TMP_E" && mv "$TMP_E" "$EMBED"
 if grep -qF 'as the uploadpic tool' "$EMBED"; then
   echo "       mutation on disk: as the uploadpic tool"
-  cp "$OLD_GUARD" "$OLDTMP"; run_guard "$OLDTMP"; rm -f "$OLDTMP"
+  cp "$OLD_GUARD" "$OLDTMP"; run_guard "$OLDTMP"; rm -f "$OLDTMP"; old_out="$VERDICT_OUT"
   [ "$VERDICT" = REFUSED ] && refuse "/docs/embed phantom" "OLD"
-  [ "$VERDICT" = "GREEN" ] && echo "  ok   /docs/embed phantom: old guard GREEN (the hole is real)" \
-                           || { echo "  *** old guard was ${VERDICT}, expected GREEN ***"; fail=1; }
+  if [ "$VERDICT" = "RED" ] && grep -qF 'presents "uploadpic" as a tool' <<<"$old_out"; then
+    echo '  ok   /docs/embed phantom: old guard RED — caught by BOTH columns, so the walk did not narrow'
+  else echo "  *** /docs/embed phantom: old guard ${VERDICT} (or did not name the phantom) ***"; fail=1; fi
   run_guard "$GUARD"
   [ "$VERDICT" = REFUSED ] && refuse "/docs/embed phantom" "NEW"
   if [ "$VERDICT" = "RED" ] && grep -qF 'presents "uploadpic" as a tool' <<<"$VERDICT_OUT"; then
@@ -530,6 +631,14 @@ assert_applied 'as the list_products tool' && check "registered name" GREEN GREE
 restore_page
 
 echo
+echo "== NEGATIVE CONTROL: a REGISTERED name in the PARENTHETICAL form must stay GREEN in both =="
+# The strict shape still fires on a bracketed snake_case name (the guard's own test pins the
+# real /docs/activity site); it is quiet here only because the name is registered.
+mutate '// QA: the MCP tool the proposal lane pairs with (list_products).'
+assert_applied 'pairs with (list_products)' && check "registered parenthetical" GREEN GREEN
+restore_page
+
+echo
 echo "== NEGATIVE CONTROL: the guard still catches real prose it was already catching =="
 mutate '// QA: has no tool to call, and the one tool of its own.'
 assert_applied 'has no tool to call' && check "ordinary prose stays quiet" GREEN GREEN
@@ -537,7 +646,7 @@ restore_page
 
 echo
 if [ "$fail" = "0" ]; then
-  echo "BITEPROOF PASS — both gap phrasings were GREEN under the shipped guard and RED under this one."
+  echo "BITEPROOF PASS — the four asides were RED under the shipped guard and GREEN under this one, one stated gap is driven rather than assumed, and every claim phrasing is still caught by both columns."
 else
   echo "BITEPROOF FAIL (fail=$fail)"
 fi
