@@ -62,7 +62,33 @@ function isSettingsTab(v: string | null): v is SettingsTab {
   return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency" || v === "affiliates" || v === "workspace";
 }
 
-// Restore the last active tab. Falls back to "chip".
+// The tab the URL names, if any — `/settings#webhooks` (the hash) or
+// `/settings?tab=domains` (issue #68). Readable during the CLIENT's FIRST
+// render, which is why the tab state initializes from it (see `useState` below):
+// a deep link then paints its OWN panel in the hydration frame instead of
+// painting the stored tab and swapping to the deep-linked one on the mount
+// effect. Measured on the built page with `jf_settings_tab = "affiliates"`, the
+// transitions the page went through for `/settings?tab=domains` were
+// `Custom domains` @169ms -> `Affiliate marketing` @226ms -> `Custom domains`
+// @248ms: the middle frame is a 22ms wrong-panel flash for the reader, and it is
+// also what a guard that latched onto the first frame (it waits for the domains
+// input, which the FIRST frame has) then read — `e2e/affiliate-row.spec.ts`'s
+// domains row threw `Cannot read properties of null (reading 'closest')` in it.
+// Returns `null` on the server, so the prerendered HTML is UNCHANGED by this
+// function: it is still the first tab the role filter renders, which is what the
+// server's intent (no session, `loadStoredTab`'s "chip") derives to.
+function tabFromUrl(): SettingsTab | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const explicit = params.get("tab");
+  if (isSettingsTab(explicit)) return explicit;
+  const hash = window.location.hash.replace("#", "");
+  return isSettingsTab(hash) ? hash : null;
+}
+
+// Restore the last active tab. Falls back to "chip" — the pre-#163 default,
+// which the role filter may hide; the render derives the tab that is actually
+// shown from this intent (`activeTab` below).
 function loadStoredTab(): SettingsTab {
   if (typeof window === "undefined") return "chip";
   try {
@@ -128,7 +154,10 @@ const WEBHOOK_EVENTS = ["sale.paid", "sale.failed", "subscription.charged"] as c
 export default function Settings() {
   const { t } = useI18n();
   const router = useRouter();
-  const [tab, setTab] = useState<SettingsTab>(loadStoredTab);
+  // The tab the URL names wins over the stored one, and it is resolved in the
+  // INITIALIZER (not only in the mount effect below) so the client's first paint
+  // already agrees with the deep link — see `tabFromUrl`.
+  const [tab, setTab] = useState<SettingsTab>(() => tabFromUrl() ?? loadStoredTab());
   const [status, setStatus] = useState<ChipStatus | null>(null);
   const [brandId, setBrandId] = useState("");
   const [secretKey, setSecretKey] = useState("");
@@ -299,11 +328,14 @@ export default function Settings() {
   //  /settings#webhooks, /settings?tab=domains, and the Cloudflare OAuth
   //  callback  /settings?cloudflare=linked|error. Anything not matched keeps
   //  the persisted tab.
+  //
+  // The tab half of this is now also done in the state initializer
+  // (`tabFromUrl`), so this effect is a no-op for a deep link that has not
+  // changed; it still has to run for the language change (`t` is a dependency
+  // because the NOTICES it sets are translated) and for the Cloudflare callback.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
-    const hash = window.location.hash.replace("#", "");
-    const explicit = params.get("tab");
     const cf = params.get("cloudflare");
     if (cf === "linked") {
       setTab("domains");
@@ -313,10 +345,9 @@ export default function Settings() {
       setTab("domains");
       setCfNoticeOk(false);
       setCfNotice(t("set.cfLinkFailed"));
-    } else if (isSettingsTab(explicit)) {
-      setTab(explicit);
-    } else if (isSettingsTab(hash)) {
-      setTab(hash);
+    } else {
+      const fromUrl = tabFromUrl();
+      if (fromUrl) setTab(fromUrl);
     }
   }, [t]);
 
@@ -589,6 +620,10 @@ export default function Settings() {
     setErr("");
   }, [activeWorkspaceId, t, goToLogin]);
 
+  // `tab`, not the derived `activeTab`: this is a fetch keyed on the merchant's
+  // INTENT, and `affiliates` is never role-filtered, so the two agree wherever
+  // the panel can actually render (the derivation lives further down, beside the
+  // role filter it depends on — reading it here would be a use-before-declare).
   useEffect(() => {
     if (tab === "affiliates") loadAffiliates();
   }, [tab, loadAffiliates]);
@@ -1081,6 +1116,32 @@ export default function Settings() {
     ? []
     : TAB_IDS.filter((id) => (id === "chip" || id === "members") ? isAdmin : true);
 
+  // The tab that is actually RENDERED, derived from `tab` (the intent: the
+  // stored / URL / clicked tab) and the role filter above.
+  //
+  // `tab` can name a tab `visibleTabs` does not contain, and on a FIRST RUN it
+  // always does: `loadStoredTab` falls back to "chip" (the pre-#163 default) and
+  // "chip" is admin-only. Keying the panel branches on `tab` then renders the
+  // CHIP panel while no rendered tab is `tab` — so the strip carried ZERO
+  // `aria-selected` (a `role="tab"` list is expected to carry exactly one) and
+  // the panel did not match any visible tab. Measured on a browser with no
+  // storage at all: ten tabs, selectedCount 0, CHIP panel underneath. The same
+  // hole opens whenever the role is demoted (stored "chip"/"members") or a
+  // deep-link names a hidden tab.
+  //
+  // So the VIEW is derived: an intent the strip cannot render falls back to the
+  // first tab it CAN render (no tab is filtered out unless the list is empty),
+  // and stays `null` only when the strip is empty — the `read_only` state, where
+  // no tab is shown and therefore no panel may be either (previously read_only
+  // rendered the CHIP panel below the read-only notice).
+  //
+  // `tab` itself is left alone on purpose: it is the merchant's intent, the
+  // persist effect below writes it, and an admin's stored "chip" must survive a
+  // first paint that has not resolved `role` yet (clamping in state would
+  // overwrite it before the session landed).
+  const activeTab: SettingsTab | null =
+    visibleTabs.includes(tab) ? tab : (visibleTabs[0] ?? null);
+
   // Keep a tab inside the strip's visible window.
   //
   // The strip is one scrolling row (`overflow-x-auto`), so a tab that is
@@ -1112,7 +1173,7 @@ export default function Settings() {
 
   useEffect(() => {
     revealTab(tabStripRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? null);
-  }, [revealTab, tab, visibleTabs.length]);
+  }, [revealTab, activeTab, visibleTabs.length]);
 
   // Stable identity: the toast's dismiss timer is keyed on this callback, and a
   // new function on every render would restart (or drop) the timer. It must live
@@ -1166,16 +1227,16 @@ export default function Settings() {
             `-mb-px` stays on the tabs: it merges the active tab's 2px underline
             with the strip's 1px border, which is the intended tab-bar look. */}
         {visibleTabs.length > 0 && (
-        <div ref={tabStripRef} className="jf-tabstrip mt-4 flex gap-1 overflow-x-auto border-b border-slate-200">
+        <div ref={tabStripRef} role="tablist" className="jf-tabstrip mt-4 flex gap-1 overflow-x-auto border-b border-slate-200">
           {visibleTabs.map((id) => (
             <button
               key={id}
               onClick={() => setTab(id)}
               onFocus={(e) => revealTab(e.currentTarget)}
-              aria-selected={tab === id}
+              aria-selected={activeTab === id}
               role="tab"
               className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium sm:px-4 ${
-                tab === id
+                activeTab === id
                   ? "border-slate-900 text-slate-900"
                   : "border-transparent text-[var(--jf-muted)] hover:text-slate-800"
               }`}
@@ -1217,7 +1278,7 @@ export default function Settings() {
         {err && <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{err}</p>}
 
         {/* ── CHIP tab ── */}
-        {tab === "chip" && (
+        {activeTab === "chip" && (
           <section className="jf-card mt-6 p-6">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">{t("set.chipTitle")}</h2>
@@ -1341,7 +1402,7 @@ export default function Settings() {
         )}
 
         {/* ── Domains tab: custom domains + Cloudflare connect ── */}
-        {tab === "domains" && (
+        {activeTab === "domains" && (
           <>
             <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("set.domainsTitle")}</h2>
@@ -1722,7 +1783,7 @@ export default function Settings() {
         )}
 
         {/* ── Tracking tab: global tracking scripts (GTM/analytics) ── */}
-        {tab === "tracking" && (
+        {activeTab === "tracking" && (
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.trackingTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted-on-tint)]">
@@ -1746,7 +1807,7 @@ export default function Settings() {
         )}
 
         {/* ── e-Invoice tab: e-Invoice (LHDN) TIN/MSIC ── */}
-        {tab === "einvoice" && (
+        {activeTab === "einvoice" && (
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.einvoiceTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
@@ -1775,7 +1836,7 @@ export default function Settings() {
         )}
 
         {/* ── Webhooks tab: outbound webhooks ── */}
-        {tab === "webhooks" && (
+        {activeTab === "webhooks" && (
           <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("set.webhooksTitle")}</h2>
               <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted-on-tint)]">
@@ -1972,7 +2033,7 @@ export default function Settings() {
                single workspace. */}
 
         {/* ── Emel tab: per-workspace receipt/notification email (issue #107) ── */}
-        {tab === "emel" && (
+        {activeTab === "emel" && (
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.emelTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
@@ -2068,7 +2129,7 @@ export default function Settings() {
           </section>
         )}
         {/* ── Storefront tab: per-workspace public-form footer (issue #183) ── */}
-        {tab === "storefront" && (
+        {activeTab === "storefront" && (
           <>
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.sfTitle")}</h2>
@@ -2457,22 +2518,22 @@ export default function Settings() {
         )}
 
         {/* ── Members tab: workspace members management (issue #163) ── */}
-        {tab === "members" && isAdmin && (
+        {activeTab === "members" && isAdmin && (
           <MembersTab workspaceId={emelWorkspaceId || activeWorkspaceId} />
         )}
         {/* ── Workspace tab: identity + Danger zone (delete workspace) ──
             Owner-only inside the component (an admin member is told to leave
             via Members instead). Gated to admin here too so a read_only member
             never sees a write tab. */}
-        {tab === "workspace" && isAdmin && (
+        {activeTab === "workspace" && isAdmin && (
           <WorkspaceTab workspaceId={emelWorkspaceId || activeWorkspaceId} />
         )}
         {/* ── Legal tab: per-workspace hosted legal pages (issue #184) ── */}
-        {tab === "legal" && (
+        {activeTab === "legal" && (
           <LegalTab workspaceId={emelWorkspaceId || activeWorkspaceId} workspaceSlug={activeWorkspaceSlug} />
         )}
         {/* ── Currency tab: per-workspace currency + BNM rates (issue #185) ── */}
-        {tab === "currency" && (
+        {activeTab === "currency" && (
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.currencyTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
@@ -2518,7 +2579,7 @@ export default function Settings() {
           </section>
         )}
         {/* ── Affiliates tab: affiliate marketing (issue #444) ── */}
-        {tab === "affiliates" && (
+        {activeTab === "affiliates" && (
           <section className="jf-card mt-6 p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
