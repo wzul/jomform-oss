@@ -34,6 +34,11 @@ const PER_PAGE = 20;
 const EVENT_TYPES = ["delivered", "bounce", "complaint", "open", "click"] as const;
 
 // Event-type badge colors (mirror the dashboard email status palette).
+// Card t_10266084. The FALLBACK (an event type the map does not name) sits on
+// `bg-slate-100`, where `text-slate-500` (#62748e) measures 4.349:1 — under the
+// 4.5:1 floor for this 10px badge; `--jf-muted-on-tint` (#5b6472) measures
+// 5.460:1 on the same tint. Invisible to `mutedText.test.ts` until the shared
+// source reader learned to follow a local helper call (this card).
 const eventBadge = (e: string) =>
   ({
     delivered: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -41,7 +46,7 @@ const eventBadge = (e: string) =>
     complaint: "bg-orange-50 text-orange-700 border-orange-200",
     open: "bg-blue-50 text-blue-700 border-blue-200",
     click: "bg-violet-50 text-violet-700 border-violet-200",
-  })[e] || "bg-slate-100 text-slate-500 border-slate-200";
+  })[e] || "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200";
 
 // Short date-time (e.g. "3 Sep 2026, 14:05").
 function fmtDateTime(iso: string): string {

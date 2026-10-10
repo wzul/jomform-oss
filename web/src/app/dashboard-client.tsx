@@ -175,13 +175,17 @@ export default function Dashboard() {
     return <main className="flex min-h-screen items-center justify-center text-[var(--jf-muted)]">…</main>;
   }
 
+  // Card t_10266084. `cancelled` sits on `bg-slate-100`, where `text-slate-500`
+  // (#62748e) measures 4.349:1 — under the 4.5:1 floor for this 10px badge;
+  // `--jf-muted-on-tint` (#5b6472) is 5.460:1 on the same tint. Invisible to
+  // `mutedText.test.ts` until the shared reader learned to follow a local helper.
   const badge = (s: string) =>
     ({
       pending: "bg-amber-50 text-amber-700 border-amber-200",
       paid: "bg-blue-50 text-blue-700 border-blue-200",
       confirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
       failed: "bg-red-50 text-red-700 border-red-200",
-      cancelled: "bg-slate-100 text-slate-500 border-slate-200",
+      cancelled: "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200",
     })[s] || "";
 
   // issue #106: per-sale receipt email status label + badge colour.
@@ -193,6 +197,10 @@ export default function Dashboard() {
       bounce: t("dash.emailBounced"),
       complaint: t("dash.emailComplaint"),
     })[s || ""] || (s ? s : t("dash.emailNotSent"));
+  // Card t_10266084. The FALLBACK (an email status the map does not name — e.g.
+  // a bare "sent", or none at all) sits on `bg-slate-100`, where `text-slate-500`
+  // (#62748e) measures 4.349:1, under the 4.5:1 floor for this 10px/11px badge.
+  // `--jf-muted-on-tint` (#5b6472) measures 5.460:1 on the same tint.
   const emailBadge = (s?: string) =>
     ({
       open: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -200,7 +208,7 @@ export default function Dashboard() {
       delivered: "bg-blue-50 text-blue-700 border-blue-200",
       bounce: "bg-red-50 text-red-700 border-red-200",
       complaint: "bg-red-50 text-red-700 border-red-200",
-    })[s || ""] || "bg-slate-100 text-slate-500 border-slate-200";
+    })[s || ""] || "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200";
 
   return (
     <Shell active="dashboard">

@@ -131,23 +131,33 @@ function playBeep() {
   }
 }
 
-/* same status badge colors as the dashboard Recent sales table */
+/* same status badge colors as the dashboard Recent sales table.
+   Card t_10266084: `cancelled` and the FALLBACK both sit on `bg-slate-100`,
+   where `text-slate-500` (#62748e) measures 4.349:1 — under the 4.5:1 floor for
+   this 10px/12px badge. `--jf-muted-on-tint` (#5b6472) measures 5.460:1 on the
+   same tint. Neither class list was visible to `mutedText.test.ts` until the
+   shared source reader learned to follow a local helper call (this card). */
 const saleBadge = (s: string) =>
   ({
     pending: "bg-amber-50 text-amber-700 border-amber-200",
     paid: "bg-blue-50 text-blue-700 border-blue-200",
     confirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
     failed: "bg-red-50 text-red-700 border-red-200",
-    cancelled: "bg-slate-100 text-slate-500 border-slate-200",
+    cancelled: "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200",
     refunded: "bg-orange-50 text-orange-700 border-orange-200",
-  })[s] || "bg-slate-100 text-slate-500 border-slate-200";
+  })[s] || "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200";
 
 /* Issue #518: the partial-refund chip. A partially refunded sale keeps its
    paid/confirmed status, so it needs its own visible marker — otherwise the
    merchant reads the sale as fully paid while money has already gone back. */
 const refundBadge = "bg-amber-50 text-amber-700 border-amber-300";
 
-/* email delivery status badge colors (issue #194) */
+/* email delivery status badge colors (issue #194).
+   Card t_10266084: the FALLBACK (a status the map does not name) sits on
+   `bg-slate-100`, where `text-slate-500` (#62748e) measures 4.349:1 — under the
+   4.5:1 floor for this 10px badge; `--jf-muted-on-tint` (#5b6472) measures
+   5.460:1 on the same tint. Invisible to `mutedText.test.ts` until the shared
+   source reader learned to follow a local helper call (this card). */
 const emailStatusBadge = (e: string) =>
   ({
     delivered: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -155,7 +165,7 @@ const emailStatusBadge = (e: string) =>
     complaint: "bg-orange-50 text-orange-700 border-orange-200",
     open: "bg-blue-50 text-blue-700 border-blue-200",
     click: "bg-violet-50 text-violet-700 border-violet-200",
-  })[e] || "bg-slate-100 text-slate-500 border-slate-200";
+  })[e] || "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200";
 
 /* localized label for an email delivery event type (issue #194) */
 const emailStatusLabel = (e: string, t: (k: Key) => string) =>

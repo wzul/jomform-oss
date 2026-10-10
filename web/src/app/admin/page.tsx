@@ -172,12 +172,18 @@ const fmtBytes = (b: number) => {
 // Suppression reason badge colours (mirror the deliveries page palette):
 // a hard bounce and a complaint are damage to the sending identity, a manual
 // entry is a decision an operator made.
+// Card t_10266084. The FALLBACK colour here (a reason the map does not name) sits
+// on `bg-slate-100`, where `text-slate-500` (#62748e) measures 4.349:1 — under
+// the 4.5:1 floor for this 12px badge. `--jf-muted-on-tint` (#5b6472) measures
+// 5.460:1 on the same tint and is the design system's muted-text-on-a-tint
+// token. This class list only became VISIBLE to `mutedText.test.ts` when the
+// shared source reader learned to follow a local helper call (this card).
 const suppReasonBadge = (reason: string) =>
   ({
     hard_bounce: "bg-red-50 text-red-700 border-red-200",
     complaint: "bg-orange-50 text-orange-700 border-orange-200",
     manual: "bg-slate-100 text-slate-600 border-slate-200",
-  })[reason] || "bg-slate-100 text-slate-500 border-slate-200";
+  })[reason] || "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200";
 
 // The feedback status badge colours. One function so the list rows, the thread
 // header and the user-facing page's legend cannot drift apart.

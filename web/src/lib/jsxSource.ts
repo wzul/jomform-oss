@@ -246,7 +246,6 @@ export function ambientSurfaceClasses(
 // being read as inherited from an ancestor.
 
 export type Variant = string;
-type Seg = { text?: string; alts?: string[] };
 
 export type Tag = {
   name: string;
@@ -255,126 +254,419 @@ export type Tag = {
   attrStart: number;
   attrEnd: number;
   closeIdx: number;
+  /**
+   * The element's `className` expression with its `{…}` container stripped and
+   * its whitespace collapsed, or "" when the element declares none.
+   */
+  classNameExpr: string;
+  /**
+   * True when part of that expression is not something this scanner can read —
+   * a prop, an import, a call it cannot follow. Such an element is NOT judged
+   * clean by a rule that only looks at `variants`: the caller has to say so out
+   * loud. `tintedSurface.test.ts` pins the sites that are legitimately
+   * unreadable and fails on any new one.
+   */
+  classNameUnreadable: boolean;
 };
 
 /** Element open/close events, in source order. */
 export type Event = { open: boolean; tag: Tag };
 
-/**
- * Read an expression, appending static text and alternative islands to `segs`.
- *
- * Recursive rather than a flat scan because a `${…}` island can itself contain a
- * template literal with its own islands, and the closing `}` has to be paired
- * with the `$`-`{` that opened it. Returns the index just past what it consumed.
- */
-function readExpr(expr: string, i: number, inIsland: boolean, segs: Seg[]): number {
-  let buf = "";
-  const flush = () => {
-    if (buf) segs.push({ text: buf });
-    buf = "";
-  };
-  while (i < expr.length) {
-    const c = expr[i];
-    if (inIsland && c === "}") {
-      flush();
-      return i + 1;
-    }
-    if (c === '"' || c === "'") {
-      // A plain string literal: its body is static text in this context (a
-      // class list, or an operand of the branch condition).
-      let j = i + 1;
-      while (j < expr.length && expr[j] !== c) {
-        if (expr[j] === "\\") j += 1;
-        buf += expr[j] ?? "";
-        j += 1;
-      }
-      i = j + 1;
-      continue;
-    }
-    if (c === "`") {
-      let j = i + 1;
-      while (j < expr.length && expr[j] !== "`") {
-        if (expr[j] === "\\") {
-          j += 1;
-          buf += expr[j] ?? "";
-          j += 1;
-          continue;
-        }
-        if (expr[j] === "$" && expr[j + 1] === "{") {
-          flush();
-          const end = matchBrace(expr, j + 1);
-          segs.push({ alts: branchLiterals(expr.slice(j + 2, end)) });
-          j = end + 1;
-          continue;
-        }
-        buf += expr[j];
-        j += 1;
-      }
-      i = j + 1; // past the closing backtick
-      continue;
-    }
-    buf += c;
-    i += 1;
-  }
-  flush();
-  return i;
-}
+// ─── reading a `className` into the class lists it can render ────────────────
+//
+// WHAT THIS USED TO MISS (measured on `web/src` before this was written)
+//
+//   The scanner handed everything after `className=` straight to a template
+//   reader, so three shapes were read as an empty (or partial) class list and
+//   the element was silently skipped — the failure mode a guard exists to
+//   prevent, in the guard itself:
+//
+//     1. the `{…}` CONTAINER was read as class text. `className={`bg-indigo-50
+//        text-[var(--jf-primary)]`}` has no `${…}` island, so nothing separated
+//        the container's braces from the class list and the tokens came back as
+//        `{bg-indigo-50` and `text-[var(--jf-primary)]}` — neither matches a
+//        class regex, so that element was invisible in BOTH directions.
+//     2. `className={cls}` / `className={`  ${tintCls(active)}`}` — a local
+//        constant or a local helper call is not a literal at all, so the
+//        variants were `{cls}` / `rounded ` and the rendered tint was never
+//        read.
+//     3. a ternary written directly in the container (`className={cond ? "…" :
+//        "…"}`) was flattened into ONE variant with the condition operands glued
+//        in, which MERGES branches that never co-paint. That is a false-positive
+//        risk, not a miss, and it is why the branches are resolved properly
+//        below instead of being read as one class list.
+//
+// HOW IT READS NOW
+//
+//   `stripWrapper` drops the container (and any single wrapping paren), then the
+//   expression is resolved by shape, in precedence order:
+//
+//     "…" / '…'        one class list
+//     `…`              its static text, with each `${…}` island resolved and
+//                      CONCATENATED
+//     [ … ]            its elements resolved and concatenated (the `.join(" ")`
+//                      tail is what makes them one class list)
+//     cond ? a : b     ALTERNATIVES — a and b are never joined
+//     a || b, a ?? b   alternatives
+//     a && b           b's alternatives, or "" (a falsy left operand renders
+//                      nothing)
+//     a + b            concatenated
+//     name / name(…)   resolved through a LOCAL declaration in the same file —
+//                      `const labelCls = "…"`, `const tint = (on) => on ? "…" :
+//                      "…"`, `function cls() { return "…" }`. This is the shape
+//                      the card was filed for.
+//     anything else    UNREADABLE, and reported as such: a prop
+//                      (`className={className}`, the caller owns the list), an
+//                      import, a call this file cannot follow. Marking it beats
+//                      guessing, and `Tag.classNameUnreadable` is what carries
+//                      it to the caller — a guard that cannot read an element
+//                      must not report it clean.
+//
+//   Depth-capped (MAX_DEPTH) so a self-referential declaration terminates.
 
-/** The index of the `}` closing the `{` at `open`. */
-function matchBrace(expr: string, open: number): number {
-  let depth = 0;
-  let i = open;
-  while (i < expr.length) {
-    const c = expr[i];
+/** The closer for each bracket that can wrap an expression piece. */
+const CLOSERS: Record<string, string> = { "{": "}", "(": ")", "[": "]" };
+
+/**
+ * The index of the bracket that closes the one at `openIdx`, skipping brackets
+ * that sit in a string, a template literal or a nested bracket pair.
+ */
+function matchPair(src: string, openIdx: number): number {
+  const stack: string[] = [];
+  let i = openIdx;
+  while (i < src.length) {
+    const c = src[i];
     if (c === '"' || c === "'" || c === "`") {
       const q = c;
       i += 1;
-      while (i < expr.length && expr[i] !== q) {
-        if (expr[i] === "\\") i += 1;
+      while (i < src.length && src[i] !== q) {
+        if (src[i] === "\\") i += 1;
         i += 1;
       }
-    } else if (c === "{") depth += 1;
-    else if (c === "}") {
-      depth -= 1;
-      if (depth === 0) return i;
+    } else if (CLOSERS[c]) {
+      stack.push(CLOSERS[c]);
+    } else if (stack.length > 0 && c === stack[stack.length - 1]) {
+      stack.pop();
+      if (stack.length === 0) return i;
     }
     i += 1;
   }
-  return expr.length;
+  return src.length;
+}
+
+/** An operator that can appear at bracket depth 0 in a class-list expression. */
+type Mark = { at: number; op: "?" | ":" | "+" | "&&" | "||" | "??" | ","; len: number };
+
+/**
+ * Every top-level operator in `src`, in source order.
+ *
+ * "Top level" means bracket depth 0 and outside strings/templates: a `?` in a
+ * template's static text is prose, and a `+` inside `(a ? "x" : "y")` belongs to
+ * the parenthesised branch, not to this expression.
+ */
+function scanTopLevel(src: string): Mark[] {
+  const marks: Mark[] = [];
+  const stack: string[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === "`") {
+      const q = c;
+      i += 1;
+      while (i < src.length && src[i] !== q) {
+        if (src[i] === "\\") i += 1;
+        i += 1;
+      }
+      i += 1;
+      continue;
+    }
+    if (CLOSERS[c]) {
+      stack.push(CLOSERS[c]);
+      i += 1;
+      continue;
+    }
+    if (stack.length > 0 && c === stack[stack.length - 1]) {
+      stack.pop();
+      i += 1;
+      continue;
+    }
+    if (stack.length === 0) {
+      const n = src[i + 1] ?? "";
+      const p = src[i - 1] ?? "";
+      if (c === "?" && n === ".") {
+        i += 2; // optional chaining: `a?.b` is a reference, not a conditional
+        continue;
+      }
+      if (c === "?" && n === "?") {
+        marks.push({ at: i, op: "??", len: 2 });
+        i += 2;
+        continue;
+      }
+      if (c === "?") {
+        marks.push({ at: i, op: "?", len: 1 });
+        i += 1;
+        continue;
+      }
+      if (c === ":") {
+        marks.push({ at: i, op: ":", len: 1 });
+        i += 1;
+        continue;
+      }
+      if (c === "+" && n !== "+" && n !== "=" && p !== "+") {
+        marks.push({ at: i, op: "+", len: 1 });
+        i += 1;
+        continue;
+      }
+      if (c === "&" && n === "&") {
+        marks.push({ at: i, op: "&&", len: 2 });
+        i += 2;
+        continue;
+      }
+      if (c === "|" && n === "|") {
+        marks.push({ at: i, op: "||", len: 2 });
+        i += 2;
+        continue;
+      }
+      if (c === ",") {
+        marks.push({ at: i, op: ",", len: 1 });
+        i += 1;
+        continue;
+      }
+    }
+    i += 1;
+  }
+  return marks;
+}
+
+/** `src` split at every top-level occurrence of one of `ops`, or null if none. */
+function splitOn(src: string, marks: Mark[], ops: Array<Mark["op"]>): string[] | null {
+  const at = marks.filter((m) => ops.includes(m.op));
+  if (at.length === 0) return null;
+  const out: string[] = [];
+  let from = 0;
+  for (const m of at) {
+    out.push(src.slice(from, m.at));
+    from = m.at + m.len;
+  }
+  out.push(src.slice(from));
+  return out;
 }
 
 /**
- * The class lists a `${…}` island can render.
+ * A ternary split into `[condition, then, else]`.
  *
- * Only the branch RESULTS count. An island is a ternary
- * (`active === n.key ? "a" : "b"`), and its condition is not a class list — a
- * condition operand like `"profile"` would otherwise be read as one. Everything
- * before the first `?` is therefore dropped, and the rest contributes one
- * alternative per string literal. "" is always an alternative because a
- * conditional whose else path is `undefined` renders no class at all.
+ * The condition is returned rather than dropped because the caller has to
+ * DISCARD it: a condition's operands (`active === "profile"`) are not class
+ * lists, and reading them as one is how a guard invents findings.
  */
-function branchLiterals(island: string): string[] {
-  const q = island.indexOf("?");
-  const body = q === -1 ? island : island.slice(q + 1);
-  const alts: string[] = [];
-  const re = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(body))) alts.push(m[1] ?? m[2] ?? m[3] ?? "");
-  alts.push("");
-  return alts;
+function splitTernary(src: string, marks: Mark[]): [string, string, string] | null {
+  const q = marks.find((m) => m.op === "?" || m.op === "??");
+  if (!q) return null;
+  if (q.op === "??") return null; // handled as an alternative pair, not a branch
+  let pending = 0;
+  for (const m of marks) {
+    if (m.at < q.at) continue;
+    if (m.op === "?") pending += 1;
+    else if (m.op === ":") {
+      pending -= 1;
+      if (pending === 0) return [src.slice(0, q.at), src.slice(q.at + 1, m.at), src.slice(m.at + 1)];
+    }
+  }
+  // `cond ? "x"` with no else: the else path renders no class at all.
+  return [src.slice(0, q.at), src.slice(q.at + 1), ""];
 }
 
-function classVariants(expr: string): Variant[] {
-  const segs: Seg[] = [];
-  readExpr(expr, 0, false, segs);
-  if (segs.length === 0) return [];
+/** The index just past the backtick that closes the template at `src[0]`, or -1. */
+function templateEnd(src: string): number {
+  let i = 1;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "\\") {
+      i += 2;
+      continue;
+    }
+    if (c === "`") return i + 1;
+    if (c === "$" && src[i + 1] === "{") {
+      i = matchPair(src, i + 1) + 1;
+      continue;
+    }
+    i += 1;
+  }
+  return -1;
+}
+
+/**
+ * The `className` VALUE out of an element's attribute list, and nothing else.
+ *
+ * `attrText` is the element's whole attribute list, so a reader that took
+ * everything after `className=` also swallowed the attributes that follow it:
+ * on `className={`…`}` + `title={t("…")}` the class list came back with
+ * `title={t(...)}` welded on the end, and once the container's braces stopped
+ * being treated as class text that tail made the whole expression unreadable —
+ * which a rule that falls back to "no surface declared" then mis-reports. The
+ * value ends at its own `}` / closing quote / closing backtick.
+ */
+function classNameValue(attrText: string, from: number): string {
+  const rest = attrText.slice(from).replace(/^\s+/, "");
+  if (rest === "") return "";
+  const c = rest[0];
+  if (c === "{") {
+    const end = matchPair(rest, 0);
+    return end < rest.length ? rest.slice(0, end + 1) : rest;
+  }
+  if (c === '"' || c === "'") {
+    const lit = readQuoted(rest);
+    return lit ? rest.slice(0, lit.end) : rest;
+  }
+  if (c === "`") {
+    const end = templateEnd(rest);
+    return end > 0 ? rest.slice(0, end) : rest;
+  }
+  return rest.split(/[\s>{]/)[0];
+}
+
+/** `src` without a single `(…)`/`{…}` wrapper, when that wrapper is the whole expression. */
+function stripWrapper(src: string): string {
+  if (src[0] === "(" || src[0] === "{") {
+    const end = matchPair(src, 0);
+    if (end === src.length - 1) return src.slice(1, end).trim();
+  }
+  return src;
+}
+
+/** A string literal read off the front of an expression, and where it ended. */
+type Quoted = { value: string; end: number };
+
+/**
+ * The string literal `src` starts with.
+ *
+ * `end` is returned rather than assumed to be `src.length`: `"a" + "b"` starts
+ * with a literal that is only PART of the expression, and a reader that stopped
+ * at the closing quote and reported `a` would drop the rest while claiming a
+ * complete read — which is exactly the silent-skip failure this module exists to
+ * not have.
+ */
+function readQuoted(src: string): Quoted | null {
+  const q = src[0];
+  if (q !== '"' && q !== "'") return null;
+  let out = "";
+  let i = 1;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "\\") {
+      out += unescapeChar(src[i + 1] ?? "");
+      i += 2;
+      continue;
+    }
+    if (c === q) return { value: out, end: i + 1 };
+    out += c;
+    i += 1;
+  }
+  return null;
+}
+
+/** The character an escape sequence stands for, as far as a class list needs. */
+function unescapeChar(c: string): string {
+  if (c === "n") return "\n";
+  if (c === "t") return "\t";
+  if (c === "r") return "\r";
+  return c;
+}
+
+/**
+ * The class-list expressions a local declaration can produce.
+ *
+ * The TypeScript parser answers "what is this name", so `const tint = (on) =>
+ * on ? "a" : "b"` resolves to its returned ternary and `function cls() { return
+ * "a"; }` to its return statement. A declaration holding anything else (`const
+ * n = 3`, an imported class map) contributes nothing, which is what leaves a
+ * reference to it unreadable rather than guessed at.
+ */
+function classTexts(node: ts.Node, sf: ts.SourceFile): string[] {
+  let n = node;
+  while (ts.isParenthesizedExpression(n)) n = n.expression;
+  if (ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n)) {
+    const body: ts.ConciseBody | undefined = n.body;
+    if (!body) return [];
+    if (!ts.isBlock(body)) return classTexts(body, sf);
+    // EVERY returned class list, not just a top-level `return`: a `switch`
+    // helper (`function badge(s) { switch (s) { case "paid": return "…" } }`)
+    // returns from inside its cases, and reading only the first top-level
+    // `return` left those badges unreadable. A nested function's returns are
+    // its own and are not collected.
+    const outs: string[] = [];
+    const collect = (node: ts.Node): void => {
+      if (node !== body && ts.isFunctionLike(node)) return;
+      if (ts.isReturnStatement(node)) {
+        if (node.expression) outs.push(...classTexts(node.expression, sf));
+        return;
+      }
+      ts.forEachChild(node, collect);
+    };
+    collect(body);
+    return outs;
+  }
+  const classLike =
+    ts.isStringLiteral(n) ||
+    ts.isNoSubstitutionTemplateLiteral(n) ||
+    ts.isTemplateExpression(n) ||
+    ts.isConditionalExpression(n) ||
+    ts.isArrayLiteralExpression(n) ||
+    ts.isIdentifier(n) ||
+    ts.isPropertyAccessExpression(n) ||
+    ts.isCallExpression(n) ||
+    (ts.isBinaryExpression(n) &&
+      (n.operatorToken.kind === ts.SyntaxKind.PlusToken ||
+        n.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+        n.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        n.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken));
+  return classLike ? [n.getText(sf)] : [];
+}
+
+/** Every local `const`/`function` name in `code` that can hold a class list. */
+function localClassExprs(code: string): Map<string, string[]> {
+  const sf = ts.createSourceFile("guard.tsx", code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const out = new Map<string, string[]>();
+  const add = (name: string, exprs: string[]) => {
+    if (exprs.length === 0) return;
+    const list = out.get(name);
+    if (list) list.push(...exprs);
+    else out.set(name, [...exprs]);
+  };
+  const walk = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      add(node.name.text, classTexts(node.initializer, sf));
+    } else if (ts.isFunctionDeclaration(node) && node.name) {
+      add(node.name.text, classTexts(node, sf));
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(sf);
+  return out;
+}
+
+const MAX_DEPTH = 5;
+
+/** What a class-list expression resolved to, and whether the read was complete. */
+type Resolved = { alts: Variant[]; resolved: boolean };
+
+/** Two halves of one class list joined — a space only when both are non-empty. */
+function joinParts(a: string, b: string): string {
+  return a && b ? `${a} ${b}` : a + b;
+}
+
+/**
+ * The class lists formed by several pieces that render TOGETHER (a template's
+ * static text plus its islands, an array's elements, a `+` chain).
+ */
+function cross(parts: Resolved[]): Variant[] {
   let out: Variant[] = [""];
-  for (const s of segs) {
-    const opts = s.text !== undefined ? [s.text] : (s.alts ?? []);
+  for (const p of parts) {
+    const opts = p.alts.length > 0 ? p.alts : [""];
     const next: Variant[] = [];
     for (const o of out) {
       for (const a of opts) {
-        next.push(o && a ? `${o} ${a}` : o + a);
+        next.push(joinParts(o, a));
         if (next.length >= 256) break;
       }
       if (next.length >= 256) break;
@@ -384,16 +676,239 @@ function classVariants(expr: string): Variant[] {
   return out;
 }
 
+/** Every alternative of several pieces that are mutually EXCLUSIVE. */
+function union(parts: Resolved[]): Variant[] {
+  return [...new Set(parts.flatMap((p) => p.alts))];
+}
+
+/** A resolved piece that also says how much of the source it consumed. */
+type ResolvedSpan = Resolved & { end: number };
+
+/**
+ * A template literal: static text, with each `${…}` island resolved and joined.
+ *
+ * `end` is the index just past the closing backtick, or -1 when the template
+ * never closes — `` `a` + `b` `` starts with a complete template, but it is not
+ * the whole expression, and the caller has to split the `+` itself.
+ */
+function resolveTemplate(src: string, locals: Map<string, string[]>, depth: number): ResolvedSpan {
+  const parts: Resolved[] = [];
+  let buf = "";
+  let resolved = true;
+  let closed = false;
+  let end = -1;
+  let i = 1;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "\\") {
+      buf += unescapeChar(src[i + 1] ?? "");
+      i += 2;
+      continue;
+    }
+    if (c === "`") {
+      closed = true;
+      end = i + 1;
+      break;
+    }
+    if (c === "$" && src[i + 1] === "{") {
+      parts.push({ alts: [buf], resolved: true });
+      buf = "";
+      const braceEnd = matchPair(src, i + 1);
+      const inner = resolveClassExpr(src.slice(i + 2, braceEnd), locals, depth + 1);
+      if (!inner.resolved) resolved = false;
+      parts.push(inner);
+      i = braceEnd + 1;
+      continue;
+    }
+    buf += c;
+    i += 1;
+  }
+  parts.push({ alts: [buf], resolved: true });
+  if (!closed) resolved = false; // an unterminated template is not readable
+  return { alts: closed ? cross(parts) : [], resolved, end };
+}
+
+/** A method chain that only re-joins an array literal's elements, e.g. `.filter(Boolean).join(" ")`. */
+const JOIN_TAIL_RE = /^(?:\.[A-Za-z_$][\w$]*\([^()]*\))*$/;
+
+/** An array literal: its elements are class lists that the `.join(" ")` tail concatenates. */
+function resolveArray(src: string, locals: Map<string, string[]>, depth: number): ResolvedSpan {
+  const close = matchPair(src, 0);
+  if (close >= src.length) return { alts: [], resolved: false, end: -1 }; // never closes
+  const body = src.slice(1, close);
+  const marks = scanTopLevel(body);
+  const elements = splitOn(body, marks, [","]) ?? [body];
+  const parts = elements
+    .map((e) => e.trim())
+    .filter((e) => e !== "")
+    .map((e) => resolveClassExpr(e, locals, depth + 1));
+  // Everything after `]` must be a join/filter chain; `[a][0]` or `[a] + b`
+  // reads a different class list and is NOT this shape.
+  const tail = src.slice(close + 1).trim();
+  if (!JOIN_TAIL_RE.test(tail)) return { alts: [], resolved: false, end: -1 };
+  // The join chain is part of the value this shape renders, so the shape
+  // consumed the whole expression.
+  if (parts.length === 0) return { alts: [""], resolved: true, end: src.length };
+  return { alts: cross(parts), resolved: parts.every((p) => p.resolved), end: src.length };
+}
+
+/**
+ * An inline CLASS MAP read by key: `({ ok: "…", bad: "…" })[status]`.
+ *
+ * The key is a name, not a class list, so the map's VALUES are the
+ * alternatives — any of them can render. A status badge written
+ * `({ paid: "…" })[s] || "…"` is this shape, and it is why a rule that followed
+ * only string literals never saw the colours those badges paint.
+ *
+ * `end` is `src.length` (the access chain is part of the read), or -1 when this
+ * is not the shape at all.
+ */
+function resolveClassMap(src: string, locals: Map<string, string[]>, depth: number): ResolvedSpan {
+  const miss: ResolvedSpan = { alts: [], resolved: false, end: -1 };
+  let body: string;
+  let rest: string;
+  if (src[0] === "(") {
+    const close = matchPair(src, 0);
+    body = src.slice(1, close);
+    rest = src.slice(close + 1);
+  } else if (src[0] === "{") {
+    const close = matchPair(src, 0);
+    body = src.slice(0, close + 1);
+    rest = src.slice(close + 1);
+  } else {
+    return miss;
+  }
+  if (body.trim()[0] !== "{") return miss;
+  const open = body.indexOf("{");
+  const closeBrace = body.lastIndexOf("}");
+  if (closeBrace <= open) return miss;
+  // Only a property/index access may follow the object; `({…}) + x` is an
+  // operand of something else and the split above owns it.
+  if (!/^(?:\[[^\[\]]*\]|\.[A-Za-z_$][\w$]*)+$/.test(rest.trim())) return miss;
+  const inner = body.slice(open + 1, closeBrace);
+  const props = splitOn(inner, scanTopLevel(inner), [","]) ?? [inner];
+  const parts: Resolved[] = [];
+  for (const prop of props) {
+    if (prop.trim() === "") continue;
+    // A property's own ternary `:` sits at the same depth as the key's, so all
+    // the pieces after the first colon are rejoined — the value is what renders.
+    const value = splitOn(prop, scanTopLevel(prop), [":"]);
+    if (!value) return miss; // a shorthand or spread property holds no class list
+    parts.push(resolveClassExpr(value.slice(1).join(":"), locals, depth + 1));
+  }
+  if (parts.length === 0) return miss;
+  return { alts: union(parts), resolved: parts.every((p) => p.resolved), end: src.length };
+}
+
+/**
+ * A bare name or a call: resolved through a LOCAL declaration when there is one.
+ *
+ * `clsConst` (a `const` holding a string), `tintCls(active)` (a local arrow
+ * whose body is the class list) and `function cls() { return "…" }` all resolve.
+ * A prop (`className={className}` — the caller owns the list), an import or a
+ * member access (`styles.label`) does not, and says so.
+ */
+function resolveReference(src: string, locals: Map<string, string[]>, depth: number): Resolved {
+  const call = /^([A-Za-z_$][\w$]*)\s*(?:\??\.[\w$]+\s*)*\(/.exec(src);
+  const bare = /^[A-Za-z_$][\w$]*$/.exec(src);
+  const name = call ? call[1] : bare ? bare[0] : null;
+  if (name === null || depth > MAX_DEPTH) return { alts: [], resolved: false };
+  const bodies = locals.get(name);
+  if (!bodies || bodies.length === 0) return { alts: [], resolved: false };
+  const parts = bodies.map((b) => resolveClassExpr(b, locals, depth + 1));
+  return { alts: union(parts), resolved: parts.every((p) => p.resolved) };
+}
+
+/** `undefined` / `null` / `false` render no class at all — a readable empty list. */
+const RENDERS_NOTHING = /^(?:undefined|null|false|void 0)$/;
+
+/**
+ * The class lists one `className` expression can render, and whether every part
+ * of it could be read.
+ *
+ * The `resolved` flag is the point of this function as much as the class lists
+ * are: an expression the scanner cannot read must not come back looking like a
+ * clean one. When only part of it resolves, the alternatives that WERE read are
+ * still returned (a rule should see what it can), with `resolved: false` so the
+ * caller can report the element as unjudged instead of clean.
+ */
+function resolveClassExpr(expr: string, locals: Map<string, string[]>, depth = 0): Resolved {
+  const src = stripWrapper(expr.trim());
+  if (src === "") return { alts: [""], resolved: true };
+  if (depth > MAX_DEPTH) return { alts: [], resolved: false };
+  if (RENDERS_NOTHING.test(src)) return { alts: [""], resolved: true };
+
+  // A literal, a template or an array is only the WHOLE class list when nothing
+  // follows it. Otherwise it is one operand of a `+`/ternary the split below
+  // handles — and reading just its first operand while reporting a complete read
+  // is how `"a" + "b"` came back as `a`.
+  if (src[0] === '"' || src[0] === "'") {
+    const lit = readQuoted(src);
+    if (lit === null) return { alts: [], resolved: false }; // unterminated
+    if (src.slice(lit.end).trim() === "") return { alts: [lit.value], resolved: true };
+  }
+  if (src[0] === "`") {
+    const t = resolveTemplate(src, locals, depth);
+    if (t.end > 0 && src.slice(t.end).trim() === "") return { alts: t.alts, resolved: t.resolved };
+  }
+  if (src[0] === "[") {
+    const a = resolveArray(src, locals, depth);
+    if (a.end > 0 && src.slice(a.end).trim() === "") return { alts: a.alts, resolved: a.resolved };
+  }
+
+  const marks = scanTopLevel(src);
+
+  const ternary = splitTernary(src, marks);
+  if (ternary) {
+    const then = resolveClassExpr(ternary[1], locals, depth + 1);
+    const otherwise = resolveClassExpr(ternary[2], locals, depth + 1);
+    return { alts: union([then, otherwise]), resolved: then.resolved && otherwise.resolved };
+  }
+
+  // Precedence, loosest first: `||` / `??`, then `&&`, then `+`.
+  const alt = splitOn(src, marks, ["||", "??"]);
+  if (alt) {
+    const parts = alt.map((p) => resolveClassExpr(p, locals, depth + 1));
+    return { alts: union(parts), resolved: parts.every((p) => p.resolved) };
+  }
+  const and = splitOn(src, marks, ["&&"]);
+  if (and) {
+    // A falsy left operand renders nothing, so "" is always an alternative.
+    const parts = and.map((p) => resolveClassExpr(p, locals, depth + 1));
+    const last = parts[parts.length - 1];
+    return { alts: [...last.alts, ""], resolved: last.resolved };
+  }
+  const concat = splitOn(src, marks, ["+"]);
+  if (concat) {
+    const parts = concat.map((p) => resolveClassExpr(p, locals, depth + 1));
+    return { alts: cross(parts), resolved: parts.every((p) => p.resolved) };
+  }
+
+  if (src[0] === "(" || src[0] === "{") {
+    const map = resolveClassMap(src, locals, depth);
+    if (map.end > 0 && src.slice(map.end).trim() === "") return map;
+  }
+
+  return resolveReference(src, locals, depth);
+}
+
 /**
  * Parse the source into tags and, for each, the index just past its closing
  * `</name>`. Pairing uses an explicit stack so a token's ancestor chain is
  * exact: a source-order "everything opened before this offset" heuristic gets
  * siblings and nested same-name elements wrong, and would either miss a defect
  * or flag clean markup.
+ *
+ * Each tag also carries the class lists its `className` renders (`variants`,
+ * via `resolveClassExpr`) and whether that read was complete
+ * (`classNameUnreadable`) — an element whose list is a prop or an import this
+ * file cannot follow is NOT the same as an element with no classes, and a guard
+ * that conflates them reports it clean.
  */
 export function jsxTags(code: string): Event[] {
   const events: Event[] = [];
   const stack: Tag[] = [];
+  const locals = localClassExprs(code);
   let i = 0;
   while (i < code.length) {
     if (code[i] !== "<") {
@@ -455,9 +970,13 @@ export function jsxTags(code: string): Event[] {
     }
     const attrText = code.slice(j, k);
     const cm = /className\s*=\s*/.exec(attrText);
+    const value = cm ? classNameValue(attrText, cm.index + cm[0].length) : "";
+    const read = value === "" ? null : resolveClassExpr(value, locals);
     const tag: Tag = {
       name,
-      variants: cm ? classVariants(attrText.slice(cm.index + cm[0].length)) : [],
+      variants: read ? read.alts : [],
+      classNameExpr: cm ? stripWrapper(value.trim()).replace(/\s+/g, " ") : "",
+      classNameUnreadable: read !== null && !read.resolved,
       openIdx: i,
       attrStart: j,
       attrEnd: k,
