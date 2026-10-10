@@ -21,12 +21,18 @@
 // WHY THE GUARD MEASURES THE PAGE AND NOT THE CLASS NAME
 // A test that asserts the string `flex-wrap` is present would stay green while
 // any other class re-created the overflow, and `npm run test:unit` has no DOM.
-// This file runs in the a11y gate (`npm run a11y`, part of
-// scripts/preflight.sh) because that is the one gate in this repo that renders
-// the real built page in a real browser, and it asserts the outcome a user
-// sees: `document.documentElement.scrollWidth === clientWidth` at every locale
-// and phone width, with all three actions still present, inside the viewport
-// and still linking where they used to.
+// This file runs in the `e2e` gate (`npm run e2e`, part of
+// scripts/preflight.sh) — the project that runs every spec under web/e2e that
+// is not named `a11y*` — because that gate renders the real built page in a
+// real browser, and this file asserts the outcome a user sees:
+// `document.documentElement.scrollWidth === clientWidth` at every locale and
+// phone width, with all three actions still present, inside the viewport and
+// still linking where they used to.
+//
+// (The paragraph above said `npm run a11y` until #884 split the two projects:
+// the a11y project's testMatch is `a11y*.spec.ts` only, so a sabotage run of
+// THIS file has to be driven through `npm run e2e` — running the a11y gate and
+// reading its green as "this guard did not bite" measures nothing at all.)
 //
 // WHY IT NOW RENDERS BOTH FORM MODES (the follow-up this file is named after)
 // The first version of this guard stubbed ONE form — `{ id, slug, title,
@@ -56,6 +62,28 @@
 // action that crosses the viewport edge. Since this file renders both modes,
 // that neutralisation reddens BOTH of them — the response variant is not a
 // case this guard only nominally covers.
+//
+// WHAT MAKES THE DESKTOP LABEL ASSERTION BITE (t_76feb850, measured)
+// The desktop case used to assert its entries label PAGE-WIDE
+// (`a:text-is("Sales")`.first()), and at 1024px that is not the header action:
+// the sidebar's own `nav.sales` link (Shell.tsx) is visible and comes first in
+// document order. Two mutations of the header's entries label
+// (page.tsx:1230's `t(entries.labelKey)`), each built and driven:
+//   * M1 — the header renders the OTHER mode's key, for both modes
+//     (`t(entries.labelKey === "nav.sales" ? "nav.submissions" : "nav.sales")`):
+//     THIS file goes 12 failed (10 phone + 2 desktop), the desktop cases failing
+//     on their own `nth(1)` assertion ("Expected substring: Sales / Received
+//     string: Submission", and the reverse). The PRE-FIX file (page-wide, at
+//     a77bfa87) driven against the same build goes 11 failed / **1 passed**: the
+//     survivor is the PAYMENT desktop case, whose page-wide "Sales" is satisfied
+//     by the sidebar link while the header says "Submission". That single green
+//     is the hole this card closed. (The response variant failed there only
+//     because it has no sidebar twin — it was scoped by accident.)
+//   * M2 — the same per-mode swap confined to >=768px
+//     (`window.matchMedia("(min-width: 768px)").matches`): THIS file goes
+//     10 passed / 2 failed — both desktop cases red at that same `nth(1)`
+//     assertion with every phone case green. So the assertion added here catches
+//     a drift the phone loop cannot see; it is not a duplicate of it.
 //
 // The API is stubbed at the browser level (no Go server, no session, no DB), so
 // the gate needs nothing but the build it is already serving.
@@ -223,9 +251,9 @@ for (const lang of LANGS) {
     test(`the /form-settings header does not scroll the page sideways in ${lang}, ${mode} form, at 320/360/390/430px`, async ({
       browser,
     }) => {
-      // The a11y gate runs this file alongside the axe scans and the chip
-      // measurements on a shared host, so the per-test budget is generous: a
-      // slow first paint under contention must not read as a layout defect.
+      // The e2e gate runs this file alongside the other feature specs on a
+      // shared host, so the per-test budget is generous: a slow first paint
+      // under contention must not read as a layout defect.
       test.setTimeout(180_000);
       const t = (key: LabelKey) => DICT[key][lang];
       // The second action is the mode's entries action: Sales for a payment
@@ -392,13 +420,28 @@ for (const variant of MODES) {
     const page = await context.newPage();
     await stubAPI(page, mode);
     await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "networkidle" });
+    const expectedLabels = [DICT["fs.editFields"].en, DICT[entriesLabelKey].en, DICT["bld.view"].en];
     await expect(page.locator("a.jf-btn-ghost")).toHaveCount(3, { timeout: 45_000 });
-    await expect(page.locator('a:text-is("Edit fields")').first()).toBeVisible({ timeout: 45_000 });
-    await expect(page.locator(`a:text-is("${DICT[entriesLabelKey].en}")`).first()).toBeVisible({
+    // The labels are asserted on the header's OWN actions (`nth`), never by
+    // page-wide text — the same scoping the phone loop above uses, and for a
+    // sharper reason here: at 1024px the sidebar's own `nav.sales` link
+    // (Shell.tsx) IS visible and comes FIRST in document order, so for the
+    // payment variant `a:text-is("Sales")`.first() resolves to that nav item.
+    // This case then passes while the header action carries the other mode's
+    // label — the exact drift this guard exists to make loud. Scoped this way
+    // the assertion is about the header row, which is what this guard owns.
+    await expect(page.locator("a.jf-btn-ghost").nth(0)).toContainText(expectedLabels[0], {
+      timeout: 45_000,
+    });
+    await expect(page.locator("a.jf-btn-ghost").nth(1)).toContainText(expectedLabels[1], {
       timeout: 45_000,
     });
 
     const g = await measureHeader(page);
+    // The three actions, in order, each carrying THIS mode's label — asserted on
+    // the header's own anchors (`measureHeader` reads only `a.jf-btn-ghost`), so
+    // a sidebar link with a matching label cannot satisfy any of them.
+    expect(g.actions.map((a) => a.text)).toEqual(expectedLabels);
     const tops = new Set(g.actions.map((a) => a.top));
     expect(
       tops.size,
