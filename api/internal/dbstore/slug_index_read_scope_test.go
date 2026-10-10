@@ -18,13 +18,20 @@
 //     die with `could not open relation with OID <n> (SQLSTATE XX000)` when a
 //     peer connection invalidated one of those OIDs underneath it.
 //
-//     RUNNING THE SUITE CONCURRENTLY IS THE CONDITION IN WHICH THE CONTROL FLAKES
-//     (card t_74cea476): measured once in five full preflights against the shared
-//     gate database with other lanes active, and never in isolation. The control
-//     (the OLD shape, kept on purpose) is therefore retried and, if it still
-//     cannot execute, REPORTED as not-run instead of failing the gate with a red
-//     that says nothing about the behaviour under test. The shipped read's
-//     assertion is unaffected and stays fatal.
+//     THE OLD SHAPE IS PLANNED ONLY, NEVER EXECUTED (card t_be5adeee). It used
+//     to be executed once per run as the schema-scope guard's positive control,
+//     which put the XX000 window back on the slug guards after the shipped read
+//     had been moved off it: measured on Postgres 16.15, that control executed
+//     the sweep and returned 5 with this run's decoy planted and three peer
+//     scratch schemas live (the count moves with the board — 2 and 4 were seen
+//     on quieter runs). #946 (card t_74cea476) retried the control around the
+//     window instead of closing it. The control is now a catalogue-level read of
+//     THIS read's shape with only its schema predicate changed, so it opens no
+//     relation by OID and cannot red the gate for a reason that says nothing
+//     about the behaviour under test. The old shape survives in exactly one
+//     place — the EXPLAIN in TestSlugIndexReadDoesNotDeparseIndexDef, which
+//     plans it and does not run it — and the guard on that is what keeps a
+//     "simplification" back to pg_indexes from shipping.
 //
 //  2. It reads other lanes' rows, so the assertion is about the shared database
 //     rather than about this package's own schema.
@@ -38,20 +45,74 @@ package dbstore
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// wholeDatabaseSlugIndexProbe is the OLD shape, kept here only as a positive
-// control: it is what the guards must be able to tell apart from the shipped
-// read. Do not use it to assert anything about the schema.
+// wholeDatabaseSlugIndexProbe is the OLD shape. PLANNED ONLY — NEVER EXECUTE IT,
+// not even as a control (card t_be5adeee). Executing it OID-opens every `forms`
+// index in the database (see the file comment, defect 1): that is the read that
+// dies with `could not open relation with OID <n> (SQLSTATE XX000)` when a peer
+// connection invalidates one of those OIDs underneath it. Its one legitimate use
+// is the EXPLAIN (VERBOSE, COSTS OFF) in
+// TestSlugIndexReadDoesNotDeparseIndexDef, which shows the pg_get_indexdef call
+// in the plan without running it. Do not use it to assert anything about the
+// schema.
 const wholeDatabaseSlugIndexProbe = `
 	SELECT COUNT(*) FROM pg_indexes
 	WHERE tablename='forms' AND indexdef ILIKE '%workspace_id%' AND indexdef ILIKE '%slug%' AND indexdef ILIKE '%unique%'`
+
+// wholeDatabaseSlugIndexRead is the shipped read with its schema predicate
+// removed: literally the shape a read that forgot to scope itself would have,
+// i.e. the mutation TestSlugIndexReadIsSchemaScoped exists to catch. That test
+// EXECUTES it as its positive control, which is only sound because it is
+// OID-safe in exactly the way the shipped read is — pg_class/pg_index/
+// pg_namespace/pg_attribute only, no pg_get_indexdef — so it cannot reopen the
+// XX000 window the file comment describes.
+//
+// TestSlugIndexReadControlsAreTheShippedReadMinusTheirScope pins its one-line
+// relationship to perWorkspaceSlugIndexRead, so it cannot drift into a query
+// that is easier to tell apart from the shipped read than the real mutation is.
+const wholeDatabaseSlugIndexRead = `
+	SELECT count(*) FROM pg_class i
+	  JOIN pg_index x ON x.indexrelid = i.oid
+	  JOIN pg_class t ON t.oid = x.indrelid
+	  JOIN pg_namespace nsp ON nsp.oid = t.relnamespace
+	 WHERE t.relname = 'forms'
+	   AND i.relkind IN ('i','I')
+	   AND x.indisunique
+	   AND (SELECT array_agg(a.attname ORDER BY a.attname)
+	          FROM unnest(x.indkey) WITH ORDINALITY AS k(attnum, ord)
+	          JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum
+	         WHERE k.attnum <> 0 AND k.ord <= x.indnkeyatts) = ARRAY['slug','workspace_id']::name[]`
+
+// tempSchemaSlugIndexRead is the shipped read's shape with its schema predicate
+// pointed at THIS session's own temporary schema — where
+// TestSlugIndexReadIsSchemaScoped plants its decoy. It is the precise half of
+// that test's control, and the half that keeps the control from going vacuous:
+// the whole-database variant above reaches 2 on peer lanes alone once two other
+// suites are gating, so on a busy board it can pass with the decoy unmatched.
+// This one matches the decoy through the read's OWN predicates (key columns and
+// uniqueness) rather than by the decoy's name — a read whose key-column
+// predicate had drifted would still match a table by name.
+const tempSchemaSlugIndexRead = `
+	SELECT count(*) FROM pg_class i
+	  JOIN pg_index x ON x.indexrelid = i.oid
+	  JOIN pg_class t ON t.oid = x.indrelid
+	  JOIN pg_namespace nsp ON nsp.oid = t.relnamespace
+	 WHERE t.relnamespace = pg_my_temp_schema()
+	   AND t.relname = 'forms'
+	   AND i.relkind IN ('i','I')
+	   AND x.indisunique
+	   AND (SELECT array_agg(a.attname ORDER BY a.attname)
+	          FROM unnest(x.indkey) WITH ORDINALITY AS k(attnum, ord)
+	          JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum
+	         WHERE k.attnum <> 0 AND k.ord <= x.indnkeyatts) = ARRAY['slug','workspace_id']::name[]`
 
 // explainPlan runs `EXPLAIN (VERBOSE, COSTS OFF)` and returns the plan text.
 func explainPlan(t *testing.T, ctx context.Context, p interface {
@@ -88,6 +149,9 @@ func explainPlan(t *testing.T, ctx context.Context, p interface {
 // taking this test down. The old shape's plan carries the call and the shipped
 // one's must not — asserted in both directions so the guard cannot pass because
 // it stopped parsing anything.
+//
+// The same property is asserted of the two controls that ARE executed (card
+// t_be5adeee): a control that OID-opened relations would put the window back.
 func TestSlugIndexReadDoesNotDeparseIndexDef(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
@@ -108,6 +172,76 @@ func TestSlugIndexReadDoesNotDeparseIndexDef(t *testing.T) {
 		t.Fatalf("control: the whole-database pg_indexes probe no longer deparses indexdef, so "+
 			"this guard can no longer tell the two shapes apart (plan:\n%s)", old)
 	}
+
+	// The controls that ARE executed (both of them, once per run, from
+	// TestSlugIndexReadIsSchemaScoped) must be as OID-safe as the shipped read:
+	// they replace an executing pg_indexes sweep, and an executing control that
+	// OID-opened relations would restore exactly the window that sweep caused.
+	for _, c := range []struct {
+		name  string
+		query string
+	}{
+		{"whole-database control", wholeDatabaseSlugIndexRead},
+		{"TEMP-schema control", tempSchemaSlugIndexRead},
+	} {
+		plan := explainPlan(t, ctx, p, c.query)
+		if strings.Contains(plan, "pg_get_indexdef") {
+			t.Errorf("the executed %s calls pg_get_indexdef, i.e. it opens relations by OID and "+
+				"puts back the XX000 window this file exists to keep out of the suite (plan:\n%s)",
+				c.name, plan)
+		}
+	}
+}
+
+// TestSlugIndexReadControlsAreTheShippedReadMinusTheirScope pins the two
+// controls TestSlugIndexReadIsSchemaScoped executes to the shipped read, and to
+// exactly one predicate each.
+//
+// Both are executed against the shared test database, so a control that had
+// drifted into an independent query could pass while the mutation the guard
+// exists to catch went unnoticed — the same hole
+// TestSlugIndexReadAnyIndexVariantIsAPerfectMutation closes for the uniqueness
+// predicate. Editing perWorkspaceSlugIndexRead without editing the controls (or
+// the reverse) fails here rather than silently weakening the guard.
+func TestSlugIndexReadControlsAreTheShippedReadMinusTheirScope(t *testing.T) {
+	shipped := perWorkspaceSlugIndexRead
+
+	const scopePredicate = "nsp.nspname = current_schema()"
+	if !strings.Contains(shipped, scopePredicate) {
+		t.Fatalf("the shipped read no longer carries `%s`, so the schema-scope controls cannot be "+
+			"derived from it and the guard would be measuring a shape it does not ship:\n%s",
+			scopePredicate, shipped)
+	}
+
+	// The shipped read's schema predicate is a whole line followed by `AND`, so
+	// dropping it and pointing it at another schema are both one-line edits that
+	// keep the statement valid SQL — which is what makes these controls a
+	// one-predicate difference rather than a second query.
+	const scopedLine = "\t WHERE nsp.nspname = current_schema()\n\t   AND "
+	if !strings.Contains(shipped, scopedLine) {
+		t.Fatalf("the shipped read's schema predicate no longer has the shape these controls edit "+
+			"(`WHERE nsp.nspname = current_schema()` followed by a line starting with `AND `), so "+
+			"the derivation below would be a no-op and each control would be the shipped read "+
+			"verbatim:\n%s", shipped)
+	}
+
+	if got := strings.Replace(shipped, scopedLine, "\t WHERE ", 1); got != wholeDatabaseSlugIndexRead {
+		t.Fatalf("the whole-database control is not the shipped read with only its schema "+
+			"predicate dropped:\n--- shipped ---\n%s\n--- control ---\n%s\n--- derived ---\n%s",
+			shipped, wholeDatabaseSlugIndexRead, got)
+	}
+	if got := strings.Replace(shipped, scopedLine,
+		"\t WHERE t.relnamespace = pg_my_temp_schema()\n\t   AND ", 1); got != tempSchemaSlugIndexRead {
+		t.Fatalf("the TEMP-schema control is not the shipped read with only its schema predicate "+
+			"pointed at pg_my_temp_schema():\n--- shipped ---\n%s\n--- control ---\n%s\n--- derived ---\n%s",
+			shipped, tempSchemaSlugIndexRead, got)
+	}
+	for _, control := range []string{wholeDatabaseSlugIndexRead, tempSchemaSlugIndexRead} {
+		if strings.Contains(control, scopePredicate) {
+			t.Fatalf("a control still carries `%s`, so it cannot tell a schema-scoped read from a "+
+				"database-wide one:\n%s", scopePredicate, control)
+		}
+	}
 }
 
 // TestSlugIndexReadIsSchemaScoped pins the other half of the defect: the read
@@ -117,8 +251,8 @@ func TestSlugIndexReadDoesNotDeparseIndexDef(t *testing.T) {
 // schema that is not current_schema() — a temporary table, which is exactly the
 // kind of object only a schema-scoped read can tell apart, because every
 // session's pg_temp is invisible to every other session yet its rows sit in
-// pg_class/pg_index like any other relation. The whole-database probe sees the
-// decoy; the shipped read must not.
+// pg_class/pg_index like any other relation. A read of this shape that has lost
+// its schema predicate sees the decoy; the shipped read must not.
 func TestSlugIndexReadIsSchemaScoped(t *testing.T) {
 	ctx := context.Background()
 	p := testPool(t)
@@ -139,66 +273,48 @@ func TestSlugIndexReadIsSchemaScoped(t *testing.T) {
 		t.Fatalf("index the decoy: %v", err)
 	}
 
-	// THE CONTROL MAY NOT FAIL MERELY BECAUSE A PEER LANE EXISTED (card t_74cea476).
+	// THE CONTROL IS THIS READ'S OWN SHAPE, WITH ITS SCHEMA PREDICATE GONE
+	// (card t_be5adeee).
 	//
-	// `wholeDatabaseSlugIndexProbe` is the OLD shape, kept deliberately so this
-	// guard can prove it still tells the two shapes apart. That shape OID-opens
-	// every `forms` index in the database, so a peer connection doing DDL against
-	// the shared gate database can invalidate one of those OIDs underneath it and
-	// the control (not the assertion the test exists for) dies with
-	// `could not open relation with OID <n> (SQLSTATE XX000)`. Measured once in
-	// five full preflights under load, and never in isolation — so the red said
-	// nothing about the behaviour under test while costing a lane a full run.
+	// It used to execute the OLD pg_indexes shape, i.e. the guard re-opened,
+	// once per run, exactly the OID-opening window the shipped read had been
+	// moved off, and it did so while ~10-15 peer scratch schemas were live on
+	// the shared gate database. #946 (card t_74cea476) wrapped that in a
+	// savepoint retry and reported a control that could not execute as "not
+	// run". The window is now closed rather than routed around: what is executed
+	// below touches the catalogue only, the same way the shipped read does, so an
+	// error here is a broken control and is fatal — not a concurrent-lane flake
+	// to be tolerated, and not a condition under which the guard may quietly
+	// stop asserting anything.
 	//
-	// Retry inside a SAVEPOINT, because an error aborts the transaction it happens
-	// in and the decoy lives in that transaction: a plain retry would fail with
-	// "current transaction is aborted" and read as a second, unrelated fault.
-	// If it STILL cannot execute, the control is REPORTED as not-run rather than
-	// treated as evidence either way, and it is not counted as proof that the
-	// probe sweeps. The shipped read's assertion below stays fatal regardless —
-	// that is the half this test exists for.
+	// The control's job is unchanged: prove the assertion below is not vacuous,
+	// i.e. that a read of this shape which has LOST its schema predicate really
+	// does see the decoy. Both halves are asserted, because either alone can go
+	// vacuous:
+	//
+	//   - unscoped, the shape matches this run's own index AND more (every other
+	//     live lane contributes one, and the decoy contributes another);
+	//   - restricted to this session's TEMP schema — where the decoy lives — the
+	//     same shape matches the decoy, which is what stops the first assertion
+	//     from being satisfied by peer lanes alone on a busy board.
 	var wholeDB int
-	controlRan := false
-	var lastErr error
-	for attempt := 0; attempt < 3 && !controlRan; attempt++ {
-		if _, err := tx.Exec(ctx, "SAVEPOINT control_probe"); err != nil {
-			lastErr = err
-			break
-		}
-		err := tx.QueryRow(ctx, wholeDatabaseSlugIndexProbe).Scan(&wholeDB)
-		if err == nil {
-			controlRan = true
-			if _, rerr := tx.Exec(ctx, "RELEASE SAVEPOINT control_probe"); rerr != nil {
-				t.Fatalf("release savepoint: %v", rerr)
-			}
-			break
-		}
-		lastErr = err
-		// A SYNTAX/SCHEMA ERROR IS A BUG IN THE PROBE, NOT AN ENVIRONMENTAL FLAKE,
-		// and must stay fatal: reporting a typo'd probe as "could not execute"
-		// would hide a control that no longer means anything. Class 42 is the
-		// syntax-error / undefined-table / undefined-column family.
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "42") {
-			t.Fatalf("the control probe is itself broken (SQLSTATE %s: %s) — this is not the "+
-				"concurrent-lane flake; fix the probe", pgErr.Code, pgErr.Message)
-		}
-		// Undo the aborted state so the NEXT attempt (and the shipped read below)
-		// can execute.
-		if _, rerr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT control_probe"); rerr != nil {
-			t.Fatalf("roll back to savepoint after a control-probe failure (%v): %v", err, rerr)
-		}
+	if err := tx.QueryRow(ctx, wholeDatabaseSlugIndexRead).Scan(&wholeDB); err != nil {
+		t.Fatalf("control: count this read's shape with the schema predicate removed: %v", err)
 	}
-	if !controlRan {
-		t.Logf("control probe could not execute (last error: %v) — a concurrent lane's DDL "+
-			"invalidates the OIDs the whole-database probe OID-opens. This is REPORTED, not "+
-			"treated as a pass or a failure of the code under test: the probe is the OLD shape "+
-			"kept only as a control, and its inability to run is not evidence either way. The "+
-			"shipped read is still asserted below.", lastErr)
-	} else if wholeDB < 2 {
-		t.Fatalf("control: the whole-database probe saw %d matching index(es) with a decoy "+
-			"planted, so it is not sweeping the database and this guard would pass vacuously "+
-			"(this is a REAL control failure, not the XX000 flake — it ran)", wholeDB)
+	if wholeDB < 2 {
+		t.Fatalf("control: a read of this shape with its schema predicate removed matched %d "+
+			"index(es) with a decoy planted, so it is not sweeping the database and this guard "+
+			"would pass vacuously", wholeDB)
+	}
+	var decoySeen int
+	if err := tx.QueryRow(ctx, tempSchemaSlugIndexRead).Scan(&decoySeen); err != nil {
+		t.Fatalf("control: count this read's shape inside this session's TEMP schema: %v", err)
+	}
+	if decoySeen != 1 {
+		t.Fatalf("control: this read's shape, restricted to this session's TEMP schema, matched "+
+			"%d index(es), want exactly 1 (the planted decoy). Without that match the unscoped "+
+			"control above can be satisfied by PEER lanes' schemas alone, and the assertion below "+
+			"would no longer be about the schema predicate", decoySeen)
 	}
 
 	var got int
@@ -303,7 +419,7 @@ func TestSlugIndexReadMatchesThePartialUniqueIndex(t *testing.T) {
 // edited and the mutated shape is not, one of the two assertions below fails.
 func TestSlugIndexReadAnyIndexVariantIsAPerfectMutation(t *testing.T) {
 	mutated := perWorkspaceSlugIndexReadIsUniqueRequired()
-	if !strings.Contains(mutated, "	   AND true") {
+	if !strings.Contains(mutated, "\t   AND true") {
 		t.Fatalf("the any-index variant no longer carries `AND true`, so it is not the mutation "+
 			"the guard below claims to catch:\n%s", mutated)
 	}
@@ -420,5 +536,67 @@ func TestSlugIndexReadRequiresAUniqueIndex(t *testing.T) {
 			"TestSlugUniquenessPerWorkspace only fails on `n == 0`, so the invariant assertion "+
 			"goes green on a constraint that does not exist. The any-index variant of the same "+
 			"statement returns %d here.", shipped, anyIndex)
+	}
+}
+
+// TestSlugIndexReadOldShapeIsExecutedNowhere pins, at the level of this file's
+// own source, the one property none of the other guards can see: WHO executes
+// the OLD pg_indexes shape (card t_be5adeee).
+//
+// Every other assertion in this file is about a string constant, so none of them
+// can tell whether a call site passes the statement it was written for. That is
+// the hole this closes: the old shape may appear in exactly two code lines — its
+// own declaration, and the EXPLAIN that plans it, which does not run it. If a
+// later change repoints a `QueryRow`/`Exec` at it (a `t.Errorf` on a constant
+// still passes when the constant is unused), or copies it into a second
+// statement, this fails instead of quietly restoring the OID-opening sweep that
+// #734 removed from the shipped read and that the schema-scope guard used to
+// execute once per gate run.
+//
+// It reads this file off disk because the property IS a property of the source:
+// no database state distinguishes a planned statement from an executed one, which
+// is exactly why the control had to stop being a pg_indexes sweep in the first
+// place.
+func TestSlugIndexReadOldShapeIsExecutedNowhere(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate this test file's own source to check it")
+	}
+	src, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read this test file (%s): %v", file, err)
+	}
+
+	// Prose may name the old shape as much as it likes; only code lines count,
+	// and the declaration and the EXPLAIN call are the two expected ones.
+	//
+	// The name is assembled from two literals so that this function's OWN lines
+	// never contain it contiguously: the scan below covers the whole file,
+	// including this guard, and a guard that spelled the name out in a string
+	// would count itself and never pass.
+	oldShape := "wholeDatabaseSlugIndex" + "Probe"
+	var sites []string
+	for i, line := range strings.Split(string(src), "\n") {
+		code := strings.TrimSpace(line)
+		if code == "" || strings.HasPrefix(code, "//") {
+			continue
+		}
+		if strings.Contains(code, oldShape) {
+			sites = append(sites, fmt.Sprintf("line %d: %s", i+1, code))
+		}
+	}
+	if len(sites) != 2 {
+		t.Fatalf("the OLD whole-database pg_indexes shape appears in %d code line(s), want 2 — its "+
+			"declaration first, then the EXPLAIN that plans it WITHOUT running it:\n%s\nExecuting "+
+			"it OID-opens every `forms` index in the database (see the file comment, defect 1) and "+
+			"is what card t_be5adeee removed from this file.", len(sites), strings.Join(sites, "\n"))
+	}
+	if !strings.Contains(sites[0], "const "+oldShape) {
+		t.Fatalf("the old shape's first code line is not its declaration, so the checks below "+
+			"cannot tell its two uses apart:\n%s", sites[0])
+	}
+	if !strings.Contains(sites[1], "explainPlan(t, ctx, p, "+oldShape+")") {
+		t.Fatalf("the old shape's only other code line is not the EXPLAIN call that plans it — "+
+			"any other use of it RUNS it:\n%s", sites[1])
 	}
 }
