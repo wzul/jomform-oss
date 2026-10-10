@@ -12,13 +12,13 @@ entry; it does **not** run out of the checkout.
 
 | Artifact | Path on the host | Uploaded to |
 |---|---|---|
-| Postgres dump (custom format, `pg_dump -Fc`, gzipped) | `/var/backups/jomform/jomform-daily-<UTC date>.dump.gz` | `gdrive:jomform-backups/daily/` |
-| Checksum of the dump | same path + `.sha256` | `gdrive:jomform-backups/daily/` |
-| MinIO media volume (`/data`, tar+gzip) | `/var/backups/jomform/jomform-daily-<UTC date>-media.tar.gz` | `gdrive:jomform-backups/daily/` |
+| Postgres dump (custom format, `pg_dump -Fc`, gzipped) | `/var/backups/jomform/jomform-daily-<UTC date>.dump.gz` | `googldrive:jomform-backups/daily/` |
+| Checksum of the dump | same path + `.sha256` | `googldrive:jomform-backups/daily/` |
+| MinIO media volume (`/data`, tar+gzip) | `/var/backups/jomform/jomform-daily-<UTC date>-media.tar.gz` | `googldrive:jomform-backups/daily/` |
 
 Retention: **30 daily** and **12 monthly**. The monthly copy is promoted on the
 1st of each month by a server-side `rclone copyto` (no re-upload) into
-`gdrive:jomform-backups/monthly/`. Local staging keeps the most recent 3 days of
+`googldrive:jomform-backups/monthly/`. Local staging keeps the most recent 3 days of
 dumps; Drive is the durable copy.
 
 The monthly pair is `jomform-monthly-<YYYY-MM>.dump.gz` plus a
@@ -45,7 +45,7 @@ so nothing makes the pair look verified.
 Verify a monthly copy by downloading the pair and checking it:
 
 ```bash
-rclone copy gdrive:jomform-backups/monthly/jomform-monthly-<YYYY-MM>.dump.gz* /tmp/
+rclone copy googldrive:jomform-backups/monthly/jomform-monthly-<YYYY-MM>.dump.gz* /tmp/
 cd /tmp && sha256sum -c jomform-monthly-<YYYY-MM>.dump.gz.sha256
 ```
 
@@ -66,11 +66,20 @@ The remote and its OAuth token live **outside this repository**, at
 public and `gitleaks` scans the full git history, so the token must never be
 committed, copied into a worktree, or pasted into a PR.
 
+The remote is named **`googldrive`**, and the name is load-bearing rather than
+cosmetic: it is the script's installed default (`REMOTE_DEFAULT` in
+`jomform-backup.sh`), so the cron job resolves `googldrive:` unless
+`JFBACKUP_REMOTE` overrides it. A remote created under any other name —
+`gdrive` is the name this page used to give — is not the one the job reaches,
+and every nightly run then fails with *"didn't find section in config file"*.
+Use the same name in every command below, including the `reconnect` that fixes
+an expired token.
+
 Configure it with the **`drive.file` scope, never the default full `drive`
 scope**:
 
 ```bash
-rclone config create gdrive drive scope drive.file
+rclone config create googldrive drive scope drive.file
 ```
 
 `drive.file` grants access **only to files this application itself creates**. It
@@ -86,17 +95,17 @@ consent. It cannot be completed by an agent. When the token expires the job
 raises an alert and the fix is one command:
 
 ```bash
-rclone config reconnect gdrive:
+rclone config reconnect googldrive:
 ```
 
 Verify the scope took effect rather than assuming it:
 
 ```bash
 grep '^scope' /root/.config/rclone/rclone.conf      # must print: scope = drive.file
-rclone lsd gdrive:                                  # lists only what this job created
+rclone lsd googldrive:                            # lists only what this job created
 ```
 
-With `drive.file`, `rclone lsd gdrive:` listing only the `jomform-backups`
+With `drive.file`, `rclone lsd googldrive:` listing only the `jomform-backups`
 folder is the expected and correct output. Other folders in the account are
 invisible to this remote by design — that is the scope working, not a fault.
 
