@@ -57,11 +57,16 @@ func (s *Server) HTTPHandler() http.Handler {
 // authenticate extracts and validates the Bearer credential. It returns the
 // resolved account identity. `apikey` is non-nil only for API-key auth (used
 // by the revoke_api_key tool); for OAuth-token auth it is nil and scopes are
-// readwrite (OAuth tokens mirror an admin key). `agent` is the connected MCP
-// client's display name (issue #195): the API key's name, or the OAuth
-// client's registered client_name. ok=false on any failure. Issue #307: OAuth
-// tokens are user-bound, so userID is returned for the OAuth path (API keys
-// have no user — the caller resolves the account owner when needed).
+// the token's GRANTED scopes read off the oauth_tokens row (t.Scope, the OAuth
+// vocabulary resolved at authorize time by oauthmeta.GrantedScopes: "read" or
+// "readwrite") — NOT a hardcoded readwrite. Only an API-key credential carries
+// the API-key scope vocabulary (key.Scopes: readonly/readwrite/admin).
+//
+// `agent` is the connected MCP client's display name (issue #195): the API
+// key's name, or the OAuth client's registered client_name. ok=false on any
+// failure. Issue #307: OAuth tokens are user-bound, so userID is returned for
+// the OAuth path (API keys have no user — the caller resolves the account
+// owner when needed).
 func (s *Server) authenticate(r *http.Request) (accountID, userID string, scopes []string, apikey *dbstore.APIKey, agent string, ok bool) {
 	header := r.Header.Get("Authorization")
 	const prefix = "Bearer "

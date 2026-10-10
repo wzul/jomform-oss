@@ -935,8 +935,13 @@ func (s *Server) registerTools() {
 // function means every write tool names BOTH gates, and dropping one is a
 // visible diff line rather than a changed boolean argument.
 //
-// OAuth tokens carry the readwrite scope (http.go, issue #121/#307), so agents
-// are unaffected. A key with the legacy "admin" scope passes (ScopeHasWrite).
+// OAuth tokens carry the GRANTED scope, not a hardcoded readwrite: a token
+// minted from `?scope=read` holds ["read"] (oauthmeta.GrantedScopes resolves
+// the grant at authorize time; authenticate in http.go returns t.Scope), so it
+// IS refused right here. That refusal is the point of the read scope —
+// TestReadScopeOAuthTokenIsRefusedEveryWrite and
+// TestRequireWriteScopeRefusesReadScope exercise this exact function. A key
+// with the legacy "admin" scope passes (ScopeHasWrite).
 func (s *Server) requireWriteScope(ctx context.Context) error {
 	id := IdentityFromContext(ctx)
 	if id == nil {
