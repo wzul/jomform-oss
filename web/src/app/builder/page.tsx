@@ -1975,7 +1975,21 @@ export default function Builder() {
   function canvasDragOver(e: React.DragEvent, i: number) {
     e.preventDefault();
     e.stopPropagation();
-    if (!dragging) return;
+    // The guard below reads the REFS, not the render-time `dragging` const.
+    //
+    // `dragging` (line ~975) is `dragType.current !== null || dragIdx.current !==
+    // null` evaluated during a render, and refs do not schedule one. So the
+    // FIRST `dragover` after `dragstart` ran inside the previous render's
+    // closure — where both refs were still null — and returned here: the
+    // insertion highlight never appeared while dragging, even though the drop
+    // itself worked, because `canvasDrop` reads the refs directly. Measured on a
+    // production build with a real held mouse drag over the empty canvas: 35
+    // `dragover` events delivered to the drop zone, 0 class mutations on it, and
+    // the drop still landed. Reading the refs live is what makes the highlight
+    // reachable at all; the `setDropAt` below then re-renders, which is the
+    // render in which `dragging` reads correctly for the palette's dim and the
+    // insertion gaps (card t_93b097c6).
+    if (dragType.current === null && dragIdx.current === null) return;
     setDropAt(i);
   }
 
