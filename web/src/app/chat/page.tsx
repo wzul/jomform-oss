@@ -58,6 +58,16 @@ import {
 } from "../../lib/wsfetch";
 import { translateApiErr } from "../../lib/apiErr";
 import { confirmDecisionFor } from "../../lib/chatConfirm";
+// The card's own wording is rendered through the dictionary from the KEYS the
+// server sends — never from a sentence on the wire (t_30ffa28a; see the module's
+// header for the defect and for why the assistant's `note` is the exception).
+import {
+  proposalLabel,
+  proposalSummary,
+  proposalTitle,
+  proposalValue,
+  type ProposalCardData,
+} from "../../lib/chatProposal";
 import { dropWorkspaceScopeIfCurrent, workspaceQuery } from "../../lib/workspace";
 
 type Turn = { role: "user" | "assistant"; content: string };
@@ -78,22 +88,14 @@ type Limits = {
   confirm_burst: number;
 };
 
-type ProposalField = { label: string; value: string };
-
 // A confirmation card (phase 2). It carries the opaque token, which is the ONLY
 // thing that can authorise the write — and the args_hash, which binds the
 // execution to the arguments shown here. Neither is ever sent to the model.
-type Proposal = {
-  token: string;
-  args_hash: string;
-  tool: string;
-  title: string;
-  summary: string;
-  fields: ProposalField[];
-  note?: string;
-  expires_at: string;
-  reversible: boolean;
-};
+//
+// The TYPE lives in lib/chatProposal.ts with the renderers: the card's wording is
+// keys the dashboard resolves, and that module is where the key/data decision is
+// executed by a test (t_30ffa28a).
+type Proposal = ProposalCardData;
 
 type ChatReply = {
   reply: string;
@@ -604,23 +606,35 @@ export default function ChatPage() {
                                         ? t("chat.proposalBadgeScopeRequired")
                                         : t("chat.proposalBadgeFailed")}
                           </span>
-                          <span className="font-semibold">{p.title}</span>
+                          {/* The title and the summary come from the dictionary,
+                              through the KEYS the server sent: the server does not
+                              know this visitor's language, so a sentence built
+                              there appeared in Malay on every dashboard
+                              (t_30ffa28a). proposalTitle/proposalSummary are the
+                              only way the card's own words become text. */}
+                          <span className="font-semibold">{proposalTitle(p, t)}</span>
                         </div>
-                        {p.summary && <p className="mt-1 opacity-80">{p.summary}</p>}
+                        {p.summary_key && (
+                          <p className="mt-1 opacity-80">{proposalSummary(p, t)}</p>
+                        )}
                         <dl className="mt-2 space-y-0.5">
                           {p.fields?.map((f) => (
-                            <div key={f.label} className="flex gap-2">
+                            <div key={f.label_key || f.label_raw} className="flex gap-2">
                               {/* opacity-80, not 70: the label keeps its lighter-
                                   than-the-value hierarchy, but 80% of the card's
                                   text token composites to 5.32:1 on the sky-50
                                   tint where 70% composites to 4.11:1 — under the
                                   4.5:1 floor at this 12px size (t_f5f269a8). The
                                   card's own summary line above already uses 80. */}
-                              <dt className="min-w-[7rem] shrink-0 opacity-80">{f.label}</dt>
-                              <dd className="break-words font-medium">{f.value}</dd>
+                              <dt className="min-w-[7rem] shrink-0 opacity-80">{proposalLabel(f, t)}</dt>
+                              <dd className="break-words font-medium">{proposalValue(f, t)}</dd>
                             </div>
                           ))}
                         </dl>
+                        {/* The assistant's OWN wording, in the language of the
+                            conversation — the one string on the card the server
+                            does not author, and therefore the one that is not a
+                            dictionary key (see lib/chatProposal.ts). */}
                         {p.note && (
                           <p className="mt-2 border-l-2 border-sky-300 pl-2 italic opacity-80">
                             {p.note}

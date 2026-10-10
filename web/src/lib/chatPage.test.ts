@@ -2127,9 +2127,11 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
 
   // ── 2. The creation is stated, and it says WHICH HALF. ──
   // `upsert_form` is BOTH a create and an update, so a page that only said "edits
-  // a form" would misdescribe a card that is about to create one. The Go summary
-  // (proposalDocs["upsert_form"].summary) names both halves for exactly this
-  // reason; the English page has to say the same thing.
+  // a form" would misdescribe a card that is about to create one. The card's own
+  // summary states both halves for exactly this reason — and since t_30ffa28a that
+  // sentence is a DICTIONARY entry (proposalDocs["upsert_form"].summaryKey →
+  // chat.proposal.summary.upsert_form; src/lib/chatProposal.test.ts fails if the
+  // key has no entry), so the English page has to say the same thing.
   assert.ok(
     docs.includes("upsert_form"),
     "the docs page no longer names upsert_form — the proposable creation would be undocumented, " +

@@ -78,17 +78,29 @@ const EN = {
 const TOKEN = "tok-1";
 const WS = "ws-b";
 
-/** The proposal the assistant hands back, and the card that renders it. */
+/**
+ * The proposal the assistant hands back, and the card that renders it.
+ *
+ * THE SHAPE IS THE SERVER'S (t_30ffa28a). The card's own wording is carried as
+ * DICTIONARY KEYS (title_key / summary_key / label_key) plus the merchant's data —
+ * the API does not know the caller's language, so it does not write the words. The
+ * English text these tests look for is therefore read out of the dictionary, and
+ * the fixture below carries no sentence of its own except the assistant's `note`.
+ */
 const PROPOSAL = {
   token: TOKEN,
   args_hash: "hash-1",
   tool: "update_product",
-  title: "Rename the product",
-  summary: "Tee 2026 → Tee 2026 (XL)",
-  fields: [{ label: "Name", value: "Tee 2026 (XL)" }],
+  title_key: "chat.proposal.title.update_product",
+  summary_key: "chat.proposal.summary.update_product",
+  fields: [{ label_key: "chat.proposal.label.name", value: "Tee 2026 (XL)" }],
+  note: "The assistant's own sentence, in the conversation's language.",
   expires_at: "2027-01-01T00:00:00Z",
   reversible: true,
 };
+
+/** The card's title as the ENGLISH dashboard renders it. */
+const CARD_TITLE = DICT["chat.proposal.title.update_product"].en;
 
 const BUNDLE = {
   me: { id: "u1", email: "merchant@example.com", name: "Merchant", lang: "", is_super_admin: false },
@@ -246,7 +258,7 @@ async function confirmWithoutScope(page: Page, baseURL: string | undefined, drop
   // Send follows, so the wait is a wait and not a red.
   await sendChatPrompt(page, baseURL, "rename my product");
 
-  const card = page.locator('[class*="border-sky-200"]').filter({ hasText: PROPOSAL.title });
+  const card = page.locator('[class*="border-sky-200"]').filter({ hasText: CARD_TITLE });
   await expect(card, "the proposal card must render — otherwise this test is vacuous").toHaveCount(1);
 
   // The scope drop is no longer performed here (see the re-anchor comment above);
@@ -318,7 +330,7 @@ test.describe("chat confirm path: a scope refusal is not a failed change", () =>
     ).toHaveCount(0);
 
     // The card itself stops claiming a failure: it says what it NEEDS.
-    const card = page.locator('[class*="border-sky-200"]').filter({ hasText: PROPOSAL.title });
+    const card = page.locator('[class*="border-sky-200"]').filter({ hasText: CARD_TITLE });
     await expect(card).toContainText(EN.badgeScopeRequired);
     await expect(
       card,
@@ -370,7 +382,7 @@ test.describe("chat confirm path: a scope refusal is not a failed change", () =>
     // Instead the generic failure copy — the honest answer, and the one the card
     // footer already carries. On this branch the token really IS spent and nothing
     // changed, so the "try again" advice is accurate (it asks for a NEW card).
-    const card = page.locator('[class*="border-sky-200"]').filter({ hasText: PROPOSAL.title });
+    const card = page.locator('[class*="border-sky-200"]').filter({ hasText: CARD_TITLE });
     await expect(
       card,
       "a non-scope 400 must report a failed change on the card",
@@ -399,7 +411,7 @@ test.describe("chat confirm path: a scope refusal is not a failed change", () =>
     await freshState(page);
     await confirmWithoutScope(page, baseURL);
 
-    const card = page.locator('[class*="border-sky-200"]').filter({ hasText: PROPOSAL.title });
+    const card = page.locator('[class*="border-sky-200"]').filter({ hasText: CARD_TITLE });
     await expect(
       card,
       `a genuine failure must still render chat.confirmFail on the card — deleting the failure path ` +
@@ -488,7 +500,7 @@ test.describe("chat confirm path: a scope refusal is not a failed change", () =>
       copyNodes,
       "the unexecutable refusal must be rendered exactly once — the card footer and the alert must not both carry it",
     ).toHaveCount(1);
-    const card = page.locator('[class*="border-sky-200"]').filter({ hasText: PROPOSAL.title });
+    const card = page.locator('[class*="border-sky-200"]').filter({ hasText: CARD_TITLE });
     await expect(card).toContainText(EN.badgeUnexecutable);
     await expect(
       card,

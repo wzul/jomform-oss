@@ -122,19 +122,36 @@ const WS = "ws-b";
 
 // The proposal QA measured: a rename, the tool name that carried information the
 // user must judge, and TWO field rows (the two `dt` nodes in the defect).
+//
+// THE SHAPE IS THE SERVER'S (t_30ffa28a). The card's own wording — its title, its
+// summary and each field's label — is carried as DICTIONARY KEYS, because the API
+// does not know the caller's language: writing the sentence there is what put Malay
+// on an English dashboard. The English text this file asserts against therefore
+// comes out of the dictionary, and the only sentence the fixture carries is the
+// assistant's own `note` (which is NOT a key — it belongs to the conversation's
+// language, see lib/chatProposal.ts).
 const PROPOSAL = {
   token: TOKEN,
   args_hash: "hash-card-1",
   tool: "update_product",
-  title: "Rename the product",
-  summary: "Tee 2026 → Tee 2026 (XL)",
+  title_key: "chat.proposal.title.update_product",
+  summary_key: "chat.proposal.summary.update_product",
   fields: [
-    { label: "Name", value: "Tee 2026 (XL)" },
-    { label: "Price", value: "RM25.00" },
+    { label_key: "chat.proposal.label.name", value: "Tee 2026 (XL)" },
+    // A COMPOSED value, so the fixture exercises the `value_key` + `value_params`
+    // rendering too: the server used to write "12 kali" here as a Malay literal.
+    {
+      label_key: "chat.proposal.label.subscriptionCharges",
+      value_key: "chat.proposal.value.chargeCount",
+      value_params: { n: "12" },
+    },
   ],
   expires_at: "2027-01-01T00:00:00Z",
   reversible: true,
 };
+
+/** The card's title as the ENGLISH dashboard renders it. */
+const CARD_TITLE = DICT["chat.proposal.title.update_product"].en;
 
 const BUNDLE = {
   me: { id: "u1", email: "merchant@example.com", name: "Merchant", lang: "", is_super_admin: false },
@@ -227,7 +244,7 @@ async function openCard(page: Page, baseURL: string | undefined) {
   // signal — and retries the type until Send follows.
   await sendChatPrompt(page, baseURL, "rename my product");
 
-  const card = page.locator(CARD).filter({ hasText: PROPOSAL.title });
+  const card = page.locator(CARD).filter({ hasText: CARD_TITLE });
   // A guard whose subject never rendered passes vacuously, so the card is
   // asserted to exist before anything is measured or scanned.
   await expect(card, "the proposal card must render — otherwise this file proves nothing").toHaveCount(

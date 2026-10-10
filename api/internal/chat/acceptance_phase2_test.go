@@ -409,8 +409,10 @@ func TestChatProposalLaneEndToEndWithRealPostgres(t *testing.T) {
 		t.Fatalf("the product was renamed to %q by the PROPOSAL alone — propose_write executed "+
 			"something", got)
 	}
-	// The card must say what will happen, in the user's terms, and carry the
-	// binding hash. A card with no fields is a card the user cannot judge.
+	// The card must say what will happen, in the KEYS the dashboard resolves to the
+	// user's own language, and carry the binding hash. A card with no fields is a
+	// card the user cannot judge, and a card with a SENTENCE here would be one
+	// language on every dashboard (t_30ffa28a).
 	if len(card.Fields) == 0 {
 		t.Error("the proposal card lists no fields — the user is asked to confirm an effect they " +
 			"were not shown")
@@ -418,8 +420,19 @@ func TestChatProposalLaneEndToEndWithRealPostgres(t *testing.T) {
 	if card.ArgsHash == "" || card.Token == "" {
 		t.Fatalf("the card carries no binding (token=%q hash=%q)", card.Token, card.ArgsHash)
 	}
-	if !strings.Contains(card.Title, "produk") && !strings.Contains(card.Title, "Produk") {
-		t.Errorf("the card title %q does not name the effect in the user's terms", card.Title)
+	if card.TitleKey != keyTitleUpdateProduct || card.SummaryKey != keySummaryUpdateProduct {
+		t.Errorf("the card carries title_key=%q summary_key=%q, want the update_product keys — the "+
+			"dashboard renders these through its dictionary, so a missing or wrong key is a card with "+
+			"no heading, and a sentence here would be one language for every locale",
+			card.TitleKey, card.SummaryKey)
+	}
+	keys := map[string]bool{}
+	for _, f := range card.Fields {
+		keys[f.LabelKey] = true
+	}
+	if !keys[keyLabelProduct] || !keys[keyLabelName] {
+		t.Errorf("the card's fields do not name the product and the new name by key (keys=%v) — a "+
+			"card that says an object is listed must list it", keys)
 	}
 	// The stored row must be the model's proposal, owned by the human.
 	var storedTool string

@@ -12,8 +12,10 @@
 //
 //  1. PROPOSE  the model calls propose_write {tool, arguments, reason}. Nothing
 //     is executed. The server stores (tool, canonical arguments, caller,
-//     expiry) and returns an OPAQUE TOKEN plus a card describing the effect in
-//     the user's language.
+//     expiry) and returns an OPAQUE TOKEN plus a card describing the effect. The
+//     card's wording is NOT built here: it is carried as dictionary KEYS the
+//     dashboard resolves in the user's own language, and the server adds only the
+//     merchant's own data (t_30ffa28a — see the key block further down).
 //  2. CONFIRM  the USER clicks in the UI. The server claims the token (single
 //     use, atomic), re-checks the arguments against the hash the card carried,
 //     and only then dispatches the tool — under the HUMAN's identity.
@@ -64,6 +66,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -184,12 +187,137 @@ func ProposalTokenFingerprint(raw string) string {
 	return h
 }
 
+// ── THE CARD'S WORDING LIVES IN THE DICTIONARY, NOT IN THE SERVER ────────────
+//
+// WHAT WAS WRONG (card t_30ffa28a). Every human word on the confirmation card —
+// the title, the summary, each field's label, and every sentence the server
+// COMPOSES out of a value ("3 fields", "no limit (infinite)", "yes") — used to be
+// a Malay literal built here. The card's chrome (the badge, the buttons, the
+// "nothing has changed yet" hint) was localized by the dashboard's five-locale
+// dictionary, so on an English dashboard the card read half English and half
+// Malay: a merchant who does not read Malay was asked to confirm a change
+// described in a language they may not read, on the one surface in the product
+// where getting the text right IS the safety mechanism. (The same class as
+// t_e15ecca3, which moved the publish confirm's refusal sentence into the
+// dictionary, and issue #6177, which made the rule for API prose in general.)
+//
+// THE RULE. The server sends KEYS plus the DATA; the dashboard renders. The API
+// deliberately never learns the caller's language — it is not sent on a JSON call
+// (see lib/chatConfirm.ts) — so a sentence built here could only ever be written
+// in ONE language. A key can be written in five.
+//
+//	title_key   chat.proposal.title.<tool>
+//	summary_key chat.proposal.summary.<tool>
+//	label_key   chat.proposal.label.<what>   (or label_raw — see ProposalField)
+//	value_key   chat.proposal.value.<what>   (with value_params interpolated)
+//
+// The dictionary entries live in web/src/components/i18nDict.ts and the guard that
+// keeps both halves in step is web/src/lib/chatProposal.test.ts: it reads THIS
+// file, extracts every "chat.proposal.*" literal, and fails when the dictionary is
+// missing one (or when a literal sentence is assigned to a label/title/value field
+// here). Adding a key on this side without adding it there is therefore not a
+// silent half-fix any more, which is precisely how the defect shipped.
+const (
+	keyTitleUpdateProduct   = "chat.proposal.title.update_product"
+	keyTitleVariation       = "chat.proposal.title.update_product_variation"
+	keyTitleFormTheme       = "chat.proposal.title.set_form_theme"
+	keyTitleUpsertForm      = "chat.proposal.title.upsert_form"
+	keySummaryUpdateProduct = "chat.proposal.summary.update_product"
+	keySummaryVariation     = "chat.proposal.summary.update_product_variation"
+	keySummaryFormTheme     = "chat.proposal.summary.set_form_theme"
+	keySummaryUpsertForm    = "chat.proposal.summary.upsert_form"
+
+	// Field labels: one per argument (or per theme key) the card can list.
+	keyLabelProduct       = "chat.proposal.label.product"
+	keyLabelVariation     = "chat.proposal.label.variation"
+	keyLabelName          = "chat.proposal.label.name"
+	keyLabelDescription   = "chat.proposal.label.description"
+	keyLabelPrice         = "chat.proposal.label.price"
+	keyLabelStock         = "chat.proposal.label.stock"
+	keyLabelActive        = "chat.proposal.label.active"
+	keyLabelType          = "chat.proposal.label.type"
+	keyLabelBilling       = "chat.proposal.label.billingPeriod"
+	keyLabelTrialDays     = "chat.proposal.label.trialDays"
+	keyLabelScheduleMode  = "chat.proposal.label.scheduleMode"
+	keyLabelImages        = "chat.proposal.label.images"
+	keyLabelVariations    = "chat.proposal.label.variations"
+	keyLabelCharges       = "chat.proposal.label.subscriptionCharges"
+	keyLabelForm          = "chat.proposal.label.form"
+	keyLabelAction        = "chat.proposal.label.action"
+	keyLabelFormTitle     = "chat.proposal.label.formTitle"
+	keyLabelSlug          = "chat.proposal.label.slug"
+	keyLabelConfig        = "chat.proposal.label.config"
+	keyLabelTheme         = "chat.proposal.label.theme"
+	keyLabelNotifications = "chat.proposal.label.notifications"
+	keyLabelChipFeeds     = "chat.proposal.label.chipFeeds"
+	// The clear_* flags: "reset this cycle back to inheriting the product".
+	keyLabelClearBilling = "chat.proposal.label.clearBillingPeriod"
+	keyLabelClearTrial   = "chat.proposal.label.clearTrialDays"
+	keyLabelClearCharges = "chat.proposal.label.clearSubscriptionCharges"
+
+	// The theme keys, named the way the dashboard's theme editor names them.
+	keyLabelThemePrimary    = "chat.proposal.label.theme.primary"
+	keyLabelThemeBackground = "chat.proposal.label.theme.background"
+	keyLabelThemeText       = "chat.proposal.label.theme.text"
+	keyLabelThemeCardBg     = "chat.proposal.label.theme.cardBackground"
+	keyLabelThemeCardRadius = "chat.proposal.label.theme.cardBorderRadius"
+	keyLabelThemeFont       = "chat.proposal.label.theme.fontFamily"
+	keyLabelThemeLogoURL    = "chat.proposal.label.theme.logoUrl"
+	keyLabelThemeLayout     = "chat.proposal.label.theme.layout"
+	keyLabelThemeSpacing    = "chat.proposal.label.theme.spacing"
+	keyLabelThemeImgSize    = "chat.proposal.label.theme.productImageSize"
+	keyLabelThemeImgLayout  = "chat.proposal.label.theme.productImageLayout"
+	keyLabelThemeCustomCSS  = "chat.proposal.label.theme.customCss"
+	keyLabelThemeCustomJS   = "chat.proposal.label.theme.customJs"
+
+	// Composed VALUES: the sentences the server builds out of a number or a flag.
+	// Each one is a dictionary key plus the parameters its sentence interpolates,
+	// so the composed text follows the dashboard's language too.
+	keyValueYes          = "chat.proposal.value.yes"
+	keyValueNo           = "chat.proposal.value.no"
+	keyValueEmpty        = "chat.proposal.value.empty"
+	keyValueUnrenderable = "chat.proposal.value.unrenderable"
+	keyValueFieldCount   = "chat.proposal.value.fieldCount"
+	keyValueItemCount    = "chat.proposal.value.itemCount"
+	keyValueListOne      = "chat.proposal.value.listOne"
+	keyValueListMany     = "chat.proposal.value.listMany"
+	keyValueCreateForm   = "chat.proposal.value.createForm"
+	keyValueUnlimited    = "chat.proposal.value.unlimitedCharges"
+	keyValueChargeCount  = "chat.proposal.value.chargeCount"
+	keyValueVariationSet = "chat.proposal.value.variationSet"
+)
+
 // ProposalField is one specific argument, rendered for the card: the label in the
 // user's terms and the value they are agreeing to. The card must show WHAT changes
 // (which form, what price), not just that something will.
+//
+// EVERY STRING HERE IS EITHER A KEY OR THE MERCHANT'S OWN DATA — never a sentence
+// (t_30ffa28a). The card is built by the SERVER, which does not know the caller's
+// language, so any sentence built here reaches every dashboard in that one
+// language (it was Malay). The label and every word the server COMPOSES are
+// therefore dictionary keys the dashboard resolves; the only literal text is a
+// value the user themselves supplied.
 type ProposalField struct {
-	Label string `json:"label"`
-	Value string `json:"value"`
+	// LabelKey names this row, e.g. "chat.proposal.label.price". The dashboard
+	// renders t(LabelKey).
+	LabelKey string `json:"label_key"`
+	// LabelRaw is an argument (or theme) key shown VERBATIM, emitted only when the
+	// dictionary has no entry for it: a theme key added after this card was written
+	// is still SHOWN rather than silently dropped. It is the key itself — an
+	// identifier such as "custom_css", never a sentence — and the guard asserts
+	// every one of them is a key of the proposal's own arguments, so a sentence
+	// cannot be smuggled through this field.
+	LabelRaw string `json:"label_raw,omitempty"`
+	// Value is the argument's value when it is DATA: an id, a name, a number, an
+	// amount. Shown verbatim — it is the merchant's own value, and "translating"
+	// it would be a lie about what will be written.
+	Value string `json:"value,omitempty"`
+	// ValueKey names a value the server COMPOSED out of words ("3 fields",
+	// "no limit (infinite)", "yes"). When it is set, Value is empty and the
+	// dashboard renders t(ValueKey, ValueParams).
+	ValueKey string `json:"value_key,omitempty"`
+	// ValueParams are the numbers and data interpolated into ValueKey's sentence.
+	ValueParams map[string]string `json:"value_params,omitempty"`
 }
 
 // ProposalCard is what the UI shows the user, and the only thing that can be
@@ -204,15 +332,26 @@ type ProposalCard struct {
 	// Tool is the real MCP tool name, shown as written down rather than prettified:
 	// a merchant who wants to check what the assistant did can look it up.
 	Tool string `json:"tool"`
-	// Title names the effect in human language ("Kemas kini produk").
-	Title string `json:"title"`
-	// Summary states what will happen, in one sentence.
-	Summary string `json:"summary"`
+	// TitleKey / SummaryKey name the card's heading sentences in the dashboard's
+	// dictionary (see the key block above). They are KEYS and not sentences: the
+	// server does not know the caller's language, and a sentence built here would
+	// be shown to every locale in one language.
+	TitleKey   string `json:"title_key"`
+	SummaryKey string `json:"summary_key"`
 	// Fields are the specific arguments the user is agreeing to.
 	Fields []ProposalField `json:"fields"`
-	// Note is the model's own explanation, displayed as the assistant's wording.
+	// Note is the MODEL's own explanation, displayed as the assistant's wording.
 	// It is untrusted text: shown, never parsed, never the authority for what the
 	// card says will happen.
+	//
+	// WHY THIS ONE IS NOT A DICTIONARY KEY (t_30ffa28a). Title, summary, labels and
+	// composed values are the SERVER's words and are now keys. This is the
+	// assistant's words, in the language of the conversation it is having — the
+	// same language as the reply in the transcript above it, which is NOT the
+	// dashboard's language and is not meant to be (the prompt answers in the
+	// language the user wrote in). There is nothing to look up: the sentence does
+	// not exist until the model writes it. Replacing it with a canned dictionary
+	// sentence would delete the assistant's explanation rather than translate it.
 	Note string `json:"note,omitempty"`
 	// ExpiresAt is when the token stops working (RFC3339, UTC).
 	ExpiresAt string `json:"expires_at"`
@@ -243,13 +382,18 @@ func (c ProposalCard) withoutSecrets() ProposalCard {
 // the card names objects through the same reads the answer used.
 type Labeler func(kind, id string) string
 
-// proposalDoc describes one proposable tool for the model: the title/summary the
-// card will show, and a reminder of the arguments. The argument schema itself is
-// NOT copied here — it comes from the registered tool over tools/list, so the
-// model builds arguments against the same contract the gate validates.
+// proposalDoc describes one proposable tool for the model: the DICTIONARY KEYS of
+// the title/summary the card will show, and a reminder of the arguments. The
+// argument schema itself is NOT copied here — it comes from the registered tool
+// over tools/list, so the model builds arguments against the same contract the
+// gate validates.
+//
+// The card's sentences are keys (see the key block above): this server does not
+// know the caller's language, so the wording lives in the dashboard's dictionary
+// and is resolved there.
 type proposalDoc struct {
-	title   string
-	summary string
+	titleKey   string
+	summaryKey string
 }
 
 // proposalDocs is the ONE place a tool is declared proposable-with-a-card. A
@@ -258,30 +402,31 @@ type proposalDoc struct {
 // guard test asserts every mcpsrv.ChatProposableTools() name exists here.
 var proposalDocs = map[string]proposalDoc{
 	"update_product": {
-		title:   "Kemas kini produk",
-		summary: "Medan produk yang disenaraikan di bawah akan ditukar. Baki medan kekal seperti sedia ada.",
+		titleKey:   keyTitleUpdateProduct,
+		summaryKey: keySummaryUpdateProduct,
 	},
 	"update_product_variation": {
-		title:   "Kemas kini variasi produk",
-		summary: "Variasi yang dinamakan di bawah akan ditukar. Variasi lain dan medan yang tidak disenaraikan kekal.",
+		titleKey:   keyTitleVariation,
+		summaryKey: keySummaryVariation,
 	},
 	"set_form_theme": {
-		title:   "Kemas kini gaya borang",
-		summary: "Gaya dan branding borang akan ditukar. Kandungan borang, harga dan tetapan lain tidak berubah.",
+		titleKey:   keyTitleFormTheme,
+		summaryKey: keySummaryFormTheme,
 	},
 	// t_804040be (Wan's C): the assistant may CREATE a form. The summary says which
 	// half is happening, because the same tool both creates and updates and a user
-	// confirming "kemas kini" when a NEW form is about to appear has been misled.
+	// confirming "update" when a NEW form is about to appear has been misled.
 	"upsert_form": {
-		title:   "Cipta atau kemas kini borang",
-		summary: "Borang baharu akan DICIPTA (atau yang sedia ada dikemas kini, jika id diberi). Tiada apa-apa dihapuskan, dan borang yang tersilap boleh dihantar ke tong sampah dan dipulihkan.",
+		titleKey:   keyTitleUpsertForm,
+		summaryKey: keySummaryUpsertForm,
 	},
 }
 
-// ProposalTitle returns the card's title and summary for a tool.
-func ProposalTitle(tool string) (title, summary string, ok bool) {
+// ProposalKeys returns the card's title and summary KEYS for a tool. The caller
+// resolves them through the dashboard's dictionary; nothing here knows a language.
+func ProposalKeys(tool string) (titleKey, summaryKey string, ok bool) {
 	d, ok := proposalDocs[tool]
-	return d.title, d.summary, ok
+	return d.titleKey, d.summaryKey, ok
 }
 
 // cardRenderer renders one tool's card fields, plus the arguments that MUST name
@@ -319,6 +464,17 @@ var describeFns = map[string]cardRenderer{
 	"upsert_form": {fn: describeFormCreation},
 }
 
+// formCreationCountLabels names the argument keys describeFormCreation summarises
+// by COUNT, in the words the dashboard uses. Declared as one map so a key added to
+// the count loop without a dictionary entry is a compile-visible omission rather
+// than a raw identifier on the card.
+var formCreationCountLabels = map[string]string{
+	"config":        keyLabelConfig,
+	"theme":         keyLabelTheme,
+	"notifications": keyLabelNotifications,
+	"chip_feeds":    keyLabelChipFeeds,
+}
+
 // describeFormCreation renders the card for t_804040be's creation.
 //
 // It shows what the form will BE — the title, the address — and says plainly when
@@ -328,15 +484,15 @@ var describeFns = map[string]cardRenderer{
 func describeFormCreation(args map[string]any, label Labeler) []ProposalField {
 	var fields []ProposalField
 	if id := asString(args["form_id"]); id != "" {
-		fields = append(fields, ProposalField{Label: "Borang", Value: named(label, "form", id)})
+		fields = append(fields, field(keyLabelForm, dataValue(named(label, "form", id))))
 	} else {
-		fields = append(fields, ProposalField{Label: "Tindakan", Value: "Cipta borang baharu"})
+		fields = append(fields, field(keyLabelAction, keyedValue(keyValueCreateForm, nil)))
 	}
 	if title := asString(args["title"]); title != "" {
-		fields = append(fields, ProposalField{Label: "Tajuk", Value: renderValue(title)})
+		fields = append(fields, field(keyLabelFormTitle, renderValue(title)))
 	}
 	if slug := asString(args["slug"]); slug != "" {
-		fields = append(fields, ProposalField{Label: "Slug (URL)", Value: renderValue(slug)})
+		fields = append(fields, field(keyLabelSlug, renderValue(slug)))
 	}
 	// The rest of the arguments are stated by COUNT rather than by value: config and
 	// theme are nested maps whose contents are the form's whole body, and dumping
@@ -347,32 +503,39 @@ func describeFormCreation(args map[string]any, label Labeler) []ProposalField {
 		if !ok || v == nil {
 			continue
 		}
+		lbl := formCreationCountLabels[key]
 		if m, isMap := v.(map[string]any); isMap {
-			fields = append(fields, ProposalField{
-				Label: key, Value: fmt.Sprintf("%d medan", len(m))})
+			fields = append(fields, field(lbl, keyedValue(keyValueFieldCount, map[string]string{
+				"n": strconv.Itoa(len(m)),
+			})))
 			continue
 		}
 		if list, isList := v.([]any); isList {
-			fields = append(fields, ProposalField{
-				Label: key, Value: fmt.Sprintf("%d item", len(list))})
+			fields = append(fields, field(lbl, keyedValue(keyValueItemCount, map[string]string{
+				"n": strconv.Itoa(len(list)),
+			})))
 			continue
 		}
-		fields = append(fields, ProposalField{Label: key, Value: renderValue(v)})
+		fields = append(fields, field(lbl, renderValue(v)))
 	}
 	return fields
 }
 
 // Describe renders a proposal card's human wording FROM THE TOOL AND ARGUMENTS
-// ONLY. The model's prose is not an input: it cannot make the card promise
-// something the arguments do not do.
+// ONLY, as dictionary keys plus the merchant's own data. The model's prose is not
+// an input: it cannot make the card promise something the arguments do not do.
+//
+// The first two results are KEYS (chat.proposal.title.*/summary.*), not sentences:
+// the server does not know the caller's language (see the key block at the top of
+// this section), so the wording is resolved by the dashboard's dictionary.
 //
 // ok=false means this tool has no card, or its arguments do not name the object
 // the card would claim: either it is not proposable at all, it was added to the
 // proposable set without a renderer, or its declared object key is absent/blank.
 // All of them must refuse — a card the server cannot explain, or one that asserts
 // a listed object it cannot name, is a card the user cannot judge (t_623676d1).
-func Describe(tool string, args map[string]any, label Labeler) (title, summary string, fields []ProposalField, ok bool) {
-	title, summary, ok = ProposalTitle(tool)
+func Describe(tool string, args map[string]any, label Labeler) (titleKey, summaryKey string, fields []ProposalField, ok bool) {
+	titleKey, summaryKey, ok = ProposalKeys(tool)
 	if !ok {
 		return "", "", nil, false
 	}
@@ -389,7 +552,51 @@ func Describe(tool string, args map[string]any, label Labeler) (title, summary s
 	if label == nil {
 		label = func(string, string) string { return "" }
 	}
-	return title, summary, renderer.fn(args, label), true
+	return titleKey, summaryKey, renderer.fn(args, label), true
+}
+
+// renderedValue is one argument value as the card will show it: either DATA
+// (verbatim) or a dictionary key plus the parameters its sentence interpolates.
+//
+// WHY A KEY RATHER THAN A SENTENCE (t_30ffa28a). The server composes text out of
+// values in several places ("3 fields", "no limit (infinite)", "yes, clear the
+// billing period"). Those were Malay literals, so they appeared in Malay on every
+// dashboard. A composed sentence is a dictionary entry with the value
+// interpolated, which is the same rule as the labels.
+type renderedValue struct {
+	value  string
+	key    string
+	params map[string]string
+}
+
+// dataValue is a value shown VERBATIM: the merchant's own name, id or number.
+func dataValue(s string) renderedValue { return renderedValue{value: s} }
+
+// keyedValue is a value the server COMPOSED out of words, named by a dictionary
+// key with the parameters its sentence interpolates.
+func keyedValue(key string, params map[string]string) renderedValue {
+	return renderedValue{key: key, params: params}
+}
+
+// field builds one card row: a label KEY and a rendered value. Exactly one of the
+// value pair is set, which is what the guard test asserts.
+func field(labelKey string, rv renderedValue) ProposalField {
+	f := ProposalField{LabelKey: labelKey, Value: rv.value}
+	if rv.key != "" {
+		f.Value, f.ValueKey, f.ValueParams = "", rv.key, rv.params
+	}
+	return f
+}
+
+// rawField builds a row whose label is an argument/theme key shown verbatim. It is
+// used ONLY when the dictionary has no entry for that key (a theme key added after
+// the dictionary was written), and the guard test asserts the key really is one of
+// the proposal's arguments — so this cannot become a way to pass a sentence
+// through the card.
+func rawField(rawKey string, rv renderedValue) ProposalField {
+	f := field("", rv)
+	f.LabelRaw = rawKey
+	return f
 }
 
 // named renders "Name (id)" when a name resolved, else just the id — so a card is
@@ -449,7 +656,12 @@ func asStringList(v any) ([]string, bool) {
 	}
 	out := make([]string, 0, len(arr))
 	for _, e := range arr {
-		out = append(out, renderValue(e))
+		// asStringList is for lists of plain values (image URLs); a keyed rendering
+		// has no text until the dashboard resolves it, so the element's own JSON is
+		// used — the element IS the data.
+		if rv := renderValue(e); rv.value != "" {
+			out = append(out, rv.value)
+		}
 	}
 	return out, true
 }
@@ -461,53 +673,52 @@ func asStringList(v any) ([]string, bool) {
 func describeProductUpdate(args map[string]any, label Labeler) []ProposalField {
 	var fields []ProposalField
 	if id := asString(args["product_id"]); id != "" {
-		fields = append(fields, ProposalField{Label: "Produk", Value: named(label, "product", id)})
+		fields = append(fields, field(keyLabelProduct, dataValue(named(label, "product", id))))
 	}
 	if v, ok := args["name"]; ok {
-		fields = append(fields, ProposalField{Label: "Nama", Value: renderValue(v)})
+		fields = append(fields, field(keyLabelName, renderValue(v)))
 	}
 	if v, ok := args["description"]; ok {
-		fields = append(fields, ProposalField{Label: "Penerangan", Value: renderValue(v)})
+		fields = append(fields, field(keyLabelDescription, renderValue(v)))
 	}
 	if sen, ok := asInt64(args["price_sen"]); ok {
-		fields = append(fields, ProposalField{Label: "Harga", Value: money(sen)})
+		fields = append(fields, field(keyLabelPrice, dataValue(money(sen))))
 	}
 	if n, ok := asInt64(args["stock"]); ok {
-		fields = append(fields, ProposalField{Label: "Stok", Value: fmt.Sprintf("%d", n)})
+		fields = append(fields, field(keyLabelStock, dataValue(strconv.FormatInt(n, 10))))
 	}
 	if b, ok := asBool(args["active"]); ok {
-		fields = append(fields, ProposalField{Label: "Aktif", Value: yesNo(b)})
+		fields = append(fields, field(keyLabelActive, yesNo(b)))
 	}
 	if v, ok := args["type"]; ok {
-		fields = append(fields, ProposalField{Label: "Jenis", Value: renderValue(v)})
+		fields = append(fields, field(keyLabelType, renderValue(v)))
 	}
 	if v, ok := args["billing_period"]; ok {
-		fields = append(fields, ProposalField{Label: "Kitaran bil", Value: renderValue(v)})
+		fields = append(fields, field(keyLabelBilling, renderValue(v)))
 	}
 	if n, ok := asInt64(args["trial_days"]); ok {
-		fields = append(fields, ProposalField{Label: "Hari percubaan", Value: fmt.Sprintf("%d", n)})
+		fields = append(fields, field(keyLabelTrialDays, dataValue(strconv.FormatInt(n, 10))))
 	}
 	if v, ok := args["schedule_mode"]; ok {
-		fields = append(fields, ProposalField{Label: "Polisi tarikh caj", Value: renderValue(v)})
+		fields = append(fields, field(keyLabelScheduleMode, renderValue(v)))
 	}
 	if imgs, ok := asStringList(args["images"]); ok {
-		fields = append(fields, ProposalField{Label: "Gambar", Value: describeList(imgs)})
+		fields = append(fields, field(keyLabelImages, describeList(imgs)))
 	}
 	if vars, ok := args["variations"]; ok {
 		n := 0
 		if arr, ok := vars.([]any); ok {
 			n = len(arr)
 		}
-		fields = append(fields, ProposalField{
-			Label: "Variasi",
-			Value: fmt.Sprintf("%d baris — senarai penuh, menggantikan senarai sedia ada", n),
-		})
+		fields = append(fields, field(keyLabelVariations, keyedValue(keyValueVariationSet,
+			map[string]string{"n": strconv.Itoa(n)})))
 	}
 	if v, ok := args["subscription_charges"]; ok {
 		if v == nil {
-			fields = append(fields, ProposalField{Label: "Bilangan caj", Value: "tiada had (infinite)"})
+			fields = append(fields, field(keyLabelCharges, keyedValue(keyValueUnlimited, nil)))
 		} else if n, ok := asInt64(v); ok {
-			fields = append(fields, ProposalField{Label: "Bilangan caj", Value: fmt.Sprintf("%d kali", n)})
+			fields = append(fields, field(keyLabelCharges, keyedValue(keyValueChargeCount,
+				map[string]string{"n": strconv.FormatInt(n, 10)})))
 		}
 	}
 	return fields
@@ -520,64 +731,65 @@ func describeProductUpdate(args map[string]any, label Labeler) []ProposalField {
 func describeVariationUpdate(args map[string]any, label Labeler) []ProposalField {
 	var fields []ProposalField
 	if id := asString(args["product_id"]); id != "" {
-		fields = append(fields, ProposalField{Label: "Produk", Value: named(label, "product", id)})
+		fields = append(fields, field(keyLabelProduct, dataValue(named(label, "product", id))))
 	}
 	if id := asString(args["variation_id"]); id != "" {
-		fields = append(fields, ProposalField{Label: "Variasi", Value: id})
+		fields = append(fields, field(keyLabelVariation, dataValue(id)))
 	}
 	if v, ok := args["name"]; ok {
-		fields = append(fields, ProposalField{Label: "Nama", Value: renderValue(v)})
+		fields = append(fields, field(keyLabelName, renderValue(v)))
 	}
 	if sen, ok := asInt64(args["price_sen"]); ok {
-		fields = append(fields, ProposalField{Label: "Harga", Value: money(sen)})
+		fields = append(fields, field(keyLabelPrice, dataValue(money(sen))))
 	}
 	if n, ok := asInt64(args["stock"]); ok {
-		fields = append(fields, ProposalField{Label: "Stok", Value: fmt.Sprintf("%d", n)})
+		fields = append(fields, field(keyLabelStock, dataValue(strconv.FormatInt(n, 10))))
 	}
 	if v, ok := args["billing_period"]; ok {
-		fields = append(fields, ProposalField{Label: "Kitaran bil", Value: renderValue(v)})
+		fields = append(fields, field(keyLabelBilling, renderValue(v)))
 	}
 	if n, ok := asInt64(args["trial_days"]); ok {
-		fields = append(fields, ProposalField{Label: "Hari percubaan", Value: fmt.Sprintf("%d", n)})
+		fields = append(fields, field(keyLabelTrialDays, dataValue(strconv.FormatInt(n, 10))))
 	}
 	if n, ok := asInt64(args["subscription_charges"]); ok {
-		fields = append(fields, ProposalField{Label: "Bilangan caj", Value: fmt.Sprintf("%d kali", n)})
+		fields = append(fields, field(keyLabelCharges, keyedValue(keyValueChargeCount,
+			map[string]string{"n": strconv.FormatInt(n, 10)})))
 	}
 	if imgs, ok := asStringList(args["images"]); ok {
-		fields = append(fields, ProposalField{Label: "Gambar", Value: describeList(imgs)})
+		fields = append(fields, field(keyLabelImages, describeList(imgs)))
 	}
-	for _, c := range []struct{ key, label string }{
-		{"clear_billing_period", "Kosongkan kitaran variasi (warisi produk)"},
-		{"clear_trial_days", "Kosongkan hari percubaan (warisi produk)"},
-		{"clear_subscription_charges", "Kosongkan bilangan caj (warisi produk)"},
+	for _, c := range []struct{ key, labelKey string }{
+		{"clear_billing_period", keyLabelClearBilling},
+		{"clear_trial_days", keyLabelClearTrial},
+		{"clear_subscription_charges", keyLabelClearCharges},
 	} {
 		if b, ok := asBool(args[c.key]); ok && b {
-			fields = append(fields, ProposalField{Label: c.label, Value: "ya"})
+			fields = append(fields, field(c.labelKey, yesNo(true)))
 		}
 	}
 	return fields
 }
 
-// themeFieldLabels names the theme keys set_form_theme accepts, in the words the
-// dashboard's theme editor uses. The KEY LIST is exactly setFormThemeIn
-// (api/internal/mcpsrv/form_creation.go) — measured from the struct, not invented
-// — and describeFormTheme falls back to the raw key for anything else, so a theme
-// key that is added later is still SHOWN rather than silently dropped from the
-// card.
+// themeFieldLabels names the theme keys set_form_theme accepts, as DICTIONARY KEYS
+// in the words the dashboard's theme editor uses. The KEY LIST is exactly
+// setFormThemeIn (api/internal/mcpsrv/form_creation.go) — measured from the struct,
+// not invented — and describeFormTheme falls back to the raw key for anything else,
+// so a theme key that is added later is still SHOWN rather than silently dropped
+// from the card.
 var themeFieldLabels = map[string]string{
-	"primary":              "Warna utama",
-	"background":           "Warna latar",
-	"text":                 "Warna teks",
-	"card_background":      "Latar kad",
-	"card_border_radius":   "Jejari sudut kad",
-	"font_family":          "Fon",
-	"logo_url":             "URL logo",
-	"layout":               "Susun atur",
-	"spacing":              "Jarak",
-	"product_image_size":   "Saiz imej produk",
-	"product_image_layout": "Susunan imej produk",
-	"custom_css":           "CSS tersuai",
-	"custom_js":            "JS tersuai",
+	"primary":              keyLabelThemePrimary,
+	"background":           keyLabelThemeBackground,
+	"text":                 keyLabelThemeText,
+	"card_background":      keyLabelThemeCardBg,
+	"card_border_radius":   keyLabelThemeCardRadius,
+	"font_family":          keyLabelThemeFont,
+	"logo_url":             keyLabelThemeLogoURL,
+	"layout":               keyLabelThemeLayout,
+	"spacing":              keyLabelThemeSpacing,
+	"product_image_size":   keyLabelThemeImgSize,
+	"product_image_layout": keyLabelThemeImgLayout,
+	"custom_css":           keyLabelThemeCustomCSS,
+	"custom_js":            keyLabelThemeCustomJS,
 }
 
 // describeFormTheme renders set_form_theme's arguments. Every key present in the
@@ -587,7 +799,7 @@ var themeFieldLabels = map[string]string{
 func describeFormTheme(args map[string]any, label Labeler) []ProposalField {
 	var fields []ProposalField
 	if id := asString(args["form_id"]); id != "" {
-		fields = append(fields, ProposalField{Label: "Borang", Value: named(label, "form", id)})
+		fields = append(fields, field(keyLabelForm, dataValue(named(label, "form", id))))
 	}
 	keys := make([]string, 0, len(args))
 	for k := range args {
@@ -598,64 +810,89 @@ func describeFormTheme(args map[string]any, label Labeler) []ProposalField {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		lbl := themeFieldLabels[k]
-		if lbl == "" {
-			lbl = k
+		// A theme key the dictionary does not cover yet keeps its OWN NAME on the
+		// card (rawField) rather than being dropped or given a guessed sentence.
+		if lbl := themeFieldLabels[k]; lbl != "" {
+			fields = append(fields, field(lbl, renderValue(args[k])))
+			continue
 		}
-		fields = append(fields, ProposalField{Label: lbl, Value: renderValue(args[k])})
+		fields = append(fields, rawField(k, renderValue(args[k])))
 	}
 	return fields
 }
 
-// renderValue turns one argument value into display text. Long strings are
-// truncated for the CARD only — the stored arguments are untouched, which is why
-// the truncation is safe: the user approves the whole value, and the hash covers
-// all of it.
-func renderValue(v any) string {
+// renderValue turns one argument value into what the card shows: the merchant's
+// own DATA verbatim, or — when the server would have to write words around it — a
+// dictionary KEY for the dashboard to resolve. Long strings are truncated for the
+// CARD only: the stored arguments are untouched, which is why the truncation is
+// safe (the user approves the whole value, and the hash covers all of it).
+func renderValue(v any) renderedValue {
 	switch t := v.(type) {
 	case nil:
-		return "(kosong)"
+		return keyedValue(keyValueEmpty, nil)
 	case string:
 		if strings.TrimSpace(t) == "" {
-			return "(kosong)"
+			return keyedValue(keyValueEmpty, nil)
 		}
-		return truncateText(t, 200)
+		return dataValue(truncateText(t, 200))
 	case bool:
 		return yesNo(t)
 	case float64:
 		if t == float64(int64(t)) {
-			return fmt.Sprintf("%d", int64(t))
+			return dataValue(strconv.FormatInt(int64(t), 10))
 		}
-		return fmt.Sprintf("%g", t)
+		return dataValue(fmt.Sprintf("%g", t))
 	case []any:
 		out := make([]string, 0, len(t))
 		for _, e := range t {
-			out = append(out, renderValue(e))
+			rv := renderValue(e)
+			if rv.value == "" {
+				// A keyed sub-value has no TEXT until the dashboard resolves it, and
+				// this row shows the first item as data. Fall back to the element's
+				// JSON, which is the element itself (data), rather than putting a
+				// blank in a row that says "1 item".
+				b, err := json.Marshal(e)
+				if err != nil {
+					continue
+				}
+				rv = dataValue(truncateText(string(b), 200))
+			}
+			out = append(out, rv.value)
 		}
 		return describeList(out)
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
-		return "(tidak dapat dipaparkan)"
+		return keyedValue(keyValueUnrenderable, nil)
 	}
-	return truncateText(string(b), 200)
+	return dataValue(truncateText(string(b), 200))
 }
 
-func describeList(items []string) string {
+// describeList renders a list of values for one card row: the count plus the first
+// item, as dictionary keys, because "1 item: X" / "3 items: X …" is a sentence the
+// server would otherwise have to write in one language.
+func describeList(items []string) renderedValue {
 	if len(items) == 0 {
-		return "(kosong)"
+		return keyedValue(keyValueEmpty, nil)
 	}
 	if len(items) == 1 {
-		return "1 item: " + truncateText(items[0], 120)
+		return keyedValue(keyValueListOne, map[string]string{
+			"name": truncateText(items[0], 120),
+		})
 	}
-	return fmt.Sprintf("%d item: %s …", len(items), truncateText(items[0], 80))
+	return keyedValue(keyValueListMany, map[string]string{
+		"n":    strconv.Itoa(len(items)),
+		"name": truncateText(items[0], 80),
+	})
 }
 
-func yesNo(b bool) string {
+// yesNo renders a boolean as a dictionary key rather than as the literal "ya" /
+// "tidak" it used to be: the card is read on every dashboard language.
+func yesNo(b bool) renderedValue {
 	if b {
-		return "ya"
+		return keyedValue(keyValueYes, nil)
 	}
-	return "tidak"
+	return keyedValue(keyValueNo, nil)
 }
 
 func truncateText(s string, max int) string {
@@ -887,23 +1124,28 @@ func (r *Runner) proposeFromArgs(ctx context.Context, caller toolCaller, argsJSO
 
 	// The card is rendered from (tool, args) — NEVER from the model's prose. The
 	// prose is stored as Note and displayed as the assistant's own wording.
+	//
+	// What Describe returns here is KEYS plus data, not sentences: the dashboard
+	// resolves the wording in the merchant's own language (t_30ffa28a, and the key
+	// block at the top of this file). The row stores the keys for the same reason —
+	// a stored sentence would be one language for a card read in five.
 	label := r.labelResolver(ctx, caller)
-	title, summary, fields, _ := Describe(in.Tool, in.Arguments, label)
+	titleKey, summaryKey, fields, _ := Describe(in.Tool, in.Arguments, label)
 
 	raw, err := newProposalToken()
 	if err != nil {
 		return nil, err
 	}
 	p := &dbstore.ChatWriteProposal{
-		TokenHash: dbstore.HashProposalToken(raw),
-		UserID:    uid,
-		AccountID: acct,
-		Tool:      in.Tool,
-		Args:      in.Arguments,
-		Title:     title,
-		Summary:   summary,
-		Note:      truncateText(in.Reason, 500),
-		ExpiresAt: time.Now().UTC().Add(ProposalTTL),
+		TokenHash:  dbstore.HashProposalToken(raw),
+		UserID:     uid,
+		AccountID:  acct,
+		Tool:       in.Tool,
+		Args:       in.Arguments,
+		TitleKey:   titleKey,
+		SummaryKey: summaryKey,
+		Note:       truncateText(in.Reason, 500),
+		ExpiresAt:  time.Now().UTC().Add(ProposalTTL),
 	}
 	if err := r.proposals.Create(ctx, p); err != nil {
 		return nil, fmt.Errorf("simpan cadangan: %w", err)
@@ -912,8 +1154,8 @@ func (r *Runner) proposeFromArgs(ctx context.Context, caller toolCaller, argsJSO
 		Token:      raw,
 		ArgsHash:   p.ArgsHash,
 		Tool:       in.Tool,
-		Title:      title,
-		Summary:    summary,
+		TitleKey:   titleKey,
+		SummaryKey: summaryKey,
 		Fields:     fields,
 		Note:       p.Note,
 		ExpiresAt:  p.ExpiresAt.Format(time.RFC3339),

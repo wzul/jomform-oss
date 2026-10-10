@@ -2037,6 +2037,98 @@ export const DICT = {
   // token is UNSPENT, so the badge must not claim expiry and must not claim a
   // failure: nothing was attempted and nothing was consumed.
   "chat.proposalBadgeUnexecutable": { en: "Cannot be applied — nothing changed", ms: "Tidak boleh dilaksanakan — tiada apa-apa diubah", zh: "无法执行——未作更改", ta: "செயல்படுத்த முடியாது — எதுவும் மாறவில்லை", ar: "لا يمكن تنفيذه — لم يتغير شيء" },
+  // ── THE CARD'S OWN WORDING (t_30ffa28a) ────────────────────────────────────
+  //
+  // Why these exist at all, and why they are HERE. The confirmation card's title,
+  // summary, every field label and every sentence the server COMPOSED out of a
+  // value ("3 fields", "yes", "no limit (infinite)") used to be Malay literals
+  // built in api/internal/chat/proposal.go. The card's chrome above was already
+  // localized, so on an English dashboard the same card read half English and half
+  // Malay — a merchant who does not read Malay was asked to confirm a change
+  // described in a language they may not read, on the one surface where the wording
+  // IS the safety mechanism.
+  //
+  // The API does not receive the caller's language on a JSON call (see
+  // lib/chatConfirm.ts / issue #6177), so anything the SERVER writes is one
+  // language for every locale. The server therefore sends KEYS — chat.proposal.
+  // title.*, .summary.*, .label.*, .value.* — plus the merchant's own data, and the
+  // dashboard resolves them through this dictionary.
+  //
+  // The guard that keeps both halves in step is src/lib/chatProposal.test.ts: it
+  // reads the Go source, extracts every "chat.proposal.*" literal and fails when a
+  // key is missing here (or when the page prints a server sentence again). Adding a
+  // key there without adding it here is not a silent half-fix any more — which is
+  // exactly how this defect shipped.
+  //
+  // The card's TITLE, per proposable tool.
+  "chat.proposal.title.update_product": { en: "Update product", ms: "Kemas kini produk", zh: "更新产品", ta: "தயாரிப்பைப் புதுப்பி", ar: "تحديث المنتج" },
+  "chat.proposal.title.update_product_variation": { en: "Update product variation", ms: "Kemas kini variasi produk", zh: "更新产品变体", ta: "தயாரிப்பு மாறுபாட்டைப் புதுப்பி", ar: "تحديث نوع المنتج" },
+  "chat.proposal.title.set_form_theme": { en: "Update form style", ms: "Kemas kini gaya borang", zh: "更新表单样式", ta: "படிவ பாணியைப் புதுப்பி", ar: "تحديث نمط النموذج" },
+  "chat.proposal.title.upsert_form": { en: "Create or update form", ms: "Cipta atau kemas kini borang", zh: "创建或更新表单", ta: "படிவத்தை உருவாக்கு அல்லது புதுப்பி", ar: "إنشاء نموذج أو تحديثه" },
+  // The card's SUMMARY, per proposable tool. upsert_form says which half is
+  // happening: the same tool creates and updates, and a user confirming "update"
+  // when a NEW form is about to appear has been misled.
+  "chat.proposal.summary.update_product": { en: "The product fields listed below will be changed. Other fields stay as they are.", ms: "Medan produk yang disenaraikan di bawah akan ditukar. Baki medan kekal seperti sedia ada.", zh: "下面列出的产品字段将被更改，其余字段保持不变。", ta: "கீழே பட்டியலிடப்பட்ட தயாரிப்பு புலங்கள் மாற்றப்படும். மற்ற புலங்கள் அப்படியே இருக்கும்.", ar: "سيتم تغيير حقول المنتج المدرجة أدناه، وتبقى الحقول الأخرى كما هي." },
+  "chat.proposal.summary.update_product_variation": { en: "The variation named below will be changed. Other variations and unlisted fields stay as they are.", ms: "Variasi yang dinamakan di bawah akan ditukar. Variasi lain dan medan yang tidak disenaraikan kekal.", zh: "下面指明的变体将被更改，其他变体和未列出的字段保持不变。", ta: "கீழே குறிப்பிடப்பட்ட மாறுபாடு மாற்றப்படும். மற்ற மாறுபாடுகளும் பட்டியலிடப்படாத புலங்களும் அப்படியே இருக்கும்.", ar: "سيتم تغيير النوع المذكور أدناه، وتبقى الأنواع الأخرى والحقول غير المدرجة كما هي." },
+  "chat.proposal.summary.set_form_theme": { en: "The form's style and branding will be changed. Its content, prices and other settings do not change.", ms: "Gaya dan branding borang akan ditukar. Kandungan borang, harga dan tetapan lain tidak berubah.", zh: "表单的样式和品牌将更改，表单内容、价格和其他设置不变。", ta: "படிவத்தின் பாணியும் பிராண்டிங்கும் மாற்றப்படும். படிவ உள்ளடக்கம், விலைகள் மற்றும் பிற அமைப்புகள் மாறாது.", ar: "سيتم تغيير نمط النموذج وهويته، ولا يتغير محتواه ولا أسعاره ولا إعداداته الأخرى." },
+  "chat.proposal.summary.upsert_form": { en: "A new form will be CREATED (or the existing one updated, if an id is given). Nothing is deleted, and a form created by mistake can be moved to the trash and restored.", ms: "Borang baharu akan DICIPTA (atau yang sedia ada dikemas kini, jika id diberi). Tiada apa-apa dihapuskan, dan borang yang tersilap boleh dihantar ke tong sampah dan dipulihkan.", zh: "将创建一个新表单（若给出 id，则更新现有表单）。不会删除任何内容，误创建的表单可以移入回收站并恢复。", ta: "புதிய படிவம் உருவாக்கப்படும் (id கொடுத்தால், ஏற்கனவே உள்ள ஒன்று புதுப்பிக்கப்படும்). எதுவும் நீக்கப்படாது, தவறுதலாக உருவாக்கிய படிவத்தை குப்பைக்கு நகர்த்தி மீட்டெடுக்கலாம்.", ar: "سيتم إنشاء نموذج جديد (أو تحديث النموذج الحالي إذا حُدِّد مُعرّف). لن يُحذف أي شيء، ويمكن نقل النموذج المُنشأ بالخطأ إلى سلة المهملات واستعادته." },
+  // The card's FIELD LABELS, one per argument the card can list.
+  "chat.proposal.label.product": { en: "Product", ms: "Produk", zh: "产品", ta: "தயாரிப்பு", ar: "المنتج" },
+  "chat.proposal.label.variation": { en: "Variation", ms: "Variasi", zh: "变体", ta: "மாறுபாடு", ar: "النوع" },
+  "chat.proposal.label.name": { en: "Name", ms: "Nama", zh: "名称", ta: "பெயர்", ar: "الاسم" },
+  "chat.proposal.label.description": { en: "Description", ms: "Penerangan", zh: "描述", ta: "விளக்கம்", ar: "الوصف" },
+  "chat.proposal.label.price": { en: "Price", ms: "Harga", zh: "价格", ta: "விலை", ar: "السعر" },
+  "chat.proposal.label.stock": { en: "Stock", ms: "Stok", zh: "库存", ta: "சரக்கு", ar: "المخزون" },
+  "chat.proposal.label.active": { en: "Active", ms: "Aktif", zh: "启用", ta: "செயலில்", ar: "مُفعَّل" },
+  "chat.proposal.label.type": { en: "Type", ms: "Jenis", zh: "类型", ta: "வகை", ar: "الفئة" },
+  "chat.proposal.label.billingPeriod": { en: "Billing period", ms: "Kitaran bil", zh: "计费周期", ta: "பில் காலம்", ar: "فترة الفوترة" },
+  "chat.proposal.label.trialDays": { en: "Trial days", ms: "Hari percubaan", zh: "试用天数", ta: "சோதனை நாட்கள்", ar: "أيام التجربة" },
+  "chat.proposal.label.scheduleMode": { en: "Next-charge policy", ms: "Polisi tarikh caj", zh: "下次扣费策略", ta: "அடுத்த கட்டணக் கொள்கை", ar: "سياسة الدفعة التالية" },
+  "chat.proposal.label.images": { en: "Images", ms: "Gambar", zh: "图片", ta: "படங்கள்", ar: "الصور" },
+  "chat.proposal.label.variations": { en: "Variations", ms: "Variasi", zh: "变体", ta: "மாறுபாடுகள்", ar: "الأنواع" },
+  "chat.proposal.label.subscriptionCharges": { en: "Number of charges", ms: "Bilangan caj", zh: "扣费次数", ta: "கட்டணங்களின் எண்ணிக்கை", ar: "عدد الدفعات" },
+  "chat.proposal.label.form": { en: "Form", ms: "Borang", zh: "表单", ta: "படிவம்", ar: "النموذج" },
+  "chat.proposal.label.action": { en: "Action", ms: "Tindakan", zh: "操作", ta: "செயல்", ar: "الإجراء" },
+  "chat.proposal.label.formTitle": { en: "Title", ms: "Tajuk", zh: "标题", ta: "தலைப்பு", ar: "العنوان" },
+  "chat.proposal.label.slug": { en: "Slug (URL)", ms: "Slug (URL)", zh: "Slug（网址）", ta: "Slug (URL)", ar: "Slug (الرابط)" },
+  "chat.proposal.label.config": { en: "Configuration", ms: "Konfigurasi", zh: "配置", ta: "கட்டமைப்பு", ar: "الإعدادات" },
+  "chat.proposal.label.theme": { en: "Theme", ms: "Tema", zh: "主题", ta: "தீம்", ar: "السمة" },
+  "chat.proposal.label.notifications": { en: "Notifications", ms: "Notifikasi", zh: "通知", ta: "அறிவிப்புகள்", ar: "الإشعارات" },
+  "chat.proposal.label.chipFeeds": { en: "Payment feeds", ms: "Suapan bayaran", zh: "支付源", ta: "கட்டண ஊட்டங்கள்", ar: "تغذيات الدفع" },
+  // The clear_* flags reset a variation back to inheriting the product.
+  "chat.proposal.label.clearBillingPeriod": { en: "Clear the variation's billing period (inherit from the product)", ms: "Kosongkan kitaran variasi (warisi produk)", zh: "清除变体的计费周期（继承产品设置）", ta: "மாறுபாட்டின் பில் காலத்தை அழி (தயாரிப்பிலிருந்து பெறு)", ar: "مسح فترة فوترة النوع (وراثةً من المنتج)" },
+  "chat.proposal.label.clearTrialDays": { en: "Clear the variation's trial days (inherit from the product)", ms: "Kosongkan hari percubaan (warisi produk)", zh: "清除变体的试用天数（继承产品设置）", ta: "மாறுபாட்டின் சோதனை நாட்களை அழி (தயாரிப்பிலிருந்து பெறு)", ar: "مسح أيام تجربة النوع (وراثةً من المنتج)" },
+  "chat.proposal.label.clearSubscriptionCharges": { en: "Clear the variation's charge count (inherit from the product)", ms: "Kosongkan bilangan caj (warisi produk)", zh: "清除变体的扣费次数（继承产品设置）", ta: "மாறுபாட்டின் கட்டண எண்ணிக்கையை அழி (தயாரிப்பிலிருந்து பெறு)", ar: "مسح عدد دفعات النوع (وراثةً من المنتج)" },
+  // The form theme's own keys, named the way the theme editor names them.
+  "chat.proposal.label.theme.primary": { en: "Primary colour", ms: "Warna utama", zh: "主色", ta: "முதன்மை வண்ணம்", ar: "اللون الأساسي" },
+  "chat.proposal.label.theme.background": { en: "Background colour", ms: "Warna latar", zh: "背景颜色", ta: "பின்னணி வண்ணம்", ar: "لون الخلفية" },
+  "chat.proposal.label.theme.text": { en: "Text colour", ms: "Warna teks", zh: "文字颜色", ta: "எழுத்து வண்ணம்", ar: "لون النص" },
+  "chat.proposal.label.theme.cardBackground": { en: "Card background", ms: "Latar kad", zh: "卡片背景", ta: "அட்டை பின்னணி", ar: "خلفية البطاقة" },
+  "chat.proposal.label.theme.cardBorderRadius": { en: "Card corner radius", ms: "Jejari sudut kad", zh: "卡片圆角", ta: "அட்டை மூலை வளைவு", ar: "انحناء زوايا البطاقة" },
+  "chat.proposal.label.theme.fontFamily": { en: "Font", ms: "Fon", zh: "字体", ta: "எழுத்துரு", ar: "الخط" },
+  "chat.proposal.label.theme.logoUrl": { en: "Logo URL", ms: "URL logo", zh: "Logo 链接", ta: "லோகோ URL", ar: "رابط الشعار" },
+  "chat.proposal.label.theme.layout": { en: "Layout", ms: "Susun atur", zh: "布局", ta: "அமைப்பு", ar: "التخطيط" },
+  "chat.proposal.label.theme.spacing": { en: "Spacing", ms: "Jarak", zh: "间距", ta: "இடைவெளி", ar: "التباعد" },
+  "chat.proposal.label.theme.productImageSize": { en: "Product image size", ms: "Saiz imej produk", zh: "产品图片尺寸", ta: "தயாரிப்பு பட அளவு", ar: "حجم صورة المنتج" },
+  "chat.proposal.label.theme.productImageLayout": { en: "Product image layout", ms: "Susunan imej produk", zh: "产品图片布局", ta: "தயாரிப்பு பட அமைப்பு", ar: "تخطيط صورة المنتج" },
+  "chat.proposal.label.theme.customCss": { en: "Custom CSS", ms: "CSS tersuai", zh: "自定义 CSS", ta: "தனிப்பயன் CSS", ar: "CSS مخصص" },
+  "chat.proposal.label.theme.customJs": { en: "Custom JS", ms: "JS tersuai", zh: "自定义 JS", ta: "தனிப்பயன் JS", ar: "JS مخصص" },
+  // The VALUES the server COMPOSES: a sentence around a number or a flag. These
+  // were the last Malay on the card after the labels moved ("3 medan", "ya",
+  // "tiada had (infinite)"), and they are the reason a key-only reading of the card
+  // was not enough. {n} / {name} are filled from the card's value_params.
+  "chat.proposal.value.yes": { en: "Yes", ms: "Ya", zh: "是", ta: "ஆம்", ar: "نعم" },
+  "chat.proposal.value.no": { en: "No", ms: "Tidak", zh: "否", ta: "இல்லை", ar: "لا" },
+  "chat.proposal.value.empty": { en: "(empty)", ms: "(kosong)", zh: "（空）", ta: "(காலி)", ar: "(فارغ)" },
+  "chat.proposal.value.unrenderable": { en: "(cannot be shown)", ms: "(tidak dapat dipaparkan)", zh: "（无法显示）", ta: "(காட்ட முடியாது)", ar: "(تعذّر العرض)" },
+  "chat.proposal.value.fieldCount": { en: "{n} fields", ms: "{n} medan", zh: "{n} 个字段", ta: "{n} புலங்கள்", ar: "{n} حقل" },
+  "chat.proposal.value.itemCount": { en: "{n} items", ms: "{n} item", zh: "{n} 项", ta: "{n} உருப்படிகள்", ar: "{n} عنصر" },
+  "chat.proposal.value.listOne": { en: "1 item: {name}", ms: "1 item: {name}", zh: "1 项：{name}", ta: "1 உருப்படி: {name}", ar: "عنصر واحد: {name}" },
+  "chat.proposal.value.listMany": { en: "{n} items: {name} …", ms: "{n} item: {name} …", zh: "{n} 项：{name} …", ta: "{n} உருப்படிகள்: {name} …", ar: "{n} عنصر: {name} …" },
+  "chat.proposal.value.createForm": { en: "Create a new form", ms: "Cipta borang baharu", zh: "创建一个新表单", ta: "புதிய படிவத்தை உருவாக்கு", ar: "إنشاء نموذج جديد" },
+  "chat.proposal.value.unlimitedCharges": { en: "No limit (infinite)", ms: "Tiada had (infinite)", zh: "无限制（无限）", ta: "வரம்பு இல்லை (முடிவிலி)", ar: "بلا حد (غير محدود)" },
+  "chat.proposal.value.chargeCount": { en: "{n} times", ms: "{n} kali", zh: "{n} 次", ta: "{n} முறை", ar: "{n} مرات" },
+  "chat.proposal.value.variationSet": { en: "{n} rows — the full list, replacing the existing one", ms: "{n} baris — senarai penuh, menggantikan senarai sedia ada", zh: "{n} 行——完整列表，将替换现有列表", ta: "{n} வரிசைகள் — முழுப் பட்டியல், தற்போதைய ஒன்றை மாற்றும்", ar: "{n} صفوف — القائمة الكاملة، وتستبدل القائمة الحالية" },
   "chat.confirm": { en: "Confirm", ms: "Sahkan", zh: "确认", ta: "உறுதிப்படுத்து", ar: "تأكيد" },
   "chat.cancel": { en: "Cancel", ms: "Batal", zh: "取消", ta: "ரத்து", ar: "إلغاء" },
   "chat.confirmHint": { en: "Nothing has changed yet.", ms: "Belum ada apa-apa yang berubah.", zh: "目前尚未发生任何更改。", ta: "இதுவரை எதுவும் மாறவில்லை.", ar: "لم يتغير شيء بعد." },

@@ -126,6 +126,13 @@ HOW TO ANSWER
   price, and say RM.
 - Be brief and concrete. A merchant wants the answer, not a summary of your
   process. Do not describe which tools you called unless it helps them.
+- The confirmation card's own wording (its title, its summary, each field's label)
+  is written by the server in the merchant's DASHBOARD language, which you do not
+  know and do not need to. What you pass as propose_write's reason argument is shown
+  on the card as YOUR words, so write it in the language of the conversation (see HOW
+  ANSWER above). The result propose_write gives you back uses machine keys such as
+  chat.proposal.title.*; those are for the server and the page, so never read a key
+  out to the merchant — say in your own words what you prepared.
 - When proposing a change, read the object first with a read tool so the
   arguments you pass are real ids and real current values — a proposal built on a
   guessed id will fail when the user confirms, which wastes their decision.

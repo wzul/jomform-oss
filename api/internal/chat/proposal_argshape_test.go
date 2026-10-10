@@ -129,8 +129,8 @@ func TestChatCardNeverClaimsAnObjectItCannotName(t *testing.T) {
 		tool  string
 		label string
 	}{
-		{"update_product", "Produk"},
-		{"set_form_theme", "Borang"},
+		{"update_product", keyLabelProduct},
+		{"set_form_theme", keyLabelForm},
 	}
 
 	for _, tc := range objectKinds {
@@ -149,17 +149,18 @@ func TestChatCardNeverClaimsAnObjectItCannotName(t *testing.T) {
 		}
 		// The positive control, so the loop above cannot pass by refusing everything.
 		good := map[string]any{mapKeyFor(tc.tool): id, "name": "renamed"}
-		title, summary, fields, ok := Describe(tc.tool, good, noLabel)
+		titleKey, summaryKey, fields, ok := Describe(tc.tool, good, noLabel)
 		if !ok {
 			t.Fatalf("Describe(%s, %v) refused the CORRECTLY keyed arguments — the check is refusing on "+
 				"the wrong condition", tc.tool, good)
 		}
-		if title == "" || summary == "" {
-			t.Errorf("Describe(%s) produced an empty title/summary", tc.tool)
+		if titleKey == "" || summaryKey == "" {
+			t.Errorf("Describe(%s) produced an empty title/summary KEY — the card's wording is resolved "+
+				"from these by the dashboard, so an empty one is a card with no heading", tc.tool)
 		}
 		found := false
 		for _, fld := range fields {
-			if fld.Label == tc.label {
+			if fld.LabelKey == tc.label {
 				found = true
 			}
 		}
@@ -268,23 +269,23 @@ func (f *acceptanceFixture) storeProposal(t *testing.T, store *dbstore.ChatWrite
 	if err != nil {
 		t.Fatalf("mint token: %v", err)
 	}
-	title, summary, _ := ProposalTitle("update_product")
+	titleKey, summaryKey, _ := ProposalKeys("update_product")
 	p := &dbstore.ChatWriteProposal{
-		TokenHash: dbstore.HashProposalToken(raw),
-		UserID:    f.userID,
-		AccountID: f.accountID,
-		Tool:      "update_product",
-		Args:      args,
-		Title:     title,
-		Summary:   summary,
-		ExpiresAt: time.Now().UTC().Add(ProposalTTL),
+		TokenHash:  dbstore.HashProposalToken(raw),
+		UserID:     f.userID,
+		AccountID:  f.accountID,
+		Tool:       "update_product",
+		Args:       args,
+		TitleKey:   titleKey,
+		SummaryKey: summaryKey,
+		ExpiresAt:  time.Now().UTC().Add(ProposalTTL),
 	}
 	if err := store.Create(context.Background(), p); err != nil {
 		t.Fatalf("store the proposal: %v", err)
 	}
 	return &ProposalCard{
 		Token: raw, ArgsHash: p.ArgsHash, Tool: p.Tool,
-		Title: title, Summary: summary,
+		TitleKey: titleKey, SummaryKey: summaryKey,
 		ExpiresAt: p.ExpiresAt.Format(time.RFC3339), Reversible: true,
 	}
 }

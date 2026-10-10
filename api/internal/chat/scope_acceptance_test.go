@@ -269,7 +269,7 @@ func TestConfirmWritesToTheSelectedWorkspaceAndLeavesTheOtherUntouched(t *testin
 // with itself).
 func cardTargetName(card *ProposalCard) string {
 	for _, fld := range card.Fields {
-		if fld.Label == "Nama" || fld.Label == "Name" {
+		if fld.LabelKey == keyLabelName {
 			return fld.Value
 		}
 	}

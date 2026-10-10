@@ -100,11 +100,19 @@ const PROBE_TIMEOUT = 20_000;
  * Every /chat spec that drives the composer must go through this: reaching the
  * page and interacting with it BEFORE hydration is what red the gate at
  * `a11y-chat-card.spec.ts:189` on 1 of 4 identical-byte runs (card t_b9eea741).
+ *
+ * `sendLabel` is the Send button's accessible name, which is LOCALIZED — it
+ * defaults to English (every caller but `e2e/chat-card-language.spec.ts` drives an
+ * English page), and a spec that drives another dashboard language passes
+ * `DICT["chat.send"][lang]`. Looking for the English label on a page rendering in
+ * Malay is not a race and not a copy defect: the button genuinely has a different
+ * accessible name there.
  */
 export async function sendChatPrompt(
   page: Page,
   baseURL: string | undefined,
   text: string,
+  sendLabel: string = DICT["chat.send"].en,
 ): Promise<void> {
   // (1) Registered BEFORE the navigation: the probe is issued by an effect, so
   //     the response can only arrive after hydration — which is the point.
@@ -141,7 +149,7 @@ export async function sendChatPrompt(
       "availability answer of `available:false`, which is a real refusal and not this file's race",
   ).toBeEnabled({ timeout: 20_000 });
 
-  const send = page.getByRole("button", { name: DICT["chat.send"].en });
+  const send = page.getByRole("button", { name: sendLabel });
 
   // (4) Typing through the app, then requiring the button to follow. `fill`
   //     dispatches an input event, so on a hydrated page React sees the change;

@@ -193,6 +193,12 @@ type Step struct {
 	// Detail is a short human-readable note for a refusal (the server's own
 	// message). Empty for a successful read.
 	Detail string `json:"detail,omitempty"`
+	// DetailKey is the same field for a PROPOSED step: a dictionary key naming what
+	// the prepared card would change, rather than a sentence. The server does not
+	// know the caller's language, so the step's detail is resolved by the dashboard
+	// exactly like the card's own wording (t_30ffa28a) — the two used to be the same
+	// Malay string, and they stay the same KEY here.
+	DetailKey string `json:"detail_key,omitempty"`
 }
 
 // Filed describes a feedback thread the chat filed during this exchange. It is
@@ -440,7 +446,10 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 				if n := len(rs.cards); n > 0 {
 					card := rs.cards[n-1]
 					res.Proposals = append(res.Proposals, card)
-					st.Detail = card.Title
+					// The step says WHICH card was prepared, by key: the server does
+					// not know the caller's language, and this used to be the card's
+					// Malay title (t_30ffa28a).
+					st.DetailKey = card.TitleKey
 				}
 			}
 			res.Steps = append(res.Steps, st)
@@ -541,12 +550,19 @@ func isWriteToolName(name string) bool {
 // why this tool is dispatchable while every real writer is not.
 //
 // THE TOKEN IS NOT IN THE RESULT. What the model gets back is the card WITHOUT
-// its token: the title, the summary and the fields, so it can tell the user what it
-// prepared and what it will change. The token goes to the browser (res.Proposals)
-// and never into the prompt. That is not cosmetic — a model that held the token
-// could "confirm" the proposal by posting it, and the whole point of this design is
-// that the confirmation is a HUMAN's click. Keeping the token out of the only
-// channel the model reads is what makes that structural rather than advisory.
+// its token: which tool, the dictionary keys of its wording, and the field values,
+// so it can tell the user what it prepared and what it will change. The token goes
+// to the browser (res.Proposals) and never into the prompt. That is not cosmetic —
+// a model that held the token could "confirm" the proposal by posting it, and the
+// whole point of this design is that the confirmation is a HUMAN's click. Keeping
+// the token out of the only channel the model reads is what makes that structural
+// rather than advisory.
+//
+// THE KEYS ARE NOT FOR THE USER (t_30ffa28a). Since the card's wording became
+// dictionary keys, this result carries `title_key` / `label_key` rather than the
+// Malay sentences it used to. That is the right direction — nothing
+// language-dependent belongs in the prompt — but the model must not read a key out
+// to the merchant, so the system prompt says so (prompt.go, "HOW TO ANSWER").
 //
 // The proposal budget (MaxProposalsPerRun) is enforced by the runner, not by the
 // model: a message can put at most that many decisions in front of the user, so a

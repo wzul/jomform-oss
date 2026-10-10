@@ -84,11 +84,13 @@ type ChatWriteProposal struct {
 	// ArgsHash is sha256(hex) of the canonical arguments. The UI echoes it on
 	// confirm, which is how "the arguments did not change" is checked.
 	ArgsHash string
-	// Title / Summary are the SERVER's rendering of the effect, derived from
-	// (tool, args) only — never from model prose — so the card cannot describe
-	// an effect the arguments do not have.
-	Title   string
-	Summary string
+	// TitleKey / SummaryKey are the SERVER's rendering of the effect, as DICTIONARY
+	// KEYS derived from (tool, args) only — never from model prose — so the card
+	// cannot describe an effect the arguments do not have. They are keys because the
+	// server does not know the caller's language: the dashboard resolves them
+	// (t_30ffa28a). The columns keep their original names (`title`, `summary`).
+	TitleKey   string
+	SummaryKey string
 	// Note is the model's own explanation, shown to the user as the assistant's
 	// wording. It is untrusted display text and is never parsed.
 	Note       string
@@ -167,7 +169,7 @@ func (s *ChatWriteProposalStore) Create(ctx context.Context, p *ChatWriteProposa
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		 RETURNING id, created_at, expires_at`,
 		p.TokenHash, p.UserID, p.AccountID, p.Tool, string(canon), p.ArgsHash,
-		p.Title, p.Summary, p.Note, p.ExpiresAt).
+		p.TitleKey, p.SummaryKey, p.Note, p.ExpiresAt).
 		Scan(&p.ID, &p.CreatedAt, &p.ExpiresAt)
 }
 
@@ -281,7 +283,7 @@ func scanChatProposal(row interface {
 	var p ChatWriteProposal
 	var rawArgs []byte
 	if err := row.Scan(&p.ID, &p.TokenHash, &p.UserID, &p.AccountID, &p.Tool, &rawArgs,
-		&p.ArgsHash, &p.Title, &p.Summary, &p.Note, &p.CreatedAt, &p.ExpiresAt, &p.ConsumedAt); err != nil {
+		&p.ArgsHash, &p.TitleKey, &p.SummaryKey, &p.Note, &p.CreatedAt, &p.ExpiresAt, &p.ConsumedAt); err != nil {
 		if isNoSuchRow(err) {
 			return nil, ErrChatProposalNotFound
 		}
