@@ -262,7 +262,16 @@ export function WorkspaceSwitcher({
                     onSetDefault(active.id);
                     setOpen(false);
                   }}
-                  className="min-h-11 w-full rounded-md px-2.5 py-1.5 text-left text-sm text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-primary)]"
+                  // The two STATES paint on different surfaces, so they take
+                  // different tokens (card t_9d8f0431): resting is --jf-muted on
+                  // the panel's white (4.834:1, passes), while the hover paints
+                  // bg-slate-50 and must not then use the base --jf-primary —
+                  // #5e6ad2 on #f8fafc is 4.492:1, below the AA floor (axe
+                  // color-contrast, serious, while hovered). --jf-primary-on-tint
+                  // (#4338ca) measures 7.554:1 on slate-50 and 7.903:1 on white,
+                  // so it is safe in both states; the base token is NOT darkened
+                  // because it also paints on white (4.700:1).
+                  className="min-h-11 w-full rounded-md px-2.5 py-1.5 text-left text-sm text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-primary-on-tint)]"
                 >
                   {t("workspace.setDefault")}
                 </button>

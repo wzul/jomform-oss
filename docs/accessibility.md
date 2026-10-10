@@ -125,6 +125,43 @@ and a local build, and **no gate executes them** (the switcher's own coverage is
 now the `a11y-switcher.spec.ts` spec named above; `nav-evidence.mjs` is a plain
 evidence tool with no assertion to promote).
 
+**The same menu's `workspace.setDefault` row ("Make this the default workspace")
+is held PER STATE** (card `t_9d8f0431`). It is the row whose two states paint on
+*different* surfaces, and only one of them used to be measured:
+
+| state | ink | surface | ratio |
+|---|---|---|---|
+| resting | `--jf-muted` #6b7280 | the panel's white #ffffff | 4.834:1 PASS |
+| hovered | `--jf-primary` #5e6ad2 (pre-fix) | `bg-slate-50` #f8fafc | **4.492:1 FAIL** |
+
+axe named the hovered node `color-contrast (serious)` — "insufficient color
+contrast of 4.49 (foreground color: #5e6ad2, background color: #f8fafc, font size:
+10.5pt (14px), font weight: normal)". The row now paints
+`--jf-primary-on-tint` #4338ca in the hover state (7.554:1) and keeps
+`--jf-muted` at rest, and `a11y-switcher.spec.ts` holds both:
+
+- it drives a REAL pointer onto the row and **measures both states** — a fix that
+  swapped the whole class list would have regressed the resting state, which
+  already passed;
+- it asserts the hover actually applied (the painted ink and the surface must both
+  move) and that the hovered ink is `--jf-primary-on-tint`;
+- it runs the scoped axe scan **with the row hovered** and requires 0
+  `color-contrast` violations — axe only reads `:hover` colours if the element is
+  hovered while it scans, so this is the run shape that reported the defect;
+- it carries a **CONTROL** that forces the pre-fix hover ink back on and requires
+  the measurement to reproduce **4.492:1** *and* axe to name the node again.
+
+Two properties of that arm to know before re-anchoring it. (1) It is driven on
+`/form-settings?form=<id>`, not `/settings`: on some dashboard pages the dropdown
+panel overlaps the page content and axe then **cannot determine the row's
+background at all** — it returns the node as `incomplete` (`elmPartiallyObscuring`,
+"Element's background color could not be determined because it partially overlaps
+other elements"), where a 0-violation reading is a scan that gave up rather than a
+pass. The arm therefore asserts the row was actually JUDGED, not merely not
+flagged. (2) The menu trigger is visible in the server-rendered HTML *before* React
+hydrates, so the open helper retries the click until the app reports
+`aria-expanded="true"`; clicking blind was measured as a flake on this file.
+
 ### The builder canvas, and a CONTRAST measurement rather than a class check
 
 The same browser-level stub pattern reaches one more authenticated surface: the
@@ -397,6 +434,11 @@ Verified to bite: with the pre-fix token restored the spec is red for the active
 tab at 4.417:1 and axe names the exact node — "insufficient color contrast of
 4.41 (foreground color: #5e6ad2, background color: #f7f8f8, font size: 10.5pt
 (14px), font weight: normal)" on `.border-b-2`.
+
+The same shape guards the **other** slate-50 site, the workspace switcher's
+`workspace.setDefault` row in its hover state (card `t_9d8f0431`, 4.492:1) — see
+the switcher section above for that arm, its control, and why it is driven on
+`/form-settings`.
 
 The guard's lexer and JSX scanner live in `web/src/lib/jsxSource.ts`, shared with
 the tinted-surface guard. They blank comments before reading class lists, and
