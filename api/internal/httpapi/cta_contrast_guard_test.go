@@ -894,6 +894,11 @@ var (
 	textTokenPaintRe = regexp.MustCompile(`color\s*:\s*var\(\s*--jf-primary-text\s*\)`)
 	// The price rule — the text that lands on the tint.
 	priceRuleRe = regexp.MustCompile(`(?m)^\s*\.price\s*\{([^}]*)\}`)
+	// The footer-link rule — the other text that lands on the tint (and on the
+	// page surface).
+	footerLinkRuleRe = regexp.MustCompile(`(?m)^\s*\.jf-flinks a\s*\{([^}]*)\}`)
+	// The confirmation-link rule on the submitted page.
+	confirmLinkRuleRe = regexp.MustCompile(`(?m)^\s*\.ok \.msg a\s*\{([^}]*)\}`)
 )
 
 // formTextTokenVerdict judges ONE rendered stylesheet for the text token:
@@ -901,7 +906,10 @@ var (
 //	declared   --jf-primary-text must exist and be a hex (a renamed token is a
 //	           failure, not an absent check);
 //	painted    the stylesheet must consume it as a text colour (a token no rule
-//	           paints is a colour no buyer's eye ever sees);
+//	           paints is a colour no buyer's eye ever sees). This check is
+//	           page-global — ONE rule satisfies it — so the per-consumer,
+//	           per-renderer coverage lives in
+//	           TestEveryTextTokenConsumerPaintsTheToken;
 //	measured   the value must clear AA on the selected-card tint.
 //
 // A pure function of the rendered HTML, so the bite case in
@@ -1018,6 +1026,90 @@ func TestPublicFormTextTokenIsMeasuredAgainstThePaintedCardSurface(t *testing.T)
 	}
 	if priced != tinted {
 		t.Fatalf("only %d of %d renderers that paint the tint also paint `.price` with var(--jf-primary-text)", priced, tinted)
+	}
+}
+
+// TestEveryTextTokenConsumerPaintsTheToken closes the gap the page-global paint
+// check leaves open. `formTextTokenVerdict` matches `textTokenPaintRe` against
+// the WHOLE page, so ONE rule that paints the token satisfied its `painted`
+// counter no matter how many of the token's consumers had dropped it — and the
+// arm above pins a rule body per renderer for `.price` only.
+//
+// QA measured (card t_7f3a9686) exactly that hole: with
+// `render_blocks.go:495` changed from
+// `  .jf-flinks a { color:var(--jf-primary-text); … }` to a literal
+//
+//	`  .jf-flinks a { color:#5964cc; … }`
+//
+// all five arms of this section stayed GREEN. The footer link is a live
+// consumer, not a dead rule: on the unthemed public form in a fresh browser,
+// after ticking the product checkbox, `.jf-flinks a` computes rgb(89,100,204) =
+// #5964cc on the #eef2ff selected-card tint.
+//
+// So this arm walks every consumer the token exists for, per renderer, and
+// requires that rule's OWN body to paint `var(--jf-primary-text)`. The
+// consumers and the call sites that emit them, measured by rendering each
+// rendererCase (not read off the templates):
+//
+//	.price        render_blocks.go:446  (blockTmpl)     public.go:1034 (formTmpl)
+//	.jf-flinks a  render_blocks.go:495  (blockTmpl)     render_blocks.go:939 (responseTmpl)  public.go:1054 (formTmpl)
+//	.ok .msg a    render_blocks.go:945  (responseTmpl)  render_custom.go:120 (customFormTmpl)
+//
+// A renderer that genuinely does not emit a selector is skipped (the
+// response-only form has no price; the custom-HTML form has no footer links),
+// but the pair floor below is the count those four renderers emit today, so a
+// deleted rule or a renamed selector cannot turn this into a check of nothing.
+func TestEveryTextTokenConsumerPaintsTheToken(t *testing.T) {
+	consumers := []struct {
+		name string
+		rule *regexp.Regexp
+	}{
+		{".price", priceRuleRe},
+		{".jf-flinks a", footerLinkRuleRe},
+		{".ok .msg a", confirmLinkRuleRe},
+	}
+	// The unthemed default is the render a form with no theme column gets. These
+	// are static rules in the stylesheets, so one render per renderer covers
+	// every theme — the themed renders are walked by the arms above.
+	const wantPairs = 7
+	var checked int
+	emittedBy := map[string]int{}
+	consumersPerRenderer := map[string]int{}
+	var renderers []string
+	for _, rc := range rendererCases() {
+		renderers = append(renderers, rc.name)
+		html := rc.render(t, "")
+		for _, c := range consumers {
+			rules := c.rule.FindAllStringSubmatch(html, -1)
+			if len(rules) == 0 {
+				continue
+			}
+			emittedBy[c.name] += len(rules)
+			consumersPerRenderer[rc.name] += len(rules)
+			for _, m := range rules {
+				checked++
+				if !textTokenPaintRe.MatchString(m[1]) {
+					t.Errorf("%s: the `%s` rule is %q — it paints a literal, not var(--jf-primary-text), so that text is no longer the colour the derivation measured against the selected-card tint %s", rc.name, c.name, strings.Join(strings.Fields(m[1]), " "), selectedCardTint)
+				}
+			}
+		}
+	}
+	// Non-vacuity three ways: the pair count (a renamed selector or a deleted
+	// rule must read as RED, never as a skipped check), then that each selector
+	// still has a renderer at all, then that no renderer slipped out of the walk
+	// entirely.
+	if checked < wantPairs {
+		t.Fatalf("only %d of the %d (renderer, selector) pairs these renderers emit were checked — a renamed selector or a deleted rule must read as RED here, not as a skipped check", checked, wantPairs)
+	}
+	for _, c := range consumers {
+		if emittedBy[c.name] == 0 {
+			t.Fatalf("no renderer emits the `%s` rule at all — the selector was renamed or the rule deleted; re-anchor this guard (the sites are listed above) instead of letting it measure nothing", c.name)
+		}
+	}
+	for _, name := range renderers {
+		if consumersPerRenderer[name] == 0 {
+			t.Fatalf("%s emits none of the text-token consumers (`.price` / `.jf-flinks a` / `.ok .msg a`) — its stylesheet changed shape, so the renderer the token is for is no longer walked here; re-anchor this guard", name)
+		}
 	}
 }
 
