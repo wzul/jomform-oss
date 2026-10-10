@@ -455,18 +455,27 @@ async function hold(
     await ended;
     throw err;
   }
+  // ONE release PER HOLDER (card t_71bd7bfd). The legs below release the holder they
+  // took, and this file's per-entry `finally` releases it AGAIN on the way out, so that
+  // a red leg cannot leave the child alive; a second call must therefore be a NO-OP
+  // rather than a second `end()`/`kill()` on an already-reaped child. Memoised so even a
+  // concurrent double call runs the sequence once.
+  let releasing: Promise<void> | undefined;
   return {
-    release: async () => {
+    release: () => {
       // Deterministic, not a timer: end stdin -> `cat` sees EOF -> flock releases. The
       // release is then WAITED for, so the next leg's premise ("the lock is free") is
       // observed rather than raced.
-      holder.stdin?.end();
-      try {
-        await waitUntil(() => lockIsFree(lock), timeoutMs, `${label}: the holder releasing the lock`);
-      } finally {
-        holder.kill("SIGKILL");
-        await ended;
-      }
+      releasing ??= (async () => {
+        holder.stdin?.end();
+        try {
+          await waitUntil(() => lockIsFree(lock), timeoutMs, `${label}: the holder releasing the lock`);
+        } finally {
+          holder.kill("SIGKILL");
+          await ended;
+        }
+      })();
+      return releasing;
     },
   };
 }
@@ -557,6 +566,17 @@ test("every /docs bite harness serialises on ONE per-worktree lock, keyed on the
     const nowait = { ...env, BITEPROOF_LOCK_WAIT: "0" };
     const run = (e: NodeJS.ProcessEnv, cwd = repoRoot, s = script) => runHarness(e, cwd, s);
 
+    // THE HOLDER IS RELEASED ON EVERY EXIT PATH OUT OF THIS ITERATION (card t_71bd7bfd).
+    // It used to be released at exactly ONE place — after legs A/E/D1/D2 — so a red leg
+    // (the case this guard exists for) left its `flock <lock> -c cat` child alive with
+    // the stdin pipe this process still owned, and `node --test` never drained: measured
+    // with a deliberately broken lock key it printed its failing assertion at 8.0s and
+    // then HUNG — still alive at 419s, exit 137 under `timeout -s KILL 60` — which inside
+    // the `web` gate is a stalled preflight, not a red one. `hold()` reaps its own child
+    // when the TAKE fails, so a holder that never came back leaves nothing to release;
+    // everything from here to the end of the iteration is unwound by the `finally` at the
+    // bottom of this `try`, which releases whatever WAS taken.
+    let holder: { release: () => Promise<void> } | undefined;
     try {
       mkdirSync(join(base, lockSubdir), { recursive: true });
       writeFileSync(ours, "");
@@ -568,7 +588,7 @@ test("every /docs bite harness serialises on ONE per-worktree lock, keyed on the
       // suite). Its release is awaited before leg B for the reason the old comment gave
       // and this one keeps: killing the holder alone leaves the lock held (measured), and
       // that silently turned leg B into a full run of the harness's body.
-      const holder = await hold(ours, label);
+      holder = await hold(ours, label);
 
       // --- A: a peer holds the lock and the wait is 0 -> refuse, do not run. --------
       const blocked = run(nowait);
@@ -636,6 +656,10 @@ test("every /docs bite harness serialises on ONE per-worktree lock, keyed on the
           `${label}: started from ${where}, the refusal lost its reason:\n${r.out}`);
       }
 
+      // RELEASED HERE AS WELL AS IN THE `finally` (card t_71bd7bfd): this call is not a
+      // convenience, it is leg D3's premise below — `ours` must be FREE before D3 holds
+      // the OTHER tree's key and requires this run NOT to be blocked. The `finally`'s
+      // later call is the memoised no-op on this path, and the only release on a red one.
       await holder.release();
 
       // --- D3: a DIFFERENT worktree in the same repo is NOT serialised against this. -
@@ -756,7 +780,16 @@ test("every /docs bite harness serialises on ONE per-worktree lock, keyed on the
         rmSync(noFlockPath, { recursive: true, force: true });
       }
     } finally {
-      rmSync(base, { recursive: true, force: true });
+      try {
+        // THE SAFETY NET (card t_71bd7bfd): on the green path this is the memoised no-op
+        // of the release above; on a RED leg it is the only release there is, and it runs
+        // BEFORE `base` is removed so the lock file still exists while the release is
+        // observed. Without it a red leg ends with a live `flock` child holding a pipe
+        // this process owns, and `node --test` never drains the event loop.
+        await holder?.release();
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
     }
   }
 });
@@ -900,6 +933,17 @@ test("hold() takes and releases a worktree lock, observed not timed (t_9044e3f2)
       lockIsFree(lock),
       "hold().release() returned without the lock being FREE — the release must end the " +
       "holder's stdin and then WAIT for the lock to read free, not assume it",
+    );
+    // RELEASE IS IDEMPOTENT (card t_71bd7bfd). The per-entry loop in the first test
+    // releases its holder from the leg AND from a `finally` on the way out of the
+    // iteration, so the second call must be a NO-OP: it may not throw, may not leave the
+    // lock held, and may not re-kill an already-reaped child. That is the mechanism the
+    // red-leg fix rests on — driven here rather than left implicit in the loop's shape.
+    await held.release();
+    assert.ok(
+      lockIsFree(lock),
+      "a SECOND release() was not a no-op — the loop's `finally` calls it after the leg " +
+      "already released its holder, and that second call must be harmless",
     );
   } finally {
     rmSync(base, { recursive: true, force: true });
