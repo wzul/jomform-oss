@@ -51,6 +51,7 @@ import {
 } from "./openapi.ts";
 import { OPENAPI_SPEC } from "./openapiSpec.gen.ts";
 import { API_EXAMPLES } from "./apiExamples.gen.ts";
+import { SITE_URL } from "./siteName.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
@@ -73,6 +74,48 @@ function normalized(src: string): string {
     .join(" ")
     .replace(/\s+/g, " ")
     .toLowerCase();
+}
+
+/**
+ * Every `href` destination the page declares, exactly as written in the JSX.
+ *
+ * The value is read with a brace-balanced scan rather than a regex like
+ * `href=\{([^}]*)\}`: a template literal such as ``href={`#${s.id}`}`` carries
+ * its own `}` inside `${…}`, so the naive form ends the match early and reports
+ * a value that is not the one on the page. Callers judge the DESTINATION with
+ * this — the href a reader follows — which is a different question from whether
+ * some identifier appears somewhere in the file. (t_d87d9298: the two were
+ * conflated, and a page whose href pointed at a dead host passed 16/16.)
+ */
+function anchorHrefs(src: string): string[] {
+  const out: string[] = [];
+  for (const m of src.matchAll(/\bhref=/g)) {
+    const i = (m.index ?? 0) + m[0].length;
+    const opener = src[i];
+    if (opener === '"' || opener === "'") {
+      const end = src.indexOf(opener, i + 1);
+      out.push(src.slice(i + 1, end));
+      continue;
+    }
+    if (opener === "{") {
+      let depth = 0;
+      let j = i;
+      for (; j < src.length; j++) {
+        if (src[j] === "{") depth++;
+        else if (src[j] === "}") {
+          depth--;
+          if (depth === 0) break;
+        }
+      }
+      out.push(src.slice(i + 1, j).trim());
+      continue;
+    }
+    // Not a shape this helper can read as an attribute value (a spread, a bare
+    // identifier). Keep it verbatim so a caller sees it rather than silently
+    // losing an href it should judge.
+    out.push(src.slice(i, i + 40));
+  }
+  return out;
 }
 
 const PAGE = "../app/docs/api/page.tsx";
@@ -444,6 +487,13 @@ test("the page links the machine-readable contract it is generated from", () => 
 // without repository access could not open it. A guard is needed because the
 // link is one string in one file and nothing else in the repo would notice it
 // pointing somewhere unreachable.
+//
+// So this checks the DESTINATION, in both places it is written: the href of each
+// anchor on the page, and the URL of the constant those anchors are supposed to
+// use. The first of those was missing (t_d87d9298): the guard asserted that the
+// page NAMES the constant — which the anchor's link text also does, because the
+// label prints the URL — so a typed href pointing at any other host passed
+// 16/16 while the page linked somewhere its reader could not fetch.
 test("the contract link is a URL the page's audience can actually fetch", () => {
   // 1. It must not be a repository URL. The repository is private, so any
   //    github.com link to it resolves to a login prompt or a 404 for the
@@ -458,26 +508,73 @@ test("the contract link is a URL the page's audience can actually fetch", () => 
     `OPENAPI_PUBLIC_URL is a github.com URL (${OPENAPI_PUBLIC_URL}) — the repository is ` +
       "private and an anonymous reader gets a 404",
   );
-  // 2. It must be https (this repo is https-only for caller-facing URLs) and on
-  //    the product's own host, not an internal host, an IP or a bucket.
+  // 2. The page's anchors must POINT AT that constant. Asserting only that the
+  //    identifier appears in the file is satisfied by the identifier left in the
+  //    anchor's link TEXT — both anchors print the URL as their visible label —
+  //    so a typed href pointing anywhere at all still passed. The href is the
+  //    half a reader follows, so the href attributes are what is read here.
+  const hrefs = anchorHrefs(pageRaw);
+  const toContract = hrefs.filter((h) => h === "OPENAPI_PUBLIC_URL");
+  assert.ok(
+    toContract.length >= 2,
+    `${PAGE} must point BOTH of its contract anchors at href={OPENAPI_PUBLIC_URL} — ` +
+      `${toContract.length} of the page's ${hrefs.length} hrefs do ` +
+      `(${JSON.stringify(hrefs)}). The link text still names the constant, so only the ` +
+      "anchor itself says where a reader is sent.",
+  );
+  // And a URL typed into an href is the same defect one step from the hole above:
+  // a destination defined in the page instead of in the guarded constant, where
+  // neither this test nor the fetcher on the other end can judge it. The page's
+  // one absolute destination is the contract; its other hrefs are in-page
+  // fragments and site-relative paths.
+  const typedURLs = hrefs.filter((h) => /https?:\/\//i.test(h));
+  assert.deepEqual(
+    typedURLs,
+    [],
+    `${PAGE} types an absolute URL into an href (${JSON.stringify(typedURLs)}) — this page's ` +
+      "one absolute destination is the contract, and it must come from OPENAPI_PUBLIC_URL so " +
+      "that the host, path and byte checks below judge one definition.",
+  );
+  // 3. It must be https (this repo is https-only for caller-facing URLs), on the
+  //    product's own origin, at the path the web app serves the asset from — and
+  //    not an internal host, an IP or a bucket.
+  //
+  //    The origin is not typed here: it is lib/siteName.ts's SITE_URL, the one
+  //    exported origin constant this repo already keeps for the canonical home
+  //    page, so a build of this repo on another origin does not fail the web
+  //    gate over a literal host in a unit test (t_d87d9298) — while the contract
+  //    still has to be on the product's own site and not on a bucket.
   assert.ok(
     OPENAPI_PUBLIC_URL.startsWith("https://"),
     `OPENAPI_PUBLIC_URL must be https (got ${OPENAPI_PUBLIC_URL})`,
   );
-  const host = new URL(OPENAPI_PUBLIC_URL).host;
+  const contractURL = new URL(OPENAPI_PUBLIC_URL);
+  const productOrigin = new URL(SITE_URL).origin;
   assert.equal(
-    host,
-    "jomform.com",
-    `the contract is not served from the product's public host (got ${host}) — a reader ` +
-      "following the page's link would land somewhere they cannot reach",
+    contractURL.origin,
+    productOrigin,
+    `the contract is not served from the product's own origin ${productOrigin} ` +
+      `(got ${OPENAPI_PUBLIC_URL}) — a reader following the page's link would land somewhere ` +
+      "they cannot reach",
   );
   assert.ok(
-    !/^[\d.]+$|localhost|127\.|10\.|192\.168\./.test(host),
-    `OPENAPI_PUBLIC_URL names an internal host or address (${host}) — it must stay off the ` +
-      "public site",
+    !/^[\d.]+$|localhost|127\.|10\.|192\.168\./.test(contractURL.host),
+    `OPENAPI_PUBLIC_URL names an internal host or address (${contractURL.host}) — it must stay ` +
+      "off the public site",
+  );
+  // The path must name the asset the web app actually serves: web/public/ is
+  // served at the site root, so /openapi.json IS web/public/openapi.json — the
+  // file read below. Any other path resolves to nothing, however correct the
+  // host looks, and no check below this line can see that.
+  assert.equal(
+    contractURL.pathname,
+    "/openapi.json",
+    `OPENAPI_PUBLIC_URL does not name the served asset (${contractURL.pathname}) — the web app ` +
+      "serves web/public/openapi.json at the site root, so a different path is a 404 the host " +
+      "and byte checks cannot see",
   );
 
-  // 3. And the bytes must really be there to fetch. The web app serves
+  // 4. And the bytes must really be there to fetch. The web app serves
   //    web/public/openapi.json, so that file is the one the URL resolves to for
   //    the visitor; if it is missing the link 404s no matter how correct it looks.
   const served = JSON.parse(read("../../public/openapi.json")) as {
@@ -506,7 +603,7 @@ test("the contract link is a URL the page's audience can actually fetch", () => 
       "contract is not the repository's contract",
   );
 
-  // 4. The agent-facing index says the same thing (llms-full.txt is the file an
+  // 5. The agent-facing index says the same thing (llms-full.txt is the file an
   //    agent reads instead of the page, and it carried the same private link).
   const llms = read("../../public/llms-full.txt");
   assert.ok(
