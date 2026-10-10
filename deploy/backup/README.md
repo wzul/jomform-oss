@@ -36,6 +36,12 @@ daily file. The digest is identical either way (a server-side copy does not
 change the bytes); only the name differs, and the name is a bare basename so it
 resolves beside the object wherever the pair is downloaded to.
 
+The promotion is verified before it is reported: the promoted dump is re-read and
+its digest compared with the one this sidecar names, and the sidecar is written
+only once that comparison has passed. A monthly dump that is not in Drive, or is
+not the bytes that were promoted, therefore fails the run — and gets no sidecar,
+so nothing makes the pair look verified.
+
 Verify a monthly copy by downloading the pair and checking it:
 
 ```bash
@@ -294,7 +300,12 @@ loud in four independent places:
 
 **"Exited 0" is not "uploaded".** After every upload the remote object is
 re-read and its size and hash compared against the local file. An upload that
-returns success but leaves nothing in Drive fails the run.
+returns success but leaves nothing in Drive fails the run. The monthly promotion
+is a write of its own and is held to the same rule: the promoted dump is re-read
+and its digest compared with the digest the monthly sidecar names, **before** that
+sidecar is written — so a `copyto` that stored nothing, or stored other bytes
+under the monthly name, fails the run instead of shipping a pair that looks
+complete.
 
 The last run's outcome is also written to `/var/lib/jomform-backup/last-run.json`
 (`/var/lib/jomform-backup/last-failure.json` on failure) so the state can be
@@ -315,7 +326,7 @@ sent; a failing run does not retry in a tight loop because the lock file
 
 ## Tested failure paths
 
-Every one of these is exercised by `jomform-backup_test.sh` (209 assertions,
+Every one of these is exercised by `jomform-backup_test.sh` (234 assertions,
 stubbed `rclone`/`docker`, no network and no database required) and every one of
 them is additionally proven to *bite* by sabotaging the script and requiring the
 suite to go red:
@@ -371,10 +382,14 @@ not hypothetical: the containment group leaked into the agent host's
 and had to be hand-remediated. The wrapper is what makes this harness safe to
 keep, and removing it would reintroduce that leak.
 
-The monthly sidecar path has **two** exceptions to that, not one. The verbatim
-daily sidecar copy is sabotaged **inside the suite** — `jomform-backup_test.sh`
-does it itself, to a copy of the script in a temp dir, so the sabotages above do
-not include it. The *write failure* half is mutated by this harness, but only
+The monthly path has **three** sabotages that live **inside the suite** rather
+than in this harness, and they are named here so "the sabotages above" is never
+read as covering them: the verbatim daily sidecar copy, the removal of the
+sidecar's post-upload re-read, and the removal of the promoted dump's re-read
+(the last is run twice, once per shape — a copy that stored nothing and a copy
+that stored a truncated object; `sabotage_promoted_dump_verification`). Each runs
+against a copy of the script inside a temp dir, so the tracked file is never
+written to. The sidecar *write failure* half IS mutated by this harness, but only
 since that mutation was anchored on the monthly block itself: it used to anchor on
 the bare `    uploads_ok=0`, which occurs three times in `jomform-backup.sh` (the
 two daily loops and the monthly gate), so `replace(..., 1)` landed on the
@@ -448,6 +463,18 @@ resolves nothing).
 - **The monthly sidecar write fails** — the run sets `uploads_ok=0`, logs the
   failure and writes `last-failure.json`, rather than reporting a healthy run
   with an unverifiable monthly copy.
+- **The promoted monthly dump is not what was promoted** — the promotion's own
+  write is re-read instead of being trusted on `copyto`'s exit status. A `copyto`
+  that exits 0 having stored nothing fails the run (`remote object missing or
+  unreadable after promotion`), and so does one that stored different bytes under
+  the monthly name (`remote digest mismatch`); neither leaves a sidecar, so a
+  dump that failed verification is never dressed as a verified pair. The cases are
+  driven by the stub's `STUB_COPYTO_SILENT_NAME` and `STUB_COPYTO_CORRUPT_NAME`,
+  which drop or truncate exactly one named destination's copy while the daily
+  uploads land normally. Two further cases put the pre-fix behaviour back (see the
+  in-suite sabotages above) and require the run to report a healthy month again —
+  one of them then runs this README's own `sha256sum -c` on the truncated pair and
+  requires it to **fail**, which is the reader's view of the defect.
 - **A partial override refuses before doing any work** — with `JFBACKUP_STAGE_DIR`
   (or any other location knob) set and `JFBACKUP_ENV_FILE`, `JFBACKUP_REMOTE` or
   `JFBACKUP_REMOTE_ROOT` missing, the run exits non-zero naming the missing

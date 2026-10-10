@@ -14,7 +14,9 @@
 #     status file, raises a syslog alert and emails the super-admins. Exit code
 #     is non-zero on any failure so a cron MAILTO would also fire.
 #   - "Exited 0" is not "uploaded". After the upload the remote object is
-#     re-read and its size and hash compared against the local file.
+#     re-read and its size and hash compared against the local file, and the
+#     monthly promotion is held to the same rule: the promoted dump is re-read
+#     and compared with the digest the monthly sidecar names.
 #
 # Usage:
 #   jomform-backup.sh                     run a full backup (cron entry)
@@ -432,6 +434,39 @@ verify_remote_content() {
   return 0
 }
 
+# verify_remote_digest <remote_path> <sha256>
+# The sibling of verify_remote_content for an object this script produced with a
+# server-side `rclone copyto`. The bytes that were promoted are the local daily
+# dump, whose digest the daily sidecar already carries, so the expected value is
+# in hand and nothing has to be hashed twice. `copyto` is a write-through in the
+# same sense `rcat` is — its exit status describes the COMMAND, not the
+# destination object — so re-reading the object and comparing DIGESTS is the only
+# thing that can tell a promoted dump from a copy that stored nothing, or stored
+# other bytes under the right name. The digest is also the number the monthly
+# sidecar names, i.e. the check the README tells a reader to run, so a mismatch
+# here is exactly the unusable pair a reader would have been handed.
+#
+# The read goes through a pipe rather than into a temp file: this object is the
+# largest thing the script handles and a second copy of it on disk is the thing
+# the production host cannot spare. `sha256sum` over a stream is the same digest
+# it produces for a file.
+verify_remote_digest() {
+  local remote_path="$1" want="$2" got
+  # The pipeline's status is checked first: `rclone cat` exits non-zero for an
+  # object that is not there, and reporting that as a digest mismatch would hide
+  # which of the two failures this run actually hit.
+  if ! got="$(rclone --config "$RCLONE_CONFIG" cat "$remote_path" 2>/dev/null \
+      | sha256sum | cut -d' ' -f1)"; then
+    echo "remote object missing or unreadable after promotion: $remote_path"
+    return 1
+  fi
+  if [ "$got" != "$want" ]; then
+    echo "remote digest mismatch for $remote_path: promoted sha256 $want, remote sha256 $got"
+    return 1
+  fi
+  return 0
+}
+
 upload_file() {
   local local_file="$1" dest_dir="$2"
   rclone --config "$RCLONE_CONFIG" copy "$local_file" "$dest_dir" \
@@ -698,6 +733,16 @@ if [ "$DAY_OF_MONTH" = "01" ]; then
   # `rcat` was the one write in this script whose exit status was trusted: an
   # rclone that consumes stdin, exits 0 and stores nothing reported a healthy
   # monthly copy whose sidecar was never in Drive.
+  #
+  # The promotion's OWN write — the dump copied by the `copyto` above — is now
+  # covered the same way, and it needs to be: `copyto`'s exit status describes
+  # the command, not the destination object. An rclone that exits 0 having stored
+  # nothing, or having stored different bytes under the monthly name, used to
+  # reach this block and be reported as a healthy month. The digest the daily
+  # sidecar carries is the digest of the bytes that were promoted (a server-side
+  # copy does not change them) and is the digest the monthly sidecar below names,
+  # so re-reading the promoted object and comparing it against that digest pins
+  # the pair together with no new tool.
   if [ "$monthly_ok" = "1" ]; then
     local_sidecar="$STAGE_DIR/$DAILY_NAME.dump.gz.sha256"
     digest="$(cut -d' ' -f1 "$local_sidecar" 2>/dev/null || true)"
@@ -705,7 +750,14 @@ if [ "$DAY_OF_MONTH" = "01" ]; then
       FAIL_DETAIL="monthly sidecar: no digest in $local_sidecar"
       log ERROR "$FAIL_DETAIL"
       monthly_ok=0
+    # Re-read the promoted DUMP before the sidecar is written: a sidecar sitting
+    # next to a dump nobody read is what makes a corrupt pair look complete.
+    elif ! PROMOTE_VERIFY_ERR="$(verify_remote_digest "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz" "$digest" 2>&1)"; then
+      FAIL_DETAIL="monthly dump verification failed: $PROMOTE_VERIFY_ERR"
+      log ERROR "$FAIL_DETAIL"
+      monthly_ok=0
     else
+      log INFO "verified $MONTHLY_DIR/$MONTHLY_NAME.dump.gz"
       # The temp file must carry the DESTINATION's basename: rclone copy takes
       # the object's name from the source path, so a bare mktemp name would
       # upload the right bytes under a garbage name.

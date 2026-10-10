@@ -168,7 +168,23 @@ case "\$cmd" in
     # remote is $CASE_DIR/remote, addressed by basename.
     src="\${1:-}"; dest="\${2:-}"
     mkdir -p "$CASE_DIR/remote"
+    # STUB_COPYTO_SILENT_NAME names one DESTINATION whose copy silently stores
+    # nothing: the command exits 0 describing itself, not the object it was
+    # asked to store. Scoped to one name so the daily uploads still land and the
+    # run reaches the promotion.
+    if [ -n "\${STUB_COPYTO_SILENT_NAME:-}" ] && [ "\$(basename "\$dest")" = "\$STUB_COPYTO_SILENT_NAME" ]; then
+      exit 0
+    fi
     if [ -f "$CASE_DIR/remote/\$(basename "\$src")" ]; then
+      # STUB_COPYTO_CORRUPT_NAME stores DIFFERENT bytes under the right name:
+      # the truncated server-side copy the sibling-gap probe reproduced, where
+      # the name says jomform-monthly-<ym>.dump.gz and the bytes are a prefix of
+      # it. Nothing in the script compares the promoted object with what the copy
+      # was given except the digest re-read, so this is the shape that needs it.
+      if [ -n "\${STUB_COPYTO_CORRUPT_NAME:-}" ] && [ "\$(basename "\$dest")" = "\$STUB_COPYTO_CORRUPT_NAME" ]; then
+        head -c 16 "$CASE_DIR/remote/\$(basename "\$src")" >"$CASE_DIR/remote/\$(basename "\$dest")"
+        exit 0
+      fi
       cp "$CASE_DIR/remote/\$(basename "\$src")" "$CASE_DIR/remote/\$(basename "\$dest")"
     else
       echo "object not found: \$src" >&2
@@ -178,13 +194,15 @@ case "\$cmd" in
   # cat <remote-path> — re-read an object, the shape the script uses to verify a
   # write it produced itself. Mirrors real rclone: the stored bytes on stdout,
   # exit 3 "directory not found" when the object is not there.
-  # STUB_CAT_CORRUPT=1 models a stored object whose bytes differ from what was
-  # sent (same shape, wrong digest).
+  # STUB_CAT_CORRUPT_NAME names ONE object whose re-read returns bytes that
+  # differ from what was sent (same shape, wrong digest). Scoped by name: the
+  # script re-reads more than one generated object now, and a knob that
+  # corrupted all of them would let one case failure stand in for another.
   cat)
     path="\${1:-}"
     base="\$(basename "\$path")"
     if [ -f "$CASE_DIR/remote/\$base" ]; then
-      if [ "\${STUB_CAT_CORRUPT:-0}" = "1" ]; then
+      if [ -n "\${STUB_CAT_CORRUPT_NAME:-}" ] && [ "\$base" = "\$STUB_CAT_CORRUPT_NAME" ]; then
         printf 'deadbeefdeadbeefdeadbeefdeadbeef  %s\\n' "\$base"
       else
         cat "$CASE_DIR/remote/\$base"
@@ -430,6 +448,40 @@ promote_and_verify() {
   assert_file   "$label: monthly object on the remote" \
     "$CASE_DIR/remote/jomform-monthly-$(monthly_name).dump.gz"
   verify_monthly_pair "$label"
+}
+
+# sabotage_promoted_dump_verification — put the pre-fix behaviour back into a COPY
+# of the script inside the case dir: the promotion is reported ok without the
+# promoted dump ever having been read. The swap is exact and literal, so a future
+# edit that moves or rewrites that branch makes this report NOTFOUND — and the
+# case calling it fails loudly — instead of quietly mutating nothing.
+# Prints APPLIED, or NOTFOUND count=N, for the caller to assert on.
+sabotage_promoted_dump_verification() {
+  cp "$SCRIPT" "$CASE_DIR/bite-target.sh"
+  python3 - "$CASE_DIR/bite-target.sh" "$CASE_DIR/bite-applied.txt" <<'PY'
+import sys
+path, marker = sys.argv[1], sys.argv[2]
+src = open(path).read()
+# The digest re-read this card added, as shipped...
+fixed = '''    elif ! PROMOTE_VERIFY_ERR="$(verify_remote_digest "$MONTHLY_DIR/$MONTHLY_NAME.dump.gz" "$digest" 2>&1)"; then
+      FAIL_DETAIL="monthly dump verification failed: $PROMOTE_VERIFY_ERR"
+      log ERROR "$FAIL_DETAIL"
+      monthly_ok=0
+    else
+      log INFO "verified $MONTHLY_DIR/$MONTHLY_NAME.dump.gz"
+'''
+# ...replaced by trusting the copyto's exit status, which is the pre-fix shape:
+# the copy command's exit status says nothing about the destination object, and
+# the promotion is reported without anything having read the promoted dump.
+broken = '''    else
+'''
+if src.count(fixed) != 1:
+    open(marker, 'w').write('NOTFOUND count=%d' % src.count(fixed))
+    sys.exit(3)
+open(path, 'w').write(src.replace(fixed, broken))
+open(marker, 'w').write('APPLIED')
+PY
+  cat "$CASE_DIR/bite-applied.txt" 2>/dev/null
 }
 
 # bite_toolbox was replaced by an exact Python edit: the sabotage is a literal
@@ -727,13 +779,15 @@ fi
 teardown_case
 
 echo "case: the sidecar lands but its stored CONTENT differs -> the run FAILS"
-# Size and md5 alone are not the acceptance: STUB_CAT_CORRUPT leaves the stored
-# object's size and hash correct for the modelled backend (so verify_remote
-# passes) and makes the re-read return different bytes, which only the content
-# comparison can catch. A same-length object with the wrong digest would be an
-# unusable sidecar.
+# Size and md5 alone are not the acceptance: STUB_CAT_CORRUPT_NAME leaves the
+# stored object's size and hash correct for the modelled backend (so
+# verify_remote passes) and makes the re-read return different bytes, which
+# only the content comparison can catch. A same-length object with the wrong
+# digest would be an unusable sidecar. It names the SIDECAR, so the dump the
+# promotion re-reads is not the object this case corrupts.
 setup_case; touch_rclone_conf
-rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok STUB_CAT_CORRUPT=1 --)"
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+  STUB_CAT_CORRUPT_NAME="jomform-monthly-$(monthly_name).dump.gz.sha256" --)"
 assert_eq "exit code" "exit=1" "$rc"
 assert_contains "log names the content mismatch" "remote content mismatch" "$RUN_LOG"
 assert_contains "log marks FAILED" "jomform-backup FAILED" "$RUN_LOG"
@@ -750,6 +804,62 @@ assert_contains "log names the failed sidecar upload" "monthly sidecar upload fa
 assert_contains "log carries the provider message" "rateLimitExceeded" "$RUN_LOG"
 assert_contains "log marks FAILED" "jomform-backup FAILED" "$RUN_LOG"
 assert_file "last-failure.json written" "$CASE_DIR/state/last-failure.json"
+teardown_case
+
+echo "case: the promoted monthly dump write exits 0 and stores NOTHING -> the run FAILS"
+# The same write-through shape the sidecar had, on the promotion's OTHER write:
+# `rclone copyto`'s exit status describes the COMMAND, not the destination
+# object, so a server-side copy that exits 0 having stored nothing used to leave
+# a run reporting "monthly copy ok" with no monthly dump in Drive. The stub drops
+# exactly one named destination's copy, so the daily uploads still land and the
+# run reaches the promotion.
+setup_case; touch_rclone_conf
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+  STUB_COPYTO_SILENT_NAME="jomform-monthly-$(monthly_name).dump.gz" --)"
+assert_eq "exit code" "exit=1" "$rc"
+assert_contains "log names the dump verification" "monthly dump verification failed" "$RUN_LOG"
+assert_contains "log says the object is missing remotely" "remote object missing or unreadable after promotion" "$RUN_LOG"
+assert_contains "log marks FAILED" "jomform-backup FAILED" "$RUN_LOG"
+assert_contains "status file FAILED" '"status": "FAILED"' "$CASE_DIR/state/last-run.json"
+assert_file "last-failure.json written" "$CASE_DIR/state/last-failure.json"
+# The whole point: nothing on the remote claims a monthly copy exists. No dump —
+# and no sidecar either, because the sidecar is written only once the promoted
+# dump has been read back, so a sidecar can never vouch for an absent dump.
+if [ -e "$CASE_DIR/remote/jomform-monthly-$(monthly_name).dump.gz" ]; then
+  bad "a monthly dump object exists although the copy stored nothing"
+else
+  ok "no monthly dump object on the remote, and the run said so"
+fi
+if [ -e "$CASE_DIR/remote/jomform-monthly-$(monthly_name).dump.gz.sha256" ]; then
+  bad "a monthly sidecar exists for a dump that is not in Drive"
+else
+  ok "no sidecar written for the dump that never landed"
+fi
+teardown_case
+
+echo "case: the promoted dump lands as DIFFERENT bytes under the right name -> the run FAILS"
+# The shape that made the monthly sidecar worse than absent: the pair LOOKS
+# complete (both names are on the remote) and the run used to report OK, while
+# the reader's own `sha256sum -c` on the pair fails. The stub stores a truncated
+# copy under the monthly name — a different size, so a size comparison would
+# catch it too, but what the script actually compares here is the DIGEST of the
+# promoted object against the digest the copy was given.
+setup_case; touch_rclone_conf
+rc="$(run_backup JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+  STUB_COPYTO_CORRUPT_NAME="jomform-monthly-$(monthly_name).dump.gz" --)"
+assert_eq "exit code" "exit=1" "$rc"
+assert_contains "log names the dump verification" "monthly dump verification failed" "$RUN_LOG"
+assert_contains "log names the digest mismatch" "remote digest mismatch" "$RUN_LOG"
+assert_contains "log marks FAILED" "jomform-backup FAILED" "$RUN_LOG"
+assert_contains "status file FAILED" '"status": "FAILED"' "$CASE_DIR/state/last-run.json"
+assert_file "last-failure.json written" "$CASE_DIR/state/last-failure.json"
+# And the dump that failed verification must not be dressed with a sidecar: a
+# sidecar beside it is exactly what makes the pair look complete and verified.
+if [ -e "$CASE_DIR/remote/jomform-monthly-$(monthly_name).dump.gz.sha256" ]; then
+  bad "a sidecar was written beside a dump that failed verification"
+else
+  ok "no sidecar written beside the dump that failed verification"
+fi
 teardown_case
 
 echo "case: no promotion on a day that is not the 1st (the gate still holds)"
@@ -840,6 +950,45 @@ if [ -f "$CASE_DIR/remote/$mn.sha256" ]; then
 else
   bad "the pre-fix script wrote no monthly sidecar at all — cannot judge the bite"
 fi
+teardown_case
+
+echo "case: the promoted-dump case BITES on a copy that stored NOTHING — remove the re-read and it goes GREEN"
+# The promotion's other write now has a case that can fail; this proves the
+# assertion it lives on bites instead of decorating. `sabotage_promoted_dump_verification`
+# puts the pre-fix behaviour back into a COPY of the script (the tracked file is
+# never written to), so the run has nothing to read back and reports whatever the
+# copy command's exit status said.
+setup_case; touch_rclone_conf
+sab_status="$(sabotage_promoted_dump_verification)"
+assert_eq "sabotage applied to the copy (NOTFOUND means this case proves nothing)" "APPLIED" "$sab_status"
+if bash -n "$CASE_DIR/bite-target.sh"; then ok "the sabotaged copy still parses"; else bad "the sabotaged copy does not parse"; fi
+sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+  STUB_COPYTO_SILENT_NAME="jomform-monthly-$(monthly_name).dump.gz" --)"
+# The pre-fix shape reports success and never notices: that is what made it silent.
+assert_eq "RED as required: without the re-read the silent-drop copy reports SUCCESS" "exit=0" "$sab_rc"
+assert_contains "RED as required: and it called the month healthy" "monthly copy ok" "$RUN_LOG"
+if [ -e "$CASE_DIR/remote/jomform-monthly-$(monthly_name).dump.gz" ]; then
+  bad "the sabotaged run left a monthly dump on the remote — the stub is wrong, not the proof"
+else
+  ok "RED as required: no monthly dump in Drive, yet the run called the month ok"
+fi
+teardown_case
+
+echo "case: the promoted-dump case BITES on a truncated copy too — GREEN run, and the reader's checksum fails"
+# The second shape, same sabotage: the pair the pre-fix script leaves behind
+# LOOKS complete — the truncated dump plus a sidecar naming it — and the run
+# reported ok, which is precisely the pair the README tells a reader to reject
+# with `sha256sum -c`. That check is run for real here. The suite's own case for
+# this shape asserts the fixed script FAILS it (exit 1, no sidecar).
+setup_case; touch_rclone_conf
+sab_status="$(sabotage_promoted_dump_verification)"
+assert_eq "sabotage applied to the copy (NOTFOUND means this case proves nothing)" "APPLIED" "$sab_status"
+if bash -n "$CASE_DIR/bite-target.sh"; then ok "the sabotaged copy still parses"; else bad "the sabotaged copy does not parse"; fi
+sab_rc="$(run_backup_script "$CASE_DIR/bite-target.sh" JFBACKUP_DAY_OF_MONTH=01 STUB_RCLONE_MODE=ok \
+  STUB_COPYTO_CORRUPT_NAME="jomform-monthly-$(monthly_name).dump.gz" --)"
+assert_eq "RED as required: without the re-read the truncated copy reports SUCCESS" "exit=0" "$sab_rc"
+assert_contains "RED as required: and it called the month healthy" "monthly copy ok" "$RUN_LOG"
+check_isolated "pre-fix truncated promotion" fail
 teardown_case
 
 # ---------------------------------------------------------------------------
