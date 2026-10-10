@@ -4,12 +4,20 @@ import { defineConfig, devices } from "@playwright/test";
 // public pages of the Next.js app. The web server is started automatically
 // by Playwright (webServer) so the scan is self-contained.
 //
-// Authenticated dashboard pages (/, /forms, /builder, /settings, /profile,
-// /products) require a live session cookie from the Go API, which the scan does
-// not provision. Without a session they render the loading shell / bounce to
-// /landing, so the automated scan covers the fully-rendered public routes
-// below; the authenticated surfaces are exercised by the manual
-// screen-reader + browser-matrix checklist (docs/accessibility.md).
+// The PUBLIC PAGES list lives in `e2e/a11y.spec.ts` and holds routes reachable
+// with no session. Authenticated dashboard pages (/, /forms, /builder,
+// /settings, /profile, /products) do NOT go in that list — without a session
+// cookie from the Go API they render the loading shell / bounce to /landing, so
+// an entry for one would scan nothing and pass green (t_81b2a928). They are
+// scanned by the sibling `a11y-*.spec.ts` files, which stub the
+// `dashboard-bundle` at the browser level and drive the real client components
+// (`e2e/a11y-products.spec.ts`, `e2e/a11y-settings-first-run-tab.spec.ts`,
+// `e2e/a11y-profile-tabs.spec.ts` — the last one added by card t_b589a807, whose
+// defect was 5 + 10 critical `aria-required-parent` nodes on /profile and
+// /settings that this gate structurally could not see). The `a11y` project
+// selects every one of them by FILENAME PREFIX, so a new `a11y-*.spec.ts` is in
+// the gate by its name alone; `src/lib/a11yAuthedCoverage.test.ts` keeps the
+// signed-in routes pinned to specs that really run axe.
 //
 // PORT: override with A11Y_PORT. This matters because the scan is now run by
 // `scripts/preflight.sh` on a shared agent host where a previous run's

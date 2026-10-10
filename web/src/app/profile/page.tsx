@@ -443,8 +443,17 @@ export default function ProfilePage() {
       <main className="w-full flex-1 px-6 py-8">
         <h1 className="max-w-xl text-2xl font-bold">{t("prof.title")}</h1>
 
-        {/* Tab bar */}
-        <div className="mt-4 flex flex-wrap gap-1 border-b border-slate-200">
+        {/* Tab bar. Card t_b589a807: the strip carries `role="tablist"`.
+            A `role="tab"` button's REQUIRED PARENT is a tablist, and the strip
+            was a plain `div` — measured as axe `aria-required-parent`
+            (impact critical) on all five of these tabs, on a page the a11y gate
+            never scanned (its PAGES list was seven public routes). The app's
+            other four strips (`/products`, `/media`, `/forms`, `/settings`)
+            already carry the role; this is the same one-attribute consistency.
+            The guard that pins the whole contract — the tablist, exactly one
+            `aria-selected`, and the panel that matches it — is
+            `web/e2e/a11y-profile-tabs.spec.ts`. */}
+        <div role="tablist" className="mt-4 flex flex-wrap gap-1 border-b border-slate-200">
           {TAB_IDS.map((id) => (
             <button
               key={id}
@@ -513,8 +522,8 @@ export default function ProfilePage() {
                 </div>
               </div>
               <div className="mt-4 border-t border-slate-100 pt-4">
-              <label className="mt-3 block text-xs text-slate-500">{t("prof.displayName")}</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder={t("prof.yourName")} />
+              <label className="mt-3 block text-xs text-slate-500" htmlFor="prof-name">{t("prof.displayName")}</label>
+              <input id="prof-name" value={name} onChange={(e) => setName(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder={t("prof.yourName")} />
               <button
                 onClick={() => post("/api/auth/profile/name", { name })}
                 className="jf-btn-primary mt-3"
@@ -522,8 +531,9 @@ export default function ProfilePage() {
               </div>
               {/* Issue #181: optional phone number — blank = not set. */}
               <div className="mt-4 border-t border-slate-100 pt-4">
-                <label className="mt-3 block text-xs text-slate-500">{t("prof.phone")}</label>
+                <label className="mt-3 block text-xs text-slate-500" htmlFor="prof-phone">{t("prof.phone")}</label>
                 <input
+                  id="prof-phone"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   className="jf-input mt-1 max-w-xl"
@@ -537,8 +547,9 @@ export default function ProfilePage() {
               </div>
               {/* Issue #191: preferred timezone — Auto (browser/PC) or a hard-coded IANA timezone. */}
               <div className="mt-4 border-t border-slate-100 pt-4">
-                <label className="mt-3 block text-xs text-slate-500">{t("prof.timezone")}</label>
+                <label className="mt-3 block text-xs text-slate-500" htmlFor="prof-tz">{t("prof.timezone")}</label>
                 <select
+                  id="prof-tz"
                   value={timezone}
                   onChange={(e) => setTimezone(e.target.value)}
                   className="jf-input mt-1 max-w-xl"
@@ -604,10 +615,10 @@ export default function ProfilePage() {
                   <span aria-hidden="true" className="inline-block h-3 w-44 animate-pulse rounded bg-slate-200 align-middle" />
                 )}
               </p>
-              <label className="mt-3 block text-sm">{t("prof.newEmail")}</label>
-              <input value={email} onChange={(e) => setEmail(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="new@email.com" />
-              <label className="mt-3 block text-sm">{t("prof.currentPwConfirm")}</label>
-              <input type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} className="jf-input mt-1 max-w-xl" />
+              <label className="mt-3 block text-sm" htmlFor="prof-new-email">{t("prof.newEmail")}</label>
+              <input id="prof-new-email" value={email} onChange={(e) => setEmail(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="new@email.com" />
+              <label className="mt-3 block text-sm" htmlFor="prof-email-pw">{t("prof.currentPwConfirm")}</label>
+              <input id="prof-email-pw" type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} className="jf-input mt-1 max-w-xl" />
               <button
                 onClick={async () => {
                   if (await post("/api/auth/profile/email", { email, password: pwCurrent })) {
@@ -625,12 +636,12 @@ export default function ProfilePage() {
           <>
             <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("prof.password")}</h2>
-              <label className="mt-3 block text-sm">{t("prof.currentPw")}</label>
-              <input type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} className="jf-input mt-1 max-w-xl" />
-              <label className="mt-2 block text-sm">{t("prof.newPw")}</label>
-              <input type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} className="jf-input mt-1 max-w-xl" />
-              <label className="mt-2 block text-sm">{t("prof.confirmPw")}</label>
-              <input type="password" value={pwConfirm} onChange={(e) => setPwConfirm(e.target.value)} className="jf-input mt-1 max-w-xl" />
+              <label className="mt-3 block text-sm" htmlFor="prof-current-pw">{t("prof.currentPw")}</label>
+              <input id="prof-current-pw" type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} className="jf-input mt-1 max-w-xl" />
+              <label className="mt-2 block text-sm" htmlFor="prof-new-pw">{t("prof.newPw")}</label>
+              <input id="prof-new-pw" type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} className="jf-input mt-1 max-w-xl" />
+              <label className="mt-2 block text-sm" htmlFor="prof-confirm-pw">{t("prof.confirmPw")}</label>
+              <input id="prof-confirm-pw" type="password" value={pwConfirm} onChange={(e) => setPwConfirm(e.target.value)} className="jf-input mt-1 max-w-xl" />
               <button
                 onClick={async () => {
                   if (pwNew !== pwConfirm) { setErr(t("prof.pwMismatch")); return; }
@@ -1010,8 +1021,9 @@ export default function ProfilePage() {
               ) : (
                 <div className="mx-auto mt-3 flex h-[220px] w-[220px] items-center justify-center rounded border border-slate-200 bg-slate-50 text-xs text-[var(--jf-muted-on-tint)]">…</div>
               )}
-              <label className="mt-4 block text-sm">{t("prof.twoFaCodeLabel")}</label>
+              <label className="mt-4 block text-sm" htmlFor="prof-totp-code">{t("prof.twoFaCodeLabel")}</label>
               <input
+                id="prof-totp-code"
                 value={code}
                 onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                 inputMode="numeric"

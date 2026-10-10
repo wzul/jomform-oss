@@ -7,6 +7,18 @@ import AxeBuilder from "@axe-core/playwright";
 // Minor/moderate findings are reported but do not fail the build, so the gate
 // stays strict on the WCAG AA blockers while surfacing the rest for triage.
 //
+// THIS LIST IS THE PUBLIC ROUTES ONLY. An authenticated dashboard page cannot be
+// scanned from here: its session comes from the Go API, which this gate does not
+// provision (no session cookie, no DB), so an entry for `/profile` would `goto`
+// a page that bounced to /landing and scan a shell with no controls on it.
+// The signed-in surfaces are scanned by the SIBLING `a11y-*.spec.ts` files, which
+// stub the `dashboard-bundle` at the browser level and are members of this same
+// `a11y` project by filename prefix (`playwright.config.ts`). Card t_b589a807 is
+// why that half exists: this list was seven public routes while `/profile` and
+// `/settings` carried 15 critical `aria-required-parent` nodes between them, and
+// `npm run a11y` was green throughout. `src/lib/a11yAuthedCoverage.test.ts` holds
+// those routes to a real page on disk AND to a spec that actually runs axe.
+//
 // The public order form (/f/...) and thank-you page (/t/...) are served by
 // the Go API, not the Next.js app, so they are covered by the manual
 // screen-reader + browser-matrix checklist (docs/accessibility.md) rather
