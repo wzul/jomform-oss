@@ -16,6 +16,8 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+
+	"github.com/wzul/jomform/api/internal/textutil"
 )
 
 // BNMExchangeRateURL is the public BNM OpenAPI endpoint for daily interbank
@@ -85,7 +87,9 @@ func (s *Store) FetchRates(ctx context.Context) ([]Rate, error) {
 		return nil, fmt.Errorf("bnm read: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("bnm http %d: %s", resp.StatusCode, truncate(raw, 256))
+		// textutil cuts on a rune boundary: a multi-byte BNM body must not
+		// render as a broken character in the operator's message.
+		return nil, fmt.Errorf("bnm http %d: %s", resp.StatusCode, textutil.Truncate(string(raw), 256))
 	}
 	var out bnmResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -182,11 +186,4 @@ func (s *Store) ConvertMinor(ctx context.Context, from, to string, amountMinor i
 	myr := float64(amountMinor) * rf
 	converted := myr / rt
 	return int64(converted + 0.5), true
-}
-
-func truncate(b []byte, n int) string {
-	if len(b) > n {
-		return string(b[:n])
-	}
-	return string(b)
 }

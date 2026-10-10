@@ -33,6 +33,7 @@ import (
 	"github.com/wzul/jomform/api/internal/csvguard"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/ssrfguard"
+	"github.com/wzul/jomform/api/internal/textutil"
 	"github.com/wzul/jomform/api/internal/totpconsume"
 )
 
@@ -1519,7 +1520,9 @@ func (s *Server) cfAPICallMCP(ctx context.Context, accountID, method, path strin
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("cloudflare http %d: %s", resp.StatusCode, truncateBytesMCP(b, 512))
+		// textutil cuts on a rune boundary: a multi-byte body must not render
+		// as a broken character in the message an operator diagnoses from.
+		return nil, fmt.Errorf("cloudflare http %d: %s", resp.StatusCode, textutil.Truncate(string(b), 512))
 	}
 	return b, nil
 }
@@ -1565,11 +1568,4 @@ func (s *Server) cfCreateCNAMEForDomainMCP(ctx context.Context, accountID, domai
 		return err
 	}
 	return s.cfCreateCNAMEMCP(ctx, accountID, zoneID, domain, "jomform.com")
-}
-
-func truncateBytesMCP(b []byte, n int) string {
-	if len(b) > n {
-		return string(b[:n])
-	}
-	return string(b)
 }

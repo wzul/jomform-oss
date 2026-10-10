@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/wzul/jomform/api/internal/textutil"
 )
 
 // CreatePurchase issues POST /purchases/ and returns the created Purchase
@@ -82,7 +84,7 @@ func (c *Client) PublicKey(ctx context.Context, secretKey string) (string, error
 		return obj.PublicKey, nil
 	}
 
-	return "", fmt.Errorf("chip: unrecognised public key response: %s", truncateBytes(raw, 200))
+	return "", fmt.Errorf("chip: unrecognised public key response: %s", textutil.Truncate(string(raw), 200))
 }
 
 // ParsePublicKey parses a PEM-encoded RSA public key (e.g. from PublicKey or

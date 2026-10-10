@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/wzul/jomform/api/internal/textutil"
 )
 
 // BaseURLProduction is CHIP Collect's API root (live & test keys share it).
@@ -85,7 +87,10 @@ func (c *Client) do(ctx context.Context, secretKey, method, path string, body an
 	}
 
 	if resp.StatusCode >= 400 {
-		apiErr := &apiError{Message: fmt.Sprintf("http %d: %s", resp.StatusCode, truncateBytes(raw, 512))}
+		// The body is bounded for the message an operator reads; textutil
+		// cuts on a rune boundary so a multi-byte body cannot render as a
+		// broken character (the byte slice this used to be did exactly that).
+		apiErr := &apiError{Message: fmt.Sprintf("http %d: %s", resp.StatusCode, textutil.Truncate(string(raw), 512))}
 		var parsed apiError
 		if json.Unmarshal(raw, &parsed) == nil && parsed.Message != "" {
 			apiErr = &parsed
@@ -99,11 +104,4 @@ func (c *Client) do(ctx context.Context, secretKey, method, path string, body an
 		}
 	}
 	return nil
-}
-
-func truncateBytes(b []byte, n int) string {
-	if len(b) > n {
-		return string(b[:n])
-	}
-	return string(b)
 }
