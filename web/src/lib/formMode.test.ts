@@ -132,11 +132,44 @@ test("a payment form keeps the Sales action", () => {
 
 test("a LEGACY form with no mode still gets the Sales action", () => {
   // Same load-bearing default as formMode: the pre-#171 forms are the ones
-  // that actually have sales in production.
+  // that actually have sales in production. The payload exists and its mode
+  // field is simply absent — that is not the same thing as a form that has not
+  // loaded (see the test below).
   for (const legacy of [{ id: "f3" }, { id: "f4", mode: undefined }]) {
     assert.equal(formEntriesAction(legacy, legacy.id)?.labelKey, "nav.sales");
   }
-  assert.equal(formEntriesAction(null, "f5")?.labelKey, "nav.sales");
+});
+
+// t_105bdd71 — the follow-up to the #602/#604 pair above, on the OTHER side of
+// the same rule.
+//
+// The defect (measured on prod by qa): /form-settings showed the payment label
+// `nav.sales` ("Sales") on a RESPONSE-mode form while its GET was in flight and,
+// permanently, after a failed load. Both states leave `form` null in
+// page.tsx (`setErr(t("fs.notFound")); setLoading(false); return` on the 404
+// path, and the `catch` on the throw path), and `formEntriesAction` returned an
+// action whenever `formId` was set. The label it picked was `isSalesForm(null)`
+// — the payment default — which is right for a legacy PAYLOAD and a lie for a
+// form that never arrived. The failed-load case is a steady state, so it never
+// corrected itself.
+test("a form that has NOT resolved gets no entries action (t_105bdd71)", () => {
+  assert.equal(
+    formEntriesAction(null, "f5"),
+    null,
+    "no payload means no mode, so no label can be honest — the header must not guess a mode",
+  );
+  assert.equal(formEntriesAction(undefined, "f5"), null);
+  // What must NOT change with it: the load-bearing default belongs to a payload
+  // whose mode field is absent (a pre-#171 legacy payment form), and that
+  // payload still gets the Sales action …
+  for (const legacy of [{ id: "f3", mode: undefined }]) {
+    assert.equal(formEntriesAction(legacy, legacy.id)?.labelKey, "nav.sales");
+  }
+  // … which is why isSalesForm's null/unknown default stays payment. Flipping
+  // IT to response is the #602 failure inverted: every legacy payment form
+  // would lose its Sales label, the worse failure (see formMode.ts's header).
+  assert.equal(isSalesForm(null), true);
+  assert.equal(formMode(null), FORM_MODE_PAYMENT);
 });
 
 test("no action is built for a form with no id", () => {

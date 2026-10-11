@@ -1191,6 +1191,13 @@ function FormSettingsInner() {
   // The header's way into this form's entries: Sales for a payment form,
   // Submission for a response form. Both are /sales?form=<id>; that page
   // renders a response form's submissions in the answers layout (#604).
+  //
+  // Deliberately null until the form has RESOLVED (t_105bdd71): the label comes
+  // from the mode and there is no mode before the payload arrives, so a
+  // response-mode form used to show the sales label while its GET was in flight
+  // — and forever after a failed load, which leaves `form` null (`setErr(…);
+  // return` on the 404 path, and `catch` on the throw path). Withholding the
+  // action is the honest state; no label can be true before the mode is known.
   const entries = formEntriesAction(form, formId);
 
   return (
@@ -1224,7 +1231,10 @@ function FormSettingsInner() {
                     /sales?form=<id> renders in the answers layout for a
                     response form (#604). Both modes get an action; only the
                     label differs, so a response form is neither mislabelled
-                    "Sales" (#602) nor left with no route to its submissions. */}
+                    "Sales" (#602) nor left with no route to its submissions.
+                    `entries` is null until the form resolves (t_105bdd71) —
+                    the label is the form's mode and the mode is not known
+                    before the payload, so the row simply waits. */}
                 {entries && (
                   <Link href={entries.href} className="jf-btn-ghost px-3 py-1.5 text-xs">
                     {t(entries.labelKey)}

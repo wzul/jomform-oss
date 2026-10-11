@@ -105,8 +105,8 @@ export function salesFormHref(f: ModeCarrier | null | undefined, formId: string)
 
 /**
  * formEntriesAction returns the per-form entries action — the deep-link plus
- * the label to give it — for a form of EITHER mode, or null when there is no
- * id to link to.
+ * the label to give it — for a form of EITHER mode, or null when there is no id
+ * to link to OR when the form has not resolved yet.
  *
  * The destination is the same for both modes (/sales?form=<id>): that page
  * lists the entries of the selected form, switching to the answers layout when
@@ -118,12 +118,29 @@ export function salesFormHref(f: ModeCarrier | null | undefined, formId: string)
  * Gating it (as the Sales link alone was gated by #602) leaves a response form
  * — an event registration, an RSVP, a contact form — with NO action at all, so
  * its submissions become unreachable from the dashboard.
+ *
+ * WHY A FORM THAT HAS NOT RESOLVED GETS NO ACTION (t_105bdd71)
+ * The label is chosen from the form's mode, and there is no mode until the
+ * payload arrives: `isSalesForm(null)` is (correctly) `true`, because a
+ * pre-mode *payload* is a legacy payment form. That default is about a form
+ * whose mode field is absent, NOT about a form that is still (or never)
+ * loading — and it is a lie there. This function used to return the action
+ * whenever `formId` was set, so /form-settings rendered "Sales"
+ * (`nav.sales`) on a RESPONSE-mode form while its GET was in flight and,
+ * permanently, after a failed load (the page leaves `form` null on both the
+ * 404 path and the throw path). The header action is now withheld until the
+ * form resolves: a form that never resolves never claims a mode, so it can
+ * never be mislabelled. `isSalesForm`'s null default is deliberately
+ * untouched — flipping IT would mislabel every legacy payment form, which is
+ * the worse failure (see the rationale at the top of this module).
  */
 export function formEntriesAction(
   f: ModeCarrier | null | undefined,
   formId: string,
 ): { href: string; labelKey: FormEntriesLabelKey } | null {
   if (!formId) return null;
+  // No payload yet: the mode is unknown, so no label here is honest.
+  if (!f) return null;
   return {
     href: formEntriesPath(formId),
     labelKey: isSalesForm(f) ? "nav.sales" : "nav.submissions",

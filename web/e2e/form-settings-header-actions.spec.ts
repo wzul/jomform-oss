@@ -463,3 +463,234 @@ for (const variant of MODES) {
     await context.close();
   });
 }
+
+// ---------------------------------------------------------------------------
+// t_105bdd71 — the header must not GUESS a mode before the form has resolved
+// ---------------------------------------------------------------------------
+//
+// THE DEFECT (measured on the live prod origin by qa, card t_ecff7d41)
+//   /form-settings labelled the entries action "Sales" (`nav.sales`) on a
+//   RESPONSE-mode form in two states, and both leave `form` null in page.tsx:
+//
+//     PRE-LOAD   the form GET is still in flight: "Edit fields" | "Sales"
+//     FAILED     the form GET answered 404: "Edit fields" | "Sales", for the
+//                life of the page — a STEADY state, it never corrects itself
+//
+//   The label came from `formEntriesAction(form, formId)`, which returned an
+//   action whenever `formId` was set and picked `isSalesForm(null)` — the
+//   payment default. That default is correct for a PAYLOAD with no `mode`
+//   field (a pre-#171 legacy sales form) and a lie for a form that has not
+//   arrived. The fix withholds the action until the form resolves
+//   (src/lib/formMode.ts), so a form that never resolves never claims a mode.
+//
+// WHAT THESE CASES OWN, and why they are not the ones above them
+//   Every case above waits for the LOADED fixture (three actions, this mode's
+//   label) before it measures, so none of them can see the null-`form` states —
+//   which is exactly how the defect reached production with a green guard. The
+//   cases below force both states and assert the rendered header:
+//     * the delayed GET is held open by the TEST (a promise the route handler
+//       awaits, released by the test), not by a sleep, so the pre-load
+//       measurement is taken while the request is genuinely outstanding;
+//     * the failed load is a real 404 on the form route, so the page takes its
+//       own `setErr(t("fs.notFound"))` path and never learns a mode.
+//   Neither case asserts the class list or the source: both read the header's
+//   own anchors out of the live DOM, the same way the cases above do.
+//
+// The destination is unchanged and is asserted for the healthy form here too
+// (`/sales?form=<id>`), because the one thing that must NOT have been traded
+// away for the label is the route into a response form's submissions (#604).
+const JSON_OK = (body: unknown) => ({
+  status: 200,
+  contentType: "application/json",
+  body: JSON.stringify(body),
+});
+
+/** The healthy fixture `stubAPI` serves, as the delayed case serves it too. */
+const formFixture = (mode: ModeVariant["mode"]) => ({
+  id: FORM_ID,
+  slug: "demo-form",
+  title: "Demo form",
+  status: "published",
+  url: FORM_URL,
+  mode,
+  config: { blocks: [] },
+  theme: {},
+});
+
+// The form GET, with or without a `?workspace=` probe suffix. Matches only the
+// single-form route: `[^/?]+` cannot span the `/chip-feeds`-style sub-resources.
+const FORM_GET_RE = /(.*)\/api\/rest\/forms\/[^/?]+(\?.*)?$/;
+
+/**
+ * The header action cluster's OWN anchors, read from the live DOM — what the
+ * user sees in the header row, never a page-wide or source-level reading.
+ * (The sidebar carries its own `nav.sales` link, which is why every assertion
+ * in this file is scoped to these anchors.)
+ */
+async function readHeaderActions(page: Page) {
+  return page.evaluate(() => {
+    const anchors = [...document.querySelectorAll("a.jf-btn-ghost")] as HTMLAnchorElement[];
+    const cluster = anchors.length ? (anchors[0].parentElement as HTMLElement) : null;
+    const own = cluster ? ([...cluster.querySelectorAll("a.jf-btn-ghost")] as HTMLAnchorElement[]) : [];
+    return {
+      documentAnchors: anchors.length,
+      texts: own.map((a) => (a.textContent || "").trim()),
+      hrefs: own.map((a) => a.getAttribute("href")),
+      clusterText: cluster ? (cluster.textContent || "").trim() : "",
+      // The page-wide overflow, so the withheld action cannot have been traded
+      // for a layout regression in a state this file never measured before.
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    };
+  });
+}
+
+/** A fresh, English, 390px phone context — the state a new visitor gets. */
+async function freshPhone(browser: import("@playwright/test").Browser, width = 390) {
+  const context = await browser.newContext({ viewport: { width, height: 720 }, deviceScaleFactor: 1 });
+  await context.addInitScript(() => {
+    // Clear FIRST: this host keeps storage between runs, and a `jf_lang` left by
+    // an earlier card would render a locale this file never asserts.
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+    } catch {
+      /* storage unavailable */
+    }
+    localStorage.setItem("jf_workspace", "demo");
+    localStorage.setItem("jf_lang", "en");
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(45_000);
+  return { context, page };
+}
+
+/** The label keys this page can put in the header's entries action. */
+const MODE_LABEL_TEXTS = [DICT["nav.sales"].en, DICT["nav.submissions"].en]; // Sales, Submission
+
+test("a response form's header shows no mode label while its GET is in flight, then Submission (390px)", async ({
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const { context, page } = await freshPhone(browser);
+  await stubAPI(page, "response");
+  // Registered AFTER stubAPI, so this handler wins for the form GET: it is held
+  // open by a gate the TEST releases, which is what makes the pre-load
+  // measurement deterministic instead of a race with a sleep.
+  let releaseForm!: () => void;
+  const formHeld = new Promise<void>((resolve) => {
+    releaseForm = resolve;
+  });
+  let formRequested = false;
+  await page.route(FORM_GET_RE, async (route) => {
+    formRequested = true;
+    await formHeld;
+    await route.fulfill(JSON_OK(formFixture("response")));
+  });
+
+  await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "domcontentloaded" });
+  // `domcontentloaded`, not `networkidle`: the form GET is deliberately still
+  // outstanding here, and networkidle would never resolve with a request held
+  // open — the wait below is the readiness signal instead. The header renders
+  // from `formId` alone, so "Edit fields" is up while that GET is pending.
+  await expect(page.locator("a.jf-btn-ghost").nth(0)).toContainText(DICT["fs.editFields"].en, {
+    timeout: 45_000,
+  });
+  expect(formRequested, "the form GET was never issued — this case measured the wrong state").toBe(true);
+
+  const pre = await readHeaderActions(page);
+  console.log(
+    `pre-load (response form, GET held open): cluster=${JSON.stringify(pre.clusterText)} ` +
+      `actions=${JSON.stringify(pre.texts)} hrefs=${JSON.stringify(pre.hrefs)} ` +
+      `client=${pre.clientWidth} scroll=${pre.scrollWidth}`,
+  );
+  // THE ACCEPTANCE, pre-load: the header carries no mode label at all. "Sales"
+  // here was the reported defect; "Submission" would be the same guess in the
+  // other direction, which is why neither is allowed.
+  expect(
+    pre.clusterText,
+    `the header already carries a mode label while the form is still loading: ` +
+      `${JSON.stringify(pre.clusterText)}. The mode is not known until the payload arrives, so the ` +
+      `entries action must not be rendered yet.`,
+  ).not.toContain(MODE_LABEL_TEXTS[0]);
+  expect(pre.clusterText).not.toContain(MODE_LABEL_TEXTS[1]);
+  expect(pre.texts, "the pre-load header should hold only the actions that do not need the payload").toEqual([
+    DICT["fs.editFields"].en,
+  ]);
+  expect(pre.scrollWidth).toBe(pre.clientWidth);
+
+  // Release the payload: the header must then reach its healthy, mode-labelled
+  // shape — the action is withheld, not DROPPED, and its destination is
+  // unchanged (/sales?form=<id>, #604).
+  releaseForm();
+  await expect(page.locator("a.jf-btn-ghost")).toHaveCount(3, { timeout: 45_000 });
+  await expect(page.locator("a.jf-btn-ghost").nth(1)).toContainText(DICT["nav.submissions"].en, {
+    timeout: 45_000,
+  });
+  const loaded = await readHeaderActions(page);
+  console.log(
+    `loaded (response form): cluster=${JSON.stringify(loaded.clusterText)} ` +
+      `actions=${JSON.stringify(loaded.texts)} hrefs=${JSON.stringify(loaded.hrefs)}`,
+  );
+  expect(loaded.texts).toEqual([DICT["fs.editFields"].en, DICT["nav.submissions"].en, DICT["bld.view"].en]);
+  expect(loaded.hrefs).toEqual([`/builder?form=${FORM_ID}`, `/sales?form=${FORM_ID}`, FORM_URL]);
+  await context.close();
+});
+
+// The failed load, once per mode the API *would* have answered with. The page
+// never learns it (the GET 404s), which is the point: the withheld action must
+// not depend on which mode the form really is, and the payment case has to be
+// pinned too, because a payment form's entries action used to render here as
+// well and the fix removes it in THAT case as well.
+for (const { mode } of MODES) {
+  test(`a FAILED form load leaves no mode label in the header (${mode}-mode form the API never answers, 390px)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(180_000);
+    const { context, page } = await freshPhone(browser);
+    await stubAPI(page, mode);
+    // Registered AFTER stubAPI: the form route 404s even if the resolve probes
+    // it with a `?workspace=` suffix, so the page takes its own not-found path
+    // (`setErr(t("fs.notFound"))`) and leaves `form` null — the steady state
+    // this card is about.
+    await page.route(FORM_GET_RE, (route) =>
+      route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "not found" }) }),
+    );
+    await page.route(/(.*)\/api\/workspaces(\?.*)?$/, (route) =>
+      route.fulfill(JSON_OK([{ id: "ws1", slug: "demo" }])),
+    );
+
+    await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "networkidle" });
+
+    // Wait for the page's OWN failure sentence (bounded), so the measurement is
+    // of the settled failed state and not of a page that is still loading.
+    await expect(page.locator(`p:text-is(${JSON.stringify(DICT["fs.notFound"].en)})`).first()).toBeVisible({
+      timeout: 45_000,
+    });
+
+    const g = await readHeaderActions(page);
+    console.log(
+      `failed load (${mode}): cluster=${JSON.stringify(g.clusterText)} actions=${JSON.stringify(g.texts)} ` +
+        `hrefs=${JSON.stringify(g.hrefs)} client=${g.clientWidth} scroll=${g.scrollWidth}`,
+    );
+    // THE ACCEPTANCE, failed load: never `nav.sales` — and never `nav.submissions`
+    // either, since the page has no idea which mode this form is.
+    for (const label of MODE_LABEL_TEXTS) {
+      expect(
+        g.clusterText,
+        `the failed-load header reads ${JSON.stringify(label)}: ${JSON.stringify(g.clusterText)}. The ` +
+          `form never resolved, so no mode is known and no mode label is honest — "Sales" here is the ` +
+          `reported defect and it persists for the life of the page.`,
+      ).not.toContain(label);
+    }
+    // Exactly the one action that needs nothing but the id.
+    expect(g.texts).toEqual([DICT["fs.editFields"].en]);
+    expect(
+      g.hrefs.some((h) => (h || "").startsWith("/sales")),
+      "the failed-load header still deep-links to the entries page, whose label it cannot know",
+    ).toBe(false);
+    // And the state stays clean at a phone width (the card measured overflow 0).
+    expect(g.scrollWidth).toBe(g.clientWidth);
+    await context.close();
+  });
+}
