@@ -41,11 +41,11 @@ func livePeerSeedKeys(pid uint32) (session, accountCounter string) {
 }
 
 // TestReclaimLeavesPeersLoginCountersAlone proves the fixture's one-time cleanup
-// is scoped to this process's own test-IP /24: a counter under a peer's /24 (a
-// concurrent `go test` binary) must survive, and one under ours must be cleared
-// so a -count rerun starts deterministic. Keys that merely sit on the PRODUCTION
-// prefixes — a live API's session token, an account-keyed counter — must survive
-// too, whatever this process is doing.
+// is scoped to this process's own test-IP /24: a counter under a /24 this process
+// does not own must survive, and one under ours must be cleared so a -count rerun
+// starts deterministic. Keys that merely sit on the PRODUCTION prefixes — a live
+// API's session token, an account-keyed counter — must survive too, whatever this
+// process is doing.
 //
 // It drives authTestValkey — the real wiring — rather than the helper, so a
 // regression back to a whole-prefix sweep fails here. authOnce is reset so the
@@ -53,8 +53,16 @@ func livePeerSeedKeys(pid uint32) (session, accountCounter string) {
 // anywhere), so mutating the package-level once is safe.
 func TestReclaimLeavesPeersLoginCountersAlone(t *testing.T) {
 	pid := uint32(os.Getpid())
-	if testIPFamilyFor(pid) == testIPFamilyFor(pid+1) {
-		t.Fatalf("test setup: pid %d and pid %d must not share a /24", pid, pid+1)
+	prefix := loginCounterKeyPrefixes[0] // the login breaker's per-IP counter
+	peer := peerCounterKey(pid)
+
+	// The peer sentinel has to be a counter NO process's scoped reclaim can claim,
+	// or the process that owns its /24 deletes it as one of its own stale counters
+	// while this test asserts it survived — the false red peerCounterKey documents.
+	// Checked exhaustively over the pid space here, and pinned on its own by
+	// TestPeerCounterSentinelBelongsToNoProcess.
+	if claimed := pidsClaimingLoginCounter(prefix, peer); len(claimed) > 0 {
+		t.Fatalf("test setup: the peer sentinel %q is claimed by the scoped reclaim of pid ≡ %d (mod 65536), so that process would delete it before the assertion below reads it", peer, claimed[0])
 	}
 
 	// Connect directly first, so the keys are seeded BEFORE the fixture's
@@ -70,17 +78,15 @@ func TestReclaimLeavesPeersLoginCountersAlone(t *testing.T) {
 	ctx := context.Background()
 	rdb := sess.Client()
 
-	prefix := loginCounterKeyPrefixes[0] // the login breaker's per-IP counter
 	// A stale counter we own (the -count case: a previous run's leftover inside
-	// our own address range), a live one belonging to a peer process, and two
-	// keys a live process on this DB would own: its session token and the
-	// per-ACCOUNT counter the breaker writes under the production prefix.
+	// our own address range), a live one standing in for a counter under a peer's
+	// /24, and two keys a live process on this DB would own: its session token and
+	// the per-ACCOUNT counter the breaker writes under the production prefix.
 	//
-	// The two production-prefix keys are named per PROCESS, not literally: their
-	// cleanup below deletes BY NAME, so a fixed name would be this test's own
-	// cross-process bug (see livePeerSeedKeys).
+	// All three seeds are named per PROCESS, not literally: the cleanup below
+	// deletes BY NAME, so a fixed name would be this test's own cross-process bug
+	// (see livePeerSeedKeys and peerCounterKey).
 	mine := prefix + testIPFor(pid, maxTestIPsPerProcess)
-	peer := prefix + testIPFamilyFor(pid+1) + "1"
 	liveSession, liveAccountCounter := livePeerSeedKeys(pid)
 	for k, v := range map[string]string{mine: "10", peer: "10", liveSession: "1", liveAccountCounter: "7"} {
 		if err := rdb.Set(ctx, k, v, 0).Err(); err != nil {
@@ -101,7 +107,7 @@ func TestReclaimLeavesPeersLoginCountersAlone(t *testing.T) {
 		key  string
 		what string
 	}{
-		{peer, "a concurrent `go test` binary's live lockout"},
+		{peer, "a login counter under a /24 this process does not own"},
 		{liveSession, "a live process's session token"},
 		{liveAccountCounter, "a live process's per-account failure counter"},
 	} {
@@ -203,5 +209,104 @@ func TestOwnLoginCounterKeyRejectsForeignAndMalformedKeys(t *testing.T) {
 		if got := ownLoginCounterKey(prefix, tc.key, family); got != tc.want {
 			t.Errorf("ownLoginCounterKey(%q) = %v, want %v", tc.key, got, tc.want)
 		}
+	}
+}
+
+// peerCounterKey returns the login-counter key the reclaim guard seeds to stand
+// in for a counter under a PEER's /24: a live counter this process's scoped
+// reclaim must leave alone.
+//
+// The address is deliberately outside every /24 testIPFor can hand a process.
+// That helper only ever produces 10.<pid low>.<pid high>.<n>, so each of its 65536
+// /24s is owned by some pid (pid mod 65536), and a key inside that space belongs to
+// a process that can really be running: on this host, `go test` binaries started
+// together hold pids 1-8 apart, with an adjacent pair (gap 1) measured across 80
+// simultaneous binaries.
+//
+// This key used to be `testIPFamilyFor(pid+1)+"1"` — pid+1's own FIRST test
+// address. The process holding pid+1 therefore reclaimed it as one of ITS OWN
+// stale counters (its SCAN is `prefix+family+"*"`, and ownLoginCounterKey accepts
+// the key under that family) while this process asserted it must still exist: a
+// false red the moment two binaries landed on adjacent pids, with no defect behind
+// it. That is a latent red, not a live one — it did not fire in 0/320 concurrent
+// guard runs — but the assertion has to hold for every pid pair, not the pairs a
+// measurement happened to hit.
+//
+// 198.0.0.0/8 is outside every family, so no process's reclaim can claim this key
+// (TestPeerCounterSentinelBelongsToNoProcess proves it over the whole pid space).
+// The pid in the address is what keeps two concurrent runs of this test from
+// deleting each other's seed by name in t.Cleanup, exactly as livePeerSeedKeys'
+// pid does — the guard's own cleanup deletes BY NAME, so a shared literal would be
+// the same collision in a different place. The pid's low 24 bits are enough:
+// pid_max here is 4194304 = 2^22, so distinct live pids always derive distinct
+// addresses.
+func peerCounterKey(pid uint32) string {
+	return fmt.Sprintf("%s198.%d.%d.%d", loginCounterKeyPrefixes[0],
+		(pid>>16)&0xff, (pid>>8)&0xff, pid&0xff)
+}
+
+// pidsClaimingLoginCounter returns the pids whose own scoped reclaim would claim
+// key as one of its own stale counters: the pids p for which ownLoginCounterKey
+// accepts key under testIPFamilyFor(p). An empty result means no process — present
+// or future — can delete the key, which is the property any key this suite asserts
+// must SURVIVE has to have.
+//
+// The range is exhaustive rather than a sample of offsets: testIPFamilyFor maps pid
+// mod 65536 onto the 65536 possible /24s one-to-one, so [0, 0xffff] covers every
+// family a reclaim can ever scope to, and pid_max (4194304 = 2^22) is below that
+// modulus, so a live pid always has its representative in the range.
+func pidsClaimingLoginCounter(prefix, key string) []uint32 {
+	var out []uint32
+	for p := uint32(0); p <= 0xffff; p++ {
+		if ownLoginCounterKey(prefix, key, testIPFamilyFor(p)) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// TestPeerCounterSentinelBelongsToNoProcess is the deterministic half of the peer
+// sentinel's fix. The defect it removes is probabilistic in the guard above (it
+// needs two binaries on adjacent pids), so a rate measurement alone cannot keep it
+// from coming back; this pins the property that removes it, in one process.
+//
+// The property is NEGATIVE, which is why it needs stating: the sentinel must be a
+// key no process's reclaim can claim. The derivation it replaced satisfies every
+// shape check the guard asserts on — it is a well-formed `ip:` counter, and it
+// exists where the guard wants it — and is still wrong, because another process
+// owns it.
+func TestPeerCounterSentinelBelongsToNoProcess(t *testing.T) {
+	pid := uint32(os.Getpid())
+	prefix := loginCounterKeyPrefixes[0]
+	sentinel := peerCounterKey(pid)
+
+	// The whole-prefix sweep this suite forbids deletes by PREFIX, so the sentinel
+	// has to be a key that sweep would match — the `<prefix><address>` counter shape
+	// the breaker writes — or the bite goes quiet the day someone restores the sweep.
+	if addr := strings.TrimPrefix(sentinel, prefix); addr == sentinel || !literalIPAddress.MatchString(addr) {
+		t.Errorf("the peer sentinel %q is not a `%s<address>` login counter — a whole-prefix sweep would not match it, so the bite would stop witnessing the scoping", sentinel, prefix)
+	}
+
+	claimed := pidsClaimingLoginCounter(prefix, sentinel)
+	if len(claimed) > 0 {
+		t.Errorf("the peer sentinel %q is claimed by the scoped reclaim of pid ≡ %d (mod 65536), which deletes it as one of its own stale counters while the guard asserts it survived", sentinel, claimed[0])
+	}
+
+	// The name carries the pid for the same reason the other two seeds do: the
+	// guard's t.Cleanup deletes this key BY NAME, so a name two runs share lets one
+	// delete the seed the other is asserting on.
+	for _, other := range []uint32{pid + 1, pid + 7, pid + 256, pid + 1000} {
+		if peerCounterKey(other) == sentinel {
+			t.Errorf("pid %d and pid %d derive the same peer sentinel %q — one run's cleanup deletes the other's live seed", pid, other, sentinel)
+		}
+	}
+
+	// Positive control: the check above must be able to FAIL on the shape it
+	// replaced, or it is asserting nothing. The pid+1 derivation is claimed by
+	// exactly the process whose /24 it sits in — that IS the false red.
+	old := prefix + testIPFamilyFor(pid+1) + "1"
+	oldClaimed := pidsClaimingLoginCounter(prefix, old)
+	if len(oldClaimed) != 1 || testIPFamilyFor(oldClaimed[0]) != testIPFamilyFor(pid+1) {
+		t.Fatalf("control: the pid+1 derivation %q must be claimed by exactly the process whose /24 it sits in; the scan reported pids %v", old, oldClaimed)
 	}
 }
