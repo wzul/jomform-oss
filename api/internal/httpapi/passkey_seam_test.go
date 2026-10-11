@@ -561,7 +561,12 @@ func TestPasskeyRegistrationOptionsRequireAResidentKey(t *testing.T) {
 		t.Fatalf("no session cookie on login (status %d body %s)", pw.Code, pw.Body.String())
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/passkeys/register/start", strings.NewReader("{}"))
+	// The registered-key requirement must reach the wire at the deployment's own
+	// host: passkey endpoints refuse a request that did not arrive on the app's
+	// domain (passkeyRPIdentity), so driving this with the httptest default host
+	// would answer 403 and measure nothing.
+	req := httptest.NewRequest(http.MethodPost,
+		"http://"+passkeyOriginHost+"/v1/auth/passkeys/register/start", strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})
 	req.Header.Set("X-Real-IP", uniqueTestIP())

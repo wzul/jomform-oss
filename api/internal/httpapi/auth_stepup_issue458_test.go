@@ -400,6 +400,11 @@ func TestStepUpPasskeyRegisterGate(t *testing.T) {
 		Accounts: h.Accounts,
 		Passkeys: dbstore.NewPasskeyStore(bundleTestPool(t)),
 		Events:   dbstore.NewEventStore(bundleTestPool(t)),
+		// The RP ID is derived from APP_BASE_URL, and a request that did not
+		// arrive on the app's domain is refused before the step-up gate — see
+		// passkeyRPIdentity. The gate is what this test is about, so the request
+		// must be a legitimate one.
+		BaseURL: passkeyBaseURL,
 	}
 
 	mux := http.NewServeMux()
@@ -455,7 +460,8 @@ func passkeyRegisterStartReq(t *testing.T, rest *RESTHandlers, session, totpCode
 	if totpCode != "" {
 		body = `{"totp_code":"` + totpCode + `"}`
 	}
-	req := httptest.NewRequest(http.MethodPost, "/v1/auth/passkeys/register/start", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost,
+		"http://"+passkeyOriginHost+"/v1/auth/passkeys/register/start", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if session != "" {
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})

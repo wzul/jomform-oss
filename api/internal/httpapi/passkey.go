@@ -5,9 +5,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-webauthn/webauthn/protocol"
@@ -136,22 +139,154 @@ func normalizeB64(s string) string {
 
 // ── base64url normalisation end ──────────────────────────────────────────────
 
-// webAuthnInstance builds the WebAuthn config for the request's origin.
-func (h *RESTHandlers) webAuthnInstance(r *http.Request) *webauthn.WebAuthn {
-	rpID := "jomform.com"
-	if host := r.Host; strings.HasSuffix(host, "jomform.com") && !strings.HasPrefix(host, "jomform.com") {
-		// subdomain logins also bind to parent RP ID (id is the same registrable domain)
-		rpID = "jomform.com"
+// ── relying party identity ───────────────────────────────────────────────────
+
+// passkeyRelyingParty is the WebAuthn identity a ceremony runs under: the RP ID
+// (a bare domain — no scheme, no port) and the origins whose ceremony responses
+// the server will accept.
+type passkeyRelyingParty struct {
+	rpID    string
+	origins []string
+}
+
+// errPasskeyOriginOutsideApp refuses a passkey request that did not arrive on
+// the deployment's own domain. It is a sentinel so the handler can answer 403
+// (the caller's origin is not this deployment) rather than 500 (this server's
+// own configuration is broken) — two conditions that look alike from here.
+var errPasskeyOriginOutsideApp = errors.New("passkey tidak tersedia pada hos ini (bukan domain aplikasi)")
+
+// passkeyRPIdentity derives the RP ID and the accepted origins from the app's
+// configured base URL (APP_BASE_URL) and the host the request arrived on.
+//
+// WHY THE RP ID IS NOT A LITERAL. WebAuthn binds a ceremony to the page's
+// ORIGIN: the RP ID must be EQUAL to the origin's effective domain or a
+// registrable domain suffix of it, and the BROWSER enforces that itself with a
+// SecurityError before an authenticator is ever reached (WebAuthn Level 2
+// §5.1.3 step 8 — "given a Relying Party whose origin is
+// https://login.example.com:1337, the following RP IDs are valid:
+// login.example.com (default) and example.com"). This function used to answer
+// "jomform.com" for every request host, inside an `if` whose two branches
+// assigned the same literal — so it read like a subdomain rule while the value
+// was constant — which meant a ceremony could only ever complete on a
+// *.jomform.com origin. The staging deployment (APP_BASE_URL=
+// https://jomform-staging.example.com) was served an rpId its browser
+// refused outright, and the user's only symptom was "Passkey cancelled or not
+// supported by this browser" (card t_bca19fe1).
+//
+// The RP ID is therefore the app base URL's HOST: that origin's own effective
+// domain, i.e. the spec's DEFAULT value. It stays valid for the app host and for
+// every subdomain of it (workspace and product subdomains such as
+// mcp.jomform.com), and it is deliberately NOT the registrable domain the same
+// rule would also permit ("example.com" for the staging host) — a public
+// suffix that broad would scope the credentials to every unrelated service on
+// that host.
+//
+// WHY THE REQUEST HOST IS READ, AND ONLY AS A REFUSAL. The accepted origins must
+// cover the host the browser is actually on, because the session is shared
+// across the app's subdomains (SharedCookieDomain) and the dashboard — hence the
+// ceremony — can run on mcp.jomform.com as well as jomform.com. Listing the
+// request's own origin is what keeps that working, but it MUST be gated: the
+// pre-fix code appended "https://" + r.Host unconditionally, so the origin
+// allow-list was whatever a caller put in the Host header, and the only thing
+// standing between a foreign origin and a ceremony was the browser's own
+// SecurityError. A host outside the app's domain is refused here instead, on a
+// LABEL boundary — "eviljomform.com" and "jomform.com.evil.example" are both
+// refused, not just a host with an unrelated top-level domain.
+func passkeyRPIdentity(appBaseURL, requestHost string) (passkeyRelyingParty, error) {
+	u, err := url.Parse(strings.TrimSpace(appBaseURL))
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return passkeyRelyingParty{}, fmt.Errorf("APP_BASE_URL %q tidak sah — RP ID passkey tidak dapat ditentukan", appBaseURL)
+	}
+	appHost := strings.ToLower(u.Hostname())
+	if appHost == "" {
+		return passkeyRelyingParty{}, fmt.Errorf("APP_BASE_URL %q tidak mempunyai hos", appBaseURL)
+	}
+	// A base URL spelled with a leading "www." is the same site, and the RP ID
+	// must cover the bare host as well: an RP ID may not be a SUBdomain of the
+	// origin, so a deployment configured at https://www.jomform.com that kept
+	// "www." here would refuse every ceremony run from https://jomform.com —
+	// where this app is served too (deploy/vps/traefik-jomform.yml routes both).
+	// Trimming to the site's own domain accepts both, and is still the narrowest
+	// value that does: the app host is a subdomain of the result, so the guard
+	// below keeps accepting www.<host> requests as well.
+	appHost = strings.TrimPrefix(appHost, "www.")
+
+	reqHost := passkeyHostname(requestHost)
+	if reqHost == "" || (reqHost != appHost && !strings.HasSuffix(reqHost, "."+appHost)) {
+		return passkeyRelyingParty{}, errPasskeyOriginOutsideApp
+	}
+
+	// An origin is scheme + host, and the scheme comes from the CONFIGURED base
+	// URL rather than off the request: TLS ends at the reverse proxy in front of
+	// the API, so r.TLS is nil and the request itself is plain HTTP even when the
+	// browser's origin is https. The request's own host is added as a second
+	// origin so a ceremony on a subdomain is accepted with the origin it really
+	// has — the port included, since RPOrigins matches an origin exactly.
+	appOrigin := passkeyOriginFor(u.Scheme, u.Host)
+	origins := []string{appOrigin}
+	if reqOrigin := passkeyOriginFor(u.Scheme, requestHost); reqOrigin != appOrigin {
+		origins = append(origins, reqOrigin)
+	}
+	return passkeyRelyingParty{rpID: appHost, origins: origins}, nil
+}
+
+// passkeyOriginFor serialises scheme + host as an origin: the host lower-cased
+// (an origin's host is case-insensitive, and a browser serialises it lower-cased
+// — the library's own comparison folds case, but the recorded value should not
+// depend on how the caller spelled the Host header) with the port preserved
+// when there is one.
+func passkeyOriginFor(scheme, host string) string {
+	host = strings.TrimSpace(host)
+	if h, p, err := net.SplitHostPort(host); err == nil {
+		if strings.Contains(h, ":") { // IPv6 literal — keep the brackets
+			return scheme + "://[" + strings.ToLower(h) + "]:" + p
+		}
+		return scheme + "://" + strings.ToLower(h) + ":" + p
+	}
+	return scheme + "://" + strings.ToLower(host)
+}
+
+// passkeyHostname strips the port from a Host header value, so "jomform.com:8080"
+// still matches the deployment's domain, and lower-cases it: host names are
+// case-insensitive, and the library's own origin comparison folds case too.
+func passkeyHostname(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return strings.ToLower(strings.TrimSpace(h))
+	}
+	return strings.ToLower(strings.TrimSpace(host))
+}
+
+// webAuthnInstance builds the WebAuthn config for the deployment the request
+// arrived at. It returns errPasskeyOriginOutsideApp when the request's host is
+// not the app's domain, and a wrapped error when APP_BASE_URL cannot supply the
+// RP ID (an IP address is not a valid RP ID — protocol.ValidateRPID).
+func (h *RESTHandlers) webAuthnInstance(r *http.Request) (*webauthn.WebAuthn, error) {
+	rp, err := passkeyRPIdentity(h.BaseURL, r.Host)
+	if err != nil {
+		return nil, err
 	}
 	w, err := webauthn.New(&webauthn.Config{
 		RPDisplayName: "JomForm",
-		RPID:          rpID,
-		RPOrigins:     []string{"https://" + r.Host, "https://jomform.com"},
+		RPID:          rp.rpID,
+		RPOrigins:     rp.origins,
 	})
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("webauthn config error: %w", err)
 	}
-	return w
+	return w, nil
+}
+
+// writeWebAuthnUnavailable maps webAuthnInstance's error onto the wire: a host
+// outside the app's domain is the caller's own 403, anything else is this
+// server's misconfiguration. The two are distinguishable so a deployment that
+// cannot supply an RP ID is diagnosable, but neither answers with a body that
+// implies a ceremony could have run.
+func writeWebAuthnUnavailable(w http.ResponseWriter, err error) {
+	if errors.Is(err, errPasskeyOriginOutsideApp) {
+		writeErr(w, http.StatusForbidden, errPasskeyOriginOutsideApp.Error())
+		return
+	}
+	writeErr(w, http.StatusInternalServerError, "webauthn config error")
 }
 
 // passkeyRegisterStart: POST /v1/auth/passkeys/register/start (authed)
@@ -159,9 +294,9 @@ func (h *RESTHandlers) webAuthnInstance(r *http.Request) *webauthn.WebAuthn {
 // code (totp_code in the JSON body) before a passkey can be planted. Non-2FA /
 // non-magic sessions are unchanged.
 func (h *RESTHandlers) passkeyRegisterStart(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	wa := h.webAuthnInstance(r)
-	if wa == nil {
-		writeErr(w, http.StatusInternalServerError, "webauthn config error")
+	wa, err := h.webAuthnInstance(r)
+	if err != nil {
+		writeWebAuthnUnavailable(w, err)
 		return
 	}
 	uid := h.sessionOwnerID(r)
@@ -211,10 +346,14 @@ func (h *RESTHandlers) passkeyRegisterStart(w http.ResponseWriter, r *http.Reque
 // short-lived grant that this call inherits; a direct /finish without a grant
 // must carry its own totp_code.
 func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	wa := h.webAuthnInstance(r)
+	wa, err := h.webAuthnInstance(r)
+	if err != nil {
+		writeWebAuthnUnavailable(w, err)
+		return
+	}
 	uid := h.sessionOwnerID(r)
 	prof, _ := h.profileUser(r)
-	if wa == nil || uid == "" || prof == nil {
+	if uid == "" || prof == nil {
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
 		return
 	}
@@ -282,9 +421,9 @@ func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Requ
 
 // passkeyLoginStart: POST /v1/auth/passkeys/login/start (anon, email optional)
 func (h *RESTHandlers) passkeyLoginStart(w http.ResponseWriter, r *http.Request) {
-	wa := h.webAuthnInstance(r)
-	if wa == nil {
-		writeErr(w, http.StatusInternalServerError, "webauthn config error")
+	wa, err := h.webAuthnInstance(r)
+	if err != nil {
+		writeWebAuthnUnavailable(w, err)
 		return
 	}
 	// discoverable-credential (resident key) login
@@ -303,9 +442,9 @@ func (h *RESTHandlers) passkeyLoginStart(w http.ResponseWriter, r *http.Request)
 
 // passkeyLoginFinish: POST /v1/auth/passkeys/login/finish — creates a session.
 func (h *RESTHandlers) passkeyLoginFinish(w http.ResponseWriter, r *http.Request) {
-	wa := h.webAuthnInstance(r)
-	if wa == nil {
-		writeErr(w, http.StatusInternalServerError, "webauthn config error")
+	wa, err := h.webAuthnInstance(r)
+	if err != nil {
+		writeWebAuthnUnavailable(w, err)
 		return
 	}
 	// The WebAuthn parser below re-reads the body, so read it exactly once

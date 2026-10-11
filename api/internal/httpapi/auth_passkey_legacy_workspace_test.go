@@ -60,10 +60,15 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// passkeyOriginHost is the request Host the passkey endpoints are driven with.
-// webAuthnInstance derives the Relying Party ID from it and the ceremony pins
-// the origin to it, so the signed assertion and the request must agree.
-const passkeyOriginHost = "jomform.com"
+// passkeyOriginHost is the request Host the passkey endpoints are driven with,
+// and passkeyBaseURL is the APP_BASE_URL the handlers under test are wired with.
+// webAuthnInstance derives the Relying Party ID from the configured base URL
+// (passkeyRPIdentity) and the ceremony pins the origin to it, so the signed
+// assertion, the request Host and the configuration must all agree.
+const (
+	passkeyOriginHost = "jomform.com"
+	passkeyBaseURL    = "https://" + passkeyOriginHost
+)
 
 // passkeyTestAuthenticator is a throwaway software authenticator: an ES256 key
 // pair plus the credential id the server has on file for it. It signs real
@@ -169,12 +174,14 @@ func (a passkeyTestAuthenticator) assertionBodyWithFlags(t *testing.T, key, rpID
 
 // passkeyHandlers wires the REST handlers the passkey ceremony needs over real
 // Postgres + Valkey: the passkey store (credentials + challenges), the user and
-// workspace stores, and a session issuer.
+// workspace stores, a session issuer, and the deployment's own APP_BASE_URL —
+// without it there is no RP ID to derive and every ceremony is refused.
 func passkeyHandlers(t *testing.T, pool *pgxpool.Pool) *RESTHandlers {
 	t.Helper()
 	h := newBundleHandlers(pool)
 	h.Passkeys = dbstore.NewPasskeyStore(pool)
 	h.Sessions = authTestValkey(t)
+	h.BaseURL = passkeyBaseURL
 	return h
 }
 
