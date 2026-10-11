@@ -564,11 +564,27 @@ var errWorkspaceSlugExhausted = errors.New("slug workspace tidak dapat dijana")
 // characters of the email, sanitised), so no call site can forget the rule or
 // invent a slug the API would reject.
 //
-// The slug is validated before it is used. If derivation somehow produced
-// something ValidateWorkspaceSlug refuses this returns an error rather than
-// provisioning a workspace whose own subdomain would 400 — a slug that the
-// wildcard host cannot serve is worse than no workspace, because the user would
-// then have a workspace whose form URLs are dead.
+// The slug is validated before it is used, and the ONE refusal this path
+// RECOVERS from is the reserved-name one (card t_ada797d1): the derived name is
+// our own guess from the user's email, never something he chose, and a name
+// JomForm reserves is policy about OUR names, not a mistake of his. So instead
+// of failing, the ladder skips the policy-refused name and the next
+// deterministic candidate is used — the same recovery a TAKEN slug already gets
+// (legacySlugCandidates does the skipping). Failing here would leave a
+// form-owning user without a workspace on every sign-in, forever: the login
+// path only logs the error, and the ask-first create path makes an account of
+// its own (issue #158) rather than adopting his, so his forms would stay
+// invisible with no in-product recovery.
+//
+// Any OTHER refusal means the derivation is broken, not that policy applies: it
+// is returned as an error rather than provisioning a workspace whose own
+// subdomain would 400 — a slug the wildcard host cannot serve is worse than no
+// workspace, because the user would then have a workspace whose form URLs are
+// dead.
+//
+// Either way, a workspace on a RESERVED host is never minted: the reserved leg
+// of the rule (ValidateWorkspaceSlug) is what refuses it, and this path cannot
+// insert a name the rule refuses.
 func (s *WorkspaceStore) ProvisionLegacyWorkspaceForOwner(ctx context.Context, ownerUserID string) (*Workspace, error) {
 	accountID, err := s.LegacyUnscopedAccount(ctx, ownerUserID)
 	if err != nil || accountID == "" {
@@ -581,7 +597,12 @@ func (s *WorkspaceStore) ProvisionLegacyWorkspaceForOwner(ctx context.Context, o
 	}
 	slug := SlugFromEmailLocalPart(email, ownerUserID)
 	if _, err := ValidateWorkspaceSlug(slug); err != nil {
-		return nil, fmt.Errorf("slug legacy tidak sah (%q): %w", slug, err)
+		if !errors.Is(err, ErrWorkspaceSlugReservedSubdomain) {
+			return nil, fmt.Errorf("slug legacy tidak sah (%q): %w", slug, err)
+		}
+		// Policy refusal about the name we derived, which the user never chose
+		// and must not be shown: fall through and let the ladder (below) pick
+		// the next deterministic name the rule accepts. See the doc comment.
 	}
 	name := email
 	if at := strings.Index(name, "@"); at > 0 {
@@ -600,17 +621,36 @@ func (s *WorkspaceStore) ProvisionLegacyWorkspaceForOwner(ctx context.Context, o
 // (measured on prod: owner00@example.com and owner00+test@example.com
 // both reduce to "owner"), and terminating because the sequence is finite and its
 // last entry carries 8 characters of a uuid.
+//
+// A name the slug RULE refuses on its reserved leg is not yielded at all (card
+// t_ada797d1). The wanted slug is derived from the user's email, so a local part
+// like "docs" or "www" derives a name JomForm reserves; the derivation is our
+// guess, not the user's choice, so the ladder steps over it and the next
+// candidate is used — exactly as it already steps over a name that is taken.
+// Without this the ladder's first entry would be a reserved host, and every
+// caller of this ladder is a path that INSERTs workspaces.slug.
+//
+// The test is the rule itself (ValidateWorkspaceSlug's sentinel), not a second
+// copy of the reserved list: the list lives in urlguard and is consulted in one
+// place, so a name added there is skipped here the moment it is added.
 func legacySlugCandidates(wantSlug, ownerUserID string) []string {
-	out := []string{wantSlug}
+	raw := []string{wantSlug}
 	for i := 2; i <= 9; i++ {
-		out = append(out, fmt.Sprintf("%s-%d", wantSlug, i))
+		raw = append(raw, fmt.Sprintf("%s-%d", wantSlug, i))
 	}
 	suffix := ownerUserID
 	if len(suffix) > 8 {
 		suffix = suffix[:8]
 	}
 	if suffix != "" {
-		out = append(out, wantSlug+"-"+suffix)
+		raw = append(raw, wantSlug+"-"+suffix)
+	}
+	out := make([]string, 0, len(raw))
+	for _, c := range raw {
+		if _, err := ValidateWorkspaceSlug(c); errors.Is(err, ErrWorkspaceSlugReservedSubdomain) {
+			continue
+		}
+		out = append(out, c)
 	}
 	return out
 }
