@@ -201,7 +201,8 @@ from the Hermes cron job `prune-kanban-worktrees` (daily `0 4 * * *`, a
 
 Before removing anything it requires **all** of: not the main checkout; a
 terminal card status; a completion older than `--min-age-hours` (24h); no live
-process referencing the worktree or the card; a clean tree; and — the one this
+process using the worktree or the card — neither one whose **argv** names it nor
+one whose **working directory** is inside it; a clean tree; and — the one this
 section is about — **durable** work.
 
 **"Durable" means reachable from a remote-tracking ref of `origin`**
@@ -220,6 +221,30 @@ and was removed. That is not hypothetical: it is how the defect this section
 records was reproduced, and it is why the test names `refs/remotes/origin`
 explicitly and prints the non-remote-tracking refs it refused to trust
 (`[ignoring non-remote-tracking ref(…)]` in the log).
+
+**"No live process" is two reads, and the second one is why a build survives.**
+A process can hold a worktree two ways: its argv can name the path (a worker's
+`work kanban task <id>`, an editor opened on a file in there, a shell that has not
+exec'd its last command yet), or its **working directory** can be inside it — the
+shape a real build has. `cd <wt> && npm run build` makes the shell exec the last
+command of the `&&` list, so the path leaves argv entirely: the process is
+`npm run build`, and npm, node and everything they start inherit cwd `<wt>`. An
+argv-only guard cannot see that, which is how a stray was removed with a build
+running inside it (`rm -rf` of 442M `node_modules` + 146M `.next`). Both reads are
+kept because neither subsumes the other: a build that has not exec'd yet is visible
+only in argv, an exec'd one only in cwd. The cwd read is the expensive one (~0.1s
+for the whole process table, against ~30ms for the argv read), so it is made **last
+in each loop — immediately before the removal or the `rm -rf` it guards** — where it
+can still change the outcome and where it is the freshest answer for that decision.
+
+A cwd read that **fails** is neither a keep nor a removal, and the process state
+separates the two cases. A **zombie** (`State: Z`) is dead and holds nothing, so it
+is skipped — measured on the agent host, every one of the 15 pids whose cwd read
+failed was a zombie, so reading a failed read as "keep" would keep everything and
+exit `1` on every run. Any other state is a live process we could not inspect: the
+worktree is left on disk **and the run exits `1`**, with a `FAIL` naming the pid. A
+silent keep there would hide a pruner that has stopped reclaiming; removing on a
+read that was never made is the one irreversible mistake this script exists to avoid.
 
 **A refusal is not a failure.** Keeping work is this script's normal, deliberate
 outcome: an unpushed local branch, a hand-made mirror, a live worker, a card
@@ -299,6 +324,13 @@ state file. It asserts, as outcomes read off real runs —
   a silent `KEEP` — and an unknown argument exits `2` having run nothing at all;
 - the stray-worktree loop (outside `.worktrees`, no card reference) gets the same
   correction;
+- a directory that is the **working directory** of a live process survives — the
+  shape a real `cd <wt> && npm run build` has, where the shell execs the build so the
+  path is in the kernel's cwd and in no argv — and the same directory is removed once
+  that process is gone, so the guard is not a blanket refusal; a live pid whose cwd
+  cannot be read is exit `1` (never a silent keep, never a removal), a **zombie**'s
+  unreadable cwd is skipped, and the build-artefact reap (`rm -rf web/node_modules`)
+  carries the same guard;
 - a worktree whose HEAD cannot be resolved at all — the shape a lane worktree takes
   when its **branch is deleted**, i.e. a valid gitdir whose `HEAD` points at a ref
   that no longer exists — is the same "cannot judge this worktree" condition as an

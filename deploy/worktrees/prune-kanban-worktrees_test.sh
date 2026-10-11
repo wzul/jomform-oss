@@ -42,6 +42,13 @@
 #       stray loop's live-process guard used to be called with `a |b ` as if the
 #       predicate were an alternation; it is a literal substring test, so the guard
 #       was dead code and a stray with a live build inside it was removed;
+#     * a directory that is the WORKING DIRECTORY of a live process survives while
+#       that process is there — the shape a real `cd <wt> && npm run build` has,
+#       where the shell EXECS the build so the path is in the kernel's cwd and in NO
+#       argv — and the same directory is removed once it is gone. A live pid whose
+#       cwd cannot be read is a loud cannot-judge (exit 1), never a silent keep and
+#       never a removal, while a ZOMBIE's unreadable cwd is skipped; the build-artefact
+#       reap (`rm -rf web/node_modules`) carries the same guard (card t_ac768fb9);
 #     * --dry-run removes nothing, and a repo path that does not exist is a no-op.
 #
 #   Entirely offline: a throwaway repo plus its own bare "origin" remote, a fake
@@ -923,6 +930,245 @@ check "premise: its stand-in is gone from the process table" "nomatch" \
 run_prune --min-age-hours 24 >/dev/null 2>&1
 check "with that process gone, the SAME stray is removed" "no" "$(stray_survives jf-live)"
 contains "...and the removal records its verdict" "$(cat "$LOG")" "RM    jf-live (stray"
+
+echo
+echo "--- the cwd half of the live-process guard: the exec'd build argv cannot describe ---"
+# 11. THE CARD'S DEFECT (t_ac768fb9), as outcomes on disk and on a real process
+#     table. SAFETY 4 is "no live process is using it", and the guard read ARGV
+#     ONLY. A real build is `cd <wt> && npm run build`: the shell EXECS the last
+#     command of the `&&` list, so the path leaves argv entirely — the process is
+#     `npm run build`, with cwd = <wt>, and npm, node and everything they start
+#     inherit that cwd. NO argv names the worktree, so the argv predicate cannot see
+#     it, and a stray (or a card worktree) was removed out from under a running
+#     build: `rm -rf` of 442M node_modules + 146M .next. In the CARD loop the worker
+#     guard masked it (`work kanban task <id>` is in a worker's argv); a stray has no
+#     worker, so its fate was age + durability + `git status` alone.
+#
+#     The three outcomes of the new read are pinned here — the directory SURVIVES
+#     while the stand-in is alive (with a KEEP line naming the cwd as the reason and
+#     removed=0/stray_removed=0 in the summary), the SAME directory is removed once
+#     it is gone (the guard is not a blanket refusal), and a LIVE pid whose cwd
+#     cannot be read is a loud cannot-judge — neither a silent keep nor a removal.
+#     The build-ARTEFACT path (`rm -rf web/node_modules`, same class of process,
+#     same damage) carries the same guard and is pinned with it.
+#
+#     The unreadable-cwd case CANNOT be produced on this host: root can read every
+#     live process's cwd here, and the only reads that fail are zombies (measured: 15
+#     of 354 pids, every one `Z`). So that case — and the ZOMBIE case the read must
+#     not mistake it for — is pinned on a SYNTHETIC process table: a root of
+#     `<pid>/cwd` entries plus a `<pid>/status` with a `State:` line, which is all
+#     the predicate reads. Its pids are drawn above the host's pid_max, so a
+#     synthetic entry can never be this suite's own process.
+#
+# The script's OWN predicate, driven through the ENVIRONMENT (a literal on the
+# caller's argv would let the scan match its own caller) -> inside | none | denied:<pid>
+cwd_check() { # <dir> [proc-root]
+  env JF_PRUNE_LIB_ONLY=1 JF_DIR="$1" JF_PROC_ROOT="${2:-/proc}" bash -c '
+    . "$0"
+    out="$(has_process_cwd_matching "$JF_DIR")"; rc=$?
+    case "$rc" in
+      0) echo inside ;;
+      2) printf "denied:%s\n" "$out" ;;
+      *) echo none ;;
+    esac
+  ' "$SCRIPT" 2>/dev/null | sed -n '$p'
+}
+# The `$$` rule, pinned the only way it CAN be: a table whose single entry is the
+# asking process's own pid and cwd. Without the skip this reads "inside" — the scan
+# would be matching the process that is asking the question. <scratch-root> must be
+# FRESH (one call per run): a stale `<pid>` directory from an earlier call would be
+# an entry for a pid that has since died, whose cwd link still points at the target.
+cwd_self_check() { # <dir> <fresh scratch-root>
+  env JF_PRUNE_LIB_ONLY=1 JF_DIR="$1" JF_SELF_ROOT="$2" bash -c '
+    . "$0"
+    root="$JF_SELF_ROOT/$$"
+    mkdir -p "$root"
+    ln -s "$JF_DIR" "$root/cwd"
+    printf "State:\tS (sleeping)\n" >"$root/status"
+    export JF_PROC_ROOT="$JF_SELF_ROOT"
+    out="$(has_process_cwd_matching "$JF_DIR")"; rc=$?
+    case "$rc" in
+      0) echo inside ;;
+      2) printf "denied:%s\n" "$out" ;;
+      *) echo none ;;
+    esac
+  ' "$SCRIPT" 2>/dev/null | sed -n '$p'
+}
+# The stand-ins cannot be started synchronously (`&`), and the premises below are
+# about where they ARE, so they are waited for rather than slept on: a loaded host
+# made the first version of this section flaky (3 of 4 reds, all in the premises).
+wait_for_cwd() { # <pid> <dir> [tries of 0.1s] -> 0 once /proc/<pid>/cwd is <dir>
+  local i=0
+  while [ "$i" -lt "${3:-100}" ]; do
+    [ "$(readlink "/proc/$1/cwd" 2>/dev/null)" = "$2" ] && return 0
+    sleep 0.1
+    i=$((i+1))
+  done
+  return 1
+}
+
+CWD_ARGV="npm run build"
+CWD_SHA="$(ucommit 'cwd-held work')"
+git -C "$UNBORN_REPO" push -q origin "$CWD_SHA:refs/heads/wt/t_00000015-cwd"
+git -C "$UNBORN_REPO" fetch -q origin
+CWD_TASK="t_00000015"
+CWD_WT="$UNBORN_REPO/.worktrees/$CWD_TASK"
+git -C "$UNBORN_REPO" worktree add -q --detach "$CWD_WT" "$CWD_SHA"
+printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$CWD_TASK"
+CWD_STRAY="$UNBORN_SB/strayroot/jf-cwdlive"
+git -C "$UNBORN_REPO" worktree add -q --detach "$CWD_STRAY" "$CWD_SHA"
+touch -d '2020-01-01' "$CWD_STRAY"
+# A third worktree, for the same guard on the ARTEFACT path: `rm -rf web/node_modules`
+# under a live build damages the build in flight rather than the worktree.
+CWD_ART_TASK="t_00000016"
+CWD_ART_WT="$UNBORN_REPO/.worktrees/$CWD_ART_TASK"
+git -C "$UNBORN_REPO" worktree add -q --detach "$CWD_ART_WT" "$CWD_SHA"
+printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$CWD_ART_TASK"
+mkdir -p "$CWD_ART_WT/web/node_modules"
+printf 'built\n' >"$CWD_ART_WT/web/node_modules/.jf-suite-marker"
+touch -d '2020-01-01' "$CWD_ART_WT"
+
+# The stand-ins are shaped exactly like the real thing — `cd <dir> && exec -a "npm
+# run build" sleep` — so the shell EXECS and the argv is `npm run build 300` while
+# the path lives in the kernel's cwd and nowhere else. (The sleep is long on purpose:
+# an earlier version used 60s, which a loaded host could outlive before the run below,
+# and a stand-in that dies early reads as "the guard refuses nothing".)
+env bash -c "cd \"$CWD_STRAY\" && exec -a \"$CWD_ARGV\" sleep 300" &
+CWD_STRAY_PID=$!
+env bash -c "cd \"$CWD_WT\" && exec -a \"$CWD_ARGV\" sleep 300" &
+CWD_WT_PID=$!
+env bash -c "cd \"$CWD_ART_WT\" && exec -a \"$CWD_ARGV\" sleep 300" &
+CWD_ART_PID=$!
+
+# Premises, measured: the stand-ins really ARE inside those directories, and NO argv
+# carries the path. The first is WAITED for (the stand-ins are background jobs, and a
+# loaded host needs more than a fixed sleep); the second half is the premise the card
+# asks for — if an argv did carry the path, the EXISTING argv guard would be what kept
+# them and these assertions would prove nothing about the cwd read. It is measured
+# through the script's OWN argv predicate on the real table (guard_real, literal via
+# the ENVIRONMENT).
+check "premise: the stray's stand-in is inside it (readlink /proc/<pid>/cwd)" "yes" \
+  "$( wait_for_cwd "$CWD_STRAY_PID" "$CWD_STRAY" && echo yes || echo no )"
+check "premise: the card worktree's stand-in is inside IT" "yes" \
+  "$( wait_for_cwd "$CWD_WT_PID" "$CWD_WT" && echo yes || echo no )"
+check "premise: the artefact worktree's stand-in is inside IT" "yes" \
+  "$( wait_for_cwd "$CWD_ART_PID" "$CWD_ART_WT" && echo yes || echo no )"
+check "premise: the stand-in's argv does NOT carry the stray's path (only a cwd read can see it)" \
+  "nomatch" "$(guard_real "$CWD_STRAY ")"
+check "premise: ...nor the '.worktrees/<name>' form of it" "nomatch" \
+  "$(guard_real "worktrees/$(basename "$CWD_STRAY") ")"
+check "premise: ...nor the card worktree's path" "nomatch" "$(guard_real "$CWD_WT ")"
+check "premise: ...nor its '.worktrees/<name>' form" "nomatch" "$(guard_real "worktrees/$CWD_TASK ")"
+check "premise: ...nor the artefact worktree's path" "nomatch" "$(guard_real "$CWD_ART_WT ")"
+check "premise: while the argv predicate DOES see the stand-in's own argv (it is not blind to the process)" \
+  "match" "$(guard_real "$CWD_ARGV")"
+
+check "the cwd predicate finds a process inside the stray" "inside" "$(cwd_check "$CWD_STRAY")"
+check "the cwd predicate finds a process inside the card worktree" "inside" "$(cwd_check "$CWD_WT")"
+check "...and says nothing is inside a directory no process is in" "none" "$(cwd_check "$SB/stub")"
+
+# The synthetic table. Each sub-root isolates ONE case, so an assertion cannot pass
+# because of a different pid in the same table.
+FAKE="$SB/fake-proc"
+FAKE_TARGET="$SB/cwd-target"
+mkdir -p "$FAKE_TARGET/sub" "$FAKE_TARGET-sibling"
+mkdir -p "$FAKE/live/9999001" "$FAKE/zombie-only/9999002" "$FAKE/deny-only/9999003" \
+         "$FAKE/sub-only/9999004" "$FAKE/sibling-only/9999005" "$FAKE/empty" "$FAKE/self"
+ln -s "$FAKE_TARGET"               "$FAKE/live/9999001/cwd"
+printf 'State:\tS (sleeping)\n' >"$FAKE/live/9999001/status"
+# The zombie: a cwd entry whose target cannot be read (a dead process's /proc entry
+# behaves the same way at the syscall find uses) with `State: Z`.
+printf 'not-a-link\n'          >"$FAKE/zombie-only/9999002/cwd"
+printf 'State:\tZ (zombie)\n'  >"$FAKE/zombie-only/9999002/status"
+# ...the same unreadable cwd, but a LIVE state: this is the cannot-judge.
+printf 'not-a-link\n'          >"$FAKE/deny-only/9999003/cwd"
+printf 'State:\tS (sleeping)\n' >"$FAKE/deny-only/9999003/status"
+ln -s "$FAKE_TARGET/sub"       "$FAKE/sub-only/9999004/cwd"
+printf 'State:\tS (sleeping)\n' >"$FAKE/sub-only/9999004/status"
+ln -s "$FAKE_TARGET-sibling"   "$FAKE/sibling-only/9999005/cwd"
+printf 'State:\tS (sleeping)\n' >"$FAKE/sibling-only/9999005/status"
+check "premise: the synthetic 'inside' entry is a cwd link the kernel can read" "$FAKE_TARGET" \
+  "$(readlink "$FAKE/live/9999001/cwd")"
+check "premise: the synthetic zombie's cwd cannot be read at all" "" \
+  "$(readlink "$FAKE/zombie-only/9999002/cwd" 2>/dev/null)"
+check "premise: ...and its State: line says Z, so the state is the only thing that can tell it apart" "Z" \
+  "$(awk '/^State:/{print $2}' "$FAKE/zombie-only/9999002/status")"
+check "premise: the third pid's cwd cannot be read either, but its state is NOT Z" "S" \
+  "$(awk '/^State:/{print $2}' "$FAKE/deny-only/9999003/status")"
+
+check "a synthetic live pid inside the target reads 'inside'" "inside" \
+  "$(cwd_check "$FAKE_TARGET" "$FAKE/live")"
+check "...and a pid sitting one level DOWN counts too (git removes the whole subtree)" "inside" \
+  "$(cwd_check "$FAKE_TARGET" "$FAKE/sub-only")"
+check "...while a SIBLING that merely shares a prefix does not" "none" \
+  "$(cwd_check "$FAKE_TARGET" "$FAKE/sibling-only")"
+check "a ZOMBIE's unreadable cwd is SKIPPED, not read as a cannot-judge" "none" \
+  "$(cwd_check "$SB/stub" "$FAKE/zombie-only")"
+check "...because a LIVE pid whose cwd cannot be read IS the cannot-judge, naming the pid" "denied:9999003" \
+  "$(cwd_check "$SB/stub" "$FAKE/deny-only")"
+check "a process table that comes back empty is a cannot-judge, NEVER 'nothing is inside'" "denied:?" \
+  "$(cwd_check "$SB/stub" "$FAKE/empty")"
+check "the scan does not match the process asking the question (its own cwd, at a fake pid)" "none" \
+  "$(cwd_self_check "$SB/stub" "$FAKE/self")"
+check "premise: the self-check really did put an entry for its own pid in the table" "yes" \
+  "$( [ -n "$(find "$FAKE/self" -maxdepth 2 -name cwd -print -quit)" ] && echo yes || echo no )"
+
+# ── run 1: both directories are the cwd of a live stand-in, so both SURVIVE ──────
+: >"$UNBORN_LOG"
+run_unborn --min-age-hours 24 >/dev/null 2>&1; RC=$?
+check "run 1: the run reclaims nothing and is exit 0 (a keep on purpose is not a failure)" "0" "$RC"
+check "the CARD worktree whose directory is a live process's cwd SURVIVES" "yes" \
+  "$( [ -d "$CWD_WT" ] && echo yes || echo no )"
+contains "...and the refusal names the cwd as the reason" "$(cat "$UNBORN_LOG")" \
+  "KEEP  $CWD_TASK (a process's working directory is inside this worktree)"
+check "the STRAY whose directory is a live process's cwd SURVIVES" "yes" \
+  "$( [ -d "$CWD_STRAY" ] && echo yes || echo no )"
+contains "...and its refusal names the cwd too" "$(cat "$UNBORN_LOG")" \
+  "KEEP  jf-cwdlive (a process's working directory is inside this stray)"
+check "...and nothing tried to remove either" "0" \
+  "$(grep -c -e "RM    jf-cwdlive" -e "RM    $CWD_TASK" "$UNBORN_LOG")"
+contains "...with removed=0 in the summary" "$(cat "$UNBORN_LOG")" " removed=0 skipped="
+contains "...and stray_removed=0" "$(cat "$UNBORN_LOG")" "stray_removed=0"
+check "...and the run records no failure at all (an unreadable cwd would be one)" "0" \
+  "$(grep -c 'FAIL ' "$UNBORN_LOG")"
+check "the third worktree's build artefacts SURVIVE while its build runs (the guard on the reap path)" "yes" \
+  "$( [ -f "$CWD_ART_WT/web/node_modules/.jf-suite-marker" ] && echo yes || echo no )"
+
+# ── the other half: it is the PROCESS, not a guard that refuses everything ───────
+kill "$CWD_STRAY_PID" "$CWD_WT_PID" "$CWD_ART_PID" 2>/dev/null
+wait "$CWD_STRAY_PID" 2>/dev/null
+wait "$CWD_WT_PID" 2>/dev/null
+wait "$CWD_ART_PID" 2>/dev/null
+check "premise: the stand-in's pid is gone from the process table" "no" \
+  "$( [ -d "/proc/$CWD_WT_PID" ] && echo yes || echo no )"
+check "premise: the cwd predicate now finds nothing in the card worktree" "none" "$(cwd_check "$CWD_WT")"
+check "premise: ...nor in the stray" "none" "$(cwd_check "$CWD_STRAY")"
+check "premise: and both directories are still on disk, so the second half starts from them" "yes" \
+  "$( [ -d "$CWD_WT" ] && [ -d "$CWD_STRAY" ] && echo yes || echo no )"
+
+: >"$UNBORN_LOG"
+run_unborn --min-age-hours 24 >/dev/null 2>&1; RC=$?
+check "run 2: with the processes gone, the SAME card worktree is removed" "no" \
+  "$( [ -d "$CWD_WT" ] && echo yes || echo no )"
+check "run 2: ...and the SAME stray is removed" "no" \
+  "$( [ -d "$CWD_STRAY" ] && echo yes || echo no )"
+contains "...the stray removal records its verdict" "$(cat "$UNBORN_LOG")" "RM    jf-cwdlive (stray"
+contains "...and the card removal records the pushed verdict" "$(cat "$UNBORN_LOG")" "durable=pushed-branch"
+contains "...with removed=1 in the summary (the guard does not refuse everything)" "$(cat "$UNBORN_LOG")" " removed=1 skipped="
+contains "...and stray_removed=1" "$(cat "$UNBORN_LOG")" "stray_removed=1"
+check "the third worktree's build artefacts are reaped now that nothing is building" "no" \
+  "$( [ -f "$CWD_ART_WT/web/node_modules/.jf-suite-marker" ] && echo yes || echo no )"
+check "...while that worktree itself stays: its artefacts are untracked, so it is dirty" "yes" \
+  "$( [ -d "$CWD_ART_WT" ] && echo yes || echo no )"
+check "...and run 2 exits 0" "0" "$RC"
+# Leave the sandbox as this section found it (the dirty worktree cannot be removed by
+# the pruner, so it is dropped the way an operator would) — a leftover would show up
+# in a later run's counts.
+rm -rf "$CWD_ART_WT"
+git -C "$UNBORN_REPO" worktree prune 2>/dev/null
+rm -f "$SB/fake-hermes/$CWD_ART_TASK"
+check "...and the sandbox is left clean (the artefact worktree is gone)" "no" \
+  "$( [ -d "$CWD_ART_WT" ] && echo yes || echo no )"
 
 echo
 printf 'prune-kanban-worktrees self-test: %d passed, %d failed\n' "$PASS" "$FAIL"

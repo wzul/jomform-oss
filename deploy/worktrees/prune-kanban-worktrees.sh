@@ -20,12 +20,117 @@
 #   1. Not the board's main checkout.
 #   2. The card's status is terminal (done/archived).
 #   3. The card finished at least --min-age-hours ago (default 24h).
-#   4. No live process references the worktree or the task id.
+#   4. No live process is using it: neither one whose ARGV names it (or the task
+#      id), nor one whose WORKING DIRECTORY is inside it. See THE LIVE-PROCESS
+#      GUARD READS ARGV AND THE KERNEL'S cwd below.
 #   5. The work is DURABLE: the current commit is reachable from a
 #      REMOTE-TRACKING ref — `refs/remotes/origin/*` (a pushed branch, or merged
 #      into origin/main). Unpushed work is never removed — it is reported instead.
 #      A LOCAL branch does not count (removing the worktree keeps the branch, so
 #      it is reported as UNSAFE, not removed).
+#
+# THE LIVE-PROCESS GUARD READS ARGV AND THE KERNEL'S cwd (card t_ac768fb9)
+#   SAFETY 4 says "no live process is using it", and a process can hold a worktree
+#   two different ways. Both are read, and neither read is redundant:
+#
+#     * its ARGV carries the path — an editor opened on a file in there, a shell
+#       that has not exec'd its last command yet, another agent's `git -C <wt> …`.
+#       `has_process_matching` answers this one, over `ps -eo args=`.
+#     * its WORKING DIRECTORY is the worktree, or anything inside it — the shape a
+#       real build takes. `cd <wt> && npm run build` makes the shell EXEC the last
+#       command of the `&&` list, so the path leaves argv entirely: the process is
+#       `npm run build` with cwd = <wt>, and npm, node and everything they start
+#       inherit it. Nothing in that argv names the worktree, so an argv-only guard
+#       cannot see it. `has_process_cwd_matching` answers this one — and this is
+#       the defect this comment exists for: a build that has not exec'd yet is
+#       visible ONLY in argv, and an exec'd one ONLY in cwd.
+#
+#   For the CARD loop the argv half was incidentally covered by the worker guard
+#   (`work kanban task <id>` is in a worker's argv). A STRAY has no worker, so
+#   before this its fate was age + durability + `git status` alone: a stray was
+#   removed with a build running inside it — `rm -rf` of 442M node_modules and
+#   146M .next under a live `npm run build`. The same hole was open on the
+#   artefact-reap path (`rm -rf web/node_modules`), which is why that call site
+#   carries the cwd test too.
+#
+#   THE MECHANISM IS ONE `find` CALL FOR THE WHOLE TABLE — `find /proc -maxdepth 2
+#   -name cwd -printf '%p\0%l\0'` — AND IT WAS DECIDED ON MEASURED NUMBERS, not on
+#   taste. On the agent host (364 pids) `readlink /proc/<pid>/cwd` once per pid
+#   costs ~1.3s and this costs ~0.05s, and the question is asked once per worktree:
+#   the host carries 641 worktrees today, i.e. ~14 minutes against ~30s of a job
+#   that takes ~1 minute end to end. `find -printf` also gives, per pid, the PATH
+#   (so a failure can name the pid) and the RAW readlink target — unlike `ls -l` it
+#   does not QUOTE the target, so a path containing a space compares exactly and a
+#   path containing ` -> ` cannot be mis-split. Considered and rejected:
+#     * `lsof` (and `fuser`): present on this host (measured) but not something a
+#       bare host is guaranteed to have, and their directory forms (`lsof +D <dir>`)
+#       walk the whole tree — seconds on a worktree with 442M of node_modules — to
+#       answer a question the kernel answers directly. `lsof -a -d cwd -p <pid>`
+#       also needs one call per pid, i.e. the same per-pid cost as readlink.
+#     * an argv heuristic (`pgrep -f` on the worktree path): that is the input
+#       source this defect is about. It cannot see a cwd at all.
+#     * `cd -P /proc/<pid>/cwd` + `$PWD` is fork-free and exact, but it CHDIRS into
+#       the process's directory, so a cwd on a hung mount can block the pruner —
+#       reading a link cannot.
+#     * `/proc/<pid>/cwd` is Linux-only, and that is accepted and stated rather
+#       than hidden: this is a host script for the agent host (systemd Linux) and
+#       it already relies on GNU/Linux-only tools (`ps -eo args=`, `stat -c`,
+#       `date -d`, `du -xsh`, `find -printf`). On a host where the read yields no
+#       rows at all the guard reports cannot-judge (below) instead of reading an
+#       unreadable table as "nothing is inside" — so the portability gap fails
+#       loudly and in the safe direction.
+#
+#   WHAT COUNTS AS A MATCH: the directory itself, or anything under it
+#   (`<dir>` or `<dir>/*`), because `git worktree remove --force` deletes the
+#   whole subtree. The argv test needs a trailing space to stop a SIBLING path
+#   (`<…>/jf-live2`) counting as `<…>/jf-live`; readlink returns the whole path,
+#   so the `/` boundary does that job here and no padding is needed. The one
+#   suffix readlink can add, ` (deleted)`, is deliberately NOT normalised: a
+#   process whose cwd was already unlinked holds a directory that is no longer
+#   the one on disk, so it must not read as holding it. `$$` is skipped for the
+#   same reason the argv scan skips it — the predicate must never be able to match
+#   the process asking the question (the self-test drives it from a shell whose
+#   cwd is the directory under test). No scanner-exclusion list is needed here:
+#   an argv that merely MENTIONS `pgrep`/`awk` has nothing to do with a cwd read.
+#
+#   WHEN THE READ FAILS — a decision, not a fallback. `readlink` of a dead
+#   process's cwd fails, and so does a read the kernel refuses for a process we
+#   may not inspect. They are told apart by the process STATE (`State:` in
+#   `/proc/<pid>/status`) and are NOT treated the same:
+#     * state `Z` (zombie): the process is dead and holds nothing, so it is
+#       SKIPPED silently — it is neither a reason to keep nor to refuse.
+#       Measured on this host: 15 of 354 pids failed the read and every one was a
+#       zombie, so a blanket "a failed read means keep" would have kept everything
+#       and exited 1 on EVERY run.
+#     * any other state: we cannot tell whether that live process is inside the
+#       worktree, so the worktree is LEFT ON DISK AND THE RUN FAILS — a `FAIL` line
+#       naming the pid, `failures+1`, exit 1. Deliberately neither a silent keep
+#       nor a removal: a silent keep hides "the pruner stopped reclaiming this
+#       worktree" (the shape the exit-1 contract exists for), and removing on a
+#       read we could not make is the one irreversible mistake this script is
+#       written to avoid. Same treatment as an unreadable card and an unresolvable
+#       HEAD.
+#     * NO ROWS AT ALL (the tool is not GNU `find`, the root is unreadable): the
+#       same cannot-judge, `?` instead of a pid. "The table came back empty" must
+#       never be read as "nothing is inside" — that is precisely the silent removal
+#       this guard exists to prevent.
+#
+#   `JF_PROC_ROOT` (default `/proc`) exists only as the self-test's seam: the suite
+#   synthesises a table containing a live pid whose cwd cannot be read, which CANNOT
+#   be produced on this host (root can read every live process's cwd here; only
+#   zombies fail). That synthetic case pins the SHAPE — a failed read on a pid whose
+#   state is not `Z` — not the EACCES errno itself.
+#
+#   WHERE THE cwd READ IS MADE, AND WHY THERE. It is made LAST in every loop —
+#   immediately before the `git worktree remove` or the `rm -rf` it guards — while
+#   the two argv reads stay in step 4. That is the cost, not a preference: the argv
+#   reads are one ~30ms `ps` each, the cwd read is a ~0.1s scan of the whole process
+#   table, and the host carries 641 worktrees (its last logged run: 33 card
+#   removals, 38 artefact reaps). Made last, the scan is paid only where it can
+#   still change the outcome, and it is the freshest available answer for the
+#   decision it guards. It is still a guard — it runs BEFORE the destructive step,
+#   never after — and the artefact path additionally skips the scan entirely for a
+#   worktree with no artefacts to reap.
 #
 # EXIT CODES — WHAT A CALLER CAN ALERT ON
 #   0  the run did its job: every removal it ATTEMPTED succeeded, and the work it
@@ -34,7 +139,8 @@
 #      — the log names each one and the summary line counts them, but a refusal is
 #      not a failure of the run.
 #   1  something went wrong: a `git worktree remove` FAILED, a card could not be
-#      read (so its worktree can never be judged), or `git fetch` failed and the
+#      read (so its worktree can never be judged), a live process's cwd could not
+#      be read (so no worktree could be proven free), or `git fetch` failed and the
 #      durability verdict was taken on stale refs. These are the conditions that
 #      mean the pruner could not do its job, and they are the ones to alarm on.
 #   2  bad arguments.
@@ -74,6 +180,7 @@
 #   JF_PRUNE_EXTRA_ROOTS  extra worktree roots to sweep (default "/tmp /root/wt")
 #   JF_PRUNE_FETCH        1 = `git fetch --prune origin` first (default), 0 = skip
 #   JF_PRUNE_LIB_ONLY     1 = define the functions and run nothing (self-test)
+#   JF_PROC_ROOT          /proc root the cwd read uses  (default /proc; self-test seam)
 set -uo pipefail
 
 DRY_RUN=0
@@ -96,7 +203,7 @@ while [ $# -gt 0 ]; do
     --board)          BOARD="$2"; shift 2;;
     --repo)           REPO="$2"; shift 2;;
     --no-fetch)       DO_FETCH=0; shift;;
-    -h|--help)        sed -n '2,52p' "$0"; sed -n '67,76p' "$0"; exit 0;;
+    -h|--help)        sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d'; exit 0;;
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
 done
@@ -250,6 +357,79 @@ has_process_matching() { # <literal substring>
   '
 }
 
+# has_process_cwd_matching: is any live process WORKING inside <dir> — i.e. is <dir>,
+# or anything under it, some process's working directory? (the OTHER half of the
+# live-process guard; card t_ac768fb9)
+#
+# WHY A cwd READ AT ALL, WHY BOTH ARGV AND cwd stay, and what a DENIED read means:
+# all three are decided and argued in the script header, under "THE LIVE-PROCESS
+# GUARD READS ARGV AND THE KERNEL'S cwd". Summary:
+#
+#   0  a live process's cwd is <dir> or under it — the caller must not remove it.
+#      The shape this exists for is a real build: `cd <wt> && npm run build` execs
+#      the build, so the path is in the cwd and in NO argv.
+#   1  nothing is inside it.
+#   2  the question could not be answered: a LIVE process's cwd could not be read,
+#      or the process table produced nothing at all. The pid(s) are printed on
+#      stdout (`?` for the empty-table case). The caller must neither keep silently
+#      nor remove — see the header (a zombie is skipped instead: it holds nothing).
+#
+# THE MECHANISM IS ONE `find` CALL FOR THE WHOLE TABLE, AND THE NUMBERS DECIDED IT
+# (measured on the agent host, 364 pids): `readlink /proc/<pid>/cwd` in a per-pid
+# loop costs ~1.3s, this costs ~0.05s, and the question is asked once per worktree
+# — 641 of them on the host today, i.e. ~14 minutes against ~30s. `lsof`/`fuser`
+# were rejected in the header (not guaranteed present, and their directory forms
+# walk the whole tree). `find -printf '%p\0%l\0'` gives, per pid, the PATH (so the
+# pid is still known for the failure message) and the RAW readlink target: unlike
+# `ls -l` it does not QUOTE the target, so a path containing a space is compared
+# exactly and a path containing ` -> ` cannot be mis-split. NUL-separated rather
+# than line-based for the same reason: a target containing a tab or a newline
+# cannot turn one pid into two records. An empty target means the read failed.
+#
+# `JF_PROC_ROOT` (default /proc) is the self-test's seam.
+has_process_cwd_matching() { # <dir>
+  local dir="${1%/}" root="${JF_PROC_ROOT:-/proc}" path target pdir pid state sl
+  local rows=0 denied=""
+  while IFS= read -r -d '' path && IFS= read -r -d '' target; do
+    rows=$((rows+1))
+    pdir="${path%/*}"                          # <root>/<pid>
+    pid="${path#"$root"/}"; pid="${pid%%/*}"   # -> <pid>
+    # Never the process asking the question (see the header).
+    [ "$pid" = "$$" ] && continue
+    if [ -z "$target" ]; then
+      # No cwd to read. A ZOMBIE has none to hold — dead, so it can be neither a
+      # reason to keep nor to refuse — and it is skipped. Any other state is a read
+      # we could not make: that is a cannot-judge, never a keep and never a
+      # removal. The state letter is the second field of the `State:` line in
+      # /proc/<pid>/status, and it is read with the shell's own `read` rather than
+      # an `awk`: this path runs once per unreadable pid, and the fork per pid is
+      # what made a call cost 273ms instead of 100ms (measured on the host).
+      state=""
+      while IFS= read -r sl; do
+        case "$sl" in State:*) state="${sl#State:}"; break ;; esac
+      done <"$pdir/status" 2>/dev/null
+      # "State:\tZ (zombie)" -> leading whitespace off -> first character is it.
+      state="${state#"${state%%[![:space:]]*}"}"
+      [ "${state:0:1}" = "Z" ] && continue
+      denied="${denied:+$denied,}$pid"
+      continue
+    fi
+    case "$target" in
+      # The directory itself, or anything under it: `git worktree remove --force`
+      # deletes the whole subtree, and the `/` boundary here is what keeps a
+      # SIBLING path (`<…>/jf-live2`) from counting as `<…>/jf-live`.
+      "$dir"|"$dir"/*) return 0 ;;
+    esac
+  done < <(find "$root" -maxdepth 2 -name cwd -printf '%p\0%l\0' 2>/dev/null)
+  # An empty table is a table that could not be read (a `find` that is not GNU
+  # find, an unreadable root, a bogus JF_PROC_ROOT) — a cannot-judge, NOT "nothing
+  # is inside", because the difference between those two is the difference between
+  # keeping a worktree and deleting one out from under a live process.
+  [ "$rows" -eq 0 ] && { printf '?\n'; return 2; }
+  [ -n "$denied" ] && { printf '%s\n' "$denied"; return 2; }
+  return 1
+}
+
 main() {
   [ -d "$REPO/.worktrees" ] || { log "no worktrees dir at $REPO/.worktrees"; exit 0; }
   cd "$REPO" || exit 1
@@ -302,14 +482,24 @@ main() {
     fi
 
     # 4. live process guard — never yank a worktree out from under a worker.
-    #    Match the WORKER INVOCATION only. A bare `pgrep -f "$name"` self-matches
-    #    any shell whose command line merely mentions the path (including this
-    #    script's own caller), which silently kept every old worktree forever.
+    #    TWO reads here, both cheap (`ps` is one ~30ms call), and the THIRD one —
+    #    a process WORKING inside the worktree, the exec'd build whose argv is
+    #    nothing but `npm run build` — is made last, just before the removal: it is
+    #    the only one that scans the whole process table (~0.1s) and the host
+    #    carries 641 worktrees, so it is made where a scan can still change the
+    #    outcome and where it is the freshest answer for the decision. See the
+    #    header, "THE LIVE-PROCESS GUARD READS ARGV AND THE KERNEL'S cwd".
+    #      a) it IS the worker — `work kanban task <id>` is in its argv. A bare
+    #         `pgrep -f "$name"` here self-matches any shell whose command line
+    #         merely mentions the path (including this script's own caller), which
+    #         silently kept every old worktree forever.
+    #      b) its ARGV names the worktree — an editor opened on a file in there, a
+    #         shell that has not exec'd its last command yet, another agent's
+    #         `git -C <wt> …` (`has_process_matching`, a LITERAL substring test).
     if has_process_matching "work kanban task $task"; then
       log "KEEP  $name (worker process alive)"
       skipped=$((skipped+1)); continue
     fi
-    # A process holding this specific worktree as its cwd (e.g. a build in it).
     if has_process_matching "worktrees/$name "; then
       log "KEEP  $name (a process references this worktree)"
       skipped=$((skipped+1)); continue
@@ -383,6 +573,22 @@ main() {
       log "UNSAFE $name (card=$task has $dirty uncommitted change(s) — leaving it)"
       unsafe=$((unsafe+1)); continue
     fi
+
+    # THE LAST CHECK, IMMEDIATELY BEFORE THE DESTRUCTIVE STEP: is a live process
+    # WORKING inside it? This is the third read of SAFETY 4, the one the argv tests
+    # cannot make, and the one made here rather than in step 4 on purpose — it scans
+    # the whole process table (~0.1s measured) and the host carries 641 worktrees,
+    # while the argv tests are one ~30ms `ps` call each. Placed here it runs only
+    # where a scan can still change the outcome, and it is the freshest possible
+    # answer at the moment the removal is decided (card t_ac768fb9; the header
+    # argues the mechanism and what a denied read means).
+    cwd_pid="$(has_process_cwd_matching "$wt")"; cwd_rc=$?
+    case "$cwd_rc" in
+      0) log "KEEP  $name (a process's working directory is inside this worktree)"
+         skipped=$((skipped+1)); continue ;;
+      2) log "FAIL  $name (cannot read the cwd of live pid(s) ${cwd_pid:-?} — cannot prove nothing is working inside this worktree; leaving it)"
+         failures=$((failures+1)); continue ;;
+    esac
 
     size=$(du -xsh "$wt" 2>/dev/null | awk '{print $1}')
     if [ "$DRY_RUN" = "1" ]; then
@@ -469,6 +675,19 @@ main() {
         stray_unsafe=$((stray_unsafe+1)); continue
       fi
 
+      # THE LAST CHECK BEFORE THE DESTRUCTIVE STEP — the half NO argv literal can see
+      # (card t_ac768fb9). A real build IS `cd <wt> && npm run build`: the shell
+      # execs it, so the path is in the kernel's cwd and in NO argv, which is
+      # exactly the shape this loop used to remove while it ran. Same three outcomes
+      # as the card loop, and the same reason for the position; see the header.
+      cwd_pid="$(has_process_cwd_matching "$wt")"; cwd_rc=$?
+      case "$cwd_rc" in
+        0) log "KEEP  $name (a process's working directory is inside this stray)"
+           continue ;;
+        2) log "FAIL  $name (cannot read the cwd of live pid(s) ${cwd_pid:-?} — cannot prove nothing is working inside this stray; leaving it)"
+           failures=$((failures+1)); continue ;;
+      esac
+
       size=$(du -xsh "$wt" 2>/dev/null | awk '{print $1}')
       if [ "$DRY_RUN" = "1" ]; then
         log "WOULD $name (stray $size durable=$dur)$note"
@@ -498,6 +717,23 @@ main() {
       has_process_matching "work kanban task $task" && continue
       mtime=$(stat -c %Y "$wt" 2>/dev/null || echo "$NOW")
       [ "$mtime" -gt "$CUTOFF" ] && continue
+      # Nothing to reap here? Then do not pay for the process-table scan at all —
+      # it is the expensive read of SAFETY 4 (see the header), and on the host 35 of
+      # 641 worktrees carry artefacts.
+      if [ -d "$wt/web/.next" ] || [ -d "$wt/web/test-results" ] || [ -d "$wt/web/node_modules" ]; then
+        # The same guard, on the same class of process, for the same reason: the
+        # worker check above is argv-only, so `rm -rf web/node_modules` under a live
+        # `npm run build` (argv = `npm run build`, cwd = this worktree) would break
+        # the build in progress (card t_ac768fb9). A denied cwd read leaves the
+        # artefacts alone and FAILs — the third outcome of has_process_cwd_matching,
+        # argued in the header.
+        cwd_pid="$(has_process_cwd_matching "$wt")"; cwd_rc=$?
+        case "$cwd_rc" in
+          0) continue ;;
+          2) log "FAIL  artefact in $(basename "$wt") (cannot read the cwd of live pid(s) ${cwd_pid:-?} — cannot prove nothing is building there; leaving its build artefacts)"
+             failures=$((failures+1)); continue ;;
+        esac
+      fi
       for sub in "$wt/web/.next" "$wt/web/test-results" "$wt/web/node_modules"; do
         if [ -d "$sub" ]; then
           sz=$(du -xsh "$sub" 2>/dev/null | awk '{print $1}')
