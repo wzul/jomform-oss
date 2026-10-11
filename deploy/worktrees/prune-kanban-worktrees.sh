@@ -234,7 +234,15 @@ worktree_head() { # <worktree-path> -> sha on stdout, empty when unresolvable
 # reads its whole input before `END` decides, so there is no early reader and no
 # SIGPIPE, and the scanner exclusion is an awk pattern instead of a second `grep`.
 # `-v` (not string concatenation) keeps a pattern with regex metacharacters literal.
-has_process_matching() { # <pattern>
+#
+# THE ARGUMENT IS ONE LITERAL SUBSTRING, NEVER AN ALTERNATION (card t_8cdb8111).
+# It is tested with `index()`, so `a |b` is a single literal that has to appear
+# verbatim in an argv — no argv contains ` |`, so such a call site can never fire
+# and is dead code that reads like a live guard. A call site that wants two
+# alternatives makes TWO CALLS. `$wt ` (the path plus a trailing space) is the
+# deliberate shape for a worktree path: it stops an argv holding a SIBLING path
+# (`/tmp/x/jf-live2`) from counting as `/tmp/x/jf-live`.
+has_process_matching() { # <literal substring>
   ps -eo args= 2>/dev/null | awk -v pat="$1" '
     $0 !~ /^[[:space:]]*([^[:space:]]*\/)?(pgrep|pkill|ps|grep|awk|sed)([[:space:]]|$)/ \
       && index($0, pat) > 0 { found = 1 }
@@ -408,7 +416,14 @@ main() {
 
       # Never touch the main checkout or a dir the board still points at.
       [ "$wt" = "$REPO" ] && continue
-      if has_process_matching "worktrees/$name |$wt "; then
+      # A process referring to this stray: the `.worktrees/<name>` form a lane
+      # writes, or this directory's own path. TWO calls, not one `a |b` string:
+      # has_process_matching is a LITERAL substring test, so the old
+      # `"worktrees/$name |$wt "` was a single literal that no argv contains — the
+      # guard was dead code and a stray with a live build inside it was REMOVED
+      # (card t_8cdb8111). The trailing space in each literal keeps a sibling path
+      # (`<…>/jf-live2`) from counting as this one.
+      if has_process_matching "worktrees/$name " || has_process_matching "$wt "; then
         log "KEEP  $name (process references it)"
         continue
       fi

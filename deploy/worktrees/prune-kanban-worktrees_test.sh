@@ -37,6 +37,11 @@
 #       exists, the shape a worktree takes when its branch is deleted — is a
 #       "cannot judge this worktree" FAILURE (exit 1), not a silent keep under a
 #       reason taken from the REPO's HEAD (card t_3fa15d1c), in both loops;
+#     * a STRAY held by a live process whose argv carries its path SURVIVES while
+#       that process is there, and the SAME stray is removed once it is gone. The
+#       stray loop's live-process guard used to be called with `a |b ` as if the
+#       predicate were an alternation; it is a literal substring test, so the guard
+#       was dead code and a stray with a live build inside it was removed;
 #     * --dry-run removes nothing, and a repo path that does not exist is a no-op.
 #
 #   Entirely offline: a throwaway repo plus its own bare "origin" remote, a fake
@@ -838,6 +843,86 @@ rm -rf "$REPO/.worktrees/$NOREF_TASK"
 git -C "$REPO" worktree prune 2>/dev/null
 rm -f "$SB/fake-hermes/$NOREF_TASK"
 check "...and the sandbox is left clean (the extra worktree is gone)" "no" "$(survives "$NOREF_TASK")"
+
+echo "--- the STRAY loop's live-process guard (a dead guard, now pinned) ---"
+# 10. THE CARD'S DEFECT (t_8cdb8111), as an outcome on disk. The stray loop's
+#     live-process guard was called as
+#         has_process_matching "worktrees/$name |$wt "
+#     — as if the argument were an alternation. The predicate tests its argument
+#     with awk `index($0, pat)`: a LITERAL substring, no regex, so ` |` had to
+#     appear verbatim in some argv for the guard to fire. Nothing ever does, so the
+#     guard was dead code: measured on the host, a stray with a stand-in still alive
+#     inside it (`cd <stray> && npm run build`) was REMOVED and the run logged
+#     `RM    jf-live (stray …)`. The CARD loop's two call sites each pass a single
+#     literal and were never affected, which is why only the stray loop is pinned
+#     here.
+#
+#     The stray's NAME is unique to this run by construction — the whole sandbox is
+#     a fresh `mktemp -d` — so a peer suite's stand-in cannot satisfy this run's
+#     pattern. That is the same cross-run hazard the card loop's pid-derived worker
+#     id exists for (section 6), handled here by the sandbox being per-run.
+
+# The predicate's own shape, pinned on a SYNTHETIC table so this is deterministic
+# and load-independent: the pre-fix pattern is a literal no argv can hold, the path
+# literal alone is what fires, and the `.worktrees/<name>` literal cannot be what
+# fires for a stray (a stray is not under .worktrees). The pattern travels through
+# the ENVIRONMENT, never on the caller's argv: a pattern on the command line makes
+# the predicate match its OWN CALLER, which is how a first attempt at the probe
+# read "the guard fired" when nothing but the probe itself was there.
+guard_literal() { # <synthetic argv row> <literal> — the script's predicate, rc on stdout
+  env JF_PRUNE_LIB_ONLY=1 JF_STUB_PS_ROWS="$1" JF_PAT="$2" PATH="$STUBDIR:$PATH" \
+    bash -c '. "$0"; has_process_matching "$JF_PAT"; echo $?' "$SCRIPT" 2>/dev/null | sed -n '$p'
+}
+# The same predicate against the REAL process table, for the premise that the
+# stand-in is (and then is not) there. NOT `ps -eo args= | grep -F -- <literal>`:
+# grep's own argv carries the literal, so ps lists it and the check matches ITSELF
+# — an assertion of absence written that way can never fail. The literal travels
+# through the ENVIRONMENT instead, and the predicate's own `awk -v pat=…` line is
+# skipped by its scanner exclusion.
+guard_real() { # <literal> -> match | nomatch, via the script's own predicate
+  env JF_PRUNE_LIB_ONLY=1 JF_PAT="$1" bash -c \
+    '. "$0"; if has_process_matching "$JF_PAT"; then echo match; else echo nomatch; fi' "$SCRIPT"
+}
+STRAY_LIVE="$SB/strayroot/jf-live"
+git -C "$REPO" worktree add -q --detach "$STRAY_LIVE" "$STRAY_PUSHED_SHA"
+touch -d '2020-01-01' "$STRAY_LIVE"
+# A realistic lane invocation, so the argv carries the path the way a lane's shell
+# does (the shape the card measured): `cd <stray> && npm run build`.
+STRAY_LIVE_ARGV="cd $STRAY_LIVE && npm run build"
+check "premise: the stray's work is durable (pushed), so ONLY the process can be keeping it" \
+  "pushed-branch" "$(lib "durable_verdict '$REPO' '$STRAY_PUSHED_SHA'")"
+check "control: the pre-fix 'worktrees/<name> |<path> ' argument is one literal, so it does NOT match an argv holding the path" \
+  "1" "$(guard_literal "$STRAY_LIVE_ARGV" "worktrees/jf-live |$STRAY_LIVE ")"
+check "the path literal ALONE does match that same argv (the predicate is not broken)" \
+  "0" "$(guard_literal "$STRAY_LIVE_ARGV" "$STRAY_LIVE ")"
+check "...while the '.worktrees/<name>' literal does not (a stray is not under .worktrees)" \
+  "1" "$(guard_literal "$STRAY_LIVE_ARGV" "worktrees/jf-live ")"
+
+# The stand-in, alive in the real process table for the run below.
+env bash -c "exec -a \"$STRAY_LIVE_ARGV\" sleep 40" &
+STRAY_LIVE_PID=$!
+sleep 0.6
+check "premise: the stand-in is visible to the pruner's OWN predicate (real process table)" "match" \
+  "$(guard_real "$STRAY_LIVE_ARGV")"
+
+: >"$LOG"
+run_prune --min-age-hours 24 >/dev/null 2>&1
+check "a STRAY with a live process whose argv carries its path SURVIVES" "yes" "$(stray_survives jf-live)"
+contains "...and the refusal is logged as a KEEP on the process" \
+  "$(cat "$LOG")" "KEEP  jf-live (process references it)"
+check "...and nothing tried to remove it" "0" "$(grep -c 'RM    jf-live' "$LOG")"
+
+# ...and it is the PROCESS holding it, not a guard that refuses everything: with the
+# process gone the SAME stray is removable — the other half of the card's acceptance.
+kill "$STRAY_LIVE_PID" 2>/dev/null
+wait "$STRAY_LIVE_PID" 2>/dev/null
+check "premise: the SAME stray is still on disk, so the second half starts from it" "yes" "$(stray_survives jf-live)"
+check "premise: its stand-in is gone from the process table" "nomatch" \
+  "$(guard_real "$STRAY_LIVE_ARGV")"
+: >"$LOG"
+run_prune --min-age-hours 24 >/dev/null 2>&1
+check "with that process gone, the SAME stray is removed" "no" "$(stray_survives jf-live)"
+contains "...and the removal records its verdict" "$(cat "$LOG")" "RM    jf-live (stray"
 
 echo
 printf 'prune-kanban-worktrees self-test: %d passed, %d failed\n' "$PASS" "$FAIL"
