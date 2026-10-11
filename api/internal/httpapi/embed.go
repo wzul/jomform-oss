@@ -258,8 +258,12 @@ func (h *PublicHandlers) embedFormBySlug(ctx context.Context, scopeSlug, slug st
 	// The store error is checked in BOTH arms, not just the workspace one:
 	// scanOne returns its pre-allocated struct non-nil when the SCAN fails for
 	// any reason other than "no rows" (a column-alignment slip is the realistic
-	// one — see redirectFormColumns), and a zero-value Form read as a real hit
-	// would serve the wrong form rather than 404.
+	// one — see redirectFormColumns), and a Form read out of a half-scanned row
+	// is not a hit — serving it would render the wrong form instead of 404.
+	// Both arms are pinned by TestEmbedRouteOldSlugStoreScanFailureIs404
+	// (embed_slug_rename_test.go), which makes a real row unscannable and
+	// requires 404; the alignment cause behind that failure class is guarded
+	// where it belongs, in dbstore by migration_scan_drift_test.go.
 	if f, err := h.Forms.RedirectedFormByAccountSlug(ctx, scopeSlug, slug); err == nil && f != nil {
 		return f
 	}

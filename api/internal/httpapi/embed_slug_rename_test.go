@@ -35,12 +35,19 @@ package httpapi
 //     around either.
 //  4. Wan's supersede rule holds HERE TOO: a form that later claims the freed
 //     slug wins, so rename history can never shadow a live form's embed URL.
+//  5. A store read that FAILS ITS SCAN — not a miss — is never served: the
+//     fallback's error check in each of its two arms must keep such a row from
+//     being read as a hit. That shape is unreachable through the resolver's
+//     normal miss path, so it has its own guard
+//     (TestEmbedRouteOldSlugStoreScanFailureIs404) which induces a real scan
+//     failure instead of asserting it.
 //
 // Runs against a real Postgres (JOMFORM_TEST_DATABASE_URL); skipped when unset.
 // The fixture is the rename guard's (form_slug_rename_test.go) — real DB and the
 // real mux, so this cannot pass while the resolver is absent.
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -302,5 +309,169 @@ func TestEmbedRouteOldSlugResolvesThroughTheAccountSlugArm(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "Hello") {
 		t.Errorf("the account-slug old embed URL did not serve the renamed form's own content (body %s)", body)
+	}
+}
+
+// TestEmbedRouteOldSlugStoreScanFailureIs404 pins the store-error check in BOTH
+// arms of the rename fallback — the line the comment above the fallback calls
+// load-bearing, and until now the one part of this file that no guard in it
+// could make go red.
+//
+// WHY THIS GUARD HAS TO INDUCE THE FAILURE ITSELF. The other five guards drive a
+// real Postgres in which a NORMAL miss never produces this shape:
+// RedirectedFormByAccountSlug / ...WorkspaceSlug map `isNoSuchRow` to
+// (nil, ErrFormNotFound) BEFORE returning, so for every row those guards can
+// build, `err == nil && f != nil` and a bare `f != nil` behave identically. The
+// shape the check exists for only appears when the SCAN genuinely fails, because
+// scanOne (dbstore/form.go) returns its PRE-ALLOCATED struct NON-NIL together
+// with the error: the discarded-error shape then hands embedFormBySlug a
+// half-read row that still looks like a live, embeddable form, and the route
+// serves it rather than 404.
+//
+// So this guard makes a column the arm's SELECT reads hold a value its Go
+// destination cannot take, which fails the read the way a column-alignment slip
+// fails: the SELECT succeeds, the row comes back, Scan errors. Two independent
+// inducers, one per shape, so the guard is not value-specific:
+//
+//	timestamptz 'infinity' into *time.Time  -> "cannot scan Infinity into *time.Time"
+//	jsonb '"…"' into map[string]any         -> json unmarshal error
+//
+// The first fails on a column that sits AFTER status and allow_embed in
+// redirectFormColumns, so the half-read struct still carries published +
+// allow_embed=true and the discarded-error shape SERVES it (200 with the form's
+// own "Hello"); the second fails earlier, so that shape answers 403 — a refusal
+// for the wrong reason, out of a row the store never returned as a hit. Either
+// way the answer is not a 404 the resolver deliberately chose, which is the
+// whole of the contract, and the assertion below is the same for both.
+//
+// The ALIGNMENT cause behind this class is guarded where it belongs, in dbstore:
+// migration_scan_drift_test.go registers redirectFormColumns -> Form. This guard
+// pins the resolver's own discipline for such a failure however it arrives.
+func TestEmbedRouteOldSlugStoreScanFailureIs404(t *testing.T) {
+	const (
+		// A timestamptz value no time.Time can take. Fails on the 15th column
+		// of redirectFormColumns, i.e. after status (7th) and allow_embed
+		// (11th) have already been assigned into scanOne's struct.
+		corruptStartAtToInfinity = `UPDATE forms SET start_at='infinity'::timestamptz WHERE id=$1`
+		// A jsonb value no map[string]any can take. Fails on the 5th column,
+		// i.e. before the two the route's own gate reads.
+		corruptConfigToAJSONString = `UPDATE forms SET config=to_jsonb('not-an-object'::text) WHERE id=$1`
+	)
+
+	// One entry per (fallback arm × scan-failure shape). The scope slug is the
+	// path segment each arm alone resolves: the workspace arm joins
+	// workspaces.slug, the account arm joins accounts.slug, and the fixture
+	// keeps those two strings different.
+	cases := []struct {
+		name    string
+		arm     string
+		scope   func(fx renameFixture) string
+		lookup  func(*dbstore.FormStore, context.Context, string, string) (*dbstore.Form, error)
+		corrupt string
+		// gateIntact is whether the columns the route's gate reads (status,
+		// allow_embed) are assigned before the failing one — i.e. whether the
+		// half-read struct the discarded-error shape would serve is a live,
+		// embeddable form. Asserted as a premise so a future reordering of
+		// redirectFormColumns cannot quietly turn this guard into one that
+		// pins a refusal instead of a served form.
+		gateIntact bool
+	}{
+		{
+			name: "workspace-arm/infinity-start-at", arm: "RedirectedFormByWorkspaceSlug",
+			scope: func(fx renameFixture) string { return fx.workspaceSlug }, lookup: (*dbstore.FormStore).RedirectedFormByWorkspaceSlug,
+			corrupt: corruptStartAtToInfinity, gateIntact: true,
+		},
+		{
+			name: "workspace-arm/jsonb-type-mismatch", arm: "RedirectedFormByWorkspaceSlug",
+			scope: func(fx renameFixture) string { return fx.workspaceSlug }, lookup: (*dbstore.FormStore).RedirectedFormByWorkspaceSlug,
+			corrupt: corruptConfigToAJSONString, gateIntact: false,
+		},
+		{
+			name: "account-arm/infinity-start-at", arm: "RedirectedFormByAccountSlug",
+			scope: func(fx renameFixture) string { return fx.accountSlug }, lookup: (*dbstore.FormStore).RedirectedFormByAccountSlug,
+			corrupt: corruptStartAtToInfinity, gateIntact: true,
+		},
+		{
+			name: "account-arm/jsonb-type-mismatch", arm: "RedirectedFormByAccountSlug",
+			scope: func(fx renameFixture) string { return fx.accountSlug }, lookup: (*dbstore.FormStore).RedirectedFormByAccountSlug,
+			corrupt: corruptConfigToAJSONString, gateIntact: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newRenameFixture(t, "it-embscan-old-"+randHex(4))
+			oldSlug := fx.slug
+			newSlug := "it-embscan-new-" + randHex(4)
+			scope := tc.scope(fx)
+			if scope != fx.workspaceSlug && scope != fx.accountSlug {
+				t.Fatalf("fixture premise broken: scope %q is neither the workspace slug %q nor the account slug %q, so "+
+					"the request below would not name the arm under test", scope, fx.workspaceSlug, fx.accountSlug)
+			}
+
+			// The route's own gate, so a form resolved through the fallback is
+			// one this route WOULD serve if the read had not failed.
+			if _, err := fx.pool.Exec(fx.ctx, `UPDATE forms SET allow_embed=true WHERE id=$1`, fx.formID); err != nil {
+				t.Fatalf("enable embedding on the fixture form: %v", err)
+			}
+			if code, raw := fx.patch(t, `{"slug":"`+newSlug+`","title":"Western menu"}`); code != http.StatusOK {
+				t.Fatalf("rename = %d, want 200 (body %s)", code, raw)
+			}
+
+			path := embedPath(scope, oldSlug)
+			// CONTROL, before the row is made unscannable: this arm serves the
+			// old slug. Without it a 404 below could simply mean the request
+			// never reached this arm at all.
+			if rec := publicServe(t, fx.pub, fx.host, path); rec.Code != http.StatusOK {
+				t.Fatalf("control: GET %s (the OLD slug through the %s arm) before the row is corrupted = %d, "+
+					"want 200 (body %s)", path, tc.arm, rec.Code, rec.Body.String())
+			}
+
+			if _, err := fx.pool.Exec(fx.ctx, tc.corrupt, fx.formID); err != nil {
+				t.Fatalf("corrupt the row to fail the scan (%s): %v", tc.name, err)
+			}
+
+			// PREMISE: this is the shape the check exists for, measured on the
+			// store itself rather than assumed. scanOne hands back a non-nil
+			// struct WITH the error, and the struct is genuinely half-read
+			// (slug already assigned), so `f != nil` alone would read it as a
+			// hit.
+			f, err := tc.lookup(dbstore.NewFormStore(fx.pool), fx.ctx, scope, oldSlug)
+			if f == nil || err == nil {
+				t.Fatalf("premise broken: %s(%q, %q) = (form %v, err %v), want a NON-NIL struct together with a NON-NIL error. "+
+					"Nothing below can bite unless the corrupted row still fails the SCAN and still returns scanOne's pre-allocated "+
+					"struct — check that %s still reads the column this case corrupts.", tc.arm, scope, oldSlug, f, err, tc.arm)
+			}
+			if f.Slug != newSlug {
+				t.Fatalf("premise broken: the failed scan returned a form whose Slug = %q, want %q (the renamed form's live slug) — "+
+					"the struct is supposed to be partially assigned up to the failing column, which is what makes it look like a hit",
+					f.Slug, newSlug)
+			}
+			if tc.gateIntact {
+				if f.Status != dbstore.FormStatusPublished || !f.AllowEmbed {
+					t.Fatalf("premise broken: the half-read form carries status=%q allow_embed=%v, want %q/true — this case expects "+
+						"the scan to fail AFTER the gate columns, so that discarding the error would SERVE it (200) rather than 404",
+						f.Status, f.AllowEmbed, dbstore.FormStatusPublished)
+				}
+			} else if f.Status != "" || f.AllowEmbed {
+				t.Fatalf("premise broken: the half-read form carries status=%q allow_embed=%v, want both zero — this case expects the "+
+					"scan to fail BEFORE the gate columns", f.Status, f.AllowEmbed)
+			}
+
+			// THE ASSERTION: a row the store could not read is a 404, not a hit.
+			// Delete the error check from either arm (`if f, _ := …; f != nil`)
+			// or weaken it to `err == nil || f != nil` and this goes red: the
+			// route answers 200 with the form's own body (infinity case) or 403
+			// (jsonb case) out of a row no store call ever returned.
+			rec := publicServe(t, fx.pub, fx.host, path)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("GET %s after %s(%q, %q) failed its SCAN = %d, want 404 (body %s).\n"+
+					"The store returned its pre-allocated struct non-nil together with the error, and this route read it as a real "+
+					"hit: a form whose row could not be read must be treated as not found, not served (or refused) as if it had been "+
+					"read. The check in BOTH arms of the fallback is what makes the difference — a normal miss never takes this path, "+
+					"so no other guard in this file can catch its removal.",
+					path, tc.arm, scope, oldSlug, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
