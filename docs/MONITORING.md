@@ -299,6 +299,17 @@ state file. It asserts, as outcomes read off real runs —
   a silent `KEEP` — and an unknown argument exits `2` having run nothing at all;
 - the stray-worktree loop (outside `.worktrees`, no card reference) gets the same
   correction;
+- a worktree whose HEAD cannot be resolved at all — the shape a lane worktree takes
+  when its **branch is deleted**, i.e. a valid gitdir whose `HEAD` points at a ref
+  that no longer exists — is the same "cannot judge this worktree" condition as an
+  unreadable card: the run exits `1`, logs a `FAIL`, and never reports it as a keep.
+  Measured before the fix: the read was a plain `git rev-parse HEAD`, which prints
+  the literal string `HEAD` for that shape before failing, so the guard never fired
+  and the verdict was taken by resolving `HEAD` **in the repo's context** — the same
+  worktree reported `only on LOCAL branch …` when the repo's HEAD was an unpushed
+  branch, and `has 1 uncommitted change(s)` when it was on main (an unborn HEAD makes
+  `git status --porcelain` call every index entry an addition). Both kept it forever,
+  named a reason about the repo, and exited `0`;
 - `--dry-run` removes nothing.
 
 Prove it bites with `JF_PRUNE_SCRIPT=<a copy with the old test restored>`. Doing

@@ -33,6 +33,10 @@
 #       reason in the log;
 #     * the STRAY loop (outside .worktrees, no card reference) gets the same
 #       correction;
+#     * an UNBORN HEAD — a valid gitdir whose HEAD points at a branch that no longer
+#       exists, the shape a worktree takes when its branch is deleted — is a
+#       "cannot judge this worktree" FAILURE (exit 1), not a silent keep under a
+#       reason taken from the REPO's HEAD (card t_3fa15d1c), in both loops;
 #     * --dry-run removes nothing, and a repo path that does not exist is a no-op.
 #
 #   Entirely offline: a throwaway repo plus its own bare "origin" remote, a fake
@@ -44,8 +48,9 @@
 #   pruner doing its job, so `0` must be what a caller sees for it, `3` is reserved
 #   for "reclaimed nothing while keeping at-risk work" (the pruner-has-started-
 #   keeping-everything alarm) and `1` for a run that could not do its job — a failed
-#   removal, an unreadable card, a failed fetch. Every one of those is reproduced
-#   here as an OUTCOME (exit status read off a real run), including the pair that
+#   removal, an unreadable card, a worktree whose HEAD cannot be resolved, a failed
+#   fetch. Every one of those is reproduced here as an OUTCOME (exit status read off
+#   a real run), including the pair that
 #   keeps exit 3 honest: the SAME at-risk set with something reclaimed exits 0.
 #
 # Run:  bash deploy/worktrees/prune-kanban-worktrees_test.sh
@@ -540,7 +545,171 @@ env JF_PRUNE_REPO="$UNREACHABLE" JF_PRUNE_BOARD=sandbox JF_PRUNE_LOG="$LOG" \
 check "--no-fetch is a deliberate judgement on the refs as they are: exit 0" "0" "$RC"
 contains "...and the log still states it" "$(cat "$LOG")" "--no-fetch"
 
-echo "--- a repo path it cannot use, and the no-fetch path ---"
+echo "--- an UNBORN HEAD is a cannot-judge failure, not a wrong-reason keep ---"
+# 8f. A card worktree whose HEAD is UNBORN — a valid gitdir whose `HEAD` points at
+#     a branch that no longer exists, which is what a lane worktree becomes when its
+#     branch is deleted (`git branch -D`, or a `fetch --prune` that drops the ref) —
+#     must reach the SAME exit-1 branch as an unreadable card: with no commit of its
+#     own there is nothing to judge durability on, so the run cannot decide (card
+#     t_3fa15d1c).
+#
+#     It reached nothing before this fix, and the reason is a STDOUT difference, not
+#     a difference in whether HEAD resolves:
+#         plain  `git rev-parse HEAD`         -> rc 128, stdout = the literal `HEAD`
+#         fixed  `git rev-parse --verify HEAD` -> rc 128, stdout = empty
+#     The old `[ -z "$head" ]` guard could therefore never fire, and the literal
+#     `HEAD` was handed to `durable_verdict`, where it resolves IN THE REPO'S
+#     CONTEXT — a rev with nothing to do with the worktree decided its fate.
+#     Measured on the host before the fix (same worktree both times): repo HEAD on an
+#     unpushed local branch logged `head=HEAD only on LOCAL branch 'local-unpushed'`;
+#     repo HEAD on main logged `has 1 uncommitted change(s)` (with no HEAD, `git
+#     status --porcelain` reports every index entry as `A `). Both exited 0, kept the
+#     worktree forever, and named a reason that was about the repo — or about a
+#     phantom edit. That is the "the pruner silently stopped reclaiming this
+#     worktree" shape the exit-1 contract exists to surface.
+#
+#     This runs in its OWN repo: the assertions above read exact `failures=` and
+#     `at_risk=` counts off the shared sandbox, and a worktree that can never be
+#     judged would red every one of them. It carries the two HEALTHY shapes too,
+#     because the fix must not turn every worktree into a FAIL: a detached and a
+#     branch-headed worktree on genuinely pushed work must still resolve to the same
+#     sha and still be removed with the same verdict.
+UNBORN_SB="$SB/unborn"
+UNBORN_REPO="$UNBORN_SB/repo"
+UNBORN_ORIGIN="$UNBORN_SB/origin.git"
+UNBORN_LOG="$UNBORN_SB/prune.log"
+mkdir -p "$UNBORN_REPO" "$UNBORN_SB/strayroot"
+git init -q --bare "$UNBORN_ORIGIN"
+git -C "$UNBORN_REPO" init -q -b main
+printf 'base\n' >"$UNBORN_REPO/README"
+git -C "$UNBORN_REPO" add README
+git -C "$UNBORN_REPO" -c user.email=t@t -c user.name=t commit -q -m base
+git -C "$UNBORN_REPO" remote add origin "$UNBORN_ORIGIN"
+git -C "$UNBORN_REPO" push -q -u origin main
+git -C "$UNBORN_REPO" fetch -q origin
+ucommit() { # <message> -> a commit whose tree is main's, parented on main
+  git -C "$UNBORN_REPO" -c user.email=t@t -c user.name=t \
+    commit-tree "$(git -C "$UNBORN_REPO" rev-parse 'main^{tree}')" -p main -m "$1"
+}
+# The healthy shapes' commits, each pushed to a real origin branch => pushed-branch.
+U13_SHA="$(ucommit 'healthy detached work')"
+git -C "$UNBORN_REPO" push -q origin "$U13_SHA:refs/heads/wt/t_00000013-pushed"
+U14_SHA="$(ucommit 'healthy branch-headed work')"
+git -C "$UNBORN_REPO" push -q origin "$U14_SHA:refs/heads/wt/t_00000014-pushed"
+USTRAY_SHA="$(ucommit 'healthy stray work')"
+git -C "$UNBORN_REPO" push -q origin "$USTRAY_SHA:refs/heads/wt/jf-healthy-pushed"
+git -C "$UNBORN_REPO" fetch -q origin
+
+# The unborn card worktree: created as a real worktree, then its HEAD is left
+# pointing at a branch that does not exist. That IS the shape the card measured —
+# the gitdir stays valid, only the ref is missing.
+UNBORN_TASK="t_00000012"
+UNBORN_WT="$UNBORN_REPO/.worktrees/$UNBORN_TASK"
+git -C "$UNBORN_REPO" worktree add -q --detach "$UNBORN_WT" "$USTRAY_SHA"
+UNBORN_REF="refs/heads/wt/$UNBORN_TASK-deleted"
+printf 'ref: %s\n' "$UNBORN_REF" >"$(git -C "$UNBORN_WT" rev-parse --absolute-git-dir)/HEAD"
+# ...and the same shape as a stray (outside .worktrees, no card reference), aged so
+# only its HEAD can keep it: strays are judged on the directory's mtime.
+UNBORN_STRAY="$UNBORN_SB/strayroot/jf-unborn"
+UNBORN_STRAY_REF="refs/heads/wt/jf-unborn-deleted"
+git -C "$UNBORN_REPO" worktree add -q --detach "$UNBORN_STRAY" "$USTRAY_SHA"
+printf 'ref: %s\n' "$UNBORN_STRAY_REF" >"$(git -C "$UNBORN_STRAY" rev-parse --absolute-git-dir)/HEAD"
+touch -d '2020-01-01' "$UNBORN_STRAY"
+# The two healthy shapes, and a healthy stray.
+git -C "$UNBORN_REPO" worktree add -q --detach "$UNBORN_REPO/.worktrees/t_00000013" "$U13_SHA"
+git -C "$UNBORN_REPO" worktree add -q -b wt/t_00000014-pushed "$UNBORN_REPO/.worktrees/t_00000014" "$U14_SHA"
+UNBORN_STRAY_OK="$UNBORN_SB/strayroot/jf-healthy"
+git -C "$UNBORN_REPO" worktree add -q --detach "$UNBORN_STRAY_OK" "$USTRAY_SHA"
+touch -d '2020-01-01' "$UNBORN_STRAY_OK"
+for id in "$UNBORN_TASK" t_00000013 t_00000014; do
+  printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$id"
+done
+
+# The premise, MEASURED rather than assumed: the gitdir is valid, the ref it names
+# really is absent, and the two reads of HEAD differ exactly as the fix claims —
+# otherwise the outcome assertions below could pass for an unrelated reason.
+check "premise: the unborn worktree's gitdir is a real directory" "yes" \
+  "$( [ -d "$(git -C "$UNBORN_WT" rev-parse --absolute-git-dir 2>/dev/null)" ] && echo yes || echo no )"
+check "premise: ...and the ref its HEAD names does not exist" "no" \
+  "$( git -C "$UNBORN_REPO" show-ref --verify --quiet "$UNBORN_REF" 2>/dev/null && echo yes || echo no )"
+check "premise: the OLD read of that HEAD yields the literal string 'HEAD'" "HEAD" \
+  "$(git -C "$UNBORN_WT" rev-parse HEAD 2>/dev/null || echo "")"
+check "premise: ...which is NOT empty, so the old -z guard could never fire" "no" \
+  "$( [ -z "$(git -C "$UNBORN_WT" rev-parse HEAD 2>/dev/null || echo "")" ] && echo yes || echo no )"
+check "the script's own HEAD read yields nothing for it, so the guard fires" "" \
+  "$(lib "worktree_head '$UNBORN_WT'")"
+
+# The healthy shapes the fix must leave alone are measured HERE, while they are
+# still on disk (the run below removes them): the read the pruner actually uses must
+# give the same sha as a plain read for a detached worktree and for a branch-headed
+# one, and it must be the commit the worktree was made at.
+check "a healthy DETACHED worktree still resolves to its own commit" "$U13_SHA" \
+  "$(lib "worktree_head '$UNBORN_REPO/.worktrees/t_00000013'")"
+check "...i.e. the same sha a plain read gives (the fix changed no healthy read)" \
+  "$(git -C "$UNBORN_REPO/.worktrees/t_00000013" rev-parse HEAD 2>/dev/null || echo "")" \
+  "$(lib "worktree_head '$UNBORN_REPO/.worktrees/t_00000013'")"
+check "a healthy BRANCH-HEADED worktree still resolves to its own commit" "$U14_SHA" \
+  "$(lib "worktree_head '$UNBORN_REPO/.worktrees/t_00000014'")"
+check "...i.e. the same sha a plain read gives" \
+  "$(git -C "$UNBORN_REPO/.worktrees/t_00000014" rev-parse HEAD 2>/dev/null || echo "")" \
+  "$(lib "worktree_head '$UNBORN_REPO/.worktrees/t_00000014'")"
+
+run_unborn() { # extra args…
+  env PATH="$SB/bin:$PATH" \
+      JF_FAKE_HERMES_DIR="$SB/fake-hermes" \
+      JF_PRUNE_REPO="$UNBORN_REPO" JF_PRUNE_BOARD=sandbox JF_PRUNE_LOG="$UNBORN_LOG" \
+      JF_PRUNE_EXTRA_ROOTS="$UNBORN_SB/strayroot" \
+      bash "$SCRIPT" "$@"
+}
+: >"$UNBORN_LOG"
+run_unborn --min-age-hours 24 >/dev/null 2>&1; RC=$?
+check "a card worktree whose HEAD is unborn makes the run exit 1, not 0" "1" "$RC"
+contains "...logged as the cannot-resolve-HEAD FAIL, not as a keep with a reason" \
+  "$(cat "$UNBORN_LOG")" "FAIL  $UNBORN_TASK (cannot resolve HEAD"
+check "...and it is explicitly NOT a KEEP" "0" "$(grep -c "KEEP  $UNBORN_TASK" "$UNBORN_LOG")"
+check "...and it is NOT reported as an UNSAFE dirty tree either (the old run's wrong reason)" "0" \
+  "$(grep -c "UNSAFE $UNBORN_TASK" "$UNBORN_LOG")"
+check "...and the worktree is still on disk (never act on one you could not judge)" "yes" \
+  "$( [ -d "$UNBORN_WT" ] && echo yes || echo no )"
+# ...and the stray loop's own copy of the branch carries the same correction.
+contains "a STRAY whose HEAD is unborn is the same failure, named on the stray" \
+  "$(cat "$UNBORN_LOG")" "FAIL  jf-unborn (no HEAD"
+check "...and it is NOT a KEEP" "0" "$(grep -c 'KEEP  jf-unborn' "$UNBORN_LOG")"
+check "...and the stray is still on disk" "yes" \
+  "$( [ -d "$UNBORN_STRAY" ] && echo yes || echo no )"
+# The count is exact, so this is an assertion about THESE two branches rather than
+# about "an exit 1 happened somewhere": the healthy shapes below all resolve.
+contains "...and the summary counts exactly the two unborn reads as failures" \
+  "$(cat "$UNBORN_LOG")" "failures=2"
+check "...with no other FAIL anywhere in the run" "2" "$(grep -c 'FAIL ' "$UNBORN_LOG")"
+
+# The fix must not turn every worktree into a FAIL — the run above kept the two
+# unborn reads as its ONLY failures and still removed every healthy shape, with the
+# same verdict each had before (measured on disk).
+check "the healthy detached worktree was still REMOVED" "no" \
+  "$( [ -d "$UNBORN_REPO/.worktrees/t_00000013" ] && echo yes || echo no )"
+check "the healthy branch-headed worktree was still REMOVED" "no" \
+  "$( [ -d "$UNBORN_REPO/.worktrees/t_00000014" ] && echo yes || echo no )"
+check "the healthy stray was still REMOVED" "no" \
+  "$( [ -d "$UNBORN_STRAY_OK" ] && echo yes || echo no )"
+line_of() { grep -F -- "$1" "$UNBORN_LOG" | sed -n '1p'; }
+line_has() { case "$2" in *"$1"*) echo yes;; *) echo no;; esac; }
+check "the healthy detached removal records the pushed verdict, as before" "yes" \
+  "$(line_has 'durable=pushed-branch' "$(line_of "RM    t_00000013" "$UNBORN_LOG")")"
+check "the healthy branch-headed removal records the pushed verdict, as before" "yes" \
+  "$(line_has 'durable=pushed-branch' "$(line_of "RM    t_00000014" "$UNBORN_LOG")")"
+check "...and the healthy stray's removal does too" "yes" \
+  "$(line_has 'durable=pushed-branch' "$(line_of 'RM    jf-healthy (stray' "$UNBORN_LOG")")"
+
+# Leave the sandbox as this section found it. A worktree whose HEAD cannot be
+# resolved cannot be removed BY GIT either, so it is cleaned the way an operator
+# would: drop the directory and prune the stale registration. Asserted, not assumed.
+rm -rf "$UNBORN_WT" "$UNBORN_STRAY"
+git -C "$UNBORN_REPO" worktree prune 2>/dev/null
+rm -f "$SB/fake-hermes/$UNBORN_TASK"
+check "...and the block leaves the unborn repo's worktree list with no unborn registration" "0" \
+  "$(git -C "$UNBORN_REPO" worktree list --porcelain | grep -c -F -e "$UNBORN_WT" -e "$UNBORN_STRAY")"
+
 OUT="$(run_prune --repo "$SB/does-not-exist" 2>&1)"; RC=$?
 check "a missing repo exits 0 without touching anything" "0" "$RC"
 contains "and says why" "$OUT" "no worktrees dir at"

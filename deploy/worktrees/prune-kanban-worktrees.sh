@@ -164,6 +164,33 @@ mirror_note() { # <repo> <head> -> " [ignoring non-remote-tracking ref(s): a,b]"
   return 0
 }
 
+# worktree_head: the worktree's OWN commit, or nothing when that cannot be resolved.
+#
+# WHY `--verify` AND NOT A PLAIN `rev-parse HEAD` (card t_3fa15d1c). The two shapes
+# of "this worktree's HEAD does not resolve" do not behave the same, and the
+# difference is STDOUT:
+#   * a valid gitdir whose HEAD points at a branch that no longer exists — what a
+#     lane worktree becomes when its branch is deleted, or a `fetch --prune` drops
+#     the ref — makes `git rev-parse HEAD` print the literal string `HEAD` to stdout
+#     before failing (rc 128). `[ -z "$head" ]` is then FALSE, so the guard below is
+#     never reached and that bogus rev is fed to `mirror_note`/`durable_verdict`,
+#     where `HEAD` resolves IN THE REPO'S CONTEXT: a rev with nothing to do with the
+#     worktree decides its fate. Measured 2026-10-11 (t_3fa15d1c): same worktree,
+#     repo HEAD on an unpushed local branch -> `head=HEAD only on LOCAL branch
+#     'local-unpushed'`; repo HEAD on main -> `has 1 uncommitted change(s)` (an
+#     unborn HEAD makes `git status --porcelain` report every index entry as `A `,
+#     since there is no HEAD to compare the index against). Both exit 0 and keep the
+#     worktree forever, naming a reason that is about the repo or about a phantom
+#     edit — the "the pruner silently stopped reclaiming this worktree" shape the
+#     exit-1 contract exists to surface.
+#   * a broken `.git` link yields no stdout either way, which is why that shape
+#     reached the guard while this one did not.
+# `git rev-parse --verify HEAD` prints nothing on failure and the same sha on
+# success (measured on this host), so the guard fires for both shapes.
+worktree_head() { # <worktree-path> -> sha on stdout, empty when unresolvable
+  git -C "$1" rev-parse --verify HEAD 2>/dev/null || echo ""
+}
+
 # has_process_matching: is any process's cmdline carrying PATTERN?
 #
 # WHY NOT A BARE `pgrep -f PATTERN` (card t_f454cd2b). `pgrep -f` matches its own
@@ -309,7 +336,11 @@ main() {
     fi
 
     # 5. DURABILITY — the whole point. Never delete work that exists nowhere else.
-    head=$(git -C "$wt" rev-parse HEAD 2>/dev/null || echo "")
+    #    The read is `worktree_head`, i.e. `rev-parse --verify HEAD`, NOT a plain
+    #    `rev-parse HEAD`: an unborn HEAD makes the plain form print the literal
+    #    `HEAD`, which reaches the verdict and is resolved in the REPO's context
+    #    (card t_3fa15d1c — the guard below never fired).
+    head=$(worktree_head "$wt")
     if [ -z "$head" ]; then
       log "FAIL  $name (cannot resolve HEAD — cannot judge this worktree; leaving it)"
       failures=$((failures+1)); continue
@@ -389,7 +420,10 @@ main() {
         continue
       fi
 
-      head=$(git -C "$wt" rev-parse HEAD 2>/dev/null || echo "")
+      # Same read as the card loop, and for the same reason: `--verify` is what
+      # makes an UNBORN HEAD come back empty instead of as the literal `HEAD`
+      # (card t_3fa15d1c).
+      head=$(worktree_head "$wt")
       [ -z "$head" ] && { log "FAIL  $name (no HEAD — cannot judge this stray; leaving it)"; failures=$((failures+1)); continue; }
 
       note="$(mirror_note "$REPO" "$head")"
