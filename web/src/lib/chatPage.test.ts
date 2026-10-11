@@ -1475,6 +1475,101 @@ const workspaceHelper = read("./workspace.ts");
 const scopeFile = read("../../../api/internal/httpapi/rest_scope.go");
 const chatTest = read("./chatPage.test.ts");
 
+// ── THE ACCOUNT-SCOPE CENSUS'S READS AND ITS VERDICT, at module scope ────────
+//
+// Lifted out of the census test below rather than inlined, because the proof of
+// the verdict's own bite runs THESE functions over a page mutated by value, and
+// a proof that re-stated the rule would prove nothing about it (this file's
+// `assistantBinClaims`/the BITES map above, trashCopyClaims.test.ts's
+// `scanClaims`).
+
+// Routes whose data is the PERSON's, not an account's — see the census test
+// below for why each of the three is legitimately unscoped.
+const USER_LEVEL = /\/api\/rest\/(feedback|uploads\/avatar|profile\/avatar)/;
+
+/**
+ * Every ACCOUNT-scoped REST URL the page builds as a string or template literal
+ * — an /api/rest/… path, and what the census has to judge.
+ *
+ * (The path is written WITHOUT quote or backtick delimiters on purpose:
+ * api/internal/httpapi/route_parity_test.go extracts every delimited /api/*
+ * literal from web/src and requires it to resolve to a registered backend route,
+ * and a delimited sample path here would be read as a real call. That guard
+ * caught this very comment when it was first written with backticks around it.)
+ */
+function accountScopedUrls(code: string): string[] {
+  return [...code.matchAll(/[`"](\/api\/rest\/[^`"]*)[`"]/g)]
+    .map((m) => m[1])
+    .filter((u) => !USER_LEVEL.test(u));
+}
+
+/**
+ * THE CALL the census keys on: the shared helper's INVOCATION, however it is
+ * spaced. A pattern rather than a literal because the bite proof below counts
+ * the calls it removes with the same one.
+ */
+const WORKSPACE_QUERY_CALL = String.raw`\bworkspaceQuery\s*\(`;
+
+/**
+ * True when `code` actually CALLS the shared workspace-scope helper.
+ *
+ * A CALL, NOT A MENTION (t_a39a1bd4). This census decided with
+ * `code.includes("workspaceQuery")`, and the helper's own NAME is also in the
+ * page's import line — `import { workspaceQuery } from "../../lib/workspace"` —
+ * so a page whose calls had all been removed but whose import was left behind
+ * read as SCOPED. An unused import is exactly what a careless revert leaves, so
+ * the census green-lit the very shape it exists to stop. Measured by QA on PR
+ * 780's head (the merge preview of main 57f3d53 x #780 x #788): app/forms/
+ * page.tsx with all 7 `${workspaceQuery()}` calls removed but the import left
+ * ran the whole file 19/19 GREEN. Reproduced on this tree before the fix, by
+ * value, through a probe that reads the page the way this census does:
+ *
+ *   app/chat/page.tsx   3 calls -> 0, import present, 3 account-scoped URLs left
+ *                       -> the old rule still read the page as scoped
+ *   app/forms/page.tsx  7 calls -> 0, import present, 6 account-scoped URLs left
+ *                       -> the old rule still read the page as scoped
+ *
+ * Both shapes now read as offenders; the bite proof below is that measurement,
+ * in the suite, over the WHOLE page set.
+ *
+ * WHAT IT STILL DOES NOT CATCH, stated honestly: a call whose RESULT the page
+ * then ignores (`void workspaceQuery();`) reads as scoped, because following the
+ * value into the URL it is interpolated into is dataflow a byte-level census
+ * cannot do. That is also why the shape keyed on is the INVOCATION and not
+ * `${workspaceQuery()}`: five of the thirteen subject pages legitimately bind it
+ * (`const sp = workspaceQuery();`) and compose the URL with `${sp}`. Measured by
+ * running the shipped census with the inline-only read substituted for this one
+ * — the census test reds against a page that is not defective
+ * (`app/activity/page.tsx`, the subject page whose only call is the bound form),
+ * and the bite proof below reds with it. A false RED is the failure this guard
+ * is least entitled to, so the read is the call, whichever shape carries it.
+ */
+function pageScopesWorkspace(code: string): boolean {
+  return new RegExp(WORKSPACE_QUERY_CALL).test(code);
+}
+
+/**
+ * The census's PAGE-LEVEL VERDICT for one page: the offender line, or null when
+ * the page is not subject or is scoped.
+ *
+ * The verdict, not a count of pages: the whole point of this census is that an
+ * unscoped page must be NAMED, and a test that only asserted the census was
+ * non-empty would pass with every page's verdict wrong. `rel` is the page's
+ * app-relative label — `app/chat/page.tsx`, the name the failure has to name —
+ * which is what both callers pass and what the bite proof's substitution map is
+ * keyed on.
+ */
+function accountScopeOffender(rel: string, code: string): string | null {
+  const accountScoped = accountScopedUrls(code);
+  if (accountScoped.length === 0) return null; // not a subject page
+  if (pageScopesWorkspace(code)) return null;
+  return (
+    `${rel}: calls ${JSON.stringify([...new Set(accountScoped)])} with no ` +
+    `workspaceQuery() — the server resolves Accounts.ByOwner(...)[0], the user's FIRST ` +
+    `account, not the workspace they selected`
+  );
+}
+
 test("the chat page scopes EVERY call with workspaceQuery() — the shared helper, not a hand-rolled string", () => {
   // Every chat call site the page builds must go through the helper. Counted
   // rather than merely "present": one call site left unscoped is the whole defect,
@@ -1732,8 +1827,11 @@ test("no dashboard page calls an ACCOUNT-scoped REST route without the workspace
     `expected the dashboard's pages, got ${pages.length} — the walk must be finding the real app tree`,
   );
 
-  // Routes whose data is the PERSON's, not an account's (see above).
-  const USER_LEVEL = /\/api\/rest\/(feedback|uploads\/avatar|profile\/avatar)/;
+  // `USER_LEVEL` (which routes are the PERSON's, not an account's) and the two
+  // reads the verdict is built from live at module scope above, beside that
+  // verdict — so the bite proof below runs THIS census rather than a
+  // restatement of it.
+  //
   // Comments stripped by the repo's SHARED, JSX-text-aware blanker — the pages
   // document the ?workspace= rule in prose, and a class quoted in a comment must
   // not satisfy this census.
@@ -1752,19 +1850,16 @@ test("no dashboard page calls an ACCOUNT-scoped REST route without the workspace
   let subjectPages = 0;
   for (const abs of pages) {
     const code = stripComments(readAbs(abs));
-    // Every /api/rest/... URL this page builds as a string/template literal.
-    const urls = [...code.matchAll(/[`"](\/api\/rest\/[^`"]*)[`"]/g)].map((m) => m[1]);
-    const accountScoped = urls.filter((u) => !USER_LEVEL.test(u));
-    if (accountScoped.length === 0) continue;
+    // The two reads the verdict is made of: which ACCOUNT-scoped REST URLs the
+    // page builds (the subject test), and whether it CALLS the scope helper
+    // (`accountScopeOffender`, which is the guard's whole point — a bare mention
+    // is not a call; see `pageScopesWorkspace`).
+    if (accountScopedUrls(code).length === 0) continue;
     subjectPages += 1;
-    const scoped = code.includes("workspaceQuery");
-    if (!scoped) {
-      offenders.push(
-        `${relative(appDir, abs)}: calls ${JSON.stringify([...new Set(accountScoped)])} with no ` +
-          `workspaceQuery() — the server resolves Accounts.ByOwner(...)[0], the user's FIRST ` +
-          `account, not the workspace they selected`,
-      );
-    }
+    // The label a failure names: `app/chat/page.tsx`, not the bare path under
+    // `src/app` (the census's own messages have to be grep-able as page names).
+    const off = accountScopeOffender(join("app", relative(appDir, abs)), code);
+    if (off) offenders.push(off);
   }
   assert.ok(
     subjectPages >= 10,
@@ -1778,6 +1873,138 @@ test("no dashboard page calls an ACCOUNT-scoped REST route without the workspace
     pages.some((p) => p.endsWith(join("app", "chat", "page.tsx"))),
     "the walk did not include app/chat/page.tsx — the page whose omission this guard exists for",
   );
+});
+
+// ── THE CENSUS'S OWN BITE: A CALL, NOT A MENTION (t_a39a1bd4) ────────────────
+//
+// WHAT THE HOLE WAS. The census above decided "scoped" with
+// `code.includes("workspaceQuery")`, and the helper's name is also in the page's
+// IMPORT line, so a page reverted to unscoped with the now-unused import left
+// behind read as scoped. Measured by QA on PR 780's head (the merge preview of
+// main 57f3d53 x #780 x #788): app/forms/page.tsx with all 7 calls removed but
+// the import left ran the whole file 19/19 GREEN, and app/chat/page.tsx with its
+// 3 calls removed was not among the run's 2 failures. Reproduced on this tree
+// before the fix, by value: chat 3 calls -> 0 and forms 7 calls -> 0, the import
+// still present, and the old page-level verdict still "scoped".
+//
+// WHY THE PROOF RE-RUNS THE WHOLE CENSUS AND NOT ONE PAGE. The subject here is a
+// page-LEVEL verdict, so a test that only asserted the census was non-empty
+// would be satisfied by a census that judged every page wrongly. The mutation is
+// substituted into the real page set and the census's own loop is re-run over
+// it: the two mutated pages must be NAMED, and nothing else may move.
+//
+// The mutation is the card's shape BY VALUE — every `${workspaceQuery()}` call
+// removed, the import left exactly as a careless revert leaves it — so what is
+// refused is the state itself rather than a paraphrase of it.
+test("the ACCOUNT-scope census reads a CALL, not a mention — an unused import cannot satisfy it (t_a39a1bd4)", () => {
+  // The card's measured call counts, per page, as FLOORS: a call ADDED later is
+  // not a failure, but a page whose calls are already missing before the
+  // mutation is — that would make this proof vacuous.
+  const CASES = [
+    { page: join("chat", "page.tsx"), calls: 3 },
+    { page: join("forms", "page.tsx"), calls: 7 },
+  ];
+  // The name the census gives a page in its failure (`app/chat/page.tsx`), built
+  // the same way the census loop below builds it — so the substitution map is
+  // keyed on the census's own labels and not on a second spelling of them.
+  const label = (page: string) => join("app", page);
+
+  const mutated = new Map<string, string>();
+  for (const { page, calls } of CASES) {
+    const rel = label(page);
+    const shipped = codeOnly(readAbs(join(appDir, page)));
+
+    // CONTROL. The shipped page is a SUBJECT page and is SCOPED, so the flip
+    // below is the mutation's doing and not a census that was already flagging
+    // this page for some other reason.
+    const shippedCalls = [...shipped.matchAll(new RegExp(WORKSPACE_QUERY_CALL, "g"))].length;
+    assert.ok(
+      shippedCalls >= calls,
+      `${rel}: only ${shippedCalls} workspaceQuery() call site(s) in the shipped page, want at ` +
+        `least ${calls} — the page this proof mutates is not the page the card measured`,
+    );
+    assert.ok(
+      accountScopedUrls(shipped).length > 0,
+      `${rel}: the shipped page builds no account-scoped URL, so it is not a subject page at all`,
+    );
+    assert.equal(
+      accountScopeOffender(rel, shipped),
+      null,
+      `${rel}: the SHIPPED page is already an offender — this proof would pass for the wrong reason`,
+    );
+
+    // THE MUTATION, by value: every call goes, the import stays.
+    const mutant = codeOnly(readAbs(join(appDir, page)).replace(/workspaceQuery\s*\(\s*\)/g, ""));
+    assert.notEqual(
+      mutant,
+      shipped,
+      `${rel}: the mutation changed nothing — this proof would be vacuous`,
+    );
+    assert.equal(
+      [...mutant.matchAll(new RegExp(WORKSPACE_QUERY_CALL, "g"))].length,
+      0,
+      `${rel}: a workspaceQuery() call survived the mutation — the card's shape is "every call removed"`,
+    );
+    assert.ok(
+      /import\s*\{[^}]*\bworkspaceQuery\b[^}]*\}\s*from\s*"[^"]*lib\/workspace"/.test(mutant),
+      `${rel}: the mutation removed the import too — the shape this card is about is "the calls are ` +
+        `gone and the unused import is left behind", and removing both is a state the OLD rule caught`,
+    );
+    // The old rule's entire input, said out loud: the MENTION is still there, so
+    // `code.includes("workspaceQuery")` would still read this page as scoped.
+    assert.ok(
+      mutant.includes("workspaceQuery"),
+      `${rel}: the mutation left no mention at all — this proof would then not tell a mention-keyed ` +
+        `rule from a call-keyed one`,
+    );
+    assert.ok(
+      !pageScopesWorkspace(mutant),
+      `${rel}: a page with every call removed but its import left behind still reads as SCOPED — the ` +
+        `census is keying on a mention, not on a call`,
+    );
+    // And it is still SUBJECT: the URLs the removed calls were appending to are
+    // still there, so the page cannot slip out of the census instead of being
+    // named by it.
+    assert.ok(
+      accountScopedUrls(mutant).length > 0,
+      `${rel}: the mutation also removed the account-scoped URLs, so the page would fall out of the ` +
+        `census rather than be named by it`,
+    );
+    mutated.set(rel, mutant);
+  }
+
+  // THE CENSUS, RE-RUN — the same loop the test above runs, over the real page
+  // set with the mutated bytes substituted for the two pages.
+  const offenders: string[] = [];
+  let subjectPages = 0;
+  for (const abs of pages) {
+    const rel = join("app", relative(appDir, abs));
+    const code = mutated.get(rel) ?? codeOnly(readAbs(abs));
+    if (accountScopedUrls(code).length === 0) continue;
+    subjectPages += 1;
+    const off = accountScopeOffender(rel, code);
+    if (off) offenders.push(off);
+  }
+  assert.ok(
+    subjectPages >= 10,
+    `only ${subjectPages} page(s) were judged account-scoped over the mutated set — the census went ` +
+      `hollow under the mutation, so this proof would pass without judging anything`,
+  );
+  assert.deepEqual(
+    [...new Set(offenders.map((o) => o.split(":")[0]))].sort(),
+    CASES.map((c) => label(c.page)).sort(),
+    `the census over the mutated page set did not name exactly the two mutated pages — an unused ` +
+      `import makes a page read as scoped again, or an untouched page was newly flagged:\n  ` +
+      offenders.join("\n  "),
+  );
+  for (const { page } of CASES) {
+    const rel = label(page);
+    assert.ok(
+      offenders.some((o) => o.startsWith(`${rel}:`)),
+      `the scope guard does not FAIL naming ${rel} with every call removed and the import left: ` +
+        `${JSON.stringify(offenders)}`,
+    );
+  }
 });
 
 // ── THE TRANSLATION HALF (the #6177 direction this file was missing) ─────────
