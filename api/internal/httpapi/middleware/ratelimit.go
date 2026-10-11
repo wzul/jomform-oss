@@ -12,6 +12,26 @@ type bucket struct {
 	lastFill time.Time
 }
 
+// Sweep cadence and idle threshold for RateLimiter's lazy GC.
+//
+// A bucket is only evicted once it is BOTH idle for gcIdle AND refilled to
+// capacity: at that point it is indistinguishable from a bucket that was never
+// created, so dropping it cannot change any decision. Evicting a bucket that
+// still holds unrefilled tokens would hand its client a fresh full burst —
+// that was card t_19d8fd3b (every RateLimitWith route really admitted `burst`
+// per ~10 min idle, e.g. 4 magic-link admissions in one bucket inside 11 min
+// where the 1/hour guard left ~0.18 tokens).
+//
+// Consequence for the memory bound: an entry now lives until it refills, i.e. at
+// most burst/rate seconds after it was last touched (10 s for RateLimit's 1/s
+// bucket, ~2 h for the magic-link bucket, 5 h for registration's), instead of a
+// flat 10 minutes. That is the price of not forgetting live token state, and it
+// is bounded — the map holds only the keys that are still being throttled.
+const (
+	gcEvery = time.Minute
+	gcIdle  = 10 * time.Minute
+)
+
 // RateLimiter limits each key to `rate` refills per second, capacity `burst`.
 type RateLimiter struct {
 	mu      sync.Mutex
@@ -27,7 +47,7 @@ func NewRateLimiter(rate, burst float64) *RateLimiter {
 		buckets: map[string]*bucket{},
 		rate:    rate,
 		burst:   burst,
-		lastGC:  time.Now(),
+		lastGC:  timeNow(),
 	}
 }
 
@@ -35,12 +55,20 @@ func NewRateLimiter(rate, burst float64) *RateLimiter {
 func (l *RateLimiter) Allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	now := time.Now()
+	now := timeNow()
 
-	// lazy GC every minute
-	if now.Sub(l.lastGC) > time.Minute {
+	// Lazy sweep every gcEvery. Only buckets that have refilled to capacity are
+	// dropped: see the gcEvery/gcIdle comment for why discarding unrefilled
+	// tokens is a defect, not housekeeping.
+	if now.Sub(l.lastGC) > gcEvery {
 		for k, b := range l.buckets {
-			if now.Sub(b.lastFill) > 10*time.Minute {
+			idle := now.Sub(b.lastFill)
+			if idle <= gcIdle {
+				continue
+			}
+			// b.tokens is the count as of b.lastFill; project the refill to now
+			// before deciding (the same arithmetic the consume path below applies).
+			if b.tokens+idle.Seconds()*l.rate >= l.burst-1e-9 {
 				delete(l.buckets, k)
 			}
 		}
