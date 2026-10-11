@@ -171,9 +171,10 @@ const EM_STAR = /\*(?=\S)([^*\n]*?\S)\*/y;
 // line) at every `[`, and parseInline advances one character on a miss, so
 // nothing bounds it. The shapes and the cap are real: 4000 characters is the chat
 // reply cap (api/internal/chat/chat.go MaxReplyChars), the block splitter has
-// already joined the answer into one paragraph, and chat/page.tsx (MAX_HISTORY =
-// 32) mounts up to 33 <Markdown> in one synchronous render. Measured through this
-// component on this host, best-of-5, ratios per doubling (2 = linear):
+// already joined the answer into one paragraph, and the chat page mounts its WHOLE
+// transcript in one synchronous render — 33 <Markdown> is the fixture used here
+// (the page's history cap bounds what it SENDS, not what it renders). Measured
+// through this component on this host, best-of-5, ratios per doubling (2 = linear):
 //
 //     input          1000     2000     4000     8000   ratios
 //     '[' x N       2.7ms    7.3ms   20.4ms   78.9ms   2.7/2.8/3.9
@@ -332,9 +333,10 @@ type UnderEmphasis = { inner: string; length: number };
 // can open, walk forward for a run that can close — is O(n²): a long answer made
 // of opener-ish runs with no closer ahead (`'_a '` repeated) re-walks the whole
 // remainder once per underscore, and a 4000-character answer (the chat reply cap,
-// api/internal/chat/chat.go MaxReplyChars) took ~220 ms instead of ~1.5 ms. With
-// 32 history bubbles mounting in one render (chat/page.tsx MAX_HISTORY) that is
-// seconds of frozen tab. Two passes make it linear:
+// api/internal/chat/chat.go MaxReplyChars) took ~220 ms instead of ~1.5 ms. With a
+// whole transcript mounting in one render (the chat page renders every message it
+// holds; the 33 bubbles are markdown.test.ts's fixture) that is seconds of frozen
+// tab. Two passes make it linear:
 //
 //   1. record the run at every position, and with it the next run that can close
 //      a run of that length (`nextSingle` / `nextDouble`) — one backwards sweep;

@@ -202,8 +202,9 @@ test("asterisk emphasis is unchanged, including the intra-word form CommonMark a
 // the end and returns null, and the parser then advances ONE character and does it
 // again — O(n²) in the length of the answer. Measured through the real component
 // (react-dom/server, production build) at the chat reply cap of 4000 characters
-// (api/internal/chat/chat.go MaxReplyChars): 164 ms, and ~8 s for the 33 bubbles a
-// full history mounts in one synchronous render (chat/page.tsx MAX_HISTORY = 32).
+// (api/internal/chat/chat.go MaxReplyChars): 164 ms, and ~8 s for the 33 bubbles
+// this file mounts in one synchronous render (the chat page mounts its whole
+// transcript; 33 is the fixture).
 // The same shape in the fix is ~4 ms, and the 33-bubble case ~66 ms.
 //
 // TWO ASSERTIONS, because one of them is not enough on its own:
@@ -341,9 +342,10 @@ test("an adversarial answer at the cap renders in milliseconds, not tenths of a 
       `— growth faster than linear. The quadratic scan measured 3200 ms / 164 ms here.`,
   );
 
-  // The severity case from the card: the /chat page mounting a full history
-  // (chat/page.tsx MAX_HISTORY = 32, so up to 33 <Markdown> in one synchronous
-  // render). 8000 ms of frozen tab was the symptom; the fix is ~66 ms.
+  // The severity case from the card: the /chat page mounting its whole transcript
+  // (33 <Markdown> in one synchronous render — this file's fixture; the page's
+  // history cap bounds what it SENDS, not what it renders). 8000 ms of frozen tab
+  // was the symptom; the fix is ~66 ms.
   const t0 = performance.now();
   for (let k = 0; k < 33; k++) render(small);
   const total = performance.now() - t0;
@@ -377,8 +379,8 @@ test("an adversarial answer at the cap renders in milliseconds, not tenths of a 
 //     '![' x N     0.7 /  0.8 /  1.1 ms   1.5 / 3.2 / 3.4 ms     3.1x
 //     '[a' x N     0.6 /  0.7 /  0.8 ms   2.2 / 2.6 / 2.8 ms     3.3x
 //
-// The severity case is the same one 1c cites: chat/page.tsx MAX_HISTORY = 32
-// mounts up to 33 <Markdown> in one synchronous render, so 33 bubbles of 4000 `[`
+// The severity case is the same one 1c cites: the chat page mounts 33 <Markdown>
+// in one synchronous render (its whole transcript, this file's fixture), so 33 `[`
 // characters was 635-876 ms of frozen tab and is 21-30 ms after the fix.
 //
 // TWO ASSERTIONS, the same split as 1c, because one is not enough:
@@ -503,8 +505,8 @@ test("an adversarial `[`-heavy answer renders in milliseconds, not a frozen tab"
       `— growth faster than linear. The pre-fix patterns measured 266 ms / 15 ms here.`,
   );
 
-  // The severity case: a full history (chat/page.tsx MAX_HISTORY = 32, so up to
-  // 33 <Markdown> in one synchronous render).
+  // The severity case: a full transcript (33 <Markdown> in one synchronous render,
+  // this file's fixture).
   const bubble = "[".repeat(CAP);
   const t0 = performance.now();
   for (let k = 0; k < 33; k++) render(bubble);

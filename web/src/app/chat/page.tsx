@@ -48,9 +48,14 @@
 //      translation was inert (t_57a77d02). `r.error` is errorKey's ONLY consumer;
 //      nothing else in this file reads it.
 //
-// The history it sends is the transcript the user can see, capped to the last
-// MAX_HISTORY turns. The server re-caps and drops any client-forged system/tool
-// turn, so the wire shape here is a convenience, not a trust boundary.
+// The history it sends is the transcript the user can see, capped to the SERVER'S
+// own retention cap — the `max_history_turns` the availability probe reports,
+// whose value is chat.MaxTurns in api/internal/chat/chat.go. A literal here and a
+// constant there is how this page sent 32 turns at a server that kept 16
+// (t_4c29963a): the assistant answered about a window three turns shorter than the
+// one the user could scroll, and nothing said so. The server re-caps and drops any
+// client-forged system/tool turn, so the wire shape here is a convenience, not a
+// trust boundary.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -148,10 +153,26 @@ type Msg = {
   states?: Record<string, ProposalState>;
 };
 
-// Mirrors the server's cap (chatMaxHistory in rest_chat.go). The server drops
-// older turns; sending more than it keeps would mean the user's own view of the
-// conversation and the model's differ for no benefit.
-const MAX_HISTORY = 32;
+// How much history the page sends when the server has not told it the cap yet,
+// i.e. the window between the first paint and GET /v1/rest/chat answering.
+//
+// THE LIVE CAP IS THE SERVER'S, and it is not a constant in this file on purpose:
+// `limits.max_history_turns` is reported by the probe, and its value is
+// chat.MaxTurns in api/internal/chat/chat.go — the number of turns the runner
+// KEEPS for the model. Sending by that number is what makes the client and the
+// model agree; a literal mirrors nothing and drifts silently.
+//
+// The three numbers that disagreed (t_4c29963a, measured on production): this page
+// sent 32, the runner kept 16, and rest_chat.go's chatMaxHistory (40) is a THIRD
+// number — the edge's reject threshold for an implausible transcript, NOT a
+// retention cap, which is what the comment here used to claim it was. A 19-turn
+// conversation whose first turn carried a passphrase came back citing "giliran 4
+// hingga 19": the model, answering confidently, about only the last 16 turns.
+//
+// This fallback is deliberately at or below the retention cap, and
+// src/lib/chatHistoryCap.test.ts reads chat.MaxTurns out of the Go source and
+// fails if it is not.
+const MAX_HISTORY = 16;
 
 export default function ChatPage() {
   const { t } = useI18n();
@@ -273,9 +294,15 @@ export default function ChatPage() {
     }
 
     // The transcript the user can see, minus the filing/refusal cards (which are
-    // UI affordances, not conversation turns).
+    // UI affordances, not conversation turns), capped to what the server KEEPS.
+    //
+    // `||`, not `??`: a reported 0 would make `slice(-0)` the WHOLE transcript —
+    // the opposite of a cap. The API's own guard rules a 0 out (every field of
+    // chatLimitsOut is asserted nonzero), so this is the cheap direction to fail
+    // in, not a state the server can send.
+    const historyCap = limits?.max_history_turns || MAX_HISTORY;
     const history: Turn[] = msgs
-      .slice(-MAX_HISTORY)
+      .slice(-historyCap)
       .map((m) => ({ role: m.role, content: m.content }));
 
     setMsgs((prev) => [...prev, { role: "user", content: text }]);
