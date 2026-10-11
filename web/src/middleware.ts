@@ -5,7 +5,7 @@
 // resolves the bare specifier to `next/server.js` and throws).
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE } from "./lib/sessionCookie";
-import { isGuardedPath, loginRedirectUrl } from "./lib/authedGuard";
+import { isGuardedPath, loginRedirectPath, requestOrigin } from "./lib/authedGuard";
 
 export function middleware(req: NextRequest) {
   const { origin, pathname, search } = req.nextUrl;
@@ -23,7 +23,24 @@ export function middleware(req: NextRequest) {
   // fetch 401s and the page's own client bounce handles it.
   if (req.cookies.has(SESSION_COOKIE)) return NextResponse.next();
 
-  return NextResponse.redirect(loginRedirectUrl(origin, pathname, search));
+  // The visitor is sent to the login page ON the host they are already on. Two
+  // separate values, deliberately:
+  //
+  //   * the REDIRECT TARGET is anchored on the SERVER's own origin, which no
+  //     request header can influence, so a forged X-Forwarded-Host can never
+  //     move the redirect itself (an absolute target built on a header would be
+  //     an open redirect). Next relativises a same-origin target into a plain
+  //     `/login?…` Location — measured on this build both locally and on prod
+  //     (`location: /login?next=…`), and independently of the Host header (the
+  //     local run's own origin is `0.0.0.0:<port>` while Host is
+  //     `127.0.0.1:<port>`, and the Location is still relative). A plain
+  //     `Response` with a relative Location is NOT an option here: Next parses
+  //     the header as a URL and answers 500 `ERR_INVALID_URL` (measured).
+  //   * the ORIGIN THE BROWSER IS ON travels inside `?next=`, which the login
+  //     page validates and drops if it is not its own — the server cannot know
+  //     it from its own URL (see requestOrigin).
+  const visitor = requestOrigin(req.headers, origin);
+  return NextResponse.redirect(new URL(loginRedirectPath(visitor, pathname, search), origin));
 }
 
 // Kept a literal array so Next can analyse it at build time. `/:path*` covers

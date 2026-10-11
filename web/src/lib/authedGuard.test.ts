@@ -25,6 +25,15 @@
 //      mechanism issue #140 built for the OAuth flow, and the login page
 //      REQUIRES an absolute, same-origin http(s) URL — a relative path is
 //      silently discarded there, so a wrong shape degrades quietly.
+//   6. THE `?next=` ORIGIN IS THE SERVER'S, NOT THE VISITOR'S (card
+//      t_788c06ce). `loginRedirectUrl` used to be handed `req.nextUrl.origin`,
+//      which on this build is the server's own identity (`0.0.0.0:3211` on a
+//      local standalone run, the container's `0160b50ada3c:3000` on prod) and
+//      never the host the browser is on — so the login page discarded the
+//      value and the visitor was not returned to the page they asked for. The
+//      origin is resolved from the request's own proxy headers in
+//      `requestOrigin`, and the redirect TARGET stays a relative path so a
+//      forged header can never move the redirect itself.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -36,7 +45,8 @@ import {
   LOGIN_PATH,
   NEXT_MAX_LEN,
   isGuardedPath,
-  loginRedirectUrl,
+  loginRedirectPath,
+  requestOrigin,
 } from "./authedGuard.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -144,13 +154,59 @@ test("the middleware reads the shared cookie constant and runs the guard", () =>
     !src.includes('"jf_session"') && !src.includes("'jf_session'"),
     "the cookie name must not be a literal — lib/sessionCookie.ts is the shared constant",
   );
-  assert.ok(src.includes("isGuardedPath") && src.includes("loginRedirectUrl"));
+  assert.ok(src.includes("isGuardedPath") && src.includes("loginRedirectPath"));
 });
 
-test("the redirect target is a /login URL the login page will honour", () => {
-  const url = new URL(loginRedirectUrl("https://jomform.com", "/profile", "?tab=passkeys"));
+test("the middleware resolves the visitor's origin from the request headers", () => {
+  const src = readFileSync(join(SRC, "middleware.ts"), "utf8");
+  // The WIRING, not the helper's existence: the origin handed to the redirect
+  // must be resolved from THIS request's headers, with `req.nextUrl.origin` as
+  // the fallback only. Passing `origin` straight through is the defect (card
+  // t_788c06ce) — it is the SERVER's own origin, which the login page drops.
+  assert.match(
+    src,
+    /requestOrigin\(\s*req\.headers\s*,\s*origin\s*\)/,
+    "middleware.ts must resolve the redirect origin with requestOrigin(req.headers, origin)",
+  );
+  assert.match(
+    src,
+    /loginRedirectPath\(\s*visitor\s*,/,
+    "the resolved visitor origin is not what loginRedirectPath is given — ?next= must name the " +
+      "origin the BROWSER is on, or readNext() discards it and the visitor is not returned to the " +
+      "page they asked for",
+  );
+  assert.ok(
+    !/loginRedirectPath\(\s*origin\s*,/.test(src),
+    "middleware.ts hands loginRedirectPath `origin` (req.nextUrl.origin) again — that is the " +
+      "server's own origin (measured: 0.0.0.0:3211 locally, 0160b50ada3c:3000 on prod), which the " +
+      "login page's readNext() rejects",
+  );
+});
+
+test("the redirect TARGET is anchored on the server's own origin, never on a header", () => {
+  const src = readFileSync(join(SRC, "middleware.ts"), "utf8");
+  // The other half of the same property, and the one that keeps a forged
+  // X-Forwarded-Host from becoming an OPEN REDIRECT: the resolved (visitor)
+  // origin may only appear inside `?next=`. The URL the browser is sent to is
+  // built on `origin` — the server's own, which no request header can move.
+  assert.match(
+    src,
+    /NextResponse\.redirect\(\s*new URL\(\s*loginRedirectPath\([^)]*\)\s*,\s*origin\s*\)\s*\)/,
+    "middleware.ts must build the redirect target as `new URL(<login path>, origin)`; if the " +
+      "resolved visitor origin (or anything else header-derived) is used as the BASE, a forged " +
+      "X-Forwarded-Host moves the redirect itself — an open redirect, worse than the bug this fixes",
+  );
+});
+
+test("the redirect target is a /login path the login page will honour", () => {
+  // The value is a PATH (the middleware must not be able to redirect off-origin
+  // — see the source guard above); what the login page reads is the absolute
+  // `next` it carries.
+  const path = loginRedirectPath("https://jomform.com", "/profile", "?tab=passkeys");
+  assert.ok(path.startsWith(LOGIN_PATH), `expected a ${LOGIN_PATH} path, got ${path}`);
+  const url = new URL(path, "https://evil.example"); // base irrelevant: the value is relative
   assert.equal(url.pathname, LOGIN_PATH);
-  assert.equal(url.origin, "https://jomform.com");
+  assert.equal(url.origin, "https://evil.example", "the path alone must never change the origin");
   const next = url.searchParams.get("next");
   assert.ok(next, "?next= must be set so the visitor returns to the page they asked for");
   // The login page's readNext(): absolute, http(s), same origin, under the cap.
@@ -163,8 +219,113 @@ test("the redirect target is a /login URL the login page will honour", () => {
 
 test("a ?next= the login page would discard is not sent at all", () => {
   const long = "/settings?" + "x".repeat(NEXT_MAX_LEN);
-  const url = new URL(loginRedirectUrl("https://jomform.com", long));
+  const url = new URL(loginRedirectPath("https://jomform.com", long), "https://jomform.com");
   assert.equal(url.search, "", "an over-long target must be dropped, not sent to be silently ignored");
+});
+
+// ── the origin the visitor is actually on (card t_788c06ce) ─────────────────
+//
+// MEASURED, 2026-10-11, on the built artifact: with `Host: jomform.com`,
+// `X-Forwarded-Host: jomform.com` and `X-Forwarded-Proto: https` on an anonymous
+// GET /profile, the pre-fix guard answered
+//   location: /login?next=https%3A%2F%2F0.0.0.0%3A3211%2Fprofile
+// — the SERVER's own origin, because the standalone build takes it from
+// HOSTNAME/PORT and ignores both Host spellings (prod: `0160b50ada3c:3000`).
+// `readNext` compares origins exactly, so that value is discarded and the
+// post-sign-in return path is lost. These arms pin the resolution rule.
+
+/** A stub `Headers` — the repo's unit runner has the real one, but this keeps
+ *  each arm's input readable and independent of the runtime's own defaults. */
+function headersOf(map: Record<string, string>): { get(name: string): string | null } {
+  const lower: Record<string, string> = {};
+  for (const [k, v] of Object.entries(map)) lower[k.toLowerCase()] = v;
+  return { get: (name: string) => lower[name.toLowerCase()] ?? null };
+}
+
+test("the origin comes from the proxy headers, not from the server's own URL", () => {
+  // The prod shape: Traefik adds X-Forwarded-Host/Proto, the container's own
+  // origin is its hostname and port.
+  assert.equal(
+    requestOrigin(
+      headersOf({ "x-forwarded-host": "jomform.com", "x-forwarded-proto": "https", host: "0160b50ada3c:3000" }),
+      "http://0160b50ada3c:3000",
+    ),
+    "https://jomform.com",
+  );
+  // A chain that rewrote Host but set no forwarded host: Host is the fallback.
+  assert.equal(
+    requestOrigin(headersOf({ host: "jomform.com", "x-forwarded-proto": "https" }), "http://localhost:3211"),
+    "https://jomform.com",
+  );
+  // A forwarded list carries the closest hop first.
+  assert.equal(
+    requestOrigin(headersOf({ "x-forwarded-host": "jomform.com, jf-web", "x-forwarded-proto": "https" }), "http://localhost:3211"),
+    "https://jomform.com",
+  );
+  // No proxy headers at all (a direct hit on the app): the server's own origin,
+  // exactly as before this change.
+  assert.equal(requestOrigin(headersOf({}), "http://localhost:3211"), "http://localhost:3211");
+});
+
+test("a host the proxy could not have meant is refused, never concatenated", () => {
+  const fallback = "http://0160b50ada3c:3000";
+  // Each of these would otherwise become part of a longer URL: the guard builds
+  // `origin + pathname`, and `new URL(path, origin)` would follow a smuggled
+  // host/path/userinfo into somewhere else entirely.
+  const refused: Record<string, string> = {
+    "evil.example/path": "a path smuggled into the host",
+    "user@evil.example": "userinfo",
+    "evil.example?x=1": "a query",
+    "evil.example#f": "a fragment",
+    "evil.example:99999": "an impossible port",
+    "": "empty",
+    "not a host": "whitespace",
+  };
+  for (const [host, why] of Object.entries(refused)) {
+    assert.equal(
+      requestOrigin(headersOf({ "x-forwarded-host": host, "x-forwarded-proto": "https" }), fallback),
+      fallback,
+      `${JSON.stringify(host)} (${why}) must fall back to the server's own origin, not be trusted`,
+    );
+  }
+  // A protocol the proxy could not have meant leaves the scheme alone rather
+  // than inventing one.
+  assert.equal(
+    requestOrigin(headersOf({ "x-forwarded-host": "jomform.com", "x-forwarded-proto": "javascript" }), "https://0160b50ada3c:3000"),
+    "https://jomform.com",
+    "an unknown X-Forwarded-Proto must not become the scheme; the trusted fallback's scheme is used",
+  );
+});
+
+test("the resolved origin is what the login page needs, and only ?next= carries it", () => {
+  // The whole property, end to end in pure code: a request that arrived through
+  // the proxy produces a relative Location whose `next` is an absolute URL on
+  // the VISITOR's origin — the shape readNext() accepts.
+  const origin = requestOrigin(
+    headersOf({ "x-forwarded-host": "jomform.com", "x-forwarded-proto": "https", host: "0160b50ada3c:3000" }),
+    "http://0160b50ada3c:3000",
+  );
+  const location = loginRedirectPath(origin, "/profile");
+  assert.equal(location.startsWith("/login"), true, `expected a relative /login path, got ${location}`);
+  assert.equal(
+    location.includes("0160b50ada3c"),
+    false,
+    "the container's own origin must not appear anywhere in the redirect",
+  );
+  const next = new URL(location, "https://jomform.com").searchParams.get("next");
+  assert.ok(next);
+  assert.equal(new URL(next).origin, "https://jomform.com");
+  // The OTHER direction, stated so the defect cannot come back unnoticed: with
+  // the server's own origin (what the pre-fix middleware passed), the login page
+  // discards the value — this is exactly what the fix is against.
+  const preFixLocation = loginRedirectPath("http://0160b50ada3c:3000", "/profile");
+  const preFixNext = new URL(preFixLocation, "https://jomform.com").searchParams.get("next");
+  assert.equal(new URL(preFixNext!).origin, "http://0160b50ada3c:3000");
+  assert.notEqual(
+    new URL(preFixNext!).origin,
+    "https://jomform.com",
+    "the pre-fix value's origin is not the visitor's — that is the defect (a value readNext drops)",
+  );
 });
 
 test("the gate cannot lock out a visitor who holds a session cookie", () => {
