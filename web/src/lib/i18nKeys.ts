@@ -40,6 +40,18 @@
 //     ceiling on the dynamic remainder, so this cannot quietly degrade into "we
 //     only check the easy half".
 //
+//   * REGEX LITERALS are recognised and SKIPPED, not read as code: a backtick in
+//     a regex body is regex text, so it must not open a template. That is not a
+//     nicety — `components/Markdown.ts`'s FENCE regex carries three backticks and
+//     the old reader consumed the 92 lines that followed it as template TEXT, so
+//     no call site written in that window was seen (measured, and pinned by
+//     i18nKeys.test.ts). The rule is narrow on purpose (see REGEX_AFTER in this
+//     file): a `/` opens a regex only after a preceder where a left operand cannot
+//     have ended. A regex behind a keyword (`return /re/`) or after `+`/`<` is
+//     therefore still read as ordinary code, exactly as before — there is no such
+//     site in this tree, and the AST cross-check in the test is what would catch
+//     one that carried a backtick.
+//
 // This module holds no DICT import: it answers "which keys does the code ask for",
 // the caller compares that against the dictionary.
 
@@ -153,6 +165,97 @@ function maskSource(src: string): { masked: string } & Spans {
     return true;
   }
 
+  /**
+   * The characters after which a `/` can only open a REGEX literal.
+   *
+   * A regex literal read as code blinds the scanner, silently: the backticks in
+   * `components/Markdown.ts`'s `/^\s*(```|~~~)\s*[\w+-]*\s*$/` (line 65) opened a
+   * template that closed on the first backtick of `/`([^`\n]+)`/y` (line 157), so
+   * every byte between them — and every `t("…")` written there — was fed to the
+   * scanner as template TEXT. Measured per line by planting a fresh call site
+   * after each one: lines 65–156 of that file were invisible, and the whole
+   * suite stayed green.
+   *
+   * Deciding "regex or division" needs the token before the `/`. This is the
+   * deliberately narrow version of that rule: only a preceder after which a LEFT
+   * OPERAND cannot already have ended. Widening it is the failure mode — reading a
+   * division (or a slash in JSX text) as a regex blanks the rest of the line and
+   * hides real call sites — so the set is data, not guesswork: all 72 regex
+   * literals in this tree (TypeScript parser, src/**.ts(x?) excluding tests) are
+   * preceded by one of these, and the AST cross-checks in i18nKeys.test.ts fail if
+   * a regex whose body carries a quote or a backtick is preceded by anything else.
+   *
+   * NOT here on purpose:
+   *   * `)` `]` — both END a left operand (`(a+b) / 2`, `x[1] / y[2]`), so a `/`
+   *     after them is division far more often than it is a regex.
+   *   * `}` — same reason, plus JSX text: `<span>{n} / {m}</span>` is prose with a
+   *     slash in it, and a second `/` on that line (the closing tag) would turn it
+   *     into a "regex" that swallows the expression between them.
+   *   * `+ - * % ^ ~ <` — unary vs binary is not decidable from one character
+   *     (`a++ / b`), and `<` is how a JSX close tag starts (`</div>`).
+   *   * `>` — a JSX tag close followed by a slash in TEXT (`<td> / </td>`) is not a
+   *     regex, so `>` counts only as the second half of `=>` (see opensRegex).
+   *   * a KEYWORD preceder (`return /re/`). No site in this tree needs any of
+   *     these: a regex there is read exactly as it was before this rule existed,
+   *     and the tree-wide tests are what catch the dangerous combination (such a
+   *     preceded regex that carries a quote or a backtick) if one ever appears.
+   */
+  const REGEX_AFTER = "(,:=!?[;{&|";
+
+  /** Does the `/` at `i` open a regex literal rather than divide? */
+  function opensRegex(i: number): boolean {
+    let p = i - 1;
+    while (p >= 0 && /\s/.test(src[p])) p--;
+    if (p < 0) return true;
+    if (src[p] === ">") {
+      // `x => /re/` is a regex; `<td> / </td>` is text. Only `=>` counts.
+      let q = p - 1;
+      while (q >= 0 && /\s/.test(src[q])) q--;
+      return q >= 0 && src[q] === "=";
+    }
+    return REGEX_AFTER.includes(src[p]);
+  }
+
+  /**
+   * The index just past the regex literal whose `/` is at `i`, or -1 when there
+   * is none. A regex literal cannot contain a raw newline, so running off the end
+   * of the line without a closer means the `/` was division after all: -1, nothing
+   * blanked, and the `/` is scanned as ordinary code (the pre-existing path). That
+   * one-line bound is also what keeps a misjudged `/` from doing damage beyond its
+   * own line.
+   */
+  function readRegex(i: number): number {
+    let j = i + 1;
+    let inClass = false;
+    while (j < src.length) {
+      const c = src[j];
+      if (c === "\\") { j += 2; continue; }
+      if (isNewline(c)) return -1;
+      if (c === "[") inClass = true;
+      else if (c === "]") inClass = false;
+      else if (c === "/" && !inClass) break;
+      j++;
+    }
+    if (j >= src.length) return -1;
+    j++; // past the closing slash
+    while (j < src.length && /[a-z]/i.test(src[j])) j++; // flags
+    return j;
+  }
+
+  /**
+   * Blank a regex literal, register its span and return where it ends — or -1 when
+   * the `/` at `i` was not one. Registering the span in `ends` is what makes
+   * matchParen/findTop skip it: a paren or a quote inside a regex body is regex
+   * text, not structure.
+   */
+  function skipRegex(i: number): number {
+    const end = readRegex(i);
+    if (end === -1) return -1;
+    blank(i, end);
+    ends.set(i, end);
+    return end;
+  }
+
   /** `i` is the opening backtick. Returns the index just past the literal. */
   function readTemplate(i: number): number {
     const segments: string[] = [];
@@ -186,6 +289,10 @@ function maskSource(src: string): { masked: string } & Spans {
           if (d === '"' || d === "'") { j = quoteIsProse(j) ? j + 1 : readString(j); continue; }
           if (d === "`") { j = readTemplate(j); continue; }
           if (src.startsWith("//", j)) { while (j < src.length && !isNewline(src[j])) j++; continue; }
+          if (d === "/") {
+            const re = opensRegex(j) ? skipRegex(j) : -1;
+            if (re !== -1) { j = re; continue; }
+          }
           if (d === "(" || d === "[" || d === "{") depth++;
           else if (d === ")" || d === "]" || d === "}") { depth--; if (depth === 0) break; }
           j++;
@@ -221,6 +328,13 @@ function maskSource(src: string): { masked: string } & Spans {
       blank(i, j);
       i = j;
       continue;
+    }
+    // A regex literal before quotes and templates, and before the `/` falls
+    // through as ordinary code: this is the Markdown.ts FENCE/CODE hole — see
+    // REGEX_AFTER above.
+    if (c === "/") {
+      const end = opensRegex(i) ? skipRegex(i) : -1;
+      if (end !== -1) { i = end; continue; }
     }
     // Quote characters (and comments) inside a template expression are prose or
     // separators, not string openers — see quoteIsProse. A quote there must not
@@ -260,7 +374,9 @@ function matchParen(src: string, spans: Spans, open: number): number {
   let i = open;
   while (i < src.length) {
     const c = src[i];
-    if (c === '"' || c === "'" || c === "`" || (c === "/" && (src[i + 1] === "/" || src[i + 1] === "*"))) {
+    // Any `/` goes through step: it is a comment opener, a registered regex span,
+    // or (step's fallback) one ordinary byte.
+    if (c === '"' || c === "'" || c === "`" || c === "/") {
       i = step(src, spans, i);
       continue;
     }
@@ -277,7 +393,7 @@ function findTop(src: string, spans: Spans, start: number, end: number, ch: stri
   let i = start;
   while (i < end) {
     const c = src[i];
-    if (c === '"' || c === "'" || c === "`" || (c === "/" && (src[i + 1] === "/" || src[i + 1] === "*"))) {
+    if (c === '"' || c === "'" || c === "`" || c === "/") {
       i = step(src, spans, i);
       continue;
     }
@@ -330,8 +446,10 @@ function keysInArg(src: string, spans: Spans, start: number, end: number): strin
   }
 
   const litEnd = spans.ends.get(s);
-  if (litEnd !== undefined && litEnd === e) {
-    const lit = spans.lits.get(s)!;
+  // `lits` has no entry for a regex span (only `ends` does), so a regex argument
+  // is `lit === undefined` and falls through to the dynamic path below.
+  const lit = litEnd !== undefined && litEnd === e ? spans.lits.get(s) : undefined;
+  if (lit) {
     if (lit.kind === "string") return [lit.value];
     if (lit.exprs.length === 0) return [lit.segments[0]];
     // Template with interpolations: each `${…}` must itself resolve.

@@ -30,9 +30,13 @@
 //       leaves `next build` at exit 0, `Compiled successfully`, with i18n.test.ts
 //       at 6/6 — the raw key ships. This guard reports it:
 //         does.not.exist  <-  src/components/MembersTab.tsx:20
-//       The same hole covers a template the compiler cannot reduce
-//       (`fb.status.${s}` — all four fb.* keys that exist today are reachable only
-//       that way) and any future non-`Key` parameter added by a helper.
+//       The same hole covers a template the compiler cannot reduce — and every
+//       `fb.status.*` key in the dictionary is reachable ONLY that way (the admin
+//       filter chips and each thread's badge both call `t(`fb.status.${s}`)`), so
+//       no call-site scan can name it either: the scanner reports that call site
+//       as DYNAMIC, and test 1 pins the POPULATION it renders through against the
+//       Go status set instead (see the comment there).
+//       And any future non-`Key` parameter added by a helper.
 //
 //   So this guard is the net for the shapes a type-checked build cannot see. It is
 //   also STRICTER than the compiler: it resolves every call site in the tree, so it
@@ -76,11 +80,14 @@
 //      no longer exists).
 //
 // WHAT IT DOES NOT COVER (stated honestly)
-//   * DYNAMIC KEYS. 41 of the tree's call sites build the key from runtime data —
-//     `t(`fb.status.${s}`)`, `t(entries.labelKey)`, `t(roleLabel(role))` — so no
-//     static scan can prove those resolve. They are COUNTED here (test 1 pins the
-//     ceiling) and the i18nKeys.ts header lists them; proving them needs the
-//     callers' own value sets, which is a different guard.
+//   * DYNAMIC KEYS — 53 of the tree's call sites build the key from runtime data
+//     (`t(`fb.status.${s}`)`, `t(entries.labelKey)`, `t(roleLabel(role))`), so no
+//     static scan can NAME them; they are counted, and the ceiling in test 2 is
+//     what stops the resolved half from shrinking unnoticed. One of those families
+//     is still pinned exactly, from the other end: every `fb.status.*` key the API
+//     can produce must exist in the dictionary, cross-checked against
+//     `dbstore.FeedbackStatuses` (test 1) — the call site cannot be named, but the
+//     VALUE SET it renders through can be checked, and a rename is then caught.
 //   * DEAD KEYS — a dictionary entry nothing calls. That is not this defect: a
 //     dead key costs a translation, a missing key costs the user's label. 272
 //     dictionary keys are referenced only dynamically, so a dead-key check would
@@ -95,6 +102,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 import { DICT } from "../components/i18nDict.ts";
 import { scanSource, scanTree, sourceFiles } from "./i18nKeys.ts";
@@ -114,6 +122,60 @@ const dictKeys = new Set(Object.keys(DICT));
 const ALLOW_MISSING: string[] = [];
 
 const rel = (file: string) => file.replace(`${SRC_DIR}/`, "");
+
+/**
+ * The dictionary's `fb.status.*` keys without their prefix, sorted.
+ *
+ * These are the keys the admin triage UI resolves through `t(`fb.status.${s}`)`
+ * — `s` is a status, so the only thing that can carry the translations is a
+ * dictionary entry per status.
+ */
+const fbStatusDictKeys = (): string[] =>
+  [...dictKeys]
+    .filter((k) => k.startsWith("fb.status."))
+    .map((k) => k.slice("fb.status.".length))
+    .sort();
+
+/**
+ * The statuses the API accepts, read from the Go source
+ * (`api/internal/dbstore/feedback.go`): the `FeedbackStatus<X> = "<value>"` consts
+ * resolved through the `FeedbackStatuses` list. The DB CHECK constraint
+ * (`feedback_threads_status_chk`, migration 000063) pins the same set, and the
+ * REST/MCP layers validate against this list, so a thread's status can only ever
+ * be one of these — which is what makes the dictionary check in test 1 exact
+ * rather than a count.
+ */
+function goFeedbackStatuses(): string[] {
+  const go = readFileSync(`${SRC_DIR}/../../api/internal/dbstore/feedback.go`, "utf8");
+  const values = new Map<string, string>();
+  for (const m of go.matchAll(/\b(FeedbackStatus[A-Za-z]+)\s*=\s*"([^"]*)"/g)) values.set(m[1], m[2]);
+  const list = go.match(/var\s+FeedbackStatuses\s*=\s*\[\]string\{([^}]*)\}/);
+  assert.ok(list, "could not find `var FeedbackStatuses = []string{…}` in api/internal/dbstore/feedback.go");
+  assert.ok(values.size >= 4, `could not read the FeedbackStatus* consts in api/internal/dbstore/feedback.go (found ${values.size})`);
+  return [...list![1].matchAll(/[A-Za-z_]\w*/g)]
+    .map((m) => {
+      const v = values.get(m[0]);
+      assert.ok(v, `FeedbackStatuses names ${m[0]}, which has no string value in api/internal/dbstore/feedback.go`);
+      return v!;
+    })
+    .sort();
+}
+
+/**
+ * The statuses the admin page's own filter list iterates —
+ * `const FB_STATUSES = [...] as const` in app/admin/page.tsx, the values `s`
+ * takes at the chip call site. Read as source, not imported: the page is a client
+ * component and this is a guard on the literal staying level with the server.
+ */
+function pageStatuses(): string[] {
+  const page = readFileSync(`${SRC_DIR}/app/admin/page.tsx`, "utf8");
+  const list = page.match(/const\s+FB_STATUSES\s*=\s*\[([^\]]*)\]/);
+  assert.ok(
+    list,
+    "app/admin/page.tsx no longer declares `const FB_STATUSES = [...]` — the filter chips' value set must stay cross-checked against the server's statuses",
+  );
+  return [...list![1].matchAll(/"([^"]*)"/g)].map((m) => m[1]).sort();
+}
 
 /** `key <- file:line, file:line` lines for the failure message. */
 function byKey(sites: { key: string; file: string; line: number }[]): string[] {
@@ -143,9 +205,9 @@ test("the hole this guard covers still exists (the type-checked build cannot see
   //   * `function roleLabel(t: (k: any) => string, …)` in components/MembersTab.tsx
   //     — a literal miss planted inside it leaves `next build` at exit 0.
   //   * `fb.status.${s}` in app/admin/page.tsx — a template no compiler can reduce;
-  //     every fb.status.* key in the dictionary is reachable ONLY this way, so if
-  //     one were dropped, this guard's resolution of the key list is the only thing
-  //     that could notice.
+  //     every fb.status.* key in the dictionary is reachable ONLY this way. The
+  //     scanner reports that call site as DYNAMIC, so it cannot NAME the keys —
+  //     what is pinned below is the POPULATION it renders through (see there).
   // Read every source file the scan itself walked, so a file rename does not turn
   // this into a spurious "readFileSync: no such file" failure.
   const loose: string[] = [];
@@ -167,12 +229,40 @@ test("the hole this guard covers still exists (the type-checked build cannot see
     [...called.keys()].includes("role.owner"),
     "literal call sites inside the loose-typed helpers are no longer being resolved",
   );
-  // The fb.status population is reachable only as a template; the scanner must
-  // produce the keys, since nothing else in the repo can check them.
-  const fbStatusKeys = [...dictKeys].filter((k) => k.startsWith("fb.status."));
-  assert.ok(
-    fbStatusKeys.length >= 4,
-    `expected the fb.status.* keys to still exist (found ${fbStatusKeys.length})`,
+  // The fb.status population, pinned EXACTLY rather than by count.
+  //
+  // `s` in `t(`fb.status.${s}`)` is a status the API accepts: the admin filter
+  // chips iterate the page's own FB_STATUSES list and each thread's badge renders
+  // the status the API returned, which the DB CHECK constraint
+  // (feedback_threads_status_chk) has already restricted to that same set. So the
+  // dictionary must carry an entry for every accepted status and no others — and
+  // this is the only thing in the repo that can notice a rename, because no
+  // call-site scan can name a dynamically-built key.
+  //
+  // A count (`>= 4`) was the earlier shape and it cannot see a rename: swap
+  // `fb.status.open` for `fb.status.pending` in the dictionary and add one more,
+  // the count stays 4, this file stays green, and every open thread's badge
+  // renders the raw `fb.status.open` in all five locales.
+  const fromGo = goFeedbackStatuses();
+  assert.deepEqual(
+    fbStatusDictKeys(),
+    fromGo,
+    "the fb.status.* dictionary keys must be EXACTLY the statuses the API accepts " +
+      "(api/internal/dbstore/feedback.go FeedbackStatuses, mirrored by the feedback_threads_status_chk " +
+      "CHECK in migration 000063). t(`fb.status.${s}`) falls back to the key itself, so a status that " +
+      `exists on one side only is a raw "fb.status.…" in the admin chips and every thread badge:\n` +
+      `  dictionary:  ${JSON.stringify(fbStatusDictKeys())}\n` +
+      `  API accepts: ${JSON.stringify(fromGo)}\n` +
+      "(Move the translations WITH the status — never leave an entry for a status the API cannot return.)",
+  );
+  // The same set again, from the page side: the chips' value list is what `s`
+  // takes at the call site, so it drifting from the server's set renders chips for
+  // statuses that cannot exist (or silently omits one that can).
+  assert.deepEqual(
+    pageStatuses(),
+    fromGo,
+    "app/admin/page.tsx's FB_STATUSES must be the same set as api/internal/dbstore/feedback.go " +
+      `FeedbackStatuses:\n  page: ${JSON.stringify(pageStatuses())}\n  API:  ${JSON.stringify(fromGo)}`,
   );
 });
 
@@ -273,6 +363,163 @@ test("comments, plain strings and lookalike identifiers are not call sites", () 
     scanSource(trailing, "fixture.tsx").static,
     [],
     "a trailing `//` comment must hide the `t(` calls written inside it",
+  );
+});
+
+test("a regex literal is skipped, so a backtick in its body cannot open a template", () => {
+  // The measured defect (card t_816ca78f). components/Markdown.ts:65 is
+  //
+  //   const FENCE = /^\s*(```|~~~)\s*[\w+-]*\s*$/;
+  //
+  // The old reader opened a TEMPLATE at the first of those three backticks and
+  // closed it at the first backtick of the next backtick-carrying regex — the
+  // `const CODE = /`([^`\n]+)`/y` 92 lines below. Everything between was fed to
+  // the scanner as template TEXT, so no `t("…")` written in that window was seen:
+  // `npm run test:unit` stayed green with the planted key appearing 0 times in the
+  // output, and Markdown.ts has 0 call sites today, so the window was latent
+  // rather than open. The shape is reproduced here first, then pinned in the real
+  // file.
+  const fixture = [
+    "const FENCE = /^\\s*(```|~~~)\\s*[\\w+-]*\\s*$/;",
+    'const a = t("qa.head.missing");',
+    "const b = t(`qa.mid.missing`);",
+    "const mid = {",
+    "  re: /`([^`\\n]+)`/y,",
+    "};",
+    'const c = t("qa.tail.missing");',
+  ].join("\n");
+  assert.deepEqual(
+    scanSource(fixture, "fixture.tsx").static.map((s) => s.key),
+    ["qa.head.missing", "qa.mid.missing", "qa.tail.missing"],
+    "a regex literal carrying backticks still hides the call sites written around it — the scanner is reading " +
+      "regex text as code, so the window this file pins is open again",
+  );
+  // The card's own reproducer, in the real file: plant a key immediately after the
+  // FENCE line and require the guard to see it. The line is located by its shape
+  // rather than by number so this does not rot when the file moves (it already
+  // moved once: PR 744 shifted it from 59 to 65).
+  const mdPath = `${SRC_DIR}/components/Markdown.ts`;
+  const md = readFileSync(mdPath, "utf8").split("\n");
+  const fence = md.findIndex((l) => /^\s*const FENCE\s*=/.test(l));
+  assert.ok(
+    fence >= 0,
+    "components/Markdown.ts no longer declares FENCE — if that backtick regex really is gone, replace this " +
+      "pin with the reason the scanner no longer needs to skip regex literals, do not just delete it",
+  );
+  const planted = [
+    ...md.slice(0, fence + 1),
+    'export const qaMid = (t: (k: any) => string) => t("qa.mid.missing");',
+    ...md.slice(fence + 1),
+  ].join("\n");
+  assert.deepEqual(
+    scanSource(planted, mdPath)
+      .static.filter((s) => s.key === "qa.mid.missing")
+      .map((s) => `${rel(mdPath)}:${s.line}`),
+    [`${rel(mdPath)}:${fence + 2}`],
+    "a call site planted just after components/Markdown.ts's FENCE regex is invisible to the scan — the next " +
+      "`t(\"…\")` written in that file would ship unguarded with the whole suite green",
+  );
+});
+
+test("no regex literal in the tree can blind the scanner (AST cross-check)", () => {
+  // The scanner decides "regex or division" from the character before the `/`
+  // (REGEX_AFTER in i18nKeys.ts), which is a heuristic. The TypeScript parser is
+  // the authority on which bytes ARE regex literals, so this cross-checks: every
+  // regex literal whose BODY carries a quote or a backtick must be skipped by the
+  // scanner. A backtick that is not skipped re-opens the Markdown.ts window; a
+  // quote is what `lib/publishResult.ts`'s `/^https:\/\/[^\s"'<>]+$/i` carries and
+  // must not derail the scan either. Behavioural, not structural: a call site
+  // planted after that regex's own line must be resolved.
+  const dangerous: { file: string; line: number }[] = [];
+  for (const file of sourceFiles(SRC_DIR)) {
+    const src = readFileSync(file, "utf8");
+    const sf = ts.createSourceFile(
+      file,
+      src,
+      ts.ScriptTarget.Latest,
+      true,
+      file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    );
+    const visit = (n: ts.Node) => {
+      if (n.kind === ts.SyntaxKind.RegularExpressionLiteral) {
+        const raw = n.getText(sf);
+        const body = raw.slice(1, raw.lastIndexOf("/"));
+        if (/["'`]/.test(body)) {
+          dangerous.push({ file, line: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1 });
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  assert.ok(
+    dangerous.length > 0,
+    "no regex literal in the tree carries a quote or a backtick any more — the Markdown.ts FENCE/CODE pair is " +
+      "gone. Re-measure and replace this pin (a regex literal is still something the scanner has to skip); do " +
+      "not leave it asserting a case the tree no longer has",
+  );
+  const blind: string[] = [];
+  for (const d of dangerous) {
+    const lines = readFileSync(d.file, "utf8").split("\n");
+    const planted = [
+      ...lines.slice(0, d.line),
+      'const qaProbe = t("qa.regex.missing");',
+      ...lines.slice(d.line),
+    ].join("\n");
+    if (!scanSource(planted, d.file).static.some((s) => s.key === "qa.regex.missing")) {
+      blind.push(`${rel(d.file)}:${d.line}`);
+    }
+  }
+  assert.deepEqual(
+    blind,
+    [],
+    `a call site written after the regex literal at ${blind.join(", ")} is invisible to the scan: that regex ` +
+      "carries a quote or a backtick the scanner is not skipping, so everything after it on the page reads as " +
+      "literal text (see REGEX_AFTER in src/lib/i18nKeys.ts)",
+  );
+});
+
+test("the scanner sees every literal call site the TypeScript parser sees", () => {
+  // The independent check, kept as a test rather than a one-off measurement: the
+  // parser is the authority on call sites, so a scanner that has gone blind
+  // ANYWHERE — a regex literal read as code, a template opened on a stray
+  // backtick, a quote mistaken for prose — shows up here as a literal `t("…")`
+  // the parser sees and the scan does not report. Measured 0 missed when this was
+  // written, so this is an exact invariant, not a floor.
+  const scanned = new Set(tree.static.map((s) => `${s.file}:${s.line}:${s.key}`));
+  const missed: string[] = [];
+  for (const file of sourceFiles(SRC_DIR)) {
+    const src = readFileSync(file, "utf8");
+    const sf = ts.createSourceFile(
+      file,
+      src,
+      ts.ScriptTarget.Latest,
+      true,
+      file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    );
+    const visit = (n: ts.Node) => {
+      if (
+        ts.isCallExpression(n) &&
+        ts.isIdentifier(n.expression) &&
+        n.expression.text === "t" &&
+        n.arguments.length > 0
+      ) {
+        const arg = n.arguments[0];
+        if (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) {
+          const line = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+          if (!scanned.has(`${file}:${line}:${arg.text}`)) missed.push(`${rel(file)}:${line} ${arg.text}`);
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  assert.deepEqual(
+    missed,
+    [],
+    `${missed.length} literal call site(s) the TypeScript parser sees are invisible to the scan — the scanner is ` +
+      "reading code as text somewhere (a regex literal, a stray backtick, a quote taken for prose) and every key " +
+      "written in that region ships unguarded",
   );
 });
 
