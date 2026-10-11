@@ -163,7 +163,7 @@ func TestAuthHandlersTypedNilMailerReportsNotConfigured(t *testing.T) {
 	if err := a.sendConnectEmail(ctx, "user@example.test", "http://x/y", "en"); err == nil {
 		t.Fatal("sendConnectEmail with a typed-nil mailer returned nil, want an error")
 	}
-	if err := a.sendMagicLinkEmail(ctx, "user@example.test", "tok", false, "en"); err == nil {
+	if err := a.sendMagicLinkEmail(ctx, "user@example.test", "tok", false, "en", ""); err == nil {
 		t.Fatal("sendMagicLinkEmail with a typed-nil mailer returned nil, want an error")
 	}
 	if err := a.sendEmail2FACode(ctx, "user@example.test", "123456", "en"); err == nil {

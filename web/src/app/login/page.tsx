@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useI18n } from "../../components/i18n";
 import { resolvePostLogin } from "../../lib/postLogin";
+import { browserNextTarget } from "../../lib/nextTarget";
 import { b64url, fromB64url } from "../../lib/webauthn";
 import { apiErr } from "../../lib/apiErr";
 
@@ -69,28 +70,16 @@ function ProviderLogo({ id }: { id: string }) {
 // (which lives on mcp.jomform.com). Read that value once at mount so standard
 // login AND the TOTP step-2 redirect back to it after a successful sign-in,
 // instead of dropping to "/". Validated against open-redirect attacks.
+//
+// The rule itself now lives in lib/nextTarget.ts (card t_5e39dc9f), because the
+// DEFAULT passwordless flow needs the same value: this page forwards the
+// validated `next` with the magic-link request (see `submit`), the server puts
+// it in the emailed link, and /magic-link validates it with the same function.
+// One rule, three call sites — instead of a copy per surface.
 function readNext(): string {
   // Prerender/SSR has no window; only run the guard in the browser.
   if (typeof window === "undefined") return "";
-  const raw = new URLSearchParams(window.location.search).get("next");
-  if (!raw) return "";
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    return "";
-  }
-  // Reject protocol-relative ("//host") and non-http(s) schemes.
-  if (raw.startsWith("//")) return "";
-  if (u.protocol !== "https:" && u.protocol !== "http:") return "";
-  // Allow only the app origin (jomform.com) and the OAuth base host
-  // (mcp.jomform.com) — never foreign hosts.
-  const self = window.location.origin;
-  const oauthBase = (process.env.NEXT_PUBLIC_OAUTH_BASE as string) || "https://mcp.jomform.com";
-  const allowed = new Set<string>([self, oauthBase]);
-  if (!allowed.has(u.origin)) return "";
-  if (u.href.length > 700) return ""; // sanity cap on the authorize URL
-  return u.href;
+  return browserNextTarget(new URLSearchParams(window.location.search).get("next"));
 }
 
 export default function Login() {
@@ -182,6 +171,13 @@ export default function Login() {
       if (mode === "magic") {
         body.website = String(fd.get("website") || "");
         body.lang = lang;
+        // Card t_5e39dc9f: carry the validated ?next= (the page the visitor was
+        // bounced from) with the request, so the emailed link can return them to
+        // it. Without this the passwordless flow — the DEFAULT one — always
+        // dropped the visitor on /workspace-picker. Only the validated value
+        // travels; an absent or discarded one sends nothing, i.e. the pre-fix
+        // behaviour, and the server re-validates what it receives.
+        if (next) body.next = next;
       }
       const r = await fetch(path, {
         method: "POST",

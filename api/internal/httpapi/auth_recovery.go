@@ -12,6 +12,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -220,6 +221,15 @@ func (a *AuthHandlers) handleMagicLinkRequest(w http.ResponseWriter, r *http.Req
 		// Lang (issue #206): the user's chosen locale, carried on the signup
 		// magic-link email so the confirmation page renders in their language.
 		Lang string `json:"lang,omitempty"`
+		// Next (card t_5e39dc9f): the page the visitor was bounced from, as the
+		// SSR gate encoded it in /login?next=… . The login page forwards the
+		// value it validated; this end re-validates the SHAPE (safeMagicLinkNext)
+		// and carries it on the emailed link, so the passwordless sign-in returns
+		// the visitor to that page instead of the dashboard root. Origin is NOT
+		// checked here — this server does not know which spelling of the app the
+		// visitor used (apex or www), and the magic-link page applies the
+		// authoritative origin check before it navigates (web/src/lib/nextTarget.ts).
+		Next string `json:"next,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		a.replyMagicLinkRequestOK(w)
@@ -234,6 +244,9 @@ func (a *AuthHandlers) handleMagicLinkRequest(w http.ResponseWriter, r *http.Req
 		a.replyMagicLinkRequestOK(w) // nothing wired (bare test) — generic ok
 		return
 	}
+	// A value that is not an absolute http(s) URL is dropped here rather than
+	// embedded in an email: the link stays exactly as it was before this change.
+	next := safeMagicLinkNext(req.Next)
 
 	user, err := a.Users.ByEmail(r.Context(), email)
 	if err == nil && user != nil && user.Verified {
@@ -244,7 +257,7 @@ func (a *AuthHandlers) handleMagicLinkRequest(w http.ResponseWriter, r *http.Req
 			a.replyMagicLinkRequestOK(w)
 			return
 		}
-		if err := a.sendMagicLinkEmail(r.Context(), user.Email, token, false, ""); err != nil {
+		if err := a.sendMagicLinkEmail(r.Context(), user.Email, token, false, "", next); err != nil {
 			slog.Warn("magiclink_email_send_failed", "err", err, "user", user.ID)
 			// Token exists but the email didn't send; it expires in 15 min.
 		}
@@ -270,7 +283,7 @@ func (a *AuthHandlers) handleMagicLinkRequest(w http.ResponseWriter, r *http.Req
 		a.replyMagicLinkRequestOK(w)
 		return
 	}
-	if err := a.sendMagicLinkEmail(r.Context(), email, token, true, req.Lang); err != nil {
+	if err := a.sendMagicLinkEmail(r.Context(), email, token, true, req.Lang, next); err != nil {
 		slog.Warn("magiclink_signup_email_send_failed", "err", err, "email", obfuscateEmail(email))
 		// Token exists but the email didn't send; it expires in 15 min.
 	}
@@ -284,11 +297,54 @@ func (a *AuthHandlers) replyMagicLinkRequestOK(w http.ResponseWriter) {
 	})
 }
 
+// nextMaxLen mirrors the web cap on a `?next=` value (NEXT_MAX_LEN in
+// web/src/lib/nextTarget.ts, the same 700 the SSR gate applies in
+// web/src/lib/authedGuard.ts). A value that the browser would refuse as
+// oversized must not be embedded in an email either — the two ends agree on the
+// cap, so a `next` that travels is a `next` that can be honoured.
+const nextMaxLen = 700
+
+// safeMagicLinkNext returns the caller-supplied `next` to carry on the emailed
+// magic link, or "" when it must not be used (card t_5e39dc9f).
+//
+// It validates the SHAPE only: an absolute http(s) URL within nextMaxLen bytes
+// that does not sneak in as protocol-relative ("//host"). Everything else — a
+// relative path, another scheme, a malformed value, an oversized one — is
+// dropped, and the link is built exactly as it was before this change, so an
+// unusable `next` degrades to today's behaviour instead of becoming an error.
+//
+// ORIGIN IS DELIBERATELY NOT CHECKED HERE. This handler cannot know which
+// spelling of the app the visitor was on (prod serves both jomform.com and
+// www.jomform.com, and the emailed link is always built on the API's base URL),
+// so the authoritative origin check belongs where the browser is: the
+// /magic-link page validates the value against its own origin with the SAME rule
+// (web/src/lib/nextTarget.ts) before it navigates. A foreign value therefore
+// never reaches window.location — it falls back to the post-login resolver.
+func safeMagicLinkNext(raw string) string {
+	if raw == "" || len(raw) > nextMaxLen {
+		return ""
+	}
+	if strings.HasPrefix(raw, "//") {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return ""
+	}
+	return u.String()
+}
+
 // sendMagicLinkEmail delivers the sign-in link (BASE_URL/magic-link?token=…).
 // Issue #199: enqueued when a queue is wired; otherwise sent synchronously.
 // Issue #278: when signup is true the email is the hybrid sign-up variant
 // (account is created on click) and lang localizes the body.
-func (a *AuthHandlers) sendMagicLinkEmail(ctx context.Context, email, token string, signup bool, lang string) error {
+// Card t_5e39dc9f: a non-empty `next` (already validated by safeMagicLinkNext)
+// rides on the link as a second query parameter, so the passwordless sign-in can
+// return the visitor to the page they were bounced from.
+func (a *AuthHandlers) sendMagicLinkEmail(ctx context.Context, email, token string, signup bool, lang, next string) error {
 	if mailerUnavailable(a.VerifyMailer) {
 		return errors.New("magic link mailer not configured")
 	}
@@ -304,6 +360,12 @@ func (a *AuthHandlers) sendMagicLinkEmail(ctx context.Context, email, token stri
 		}
 	}
 	link := strings.TrimRight(a.BaseURL, "/") + "/magic-link?token=" + token
+	// Card t_5e39dc9f: carry the validated return target, escaped, so a value
+	// with its own query string ("?tab=images") survives the trip intact. An
+	// empty `next` builds the byte-identical link this function built before.
+	if next != "" {
+		link += "&next=" + url.QueryEscape(next)
+	}
 	subject, body := magicLinkEmailText(link, signup, lang)
 	// Issue #199: background path — enqueue and return immediately. Lang rides
 	// with the rendered text so the worker brands the HTML part in the same

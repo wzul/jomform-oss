@@ -196,7 +196,7 @@ func TestUnconfiguredSESAuthHandlersDoNotCallTheMailer(t *testing.T) {
 		{"auth_ux.go", func() error { return a.sendPasswordResetEmail(ctx, "user@example.test", "tok", "en") },
 			"reset mailer not configured"},
 		{"auth_recovery.go/magic_link", func() error {
-			return a.sendMagicLinkEmail(ctx, "user@example.test", "tok", false, "en")
+			return a.sendMagicLinkEmail(ctx, "user@example.test", "tok", false, "en", "")
 		}, "magic link mailer not configured"},
 		{"auth_recovery.go/email2fa", func() error {
 			return a.sendEmail2FACode(ctx, "user@example.test", "123456", "en")

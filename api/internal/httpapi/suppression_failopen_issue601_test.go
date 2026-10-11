@@ -107,7 +107,7 @@ func TestSendMagicLinkFailsOpenOnSuppressionStoreError(t *testing.T) {
 		Suppressions: unreachableSuppressionStore(t),
 	}
 
-	if err := h.sendMagicLinkEmail(context.Background(), "reg@example.com", "tok", false, "en"); err != nil {
+	if err := h.sendMagicLinkEmail(context.Background(), "reg@example.com", "tok", false, "en", ""); err != nil {
 		t.Fatalf("sendMagicLinkEmail err = %v, want nil (fail open)", err)
 	}
 	if !mailer.wasCalled() {

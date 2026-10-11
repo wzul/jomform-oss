@@ -8,11 +8,21 @@ import { useSearchParams } from "next/navigation";
 import { useI18n } from "../../components/i18n";
 import { apiErr } from "../../lib/apiErr";
 import { resolvePostLogin } from "../../lib/postLogin";
+import { browserNextTarget } from "../../lib/nextTarget";
 
 function MagicLinkForm() {
   const { t } = useI18n();
   const search = useSearchParams();
   const token = search.get("token") || "";
+  // Card t_5e39dc9f: the page the visitor was bounced from, carried by the
+  // emailed link (`…/magic-link?token=…&next=…`) because the magic-link request
+  // forwarded it. Validated with the SAME rule the login page uses before it is
+  // honoured, so a foreign/absent/oversized value falls back to today's
+  // behaviour (`resolvePostLogin("")` → dashboard or picker) with no open
+  // redirect. Computed once, at mount: it is only read by the verify effect
+  // below, and nothing here may change the effect's identity — a second POST
+  // would burn the single-use token (see the dependency note under it).
+  const [next] = useState<string>(() => browserNextTarget(search.get("next")));
   // The failure MESSAGE, not a flag: the page has to be able to say WHICH failure
   // it met (card t_9ed9bc2c — a flag answers every code with one generic sentence,
   // which made `magicLink.tokenMissing` unreachable). `""` means "still working".
@@ -35,6 +45,10 @@ function MagicLinkForm() {
         if (r.ok) {
           // Issue #164: route multi-workspace users without a default to the
           // workspace-picker; otherwise go straight to the dashboard.
+          // Card t_5e39dc9f: honour the validated `next` the emailed link
+          // carried — the page the visitor was bounced from — instead of the
+          // hard-coded "". An absent or discarded value resolves exactly as
+          // before (dashboard, or the picker for a workspace-less user).
           // Issue #349: navigate with a FULL PAGE LOAD (window.location.href),
           // NOT router.replace. The magic-link page is wrapped in the root
           // SessionProvider, which on this (still-anonymous) page load already
@@ -45,7 +59,7 @@ function MagicLinkForm() {
           // response is valid. A full-page load remounts SessionProvider after
           // jf_session is committed and re-fetches the bundle authenticated —
           // the same pattern the password/passkey logins use.
-          window.location.href = await resolvePostLogin("");
+          window.location.href = await resolvePostLogin(next);
           return;
         }
         // ROUTE THE FAILURE THROUGH THE BODY (card t_9ed9bc2c). The page used to
@@ -73,7 +87,10 @@ function MagicLinkForm() {
     // `t` is a stable function from the i18n context, and `token` is the only
     // input: adding anything unstable here would re-run the POST (the
     // duplicate-POST lesson on connect/page.tsx:69, card t_160dc5cd).
-  }, [token, t]);
+    // `next` (card t_5e39dc9f) is listed for the linter and is mount-constant —
+    // there is no setter — so it can never re-fire this effect and never costs a
+    // second verify against the single-use token.
+  }, [token, t, next]);
 
   return (
     <div className="relative w-full max-w-sm">
