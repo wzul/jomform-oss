@@ -31,6 +31,12 @@
 #       younger than --min-age-hours, a card still running, an unreadable card,
 #       and a worktree with a live worker process all SURVIVE, each with its own
 #       reason in the log;
+#     * that live-worker premise is itself MEASURED rather than assumed: the pruner's
+#       own predicate answers `nomatch` for this run's pattern before the stand-in
+#       starts and again after it is killed, and `match` while it runs. The shape that
+#       used to assert it (`ps -eo args= | grep -F -- <literal>`) matched its own grep,
+#       so it was green even with the stand-in dead — a premise that cannot fail
+#       (card t_5487f80a);
 #     * the STRAY loop (outside .worktrees, no card reference) gets the same
 #       correction;
 #     * an UNBORN HEAD — a valid gitdir whose HEAD points at a branch that no longer
@@ -92,6 +98,22 @@ contains() { # desc haystack needle
   # reporting "missing" for text that was plainly in the log.
   if grep -qF -- "$3" <<<"$2"; then ok "$1"
   else bad "$1 (missing '$3' in: $(printf '%s' "$2" | tr '\n' '|' | cut -c1-600))"; fi
+}
+
+# guard_real: the pruner's OWN predicate, against the REAL process table.
+#   <literal> -> `match` | `nomatch`
+#
+# WHY NOT `ps -eo args= | grep -F -- <literal>` (card t_5487f80a). That is the shape
+# this suite asserted the live-worker premise with, and it CANNOT fail: `grep`'s own
+# argv carries the literal, `ps` lists that very process, and grep then matches ITSELF.
+# Measured on this host with a pattern nothing held: 300/300 runs reported a match, and
+# the line it matched was `grep -F -- work kanban task t_<id>`. An assertion of presence
+# that is green even when its stand-in is dead — or was never started — is not a premise.
+# The literal travels through the ENVIRONMENT instead, and the predicate's own
+# `awk -v pat=…` line is skipped by its scanner exclusion.
+guard_real() { # <literal> -> match | nomatch, via the script's own predicate
+  env JF_PRUNE_LIB_ONLY=1 JF_PAT="$1" bash -c \
+    '. "$0"; if has_process_matching "$JF_PAT"; then echo match; else echo nomatch; fi' "$SCRIPT"
 }
 
 SB="$(mktemp -d /tmp/jf-prunewt-test.XXXXXX)"
@@ -344,19 +366,49 @@ printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/t_00000009"
 #    unchanged.
 WORKER_PAT="work kanban task $WORKER_TASK"
 printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$WORKER_TASK"
+# THE PREMISE OF THE PREMISE (card t_5487f80a). "The stand-in is visible" is only a
+# premise if it is ABLE to fail, so it is measured against a stand-in that is not there
+# yet, and against a literal no process can hold. The shape this section used to assert
+# it with,
+#     ps -eo args= | grep -F -- "$WORKER_PAT"
+# cannot fail: `grep`'s argv carries the literal, `ps` lists that very process, and grep
+# matches ITSELF, so it reported a match for a pattern nothing held — measured 300/300 on
+# this host, and the line it matched was `grep -F -- work kanban task t_<id>`. It was
+# green even with the stand-in dead or never started, which is worthless in the guard
+# section, where a false "the worker is alive" is the data-loss direction. The literal
+# now travels through the ENVIRONMENT and the check asks the SCRIPT'S OWN predicate —
+# the thing the run actually uses — so a vacuous green is impossible.
+check "premise of the premise: before the stand-in starts, this run's pattern matches NOTHING" \
+  "nomatch" "$(guard_real "$WORKER_PAT")"
+check "...and a literal no process can hold answers nomatch too (the helper is not a rubber stamp)" \
+  "nomatch" "$(guard_real "work kanban task t_00000000-not-a-worker")"
+# ...and the MECHANISM the shipped shape fell for, pinned before the stand-in exists: an
+# argv that IS that reader's own. The predicate excludes a scanner's argv (`grep` is
+# one), so the old pipeline's "match" could only ever have been the reader itself. The
+# reader's argv is reproduced byte-for-byte from the measurement above.
+env bash -c "exec -a \"grep -F -- $WORKER_PAT\" sleep 5" &
+SELF_READER_PID=$!
+sleep 0.4
+check "control: an argv that is the shipped reader's own ('grep -F -- <literal>') is NOT a match for the pruner's predicate" \
+  "nomatch" "$(guard_real "$WORKER_PAT")"
+kill "$SELF_READER_PID" 2>/dev/null
+wait "$SELF_READER_PID" 2>/dev/null
+# Now the stand-in that the run below must find.
 env bash -c "exec -a \"$WORKER_PAT\" sleep 40" &
 WORKER_PID=$!
 sleep 0.6
-# The assertion that a match is genuinely visible — with a plain, non-early-exiting
-# grep, so the sanity check cannot itself be a false miss (which is the bug below).
-check "the stand-in worker process is visible in the process table" "yes" \
-  "$(ps -eo args= 2>/dev/null | grep -F -- "$WORKER_PAT" >/dev/null 2>&1 && echo yes || echo no)"
+check "the stand-in worker process is visible to the pruner's OWN predicate" "match" \
+  "$(guard_real "$WORKER_PAT")"
 : >"$LOG"
 run_prune --min-age-hours 24 >/dev/null 2>&1
 check "a worktree with a live worker process SURVIVES" "yes" "$(survives "$WORKER_TASK")"
 contains "the live-process refusal is logged" "$(cat "$LOG")" "KEEP  $WORKER_TASK (worker process alive)"
 kill "$WORKER_PID" 2>/dev/null
 wait "$WORKER_PID" 2>/dev/null
+# ...and the premise measured in the other direction, so the removal assertion below
+# means "the guard tracks liveness" rather than "the guard always says match".
+check "premise: with the stand-in gone, this run's pattern matches nothing again" \
+  "nomatch" "$(guard_real "$WORKER_PAT")"
 # ... and it is only the process holding it: with the process gone, the same
 # worktree is removable, so the guard is not simply refusing everything. A peer
 # run's stand-in carries a different pid-derived id, so it cannot keep this one alive.
@@ -880,16 +932,12 @@ guard_literal() { # <synthetic argv row> <literal> — the script's predicate, r
   env JF_PRUNE_LIB_ONLY=1 JF_STUB_PS_ROWS="$1" JF_PAT="$2" PATH="$STUBDIR:$PATH" \
     bash -c '. "$0"; has_process_matching "$JF_PAT"; echo $?' "$SCRIPT" 2>/dev/null | sed -n '$p'
 }
-# The same predicate against the REAL process table, for the premise that the
-# stand-in is (and then is not) there. NOT `ps -eo args= | grep -F -- <literal>`:
-# grep's own argv carries the literal, so ps lists it and the check matches ITSELF
-# — an assertion of absence written that way can never fail. The literal travels
-# through the ENVIRONMENT instead, and the predicate's own `awk -v pat=…` line is
-# skipped by its scanner exclusion.
-guard_real() { # <literal> -> match | nomatch, via the script's own predicate
-  env JF_PRUNE_LIB_ONLY=1 JF_PAT="$1" bash -c \
-    '. "$0"; if has_process_matching "$JF_PAT"; then echo match; else echo nomatch; fi' "$SCRIPT"
-}
+# guard_real — the same predicate against the REAL process table, for the premise that
+# the stand-in is (and then is not) there — is defined with the other helpers at the top
+# of this file (it is used by the card loop's premise too, section 6). NOT
+# `ps -eo args= | grep -F -- <literal>`: grep's own argv carries the literal, so ps lists
+# it and the check matches ITSELF — an assertion of absence written that way can never
+# fail (card t_5487f80a).
 STRAY_LIVE="$SB/strayroot/jf-live"
 git -C "$REPO" worktree add -q --detach "$STRAY_LIVE" "$STRAY_PUSHED_SHA"
 touch -d '2020-01-01' "$STRAY_LIVE"
