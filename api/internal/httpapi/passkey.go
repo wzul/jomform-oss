@@ -4,7 +4,9 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -343,21 +345,58 @@ func (h *RESTHandlers) passkeyLoginFinish(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var foundUID string
-	_, err = wa.ValidateDiscoverableLogin(func(rawID, userHandle []byte) (user webauthn.User, err error) {
+	var repairedLegacyFlags bool
+	cred, err := wa.ValidateDiscoverableLogin(func(rawID, userHandle []byte) (user webauthn.User, err error) {
 		u, gerr := h.passkeyLookupUser(r.Context(), string(userHandle))
 		if gerr != nil {
 			return nil, gerr
 		}
+		// A row written before the store persisted flags holds the sentinel 0,
+		// which the credential could never have reported itself, so adopt the
+		// assertion's flags for it before the library compares BackupEligible.
+		// Without this every synced passkey registered before the fix stays
+		// unusable; with it, the comparison is made against a real value and
+		// the row is persisted as recorded below. See
+		// dbstore.PasskeyUser.RestoreUnrecordedFlags.
+		repairedLegacyFlags = u.RestoreUnrecordedFlags(rawID, parsed.Response.AuthenticatorData.Flags)
 		foundUID = u.ID
 		return u, nil
 	}, *session, parsed)
 	if err != nil {
+		// The verifier's own error is the ONLY place the server-side reason
+		// exists: the client is told a generic 401, and until now the API log
+		// carried nothing either, so a rejected real-authenticator login (card
+		// t_0a2d413c: "Backup Eligible flag inconsistency") was undiagnosable
+		// from prod. protocol.Error renders only its Details through Error();
+		// its Type, DevInfo and wrapped cause are logged separately or they are
+		// lost.
+		attrs := []any{"err", err}
+		var perr *protocol.Error
+		if errors.As(err, &perr) {
+			attrs = append(attrs, "error_type", perr.Type, "error_debug", perr.DevInfo)
+			if perr.Err != nil {
+				attrs = append(attrs, "error_cause", perr.Err)
+			}
+		}
+		slog.Warn("passkey_login_rejected", attrs...)
 		writeErr(w, http.StatusUnauthorized, "passkey tidak sah")
 		return
 	}
 	if foundUID == "" {
+		slog.Warn("passkey_login_rejected", "reason", "verify reported no user")
 		writeErr(w, http.StatusUnauthorized, "passkey tidak sah")
 		return
+	}
+	if repairedLegacyFlags {
+		slog.Info("passkey_login_legacy_flags_adopted")
+	}
+	// Write back what the assertion advanced (counter + flags). The ceremony
+	// has already verified, so a failure here is logged rather than turned into
+	// a 401 the user cannot act on; it must still be visible, because the flags
+	// it stores are what the next ceremony's BackupEligible check compares
+	// against.
+	if err := h.Passkeys.RecordAssertion(r.Context(), foundUID, *cred); err != nil {
+		slog.Warn("passkey_login_state_writeback_failed", "err", err)
 	}
 	if err := h.startSessionFor(w, r, foundUID); err != nil {
 		respondErr(w, r, err)

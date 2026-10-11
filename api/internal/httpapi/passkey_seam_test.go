@@ -72,6 +72,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/protocol/webauthncbor"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -264,6 +265,13 @@ type passkeyRegistrationFixture struct {
 	origin  string
 	aaguid  []byte
 	session webauthn.SessionData
+	// flags is the authenticator-data flag octet the attestation carries.
+	// newPasskeyRegistrationFixture sets UP|AT — the shape of a credential that
+	// is neither synced nor user-verified. A caller exercising a REAL synced
+	// passkey (iCloud Keychain / Touch ID, Google Password Manager, Windows
+	// Hello) overrides it with UP|UV|AT|BE|BS, which is also the shape that
+	// carries a non-ASCII AAGUID; see passkey_real_assertion_test.go.
+	flags protocol.AuthenticatorFlags
 }
 
 // newPasskeyRegistrationFixture drives the REAL /register/start endpoint for a
@@ -328,6 +336,7 @@ func newPasskeyRegistrationFixture(t *testing.T, h *RESTHandlers, ah *AuthHandle
 		authn: authn, cose: cose, key: st.Key,
 		rpID: sd.RelyingPartyID, origin: "https://" + passkeyOriginHost,
 		aaguid: aaguid, session: sd,
+		flags: protocol.FlagUserPresent | protocol.FlagAttestedCredentialData,
 	}
 }
 
@@ -336,13 +345,22 @@ func newPasskeyRegistrationFixture(t *testing.T, h *RESTHandlers, ah *AuthHandle
 //
 // Passing base64.StdEncoding reproduces the pre-fix client byte-for-byte;
 // passing base64.RawURLEncoding is what the fixed client sends. The authData is
-// the attested-credential-data form: rpIdHash || flags(UP|AT) || counter ||
-// AAGUID || credIdLen || credId || COSE public key. The CBOR attestation object
+// the attested-credential-data form: rpIdHash || flags || counter || AAGUID ||
+// credIdLen || credId || COSE public key, where flags is the fixture's own (see
+// the flags field; UP|AT by default). The CBOR attestation object
 // declares fmt "none" with an empty attStmt, which is what a browser sends when
 // no attestation is requested — and go-webauthn accepts it (VerifyAttestation
 // short-circuits on AttestationFormatNone once the statement is empty).
 func (f passkeyRegistrationFixture) attestationBody(t *testing.T, enc *base64.Encoding) []byte {
 	t.Helper()
+
+	if !f.flags.HasAttestedCredentialData() {
+		// The body below embeds attested credential data, so a fixture whose
+		// flags clear AT would be rejected by go-webauthn's parser with
+		// "Attested credential flag not set" — a confusing failure for a
+		// fixture mistake.
+		t.Fatalf("fixture flags %#02x clear the AT bit but the body carries attested credential data", byte(f.flags))
+	}
 
 	clientDataJSON, err := json.Marshal(map[string]any{
 		"type":        "webauthn.create",
@@ -357,7 +375,7 @@ func (f passkeyRegistrationFixture) attestationBody(t *testing.T, enc *base64.En
 	rpIDHash := sha256.Sum256([]byte(f.rpID))
 	authData := make([]byte, 0, 55+len(f.authn.id)+len(f.cose))
 	authData = append(authData, rpIDHash[:]...)
-	authData = append(authData, 0x41) // UP | AT (attested credential data present)
+	authData = append(authData, byte(f.flags)) // the fixture's own flag octet
 	authData = binary.BigEndian.AppendUint32(authData, 0)
 	authData = append(authData, f.aaguid...)
 	authData = binary.BigEndian.AppendUint16(authData, uint16(len(f.authn.id)))

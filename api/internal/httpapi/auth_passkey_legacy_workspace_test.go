@@ -51,6 +51,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/protocol/webauthncbor"
 	"github.com/go-webauthn/webauthn/protocol/webauthncose"
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -100,16 +101,28 @@ func newPasskeyTestAuthenticator(t *testing.T) (passkeyTestAuthenticator, []byte
 }
 
 // assertionBody builds the JSON body the shipped client posts to
-// /v1/auth/passkeys/login/finish, signing authData || sha256(clientDataJSON).
+// /v1/auth/passkeys/login/finish, signing authData || sha256(clientDataJSON),
+// with user-present as its only flag: a credential that is not synced and not
+// user-verified. That is a legitimate authenticator shape, and it is what these
+// two tests need — they assert the legacy-workspace wiring, not the flags.
 //
-// The authenticator data is the 37-byte assertion form: rpIdHash || flags ||
-// counter, with no attested credential data (that flag belongs to registration)
-// and no extensions. Flags carry user-present only — the Relying Party config in
-// webAuthnInstance sets no UserVerification requirement, so user-verified is not
-// demanded, and the backup-eligible bit is left clear to match the credential
-// row the store reads back (PasskeyStore.ByUser does not restore per-credential
-// flags, so the stored value is effectively false).
+// The flags are a parameter, not a constant, because the flags are exactly what
+// the hand-built shape used to hide. The authenticator data is the 37-byte
+// assertion form: rpIdHash || flags || counter, with no attested credential
+// data (that flag belongs to registration) and no extensions. A REAL synced
+// passkey asserts UP|UV|BE|BS — see assertionBodyWithFlags and
+// passkey_real_assertion_test.go, which drives that shape through the whole
+// ceremony.
 func (a passkeyTestAuthenticator) assertionBody(t *testing.T, key, rpID, origin, challenge string, userHandle []byte) []byte {
+	t.Helper()
+	return a.assertionBodyWithFlags(t, key, rpID, origin, challenge, userHandle, protocol.FlagUserPresent)
+}
+
+// assertionBodyWithFlags is assertionBody with the authenticator-data flag octet
+// chosen by the caller, so a test can sign the shape a real authenticator
+// actually produces rather than one that happens to agree with the server's
+// stored state.
+func (a passkeyTestAuthenticator) assertionBodyWithFlags(t *testing.T, key, rpID, origin, challenge string, userHandle []byte, flags protocol.AuthenticatorFlags) []byte {
 	t.Helper()
 
 	clientDataJSON, err := json.Marshal(map[string]any{
@@ -125,7 +138,7 @@ func (a passkeyTestAuthenticator) assertionBody(t *testing.T, key, rpID, origin,
 	rpIDHash := sha256.Sum256([]byte(rpID))
 	authData := make([]byte, 0, 37)
 	authData = append(authData, rpIDHash[:]...)
-	authData = append(authData, 0x01) // UP set; UV/BE/BS/ED/AT clear
+	authData = append(authData, byte(flags))
 	authData = binary.BigEndian.AppendUint32(authData, 1)
 
 	clientHash := sha256.Sum256(clientDataJSON)
