@@ -17,6 +17,18 @@
 # The allowlist entries are the fixtures that legitimately contain secret-shaped
 # strings (a `SESSION_SECRET: "x"` test fixture and similar). They are scoped by
 # PATH so a real secret in a non-test file is still reported.
+#
+# The two web entries are BOTH needed and neither implies the other: `web/**/*.test.*`
+# is the vitest unit tests and `web/**/*.spec.*` is the Playwright e2e/feature specs
+# (`web/e2e/*.spec.ts`). The e2e specs carry deliberately token-shaped fixtures —
+# `await page.goto("/magic-link?token=…")` — which the `generic-api-key` rule matches
+# at entropy 4.0, and `gitleaks detect --source .` scans EVERY ref, not just the tree
+# under test. So a spec fixture that is not allowlisted reds the `gitleaks` gate for
+# every worktree and every candidate tree in the repo (measured 2026-10-11: an e2e
+# fixture pushed on one feature branch failed the gate on all of them, including
+# trees whose own diff could not possibly contain it). Keep the entries
+# PATH-scoped: widening them to `web/` would stop a real secret in `web/src/` being
+# reported, which is half the reason the list exists.
 [extend]
   useDefault = true
 
@@ -26,6 +38,7 @@
     '''api/internal/config/config_test\.go''',
     '''api/internal/.*_test\.go''',
     '''web/.*\.test\.(ts|tsx|js|jsx)''',
+    '''web/.*\.spec\.(ts|tsx|js|jsx)''',
   ]
   regexes = [
     '''SESSION_SECRET["']?\s*[:=]\s*["']x["']''',

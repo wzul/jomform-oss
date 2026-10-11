@@ -606,6 +606,91 @@ else
   bad ".gitleaks.toml has NO [[rules]] and no [extend] useDefault — gitleaks would scan with an EMPTY ruleset and never report a leak (a green gate that cannot fail)"
 fi
 
+# 11b. The allowlist must COVER the Playwright spec form and must stay SCOPED to test
+#      paths (card t_43005ced). WHY THIS IS A SEPARATE CHECK AND WHY IT IS HERE: the
+#      instrument that proves this properly is `scripts/biteproof_gitleaks_allowlist.sh`,
+#      and BITE-HARNESSES.md rules that a bite proof is an ON-DEMAND instrument, never
+#      a per-merge gate — so without a check at this level NOTHING that runs on every
+#      merge would notice the spec-path entry being deleted again.
+#      THE DEFECT, MEASURED 2026-10-11: the allowlist carried `web/.*\.test\.(ts|tsx|js|jsx)`
+#      but not the Playwright form, so ONE e2e fixture — an `await page.goto("/magic-link?token=…")`
+#      line, matched by `generic-api-key` at entropy 4.0 — redded the `gitleaks` gate on
+#      every tree in the repo, because `gitleaks detect --source .` scans EVERY REF and
+#      not the tree under test. A merge lane blocked on it could not fix it from its own
+#      diff: tree `3c1cd07d` recorded `gitleaks: pass` at 12:44:35Z and the SAME history
+#      failed 30 minutes later only because a foreign branch was pushed.
+#      THE PATTERNS ARE EVALUATED, NOT GREPPED FOR AS LITERALS: an entry re-typed with a
+#      typo (`web/.*\.specs\.`) or one widened to `web/.*` would satisfy any
+#      `grep -F`-style "does the line exist / does it not exist" test, so the check
+#      matches sample PATHS through the pattern the way gitleaks does. The negative
+#      direction is half the property: a pattern that also allowlists `web/src/…` would
+#      stop a real secret there from ever being reported.
+C11B_SPEC="web/e2e/magic-link-next.spec.ts"
+C11B_NONTEST="web/src/app/page.tsx"
+C11B_ANCHOR='web/.*\.spec\.(ts|tsx|js|jsx)'
+
+# c11b_verdict CFG -> one config file's verdict:
+#   ok:<pattern>     a PATH pattern matches a spec path, and none matches a non-test path
+#   noscopepattern   no PATH pattern matches the spec form (the carded defect)
+#   widen:<pattern>  some PATH pattern also allowlists a non-test path (the over-wide fix)
+#   nopatterns       the [allowlist] paths block could not be read at all
+c11b_verdict() {
+  local cfg="$1" region paths pat spec="" widen=""
+  region="$(tr '\n' ' ' < "$cfg" | sed -nE 's/.*paths[[:space:]]*=[[:space:]]*\[([^]]*)\].*/\1/p')"
+  paths="$(grep -oE "'''[^']+'''" <<<"$region" | sed -e "s/'''//g")"
+  if [ -z "$paths" ]; then
+    printf 'nopatterns\n'
+    return 0
+  fi
+  while IFS= read -r pat; do
+    [ -n "$pat" ] || continue
+    grep -Eq "$pat" <<<"$C11B_SPEC" && spec="$pat"
+    grep -Eq "$pat" <<<"$C11B_NONTEST" && widen="$pat"
+  done <<<"$paths"
+  if [ -n "$widen" ]; then
+    printf 'widen:%s\n' "$widen"
+  elif [ -n "$spec" ]; then
+    printf 'ok:%s\n' "$spec"
+  else
+    printf 'noscopepattern\n'
+  fi
+}
+
+# THE CHECK'S OWN BITE, with no repo mutation: the SAME reader on a sabotaged copy of
+# the same config (the spec-path entry removed) must NOT answer ok. A reader that
+# answered ok for both the healthy and the sabotaged file could never go RED, which is
+# the exact failure mode this file exists to catch. The mutant lives in the host state
+# dir, never in the sandbox repo — a file added to $SB would move the tree sha that
+# later checks key their records on.
+c11b_live="$(c11b_verdict "$CFG")"
+c11b_live_anchor="$(grep -cF "$C11B_ANCHOR" "$CFG")"
+c11b_mut="$SB_STATE/gitleaks-nospec.toml"
+grep -vF "$C11B_ANCHOR" "$CFG" > "$c11b_mut"
+c11b_mut_left="$(grep -cF "$C11B_ANCHOR" "$c11b_mut")"
+c11b_mut_verdict="$(c11b_verdict "$c11b_mut")"
+if [ ! -f "$CFG" ]; then
+  bad "check 11b — .gitleaks.toml is missing at $CFG, so the secrets allowlist's scoping cannot be asserted at all"
+elif [ "$c11b_live_anchor" = "1" ] && [ "$c11b_mut_left" != "0" ]; then
+  bad "check 11b is VACUOUS — the sabotaged config still carries the spec-path entry ($c11b_mut_left time(s)), so the bite leg below would be measuring the healthy file"
+elif [ "$c11b_mut_verdict" != "noscopepattern" ]; then
+  bad "check 11b CANNOT GO RED — the same reader answers [$c11b_mut_verdict] for a config with the spec-path entry removed, so its green on the live config proves nothing about the entry"
+else
+  case "$c11b_live" in
+    ok:*)
+      ok "check 11b — the [allowlist] covers the Playwright spec form by PATH ([${c11b_live#ok:}] matches $C11B_SPEC) and stays scoped to test files (no PATH pattern matches $C11B_NONTEST)"
+      ;;
+    widen:*)
+      bad "check 11b — the [allowlist] PATH pattern [${c11b_live#widen:}] matches the NON-test path $C11B_NONTEST as well: an over-wide entry stops a real secret there being reported. Test paths and only test paths belong in the list"
+      ;;
+    noscopepattern)
+      bad "check 11b — no [allowlist] PATH pattern matches a Playwright spec path ($C11B_SPEC). The e2e specs carry deliberately token-shaped fixtures and the secrets scan reads EVERY ref (not the tree under test), so one such fixture reds the gate on every tree in the repo — add '''web/.*\\.spec\\.(ts|tsx|js|jsx)''' to the paths list"
+      ;;
+    *)
+      bad "check 11b — the [allowlist] paths block could not be read out of $CFG (verdict [$c11b_live]); the scoping of the secrets allowlist is unverifiable in this shape"
+      ;;
+  esac
+fi
+
 # 12. The test-env advice must name a DURABLE path — and the SAME path at every
 #     durable site. Each prerequisite failure tells the operator where to get
 #     the two env vars; until 2026-09-21 NOTHING asserted that string, so
