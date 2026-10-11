@@ -354,6 +354,198 @@ test("an adversarial answer at the cap renders in milliseconds, not tenths of a 
   );
 });
 
+// ── 1d. THE LINK/IMAGE PATTERNS DO NOT RESCAN THE ANSWER PER `[` ────────────
+//
+// The second quadratic in this file (filed as its own card: same renderer, other
+// code path). `IMAGE`/`LINK` were applied at EVERY position from parseInline's
+// loop, and a rejected attempt was only rejected once its `[^\]\n]*` text group
+// had walked to the next `]` or to the end of the line — while parseInline
+// advances one character on a miss, so nothing bounded it. The block splitter has
+// already joined the answer into one paragraph, so the whole reply can be one
+// such line.
+//
+// Measured through this component (production build, this host, min/median/max of
+// ten best-of-3 samples) at the chat reply cap (4000 characters,
+// api/internal/chat/chat.go MaxReplyChars) and 4x it:
+//
+//     input           4000                16000            ratio (2 = linear)
+//     '[' x N     15.1 / 17.5 / 20.6 ms   266 / 281 / 301 ms   17.6x   <- before
+//     '![' x N    16.2 / 20.6 / 24.7 ms   273 / 320 / 388 ms   16.8x
+//     '[a' x N     8.5 / 11.0 / 11.6 ms   141 / 160 / 172 ms   16.5x
+//     ----------------------------------------------------------------
+//     '[' x N      0.7 /  1.0 /  1.3 ms   2.0 / 2.6 / 3.1 ms     2.6x   <- after
+//     '![' x N     0.7 /  0.8 /  1.1 ms   1.5 / 3.2 / 3.4 ms     3.1x
+//     '[a' x N     0.6 /  0.7 /  0.8 ms   2.2 / 2.6 / 2.8 ms     3.3x
+//
+// The severity case is the same one 1c cites: chat/page.tsx MAX_HISTORY = 32
+// mounts up to 33 <Markdown> in one synchronous render, so 33 bubbles of 4000 `[`
+// characters was 635-876 ms of frozen tab and is 21-30 ms after the fix.
+//
+// TWO ASSERTIONS, the same split as 1c, because one is not enough:
+//   * the WORK assertion counts the characters the link/image delimiter scan
+//     walks. One pass is 1.0x the length of the answer at every size (measured),
+//     so the bound cannot flake on a loaded host.
+//   * the TIME assertion is the backstop for quadratic work the counter cannot
+//     see — and here that is precisely the pre-fix shape, whose walk happens
+//     inside the regex engine and therefore reports NO counted work at all. That
+//     is why the vacuity check below is not decoration: a renderer that reports
+//     zero link-delimiter work while producing this output is not instrumented,
+//     which is exactly what the pre-fix code did.
+
+// Long runs of `[`/`![` with no closer, at and beyond the caps (chat reply 4000
+// — api/internal/chat/chat.go MaxReplyChars; feedback body 5000 —
+// api/internal/feedbacksvc/feedbacksvc.go BodyMax), plus the shapes whose closer
+// is far away.
+const LINK_ADVERSARIAL: [string, string][] = [
+  ["'[' x 4200", "[".repeat(4200)],
+  ["'![' x 4200", "![".repeat(2100)],
+  ["'[a' x 4200", "[a".repeat(2100)],
+  ["'[' x N then one closer", "[".repeat(4198) + "]("],
+  ["'[](a' repeated", "[](a".repeat(1050)],
+];
+
+test("the link/image delimiters are resolved once, not at every `[` (the O(n²) guard)", () => {
+  // WHAT THIS COUNTS. Every character the LINK/IMAGE delimiter scan examines, one
+  // unit each. A single left-to-right pass — this one — costs 1.0x the length of
+  // the answer (measured 8000 for 8000 characters at every shape below); the
+  // pre-fix shape resolved the closer inside the regex engine at every `[`, which
+  // is O(n²) work and is not visible here at all (it reported 0).
+  const linkWorkAt = (src: string) => __withScanProbe(() => render(src)).linkWork;
+
+  for (const len of [1000, 2000, 4000, 8000]) {
+    const src = "[".repeat(len);
+    const work = linkWorkAt(src);
+    // Vacuity: the scan must actually be measuring something.
+    assert.ok(
+      work > 0,
+      `the renderer reported no link-delimiter work at all for a ${len}-character answer of '[' — ` +
+        `the probe is not wired to the scan, so every bound below is vacuous`,
+    );
+    assert.ok(
+      work <= 2 * len,
+      `rendering ${len} characters of '[' examined ${work} characters of link delimiters ` +
+        `(${(work / len).toFixed(1)}x the length; a single pass is 1.0x). The closer is being resolved ` +
+        `per '[' again, not once per answer — that is the O(n²) LINK/IMAGE scan this card reports.`,
+    );
+  }
+  // 8x the input: one pass is 8x the work (measured 1000 -> 8000 exactly), the
+  // per-`[` rescan is ~64x. The bound sits between them.
+  const w1000 = linkWorkAt("[".repeat(1000));
+  const w8000 = linkWorkAt("[".repeat(8000));
+  assert.ok(
+    w8000 <= 16 * w1000,
+    `8x the input cost ${(w8000 / Math.max(w1000, 1)).toFixed(1)}x the link-delimiter work ` +
+      `(1000 characters: ${w1000}, 8000 characters: ${w8000}) — growth faster than linear.`,
+  );
+
+  // Every adversarial shape at and beyond the cap.
+  for (const [what, src] of LINK_ADVERSARIAL) {
+    const work = __withScanProbe(() => render(src)).linkWork;
+    assert.ok(
+      work > 0,
+      `${what}: no link-delimiter work was counted — the guard is not seeing the scan`,
+    );
+    assert.ok(
+      work <= 2 * src.length,
+      `${what}: rendering ${src.length} characters examined ${work} characters of link delimiters ` +
+        `(> 2x the length) — the per-'\[' closer search is back.`,
+    );
+  }
+
+  // The severity case: the whole conversation, each bubble its own answer.
+  const bubble = "[".repeat(4000);
+  const { linkWork } = __withScanProbe(() => {
+    for (let k = 0; k < 33; k++) render(bubble);
+  });
+  assert.ok(
+    linkWork <= 2 * 33 * bubble.length,
+    `33 bubbles of ${bubble.length} characters examined ${linkWork} link delimiters (2x bound: ` +
+      `${2 * 33 * bubble.length}) — a full chat history is O(n²) again`,
+  );
+});
+
+test("an adversarial `[`-heavy answer renders in milliseconds, not a frozen tab", () => {
+  // The symptom the merchant sees, asserted directly. Every sample is a best-of-N
+  // (min), because host load only ever ADDS time, so the minimum is the stable
+  // estimator. The ceilings sit far above the worst sample of the fix and below
+  // what the pre-fix patterns measured, so restoring them fails rather than
+  // squeaks by: 12x headroom at 16000 characters (fix max 3.4 ms, ceiling 40 ms)
+  // against a pre-fix minimum of 140 ms, and for the full conversation 10x
+  // headroom (fix max 30 ms, ceiling 300 ms) against a pre-fix minimum of 635 ms.
+  const bestOf = (src: string, reps: number) => {
+    let best = Infinity;
+    for (let r = 0; r < reps; r++) {
+      const t0 = performance.now();
+      render(src);
+      best = Math.min(best, performance.now() - t0);
+    }
+    return best;
+  };
+  const CAP = 4000;
+  const shapes = ["[".repeat(CAP * 4), "![".repeat(CAP * 2), "[a".repeat(CAP * 2)];
+  for (const src of shapes) {
+    const t = bestOf(src, 3);
+    assert.ok(
+      t < 40,
+      `a ${src.length}-character '['-heavy answer took ${t.toFixed(1)} ms to render (ceiling 40 ms). ` +
+        `The fix measures ~2-3 ms here; the pre-fix patterns measured 140-388 ms.`,
+    );
+  }
+
+  // 4x the input. Linear growth is ~2.6-3.3x the time; the pre-fix shape was
+  // ~17x. The bound is 6x with a constant so a near-zero denominator cannot
+  // decide the test.
+  const tCap = bestOf("[".repeat(CAP), 5);
+  const tHuge = bestOf("[".repeat(CAP * 4), 3);
+  assert.ok(
+    tHuge <= 6 * tCap + 20,
+    `4x the input took ${tHuge.toFixed(1)} ms against ${tCap.toFixed(1)} ms for ${CAP} characters ` +
+      `— growth faster than linear. The pre-fix patterns measured 266 ms / 15 ms here.`,
+  );
+
+  // The severity case: a full history (chat/page.tsx MAX_HISTORY = 32, so up to
+  // 33 <Markdown> in one synchronous render).
+  const bubble = "[".repeat(CAP);
+  const t0 = performance.now();
+  for (let k = 0; k < 33; k++) render(bubble);
+  const total = performance.now() - t0;
+  assert.ok(
+    total < 300,
+    `33 bubbles of ${CAP} '['-heavy characters took ${total.toFixed(0)} ms (ceiling 300 ms) — ` +
+      `a full conversation freezes the tab. The pre-fix patterns measured 635-876 ms, the fix ~25 ms.`,
+  );
+});
+
+test("the link/image guard changes nothing about which shapes are links (the boundaries)", () => {
+  // The guard only decides WHETHER the pattern runs; these are the shapes where
+  // the two delimiter rules meet, pinned so a future change to the scan cannot
+  // quietly move the boundary.
+  const anchored = "Baca [panduan](https://jomform.com/docs/chat) ini.";
+  assert.match(render(anchored), /href="https:\/\/jomform\.com\/docs\/chat"/);
+  // A space inside the LABEL is fine (the URL group's whitespace rule only
+  // applies after the `]`) — the case a naive "scan for whitespace" would break.
+  assert.match(render("[a b](https://x.com)"), /href="https:\/\/x\.com"/);
+  assert.match(visible(render("[a b](https://x.com)")), /a b/);
+  // The text group may not cross a line...
+  assert.doesNotMatch(render("[a\nb](https://x.com)"), /<a[\s>]/);
+  // ...nor may `](` be split by a space, and the URL must close.
+  assert.doesNotMatch(render("[a] (https://x.com)"), /<a[\s>]/);
+  assert.doesNotMatch(render("[a](https://x.com"), /<a[\s>]/);
+  // A `(` inside the URL ends the URL group before it can close.
+  assert.doesNotMatch(render("[a](https://x.com/(y))"), /<a[\s>]/);
+  // The URL group is closed by the FIRST `)`, and an empty label falls back to
+  // the href — the two edges of `m[1] || href`.
+  assert.match(render("[](https://x.com)"), /<a[^>]*href="https:\/\/x\.com"[^>]*>https:\/\/x\.com<\/a>/);
+  assert.match(render("[a](https://x.com)"), /<a[^>]*>a<\/a>/);
+  // An image is its alt text (unsupported on purpose), and `![` is checked
+  // before LINK so a stray `!` does not swallow the link.
+  assert.equal(visible(render("![p](https://x.com/a.png)")), "p");
+  assert.match(render("![p](https://x.com/a.png)[b](https://y.com)"), /href="https:\/\/y\.com"/);
+  // Nothing here may become an anchor even though the delimiters are complete.
+  assert.doesNotMatch(render("[klik](javascript:alert(1))"), /<a[\s>]/);
+  assert.doesNotMatch(render("[x](/relative)"), /<a[\s>]/);
+});
+
 // ── 2. the required element set ──────────────────────────────────────────────
 
 test("inline code becomes <code>, fenced code becomes <pre><code>", () => {

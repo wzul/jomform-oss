@@ -162,6 +162,96 @@ const LINK = /\[([^\]\n]*)\]\(([^()\s]*)\)/y;
 const STRONG_STAR = /\*\*(?=\S)([\s\S]*?\S)\*\*/y;
 const EM_STAR = /\*(?=\S)([^*\n]*?\S)\*/y;
 
+// ── link/image delimiters: resolved once per string ──────────────────────────
+//
+// WHY THE PRECOMPUTED DELIMITERS, AND NOT JUST THE TWO STICKY PATTERNS. Both
+// patterns are applied at EVERY position from parseInline's loop, and a rejected
+// attempt is only rejected once its `[^\]\n]*` text group has walked to the next
+// `]` or to the end of the line. A `[`-heavy answer therefore costs O(rest of the
+// line) at every `[`, and parseInline advances one character on a miss, so
+// nothing bounds it. The shapes and the cap are real: 4000 characters is the chat
+// reply cap (api/internal/chat/chat.go MaxReplyChars), the block splitter has
+// already joined the answer into one paragraph, and chat/page.tsx (MAX_HISTORY =
+// 32) mounts up to 33 <Markdown> in one synchronous render. Measured through this
+// component on this host, best-of-5, ratios per doubling (2 = linear):
+//
+//     input          1000     2000     4000     8000   ratios
+//     '[' x N       2.7ms    7.3ms   20.4ms   78.9ms   2.7/2.8/3.9
+//     '![' x N      1.9ms    5.4ms   20.8ms   82.9ms   2.8/3.9/4.0
+//     '[a' x N      1.0ms    3.6ms   10.6ms   36.2ms   3.6/3.0/3.4
+//
+// ...and with a full history the browser itself reported it: 33 `[`-heavy bubbles
+// blocked the main thread for 585-655 ms per render (100 long tasks, 33.4 s of
+// blocking across the transcript) before this change, against 0 long tasks over
+// 90 ms after it. See the guard in web/src/lib/markdown.test.ts.
+//
+// A link/image candidate is fully determined by TWO positions, so both are
+// precomputed for the whole string in one pass and a candidate that is not a
+// link is then rejected by two array reads:
+//
+//   * where the text group stops — the next `]` or `\n`, whichever comes first
+//     (the group may not cross a line, and cannot contain a `]`);
+//   * where the URL group stops — the next `(`, `)` or whitespace (`[^()\s]`).
+//
+// The patterns themselves still extract the groups; only the search they used to
+// repeat at every position is precomputed, so the rendered output is unchanged
+// (proved by a differential fuzz against the previous module).
+type LinkDelims = {
+  /** Next position of a `]` or `\n` at or after i (where `[^\]\n]*` must stop), or -1. */
+  nextText: Int32Array;
+  /** Next position of a `(`, `)` or whitespace at or after i (where `[^()\s]*` must stop), or -1. */
+  nextUrl: Int32Array;
+};
+
+// The URL group's own exclusion class, kept EXACTLY as the pattern spells it
+// (non-unicode `\s`, so U+FEFF stays a stop character).
+const URL_STOP = /[()\s]/;
+
+function scanLinkDelims(src: string): LinkDelims {
+  const n = src.length;
+  // n + 1 so a position just past the end reads -1 instead of undefined.
+  const nextText = new Int32Array(n + 1).fill(-1);
+  const nextUrl = new Int32Array(n + 1).fill(-1);
+  let text = -1;
+  let url = -1;
+  for (let j = n - 1; j >= 0; j--) {
+    // Cost accounting for the guard: one unit per character this scan examines.
+    // A quadratic version (resolving the closer per `[` instead of once per
+    // string) cannot keep this under a multiple of the answer's length.
+    if (__mdScanProbe) __mdScanProbe.linkWork++;
+    const ch = src[j];
+    if (ch === "]" || ch === "\n") text = j;
+    if (ch === "(" || ch === ")" || URL_STOP.test(ch)) url = j;
+    nextText[j] = text;
+    nextUrl[j] = url;
+  }
+  return { nextText, nextUrl };
+}
+
+// linkExtent is the end index (exclusive) of the LINK match at i — or, with
+// `image`, of the IMAGE match, which is the same shape with a leading `!` — or
+// -1 when the pattern cannot match there. It reads the precomputed delimiters
+// only, so a position that is not a link costs O(1) instead of walking the rest
+// of the line.
+function linkExtent(src: string, i: number, d: LinkDelims, image: boolean): number {
+  const n = src.length;
+  if (image) {
+    if (src[i] !== "!" || src[i + 1] !== "[") return -1;
+  } else if (src[i] !== "[") {
+    return -1;
+  }
+  // The text group's stop: it must be a `]` (a `\n` first means the group could
+  // not reach a closer, which is a failed match, not a match to the newline).
+  const stop = d.nextText[i + (image ? 2 : 1)];
+  if (stop < 0 || src[stop] !== "]") return -1;
+  const open = stop + 1;
+  if (open >= n || src[open] !== "(") return -1;
+  // The URL group's stop must be a `)` for the pattern to close.
+  const close = d.nextUrl[stop + 2];
+  if (close < 0 || src[close] !== ")") return -1;
+  return close + 1;
+}
+
 // ── underscore emphasis: the delimiter-run rule, not "any two underscores" ───
 //
 // WHY THIS IS NOT JUST ANOTHER STICKY PATTERN. The previous `_` patterns were
@@ -271,20 +361,26 @@ type Delims = {
 // Cost accounting, for the guard that proves this scan is linear. Zero in the
 // app; a test sets the probe and reads how much work a render actually did.
 //
-// The counted unit is a FLANKING TEST — the one operation that examines a `_`
-// delimiter. Counted there and not once per scan on purpose: a scan that looks at
-// each delimiter once (this one) makes O(n) such calls, while the per-underscore
+// `work` counts FLANKING TESTS — the one operation that examines a `_` delimiter.
+// Counted there and not once per scan on purpose: a scan that looks at each
+// delimiter once (this one) makes O(n) such calls, while the per-underscore
 // rescan this replaced makes O(n²) of them, so the counter separates the two
 // without a clock and cannot flake on a loaded host.
-export let __mdScanProbe: { work: number } | null = null;
+//
+// `linkWork` counts the characters the LINK/IMAGE delimiter scan examines
+// (scanLinkDelims), one unit per character — the same shape of accounting for the
+// other quadratic in this file. The old sticky patterns did that walk inside the
+// regex engine at every `[`, so they reported none of it; that is exactly the
+// unbounded hidden work the counter makes visible.
+export let __mdScanProbe: { work: number; linkWork: number } | null = null;
 
 /** Test seam: count the delimiter work done by render/parse calls in `fn`. */
-export function __withScanProbe<T>(fn: () => T): { result: T; work: number } {
+export function __withScanProbe<T>(fn: () => T): { result: T; work: number; linkWork: number } {
   const prev = __mdScanProbe;
-  const probe = { work: 0 };
+  const probe = { work: 0, linkWork: 0 };
   __mdScanProbe = probe;
   try {
-    return { result: fn(), work: probe.work };
+    return { result: fn(), work: probe.work, linkWork: probe.linkWork };
   } finally {
     __mdScanProbe = prev;
   }
@@ -379,6 +475,10 @@ export function parseInline(src: string, depth = 0): Inline[] {
   // One delimiter scan for this string, shared by every `_` position below —
   // this is the half that makes rendering linear (see scanUnderDelims).
   const delims = scanUnderDelims(src);
+  // ...and one for the link/image delimiters, shared by every `[` position. Only
+  // when the string contains a `[` at all: both patterns need a literal one, so a
+  // string without it can have no link and needs no scan. See scanLinkDelims.
+  const links = src.indexOf("[") < 0 ? null : scanLinkDelims(src);
   let text = "";
   let i = 0;
 
@@ -394,7 +494,11 @@ export function parseInline(src: string, depth = 0): Inline[] {
       continue;
     }
 
-    if ((m = at(i, IMAGE, src))) {
+    // A `[` or `![` that the precomputed delimiters say cannot complete is not a
+    // link, and is not asked of the pattern at all — that is what keeps a
+    // `[`-heavy answer linear (the pattern would walk to the end of the line
+    // before failing). The pattern still does the extraction.
+    if (links && src[i] === "!" && linkExtent(src, i, links, true) >= 0 && (m = at(i, IMAGE, src))) {
       if (text) out.push({ t: "text", v: text });
       text = "";
       out.push({ t: "text", v: m[1] }); // alt text only — images are not rendered
@@ -402,7 +506,7 @@ export function parseInline(src: string, depth = 0): Inline[] {
       continue;
     }
 
-    if ((m = at(i, LINK, src))) {
+    if (links && src[i] === "[" && linkExtent(src, i, links, false) >= 0 && (m = at(i, LINK, src))) {
       if (text) out.push({ t: "text", v: text });
       text = "";
       const href = m[2];
