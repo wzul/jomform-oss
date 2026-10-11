@@ -69,22 +69,25 @@ func (f *acceptanceFixture) proposalRunner(t *testing.T) *Runner {
 }
 
 // proposalCtx is the READONLY identity a chat message runs under — built the same
-// way the REST edge builds it, so nothing here passes a stricter scope than
-// production uses.
+// way the REST edge builds it (identity PLUS the per-call workspace scope, issue
+// #747), so nothing here passes a stricter scope than production uses.
 func (f *acceptanceFixture) proposalCtx() context.Context {
-	return mcpsrv.WithAuthIdentity(context.Background(), &mcpsrv.AuthIdentity{
+	ctx := mcpsrv.WithAuthIdentity(context.Background(), &mcpsrv.AuthIdentity{
 		AccountID: f.accountID, UserID: f.userID,
 		Scopes: ReadOnlyScopes(), Agent: "in-app-chat",
 	})
+	return mcpsrv.WithCallScope(ctx, &mcpsrv.CallScope{Accounts: []string{f.accountID}})
 }
 
 // confirmCtx is the identity the CONFIRMED tool runs under: the human's, with the
-// write scope. It mirrors chatConfirmContextFor in the REST layer.
+// write scope, for the workspace the request resolved. It mirrors
+// chatConfirmContextFor in the REST layer.
 func (f *acceptanceFixture) confirmCtx() context.Context {
-	return mcpsrv.WithAuthIdentity(context.Background(), &mcpsrv.AuthIdentity{
+	ctx := mcpsrv.WithAuthIdentity(context.Background(), &mcpsrv.AuthIdentity{
 		AccountID: f.accountID, UserID: f.userID,
 		Scopes: WriteScopes(), Agent: "in-app-chat-confirm",
 	})
+	return mcpsrv.WithCallScope(ctx, &mcpsrv.CallScope{Accounts: []string{f.accountID}})
 }
 
 // proposeUpdateProduct drives the model's own path — the dispatch of the

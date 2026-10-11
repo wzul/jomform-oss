@@ -27,15 +27,15 @@ package chat
 //     requireResolvedWorkspaceScope — is pinned in internal/httpapi, where the
 //     request lives; and the page's own ?workspace= is pinned by the
 //     cross-language guard in web/src/lib/chatPage.test.ts.
-//   * WHICH ACCOUNT THE CONFIRMATION RAN UNDER is not discriminated here, and a
-//     mutation proved it: feeding this test the OTHER workspace's AccountID still
-//     passes. That is not a hole in the lane, it is how the MCP layer works —
-//     resolveEntityAccount walks ownedOrScopedAccounts (issue #307), i.e. every
-//     account the USER can reach, so an entity-keyed write is routed by which
-//     account OWNS the product, not by the identity's AccountID
-//     (api/internal/mcpsrv/callscope.go). The identity's account is what the
-//     HTTP edge must get right, and that assertion lives in
-//     chat_workspace_scope_test.go, which sets it directly.
+//   * The tool lane is driven here with the SAME construction the REST edge uses
+//     (identity + per-call workspace scope, see identityFor), so the confirmed
+//     write is routed by the scope it is given. What that construction can no
+//     longer say is "which account would a tool pick on its own": with the scope
+//     bound, an entity-keyed write is routed by which account in the scope OWNS
+//     the product (mcpsrv/callscope.go resolveProductAccount), and the scope — not
+//     the identity's AccountID — is what decides where a read lands. That pair is
+//     pinned at the HTTP edge instead, in chat_tool_lane_scope_test.go, over the
+//     real runner and the real MCP server.
 //
 // So this file owns the DATA boundary the other two point at: the confirmed
 // rename lands on the named product's row and the other workspace's row is
@@ -188,11 +188,27 @@ func (f *twoWorkspaceFixture) productRow(t *testing.T, id string) productRow {
 }
 
 // identityFor builds the READ-ONLY identity the chat's message path uses, for a
-// given account — the same construction chatContextFor performs in the REST edge.
+// given account — the same construction chatContextFor performs in the REST edge,
+// the per-call WORKSPACE SCOPE included: binding the account set the request
+// resolved is what keeps the tool lane on the workspace the user selected
+// (issue #747 — an identity without it let every tool fall back to the union of
+// the user's accounts).
 func identityFor(ctx context.Context, accountID, userID string) context.Context {
-	return mcpsrv.WithAuthIdentity(ctx, &mcpsrv.AuthIdentity{
+	ctx = mcpsrv.WithAuthIdentity(ctx, &mcpsrv.AuthIdentity{
 		AccountID: accountID, UserID: userID, Scopes: ReadOnlyScopes(), Agent: "in-app-chat",
 	})
+	return mcpsrv.WithCallScope(ctx, &mcpsrv.CallScope{Accounts: []string{accountID}})
+}
+
+// writeIdentityFor is identityFor's write-scope counterpart: the human's identity
+// for the workspace the request resolved, exactly as chatConfirmContextFor builds
+// it. Shared here so the two identities cannot drift apart, which is the property
+// the REST edge's own pair exists for.
+func writeIdentityFor(ctx context.Context, accountID, userID string) context.Context {
+	ctx = mcpsrv.WithAuthIdentity(ctx, &mcpsrv.AuthIdentity{
+		AccountID: accountID, UserID: userID, Scopes: WriteScopes(), Agent: "in-app-chat-confirm",
+	})
+	return mcpsrv.WithCallScope(ctx, &mcpsrv.CallScope{Accounts: []string{accountID}})
 }
 
 // TestConfirmWritesToTheSelectedWorkspaceAndLeavesTheOtherUntouched is the
@@ -233,11 +249,9 @@ func TestConfirmWritesToTheSelectedWorkspaceAndLeavesTheOtherUntouched(t *testin
 	}
 
 	// The human's click: the write identity is built for the SELECTED workspace's
-	// account, which is what the REST edge resolves from ?workspace=<slug>.
-	writeCtx := mcpsrv.WithAuthIdentity(context.Background(), &mcpsrv.AuthIdentity{
-		AccountID: selected.account, UserID: f.userID, Scopes: WriteScopes(),
-		Agent: "in-app-chat-confirm",
-	})
+	// account, which is what the REST edge resolves from ?workspace=<slug> — the
+	// scope included, so the write can only reach that workspace.
+	writeCtx := writeIdentityFor(context.Background(), selected.account, f.userID)
 	confirmed, err := r.Confirm(ctx, writeCtx, f.userID, card.Token, card.ArgsHash)
 	if err != nil {
 		t.Fatalf("confirm the proposal: %v — the proposal prepared under a read-only identity must be "+

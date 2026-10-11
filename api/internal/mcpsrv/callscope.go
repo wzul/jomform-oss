@@ -44,6 +44,31 @@ func withCallScope(ctx context.Context, s *CallScope) context.Context {
 	return context.WithValue(ctx, scopeCtxKey{}, s)
 }
 
+// WithCallScope binds an ALREADY-RESOLVED per-call scope to ctx, for an
+// IN-PROCESS caller that resolved the caller's workspace itself before opening a
+// session. The in-app chat is the one: httpapi/rest_chat.go resolves
+// ?workspace= at the HTTP edge and hands the result to the tool lane here.
+//
+// It is deliberately NOT for the outbound MCP lane (mcpsrv/http.go). There the
+// per-call `workspace_id`/`account_id` ARGUMENTS are the only source of a scope
+// (resolveScope), because there is no request whose ?workspace= could be read.
+//
+// A bound scope WINS over the arguments (see addTool). The arguments of a chat
+// tool call are the MODEL's, the reserved helper fields are optional, and no
+// model writes them — so re-deriving the scope from them lands on the UNSCOPED
+// branch, i.e. EVERY account the user can reach (issue #747: under
+// ?workspace=abc the assistant answered with another workspace's forms and a
+// confirmed write reached a product abc does not own).
+//
+// A nil scope is a no-op, so a caller with nothing to bind cannot accidentally
+// clear a scope that is already on the ctx.
+func WithCallScope(ctx context.Context, s *CallScope) context.Context {
+	if s == nil {
+		return ctx
+	}
+	return withCallScope(ctx, s)
+}
+
 // callScopeFrom returns the per-call scope, or nil when none was set.
 func callScopeFrom(ctx context.Context) *CallScope {
 	if s, ok := ctx.Value(scopeCtxKey{}).(*CallScope); ok {

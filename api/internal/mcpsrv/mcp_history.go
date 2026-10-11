@@ -21,11 +21,24 @@ import (
 //
 // The event carries {tool, agent, account_id, success, error} and is
 // best-effort: a nil Events store or a write error is logged, never fatal.
+//
+// ARGUMENTS ARE THE FALLBACK, NOT THE AUTHORITY. A scope already bound to ctx by
+// an IN-PROCESS caller (WithCallScope — the in-app chat, which resolved
+// ?workspace= at the HTTP edge) is left alone. Re-resolving it from the raw
+// arguments is right for the outbound MCP lane, where the arguments ARE the
+// client's own request, and wrong for the chat, where the arguments are the
+// MODEL's: the reserved helper fields are optional and a model does not write
+// them, so re-resolving there reads `{}` and lands on resolveScope's UNSCOPED
+// branch — every account the user can reach (issue #747).
 func addTool[In, Out any](s *Server, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
 	mcp.AddTool(s.mcp, t, func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
 		// Resolve + scope the call from its raw arguments (optional workspace_id /
 		// account_id). A failure (e.g. an inaccessible workspace) blocks the call.
-		if req != nil && req.Params != nil {
+		//
+		// Skipped when the ctx already carries a scope: that scope was resolved
+		// from the request by a trusted in-process caller, so the tool's own
+		// arguments may not widen (or narrow) it.
+		if req != nil && req.Params != nil && callScopeFrom(ctx) == nil {
 			raw := req.Params.Arguments
 			scope, serr := s.resolveScope(ctx, raw)
 			if serr != nil {

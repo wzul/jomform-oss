@@ -191,8 +191,18 @@ func (h *RESTHandlers) workspaceScopeResolutionFor(r *http.Request, userID strin
 // requireResolvedWorkspaceScope is the gate for the endpoints that may not fall
 // back to the first owned account — currently the chat lane (see
 // chatWorkspaceScopeOr403 in rest_chat.go for the argument). It writes the refusal
-// and returns false when the scope cannot be resolved, and is silent (true) when it
-// can.
+// and returns ok=false when the scope cannot be resolved, and is silent (ok=true)
+// when it can.
+//
+// It returns the resolved SCOPE as well as the verdict, and the chat lane needs
+// it: the account set a request resolved to is what the chat's tool calls must
+// run under (see chatContextFor — issue #747, where the REST edge resolved the
+// right account and every tool the assistant called read and wrote the union of
+// all the user's accounts instead). Resolving it HERE rather than in the handlers
+// keeps it one resolution per request, and keeps the answer and the refusal on
+// the same code path — a handler that got the verdict from one place and the
+// account set from another is how the two halves drifted apart in the first
+// place.
 //
 // The two refusals are deliberately different, and the difference is the CLIENT's,
 // not the server's taste:
@@ -204,22 +214,37 @@ func (h *RESTHandlers) workspaceScopeResolutionFor(r *http.Request, userID strin
 //     web/src/lib/wsfetch.ts defines 401/403 as "the session is no longer valid"
 //     and redirects to /login. A 403 there would log a signed-in merchant out of
 //     the page they are reading; a 400 is rendered as the page's own message.
-func (h *RESTHandlers) requireResolvedWorkspaceScope(w http.ResponseWriter, r *http.Request, actx *AccountCtx) bool {
+func (h *RESTHandlers) requireResolvedWorkspaceScope(w http.ResponseWriter, r *http.Request, actx *AccountCtx) (*scopeResult, bool) {
 	// API-key callers have no session and no workspace list; their account comes
 	// from the key. The unscoped fallback is the documented API-key path and is
 	// not a guess about a person's selection.
 	if actx == nil || actx.ViaAPIKey {
-		return true
+		return credentialScope(actx), true
 	}
 	switch h.workspaceScopeResolutionFor(r, h.sessionOwnerID(r)) {
 	case scopeUnresolved:
 		writeErr(w, http.StatusForbidden, "workspace tidak dijumpai")
-		return false
+		return nil, false
 	case scopeAmbiguous:
 		writeErr(w, http.StatusBadRequest, scopeRequiredMessage)
-		return false
+		return nil, false
 	}
-	return true
+	// Resolved: the same ?workspace= resolution every dashboard endpoint uses,
+	// including its 403 for a slug that turns out not to be the caller's.
+	return h.scopeOr403(w, r, actx)
+}
+
+// credentialScope is the account set of a caller whose account comes from its
+// CREDENTIAL rather than from a ?workspace= selection: an API key, or a request
+// that arrived without a resolved account at all. It is the single-account answer
+// resolveAccountScope gives an unscoped session request, and it is never empty for
+// a caller that has an account — a chat tool lane handed an empty scope would fall
+// back to the union, which is the defect this file's chat gate exists to stop.
+func credentialScope(actx *AccountCtx) *scopeResult {
+	if actx == nil || actx.Account == nil {
+		return &scopeResult{}
+	}
+	return &scopeResult{Accounts: []string{actx.Account.ID}}
 }
 
 // requireWriteScope enforces the API-key WRITE SCOPE on a mutating REST

@@ -147,7 +147,7 @@ func (h *RESTHandlers) handleChatStatus(w http.ResponseWriter, r *http.Request, 
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
 		return
 	}
-	if !h.chatWorkspaceScopeOr403(w, r, actx) {
+	if _, ok := h.chatWorkspaceScopeOr403(w, r, actx); !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -157,7 +157,14 @@ func (h *RESTHandlers) handleChatStatus(w http.ResponseWriter, r *http.Request, 
 	})
 }
 
-// chatWorkspaceScopeOr403 refuses a chat call whose account would be GUESSED.
+// chatWorkspaceScopeOr403 refuses a chat call whose account would be GUESSED, and
+// hands back the account set the call resolved to.
+//
+// The scope is returned, not just the verdict, because the tools a chat message
+// dispatches must run under EXACTLY the workspace this request resolved (see
+// chatContextFor): the REST edge already resolved ?workspace= correctly, and
+// handing the tool lane nothing but the identity's account id is what let every
+// tool read and write the union of all the user's accounts (issue #747).
 //
 // WHY THE CHAT NEEDS THIS AND THE REST OF THE DASHBOARD DOES NOT. Every dashboard
 // page resolves its account from ?workspace=; the chat used to send none, and the
@@ -179,7 +186,7 @@ func (h *RESTHandlers) handleChatStatus(w http.ResponseWriter, r *http.Request, 
 // It is applied to ALL FOUR chat routes — GET status, POST message, POST confirm,
 // POST cancel — because they are one lane: a decision endpoint left unscoped would
 // be the same defect with a narrower door.
-func (h *RESTHandlers) chatWorkspaceScopeOr403(w http.ResponseWriter, r *http.Request, actx *AccountCtx) bool {
+func (h *RESTHandlers) chatWorkspaceScopeOr403(w http.ResponseWriter, r *http.Request, actx *AccountCtx) (*scopeResult, bool) {
 	return h.requireResolvedWorkspaceScope(w, r, actx)
 }
 
@@ -204,8 +211,10 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 	}
 	// Refuse a GUESSED account before anything else: the message's tools read
 	// under this identity, so an unresolved scope would answer questions about a
-	// workspace the user is not looking at (see chatWorkspaceScopeOr403).
-	if !h.chatWorkspaceScopeOr403(w, r, actx) {
+	// workspace the user is not looking at (see chatWorkspaceScopeOr403). The
+	// scope it returns is the account set those tools must run under.
+	scope, ok := h.chatWorkspaceScopeOr403(w, r, actx)
+	if !ok {
 		return
 	}
 
@@ -250,8 +259,10 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 
 	// The identity the tool calls run under. THIS is what makes the chat
 	// read-only: whatever the session could do itself, the tools it can reach
-	// are dispatched with a readonly scope, so every write refuses.
-	ctx := chatContextFor(r.Context(), actx.Account.ID, uid)
+	// are dispatched with a readonly scope, so every write refuses. The scope is
+	// the workspace this request resolved, so those tools also read and write the
+	// workspace the user is looking at (issue #747).
+	ctx := chatContextFor(r.Context(), scope, actx.Account.ID, uid)
 
 	res, err := h.Chat.Run(ctx, in.History, msg)
 	if err != nil {
@@ -299,8 +310,12 @@ func (h *RESTHandlers) handleChatConfirm(w http.ResponseWriter, r *http.Request,
 	}
 	// The confirmation writes with THE ACCOUNT THIS REQUEST RESOLVED, so an
 	// unresolved scope here is a write to the wrong workspace — the worst version
-	// of the chat's scope defect. Refused before the token is even read.
-	if !h.chatWorkspaceScopeOr403(w, r, actx) {
+	// of the chat's scope defect. Refused before the token is even read. The
+	// returned scope is what makes the confirmed call TARGET that workspace too:
+	// the write gate was already scoped here, the write TARGET was not
+	// (issue #747).
+	scope, ok := h.chatWorkspaceScopeOr403(w, r, actx)
+	if !ok {
 		return
 	}
 	if h.Chat == nil {
@@ -332,8 +347,10 @@ func (h *RESTHandlers) handleChatConfirm(w http.ResponseWriter, r *http.Request,
 	// The identity the CONFIRMED tool runs under: the HUMAN's, with the write
 	// scope. The confirmed call is the one place the chat gains a write, and it is
 	// granted here — for a single bound proposal — rather than by loosening the
-	// read-only identity every message runs under.
-	writeCtx := chatConfirmContextFor(r.Context(), actx.Account.ID, uid)
+	// read-only identity every message runs under. The workspace scope rides with
+	// it, so the write can only ever land in the workspace the user selected
+	// (issue #747: the gate was scoped, the target was not).
+	writeCtx := chatConfirmContextFor(r.Context(), scope, actx.Account.ID, uid)
 
 	res, err := h.Chat.Confirm(r.Context(), writeCtx, uid, in.Token, in.ArgsHash)
 	if err != nil {
@@ -373,7 +390,7 @@ func (h *RESTHandlers) handleChatCancel(w http.ResponseWriter, r *http.Request, 
 	// workspace it was prepared in, and an unscoped request cannot say which one
 	// that is. Refused for the SAME reason as a confirm so the three routes cannot
 	// drift apart (see chatWorkspaceScopeOr403).
-	if !h.chatWorkspaceScopeOr403(w, r, actx) {
+	if _, ok := h.chatWorkspaceScopeOr403(w, r, actx); !ok {
 		return
 	}
 	if h.Chat == nil {
@@ -558,14 +575,50 @@ func NewChatLimiter() *middleware.RateLimiter {
 	return middleware.NewRateLimiter(chatRatePerHour/3600.0, chatBurst)
 }
 
-// chatContextFor builds the identity ctx the chat's tools run under. It exists
-// as a named function so the read-only scope is set in ONE place: the refusal
-// tests assert on it, and a future edit has a single line to get wrong.
-func chatContextFor(ctx context.Context, accountID, userID string) context.Context {
-	return mcpsrv.WithAuthIdentity(ctx, &mcpsrv.AuthIdentity{
+// chatContextFor builds the identity ctx the chat's tools run under: the
+// caller's account, the READ-ONLY scope, and the WORKSPACE SCOPE this request
+// resolved to.
+//
+// It exists as a named function so the read-only scope is set in ONE place: the
+// refusal tests assert on it, and a future edit has a single line to get wrong.
+//
+// WHY THE WORKSPACE SCOPE IS BOUND HERE (issue #747). The identity alone was
+// never enough, and that is what shipped: the MCP lane re-derives a per-call
+// scope from the tool call's OWN arguments (mcpsrv.addTool → resolveScope), the
+// reserved `workspace_id`/`account_id` helper fields are optional, and the
+// arguments of a chat tool call are the MODEL's — so every call resolved the
+// UNSCOPED branch, i.e. EVERY account the user can reach. Under
+// ?workspace=abc the assistant answered with another workspace's forms and a
+// confirmed write reached a product abc does not own. Binding the resolved set
+// here is what makes the tool lane read and write the workspace the user is
+// looking at.
+func chatContextFor(ctx context.Context, scope *scopeResult, accountID, userID string) context.Context {
+	ctx = mcpsrv.WithAuthIdentity(ctx, &mcpsrv.AuthIdentity{
 		AccountID: accountID, UserID: userID,
 		Scopes: chat.ReadOnlyScopes(), Agent: "in-app-chat",
 	})
+	return mcpsrv.WithCallScope(ctx, chatCallScope(scope))
+}
+
+// chatCallScope turns the account set this request resolved to into the per-call
+// MCP scope the tool lane runs under.
+//
+// WorkspaceID and Role stay empty on purpose: both describe a workspace the call
+// named in its ARGUMENTS, and this scope did not come from an argument. Their
+// only consumer (mcpsrv.accountAndRole) falls back to RoleByAccount for the
+// workspace owning the account, which is the same answer and cannot go stale —
+// writing a slug into a field documented as a workspace ID would be a lie in
+// exchange for nothing.
+//
+// A nil scope — or one with no accounts, which is the same thing to the scope
+// consumers (mcpsrv.accountScopes treats an empty set as "no scope" and falls
+// through to the union) — binds nothing, so a caller that cannot name an account
+// must never accidentally re-create the defect this function exists to fix.
+func chatCallScope(scope *scopeResult) *mcpsrv.CallScope {
+	if scope == nil || len(scope.Accounts) == 0 {
+		return nil
+	}
+	return &mcpsrv.CallScope{Accounts: scope.Accounts}
 }
 
 // chatConfirmContextFor builds the identity the CONFIRMED tool runs under: the
@@ -580,11 +633,18 @@ func chatContextFor(ctx context.Context, accountID, userID string) context.Conte
 // The scope is granted HERE rather than to the conversation, so a confirmed write
 // cannot enable a second one: the next message opens a new readonly session, and
 // the next write needs its own token.
-func chatConfirmContextFor(ctx context.Context, accountID, userID string) context.Context {
-	return mcpsrv.WithAuthIdentity(ctx, &mcpsrv.AuthIdentity{
+//
+// It carries the request's WORKSPACE SCOPE for the same reason chatContextFor
+// does, and it is the binding that matters most: this is the one identity the
+// chat can write under, and without the scope the confirmed call targeted
+// whatever account owned the object rather than the workspace the user was
+// looking at (issue #747).
+func chatConfirmContextFor(ctx context.Context, scope *scopeResult, accountID, userID string) context.Context {
+	ctx = mcpsrv.WithAuthIdentity(ctx, &mcpsrv.AuthIdentity{
 		AccountID: accountID, UserID: userID,
 		Scopes: chat.WriteScopes(), Agent: "in-app-chat-confirm",
 	})
+	return mcpsrv.WithCallScope(ctx, chatCallScope(scope))
 }
 
 // NewChatConfirmLimiter builds the per-user confirmation bucket used by
