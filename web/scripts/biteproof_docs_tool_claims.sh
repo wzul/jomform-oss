@@ -20,6 +20,19 @@
 #     is why the old column is what has to be green in a fixed tree.
 #   * GAP — OLD GREEN, NEW RED: the base guard misses a phrasing this tree catches. This is
 #     the direction every earlier case in this file drove.
+#   * FALSE POSITIVE, second family (card t_ceef983f, whose defect report is QA card
+#     t_034ae078) — OLD RED, NEW GREEN: the loose `as (the )?X tool` capture read a
+#     DETERMINER or a POSSESSIVE — their, this, your, any, the — as a claimed tool name.
+#     Five sentences, each its own case, each with the old column naming the rejected word
+#     (the defect is exactly that the guard called that word a tool). The fix is a CLOSED
+#     class excluded BY RULE inside both loose patterns (FUNCTION_WORDS), not a longer
+#     stoplist; the section drives the already-stoplisted article "a" as a control that had
+#     to stay quiet in BOTH columns.
+#   * SELF-BITE — the GUARD ITSELF is mutated: BARE_NAME widened to accept a hyphen must
+#     redden the guard's own new footprint test. The page-mutation cases prove the fix works
+#     on the phrasings QA measured; this one proves the new test catches the CLASS, which is
+#     what the card is about (a test that passes on its own three literals is the defect).
+#     Driven by awk on a per-run temp copy beside the real guard, .ts extension kept.
 #
 # THE GAP CASES THIS PROOF WAS BUILT FOR CAN NO LONGER REPRODUCE THEIR PREMISE, and they are
 # not deleted for it (card t_3926a5dd): their phrasings were gaps against a guard that
@@ -29,6 +42,16 @@
 # the new column naming the offender. `check` prints which direction it read, so a case whose
 # premise has moved cannot pass as the other kind; a stale premise reads as a `***` line, not
 # as a verdict (measured before this change: 4 such lines, `fail=1`, on the unmutated tree).
+#
+# THE FALSE POSITIVE CASES' PREMISE HAS SINCE MOVED THE SAME WAY (card t_ceef983f): the
+# parenthetical narrowing and the four asides that motivated it landed ON `origin/main`, the
+# OLD column here, so those cases can no longer show "OLD RED, NEW GREEN" — the OLD column is
+# GREEN too. Measured in a clean worktree at base 4a4018aa with nothing else touched: the
+# landed harness exits 1 with five `***` lines, "OLD guard wanted RED, got GREEN". They are
+# driven as GREEN GREEN (quiet in both columns) instead, which still bites on the tree under
+# test — re-widening the shape turns the NEW column RED. The five DETERMINER/POSSESSIVE cases
+# added with t_ceef983f do still reproduce their premise (the loose shapes are untouched on
+# the base), so they are driven the original way, with the old column naming the word.
 #
 # Each case: mutate -> assert the mutation is really on disk -> run the OLD guard -> run the
 # NEW guard -> restore the page byte-identically (re-checked with sha256).
@@ -250,6 +273,10 @@ fail=0
 #   * every temp file a run created is removed here. They are per-run `mktemp` paths, so
 #     one run cannot remove another's, and no run can leave debris behind.
 TMP_E=''
+# The guard variant the SELF-BITE section writes (widened BARE_NAME). Declared empty here
+# for the same reason as TMP_E: the trap below removes every per-run temp file even when a
+# case aborts before the section that creates it.
+WIDETMP=''
 # The temp copies of the guard also live beside the real one (the guard resolves its
 # paths from import.meta.url, and node strips types by .ts extension), but under a
 # PER-RUN name: a fixed `$GUARD.oldcheck.ts` is the same host-global channel as
@@ -264,7 +291,7 @@ cleanup() {
   cp "$PAGE_BAK" "$PAGE" 2>/dev/null
   cp "$EMBED_BAK" "$EMBED" 2>/dev/null
   rm -f "$OLD_GUARD" "$PAGE_BAK" "$EMBED_BAK" "$TMP_E"
-  rm -f "$OLDTMP" "$SKTMP" "$NOLOADTMP" "$MISSINGTMP"
+  rm -f "$OLDTMP" "$SKTMP" "$NOLOADTMP" "$MISSINGTMP" "$WIDETMP"
   exit "$rc"
 }
 trap cleanup EXIT
@@ -472,7 +499,8 @@ check() { # check <label> <old-want> <new-want> [must-name] [old-must-name]
   elif [ "$old_want" = "$new_want" ] && [ "$old_want" = "RED" ]; then
     echo "  ok   ${label}: old guard RED — caught by BOTH columns, so this claim was not narrowed away"
   elif [ "$old_want" = "$new_want" ]; then
-    echo "  ok   ${label}: old guard GREEN — quiet in both columns (control)"
+    echo "  ok   ${label}: old guard GREEN — quiet in both columns (a control, or a premise " \
+         "that has moved — each section header says which)"
   else
     echo "  ok   ${label}: old guard GREEN — the gap reproduces (it missed this)"
   fi
@@ -533,51 +561,152 @@ check "baseline" GREEN GREEN
 # asserts must stay quiet — the two instruments read the same three forms, one by running the
 # shipped guard on them and one by running this tree's.
 #
-# The direction is the INVERSE of the cases below: OLD RED (it reported a claim nobody made),
-# NEW GREEN — and the old column must NAME the prose word, because a red for another reason
-# would not be this defect.
+# The direction WAS the INVERSE of the cases below: OLD RED (it reported a claim nobody
+# made), NEW GREEN, with the old column naming the prose word.
+#
+# THE PREMISE HAS MOVED, measured rather than assumed (card t_ceef983f): the parenthetical
+# narrowing has since landed ON `origin/main`, which is the OLD column here, so that column is
+# now GREEN as well. Reproduced in a clean worktree at the base with nothing else touched —
+# the harness there exits 1 with this section's four lines and the stated-gap line below
+# reading "OLD guard wanted RED, got GREEN — the case does not reproduce its premise". The
+# cases are NOT deleted for it (the house rule for the GAP family below, whose premise moved
+# the same way): a form that stopped being quiet would be a hole nobody measured, and
+# `check ... GREEN GREEN` asserts the thing that matters on this tree — both columns quiet —
+# so reverting the narrowing in the tree under test still turns the NEW column RED. What is
+# lost is the old column NAMING a word; it no longer reports one, so there is no word to name.
 echo
-echo "== FALSE POSITIVE 1: a gloss in brackets after the word 'tool' =="
+echo "== FALSE POSITIVE 1: a gloss in brackets after the word 'tool' ==  (premise moved: quiet in both columns)"
 mutate '// QA: the tool (deprecated) is no longer listed'
 assert_applied '(deprecated) is no longer listed' && {
-  check "prose gloss (deprecated)" RED GREEN '' 'presents "deprecated" as a tool'; }
+  check "prose gloss (deprecated)" GREEN GREEN; }
 restore_page
 
 echo
-echo "== FALSE POSITIVE 2: a gloss in brackets after the word 'tools' =="
+echo "== FALSE POSITIVE 2: a gloss in brackets after the word 'tools' ==  (premise moved: quiet in both columns)"
 mutate '// QA: This page describes the MCP tools (overview) of the assistant.'
 assert_applied 'tools (overview) of the assistant' && {
-  check "prose gloss (overview)" RED GREEN '' 'presents "overview" as a tool'; }
+  check "prose gloss (overview)" GREEN GREEN; }
 restore_page
 
 echo
-echo "== FALSE POSITIVE 3: the literal English plural marker 'tool(s)' =="
+echo "== FALSE POSITIVE 3: the literal English plural marker 'tool(s)' ==  (premise moved: quiet in both columns)"
 mutate '// QA: words after the word "tool(s)" reads as a phantom claim'
 assert_applied '"tool(s)" reads as a phantom claim' && {
-  check "plural marker (s)" RED GREEN '' 'presents "s" as a tool'; }
+  check "plural marker (s)" GREEN GREEN; }
 restore_page
 
 echo
-echo "== FALSE POSITIVE 4: a KANBAN CARD ID in brackets after the word 'tools' =="
+echo "== FALSE POSITIVE 4: a KANBAN CARD ID in brackets after the word 'tools' ==  (premise moved: quiet in both columns)"
 # The face the STRICT spelling alone does not close: a card id is `t_` + 8 hex, which is
 # snake_case, so it reached the strict capture too (measured on the fixed tree before the
 # shape skipped the spelling). A bracketed aside is exactly where a docs comment cites a
 # card, and the card that filed this defect could not write its own id there.
 mutate '// QA: these tools (t_cde2e73a) are added to the registry here'
 assert_applied 'tools (t_cde2e73a) are added' && {
-  check "card-id citation (t_cde2e73a)" RED GREEN '' 'presents "t_cde2e73a" as a tool'; }
+  check "card-id citation (t_cde2e73a)" GREEN GREEN; }
 restore_page
 
 echo
+echo "== FALSE POSITIVE 5-9: a DETERMINER or POSSESSIVE in the loose shapes' slot (t_ceef983f) =="
+# The class this harness could not drive before the fix: `as (the )?X tool` captured ANY
+# lower-case identifier, and ordinary English puts a determinative or a possessive exactly
+# there. Each sentence below was RED against the shipped guard (QA card t_034ae078 measured
+# all five on the real page) and the old column has to NAME the word, because the defect is
+# precisely that the guard called that word a tool the docs claim.
+#
+# The fix is a closed class excluded BY RULE inside both loose patterns (FUNCTION_WORDS),
+# not a longer stoplist: the old column here reports the word and the new column is quiet.
+# The determinatives are what the class is FOR; the negative control below (the article "a",
+# already stoplisted) is driven so the section shows a form that was quiet in BOTH columns.
+mutate '// QA: the assistant can be used as their tool of choice.'
+assert_applied 'as their tool of choice' && {
+  check "possessive (their)" RED GREEN '' 'presents "their" as a tool'; }
+restore_page
+
+echo
+echo "== FALSE POSITIVE 6: a DEMONSTRATIVE in the loose slot =="
+mutate '// QA: it behaves as this tool does.'
+assert_applied 'as this tool does' && {
+  check "demonstrative (this)" RED GREEN '' 'presents "this" as a tool'; }
+restore_page
+
+echo
+echo "== FALSE POSITIVE 7: a POSSESSIVE PRONOUN in the loose slot =="
+mutate '// QA: the page acts as your tool to reach the API.'
+assert_applied 'as your tool to reach the API' && {
+  check "possessive (your)" RED GREEN '' 'presents "your" as a tool'; }
+restore_page
+
+echo
+echo "== FALSE POSITIVE 8: a QUANTIFIER in the loose slot =="
+mutate '// QA: the same as any tool on the platform.'
+assert_applied 'as any tool on the platform' && {
+  check "quantifier (any)" RED GREEN '' 'presents "any" as a tool'; }
+restore_page
+
+echo
+echo "== FALSE POSITIVE 9: the ARTICLE the shape has to back off from =="
+# The `(?:the )?` in `as (?:the )?X tool` is optional, so the engine can spend that "the"
+# AS the captured name: "works as the tool it is told to be" read as `presents "the" as a
+# tool`. The class closes it (and the other spellings of `the` in the slot).
+mutate '// QA: the assistant works as the tool it is told to be.'
+assert_applied 'as the tool it is told to be' && {
+  check "article backoff (the)" RED GREEN '' 'presents "the" as a tool'; }
+restore_page
+
+echo
+echo "== NEGATIVE CONTROL: the stoplisted article 'a' was quiet in BOTH columns =="
+# Already absorbed by PROSE_WORDS before the fix, so the new column must not have narrowed
+# anything here. Driven so "the class did it" cannot be read as "the shapes went quiet".
+mutate '// QA: described as a tool for the workspace.'
+assert_applied 'as a tool for the workspace' && check "stoplisted article (a)" GREEN GREEN
+restore_page
+
+echo
+echo "== SELF-BITE: widening BARE_NAME reddens the guard's OWN footprint test (t_ceef983f) =="
+# The five cases above are driven against the SHIPPED guard as the OLD column, which proves
+# the fix works on the phrasings QA measured. It does not prove the guard's new test CATCHES
+# the class: a test that only passes on the sentences it was written for is the defect the
+# card is about. So the guard itself is mutated, in a temp copy beside the real one (the
+# .ts extension is load-bearing for the same reason as elsewhere in this file), with
+# BARE_NAME widened to accept a hyphen — and the run must be RED in the footprint test.
+#
+# The hyphen is the measured widening, not a stand-in: the guard's own corpus carries
+# "documented as a read-only tool", which the shipped BARE_NAME cannot spell past (it stops
+# at "read"), so the widened capture reaches "read-only" and that word is in no class.
+WIDETMP="$GUARD.selfbite.$$.ts"
+awk '{ if ($0 == "const BARE_NAME = String.raw`[a-z][a-z0-9_]*`;") print "const BARE_NAME = String.raw`[a-z][a-z0-9_-]*`;"; else print }' "$GUARD" > "$WIDETMP"
+if grep -qF 'const BARE_NAME = String.raw`[a-z][a-z0-9_-]*`;' "$WIDETMP"; then
+  echo "       mutation on disk: BARE_NAME widened to [a-z][a-z0-9_-]*"
+  run_guard "$WIDETMP"
+  [ "$VERDICT" = REFUSED ] && refuse "BARE_NAME widened" "NEW"
+  if [ "$VERDICT" = "RED" ] && grep -qF "footprint on ordinary English is a CLOSED class" <<<"$VERDICT_OUT"; then
+    echo '  BITES BARE_NAME widened: the footprint test is RED, so the class is pinned and a widening cannot move the cliff silently'
+    grep -F 'the loose shapes reach' <<<"$VERDICT_OUT" | head -1
+  else
+    echo "  *** BARE_NAME widened: the guard is ${VERDICT} and the footprint test is not among the failures — the new test does not catch a widening ***"
+    grep -E '^ℹ (pass|fail)' <<<"$VERDICT_OUT" | head -2; fail=1
+  fi
+else
+  echo "  *** BARE_NAME widening DID NOT APPLY — the constant in the guard moved; re-derive this case ***"; fail=1
+fi
+rm -f "$WIDETMP"
+
+echo
 echo "== STATED GAP: a SINGLE-WORD parenthetical claim is deliberately not caught (t_3926a5dd) =="
-# Not a control and not a fix. The narrowing above trades this form away, because at the
 # bracket position a bare English word and a name are structurally identical — see the
 # guard's own note and its WHAT IT DOES NOT COVER paragraph. Driven here so the trade is a
-# measured line of output rather than a sentence in a comment: the shipped guard reports the
-# phantom, this tree's guard does not.
+# measured line of output rather than a sentence in a comment.
+#
+# Its premise moved with the four asides above, and for the same reason: the shipped guard
+# used to report this phantom and `origin/main` — the OLD column — now carries the narrowing,
+# so BOTH columns are quiet and the line is "quiet in both columns". Driving it as RED GREEN
+# is what reddened the landed harness on the base (measured in a clean worktree at
+# 4a4018aa, exit 1); it still bites on this tree, where re-widening the parenthetical shape
+# would turn the NEW column RED.
 mutate '// QA: the MCP tool the proposal lane pairs with (deleteall).'
 assert_applied 'pairs with (deleteall)' && {
-  check "single-word parenthetical not caught (stated gap)" RED GREEN; }
+  check "single-word parenthetical not caught (stated gap)" GREEN GREEN; }
 restore_page
 
 echo
@@ -646,7 +775,7 @@ restore_page
 
 echo
 if [ "$fail" = "0" ]; then
-  echo "BITEPROOF PASS — the four asides were RED under the shipped guard and GREEN under this one, one stated gap is driven rather than assumed, and every claim phrasing is still caught by both columns."
+  echo "BITEPROOF PASS — the five determiner/possessive slot words were RED under the shipped guard and GREEN under this one, each with the old column naming the word it rejected; the guard's own footprint test is RED when BARE_NAME is widened (so the new test catches the class, not just its own literals); the four asides and the stated gap are quiet in both columns, their premise having moved with the narrowing that landed on the base; and every claim phrasing is still caught by both columns."
 else
   echo "BITEPROOF FAIL (fail=$fail)"
 fi

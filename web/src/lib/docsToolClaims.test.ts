@@ -16,9 +16,11 @@
 //   1. A name the docs CALL a tool must be a name the Go registry actually registers.
 //      Five phrasings, named for the name shape they carry: "as the X tool" / "X, the
 //      tool that …" in both a strict form (X is snake_case, no stoplist needed) and a
-//      loose one (X is any lower-case identifier, stoplisted against real prose — see
-//      PROSE_WORDS), plus the parenthetical form "… the MCP tool <phrase> (X)", which is
-//      strict — X must be snake_case, and this repo's card-id spelling is skipped as a
+//      loose one (X is any lower-case identifier, held off ordinary prose by a CLOSED
+//      class of English determinatives and pronouns excluded by rule — FUNCTION_WORDS —
+//      plus the measured residue in PROSE_WORDS), plus the parenthetical form "… the MCP
+//      tool <phrase> (X)", which is strict — X must be snake_case, and this repo's card-id
+//      spelling is skipped as a
 //      citation — because in a bracket position a bare English word and a name are
 //      structurally identical (card t_3926a5dd; the shape's own note below carries the
 //      measurement). The parenthetical is the phrasing the page's own HEADER COMMENT
@@ -32,8 +34,10 @@
 //   5. Every `{ name: … }` entry of the MCP tool reference (/docs/mcp) is a
 //      registered tool, so that page cannot advertise a tool that does not exist
 //      (the reverse direction of 1).
-//   6. The loose shapes' stoplist cannot hide a registered tool: no entry may be a
-//      registered name, and the list stays small enough to audit.
+//   6. The loose shapes' prose exclusions cannot hide a registered tool: no entry of the
+//      rule's closed class (FUNCTION_WORDS) or of the measured stoplist (PROSE_WORDS) may
+//      be a registered name, the stoplist stays small enough to audit, and the class stays
+//      closed against the ordinary English a written corpus puts in its slot.
 //
 // HOW THE REGISTRY IS READ, and why it is not a hardcoded list: the tool
 // registry lives in Go, so a hardcoded name list here would be a second,
@@ -71,7 +75,18 @@
 // DESCRIPTION is accurate, only that the tool exists. And the loose shapes cover
 // the phrasings named above, not every way English can call something a tool: a
 // new wording ("the deleteall helper") is still a copy defect this guard cannot
-// see. The parenthetical shape has a spelling gap of its own, deliberately
+// see. Inside the phrasings it does cover, the closed class it excludes is the
+// determinatives and pronouns ordinary prose puts in that slot; an OPEN-class word
+// there ("as the main tool for the workspace") is still read as a claim, exactly as
+// it was before the rule — no exclusion can leave every adjective alone and still
+// catch a single-word phantom name ("as the deleteall tool"), because at that
+// position a name and a common noun are spelled identically. The comma shape has the
+// same residual from the other side: its slot is an appositive HEAD, so a noun gloss
+// ("The chat page, the tool that answers every message, is documented.") is still read
+// as a claim on "page" — the price of keeping the single-word phantom ("wipeall, the
+// tool that removes everything") catchable, and pinned as a measured line in the
+// footprint test rather than left to be discovered. The parenthetical shape has a
+// spelling gap of its own, deliberately
 // (card t_3926a5dd): a SINGLE-WORD tool name in brackets ("… the MCP tool the lane
 // pairs with (deleteall)") is NOT read as a claim, because at that position a bare
 // English word cannot be told from a name — the loose spelling read four forms of
@@ -176,9 +191,41 @@ const REGISTERED = registeredTools();
 // shipped prose says "has no tool to call" and "names submit_feedback as the one tool
 // of its own". So it carries an explicit STOPLIST, measured against the real corpus —
 // every entry below is a word that only ever appeared as prose there, and none is a
-// registered tool (asserted below, so a tool cannot be silently stoplisted away). A
-// hand-maintained stoplist is a cost, but the alternative — dropping the strict shape's
-// underscore rule — is a guard that goes green on the exact wording it exists to stop.
+// registered tool (asserted below, so a tool cannot be silently stoplisted away).
+//
+// THAT STOPLIST WAS NEVER ENOUGH ON ITS OWN (card t_ceef983f, whose defect report is QA
+// card t_034ae078). It is measured against the corpus that happens to exist, and the
+// shape is broader than that corpus: ordinary English puts a possessive or a determiner
+// in exactly this slot, and none of those is a corpus word. Measured on the real page,
+// each of these was RED under the shape as it shipped (the guard naming the slot word):
+//
+//   "the assistant can be used as their tool of choice"  -> presents "their" as a tool
+//   "it behaves as this tool does"                       -> presents "this" as a tool
+//   "the page acts as your tool to reach the API"        -> presents "your" as a tool
+//   "the same as any tool on the platform"               -> presents "any" as a tool
+//   "the assistant works as the tool it is told to be"   -> presents "the" as a tool
+//
+// Every one of those words is a DETERMINATIVE or a PRONOUN: a CLOSED class of English,
+// finite and enumerable from grammar, not a vocabulary to be re-measured per corpus. So
+// the loose shape excludes that class BY RULE — FUNCTION_WORDS, compiled into both loose
+// patterns as a negative lookahead below — instead of growing a stoplist one failure at a
+// time. Adding each word the failure named is the route this file already warns is "a
+// guard that goes green on the exact wording it exists to stop", and the rule is asserted
+// CLOSED in both directions instead: every member of the class is driven through both
+// loose shapes (so deleting a member reddens, in "the loose shapes' footprint …"), and no
+// member may be a registered tool name (so a tool cannot be silently ruled out of scope).
+//
+// PROSE_WORDS is NOT retired for it, and the two are not each other's fallback. The class
+// carries determinatives and pronouns; the corpus-measured residue stays measured. "one"
+// is reached by real shipped prose ("names submit_feedback as the one tool of its own"),
+// is not a word the rule needs to exclude, and stays where the corpus put it.
+//
+// WHAT THIS DOES NOT CLOSE, stated rather than papered over: the class is the closed-class
+// vocabulary of English determinatives and pronouns. An OPEN-class word in the same slot
+// ("as the main tool for the workspace") is still read as a claim, exactly as it was
+// before this rule — no rule can both catch a single-word phantom ("as the deleteall
+// tool") and leave every ordinary adjective alone, because the slot holds a name and a
+// common noun identically. That residual is stated under WHAT IT DOES NOT COVER.
 //
 // The third shape is the parenthetical form the page's own HEADER COMMENT shipped with:
 // "the MCP tool the proposal lane pairs with (propose_write)". The guard reads whole
@@ -239,6 +286,51 @@ const CARD_ID = /^t_[0-9a-f]{8}$/;
 // is a registered tool name.
 const PROSE_WORDS = new Set(["a", "an", "no", "one", "own"]);
 
+// The CLOSED class the loose shapes exclude BY RULE (card t_ceef983f): the English
+// determinatives and pronouns that can sit in the loose slot — "as (the )?X tool" and
+// "X, the tool that" — where X is otherwise read as a claimed tool name. Closed class
+// means finite and enumerable from grammar, which is the point: the loose shape does not
+// need a corpus to be re-measured against (PROSE_WORDS, above), it needs the vocabulary
+// that English can put at that position and nothing else can.
+//
+// The entries are grouped by the grammatical class each one comes from, so this list can
+// be AUDITED against English rather than against a failure log:
+const FUNCTION_WORDS = new Set([
+  // articles
+  "a", "an", "the",
+  // demonstratives
+  "this", "that", "these", "those",
+  // possessive determiners and possessive pronouns
+  "my", "your", "his", "her", "its", "our", "their",
+  "mine", "yours", "hers", "ours", "theirs",
+  // personal pronouns
+  "i", "you", "he", "she", "it", "we", "they",
+  "me", "him", "us", "them",
+  // reflexive pronouns
+  "myself", "yourself", "himself", "herself", "itself",
+  "ourselves", "yourselves", "themselves",
+  // quantifiers
+  "all", "any", "both", "each", "either", "enough", "every", "few", "fewer",
+  "half", "less", "little", "many", "more", "most", "much", "neither",
+  "no", "none", "several", "some", "such", "whole",
+  // indefinite pronouns
+  "another", "anybody", "anyone", "anything", "everybody", "everyone",
+  "everything", "nobody", "nothing", "other", "others", "somebody",
+  "someone", "something",
+  // wh-words
+  "what", "whatever", "which", "whichever", "who", "whoever", "whom",
+  "whomever", "whose",
+]);
+
+// The class compiled into the loose patterns. Longest alternative first so the spelling
+// reads the way it matches; the trailing `\b` is what makes the order matter-free either
+// way (for "their_tool", the `their` alternative fails on the boundary and the snake_case
+// name is captured, which is the case a name that merely STARTS with a function word
+// needs). Case-insensitive, like the shapes themselves — the class carries "their", and
+// the shapes' `i` flag means "Their" reaches the same slot.
+const FUNCTION_WORD_ALT = [...FUNCTION_WORDS].sort((a, b) => b.length - a.length).join("|");
+const NOT_FUNCTION_WORD = String.raw`(?!${FUNCTION_WORD_ALT}\b)`;
+
 // Named so a failure can say WHICH shape caught a name, and so the load-bearing test
 // below can point at one shape by name instead of by index. `skip` is a per-shape
 // exclusion for a spelling that cannot be a tool name at all — the parenthetical carries
@@ -246,8 +338,8 @@ const PROSE_WORDS = new Set(["a", "an", "no", "one", "own"]);
 const CLAIM_SHAPES: { shape: string; re: RegExp; skip?: (name: string) => boolean }[] = [
   { shape: "as-the-tool/strict", re: new RegExp(String.raw`\bas (?:the )?(${TOOLNAME}) tool\b`, "gi") },
   { shape: "comma-the-tool/strict", re: new RegExp(String.raw`\b(${TOOLNAME}),? the tool (?:that|which|for)\b`, "gi") },
-  { shape: "as-the-tool/loose", re: new RegExp(String.raw`\bas (?:the )?(${BARE_NAME}) tool\b`, "gi") },
-  { shape: "comma-the-tool/loose", re: new RegExp(String.raw`\b(${BARE_NAME}),? the tool (?:that|which|for)\b`, "gi") },
+  { shape: "as-the-tool/loose", re: new RegExp(String.raw`\bas (?:the )?${NOT_FUNCTION_WORD}(${BARE_NAME}) tool\b`, "gi") },
+  { shape: "comma-the-tool/loose", re: new RegExp(String.raw`\b${NOT_FUNCTION_WORD}(${BARE_NAME}),? the tool (?:that|which|for)\b`, "gi") },
   // The parenthetical: the docs name a tool, then give the name in brackets a few
   // words later. It pins the header-comment form the original defect shipped in, and it
   // is the one shape whose name is in a GLOSS position — which is why it is strict,
@@ -705,4 +797,214 @@ test("every claim shape is load-bearing, and the guard catches what it missed", 
       `the ${shape} shape now catches the parenthetical form — the parenthetical shape is redundant`,
     );
   }
+});
+
+test("the loose shapes' footprint on ordinary English is a CLOSED class, not a hand-grown stoplist", () => {
+  // WHY THIS TEST EXISTS (card t_ceef983f, whose defect report is QA card t_034ae078).
+  //
+  // The test above ("the prose scan does not mistake a field or a phrase for a tool name")
+  // measures the loose shapes on THREE hardcoded phrases and asserts that the words they
+  // reach there are stoplisted. Against the shipped corpus that was quiet, because the
+  // corpus contains exactly one unstoplisted prose hit ("one", which PROSE_WORDS absorbs).
+  // It measured the corpus, not the shape. Ordinary English puts a possessive or a
+  // determiner in exactly this slot, and the shape read five of them as claimed tool names
+  // (their, this, your, any, the — the table is in the note above the shapes). The fix is a
+  // closed class excluded BY RULE (FUNCTION_WORDS); this test is what keeps that class
+  // closed and keeps the cliff visible: it measures the shapes' footprint on ordinary
+  // English WRITTEN HERE rather than read off the corpus, and asserts every word the
+  // pre-rule capture reaches there (and across the real docs tree) is excluded. So the next
+  // widening of BARE_NAME, or the deletion of a class member, reddens HERE instead of
+  // silently moving the cliff.
+
+  // The PRE-RULE spellings — the loose shapes exactly as this file shipped them before the
+  // rule, built from the SAME BARE_NAME the guard uses. This is what makes the measurement
+  // a measurement: it captures the words the class has to hold off, wherever BARE_NAME is
+  // moved to. (If BARE_NAME is widened, these follow it, and the legs below see the wider
+  // capture. If they were spelled out as literals here they would measure the old shape.)
+  const UNRULED_AS = new RegExp(String.raw`\bas (?:the )?(${BARE_NAME}) tool\b`, "gi");
+  const UNRULED_COMMA = new RegExp(String.raw`\b(${BARE_NAME}),? the tool (?:that|which|for)\b`, "gi");
+  const unruledHits = (text: string) =>
+    [...text.matchAll(UNRULED_AS), ...text.matchAll(UNRULED_COMMA)].map((m) => m[1]);
+  // Mirrors what the guard itself skips, so the two cannot disagree about what "excluded"
+  // means: the class is matched case-insensitively (the shapes carry the `i` flag), the
+  // stoplist is matched as measured (exactly, the way namesClaimedAsTools does).
+  const excluded = (word: string) => FUNCTION_WORDS.has(word.toLowerCase()) || PROSE_WORDS.has(word);
+
+  // ORDINARY ENGLISH THAT IS NOT IN THE SHIPPED CORPUS — one sentence per grammatical
+  // subclass the class carries, plus the near-misses that would only be reached if the
+  // capture WIDENED (a possessive with an apostrophe, which BARE_NAME cannot spell). These
+  // are English a docs page could legitimately carry; none of them claims a tool.
+  const SLOT_PROSE = [
+    // the real shipped prose the stoplist was measured on (its registered tool name
+    // removed, so LEG 3 below is about prose and not about a true claim)
+    "the chat page says the assistant has no tool to call",
+    "it is named as the one tool of its own",
+    // articles, including the "the" the shape has to back off from
+    "described as a tool for the workspace",
+    "the reference names the page as a tool for the build",
+    "the assistant works as the tool it is told to be",
+    "the sidebar is listed as the tool to reach the settings",
+    // demonstratives
+    "it behaves as this tool does",
+    "the export works the same as that tool does",
+    "the reply is not as these tools are",
+    "the runner is not as those tools are",
+    // possessives
+    "the assistant can be used as their tool of choice",
+    "the page acts as your tool to reach the API",
+    "each workspace treats the assistant as its tool for bulk edits",
+    "the extension is documented as our tool for importing",
+    "the shortcut is listed as my tool for the inbox",
+    "the walkthrough shows it as his tool for the first draft",
+    "the template is offered as her tool for the outline",
+    // quantifiers
+    "the same as any tool on the platform",
+    "the sidebar is described as some tool for the job",
+    "the panel is advertised as each tool in the suite",
+    "the runner is offered as every tool at once",
+    "the reference names the CLI as either tool in the pair",
+    "the reference names the CLI as neither tool of the pair",
+    "the assistant is not documented as no tool at all",
+    // indefinite and wh-words
+    "the panel is described as whatever tool fits the job",
+    "the guide does not say as which tool it runs",
+    // near misses: English the capture cannot spell today — a widened BARE_NAME reaches
+    // these, and they are not in the class, so leg 2 below reddens on that widening
+    "the reply is written as the model's tool of choice",
+    "the panel is documented as a client's tool",
+    "the runner is documented as the read-only tool for the build",
+    // the second loose shape, "X, the tool that" — its slot is an appositive head, and
+    // these are the pronouns that head one in ordinary English
+    "it, the tool that answers every message, is on every page",
+    "this, the tool that writes the reply, is documented",
+    "they, the tool that answers the message, are the assistant",
+    "nothing, the tool that does it, is registered",
+  ];
+
+  // LEG 1 — the corpus has to be IN the shapes' mouth, or every assertion below passes
+  // vacuously (a corpus of sentences that the shapes never reach measures nothing).
+  const hits = SLOT_PROSE.flatMap(unruledHits);
+  assert.ok(
+    hits.length >= 20,
+    `this corpus reaches the loose slot only ${hits.length} time(s) — the sentences below ` +
+      "have drifted out of the shapes' mouth and this test would pass without measuring " +
+      "anything (re-derive the corpus against the shipped BARE_NAME)",
+  );
+
+  // LEG 2 — the class and the stoplist must exclude every word the pre-rule capture reaches
+  // on ordinary English. This is the closure the rule has against English rather than
+  // against the corpus: no word in this list was measured off a failure log, and a member
+  // deleted from FUNCTION_WORDS lands here.
+  const unexcluded = [...new Set(hits)].filter((w) => !excluded(w));
+  assert.deepEqual(
+    unexcluded,
+    [],
+    `the loose shapes reach ${JSON.stringify(unexcluded)} in ordinary English, and neither the ` +
+      "closed class (FUNCTION_WORDS) nor the measured stoplist (PROSE_WORDS) excludes them. " +
+      "Each of those is a name the docs do not claim and the registry has never had — the " +
+      "false positive card t_ceef983f measured. Either the word's grammatical class belongs " +
+      "in FUNCTION_WORDS (and the class is then closed against this corpus), or the capture " +
+      "has WIDENED past the English this corpus was measured on.",
+  );
+
+  // LEG 3 — and the guard itself must be quiet on the same sentences: excluded words are
+  // not enough if a shape still reports one of them.
+  for (const sentence of SLOT_PROSE) {
+    assert.deepEqual(
+      namesClaimedAsTools(sentence).map((c) => `${c.name} (${c.shape})`),
+      [],
+      `ordinary English is read as presenting a tool: ${JSON.stringify(sentence)} — the ` +
+        'guard\'s message ("presents … as a tool, but no such tool is registered") would be ' +
+        "about a claim nobody made",
+    );
+  }
+
+  // LEG 4 — the same measurement on the SHIPPED corpus, so the class is not closed on the
+  // sentences above while the real tree drifts the other way. Everything the pre-rule
+  // capture reaches on the docs tree is either a registered name (a true claim) or
+  // excluded; and the loose shapes must still reach a registered name there, or this leg
+  // would pass on shapes that had gone blind rather than quiet.
+  const treeHits = [...PAGES.values()].flatMap(unruledHits);
+  const realUnexcluded = [
+    ...new Set(treeHits.filter((w) => !REGISTERED.has(w) && !excluded(w))),
+  ];
+  assert.deepEqual(
+    realUnexcluded,
+    [],
+    `/docs prose reaches ${JSON.stringify(realUnexcluded)} in the loose slot and neither the ` +
+      "class nor the stoplist excludes it — the shapes now read shipped English as a claimed " +
+      "tool name (or the capture widened over the tree)",
+  );
+  assert.ok(
+    [...REGISTERED].some((n) => treeHits.includes(n)),
+    "the loose shapes reach no registered tool name anywhere in /docs — they have gone blind, " +
+      "so this leg proves nothing about what they catch on the real corpus",
+  );
+
+  // LEG 5 — the class is CLOSED, auditable by eye, and cannot hide a real tool. The same
+  // both-directions check PROSE_WORDS carries, on the rule that now does most of the work:
+  // an entry that is a registered name would make every mention of that tool invisible.
+  for (const word of FUNCTION_WORDS) {
+    assert.match(
+      word,
+      /^[a-z]+$/,
+      `the class entry ${JSON.stringify(word)} is not a plain English word — the class is a ` +
+        "grammatical closed class (determinatives and pronouns), and an identifier in it is a " +
+        "tool the guard can no longer see",
+    );
+  }
+  const classIsRegistered = [...FUNCTION_WORDS].filter((w) => REGISTERED.has(w));
+  assert.deepEqual(
+    classIsRegistered,
+    [],
+    `the class entry/entries ${JSON.stringify(classIsRegistered)} are REGISTERED MCP tool ` +
+      "names — the loose scan now ignores every doc that calls them a tool, which is the hole " +
+      "this guard exists to close (rename the tool or move the entry, do not leave both)",
+  );
+  assert.ok(
+    FUNCTION_WORDS.size <= 96,
+    `the class has grown to ${FUNCTION_WORDS.size} entries — that is past the size of the ` +
+      "closed class of English determinatives and pronouns, so it is being used as a stoplist " +
+      "again: one word per failure, re-measured against whatever corpus is in front of it",
+  );
+
+  // LEG 6 — the pattern and the declared class must AGREE, in both loose shapes, for every
+  // member. The rule is compiled into the regex from FUNCTION_WORDS, so a hand-written
+  // alternation that drifts from the set (or an entry added to the set and not to the
+  // pattern) is caught here rather than by an unexplained false positive on a docs page.
+  for (const word of FUNCTION_WORDS) {
+    assert.deepEqual(
+      unruledHits(`as ${word} tool`),
+      [word],
+      `${JSON.stringify(word)} does not reach the loose slot at all ("as X tool") — this ` +
+        "member of the class was measured against nothing, so LEG 2/4 cannot see it either",
+    );
+    for (const shape of ["as-the-tool/loose", "comma-the-tool/loose"]) {
+      assert.deepEqual(
+        namesClaimedByShape(shape, shape === "as-the-tool/loose" ? `as ${word} tool` : `${word}, the tool that`),
+        [],
+        `the ${shape} shape still claims ${JSON.stringify(word)} in its own slot — the class ` +
+          "entry is declared but not compiled into that pattern, so ordinary English reaches " +
+          "it as a claimed tool name",
+      );
+    }
+  }
+
+  // MEASURED RESIDUAL — stated, not fixed by this card, and pinned so it is a line of
+  // output rather than a surprise in someone else's red. The comma shape's slot is an
+  // appositive HEAD, and English heads an appositive with a NOUN as readily as with a
+  // pronoun, so "The chat page, the tool that answers every message, is documented." still
+  // reads as a claim on "page". It cannot be ruled out by class: the same slot is what
+  // keeps the single-word phantom ("wipeall, the tool that removes everything") catchable,
+  // and at that position a noun and a name are spelled identically — the same trade the
+  // parenthetical shape makes in the other direction (its single-word leg above). If this
+  // ever changes, re-derive it against the shipped form rather than deleting the leg.
+  const NOUN_GLOSS = "The chat page, the tool that answers every message, is documented.";
+  assert.deepEqual(
+    namesClaimedByShape("comma-the-tool/loose", NOUN_GLOSS),
+    ["page"],
+    "the comma shape's noun-headed appositive no longer reproduces its measured residual — " +
+      "either the shape was narrowed (then update WHAT IT DOES NOT COVER and delete this " +
+      "leg, with the measurement) or it was widened (then check LEG 2)",
+  );
 });
