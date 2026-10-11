@@ -292,6 +292,11 @@ state file. It asserts, as outcomes read off real runs —
   reclaim exits `0`; the same at-risk set with nothing reclaimed exits `3`; a
   removal git refuses (a locked worktree), an unreadable card, and a failed fetch
   each exit `1`; `--no-fetch` stays `0`; a `--dry-run` is never judged on progress;
+- **every branch of that contract**, not just the three above, has its own run behind
+  it (card `t_7360634f` measured four of them green against one-armed mutants): the
+  STRAY loop's refused removal (a locked stray) exits `1` with `failures=1`, the CARD
+  loop's and the STRAY loop's unresolvable HEAD each exit `1` and log a `FAIL` — never
+  a silent `KEEP` — and an unknown argument exits `2` having run nothing at all;
 - the stray-worktree loop (outside `.worktrees`, no card reference) gets the same
   correction;
 - `--dry-run` removes nothing.

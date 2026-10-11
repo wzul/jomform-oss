@@ -548,6 +548,128 @@ contains "and says why" "$OUT" "no worktrees dir at"
 run_prune --no-fetch --dry-run --min-age-hours 24 >/dev/null 2>&1
 contains "--no-fetch says the judgement is on unfetched refs" "$(cat "$LOG")" "--no-fetch"
 
+echo "--- the four remaining exit-code branches, each pinned by its own real run ---"
+# The contract at the top of the pruner names four failure conditions and one
+# bad-argument code. Three of them were pinned above (the CARD loop's refused
+# removal in 8c, an unreadable card, a failed fetch in 8d). The OTHER four were
+# live behaviour with nothing behind them, so a one-armed mutant of any one of them
+# still reported this suite green (card t_7360634f):
+#   * the CARD loop's unresolvable HEAD      -> `failures+1` -> exit 1
+#   * the STRAY loop's unresolvable HEAD     -> `failures+1` -> exit 1
+#   * the STRAY loop's refused removal       -> `failures+1` -> exit 1
+#   * an unknown argument                    -> exit 2
+# Each is pinned below the way the rest of this file pins things: an OUTCOME read
+# off a real run (exit status, the log line, and what is left on disk) — never a
+# grep of the script's source, which would pass against a branch that is present
+# but unable to change a run's result.
+
+# 9a. Bad arguments: exit 2, and NOTHING was run. The unknown argument is rejected
+#     while parsing, before main() is reached, so the empty log is what separates
+#     "refused the invocation" from "started, then fell over" — both of which a
+#     bare `rc != 0` would accept.
+: >"$LOG"
+OUT="$(run_prune --definitely-not-an-option 2>&1)"; RC=$?
+check "an unknown argument is exit 2 (a bad invocation is not a run failure)" "2" "$RC"
+contains "...and the rejection names the offending argument" "$OUT" "unknown arg: --definitely-not-an-option"
+check "...and nothing ran at all (the log is still empty)" "" "$(cat "$LOG")"
+
+# 9b. The STRAY loop's refused removal. 8c pins the same failure in the CARD loop;
+#     the stray loop carries its own copy of the branch and its own counter, and
+#     nothing pinned it. A locked stray reproduces it deterministically (git 2.43:
+#     `remove --force` cannot remove a locked tree, only `--force --force` can).
+#     No other branch can fail in this state, so `failures=1` is exact — that is
+#     what makes it an assertion about THIS branch rather than about "an exit 1
+#     happened somewhere".
+STRAY_LOCKED="$SB/strayroot/jf-locked"
+git -C "$REPO" worktree add -q --detach "$STRAY_LOCKED" "$PUSHED_SHA"
+touch -d '2020-01-01' "$STRAY_LOCKED"
+git -C "$REPO" worktree lock --reason sandbox "$STRAY_LOCKED"
+: >"$LOG"
+run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
+check "a STRAY removal that git REFUSES is exit 1" "1" "$RC"
+contains "...and the refusal is logged as a FAIL on the stray, not as a keep" \
+  "$(cat "$LOG")" "FAIL  jf-locked (could not remove stray worktree)"
+check "...the locked stray is still on disk" "yes" "$(stray_survives jf-locked)"
+contains "...and the summary counts exactly that one failure" "$(cat "$LOG")" "failures=1"
+git -C "$REPO" worktree unlock "$STRAY_LOCKED" 2>/dev/null
+check "the lock is what caused it (unlocking makes the same stray removable)" "no" \
+  "$( git -C "$REPO" worktree remove --force "$STRAY_LOCKED" >/dev/null 2>&1; [ -d "$STRAY_LOCKED" ] && echo yes || echo no )"
+
+# 9c. The STRAY loop's unresolvable HEAD. Its twin in the card loop is 9d; the stray
+#     loop reads HEAD through its own copy of the branch.
+#
+#     HOW THE HEAD IS BROKEN DECIDES WHETHER THIS BRANCH IS REACHED AT ALL, and that
+#     was measured, not assumed. The pruner's read is
+#     `head=$(git -C "$wt" rev-parse HEAD 2>/dev/null || echo "")`, so the branch
+#     fires exactly when that read yields no STDOUT — and the two candidate shapes
+#     differ in stdout, not in whether HEAD resolves:
+#       * the worktree's `.git` FILE overwritten with `ref: refs/heads/<missing>`
+#         (the shape the card measured, used here): git writes `fatal: invalid
+#         gitfile format` to stderr and NOTHING to stdout, so `head` is empty and
+#         this branch fires. The directory and every file in it are untouched, which
+#         is what makes the on-disk assertions below meaningful.
+#       * a VALID gitdir whose HEAD points at a missing branch — the shape a worktree
+#         whose branch was deleted leaves behind — does NOT reach this branch:
+#         `git rev-parse HEAD` prints the literal `HEAD` on stdout, so the run then
+#         judges the worktree by a rev belonging to the REPO rather than refusing to
+#         judge it. That is a separate defect with its own card; this assertion
+#         deliberately claims only the shape measured here.
+STRAY_NOREF="$SB/strayroot/jf-noref"
+git -C "$REPO" worktree add -q --detach "$STRAY_NOREF" "$PUSHED_SHA"
+touch -d '2020-01-01' "$STRAY_NOREF"
+printf 'ref: refs/heads/no-such-branch\n' >"$STRAY_NOREF/.git"
+# The premise, measured: the directory is still there and the pruner's OWN read of
+# its HEAD really does come back empty — otherwise the assertion below could be
+# green for a reason that has nothing to do with the branch.
+check "premise: the stray's directory exists but the pruner's read of its HEAD is empty" "yes" \
+  "$( [ -d "$STRAY_NOREF" ] && [ -z "$(git -C "$STRAY_NOREF" rev-parse HEAD 2>/dev/null)" ] && echo yes || echo no )"
+: >"$LOG"
+run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
+check "a STRAY whose HEAD cannot be resolved is exit 1" "1" "$RC"
+contains "...and it is a FAIL, not a silent keep" "$(cat "$LOG")" "FAIL  jf-noref (no HEAD"
+check "...and it is NOT reported as a KEEP (a keep would say it judged a worktree it could not read)" "0" \
+  "$(grep -c 'KEEP  jf-noref' "$LOG")"
+check "...the stray is still on disk (never act on a worktree you could not judge)" "yes" "$(stray_survives jf-noref)"
+contains "...and the summary counts exactly that one failure" "$(cat "$LOG")" "failures=1"
+# A worktree whose git link is broken cannot be removed BY GIT (the same broken read
+# makes every git command in it fail), so the sandbox is cleaned the way an operator
+# would: drop the directory and prune the stale registration. Asserted, not assumed —
+# a leftover here would red the exit-code assertions on every later run.
+rm -rf "$STRAY_NOREF"
+git -C "$REPO" worktree prune 2>/dev/null
+check "...and the sandbox is left clean (the stray is gone and no longer registered)" "yes" \
+  "$( [ ! -d "$STRAY_NOREF" ] && [ -z "$(git -C "$REPO" worktree list --porcelain | grep -F "$STRAY_NOREF")" ] && echo yes || echo no )"
+
+# 9d. The CARD loop's unresolvable HEAD. A card the script CAN read, terminal and
+#     comfortably past --min-age-hours, whose worktree's HEAD is gone: with no HEAD
+#     there is no commit to judge durability on, so the run cannot decide — and a
+#     silent KEEP there is the "the pruner quietly stopped reclaiming this worktree"
+#     shape the exit-1 contract exists for. Asserted as a FAIL AND explicitly as NOT
+#     a KEEP: the branch the card measured under its mutant logged the very same FAIL
+#     line while the run exited 0, so the log line alone pins nothing.
+NOREF_TASK="t_00000011"
+git -C "$REPO" worktree add -q --detach "$REPO/.worktrees/$NOREF_TASK" "$PUSHED_SHA"
+printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$NOREF_TASK"
+printf 'ref: refs/heads/no-such-branch\n' >"$REPO/.worktrees/$NOREF_TASK/.git"
+check "premise: the card is readable and terminal" "done" "$(sed -n '1p' "$SB/fake-hermes/$NOREF_TASK")"
+check "premise: its worktree exists but the pruner's read of its HEAD is empty" "yes" \
+  "$( [ -d "$REPO/.worktrees/$NOREF_TASK" ] && [ -z "$(git -C "$REPO/.worktrees/$NOREF_TASK" rev-parse HEAD 2>/dev/null)" ] && echo yes || echo no )"
+: >"$LOG"
+run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
+check "a readable card whose worktree HEAD cannot be resolved is exit 1" "1" "$RC"
+contains "...and says it cannot judge this worktree" \
+  "$(cat "$LOG")" "FAIL  $NOREF_TASK (cannot resolve HEAD"
+check "...and it is NOT a KEEP (the same branch reported as a silent keep is invisible to a caller)" "0" \
+  "$(grep -c "KEEP  $NOREF_TASK" "$LOG")"
+check "...the worktree is still on disk (never act on a worktree you could not judge)" "yes" "$(survives "$NOREF_TASK")"
+contains "...and the summary counts exactly that one failure" "$(cat "$LOG")" "failures=1"
+# Leave the sandbox as this section found it: a later run must not inherit a
+# worktree that can never be judged (it would red every exit-code assertion above).
+rm -rf "$REPO/.worktrees/$NOREF_TASK"
+git -C "$REPO" worktree prune 2>/dev/null
+rm -f "$SB/fake-hermes/$NOREF_TASK"
+check "...and the sandbox is left clean (the extra worktree is gone)" "no" "$(survives "$NOREF_TASK")"
+
 echo
 printf 'prune-kanban-worktrees self-test: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
