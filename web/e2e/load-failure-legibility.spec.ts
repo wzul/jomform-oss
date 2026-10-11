@@ -43,6 +43,17 @@
 //   cd web && npm run e2e
 import { test, expect, type Page } from "@playwright/test";
 
+import { signIn } from "./auth";
+
+// The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
+// without the `jf_session` cookie is redirected to /login BEFORE the page
+// renders. This spec visits one, so it declares the session it means — before
+// the gate existed an anonymous visit rendered the account shell, so this spec
+// could (and did) rely on the bug. See e2e/auth.ts.
+test.beforeEach(async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
+});
+
 // The AA floor for normal-size text, and the value these banners measured BEFORE
 // the fix. Both pinned so the guard states what it is guarding against, and a
 // re-measure of the pre-fix tree is comparable to a number rather than a memory.

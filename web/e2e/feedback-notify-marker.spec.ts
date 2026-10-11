@@ -25,6 +25,17 @@
 // Nothing here asserts on a CSS class — every rule is a property of the rendered
 // output, so a re-arrangement that re-introduced the defect would still fail it.
 import { test, expect, type Page } from "@playwright/test";
+
+import { signIn } from "./auth";
+
+// The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
+// without the `jf_session` cookie is redirected to /login BEFORE the page
+// renders. This spec visits one, so it declares the session it means — before
+// the gate existed an anonymous visit rendered the account shell, so this spec
+// could (and did) rely on the bug. See e2e/auth.ts.
+test.beforeEach(async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
+});
 import AxeBuilder from "@axe-core/playwright";
 
 // The thread the tests open. notify_failed_* present = the marker migration 000070
@@ -219,7 +230,7 @@ test.describe("admin feedback: the notification-failure marker", () => {
     // both, then assert the locale the page actually came up in.
     await page.goto("/login", { waitUntil: "domcontentloaded" });
     await page.evaluate(() => window.localStorage.clear());
-    await page.context().clearCookies();
+    await signIn(page);
 
     await stubAdmin(page);
     await page.goto("/admin", { waitUntil: "domcontentloaded" });
@@ -268,7 +279,7 @@ test.describe("admin feedback: the notification-failure marker", () => {
     // render this page in a language this test never asked for.
     await page.goto("/login", { waitUntil: "domcontentloaded" });
     await page.evaluate(() => window.localStorage.clear());
-    await page.context().clearCookies();
+    await signIn(page);
 
     await stubAdmin(page);
     await page.goto("/admin", { waitUntil: "domcontentloaded" });
@@ -330,7 +341,7 @@ test.describe("admin feedback: the notification-failure marker", () => {
   test("the marker badge is absent from a thread with no failure", async ({ page }) => {
     await page.goto("/login", { waitUntil: "domcontentloaded" });
     await page.evaluate(() => window.localStorage.clear());
-    await page.context().clearCookies();
+    await signIn(page);
 
     await stubAdmin(page);
     await page.goto("/admin", { waitUntil: "domcontentloaded" });
@@ -361,7 +372,7 @@ test.describe("admin feedback: the notification-failure marker", () => {
   }) => {
     await page.goto("/login", { waitUntil: "domcontentloaded" });
     await page.evaluate(() => window.localStorage.clear());
-    await page.context().clearCookies();
+    await signIn(page);
 
     await stubAdmin(page);
     // The retry succeeds at the queue but the thread keeps its marker: the server
@@ -404,7 +415,7 @@ test.describe("admin feedback: the notification-failure marker", () => {
   test("the failure banner and its retry control pass axe", async ({ page }) => {
     await page.goto("/login", { waitUntil: "domcontentloaded" });
     await page.evaluate(() => window.localStorage.clear());
-    await page.context().clearCookies();
+    await signIn(page);
 
     await stubAdmin(page);
     await page.goto("/admin", { waitUntil: "domcontentloaded" });
@@ -508,7 +519,7 @@ test.describe("admin feedback: the notification-failure marker", () => {
   async function openThread(page: Page, subject: RegExp) {
     await page.goto("/login", { waitUntil: "domcontentloaded" });
     await page.evaluate(() => window.localStorage.clear());
-    await page.context().clearCookies();
+    await signIn(page);
     await stubAdmin(page);
     await page.goto("/admin", { waitUntil: "domcontentloaded" });
     // The ENGLISH default, stated explicitly: a leftover jf_lang has already

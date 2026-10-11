@@ -63,6 +63,19 @@
 // uses), so the gate needs nothing but the build it is already serving.
 import { test, expect, type Locator, type Page } from "@playwright/test";
 
+import { signIn } from "./auth";
+
+// The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
+// without the `jf_session` cookie is redirected to /login BEFORE the page
+// renders. The /chat cases here are about a visitor whose bundle read
+// misbehaves, and the CONTROL case is about a DEAD session — both are states a
+// browser reaches WITH the cookie present, so the session is declared as those
+// siblings above do. "/" is not gated, so the cases that only touch it are
+// unaffected either way.
+test.beforeEach(async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
+});
+
 import { DICT } from "../src/components/i18nDict";
 
 const EN = {

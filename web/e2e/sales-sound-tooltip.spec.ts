@@ -37,6 +37,17 @@
 // the gate needs nothing but the build it is already serving — the same technique
 // e2e/a11y-switcher.spec.ts and e2e/affiliate-row.spec.ts use.
 import { test, expect, type Page } from "@playwright/test";
+
+import { signIn } from "./auth";
+
+// The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
+// without the `jf_session` cookie is redirected to /login BEFORE the page
+// renders. This spec visits one, so it declares the session it means — before
+// the gate existed an anonymous visit rendered the account shell, so this spec
+// could (and did) rely on the bug. See e2e/auth.ts.
+test.beforeEach(async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
+});
 import { DICT } from "../src/components/i18nDict";
 
 /** The two copies under test, read from the dictionary so a reword fails here. */

@@ -35,6 +35,17 @@
 // The API is stubbed at the browser level (no Go server, no session, no DB), so
 // the gate needs nothing but the build it is already serving.
 import { test, expect, type Page } from "@playwright/test";
+
+import { signIn } from "./auth";
+
+// The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
+// without the `jf_session` cookie is redirected to /login BEFORE the page
+// renders. This spec visits one, so it declares the session it means — before
+// the gate existed an anonymous visit rendered the account shell, so this spec
+// could (and did) rely on the bug. See e2e/auth.ts.
+test.beforeEach(async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
+});
 import { DICT } from "../src/components/i18nDict";
 
 // The four statuses the row renders, in source order.
@@ -173,6 +184,8 @@ for (const lang of ["en", "ms", "zh", "ta", "ar"] as const) {
         [lang],
       );
       const page = await context.newPage();
+      // A hand-made context does not inherit the config's cookie (see e2e/auth.ts).
+      await signIn(page);
       page.setDefaultTimeout(45_000);
       await stubAPI(page);
       await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "networkidle" });
@@ -268,6 +281,8 @@ test("the status chips stay under the Status label and inside max-w-xl at 1024px
     localStorage.setItem("jf_lang", "en");
   });
   const page = await context.newPage();
+  // A hand-made context does not inherit the config's cookie (see e2e/auth.ts).
+  await signIn(page);
   await stubAPI(page);
   await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "networkidle" });
   await expect(page.locator('button:text-is("Published")').first()).toBeVisible({ timeout: 45_000 });

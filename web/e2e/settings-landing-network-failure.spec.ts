@@ -36,6 +36,17 @@
 // The API is stubbed at the browser level, so the gate needs nothing but the
 // build it is already serving.
 import { test, expect, type Page } from "@playwright/test";
+
+import { signIn } from "./auth";
+
+// The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
+// without the `jf_session` cookie is redirected to /login BEFORE the page
+// renders. This spec visits one, so it declares the session it means — before
+// the gate existed an anonymous visit rendered the account shell, so this spec
+// could (and did) rely on the bug. See e2e/auth.ts.
+test.beforeEach(async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
+});
 import { DICT } from "../src/components/i18nDict";
 
 const BUNDLE = {
@@ -150,7 +161,7 @@ async function landingSave(page: Page, put: { kind: "abort" } | { kind: "status"
       localStorage.setItem("jf_lang", "en");
     } catch {}
   });
-  await page.context().clearCookies();
+  await signIn(page);
   await stubAPI(page, put);
 
   await page.goto("/settings?tab=storefront", { waitUntil: "domcontentloaded" });

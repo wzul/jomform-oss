@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { E2E_ORIGIN, E2E_PORT } from "./e2e/auth";
 
 // Accessibility scan config (issue #104). Runs axe-core against the key
 // public pages of the Next.js app. The web server is started automatically
@@ -29,8 +30,8 @@ import { defineConfig, devices } from "@playwright/test";
 //   * preflight picks a free A11Y_PORT, so a leftover cannot collide either.
 // In CI (a fresh container) the port was always free; that assumption does not
 // hold locally, which is why this knob exists.
-const PORT = Number(process.env.A11Y_PORT || 3100);
-const BASE = `http://127.0.0.1:${PORT}`;
+const PORT = E2E_PORT;
+const BASE = E2E_ORIGIN;
 
 export default defineConfig({
   testDir: "./e2e",

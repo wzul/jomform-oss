@@ -35,6 +35,17 @@
 // A guard whose subject never rendered proves nothing, so the card's presence and
 // its two field rows are asserted before anything is read.
 import { test, expect, type Page } from "@playwright/test";
+
+import { signIn } from "./auth";
+
+// The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
+// without the `jf_session` cookie is redirected to /login BEFORE the page
+// renders. This spec visits one, so it declares the session it means — before
+// the gate existed an anonymous visit rendered the account shell, so this spec
+// could (and did) rely on the bug. See e2e/auth.ts.
+test.beforeEach(async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
+});
 import { DICT, LANGS, type Lang } from "../src/components/i18nDict";
 import { sendChatPrompt } from "./chatComposer";
 

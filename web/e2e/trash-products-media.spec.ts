@@ -17,6 +17,17 @@
 // new visitor sees. The default here is asserted explicitly: en.
 import { test, expect, type Page } from "@playwright/test";
 
+import { signIn } from "./auth";
+
+// The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
+// without the `jf_session` cookie is redirected to /login BEFORE the page
+// renders. This spec visits one, so it declares the session it means — before
+// the gate existed an anonymous visit rendered the account shell, so this spec
+// could (and did) rely on the bug. See e2e/auth.ts.
+test.beforeEach(async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
+});
+
 const TRASHED_PRODUCTS = [
   { id: "p_purgeable", name: "Kopi Ais", price_sen: 650, active: true,
     deleted_at: "2026-09-25T10:00:00Z", sales_count: 0, subscription_count: 0, can_purge: true },

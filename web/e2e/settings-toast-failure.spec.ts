@@ -39,6 +39,17 @@
 // the browser can say which nodes it exposes as live regions in the accessible
 // tree a screen reader consumes — so it is measured here, before and after.
 import { test, expect, type Page } from "@playwright/test";
+
+import { signIn } from "./auth";
+
+// The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
+// without the `jf_session` cookie is redirected to /login BEFORE the page
+// renders. This spec visits one, so it declares the session it means — before
+// the gate existed an anonymous visit rendered the account shell, so this spec
+// could (and did) rely on the bug. See e2e/auth.ts.
+test.beforeEach(async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
+});
 import { DICT } from "../src/components/i18nDict";
 
 const BUNDLE = {
@@ -256,7 +267,7 @@ async function failedSaveMustPersist(page: Page, site: Site) {
       localStorage.setItem("jf_lang", "en");
     } catch {}
   });
-  await page.context().clearCookies();
+  await signIn(page);
   await stubAPI(page, 500);
 
   await page.goto(`/settings?tab=${site.tab}`, { waitUntil: "domcontentloaded" });
@@ -340,7 +351,7 @@ test("CONTROL: a SUCCESSFUL save still auto-dismisses, on success chrome", async
       localStorage.setItem("jf_lang", "en");
     } catch {}
   });
-  await page.context().clearCookies();
+  await signIn(page);
   await stubAPI(page, 200);
 
   await page.goto("/settings?tab=tracking", { waitUntil: "domcontentloaded" });
@@ -382,7 +393,7 @@ test("the toast is ONE live region — not a live region nested inside another (
       localStorage.setItem("jf_lang", "en");
     } catch {}
   });
-  await page.context().clearCookies();
+  await signIn(page);
   await stubAPI(page, 500);
 
   await page.goto("/settings?tab=tracking", { waitUntil: "domcontentloaded" });

@@ -88,6 +88,17 @@
 // The API is stubbed at the browser level (no Go server, no session, no DB), so
 // the gate needs nothing but the build it is already serving.
 import { test, expect, type Page } from "@playwright/test";
+
+import { signIn } from "./auth";
+
+// The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
+// without the `jf_session` cookie is redirected to /login BEFORE the page
+// renders. This spec visits one, so it declares the session it means — before
+// the gate existed an anonymous visit rendered the account shell, so this spec
+// could (and did) rely on the bug. See e2e/auth.ts.
+test.beforeEach(async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
+});
 import { DICT } from "../src/components/i18nDict";
 
 // Phone widths from the card, plus the 430px where the desktop layout starts to
@@ -279,6 +290,8 @@ for (const lang of LANGS) {
           [lang],
         );
         const page = await context.newPage();
+        // A hand-made context does not inherit the config's cookie (see e2e/auth.ts).
+        await signIn(page);
         page.setDefaultTimeout(45_000);
         await stubAPI(page, mode);
         await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "networkidle" });
@@ -418,6 +431,8 @@ for (const variant of MODES) {
       localStorage.setItem("jf_lang", "en");
     });
     const page = await context.newPage();
+    // A hand-made context does not inherit the config's cookie (see e2e/auth.ts).
+    await signIn(page);
     await stubAPI(page, mode);
     await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "networkidle" });
     const expectedLabels = [DICT["fs.editFields"].en, DICT[entriesLabelKey].en, DICT["bld.view"].en];
@@ -561,6 +576,8 @@ async function freshPhone(browser: import("@playwright/test").Browser, width = 3
     localStorage.setItem("jf_lang", "en");
   });
   const page = await context.newPage();
+  // A hand-made context does not inherit the config's cookie (see e2e/auth.ts).
+  await signIn(page);
   page.setDefaultTimeout(45_000);
   return { context, page };
 }

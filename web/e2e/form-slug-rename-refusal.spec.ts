@@ -15,6 +15,17 @@
 // The API is stubbed at the browser level, so this needs no Go server, session,
 // or database — only the build the gate is already serving.
 import { test, expect, type Page } from "@playwright/test";
+
+import { signIn } from "./auth";
+
+// The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
+// without the `jf_session` cookie is redirected to /login BEFORE the page
+// renders. This spec visits one, so it declares the session it means — before
+// the gate existed an anonymous visit rendered the account shell, so this spec
+// could (and did) rely on the bug. See e2e/auth.ts.
+test.beforeEach(async ({ page, baseURL }) => {
+  await signIn(page, baseURL!);
+});
 import { DICT } from "../src/components/i18nDict";
 
 const FORM_ID = "form_slug_guard";
@@ -101,7 +112,7 @@ test.describe("a refused slug rename is visible, in the merchant's language", ()
         window.localStorage.clear();
       } catch {}
     });
-    await page.context().clearCookies();
+    await signIn(page);
     await stubAPI(page, {
       status: 409,
       // The server's wire body: Malay prose + the machine code. The prose must
@@ -137,7 +148,7 @@ test.describe("a refused slug rename is visible, in the merchant's language", ()
         window.localStorage.clear();
       } catch {}
     });
-    await page.context().clearCookies();
+    await signIn(page);
     await stubAPI(page, {
       status: 400,
       body: {
@@ -169,7 +180,7 @@ test.describe("a refused slug rename is visible, in the merchant's language", ()
         window.localStorage.clear();
       } catch {}
     });
-    await page.context().clearCookies();
+    await signIn(page);
     stubAPI(page, { status: 200, body: { ok: true } });
 
     await page.goto(`/form-settings?form=${FORM_ID}`);
