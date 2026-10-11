@@ -30,6 +30,19 @@ package httpapi
 //     silently implied the deployment's RP ID was available to a host it does not
 //     own; the origin allow-list was `"https://" + r.Host`).
 //
+//   - TestPasskeyCeremonySurvivesTheProxyHop (card t_ce549b48) is the arm that
+//     was MISSING, and its absence is why v1.21.52 took passkey sign-in off prod:
+//     every test above drives the handler with the APP host as r.Host, while the
+//     product's own dashboard proxy replaces Host with the API's internal address
+//     (`api:8080`), and that request was answered 403. The arm now drives the real
+//     mux in the proxy's shape — with and without the forwarded host — and keeps
+//     the refusal arms that prove the fix widened who may ask, not what is handed
+//     out.
+//
+//   - TestPasskeyProxyForwardsTheBrowserHost pins the web half of the same
+//     contract: the proxy must actually send the browser's host, or the API has
+//     nothing true to read.
+//
 // Skipped without JOMFORM_TEST_DATABASE_URL (the challenge store is Postgres).
 
 import (
@@ -133,6 +146,68 @@ func TestPasskeyRPIdentityFollowsTheConfiguredAppBaseURL(t *testing.T) {
 			// The www rule must not trim a host that merely CONTAINS "www.".
 			name: "www inside a label", appBaseURL: "https://wwwshop.example.com", requestHost: "wwwshop.example.com",
 			wantRPID: "wwwshop.example.com", wantOrigins: []string{"https://wwwshop.example.com"},
+		},
+		{
+			// ---- card t_ce549b48: the deployment's OWN proxy hop ----
+			//
+			// This is the host the API sees for the product's own path. The
+			// dashboard's /api/* proxy dials JOMFORM_API_URL and REPLACES Host
+			// with it, so the request that runs a real browser ceremony arrives
+			// as `api:8080`. v1.21.52 refused exactly that —
+			// `POST https://jomform.com/api/auth/passkeys/login/start` answered
+			// 403 `request.forbidden` while the direct /v1/ URL kept working —
+			// because `api` is not a subdomain of jomform.com.
+			//
+			// It is the deployment's own hop, so it is accepted AS the app host:
+			// the ceremony is jomform.com's, and jomform.com is the only origin
+			// listed. The internal host must never become an origin itself —
+			// "https://api:8080" is an origin no browser can ever present.
+			name: "the deployments own proxy hop", appBaseURL: "https://jomform.com", requestHost: "api:8080",
+			wantRPID: "jomform.com", wantOrigins: []string{"https://jomform.com"},
+		},
+		{
+			// The same container under its compose/swarm name: this repo's
+			// Traefik config targets http://jomform-api-1:8080.
+			name: "the proxy hop under its compose name", appBaseURL: "https://jomform.com", requestHost: "jomform-api-1:8080",
+			wantRPID: "jomform.com", wantOrigins: []string{"https://jomform.com"},
+		},
+		{
+			// The hop is a bare label whatever it is called, and the case does
+			// not depend on how the deployment spells it.
+			name: "the proxy hop with mixed-case spelling", appBaseURL: "https://jomform.com", requestHost: "API:8080",
+			wantRPID: "jomform.com", wantOrigins: []string{"https://jomform.com"},
+		},
+		{
+			// A local dev deployment: the proxy targets http://api:8080 (the
+			// compose service name) while APP_BASE_URL names localhost, so the
+			// hop's host is not the app's host either — and the app's origin is
+			// what is listed.
+			name: "the proxy hop in local dev", appBaseURL: "http://localhost:8080", requestHost: "api:8080",
+			wantRPID: "localhost", wantOrigins: []string{"http://localhost:8080"},
+		},
+		{
+			// The hop's host is compared WITHOUT its port, so a proxy that dials
+			// the app's own name on another port (localhost:8082 is
+			// route.ts's own default) is the app-host arm rather than the
+			// internal-hop arm, and its port-preserving origin is added as it
+			// always was. Measured, not assumed: this is what the port rule in
+			// passkeyHostname/passkeyOriginFor already produced.
+			name: "the proxy hop on the app host, another port", appBaseURL: "http://localhost:8080", requestHost: "localhost:8082",
+			wantRPID: "localhost",
+			wantOrigins: []string{
+				"http://localhost:8080", "http://localhost:8082",
+			},
+		},
+		{
+			// A deployment whose proxy targets an address instead of a name.
+			name: "the proxy hop by private address", appBaseURL: "https://jomform.com", requestHost: "172.17.0.5:8080",
+			wantRPID: "jomform.com", wantOrigins: []string{"https://jomform.com"},
+		},
+		{
+			// …and the staging deployment, whose hop is the same internal name
+			// and whose ceremony must stay bound to ITS domain.
+			name: "staging proxy hop", appBaseURL: "https://" + stagingHost, requestHost: "api:8080",
+			wantRPID: stagingHost, wantOrigins: []string{"https://" + stagingHost},
 		},
 		{
 			// A suffix test without a label boundary would accept this.
@@ -302,6 +377,194 @@ func TestPasskeyCeremonyIsRefusedOffTheDeploymentsDomain(t *testing.T) {
 	}
 	if refusal.Code == "" {
 		t.Errorf("the refusal carries no machine code: %s (issue #6177)", rec.Body.String())
+	}
+}
+
+// TestPasskeyCeremonySurvivesTheProxyHop is the arm #1128's tests did not have —
+// and the one the product actually sends.
+//
+// #1128 drove the handler with the app host as r.Host (`httptest`), so the shape
+// the browser produces through the dashboard's own proxy was never exercised, and
+// it answered 403: web/src/app/api/[...path]/route.ts builds a FRESH header set
+// for its hop (Authorization, Cookie, Content-Type only) and fetches
+// JOMFORM_API_URL, so the API receives `Host: api:8080` — the deployment's own
+// internal name, not the app's domain. Measured on prod with v1.21.52:
+//
+//	POST https://jomform.com/api/auth/passkeys/login/start   -> 403 (Host: api:8080)
+//	POST https://api.jomform.com/v1/auth/passkeys/login/start -> 200 (Host: api.jomform.com)
+//
+// i.e. passkey sign-in and registration were dead for every browser, while the
+// one URL no browser uses answered correctly.
+//
+// EVERY ARM BELOW IS A REQUEST SHAPE THAT MUST KEEP WORKING, or the one shape
+// that must still be refused:
+//
+//  1. Host: api:8080 + X-Forwarded-Host: jomform.com — the fixed proxy's shape.
+//  2. Host: api:8080, no forwarded host — an api image newer than the web image
+//     (a rolling deploy, or an api-only bump). The hop is recognised for what it
+//     is, so passkey does not depend on the two images shipping together.
+//  3. Host: api:8080 + X-Forwarded-Host: www.jomform.com — the same hop for a
+//     browser on a host this deployment serves; the ceremony stays the app's.
+//  4. Host: api.jomform.com — the direct API route (Traefik, jf-api-f), which is
+//     what kept answering 200 and hid the regression. It must keep working.
+//  5. Host: api:8080 + X-Forwarded-Host: attacker.example — the forwarded host is
+//     VALIDATED, not trusted: a caller cannot smuggle a foreign origin into the
+//     ceremony by header.
+//  6. Host: attacker.example — a genuinely foreign host is still refused with no
+//     options and no key.
+//
+// 5 and 6 are the arms that keep the guard real: the fix widens WHO may ask (the
+// deployment's own proxy) without widening WHAT can be handed out (never a host
+// outside the app's domain).
+func TestPasskeyCeremonySurvivesTheProxyHop(t *testing.T) {
+	if os.Getenv("JOMFORM_TEST_DATABASE_URL") == "" {
+		t.Skip("JOMFORM_TEST_DATABASE_URL not set")
+	}
+	pool := bundleTestPool(t)
+	h := passkeyHandlers(t, pool)
+	h.Passkeys = dbstore.NewPasskeyStore(pool)
+
+	// proxyHopHost is what the API sees for a browser on passkeyOriginHost: the
+	// host JOMFORM_API_URL resolves to in the deployment (card t_ce549b48).
+	const proxyHopHost = "api:8080"
+
+	start := func(t *testing.T, host, forwarded string) *httptest.ResponseRecorder {
+		t.Helper()
+		mux := http.NewServeMux()
+		h.RegisterRoutes(mux)
+		req := httptest.NewRequest(http.MethodPost, "http://"+host+"/v1/auth/passkeys/login/start", nil)
+		if forwarded != "" {
+			req.Header.Set("X-Forwarded-Host", forwarded)
+		}
+		req.Header.Set("X-Real-IP", uniqueTestIP())
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// wantsCeremony asserts a 200 whose body really carries a ceremony bound to
+	// wantRPID — a 200 without options would pass a status-only check.
+	wantsCeremony := func(t *testing.T, host, forwarded, wantRPID string) {
+		t.Helper()
+		rec := start(t, host, forwarded)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("login/start (Host %s, X-Forwarded-Host %q) = %d (body %s), want 200 — this is the "+
+				"request shape the product sends: a browser goes to /api/auth/passkeys/login/start, and the "+
+				"dashboard proxy forwards it to the API with its own Host. A 403 here is passkey sign-in and "+
+				"registration dead for every user (v1.21.52 on prod).",
+				host, forwarded, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Key     string `json:"key"`
+			Options struct {
+				PublicKey struct {
+					RPID      string `json:"rpId"`
+					Challenge string `json:"challenge"`
+				} `json:"publicKey"`
+			} `json:"options"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode login/start body (Host %s, X-Forwarded-Host %q): %v (%s)", host, forwarded, err, rec.Body.String())
+		}
+		if body.Key == "" || body.Options.PublicKey.Challenge == "" {
+			t.Fatalf("login/start (Host %s, X-Forwarded-Host %q) answered 200 without a usable ceremony: %s",
+				host, forwarded, rec.Body.String())
+		}
+		if body.Options.PublicKey.RPID != wantRPID {
+			t.Errorf("login/start (Host %s, X-Forwarded-Host %q) returned rpId %q, want %q — the ceremony "+
+				"reaching the browser must be the DEPLOYMENT's, whichever host the internal hop used",
+				host, forwarded, body.Options.PublicKey.RPID, wantRPID)
+		}
+		// The internal host must never reach the wire as an RP ID: "api" is not a
+		// domain any page can be on.
+		if body.Options.PublicKey.RPID == "api" {
+			t.Errorf("the ceremony is bound to the proxy hop's own name (%q) — no browser origin can be "+
+				"on it, so every ceremony would fail", body.Options.PublicKey.RPID)
+		}
+	}
+
+	// wantsRefusal asserts 403 AND that nothing ceremony-shaped came back.
+	wantsRefusal := func(t *testing.T, host, forwarded string) {
+		t.Helper()
+		rec := start(t, host, forwarded)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("login/start (Host %s, X-Forwarded-Host %q) = %d (body %s), want 403 — a passkey "+
+				"ceremony must not be offered at an origin the deployment does not own",
+				host, forwarded, rec.Code, rec.Body.String())
+		}
+		var refusal struct {
+			Code      string          `json:"code"`
+			Options   json.RawMessage `json:"options"`
+			Key       string          `json:"key"`
+			Challenge json.RawMessage `json:"challenge"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &refusal); err != nil {
+			t.Fatalf("decode refusal body: %v (%s)", err, rec.Body.String())
+		}
+		if refusal.Options != nil || refusal.Key != "" || refusal.Challenge != nil {
+			t.Errorf("the refusal for (Host %s, X-Forwarded-Host %q) still carries ceremony material "+
+				"(options=%s key=%q challenge=%s)", host, forwarded, refusal.Options, refusal.Key, refusal.Challenge)
+		}
+	}
+
+	t.Run("proxy hop forwarding the browser host", func(t *testing.T) {
+		wantsCeremony(t, proxyHopHost, passkeyOriginHost, passkeyOriginHost)
+	})
+	t.Run("proxy hop with no forwarded host (api-only deploy)", func(t *testing.T) {
+		wantsCeremony(t, proxyHopHost, "", passkeyOriginHost)
+	})
+	t.Run("proxy hop for a browser on www", func(t *testing.T) {
+		wantsCeremony(t, proxyHopHost, "www."+passkeyOriginHost, passkeyOriginHost)
+	})
+	t.Run("the direct API route", func(t *testing.T) {
+		wantsCeremony(t, "api."+passkeyOriginHost, "", passkeyOriginHost)
+	})
+	t.Run("forwarded host cannot smuggle a foreign origin", func(t *testing.T) {
+		wantsRefusal(t, proxyHopHost, "attacker.example")
+	})
+	t.Run("a foreign host is still refused", func(t *testing.T) {
+		wantsRefusal(t, "attacker.example", "")
+	})
+}
+
+// The test below is the OTHER half of this card: the proxy that dropped the
+// browser's host must carry it, or the ceremony loses the origin it really runs
+// on (a browser on www.jomform.com would be handed an origin allow-list without
+// https://www.jomform.com). node --test cannot load route.ts (Next imports), so
+// the file is read as TEXT — the cross-language seam this package already works
+// under, and the shape web/src/lib/passkeyProxyHost.test.ts mirrors in web/.
+//
+// A source-level pin is the only thing that can catch this half: the Go suite
+// cannot import the proxy, and no unit test of the API can see a header the proxy
+// never sends. The bug that made this card necessary lived in exactly this gap.
+func TestPasskeyProxyForwardsTheBrowserHost(t *testing.T) {
+	route := webSource(t, "src/app/api/[...path]/route.ts")
+
+	if !strings.Contains(route, `headers.set("X-Forwarded-Host", browserHost)`) {
+		t.Errorf("web/src/app/api/[...path]/route.ts no longer sends the browser's host to the API as " +
+			"X-Forwarded-Host — the proxy replaces Host with JOMFORM_API_URL, so without this header the API " +
+			"cannot know the browser's origin (this is the shape that made v1.21.52 answer 403 to the " +
+			"product's own /api/auth/passkeys/login/start)")
+	}
+
+	// The value must come from the connection's own Host first: `host` is set by
+	// the client and rewritten by nobody until the proxy, while a forwarded value
+	// is caller-supplied and only worth falling back to.
+	hostIdx := strings.Index(route, `req.headers.get("host")`)
+	fwdIdx := strings.Index(route, `req.headers.get("x-forwarded-host")`)
+	if hostIdx < 0 {
+		t.Errorf("web/src/app/api/[...path]/route.ts no longer reads req.headers.get(\"host\") — the browser's " +
+			"host is the value the API must be told")
+	} else if fwdIdx >= 0 && fwdIdx < hostIdx {
+		t.Errorf("web/src/app/api/[...path]/route.ts prefers a caller-supplied X-Forwarded-Host over the " +
+			"connection's own Host header")
+	}
+
+	// And the path that carries passkeys through it must be the one that proxies at
+	// all: if the catch-all route is deleted the assertion above becomes vacuous.
+	if !strings.Contains(route, "/v1") {
+		t.Errorf("web/src/app/api/[...path]/route.ts no longer targets the API's /v1 namespace — this guard " +
+			"is reading a file that no longer proxies anything")
 	}
 }
 

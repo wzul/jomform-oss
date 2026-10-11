@@ -155,6 +155,36 @@ type passkeyRelyingParty struct {
 // own configuration is broken) — two conditions that look alike from here.
 var errPasskeyOriginOutsideApp = errors.New("passkey tidak tersedia pada hos ini (bukan domain aplikasi)")
 
+// passkeyBrowserHost returns the host the BROWSER is on for this request.
+//
+// WHY THIS IS NOT r.Host. The dashboard's own /api/* proxy
+// (web/src/app/api/[...path]/route.ts) builds a FRESH header set for its hop to
+// the API, so the request the API receives carries the proxy's own target as
+// `Host` — `api:8080` in the deployment (JOMFORM_API_URL) — and the browser's
+// host is gone. Gating the ceremony on r.Host therefore refused the PRODUCT'S
+// OWN passkey endpoints: v1.21.52 answered 403 `request.forbidden` to
+// POST https://jomform.com/api/auth/passkeys/login/start, the path
+// web/src/app/{login,profile}/page.tsx actually call,
+// while https://jomform.com/v1/auth/passkeys/login/start — direct to the API,
+// the URL no browser uses — kept working and hid the regression. The proxy now
+// forwards the browser's host as X-Forwarded-Host, and that is the value the
+// origin guard is applied to.
+//
+// The forwarded value is not trusted on its own: passkeyRPIdentity still
+// requires it to be the app's own domain or a subdomain of it, so a caller can
+// only ever select among the hosts this deployment already serves. The RP ID and
+// the base origin come from APP_BASE_URL either way — a forged header cannot
+// move the ceremony off the deployment's own domain.
+func passkeyBrowserHost(r *http.Request) string {
+	if v := r.Header.Get("X-Forwarded-Host"); v != "" {
+		// A proxy chain may append; the left-most value is the original host.
+		if h := strings.TrimSpace(strings.Split(v, ",")[0]); h != "" {
+			return h
+		}
+	}
+	return r.Host
+}
+
 // passkeyRPIdentity derives the RP ID and the accepted origins from the app's
 // configured base URL (APP_BASE_URL) and the host the request arrived on.
 //
@@ -181,17 +211,21 @@ var errPasskeyOriginOutsideApp = errors.New("passkey tidak tersedia pada hos ini
 // suffix that broad would scope the credentials to every unrelated service on
 // that host.
 //
-// WHY THE REQUEST HOST IS READ, AND ONLY AS A REFUSAL. The accepted origins must
-// cover the host the browser is actually on, because the session is shared
-// across the app's subdomains (SharedCookieDomain) and the dashboard — hence the
-// ceremony — can run on mcp.jomform.com as well as jomform.com. Listing the
-// request's own origin is what keeps that working, but it MUST be gated: the
-// pre-fix code appended "https://" + r.Host unconditionally, so the origin
-// allow-list was whatever a caller put in the Host header, and the only thing
-// standing between a foreign origin and a ceremony was the browser's own
-// SecurityError. A host outside the app's domain is refused here instead, on a
-// LABEL boundary — "eviljomform.com" and "jomform.com.evil.example" are both
-// refused, not just a host with an unrelated top-level domain.
+// WHY THE REQUEST HOST IS READ, AND ONLY AS A REFUSAL OR AN INTERNAL HOP. The
+// accepted origins must cover the host the browser is actually on, because the
+// session is shared across the app's subdomains (SharedCookieDomain) and the
+// dashboard — hence the ceremony — can run on mcp.jomform.com as well as
+// jomform.com. Listing the request's own origin is what keeps that working, but
+// it MUST be gated: the pre-fix code appended "https://" + r.Host
+// unconditionally, so the origin allow-list was whatever a caller put in the Host
+// header, and the only thing standing between a foreign origin and a ceremony
+// was the browser's own SecurityError. A host outside the app's domain is
+// refused here instead, on a LABEL boundary — "eviljomform.com" and
+// "jomform.com.evil.example" are both refused, not just a host with an unrelated
+// top-level domain. The one host that is accepted without being in the app's
+// domain is the deployment's own proxy hop, and it is accepted as the APP host
+// (never as itself): its own origin is never added to RPOrigins. See
+// passkeyInternalHopHost.
 func passkeyRPIdentity(appBaseURL, requestHost string) (passkeyRelyingParty, error) {
 	u, err := url.Parse(strings.TrimSpace(appBaseURL))
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
@@ -212,22 +246,74 @@ func passkeyRPIdentity(appBaseURL, requestHost string) (passkeyRelyingParty, err
 	appHost = strings.TrimPrefix(appHost, "www.")
 
 	reqHost := passkeyHostname(requestHost)
-	if reqHost == "" || (reqHost != appHost && !strings.HasSuffix(reqHost, "."+appHost)) {
+	switch {
+	case reqHost != "" && (reqHost == appHost || strings.HasSuffix(reqHost, "."+appHost)):
+		// An origin is scheme + host, and the scheme comes from the CONFIGURED
+		// base URL rather than off the request: TLS ends at the reverse proxy in
+		// front of the API, so r.TLS is nil and the request itself is plain HTTP
+		// even when the browser's origin is https. The request's own host is
+		// added as a second origin so a ceremony on a subdomain is accepted with
+		// the origin it really has — the port included, since RPOrigins matches
+		// an origin exactly.
+		appOrigin := passkeyOriginFor(u.Scheme, u.Host)
+		origins := []string{appOrigin}
+		if reqOrigin := passkeyOriginFor(u.Scheme, requestHost); reqOrigin != appOrigin {
+			origins = append(origins, reqOrigin)
+		}
+		return passkeyRelyingParty{rpID: appHost, origins: origins}, nil
+	case passkeyInternalHopHost(reqHost):
+		// THE PROXY HOP. The deployment's own web proxy dials the API on an
+		// internal name (JOMFORM_API_URL = http://api:8080), so this request IS
+		// the app's — and it is treated as the app host, not as its own origin:
+		// the ceremony handed back is the app's, RP ID and RPOrigins both derived
+		// from APP_BASE_URL. Adding the internal host as an origin instead would
+		// put "https://api:8080" in RPOrigins, which no browser origin can ever
+		// match, and would refuse the app's own host — the v1.21.52 regression.
+		return passkeyRelyingParty{rpID: appHost, origins: []string{passkeyOriginFor(u.Scheme, u.Host)}}, nil
+	default:
 		return passkeyRelyingParty{}, errPasskeyOriginOutsideApp
 	}
+}
 
-	// An origin is scheme + host, and the scheme comes from the CONFIGURED base
-	// URL rather than off the request: TLS ends at the reverse proxy in front of
-	// the API, so r.TLS is nil and the request itself is plain HTTP even when the
-	// browser's origin is https. The request's own host is added as a second
-	// origin so a ceremony on a subdomain is accepted with the origin it really
-	// has — the port included, since RPOrigins matches an origin exactly.
-	appOrigin := passkeyOriginFor(u.Scheme, u.Host)
-	origins := []string{appOrigin}
-	if reqOrigin := passkeyOriginFor(u.Scheme, requestHost); reqOrigin != appOrigin {
-		origins = append(origins, reqOrigin)
+// passkeyInternalHopHost reports whether host (already port-stripped and
+// lower-cased by passkeyHostname) is an address the deployment's own web proxy
+// dials the API on — a name a BROWSER origin can never be.
+//
+// WHAT QUALIFIES, and why each is safe to read as "this deployment":
+//
+//   - a bare label with no dot: "api" (the deployment in this repo's compose),
+//     "jomform-api-1" (the same container under its compose/swarm name), "web".
+//     A single-label name cannot be a public DNS name, so no page can ever have
+//     an origin on one, and the browser path is what this guard is about.
+//   - loopback / RFC1918 private / link-local / unspecified IP literals: the
+//     same case for a deployment configured with an address instead of a name
+//     (http://172.17.0.5:8080).
+//
+// WHAT DOES NOT QUALIFY: anything carrying a dot that is not the app's own
+// domain — "eviljomform.com", "jomform.com.evil.example", "attacker.example".
+// The refusal this guard exists for is unchanged.
+//
+// THE TRADE-OFF, stated because it is deliberate. Admitting such a host does NOT
+// admit its origin: the internal-hop arm above returns the APP's ceremony, so a
+// caller who reaches the API with `Host: api` is handed options for
+// https://jomform.com — an RP ID its own page can never use, because the browser
+// raises a SecurityError for any RP ID that is not equal to (or a registrable
+// domain suffix of) the page's own origin. Nothing foreign enters RPOrigins.
+// The alternative — recognising the hop only by a header the proxy sets — leaves
+// the endpoint refusing the product's own path whenever the api image and the
+// web image are not the same revision (a rolling deploy, or an api-only bump),
+// which is precisely how v1.21.52 took passkey sign-in off prod.
+func passkeyInternalHopHost(host string) bool {
+	if host == "" {
+		return false
 	}
-	return passkeyRelyingParty{rpID: appHost, origins: origins}, nil
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
+	}
+	return !strings.Contains(host, ".")
 }
 
 // passkeyOriginFor serialises scheme + host as an origin: the host lower-cased
@@ -257,11 +343,12 @@ func passkeyHostname(host string) string {
 }
 
 // webAuthnInstance builds the WebAuthn config for the deployment the request
-// arrived at. It returns errPasskeyOriginOutsideApp when the request's host is
-// not the app's domain, and a wrapped error when APP_BASE_URL cannot supply the
-// RP ID (an IP address is not a valid RP ID — protocol.ValidateRPID).
+// arrived at. It returns errPasskeyOriginOutsideApp when the request did not
+// come from the app's domain (or from the deployment's own proxy hop — see
+// passkeyInternalHopHost), and a wrapped error when APP_BASE_URL cannot supply
+// the RP ID (an IP address is not a valid RP ID — protocol.ValidateRPID).
 func (h *RESTHandlers) webAuthnInstance(r *http.Request) (*webauthn.WebAuthn, error) {
-	rp, err := passkeyRPIdentity(h.BaseURL, r.Host)
+	rp, err := passkeyRPIdentity(h.BaseURL, passkeyBrowserHost(r))
 	if err != nil {
 		return nil, err
 	}

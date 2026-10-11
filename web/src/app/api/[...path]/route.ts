@@ -18,6 +18,22 @@ async function proxy(req: NextRequest) {
   const cookie = req.headers.get("cookie");
   if (cookie) headers.set("Cookie", cookie);
 
+  // Forward the BROWSER's host. This proxy replaces Host with the API's own
+  // address (JOMFORM_API_URL, e.g. http://api:8080), and the Go API derives the
+  // passkey (WebAuthn) relying party from the request host — reading Host here
+  // refused the product's own endpoints (/api/auth/passkeys/{login,register}/start
+  // answered 403 for a browser on jomform.com, since the API saw `api:8080`).
+  // The API validates this value against the app's own domain either way, so it
+  // can only ever select among the hosts this deployment already serves.
+  // `host` is the name the client connected to (the browser sets it and Traefik
+  // forwards it unchanged); the forwarded variant is only a fallback for a chain
+  // that has already rewritten it.
+  const browserHost =
+    req.headers.get("host") ||
+    req.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
+    new URL(req.url).host;
+  if (browserHost) headers.set("X-Forwarded-Host", browserHost);
+
   const init: RequestInit = { method: req.method, headers };
   if (req.method !== "GET" && req.method !== "HEAD") {
     init.body = await req.arrayBuffer();
