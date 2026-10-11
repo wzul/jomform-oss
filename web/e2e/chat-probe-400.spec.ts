@@ -32,12 +32,21 @@
 // pre-fix shape), AND the composer is still offered. A revert to the pre-fix
 // branch fails the second and third assertions.
 //
+// THE THIRD ARM (card t_57a77d02) is the RENDER half of the same probe, one lane
+// over: a failure neither tenancy branch claims must render the sentence runLoad
+// built from the server's machine `code` (lib/apiErr, #6177) instead of the
+// page's generic chat.unavailable. The shipped page computed that sentence and
+// discarded it, which made the whole translation inert; the arm stubs a 500
+// carrying a code the dashboard can translate and asserts the translated
+// sentence in the alert, the generic line absent, and the server's prose absent.
+//
 // Run with:
 //
 //   npm run a11y                       # the whole gate (this file included)
 //   npx playwright test e2e/chat-probe-400.spec.ts    # this file alone
 import { test, expect, type Page } from "@playwright/test";
 import { DICT } from "../src/components/i18nDict";
+import { API_ERROR_KEYS } from "../src/lib/apiErr";
 
 const EN = {
   scopeRequired: DICT["chat.scopeRequired"].en,
@@ -46,6 +55,19 @@ const EN = {
   title: DICT["chat.title"].en,
   placeholder: DICT["chat.placeholder"].en,
 };
+
+/**
+ * A machine code the dashboard CAN translate, and the sentence it maps to — read
+ * out of the app's own dictionary rather than typed in, so a copyedit moves this
+ * test with the page instead of breaking it. The code is the Go constant
+ * `CodeWorkspaceNotFound` (api/internal/httpapi/errcode.go); its cross-language
+ * pin is the sibling `stale-workspace-slug.spec.ts`, which reads that constant
+ * out of the Go source.
+ */
+const NAMED_CODE = "workspace.notFound";
+const NAMED_SENTENCE = DICT["apiErr.workspaceNotFound"].en;
+/** The server's own prose for the refusal — it must never reach the screen. */
+const SERVER_PROSE = "skop workspace diperlukan — pilih workspace dahulu";
 
 /** The two-workspace session: the probe must not guess between them. */
 const BUNDLE = {
@@ -73,7 +95,11 @@ const BUNDLE = {
  * shares the path), and its request URL is recorded so the test can assert the
  * shape it believes it reproduced.
  */
-async function stubProbe(page: Page, probeStatus: number): Promise<string[]> {
+async function stubProbe(
+  page: Page,
+  probeStatus: number,
+  probeCode = "request.badRequest",
+): Promise<string[]> {
   const json = (body: unknown) => ({
     status: 200,
     contentType: "application/json",
@@ -95,8 +121,8 @@ async function stubProbe(page: Page, probeStatus: number): Promise<string[]> {
       status: probeStatus,
       contentType: "application/json",
       body: JSON.stringify({
-        error: "skop workspace diperlukan — pilih workspace dahulu",
-        code: "request.badRequest",
+        error: SERVER_PROSE,
+        code: probeCode,
       }),
     });
   });
@@ -240,5 +266,64 @@ test.describe("chat availability probe: a scope refusal is not 'unavailable'", (
       "a 5xx is not a scope refusal — the scope copy must not appear",
     ).toHaveCount(0);
     await expect(page.locator("#chat-input"), "a dead assistant must not offer the box").toBeDisabled();
+  });
+
+  test("a NAMED machine code on the probe renders its translated sentence, not the generic line", async ({
+    page,
+    baseURL,
+  }) => {
+    // THE SECOND SUBJECT OF THIS FILE (t_57a77d02): THE RENDER, not the branch.
+    // The probe's failure path computes a message from the server's machine
+    // `code` through lib/apiErr (#6177) — and the shipped page threw it away.
+    // `setErr` is the only writer of the alert, `r.error` is errorKey's only
+    // consumer, and the render was the page's own `t("chat.unavailable")`, so a
+    // refusal the server named precisely was reported as "the assistant is not
+    // available" — false of it — and dropping the option changed nothing a user
+    // sees. Measured on the pre-fix build, this stub renders the generic line in
+    // `role=log` with NO alert at all.
+    //
+    // WHY THE STATUS IS A 500 RATHER THAN THE REFUSAL'S OWN 400/403. On this
+    // route the page's two tenancy branches answer FIRST, by STATUS: a 400 is
+    // the ambiguous-scope refusal, a 403 carrying `workspace.notFound` is the
+    // foreign-slug refusal, and both render the scope copy on purpose
+    // (t_997bb646 / t_da4b2031 — the two arms above, whose assertions this arm
+    // must not weaken). What this arm owns is the REMAINING lane: a failure
+    // those branches do not claim must still render the sentence runLoad
+    // computed for it. So the stub names a code the dashboard CAN translate on a
+    // status the page's branches do not claim — precisely the case the discard
+    // made impossible to observe.
+    expect(
+      API_ERROR_KEYS[NAMED_CODE],
+      `the stub's code (${NAMED_CODE}) is not in the dashboard's apiErr map, so this arm would be ` +
+        `measuring the unknown-code fallback and would prove nothing about the translation`,
+    ).toBeTruthy();
+
+    await stubProbe(page, 500, NAMED_CODE);
+    await freshState(page);
+    await page.goto(`${baseURL}/chat`, { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: EN.title })).toBeVisible({ timeout: 15_000 });
+
+    // THE FIX: the sentence the named code translates to, in the page's alert.
+    await expect(page.locator('p[role="alert"]')).toHaveText(NAMED_SENTENCE, { timeout: 15_000 });
+
+    // Quoted evidence: the live DOM, not what the test expects to find.
+    console.log(
+      `PROBE-NAMED-CODE OBSERVED: alert=${JSON.stringify(await page.locator('p[role="alert"]').innerText())} ` +
+        `log=${JSON.stringify(await page.locator('[role="log"]').innerText())} ` +
+        `composerDisabled=${await page.locator("#chat-input").isDisabled()} ` +
+        `genericLinePresent=${(await page.getByText(EN.unavailable, { exact: true }).count()) > 0}`,
+    );
+
+    // And NOT the generic claim (false of a workspace refusal) and NOT the
+    // server's prose (Malay, whatever language the visitor reads — #6177).
+    await expect(
+      page.getByText(EN.unavailable, { exact: true }),
+      `a named code must not be reported as "${EN.unavailable}" — the assistant is available, and ` +
+        `the sentence the server's code translates to is the one the merchant can act on`,
+    ).toHaveCount(0);
+    await expect(
+      page.getByText(SERVER_PROSE, { exact: false }),
+      "the server's own prose reached the screen — the dashboard renders the machine code's sentence",
+    ).toHaveCount(0);
   });
 });

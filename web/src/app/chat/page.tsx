@@ -39,6 +39,15 @@
 //      confirming the card edits it. A merchant with two workspaces would be shown
 //      a card for the account they are not looking at.
 //
+//   6. A REFUSED probe says WHY, in the visitor's language. The availability
+//      fetch hands runLoad the server's machine `code` through lib/apiErr
+//      (#6177), and the sentence that translation produced is what the page's
+//      alert renders. It used to be computed and then thrown away — the failure
+//      branch returned without reading `r.error`, so a refused workspace read as
+//      the generic "the assistant is not available right now" and the whole
+//      translation was inert (t_57a77d02). `r.error` is errorKey's ONLY consumer;
+//      nothing else in this file reads it.
+//
 // The history it sends is the transcript the user can see, capped to the last
 // MAX_HISTORY turns. The server re-caps and drops any client-forged system/tool
 // turn, so the wire shape here is a convenience, not a trust boundary.
@@ -207,7 +216,25 @@ export default function ChatPage() {
           setErr(t("chat.scopeRequired"));
           return;
         }
+        // EVERYTHING ELSE is a genuine failure, and the sentence runLoad
+        // computed for it is what the page renders — in the alert slot, which is
+        // `r.error`'s ONLY consumer. `r.error` is the translated machine code
+        // when the server named one it could translate, and the generic
+        // `t("chat.unavailable")` when it could not (runLoad's own `|| fallback`
+        // contract), so both states are one call and the server's prose is never
+        // reachable. Discarding it here is what made the whole #6177 translation
+        // inert on this page: a refused workspace rendered the generic "the
+        // assistant is not available right now" — false, the assistant IS
+        // available and the workspace is simply not the caller's — with an empty
+        // alert, and dropping the `errorKey` option changed nothing a user sees
+        // (measured in a browser, t_57a77d02).
+        //
+        // The transcript's own generic line stands down for it (`!err` in the
+        // render below) rather than printing the same sentence a second time one
+        // region over, exactly as the scope path above refuses to report a false
+        // "not available" for a condition the user can fix (t_997bb646).
         setAvailable(false);
+        setErr(r.error);
         return;
       }
       // The probe succeeded, so any scope message from THIS probe is resolved:
@@ -498,7 +525,14 @@ export default function ChatPage() {
             role="log"
             aria-live="polite"
           >
-            {available === false && (
+            {/* The unavailable STATE (a deployment that cannot answer) — and
+                only when the alert is not already carrying the reason for a
+                FAILURE. A failure's sentence is rendered once, by the page's
+                single role="alert": an unknown/absent machine code reaches that
+                slot as this same chat.unavailable string, and a named one
+                reaches it translated, so this line would otherwise print the
+                identical sentence a second time one region over. */}
+            {available === false && !err && (
               <p className="text-sm text-[var(--jf-muted)]">{t("chat.unavailable")}</p>
             )}
             {available !== false && msgs.length === 0 && (

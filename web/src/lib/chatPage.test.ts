@@ -2015,6 +2015,91 @@ test("every runLoad call site that translates an API code routes through lib/api
   );
 });
 
+// ── THE RENDER HALF: the message was computed and DISCARDED ──────────────────
+//
+// WHAT BROKE (t_57a77d02 — measured in a browser, by driving the built page, not
+// by reading it). The test above pins the OPTION. Nothing pinned what happens to
+// the message the option produces, and the availability probe computed it and
+// threw it away: `setErr` is the ONLY writer of the page's alert, and `r.error`
+// is errorKey's ONLY consumer. Both were true of the shipped page, and together
+// they made the option INERT — a page that keeps `errorKey` and drops `r.error`
+// passed every assertion in this file.
+//
+// The consequence is a FALSE statement, not merely a less precise one: a refused
+// workspace closed the box and the user read "The assistant is not available
+// right now." while the sentence they could act on ("That workspace was not
+// found, or it is not one you have access to.") was computed and discarded. The
+// browser arm is e2e/chat-probe-400.spec.ts's named-code test; this guard is the
+// cheap one that fails the moment the discard comes back.
+test("the availability fetch's translated message is RENDERED, not computed and dropped", () => {
+  const pageCode = codeOnly(page);
+
+  // 1. The branch the message is built in must hand it to the alert's state.
+  //    Located by the same two sites the scope test above slices between, so an
+  //    edit above the probe cannot move this guard onto another call.
+  const probeAt = pageCode.indexOf("const r = await runLoad(");
+  assert.ok(
+    probeAt !== -1,
+    "app/chat/page.tsx no longer reads availability through runLoad — this guard cannot judge " +
+      "the probe's failure branch and refuses to guess",
+  );
+  const branchFrom = pageCode.indexOf("if (!r.ok) {", probeAt);
+  const branchEnd = pageCode.indexOf("setAvailable(r.data.available", branchFrom);
+  assert.ok(
+    branchFrom !== -1 && branchEnd > branchFrom,
+    "could not delimit the availability probe's !r.ok branch — this guard refuses to slice a " +
+      "branch it cannot bound",
+  );
+  const branch = pageCode.slice(branchFrom, branchEnd);
+  assert.match(
+    branch,
+    /setErr\(\s*r\.error\s*\)/,
+    `the availability probe's failure branch never reads r.error — the message runLoad built from ` +
+      `the server's machine code (lib/apiErr, #6177) is computed and discarded, so every refusal ` +
+      `renders the page's generic chat.unavailable instead of the reason. Branch was:\n${branch}`,
+  );
+
+  // 2. And the render must not print that sentence twice: the transcript's own
+  //    generic line stands down while the alert carries the reason. Both states
+  //    land in the alert (an unknown/absent code reaches it as this same
+  //    chat.unavailable string, a named one translated), so an unconditional
+  //    line here would duplicate the sentence one region over — which is a
+  //    measured break, not a style point: the 5xx arm of
+  //    e2e/chat-probe-400.spec.ts reads chat.unavailable by text and a second
+  //    copy makes that locator ambiguous.
+  const renderAt = pageCode.indexOf("{available === false &&");
+  const renderEnd = pageCode.indexOf("msgs.length === 0", renderAt);
+  assert.ok(
+    renderAt !== -1 && renderEnd > renderAt,
+    "could not delimit the transcript's unavailable line — this guard refuses to slice JSX it " +
+      "cannot bound",
+  );
+  const render = pageCode.slice(renderAt, renderEnd);
+  assert.match(
+    render,
+    /t\("chat\.unavailable"\)/,
+    "the unavailable state no longer has a message of its own",
+  );
+  const condition = pageCode.slice(renderAt, pageCode.indexOf("<p", renderAt));
+  assert.match(
+    condition,
+    /\berr\b/,
+    `the transcript's generic line is rendered on \`available === false\` alone, so a failure's ` +
+      `own sentence (the alert, set from r.error) is printed alongside it — the same words twice, ` +
+      `and the generic claim stays on screen for a condition it is false of. Condition was:\n${condition}`,
+  );
+
+  // 3. The alert is the slot that sentence is rendered in — the one place
+  //    r.error has ever been able to reach, and therefore the half a fix has to
+  //    keep wired.
+  assert.match(
+    pageCode,
+    /\{err && \(\s*<p role="alert"/,
+    "the page no longer renders `err` in its role=\"alert\" — the availability probe's message " +
+      "would have no consumer again, which is the defect this guard exists for",
+  );
+});
+
 test("the nav entry and the page exist together, and the docs page is reachable", () => {
   assert.ok(
     shell.includes('href: "/chat"'),
