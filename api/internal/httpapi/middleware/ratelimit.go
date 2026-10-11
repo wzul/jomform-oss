@@ -2,7 +2,6 @@
 package middleware
 
 import (
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -66,25 +65,6 @@ func (l *RateLimiter) Allow(key string) bool {
 	return true
 }
 
-// ClientIP returns the best client IP from the request: CF-Connecting-IP when
-// present (set by the Cloudflare edge, cannot be spoofed behind it), else
-// X-Real-IP (client-suppliable, only used for direct/internal traffic), else
-// the socket peer. Shared by rate limiting and login-failure keying.
-func ClientIP(r *http.Request) string {
-	ip := r.Header.Get("CF-Connecting-IP")
-	if ip == "" {
-		ip = r.Header.Get("X-Real-IP")
-	}
-	if ip == "" {
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			ip = host
-		} else {
-			ip = r.RemoteAddr
-		}
-	}
-	return ip
-}
-
 // RateLimitBurst is the per-IP CAPACITY of RateLimit's bucket. Exported so a test
 // that must DRAIN a bucket before measuring throttle behaviour does not duplicate
 // the number (card t_80c62c1c); see RateLimit for what the pair means.
@@ -93,7 +73,9 @@ const RateLimitBurst = 10
 // RateLimitRate is RateLimit's refill, in tokens per second.
 const RateLimitRate = 1
 
-// RateLimit limits per client IP: rate 1/sec, burst 10 (spam guard).
+// RateLimit limits per client IP (middleware.ClientIP — see clientip.go for how
+// that address is resolved and why a caller cannot choose it): rate 1/sec,
+// burst 10 (spam guard).
 func RateLimit(next http.Handler) http.Handler {
 	return RateLimitWith(RateLimitRate, RateLimitBurst)(next)
 }

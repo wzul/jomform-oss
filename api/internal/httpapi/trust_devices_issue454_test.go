@@ -42,7 +42,7 @@ func loginOnceUA(t *testing.T, h *AuthHandlers, email, password, totpCode string
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login", strings.NewReader(string(mustJSON(body))))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Real-IP", testIP(t))
+	setTestClientAddr(req, testIP(t))
 	if ua != "" {
 		req.Header.Set("User-Agent", ua)
 	}

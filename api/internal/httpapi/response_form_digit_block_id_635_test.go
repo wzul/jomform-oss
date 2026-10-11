@@ -255,7 +255,9 @@ func TestResponseFormWithDigitLeadingBlockIDSubmits201AndNotifies(t *testing.T) 
 	}
 	req.Host = workspaceSlug + ".jomform.com"
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("CF-Connecting-IP", uniqueTestIP())
+	// No client-address header: this request goes over TCP to an httptest server
+	// (peer 127.0.0.1) and middleware.RealIP is not in that chain, so the key is
+	// the peer. See setTestClientAddr.
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST /%s/order: %v", slug, err)

@@ -146,7 +146,7 @@ func registerRealPasskey(t *testing.T, h *RESTHandlers, ah *AuthHandlers, pool *
 		"http://"+passkeyOriginHost+"/v1/auth/passkeys/register/finish", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})
-	req.Header.Set("X-Real-IP", uniqueTestIP())
+	setTestClientAddr(req, uniqueTestIP())
 	rec := httptest.NewRecorder()
 	h.passkeyRegisterFinish(rec, req, &AccountCtx{Account: accountForUser(t, h, user)})
 	if rec.Code != http.StatusOK {

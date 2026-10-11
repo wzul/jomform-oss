@@ -51,10 +51,16 @@ var ipArgHelpers = map[string]int{
 	"postJSONCookies":     3, // postJSONCookies(mux, path, body, ip, session)
 	"registerAndVerify":   4, // registerAndVerify(t, h, email, password, ip)
 	"enable2FAAndSession": 3, // enable2FAAndSession(t, h, email, ip)
+	// setTestClientAddr puts the address where a directly-connected request
+	// carries it — r.RemoteAddr — which is the position ClientIP reads unless the
+	// request arrived through a proxy (card t_ac16d273); a literal handed to it
+	// is the same defect in a new spelling.
+	"setTestClientAddr": 1, // setTestClientAddr(req, ip)
 }
 
-// ipHeaderNames are the headers the server reads a client address from
-// (middleware.ClientIP).
+// ipHeaderNames are the headers the server reads a client address from, through
+// middleware.ClientIP — and only when the request reached it through a trusted
+// hop, which is why a test may not rely on one (see setTestClientAddr).
 var ipHeaderNames = map[string]bool{"X-Real-IP": true, "CF-Connecting-IP": true}
 
 // TestNoLiteralClientIPInTests is the guard: no test may hand the HTTP layer a
@@ -151,6 +157,7 @@ func TestTheLiteralClientIPDetectorDiscriminates(t *testing.T) {
 		{"a RemoteAddr assignment", `fn() { req.RemoteAddr = "203.0.113.7:1234" }`},
 		{"an X-Real-IP header", `fn() { req.Header.Set("X-Real-IP", "10.7.7.7") }`},
 		{"a CF-Connecting-IP header", `fn() { req.Header.Set("CF-Connecting-IP", "10.1.2.3") }`},
+		{"a setTestClientAddr argument", `fn() { setTestClientAddr(req, "10.9.9.9") }`},
 	}
 	for _, tc := range fires {
 		if got := detectorHits(t, tc.src); len(got) != 1 {
@@ -167,6 +174,7 @@ func TestTheLiteralClientIPDetectorDiscriminates(t *testing.T) {
 		src  string
 	}{
 		{"the sanctioned helper", `fn() { postJSON(mux, "/v1/auth/login", body, ip) }`},
+		{"the sanctioned address setter", `fn() { setTestClientAddr(req, ip) }`},
 		{"an SNS notification payload field", `fn() { body := []byte("{\"ipAddress\":\"203.0.113.7\"}") }`},
 		{"a predicate table in a guard", `fn() { cases = append(cases, struct{ key, want string }{"jf:loginfail:ip:10.99.99.1", ""}) }`},
 		{"an unrelated literal", `fn() { email := "2fa-10.9.9.9@example.test" }`},
@@ -223,54 +231,58 @@ func TestEveryRequestHelperTakesATestIP(t *testing.T) {
 // inherits the counter. The literal scan above cannot refuse this shape, because
 // the offending value is not in the test file at all; so the property the
 // helpers must satisfy is asserted directly.
+//
+// Since card t_ac16d273 the address must go to setTestClientAddr (r.RemoteAddr):
+// a client-IP header is only read when the request arrived through a proxy, which
+// a bare-mux test request does not.
 func TestLoginHelpersSetATestClientIP(t *testing.T) {
 	for _, name := range []string{"loginOnce", "loginOnceUA"} {
 		decl := findFuncDecl(t, name)
 		if decl == nil {
 			t.Fatalf("%s is not declared in this package — this guard would check nothing", name)
 		}
-		calls := headerSetCalls(decl.Body)
-		var found bool
-		for _, c := range calls {
-			hdr, ok := stringLiteral(c.name)
-			if !ok || !ipHeaderNames[hdr] {
-				continue
-			}
-			if call, ok := c.value.(*ast.CallExpr); ok && callName(call) == testIPHelperName {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("%s does not set a client-IP header to %s(t) — without it every request it\n"+
-				"builds carries httptest's default 192.0.2.1, which is outside every process's\n"+
+		if !presentsTestIPToTheLayer(decl.Body) {
+			t.Errorf("%s does not present its client address through %s(req, %s(t)) — without it every\n"+
+				"request it builds carries httptest's default 192.0.2.1, which is outside every process's\n"+
 				"reclaimed /24, so any wrong-credential login it drives leaves a counter no run can clear",
-				name, testIPHelperName)
+				name, testClientAddrHelper, testIPHelperName)
 		}
 	}
 }
 
-// headerSetCall is a `.Set(<name>, <value>)` call on some receiver.
-type headerSetCall struct {
-	name  ast.Expr
-	value ast.Expr
-}
+// testClientAddrHelper is the one sanctioned way to present a client address to
+// a request built by hand (testutil_test.go): it writes r.RemoteAddr.
+const testClientAddrHelper = "setTestClientAddr"
 
-// headerSetCalls returns every `<recv>.Set(name, value)` call in body.
-func headerSetCalls(body *ast.BlockStmt) []headerSetCall {
-	var out []headerSetCall
+// presentsTestIPToTheLayer reports whether body hands the address the layer
+// reads — via setTestClientAddr or a RemoteAddr assignment — a value derived
+// from testIP(t).
+func presentsTestIPToTheLayer(body *ast.BlockStmt) bool {
+	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok || len(call.Args) != 2 {
-			return true
+		switch node := n.(type) {
+		case *ast.CallExpr:
+			if callName(node) == testClientAddrHelper {
+				for _, arg := range node.Args {
+					if inner, ok := arg.(*ast.CallExpr); ok && callName(inner) == testIPHelperName {
+						found = true
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			for i, lhs := range node.Lhs {
+				sel, ok := lhs.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "RemoteAddr" || i >= len(node.Rhs) {
+					continue
+				}
+				if inner, ok := node.Rhs[i].(*ast.CallExpr); ok && callName(inner) == testIPHelperName {
+					found = true
+				}
+			}
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Set" {
-			return true
-		}
-		out = append(out, headerSetCall{name: call.Args[0], value: call.Args[1]})
 		return true
 	})
-	return out
+	return found
 }
 
 // detectorHits parses src as a function body and returns the positions the

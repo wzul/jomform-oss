@@ -169,9 +169,12 @@ func TestEventsStreamDeliversARealFormSubmission(t *testing.T) {
 	}
 	subReq.Host = workspaceSlug + ".jomform.com"
 	subReq.Header.Set("Content-Type", "application/json")
-	// The submit route is per-IP rate limited; a fresh IP keeps this test
-	// independent of whatever else ran in the package.
-	subReq.Header.Set("CF-Connecting-IP", uniqueTestIP())
+	// The submit route is per-IP rate limited. This request goes over TCP to an
+	// httptest server, so its peer is 127.0.0.1 and no forwarding header is read
+	// from it (middleware.RealIP is wired only when the server has sessions; see
+	// setTestClientAddr). Independence comes from building a fresh server — and
+	// so a fresh limiter — per test, which is why the header that used to be set
+	// here is gone.
 
 	subResp, err := http.DefaultClient.Do(subReq)
 	if err != nil {
@@ -357,7 +360,6 @@ func TestEventsStreamStaysQuietForAnotherAccountsSubmission(t *testing.T) {
 	}
 	subReq.Host = wsB + ".jomform.com"
 	subReq.Header.Set("Content-Type", "application/json")
-	subReq.Header.Set("CF-Connecting-IP", uniqueTestIP())
 
 	subResp, err := http.DefaultClient.Do(subReq)
 	if err != nil {

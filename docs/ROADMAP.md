@@ -20,9 +20,11 @@ Last updated: 1 Sep 2026 (MYT)
   `<script src>`/`<meta>` only; event handlers & cookies stripped)
 - Multi-domain per account (`account_domains`), content-based verify,
   **Traefik file-provider route** (auto route + LE cert on verify; removed on delete)
-- Real-IP chain (Cloudflare ranges fetched at startup, 12h refresh,
-  CF-Connecting-IP / XFF rightmost-trusted rewrite)
-- Rate limiting (1 r/s, burst 10, per-IP, CF-aware) on public submit
+- Real-IP chain (Cloudflare ranges fetched at startup, 12h refresh; the
+  forwarding headers are read only from a peer a request can arrive through,
+  and the chain is walked right-to-left — see `middleware/clientip.go`)
+- Rate limiting (1 r/s, burst 10, per-IP, keyed on the resolved client address,
+  CDN-aware) on public submit
 - Landing page with MCP selling point; dashboard-less capable MCP (16 tools,
   OAuth 2.1 metadata + DCR at mcp.jomform.com)
 - AGENTS.md parity rule (every dashboard feature must ship an MCP tool)

@@ -296,7 +296,7 @@ func TestPasskeyCeremonyIsRefusedOffTheDeploymentsDomain(t *testing.T) {
 		mux := http.NewServeMux()
 		h.RegisterRoutes(mux)
 		req := httptest.NewRequest(http.MethodPost, "http://"+host+"/v1/auth/passkeys/login/start", nil)
-		req.Header.Set("X-Real-IP", uniqueTestIP())
+		setTestClientAddr(req, uniqueTestIP())
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		return rec
@@ -436,7 +436,7 @@ func TestPasskeyCeremonySurvivesTheProxyHop(t *testing.T) {
 		if forwarded != "" {
 			req.Header.Set("X-Forwarded-Host", forwarded)
 		}
-		req.Header.Set("X-Real-IP", uniqueTestIP())
+		setTestClientAddr(req, uniqueTestIP())
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		return rec
@@ -585,7 +585,7 @@ func TestPasskeyHandlersRefuseWhenNoRPIDCanBeDerived(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	req := httptest.NewRequest(http.MethodPost, "http://"+stagingHost+"/v1/auth/passkeys/login/start", nil)
-	req.Header.Set("X-Real-IP", uniqueTestIP())
+	setTestClientAddr(req, uniqueTestIP())
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -103,6 +104,28 @@ func testIP(t *testing.T) string {
 	}
 	testIPName, testIPAddr = name, uniqueTestIP()
 	return testIPAddr
+}
+
+// setTestClientAddr presents ip as the request's SOCKET PEER, which is where the
+// API reads a client address from on a request that reached it directly.
+//
+// middleware.ClientIP reads a forwarding header only when the socket peer is an
+// address a request can arrive through, and it never uses CF-Connecting-IP
+// unless the chain shows a Cloudflare edge (card t_ac16d273: the header used to
+// be read unconditionally, so a request straight to the origin chose its own
+// rate-limit bucket). A test that wants "this request came from address X" must
+// therefore put X where a directly-connected client's address really is:
+// r.RemoteAddr. Setting only a header leaves httptest's default 192.0.2.1 as the
+// peer, which every such request then shares.
+//
+// A test that drives the API over TCP (`http.DefaultClient.Do` against an
+// httptest server) cannot choose its peer — the kernel says 127.0.0.1 — so those
+// present their address in X-Forwarded-For instead, where a front would put it.
+func setTestClientAddr(req *http.Request, ip string) {
+	if ip == "" {
+		return
+	}
+	req.RemoteAddr = ip + ":1234"
 }
 
 // testIPMu guards the one-entry memo testIP keeps. One address per test rather

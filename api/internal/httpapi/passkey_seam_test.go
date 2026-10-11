@@ -286,7 +286,7 @@ func newPasskeyRegistrationFixture(t *testing.T, h *RESTHandlers, ah *AuthHandle
 	req := httptest.NewRequest(http.MethodPost, "http://"+passkeyOriginHost+"/v1/auth/passkeys/register/start", strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})
-	req.Header.Set("X-Real-IP", uniqueTestIP())
+	setTestClientAddr(req, uniqueTestIP())
 	rec := httptest.NewRecorder()
 	h.passkeyRegisterStart(rec, req, &AccountCtx{Account: accountForUser(t, h, user)})
 	if rec.Code != http.StatusOK {
@@ -482,7 +482,7 @@ func TestPasskeyRegistrationAcceptsStandardBase64(t *testing.T) {
 				"http://"+passkeyOriginHost+"/v1/auth/passkeys/register/finish", bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})
-			req.Header.Set("X-Real-IP", uniqueTestIP())
+			setTestClientAddr(req, uniqueTestIP())
 			rec := httptest.NewRecorder()
 			h.passkeyRegisterFinish(rec, req, actx)
 
@@ -569,7 +569,7 @@ func TestPasskeyRegistrationOptionsRequireAResidentKey(t *testing.T) {
 		"http://"+passkeyOriginHost+"/v1/auth/passkeys/register/start", strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})
-	req.Header.Set("X-Real-IP", uniqueTestIP())
+	setTestClientAddr(req, uniqueTestIP())
 	rec := httptest.NewRecorder()
 	h.passkeyRegisterStart(rec, req, &AccountCtx{Account: accountForUser(t, h, user)})
 	if rec.Code != http.StatusOK {

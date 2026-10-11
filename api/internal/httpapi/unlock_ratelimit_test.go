@@ -74,10 +74,10 @@ func unlockPost(hnd http.Handler, host, path, ip, password string) int {
 	body := fmt.Sprintf(`{"password":%q}`, password)
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	// middleware.ClientIP reads CF-Connecting-IP first (else X-Real-IP, else the
-	// socket peer). Setting it is how a test plays "this request came from
-	// address X" — production gets the same value from the Cloudflare edge.
-	req.Header.Set("CF-Connecting-IP", ip)
+	// The address is the SOCKET PEER: see setTestClientAddr. A forwarding header
+	// would be ignored here, because a directly-connected test request carries
+	// httptest's default peer (192.0.2.1) and nothing in front of it.
+	setTestClientAddr(req, ip)
 	req.Host = host
 	rec := httptest.NewRecorder()
 	hnd.ServeHTTP(rec, req)

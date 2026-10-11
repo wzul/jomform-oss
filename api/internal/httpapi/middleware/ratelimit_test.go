@@ -81,25 +81,5 @@ func TestRateLimitDistinctIPsDoNotShareBuckets(t *testing.T) {
 	}
 }
 
-// TestClientIP: CF-Connecting-IP is trusted first, then X-Real-IP, then the
-// socket peer.
-func TestClientIP(t *testing.T) {
-	r := httptest.NewRequest("GET", "/", nil)
-	r.RemoteAddr = "203.0.113.9:443"
-	if got := ClientIP(r); got != "203.0.113.9" {
-		t.Errorf("peer IP = %q, want 203.0.113.9", got)
-	}
-
-	r.RemoteAddr = "" // no split -> raw fallback
-	r.Header.Set("CF-Connecting-IP", "198.51.100.7")
-	if got := ClientIP(r); got != "198.51.100.7" {
-		t.Errorf("CF IP = %q, want 198.51.100.7", got)
-	}
-
-	r2 := httptest.NewRequest("GET", "/", nil)
-	r2.RemoteAddr = "192.0.2.5:80"
-	r2.Header.Set("X-Real-IP", "192.0.2.6")
-	if got := ClientIP(r2); got != "192.0.2.6" {
-		t.Errorf("X-Real-IP = %q, want 192.0.2.6", got)
-	}
-}
+// TestClientIP now lives in clientip_test.go: the resolution rule (and why a
+// caller cannot choose its own key) is the subject of card t_ac16d273.

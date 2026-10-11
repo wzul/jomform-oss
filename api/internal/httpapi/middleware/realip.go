@@ -1,6 +1,9 @@
-// Real-IP resolution behind Cloudflare (and other trusted proxies).
-// IP ranges are fetched ONCE at startup and refreshed every 12h; direct IPs
-// from trusted ranges get replaced by CF-Connecting-IP.
+// The trusted-proxy registry: which addresses are the Cloudflare edge.
+//
+// The client-address trust decision itself lives in clientip.go — the
+// forwarding headers are read in exactly one place (TrustedProxy.resolveClientIP)
+// and only when the socket peer is a hop the request can arrive through.
+// IP ranges are fetched ONCE at startup and refreshed every 12h.
 package middleware
 
 import (
@@ -15,7 +18,8 @@ import (
 	"time"
 )
 
-// TrustedProxy holds CIDR ranges whose X-Forwarded-For we trust.
+// TrustedProxy holds the Cloudflare edge ranges, the one PUBLIC address class we
+// treat as a hop rather than as the client.
 type TrustedProxy struct {
 	mu      sync.RWMutex
 	cidrs   []*net.IPNet
@@ -79,53 +83,18 @@ func (t *TrustedProxy) ensure() {
 	}
 }
 
-// trusted reports whether ip falls inside a known proxy range.
-func (t *TrustedProxy) trusted(ip string) bool {
+// cloudflareEdge reports whether ip is inside Cloudflare's published ranges.
+// Callers reach it only through proxyHop, which also accepts the container
+// network — an edge address is the ONE public address a request may arrive
+// through, so it is never returned to a caller as "the client".
+func (t *TrustedProxy) cloudflareEdge(ip string) bool {
 	t.ensure()
-	parsed := net.ParseIP(ip)
-	if parsed == nil {
-		return false
-	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	for _, c := range t.cidrs {
-		if c.Contains(parsed) {
-			return true
-		}
-	}
-	return false
+	return inRanges(t.cidrs, ip)
 }
 
-// RealIP middleware: rewrite r.RemoteAddr to the true client IP when the
-// immediate peer is a trusted proxy (Cloudflare).
-func (t *TrustedProxy) RealIP(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		peer := r.RemoteAddr
-		if i := strings.LastIndex(peer, ":"); i > 0 && !strings.Contains(peer, "]") {
-			peer = peer[:i] // strip port (v4); v6 bracketed kept as-is in net.SplitHostPort below
-		}
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			peer = host
-		}
-		if t.trusted(peer) {
-			if cf := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); net.ParseIP(cf) != nil {
-				r.RemoteAddr = cf
-			} else if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-				parts := strings.Split(xff, ",")
-				for i := len(parts) - 1; i >= 0; i-- { // rightmost non-trusted
-					cand := strings.TrimSpace(parts[i])
-					if cand != "" && !t.trusted(cand) {
-						r.RemoteAddr = cand
-						break
-					}
-				}
-			}
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// JSON debug: current trusted CIDR count (health tooling).
+// JSON debug: current Cloudflare range count (health tooling).
 func (t *TrustedProxy) Count() int {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

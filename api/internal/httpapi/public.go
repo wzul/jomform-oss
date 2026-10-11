@@ -208,16 +208,19 @@ func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// 403/200), so leaving them open is an unlimited online guessing surface.
 	//
 	// On the KEY, which is middleware.RateLimit's own (do not re-key it here):
-	// it buckets per middleware.ClientIP(r) — CF-Connecting-IP, else
-	// X-Real-IP, else the socket peer — i.e. per BUYER, not per form and not
-	// per embedding page. That is the right key for a route reached from a
-	// third-party frame. An embed is framed by the merchant, but the requests
-	// to this API originate from each buyer's own browser, so every buyer has
-	// their own bucket and one merchant page cannot be throttled by its
-	// neighbours. An attacker cannot rotate the key either: measured on prod,
-	// Cloudflare refuses to forward a caller-supplied CF-Connecting-IP (403,
-	// "error code: 1000") and the bucket through the edge is edge-derived, and
-	// middleware.ClientIP does not read X-Forwarded-For at all.
+	// it buckets per middleware.ClientIP(r) — the hop the request demonstrably
+	// came from, resolved in middleware/clientip.go — i.e. per BUYER, not per
+	// form and not per embedding page. That is the right key for a route reached
+	// from a third-party frame. An embed is framed by the merchant, but the
+	// requests to this API originate from each buyer's own browser, so every
+	// buyer has their own bucket and one merchant page cannot be throttled by
+	// its neighbours. An attacker cannot rotate the key either: through the edge
+	// the bucket is the visitor Cloudflare itself recorded (a caller-supplied
+	// CF-Connecting-IP is refused — 403, "error code: 1000", measured on prod —
+	// and X-Forwarded-For/X-Real-IP are rewritten by the front), and a request
+	// that reaches the origin without Cloudflare is keyed on the address the
+	// front recorded for it (card t_ac16d273 measured 16 concurrent requests
+	// with a distinct CF-Connecting-IP each: 16x401 and no 429 before that fix).
 	//
 	// Burst 10 / 1 per second matches the /order precedent deliberately. An
 	// unlock is ONE request per buyer and the bucket refills at 1/s, so the

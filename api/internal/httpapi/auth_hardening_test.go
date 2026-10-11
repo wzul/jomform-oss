@@ -245,7 +245,7 @@ func postJSON(mux *http.ServeMux, path string, body map[string]any, ip string) *
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
 	if ip != "" {
-		req.Header.Set("X-Real-IP", ip)
+		setTestClientAddr(req, ip)
 	}
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -452,7 +452,7 @@ func TestAuthAllRoutesRateLimited(t *testing.T) {
 
 	// /me with no session returns 401 (not 429) and is not a login surface.
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/me", nil)
-	req.Header.Set("X-Real-IP", ip)
+	setTestClientAddr(req, ip)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {

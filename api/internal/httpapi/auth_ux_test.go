@@ -51,7 +51,7 @@ func loginOnce(t *testing.T, h *AuthHandlers, email, password, totpCode string, 
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login", strings.NewReader(string(mustJSON(body))))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Real-IP", testIP(t))
+	setTestClientAddr(req, testIP(t))
 	if trustValue != "" {
 		req.AddCookie(&http.Cookie{Name: trustCookie, Value: trustValue})
 	}
@@ -74,9 +74,7 @@ func cookieValueFrom(rec *httptest.ResponseRecorder, name string) string {
 func postJSONCookies(mux *http.ServeMux, path string, body map[string]any, ip, session string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(mustJSON(body))))
 	req.Header.Set("Content-Type", "application/json")
-	if ip != "" {
-		req.Header.Set("X-Real-IP", ip)
-	}
+	setTestClientAddr(req, ip)
 	if session != "" {
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})
 	}

@@ -330,7 +330,9 @@ func unlockBurstCodes(hnd http.Handler, host, probePath, ip string, n int) []int
 			defer wg.Done()
 			req := httptest.NewRequest(http.MethodPost, probePath, strings.NewReader(`{"password":"not-it"}`))
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("CF-Connecting-IP", ip)
+			// The address is the SOCKET PEER (see setTestClientAddr): a
+			// forwarding header is not read from a peer that is not a proxy.
+			setTestClientAddr(req, ip)
 			req.Host = host
 			rec := httptest.NewRecorder()
 			<-start // released together: the burst must land inside one refill window

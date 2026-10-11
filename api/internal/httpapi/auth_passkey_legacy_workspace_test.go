@@ -194,7 +194,7 @@ func startPasskeyLogin(t *testing.T, h *RESTHandlers, ip string) (key, challenge
 	h.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodPost, "http://"+passkeyOriginHost+"/v1/auth/passkeys/login/start", nil)
-	req.Header.Set("X-Real-IP", ip)
+	setTestClientAddr(req, ip)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -236,7 +236,7 @@ func finishPasskeyLogin(t *testing.T, h *RESTHandlers, body []byte, ip string) *
 	req := httptest.NewRequest(http.MethodPost,
 		"http://"+passkeyOriginHost+"/v1/auth/passkeys/login/finish", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Real-IP", ip)
+	setTestClientAddr(req, ip)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec
