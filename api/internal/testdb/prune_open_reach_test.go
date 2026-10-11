@@ -734,7 +734,9 @@ func createIdleTestDB(t *testing.T, ctx context.Context, dsn string) (string, st
 	if _, err := rand.Read(buf); err != nil {
 		t.Fatalf("generate throwaway database name: %v", err)
 	}
-	name := reachScratchPrefix + hex.EncodeToString(buf)
+	// The name ends with the CREATING pid, the convention scratchdb.go's prune
+	// attributes on — see migrations_fresh_db_test.go for the full reason.
+	name := reachScratchPrefix + hex.EncodeToString(buf) + "_p" + strconv.Itoa(os.Getpid())
 
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {

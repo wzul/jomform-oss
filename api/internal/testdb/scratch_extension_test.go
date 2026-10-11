@@ -30,6 +30,7 @@ import (
 	"context"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -58,7 +59,9 @@ const scratchDBPrefix = "jomform_testdb_regress_"
 // and the template0 detail is exactly what makes these guards non-vacuous.
 func createScratchDB(t *testing.T, ctx context.Context, dsn string) string {
 	t.Helper()
-	name := scratchDBPrefix + randSuffix(t)
+	// The name ends with the CREATING pid, the convention scratchdb.go's prune
+	// attributes on — see migrations_fresh_db_test.go for the full reason.
+	name := scratchDBPrefix + randSuffix(t) + "_p" + strconv.Itoa(os.Getpid())
 
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {

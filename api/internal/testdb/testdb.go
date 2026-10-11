@@ -137,6 +137,12 @@ func open(ctx context.Context, dsn, schema string) (*pgxpool.Pool, error) {
 		return nil, err
 	}
 	pruneDeadSchemas(ctx, admin, schema)
+	// The DATABASE half of the same cleanup: the fixtures that create a whole
+	// throwaway database leak one per killed run, and t.Cleanup cannot run
+	// then. It is called from the same place, before the caller's pool exists,
+	// so the caller's own database is not yet a backend any candidate could be
+	// confused with. See scratchdb.go.
+	pruneDeadDatabases(ctx, admin)
 
 	// Pool whose connections resolve unqualified names to the scratch schema
 	// first, then `public` for shared extensions (pgcrypto, citext). This is the
@@ -442,6 +448,13 @@ func ownerAliveFromErr(err error) bool {
 }
 
 // schemaPID extracts the pid encoded by pkgName, e.g. test_httpapi_p1234 → 1234.
+//
+// It reads the ATTRIBUTION shared by both kinds of scratch object: scratch
+// SCHEMA names (test_<pkg>_p<pid>) and scratch DATABASE names
+// (<family><hex>_p<pid>, see scratchdb.go) both end with `_p<pid>`, so this one
+// parser is what decides "can this name be attributed to a process" for both.
+// The pid is the LAST `_p` segment; a name with a suffix after the pid parses as
+// unattributable, which is what the guards pin.
 func schemaPID(schema string) (int, bool) {
 	i := strings.LastIndex(schema, "_p")
 	if i < 0 {

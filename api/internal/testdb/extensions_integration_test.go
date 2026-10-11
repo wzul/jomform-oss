@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"net/url"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -68,7 +69,7 @@ func scratchDatabaseForThisTest(t *testing.T, template string) string {
 	if _, err := rand.Read(buf); err != nil {
 		t.Fatalf("generate scratch database name: %v", err)
 	}
-	name := "jomform_tdbguard_" + hex.EncodeToString(buf)
+	name := "jomform_tdbguard_" + hex.EncodeToString(buf) + "_p" + strconv.Itoa(os.Getpid())
 
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {

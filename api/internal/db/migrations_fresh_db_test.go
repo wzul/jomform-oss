@@ -37,6 +37,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -153,7 +154,13 @@ func createScratchDBFromTemplate(t *testing.T, ctx context.Context, dsn, templat
 	if _, err := rand.Read(buf); err != nil {
 		t.Fatalf("generate scratch database name: %v", err)
 	}
-	name := scratchPrefix + hex.EncodeToString(buf)
+	// The name ends with the CREATING pid (`…_p<pid>`), the same convention
+	// pkgName uses for scratch schemas. It is what lets the database prune
+	// (testdb/scratchdb.go) attribute a leftover database to a process and
+	// reclaim it the moment that process is gone, instead of having to guess
+	// from the clock whether the database might still be in use. testdb's
+	// registry guard requires this shape of every throwaway-database creator.
+	name := scratchPrefix + hex.EncodeToString(buf) + "_p" + strconv.Itoa(os.Getpid())
 
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {

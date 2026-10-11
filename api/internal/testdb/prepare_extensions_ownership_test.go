@@ -33,6 +33,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -221,7 +223,7 @@ func TestPrepareExtensionsToleratesAnExtensionItDoesNotOwn(t *testing.T) {
 	createThrowawayRole(t, ctx, super, dsn, installer)
 	createThrowawayRole(t, ctx, super, dsn, runner)
 
-	database := ownedDBPrefix + suffix
+	database := ownedDBPrefix + suffix + "_p" + strconv.Itoa(os.Getpid())
 	createOwnedDatabase(t, ctx, super, dsn, database, runner)
 	dbDSN := dsnForDatabase(t, dsn, database)
 
