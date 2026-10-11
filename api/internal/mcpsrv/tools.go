@@ -734,7 +734,7 @@ func (s *Server) registerTools() {
 	}, s.setFeedbackStatus)
 	addTool(s, &mcp.Tool{
 		Name:        "retry_feedback_notify",
-		Description: "Hantar semula notifikasi emel yang GAGAL untuk satu thread maklum balas (medan notify_failed_at pada thread). Ini laluan pemulihan untuk kegagalan penghantaran: emel yang tidak sempat masuk baris gilir ditandakan pada thread supaya kelihatan, dan tool ini cuba semula melalui saluran yang sama. Keputusan: queued|sent|failed|none ('none' bermaksud tiada kegagalan direkodkan). Super-admin sahaja; diaudit.",
+		Description: "Hantar semula notifikasi emel yang GAGAL untuk satu thread maklum balas (medan notify_failed_at pada thread). Ini laluan pemulihan untuk kegagalan penghantaran: emel yang tidak sempat masuk baris gilir ditandakan pada thread supaya kelihatan, dan tool ini cuba semula melalui saluran yang sama. Keputusan: queued|sent|failed|none|skipped ('none' bermaksud tiada kegagalan direkodkan; 'skipped' bermaksud tiada penerima super-admin dikonfigurasi, jadi tiada emel dicuba dan tiada tugasan masuk baris gilir — semak senarai super-admin). Super-admin sahaja; diaudit.",
 	}, s.retryFeedbackNotify)
 
 	// In-app chat (phase 1): the ONE write the chat has — file a feedback thread
