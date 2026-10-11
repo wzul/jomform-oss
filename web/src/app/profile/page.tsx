@@ -3,6 +3,7 @@
 // Profile page — user identity & security (name, email, password, 2FA, passkeys),
 // organised into Identity / Security / Passkeys tabs.
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import QRCode from "qrcode";
 import { Shell } from "../../components/Shell";
 import { useI18n, LANGS_SHOWN, LANG_LABEL, type Lang } from "../../components/i18n";
@@ -10,6 +11,7 @@ import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 import { isValidStepUpCode, stepUpRequired } from "../../lib/stepUp";
 import { apiErr } from "../../lib/apiErr";
+import { classifyLoadError, fetchJson } from "../../lib/wsfetch";
 import { b64url, fromB64url } from "../../lib/webauthn";
 
 type Profile = {
@@ -101,7 +103,8 @@ function loadStoredTab(): ProfileTab {
 
 export default function ProfilePage() {
   const { t, lang: ctxLang, setLang } = useI18n();
-  const { user: sessionUser, reload: reloadSession } = useSession();
+  const router = useRouter();
+  const { user: sessionUser, reload: reloadSession, anon } = useSession();
   const [tab, setTab] = useState<ProfileTab>(loadStoredTab);
   const [p, setP] = useState<Profile | null>(null);
   const [name, setName] = useState("");
@@ -153,6 +156,37 @@ export default function ProfilePage() {
     }
   }, [tab]);
 
+  // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
+  const goToLogin = useCallback(() => {
+    router.replace("/login");
+    window.location.href = "/login";
+  }, [router]);
+
+  // Issue #48: an anonymous visit bounces to the landing page — the guard every
+  // other page under the shell carries. This page shipped WITHOUT it, so a
+  // signed-out visitor sat on the account UI: measured 2026-10-11, an anonymous
+  // GET /profile answered 200 with the shell (nav, "Sign out", the
+  // Profile/Passkeys tabs) in the HTML while every request under it 401'd.
+  // Guarded by src/lib/authedPageGuards.test.ts, which now pins the convention
+  // across the whole app directory instead of this one page.
+  useEffect(() => {
+    if (anon) router.replace("/landing");
+  }, [anon, router]);
+
+  // A tab's own fetch must not paint an empty list when the session is dead:
+  // "you have no passkeys" and "you are signed out" look identical otherwise.
+  const loadAuthed = useCallback(
+    <T,>(path: string, fallback: T, onOk: (v: T) => void) => {
+      fetchJson<T>(path)
+        .then(onOk)
+        .catch((e) => {
+          if (classifyLoadError(e).kind === "unauth") goToLogin();
+          onOk(fallback);
+        });
+    },
+    [goToLogin],
+  );
+
   const load = useCallback(() => {
     // Issue #29: identity fields hydrate from the shared session context
     // (dashboard-bundle, fetched once per session) instead of a per-mount
@@ -176,40 +210,37 @@ export default function ProfilePage() {
       setPhone((cur) => cur || sessionUser.phone || "");
       setTimezone((cur) => cur || sessionUser.timezone || "");
     }
-    fetch("/api/auth/passkeys")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((k) => setPasskeys(Array.isArray(k) ? k : []))
-      .catch(() => setPasskeys([]));
+    loadAuthed<{ id: string }[]>("/api/auth/passkeys", [], (k) =>
+      setPasskeys(Array.isArray(k) ? k : []),
+    );
     // Issue #301: connected accounts load straight from the user-level
     // /api/auth/social endpoint (no ?workspace=), so they're identical across all
     // of the user's spaces.
-    fetch("/api/auth/social")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((s) => setSocial(Array.isArray(s) ? s : []))
-      .catch(() => setSocial([]));
+    loadAuthed<SocialRow[]>("/api/auth/social", [], (s) =>
+      setSocial(Array.isArray(s) ? s : []),
+    );
     // Issue #307: connected MCP agents load straight from the user-level
     // /api/auth/mcp-agents endpoint (no ?workspace=), so they're identical across
     // all of the user's spaces.
-    fetch("/api/auth/mcp-agents")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((s) => setAgents(Array.isArray(s) ? s : []))
-      .catch(() => setAgents([]));
-  }, [sessionUser]);
+    loadAuthed<MCPAgentRow[]>("/api/auth/mcp-agents", [], (s) =>
+      setAgents(Array.isArray(s) ? s : []),
+    );
+  }, [sessionUser, loadAuthed]);
 
   useEffect(() => { load(); }, [load]);
 
   // Issue #63: fetch trusted-device status for the Profile → Security line.
   // Issue #454: also fetch the full trusted-devices management list.
   const loadTrust = useCallback(() => {
-    fetch("/api/auth/trust-status")
-      .then((r) => (r.ok ? r.json() : { trusted: false }))
-      .then((d) => setTrustedUntil(d.trusted ? d.until || "" : ""))
-      .catch(() => setTrustedUntil(""));
-    fetch("/api/auth/trust-devices")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setTrustDevices(Array.isArray(d) ? d : []))
-      .catch(() => setTrustDevices([]));
-  }, []);
+    loadAuthed<{ trusted?: boolean; until?: string }>(
+      "/api/auth/trust-status",
+      {},
+      (d) => setTrustedUntil(d.trusted ? d.until || "" : ""),
+    );
+    loadAuthed<TrustDeviceRow[]>("/api/auth/trust-devices", [], (d) =>
+      setTrustDevices(Array.isArray(d) ? d : []),
+    );
+  }, [loadAuthed]);
 
   useEffect(() => { loadTrust(); }, [loadTrust]);
 
