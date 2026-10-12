@@ -29,8 +29,14 @@
 #     jomform/traefik containers are all compose-labelled, and they are in KEEP_NAMES too.
 #   * NEVER removes a container younger than JF_PRUNE_MIN_AGE_H hours (default 168 = 7 days).
 #     A young stopped container may belong to an in-flight deploy or QA probe.
-#   * FAILS CLOSED: if docker is unreachable, or the container list cannot be read, or the
-#     list is empty, it LOGS and exits non-zero having removed nothing. It never guesses.
+#   * FAILS CLOSED: if docker is unreachable, the container list cannot be read, the list is
+#     empty, or it cannot create its own private rm-output file, it LOGS and exits non-zero
+#     having removed nothing. It never guesses.
+#   * NEVER writes to a FIXED path. This runs as ROOT (cron, 03:40), so a fixed name under a
+#     world-writable directory is a name any local user can create FIRST: root then opens it
+#     for writing, follows a planted symlink and truncates whatever it points at. The rm
+#     output goes to a private `mktemp` file (O_EXCL, random name, mode 0600) instead, which
+#     also means two overlapping passes cannot share one diagnostic file.
 #
 # Usage / overrides:
 #   JF_PRUNE_MIN_AGE_H=168   age floor in hours (default 168)
@@ -152,13 +158,28 @@ if [ "${#rm_ids[@]}" -eq 0 ]; then
 fi
 
 # --- remove ----------------------------------------------------------------
+# The rm output goes to a PRIVATE per-run file, never a fixed path. This script
+# is run as root by cron, and a fixed name under a world-writable directory
+# (/tmp is mode 1777) is a name any local user can create FIRST — root then opens
+# that name for writing, follows a planted symlink and truncates/replaces
+# whatever it points at. `mktemp` creates the file O_EXCL under a random name
+# with mode 0600, so a path that already exists is never opened (symlink or not),
+# and two overlapping passes (a hand-run at 03:40 while cron fires) cannot share
+# one output file. Fail closed: no private file means NOTHING is removed.
+rm_out="$(mktemp "${TMPDIR:-/tmp}/jomform-container-prune.rm.XXXXXXXX")" || {
+  log "FATAL: could not create a private rm-output file (mktemp failed) - fail closed, nothing removed"
+  exit 1
+}
+
 before_count="$(docker ps -a -q | wc -l)"
-if docker rm -v -f "${rm_ids[@]}" >/tmp/jomform-container-prune.rm.out 2>&1; then
+if docker rm -v -f "${rm_ids[@]}" >"$rm_out" 2>&1; then
   :
 else
-  log "WARN docker rm reported an error (see /tmp/jomform-container-prune.rm.out):"
-  while read -r line; do log "  rm: $line"; done < /tmp/jomform-container-prune.rm.out
+  # Every line is logged here, so deleting the file below loses no diagnostic.
+  log "WARN docker rm reported an error:"
+  while read -r line; do log "  rm: $line"; done < "$rm_out"
 fi
+rm -f "$rm_out"
 after_count="$(docker ps -a -q | wc -l)"
 removed=$(( before_count - after_count ))
 

@@ -65,13 +65,32 @@ Never touches:
 
 ### It fails closed
 
-An unreachable docker daemon, a failed `docker ps`, or an **empty container
-list** (the stack is always up, so empty means something is wrong) is logged and
-exits **non-zero having removed nothing**. It never guesses. Success is verified
-by counting containers before and after, never by `docker rm`'s exit status.
+An unreachable docker daemon, a failed `docker ps`, an **empty container list**
+(the stack is always up, so empty means something is wrong), or a private file for
+`docker rm`'s output that cannot be created (see below) is logged and exits
+**non-zero having removed nothing**. It never guesses. Success is verified by
+counting containers before and after, never by `docker rm`'s exit status.
 
 Exit codes: `0` = it ran (removed N ≥ 0, including "nothing to do"); `1` =
 fail-closed or bad usage.
+
+### Its `docker rm` output is a private file, never a fixed path
+
+`docker rm`'s output goes to a file the guard creates for itself — `mktemp`, random
+name, `O_EXCL`, mode 0600, under `$TMPDIR` — and deletes again before it exits.
+Every line of a failing `docker rm` is logged as it is read, so deleting the file
+costs no diagnostic.
+
+It used to go to **`/tmp/jomform-container-prune.rm.out`**: a fixed name in a
+world-writable directory (`/tmp` is mode 1777), opened by **root** *before*
+`docker rm` ran, on every pass that reached the removal step. Any local user who
+created that name first — a symlink to a file root can write — made root truncate
+and replace the target, and two overlapping passes (a hand-run at 03:40 while cron
+fires) shared one diagnostic file. Reproduced against the shipped bytes by card
+`t_3d34df24` on a private `dockerd`: the victim's sha256 went
+`89f2522a…` → `f5120dc7…`. The suite now plants exactly that symlink before its
+real floor-0 pass and requires the target to come out byte-identical, and it fails
+the pass if the guard cannot create its private file (nothing removed, exit 1).
 
 ## Installing it
 
@@ -139,7 +158,7 @@ assume this guard covers them.
 ### The decoy suite — the `prunehost` gate
 
 ```bash
-bash deploy/host/jomform-container-prune_test.sh      # ~25s, 65 checks
+bash deploy/host/jomform-container-prune_test.sh      # ~40s, 92 checks
 ```
 
 It runs the guard against a **private Docker daemon of its own** — a second
@@ -153,27 +172,49 @@ torn down by the suite — and plants decoy containers in it:
 | `jf-prune-decoy-compose` | the COMPOSE gate: stopped, labelled `com.docker.compose.project=jomform` → `keep (compose project=…)` |
 | `jf-prune-decoy-keepfile` | the KEEP gate: stopped, named in the keep file → `keep (name)` |
 | `jf-prune-decoy-running` | the STATE gate: never listed, and it survives a real floor-0 run |
+| `jf-prune-decoy-nomkt` | the refusal arm: a stopped container created **after** the real run, which a floor-0 pass that cannot create its private rm-output file must NOT remove |
 
-plus the fail-closed arm (an empty container list must exit non-zero), the
-installer arms, and — at the end — four assertions that the suite tore its own
+plus the arms that are not about a decoy: the fail-closed one (an empty container
+list must exit non-zero), the **private rm-output file** pair (a `mktemp` that
+always fails must make the pass exit non-zero having removed NOTHING, and the
+symlink planted at the guard's old fixed `/tmp` path must leave its target
+byte-identical after the real pass — with the file the guard DID open measured
+through a delegating `mktemp` wrapper: a private path under the run's own `TMPDIR`,
+regular, 0600, root-owned, and deleted before the guard exits), the installer arms,
+and — at the end — four assertions that the suite tore its own
 sandbox down (scratch tree gone, no private `dockerd`, no decoy process, no
 mount). The host daemon is read **only** to prove nothing outside the sandbox was
 removed: the host's container and image id sets are snapshotted first and
 compared last (`before ⊆ after`), and no decoy is ever visible on it.
 
 This is why the suite is safe to run on a busy host: the guard under test cannot
-see the host's containers at all, and the one destructive pass it runs happens in
-a daemon that holds nothing but the five decoys.
+see the host's containers at all, the one destructive pass it runs happens in
+a daemon that holds nothing but the five decoys — **and that daemon runs in a
+network namespace of the suite's own** (`unshare -n`), because `--bridge=none`
+does not merely skip creating a bridge: it makes moby **delete** the default
+bridge of whichever network namespace the daemon is started in
+(`daemon/daemon_unix.go`, `removeDefaultBridgeInterface()`, the `--bridge=none`
+case). In the host's namespace that is the host's `docker0`, and every container
+on the default bridge is then unreachable from the host — the shared test valkey
+among them, which is how card `t_a10c01dd` (the root cause of `t_eb901784`) redded
+other lanes' gates on trees that were correct. The suite therefore plants a
+`docker0` **decoy** in its own namespace and requires the daemon to delete that
+one — so the survival of the caller's bridge is attributable to the namespace and
+not to a docker that stopped doing it — and it reads the caller's `docker0`
+through a descriptor inherited across the re-exec, requiring the **same ifindex
+and MAC** before and after. The namespace arm is checked before anything
+destructive exists and fails closed: a run that is in the caller's namespace
+refuses to start a daemon at all.
 
 Requirements: **root** (a private `dockerd` cannot run unprivileged), the
 `dockerd` binary, `busybox` (a 1 MB throwaway image, imported — nothing is pulled
-and no host image is borrowed), and a reachable host docker daemon. It fails
-loudly without them; it never skips.
+and no host image is borrowed), `unshare`/`nsenter` (util-linux), and a reachable
+host docker daemon. It fails loudly without them; it never skips.
 
-### The bite proof (on demand, ~3 minutes)
+### The bite proof (on demand, ~5 minutes)
 
 ```bash
-bash deploy/host/jomform-container-prune_bite.sh      # 6 sabotages, one per gate
+bash deploy/host/jomform-container-prune_bite.sh      # 10 sabotages, one behaviour each
 ```
 
 It copies the guard, the installer and the suite into a throwaway directory,
@@ -190,7 +231,8 @@ gate.
 
 ## The installed copy on production
 
-Measured 2026-10-12 (card `t_2646fc00`):
+Measured 2026-10-12 (card `t_2646fc00`), re-measured 2026-10-12 by card
+`t_3d34df24`:
 
 ```
 /usr/local/bin/jomform-container-prune.sh
@@ -199,10 +241,28 @@ root crontab: 40 3 * * * /usr/local/bin/jomform-container-prune.sh >> /var/log/j
 /var/log/jomform-container-prune.log  (0644, empty until the first pass)
 ```
 
-The repository copy is byte-identical to it, and the installer verifies the
-sha256 on every install. That sha is a **measurement, not a contract** — a future
-fix to the guard changes it, and the installer then reports the difference rather
-than silently replacing it with something else:
+**That is the PRE-FIX copy, and production still runs it.** Card `t_3d34df24`
+replaced the guard's fixed `/tmp/jomform-container-prune.rm.out` redirect with a
+private per-run `mktemp` file, so the repository copy is now
+
+```
+sha256 8634f8da790cf6b23b8049e0e7dae22b60e44eca115a869d8e3bba74ca591524
+```
+
+and the host keeps the old bytes until the installer runs again:
+
+```bash
+deploy/host/install-host-container-prune.sh --host root@203.0.113.10
+```
+
+Its verification step prints the new sha and refuses if the installed copy does not
+match the repository's; the cron line is left alone because that exact line is
+already present. Until that command runs, the fix is in the repo and not on the
+host — say so, do not assume it.
+
+The sha is a **measurement, not a contract** — a future fix to the guard changes it,
+and the installer then reports the difference rather than silently replacing it
+with something else:
 
 ```bash
 ssh root@203.0.113.10 sha256sum /usr/local/bin/jomform-container-prune.sh

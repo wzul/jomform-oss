@@ -11,15 +11,40 @@
 # visible to the guard under test, which is asserted at the end rather than
 # assumed.
 #
+# AND IT RUNS IN A NETWORK NAMESPACE OF ITS OWN, which is not decoration: a
+# data-root and a socket isolate a second daemon's CONTAINERS, not its NETNS.
+# `--bridge=none` does not merely refrain from creating a bridge — moby DELETES
+# the default bridge (`daemon/daemon_unix.go`, `removeDefaultBridgeInterface()`)
+# of whichever network namespace the daemon is started in, and in the host's
+# namespace that is the HOST's `docker0`. While it is gone EVERY container on the
+# default bridge is unreachable FROM the host, the shared test valkey included,
+# so other lanes' gates red with valkey `i/o timeout` on trees that are correct.
+# Measured on the agent host 2026-10-12 (card `t_a10c01dd`): 16 `docker0 is
+# MISSING` ALERTs in under four hours, each 2-minute watchdog run repairing a
+# bridge a harness run had just deleted again, with this suite's private
+# `dockerd … --bridge=none …` in the process snapshot taken the second `docker0`
+# vanished. So the suite re-execs itself under `unshare -n`, plants its OWN
+# `docker0` decoy in that namespace, and REQUIRES the daemon to delete THAT one;
+# the caller's bridge is then read, from the caller's namespace, before and after.
+#
 # The decoys, and the gate each one exists for:
 #   jf-prune-decoy-young     exited,  no label  -> the AGE gate   (floor 168h: not a candidate)
 #   jf-prune-decoy-plain     exited,  no label  -> the guard BITES (floor 0: removed)
 #   jf-prune-decoy-compose   created, com.docker.compose.project=jomform -> the COMPOSE gate
 #   jf-prune-decoy-keepfile  created, named in the keep file -> the KEEP gate
 #   jf-prune-decoy-running   RUNNING            -> the STATE gate (never a candidate, survives a floor-0 run)
+#   jf-prune-decoy-nomkt     exited,  no label  -> created LATER, for the refusal
+#                                                 arm: the candidate a floor-0 pass
+#                                                 that cannot create its private
+#                                                 rm-output file must NOT remove
 #
-# Plus the two halves of the guard that are not about a decoy: it FAILS CLOSED on
-# an empty container list, and it never removes an image.
+# Plus the halves of the guard that are not about a decoy: it FAILS CLOSED on an
+# empty container list, it FAILS CLOSED when it cannot create its own private
+# rm-output file (and removes nothing then), it never removes an image, and it
+# never writes to a FIXED path — the path it used to write its rm output to
+# (`/tmp/jomform-container-prune.rm.out`, card t_13f1c904) is planted here as a
+# symlink to a file root can write, and the real floor-0 pass below must leave
+# that file byte-identical (card t_3d34df24).
 #
 # It also drives the INSTALLER (install-host-container-prune.sh) twice against a
 # sandbox prefix with a fake `crontab` on PATH, and asserts the cron entry stays
@@ -28,12 +53,16 @@
 #
 # REQUIREMENTS (it FAILS, never skips, without them): root — a private dockerd
 # cannot run unprivileged — plus the `dockerd` binary, `busybox` (for a 1 MB
-# throwaway image, so no image has to be pulled or borrowed) and a reachable HOST
-# docker daemon, which is read ONLY to prove this run did not touch it.
+# throwaway image, so no image has to be pulled or borrowed), `unshare` and
+# `nsenter` (util-linux: the namespace above, and the caller's bridge read
+# through it) and a reachable HOST docker daemon, which is read ONLY to prove
+# this run did not touch it.
 #
 # Run:  bash deploy/host/jomform-container-prune_test.sh
-# Exit: 0 only if every assertion held; 1 = an assertion failed; 2 = the suite
-#       itself could not run (missing prerequisite, private daemon would not start).
+# Exit: 0 only if every assertion held; 1 = an assertion failed — including the
+#       namespace arm, which FAILS CLOSED (it refuses to start a daemon at all,
+#       so a lost namespace cannot damage the host); 2 = the suite itself could
+#       not run (missing prerequisite, private daemon would not start).
 
 set -uo pipefail
 
@@ -50,6 +79,7 @@ D_PLAIN="$DECOY-plain"
 D_COMPOSE="$DECOY-compose"
 D_KEEPFILE="$DECOY-keepfile"
 D_RUNNING="$DECOY-running"
+D_NOMKT="$DECOY-nomkt"                    # the refusal arm's OWN candidate (created after the real run)
 IMG=""                                    # the per-run image the decoys are made from
 # The running decoy's lifetime, unique per run: if this process is ever found
 # after the run, the leak can be traced to THIS run, and a second suite running
@@ -61,6 +91,8 @@ PRIV=""      # the private daemon's socket path
 PRIV_URL=""
 DPID=""
 KEEPFILE=""
+NOMKT_BIN="" # PATH prefix holding an always-failing `mktemp` (the fail-closed arm)
+PLANTED=""   # the symlink this run plants at the guard's historical FIXED rm path
 CHECKS=0
 FAILS=0
 
@@ -99,6 +131,82 @@ dump() {
   printf '       ---- %s ----\n' "$1"
   sed 's/^/       /' "$1"
   printf '       ------------------\n'
+}
+
+# =========================================== this run's own NETWORK namespace
+# WHY THIS IS THE FIRST THING THAT TOUCHES ANYTHING. A private data-root, socket
+# and pidfile isolate a second daemon's CONTAINERS, not its network namespace —
+# and `--bridge=none` makes moby DELETE the default bridge of the namespace it is
+# started in (`daemon/daemon_unix.go` → `removeDefaultBridgeInterface()`, the
+# "--bridge=none use case"). Started in the host's namespace, that is the HOST's
+# `docker0`: every container on the default bridge then becomes unreachable from
+# the host (the shared test valkey among them, so other lanes' gates red with
+# valkey `i/o timeout` on correct trees), and Docker does not recreate it.
+# Measured on the agent host 2026-10-12 — card `t_a10c01dd`, the root cause of
+# `t_eb901784`: 16 `docker0 is MISSING` ALERTs in the watchdog log
+# (`/var/log/jomform-docker0-watchdog.log`) between 11:40 and 15:24, i.e. the
+# bridge destroyed again within ~2 minutes of every repair by the watchdog cron,
+# and this suite's own private `dockerd … --bridge=none …` (parent: this file) in
+# the process snapshot taken the second `docker0` vanished.
+#
+# So the whole suite re-execs itself inside `unshare -n`. Every socket it uses
+# (the private daemon's, the host daemon's, the host containerd's) is a
+# filesystem object, which crosses a namespace boundary unchanged, and every
+# decoy is `--network none`, so the run needs no network of its own. The
+# descriptor allocated below holds the CALLER's namespace — the one that must
+# still own its `docker0` when this run ends — open across the re-exec, which is
+# what lets the namespace arm read the caller's bridge from inside its own and
+# assert that it is the same interface afterwards.
+#
+# THE FD IS ALLOCATED BY bash, NEVER A LITERAL 9: `scripts/preflight.sh` holds
+# its gate-pool slot on a descriptor it allocates and passes down through the
+# environment, and a fixed number here could free a peer's slot.
+if [ "${JF_PRUNE_CELL:-0}" != "1" ]; then
+  [ "$(id -u)" = 0 ] || fatal "this suite must run as root: it starts a private docker daemon"
+  command -v unshare >/dev/null 2>&1 \
+    || fatal "unshare (util-linux) not on PATH — the private daemon cannot be kept out of the host's network namespace, and a --bridge=none dockerd DELETES the docker0 of the namespace it is started in"
+  command -v nsenter >/dev/null 2>&1 \
+    || fatal "nsenter (util-linux) not on PATH — the caller's docker0 could not be measured from inside this run's own namespace"
+  CALLER_NS="$(readlink /proc/self/ns/net)" \
+    || fatal "could not read /proc/self/ns/net — the caller's network namespace cannot even be named"
+  SELF="${BASH_SOURCE[0]}"
+  case "$SELF" in /*) ;; *) SELF="$PWD/$SELF" ;; esac
+  exec {HOSTNS_FD}</proc/self/ns/net
+  exec unshare -n env \
+    JF_PRUNE_CELL=1 \
+    JF_PRUNE_CALLER_NS="$CALLER_NS" \
+    JF_PRUNE_HOSTNS_FD="$HOSTNS_FD" \
+    bash "$SELF" "$@"
+fi
+
+# We are in our own namespace now, and fd $HOSTNS_FD (inherited, see above) holds
+# the CALLER's. Both inodes are read here rather than assumed: the arm below
+# compares them, so a run that is somehow still in the caller's namespace (the
+# re-exec removed, `unshare` neutered) can never reach the point of starting a
+# daemon there.
+HOSTNS_FD="${JF_PRUNE_HOSTNS_FD:-}"
+CALLER_NS="${JF_PRUNE_CALLER_NS:-}"
+OUR_NS="$(readlink /proc/self/ns/net || true)"
+HOST_D0_BEFORE=""                               # set before anything starts a daemon
+
+# host_ip <args…> — run `ip` in the CALLER's namespace through the inherited fd.
+host_ip() { nsenter --net="/proc/self/fd/$HOSTNS_FD" ip "$@"; }
+
+# host_d0_id — "ifindex mac" of the CALLER's docker0, empty when it has none.
+host_d0_id() {
+  host_ip -o link show docker0 2>/dev/null \
+    | sed -n 's/^\([0-9][0-9]*\): docker0:.*link\/ether \([0-9a-f:][0-9a-f:]*\).*/\1 \2/p'
+}
+
+# host_d0_intact <label> — ONE check either way, so a host that genuinely has no
+# docker0 is measured (and said out loud) rather than skipped: "nothing to lose"
+# is a fact about the host, not a pass for this suite.
+host_d0_intact() {
+  if [ -n "$HOST_D0_BEFORE" ]; then
+    eq "$(host_d0_id)" "$HOST_D0_BEFORE" "$1"
+  else
+    ok "$1 — no docker0 existed in the caller's namespace before this run (measured), so there is none to lose"
+  fi
 }
 
 # ---------------------------------------------------------------- the sandbox
@@ -169,6 +277,9 @@ priv_stop() {
     wait "$DPID" 2>/dev/null || true
   fi
   DPID=""
+  # Only ever removes the symlink THIS run planted at the guard's historical fixed
+  # rm path (a fixed path by definition, so it cannot be owned exclusively).
+  if [ -n "$PLANTED" ] && [ -L "$PLANTED" ]; then rm -f "$PLANTED"; fi
   release_mounts
   drop_scratch
 }
@@ -183,7 +294,7 @@ priv_start() {
   SB="$(mktemp -d "${TMPDIR:-/tmp}/jf-prune-bite.XXXXXX")"
   PRIV="$SB/docker.sock"
   PRIV_URL="unix://$PRIV"
-  mkdir -p "$SB/root" "$SB/rootfs"
+  mkdir -p "$SB/root" "$SB/rootfs" "$SB/tmp"
   dockerd \
     --data-root "$SB/root" \
     --exec-root "$SB/exec" \
@@ -247,9 +358,14 @@ priv_image() {
 # Run the guard under test against the PRIVATE daemon. Everything the guard needs
 # is passed as an environment assignment ON THE COMMAND, so it can never fall
 # back to the host socket: DOCKER_HOST is what the guard's own `docker` calls read.
+# TMPDIR is this run's own empty directory, so the guard's PRIVATE rm-output file
+# (see the fixed-path arm below) lands inside the sandbox and its removal can be
+# asserted instead of assumed.
 run_guard() { # <floor-hours> <dry-run 0|1> <out-file>
   local floor="$1" dry="$2" out="$3" rc=0
   DOCKER_HOST="$PRIV_URL" \
+    TMPDIR="$SB/tmp" \
+    PATH="$MKT_BIN:$PATH" \
     JF_PRUNE_MIN_AGE_H="$floor" \
     JF_PRUNE_DRY_RUN="$dry" \
     JF_PRUNE_KEEP_FILE="$KEEPFILE" \
@@ -257,7 +373,49 @@ run_guard() { # <floor-hours> <dry-run 0|1> <out-file>
   return "$rc"
 }
 
+# The same real run, with a `mktemp` that ALWAYS FAILS first on PATH: the arm that
+# drives the guard's refusal to proceed without its private rm-output file.
+run_guard_nomktemp() { # <out-file>
+  local out="$1" rc=0
+  DOCKER_HOST="$PRIV_URL" \
+    TMPDIR="$SB/tmp" \
+    PATH="$NOMKT_BIN:$PATH" \
+    JF_PRUNE_MIN_AGE_H=0 \
+    JF_PRUNE_DRY_RUN=0 \
+    JF_PRUNE_KEEP_FILE="$KEEPFILE" \
+    bash "$GUARD" >"$out" 2>&1 || rc=$?
+  return "$rc"
+}
+
 # ------------------------------------------------------------------ run it
+# THE NAMESPACE ARM, FIRST, and it FAILS CLOSED: nothing below this point has
+# started a daemon, planted anything or removed anything, so a run that is in the
+# CALLER's namespace stops here instead of deleting the caller's `docker0` and
+# reporting on decoys it no longer controls. It is a comparison of two measured
+# inodes rather than a marker check, because the marker is what a broken re-exec
+# would still export: `exec unshare -n` replaced by `exec`, with the environment
+# intact, leaves JF_PRUNE_CELL=1 set and lands in the caller's namespace all the
+# same — which is exactly the mutation the bite proof drives.
+if [ "${JF_PRUNE_CELL:-0}" != "1" ] || [ -z "$CALLER_NS" ] || [ -z "$OUR_NS" ] || [ "$OUR_NS" = "$CALLER_NS" ]; then
+  bad "the private daemon would be started in the CALLER's network namespace (ours='${OUR_NS:-unreadable}', caller's='${CALLER_NS:-unset}'), where a --bridge=none dockerd DELETES the caller's docker0"
+  say ""
+  say "REFUSING to go further: the namespace arm fails closed, so a lost namespace cannot"
+  say "damage the host. Nothing has been started, planted or removed at this point."
+  say "RESULT: $FAILS of $CHECKS checks FAILED"
+  exit 1
+fi
+ok "the suite and its private daemon run in their OWN network namespace ($OUR_NS), not the caller's ($CALLER_NS)"
+
+# The instrument the bridge checks below depend on, proven before it is trusted: a
+# descriptor that no longer points at a namespace would make every docker0 reading
+# empty, and an empty reading compared against an empty one is a green that
+# measures nothing.
+ifaces="$(host_ip -o link show 2>/dev/null | wc -l | tr -d ' ')"
+[ "${ifaces:-0}" -ge 1 ] \
+  || fatal "the CALLER's network namespace could not be read through fd '$HOSTNS_FD' ($ifaces interfaces) — the caller's docker0 cannot be measured from here"
+ok "the caller's namespace is readable through fd $HOSTNS_FD ($ifaces interfaces), so its docker0 is MEASURED rather than assumed"
+HOST_D0_BEFORE="$(host_d0_id)"
+
 [ "$(id -u)" = 0 ] || fatal "this suite must run as root: it starts a private docker daemon"
 [ -f "$GUARD" ] || fatal "$GUARD not found"
 [ -f "$INSTALLER" ] || fatal "$INSTALLER not found"
@@ -272,6 +430,30 @@ host info >/dev/null 2>&1 || fatal "the HOST docker daemon is unreachable ($HOST
 HOST_CONTAINERS_BEFORE="$(host ps -a -q | sort)"
 HOST_IMAGES_BEFORE="$(host images -q | sort)"
 
+say ""
+say "== this run's own namespace: the decoy docker0 the private daemon will delete =="
+# WHAT THE DECOY IS FOR. The daemon deletes the default bridge of whatever
+# namespace it runs in, so this namespace's `docker0` is planted here — before the
+# daemon exists — and the arm below REQUIRES that it is gone afterwards. Without
+# that requirement "the caller's docker0 survived" would credit the namespace for
+# something a future docker might simply have stopped doing; with it, the survival
+# is attributable to the namespace and nothing else. It is also why this suite
+# cannot be run in a namespace that already has a bridge: the decoy would not be
+# its own, and the requirement would be unfalsifiable.
+if ip -o link show docker0 >/dev/null 2>&1; then
+  bad "this run's own namespace already had a docker0 before the private daemon started — the decoy would not be this run's own, so a deletion here would prove nothing"
+else
+  ok "this run's own namespace has no docker0 yet (so the one planted below is the only bridge this run can lose)"
+fi
+ip link add docker0 type bridge \
+  || fatal "could not plant the decoy docker0 in this run's own namespace (is the bridge kernel module available?)"
+ip addr add 172.17.0.1/16 dev docker0 || fatal "could not address the decoy docker0"
+ip link set docker0 up || fatal "could not bring the decoy docker0 up"
+DECOY_D0="$(ip -o link show docker0 | sed -n 's/^\([0-9][0-9]*\): docker0:.*link\/ether \([0-9a-f:][0-9a-f:]*\).*/\1 \2/p')"
+[ -n "$DECOY_D0" ] || fatal "could not read the decoy docker0's identity back after planting it"
+say "decoy: this namespace's docker0 -> $DECOY_D0; the caller's is '$HOST_D0_BEFORE'"
+
+say ""
 say "== the private daemon =="
 priv_start
 # --host must win over DOCKER_HOST, or the isolation claim is wrong. Two daemons
@@ -284,9 +466,56 @@ if [ -z "$host_id" ] || [ -z "$priv_id" ] || [ "$host_id" = "$priv_id" ]; then
   fatal "--host and DOCKER_HOST resolved to the same daemon (host='$host_id' default='$priv_id') — the sandbox is not isolated"
 fi
 ok "the private daemon is isolated from the host daemon (--host wins over DOCKER_HOST)"
+
+# THE NETNS CLAIM, in three parts, immediately after the daemon has started —
+# which is when a `--bridge=none` dockerd deletes a bridge. (1) the daemon process
+# itself is inside this run's namespace; (2) it deleted a docker0, namely this
+# run's own decoy, so the destructive behaviour is LIVE here and what spares the
+# caller is the namespace and not a docker that changed its mind; (3) the caller's
+# docker0 is the SAME interface it was — same ifindex, same MAC — so a recreated
+# bridge somewhere else cannot read as a bridge that survived.
+eq "$(readlink "/proc/$DPID/ns/net" 2>/dev/null)" "$OUR_NS" \
+   "the private daemon itself runs inside this run's own network namespace ($OUR_NS)"
+eq "$(ip -o link show docker0 >/dev/null 2>&1 && echo present || echo gone)" "gone" \
+   "the private daemon DELETED the docker0 of its OWN namespace ($DECOY_D0 is gone) — --bridge=none really does this, so what spares the caller's is the namespace"
+host_d0_intact "the caller's docker0 survived the private daemon's start, unchanged from '$HOST_D0_BEFORE' (same ifindex and MAC)"
 priv_image
 KEEPFILE="$SB/keep-containers"
 printf '%s\n' "$D_KEEPFILE" >"$KEEPFILE"
+
+# A `mktemp` on PATH that RECORDS what the guard asked for and what it got, then
+# delegates to the real one. This is what makes the guard's private rm-output
+# file a MEASUREMENT rather than an assumption: the arm asserts the template the
+# guard asked for (a path under this run's own TMPDIR) and the created file's own
+# identity (a regular file — not a followed symlink — mode 0600, owned by root).
+# Nothing else in a guard pass
+# calls the `mktemp` binary, so the log holds exactly one entry after a real run
+# and zero after the dry runs.
+MKT_BIN="$SB/mkt-bin"
+RM_MKT_LOG="$SB/mktemp.invocations"
+REAL_MKTEMP="$(command -v mktemp)"
+[ -n "$REAL_MKTEMP" ] || fatal "no mktemp on PATH — the guard's private rm-output file cannot be measured"
+mkdir -p "$MKT_BIN"
+: >"$RM_MKT_LOG"
+cat >"$MKT_BIN/mktemp" <<WRAPPER
+#!/usr/bin/env bash
+# Log the template, the created path and that path's own identity, then answer
+# exactly as the real mktemp would (same args, same stdout, same status).
+out="\$(exec "$REAL_MKTEMP" "\$@")" || exit \$?
+printf 'template=%s\nfile=%s\nkind=%s\nmode=%s\nowner=%s\n' \
+  "\$*" "\$out" "\$(stat -c '%F' "\$out")" "\$(stat -c '%a' "\$out")" "\$(stat -c '%U' "\$out")" >>"$RM_MKT_LOG"
+printf '%s\n' "\$out"
+WRAPPER
+chmod 0755 "$MKT_BIN/mktemp"
+chmod 0644 "$RM_MKT_LOG"
+# The wrapper is load-bearing for an assertion below, so prove it delegates: a
+# wrapper that failed to answer would abort the real run and red the suite for the
+# wrong reason, and one that never logged would make the arm vacuous.
+probe="$(PATH="$MKT_BIN:$PATH" mktemp "$SB/tmp/probe.XXXXXX")" || fatal "the delegating mktemp wrapper did not answer"
+eq "$(grep -c '^template=' "$RM_MKT_LOG" || true)" "1" "the mktemp wrapper logs the call and delegates to the real mktemp"
+[ -f "$probe" ] && ok "the wrapper's own probe file exists (it created a real file)" || bad "the wrapper's probe file was not created"
+rm -f "$probe"
+: >"$RM_MKT_LOG"
 
 # ---------------------------------------------------------------- fail closed
 say ""
@@ -371,6 +600,44 @@ else
   ok "no live stack container name appeared in the guard's output"
 fi
 
+# --------------------- the private rm-output file (the fixed /tmp path defect)
+# WHAT THIS PINS, and why. The guard writes its `docker rm` output to a file it
+# creates itself (`mktemp`, random name, O_EXCL, mode 0600). The version of this
+# guard that shipped first (card `t_13f1c904`) redirected that output to a FIXED
+# path in a world-writable directory — `/tmp/jomform-container-prune.rm.out` —
+# and the redirect is opened by root BEFORE `docker rm` runs, so any local user
+# who creates that name first (a symlink to a file root can write) made root
+# truncate and replace the target. Reproduced by card `t_3d34df24` against the
+# shipped bytes: victim sha256 89f2522a… -> f5120dc7….
+#
+# THE TWO HALVES ARE DRIVEN IN THIS ORDER ON PURPOSE. The refusal arm below is a
+# real floor-0 pass that removes a candidate OF ITS OWN, and this suite's first
+# draft ran it FIRST — which made the sabotage proof come out DID NOT BITE,
+# measured on 2026-10-12: with the fixed path restored, the refusal arm removed
+# the ONE candidate the planted-symlink arm depends on, so that arm then found
+# `nothing to remove`, never reached the removal step, and left the victim
+# untouched (the guard still exited 0, so nothing else caught it either). A guard
+# that removes nothing cannot damage anything, so the symlink arm only measures
+# something when a removal really happens first.
+say ""
+say "== the private rm-output file: never a fixed path, and fail closed without one =="
+eq "$(grep -c '^template=' "$RM_MKT_LOG" || true)" "0" \
+   "no rm-output file was created by the dry runs or by an earlier refusal (only a real removal creates one)"
+
+# The planted symlink. It is planted at the path the guard USED TO write to, and
+# the assertion is about the VICTIM's bytes rather than about the symlink itself:
+# a fixed path cannot be owned exclusively, so a second concurrent run of this
+# suite may replace the link, and a false red on a healthy host would be worse
+# than the (only-in-concurrency) weaker claim. The real floor-0 run below is what
+# would follow it.
+PLANTED=/tmp/jomform-container-prune.rm.out
+VICTIM="$SB/planted-symlink-victim.txt"
+printf '%s\n' 'THIS FILE MUST NOT BE TOUCHED BY A CONTAINER PRUNE' >"$VICTIM"
+victim_before="$(sha256sum "$VICTIM" | awk '{print $1}')"
+ln -sfn "$VICTIM" "$PLANTED"
+say "planted: $PLANTED -> $(readlink "$PLANTED" 2>/dev/null || echo '(the link was not planted)')"
+eq "$(readlink "$PLANTED" 2>/dev/null)" "$VICTIM" "the decoy symlink is in place (the victim really is exposed)"
+
 # ---------------------------------------------------- the guard BITES (floor 0)
 say ""
 say "== the guard BITES: floor 0, real run =="
@@ -387,6 +654,69 @@ eq "$(priv ps -a --format '{{.State}}' | sort | uniq -c | awk '{printf "%s %s;",
 leftover="$(priv ps -a --format '{{.Names}}' | grep -cv "^$DECOY-" || true)"
 eq "$leftover" "0" "every container in the private daemon is one of this suite's decoys"
 
+# The half the planted symlink exists for: the guard's one destructive pass ran,
+# and the file the guard USED to open for writing is exactly as it was.
+eq "$(sha256sum "$VICTIM" | awk '{print $1}')" "$victim_before" \
+   "the planted symlink's target was NOT written through (the fixed /tmp path is never opened)"
+has "$VICTIM" "MUST NOT BE TOUCHED" "the victim's original text is intact, byte for byte"
+# ...and the positive half: the file the guard DID open was its own, created
+# through mktemp under this run's TMPDIR, regular, 0600, owned by root.
+eq "$(grep -c '^template=' "$RM_MKT_LOG" || true)" "1" "the real pass created its rm-output file exactly once"
+mkt_template="$(grep -m1 '^template=' "$RM_MKT_LOG" | cut -d= -f2-)"
+mkt_file="$(grep -m1 '^file=' "$RM_MKT_LOG" | cut -d= -f2-)"
+case "$mkt_template" in
+  "$SB"/tmp/*) ok "the guard asked mktemp for a PRIVATE path under its own TMPDIR ($mkt_template)";;
+  *)           bad "the guard asked mktemp for '$mkt_template' — not a private path under $SB/tmp";;
+esac
+case "$mkt_file" in
+  "$SB"/tmp/*) ok "the rm output really was written to that private file ($mkt_file)";;
+  *)           bad "the rm output's file was '$mkt_file' — not under $SB/tmp";;
+esac
+mkt_kind="$(grep -m1 '^kind=' "$RM_MKT_LOG" | cut -d= -f2-)"
+case "$mkt_kind" in
+  regular*) ok "the rm-output path is a regular file ($mkt_kind), not a followed symlink";;
+  *)        bad "the rm-output path is a '$mkt_kind' — not a regular file";;
+esac
+eq "$(grep -m1 '^mode=' "$RM_MKT_LOG" | cut -d= -f2-)" "600" \
+   "it is mode 0600 — nobody but root can read root's rm output"
+eq "$(grep -m1 '^owner=' "$RM_MKT_LOG" | cut -d= -f2-)" "root" "it is owned by root"
+eq "$(find "$SB/tmp" -maxdepth 1 -name 'jomform-container-prune.rm.*' | wc -l | tr -d ' ')" "0" \
+   "the guard deleted its own rm-output file before exiting (nothing left in TMPDIR)"
+
+# ---- the refusal arm, AFTER the real run (see the order comment above): it needs
+# a candidate of its own, because the real run above has just taken $D_PLAIN.
+say ""
+say "== the private rm-output file is REQUIRED: a pass that cannot create one removes NOTHING =="
+req "create decoy $D_NOMKT" priv run --network none --name "$D_NOMKT" "$IMG" $TRUE_CMD
+eq "$(priv inspect --format '{{.State.Status}}' "$D_NOMKT")" "exited" \
+   "$D_NOMKT is a stopped container — the leak class this arm's floor-0 pass would take"
+# Floor 0 compares the CreatedAt SECOND against now, so wait past that or the age
+# gate would spare the decoy and the arm would measure the age gate instead.
+sleep 2
+NOMKT_BIN="$SB/nomkt-bin"
+mkdir -p "$NOMKT_BIN"
+cat >"$NOMKT_BIN/mktemp" <<'FAKEMKT'
+#!/usr/bin/env bash
+# An always-failing `mktemp`: this arm measures the guard's refusal, and it must
+# not depend on the real TMPDIR being full or read-only.
+echo "fake mktemp: refusing to create $*" >&2
+exit 1
+FAKEMKT
+chmod 0755 "$NOMKT_BIN/mktemp"
+# The arm's premise, verified rather than assumed: if the fake did NOT fail, the
+# arm would be measuring the real mktemp and would pass for the wrong reason.
+rc=0; PATH="$NOMKT_BIN:$PATH" mktemp >/dev/null 2>&1 || rc=$?
+eq "$rc" "1" "the arm's fake mktemp really fails (the arm measures the guard)"
+OUT="$SB/nomktemp.out"
+rc=0; run_guard_nomktemp "$OUT" || rc=$?
+eq "$rc" "1" "no private rm-output file means a non-zero exit"
+has "$OUT" "could not create a private rm-output file" "it says WHY, and calls it fail-closed"
+has "$OUT" "nothing removed" "it states that nothing was removed"
+eq "$(priv ps -a --format '{{.Names}}' | grep -c "^$D_NOMKT$" || true)" "1" \
+   "NOTHING was removed: the candidate SURVIVED the refusal (a real floor-0 pass that removes nothing)"
+eq "$(priv ps -a --format '{{.Names}}' | grep -cv "^$DECOY-" || true)" "0" \
+   "the private daemon still holds only this suite's decoys"
+
 # ------------------------------------------------------- the host was not touched
 say ""
 say "== the HOST daemon was not touched =="
@@ -395,6 +725,11 @@ lost_images="$(comm -23 <(printf '%s\n' "$HOST_IMAGES_BEFORE") <(host images -q 
 eq "$lost_containers" "0" "no host container that existed before this run is gone"
 eq "$lost_images" "0" "no host image that existed before this run is gone"
 eq "$(host ps -a --format '{{.Names}}' | grep -c "^$DECOY-" || true)" "0" "no decoy ever existed on the host daemon"
+# The bridge, at the END of the run as well: this is the caller's view of the whole
+# suite, which is what the next lane's `docker run --network bridge` needs. (The
+# same measurement right after the daemon started is what ATTRIBUTES a failure to
+# this suite rather than to some other actor on the host.)
+host_d0_intact "the caller's docker0 is still there after the whole suite, and is the same interface (ifindex and MAC) it started as"
 
 # --------------------------------------------------------------- the installer
 say ""

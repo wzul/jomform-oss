@@ -14,7 +14,7 @@
 # three committed files are sha256-checked before and after the run.
 #
 # It is ON DEMAND, not a preflight gate: each case costs a whole decoy suite
-# (a private dockerd per case), measured ~24s, so the six cases below are ~3
+# (a private dockerd per case), measured ~24s, so the nine cases below are ~4
 # minutes — the same reason deploy/backup/jomform-backup_bite.sh is not wired in.
 # The SUITE is the per-merge gate (`prunehost`); this is the instrument that
 # proves the suite's assertions can fail.
@@ -84,7 +84,44 @@ sab_age_gate()       { sub '  if [ "$epoch" -ge "$cutoff" ]; then' '  if false; 
 sab_compose_gate()   { sub '  if [ -n "$proj" ]; then' '  if false; then'; }
 sab_keepfile_gate()  { sub '    KEEP_NAMES="$KEEP_NAMES $extra "' '    : "sabotage: the keep file is ignored"'; }
 sab_fail_closed()    { sub 'if [ -z "$raw" ]; then' 'if false; then'; }
+
+# THE NETWORK-NAMESPACE CONTAINMENT of the private daemon (card `t_a10c01dd`).
+# `--bridge=none` makes a `dockerd` DELETE the default bridge of whatever network
+# namespace it is started in, so the decoy suite re-execs itself under `unshare -n`
+# (see `deploy/host/jomform-container-prune_test.sh`) and the bridge it deletes is a
+# decoy of its own. Dropping `unshare -n` from that re-exec puts the daemon back in
+# the CALLER's namespace — which on this host is the one holding `docker0`, and the
+# defect the card is about — and the suite must then go RED on the arm that names
+# it. THE CASE IS SAFE TO RUN ON A LIVE HOST, and that is not luck: the namespace arm
+# is checked BEFORE anything destructive exists and FAILS CLOSED, so the mutation
+# cannot reach a daemon start (nothing is planted, nothing is removed, no decoy
+# suite runs) — measured on the agent host 2026-10-12: after the case, the host's
+# docker0 kept its ifindex and MAC and the watchdog log gained no ALERT.
+sab_netns_isolation() { sub 'exec unshare -n env \' 'exec env \'; }
 sab_installer_idem() { sub 'if [ "${have:-0}" -gt 0 ]; then' 'if false; then'; }
+
+# The guard's PRIVATE rm-output file (card `t_3d34df24`). The four-line block that
+# creates it is replaced wholesale in both cases below, because a hand-split anchor
+# across it is exactly the shape that silently matches nothing. Both anchors are one
+# exact block: `sub` ABORTS the case when it occurs 0 or 2+ times.
+RM_OUT_BLOCK='rm_out="$(mktemp "${TMPDIR:-/tmp}/jomform-container-prune.rm.XXXXXXXX")" || {
+  log "FATAL: could not create a private rm-output file (mktemp failed) - fail closed, nothing removed"
+  exit 1
+}'
+
+# THE CARDED DEFECT, RESTORED: `docker rm`'s output goes back to the FIXED,
+# predictable path in a world-writable directory that the guard shipped with. Root
+# opens it for writing BEFORE `docker rm` runs, so the symlink the suite plants
+# there first is followed and the file it points at is truncated.
+sab_fixed_rm_path() { sub "$RM_OUT_BLOCK" 'rm_out=/tmp/jomform-container-prune.rm.out'; }
+
+# The OTHER half: the file is still private, but the guard no longer REFUSES when
+# it cannot create one. Measured, not assumed: `rm_out` is then empty, `>"$rm_out"`
+# fails with "No such file or directory", `docker rm` never runs, and the pass ends
+# `removed=0 containers` with exit 0 — a silent no-op reported as success.
+sab_rm_out_fail_closed() {
+  sub "$RM_OUT_BLOCK" 'rm_out="$(mktemp "${TMPDIR:-/tmp}/jomform-container-prune.rm.XXXXXXXX")"'
+}
 
 # BOTH halves of the running-container defence. The guard has two and they are
 # independent: the stopped-state filter keeps a running container out of the
@@ -193,10 +230,25 @@ bite "the FAIL-CLOSED gate (an empty container list is no longer an error)" \
      "an empty container list exits non-zero" \
      sab_fail_closed
 
+bite "the NETWORK-NAMESPACE containment (the private daemon put back in the CALLER's namespace, where --bridge=none deletes the host's docker0)" \
+     "$SUITE_FILE" \
+     "would be started in the CALLER's network namespace" \
+     sab_netns_isolation
+
 bite "the INSTALLER's idempotency (the cron entry is added even when present)" \
      "$INSTALLER_FILE" \
      "two runs leave exactly ONE cron entry" \
      sab_installer_idem
+
+bite "the PRIVATE rm-output file (the fixed /tmp path restored, so a symlink planted there is followed)" \
+     "$GUARD_FILE" \
+     "NOT written through" \
+     sab_fixed_rm_path
+
+bite "the FAIL-CLOSED refusal when no private rm-output file can be created" \
+     "$GUARD_FILE" \
+     "no private rm-output file means a non-zero exit" \
+     sab_rm_out_fail_closed
 
 # ------------------------------------------------------------------ the verdict
 say ""
