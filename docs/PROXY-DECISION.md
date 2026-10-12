@@ -17,7 +17,12 @@ Reasons:
    Let's Encrypt certificates. Traefik's file provider lets us append/replace a
    small YAML snippet per domain with zero reload of the Go processes:
    `deploy/vps/traefik-jomform.yml` is the live pattern (v3 `HostRegexp`
-   syntax — plain regex, no Go named-group placeholders).
+   syntax — plain regex, no Go named-group placeholders) and is the live FILE
+   rather than a description of it: measured 2026-10-12 it held 55 lines in
+   Traefik v2 syntax while the host loaded 179 lines of v3, so installing "the
+   live pattern" on a new host would have produced different routing. It is now a
+   byte-for-byte copy of what the edge loads, and `deploy/vps/drift-check.sh`
+   compares the two (see `deploy/HOST-SETUP.md`).
 2. **Wildcard TLS** for `*.jomform.com` is already issued and working.
 3. **No code coupling.** The API serves plain HTTP inside the network. Swapping
    the proxy for Caddy or Go `autocert` later touches only `deploy/vps/`, never

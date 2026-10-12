@@ -5,6 +5,11 @@ the VPS. It exists because during the v1.0.0 deploy two agents built images
 from the same working tree at the same time, and prod briefly ran a pre-release
 binary labelled as the release.
 
+This file is about IMAGES. For standing the stack up on a NEW host — the compose
+and Traefik the host must run, the env contract (which secrets are inherited and
+which may be minted), the repo/host drift check, and the data move — see
+[`HOST-SETUP.md`](HOST-SETUP.md).
+
 ## What the script guarantees
 
 | Guarantee | Mechanism |

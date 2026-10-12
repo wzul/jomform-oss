@@ -1745,6 +1745,7 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
     monitor)  printf '%s\n' 'deploy/monitoring/*' ;;
     tmpkey)   printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
     backup)   printf '%s\n' 'deploy/backup/*' ;;
+    host)     printf '%s\n' 'deploy/host/*' 'deploy/vps/*' ;;
     prunewt)  printf '%s\n' 'deploy/worktrees/*' ;;
     refguard) printf '%s\n' 'scripts/refguard.sh' 'scripts/refguard_test.sh' ;;
     selftest) printf '%s\n' 'scripts/preflight.sh' 'scripts/preflight_test.sh' ;;

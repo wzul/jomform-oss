@@ -241,7 +241,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet gofmt test govuln web lint webimage a11y e2e npmaudit gitleaks monitor tmpkey backup prunewt refguard selftest)
+GATE_NAMES=(build vet gofmt test govuln web lint webimage a11y e2e npmaudit gitleaks monitor tmpkey backup host prunewt refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -490,7 +490,7 @@ pw_declared() {
     build|vet|test|govuln) printf '%s\n' 'api/*' ;;
     web|a11y|e2e|lint)    printf '%s\n' 'web/*' ;;
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
-    monitor|tmpkey|backup|prunewt|refguard) printf '%s\n' 'deploy/*' 'scripts/*' ;;
+    monitor|tmpkey|backup|host|prunewt|refguard) printf '%s\n' 'deploy/*' 'scripts/*' ;;
     selftest)              printf '%s\n' 'scripts/*' 'GATE-INVENTORY.md' ;;
     gitleaks)              printf '%s\n' '*' ;;
     *)                     printf '%s\n' '*' ;;
@@ -512,6 +512,7 @@ pw_sources() {
     monitor)               printf '%s\n' 'deploy/monitoring/*' ;;
     tmpkey)                printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
     backup)                printf '%s\n' 'deploy/backup/*' ;;
+    host)                  printf '%s\n' 'deploy/host/*' 'deploy/vps/*' ;;
     prunewt)               printf '%s\n' 'deploy/worktrees/*' ;;
     refguard)              printf '%s\n' 'scripts/refguard.sh' 'scripts/refguard_test.sh' ;;
     selftest)              printf '%s\n' 'scripts/preflight.sh' 'scripts/preflight_test.sh' ;;
@@ -2614,6 +2615,31 @@ backup_run() {
   bash "$REPO_ROOT/deploy/backup/jomform-backup_test.sh"
 }
 run backup "nightly backup failure-path suite (exit 0 is not an upload, empty dump refused, drill cannot mask a failing job)" backup_run
+
+# host — the fresh-host bootstrap and the repo/host drift check, as self-tests.
+# Same shape of gate as `monitor`/`tmpkey`/`backup`: what is testable in the repo is
+# each script's own harness, and neither harness touches a real host (a stubbed
+# `docker`/`id` on PATH, `--root` pointed at a temp dir, and fixtures instead of
+# ssh — the drift test never opens a connection).
+#
+# WHY IT IS A GATE AND NOT JUST TWO SCRIPTS. Measured 2026-10-12, the repo
+# described a host that did not match the one running production, and every
+# difference was SILENT: `deploy/docker-compose.yml` was the dev shape, whose
+# `pgdata` mount (`/var/lib/postgresql/data`) does not match where the pinned
+# `postgres:18` image keeps its data, so a fresh host would have come up with an
+# EMPTY database, and its password defaulted to `jomform_dev`; the traefik pattern
+# was written in Traefik v2 syntax while the live edge is v3; and the env example
+# used `SMTP_*` names the API does not read (it reads `SES_*`), so a deployment
+# from it had no working email. The stack comes up healthy in all three cases. This
+# gate is what keeps the repo's half of the fact — `deploy/vps/*` — and the
+# contract the scripts enforce from drifting apart again, and it is why
+# `deploy/vps/*` is in this gate's sources: a compose key added there changes the
+# env contract the bootstrap derives.
+host_run() {
+  bash "$REPO_ROOT/deploy/host/bootstrap-host_test.sh"
+  bash "$REPO_ROOT/deploy/vps/drift-check_test.sh"
+}
+run host "fresh-host bootstrap + repo/host drift self-tests (dry-run changes nothing; the env contract is derived from the compose; a missing live file is never a pass)" host_run
 
 # prunewt — the worktree pruner's self-test. Same shape of gate as
 # `monitor`/`tmpkey` and for the same reason: `prune-kanban-worktrees.sh` only

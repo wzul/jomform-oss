@@ -1,55 +1,179 @@
 http:
   routers:
     jf-web:
-      rule: "Host(`jomform.com`) || Host(`www.jomform.com`)"
-      entryPoints: [websecure]
+      rule: Host(`jomform.com`) || Host(`www.jomform.com`)
+      entryPoints:
+      - websecure
       service: jf-web
-      tls: {certResolver: le}
+      tls:
+        certResolver: le
       priority: 10
-    jf-healthz:
-      rule: "PathPrefix(`/healthz`) && (Host(`jomform.com`) || Host(`www.jomform.com`))"
-      entryPoints: [websecure]
-      service: jf-api
-      tls: {certResolver: le}
-      priority: 60
-    jf-web-api:
-      rule: "PathPrefix(`/api/`) && (Host(`jomform.com`) || Host(`www.jomform.com`))"
-      entryPoints: [websecure]
+    jf-web-mcp-setup:
+      rule: (Host(`jomform.com`) || Host(`www.jomform.com`)) && PathPrefix(`/mcp`)
+      entryPoints:
+      - websecure
       service: jf-web
-      tls: {certResolver: le}
-      priority: 30
-    jf-api-f:
-      rule: "PathPrefix(`/f/`) || PathPrefix(`/t/`) || PathPrefix(`/v1/`) || PathPrefix(`/mcp`) || PathPrefix(`/embed/`) || PathPrefix(`/.well-known/oauth`) || PathPrefix(`/oauth/`) || PathPrefix(`/media/`)"
-      entryPoints: [websecure]
-      service: jf-api
-      tls: {certResolver: le}
-      priority: 25
-    jf-wildcard:
-      rule: "HostRegexp(`[a-z0-9-]+.jomform.com`) && !Host(`www.jomform.com`)"
-      entryPoints: [websecure]
+      tls:
+        certResolver: le
+      priority: 50
+    jf-healthz:
+      rule: PathPrefix(`/healthz`) && (Host(`jomform.com`) || Host(`www.jomform.com`))
+      entryPoints:
+      - websecure
       service: jf-api
       tls:
         certResolver: le
-        domains: ["*.jomform.com", "jomform.com"]
+      priority: 60
+    jf-web-api:
+      rule: PathPrefix(`/api/`) && (Host(`jomform.com`) || Host(`www.jomform.com`))
+      entryPoints:
+      - websecure
+      service: jf-web
+      tls:
+        certResolver: le
+      priority: 30
+    jf-api-f:
+      rule: PathPrefix(`/f/`) || PathPrefix(`/t/`) || PathPrefix(`/v1/`) || PathPrefix(`/mcp`)
+        || PathPrefix(`/media/`) || PathPrefix(`/embed/`) || PathPrefix(`/.well-known/oauth`)
+        || PathPrefix(`/oauth/`) || PathPrefix(`/healthz`)
+      entryPoints:
+      - websecure
+      service: jf-api
+      tls:
+        certResolver: le
+      priority: 25
+    jf-custom-root:
+      rule: '!Host(`jomform.com`) && !Host(`www.jomform.com`) && !Host(`mcp.jomform.com`)
+        && PathPrefix(`/`)'
+      entryPoints:
+      - websecure
+      service: jf-api
+      tls:
+        certResolver: le
+      priority: 15
+    jf-custom-cert-halo:
+      rule: Host(`halo.example.com`)
+      entryPoints:
+      - websecure
+      service: jf-api
+      tls:
+        certResolver: le
+        domains:
+        - halo.example.com
+      priority: 70
+    jf-custom-root-http:
+      rule: '!Host(`jomform.com`) && !Host(`www.jomform.com`) && !Host(`mcp.jomform.com`)'
+      entryPoints:
+      - web
+      priority: 15
+      middlewares:
+      - https-redirect
+      service: jf-api
+    jf-mcp-root:
+      rule: Host(`mcp.jomform.com`) && Path(`/`)
+      entryPoints:
+      - websecure
+      priority: 60
+      middlewares:
+      - mcp-root-redirect
+      service: jf-web
+      tls:
+        certResolver: le
+    jf-mcp-root-http:
+      rule: Host(`mcp.jomform.com`) && Path(`/`)
+      entryPoints:
+      - web
+      priority: 60
+      middlewares:
+      - mcp-root-redirect
+      service: jf-web
+    jf-wildcard:
+      rule: HostRegexp(`[a-z0-9-]+.jomform.com`) && !Host(`www.jomform.com`)
+      entryPoints:
+      - websecure
+      service: jf-api
+      tls:
+        certResolver: le
+        domains:
+        - '*.jomform.com'
+        - jomform.com
       priority: 20
     jf-wildcard-http:
-      rule: "HostRegexp(`[a-z0-9-]+.jomform.com`) && !Host(`www.jomform.com`)"
-      entryPoints: [web]
+      rule: HostRegexp(`[a-z0-9-]+.jomform.com`) && !Host(`www.jomform.com`)
+      entryPoints:
+      - web
       service: jf-api
       priority: 20
     jf-web-fallback:
-      rule: "Host(`jomform.com`) || Host(`www.jomform.com`)"
-      entryPoints: [web]
+      rule: Host(`jomform.com`) || Host(`www.jomform.com`)
+      entryPoints:
+      - web
       service: jf-web
       priority: 1
-      middlewares: [https-redirect]
+      middlewares:
+      - https-redirect
+    jf-docs-root:
+      rule: Host(`docs.jomform.com`) && Path(`/`)
+      entryPoints:
+      - websecure
+      priority: 60
+      middlewares:
+      - docs-root-redirect
+      service: jf-web
+      tls:
+        certResolver: le
+    jf-docs-root-http:
+      rule: Host(`docs.jomform.com`) && Path(`/`)
+      entryPoints:
+      - web
+      priority: 60
+      middlewares:
+      - docs-root-redirect
+      service: jf-web
+    jf-docs-prefix:
+      rule: Host(`docs.jomform.com`) && PathPrefix(`/docs/`)
+      entryPoints:
+      - websecure
+      priority: 55
+      middlewares:
+      - docs-prefix-redirect
+      service: jf-web
+      tls:
+        certResolver: le
+    jf-docs-prefix-http:
+      rule: Host(`docs.jomform.com`) && PathPrefix(`/docs/`)
+      entryPoints:
+      - web
+      priority: 55
+      middlewares:
+      - docs-prefix-redirect
+      service: jf-web
   middlewares:
     https-redirect:
-      redirectScheme: {scheme: https, permanent: true}
+      redirectScheme:
+        scheme: https
+        permanent: true
+    mcp-root-redirect:
+      redirectRegex:
+        regex: ^(?:https?://mcp\.jomform\.com)?/?$
+        replacement: https://jomform.com/mcp
+        permanent: true
+    docs-root-redirect:
+      redirectRegex:
+        regex: ^(?:https?://docs\.jomform\.com)?/?$
+        replacement: https://jomform.com/docs
+        permanent: true
+    docs-prefix-redirect:
+      redirectRegex:
+        regex: ^(?:https?://docs\.jomform\.com)?(/docs/.*)$
+        replacement: https://jomform.com$1
+        permanent: true
   services:
     jf-web:
       loadBalancer:
-        servers: [{url: "http://jomform-web-1:3000"}]
+        servers:
+        - url: http://jomform-web-1:3000
     jf-api:
       loadBalancer:
-        servers: [{url: "http://jomform-api-1:8080"}]
+        servers:
+        - url: http://jomform-api-1:8080

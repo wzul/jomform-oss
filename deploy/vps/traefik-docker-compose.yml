@@ -21,7 +21,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /opt/traefik/dynamic:/etc/traefik/dynamic:ro
       - /opt/traefik/acme:/acme
-    networks: [jomform_internal]
+    networks: [jomform_internal, dokploy-network]
 networks:
+  dokploy-network:
+    external: true
   jomform_internal:
     external: true
