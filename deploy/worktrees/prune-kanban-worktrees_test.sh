@@ -577,6 +577,58 @@ contains "...and nothing in that run is called a failure" "$(grep -c 'FAIL ' "$L
 run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
 check "at-risk work kept with no reclaim at all is exit 3 (the pruner-is-keeping-everything alarm)" "3" "$RC"
 contains "...and the summary names the at-risk keeps" "$(cat "$LOG")" "at_risk=2"
+# ...and "no reclaim at all" is measured, not assumed: the summary line carries the
+# artefact reap's own count too, and it is 0 here. That is what makes 8b's exit 3 the
+# statement "the run reclaimed literally nothing" (card t_ef95e467).
+contains "...and it reclaimed literally nothing, artefact reaps included" "$(cat "$LOG")" " artefacts=0 "
+
+# 8b-ii. THE SAME at-risk set and the same "no worktree reclaimed" state as 8b —
+#     except this run DOES reclaim something: the build artefacts of a worktree it is
+#     KEEPING for an at-risk reason. That is the job the script exists for, one level
+#     down, and it must NOT trip the alarm (card t_ef95e467).
+#
+#     The defect: the exit-3 test read `removed`/`stray_removed` only, and both count
+#     WORKTREE removals. So this exact run — `RM artefact web/node_modules … (442M)`
+#     in its log, hundreds of MB off the disk — still exited 3, and a human reading
+#     that code would conclude the pruner is doing nothing while it is in fact doing
+#     its job. Reproduced by QA against the real script at head 4998ea2 with a
+#     worktree holding one commit on no ref plus a stale node_modules payload:
+#         rc=3 / UNSAFE t_00000001 (… on no ref at all) / RM artefact web/node_modules
+#         in t_00000001 (8.1M) / … removed=0 … stray_removed=0 … at_risk=1
+#     The artefact pass now has its own count (`artefacts=` in the summary line) and
+#     the exit-3 test reads it, so 3 means "reclaimed nothing" and nothing else.
+#
+#     Nothing here creates a reclaimable worktree: at this point in the sandbox every
+#     removable one is gone (8a reclaimed the last), which is why 8b is exit 3 at all.
+#     `removed=0`/`stray_removed=0` are asserted alongside the artefact count, so the
+#     reclaim really is artefact-only, and the at-risk work is asserted to still be
+#     there, so the run really is the shape the alarm is built from.
+PAYLOAD="$REPO/.worktrees/t_00000010/web/node_modules"
+mkdir -p "$PAYLOAD"
+printf 'built\n' >"$PAYLOAD/.jf-suite-marker"
+# The artefact pass judges AGE from the worktree directory's mtime and this sandbox
+# is minutes old, so the at-risk worktree is aged the way an operator's would be
+# after a day. This cannot change that worktree's fate: its card-loop verdict is its
+# ref-less HEAD, which is reached before mtime is ever consulted.
+touch -d '2020-01-01' "$REPO/.worktrees/t_00000010"
+check "premise: the at-risk worktree really holds a node_modules payload to reap" "yes" \
+  "$( [ -f "$PAYLOAD/.jf-suite-marker" ] && echo yes || echo no )"
+: >"$LOG"
+run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
+check "reclaiming ONLY build artefacts while keeping at-risk work is exit 0 — that is progress, not the alarm" "0" "$RC"
+contains "...the artefact reclaim is logged, with its size" "$(cat "$LOG")" \
+  "RM    artefact web/node_modules in t_00000010 ("
+contains "...and counted separately from worktree removals in the summary" "$(cat "$LOG")" " artefacts=1 "
+contains "...while no worktree is claimed as reclaimed (the reclaim really was artefact-only)" \
+  "$(cat "$LOG")" " removed=0 skipped="
+contains "...and no stray worktree either" "$(cat "$LOG")" "stray_removed=0"
+contains "...with the at-risk keeps still counted (that is the shape the alarm is for)" \
+  "$(cat "$LOG")" "at_risk=2"
+contains "...and the run records nothing as a failure" "$(grep -c 'FAIL ' "$LOG")" "0"
+check "...the payload really is gone from disk" "no" \
+  "$( [ -e "$PAYLOAD" ] && echo yes || echo no )"
+check "...and the worktree holding it was NOT removed (an artefact is not a worktree)" "yes" \
+  "$(survives t_00000010)"
 
 # 8c. A FAILED removal is exit 1, not a silent keep: the worktree is retained because
 #     git refused, which is a different thing from a deliberate refusal. A locked

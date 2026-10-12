@@ -171,11 +171,17 @@
 #      durability verdict was taken on stale refs. These are the conditions that
 #      mean the pruner could not do its job, and they are the ones to alarm on.
 #   2  bad arguments.
-#   3  no progress: the run reclaimed nothing while work whose ONLY copy is a
-#      directory it refused to remove was kept. This is the "the pruner has
-#      started keeping everything" alarm — deliberately narrow, so a board that
-#      keeps a few at-risk directories while reclaiming the reclaimable rest stays
-#      green. `--dry-run` reclaims nothing by design and is never judged on this.
+#   3  no progress: the run reclaimed NOTHING — no worktree, no stray worktree, and
+#      no build artefact (the third pass's `web/node_modules` / `web/.next` /
+#      `web/test-results` reap; its count is reported as `artefacts=` in the summary
+#      line) — while work whose ONLY copy is a directory it refused to remove was
+#      kept. This is the "the pruner has started keeping everything" alarm —
+#      deliberately narrow, so a board that keeps a few at-risk directories while
+#      reclaiming the reclaimable rest stays green, and a run whose only reclaim is
+#      442M of node_modules is green too (card t_ef95e467: counting worktree
+#      removals alone made that run — hundreds of MB reclaimed — exit 3, the same
+#      "nothing was done" false red this contract was written to remove, one level
+#      down). `--dry-run` reclaims nothing by design and is never judged on this.
 #
 # BEFORE THIS CONTRACT: any `unsafe` count exited 3. On a busy board that is every
 # run (measured 2026-09-25: 11 of 20 logged runs, the last 7 of 7, 528 of 567
@@ -496,6 +502,14 @@ main() {
   # `failures`/`fetch_failed` are what exit 1 is for (see EXIT CODES at the top of
   # this file). Initialised BEFORE the fetch below, which is what can set the second.
   failures=0 fetch_failed=0
+  # RECLAIM counter for the build-artefact pass (the third loop below, which reaps
+  # `web/node_modules` 442M / `web/.next` 146M / `web/test-results`). It is part of
+  # the exit-3 "reclaimed nothing" test exactly like `removed` and `stray_removed`
+  # are, because a run that reclaims 442M HAS done the job this script exists for
+  # even if it removed no worktree at all (card t_ef95e467). It is initialised here
+  # with the other reclaim counters so no code path can read it unset under
+  # `set -u`, and it is reported in the summary line as `artefacts=`.
+  artefacts_removed=0
   # Directories refused because NOTHING under refs/ — no remote-tracking ref, no
   # hand-made mirror — carries their commit, so the directory itself may hold the
   # only copy. Counted for the exit-3 "reclaimed nothing while keeping at-risk
@@ -794,13 +808,25 @@ main() {
       for sub in "$wt/web/.next" "$wt/web/test-results" "$wt/web/node_modules"; do
         if [ -d "$sub" ]; then
           sz=$(du -xsh "$sub" 2>/dev/null | awk '{print $1}')
-          rm -rf "$sub" 2>/dev/null && log "RM    artefact $(basename "$(dirname "$sub")")/$(basename "$sub") in $(basename "$wt") ($sz)"
+          # A reclaimed artefact IS progress and is COUNTED as such: this counter is
+          # what the exit-3 "reclaimed nothing" test reads, so a run whose only
+          # reclaim is hundreds of MB of node_modules no longer reads as a pruner
+          # that kept everything (card t_ef95e467 — it used to exit 3 here).
+          #
+          # The increment hangs off the `rm` succeeding, NOT off the log line being
+          # written (`rm … && log … && artefacts_removed=…` would have made a failed
+          # append to $LOG — tee's exit status — report reclaimed bytes as "nothing
+          # reclaimed", which is the direction this counter exists to close).
+          if rm -rf "$sub" 2>/dev/null; then
+            log "RM    artefact $(basename "$(dirname "$sub")")/$(basename "$sub") in $(basename "$wt") ($sz)"
+            artefacts_removed=$((artefacts_removed+1))
+          fi
         fi
       done
     done
   fi
 
-  log "=== prune done: removed=$removed skipped=$skipped unsafe=$unsafe stray_removed=$stray_removed stray_unsafe=$stray_unsafe failures=$failures at_risk=$at_risk_total fetch_failed=$fetch_failed ==="
+  log "=== prune done: removed=$removed skipped=$skipped unsafe=$unsafe stray_removed=$stray_removed stray_unsafe=$stray_unsafe artefacts=$artefacts_removed failures=$failures at_risk=$at_risk_total fetch_failed=$fetch_failed ==="
   df -h / | sed -n '2p' | sed 's/^/  /' | tee -a "$LOG"
 
   # EXIT CODES — see the header. In order of who should look:
@@ -811,14 +837,19 @@ main() {
   [ "$failures" -gt 0 ] && exit 1
   [ "$fetch_failed" -gt 0 ] && exit 1
   #
-  # 3  "no progress": nothing was reclaimed even though work whose only copy may be
-  #    this directory was kept. Narrow ON PURPOSE — a board that keeps a few at-risk
-  #    directories while still reclaiming the reclaimable rest is a normal busy board
-  #    (exit 0). A pruner that suddenly keeps EVERYTHING is the different thing worth
-  #    waking someone for, and it is the only thing this code means now. A dry run
-  #    reclaims nothing by design, so it is never judged on this.
+  # 3  "no progress": NOTHING was reclaimed — no worktree, no stray worktree, and no
+  #    build artefact — even though work whose only copy may be this directory was
+  #    kept. Narrow ON PURPOSE — a board that keeps a few at-risk directories while
+  #    still reclaiming the reclaimable rest is a normal busy board (exit 0), and a
+  #    run whose only reclaim is 442M of `web/node_modules` is a run DOING the job it
+  #    exists for, so `artefacts_removed` is read here too (card t_ef95e467: without
+  #    it, that run reclaimed hundreds of MB and still tripped the alarm, which is
+  #    the "the cron job's last_status can never clear" shape one level down). A
+  #    pruner that suddenly keeps EVERYTHING is the different thing worth waking
+  #    someone for, and it is the only thing this code means now. A dry run reclaims
+  #    nothing by design, so it is never judged on this.
   if [ "$DRY_RUN" != "1" ] && [ "$at_risk_total" -gt 0 ] \
-     && [ "$removed" -eq 0 ] && [ "$stray_removed" -eq 0 ]; then
+     && [ "$removed" -eq 0 ] && [ "$stray_removed" -eq 0 ] && [ "$artefacts_removed" -eq 0 ]; then
     exit 3
   fi
   #

@@ -268,13 +268,20 @@ code was the steady state, not a signal. The codes now mean:
 | `0` | the run did its job: every removal it attempted succeeded, and whatever it kept, it kept on purpose | no |
 | `1` | the run could not do its job — a `git worktree remove` FAILED, a card could not be read (so its worktree can never be judged), or `git fetch` failed and the durability verdict came from stale refs | yes |
 | `2` | bad arguments | — |
-| `3` | **no progress**: nothing was reclaimed while work whose only copy may be a kept directory was kept — the pruner-has-started-keeping-everything alarm | yes |
+| `3` | **no progress**: nothing was reclaimed at all — no worktree, no stray worktree, and no build artefact — while work whose only copy may be a kept directory was kept — the pruner-has-started-keeping-everything alarm | yes |
 
 Exit `3` is deliberately narrow. A busy board that keeps a few at-risk
-directories while reclaiming the reclaimable rest is exit `0`; the alarm is the
-shape where the pruner stops reclaiming *anything*. `--no-fetch` is a deliberate
-caller choice (the log says so) and is never exit `1`; a failed fetch is. A
-`--dry-run` reclaims nothing *by design*, so it is never judged on progress.
+directories while reclaiming the reclaimable rest is exit `0`, and so is a run
+whose **only** reclaim is build artefacts: the third pass reaps `web/node_modules`
+(442M) / `web/.next` (146M) / `web/test-results` in worktrees it is keeping for
+other reasons, and its own count is reported as `artefacts=` in the summary line
+and read by the alarm. Counting worktree removals alone made a run that reclaimed
+hundreds of MB read as "reclaimed nothing" (card `t_ef95e467`) — the same false
+red, one level down, that this contract was written to remove: the cron job's
+`last_status` could never clear. The alarm is the shape where the pruner stops
+reclaiming *anything*. `--no-fetch` is a deliberate caller choice (the log says
+so) and is never exit `1`; a failed fetch is. A `--dry-run` reclaims nothing *by
+design*, so it is never judged on progress.
 
 ### Operating it
 
@@ -322,7 +329,12 @@ state file. It asserts, as outcomes read off real runs —
   and a worktree with a live worker process are each kept, each with its own reason
   in the log;
 - the **exit-code contract** is read off real runs: a keep-on-purpose run with a
-  reclaim exits `0`; the same at-risk set with nothing reclaimed exits `3`; a
+  reclaim exits `0`; the same at-risk set with nothing reclaimed (artefact reaps
+  included, measured off the summary line's `artefacts=` count) exits `3`; a run
+  whose **only** reclaim is build artefacts — `web/node_modules` reaped in a
+  worktree kept for an at-risk reason, with `removed=0`/`stray_removed=0` — exits
+  `0` (card `t_ef95e467`: the exit-3 test counted worktree removals only, so that
+  run reclaimed hundreds of MB and still tripped the alarm); a
   removal git refuses (a locked worktree), an unreadable card, and a failed fetch
   each exit `1`; `--no-fetch` stays `0`; a `--dry-run` is never judged on progress;
 - **every branch of that contract**, not just the three above, has its own run behind
