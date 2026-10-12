@@ -482,15 +482,15 @@ anchor on the bare `    uploads_ok=0`, which occurs three times in
 `jomform-backup.sh`, so `replace(..., 1)` landed on a daily site and left the path
 unmutated while the README claimed the harness covered it.
 
-Three of those twelve were **not** caught when this harness was first written
-against the suite, and the suite grew the assertions they need rather than the
-claim being trimmed: the `FAILED` line's *level* (the message text survives a
-downgrade to `WARN`, so the suite now asserts `ERROR`), an ignored restore
-failure (every `--restore` case drove a stub that succeeded, so there is now a
-case whose `pg_restore` fails), and the cron `PATH` pin (running under `env -i`
-does not prove the script pins its own `PATH`, because bash supplies a usable
-default when the environment has none — the new case hands the job a `PATH` that
-resolves nothing).
+Three of those thirteen failure-handling sabotages were **not** caught when this
+harness was first written against the suite, and the suite grew the assertions
+they need rather than the claim being trimmed: the `FAILED` line's *level* (the
+message text survives a downgrade to `WARN`, so the suite now asserts `ERROR`),
+an ignored restore failure (every `--restore` case drove a stub that succeeded, so
+there is now a case whose `pg_restore` fails), and the cron `PATH` pin (running
+under `env -i` does not prove the script pins its own `PATH`, because bash
+supplies a usable default when the environment has none — the new case hands the
+job a `PATH` that resolves nothing).
 
 - **`rclone copy` fails** — the provider's own error text is carried into the log
   and the status detail (not just "upload failed"), the run exits non-zero, and
@@ -547,6 +547,28 @@ resolves nothing).
 - **The monthly sidecar write fails** — the run sets `uploads_ok=0`, logs the
   failure and writes `last-failure.json`, rather than reporting a healthy run
   with an unverifiable monthly copy.
+- **The monthly sidecar write exits 0 and stores NOTHING** — the sidecar's own
+  upload is re-read instead of being trusted on the command's exit status: an
+  `rclone rcat` that consumes the stream, exits 0 and leaves no object fails the
+  run. The case asserts the run's `exit code` is `exit=1`, that the log names the
+  verification (`monthly sidecar verification failed`) and the missing object
+  (`remote object missing or unreadable after upload`), that the log marks
+  `FAILED` with `last-failure.json` written — and, the point of the case, that
+  **no** sidecar object is left on the remote, so nothing makes the pair look
+  verified. Driven by the stub's `STUB_SILENT_NAME` naming the monthly `.sha256`,
+  which drops exactly that one object's stream while every other object lands. A
+  further case removes the re-read from a copy of the script (an in-suite
+  sabotage, above) and requires that run to report SUCCESS again, so the
+  assertion bites rather than decorating.
+- **The monthly sidecar lands but its stored CONTENT differs** — size and hash
+  alone are not the acceptance: the stub leaves the stored sidecar's size and hash
+  right for the modelled backend, so the size/hash re-read passes, and makes the
+  re-read return different bytes — only the content comparison catches it. The
+  case asserts the run's `exit code` is `exit=1`, that the log names the content
+  mismatch (`remote content mismatch`) and marks `FAILED`, rather than reporting a
+  healthy month with an unusable checksum. Driven by the stub's
+  `STUB_CAT_CORRUPT_NAME` naming the monthly `.sha256` (not the dump); the same
+  in-suite sabotage removes this comparison together with the missing-object one.
 - **The promoted monthly dump is not what was promoted** — the promotion's own
   write is re-read instead of being trusted on `copyto`'s exit status. A `copyto`
   that exits 0 having stored nothing fails the run (`remote object missing or
