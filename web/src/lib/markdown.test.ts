@@ -52,6 +52,55 @@ const visible = (html: string) =>
     .replace(/&#x27;/g, "'")
     .replace(/&amp;/g, "&");
 
+// ── HOW THE TWO PERF GUARDS MEASURE TIME ─────────────────────────────────────
+//
+// Both perf guards below (the `_`-heavy answer, the `[`-heavy answer) are
+// pass/fail GATE assertions — `web` is gate 6 of 19 in scripts/preflight.sh and
+// that script is fail-fast — so what they must measure is the RENDERER's cost.
+// performance.now() does not: the build host is shared, so other work is using
+// these cores while this file runs, and a wall-clock delta then measures the
+// scheduler instead.
+//
+// The "every sample is a best-of-N (min), because host load only ever ADDS time,
+// so the minimum is the stable estimator" argument those ceilings were built on
+// is FALSE for work this small. That was measured, not argued (filed as its own
+// card): the `[`-heavy test redded at 42.5 ms against its 40 ms ceiling at
+// `load average: 11.84` on a 6-core host, and passed on the SAME bytes at load
+// 7.08. The minimum does not save it because one sample here is ~2-3 ms, i.e.
+// SHORTER than a scheduler timeslice: under oversubscription every one of the N
+// samples is preempted, so the minimum is preempted too. Reproduced with the
+// whole suite pinned to ONE core with competing spinners on it: at 6 spinners
+// `'[' x 16000` measured a wall minimum of 37.0 ms against a CPU minimum of
+// 3.26 ms, the wall-clock version of this test red on its ratio assertion
+// (24.9 ms against 0.6 ms), and the 33-bubble case measured 206-264 ms of wall
+// time against its 300 ms ceiling; at 12 spinners the wall-clock version red
+// 4 runs out of 4 (ratio assertion again: 34.5-42.2 ms against ~25 ms), while
+// the CPU-time version of this file red 0 of 4 on that same core.
+//
+// process.cpuUsage() is the load-invariant estimator of the same work: time a
+// process is DESCHEDULED does not accrue to it, so contention cancels out of the
+// number instead of being added to it. Same bytes, idle vs that 6-spinner
+// contention: `'[' x 16000` 3.72 -> 3.26 ms of CPU. NOTHING BELOW IS RAISED —
+// the quantity under each ceiling changed, the ceilings did not, and the
+// separation they exist for is unchanged: the fix costs ~2-7 ms of CPU at 16000
+// characters where the pre-fix patterns burn 176-368 ms of it at the same sizes
+// (and 774 ms for the 33-bubble case).
+const cpuMillis = (fn: () => void): number => {
+  const before = process.cpuUsage();
+  fn();
+  const delta = process.cpuUsage(before);
+  // user + system, microseconds -> milliseconds. V8's concurrent GC threads are
+  // part of the process's CPU time too, which is work this renderer also caused.
+  return (delta.user + delta.system) / 1000;
+};
+
+/** Best-of-N (min) of the process CPU milliseconds one render of `src` costs. */
+const bestOfCpu = (src: string, reps: number): number => {
+  let best = Infinity;
+  for (let r = 0; r < reps; r++) best = Math.min(best, cpuMillis(() => render(src)));
+  return best;
+};
+
 test("the guard is looking at real files and the renderer really runs (it cannot pass vacuously)", () => {
   const src = read("../components/Markdown.ts");
   assert.ok(src.includes("export function Markdown"), "Markdown.ts is not the renderer source");
@@ -306,39 +355,34 @@ test("an adversarial answer at the cap renders in milliseconds, not tenths of a 
   // api/internal/chat/chat.go MaxReplyChars; feedback body 5000,
   // api/internal/feedbacksvc/feedbacksvc.go BodyMax).
   //
-  // Every sample is a best-of-N (min), because host load only ever ADDS time, so
-  // the minimum is the stable estimator. Measured through this component on this
-  // host: fix 4000 chars ~1.4-8.5 ms across ten samples, 16000 chars ~5 ms, 33
-  // bubbles ~62-109 ms; the old unbounded scan 164 ms / 3200 ms / 8032 ms. The
+  // Every sample is a best-of-N (min) of the process CPU time, not the wall
+  // clock — see "HOW THE TWO PERF GUARDS MEASURE TIME" at the top of this file
+  // for why the wall-clock version of exactly this assertion is a gate flake, and
+  // for the measurements. Measured through this component, in CPU ms: fix 4000
+  // chars ~1.7-4.0, 16000 chars ~4.1-4.6, 33 bubbles ~45-54. The per-opener
+  // re-walk this replaced measured 140.8 ms of CPU at 4000 characters — the run
+  // that proved this assertion bites — against the 75 ms ceiling below (and
+  // 164 ms / 3200 ms / 8032 ms of wall time on this host before the rewrite). The
   // ceilings below sit between the two by a wide margin on the side that matters:
-  // ~9x headroom over the worst sample of the fix, and still 2-2.7x BELOW what the
+  // ~19x headroom over the worst sample of the fix, and still well BELOW what the
   // quadratic shape measured, so restoring it fails rather than squeaks by.
   const CAP = 4000;
   const small = "_a ".repeat(Math.ceil(CAP / 3)).slice(0, CAP);
   const huge = "_a ".repeat(Math.ceil((CAP * 4) / 3)).slice(0, CAP * 4);
-  const bestOf = (src: string, reps: number) => {
-    let best = Infinity;
-    for (let r = 0; r < reps; r++) {
-      const t0 = performance.now();
-      render(src);
-      best = Math.min(best, performance.now() - t0);
-    }
-    return best;
-  };
-  const tCap = bestOf(small, 5);
-  const tHuge = bestOf(huge, 3);
+  const tCap = bestOfCpu(small, 5);
+  const tHuge = bestOfCpu(huge, 3);
 
   assert.ok(
     tCap < 75,
-    `a ${CAP}-character adversarial answer took ${tCap.toFixed(1)} ms to render (ceiling 75 ms). ` +
-      `The fix measures ~4 ms here; the O(n²) scan measured 164 ms.`,
+    `a ${CAP}-character adversarial answer took ${tCap.toFixed(1)} ms of CPU to render (ceiling 75 ms). ` +
+      `The fix measures ~2-4 ms here; the O(n²) scan measured 164 ms.`,
   );
   // 4x the input. Linear growth is ~4x the time; the quadratic shape was ~19x
   // (164 ms -> 3200 ms). The bound is 10x, with a constant so a near-zero
   // denominator cannot decide the test.
   assert.ok(
     tHuge <= 10 * tCap + 50,
-    `4x the input took ${tHuge.toFixed(1)} ms against ${tCap.toFixed(1)} ms for ${CAP} characters ` +
+    `4x the input took ${tHuge.toFixed(1)} ms of CPU against ${tCap.toFixed(1)} ms for ${CAP} characters ` +
       `— growth faster than linear. The quadratic scan measured 3200 ms / 164 ms here.`,
   );
 
@@ -346,12 +390,12 @@ test("an adversarial answer at the cap renders in milliseconds, not tenths of a 
   // (33 <Markdown> in one synchronous render — this file's fixture; the page's
   // history cap bounds what it SENDS, not what it renders). 8000 ms of frozen tab
   // was the symptom; the fix is ~66 ms.
-  const t0 = performance.now();
-  for (let k = 0; k < 33; k++) render(small);
-  const total = performance.now() - t0;
+  const total = cpuMillis(() => {
+    for (let k = 0; k < 33; k++) render(small);
+  });
   assert.ok(
     total < 3000,
-    `33 bubbles of ${CAP} adversarial characters took ${total.toFixed(0)} ms (ceiling 3000 ms) — ` +
+    `33 bubbles of ${CAP} adversarial characters took ${total.toFixed(0)} ms of CPU (ceiling 3000 ms) — ` +
       `a full conversation freezes the tab. The quadratic scan measured ~8000 ms, the fix ~66 ms.`,
   );
 });
@@ -467,54 +511,60 @@ test("the link/image delimiters are resolved once, not at every `[` (the O(n²) 
 });
 
 test("an adversarial `[`-heavy answer renders in milliseconds, not a frozen tab", () => {
-  // The symptom the merchant sees, asserted directly. Every sample is a best-of-N
-  // (min), because host load only ever ADDS time, so the minimum is the stable
-  // estimator. The ceilings sit far above the worst sample of the fix and below
-  // what the pre-fix patterns measured, so restoring them fails rather than
-  // squeaks by: 12x headroom at 16000 characters (fix max 3.4 ms, ceiling 40 ms)
-  // against a pre-fix minimum of 140 ms, and for the full conversation 10x
-  // headroom (fix max 30 ms, ceiling 300 ms) against a pre-fix minimum of 635 ms.
-  const bestOf = (src: string, reps: number) => {
-    let best = Infinity;
-    for (let r = 0; r < reps; r++) {
-      const t0 = performance.now();
-      render(src);
-      best = Math.min(best, performance.now() - t0);
-    }
-    return best;
-  };
+  // The symptom the merchant sees, asserted directly — on the clock that measures
+  // the renderer and not the host ("HOW THE TWO PERF GUARDS MEASURE TIME" above).
+  // The ceilings are UNCHANGED from the wall-clock version this replaced, at
+  // exactly the size that redded it: 40 ms at 16000 characters where the fix
+  // costs ~2-7 ms of CPU and the pre-fix patterns burn 176-368 ms, and 300 ms for
+  // the full conversation where the fix costs ~25-45 ms and the pre-fix patterns
+  // burn 774 ms. Restoring the pre-fix patterns fails rather than squeaks by.
   const CAP = 4000;
+  // The shapes the wall-clock ceiling guarded, each also asserted as COUNTED
+  // link-delimiter work (the sibling test above): the count is the half that
+  // cannot flake. The vacuity check is not decoration — the pre-fix patterns did
+  // their walk inside the regex engine and reported ZERO counted work, so a zero
+  // reading here means the quadratic is back and hiding.
   const shapes = ["[".repeat(CAP * 4), "![".repeat(CAP * 2), "[a".repeat(CAP * 2)];
   for (const src of shapes) {
-    const t = bestOf(src, 3);
+    const { linkWork } = __withScanProbe(() => render(src));
+    assert.ok(
+      linkWork > 0,
+      `rendering ${src.length} characters of '['-heavy text counted no link-delimiter work at all — ` +
+        `the scan is not being measured (the pre-fix patterns reported 0 here), so the bound below is vacuous`,
+    );
+    assert.ok(
+      linkWork <= 2 * src.length,
+      `${src.length} characters of '['-heavy text examined ${linkWork} characters of link delimiters ` +
+        `(${(linkWork / src.length).toFixed(1)}x the length; a single pass is 1.0x) — the per-'[' closer search is back`,
+    );
+    const t = bestOfCpu(src, 3);
     assert.ok(
       t < 40,
-      `a ${src.length}-character '['-heavy answer took ${t.toFixed(1)} ms to render (ceiling 40 ms). ` +
-        `The fix measures ~2-3 ms here; the pre-fix patterns measured 140-388 ms.`,
+      `a ${src.length}-character '['-heavy answer took ${t.toFixed(1)} ms of CPU to render (ceiling 40 ms). ` +
+        `The fix measures ~2-7 ms here; the pre-fix patterns measured 176-368 ms.`,
     );
   }
 
   // 4x the input. Linear growth is ~2.6-3.3x the time; the pre-fix shape was
   // ~17x. The bound is 6x with a constant so a near-zero denominator cannot
   // decide the test.
-  const tCap = bestOf("[".repeat(CAP), 5);
-  const tHuge = bestOf("[".repeat(CAP * 4), 3);
+  const tCap = bestOfCpu("[".repeat(CAP), 5);
+  const tHuge = bestOfCpu("[".repeat(CAP * 4), 3);
   assert.ok(
     tHuge <= 6 * tCap + 20,
-    `4x the input took ${tHuge.toFixed(1)} ms against ${tCap.toFixed(1)} ms for ${CAP} characters ` +
-      `— growth faster than linear. The pre-fix patterns measured 266 ms / 15 ms here.`,
+    `4x the input took ${tHuge.toFixed(1)} ms of CPU against ${tCap.toFixed(1)} ms for ${CAP} characters ` +
+      `— growth faster than linear. The pre-fix patterns measured 336 ms / 22 ms here.`,
   );
 
   // The severity case: a full transcript (33 <Markdown> in one synchronous render,
   // this file's fixture).
-  const bubble = "[".repeat(CAP);
-  const t0 = performance.now();
-  for (let k = 0; k < 33; k++) render(bubble);
-  const total = performance.now() - t0;
+  const total = cpuMillis(() => {
+    for (let k = 0; k < 33; k++) render("[".repeat(CAP));
+  });
   assert.ok(
     total < 300,
-    `33 bubbles of ${CAP} '['-heavy characters took ${total.toFixed(0)} ms (ceiling 300 ms) — ` +
-      `a full conversation freezes the tab. The pre-fix patterns measured 635-876 ms, the fix ~25 ms.`,
+    `33 bubbles of ${CAP} '['-heavy characters took ${total.toFixed(0)} ms of CPU (ceiling 300 ms) — ` +
+      `a full conversation freezes the tab. The pre-fix patterns measured 774 ms, the fix ~25-45 ms.`,
   );
 });
 
