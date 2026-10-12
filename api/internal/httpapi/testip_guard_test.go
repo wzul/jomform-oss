@@ -18,8 +18,14 @@
 // types. The scan is over the AST rather than the text, so a literal in a
 // comment or a doc string is not a hit and the scan cannot be satisfied by
 // spelling. The trade-off, stated: it refuses a literal in the positions below,
-// so it cannot see an address that arrives through a variable, a table, or a
-// helper this file does not know about.
+// so it cannot see an address that arrives through a variable or a table.
+//
+// The third hole it used to have — "a helper this file does not know about" —
+// is closed, and not by a second list that could itself go stale:
+// TestEveryAddressPresentingHelperIsPinned walks this package's own funcs and
+// fails on any that presents an `ip` parameter to a request without being in
+// ipArgHelpers below. That is what makes the list a CLOSED set rather than a
+// promise; the map alone could only ever pin its own keys (card t_e9bd13cd).
 package httpapi
 
 import (
@@ -44,13 +50,26 @@ const testIPHelperName = "testIP"
 
 // ipArgHelpers maps a request helper to the zero-based index of its client-IP
 // parameter. A helper that takes one and is NOT listed here would slip past the
-// guard, so TestEveryRequestHelperTakesATestIP pins the set against the helpers
-// themselves.
+// guard, so the set is pinned in BOTH directions: TestEveryRequestHelperTakesATestIP
+// refuses a stale entry or a wrong index, and
+// TestEveryAddressPresentingHelperIsPinned refuses a helper that is missing from
+// the map altogether — the half that made "a helper this file does not know
+// about" a hole rather than a note.
 var ipArgHelpers = map[string]int{
 	"postJSON":            3, // postJSON(mux, path, body, ip)
 	"postJSONCookies":     3, // postJSONCookies(mux, path, body, ip, session)
 	"registerAndVerify":   4, // registerAndVerify(t, h, email, password, ip)
 	"enable2FAAndSession": 3, // enable2FAAndSession(t, h, email, ip)
+	// The unlock-route probes and the passkey ceremony helpers take a client
+	// address and hand it to the request themselves, which is what these five
+	// were missing from this map for (card t_e9bd13cd): their call sites were
+	// outside the literal scan entirely, so `unlockPost(h, host, path,
+	// "10.99.0.7", pw)` was a literal the guard could not see.
+	"startPasskeyLogin":     2, // startPasskeyLogin(t, h, ip)
+	"finishPasskeyLogin":    3, // finishPasskeyLogin(t, h, body, ip)
+	"unlockPost":            3, // unlockPost(hnd, host, path, ip, password)
+	"concurrentUnlockBurst": 3, // concurrentUnlockBurst(hnd, host, path, ip, password, n)
+	"unlockBurstCodes":      3, // unlockBurstCodes(hnd, host, probePath, ip, n)
 	// setTestClientAddr puts the address where a directly-connected request
 	// carries it — r.RemoteAddr — which is the position ClientIP reads unless the
 	// request arrived through a proxy (card t_ac16d273); a literal handed to it
@@ -192,6 +211,13 @@ func TestTheLiteralClientIPDetectorDiscriminates(t *testing.T) {
 // and a list is only honest if a mismatch is loud: a request helper that takes a
 // client address the guard does not know about is exactly how the literals got
 // in, so it must fail rather than silently narrow the scan.
+//
+// This direction covers the entries that ARE in the map: a key whose helper was
+// renamed (a stale entry, so the literal scan would be looking for a call that
+// cannot exist) and an index that no longer lands on the client-IP parameter.
+// The OTHER direction — a helper that presents an address and is absent from the
+// map — is a different walk and lives in
+// TestEveryAddressPresentingHelperIsPinned below.
 func TestEveryRequestHelperTakesATestIP(t *testing.T) {
 	for name, idx := range ipArgHelpers {
 		decl := findFuncDecl(t, name)
@@ -199,16 +225,9 @@ func TestEveryRequestHelperTakesATestIP(t *testing.T) {
 			t.Errorf("ipArgHelpers names %q, which this package does not declare — the guard is scanning for a helper that does not exist", name)
 			continue
 		}
-		params := decl.Type.Params.List
-		if len(params) == 0 {
+		names := funcParamNames(decl)
+		if len(names) == 0 {
 			continue
-		}
-		// Count parameters (a field may bind several names).
-		var names []string
-		for _, f := range params {
-			for _, id := range f.Names {
-				names = append(names, id.Name)
-			}
 		}
 		if idx >= len(names) {
 			t.Errorf("%s has %d parameter(s); ipArgHelpers says its client address is argument %d", name, len(names), idx)
@@ -218,6 +237,293 @@ func TestEveryRequestHelperTakesATestIP(t *testing.T) {
 			t.Errorf("%s argument %d is %q, but ipArgHelpers says that is its client-IP parameter — the guard would inject-check the wrong argument", name, idx, names[idx])
 		}
 	}
+}
+
+// TestEveryAddressPresentingHelperIsPinned is the other half of the pin, and it
+// is the half the guard's own header advertised: a helper that takes a client
+// address and is NOT in ipArgHelpers at all.
+//
+// TestEveryRequestHelperTakesATestIP above iterates the map's OWN keys, so it
+// sees a renamed helper and a wrong index but is blind to a helper that was
+// never added — and the map is what the literal scan calls through, so a new
+// `…(…, ip string)` helper with a hand-written address at its call site passes
+// both guards. Measured on the pre-fix tree (7960d09): a helper taking an `ip`
+// and setting X-Real-IP from it, called with 10.99.0.7, left
+// TestNoLiteralClientIPInTests and TestEveryRequestHelperTakesATestIP green.
+// That address sits outside every process's /24, so the jf:loginfail:ip counter
+// it writes is one the scoped reclaim can never clear — the cross-process flake
+// this whole file exists to remove.
+//
+// So this walks the package's _test.go funcs (the same walker the literal scan
+// uses, so a NEW file is covered because it exists) and fails on every func that
+// presents its `ip` parameter to a request without being listed.
+func TestEveryAddressPresentingHelperIsPinned(t *testing.T) {
+	decls := packageFuncDecls(t)
+	if len(decls) < 100 {
+		t.Fatalf("scanned only %d func(s) — the file walker is broken, so this guard would pass vacuously", len(decls))
+	}
+
+	where := make(map[string]string, len(decls))
+	for _, d := range decls {
+		where[d.name] = d.file
+	}
+
+	var unlisted []string
+	for name := range addressPresentingHelpers(decls) {
+		if _, listed := ipArgHelpers[name]; !listed {
+			unlisted = append(unlisted, where[name]+": "+name)
+		}
+	}
+	sort.Strings(unlisted)
+	if len(unlisted) > 0 {
+		t.Errorf("%d helper(s) present a client address to a request but are not in ipArgHelpers —\n"+
+			"their call sites are outside the literal scan, so a hand-written address handed to one is\n"+
+			"exactly the counter the scoped reclaim cannot clear:\n  %s\n\n"+
+			"Add each to ipArgHelpers with the zero-based index of its client-IP parameter, and pass\n"+
+			"%s(t) at its call sites instead of a literal.",
+			len(unlisted), strings.Join(unlisted, "\n  "), testIPHelperName)
+	}
+}
+
+// TestTheAddressPresenterDetectorDiscriminates is the reverse scan's own control.
+// A predicate that fires on nothing would make the pin above vacuous rather than
+// green, and the two are indistinguishable from that test's output alone, so the
+// detector is pinched between the shapes it must catch and the shapes it must
+// leave alone.
+func TestTheAddressPresenterDetectorDiscriminates(t *testing.T) {
+	fires := []struct {
+		what string
+		src  string
+		want []string
+	}{
+		{
+			"a helper that presents the socket peer",
+			`func qaPeer(req *http.Request, ip string) { setTestClientAddr(req, ip) }`,
+			[]string{"qaPeer"},
+		},
+		{
+			"a helper that assigns r.RemoteAddr",
+			`func qaRemote(req *http.Request, ip string) { req.RemoteAddr = ip }`,
+			[]string{"qaRemote"},
+		},
+		{
+			// The shape the card's probe took: a NEW helper whose `ip` lands in
+			// a header position the literal scan reads.
+			"a helper that sets a client-IP header from its parameter",
+			`func qaHeader(req *http.Request, path string, ip string) { req.Header.Set("X-Real-IP", ip) }`,
+			[]string{"qaHeader"},
+		},
+		{
+			"a wrapper that forwards to a listed helper",
+			`func qaForward(mux *http.ServeMux, ip string) { postJSON(mux, "/x", nil, ip) }`,
+			[]string{"qaForward"},
+		},
+		{
+			"a wrapper one hop further from the request",
+			"func qaInner(req *http.Request, ip string) { setTestClientAddr(req, ip) }\n" +
+				`func qaOuter(req *http.Request, ip string) { qaInner(req, ip) }`,
+			[]string{"qaInner", "qaOuter"},
+		},
+	}
+	for _, tc := range fires {
+		got := addressPresentingFromSource(t, tc.src)
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("the reverse scan saw %v for %s — want %v; a presenter it misses is a helper whose\ncall sites stay outside the literal scan:\n  %s",
+				got, tc.what, tc.want, tc.src)
+		}
+	}
+
+	// Silent: a func that takes an address as DATA, and a request builder whose
+	// address never comes from its own `ip` parameter. Both are legitimate, and a
+	// false positive here would force an allowlist and hollow the pin out.
+	staysSilent := []struct {
+		what string
+		src  string
+	}{
+		{
+			"a validator that reads the address as data",
+			`func qaValidIP(ip, family string) bool { return strings.HasPrefix(ip, family) }`,
+		},
+		{
+			"a helper whose address parameter is not named ip",
+			`func qaOtherName(req *http.Request, addr string) { setTestClientAddr(req, addr) }`,
+		},
+		{
+			"a helper that builds a request without its own address",
+			`func qaBuild(mux *http.ServeMux, ip string) { req := httptest.NewRequest("POST", "/x", nil); mux.ServeHTTP(httptest.NewRecorder(), req) }`,
+		},
+	}
+	for _, tc := range staysSilent {
+		if got := addressPresentingFromSource(t, tc.src); len(got) != 0 {
+			t.Errorf("the reverse scan fired on %s — %v; the pin is a closed set, so a false positive\nhere would demand an entry (or an exemption) for a func that never presents an address:\n  %s",
+				tc.what, got, tc.src)
+		}
+	}
+}
+
+// addressPresentingFromSource runs the reverse scan over a source snippet, for
+// the control above.
+func addressPresentingFromSource(t *testing.T, src string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "control.go", "package p\n"+src+"\n", 0)
+	if err != nil {
+		t.Fatalf("parse control snippet: %v\n  %s", err, src)
+	}
+	var decls []testFuncDecl
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok {
+			decls = append(decls, testFuncDecl{name: fd.Name.Name, file: "control.go", decl: fd})
+		}
+	}
+
+	var out []string
+	for name := range addressPresentingHelpers(decls) {
+		if _, listed := ipArgHelpers[name]; !listed {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// addressPresentingHelpers returns the funcs that put a client address into a
+// request, keyed by name with the index of the `ip` parameter they present.
+//
+// It is seeded with the helpers the literal scan already knows (by definition
+// they ARE presenters) and grown to a fixpoint, because a func that passes its
+// own `ip` parameter to one of these presents the address too — which is how
+// concurrentUnlockBurst, a wrapper around unlockPost, is seen.
+func addressPresentingHelpers(decls []testFuncDecl) map[string]int {
+	present := make(map[string]int, len(ipArgHelpers)+len(decls))
+	for name, idx := range ipArgHelpers {
+		present[name] = idx
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, d := range decls {
+			if _, known := present[d.name]; known {
+				continue
+			}
+			idx := ipParamIndex(d.decl)
+			if idx < 0 {
+				continue
+			}
+			if presentsIPParameter(d.decl, idx, present) {
+				present[d.name] = idx
+				changed = true
+			}
+		}
+	}
+	return present
+}
+
+// presentsIPParameter reports whether decl hands the value of parameter idx into
+// a request: through a helper that presents one (setTestClientAddr, the unlock
+// and passkey helpers, …), a RemoteAddr assignment, or a client-IP header Set —
+// the positions the literal scan reads, with the parameter where the literal
+// would be.
+//
+// It is deliberately shallow about the VALUE: `ip` must reach the position
+// itself (`setTestClientAddr(req, ip)`), not through a local copy. A helper that
+// launders the address through a variable first is still missed, and that is the
+// limit the header states.
+func presentsIPParameter(decl *ast.FuncDecl, idx int, present map[string]int) bool {
+	if decl.Body == nil || idx < 0 {
+		return false
+	}
+	hit := false
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
+		if hit {
+			return false
+		}
+		switch node := n.(type) {
+		case *ast.CallExpr:
+			// A call to a presenter, with this func's `ip` where that helper
+			// takes its client address.
+			if target, ok := present[callName(node)]; ok && target >= 0 && target < len(node.Args) {
+				if referencesIPParameter(node.Args[target]) {
+					hit = true
+					return true
+				}
+			}
+			// req.Header.Set("X-Real-IP", ip).
+			if sel, ok := node.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Set" && len(node.Args) == 2 {
+				if hdr, ok := stringLiteral(node.Args[0]); ok && ipHeaderNames[hdr] && referencesIPParameter(node.Args[1]) {
+					hit = true
+				}
+			}
+		case *ast.AssignStmt:
+			// req.RemoteAddr = ip.
+			for i, lhs := range node.Lhs {
+				sel, ok := lhs.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "RemoteAddr" || i >= len(node.Rhs) {
+					continue
+				}
+				if referencesIPParameter(node.Rhs[i]) {
+					hit = true
+				}
+			}
+		}
+		return true
+	})
+	return hit
+}
+
+// referencesIPParameter reports whether e reads the identifier `ip` — the name
+// every client-address helper in this package gives its parameter, which is what
+// lets the pin find them without a list. A field of that name (cfg.ip) is not
+// the parameter, so it does not count.
+func referencesIPParameter(e ast.Expr) bool {
+	if e == nil {
+		return false
+	}
+	fields := map[token.Pos]bool{}
+	ast.Inspect(e, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok {
+			fields[sel.Sel.Pos()] = true
+		}
+		return true
+	})
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == "ip" && !fields[id.Pos()] {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// ipParamIndex returns the zero-based position of decl's parameter named "ip",
+// or -1 when it declares none.
+func ipParamIndex(decl *ast.FuncDecl) int {
+	for i, name := range funcParamNames(decl) {
+		if name == "ip" {
+			return i
+		}
+	}
+	return -1
+}
+
+// funcParamNames returns decl's parameter names in order. A field that binds no
+// name (`*testing.T`) is one parameter with an empty name, so the index of a
+// named parameter after it is its real position.
+func funcParamNames(decl *ast.FuncDecl) []string {
+	var names []string
+	if decl.Type.Params == nil {
+		return names
+	}
+	for _, f := range decl.Type.Params.List {
+		if len(f.Names) == 0 {
+			names = append(names, "")
+			continue
+		}
+		for _, id := range f.Names {
+			names = append(names, id.Name)
+		}
+	}
+	return names
 }
 
 // TestLoginHelpersSetATestClientIP closes the half the literal scan cannot see.
@@ -314,8 +620,19 @@ func packageTestGoFiles(t *testing.T) []string {
 	return entries
 }
 
-func findFuncDecl(t *testing.T, name string) *ast.FuncDecl {
+// testFuncDecl is one func declaration from this package's test files, carrying
+// the file it came from so a finding can name it.
+type testFuncDecl struct {
+	name string
+	file string
+	decl *ast.FuncDecl
+}
+
+// packageFuncDecls parses each of this package's _test.go files once and returns
+// the funcs they declare.
+func packageFuncDecls(t *testing.T) []testFuncDecl {
 	t.Helper()
+	var out []testFuncDecl
 	for _, path := range packageTestGoFiles(t) {
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, path, nil, 0)
@@ -323,9 +640,19 @@ func findFuncDecl(t *testing.T, name string) *ast.FuncDecl {
 			t.Fatalf("parse %s: %v", path, err)
 		}
 		for _, d := range f.Decls {
-			if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == name {
-				return fd
+			if fd, ok := d.(*ast.FuncDecl); ok {
+				out = append(out, testFuncDecl{name: fd.Name.Name, file: filepath.Base(path), decl: fd})
 			}
+		}
+	}
+	return out
+}
+
+func findFuncDecl(t *testing.T, name string) *ast.FuncDecl {
+	t.Helper()
+	for _, d := range packageFuncDecls(t) {
+		if d.name == name {
+			return d.decl
 		}
 	}
 	return nil
