@@ -605,8 +605,16 @@ test("every cut entry's facts are readable at the destination (not just its anch
   // with an `href` and no facts here is unguarded, which is how the Templates
   // entry's text was lost without anything going red.
   const linked = entries.filter((e) => e.href).map((e) => e.title);
+  // Membership is asked as an OWN property, never with `in` (t_dd08bc5c). `in` walks
+  // the prototype chain, so an entry titled after an Object.prototype member
+  // (`constructor`, `toString`) reads as present in a map that has no entry for it at
+  // all — exactly the state this assertion exists to report. The same rule applies to
+  // the three mirrors below, and it is measured rather than argued: with `in`,
+  // renaming a floored entry to `constructor` on EVERY side and deleting its floor
+  // line was GREEN 10/10 exit 0 on f682e1c5, while the normal-named version of that
+  // same edit was RED.
   assert.deepEqual(
-    linked.filter((t) => !(t in DESTINATION_FACTS)),
+    linked.filter((t) => !Object.hasOwn(DESTINATION_FACTS, t)),
     [],
     `these entries link to a guide but have no facts asserted at the destination — ` +
       `add them to DESTINATION_FACTS, or the entry can be re-cut with nothing to catch it`,
@@ -658,7 +666,17 @@ test("every cut entry's facts are readable at the destination (not just its anch
   // The count check: every fact in PER_ENTRY_FLOOR must still be one of the facts
   // asserted for that entry, so the surviving list is the one the floor was
   // written against rather than a shorter list the floor was moved down to.
+  // OWN keys only, for two measured reasons. `DESTINATION_FACTS[t]` reads through the
+  // prototype chain, so an orphan floor line NAMED after a prototype member was
+  // compared against that member instead of being reported: `constructor: 1` matched
+  // `Function.prototype.length` (which is 1), the line passed here, and the drift check
+  // below hid it too — measured GREEN 10/10 exit 0 before this guard asked for own
+  // properties. And an orphan line with an ordinary name threw `TypeError: Cannot read
+  // properties of undefined (reading 'length')` from this line instead of naming the
+  // drift. A key that is absent is the assertion BELOW's finding, not this one's: it is
+  // skipped here and reported there, by name.
   const replaced = Object.keys(PER_ENTRY_FLOOR)
+    .filter((t) => Object.hasOwn(DESTINATION_FACTS, t))
     .filter((t) => DESTINATION_FACTS[t].length !== PER_ENTRY_FLOOR[t])
     .map((t) => `${t}: ${DESTINATION_FACTS[t].length} facts, floor says ${PER_ENTRY_FLOOR[t]}`);
   assert.deepEqual(
@@ -681,7 +699,16 @@ test("every cut entry's facts are readable at the destination (not just its anch
   // no number to justify, so a missing floor has to be its own failure rather than a
   // silent skip. (Stated per check because "the `?? 0` fallback" alone does not
   // explain the second one, and the two need different care if either is rewritten.)
-  const unfloored = Object.keys(DESTINATION_FACTS).filter((t) => !(t in PER_ENTRY_FLOOR));
+  // …AND BOTH DIRECTIONS ASK FOR OWN PROPERTIES, not `in` (t_dd08bc5c). `in` walks
+  // the prototype chain, so a name that happens to be an Object.prototype member reads
+  // as PRESENT in a map with no entry for it: with `in`, renaming a floored entry to
+  // `constructor` on every side and deleting its floor line left this assertion silent
+  // (GREEN 10/10, exit 0 on f682e1c5), and the reverse check hid an orphan
+  // `constructor: 1` line the same way. The two lists are plain object literals keyed on
+  // entry titles, and every title is data a human types, so a title colliding with the
+  // prototype is a trap rather than a present defect — 0 of the 31 entries does today —
+  // which is exactly why it has to be closed before one does.
+  const unfloored = Object.keys(DESTINATION_FACTS).filter((t) => !Object.hasOwn(PER_ENTRY_FLOOR, t));
   assert.deepEqual(
     unfloored,
     [],
@@ -692,10 +719,13 @@ test("every cut entry's facts are readable at the destination (not just its anch
       `re-scope an entry (that is lowering it); restore the line, or if the entry genuinely ` +
       `has no facts left to protect, remove its DESTINATION_FACTS entry too.`,
   );
+  const drifted = Object.keys(PER_ENTRY_FLOOR).filter((t) => !Object.hasOwn(DESTINATION_FACTS, t));
   assert.deepEqual(
-    Object.keys(PER_ENTRY_FLOOR).filter((t) => !(t in DESTINATION_FACTS)),
+    drifted,
     [],
-    `PER_ENTRY_FLOOR names entries DESTINATION_FACTS no longer has — the two lists drifted`,
+    `PER_ENTRY_FLOOR names entries DESTINATION_FACTS no longer has — the two lists ` +
+      `drifted:\n  ${drifted.join("\n  ")}. Delete the floor line with the entry it ` +
+      `protected, or restore the DESTINATION_FACTS list.`,
   );
   assert.ok(
     Object.values(DESTINATION_FACTS).every((f) => f.length >= 2),

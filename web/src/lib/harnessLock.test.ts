@@ -370,6 +370,22 @@ const HARNESSES: HarnessEntry[] = [
     d3ProbeEnv: { BITEPROOF_FLAT_ARM: "refs/heads/jomform-nonexistent-probe" },
     d3ProbeNeedle: /cannot resolve BITEPROOF_FLAT_ARM=refs\/heads\/jomform-nonexistent-probe/,
   },
+  // CARD t_dd08bc5c ADDED THIS ONE. `biteproof_docs_index_floor_mirror.sh` rewrites
+  // `src/lib/docsFacts.ts` (an entry's PER_ENTRY_FLOOR line), `src/lib/docsIndex.test.ts`
+  // (that entry's ORIGINAL_TITLES row) and `src/app/docs/page.tsx` (its title) IN PLACE,
+  // and the guard it drives reads all three — the same shared input the family mutates, so
+  // it takes the family key rather than its own. Its D3 probe reaches a node-free refusal
+  // AFTER its lock block and BEFORE any node run: the base guard is read out of git, so an
+  // unresolvable `BITEPROOF_BASE` exits 2 there. (The running count in the header comment
+  // above lags this list, exactly as it already did for t_18750b46's entry.)
+  {
+    label: "biteproof_docs_index_floor_mirror.sh",
+    script: join(webRoot, "scripts", "biteproof_docs_index_floor_mirror.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_BASE: "refs/heads/jomform-nonexistent-probe" },
+    d3ProbeNeedle: /cannot resolve refs\/heads\/jomform-nonexistent-probe/,
+  },
 ];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
