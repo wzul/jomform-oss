@@ -1094,92 +1094,209 @@ else
   ok "16b BITES: with all $default_count slot(s) held the run REPORTS the busy pool and exits 74 without executing a gate — the cap is real, and it is a wait rather than a refusal"
 fi
 
-# 16c. THE OTHER DIRECTION OF 16b: once a slot frees, the waiter must RUN.
-#      Without this leg 16b is satisfied by a runner that always refuses under
-#      contention, which is the false-red shape the pool exists to avoid.
+# 16c AND 16f. THE OTHER DIRECTION OF 16b: once a slot frees, the waiter must RUN
+#      — and it must run while SLOT 1 IS STILL HELD (card t_1c59f9f5). Without
+#      this leg 16b is satisfied by a runner that always refuses under contention,
+#      which is the false-red shape the pool exists to avoid. The wait used to be
+#      one blocking `flock` on slot 1, so a run proceeded only when SLOT 1 freed
+#      and exited 74 while another slot was free; the run must instead proceed on
+#      the freed slot 2..N, which is exactly the ordering a slot-1-only wait is
+#      blind to.
 #
-#      AND IT MUST BE THE SLOT THAT IS NOT SLOT 1 (card t_1c59f9f5). The wait
-#      used to be one blocking `flock` on slot 1, so a run proceeded only when
-#      SLOT 1 freed and exited 74 while another slot was free. The old version of
-#      this check released BOTH slots together after 2s, so slot 1 frees FIRST and
-#      the check could not see the defect at all — it went green on a runner whose
-#      waiter watches one path. It now holds slot 1 for the WHOLE check and frees
-#      only the other slot(s): slot 1 frees LAST, which is exactly the ordering a
-#      slot-1-only wait is blind to, and the run must still proceed. On the
-#      pre-fix runner that is RED (rc=74 with slot 2 free the whole time).
+#      MEASURED AS A PROPERTY, NOT AGAINST A WALL-CLOCK CONSTANT (card
+#      t_92e2e4ae). This leg used to assert `elapsed < 12s`, where `elapsed` was
+#      the TOTAL wall clock of the subject run — its own start, the wait, the
+#      gate, the record write — against a fixed 12s. That constant was never the
+#      measured quantity, and everything OUTSIDE the wait inflates with host load.
+#      Measured on this host at load 33 on 6 cores, the SAME bytes gave
+#      elapsed=16.24s with the wait demonstrably CORRECT: the run announced its
+#      gate 4.0s after slot 2 was freed and 8s BEFORE slot 1 was released (the
+#      gate itself then cost 7s). The old assertion read that as "it waited out
+#      the slot-1 hold" and turned a real full gate run RED (card t_d7553726, tree
+#      fb8aea76, 17 passed / 1 failed) — a false red that costs every unlucky lane
+#      a 200s re-run and reads as a defect in the tree under test.
 #
-#      WAIT is deliberately SHORTER than the slot-1 hold, so a waiter that only
-#      watched slot 1 cannot pass by timing out at the deadline: rc=0 here is only
-#      reachable by waking on the freed slot.
-s16c_hold=12
-s16c_wait=8
-# The filler's READINESS SENTINEL, the same mechanism 16b uses (card t_458c2578).
-# `sleep 0.5` used to be a start BUDGET for the subject: if the host was loaded
-# and the filler had not taken its slots yet, the subject started against a FREE
-# pool, took a slot, ran its gate and answered rc=0 — 16c then reported the green
-# it is meant to be unable to report without a slot-1-only wait being wrong. The
-# sentinel, written AFTER the filler holds every slot, makes the subject's start
-# wait for a full pool rather than hope for it.
-s16c_ready="$SB_STATE/s16c.ready"
-rm -f "$s16c_ready"
-(
-  # FIXED DESCRIPTOR NUMBERS, closed by NUMBER — no `eval`, and no descriptor this
+#      So the assertion is now the property that sentence always meant: THE RUN
+#      ANNOUNCED ITS GATE WHILE SLOT 1 WAS STILL HELD, with a FRESH non-blocking
+#      take on slot 1 REFUSED at that moment to prove it. Slot 1 is released BY
+#      THE CHECK, only after that moment, so the assertion holds at any host speed
+#      — and a slot-1-only waiter cannot satisfy it, at any host speed.
+#
+#      THE PREMISE IS A WAIT, NOT A HOPE (the 16b/16e pattern, card t_458c2578).
+#      The pool stays FULL until the SUBJECT ITSELF reports it is waiting, so "the
+#      pool was full at the subject's own decision" cannot be lost to a loaded
+#      host delaying the subject's start. The old form freed slot 2 on a 2s timer
+#      whatever the subject was doing, so a subject that reached the pool after
+#      that simply took the free slot and never waited at all.
+#
+# The two markers these legs key on, both taken from the runner's OWN output
+# rather than assumed: its wait line, and its gate announcement.
+s16_poolfull='gate slot(s) busy'
+s16_gofmt_banner='==> gate [gofmt]:'
+# $1 of wait_file_line and of pool_wake_leg is a LIVENESS bound, never the
+# measured quantity: the runner polls its slots at <=1s intervals, so a bound an
+# order of magnitude over that only fires for a subject that never gets there.
+s16_bound=20
+# The subject's own slot-wait budget must OUTLAST that bound: were the runner's
+# deadline to expire first, the leg would be reading the runner's timeout rather
+# than the pool.
+s16_wait=90
+
+# Wait, BOUNDED, for a fixed string to appear in a file a subject is writing AS IT
+# RUNS. 0 = the line appeared, 1 = the bound ran out (a file that does not exist
+# yet counts as "not yet", so this is a wait rather than a race).
+wait_file_line() {  # $1 file, $2 fixed string, $3 seconds
+  local f="$1" pat="$2" deadline
+  deadline=$(( $(date +%s) + $3 ))
+  while :; do
+    grep -qF "$pat" "$f" 2>/dev/null && return 0
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
+    sleep 0.1
+  done
+}
+
+# pool_wake_leg <tag> <bound> <subject argv...> — drive ONE runner against a pool
+# that stays FULL until the SUBJECT ITSELF reports it is waiting, then free slot
+# 2..N while slot 1 stays held, and record WHAT the runner did.
+#
+# THE SAME MEASUREMENT IS APPLIED TO TWO SUBJECTS — the live runner (16c) and a
+# copy whose pool is a single lock on slot 1 (16f) — so neither verdict can come
+# from a difference in the measurement itself.
+#
+# Sets, for the caller:
+#   PW_RESULT   held | held_unverified | after | never | nofull | nohold
+#   PW_RC       the subject's exit status
+#   PW_READY_RC the holder's readiness status (0 = the pool was full)
+#   PW_OUT      the file the subject's output is streamed to, read WHILE it runs
+#   PW_ELAPSED  the subject's wall clock — REPORTED in the messages and never
+#               asserted on: it is the number whose load dependence reddened a
+#               real full gate run while the wait was correct.
+pool_wake_leg() {  # $1 tag, $2 bound seconds, $3.. the subject's argv
+  local tag="$1" bound="$2"; shift 2
+  local ready="$SB_STATE/$tag.ready" sfree="$SB_STATE/$tag.free" srel="$SB_STATE/$tag.release"
+  local holder pid start
+  PW_OUT="$SB_STATE/$tag.out"
+  PW_RESULT=never; PW_RC=""; PW_ELAPSED=""; PW_READY_RC=0
+  rm -f "$ready" "$sfree" "$srel" "$PW_OUT"
+  # THE HOLDER: every slot, held until the subject reports the full pool (bounded),
+  # then slots 2..N freed and slot 1 held until the CHECK releases it (bounded).
+  # Both triggers are FILES, so the ordering this leg measures is the subject's own
+  # observation rather than a timer.
+  # FIXED DESCRIPTOR NUMBERS, closed by NUMBER — no `eval` and no descriptor this
   # shell might already be using. `eval "exec \${var}>&-"` looks like the obvious
   # close-by-variable, but it is not reliably a redirection: when it degrades to
   # `exec <num>` bash tries to EXECUTE a command named by the digit, and a failed
-  # `exec` in a non-interactive shell EXITS the subshell — which releases EVERY slot
-  # it holds, including slot 1, and the check then measures an empty pool instead of
-  # a slot-1-only hold. (Measured while writing this: the fd-variable form printed
-  # `exec: 11: not found` and the waiter passed in 3s.) Slot `n` therefore lives on
-  # fd `$((100+n))`, which nothing else here opens.
-  for n in $(seq 1 "$default_count"); do
-    eval "exec $((100+n))>>\"\$pool_lock.slot\$n\"" || exit 1
-    flock -o -n "$((100+n))" || exit 1
-  done
-  echo "16c: all $default_count slot(s) held"
-  : >"$s16c_ready"
-  sleep 2
-  # Free every slot EXCEPT slot 1, so slot 1 is the last to free — for longer than
-  # the waiter's whole budget. That is the ordering a slot-1-only wait is blind to.
-  for n in $(seq 2 "$default_count"); do
-    eval "exec $((100+n))>&-"
-  done
-  echo "16c: slot(s) 2..$default_count FREED at t=2s; slot1 HELD for ${s16c_hold}s"
-  sleep "$s16c_hold"
-) &
-s16c_filler=$!
-s16c_ready_rc=0
-wait_pool_hold_ready "$s16c_ready" "$s16c_filler" || s16c_ready_rc=$?
-s16c_start=$(date +%s)
-# `env -u` for the inheritance markers, exactly as 16b/16e do: this is the check
-# that measures the TAKE and the WAIT, so an inherited marker must not short-circuit it.
-s16c_out="$( (cd "$LIVE_ROOT" && env -u PREFLIGHT_SLOT_FD -u PREFLIGHT_SLOT_HOLDER -u PREFLIGHT_SLOT_N -u PREFLIGHT_SLOT_LOCK \
-    PREFLIGHT_RESULT_DIR="$SB_STATE/pool-results" PREFLIGHT_RESULT_TTL=1 \
-    PREFLIGHT_LOCK_FILE="$pool_lock" PREFLIGHT_LOCK_WAIT="$s16c_wait" \
-    ./scripts/preflight.sh --only gofmt 2>&1) )"
-s16c_rc=$?
-s16c_elapsed=$(( $(date +%s) - s16c_start ))
-# WAIT IT OUT rather than killing it. `kill` would end the subshell but not the
-# `sleep` child that shares the slot-1 open file description, so the lock would
-# survive the kill and 16d's own full-pool premise (a fresh take on slot1 is
-# refused) would then be measuring a leaked holder. Letting the hold expire closes
-# the descriptors with it; the hold is bounded and short.
-wait "$s16c_filler" 2>/dev/null
-# The SAME holder premise as 16b/16e (card t_458c2578): the filler's status used
-# to be discarded, and its readiness wait is what guarantees the subject started
-# against a FULL pool. If the filler never took its slots, a rc=0 subject proves
-# nothing about the wait — report that, never the green it would otherwise read as.
-if [ "$s16c_ready_rc" -ne 0 ]; then
-  bad "16c: the pool HOLDER did not fill the pool within 15s (readiness rc=$s16c_ready_rc), so a rc=$s16c_rc subject cannot be read as 'the wait watches every slot' — the pool it was measured against was not full"
-elif [ "$s16c_rc" -eq 0 ] && grep -qF "$s16_gofmt_label" <<<"$s16c_out"; then
-  if [ "$s16c_elapsed" -lt "$s16c_hold" ]; then
-    ok "16c BITES: with only slot1 held and slot 2..$default_count freed, the run RUNS its gate in ${s16c_elapsed}s (rc=0, gate executed) — the wait watches EVERY slot, not slot 1 alone (it cannot have waited for slot1, held for ${s16c_hold}s)"
+  # `exec` in a non-interactive shell EXITS the subshell — which releases EVERY
+  # slot it holds, so the leg would measure an empty pool instead of a hold.
+  # Slot `n` therefore lives on fd `$((100+n))`, which nothing else here opens.
+  (
+    for n in $(seq 1 "$default_count"); do
+      eval "exec $((100+n))>>\"\$pool_lock.slot\$n\"" || exit 1
+      flock -o -n "$((100+n))" || exit 1
+    done
+    # The same premise probe as pool_hold (card t_458c2578): a FRESH take on a slot
+    # this process holds must be REFUSED, or the pool being measured is not full
+    # for anyone else and the subject's wait line would mean something else.
+    probe=""
+    exec {probe}>>"$pool_lock.slot1" || exit 1
+    if flock -n "$probe" 2>/dev/null; then exec {probe}>&-; exit 2; fi
+    exec {probe}>&-
+    echo "  $tag: all $default_count slot(s) held"
+    : >"$ready"
+    _w=0
+    while [ ! -f "$sfree" ] && [ "$_w" -lt 1200 ]; do sleep 0.1; _w=$((_w+1)); done
+    for n in $(seq 2 "$default_count"); do
+      eval "exec $((100+n))>&-"
+    done
+    echo "  $tag: slot(s) 2..$default_count FREED on the subject's own pool-full report; slot1 still HELD"
+    _w=0
+    while [ ! -f "$srel" ] && [ "$_w" -lt 1800 ]; do sleep 0.1; _w=$((_w+1)); done
+    echo "  $tag: slot1 released"
+  ) &
+  holder=$!
+  # `env -u` for the inheritance markers, exactly as 16b/16e do: this is the leg
+  # that measures the TAKE and the WAIT, so an inherited marker must not
+  # short-circuit it.
+  (
+    cd "$LIVE_ROOT" || exit 1
+    exec env -u PREFLIGHT_SLOT_FD -u PREFLIGHT_SLOT_HOLDER -u PREFLIGHT_SLOT_N -u PREFLIGHT_SLOT_LOCK \
+      PREFLIGHT_RESULT_DIR="$SB_STATE/pool-results" PREFLIGHT_RESULT_TTL=1 \
+      PREFLIGHT_LOCK_FILE="$pool_lock" PREFLIGHT_LOCK_WAIT="$s16_wait" \
+      "$@"
+  ) >"$PW_OUT" 2>&1 &
+  pid=$!
+  start=$(date +%s)
+  wait_pool_hold_ready "$ready" "$holder" || PW_READY_RC=$?
+  if [ "$PW_READY_RC" -ne 0 ]; then
+    PW_RESULT=nohold
+  elif ! wait_file_line "$PW_OUT" "$s16_poolfull" "$bound"; then
+    PW_RESULT=nofull
   else
-    bad "16c: the run proceeded only after ${s16c_elapsed}s, i.e. it waited out the slot-1 hold (${s16c_hold}s) rather than waking on the freed slot — the wait is still not a pool wait"
+    # The subject has reported a FULL pool, so the free that follows is the FIRST
+    # slot it can possibly wake on — the ordering a slot-1-only wait is blind to.
+    : >"$sfree"
+    if wait_file_line "$PW_OUT" "$s16_gofmt_banner" "$bound"; then
+      # PROVE slot 1 was still held AT THAT MOMENT rather than trusting the holder
+      # to still be holding it: flock refusal is open-file-description scoped, so a
+      # fresh non-blocking take by this process is REFUSED while the holder lives.
+      # If it SUCCEEDS the pool had already emptied and the proceed proves nothing
+      # — and the probe is closed at once, because this leg leaves the pool as it
+      # found it.
+      probe=""
+      if exec {probe}>>"$pool_lock.slot1"; then
+        if flock -n "$probe" 2>/dev/null; then PW_RESULT=held_unverified; else PW_RESULT=held; fi
+        exec {probe}>&-
+      fi
+    else
+      # Nothing ran its gate while slot 1 was held. The subject's output is only
+      # ever APPENDED to, so whatever appears after the release below appeared
+      # AFTER it — the attribution needs no clock, only that ordering.
+      PW_RESULT=after_or_never
+    fi
   fi
-else
-  bad "16c: a queued run must execute its gate once ANY slot frees (slot1 held, slot 2..$default_count freed at t=2s) — rc=$s16c_rc, elapsed=${s16c_elapsed}s, output: [$(printf '%s' "$s16c_out" | grep -E 'slots:|gate \[gofmt\]|summary|preflight:' | tr '\n' ' ')]"
-fi
+  # End the holder's holds whatever the outcome, BEFORE waiting for it, or a
+  # premise failure would park this leg on the holder's own bound and leave the
+  # sandbox pool occupied (16d's premise takes a fresh look at a held slot).
+  : >"$sfree"
+  : >"$srel"
+  wait "$holder" 2>/dev/null
+  wait "$pid" 2>/dev/null; PW_RC=$?
+  PW_ELAPSED=$(( $(date +%s) - start ))
+  if [ "$PW_RESULT" = after_or_never ]; then
+    if grep -qF "$s16_gofmt_banner" "$PW_OUT" 2>/dev/null; then PW_RESULT=after; else PW_RESULT=never; fi
+  fi
+}
+# 16c. THE WAIT WATCHES EVERY SLOT. The LIVE runner is the subject: with the pool
+#      held until it says it is waiting, then slot 2..N freed while slot 1 stays
+#      held, it must run its gate — and a FRESH take on slot 1 must be refused at
+#      that moment. A runner that watched slot 1 alone could not do that; that is
+#      the defect card t_1c59f9f5 fixed, and 16f is the copy that proves this
+#      assertion still rejects it.
+pool_wake_leg s16c "$s16_bound" ./scripts/preflight.sh --only gofmt
+s16c_out="$(cat "$PW_OUT" 2>/dev/null)"
+case "$PW_RESULT" in
+  held)
+    ok "16c BITES: with slot 2..$default_count freed while slot1 stayed held, the run RUNS its gate anyway and a FRESH take on slot1 was still refused at that moment — the wait watches EVERY slot, not slot 1 alone (rc=$PW_RC, ${PW_ELAPSED}s total)"
+    ;;
+  nohold)
+    bad "16c: the pool HOLDER did not fill the pool within 15s (readiness rc=$PW_READY_RC), so a rc=$PW_RC subject cannot be read as 'the wait watches every slot' — the pool it was measured against was not full"
+    ;;
+  nofull)
+    bad "16c PREMISE: the subject never reported a full pool within ${s16_bound}s (rc=$PW_RC), so the pool was not full at the subject's own decision and this leg measured NOTHING about the wait — output: [$(printf '%s' "$s16c_out" | grep -E 'slots:|gate \[gofmt\]|preflight:' | tr '\n' ' ')]"
+    ;;
+  held_unverified)
+    bad "16c: the run ran a gate while slot 2..$default_count were free, but slot1 was free TOO at that moment (a fresh take succeeded) — the pool had already emptied, so the proceed cannot be attributed to the wait (rc=$PW_RC)"
+    ;;
+  after)
+    bad "16c: the run did not run a gate while slot1 was held (${s16_bound}s with slot 2..$default_count free) and only ran it after slot1 was RELEASED — the wait is blind to the other slot(s) (rc=$PW_RC, ${PW_ELAPSED}s total)"
+    ;;
+  never)
+    bad "16c: a queued run must execute its gate once ANY slot frees (slot1 held, slot 2..$default_count freed on the subject's own pool-full report) — it never ran one (rc=$PW_RC), output: [$(printf '%s' "$s16c_out" | grep -E 'slots:|gate \[gofmt\]|preflight:' | tr '\n' ' ')]"
+    ;;
+  *)
+    bad "16c: the pool leg returned an unexpected result [$PW_RESULT]"
+    ;;
+esac
 
 # 16d. AN INHERITED SLOT MUST NOT BE QUEUED ON. A nested invocation that inherits
 #      its ancestor's slot is already inside the pool — it must run its gates, not
@@ -1283,6 +1400,54 @@ else
   fi
 fi
 rm -f "$SB/scripts/preflight_slotmut.sh"
+
+# 16f. THE BITE FOR 16c, ON THE SAME LEG. 16c's PASS is a property — "it ran its
+#      gate while slot 1 was still held" — and a property claim needs a case that
+#      shows it is not free. The case is a COPY of the runner whose pool is a
+#      SINGLE LOCK on slot 1 (the exact defect card t_1c59f9f5 fixed), driven
+#      through the SAME pool_wake_leg as 16c on the same pool: it must NOT proceed
+#      while slot 1 is held, and it must proceed once slot 1 is RELEASED — the
+#      second half is what stops the leg being satisfied by a copy that is simply
+#      broken. Driven on a COPY (never the live runner, which this gate runs on).
+#
+#      BOTH candidate scans have to be rewritten, not just the poll's: the TAKE
+#      re-scans every slot on EVERY call, which is the other half of why the live
+#      wait cannot be blind to a freed slot. A mutation of the poll alone leaves
+#      the take's scan intact and the copy then behaves like the live runner —
+#      measured while writing this. So the mutation is applied to the literal both
+#      scans share, and the check asserts that exactly the two rewritten loops
+#      landed, so a future third scan reds by name instead of silently weakening
+#      the case.
+s16f_mut="$SB/scripts/preflight_slot1only.sh"
+sed 's/\$(seq 1 "\$PREFLIGHT_SLOT_COUNT")/1/g' "$PREFLIGHT" > "$s16f_mut" 2>/dev/null
+if [ "$(grep -cF 'for n in 1; do' "$s16f_mut" 2>/dev/null)" != "1" ] \
+   || [ "$(grep -cF 'for _slot_n in 1; do' "$s16f_mut" 2>/dev/null)" != "1" ]; then
+  bad "16f's mutation did not land (the pool's candidate scans are no longer the two literal \$(seq 1 \"\$PREFLIGHT_SLOT_COUNT\") loops this check rewrites — the take's and the poll's — so the case would have reported a false green)"
+else
+  pool_wake_leg s16f "$s16_bound" bash "$s16f_mut" --only gofmt
+  s16f_out="$(cat "$PW_OUT" 2>/dev/null)"
+  case "$PW_RESULT" in
+    after)
+      ok "16f BITES: a copy whose pool is a SINGLE LOCK on slot1 does NOT proceed while slot1 is held and runs its gate only once slot1 is RELEASED (rc=$PW_RC, ${PW_ELAPSED}s) — 16c's PASS is not reachable by the slot-1-only wait it exists to catch"
+      ;;
+    held|held_unverified)
+      bad "16f does not bite: a copy whose pool is a single lock on slot1 still ran its gate while slot1 was held ([$PW_RESULT]) — so 16c's PASS IS reachable by the very defect it exists to catch"
+      ;;
+    nohold)
+      bad "16f: the pool HOLDER did not fill the pool within 15s (readiness rc=$PW_READY_RC), so this case measured nothing"
+      ;;
+    nofull)
+      bad "16f: the mutated copy never reported a full pool within ${s16_bound}s (rc=$PW_RC) — output: [$(printf '%s' "$s16f_out" | grep -E 'slots:|gate \[gofmt\]|preflight:' | tr '\n' ' ')]"
+      ;;
+    never)
+      bad "16f: the mutated copy never ran a gate even after slot1 was released (rc=$PW_RC) — a copy that is simply broken cannot show what a slot-1-only wait does, output: [$(printf '%s' "$s16f_out" | grep -E 'slots:|gate \[gofmt\]|preflight:' | tr '\n' ' ')]"
+      ;;
+    *)
+      bad "16f: the pool leg returned an unexpected result [$PW_RESULT]"
+      ;;
+  esac
+  rm -f "$s16f_mut"
+fi
 
 # 15. PATH-AWARE SELECTION (--for-diff / --classify) — the narrowing must BITE,
 #     and it must be SAFE. These assertions are the reason the feature can be
