@@ -612,6 +612,15 @@ function classTexts(node: ts.Node, sf: ts.SourceFile): string[] {
     ts.isTemplateExpression(n) ||
     ts.isConditionalExpression(n) ||
     ts.isArrayLiteralExpression(n) ||
+    // An object literal is a CLASS MAP held in a name: `const S = { paid: "…" }`
+    // read at a use site as `S[s]`. Without it the name was absent from `locals`
+    // entirely, so `className={S[s]}` came back as `resolved: false` — the reader
+    // could not follow the shape the app's status badges use, and a guard that
+    // sees no class list reports nothing. The map's text is read by key in
+    // `resolveClassExpr`, which appends the access and hands it to
+    // `resolveClassMap`; a bare `className={S}` stays unreadable on purpose (the
+    // key is not known there, and guessing a value would be a false positive).
+    ts.isObjectLiteralExpression(n) ||
     ts.isIdentifier(n) ||
     ts.isPropertyAccessExpression(n) ||
     ts.isCallExpression(n) ||
@@ -887,6 +896,31 @@ function resolveClassExpr(expr: string, locals: Map<string, string[]>, depth = 0
   if (src[0] === "(" || src[0] === "{") {
     const map = resolveClassMap(src, locals, depth);
     if (map.end > 0 && src.slice(map.end).trim() === "") return map;
+  }
+
+  // The same class map, held in a LOCAL name and read by key: `const S = { paid:
+  // "…" }; S[s]`. `resolveClassMap` only takes the map's text inline, and the
+  // map is the shape this repo's status badges are written in (a page map for
+  // /sales, /deliveries, /admin suppressions, the dashboard e-mail status), so
+  // leaving the name unresolvable meant an element whose className is a badge
+  // lookup carried no class list at all and every rule skipped it in silence.
+  //
+  // The map's text and the ACCESS are joined before the read, so `S[s]` and
+  // `S.cancelled` are read by the same code path as `({ paid: "…" })[s]`, and a
+  // local holding anything that is not a map (`S` a string, an array) simply
+  // does not resolve here and falls through to the unreadable path below.
+  const localMap = /^([A-Za-z_$][\w$]*)\s*((?:\[[^[\]]*\]|\.[A-Za-z_$][\w$]*)+)$/.exec(src);
+  if (localMap) {
+    const bodies = locals.get(localMap[1]);
+    if (bodies && bodies.length > 0) {
+      const parts = bodies.map((b) => resolveClassMap(`${b}${localMap[2]}`, locals, depth + 1));
+      if (parts.every((p) => p.end > 0)) {
+        return {
+          alts: union(parts.map((p) => ({ alts: p.alts, resolved: p.resolved }))),
+          resolved: parts.every((p) => p.resolved),
+        };
+      }
+    }
   }
 
   return resolveReference(src, locals, depth);

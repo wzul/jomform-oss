@@ -54,6 +54,16 @@
 //
 //   * It does not judge `text-slate-600` / `text-slate-700` — both clear 4.5:1
 //     on every light surface above (7.13:1 / 9.73:1 on --jf-bg).
+//   * It does not judge `text-red-500` (`#fb2c36`, 3.81:1 on white, 3.58:1 on
+//     --jf-bg) or any other red/sky step, and that is a SCOPE decision, not an
+//     oversight: the RED and SKY text family is owned by `dangerText.test.ts`,
+//     which computes each step's bad-surface set from the installed Tailwind
+//     theme and forbids `text-red-500` on every light surface in this app (no
+//     `text-red-500` is left in `web/src/**/*.tsx`; the class only appears in
+//     that guard's own fixtures). The two rules are disjoint by construction —
+//     see the ownership block at the top of `dangerText.test.ts`. So a GREEN run
+//     of THIS file means "no muted-GRAY token is painted below AA", and it must
+//     not be read as "all AA text is covered".
 //   * It does not judge a token against a surface it cannot SEE. A token whose
 //     nearest background comes from a parent's `bg-black/40` overlay, an
 //     `aria-selected` attribute or a media query is left alone; those are
@@ -62,6 +72,29 @@
 //   * It does not require a surface to be declared. `text-[var(--jf-muted)]`
 //     with no background of its own is the 381-site majority and is correct on
 //     white, which is what the app's cards are.
+//   * It does not reach a class list that is IMPORTED from another module
+//     (`import { badgeCls } from "./badges"`), or a `className` that is a PROP
+//     the caller owns. `jsxSource.ts` marks both unreadable rather than clean,
+//     and `tintedSurface.test.ts` pins the five such sites in this tree; this
+//     file judges what it can read and says so here rather than reporting an
+//     element clean because it could not read it.
+//
+// HOW A CLASS LIST REACHES AN ELEMENT (both shapes are judged)
+//
+//   Inline — `className="bg-slate-100 text-slate-500"` — the token's own offset
+//   falls inside the element's attribute range, and rules (a) and (b) below
+//   judge it there.
+//
+//   Through a VARIABLE — `const labelCls = "text-xs text-slate-500"`, a class map
+//   read by key (`const S = { cancelled: "…" }; S[s]`), a local helper — the
+//   bytes are at the DECLARATION and the element only names the variable, so no
+//   attribute range contains them. This is the shape every status badge in the
+//   app is written in, and until the (b-held) branch below existed the site was
+//   skipped in silence: the `bg-slate-100 text-slate-500` chip family (#62748e on
+//   #f1f5f9 = 4.349:1) ran GREEN through a full pass of this file on the tree
+//   that rendered it 14 times. The attribution is the element that RENDERS the
+//   list — `jsxTags` resolves each tag's `className` through the local
+//   declaration, so the surface question is the one rule (b) already answers.
 //
 // The class-list / JSX-shape parser (`codeOnly`, `jsxTags`, `ancestorsAt`,
 // `descendantsAt`, `tsxFiles`) now lives in `web/src/lib/jsxSource.ts`, shared
@@ -396,37 +429,29 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
   //     carries those layout surfaces, nearest first.
   const PAGE_BG = "bg-[var(--jf-bg)]";
   const ambientSurfaces = ambient.flatMap((variants) => declaredSurfaces(variants));
-  const TOKEN_RE = new RegExp(
-    `(?:^|[\\s"'\`])(${Object.keys(TEXT_TOKENS)
-      .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-      .join("|")})(?![\\w-])`,
-    "g",
-  );
-  let m: RegExpExecArray | null;
-  while ((m = TOKEN_RE.exec(code))) {
-    const idx = m.index + m[0].length - m[1].length;
-    const owner = events.find((e) => e.tag.attrStart < idx && idx < e.tag.attrEnd)?.tag;
-    if (!owner) continue;
-    const tok = m[1];
-    const ownIsBad = owner.variants.some((v) =>
-      v.split(/\s+/).some((cls) => {
-        const [s, bareCls] = splitState(cls);
-        if (!bareCls || !LIGHT_SURFACE_RE.test(cls)) return false;
-        return tokensIn(v, s).some((t) => TEXT_TOKENS[t].bad.length > 0);
-      }),
-    );
-    if (ownIsBad) continue; // already (a)
-    // The NEAREST surface ancestor wins, not the outermost one. CSS paints
-    // through the innermost opaque background between the text and the page, so
-    // taking the first match mis-attributes any token nested inside two surfaces.
-    // `dangerText.test.ts` hit a real site this way (the /chat card footer, card
-    // t_624b7275); this guard carried the same `.find()` shape and takes `.at(-1)`
-    // for the same reason. The nested fixture below pins it in BOTH directions:
-    // nearest is what stops an inner `bg-slate-100` being read as the `bg-white`
-    // card behind it (where `--jf-muted` reads 4.83:1 and passes) and what stops
-    // an inner `bg-white` being read as the `bg-[var(--jf-bg)]` region behind it
-    // (where `text-slate-500` reads 4.48:1 and would be a false positive).
-    const surfaceEl = ancestorsAt(events, owner.openIdx)
+  const LAYOUT_SURFACE = ambientSurfaces[0];
+
+  /**
+   * The NEAREST ancestor of `owner` that declares an unqualified light surface.
+   *
+   * CSS paints through the innermost opaque background between the text and the
+   * page, so taking the first match mis-attributes any token nested inside two
+   * surfaces. `dangerText.test.ts` hit a real site this way (the /chat card
+   * footer, card t_624b7275); this guard carried the same `.find()` shape and
+   * takes `.at(-1)` for the same reason. The nested fixture in "the repo-wide
+   * rule is looking at real, reachable markup" pins it in BOTH directions:
+   * nearest is what stops an inner `bg-slate-100` being read as the `bg-white`
+   * card behind it (where `--jf-muted` reads 4.83:1 and passes) and what stops an
+   * inner `bg-white` being read as the `bg-[var(--jf-bg)]` region behind it
+   * (where `text-slate-500` reads 4.48:1 and would be a false positive).
+   *
+   * An ancestor only counts here when its surface is UNQUALIFIED, because the
+   * descendant's token and the ancestor's surface would have to be in the same
+   * state to overlap and a source scan cannot pair states across elements. That
+   * keeps this shape a real defect and not a guess.
+   */
+  const nearestSurfaceAncestor = (owner: Tag): Tag | undefined =>
+    ancestorsAt(events, owner.openIdx)
       .filter((t) => t !== owner)
       .filter((t) =>
         t.variants.some((v) =>
@@ -437,30 +462,67 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
         ),
       )
       .at(-1);
+
+  /**
+   * The surfaces the text of `owner` is painted on, and the element that paints
+   * the nearest one (undefined when the surface comes from further out).
+   *
+   *   * the nearest surface ancestor's — the token sits on a descendant of a
+   *     surface element, so it is painted on that surface even though its own
+   *     class list declares none;
+   *   * else the page's `layout.tsx` chain's, when it declares one;
+   *   * else the app's page background — `globals.css` sets
+   *     `html, body { background: var(--jf-bg) }` (#f7f8f8). That is the case the
+   *     `/settings` and `/profile` tab strips are in, and where `text-slate-500`
+   *     measures 4.48:1 (axe: 4.47) — the card's "off by 0.03" node.
+   *
+   * The page-background fallback is not taken blindly: `docs/layout.tsx:61` is
+   * `<main className="min-h-screen bg-white">`, so every docs page renders on
+   * WHITE (where `text-slate-500` is 4.76:1 and passes) and an in-file scan that
+   * assumed `--jf-bg` reported 4.48:1 for text that is fine. `ambient` carries
+   * those layout surfaces, nearest first.
+   */
+  const paintedSurface = (owner: Tag): { surfaceEl: Tag | undefined; surfaces: string[] } => {
+    const surfaceEl = nearestSurfaceAncestor(owner);
+    if (!surfaceEl) {
+      return { surfaceEl, surfaces: LAYOUT_SURFACE ? [LAYOUT_SURFACE] : [PAGE_BG] };
+    }
     // Which of the surfaces that ancestor declares is the token painted on? The
     // nearest one wins, but the ancestor's class list is not ordered by paint
     // order, so take the LAST surface in every variant it declares.
-    const layoutSurface = ambientSurfaces[0];
-    const surfaces = surfaceEl
-      ? surfaceEl.variants.flatMap((v) =>
-          v
-            .split(/\s+/)
-            .map((cls) => splitState(cls))
-            .filter(([, bareCls]) => bareCls && LIGHT_SURFACE_RE.test(bareCls))
-            .map(([s, bareCls]) => (s === "" ? canonicalSurface(bareCls) : "")),
-        )
-      : (layoutSurface ? [layoutSurface] : [PAGE_BG]);
+    return {
+      surfaceEl,
+      surfaces: surfaceEl.variants.flatMap((v) =>
+        v
+          .split(/\s+/)
+          .map((cls) => splitState(cls))
+          .filter(([, bareCls]) => bareCls && LIGHT_SURFACE_RE.test(bareCls))
+          .map(([s, bareCls]) => (s === "" ? canonicalSurface(bareCls) : "")),
+      ),
+    };
+  };
+
+  /**
+   * Rule (b) and rule (b2) for ONE muted token written in `owner`'s class list.
+   *
+   * `line` is the site the finding is reported at and `via` is how the class
+   * string reached the element ("" when it is written inline in the element's own
+   * attribute). Both scans below call this, so the inline shape and the
+   * variable-held shape cannot drift apart.
+   */
+  const reportInherited = (owner: Tag, tok: string, line: number, via: string): void => {
+    const { surfaceEl, surfaces } = paintedSurface(owner);
     const bad = TEXT_TOKENS[tok].bad.filter((b) => surfaces.includes(b));
-    // NOT `continue` when `bad` is empty: rule (b2) below only reports a site
-    // that is clear on its OWN surface, so it needs this branch to have run.
+    // NOT `return` when `bad` is empty: rule (b2) below only reports a site that
+    // is clear on its OWN surface, so it needs this branch to have run.
     if (bad.length > 0) {
       const where = surfaceEl
         ? `inside <${surfaceEl.name}> which paints`
-        : layoutSurface
+        : LAYOUT_SURFACE
           ? "on a surface its layout paints"
           : "on the page background";
       findings.push(
-        `${rel}:${lineAt(idx)} — ${tok} is ${where} ${bad.join(" / ")}: ${TEXT_TOKENS[tok].note}`,
+        `${rel}:${line} — ${tok} is ${where} ${bad.join(" / ")}${via}: ${TEXT_TOKENS[tok].note}`,
       );
     }
 
@@ -477,7 +539,6 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
     //      NEAREST colour-declaring ancestor must be this element — if something
     //      between them declares a colour (or the child declares its own), this
     //      token never reaches the child and some other occurrence owns it.
-    const pageSurfaces = surfaceEl ? surfaces : (layoutSurface ? [layoutSurface] : [PAGE_BG]);
     for (const child of descendantsAt(events, owner)) {
       if (!INLINE.has(child.name)) continue;
       const childSurfaces = child.variants.flatMap((v) =>
@@ -503,14 +564,110 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
       if (nearest !== owner) continue;
       // Only report where the token was ALREADY clear of the surface behind it;
       // if it was not, the branch above already reported that site.
-      const okBehind = TEXT_TOKENS[tok].bad.every((b) => !pageSurfaces.includes(b));
+      const okBehind = TEXT_TOKENS[tok].bad.every((b) => !surfaces.includes(b));
       if (!okBehind) continue;
       const bad2 = TEXT_TOKENS[tok].bad.filter((b) => childSurfaces.includes(b));
       if (bad2.length === 0) continue;
       findings.push(
-        `${rel}:${lineAt(child.openIdx)} — ${tok} inherited into <${child.name}> which paints ` +
-          `${bad2.join(" / ")}: ${TEXT_TOKENS[tok].note}`,
+        `${rel}:${line} — ${tok} inherited into <${child.name}> which paints ` +
+          `${bad2.join(" / ")}${via}: ${TEXT_TOKENS[tok].note}`,
       );
+    }
+  };
+
+  const TOKEN_RE = new RegExp(
+    `(?:^|[\\s"'\`])(${Object.keys(TEXT_TOKENS)
+      .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("|")})(?![\\w-])`,
+    "g",
+  );
+  let m: RegExpExecArray | null;
+  while ((m = TOKEN_RE.exec(code))) {
+    const idx = m.index + m[0].length - m[1].length;
+    // The token is attributed to the element that OWNS it: the tag whose
+    // attribute list contains the offset. A token written in the same element's
+    // className was already reported by (a) — reporting it again as "inherited"
+    // would double-count one site.
+    const owner = events.find((e) => e.tag.attrStart < idx && idx < e.tag.attrEnd)?.tag;
+    if (!owner) continue;
+    const tok = m[1];
+    const ownIsBad = owner.variants.some((v) =>
+      v.split(/\s+/).some((cls) => {
+        const [s, bareCls] = splitState(cls);
+        if (!bareCls || !LIGHT_SURFACE_RE.test(cls)) return false;
+        return tokensIn(v, s).some((t) => TEXT_TOKENS[t].bad.length > 0);
+      }),
+    );
+    if (ownIsBad) continue; // already (a)
+    reportInherited(owner, tok, lineAt(idx), "");
+  }
+
+  /**
+   * How a variable-held class string reached the element, for the finding text.
+   *
+   * It names the DECLARATION's line when the file has exactly one occurrence of
+   * the token outside every element's attribute list — the bytes a developer has
+   * to change. With more than one such occurrence (`const a = …; const b = …`)
+   * naming one of them would be a guess, so the finding says only that the string
+   * is held in a variable.
+   */
+  const heldVia = (tok: string): string => {
+    // `indexOf` rather than a pattern: the token is a literal, and a class name
+    // built by hand into a RegExp is a second place for the same string to be
+    // written wrong.
+    const lines = new Set<number>();
+    for (let at = code.indexOf(tok); at !== -1; at = code.indexOf(tok, at + 1)) {
+      if (events.some((e) => e.tag.attrStart < at && at < e.tag.attrEnd)) continue;
+      lines.add(lineAt(at));
+    }
+    if (lines.size !== 1) return " (the element's class string is held in a variable)";
+    return ` (the element's class string is held in a variable, declared at line ${[...lines][0]})`;
+  };
+
+  // ── (b-held): the same obligation for a class string held in a VARIABLE ────
+  //
+  //   The offset scan above attributes a token by the BYTES it sits in: a token
+  //   is judged only when its own offset falls inside a JSX element's attribute
+  //   range. A class string held in a `const` — `const labelCls = "text-xs
+  //   text-slate-500"`, `const S = { cancelled: "bg-slate-100 text-slate-500" }`
+  //   — has no such range: its bytes are at the DECLARATION, the element only
+  //   names the variable, `owner` came back undefined, and the site was skipped
+  //   in silence. That is the hole this branch closes, and it is not theoretical:
+  //   it is how the `bg-slate-100 text-slate-500` status-badge family (4.349:1,
+  //   14 rendered sites) shipped green through this guard.
+  //
+  //   The attribution is the element that RENDERS the list, not the declaration:
+  //   `jsxTags` resolves each tag's `className` through the local declaration
+  //   (see `resolveClassExpr` in `jsxSource.ts`), so `tag.variants` already holds
+  //   the class lists that element can paint, and the surface question is the
+  //   one rule (b) answers. Judging the DECLARATION instead would have no
+  //   surface to judge it against, and a finding without a surface is how this
+  //   guard produced false positives before (card t_fa5786c4).
+  //
+  //   Both directions of overlap with the branches above are skipped:
+  //     * `attrText` — a token written inside this element's OWN attribute list
+  //       is the offset scan's site; reporting it here too would name one
+  //       element twice.
+  //     * `surfacesFor` — when the resolved class list declares BOTH the token
+  //       and the surface it fails on (`bg-slate-100 text-slate-500` in one
+  //       string), the pairing is a finding on its own and rule (a) owns it.
+  //
+  //   What this does NOT reach, stated so the green run is not read as more than
+  //   it is: a class list IMPORTED from another module (`import { badgeCls }`),
+  //   and a `className` that is a PROP the caller owns. `jsxSource.ts` reports
+  //   those as unreadable rather than as clean; `tintedSurface.test.ts` pins the
+  //   sites. This file judges what it can read and says so here.
+  for (const tag of new Set(events.map((e) => e.tag))) {
+    const attrText = code.slice(tag.attrStart, tag.attrEnd);
+    for (const v of tag.variants) {
+      for (const cls of v.split(/\s+/)) {
+        const [state, tok] = splitState(cls);
+        const spec = TEXT_TOKENS[tok];
+        if (!spec || spec.bad.length === 0) continue;
+        if (attrText.includes(tok)) continue; // the offset scan above owns it
+        if (spec.bad.some((b) => surfacesFor(v, state).includes(b))) continue; // (a) owns it
+        reportInherited(tag, tok, lineAt(tag.openIdx), heldVia(tok));
+      }
     }
   }
 
@@ -909,5 +1066,189 @@ test("a page this branch has never seen is scanned correctly (cross-tree)", () =
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// ─── a class string held in a VARIABLE ──────────────────────────────────────
+//
+// THE DEFECT this test pins (measured on the live revision with a scratch copy of
+// this file, probes never in the tree under test):
+//
+//   A token was judged only when its own offset fell inside a JSX element's
+//   attribute range. A class list held in a `const` — the shape every status
+//   badge in this app is written in — has no such range: its bytes are at the
+//   declaration and the element only names the variable, so the site was skipped
+//   in silence. The `bg-slate-100 text-slate-500` chip family (#62748e on
+//   #f1f5f9 = 4.349:1) was GREEN through a full run of this file on the tree that
+//   rendered it 14 times.
+//
+// Three arms, and all three have to hold for the hole to stay closed:
+//
+//   A  the same defect written inline              -> reported (never regressed)
+//   B  the defect reached through a variable       -> reported, naming the
+//                                                     surface that renders it
+//   C  a LEGAL token reached through a variable    -> NOT reported (the false
+//                                                     positive that deleting the
+//                                                     attribution guard would buy)
+test("a class string held in a variable is judged on the surface that renders it", () => {
+  const problems: string[] = [];
+  const names = (f: string[]) => f.join(" | ");
+
+  // (A) Inline: the shape rule (a) has always caught. If this one ever passes it
+  //     means the rules were weakened to make room for the new branch.
+  const inline = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="jf-card">',
+      '      <span className="bg-slate-100 text-slate-500 border-slate-200">cancelled</span>',
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (!inline.some((f) => f.includes("text-slate-500") && f.includes("bg-slate-100"))) {
+    problems.push(`the INLINE chip stopped being reported: ${names(inline)}`);
+  }
+
+  // (B1) An object literal read by key — `const S = { cancelled: "…" }` with
+  //      `className={S[s]}`. This is the badge shape on /sales, /deliveries and
+  //      /admin; the reader resolves the local map, and the element that reads it
+  //      is the surface attribution.
+  const map = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P({ s }: { s: string }) {",
+      "  return (",
+      '    <div className="jf-card">',
+      '      <span className={S[s]}>cancelled</span>',
+      "    </div>",
+      "  );",
+      "}",
+      'const S: Record<string, string> = { cancelled: "bg-slate-100 text-slate-500 border-slate-200" };',
+      "",
+    ].join("\n"),
+  );
+  if (!map.some((f) => f.includes("text-slate-500") && f.includes("bg-slate-100"))) {
+    problems.push(
+      `a class map held in a const and read by key (\`className={S[s]}\`) was not reported: ${names(map)}`,
+    );
+  }
+
+  // (B2) A plain const, painted on a TINTED ancestor. No surface in its own class
+  //      list, so rule (a) cannot see it either — this arm was GREEN on the live
+  //      revision, which is the hole.
+  const heldOnTint = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      '  const labelCls = "text-xs text-slate-500";',
+      "  return (",
+      '    <div className="bg-slate-100">',
+      "      <span className={labelCls}>a summary</span>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (
+    !heldOnTint.some(
+      (f) => f.includes("text-slate-500") && f.includes("inside <div>") && f.includes("bg-slate-100"),
+    )
+  ) {
+    problems.push(
+      `a const-held token on a tinted ancestor was not attributed to that tint: ${names(heldOnTint)}`,
+    );
+  }
+  // The same bytes inline, as the control for the arm above.
+  const inlineOnTint = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="bg-slate-100">',
+      '      <span className="text-xs text-slate-500">a summary</span>',
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (!inlineOnTint.some((f) => f.includes("text-slate-500") && f.includes("bg-slate-100"))) {
+    problems.push(`the inline control for the tinted-ancestor arm stopped being reported`);
+  }
+
+  // (B3) The SAME const rendered by two elements on DIFFERENT surfaces: only the
+  //      one whose surface it fails on may be reported. This is the assertion that
+  //      says the attribution is the RENDERING element and not the declaration —
+  //      judging the declaration would have no surface to judge it against, and
+  //      judging the file rather than the element would report the legal card too.
+  const twoSurfaces = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      '  const cls = "text-slate-500";',
+      "  return (",
+      "    <div>",
+      '      <div className="bg-slate-100">',
+      "        <span className={cls}>on the tint</span>",
+      "      </div>",
+      '      <div className="jf-card">',
+      "        <span className={cls}>on white, which PASSES (4.76:1)</span>",
+      "      </div>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (twoSurfaces.length !== 1) {
+    problems.push(
+      `one const on two surfaces must report the FAILING one and only it, got ${names(twoSurfaces)}`,
+    );
+  } else if (!twoSurfaces[0].includes("bg-slate-100")) {
+    problems.push(`the one finding named the wrong surface: ${names(twoSurfaces)}`);
+  }
+
+  // (C) Legal, and reached through a variable: `--jf-muted` on a `jf-card` is
+  //     4.83:1. A rule that reported this would be a false positive on 381 real
+  //     sites, and it is the reason the attribution is not simply "report every
+  //     token outside an attribute".
+  const legal = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      '  const cls = "text-[var(--jf-muted)]";',
+      "  return (",
+      '    <div className="jf-card">',
+      "      <span className={cls}>a summary</span>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (legal.length !== 0) {
+    problems.push(`a LEGAL const-held token on white was reported: ${names(legal)}`);
+  }
+
+  // (C2) …and a legal one on the page background, where `--jf-muted` is 4.54:1.
+  const legalOnPage = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      '  const cls = "text-[var(--jf-muted)]";',
+      "  return <div><span className={cls}>a summary</span></div>;",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (legalOnPage.length !== 0) {
+    problems.push(`a LEGAL const-held token on the page background was reported: ${names(legalOnPage)}`);
+  }
+
+  assert.deepEqual(problems, [], problems.join("\n"));
 });
 
