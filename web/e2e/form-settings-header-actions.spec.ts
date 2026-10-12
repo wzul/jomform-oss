@@ -613,7 +613,40 @@ test("a response form's header shows no mode label while its GET is in flight, t
   await expect(page.locator("a.jf-btn-ghost").nth(0)).toContainText(DICT["fs.editFields"].en, {
     timeout: 45_000,
   });
-  expect(formRequested, "the form GET was never issued — this case measured the wrong state").toBe(true);
+  // BUT THE HEADER BEING UP IS NOT EVIDENCE THAT THE GET WAS ISSUED, and this
+  // case needs BOTH states, so the request is waited for, not assumed.
+  //
+  // Measured on this build (t_d77ad675, probe driving the built page directly):
+  // the anchor is in the DOM — and visible to a per-frame poll, the shape a
+  // locator assertion's retry loop uses — 1.8-10.1ms BEFORE `window.fetch` is
+  // called for the form GET (6/6 runs), 6.2-23.3ms before under CPU load
+  // (8/8 runs). The gap is structural, not a property of the page: the anchor
+  // needs only `formId` (page.tsx:1223, `{formId && ...}`), while the fetch is
+  // issued by the load effect (page.tsx:711, `useEffect(() => void load())`),
+  // which React runs AFTER the commit that painted that anchor. `formRequested`
+  // is then set in THIS process, one more asynchronous hop later (the route
+  // handler is in the test process, not the page). So the old
+  // `expect(formRequested).toBe(true)` — a NON-retrying assertion — read a
+  // value that this build sets a few ms after the state it had just confirmed,
+  // and it reddened once on a loaded host (201 passed / 1 failed, gate `e2e`).
+  // Same shape the other specs in this directory already use for "wait for the
+  // side effect": e2e/workspace-trash.spec.ts:188, e2e/activity-page.spec.ts:221.
+  //
+  // This does NOT weaken the acceptance below: the response stays withheld
+  // (`formHeld` is resolved only by the `releaseForm()` call below), so the
+  // header is frozen in the pre-load state this case is about; waiting only
+  // guarantees that the state is measured with the request actually in flight.
+  // A build that stops issuing the GET still fails here — on the timeout, with
+  // this same sentence.
+  await expect
+    .poll(() => formRequested, {
+      timeout: 45_000,
+      message:
+        "the form GET was never issued — this case measured the wrong state (the header is " +
+        "up, but the page never asked for the form, so the in-flight state below is not the " +
+        "state being measured)",
+    })
+    .toBe(true);
 
   const pre = await readHeaderActions(page);
   console.log(
