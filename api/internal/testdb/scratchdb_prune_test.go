@@ -19,8 +19,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -94,11 +96,235 @@ func databaseBackends(t *testing.T, ctx context.Context, admin *pgxpool.Pool, na
 	return n
 }
 
+// keptReason returns the reason the last prune recorded for keeping name (""
+// when it recorded none). The kept list is the prune's audit trail, one
+// `"<name>: <reason>"` entry per candidate it refused, so a guard can assert
+// WHICH arm held a database instead of guessing from the fact that it survived.
+func keptReason(res dbPruneResult, name string) string {
+	for _, k := range res.kept {
+		if strings.HasPrefix(k, name+": ") {
+			return strings.TrimPrefix(k, name+": ")
+		}
+	}
+	return ""
+}
+
+// dropRecorded reports whether the last prune recorded dropping name. A drop
+// that happened but was not recorded is a different failure from a drop that
+// never happened, and the guards below need the two apart.
+func dropRecorded(res dbPruneResult, name string) bool {
+	for _, d := range res.dropped {
+		if d == name {
+			return true
+		}
+	}
+	return false
+}
+
+// leakOwner is a process this test starts and holds open, so a fixture's name
+// can carry a pid that is ALIVE while the test sets the fixture up and DEAD the
+// moment the test wants the fixture to be a leak's shape.
+//
+// Why a fixture needs one (card t_9a1cbc7e): a database planted in the leak's
+// shape — a family name, a DEAD pid, nothing connected — is reclaimable by ANY
+// pruner on the host, because the rule reads nothing about which process is
+// asking (see reclaimableScratchDatabase). This host runs more than one gate at
+// a time and each one's `internal/testdb` prunes, so a fixture planted with a
+// dead pid can be taken by a PEER lane's prune in the window between the plant
+// and the assertion that reads it. Measured: a planted fixture gone by the time
+// the test dropped it (`database "<fixture>" does not exist, SQLSTATE 3D000`)
+// with a peer's full `go test ./...` running.
+//
+// A pid-qualified name whose owner still exists is never reclaimed — not by
+// this process's prune, not by a peer's — so holding the owner alive is what
+// makes the plant→set-up window peer-proof rather than merely short. The owner
+// is ended by release(), at the one moment the test wants the leak's shape; from
+// there on the fixture is reclaimable by anyone and nothing can be done about it
+// (the rule has no input that tells two pruners apart), which is why the reclaim
+// guard treats "a peer took it" as an attempt with no verdict rather than as a
+// failure.
+type leakOwner struct {
+	cmd      *exec.Cmd
+	released bool
+}
+
+// startLeakOwner starts the process whose pid a fixture's name will carry. The
+// test decides when it ends (release); the cleanup kills it if the test returns
+// without doing so.
+func startLeakOwner(t *testing.T) *leakOwner {
+	t.Helper()
+	cmd := exec.Command("sleep", "600")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot spawn the process a fixture's name must carry to be peer-proof: %v", err)
+	}
+	o := &leakOwner{cmd: cmd}
+	t.Cleanup(o.kill)
+	return o
+}
+
+// pid is the pid a fixture's name should carry while the owner is alive.
+func (o *leakOwner) pid() int { return o.cmd.Process.Pid }
+
+// kill ends the owner process and reaps it. The reaping is the point: `kill(pid,
+// 0)` still SUCCEEDS for a zombie, so a killed-but-unreaped owner would leave the
+// fixture looking owned and protected — a green guard that proves nothing.
+func (o *leakOwner) kill() {
+	_ = o.cmd.Process.Kill()
+	_, _ = o.cmd.Process.Wait()
+}
+
+// release ends the owner and asserts the pid really is gone, which is what turns
+// the fixture into the leak's shape.
+func (o *leakOwner) release(t *testing.T) {
+	t.Helper()
+	if o.released {
+		t.Fatalf("the fixture's owner (pid %d) was released twice — the second release would assert "+
+			"liveness of a pid that is already gone and say nothing about the fixture", o.pid())
+	}
+	o.kill()
+	o.released = true
+	if ownerAliveFromErr(syscall.Kill(o.pid(), 0)) {
+		t.Fatalf("the fixture's owner (pid %d) still probes as a live process after this test ended it, "+
+			"so the fixture is not in the leak's shape and the reclaim below would assert the wrong thing "+
+			"(`kill(pid, 0)` reports a killed-but-unreaped process as live, so ending the owner means "+
+			"killing AND reaping it)", o.pid())
+	}
+}
+
+// leakReclaimAttempts bounds how many fixtures the reclaim guard plants.
+//
+// The verdict itself is not probabilistic: an attempt is a verdict (this
+// process's prune reclaimed the fixture AND recorded it), a dead reclaim (the
+// fixture survived — the failure that guard exists for), or no verdict at all (a
+// peer's prune took the fixture in the hand-off window, which no input can close
+// — see leakOwner). Repeating only reduces how often a run ends without a
+// verdict; both real failures are raised per attempt, never aggregated away.
+const leakReclaimAttempts = 5
+
+// reclaimOneLeak plants one peer-proof fixture, asserts the premise that makes it
+// peer-proof, ends its owner, and requires the REAL prune to reclaim the leak's
+// shape. It reports whether THIS process's prune reclaimed it and recorded that
+// (the verdict); false means a peer's prune took the fixture first, which is
+// logged here and retried by the caller.
+//
+// Every other outcome is a reclaim failure and is raised here:
+//
+//   - the prune reclaims the fixture while its owner is still alive — the
+//     direction that costs a peer lane the database its live run is migrating;
+//   - the prune leaves the abandoned fixture behind — the dead reclaim that
+//     brings the measured 4.5 GB leak back;
+//   - the prune neither decided on the fixture nor recorded a reason for it —
+//     its own inputs degraded, which is how the reclaim silently stops working.
+func reclaimOneLeak(t *testing.T, ctx context.Context, dsn string, admin *pgxpool.Pool, attempt int) bool {
+	t.Helper()
+
+	owner := startLeakOwner(t)
+	leaked := fixtureName(t, scratchDBFamilies[0].prefix, owner.pid())
+	plantDatabase(t, ctx, dsn, leaked)
+	if !databaseExists(t, ctx, admin, leaked) {
+		t.Fatalf("attempt %d: fixture %s is not present immediately after this test created it. Its name carries "+
+			"a pid that is still alive (pid %d), so no pruner on this host may reclaim it — either the pid arm "+
+			"of the rule is not holding, or the name's pid is not the live process this guard started (a fixture "+
+			"in the leak's shape is reclaimable by every pruner on the host), or the plant did not do what its "+
+			"own error check says it did.", attempt, leaked, owner.pid())
+	}
+	// The precondition the reclaim turns on: the fixture is not in use. Fail
+	// loudly rather than reading a busy database as "the prune kept it".
+	if n := databaseBackends(t, ctx, admin, leaked); n != 0 {
+		t.Fatalf("attempt %d: fixture %s has %d backend(s) on it before the prune; this guard needs an idle fixture",
+			attempt, leaked, n)
+	}
+
+	// The premise of the whole fixture construction, asserted rather than
+	// assumed: while the owner is alive the real prune must KEEP the fixture and
+	// name the pid arm as the cause. That is what makes the set-up window
+	// peer-proof, and it is asserted because the alternative — planting in the
+	// leak's shape straight away — is what a peer's prune reclaimed out from
+	// under this suite.
+	pruneDeadDatabases(ctx, admin)
+	res, ok := lastDBPrune()
+	if !ok {
+		t.Fatalf("attempt %d: no prune recorded an outcome — pruneDeadDatabases did not run the wired path", attempt)
+	}
+	if !databaseExists(t, ctx, admin, leaked) {
+		t.Fatalf("attempt %d: the prune reclaimed %s while its creating process (pid %d) is STILL ALIVE.\n\n"+
+			"That is the one failure this rule must never have: a peer lane's live run would lose the database it "+
+			"is migrating, mid-run.\n\nLast prune: scanned=%d dropped=%v kept=%v\nnote=%s",
+			attempt, leaked, owner.pid(), res.scanned, res.dropped, res.kept, databasePruneNote())
+	}
+	if reason := keptReason(res, leaked); reason == "" {
+		t.Fatalf("attempt %d: the prune recorded no reason for keeping %s while its owner (pid %d) is alive — the "+
+			"fixture survived without the rule having decided on it, so it is protected by luck rather than by the "+
+			"pid arm this guard's whole construction rests on.\n\nLast prune: scanned=%d dropped=%v kept=%v\nnote=%s",
+			attempt, leaked, owner.pid(), res.scanned, res.dropped, res.kept, databasePruneNote())
+	} else if want := strconv.Itoa(owner.pid()); !strings.Contains(reason, "still exists") || !strings.Contains(reason, want) {
+		t.Fatalf("attempt %d: the prune kept %s for %q, want the pid arm — `its creating process (pid %d) still "+
+			"exists`. That arm is what makes this fixture peer-proof while the test sets it up; any other arm "+
+			"(a family, a grace period) leaves it reclaimable by a peer's prune and this guard back where the "+
+			"card found it.", attempt, leaked, reason, owner.pid())
+	}
+
+	// The hand-off: the owner ends here, and the fixture is from this instant the
+	// leak's shape — a family name whose creating process is gone, with nothing
+	// connected. Nothing about the rule can then tell this process's pruner from
+	// a peer's, so a peer taking it is a possible outcome of the prune below and
+	// not a fault of the tree under test.
+	owner.release(t)
+
+	pruneDeadDatabases(ctx, admin)
+	res, ok = lastDBPrune()
+	if !ok {
+		t.Fatalf("attempt %d: no prune recorded an outcome for the reclaim of the abandoned fixture", attempt)
+	}
+	if databaseExists(t, ctx, admin, leaked) {
+		t.Fatalf("attempt %d: the prune left the abandoned database %s behind.\n\n"+
+			"Nothing is connected to it and its creating process is gone (pid %d, ended and reaped by this test), "+
+			"so no arm of the rule could have suppressed the reclaim — this is a dead reclaim, and the leak the "+
+			"card measured (273 databases / 4506 MB) comes straight back.\n\n"+
+			"Last prune: scanned=%d dropped=%v bytes=%d kept=%v\nnote=%s",
+			attempt, leaked, owner.pid(), res.scanned, res.dropped, res.bytes, res.kept, databasePruneNote())
+	}
+	if dropRecorded(res, leaked) {
+		return true
+	}
+	// Gone, and not by this prune: the fixture was reclaimed between the owner's
+	// death and this prune's candidate read, and the only other pruner on the
+	// host is a PEER lane's. No verdict from this attempt.
+	t.Logf("attempt %d: a peer's prune reclaimed %s before this process's prune read the candidate list — the "+
+		"hand-off window no input of the rule can close (see leakOwner); planting a fresh fixture", attempt, leaked)
+	return false
+}
+
 // TestPruneDeadDatabasesReclaimsALeakedDatabase is the reclaim arm on a real
 // server: a database whose creating process is gone, with nothing connected to
 // it, must be dropped by the real prune. Pre-fix (and with any prune that
 // forgets this family) it survives forever, which is the 4.5 GB the card
 // measured.
+//
+// The fixture has to BE the leak — a family name, a DEAD pid, nothing connected
+// — and that shape is reclaimable by every pruner on the host, by definition:
+// the rule reads the name, the backends and the age, never which process is
+// asking. This host runs more than one gate at a time and each one's
+// `internal/testdb` prunes, so a fixture planted in that shape can be taken by a
+// PEER lane's prune before this test reads it (card t_9a1cbc7e, measured: a
+// planted fixture gone by the time the test reached it, `database "…" does not
+// exist (SQLSTATE 3D000)`). That is a red on a correct tree.
+//
+// So the fixture is NOT planted in that shape. It is planted with a LIVE pid —
+// a process this test starts and holds (leakOwner) — which the rule's own pid
+// arm protects from every pruner on the host, and the owner is ended only at the
+// moment the test wants the leak's shape. The premise is asserted, not assumed:
+// each attempt first requires the real prune to KEEP the live-owned fixture and
+// name the pid arm (reclaimOneLeak).
+//
+// Once the owner is ended the fixture is reclaimable by anyone and no input can
+// tell this process's pruner from a peer's, so an attempt ends three ways:
+// this process's prune reclaimed it and recorded it (the verdict, returned on),
+// the fixture survived (a dead reclaim — raised immediately), or a peer's prune
+// took it in the hand-off (no verdict — retried with a fresh fixture). A run in
+// which every attempt was taken by a peer SKIPS with the mechanism named: it
+// reports no verdict rather than a wrong one, and it can never red a tree for
+// the host it ran on.
 func TestPruneDeadDatabasesReclaimsALeakedDatabase(t *testing.T) {
 	ctx := context.Background()
 	dsn := dsnOrSkip(t)
@@ -108,41 +334,17 @@ func TestPruneDeadDatabasesReclaimsALeakedDatabase(t *testing.T) {
 	}
 	defer admin.Close()
 
-	leaked := fixtureName(t, scratchDBFamilies[0].prefix, deadPID(t))
-	plantDatabase(t, ctx, dsn, leaked)
-	if !databaseExists(t, ctx, admin, leaked) {
-		t.Fatalf("fixture %s was not planted", leaked)
-	}
-	// The precondition the reclaim turns on: the fixture is not in use. Fail
-	// loudly rather than reading a busy database as "the prune kept it".
-	if n := databaseBackends(t, ctx, admin, leaked); n != 0 {
-		t.Fatalf("fixture %s has %d backend(s) on it before the prune; this guard needs an idle fixture", leaked, n)
-	}
-
-	pruneDeadDatabases(ctx, admin)
-
-	if databaseExists(t, ctx, admin, leaked) {
-		res, _ := lastDBPrune()
-		t.Fatalf("the prune left the abandoned database %s behind.\n\n"+
-			"Nothing is connected to it and its creating process is gone, so no arm of the rule could have "+
-			"suppressed the reclaim — this is a dead reclaim, and the leak the card measured (273 databases / "+
-			"4506 MB) comes straight back.\n\nLast prune: scanned=%d dropped=%v bytes=%d kept=%v\nnote=%s",
-			leaked, res.scanned, res.dropped, res.bytes, res.kept, databasePruneNote())
-	}
-	res, ok := lastDBPrune()
-	if !ok {
-		t.Fatalf("no prune recorded an outcome — pruneDeadDatabases did not run the wired path")
-	}
-	found := false
-	for _, d := range res.dropped {
-		if d == leaked {
-			found = true
+	for attempt := 1; attempt <= leakReclaimAttempts; attempt++ {
+		if reclaimOneLeak(t, ctx, dsn, admin, attempt) {
+			return
 		}
 	}
-	if !found {
-		t.Errorf("the prune dropped %s but did not record it in dropped=%v — the outcome a guard (or an "+
-			"operator) reads would not match what happened", leaked, res.dropped)
-	}
+	t.Skipf("every one of the %d fixtures this guard planted was reclaimed by a PEER lane's prune before this "+
+		"process's own prune could be attributed with it, so this run cannot say whether the wired prune reclaims "+
+		"a leaked database.\n\n"+
+		"This is a contention report, not a verdict: the same rule took each fixture (its inputs cannot tell one "+
+		"pruner from another — see leakOwner), and a DEAD reclaim would have failed every attempt instead. Re-run "+
+		"on a quieter host, or widen leakReclaimAttempts, to get the live verdict.", leakReclaimAttempts)
 }
 
 // TestPruneDeadDatabasesKeepsADatabaseAPeerIsConnectedTo is the other direction
@@ -151,6 +353,17 @@ func TestPruneDeadDatabasesReclaimsALeakedDatabase(t *testing.T) {
 // says it is in use (its owner is gone — that is WHY a guard can connect to it:
 // it is exactly what a leaked database looks like while a peer is verifying it,
 // or while a fresh run is still migrating).
+//
+// The order is the fix (card t_9a1cbc7e). A dead-pid fixture is fair game for
+// EVERY pruner on this host, so a peer lane's prune can take it in the window
+// between the plant and the peer connection landing — measured: `fixture … was
+// not planted`, and the same shape gone mid-test with a peer's gate running. So
+// the fixture is planted with a LIVE pid (leakOwner) and the owner is ended only
+// AFTER the peer connection is in place. From then on the connection is the only
+// thing keeping the fixture, and it is a sufficient one: the rule yields to a
+// live backend before it ever looks at the pid, and the reason it records is
+// asserted below. No window remains in which a peer's prune could take it, so
+// this guard cannot red on a correct tree for the host it ran on.
 func TestPruneDeadDatabasesKeepsADatabaseAPeerIsConnectedTo(t *testing.T) {
 	ctx := context.Background()
 	dsn := dsnOrSkip(t)
@@ -160,8 +373,15 @@ func TestPruneDeadDatabasesKeepsADatabaseAPeerIsConnectedTo(t *testing.T) {
 	}
 	defer admin.Close()
 
-	busy := fixtureName(t, scratchDBFamilies[0].prefix, deadPID(t))
+	// The owner is alive here, so the plant cannot be taken out from under this
+	// guard while it sets the fixture up.
+	owner := startLeakOwner(t)
+	busy := fixtureName(t, scratchDBFamilies[0].prefix, owner.pid())
 	plantDatabase(t, ctx, dsn, busy)
+	if !databaseExists(t, ctx, admin, busy) {
+		t.Fatalf("fixture %s is not present immediately after this test created it, while its owner (pid %d) "+
+			"is alive and no pruner on this host may reclaim it", busy, owner.pid())
+	}
 
 	// A peer: this guard's own second connection to the fixture, standing in
 	// for any run that is mid-test on a database whose creator is gone.
@@ -179,6 +399,14 @@ func TestPruneDeadDatabasesKeepsADatabaseAPeerIsConnectedTo(t *testing.T) {
 			"assert nothing", busy)
 	}
 
+	// Only now does the owner end. The fixture IS the leak from this instant —
+	// a family name whose creating process is gone, with nothing about the name
+	// saying it is in use — and the peer connection landed before it, so there
+	// is no instant in which the fixture was both abandoned-looking and
+	// unconnected for a pruner to take. release() asserts the pid is really
+	// gone, so "its owner is gone" is measured and not merely intended.
+	owner.release(t)
+
 	pruneDeadDatabases(ctx, admin)
 
 	if !databaseExists(t, ctx, admin, busy) {
@@ -188,12 +416,7 @@ func TestPruneDeadDatabasesKeepsADatabaseAPeerIsConnectedTo(t *testing.T) {
 			"drop and never WITH (FORCE).", busy)
 	}
 	res, _ := lastDBPrune()
-	reason := ""
-	for _, k := range res.kept {
-		if len(k) > len(busy)+2 && k[:len(busy)+2] == busy+": " {
-			reason = k
-		}
-	}
+	reason := keptReason(res, busy)
 	if reason == "" {
 		t.Errorf("the prune kept %s but recorded no reason for it; kept=%v", busy, res.kept)
 	} else if !strings.Contains(reason, "connected") {
