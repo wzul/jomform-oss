@@ -238,13 +238,21 @@ in each loop — immediately before the removal or the `rm -rf` it guards** — 
 can still change the outcome and where it is the freshest answer for that decision.
 
 A cwd read that **fails** is neither a keep nor a removal, and the process state
-separates the two cases. A **zombie** (`State: Z`) is dead and holds nothing, so it
-is skipped — measured on the agent host, every one of the 15 pids whose cwd read
+separates the cases. A **zombie** (`State: Z`) is dead and holds nothing, so it is
+skipped — measured on the agent host, every one of the 15 pids whose cwd read
 failed was a zombie, so reading a failed read as "keep" would keep everything and
-exit `1` on every run. Any other state is a live process we could not inspect: the
-worktree is left on disk **and the run exits `1`**, with a `FAIL` naming the pid. A
-silent keep there would hide a pruner that has stopped reclaiming; removing on a
-read that was never made is the one irreversible mistake this script exists to avoid.
+exit `1` on every run. A pid that **vanished between the scan and the read** reads
+the same way as a refused one — both reads fail — but it is skipped too: nothing is
+left to hold the worktree. The two are told apart by the pid's own `/proc/<pid>`
+directory, re-read immediately before the verdict: a refused read leaves it there,
+a vanished pid does not. Without that, a busy host's nightly run printed a `FAIL`
+and exited `1` having reclaimed nothing for a process that no longer existed
+(measured at ~12 load: 2 of 80 predicate calls, each naming a pid already absent
+from `/proc`). Any **other** state — an existing pid we could not inspect — is a
+live process: the worktree is left on disk **and the run exits `1`**, with a `FAIL`
+naming the pid. A silent keep there would hide a pruner that has stopped
+reclaiming; removing on a read that was never made is the one irreversible mistake
+this script exists to avoid.
 
 **A refusal is not a failure.** Keeping work is this script's normal, deliberate
 outcome: an unpushed local branch, a hand-made mirror, a live worker, a card
@@ -329,8 +337,11 @@ state file. It asserts, as outcomes read off real runs —
   path is in the kernel's cwd and in no argv — and the same directory is removed once
   that process is gone, so the guard is not a blanket refusal; a live pid whose cwd
   cannot be read is exit `1` (never a silent keep, never a removal), a **zombie**'s
-  unreadable cwd is skipped, and the build-artefact reap (`rm -rf web/node_modules`)
-  carries the same guard;
+  unreadable cwd is skipped, a pid that **vanished** between the scan's readdir and
+  the reads (same two failed reads, but its `/proc/<pid>` is gone) is skipped too —
+  with the pre-fix predicate shown reading that very same row as the live-pid
+  cannot-judge, so the assertion bites — and the build-artefact reap
+  (`rm -rf web/node_modules`) carries the same guard;
 - a worktree whose HEAD cannot be resolved at all — the shape a lane worktree takes
   when its **branch is deleted**, i.e. a valid gitdir whose `HEAD` points at a ref
   that no longer exists — is the same "cannot judge this worktree" condition as an

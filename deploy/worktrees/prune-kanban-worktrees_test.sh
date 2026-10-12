@@ -55,6 +55,16 @@
 #       cwd cannot be read is a loud cannot-judge (exit 1), never a silent keep and
 #       never a removal, while a ZOMBIE's unreadable cwd is skipped; the build-artefact
 #       reap (`rm -rf web/node_modules`) carries the same guard (card t_ac768fb9);
+#     * ...and so is a pid that VANISHED between the scan's readdir and the per-pid
+#       reads: its cwd read fails AND its `status` read fails, which is the same
+#       shape a refused read gives, but there is no process left to hold the
+#       worktree — so it is SKIPPED, not reported as a live pid with an unreadable
+#       cwd (cards t_d53b71b8 / t_e7ac4bcd, the "reaped pid"). Its pid's own
+#       DIRECTORY being GONE is what separates it from a refused read, and the
+#       fixture has to print the row for a pid directory that does not exist to say
+#       so. The control arm shows the pre-fix predicate reading the very same row as
+#       that cannot-judge, so the assertion bites; the fail-safe direction is pinned
+#       too (a pid whose directory IS still there stays the cannot-judge);
 #     * --dry-run removes nothing, and a repo path that does not exist is a no-op.
 #
 #   Entirely offline: a throwaway repo plus its own bare "origin" remote, a fake
@@ -1010,8 +1020,11 @@ echo "--- the cwd half of the live-process guard: the exec'd build argv cannot d
 #
 # The script's OWN predicate, driven through the ENVIRONMENT (a literal on the
 # caller's argv would let the scan match its own caller) -> inside | none | denied:<pid>
-cwd_check() { # <dir> [proc-root]
-  env JF_PRUNE_LIB_ONLY=1 JF_DIR="$1" JF_PROC_ROOT="${2:-/proc}" bash -c '
+# [bin-dir] is prepended to PATH for the call (the vanish stub's `find`, below) and
+# [script] overrides the copy sourced (the pre-fix control arm) — both default to
+# today's behaviour, so every other call site is unchanged.
+cwd_check() { # <dir> [proc-root] [bin-dir] [script]
+  env PATH="${3:+$3:}$PATH" JF_PRUNE_LIB_ONLY=1 JF_DIR="$1" JF_PROC_ROOT="${2:-/proc}" bash -c '
     . "$0"
     out="$(has_process_cwd_matching "$JF_DIR")"; rc=$?
     case "$rc" in
@@ -1019,7 +1032,7 @@ cwd_check() { # <dir> [proc-root]
       2) printf "denied:%s\n" "$out" ;;
       *) echo none ;;
     esac
-  ' "$SCRIPT" 2>/dev/null | sed -n '$p'
+  ' "${4:-$SCRIPT}" 2>/dev/null | sed -n '$p'
 }
 # The `$$` rule, pinned the only way it CAN be: a table whose single entry is the
 # asking process's own pid and cwd. Without the skip this reads "inside" — the scan
@@ -1121,8 +1134,7 @@ FAKE="$SB/fake-proc"
 FAKE_TARGET="$SB/cwd-target"
 mkdir -p "$FAKE_TARGET/sub" "$FAKE_TARGET-sibling"
 mkdir -p "$FAKE/live/9999001" "$FAKE/zombie-only/9999002" "$FAKE/deny-only/9999003" \
-         "$FAKE/sub-only/9999004" "$FAKE/sibling-only/9999005" "$FAKE/empty" "$FAKE/self" \
-         "$FAKE/gone-only/9999006"
+         "$FAKE/sub-only/9999004" "$FAKE/sibling-only/9999005" "$FAKE/empty" "$FAKE/self"
 ln -s "$FAKE_TARGET"               "$FAKE/live/9999001/cwd"
 printf 'State:\tS (sleeping)\n' >"$FAKE/live/9999001/status"
 # The zombie: a cwd entry whose target cannot be read (a dead process's /proc entry
@@ -1132,11 +1144,13 @@ printf 'State:\tZ (zombie)\n'  >"$FAKE/zombie-only/9999002/status"
 # ...the same unreadable cwd, but a LIVE state: this is the cannot-judge.
 printf 'not-a-link\n'          >"$FAKE/deny-only/9999003/cwd"
 printf 'State:\tS (sleeping)\n' >"$FAKE/deny-only/9999003/status"
-# The REAPED pid (card t_d53b71b8): find listed the entry, and the process was gone
-# before the cwd link was read — so the link cannot be read AND there is no status
-# beside it to say anything. Nothing is left that could be holding a worktree, and
-# read as a cannot-judge it FAILED EVERY worktree in the run.
-printf 'not-a-link\n'          >"$FAKE/gone-only/9999006/cwd"
+# The REAPED/VANISHED pid (cards t_d53b71b8, t_e7ac4bcd) has its fixture in the vanish
+# block below, NOT here: its defining property is that the pid's own directory is GONE
+# by the time the row is read, and a directory of pid directories cannot express that —
+# a table here can only say "the `status` file is absent", which is a pid whose
+# directory IS still there, i.e. the cannot-judge, not a reaped pid. The block below
+# prints the row from a stub `find` for a pid directory that does not exist, which is
+# the shape a real readdir hands the loop when the process dies mid-scan.
 ln -s "$FAKE_TARGET/sub"       "$FAKE/sub-only/9999004/cwd"
 printf 'State:\tS (sleeping)\n' >"$FAKE/sub-only/9999004/status"
 ln -s "$FAKE_TARGET-sibling"   "$FAKE/sibling-only/9999005/cwd"
@@ -1160,16 +1174,89 @@ check "a ZOMBIE's unreadable cwd is SKIPPED, not read as a cannot-judge" "none" 
   "$(cwd_check "$SB/stub" "$FAKE/zombie-only")"
 check "...because a LIVE pid whose cwd cannot be read IS the cannot-judge, naming the pid" "denied:9999003" \
   "$(cwd_check "$SB/stub" "$FAKE/deny-only")"
-check "premise: the reaped pid's entry has an unreadable cwd and NO status beside it" "no" \
-  "$( [ -e "$FAKE/gone-only/9999006/status" ] && echo yes || echo no )"
-check "a pid REAPED mid-scan (unreadable cwd, nothing readable beside it) is SKIPPED, not a cannot-judge" "none" \
-  "$(cwd_check "$SB/stub" "$FAKE/gone-only")"
 check "a process table that comes back empty is a cannot-judge, NEVER 'nothing is inside'" "denied:?" \
   "$(cwd_check "$SB/stub" "$FAKE/empty")"
 check "the scan does not match the process asking the question (its own cwd, at a fake pid)" "none" \
   "$(cwd_self_check "$SB/stub" "$FAKE/self")"
 check "premise: the self-check really did put an entry for its own pid in the table" "yes" \
   "$( [ -n "$(find "$FAKE/self" -maxdepth 2 -name cwd -print -quit)" ] && echo yes || echo no )"
+
+# ── THE VANISH (cards t_d53b71b8, t_e7ac4bcd) ───────────────────────────────────
+# A pid that dies BETWEEN the scan's readdir and the per-pid reads produces a row
+# whose cwd target is EMPTY and whose `status` read ALSO fails — byte for byte what a
+# read the kernel REFUSES looks like. Counted as a live pid with an unreadable cwd it
+# is a cannot-judge about a process that no longer exists: the worktree is left on
+# disk and the run FAILs (`FAIL … cannot read the cwd of live pid(s) <pid>`, exit 1,
+# the "the pruner could not do its job" alarm). That is not a rare shape on a busy
+# host: it cost the deploy lane's v1.21.74 installer gate its first run (184/3, whose
+# own bytes read 187/0 minutes later) and reproduces on the REAL table under churn.
+#
+# This is the case card t_d53b71b8 pinned as a "reaped pid" with a cwd entry that has
+# no `status` beside it — the same defect, from the same measurement. Its fixture is
+# replaced here because that shape is a pid whose directory IS still there, which is
+# NOT what a reaped pid looks like (see the note where its fixture was).
+#
+# A real readdir cannot be made to LIST a pid that is already gone, so the row is
+# synthesised at the one place the predicate reads its table from — a stub `find` on
+# PATH that prints that single row for a pid directory that does NOT exist, which is
+# exactly the table a real vanish hands the loop (the cwd read fails, the status read
+# fails, and there is no /proc/<pid> left).
+VANISH_BIN="$SB/vanish-bin"; VANISH_ROOT="$SB/fake-proc-vanish"
+VANISH_PID=9999006
+mkdir -p "$VANISH_BIN"
+cat >"$VANISH_BIN/find" <<STUB
+#!/usr/bin/env bash
+# The ONE row, in find's own -printf '%p\0%l\0' shape: the PATH (so the failure can
+# name the pid) and an EMPTY target (the failed read). The arguments are ignored on
+# purpose — the walk is not what is under test here, the ROW is.
+printf '%s\0\0' "$VANISH_ROOT/$VANISH_PID/cwd"
+STUB
+chmod +x "$VANISH_BIN/find"
+VANISH_ROW="$SB/vanish-row.bin"
+"$VANISH_BIN/find" >"$VANISH_ROW"
+# Premises. (i) the emitted row IS the shape a failed read gives — one path and an
+# empty target, i.e. two NULs and nothing else. (ii) the directory that row names
+# does not exist (that is the vanish) and the pid is not in the real process table
+# either. (iii) the probe's `find` is the stub: without it the predicate would read
+# an empty root and answer `denied:?`, so the assertion below could not pass for the
+# right reason.
+check "premise: the vanish stub emits exactly one find row — a path and an EMPTY target (2 NULs, one path)" \
+  "2 $VANISH_ROOT/$VANISH_PID/cwd" \
+  "$( printf '%s %s' "$(tr -cd '\0' <"$VANISH_ROW" | wc -c)" "$(tr -d '\0' <"$VANISH_ROW")" )"
+check "premise: the pid directory that row names does NOT exist — the process is GONE, not refused" "no" \
+  "$( [ -d "$VANISH_ROOT/$VANISH_PID" ] && echo yes || echo no )"
+check "premise: ...and that pid is not in the real process table either" "no" \
+  "$( [ -d "/proc/$VANISH_PID" ] && echo yes || echo no )"
+check "premise: the probe really would use the stub \`find\`, not the walking one" "$VANISH_BIN/find" \
+  "$(PATH="$VANISH_BIN:$PATH" command -v find)"
+# The control: THIS script minus the vanished-pid re-check is the pre-fix predicate in
+# the only respect that matters here (it had no existence re-check at all), and it must
+# read the SAME row as the cannot-judge — otherwise the assertion below proves nothing
+# about the fix. It is BUILT from the script rather than copied from history so it
+# cannot drift from it; the two premises under it are what stop a no-op edit of the
+# predicate from making the control vacuous (a `sed` that matched nothing on a script
+# that HAS the re-check would leave a control identical to it, and the first premise
+# goes red). On a copy that predates the fix — the documented JF_PRUNE_SCRIPT bite run —
+# there is nothing to remove and that copy already IS the pre-fix predicate, so the
+# premises expect it unchanged.
+VANISH_CTL="$SB/vanish-prefix-control.sh"
+if grep -q '\[ -d "\$pdir" \] || continue' "$SCRIPT"; then
+  VANISH_CTL_LINES_WANT="$(( $(wc -l <"$SCRIPT") - 1 ))"
+else
+  VANISH_CTL_LINES_WANT="$(wc -l <"$SCRIPT")"
+fi
+sed '/^[[:space:]]*\[ -d "\$pdir" \] || continue$/d' "$SCRIPT" >"$VANISH_CTL"
+check "premise: the control is this script with the vanished-pid re-check removed (that one line, or none on a pre-fix copy)" \
+  "$VANISH_CTL_LINES_WANT" "$(wc -l <"$VANISH_CTL")"
+check "premise: ...and the control carries no vanished-pid re-check" "0" \
+  "$(grep -c '\[ -d "\$pdir" \] || continue' "$VANISH_CTL")"
+check "control: on the pre-fix predicate the SAME row IS a cannot-judge, naming a pid that is not in the process table" \
+  "denied:$VANISH_PID" "$(cwd_check "$SB/stub" "$VANISH_ROOT" "$VANISH_BIN" "$VANISH_CTL")"
+check "a pid that VANISHED between the readdir and the status read is NOT a cannot-judge (rc != 2, no pid reported)" \
+  "none" "$(cwd_check "$SB/stub" "$VANISH_ROOT" "$VANISH_BIN")"
+check "...while the SAME row for a pid whose directory IS still there stays the cannot-judge (fail-safe, not weakened)" \
+  "denied:$VANISH_PID" "$(mkdir -p "$VANISH_ROOT/$VANISH_PID" && cwd_check "$SB/stub" "$VANISH_ROOT" "$VANISH_BIN")"
+rm -rf "$VANISH_ROOT"
 
 # ── run 1: both directories are the cwd of a live stand-in, so both SURVIVE ──────
 : >"$UNBORN_LOG"

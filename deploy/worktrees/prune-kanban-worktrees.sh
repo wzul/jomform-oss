@@ -118,6 +118,18 @@
 #       read we could not make is the one irreversible mistake this script is
 #       written to avoid. Same treatment as an unreadable card and an unresolvable
 #       HEAD.
+#     * the pid VANISHED between the readdir and the read (card t_e7ac4bcd — the
+#       "reaped pid" of card t_d53b71b8, the same measurement): both
+#       reads then fail — the cwd link is read after the process died, and so is
+#       its `status` — which is the SAME shape a refused read gives. It is NOT a
+#       cannot-judge: there is no process left to hold the worktree, so it is
+#       SKIPPED like a zombie. The two are told apart by the pid's own directory,
+#       re-read immediately before the verdict (listed by the scan a moment ago,
+#       gone now): a refused read leaves the directory there. Without this, a busy
+#       host's nightly run printed a FAIL and exited 1 having reclaimed nothing —
+#       measured 2 of 80 predicate calls rc=2 with pids already absent from /proc,
+#       at ~12 load, and the self-test read 184/3 where its own bytes read 187/0
+#       minutes later.
 #     * NO ROWS AT ALL (the tool is not GNU `find`, the root is unreadable): the
 #       same cannot-judge, `?` instead of a pid. "The table came back empty" must
 #       never be read as "nothing is inside" — that is precisely the silent removal
@@ -128,8 +140,13 @@
 #   be produced ON DEMAND (root can read every live process's cwd here; the reads
 #   that fail in practice are zombies and pids reaped mid-scan). That synthetic case
 #   pins the SHAPE — a failed read on a pid whose state is not `Z` — not the EACCES
-#   errno itself, and the reaped-pid shape has its own case (a cwd entry with no
-#   `status` beside it), because that is the one that turns a whole run red.
+#   errno itself. The REAPED/VANISHED pid has its own case, and it needs a second
+#   seam to be honest about it: a stub `find` on `PATH`, because a real readdir
+#   cannot be made to list a pid whose directory is already gone. That fixture
+#   prints the one row a real table hands the loop for a process that died between
+#   the two reads — the pid's `cwd` with an EMPTY target — while the pid directory
+#   does NOT exist, which is what tells that case apart from a refused read (where
+#   the directory is still there).
 #
 #   WHERE THE cwd READ IS MADE, AND WHY THERE. It is made LAST in every loop —
 #   immediately before the `git worktree remove` or the `rm -rf` it guards — while
@@ -408,14 +425,14 @@ has_process_cwd_matching() { # <dir>
     [ "$pid" = "$$" ] && continue
     if [ -z "$target" ]; then
       # No cwd to read. A ZOMBIE has none to hold — dead, so it can be neither a
-      # reason to keep nor to refuse — and it is skipped. A pid that was REAPED
-      # between find's readdir and its readlink is the same kind of skip: it has
-      # no cwd link and no `status` left, so there is nothing of it that could be
-      # holding the worktree. Any other state is a read we could not make: that is
-      # a cannot-judge, never a keep and never a removal. The state letter is the
-      # second field of the `State:` line in /proc/<pid>/status, and it is read
-      # with the shell's own `read` rather than an `awk`: this path runs once per
-      # unreadable pid, and the fork per pid is what made a call cost 273ms
+      # reason to keep nor to refuse — and it is skipped. A pid that has ALREADY
+      # VANISHED reads exactly the same way and is skipped too (below) — and
+      # "vanished" means the pid's own DIRECTORY is gone, not merely that its
+      # `status` could not be read. Any other state is a read we could not make:
+      # that is a cannot-judge, never a keep and never a removal. The state letter
+      # is the second field of the `State:` line in /proc/<pid>/status, and it is
+      # read with the shell's own `read` rather than an `awk`: this path runs once
+      # per unreadable pid, and the fork per pid is what made a call cost 273ms
       # instead of 100ms (measured on the host).
       state=""
       while IFS= read -r sl; do
@@ -423,16 +440,34 @@ has_process_cwd_matching() { # <dir>
       done <"$pdir/status" 2>/dev/null
       # "State:\tZ (zombie)" -> leading whitespace off -> first character is it.
       state="${state#"${state%%[![:space:]]*}"}"
-      # NOTHING READABLE AT ALL — no state line — means the pid is GONE: the whole
-      # /proc/<pid> directory went away between find listing it and this read. A
-      # process that no longer exists holds nothing, and counting it as a
-      # cannot-judge FAILS EVERY worktree in the run (measured on a churned /proc,
-      # card t_d53b71b8: it red-gated a tree that never touched this script). So
-      # it is a skip, exactly like a zombie — while a pid that IS still there and
-      # whose cwd we could not read stays the cannot-judge the bullet above
-      # describes.
-      [ -n "$state" ] || continue
       [ "${state:0:1}" = "Z" ] && continue
+      # A VANISHED PID IS NOT A DENIED READ (card t_e7ac4bcd — the "reaped pid" of
+      # card t_d53b71b8, same measurement, and its fix is subsumed here). A process
+      # that dies between the `find` above and this loop leaves BOTH reads failing:
+      # its cwd link is gone by the time `find` reads it (empty target — the row we
+      # are in now) and /proc/<pid>/status is gone with it (no `State:` line, so
+      # `state` is exactly as empty as it is for a REFUSED read). Counting that
+      # as "a LIVE pid whose cwd could not be read" is a cannot-judge about a
+      # process that no longer exists: it keeps the worktree AND fails the run
+      # (`FAIL … cannot read the cwd of live pid(s) <pid>`, exit 1 — the "the
+      # pruner could not do its job" alarm), so on a busy host the nightly run
+      # alerted and reclaimed nothing. Measured on the agent host: 80 predicate
+      # calls under a 600-process churn gave 2 rc=2 samples whose pids were both
+      # absent from /proc immediately afterwards, and it cost the v1.21.74
+      # installer gate its first run (184 passed / 3 failed; the same bytes read
+      # 187/0 minutes later).
+      #
+      # THE PID'S OWN DIRECTORY IS THE DISCRIMINATOR, AND IT IS READ HERE — after
+      # the status read, immediately before the verdict — so the gap between the
+      # last evidence and the decision is one `stat` instead of a whole file read
+      # (the order matters: checking first would leave the slow read inside the
+      # window this exists to close). `find` listed an entry under this directory
+      # a moment ago, so this user could traverse it then; a directory that is
+      # gone now means GONE, not refused. A directory that is still there — the
+      # status read failed for any other reason, e.g. a read the kernel refused —
+      # keeps the cannot-judge below exactly as it was: an EXISTING live pid whose
+      # cwd cannot be read must still leave the worktree on disk and fail the run.
+      [ -d "$pdir" ] || continue
       denied="${denied:+$denied,}$pid"
       continue
     fi
