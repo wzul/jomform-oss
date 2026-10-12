@@ -838,25 +838,27 @@ git -C "$REPO" worktree unlock "$STRAY_LOCKED" 2>/dev/null
 check "the lock is what caused it (unlocking makes the same stray removable)" "no" \
   "$( git -C "$REPO" worktree remove --force "$STRAY_LOCKED" >/dev/null 2>&1; [ -d "$STRAY_LOCKED" ] && echo yes || echo no )"
 
-# 9c. The STRAY loop's unresolvable HEAD. Its twin in the card loop is 9d; the stray
-#     loop reads HEAD through its own copy of the branch.
+# 9c. The STRAY loop's unresolvable HEAD. Its twin in the card loop is 9d; since
+#     PR #1151 (section 8f) both loops read HEAD through the same `worktree_head`
+#     helper, so the two sections differ only in WHICH shape they pin.
 #
-#     HOW THE HEAD IS BROKEN DECIDES WHETHER THIS BRANCH IS REACHED AT ALL, and that
-#     was measured, not assumed. The pruner's read is
-#     `head=$(git -C "$wt" rev-parse HEAD 2>/dev/null || echo "")`, so the branch
-#     fires exactly when that read yields no STDOUT — and the two candidate shapes
-#     differ in stdout, not in whether HEAD resolves:
+#     HOW THE HEAD IS BROKEN STILL DECIDES WHAT REACHES THIS BRANCH — measured, not
+#     assumed. The guard fires exactly when the read yields no STDOUT, and the two
+#     shapes of "this worktree's HEAD does not resolve" are not equal in that:
 #       * the worktree's `.git` FILE overwritten with `ref: refs/heads/<missing>`
 #         (the shape the card measured, used here): git writes `fatal: invalid
-#         gitfile format` to stderr and NOTHING to stdout, so `head` is empty and
-#         this branch fires. The directory and every file in it are untouched, which
-#         is what makes the on-disk assertions below meaningful.
+#         gitfile format` to stderr and NOTHING to stdout, so the read is empty and
+#         this branch fires. That was already true of the old plain
+#         `head=$(git -C "$wt" rev-parse HEAD 2>/dev/null || echo "")`, so the fix
+#         left this shape's verdict untouched. The directory and every file in it
+#         are untouched, which is what makes the on-disk assertions below
+#         meaningful.
 #       * a VALID gitdir whose HEAD points at a missing branch — the shape a worktree
-#         whose branch was deleted leaves behind — does NOT reach this branch:
-#         `git rev-parse HEAD` prints the literal `HEAD` on stdout, so the run then
-#         judges the worktree by a rev belonging to the REPO rather than refusing to
-#         judge it. That is a separate defect with its own card; this assertion
-#         deliberately claims only the shape measured here.
+#         whose branch was deleted leaves behind — NOW reaches this branch too: the
+#         old plain read printed the literal `HEAD` on stdout, so `[ -z "$head" ]`
+#         never fired and the run judged the worktree by a rev belonging to the
+#         REPO; `worktree_head` prints nothing for it, so the run refuses to judge
+#         it, exactly as section 8f measures (PR #1151, card t_3fa15d1c).
 STRAY_NOREF="$SB/strayroot/jf-noref"
 git -C "$REPO" worktree add -q --detach "$STRAY_NOREF" "$PUSHED_SHA"
 touch -d '2020-01-01' "$STRAY_NOREF"
