@@ -29,10 +29,12 @@ package urlguard
 // the file that makes it cheap to make.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -234,6 +236,250 @@ func tenantOrApexHost(host string) bool {
 	return h == "jomform.com"
 }
 
+// --- reading the router table -----------------------------------------------
+//
+// A router is not a line, and the guards below need three things that a
+// line-by-line `rule:` scan cannot give. Each of the three has already bitten
+// this file:
+//
+//   - the rule text with its CONTINUATION lines JOINED. Traefik's own table
+//     wraps long rules (jf-api-f, jf-custom-root), and a `Host(...)` on a wrapped
+//     line was invisible — the same class as t_1ab825fc, where a rule line mixing
+//     HostRegexp with a static Host skipped the whole line.
+//   - the router's PRIORITY, because priority is what decides which router
+//     serves a host. A guard that assumes "the tenant wildcard always wins" is
+//     not describing Traefik, and that assumption is exactly what reds `docs`
+//     and `mcp` on the live file this repo now holds (t_3f44c437).
+//   - the ENTRY POINTS. Two routers on different entry points never compete, so
+//     comparing their priorities would demand exclusions nothing needs.
+
+// traefikRouter is one entry of a file provider's `http.routers` table.
+type traefikRouter struct {
+	name        string
+	rule        string
+	priority    int
+	hasPriority bool
+	entryPoints []string
+	line        int
+}
+
+// yamlKeyLineRe matches a `key:` or `key: value` line: a router's own key, as
+// opposed to a wrapped rule continuation (`|| PathPrefix(...)`), which has no
+// colon of its own.
+var yamlKeyLineRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_-]*):`)
+
+// splitYAMLKey splits "key: value" into its key and raw value. ok is false for a
+// line that is not a key at all, which is how a wrapped rule continuation is told
+// apart from the next key.
+func splitYAMLKey(line string) (key, value string, ok bool) {
+	m := yamlKeyLineRe.FindStringSubmatch(line)
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], strings.TrimSpace(line[len(m[1])+1:]), true
+}
+
+// unquoteYAMLScalar strips one matching pair of surrounding quotes. Both files
+// write rules both bare (“Host(`x`)“) and quoted (`"Host(`x`)"`, `'!Host(...)'`
+// after a YAML line fold), so the guard must read the VALUE Traefik reads — not
+// the YAML spelling of it.
+func unquoteYAMLScalar(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
+}
+
+// parseEntryPoints reads an `entryPoints:` value in either spelling the files
+// use: the inline flow sequence (`entryPoints: [websecure]`) or the block
+// sequence on the following lines (`entryPoints:` / `- websecure`).
+func parseEntryPoints(lines []string, keyLine, indent int, value string) []string {
+	var out []string
+	if strings.TrimSpace(value) != "" {
+		v := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(value), "["), "]")
+		for _, part := range strings.Split(v, ",") {
+			if p := unquoteYAMLScalar(part); p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	for j := keyLine + 1; j < len(lines); j++ {
+		lt := strings.TrimSpace(lines[j])
+		if lt == "" || strings.HasPrefix(lt, "#") {
+			continue
+		}
+		li := len(lines[j]) - len(strings.TrimLeft(lines[j], " "))
+		if li < indent || !strings.HasPrefix(lt, "- ") {
+			break
+		}
+		out = append(out, unquoteYAMLScalar(strings.TrimPrefix(lt, "- ")))
+	}
+	return out
+}
+
+// parseTraefikRouters reads the `http.routers` table out of a committed Traefik
+// file. It parses the YAML SUBSET these files use (block mapping, block/flow
+// sequences, folded scalar values) because the guard needs the per-router
+// associations — rule WITH its continuations, priority, entryPoints — that a line
+// filter cannot express. A shape it cannot read is a hard failure, never a skip:
+// a guard that quietly reads nothing reports green and proves nothing (the
+// counters in each test say the same).
+func parseTraefikRouters(t *testing.T, path string) []traefikRouter {
+	t.Helper()
+	lines := strings.Split(mustReadFile(t, path), "\n")
+
+	var routers []traefikRouter
+	section := ""    // the indent-2 key we are inside, e.g. "routers"
+	cur := -1        // index into routers, -1 when not inside a router
+	ruleIndent := -1 // indent of the `rule:` key that a continuation must exceed
+
+	for i, line := range lines {
+		lineNo := i + 1
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		key, value, isKey := splitYAMLKey(trimmed)
+
+		// A wrapped `rule:` value: deeper than the `rule:` key and not a key of
+		// its own. Joined, so a Host literal on a continuation is checked like
+		// any other.
+		if cur >= 0 && ruleIndent >= 0 && indent > ruleIndent && !isKey {
+			routers[cur].rule += " " + trimmed
+			continue
+		}
+		ruleIndent = -1
+
+		if indent <= 2 {
+			if indent == 2 && isKey {
+				section = key
+			} else {
+				section = ""
+			}
+			continue
+		}
+		if section != "routers" {
+			continue
+		}
+		if indent == 4 {
+			if !isKey {
+				continue
+			}
+			routers = append(routers, traefikRouter{name: key, line: lineNo})
+			cur = len(routers) - 1
+			continue
+		}
+		if cur < 0 || !isKey {
+			continue
+		}
+		switch key {
+		case "rule":
+			routers[cur].rule = value
+			ruleIndent = indent
+		case "priority":
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				t.Fatalf("%s:%d: priority %q is not an integer (%v) — this guard "+
+					"reads priorities to decide which router serves a host, so it "+
+					"cannot reason about this table; fix the file or the parser",
+					path, lineNo, value, err)
+			}
+			routers[cur].priority, routers[cur].hasPriority = n, true
+		case "entryPoints":
+			routers[cur].entryPoints = parseEntryPoints(lines, i, indent, value)
+		}
+	}
+
+	for i := range routers {
+		routers[i].rule = unquoteYAMLScalar(strings.TrimSpace(routers[i].rule))
+	}
+	return routers
+}
+
+// routerPriority is the number Traefik sorts a router by: the explicit
+// `priority:` when the file sets one, and the LENGTH OF THE RULE otherwise — the
+// documented default
+// (https://doc.traefik.io/traefik/reference/routing-configuration/http/routing/rules-and-priority/:
+// "the priority is directly equal to the length of the rule ... A value of 0 for
+// the priority is ignored"). Both spellings appear in this repo, so assuming
+// either one alone would be wrong.
+func routerPriority(r traefikRouter) int {
+	if r.hasPriority && r.priority != 0 {
+		return r.priority
+	}
+	return len(r.rule)
+}
+
+// competingStaticRouters returns the routers from statics that share an entry
+// point with w. Routers on different entry points never compete for a request,
+// so they must not be compared. A missing entryPoints list is treated as "could
+// compete" — the conservative direction for a guard that must not miss a
+// shadowed host.
+func competingStaticRouters(w traefikRouter, statics []traefikRouter) []traefikRouter {
+	var out []traefikRouter
+	for _, s := range statics {
+		if len(w.entryPoints) == 0 || len(s.entryPoints) == 0 {
+			out = append(out, s)
+			continue
+		}
+		for _, we := range w.entryPoints {
+			for _, se := range s.entryPoints {
+				if we == se {
+					out = append(out, s)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// wildcardOutranksStatic reports whether the tenant wildcard w WINS a request to
+// a statically routed label's host — i.e. whether w can take that host away from
+// the router the file gave it.
+//
+// Traefik serves the matching router with the HIGHEST priority (an explicit
+// `priority:` overrides the rule-length default), so the wildcard wins only when
+// no static router for that label outranks it on a shared entry point. The live
+// file shows both sides of this: `www` (static 10, wildcard 20) IS outranked and
+// must be excluded — PR 740's finding, still pinned here — while `docs`/`mcp`
+// (static 60/55, wildcard 20) are NOT, which is why the file carries no exclusion
+// for them and why a guard demanding one would be wrong about Traefik.
+//
+// A label with no static router on w's entry point also counts as outranked: the
+// wildcard would then be the only router serving a host JomForm owns on that
+// port, which is the same wrong-service symptom.
+func wildcardOutranksStatic(w traefikRouter, statics []traefikRouter) bool {
+	competing := competingStaticRouters(w, statics)
+	if len(competing) == 0 {
+		return true
+	}
+	wp := routerPriority(w)
+	for _, s := range competing {
+		if routerPriority(s) <= wp {
+			return true
+		}
+	}
+	return false
+}
+
+// staticRoutersFor returns a one-line description of the routers behind a label,
+// with the priority each is sorted by, so a failure says WHICH router loses to
+// the wildcard instead of only the file and line.
+func staticRoutersFor(statics []traefikRouter) string {
+	parts := make([]string, 0, len(statics))
+	for _, s := range statics {
+		parts = append(parts, fmt.Sprintf("%s:%d", s.name, routerPriority(s)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// --- bound to reality: what Traefik actually routes -------------------------
+
 func TestReservedSubdomainsCoverStaticTraefikHosts(t *testing.T) {
 	root := repoRoot(t)
 	// The static (file-provider) router table for the VPS deployment. The
@@ -246,53 +492,49 @@ func TestReservedSubdomainsCoverStaticTraefikHosts(t *testing.T) {
 
 	checked, hostRegexps := 0, 0
 	for _, path := range paths {
-		src := mustReadFile(t, path)
-		for _, line := range strings.Split(src, "\n") {
-			trimmed := strings.TrimSpace(line)
-			// Only rule lines carry hosts; comments are skipped so a hostname
-			// discussed in a comment is not mistaken for a routed one.
-			if !strings.HasPrefix(trimmed, "rule:") {
-				continue
-			}
-			if strings.Contains(trimmed, "HostRegexp(") {
-				// A regex host is the tenant wildcard, not a static subdomain:
-				// it matches the workspace subdomains on purpose.
-				//
-				// COUNT it, then KEEP GOING (card t_1ab825fc). This used to
-				// `continue`, which skipped the ENTIRE rule line — so a line
-				// mixing the wildcard with a static host hid that host from the
-				// check below. Not hypothetical: the committed config already has
-				//   HostRegexp(`[a-z0-9-]+.jomform.com`) && !Host(`www.jomform.com`)
-				// so `www` was never checked on those lines. A router whose static
-				// host is neither the apex nor reserved is exactly the drift this
-				// guard exists to catch, and it was invisible whenever it shared a
-				// line with the wildcard.
-				//
-				// traefikHostRe matches `Host(`…`)` and NOT `HostRegexp(` (the
-				// characters after `Host` differ), so letting the line through
-				// finds only its static literals. A negated `!Host(...)` counts on
-				// purpose: the label still has to be one JomForm owns or protects,
-				// which is why `www` is reserved at all.
+		for _, r := range parseTraefikRouters(t, path) {
+			// A regex host is the tenant wildcard, not a static subdomain: it
+			// matches the workspace subdomains on purpose. COUNT it — a table
+			// with no wildcard would mean a claimed slug is no longer a live
+			// host, and this guard's premise would be wrong (card t_1ab825fc
+			// is the reason the scan does not `continue` here: a rule line
+			// mixing the wildcard with a static Host must still have that Host
+			// checked, and joining continued lines keeps the same promise for a
+			// literal that is wrapped onto the next line).
+			if traefikHostRegexpRe.MatchString(r.rule) {
 				hostRegexps++
 			}
-			for _, m := range traefikHostRe.FindAllStringSubmatch(trimmed, -1) {
+			for _, m := range traefikHostRe.FindAllStringSubmatch(r.rule, -1) {
 				host := m[2]
 				checked++
 				if tenantOrApexHost(host) {
 					continue
 				}
-				label := strings.TrimSuffix(strings.ToLower(host), ".jomform.com")
-				if label == strings.ToLower(host) {
-					t.Errorf("%s routes Host(`%s`), which is not under jomform.com — "+
-						"this guard only understands JomForm subdomains, so it cannot "+
-						"tell whether the label is claimable. Extend the guard.", path, host)
+				label, ok := jomformLabel(host)
+				if !ok {
+					// Not under jomform.com. Two legitimate kinds, and one
+					// illegitimate: a DECLARED foreign route (a merchant's
+					// custom domain — foreignRoutedHosts in subdomains.go), or
+					// whatever nobody has looked at.
+					if isForeignRoutedHost(host) {
+						continue
+					}
+					t.Errorf("%s:%d router %s routes Host(`%s`), which is not "+
+						"under jomform.com and is not declared: this guard cannot "+
+						"tell whether the label is claimable. If it is a real "+
+						"route, add it to foreignRoutedHosts in subdomains.go "+
+						"with the reason it is allowed (the ONE list for non-"+
+						"JomForm hosts); if it is not, remove the route — a guard "+
+						"extended by deleting this check would stop seeing hosts "+
+						"altogether.", path, r.line, r.name, host)
 					continue
 				}
 				if !ReservedSubdomain(label) {
-					t.Errorf("%s routes Host(`%s`) statically, but %q is NOT in the "+
-						"reserved list — a merchant could claim it and shadow this "+
-						"JomForm surface. Add %q to reservedSubdomains (with its "+
-						"reason) in subdomains.go.", path, host, label, label)
+					t.Errorf("%s:%d router %s routes Host(`%s`) statically, but "+
+						"%q is NOT in the reserved list — a merchant could claim "+
+						"it and shadow this JomForm surface. Add %q to "+
+						"reservedSubdomains (with its reason) in subdomains.go.",
+						path, r.line, r.name, host, label, label)
 				}
 			}
 		}
@@ -314,9 +556,8 @@ func TestReservedSubdomainsCoverStaticTraefikHosts(t *testing.T) {
 }
 
 // TestTraefikWildcardExcludesStaticallyRoutedHosts is the guard PR 740 needed
-// and did not have (card t_d49dae9f). Its whole point is that the two-line
-// `&& !Host(`www.jomform.com`)` clause on the tenant wildcard cannot be deleted
-// again in silence.
+// and did not have (card t_d49dae9f), re-founded on what Traefik actually does
+// (card t_3f44c437).
 //
 // THE DEFECT IT PINS (measured on prod, t_ba241aeb): a router that matches
 // `HostRegexp(`[a-z0-9-]+.jomform.com`)` matches www.jomform.com — the regex is
@@ -328,23 +569,46 @@ func TestReservedSubdomainsCoverStaticTraefikHosts(t *testing.T) {
 // that stops it. Delete the clause — as main did before #740 — and www goes
 // back to 404 while every gate stayed green.
 //
+// WHAT THIS GUARD GOT WRONG (t_3f44c437). It carried the same conclusion as a
+// GENERAL rule — "the wildcard's priority beats the static router" — for every
+// statically routed host, and red-on-any-file that did not exclude all of them.
+// That is true for `www` (10 vs 20) and false for the rest of the live table:
+// the wildcard is priority 20 while `docs` is 55/60 and `mcp` is 60, so Traefik
+// serves THEIR routers for those hosts and the file correctly carries no
+// exclusion for them. Traefik picks the matching router with the HIGHEST
+// priority — explicit `priority:`, otherwise the rule's length (see
+// routerPriority for the documented rule) — so "does the wildcard win?" is a
+// comparison, not an assumption. PR #1167 put the host's real
+// 179-line table into the repo as a byte-for-byte copy
+// (deploy/vps/drift-check.sh fails if they differ), which is what surfaced it:
+// the guard red on a correct file, and because it is the `test` gate it stopped
+// every lane on the board.
+//
 // TWO INVARIANTS, both derived from the files themselves (no host, no network):
 //
-//  1. EXCLUSION IS DRAWN FROM THE ONE SOURCE. Every `!Host(`<label>.jomform.com`)`
-//     exclusion must name a urlguard.ServingReservedSubdomain. An exclusion of a
-//     name that is NOT on that list would take a real merchant's host off the
-//     wildcard — a workspace would stop serving — so it is RED. The list is now
-//     the ONE declaration shared with the Go serving check (accountSubdomain
-//     consumes it too), which is what makes "the next reserved name cannot be
-//     added to one side only" mechanical rather than aspirational.
+//  1. AN EXCLUSION NAMES A NAME JOMFORM PROTECTS. Every `!Host(`…`)` on any
+//     rule must be the apex, a DECLARED foreign route (foreignRoutedHosts), or a
+//     label ReservedSubdomain refuses. The harm an exclusion can do is take a
+//     live host off a router, and that can only happen to a label a merchant
+//     could actually hold — which is exactly what reservedSubdomains answers.
+//     PR 960 drew this from ServingReservedSubdomains instead, which is a
+//     strict sub-set (asserted separately): `mcp` is on the claim list and is
+//     statically routed in this very file (jf-mcp-root), so the stricter source
+//     reds a correct file. The serving list keeps its own job — what the API may
+//     resolve to a workspace — and no exclusion legal before becomes illegal:
+//     every serving-reserved label is claim-reserved too.
 //
-//  2. EXCLUSION COVERS EVERY STATICALLY ROUTED HOST. For every label the file
-//     ALSO gives its own static `Host(`<label>.jomform.com`)` router, the file's
-//     wildcard routers must exclude that label. `www` has four such routers
-//     (jf-web, jf-healthz, jf-web-api, jf-web-fallback), so www must be excluded
-//     from both jf-wildcard (:443) and jf-wildcard-http (:80) — exactly the pair
-//     #740 fixed. A NEW static router for a new label whose wildcard exclusion is
-//     forgotten fails here, which is the "cannot quietly rot" half.
+//  2. AN EXCLUSION EXISTS WHEREVER THE WILDCARD REALLY WINS. For every label the
+//     file also gives its own static `Host(`<label>.jomform.com`)` router, the
+//     wildcard must exclude that label IF it outranks those routers on an entry
+//     point they share (wildcardOutranksStatic — routers on different entry
+//     points never compete, so their priorities are not comparable at all). `www`
+//     is the first case (10 <= 20, the pair #740 fixed); `docs` (55/60) and `mcp`
+//     (60) are the second, and a wildcard that does NOT exclude them is correct.
+//     A NEW static router for a new label whose wildcard exclusion is forgotten
+//     at a lower-or-equal priority still fails here, which is the "cannot quietly
+//     rot" half. The case where no exclusion is needed is LOGGED with the
+//     priorities, so the guard's silence is evidence rather than an absence.
 //
 // SCOPE, stated so this guard is not over-claimed: it reads the committed files
 // only. It cannot see prod, and it does not re-derive prod's 17 routers. It also
@@ -365,74 +629,78 @@ func TestTraefikWildcardExcludesStaticallyRoutedHosts(t *testing.T) {
 
 	exclusions, wildcards, staticRoutes := 0, 0, 0
 	for _, path := range paths {
-		src := mustReadFile(t, path)
+		routers := parseTraefikRouters(t, path)
 
-		type ruleLine struct {
-			no   int
-			text string
-		}
-		var wildcardRules []ruleLine
-		staticLabels := map[string]int{} // label -> the line that routes it statically
-
-		for i, line := range strings.Split(src, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if !strings.HasPrefix(trimmed, "rule:") {
-				continue
-			}
-			lineNo := i + 1
-
-			// (1) Any `!Host(...)` on ANY rule must name a name JomForm owns.
-			//     Applied to every rule, not only wildcards: an exclusion
-			//     anywhere in these files takes a jomform label out of a
-			//     router, and that label must be one JomForm serves.
-			for _, m := range traefikHostRe.FindAllStringSubmatch(trimmed, -1) {
+		// (1) Any `!Host(...)` on ANY rule must name a name JomForm owns or
+		//     protects. Applied to every rule, not only wildcards: an exclusion
+		//     anywhere in these files takes a jomform label out of a router, and
+		//     that label must not be one a merchant could have claimed.
+		for _, r := range routers {
+			for _, m := range traefikHostRe.FindAllStringSubmatch(r.rule, -1) {
 				if m[1] != "!" {
 					continue
 				}
 				exclusions++
-				label, ok := jomformLabel(m[2])
+				host := m[2]
+				if tenantOrApexHost(host) || isForeignRoutedHost(host) {
+					continue
+				}
+				label, ok := jomformLabel(host)
 				if !ok {
-					t.Errorf("%s:%d excludes Host(`%s`), which is not a "+
-						"<label>.jomform.com host — this guard only understands "+
-						"JomForm subdomains. Extend the guard.", path, lineNo, m[2])
+					t.Errorf("%s:%d router %s excludes Host(`%s`), which is not a "+
+						"<label>.jomform.com host and is not a declared foreign "+
+						"route: this guard cannot tell whether a merchant holds "+
+						"it. Declare it in foreignRoutedHosts (subdomains.go) with "+
+						"the reason it is allowed, or remove the exclusion.",
+						path, r.line, r.name, host)
 					continue
 				}
-				if !IsServingReserved(label) {
-					t.Errorf("%s:%d excludes Host(`%s`) from its router, but %q is "+
-						"NOT in urlguard.ServingReservedSubdomains — excluding a "+
-						"label JomForm does not serve would take a real merchant's "+
-						"host off this router. If %q really is a JomForm host, add "+
-						"it to ServingReservedSubdomains in subdomains.go (the ONE "+
-						"list); otherwise remove the exclusion.", path, lineNo, m[2], label, label)
-				}
-			}
-
-			// (2) Static (non-negated) routes for a jomform label.
-			for _, m := range traefikHostRe.FindAllStringSubmatch(trimmed, -1) {
-				if m[1] == "!" {
-					continue
-				}
-				if label, ok := jomformLabel(m[2]); ok {
-					staticLabels[label] = lineNo
-					staticRoutes++
-				}
-			}
-
-			// Is this rule a tenant wildcard? A HostRegexp whose pattern is a
-			// jomform host, in either file's escaping.
-			for _, m := range traefikHostRegexpRe.FindAllStringSubmatch(trimmed, -1) {
-				if strings.Contains(strings.ToLower(m[1]), "jomform") {
-					wildcardRules = append(wildcardRules, ruleLine{no: lineNo, text: trimmed})
-					wildcards++
+				if !ReservedSubdomain(label) {
+					t.Errorf("%s:%d router %s excludes Host(`%s`) from its router, "+
+						"but %q is NOT in reservedSubdomains — a merchant CAN "+
+						"claim that label, and excluding it would take a real "+
+						"merchant's host off this router. If %q really is a "+
+						"JomForm name, add it to reservedSubdomains (with its "+
+						"reason) in subdomains.go (the ONE list); otherwise "+
+						"remove the exclusion.", path, r.line, r.name, host, label, label)
 				}
 			}
 		}
 
-		// (2, continued) Every statically routed label must be excluded from
-		// every wildcard rule in the SAME file.
-		for _, wr := range wildcardRules {
+		// (2a) Static (non-negated) routes, per label, WITH the routers behind
+		//      them: invariant 2 compares priorities, which needs the routers.
+		staticByLabel := map[string][]traefikRouter{}
+		for _, r := range routers {
+			for _, m := range traefikHostRe.FindAllStringSubmatch(r.rule, -1) {
+				if m[1] == "!" {
+					continue
+				}
+				if label, ok := jomformLabel(m[2]); ok {
+					staticByLabel[label] = append(staticByLabel[label], r)
+					staticRoutes++
+				}
+			}
+		}
+
+		// (2b) The tenant wildcards: a HostRegexp whose pattern is a jomform
+		//      host, in either file's escaping. A router counts once however many
+		//      HostRegexp matchers its rule carries.
+		var wildcardRouters []traefikRouter
+		for _, r := range routers {
+			for _, m := range traefikHostRegexpRe.FindAllStringSubmatch(r.rule, -1) {
+				if strings.Contains(strings.ToLower(m[1]), "jomform") {
+					wildcardRouters = append(wildcardRouters, r)
+					wildcards++
+					break
+				}
+			}
+		}
+
+		// (2c) Every label the wildcard WINS must be excluded from every
+		//      wildcard router that wins it.
+		for _, w := range wildcardRouters {
 			excluded := map[string]bool{}
-			for _, m := range traefikHostRe.FindAllStringSubmatch(wr.text, -1) {
+			for _, m := range traefikHostRe.FindAllStringSubmatch(w.rule, -1) {
 				if m[1] != "!" {
 					continue
 				}
@@ -440,17 +708,31 @@ func TestTraefikWildcardExcludesStaticallyRoutedHosts(t *testing.T) {
 					excluded[label] = true
 				}
 			}
-			for label, atLine := range staticLabels {
+			for label, statics := range staticByLabel {
+				// The log line is the evidence for the cases this guard does NOT
+				// demand an exclusion on — the reader should not have to guess
+				// whether the check ran or the label was skipped.
+				if !wildcardOutranksStatic(w, statics) {
+					t.Logf("%s:%d wildcard %s (priority %d) does not exclude `%s`, "+
+						"and does not need to: its static routers outrank it (%s) "+
+						"on a shared entry point, so it cannot serve that host",
+						path, w.line, w.name, routerPriority(w), label,
+						staticRoutersFor(statics))
+					continue
+				}
 				if excluded[label] {
 					continue
 				}
-				t.Errorf("%s:%d is a tenant wildcard (HostRegexp on jomform.com) "+
-					"that does NOT exclude `%s`, but the same file routes "+
-					"Host(`%s.jomform.com`) statically at line %d. The wildcard's "+
-					"priority beats the static router, so %s.jomform.com would be "+
+				t.Errorf("%s:%d wildcard %s (priority %d) does NOT exclude `%s`, "+
+					"and the same file routes Host(`%s.jomform.com`) statically at "+
+					"line %d without a higher priority (%s). Traefik serves the "+
+					"router with the higher priority, so %s.jomform.com would be "+
 					"served by the wildcard's service instead — this is the exact "+
 					"shadowing PR 740 fixed for www. Add `&& !Host(`%s.jomform.com`)` "+
-					"to this rule.", path, wr.no, label, label, atLine, label, label)
+					"to this rule, or raise the static router's priority above %d.",
+					path, w.line, w.name, routerPriority(w), label, label,
+					statics[0].line, staticRoutersFor(statics), label, label,
+					routerPriority(w))
 			}
 		}
 	}
@@ -656,6 +938,193 @@ func TestIsServingReservedIsTheOnePredicate(t *testing.T) {
 		if IsServingReserved(label) {
 			t.Errorf("IsServingReserved(%q) = true, want false — the serving list must "+
 				"stay the deployment's own hosts, not the wider claim list", label)
+		}
+	}
+}
+
+// --- the foreign-host declaration (card t_3f44c437) -------------------------
+
+// TestForeignRoutedHostsAreDeclaredAndNarrow is the other half of the fix the
+// Traefik guard needed: `halo.example.com` is a real merchant custom
+// domain in the live table, so it is declared rather than waved through.
+//
+// The declaration is an EXCEPTION list, which is exactly the kind of thing that
+// rots — so it is held to the same standard as reservedSubdomains: every entry
+// says WHY it is allowed, the match is exact (not a suffix, or
+// `halo.example.com.evil.tld` would read as the declared host), and an
+// entry that belongs to the LABEL path (anything under jomform.com) is refused
+// here, because declaring one would be a hole in the claim guard rather than a
+// documented exception.
+func TestForeignRoutedHostsAreDeclaredAndNarrow(t *testing.T) {
+	validHost := regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
+	for host, reason := range foreignRoutedHosts {
+		if !validHost.MatchString(host) {
+			t.Errorf("foreignRoutedHosts key %q is not a bare lower-case host "+
+				"(labels of a-z, 0-9, dash) — it can never match a Host(`…`) "+
+				"literal in the Traefik table", host)
+		}
+		if host == "jomform.com" || strings.HasSuffix(host, ".jomform.com") {
+			t.Errorf("foreignRoutedHosts carries %q, which IS a jomform.com host: "+
+				"those are classified by LABEL through reservedSubdomains, and an "+
+				"entry here would let a claimable label bypass the claim guard "+
+				"(it is the list for hosts that are NOT under jomform.com)", host)
+		}
+		if len(strings.TrimSpace(reason)) < 20 {
+			t.Errorf("foreignRoutedHosts[%q] reason %q is too thin to review — an "+
+				"exception nobody can check is an exception nobody can remove",
+				host, reason)
+		}
+	}
+
+	// The predicate normalises the way the rest of this package does, and it is
+	// an EXACT match: a host that merely ends with a declared one is not it.
+	for _, host := range []string{
+		"halo.example.com", " HALO.example.com ", "halo.example.com	",
+	} {
+		if !isForeignRoutedHost(host) {
+			t.Errorf("isForeignRoutedHost(%q) = false, want true", host)
+		}
+	}
+	for _, host := range []string{
+		"", "jomform.com", "www.jomform.com", "example.com",
+		"halo.example.com.evil.example", "evil.example.com",
+	} {
+		if isForeignRoutedHost(host) {
+			t.Errorf("isForeignRoutedHost(%q) = true, want false — the declaration "+
+				"is an exact, normalised match on a host the edge really routes, "+
+				"not a suffix rule and not a blanket allowance for foreign hosts",
+				host)
+		}
+	}
+}
+
+// --- the priority comparison, exercised on its own --------------------------
+
+// TestWildcardOutranksStaticIsAPriorityComparison is the control for the rule the
+// shadowing invariant rests on, so the contrast cannot rot: the SAME wildcard
+// outranks a static router at priority 10 (www — the pair PR 740 fixed) and does
+// NOT outrank one at 30, 55 or 60 (the `docs`/`mcp` routers in the live table).
+// A guard that hard-coded either answer — which is what "the wildcard's priority
+// beats the static router" did — fails here on the other case.
+func TestWildcardOutranksStaticIsAPriorityComparison(t *testing.T) {
+	wildcard := traefikRouter{
+		name:        "jf-wildcard",
+		rule:        "HostRegexp(`[a-z0-9-]+.jomform.com`) && !Host(`www.jomform.com`)",
+		priority:    20,
+		hasPriority: true,
+		entryPoints: []string{"websecure"},
+	}
+	static := func(name string, priority int, eps ...string) traefikRouter {
+		return traefikRouter{name: name, priority: priority, hasPriority: true,
+			rule:        fmt.Sprintf("Host(`%s.jomform.com`)", name),
+			entryPoints: eps}
+	}
+
+	for _, tc := range []struct {
+		what    string
+		statics []traefikRouter
+		want    bool
+	}{
+		{"a static router at 10 is beaten by the 20 wildcard (www)", []traefikRouter{static("jf-web", 10, "websecure")}, true},
+		{"a tie at 20 counts as beaten — the outcome must not rest on the tiebreak", []traefikRouter{static("jf-tie", 20, "websecure")}, true},
+		{"a static router at 30 wins (www's /api router)", []traefikRouter{static("jf-web-api", 30, "websecure")}, false},
+		{"docs: both of its routers win (60, 55)", []traefikRouter{static("jf-docs-root", 60, "websecure"), static("jf-docs-prefix", 55, "websecure")}, false},
+		{"one beaten router among winners decides it (www has jf-web at 10 as well)", []traefikRouter{static("jf-healthz", 60, "websecure"), static("jf-web", 10, "websecure")}, true},
+		{"a router on another entry point does not compete", []traefikRouter{static("jf-web-fallback", 1, "web")}, true},
+		{"one competing router and one elsewhere: only the competing one counts", []traefikRouter{static("jf-web-fallback", 1, "web"), static("jf-web", 30, "websecure")}, false},
+	} {
+		if got := wildcardOutranksStatic(wildcard, tc.statics); got != tc.want {
+			t.Errorf("wildcardOutranksStatic(%s) = %v, want %v", tc.what, got, tc.want)
+		}
+	}
+
+	// A router with no explicit priority is sorted by the LENGTH OF ITS RULE,
+	// the documented Traefik default — so the comparison must still work when a
+	// future router omits `priority:`. Both files set it explicitly today, which
+	// is exactly why this leg is easy to lose.
+	short, long := traefikRouter{rule: strings.Repeat("x", 12)}, traefikRouter{rule: strings.Repeat("y", 40)}
+	if got := routerPriority(short); got != 12 {
+		t.Errorf("routerPriority(rule of 12 chars, no explicit priority) = %d, want 12", got)
+	}
+	if !wildcardOutranksStatic(wildcard, []traefikRouter{short}) {
+		t.Errorf("the 20 wildcard must beat a router whose default priority is 12")
+	}
+	if wildcardOutranksStatic(wildcard, []traefikRouter{long}) {
+		t.Errorf("a router whose default priority is 40 must beat the 20 wildcard")
+	}
+}
+
+// TestParseTraefikRoutersReadsTheCommittedTable pins the parse against the file
+// the host loads, so a shape the parser cannot read is a failure here rather than
+// a guard that quietly checks nothing (each test's counters cover the "zero
+// routers" case; this covers "read it wrong").
+func TestParseTraefikRoutersReadsTheCommittedTable(t *testing.T) {
+	root := repoRoot(t)
+	path := filepath.Join(root, "deploy", "vps", "traefik-jomform.yml")
+	routers := parseTraefikRouters(t, path)
+	if len(routers) < 10 {
+		t.Fatalf("parsed %d router(s) from %s — the table moved, or the parser "+
+			"stopped reading it (the guards above would then be checking nothing)",
+			len(routers), path)
+	}
+	byName := map[string]traefikRouter{}
+	for _, r := range routers {
+		if _, dup := byName[r.name]; dup {
+			t.Errorf("%s parsed twice under the name %s", path, r.name)
+		}
+		byName[r.name] = r
+	}
+
+	w, ok := byName["jf-wildcard"]
+	if !ok {
+		t.Fatalf("%s has no jf-wildcard router — the tenant wildcard is what the "+
+			"shadowing guard exists for", path)
+	}
+	if got := routerPriority(w); got != 20 {
+		t.Errorf("jf-wildcard priority = %d, want 20 (the value the file sets)", got)
+	}
+	// The file writes entryPoints as a BLOCK sequence; the v2-style sibling wrote
+	// it as a flow sequence. Both must read the same, or every entry-point
+	// comparison silently degrades to "compare everything".
+	if len(w.entryPoints) != 1 || w.entryPoints[0] != "websecure" {
+		t.Errorf("jf-wildcard entryPoints = %v, want [websecure]", w.entryPoints)
+	}
+	if got := parseEntryPoints([]string{"      entryPoints: [websecure, web]"}, 0, 6, "[websecure, web]"); len(got) != 2 || got[0] != "websecure" || got[1] != "web" {
+		t.Errorf("parseEntryPoints(flow sequence) = %v, want [websecure web]", got)
+	}
+
+	// jf-custom-root's value is FOLDED onto a second line in the file (and
+	// single-quoted): it must arrive whole and unquoted, or the exclusions on it
+	// are half-read.
+	cr := byName["jf-custom-root"]
+	for _, want := range []string{"!Host(`jomform.com`)", "!Host(`www.jomform.com`)", "!Host(`mcp.jomform.com`)", "PathPrefix(`/`)"} {
+		if !strings.Contains(cr.rule, want) {
+			t.Errorf("jf-custom-root rule = %q, want it to contain %q (its value is "+
+				"folded onto the next line in the file)", cr.rule, want)
+		}
+	}
+	if strings.ContainsAny(cr.rule, `'"`) {
+		t.Errorf("jf-custom-root rule still carries YAML quoting: %q", cr.rule)
+	}
+	if !strings.Contains(byName["jf-api-f"].rule, "PathPrefix(`/healthz`)") {
+		t.Errorf("jf-api-f rule = %q — its continued lines were not joined",
+			byName["jf-api-f"].rule)
+	}
+	if got := routerPriority(byName["jf-docs-prefix"]); got != 55 {
+		t.Errorf("jf-docs-prefix priority = %d, want 55", got)
+	}
+
+	// The docker-provider file: two PathPrefix routers, one entry point each.
+	wcs := parseTraefikRouters(t, filepath.Join(root, "deploy", "traefik-wildcard.yml"))
+	if len(wcs) != 2 {
+		t.Fatalf("parsed %d router(s) from deploy/traefik-wildcard.yml, want 2", len(wcs))
+	}
+	for _, r := range wcs {
+		if len(r.entryPoints) != 1 || r.entryPoints[0] != "websecure" {
+			t.Errorf("%s entryPoints = %v, want [websecure]", r.name, r.entryPoints)
+		}
+		if strings.ContainsAny(r.rule, `'"`) {
+			t.Errorf("%s rule still carries YAML quoting: %q", r.name, r.rule)
 		}
 	}
 }

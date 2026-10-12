@@ -161,6 +161,33 @@ var reservedSubdomains = map[string]string{
 	"assets":   "impersonation: the same first-party-origin abuse under a second common name",
 }
 
+// foreignRoutedHosts is the ONE declaration of the hosts JomForm's edge routes
+// that are NOT under jomform.com (card t_3f44c437). The key is a WHOLE host —
+// a foreign route has no `<label>.jomform.com` to name — and the value is WHY
+// it is allowed, so the exception is reviewed rather than waved through.
+//
+// WHY IT EXISTS. subdomains_test.go parses the committed Traefik table
+// (deploy/vps/traefik-jomform.yml, deploy/traefik-wildcard.yml) and classifies
+// every Host(`…`) literal: the apex, then a claimable `<label>.jomform.com` — and
+// until this list existed, anything else was a bare `t.Errorf("… Extend the
+// guard.")`. PR #1167 replaced that file with a byte-for-byte copy of what the
+// host runs, and the host runs a real merchant CUSTOM domain
+// (`halo.example.com`, router jf-custom-cert-halo, its own Let's Encrypt
+// certificate). A guard that reds on the file the host actually loads is worse
+// than no guard at all: it is the `test` gate, so it stops every lane on the
+// board — measured 2026-10-12 on pristine main 27444a64.
+//
+// The exception is DECLARED, the same shape as reservedSubdomains: a name is not
+// added here to make a test pass, an entry says "this exact host is a route
+// JomForm means to serve". Deliberately NOT here:
+//   - anything under jomform.com (apex included): those are classified by LABEL
+//     through reservedSubdomains, and declaring one here would open a hole in
+//     the claim guard — a test refuses an entry that is under jomform.com;
+//   - a host this edge does not route: the list describes this file's table.
+var foreignRoutedHosts = map[string]string{
+	"halo.example.com": "a merchant custom domain, not a JomForm subdomain: router jf-custom-cert-halo serves it from the API and obtains its own Let's Encrypt certificate for it (deploy/vps/traefik-jomform.yml, the byte-for-byte copy of the file the host loads)",
+}
+
 // ReservedSubdomain reports whether label may NOT be claimed as a workspace
 // subdomain. The comparison is exact after trimming and lower-casing, so the
 // rule does not depend on a caller having normalised the slug first (the length
@@ -199,6 +226,21 @@ func IsServingReserved(label string) bool {
 		}
 	}
 	return false
+}
+
+// isForeignRoutedHost reports whether host is one JomForm's edge is DECLARED to
+// route although it is not under jomform.com (see foreignRoutedHosts). The
+// comparison is an exact match after trimming and lower-casing — deliberately not
+// a suffix rule: a suffix rule would let `halo.example.com.evil.tld` read
+// as the declared host, which is the shape of an impersonation.
+//
+// It is package-private because its only consumer is the Traefik guard in
+// subdomains_test.go. The serving decision never meets a foreign host:
+// accountSubdomain returns "" unless the host ends in .jomform.com, and a custom
+// domain resolves through accounts.custom_domain instead.
+func isForeignRoutedHost(host string) bool {
+	_, ok := foreignRoutedHosts[strings.ToLower(strings.TrimSpace(host))]
+	return ok
 }
 
 // ReservedSubdomainMessage is the refusal for a reserved label. It says WHY the

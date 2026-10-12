@@ -48,17 +48,36 @@ Reasons:
 - **The wildcard regex is UNANCHORED, so it also matches the reserved hosts.**
   `[a-z0-9-]+.jomform.com` matches `www.jomform.com` (the unescaped `.` takes the
   literal `w`), and the tenant wildcard's priority (20) beats the static www
-  routers (priority 10). Any static host that shares a suffix with the wildcard
-  MUST be excluded with `&& !Host(`<label>.jomform.com`)` on **every** wildcard
-  entry point (`jf-wildcard` :443 and `jf-wildcard-http` :80). This is what PR 740
-  fixed for `www`.
-- **The reserved serving list is ONE thing now** (card t_d49dae9f):
+  routers (priority 10). So `www` must be excluded with
+  `&& !Host(`www.jomform.com`)` on **every** wildcard entry point (`jf-wildcard`
+  :443 and `jf-wildcard-http` :80). This is what PR 740 fixed for `www`.
+- **Whether a static host NEEDS that exclusion is a PRIORITY comparison, not a
+  rule about the wildcard** (card t_3f44c437). Traefik serves the matching router
+  with the highest priority — an explicit `priority:`, otherwise the rule's
+  length — so `www` (static 10) is outranked by the wildcard (20) and needs the
+  exclusion, while `docs` (55/60) and `mcp` (60) outrank it and correctly have
+  none. Do not "fix" the file by excluding every statically routed host: it is a
+  byte-for-byte copy of what the host loads (`deploy/vps/drift-check.sh` fails on
+  any difference). `subdomains_test.go` compares the priorities per entry point
+  (routers on different entry points never compete) and logs the labels where no
+  exclusion is needed.
+- **A host this edge routes that is NOT under jomform.com is DECLARED**, with its
+  reason, in `urlguard.foreignRoutedHosts` (`api/internal/urlguard/subdomains.go`)
+  — today `halo.example.com`, a merchant custom domain served by
+  `jf-custom-cert-halo` with its own certificate. The Traefik guard reds on an
+  undeclared foreign host and refuses an entry under jomform.com (those are
+  classified by label through `reservedSubdomains`).
+- **The reserved serving list is ONE thing** (card t_d49dae9f):
   `urlguard.ServingReservedSubdomains` in `api/internal/urlguard/subdomains.go`.
-  `accountSubdomain` (httpapi/public.go) consumes `urlguard.IsServingReserved`,
-  and `subdomains_test.go::TestTraefikWildcardExcludesStaticallyRoutedHosts`
-  asserts every `!Host(...)` exclusion is drawn from that same list. So adding a
-  reserved name to one side only, or deleting a wildcard `!Host(...)` clause,
-  turns `go test ./internal/urlguard/` RED (wired into the `test` gate).
+  `accountSubdomain` (httpapi/public.go) consumes `urlguard.IsServingReserved`.
+  Note what that list is FOR: which Host headers the API must not resolve to a
+  workspace. The Traefik guard's `!Host(...)` check is drawn from the wider
+  `reservedSubdomains` (unclaimable names) instead, because the harm an exclusion
+  can do — taking a live host off a router — is only possible for a label a
+  merchant could actually claim; the serving list is a strict sub-set of it
+  (asserted in the same file), so no exclusion legal before becomes illegal.
+  Deleting a wildcard `!Host(...)` clause, or excluding a claimable label, turns
+  `go test ./internal/urlguard/` RED (wired into the `test` gate).
 - `ssh`-based python heredocs into `/opt/traefik/dynamic/*.yml` are fragile —
   edit via local python + scp, then `docker compose restart`.
 - File provider is independent of the Docker provider; the Docker provider
