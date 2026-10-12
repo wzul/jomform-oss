@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -39,6 +41,20 @@ import (
 
 func main() {
 	log := slog.Default()
+
+	// argv is answered BEFORE any startup work. Returning here means no config
+	// load, no Postgres or valkey connection, no migration, no worker and no
+	// listener: a probe must never be served by a second instance of the server.
+	// This binary used to parse no argv at all, so `jomform-api --version` in a
+	// running container ran the whole boot — db.Migrate and the email worker
+	// included — because the port bind, the only step that can fail on a busy
+	// port, is the LAST thing startup does (measured on prod, 2026-10-12).
+	if handled, code := handleArgs(os.Args[1:], os.Stdout, os.Stderr); handled {
+		if code != 0 {
+			osExit(code)
+		}
+		return
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -790,6 +806,48 @@ func main() {
 		pool.Close()
 	}
 	log.Info("jomform-api stopped")
+}
+
+// usageText is printed for --help and after an unknown argument. Kept here so
+// the text a probe prints is the same text a usage error prints.
+const usageText = `jomform-api is the JomForm backend (REST API, MCP, background workers).
+
+Usage:
+  jomform-api            run the server; all configuration comes from the
+                         environment and there are no positional arguments
+  jomform-api --version  print "version=<version> commit=<commit>" and exit 0
+  jomform-api --help     print this message and exit 0
+
+An unknown argument is a usage error (exit 2), never a server start.
+`
+
+// handleArgs answers the informational argv paths and reports whether argv was
+// handled. handled == false means "boot the server".
+//
+// Every handled path returns before config.Load, so no handled argument opens
+// Postgres or valkey, runs a migration, starts a worker or binds a port. That is
+// the whole point of answering argv first: the listener is the LAST step of
+// startup and the only step a second instance can fail on, so an arg-ignoring
+// binary serves `--version` by running a duplicate server for as long as it
+// takes to fail — or indefinitely, if the probe is given a free port.
+//
+// The exit code is the caller's: main exits it through the swappable osExit.
+// 2 is the convention for a usage error (what Go's own flag package uses).
+func handleArgs(args []string, stdout, stderr io.Writer) (handled bool, code int) {
+	for _, arg := range args {
+		switch arg {
+		case "-v", "--version":
+			fmt.Fprintf(stdout, "version=%s commit=%s\n", version.Version, version.Commit)
+			return true, 0
+		case "-h", "--help":
+			fmt.Fprint(stdout, usageText)
+			return true, 0
+		default:
+			fmt.Fprintf(stderr, "jomform-api: unknown argument %q\n\n%s", arg, usageText)
+			return true, 2
+		}
+	}
+	return false, 0
 }
 
 // osExit is swappable in tests.

@@ -431,6 +431,18 @@ export default function ApiDocsPage() {
           (which is regenerated with every route change, and fails the test suite when it is out of
           date) and the release notes for each version tag.
         </p>
+        <p className="mt-3 text-sm leading-6 text-slate-600">
+          Two ways to read the release you are talking to.{" "}
+          <code className="rounded bg-slate-100 px-1">GET /version</code> answers the release tag,
+          the commit and the build date over HTTP. On a host you operate, the server binary
+          answers the same pair by itself:{" "}
+          <code className="rounded bg-slate-100 px-1">jomform-api --version</code> prints{" "}
+          <code className="rounded bg-slate-100 px-1">version=&lt;version&gt; commit=&lt;commit&gt;</code>{" "}
+          and exits, and <code className="rounded bg-slate-100 px-1">jomform-api --help</code>{" "}
+          prints the usage. Running either against a live instance is safe — including inside its
+          own container — because the flag is answered before startup: no database or cache
+          connection, no migration, no background worker and no port is opened.
+        </p>
       </section>
 
       {/* ── Testing against your own workspace ─────────────────────────────── */}

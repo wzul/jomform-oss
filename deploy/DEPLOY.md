@@ -252,6 +252,19 @@ git rev-list --count main..origin/main    # how far apart are they
 Steps 4–7 are printed by the script at the end as a reminder; they are always
 run on the server manually.
 
+**Probing the running version must not disturb the service.** To read the release
+a container is running, use
+`docker exec jomform-api-1 /usr/local/bin/jomform-api --version`: it prints
+`version=<v> commit=<sha>` and exits 0. `--help` prints the usage, and any other
+argument is a usage error (exit 2). All of those are answered **before startup**,
+so a probe opens no Postgres or valkey connection, runs no migration, starts no
+background worker and binds no port. This matters because the port bind is the
+last thing startup does: a binary that ignored its argv would serve that probe by
+booting a second full instance inside the live container (migrations and the
+email worker included) and only fail on the already-bound port — or never, if it
+were given a free one. `curl`ing the public health route is still the check for
+whether the service actually serves; the flag only tells you what binary it is.
+
 ## Verifying a deploy: probe a form you own, never a merchant's live form
 
 A deploy acceptance that drives the real public route has to POST a real
