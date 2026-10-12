@@ -60,6 +60,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -69,6 +70,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -784,6 +786,268 @@ func TestOpenAPIRateLimitsMatchTheCode(t *testing.T) {
 			}
 		default:
 			t.Errorf("%s %s has an unknown RateSource %q", d.Method, d.Path, d.RateSource)
+		}
+	}
+}
+
+// chatPolicyCase is one chat route whose documented rate sentence must quote the
+// constants the handler's bucket is built from.
+//
+// The numbers are READ from those constants, never written here: a test that
+// restated 60/10 would be a fifth copy of the cap, and it would keep passing
+// while the code and the contract drifted away from it together.
+type chatPolicyCase struct {
+	Path    string
+	Noun    string // the word between the number and "per hour" in the sentence
+	PerHour float64
+	Burst   float64
+	// Consts are the package identifiers the sentence must be BUILT from.
+	Consts []string
+}
+
+func chatPolicyCases() []chatPolicyCase {
+	return []chatPolicyCase{
+		{Path: "/v1/rest/chat", Noun: "messages",
+			PerHour: chatRatePerHour, Burst: chatBurst,
+			Consts: []string{"chatRatePerHour", "chatBurst"}},
+		{Path: "/v1/rest/chat/confirm", Noun: "confirmations",
+			PerHour: chatConfirmPerHour, Burst: chatConfirmBurst,
+			Consts: []string{"chatConfirmPerHour", "chatConfirmBurst"}},
+		{Path: "/v1/rest/chat/cancel", Noun: "confirmations",
+			PerHour: chatConfirmPerHour, Burst: chatConfirmBurst,
+			Consts: []string{"chatConfirmPerHour", "chatConfirmBurst"}},
+	}
+}
+
+// specRateLimit / specOperation are the parts of a published document this guard
+// reads: the extension an agent parses, and the description a human reads.
+type specRateLimit struct {
+	Scope  string `json:"scope"`
+	Policy string `json:"policy"`
+}
+
+type specOperation struct {
+	RateLimit   *specRateLimit `json:"x-jomform-rate-limit"`
+	Description string         `json:"description"`
+}
+
+// parseSpecPaths unmarshals a document's paths, keyed by path and then by
+// lowercase HTTP method. It reads the BYTES that ship, not the Go map they were
+// built from, because the bytes are what a developer downloads.
+func parseSpecPaths(t *testing.T, name, body string) map[string]map[string]specOperation {
+	t.Helper()
+	var doc struct {
+		Paths map[string]map[string]specOperation `json:"paths"`
+	}
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("%s does not parse as JSON: %v", name, err)
+	}
+	return doc.Paths
+}
+
+// TestChatRatePoliciesQuoteTheEnforcedCaps pins the contract's chat rate
+// sentences to the constants the server enforces. The sentence a caller reads —
+// x-jomform-rate-limit.policy, and the same sentence the generator appends to the
+// operation's description — must state chatRatePerHour/chatBurst for /chat and
+// chatConfirmPerHour/chatConfirmBurst for confirm + cancel.
+//
+// WHY IT IS NOT REDUNDANT WITH TestGeneratedArtifactsAreInSync. That test proves
+// the artifacts match a fresh generation of openapi_routes.go, so a WRONGLY WIRED
+// derivation — the confirmation sentence quoting the message constants —
+// regenerates consistently and stays green there. This test is checked against
+// the document the CODE produces (a fresh, wrongly wired generation is red) and
+// against the JSON artifacts ON DISK (a stale one is red), which together are the
+// failure this guard exists for: the constant moved and the published contract
+// did not. web/src/lib/openapiSpec.gen.ts needs no branch of its own — the sync
+// test compares it byte-for-byte with the in-memory generation read here first.
+func TestChatRatePoliciesQuoteTheEnforcedCaps(t *testing.T) {
+	sources := []struct{ name, body string }{
+		{"the document the generator produces (in memory)", generatedArtifact(t, "api/openapi/openapi.json")},
+		{"api/openapi/openapi.json", readRootFile(t, "api/openapi/openapi.json")},
+		{"web/public/openapi.json", readRootFile(t, "web/public/openapi.json")},
+	}
+	for _, src := range sources {
+		paths := parseSpecPaths(t, src.name, src.body)
+		// ANCHOR, not courtesy: a document that parsed to nothing would make
+		// every lookup below a miss dressed up as a pass.
+		if len(paths) < 50 {
+			t.Errorf("%s has %d paths — that is not the API, so the lookups below would "+
+				"check nothing", src.name, len(paths))
+			continue
+		}
+		for _, c := range chatPolicyCases() {
+			op, ok := paths[c.Path]["post"]
+			if !ok {
+				t.Errorf("%s: no POST %s in the document — the anchor moved", src.name, c.Path)
+				continue
+			}
+			if op.RateLimit == nil {
+				t.Errorf("%s: POST %s carries no x-jomform-rate-limit, so the contract "+
+					"promises a chat lane that is not throttled", src.name, c.Path)
+				continue
+			}
+			re := regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?) ` + c.Noun +
+				` per hour per user, burst ([0-9]+(?:\.[0-9]+)?)$`)
+			m := re.FindStringSubmatch(op.RateLimit.Policy)
+			if m == nil {
+				t.Errorf("%s: POST %s documents the rate policy %q, which does not quote the "+
+					"cap as \"<N> %s per hour per user, burst <N>\" — the sentence and this "+
+					"guard have to agree on the shape", src.name, c.Path, op.RateLimit.Policy, c.Noun)
+				continue
+			}
+			gotPerHour, errPerHour := strconv.ParseFloat(m[1], 64)
+			gotBurst, errBurst := strconv.ParseFloat(m[2], 64)
+			if errPerHour != nil || errBurst != nil {
+				t.Errorf("%s: POST %s documents the rate policy %q, which is not two numbers "+
+					"(%v / %v)", src.name, c.Path, op.RateLimit.Policy, errPerHour, errBurst)
+				continue
+			}
+			if gotPerHour != c.PerHour || gotBurst != c.Burst {
+				t.Errorf("%s: POST %s documents %g per hour, burst %g, but the handler enforces "+
+					"%g per hour, burst %g — the published contract tells the caller a limit the "+
+					"server does not apply.\n(The sentence is built from the constants; if you "+
+					"changed one, run: cd api && go run ./cmd/openapi-gen)",
+					src.name, c.Path, gotPerHour, gotBurst, c.PerHour, c.Burst)
+			}
+			// The same sentence is appended to the description, which is the copy a
+			// human reads in the rendered reference.
+			if !strings.Contains(op.Description, "Rate limit: "+op.RateLimit.Policy+".") {
+				t.Errorf("%s: POST %s's description does not carry \"Rate limit: %s.\" — the "+
+					"extension and the prose have diverged", src.name, c.Path, op.RateLimit.Policy)
+			}
+		}
+	}
+}
+
+// registryRateFields returns, per documented path, the SYNTAX of that entry's
+// Rate field in restRouteDocs — and the number of contract entries it walked, so
+// the caller can tell a moved parse anchor from a registry that simply has few
+// throttled routes (only seven do). The syntax is the point: whether a sentence
+// is built from a constant or typed out is not visible in the value it evaluates
+// to.
+func registryRateFields(t *testing.T, file *ast.File) (map[string]ast.Expr, int) {
+	t.Helper()
+	out := map[string]ast.Expr{}
+	entries := 0
+	for _, d := range file.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, s := range gd.Specs {
+			vs, ok := s.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, n := range vs.Names {
+				if n.Name != "restRouteDocs" || i >= len(vs.Values) {
+					continue
+				}
+				slice, ok := vs.Values[i].(*ast.CompositeLit)
+				if !ok {
+					t.Fatalf("restRouteDocs is no longer a composite literal — this guard cannot " +
+						"read the registry")
+				}
+				for _, elt := range slice.Elts {
+					entry, ok := elt.(*ast.CompositeLit)
+					if !ok {
+						continue
+					}
+					entries++
+					var path string
+					var rate ast.Expr
+					for _, f := range entry.Elts {
+						kv, ok := f.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						key, ok := kv.Key.(*ast.Ident)
+						if !ok {
+							continue
+						}
+						switch key.Name {
+						case "Path":
+							if lit, ok := kv.Value.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+								path, _ = strconv.Unquote(lit.Value)
+							}
+						case "Rate":
+							rate = kv.Value
+						}
+					}
+					if path != "" && rate != nil {
+						out[path] = rate
+					}
+				}
+			}
+		}
+	}
+	return out, entries
+}
+
+// TestChatRatePoliciesAreDerivedNotRestated is the other half of the guard, and
+// the half a value comparison cannot express: a literal that happens to be the
+// right number compares equal to the constant, so only the source can tell the
+// two apart. The chat lane's Rate fields must be CALLS whose bodies name the
+// constants that enforce that route's cap — the shape restRouteDocs uses today —
+// because that is what makes the published contract move with the constant
+// instead of drifting from it (t_da26169c).
+func TestChatRatePoliciesAreDerivedNotRestated(t *testing.T) {
+	pkg := parseRESTPackage(t)
+	file, err := parser.ParseFile(token.NewFileSet(),
+		filepath.Join(rootDir, "api", "internal", "httpapi", "openapi_routes.go"),
+		nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("cannot parse openapi_routes.go: %v", err)
+	}
+	rates, entries := registryRateFields(t, file)
+	if entries < 50 {
+		t.Fatalf("walked only %d contract entries in restRouteDocs — the registry's shape moved, "+
+			"so this guard would check nothing", entries)
+	}
+	for _, c := range chatPolicyCases() {
+		expr, ok := rates[c.Path]
+		if !ok {
+			t.Errorf("no contract entry for POST %s — the anchor moved", c.Path)
+			continue
+		}
+		if lit, isLit := expr.(*ast.BasicLit); isLit {
+			t.Errorf("POST %s's Rate is the string literal %s — a literal is a copy of the cap "+
+				"that no test can tell from the truth. Build it from %s instead.",
+				c.Path, lit.Value, strings.Join(c.Consts, " / "))
+			continue
+		}
+		call, ok := expr.(*ast.CallExpr)
+		if !ok {
+			t.Errorf("POST %s's Rate is %T, not a call — the sentence has to be built from the "+
+				"constants that enforce the cap (%s)", c.Path, expr, strings.Join(c.Consts, " / "))
+			continue
+		}
+		fn, ok := call.Fun.(*ast.Ident)
+		if !ok {
+			t.Errorf("POST %s's Rate calls %T — expected a package-level helper", c.Path, call.Fun)
+			continue
+		}
+		decls := pkg.funcs[fn.Name]
+		if len(decls) == 0 {
+			t.Errorf("POST %s's Rate calls %s, which is not declared in this package",
+				c.Path, fn.Name)
+			continue
+		}
+		named := map[string]bool{}
+		for _, d := range decls {
+			ast.Inspect(d, func(n ast.Node) bool {
+				if id, ok := n.(*ast.Ident); ok {
+					named[id.Name] = true
+				}
+				return true
+			})
+		}
+		for _, want := range c.Consts {
+			if !named[want] {
+				t.Errorf("POST %s's Rate is built by %s, which does not name %s — so the sentence "+
+					"is not derived from the constant that enforces this route's cap (%s)",
+					c.Path, fn.Name, want, strings.Join(c.Consts, " / "))
+			}
 		}
 	}
 }

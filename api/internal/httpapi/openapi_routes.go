@@ -27,7 +27,10 @@
 //		                     call in the handler, BOTH directions. This matters
 //		                     because the honest fact about this API is that almost
 //		                     nothing is throttled, and that fact is exactly the one
-//		                     that rots silently.
+//		                     that rots silently. Where the cap is a CONSTANT (the
+//		                     chat lane) the sentence is rendered from it rather
+//		                     than typed: a literal there is a copy of the number
+//		                     that no test can tell from the truth (t_da26169c).
 //
 //	  Regenerate the published artifacts with:
 //
@@ -44,6 +47,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -114,6 +118,32 @@ type restRouteDoc struct {
 	// axis to the handler) changes a shipped route's behaviour and was
 	// explicitly rejected on the parent card.
 	ScopeOnly bool
+}
+
+// chatMessageRatePolicy and chatConfirmRatePolicy render the contract's Rate
+// sentence from the constants that ENFORCE the cap (rest_chat.go), the same way
+// chatLimits() reports them to the client.
+//
+// WHY BUILT, NOT WRITTEN OUT. A literal here is a copy of the cap that nothing
+// can tell from the truth: it stays at 60 while rest_chat.go moves to 90, every
+// artifact stays internally consistent, and the published contract tells the
+// developer reading it a number the server does not apply (t_da26169c). Built
+// from the constant, the same edit moves the document — which is what makes
+// TestGeneratedArtifactsAreInSync fail on an artifact that was not regenerated,
+// and TestChatRatePoliciesQuoteTheEnforcedCaps fail on a sentence that quotes a
+// number the handler does not enforce.
+//
+// %g, not %.0f: the cap is quoted exactly as written, so a half-hour value is
+// visible instead of being rounded to a number the limiter never applies.
+func chatMessageRatePolicy() string {
+	return fmt.Sprintf("%g messages per hour per user, burst %g", chatRatePerHour, chatBurst)
+}
+
+// chatConfirmRatePolicy is the confirm/cancel bucket's sentence — one string for
+// both routes because /chat/cancel shares confirm's bucket (see rest_chat.go's
+// handleChatCancel), so a caller reading either operation is told the same thing.
+func chatConfirmRatePolicy() string {
+	return fmt.Sprintf("%g confirmations per hour per user, burst %g", chatConfirmPerHour, chatConfirmBurst)
 }
 
 // restRouteDocs is the contract for every /v1/rest/* route.
@@ -433,19 +463,19 @@ var restRouteDocs = []restRouteDoc{
 	{Method: "POST", Path: "/v1/rest/chat", Handler: "handleChat", Tag: "In-app assistant",
 		Summary: "Ask the in-app assistant one message", Access: AccessSession, Body: true,
 		RespDesc:   "The assistant's reply, the tool steps it took, and whether it filed feedback.",
-		Rate:       "60 messages per hour per user, burst 10",
+		Rate:       chatMessageRatePolicy(),
 		RateSource: RateHandler,
 		Desc:       "Session-only, and read-only by construction: the assistant's tool calls run under a readonly identity, so nothing typed into the box can write. The limit is enforced in the handler, keyed on the user rather than the IP."},
 	{Method: "POST", Path: "/v1/rest/chat/confirm", Handler: "handleChatConfirm", Tag: "In-app assistant",
 		Summary: "Execute a write the assistant proposed", Access: AccessSession, Body: true,
 		RespDesc:   "status, the tool that ran, and its result.",
-		Rate:       "30 confirmations per hour per user, burst 5",
+		Rate:       chatConfirmRatePolicy(),
 		RateSource: RateHandler,
 		Desc:       "The only place a proposed write is executed. The body carries the opaque single-use token the browser holds and the args_hash the card showed; there is no confirm flag and nothing the caller can set to make the write happen, because the token IS the authorisation. A model cannot reach this endpoint — it is never given the token."},
 	{Method: "POST", Path: "/v1/rest/chat/cancel", Handler: "handleChatCancel", Tag: "In-app assistant",
 		Summary: "Discard a write the assistant proposed", Access: AccessSession, Body: true,
 		RespDesc:   "status and the tool whose proposal was discarded.",
-		Rate:       "30 confirmations per hour per user, burst 5",
+		Rate:       chatConfirmRatePolicy(),
 		RateSource: RateHandler,
 		Desc:       "Same request shape as confirm (token + args_hash), and it shares confirm's bucket. Withdrawing a proposal executes nothing."},
 }
