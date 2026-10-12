@@ -65,6 +65,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -178,6 +180,9 @@ func dsnDatabaseName() string {
 // is what lets the rule be driven with planted answers instead of a real host.
 type scratchDBCandidate struct {
 	name string
+	// size is the database's on-disk size, read from the same directory walk
+	// that the creation time comes from. A database whose directory is gone (a
+	// drop in flight) is not a candidate at all — see candidates().
 	size int64
 	// created is the database's creation time and haveCreated says whether it
 	// could be read at all (see scratchDBAgesQuery).
@@ -258,6 +263,14 @@ func reclaimableScratchDatabase(c scratchDBCandidate, protect []string) (bool, s
 // the database the DSN names is a different name whenever open() runs on a
 // fixture, and that is protected by the rule (see dsnDatabaseName) — leaving it
 // to this clause alone is what dropped the shared test database.
+//
+// `pg_database_size(oid)` is a walk of the database's directory, so it reports
+// NULL — not 0, and not an error (measured on this host: an unlinked directory
+// and a bogus OID both answer NULL) — when there is no directory to walk. That
+// is the same window scratchDBAgesQuery documents: a database that is being
+// dropped right now still has its pg_database row and no longer has a
+// directory. candidates() drops such a database from the candidate list rather
+// than reading its unreadable size as zero; see the scan there.
 const scratchDBCandidatesQuery = `SELECT datname, pg_database_size(oid)
   FROM pg_database
  WHERE NOT datistemplate AND datname <> current_database()
@@ -272,7 +285,33 @@ const scratchDBCandidatesQuery = `SELECT datname, pg_database_size(oid)
 // rule is skipped entirely (an unreadable age is never reclaimed) and the prune
 // records that in lastDBPruneNote. TestScratchDatabaseCreationTimesAreReadable
 // fails loudly in that case, so the degradation cannot pass unnoticed.
-const scratchDBAgesQuery = `SELECT datname, (pg_stat_file('base/' || oid || '/PG_VERSION')).modification
+//
+// `true` (pg_stat_file's missing_ok) is LOAD-BEARING and is not about that
+// degradation (card t_55ee71c8). `DROP DATABASE` unlinks base/<oid> BEFORE the
+// pg_database row it deletes becomes invisible, so for the length of that window
+// a database is listed here with no directory to stat — and without missing_ok,
+// pg_stat_file raises `could not stat file "base/<oid>/PG_VERSION": No such file
+// or directory (SQLSTATE 58P01)`. ONE such database errored the WHOLE read,
+// because this is one statement: every age came back unreadable, the prune
+// recorded the degradation note, and TestPruneDeadDatabasesNeverDropsProtected-
+// Databases turned that note into a red on WHATEVER tree was under test (measured
+// on this host: a full `go test ./...` runs packages in parallel and this prune
+// itself drops databases, so the window is reachable from the suite alone).
+//
+// The distinction missing_ok buys is exactly the honest one: a vanished
+// directory means THAT database's age is unknown — the answer the rule already
+// treats conservatively (an age it cannot read is never reclaimed) — while a
+// REAL unavailability of the age source is still an error and still sets the
+// note, because missing_ok turns away a missing file only. `permission denied
+// for function pg_stat_file` (measured on this host with a role holding neither
+// pg_monitor nor pg_read_server_files), and every other errno, still error the
+// statement.
+//
+// Known limit, stated rather than assumed: this tolerates the errno the flake
+// produced (ENOENT). A concurrent drop that made stat fail some other way would
+// still error the read — a rarer shape nobody has measured, and one the note
+// would honestly report.
+const scratchDBAgesQuery = `SELECT datname, (pg_stat_file('base/' || oid || '/PG_VERSION', true)).modification
   FROM pg_database
  WHERE NOT datistemplate`
 
@@ -297,8 +336,20 @@ type scratchDBQuerier interface {
 	dropDatabase(ctx context.Context, name string) error
 }
 
+// scratchDBConn is the slice of a PostgreSQL connection the live querier uses:
+// the admin pool in production, and — in the guard for a database dropped
+// mid-scan (scratchdb_prune_test.go) — a TRANSACTION, because that guard has to
+// hold a snapshot open across the drop and drive the real reads against the
+// condition the flake names rather than racing for it. Both *pgxpool.Pool and
+// pgx.Tx satisfy it, so nothing about the production wiring changes.
+type scratchDBConn interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
 // pgDatabases is the live implementation, over the admin connection.
-type pgDatabases struct{ admin *pgxpool.Pool }
+type pgDatabases struct{ admin scratchDBConn }
 
 func (q pgDatabases) currentDatabase(ctx context.Context) (string, error) {
 	var name string
@@ -314,10 +365,20 @@ func (q pgDatabases) candidates(ctx context.Context) ([]scratchDBCandidate, erro
 	var cands []scratchDBCandidate
 	for rows.Next() {
 		var c scratchDBCandidate
-		if err := rows.Scan(&c.name, &c.size); err != nil {
+		// A NULL size is a database whose directory is already gone — it is
+		// being dropped right now (see scratchDBCandidatesQuery), so it is not
+		// this prune's to reclaim and its size is not a number to report. It is
+		// dropped from the list, and the reads below are not affected: this is
+		// one database's unreadable input, not a failure of the query.
+		var size *int64
+		if err := rows.Scan(&c.name, &size); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan database row: %w", err)
 		}
+		if size == nil {
+			continue
+		}
+		c.size = *size
 		cands = append(cands, c)
 	}
 	rows.Close()
@@ -355,7 +416,11 @@ func (q pgDatabases) candidates(ctx context.Context) ([]scratchDBCandidate, erro
 }
 
 // creationTimes reads every non-template database's creation time. A database
-// missing from the result is one whose age could not be read.
+// missing from the result is one whose age could not be read — most often a
+// database dropped mid-scan, whose directory is already unlinked while its
+// pg_database row is still visible (see scratchDBAgesQuery). Unknown is never
+// reclaimed, so leaving it out is the conservative answer; it is NOT a
+// degradation of the age source, which is what the note is reserved for.
 func (q pgDatabases) creationTimes(ctx context.Context) (map[string]time.Time, error) {
 	rows, err := q.admin.Query(ctx, scratchDBAgesQuery)
 	if err != nil {
@@ -365,11 +430,16 @@ func (q pgDatabases) creationTimes(ctx context.Context) (map[string]time.Time, e
 	out := make(map[string]time.Time)
 	for rows.Next() {
 		var name string
-		var created time.Time
+		// NULL = the directory was gone at this instant (missing_ok in the
+		// query) — an age unknown for THAT database, not a failed read.
+		var created *time.Time
 		if err := rows.Scan(&name, &created); err != nil {
 			return nil, err
 		}
-		out[name] = created
+		if created == nil {
+			continue
+		}
+		out[name] = *created
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

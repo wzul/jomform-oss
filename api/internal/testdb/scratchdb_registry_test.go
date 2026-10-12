@@ -63,6 +63,7 @@ var notDatabasePrefixes = map[string]string{
 	"in_":             "internal/testdb/prepare_extensions_ownership_test.go — a ROLE-name tail (`rolePrefix + \"in_\" + suffix`)",
 	"ru_":             "internal/testdb/prepare_extensions_ownership_test.go — a ROLE-name tail (`rolePrefix + \"ru_\" + suffix`)",
 	"test_misplaced_": "internal/testdb/prepare_extensions_ownership_test.go — a scratch SCHEMA name (the misplaced-extension fixture), not a database",
+	"jf_age_nopriv_":  "internal/testdb/scratchdb_prune_test.go — a throwaway ROLE prefix, not a database (the role the unavailable-age-source guard becomes, so it can prove the read still fails where pg_stat_file is denied)",
 }
 
 // databaseCreatorPrefixes returns, per file that creates a database, the

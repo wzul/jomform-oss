@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -392,6 +393,267 @@ func TestPruneDeadDatabasesNeverDropsProtectedDatabases(t *testing.T) {
 		if d == shared || d == "postgres" {
 			t.Errorf("the prune reported dropping %q", d)
 		}
+	}
+}
+
+// TestPruneInputsSurviveADatabaseDroppedMidScan is the guard for the flake this
+// card measured (t_55ee71c8): ONE database whose directory vanished while the
+// prune was reading the cluster errored the WHOLE age read —
+//
+//	database creation times unavailable: ERROR: could not stat file
+//	"base/<oid>/PG_VERSION": No such file or directory (SQLSTATE 58P01)
+//
+// — the prune recorded that degradation note, and
+// TestPruneDeadDatabasesNeverDropsProtectedDatabases (a guard about a DIFFERENT
+// property) turned the note into a red on whatever tree happened to be under
+// test. It cost the merge lane a 418s `test` gate and then a full re-run of the
+// same bytes, which passed solo: the red was the host, not the tree.
+//
+// The window is not raced for here, it is HELD OPEN. `DROP DATABASE` unlinks
+// base/<oid> before the pg_database row it deletes becomes invisible, and a
+// REPEATABLE READ transaction that has already read that row keeps seeing it
+// after the drop has committed. So from a held snapshot the database is listed
+// and its directory is already gone — the exact condition the reported error
+// names — and the prune's own reads (the live querier, driven over that
+// transaction rather than over the pool) are what this guard asserts on.
+//
+// Both directions are pinned:
+//
+//   - a vanished directory is ONE database's unreadable input, not a failure of
+//     the read: the age read must answer for the databases whose directories are
+//     there, must leave the dropped one out (an unknown age is never reclaimed),
+//     and must raise NO note; the candidate read must survive the equally
+//     unreadable size (measured on this host: pg_database_size answers NULL for a
+//     database with no directory, while it errors for nothing in this shape);
+//   - the staging really is the reported failure: read WITHOUT the tolerance, the
+//     same query still raises the flake's own `could not stat file … SQLSTATE
+//     58P01` — so the tolerance is load-bearing and cannot be replaced by
+//     something that only moves the problem.
+//
+// The reads run in their own held snapshots, so a red under one of them cannot
+// be explained by the other's failure (a statement error aborts its transaction).
+func TestPruneInputsSurviveADatabaseDroppedMidScan(t *testing.T) {
+	ctx := context.Background()
+	dsn := dsnOrSkip(t)
+	admin, err := db.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("admin connect: %v", err)
+	}
+	defer admin.Close()
+
+	// Two fixtures: the one that is dropped mid-scan, and one that stays — the
+	// control for "the read still answered for the databases that are still
+	// there", which the shared database cannot provide (another lane's drop of it
+	// is not this test's business, but its presence is not this test's to assume
+	// either).
+	//
+	// Both carry a LIVE pid (this process), not deadPID's: this host runs two
+	// gates at once, and a dead-pid database with nothing connected to it is
+	// exactly what a PEER lane's prune is entitled to reclaim — measured while
+	// writing this guard, with the merger lane's `go test ./...` running: a
+	// planted dead-pid fixture was gone by the time the test dropped it
+	// (`database "<fixture>" does not exist, SQLSTATE 3D000`). A live pid is the
+	// rule's own "its creating process still exists" arm, so no peer can take
+	// these two out from under the test.
+	victim := fixtureName(t, scratchDBFamilies[0].prefix, os.Getpid())
+	plantDatabase(t, ctx, dsn, victim)
+	keeper := fixtureName(t, scratchDBFamilies[0].prefix, os.Getpid())
+	plantDatabase(t, ctx, dsn, keeper)
+
+	// A snapshot in which the victim is visible, held across the drop. pgx gives
+	// REPEATABLE READ its snapshot at the first statement, so the read of the
+	// victim's oid is what pins it (and is why it is the first thing this does).
+	//
+	// Each snapshot gets its own SESSION rather than a connection from the admin
+	// pool: the pool's Close waits for its connections to come back, and these
+	// transactions are still open when the test returns (measured as a 120s hang
+	// in the first cut of this guard), while closing a dedicated session ends the
+	// transaction it holds.
+	holdSnapshot := func() pgx.Tx {
+		t.Helper()
+		conn, err := pgx.Connect(ctx, dsn)
+		if err != nil {
+			t.Fatalf("connect a session to hold a snapshot: %v", err)
+		}
+		t.Cleanup(func() { _ = conn.Close(context.Background()) })
+		tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+		if err != nil {
+			t.Fatalf("begin a snapshot-holding transaction: %v", err)
+		}
+		var oid int32
+		if err := tx.QueryRow(ctx, `SELECT oid::int4 FROM pg_database WHERE datname = $1`, victim).Scan(&oid); err != nil {
+			t.Fatalf("pin a snapshot with %s visible: %v", victim, err)
+		}
+		return tx
+	}
+	agesTx := holdSnapshot()
+	candsTx := holdSnapshot()
+	controlTx := holdSnapshot()
+
+	// The drop, from a connection that is not one of the held snapshots.
+	// IF EXISTS, so a peer that managed to reclaim the fixture first leaves the
+	// staging intact rather than failing the test: the held snapshots below are
+	// what prove the database is listed with no directory, whoever unlinked it.
+	if _, err := admin.Exec(ctx, `DROP DATABASE IF EXISTS `+quote(victim)); err != nil {
+		t.Fatalf("drop %s mid-scan: %v", victim, err)
+	}
+
+	// The staging is asserted, not assumed: the held snapshot still lists the
+	// database, and its directory is already unlinked.
+	var oid int32
+	if err := agesTx.QueryRow(ctx, `SELECT oid::int4 FROM pg_database WHERE datname = $1`, victim).Scan(&oid); err != nil {
+		t.Fatalf("re-read %s in the held snapshot: %v — this guard cannot stage the window it needs", victim, err)
+	}
+	var dirGone bool
+	if err := agesTx.QueryRow(ctx, fmt.Sprintf(`SELECT pg_stat_file('base/%d', true) IS NULL`, oid)).Scan(&dirGone); err != nil {
+		t.Fatalf("probe the base directory of %s: %v", victim, err)
+	}
+	if !dirGone {
+		t.Fatalf("the base directory of %s is still readable after its drop — this guard needs a database that is "+
+			"still listed in a held snapshot with its directory already unlinked, or it asserts nothing", victim)
+	}
+
+	// 1. The age read: the dropped database's age is unknown, the others' are not.
+	ages, err := pgDatabases{admin: agesTx}.creationTimes(ctx)
+	if err != nil {
+		t.Errorf("reading database creation times failed with ONE database dropped mid-scan: %v\n\n"+
+			"A database's directory is unlinked before its pg_database row goes, so a database this read can still\n"+
+			"see may have no base/<oid>/PG_VERSION to stat. That is one database's age unknown — the conservative\n"+
+			"answer the rule already takes for an age it cannot read — and not an unavailability of the age source,\n"+
+			"which is what the degradation note is reserved for. Reporting it as a degradation reds the whole\n"+
+			"`test` gate on whichever tree happens to be under test (see scratchDBAgesQuery).", err)
+	} else {
+		if _, ok := ages[victim]; ok {
+			t.Errorf("the age read answered for %s, whose directory was already unlinked — that age cannot be its "+
+				"creation time, and a value here would let the unattributable arm reclaim on it", victim)
+		}
+		if _, ok := ages[keeper]; !ok {
+			t.Errorf("the age read answered for none of the databases that still have a directory (%s is missing from %d "+
+				"entr(ies)) — one dropped database must not cost every other database its age", keeper, len(ages))
+		}
+	}
+
+	// 2. The control: the same read, un-tolerated, still raises the flake's error.
+	//    In its own held snapshot, because a failure here aborts its transaction
+	//    and would otherwise take the reads below down with it.
+	controlRows, controlErr := controlTx.Query(ctx, `SELECT datname, (pg_stat_file('base/' || oid || '/PG_VERSION')).modification
+  FROM pg_database
+ WHERE NOT datistemplate`)
+	if controlErr == nil {
+		for controlRows.Next() {
+		}
+		controlRows.Close()
+		controlErr = controlRows.Err()
+	}
+	if controlErr == nil {
+		t.Errorf("the un-tolerated age read answered every database while %s is listed with no directory — this guard "+
+			"is not staging the failure the card measured, so a green above proves nothing", victim)
+	} else if !strings.Contains(controlErr.Error(), "could not stat file") ||
+		!strings.Contains(controlErr.Error(), "58P01") {
+		t.Errorf("the un-tolerated age read failed with %v, want the flake's own `could not stat file … (SQLSTATE 58P01)` — "+
+			"the mechanism this guard stages has changed", controlErr)
+	}
+
+	// 3. The candidate read: the dropped database's size is unreadable too, which
+	//    must not fail the list either. In its own held snapshot, so the aborted
+	//    transaction above cannot be blamed for it.
+	cands, err := pgDatabases{admin: candsTx}.candidates(ctx)
+	if err != nil {
+		t.Errorf("listing the databases failed with ONE database dropped mid-scan: %v\n\n"+
+			"pg_database_size(oid) walks the database's directory and answers NULL for one that has none — the same\n"+
+			"window as the age read. A NULL must not be scanned into an int and must not fail the list; a database\n"+
+			"being dropped is not this prune's to reclaim, so it is left out.", err)
+	} else {
+		var sawKeeper bool
+		for _, c := range cands {
+			if c.name == victim {
+				t.Errorf("the database %s, whose directory has already been unlinked, came back as a candidate of size "+
+					"%d — it is being dropped by whoever unlinked it, and %d is not its size", victim, c.size, c.size)
+			}
+			if c.name == keeper {
+				sawKeeper = true
+			}
+		}
+		if !sawKeeper {
+			t.Errorf("%s (a database with a directory, planted by this guard) is not among the %d candidate(s) — one "+
+				"dropped database must not cost the enumeration its other rows", keeper, len(cands))
+		}
+	}
+	// The note is the degradation channel, and neither read degraded.
+	if note := databasePruneNote(); note != "" {
+		t.Errorf("the prune's reads recorded %q for ONE database whose directory was unlinked mid-scan. A note turns "+
+			"TestPruneDeadDatabasesNeverDropsProtectedDatabases — a guard about the PROTECTED names — into a red on "+
+			"whatever tree is under test, which is exactly the flake this card is about.", note)
+	}
+}
+
+// TestScratchDatabaseAgeReadStillFailsWhenTheAgeSourceIsUnavailable is the other
+// half of the same fix (t_55ee71c8), and the reason the tolerance added there is
+// a tolerance and not a cover-up. The degradation
+// TestScratchDatabaseCreationTimesAreReadable guards — a role that cannot call
+// pg_stat_file at all — must still FAIL the read: `missing_ok` turns away a
+// missing file only, so nothing about a vanished directory can answer for it. If
+// it ever did, every age would silently read as "unknown", the unattributable arm
+// of the rule would stop reclaiming (most of the leak), the prune's note would
+// stay empty, and the guard would be green on a host where the reclaim is dead.
+//
+// Driven with a role that holds neither pg_monitor nor pg_read_server_files, in a
+// transaction that is rolled back: CREATE ROLE is transactional, so the role
+// cannot outlive the test (asserted below, because a leftover role is exactly the
+// kind of residue a guard on a shared cluster must not add).
+func TestScratchDatabaseAgeReadStillFailsWhenTheAgeSourceIsUnavailable(t *testing.T) {
+	ctx := context.Background()
+	dsn := dsnOrSkip(t)
+	admin, err := db.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("admin connect: %v", err)
+	}
+	defer admin.Close()
+
+	tx, err := admin.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		t.Fatalf("begin the transaction that owns the throwaway role: %v", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	role := "jf_age_nopriv_" + randHex(t)
+	if _, err := tx.Exec(ctx, "CREATE ROLE "+quote(role)+" NOLOGIN"); err != nil {
+		t.Fatalf("create the unprivileged role %s (needs CREATEROLE/superuser on this host): %v", role, err)
+	}
+	if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+quote(role)); err != nil {
+		t.Fatalf("become %s for the read: %v", role, err)
+	}
+
+	rows, qerr := tx.Query(ctx, scratchDBAgesQuery)
+	answered := 0
+	if qerr == nil {
+		for rows.Next() {
+			answered++
+		}
+		rows.Close()
+		qerr = rows.Err()
+	}
+	if qerr == nil {
+		t.Errorf("the age read answered %d database(s) as %s, a role holding neither pg_monitor nor "+
+			"pg_read_server_files — pg_stat_file is not available to it, so every creation time it reported can "+
+			"only be wrong, and the prune would go on reclaiming (or, here, NOT reclaiming) on an age source that "+
+			"does not exist. The tolerance for a database dropped mid-scan must not reach this shape: it is the "+
+			"degradation the note and TestScratchDatabaseCreationTimesAreReadable exist for", answered, role)
+	} else if !strings.Contains(qerr.Error(), "permission denied") {
+		t.Errorf("the age read as %s failed with %v, want `permission denied for function pg_stat_file` — the "+
+			"degradation this guard stages has changed shape", role, qerr)
+	}
+
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("roll back the transaction that created %s: %v", role, err)
+	}
+	var left int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname = $1`, role).Scan(&left); err != nil {
+		t.Fatalf("check whether %s survived the rollback: %v", role, err)
+	}
+	if left != 0 {
+		t.Errorf("the throwaway role %s survived the rollback (%d row(s) in pg_roles) — this guard must not leave a "+
+			"cluster object behind on a host other lanes share", role, left)
 	}
 }
 
