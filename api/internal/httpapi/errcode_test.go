@@ -146,6 +146,87 @@ func TestIssue6177ChatLimitPrefixResolvesToItsCode(t *testing.T) {
 	}
 }
 
+// TestIssue6177ConfirmationMismatchPrefixesResolveToTheirOwnCode covers the
+// TYPED-CONFIRMATION refusals: the four sites that make the caller name back
+// what it is destroying (a form's slug, a workspace's slug, a product's name)
+// and refuse a mismatch.
+//
+// THE BUG. Each of those messages is ASSEMBLED around the value it names —
+// "taip nama produk (Kopi Ais) untuk sahkan pemadaman kekal" — so no key in
+// errCodeByMessage can ever match one, and the 400 shipped with only the class
+// code `request.badRequest`. A dashboard that renders by code could not tell
+// "you typed the wrong product name" from any other malformed request and fell
+// back to its generic sentence, so the merchant read the server's Malay prose
+// instead of their own language (issue #6177).
+//
+// WHY THE VALUES BELOW ARE AWKWARD. Each message is built here the way the
+// handler builds it, at several values — including one containing the
+// sentence's own punctuation ("Kopi (Ais) — 500ml", i.e. brackets, a dash and
+// spaces). "The prefix resolves for a plain slug" and "the prefix resolves for
+// a name that could be mistaken for the literal" are two different claims, and
+// the second is the one a naive contains-match fails.
+func TestIssue6177ConfirmationMismatchPrefixesResolveToTheirOwnCode(t *testing.T) {
+	cases := []struct {
+		what string
+		msg  string
+		want string
+	}{
+		{"a product purge refusal (an ordinary name)",
+			"taip nama produk (Kopi Ais) untuk sahkan pemadaman kekal", CodeProductConfirmNameMismatch},
+		{"a product purge refusal (a name with the sentence's own punctuation)",
+			"taip nama produk (Kopi (Ais) — 500ml) untuk sahkan pemadaman kekal", CodeProductConfirmNameMismatch},
+		{"a form purge refusal",
+			"taip slug borang (borang-saya-) untuk sahkan pemadaman kekal", CodeFormConfirmSlugMismatch},
+		// BOTH workspace sentences, because the bin and the permanent delete are
+		// two different messages that must land on the one code that describes
+		// their shared complaint.
+		{"a workspace BIN refusal",
+			"taip slug workspace (ws-saya) untuk sahkan pemadaman", CodeWorkspaceConfirmSlugMismatch},
+		{"a workspace PURGE refusal",
+			"taip slug workspace (ws-saya) untuk sahkan pemadaman kekal", CodeWorkspaceConfirmSlugMismatch},
+	}
+	for _, c := range cases {
+		if got := ErrCodeFor(c.msg); got != c.want {
+			t.Errorf("%s: ErrCodeFor(%q) = %q, want %q — without it the 400 carries only "+
+				"`%s` and the dashboard renders its generic sentence instead of telling the "+
+				"merchant which value did not match", c.what, c.msg, got, c.want, ClassBadRequest)
+		}
+	}
+
+	// The MAINTENANCE half. An exact-key entry is kept honest by the dead-key
+	// guard above (the key must still appear as a literal in a handler); a prefix
+	// entry needs the same property, or a reworded refusal silently loses its
+	// code. These three prefixes are the LEAD-IN of a message assembled in THIS
+	// package, so each must appear as a Go string literal here. (The other
+	// prefix entries name lead-ins owned by other packages — urlguard,
+	// dbstore — and are deliberately not in this list.)
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package dir: %v", err)
+	}
+	var src strings.Builder
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") ||
+			strings.HasSuffix(e.Name(), "_test.go") || e.Name() == "errcode.go" {
+			continue
+		}
+		b, err := os.ReadFile(e.Name())
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		src.Write(b)
+		src.WriteString("\n")
+	}
+	all := src.String()
+	for _, prefix := range []string{"taip slug borang (", "taip slug workspace (", "taip nama produk ("} {
+		if !strings.Contains(all, `"`+prefix+`"`) {
+			t.Errorf("the confirmation prefix %q is keyed in errCodeByPrefix but no handler in "+
+				"this package writes it as a string literal any more — the code is unreachable and "+
+				"the refusal is back to `%s`. Update the prefix to the new wording.", prefix, ClassBadRequest)
+		}
+	}
+}
+
 func TestIssue6177ErrorCodeTableHasNoDeadKeys(t *testing.T) {
 	// A table entry keyed on a message that no longer exists anywhere in the
 	// package is DEAD: the code can never fire, and nothing says so. Read every

@@ -866,6 +866,37 @@ export const DICT = {
     ta: "இந்தத் தயாரிப்பில் இன்னும் சந்தாக்கள் உள்ளன, எனவே நிரந்தரமாக நீக்க முடியாது — முதலில் அவற்றை ரத்து செய்யவும். இது குப்பைத் தொட்டியில் இருக்கும்.",
     ar: "لا تزال لهذا المنتج اشتراكات، لذا لا يمكن حذفه نهائياً — ألغِها أولاً. سيبقى في سلة المهملات.",
   },
+  // The TYPED-CONFIRMATION refusals (the destructive calls that make the caller
+  // name back what it is destroying). A DIFFERENT class from the two above:
+  // nothing blocks the delete — the caller has simply not confirmed it — so the
+  // sentence must ask for the value, not name an obstacle. The dashboard used to
+  // fall back to its generic "we couldn't delete that" line for all three,
+  // because the server's assembled message could not carry a code.
+  "apiErr.productConfirmNameMismatch": {
+    en: "The name doesn't match this product. Type the product's own name to delete it for good.",
+    ms: "Nama itu tidak sepadan dengan produk ini. Taip nama produk itu sendiri untuk padam secara kekal.",
+    zh: "名称与此商品不一致。请输入该商品自身的名称以永久删除。",
+    ta: "பெயர் இந்தத் தயாரிப்புடன் பொருந்தவில்லை. நிரந்தரமாக நீக்க அந்தத் தயாரிப்பின் பெயரையே தட்டச்சு செய்யவும்.",
+    ar: "الاسم لا يطابق هذا المنتج. اكتب اسم المنتج نفسه لحذفه نهائياً.",
+  },
+  "apiErr.formConfirmSlugMismatch": {
+    en: "The slug doesn't match this form. Type the form's own slug to delete it for good.",
+    ms: "Slug itu tidak sepadan dengan borang ini. Taip slug borang itu sendiri untuk padam secara kekal.",
+    zh: "Slug 与此表单不一致。请输入该表单自身的 Slug 以永久删除。",
+    ta: "slug இந்தப் படிவத்துடன் பொருந்தவில்லை. நிரந்தரமாக நீக்க அந்தப் படிவத்தின் slug-ஐயே தட்டச்சு செய்யவும்.",
+    ar: "الـ slug لا يطابق هذا النموذج. اكتب الـ slug الخاص بالنموذج نفسه لحذفه نهائياً.",
+  },
+  // One sentence for BOTH workspace refusals — the bin and the permanent delete
+  // share the code on purpose (the complaint and the remedy are the same), so
+  // this sentence must be true of either: it asks for the slug and does not
+  // promise which of the two the caller was doing.
+  "apiErr.workspaceConfirmSlugMismatch": {
+    en: "The slug doesn't match this workspace. Type the workspace's own slug to confirm.",
+    ms: "Slug itu tidak sepadan dengan workspace ini. Taip slug workspace itu sendiri untuk mengesahkan.",
+    zh: "Slug 与此工作区不一致。请输入该工作区自身的 Slug 以确认。",
+    ta: "slug இந்தப் பணியிடத்துடன் பொருந்தவில்லை. உறுதிப்படுத்த அந்தப் பணியிடத்தின் slug-ஐயே தட்டச்சு செய்யவும்.",
+    ar: "الـ slug لا يطابق مساحة العمل هذه. اكتب الـ slug الخاص بمساحة العمل نفسها للتأكيد.",
+  },
   "apiErr.workspaceNotEmpty": {
     en: "This workspace still has content, so it can't be deleted — empty it first (the list below says what is left).",
     ms: "Workspace ini masih mempunyai kandungan, jadi ia tidak boleh dipadam — kosongkannya dahulu (senarai di bawah menunjukkan apa yang tinggal).",

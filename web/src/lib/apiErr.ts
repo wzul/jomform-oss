@@ -139,6 +139,17 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   "product.hasSales": "apiErr.productHasSales",
   "product.hasSubscriptions": "apiErr.productHasSubscriptions",
   "product.outOfStock": "apiErr.productOutOfStock",
+  // The TYPED-CONFIRMATION refusals — the merchant mistyped the value the
+  // destructive call has to name back (a form's slug, a workspace's slug, a
+  // product's name). Each is a DIFFERENT sentence from the obstacle refusals
+  // above: nothing is blocking the delete, the caller simply has not confirmed
+  // it, and the remedy is to type the value — not to clear a sale or free a
+  // slug. Without these three codes the server answered the class code
+  // `request.badRequest`, which this dictionary deliberately does not
+  // translate, so the merchant read the API's Malay prose (issue #6177).
+  "form.confirmSlugMismatch": "apiErr.formConfirmSlugMismatch",
+  "product.confirmNameMismatch": "apiErr.productConfirmNameMismatch",
+  "workspace.confirmSlugMismatch": "apiErr.workspaceConfirmSlugMismatch",
   "template.needMetadata": "apiErr.templateNeedMetadata",
 
   // URL scheme (urlguard) and outbound webhook URLs.

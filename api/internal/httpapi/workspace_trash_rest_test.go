@@ -239,13 +239,29 @@ func TestRESTPurgeRequiresConfirmSlug(t *testing.T) {
 		t.Fatalf("trash form: %v", err)
 	}
 
-	for _, tc := range []struct{ name, body string }{
-		{"no confirm_slug at all", ""},
-		{"a mismatched confirm_slug", `{"confirm_slug":"definitely-not-the-slug"}`},
+	for _, tc := range []struct{ name, body, wantCode string }{
+		// An EMPTY body is not a mismatch: it never decoded, so it is refused
+		// before the comparison and keeps the class code. Pinned separately from
+		// the mismatch below, because "the code names the confirmation failure"
+		// and "a malformed body is still a malformed body" would otherwise be one
+		// assertion that a blanket fix could satisfy by mislabelling both.
+		{"no confirm_slug at all", "", ClassBadRequest},
+		// The mismatch. Its message is assembled around the form's slug, so it
+		// can never match an exact key in errCodeByMessage: without the prefix
+		// entry this 400 answered `request.badRequest`, which the dashboard
+		// deliberately does not translate, and the merchant read the server's
+		// Malay prose instead of their own sentence (issue #6177).
+		{"a mismatched confirm_slug", `{"confirm_slug":"definitely-not-the-slug"}`, CodeFormConfirmSlugMismatch},
 	} {
 		rec := bearerReq(t, h, key, http.MethodDelete, "/v1/rest/forms/"+f.ID+"/purge", tc.body)
 		if rec.Code == http.StatusOK {
 			t.Errorf("purge with %s returned 200, want a refusal", tc.name)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Errorf("purge with %s: body is not the error envelope: %v (%s)", tc.name, err, rec.Body.String())
+		} else if got := body["code"]; got != tc.wantCode {
+			t.Errorf("purge with %s: code = %v, want %q (status %d, body %s)", tc.name, got, tc.wantCode, rec.Code, rec.Body.String())
 		}
 		var n int
 		if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM forms WHERE id=$1`, f.ID).Scan(&n); err != nil {
@@ -349,11 +365,22 @@ func TestRESTWorkspaceDeleteRequiresOwnerAndConfirm(t *testing.T) {
 	if rec.Code == http.StatusOK {
 		t.Error("DELETE /v1/workspaces/{id} without confirm_slug returned 200")
 	}
-	// Wrong confirmation → refused, row intact.
+	// Wrong confirmation → refused, row intact, and the refusal names its OWN
+	// code: the message is assembled around the workspace's slug, so no exact key
+	// can match it and the 400 used to answer the class code `request.badRequest`
+	// — which the dashboard deliberately does not translate (issue #6177).
 	rec = sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+first.ID,
 		`{"confirm_slug":"nope"}`)
 	if rec.Code == http.StatusOK {
 		t.Error("DELETE /v1/workspaces/{id} with a mismatched confirm_slug returned 200")
+	}
+	var wrongNameBody map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &wrongNameBody); err != nil {
+		t.Errorf("workspace delete refusal is not the error envelope: %v (%s)", err, rec.Body.String())
+	} else if got := wrongNameBody["code"]; got != CodeWorkspaceConfirmSlugMismatch {
+		t.Errorf("workspace delete refusal code = %v, want %q (body %s) — without it the "+
+			"dashboard prints its generic \"couldn't delete\" sentence for a merchant who "+
+			"simply mistyped the slug", got, CodeWorkspaceConfirmSlugMismatch, rec.Body.String())
 	}
 	live, binned := 0, 0
 	if err := pool.QueryRow(ctx,
@@ -746,11 +773,20 @@ func TestRESTWorkspacePurgeRefusalCarriesItsCode(t *testing.T) {
 		t.Errorf("purge refusal sales_count = %v, want >= 1 (the code was added alongside it)", body["sales_count"])
 	}
 	// An unconfirmed purge is refused too, and for the confirmation — the row
-	// must not be destroyed by a purge that never named it.
+	// must not be destroyed by a purge that never named it. The refusal carries
+	// its own code (see CodeWorkspaceConfirmSlugMismatch): the message is
+	// assembled around the slug, so it can never match an exact table key.
 	rec = sessionReq(t, h, token, http.MethodDelete, "/v1/workspaces/"+target.ID+"/purge",
 		`{"confirm_slug":"nope"}`)
 	if rec.Code == http.StatusOK {
 		t.Error("an unconfirmed workspace purge returned 200")
+	}
+	var confirmBody map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &confirmBody); err != nil {
+		t.Errorf("unconfirmed purge refusal is not the error envelope: %v (%s)", err, rec.Body.String())
+	} else if got := confirmBody["code"]; got != CodeWorkspaceConfirmSlugMismatch {
+		t.Errorf("unconfirmed purge refusal code = %v, want %q (status %d, body %s)", got,
+			CodeWorkspaceConfirmSlugMismatch, rec.Code, rec.Body.String())
 	}
 	if n := countRowsREST(t, pool, `SELECT COUNT(*) FROM workspaces WHERE id=$1`, target.ID); n != 1 {
 		t.Error("a refused workspace purge removed the row anyway")

@@ -144,6 +144,31 @@ const (
 	CodeProductHasSales         = "product.hasSales"
 	CodeProductHasSubscriptions = "product.hasSubscriptions"
 
+	// The TYPED-CONFIRMATION refusals: the four sites that make the caller name
+	// back what it is about to destroy (a form's slug, a workspace's slug, a
+	// product's name) and refuse when the answer does not match.
+	//
+	// WHY THEY NEED THEIR OWN CODES. These messages are ASSEMBLED around the
+	// value they name — "taip nama produk (Kopi Ais) untuk sahkan pemadaman
+	// kekal" — so no key in errCodeByMessage can ever match one, and the 400
+	// fell through to the HTTP class code `request.badRequest`. A dashboard that
+	// renders by code (the whole point of this file, #6177) could then not tell
+	// "you typed the wrong name" from any other malformed request, and printed
+	// the server's Malay prose instead of its own sentence in the user's
+	// language. They are keyed by PREFIX in errCodeByPrefix instead — the fixed
+	// lead-in before the interpolated value — so the code is stable whatever the
+	// caller mistyped and is not a second copy of the value.
+	//
+	// ONE CODE FOR THE TWO WORKSPACE MESSAGES. The bin and the permanent delete
+	// write different sentences ("untuk sahkan pemadaman" vs "untuk sahkan
+	// pemadaman kekal"), but it is the same complaint with the same remedy —
+	// type the workspace's own slug — so one code and one sentence serve both.
+	// Two codes would be two translations to keep in step and no different
+	// instruction to give the merchant.
+	CodeFormConfirmSlugMismatch      = "form.confirmSlugMismatch"
+	CodeWorkspaceConfirmSlugMismatch = "workspace.confirmSlugMismatch"
+	CodeProductConfirmNameMismatch   = "product.confirmNameMismatch"
+
 	// Caller-supplied URL scheme (urlguard) and outbound webhook URLs.
 	CodeURLNotHTTPS       = "url.notHttps"
 	CodeWebhookURLInvalid = "webhook.urlInvalid"
@@ -391,6 +416,20 @@ var errCodeByPrefix = []struct {
 	// lead-in means a future re-wording that keeps the sentence's shape keeps its
 	// code, and #6177's rule (the code decides, not the status) still holds.
 	{"nama workspace maksimum ", CodeWorkspaceNameTooLong},
+	// The TYPED-CONFIRMATION refusals (the three codes above). Each prefix is
+	// EXACTLY the first string fragment the handler writes, before the value it
+	// interpolates — `"taip slug borang ("` in rest_handlers.go's purgeForm is
+	// literally `"taip slug borang ("+f.Slug+")…"` — so the code follows the
+	// sentence's LEAD-IN and is unaffected by the value the caller mistyped: a
+	// name of "Kopi (Ais) — 500ml" cannot change which code comes back, and no
+	// second copy of the value lives in this table to drift.
+	//
+	// Longest-match keeps the three apart (they share no lead-in), and the two
+	// workspace messages collapse onto one prefix on purpose — see
+	// CodeWorkspaceConfirmSlugMismatch.
+	{"taip slug borang (", CodeFormConfirmSlugMismatch},
+	{"taip slug workspace (", CodeWorkspaceConfirmSlugMismatch},
+	{"taip nama produk (", CodeProductConfirmNameMismatch},
 }
 
 // ErrCodeFor returns the machine code for a wire message, or "" when the

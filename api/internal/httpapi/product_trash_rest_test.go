@@ -220,6 +220,31 @@ func TestRESTProductPurgeRefusesAWrongConfirmation(t *testing.T) {
 		if code != http.StatusBadRequest {
 			t.Fatalf("purge with %s = %d, want 400 (body %s)", tc.label, code, raw)
 		}
+		// The refusal must carry its OWN code, not the class fallback. The message
+		// is assembled around the product's name, so it can never match an exact
+		// key in errCodeByMessage — without a prefix entry the body answered
+		// `request.badRequest`, a code the dashboard deliberately does not
+		// translate (issue #6177), so a merchant who mistyped the name read the
+		// server's Malay prose instead of their own language. Asserted on EVERY
+		// case, the empty and whitespace-only ones included: "the mismatch names
+		// its code" and "so does a confirmation that is merely blank" are two
+		// claims, and the blank ones are what an early-return guard would skip.
+		var body map[string]any
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatalf("purge with %s: the 400 body is not the error envelope: %v (%s)", tc.label, err, raw)
+		}
+		if got := body["code"]; got != CodeProductConfirmNameMismatch {
+			t.Errorf("purge with %s: code = %v, want %q — %q is what the dashboard does NOT "+
+				"translate, so the merchant would read the server's prose", tc.label, got,
+				CodeProductConfirmNameMismatch, ClassBadRequest)
+		}
+		// ...and the prose SURVIVES beside it: API-key/curl/MCP callers consume
+		// that string and cannot look up an i18n code. It still names the value
+		// the caller has to type, which is the whole point of the confirmation.
+		if s, _ := body["error"].(string); !strings.Contains(s, p.Name) {
+			t.Errorf("purge with %s: error = %q, want the wire prose naming the product (%q) — "+
+				"the code was added BESIDE the prose, not instead of it", tc.label, s, p.Name)
+		}
 		if _, err := ps.GetTrashed(ctx, accountID, p.ID); err != nil {
 			t.Fatalf("purge with %s was REFUSED but the product left the bin anyway: %v", tc.label, err)
 		}
