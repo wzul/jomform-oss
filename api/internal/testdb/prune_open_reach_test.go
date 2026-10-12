@@ -56,6 +56,48 @@ import (
 // short so the generated name stays well inside Postgres' 63-byte limit.
 const reachScratchPrefix = "jomform_reachtest_"
 
+// fixtureApplicationName tags EVERY connection this fixture opens, on its own
+// pools. It exists so the idle wait can tell the fixture's own pool from another
+// client's, and it is the fix for the leading hypothesis on card t_6ce68116.
+//
+// The defect shape: a pool counts its own siblings as peers. `otherBackends`
+// excludes one backend — `pg_backend_pid()`, the one running the query — so if
+// `pgxpool` holds a second backend at that instant, the pool sees ITSELF as
+// "1 other backends" and the idle precondition cannot hold. Measured on this
+// host with a pool configured to hold more than one backend (a probe, never the
+// tree): a 3-connection pool read `otherBackends = 4` with nothing else on the
+// database at all. `db.Connect` leaves MinConns at 0, so the fixture's own pool
+// held exactly one backend across 40 iterations of its exact workload and the
+// hazard was NOT reachable — but it is one pool-config change (MinConns > 0, a
+// concurrent acquire) away from refusing on every run on a correct tree.
+//
+// Excluding the family by application_name, rather than only pg_backend_pid(),
+// makes the count mean what it claims: the OTHER clients on this database. Every
+// pool the fixture opens is stamped with it (fixtureDSN); nothing else in the
+// suite is, so a genuine peer is still counted — which is what the yield
+// direction of the reclaim depends on.
+//
+// It is per-PROCESS, not a bare literal: two lanes must never share a tag, or a
+// peer worktree's connection could be excluded as "ours".
+var fixtureApplicationName = "jomform_reachfixture_p" + strconv.Itoa(os.Getpid())
+
+// fixtureDSN stamps the fixture's own application_name onto the throwaway DSN,
+// so every connection of the fixture's own pools is recognisable as ours — see
+// fixtureApplicationName. It is used for the pools the fixture counts PEERS
+// from; a pool that has to be a peer (the yield-direction guards hold one)
+// connects through the plain DSN, untagged, and is therefore counted.
+func fixtureDSN(t *testing.T, dsn string) string {
+	t.Helper()
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("parse %s: %v", dsn, err)
+	}
+	q := u.Query()
+	q.Set("application_name", fixtureApplicationName)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // otherBackends counts the peer backends open()'s prune yields to — literally
 // open()'s predicate, shared through peerBackendsPredicate rather than restated
 // here. Sharing it is the point: the guard may only take its verdict on a
@@ -70,8 +112,17 @@ const reachScratchPrefix = "jomform_reachtest_"
 // has to yield to, and counting one used to make this guard refuse, and
 // open() suppress the reclaim, on a database with no peer on it at all. See
 // peerBackendsPredicate for the measured capture and the reasoning.
+//
+// It ALSO excludes the fixture's own connection family by application_name
+// (fixtureApplicationName, card t_6ce68116). That is not a second predicate: it
+// is the difference between "who else is on this database" and "who is on this
+// database", and a fixture that counted its own pool's idle siblings would be
+// asking open()'s question with itself in the answer. The exclusion is
+// observable only while the fixture's own pool is open — the guards close it
+// before open() runs — so at the prune's instant the two reads agree.
 const otherBackends = `SELECT count(*) FROM pg_stat_activity
-  WHERE ` + peerBackendsPredicate
+  WHERE ` + peerBackendsPredicate + `
+    AND application_name IS DISTINCT FROM $1`
 
 // idleWaitBudget and idleSampleInterval bound how long the reclaim guard waits
 // for its throwaway database to have no peer on it. Since card t_26671247 the
@@ -303,7 +354,11 @@ func TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase(t *testing.T) {
 		// schema is gone".
 		abandoned, legacy := reclaimFixtureNames(attempt, deadPID(t))
 
-		plant, err := db.Connect(ctx, dbDSN)
+		// The plant pool is also this attempt's PEER COUNTER, so it opens
+		// through fixtureDSN: the count then excludes the fixture's own pool
+		// family (however many backends pgxpool holds) instead of counting a
+		// sibling of itself as another client (card t_6ce68116).
+		plant, err := db.Connect(ctx, fixtureDSN(t, dbDSN))
 		if err != nil {
 			t.Fatalf("connect to %s to plant the fixtures: %v", dbname, err)
 		}
@@ -478,7 +533,10 @@ func TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabaseNeverSuppressedAlone(t *te
 	own := "test_reach_own3_p" + strconv.Itoa(os.Getpid())
 	abandoned := "test_reach_never_p" + strconv.Itoa(deadPID(t))
 
-	plant, err := db.Connect(ctx, dbDSN)
+	// Tagged (fixtureDSN): this pool is the counter the idle wait uses, so it
+	// must be recognisable as the fixture's own and its own backends must not
+	// be counted as other clients (card t_6ce68116).
+	plant, err := db.Connect(ctx, fixtureDSN(t, dbDSN))
 	if err != nil {
 		t.Fatalf("connect to %s to plant the fixture: %v", dbname, err)
 	}
@@ -848,11 +906,21 @@ func holdNonClientBackend(t *testing.T, ctx context.Context, dbDSN, dbname strin
 // The count and the dump both come from the caller's own connection, so the
 // backend this process holds is never the one being waited on: only foreign
 // backends can keep this looping.
+//
+// It excludes the fixture's own pool family as well as the calling backend
+// (otherBackends + fixtureApplicationName, card t_6ce68116), and it REFUSES to
+// run on a connection that is not tagged as the fixture's own (check: see
+// assertFixtureOwnConn). Both exist for the same reason: a pool can hold more
+// than one backend, and a count that sees its own pool-mates answers "someone
+// else is here" about itself.
 func awaitNoOtherBackends(ctx context.Context, conn *pgxpool.Pool, budget time.Duration) (ok bool, detail string, err error) {
+	if err := assertFixtureOwnConn(ctx, conn); err != nil {
+		return false, "", err
+	}
 	deadline := time.Now().Add(budget)
 	for attempt := 0; ; attempt++ {
 		var others int
-		if err := conn.QueryRow(ctx, otherBackends).Scan(&others); err != nil {
+		if err := conn.QueryRow(ctx, otherBackends, fixtureApplicationName).Scan(&others); err != nil {
 			return false, "", err
 		}
 		if others == 0 {
@@ -868,6 +936,24 @@ func awaitNoOtherBackends(ctx context.Context, conn *pgxpool.Pool, budget time.D
 		case <-time.After(idleSampleInterval):
 		}
 	}
+}
+
+// assertFixtureOwnConn refuses a connection that is not one of the fixture's own
+// (fixtureApplicationName). The idle wait may only be handed a family-tagged
+// pool: otherBackends excludes that tag, so an untagged pool's own pool-mates
+// would be counted as other clients and the precondition could never hold —
+// which is precisely the defect this wait was fixed for (card t_6ce68116).
+// Failing loudly here keeps that mis-wiring from ever reading as a busy host.
+func assertFixtureOwnConn(ctx context.Context, conn *pgxpool.Pool) error {
+	var appName string
+	if err := conn.QueryRow(ctx, `SELECT current_setting('application_name')`).Scan(&appName); err != nil {
+		return fmt.Errorf("read application_name: %w", err)
+	}
+	if appName != fixtureApplicationName {
+		return fmt.Errorf("the idle wait was handed a connection whose application_name is %q, not the fixture's own %q — the count it takes excludes only the fixture's family, so this pool's own pool-mates would be counted as other clients and the idle precondition could never hold (t_6ce68116)",
+			appName, fixtureApplicationName)
+	}
+	return nil
 }
 
 // renderBackends formats the other backends on the current database, best
@@ -926,7 +1012,11 @@ func TestAwaitNoOtherBackendsWaitsOutATransientVisitor(t *testing.T) {
 	_, dbDSN := createIdleTestDB(t, ctx, dsnOrSkip(t))
 
 	t.Run("a transient visitor is waited out, not reported as a failure", func(t *testing.T) {
-		watcher, err := db.Connect(ctx, dbDSN)
+		// The WATCHER is tagged as the fixture's own (fixtureDSN): it is the
+		// counter, so its own pool-mates must not be counted. The visitor below
+		// is deliberately NOT tagged — it is genuinely another client, which is
+		// what makes this direction bite (card t_6ce68116).
+		watcher, err := db.Connect(ctx, fixtureDSN(t, dbDSN))
 		if err != nil {
 			t.Fatalf("connect: %v", err)
 		}
@@ -959,7 +1049,9 @@ func TestAwaitNoOtherBackendsWaitsOutATransientVisitor(t *testing.T) {
 	})
 
 	t.Run("a backend that stays still refuses", func(t *testing.T) {
-		watcher, err := db.Connect(ctx, dbDSN)
+		// Counter tagged as the fixture's own; the staying peer deliberately is
+		// not (card t_6ce68116).
+		watcher, err := db.Connect(ctx, fixtureDSN(t, dbDSN))
 		if err != nil {
 			t.Fatalf("connect: %v", err)
 		}
@@ -990,6 +1082,153 @@ func TestAwaitNoOtherBackendsWaitsOutATransientVisitor(t *testing.T) {
 		}
 		t.Logf("refused as designed: %s", detail)
 	})
+}
+
+// TestTheIdleWaitIgnoresTheFixturesOwnPoolSiblings is the guard for the class of
+// defect card t_6ce68116 filed, and it is the reason the fixture tags its own
+// pools (fixtureApplicationName).
+//
+// The card's symptom was a red on a correct tree: the reclaim guard reported
+// "1 other backends" on a throwaway database nothing else had any reason to be
+// on. Attributed since (server-level capture, and #871's own measurement): the
+// visitor was an AUTOVACUUM WORKER that the CREATE DATABASE churn sends to the
+// freshly created database — a non-client backend, which the peer count no
+// longer includes at all (card t_26671247, peerBackendsPredicate). NOT the
+// fixture's own pool: measured over 40 iterations of this fixture's exact
+// workload, `db.Connect`'s pool holds exactly one backend (MinConns is 0) and
+// otherBackends read 0 every time.
+//
+// The hazard the card named is real anyway, and this is where it is pinned: a
+// pool that holds MORE THAN ONE backend answers "someone else is here" about
+// its own pool-mates, because the count excludes only pg_backend_pid() — the one
+// backend running the query. Measured on this host with a three-connection pool
+// and nothing else on the database: otherBackends read 4.
+//
+// So this test builds exactly that shape out of the fixture's OWN pool — two
+// acquisitions held open, i.e. two live backends with the fixture's tag — and
+// requires the idle wait to still answer, because those backends are the fixture
+// itself, not another client. It also requires the reclaim to run afterwards.
+// Removing the family exclusion from otherBackends reds the first half; handing
+// the wait an untagged pool reds the second, which is what keeps a future
+// re-wiring from silently reading as a busy host.
+func TestTheIdleWaitIgnoresTheFixturesOwnPoolSiblings(t *testing.T) {
+	ctx := context.Background()
+	dbname, dbDSN := createIdleTestDB(t, ctx, dsnOrSkip(t))
+
+	own := "test_reach_own5_p" + strconv.Itoa(os.Getpid())
+	abandoned := "test_reach_siblings_p" + strconv.Itoa(deadPID(t))
+
+	// The fixture's own pool, opened exactly the way the guards open theirs.
+	plant, err := db.Connect(ctx, fixtureDSN(t, dbDSN))
+	if err != nil {
+		t.Fatalf("connect to %s: %v", dbname, err)
+	}
+	if _, err := plant.Exec(ctx, `CREATE SCHEMA `+quote(abandoned)); err != nil {
+		plant.Close()
+		t.Fatalf("plant %s: %v", abandoned, err)
+	}
+
+	// Two backends of that ONE pool, held for the whole of the wait. They are
+	// the "more than one backend" the card's hypothesis is about.
+	hold1, err := plant.Acquire(ctx)
+	if err != nil {
+		plant.Close()
+		t.Fatalf("hold a second backend on %s: %v", dbname, err)
+	}
+	hold2, err := plant.Acquire(ctx)
+	if err != nil {
+		hold1.Release()
+		plant.Close()
+		t.Fatalf("hold a third backend on %s: %v", dbname, err)
+	}
+	// Released exactly once, whichever way this test leaves: Pool.Close blocks
+	// until acquired connections come back, so they must go before it.
+	released := false
+	releaseHeld := func() {
+		if released {
+			return
+		}
+		released = true
+		hold2.Release()
+		hold1.Release()
+	}
+	defer releaseHeld()
+
+	pid1, pid2 := hold1.Conn().PgConn().PID(), hold2.Conn().PgConn().PID()
+	if pid1 == pid2 {
+		t.Fatalf("both acquisitions landed on backend %d — this test needs the fixture's pool holding TWO backends, and with one it would assert nothing", pid1)
+	}
+	t.Logf("fixture pool on %s holds at least two backends (pids %d, %d)", dbname, pid1, pid2)
+
+	// Every backend on the database, as the OLD count saw them: the two held
+	// ones are the fixture's own pool-mates.
+	var every int
+	if err := plant.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()`).Scan(&every); err != nil {
+		t.Fatalf("count every backend on %s: %v", dbname, err)
+	}
+	if every < 2 {
+		t.Fatalf("only %d other backend(s) visible on %s with two of this pool's backends held — the shape this test needs is not the shape the host is in", every, dbname)
+	}
+
+	// The real question: does the idle precondition hold when the fixture's own
+	// pool has more than one backend?
+	ok, detail, err := awaitNoOtherBackends(ctx, plant, 3*idleSampleInterval)
+	if err != nil {
+		t.Fatalf("the idle wait on %s did not even run: %v", dbname, err)
+	}
+	if !ok {
+		t.Errorf("the idle wait refused on %s although the only other backends were the fixture's OWN pool-mates (%d visible to a count that excludes just pg_backend_pid()) — a count taken from inside a pool answers \"someone else is here\" about itself, and the guard then cannot ask its question on a database no peer is on (t_6ce68116). What it counted:\n%s",
+			dbname, every, detail)
+	}
+
+	// The reclaim still has to run once the fixture's own backends are gone.
+	releaseHeld()
+	plant.Close()
+
+	p, err := open(ctx, dbDSN, own)
+	if err != nil {
+		t.Fatalf("open on the throwaway database %s: %v", dbname, err)
+	}
+	defer p.Close()
+
+	snap, haveSnap := connectionSnapshot()
+	if !haveSnap {
+		t.Fatalf("open() on %s recorded no prune connection reading, so this guard cannot judge the reclaim (card t_53b9b15f)", dbname)
+	}
+	survived, dump, err := schemaSurvived(ctx, p, abandoned)
+	if err != nil {
+		t.Fatalf("probe %s: %v", abandoned, err)
+	}
+	dead, suppressed, _ := judgeSurvival(survived, snap, haveSnap)
+	if dead {
+		t.Errorf("open()'s prune ran with NO other backend connected and left %s behind after the fixture's own pool was closed — the reclaim must run on a database the fixture's own pool merely visited. Reading the prune decided on: others=%d\n%s\nBackends at the probe (after open(), for context only):\n%s",
+			abandoned, snap.others, snap.dump, dump)
+	} else if suppressed {
+		t.Logf("the reclaim of %s was suppressed by a backend the prune saw (others=%d) — tolerated here; the wait above is this test's assertion:\n%s", abandoned, snap.others, snap.dump)
+	}
+
+	var ownCount int
+	if err := p.QueryRow(ctx, `SELECT count(*) FROM pg_namespace WHERE nspname = $1`, own).Scan(&ownCount); err != nil {
+		t.Fatalf("probe %s: %v", own, err)
+	}
+	if ownCount == 0 {
+		t.Errorf("open() did not create %s — ensureSchema must run whatever the reclaim did", own)
+	}
+
+	// The mis-wiring direction, checked last so this pool is not itself a peer
+	// at open()'s prune: a pool that is NOT tagged as the fixture's own may
+	// never be handed to the idle wait. Its pool-mates are not the fixture's,
+	// so excluding them would make the wait answer a different question from
+	// the one open() decides on — and a future re-wiring that passed one would
+	// silently read as a busy host instead of failing.
+	untagged, err := db.Connect(ctx, dbDSN)
+	if err != nil {
+		t.Fatalf("connect an untagged pool to %s: %v", dbname, err)
+	}
+	defer untagged.Close()
+	if _, _, err := awaitNoOtherBackends(ctx, untagged, idleSampleInterval); err == nil {
+		t.Error("the idle wait accepted an UNTAGGED pool — the count it takes excludes only the fixture's own family, so this pool's pool-mates would be counted as other clients and the precondition could never hold (t_6ce68116)")
+	}
 }
 
 // createIdleTestDB creates a uniquely named, empty database and registers its
