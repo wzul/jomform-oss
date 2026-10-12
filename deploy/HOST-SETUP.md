@@ -26,6 +26,13 @@ The repo now holds the production files **byte-for-byte**, and
 - `deploy/vps/drift-check.sh` — repo vs host, per file. Exit 1 on any drift.
 - `deploy/host/bootstrap-host.sh` — installs the files, the external network, the
   stack and the two cron lines. **Dry-run by default**; `--apply` needs root.
+- `deploy/host/jomform-container-prune.sh` — the host-side guard that reclaims
+  STOPPED containers (152 anonymous probe containers had accumulated on prod by
+  2026-10-12). Its installer, its decoy suite (`prunehost` gate) and its bite proof
+  are in the same directory: **`deploy/host/README.md`** is its doc home. The
+  bootstrap installs its CRON LINE only — the script itself is installed by
+  `deploy/host/install-host-container-prune.sh`, which is step 2 of the procedure
+  below.
 - Both scripts have a self-test (`*_test.sh`), run by the `host` gate in the preflight.
 
 ## Procedure
@@ -49,11 +56,16 @@ sudo deploy/host/bootstrap-host.sh --env-file ~/jomform.env --apply
 
 # 4. install the backup script + its rclone remote on the new host, or it has
 #    NO backups (deploy/backup/README.md § Install on the host)
+#
+# 5. install the container-prune guard (deploy/host/README.md § Installing it).
+#    Step 3 installed its cron line, so without this one the 03:40 job fails
+#    silently and stopped containers accumulate exactly as they did before:
+deploy/host/install-host-container-prune.sh --host root@<new-host>
 
-# 5. point DNS at the new host, then check the edge is what the repo says
+# 6. point DNS at the new host, then check the edge is what the repo says
 deploy/vps/drift-check.sh --host root@<new-host>
 
-# 6. move the data (see below), verify, then flip the DNS record.
+# 7. move the data (see below), verify, then flip the DNS record.
 ```
 
 ## The env contract — the part that breaks a migration

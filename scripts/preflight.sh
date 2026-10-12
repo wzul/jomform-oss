@@ -97,6 +97,23 @@
 #                         a live worker's worktree is still kept.
 #                         Offline: a sandbox repo with its own bare `origin`, a
 #                         fake `hermes kanban show`, no board, no network.
+#   prunehost  host       deploy/host/jomform-container-prune_test.sh — the
+#                         prod container-prune guard's decoy suite: five planted
+#                         decoy containers in a PRIVATE dockerd of the suite's
+#                         own (scratch data-root + socket), one per gate — a
+#                         stopped-but-young container is spared by the age floor
+#                         and IS a candidate at floor 0, a RUNNING one is never a
+#                         candidate and survives a real floor-0 run, a
+#                         compose-labelled and a keep-file named one are spared
+#                         by label and by name, and a plain stopped one is the
+#                         sole candidate and is removed. Plus fail-closed on an
+#                         empty container list, the installer's idempotency
+#                         (two runs, one cron line) and the suite's own teardown
+#                         (no daemon, process, mount or scratch tree left). The
+#                         HOST daemon is read only to prove nothing outside the
+#                         sandbox was removed. Needs root + `dockerd` + busybox
+#                         (~25s). Its bite proof (jomform-container-prune_bite.sh)
+#                         is deliberately NOT wired in — on-demand only.
 #   selftest   selfcheck  scripts/preflight_test.sh — the gate runner's OWN
 #                         safety properties: an all-skipped run is REFUSED
 #                         rather than reported green, a missing prerequisite
@@ -241,7 +258,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet gofmt test govuln web lint webimage a11y e2e npmaudit gitleaks monitor tmpkey backup host prunewt refguard selftest)
+GATE_NAMES=(build vet gofmt test govuln web lint webimage a11y e2e npmaudit gitleaks monitor tmpkey backup host prunewt prunehost refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -491,6 +508,7 @@ pw_declared() {
     web|a11y|e2e|lint)    printf '%s\n' 'web/*' ;;
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor|tmpkey|backup|host|prunewt|refguard) printf '%s\n' 'deploy/*' 'scripts/*' ;;
+    prunehost)             printf '%s\n' 'deploy/host/*' ;;
     selftest)              printf '%s\n' 'scripts/*' 'GATE-INVENTORY.md' ;;
     gitleaks)              printf '%s\n' '*' ;;
     *)                     printf '%s\n' '*' ;;
@@ -514,6 +532,7 @@ pw_sources() {
     backup)                printf '%s\n' 'deploy/backup/*' ;;
     host)                  printf '%s\n' 'deploy/host/*' 'deploy/vps/*' ;;
     prunewt)               printf '%s\n' 'deploy/worktrees/*' ;;
+    prunehost)             printf '%s\n' 'deploy/host/*' ;;
     refguard)              printf '%s\n' 'scripts/refguard.sh' 'scripts/refguard_test.sh' ;;
     selftest)              printf '%s\n' 'scripts/preflight.sh' 'scripts/preflight_test.sh' ;;
     gitleaks)              printf '%s\n' '.gitleaks.toml' ;;
@@ -2169,7 +2188,7 @@ summary() {
 }
 
 # --- which gates are selected, for the env preflight ------------------------
-g_build=0; g_vet=0; g_test=0; g_govuln=0; g_web=0; g_lint=0; g_webimage=0; g_a11y=0; g_npmaudit=0; g_gitleaks=0
+g_build=0; g_vet=0; g_test=0; g_govuln=0; g_web=0; g_lint=0; g_webimage=0; g_a11y=0; g_npmaudit=0; g_gitleaks=0; g_prunehost=0
 selected build    && g_build=1
 selected vet      && g_vet=1
 selected test     && g_test=1
@@ -2180,12 +2199,17 @@ selected webimage && g_webimage=1
 selected a11y     && g_a11y=1
 selected npmaudit && g_npmaudit=1
 selected gitleaks && g_gitleaks=1
+selected prunehost && g_prunehost=1
 
 need_api=0; need_web=0; need_a11y=0; need_docker=0; need_lint=0
 if [ $g_build = 1 ] || [ $g_vet = 1 ] || [ $g_test = 1 ] || [ $g_govuln = 1 ]; then need_api=1; fi
 if [ $g_web = 1 ]; then need_web=1; fi
 if [ $g_a11y = 1 ]; then need_a11y=1; need_web=1; fi
 if [ $g_webimage = 1 ]; then need_docker=1; fi
+# `prunehost` starts a private dockerd, which needs the `dockerd` binary and
+# root; the suite REFUSES loudly on either being missing. What this line adds is
+# the same daemon prerequisite `webimage` has, checked before the pool slot.
+if [ $g_prunehost = 1 ]; then need_docker=1; fi
 # `lint` reads web/eslint.config.mjs and web/package.json but runs eslint from
 # web/node_modules — it does NOT need the full `web` build. Keeping them separate
 # means a lint failure is reported as a lint failure, not as a failed build.
@@ -2660,6 +2684,35 @@ prunewt_run() {
   bash "$REPO_ROOT/deploy/worktrees/prune-kanban-worktrees_test.sh"
 }
 run prunewt "worktree pruner self-test (a stale refs/remotes/pr/N mirror is not durability; real durability still prunes)" prunewt_run
+
+# prunehost — the prod container-prune guard's decoy suite. Same shape of gate as
+# `monitor`/`tmpkey`/`backup` and for the same reason: `deploy/host/jomform-container-prune.sh`
+# only ever runs on the production host (as a cron job at 03:40), and its one
+# irreversible mistake is removing a container that should have stayed. What is
+# testable in the repo is its own harness — that each of its four gates really
+# spares what it claims to spare, that a plain stopped container really IS taken,
+# that an empty container list really is a non-zero exit having removed nothing,
+# and that the installer leaves exactly one cron line after two runs.
+#
+# WHY THE DECOYS ARE SAFE TO DELETE. The guard under test can only ever see the
+# PRIVATE daemon this suite starts for it (a second `dockerd` on a scratch
+# data-root and unix socket), so the one destructive floor-0 pass it runs cannot
+# reach the host's containers — which the suite asserts rather than assumes: it
+# snapshots the host's container and image ids first and requires every one of
+# them to still exist at the end, and it requires the suite's own daemon,
+# processes, mounts and scratch tree to be gone. Needs root (a private dockerd
+# cannot run unprivileged) and the `dockerd` binary; it FAILS loudly without
+# them, it never skips. ~25s.
+#
+# ITS BITE PROOF IS deploy/host/jomform-container-prune_bite.sh, ON DEMAND AND NOT
+# WIRED IN — the same convention as the `backup` gate's: it sabotages one gate of
+# the guard at a time in a throwaway copy, requires the suite to go RED on the
+# assertion naming that gate, and takes ~3 minutes (a decoy suite per case), which
+# is how a per-merge gate gets skipped.
+prunehost_run() {
+  bash "$REPO_ROOT/deploy/host/jomform-container-prune_test.sh"
+}
+run prunehost "prod container-prune guard decoy suite (age/state/compose/keep gates, it bites, fails closed, installer idempotent)" prunehost_run
 
 # refguard — the hand-made `refs/remotes/<non-remote>/<N>` mirror guard. Same shape
 # of gate as `monitor`/`tmpkey`/`backup` and for the same reason: what is testable

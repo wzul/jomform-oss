@@ -313,6 +313,17 @@ three separate ways — a captured id glued to psql's `INSERT 0 1` command tag, 
 key minted in a shape the API can never accept, and a cleanup written as a `LIKE`
 sweep that would take a sibling card's live key.
 
+Probe **containers** are the same story one layer down. An inspection probe run
+as a bare `docker run …` over ssh is never `--rm`'d, so it stays in
+`docker ps -a` for ever: **152 anonymous one-shot containers** accumulated on
+prod between 2026-09-19 and 2026-10-12 (149 `exited` + 3 `created`), none of them
+attributable to a card, and they were swept by hand (card `t_2646fc00`). Run a
+probe with `--rm`, and know that `deploy/host/` now holds the host-side guard that
+reclaims what is left behind — stopped containers older than 7 days, and never a
+running one, a `com.docker.compose.project`-labelled one, an image or a named
+volume. See `deploy/host/README.md`, including the volume reclaim it deliberately
+does **not** do.
+
 ## Prerequisite
 
 The api image Dockerfile (`api/Dockerfile`) is being added by the Dockerfile
