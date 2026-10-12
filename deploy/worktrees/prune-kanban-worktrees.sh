@@ -102,6 +102,14 @@
 #       Measured on this host: 15 of 354 pids failed the read and every one was a
 #       zombie, so a blanket "a failed read means keep" would have kept everything
 #       and exited 1 on EVERY run.
+#     * NO STATE LINE AT ALL: the pid was REAPED between `find`'s readdir and its
+#       readlink, so there is no cwd link AND no `status` to read — nothing is
+#       left of it that could hold the worktree, which makes it the same kind of
+#       skip as a zombie (card t_d53b71b8, 2026-10-12). The window is not
+#       theoretical: a churned /proc produced exactly this signature (measured, 1
+#       hit in 188 scans of a table with 4000 short-lived processes behind it),
+#       and read as a cannot-judge it FAILS EVERY worktree in the run — a red gate
+#       on a tree that never touched the pruner.
 #     * any other state: we cannot tell whether that live process is inside the
 #       worktree, so the worktree is LEFT ON DISK AND THE RUN FAILS — a `FAIL` line
 #       naming the pid, `failures+1`, exit 1. Deliberately neither a silent keep
@@ -116,10 +124,12 @@
 #       this guard exists to prevent.
 #
 #   `JF_PROC_ROOT` (default `/proc`) exists only as the self-test's seam: the suite
-#   synthesises a table containing a live pid whose cwd cannot be read, which CANNOT
-#   be produced on this host (root can read every live process's cwd here; only
-#   zombies fail). That synthetic case pins the SHAPE — a failed read on a pid whose
-#   state is not `Z` — not the EACCES errno itself.
+#   synthesises a table containing a live pid whose cwd cannot be read, which cannot
+#   be produced ON DEMAND (root can read every live process's cwd here; the reads
+#   that fail in practice are zombies and pids reaped mid-scan). That synthetic case
+#   pins the SHAPE — a failed read on a pid whose state is not `Z` — not the EACCES
+#   errno itself, and the reaped-pid shape has its own case (a cwd entry with no
+#   `status` beside it), because that is the one that turns a whole run red.
 #
 #   WHERE THE cwd READ IS MADE, AND WHY THERE. It is made LAST in every loop —
 #   immediately before the `git worktree remove` or the `rm -rf` it guards — while
@@ -398,18 +408,30 @@ has_process_cwd_matching() { # <dir>
     [ "$pid" = "$$" ] && continue
     if [ -z "$target" ]; then
       # No cwd to read. A ZOMBIE has none to hold — dead, so it can be neither a
-      # reason to keep nor to refuse — and it is skipped. Any other state is a read
-      # we could not make: that is a cannot-judge, never a keep and never a
-      # removal. The state letter is the second field of the `State:` line in
-      # /proc/<pid>/status, and it is read with the shell's own `read` rather than
-      # an `awk`: this path runs once per unreadable pid, and the fork per pid is
-      # what made a call cost 273ms instead of 100ms (measured on the host).
+      # reason to keep nor to refuse — and it is skipped. A pid that was REAPED
+      # between find's readdir and its readlink is the same kind of skip: it has
+      # no cwd link and no `status` left, so there is nothing of it that could be
+      # holding the worktree. Any other state is a read we could not make: that is
+      # a cannot-judge, never a keep and never a removal. The state letter is the
+      # second field of the `State:` line in /proc/<pid>/status, and it is read
+      # with the shell's own `read` rather than an `awk`: this path runs once per
+      # unreadable pid, and the fork per pid is what made a call cost 273ms
+      # instead of 100ms (measured on the host).
       state=""
       while IFS= read -r sl; do
         case "$sl" in State:*) state="${sl#State:}"; break ;; esac
       done <"$pdir/status" 2>/dev/null
       # "State:\tZ (zombie)" -> leading whitespace off -> first character is it.
       state="${state#"${state%%[![:space:]]*}"}"
+      # NOTHING READABLE AT ALL — no state line — means the pid is GONE: the whole
+      # /proc/<pid> directory went away between find listing it and this read. A
+      # process that no longer exists holds nothing, and counting it as a
+      # cannot-judge FAILS EVERY worktree in the run (measured on a churned /proc,
+      # card t_d53b71b8: it red-gated a tree that never touched this script). So
+      # it is a skip, exactly like a zombie — while a pid that IS still there and
+      # whose cwd we could not read stays the cannot-judge the bullet above
+      # describes.
+      [ -n "$state" ] || continue
       [ "${state:0:1}" = "Z" ] && continue
       denied="${denied:+$denied,}$pid"
       continue

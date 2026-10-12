@@ -1121,7 +1121,8 @@ FAKE="$SB/fake-proc"
 FAKE_TARGET="$SB/cwd-target"
 mkdir -p "$FAKE_TARGET/sub" "$FAKE_TARGET-sibling"
 mkdir -p "$FAKE/live/9999001" "$FAKE/zombie-only/9999002" "$FAKE/deny-only/9999003" \
-         "$FAKE/sub-only/9999004" "$FAKE/sibling-only/9999005" "$FAKE/empty" "$FAKE/self"
+         "$FAKE/sub-only/9999004" "$FAKE/sibling-only/9999005" "$FAKE/empty" "$FAKE/self" \
+         "$FAKE/gone-only/9999006"
 ln -s "$FAKE_TARGET"               "$FAKE/live/9999001/cwd"
 printf 'State:\tS (sleeping)\n' >"$FAKE/live/9999001/status"
 # The zombie: a cwd entry whose target cannot be read (a dead process's /proc entry
@@ -1131,6 +1132,11 @@ printf 'State:\tZ (zombie)\n'  >"$FAKE/zombie-only/9999002/status"
 # ...the same unreadable cwd, but a LIVE state: this is the cannot-judge.
 printf 'not-a-link\n'          >"$FAKE/deny-only/9999003/cwd"
 printf 'State:\tS (sleeping)\n' >"$FAKE/deny-only/9999003/status"
+# The REAPED pid (card t_d53b71b8): find listed the entry, and the process was gone
+# before the cwd link was read — so the link cannot be read AND there is no status
+# beside it to say anything. Nothing is left that could be holding a worktree, and
+# read as a cannot-judge it FAILED EVERY worktree in the run.
+printf 'not-a-link\n'          >"$FAKE/gone-only/9999006/cwd"
 ln -s "$FAKE_TARGET/sub"       "$FAKE/sub-only/9999004/cwd"
 printf 'State:\tS (sleeping)\n' >"$FAKE/sub-only/9999004/status"
 ln -s "$FAKE_TARGET-sibling"   "$FAKE/sibling-only/9999005/cwd"
@@ -1154,6 +1160,10 @@ check "a ZOMBIE's unreadable cwd is SKIPPED, not read as a cannot-judge" "none" 
   "$(cwd_check "$SB/stub" "$FAKE/zombie-only")"
 check "...because a LIVE pid whose cwd cannot be read IS the cannot-judge, naming the pid" "denied:9999003" \
   "$(cwd_check "$SB/stub" "$FAKE/deny-only")"
+check "premise: the reaped pid's entry has an unreadable cwd and NO status beside it" "no" \
+  "$( [ -e "$FAKE/gone-only/9999006/status" ] && echo yes || echo no )"
+check "a pid REAPED mid-scan (unreadable cwd, nothing readable beside it) is SKIPPED, not a cannot-judge" "none" \
+  "$(cwd_check "$SB/stub" "$FAKE/gone-only")"
 check "a process table that comes back empty is a cannot-judge, NEVER 'nothing is inside'" "denied:?" \
   "$(cwd_check "$SB/stub" "$FAKE/empty")"
 check "the scan does not match the process asking the question (its own cwd, at a fake pid)" "none" \
