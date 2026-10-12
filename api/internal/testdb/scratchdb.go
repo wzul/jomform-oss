@@ -318,6 +318,20 @@ const scratchDBAgesQuery = `SELECT datname, (pg_stat_file('base/' || oid || '/PG
 // scratchDBBackendsQuery counts the backends connected to each database. The
 // count excludes this session (`pid <> pg_backend_pid()`), or every database
 // would report at least the one running the query — the trap the card records.
+//
+// It counts EVERY backend, deliberately, and must keep doing so. This count is
+// not a guess about who a peer run is, it is the precondition of the DDL itself:
+// the reclaim's drop is a PLAIN `DROP DATABASE` (see dropDatabase), and Postgres
+// refuses that while anyone else is connected — "if anyone else is connected to
+// the target database, this command will fail unless you use the FORCE option"
+// (https://www.postgresql.org/docs/16/sql-dropdatabase.html), with FORCE being
+// what terminates background worker connections. So filtering it to client
+// backends — the way the SCHEMA prune's peer predicate does (card t_26671247,
+// peerBackendsPredicate in testdb.go) — would not make the reclaim more eager;
+// it would make the drop fail with `database "..." is being accessed by other
+// users`. The two counts look alike and are not the same rule: the schema
+// count protects a peer's catalogue reads, this one asks whether the DDL will
+// succeed.
 const scratchDBBackendsQuery = `SELECT datname, count(*)
   FROM pg_stat_activity
  WHERE datname IS NOT NULL AND pid <> pg_backend_pid()

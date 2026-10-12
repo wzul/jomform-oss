@@ -56,21 +56,33 @@ import (
 // short so the generated name stays well inside Postgres' 63-byte limit.
 const reachScratchPrefix = "jomform_reachtest_"
 
-// otherBackends counts every connection to the current database except this one
-// — the same question open()'s prune asks, spelled out here so the fixture can
-// refuse to run when the idle precondition does not hold. It is deliberately
-// kept identical to open()'s predicate (EVERY backend, not just client
-// backends): the guard may only take its verdict on a database that open() will
-// itself agree is idle, and a narrower count here would let the guard assert a
-// reclaim that open() had correctly suppressed.
+// otherBackends counts the peer backends open()'s prune yields to — literally
+// open()'s predicate, shared through peerBackendsPredicate rather than restated
+// here. Sharing it is the point: the guard may only take its verdict on a
+// database open() will itself agree is idle, and a guard that counted a
+// different set would either assert a reclaim open() had correctly suppressed
+// (wider) or refuse to ask its question on a database open() considers free
+// (narrower).
+//
+// It counts CLIENT backends only (card t_26671247). That is not a relaxation of
+// the idle precondition: a non-client backend — an autovacuum worker on this
+// throwaway database, a parallel worker — is not what `DROP SCHEMA ... CASCADE`
+// has to yield to, and counting one used to make this guard refuse, and
+// open() suppress the reclaim, on a database with no peer on it at all. See
+// peerBackendsPredicate for the measured capture and the reasoning.
 const otherBackends = `SELECT count(*) FROM pg_stat_activity
-  WHERE datname = current_database() AND pid <> pg_backend_pid()`
+  WHERE ` + peerBackendsPredicate
 
 // idleWaitBudget and idleSampleInterval bound how long the reclaim guard waits
-// for its throwaway database to go idle. A transient autovacuum worker leaves
-// within milliseconds, so the budget never has to be large; a peer test binary
-// never leaves within it, which is what keeps the refusal honest. See
-// awaitNoOtherBackends.
+// for its throwaway database to have no peer on it. Since card t_26671247 the
+// count the wait uses is CLIENT backends only (otherBackends), so the
+// infrastructure visitors it used to wait out — an autovacuum worker sent to
+// this freshly created database, a parallel worker — are no longer seen at all.
+// What the budget is for now is the genuinely transient CLIENT backend (the
+// short-lived connection of a neighbouring create/drop-database churn, or this
+// test's own fixture closing): it leaves within milliseconds, while a peer test
+// binary never leaves within the budget, which is what keeps the refusal honest.
+// See awaitNoOtherBackends.
 const (
 	idleWaitBudget     = 30 * time.Second
 	idleSampleInterval = 250 * time.Millisecond
@@ -79,6 +91,12 @@ const (
 // backendDump renders who else is connected. It exists so a refusal names its
 // cause — a peer test binary and an autovacuum worker are very different
 // findings, and the gate's reader should not have to re-derive which one it was.
+//
+// Unlike the COUNT (otherBackends, open()'s predicate) this is deliberately
+// EVERY backend, including the non-client ones the count now ignores: a refusal
+// is caused by a client backend, but a reader diagnosing a busy host is better
+// served by seeing the infrastructure visitors as well. It never decides
+// anything — it is report context on a refusal path only.
 const backendDump = `SELECT pid, backend_type, coalesce(state, ''), coalesce(query, '')
   FROM pg_stat_activity
   WHERE datname = current_database() AND pid <> pg_backend_pid()
@@ -112,9 +130,11 @@ func schemaSurvived(ctx context.Context, p *pgxpool.Pool, name string) (survived
 }
 
 // backendDumpAgg renders the foreign backends on the current database, best
-// effort, for report context. It reads the same predicate as open()'s prune
-// (EVERY backend, not just client backends), because that is the count the
-// reclaim acts on.
+// effort, for report context. Like backendDump it renders EVERY backend,
+// including the non-client ones open()'s peer count deliberately ignores
+// (peerBackendsPredicate) — it appears under a failure whose cause is a client
+// backend, and the wider view is what lets a reader tell a busy host from a
+// broken reclaim. It is never the basis of a count or a verdict.
 const backendDumpAgg = `SELECT coalesce(string_agg(
     format('pid=%s type=%s state=%s query=%s', pid, backend_type, coalesce(state,''), left(coalesce(query,''), 80)), E'\n'), '(none)')
   FROM pg_stat_activity
@@ -302,19 +322,21 @@ func TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase(t *testing.T) {
 			t.Fatalf("attempt %d on %s could not plant its fixtures (%s) — the reclaim left an earlier attempt's schema behind, so this attempt cannot take a verdict", attempt, dbname, firstErr)
 		}
 
-		// Wait for the throwaway database to be idle before letting open() take
-		// its own read, so a visitor already connected does not pre-empt the
-		// reclaim before the attempt even starts. "Idle" is idleness under
-		// open()'s OWN predicate: that count is every backend, not just client
-		// backends, so a transient background visitor is enough to make open()
-		// suppress the reclaim by design.
+		// Wait for the throwaway database to have no peer on it before letting
+		// open() take its own read, so a visitor already connected does not
+		// pre-empt the reclaim before the attempt even starts. "No peer" is
+		// open()'s OWN predicate (otherBackends, shared with the live prune):
+		// CLIENT backends only, so the infrastructure visitors that used to
+		// make open() suppress the reclaim by design — an autovacuum worker on
+		// this freshly created database, a parallel worker (card t_26671247) —
+		// are not waited on any more.
 		ok, detail, err := awaitNoOtherBackends(ctx, plant, idleWaitBudget)
 		if err != nil {
 			t.Fatalf("count backends on %s: %v", dbname, err)
 		}
 		if !ok {
 			plant.Close()
-			t.Fatalf("attempt %d: throwaway database %s never went idle within %s (%s) — the idle precondition does not hold, so this test cannot distinguish a working reclaim from a suppressed one",
+			t.Fatalf("attempt %d: throwaway database %s never went peerless within %s (%s) — the idle precondition does not hold, so this test cannot distinguish a working reclaim from a suppressed one",
 				attempt, dbname, idleWaitBudget, detail)
 		}
 		plant.Close()
@@ -421,9 +443,11 @@ func TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase(t *testing.T) {
 	// skip, because the direction it protects is the one that silently rots: a
 	// reclaim that is dead would otherwise be indistinguishable from a busy host.
 	// (A dead reclaim itself is already an unconditional per-attempt failure
-	// above — this only catches the different case of a run with no verdict.)
+	// above; what reaches here is a run whose every attempt yielded, which
+	// includes the ordering bug where the yield is to the caller's own pool —
+	// and for that reason this is a FAILURE and not a skip.)
 	if !witnessed {
-		t.Fatalf("open() never reclaimed an abandoned schema in %d attempts on a database whose prune saw nobody — either the reclaim is dead (every attempt's prune saw no backend and left the schema) or every attempt's prune saw a transient visitor, and this guard cannot tell the two apart", reclaimAttempts)
+		t.Fatalf("open() never reclaimed an abandoned schema in %d attempts — either every attempt's prune yielded to a backend it saw (`others > 0` => no DDL, which is the ordering bug when that backend is the caller's own pool: check that open() still prunes BEFORE it creates the caller's pool, since pgxpool is lazy and pruning after pgxpool.NewWithConfig/Ping counts the caller's own pinged backend as a peer), or the reclaim is dead. The per-attempt lines above name the reading each prune decided on. Either way the reclaim cannot run unattended, which leaks a schema per killed run", reclaimAttempts)
 	}
 	if !reclaimedLegacy {
 		t.Logf("note: an abandoned schema was reclaimed, but never in an attempt that also reclaimed the legacy shape — the two shapes are reached by different predicates, so check the legacy arm if it stays silent across runs")
@@ -560,25 +584,266 @@ func TestOpenLeavesAnAbandonedSchemaAloneWhileAPeerIsConnected(t *testing.T) {
 	}
 }
 
-// awaitNoOtherBackends waits for the database to have no backend but `conn`,
-// and reports whether it got there inside budget.
+// nonClientBackends counts backends on this database that are NOT client
+// backends: the infrastructure visitors the peer count must ignore.
+const nonClientBackends = `SELECT count(*) FROM pg_stat_activity
+  WHERE datname = current_database() AND pid <> pg_backend_pid()
+    AND backend_type <> 'client backend'`
+
+// backendClassCounts classifies every foreign backend on this database in one
+// row: how many are non-client, how many are client, and how many there are in
+// total. It is what tells the guard above whether a sample is one that can carry
+// a verdict (only non-client backends present) or one that a transient client
+// peer has made unreadable.
+const backendClassCounts = `SELECT
+    count(*) FILTER (WHERE backend_type <> 'client backend'),
+    count(*) FILTER (WHERE backend_type = 'client backend'),
+    count(*)
+  FROM pg_stat_activity
+  WHERE datname = current_database() AND pid <> pg_backend_pid()`
+
+// peerSample is one reading of who is on this database: the production peer
+// predicate (peers, dump) exactly as open()'s prune reads it, together with the
+// raw classification of every foreign backend (nonClient, client, every).
 //
-// The wait, not a narrower count, is what fixes the false red. Host contention
-// does not create peers in a throwaway database whose name was drawn 48 bits of
-// randomness a moment ago; what it does is make the CREATE DATABASE churn on the
-// shared catalogue frequent enough that the autovacuum launcher keeps sending a
-// worker to ANALYZE pg_database. A worker that is mid-ANALYZE is connected, so it
-// counts under open()'s predicate, and open() then suppresses the reclaim
-// exactly as designed — whereupon the old instant read of that same count called
-// the suppression a broken reclaim. A worker is transient: the live capture
-// showed it leaving within the sample interval, and on an empty database it has
-// nothing to hold. A real peer never leaves, so a refusal here still means what
-// the guard intends it to mean.
+// The two queries are issued back to back rather than merged, because the
+// production count has to be exercised as itself — merging it with the
+// classification would let a change to one silently cover a change to the other,
+// and the whole point of this guard is to read the count the prune really uses.
+type peerSample struct {
+	peers     int
+	dump      string
+	nonClient int
+	client    int
+	every     int
+}
+
+// samplePeerBackends takes one peerSample on conn, which must be a client
+// backend on the database being observed (`pid <> pg_backend_pid()` keeps the
+// reader out of its own count).
+func samplePeerBackends(ctx context.Context, conn *pgxpool.Pool) (peerSample, error) {
+	var s peerSample
+	if err := conn.QueryRow(ctx, otherConnectionsDump).Scan(&s.peers, &s.dump); err != nil {
+		return s, err
+	}
+	if err := conn.QueryRow(ctx, backendClassCounts).Scan(&s.nonClient, &s.client, &s.every); err != nil {
+		return s, err
+	}
+	return s, nil
+}
+
+// TestThePeerCountIgnoresANonClientBackend is the guard for card t_26671247: the
+// peers open()'s prune yields to are CLIENT backends, and a non-client backend
+// carrying this database's datname must neither suppress the reclaim nor make
+// the guard refuse.
+//
+// The defect. pg_stat_activity holds non-client backends, and PostgreSQL attaches
+// a database to some of them: an autovacuum worker that the CREATE DATABASE
+// churn sends to a freshly created throwaway database, a parallel worker serving
+// some peer's parallel query, (PG18, io_method=worker) an AIO worker. While one
+// was connected the peer count read 1, `solo` went false, the prune issued NO
+// DDL by design, and a database with no peer on it never reclaimed anything —
+// not a transient yield but a permanent leak, which is the leak this reclaim
+// exists to close. On the guard's side it was the false RED that started this
+// card: the QA verify measured `autovacuum worker
+// datname=jomform_reachtest_ca8e2fc7923e` (and three more throwaway names from
+// the same server-level capture) while the guard was running, plus 48 samples of
+// `parallel worker datname=jomform_test`.
+//
+// An autovacuum worker cannot be summoned on demand, so this pins the CLASS it
+// belongs to with the one non-client backend a test can hold deterministically:
+// a walsender, i.e. a `replication=database` session. It is not a client
+// backend, the server attaches this database to it, and it stays as long as the
+// test holds it — so both halves below are about the predicate, not about racing
+// a transient visitor.
+//
+// Both halves bite. Removing the filter from peerBackendsPredicate fails the
+// count assertion with the visitor plainly connected; narrowing only the guard
+// and leaving open()'s read unfiltered fails the behavioural half, because the
+// schema survives. If this environment cannot hold a non-client backend, or
+// cannot give the throwaway database a moment with no client peer, the test
+// SKIPS with the reason rather than reporting a verdict it cannot support.
+func TestThePeerCountIgnoresANonClientBackend(t *testing.T) {
+	ctx := context.Background()
+	dbname, dbDSN := createIdleTestDB(t, ctx, dsnOrSkip(t))
+
+	own := "test_reach_own4_p" + strconv.Itoa(os.Getpid())
+	abandoned := "test_reach_nonpeer_p" + strconv.Itoa(deadPID(t))
+
+	plant, err := db.Connect(ctx, dbDSN)
+	if err != nil {
+		t.Fatalf("connect to %s to plant the fixture: %v", dbname, err)
+	}
+	if _, err := plant.Exec(ctx, `CREATE SCHEMA `+quote(abandoned)); err != nil {
+		plant.Close()
+		t.Fatalf("plant %s: %v", abandoned, err)
+	}
+
+	// Held open for the whole test.
+	holdNonClientBackend(t, ctx, dbDSN, dbname)
+
+	// The verdict, read off live samples. A sample can only carry one when the
+	// only foreign backends on this database are NON-CLIENT ones (client == 0,
+	// every > 0) — that is the defect's condition, and gating on it means a
+	// transient client peer (a neighbouring churn's session) can never turn this
+	// into a false RED. Two consecutive samples must agree before either
+	// direction is taken, so a single flickering reading decides nothing.
+	//
+	// The wait helper is deliberately NOT used here: it shares the very
+	// predicate under test, so at the moment the filter is missing it refuses
+	// (seeing the walsender) instead of exposing the wrong reading — the one
+	// shape this guard must never answer with.
+	deadline := time.Now().Add(idleWaitBudget)
+	confirmOK, confirmBad := 0, 0
+	var sawBackends bool
+	var bad peerSample
+	for {
+		s, serr := samplePeerBackends(ctx, plant)
+		if serr != nil {
+			plant.Close()
+			t.Fatalf("sample the backends on %s: %v", dbname, serr)
+		}
+		if s.every > 0 {
+			sawBackends = true
+		}
+		if s.client == 0 && s.every > 0 {
+			if s.peers == 0 {
+				confirmOK, confirmBad = confirmOK+1, 0
+			} else {
+				confirmBad, confirmOK, bad = confirmBad+1, 0, s
+			}
+			if confirmOK >= 2 {
+				break
+			}
+			if confirmBad >= 2 {
+				plant.Close()
+				t.Errorf("the peer count reads %d on %s twice running while the only foreign backends present are non-client ones (every-backend count %d, client backends 0) — a non-client backend is not the peer `DROP SCHEMA ... CASCADE` yields to, and counting it suppresses the reclaim on an otherwise idle database for as long as it is there (card t_26671247). What the predicate counted:\n%s",
+					bad.peers, dbname, bad.every, bad.dump)
+				break
+			}
+		} else {
+			confirmOK, confirmBad = 0, 0
+		}
+		if time.Now().After(deadline) {
+			plant.Close()
+			if !sawBackends {
+				t.Skipf("no non-client backend carrying datname=%s could be observed within %s, so this run cannot say whether the peer count ignores one (card t_26671247)", dbname, idleWaitBudget)
+			}
+			t.Skipf("throwaway database %s never had two consecutive samples with only non-client backends on it within %s, so this run cannot take the count assertion (last sample: every=%d client=%d non-client=%d)",
+				dbname, idleWaitBudget, s.every, s.client, s.nonClient)
+		}
+		time.Sleep(idleSampleInterval)
+	}
+	plant.Close()
+
+	// The real path: open() must reclaim the abandoned schema while the
+	// non-client backend is still attached.
+	p, err := open(ctx, dbDSN, own)
+	if err != nil {
+		t.Fatalf("open on the throwaway database %s: %v", dbname, err)
+	}
+	defer p.Close()
+
+	snap, haveSnap := connectionSnapshot()
+	if !haveSnap {
+		t.Fatalf("open() on %s recorded no prune connection reading, so this guard cannot judge the reclaim (card t_53b9b15f)", dbname)
+	}
+
+	// The visitor must STILL be attached, or a reclaim could be explained by it
+	// having left instead of by the predicate ignoring it.
+	var visitors int
+	if err := p.QueryRow(ctx, nonClientBackends).Scan(&visitors); err != nil {
+		t.Fatalf("count non-client backends on %s after open(): %v", dbname, err)
+	}
+	if visitors == 0 {
+		t.Skipf("the non-client backend on %s left before open() took its decision, so this run cannot show a reclaim proceeding with one attached (the count assertion above still stands: it was taken while one was present)", dbname)
+	}
+	if snap.others != 0 {
+		t.Errorf("open()'s prune read %d peer backend(s) on %s while the only visitor was a non-client backend — the peer count must be CLIENT backends only, or a non-client visitor suppresses the reclaim on an otherwise idle database for good. Reading the prune decided on:\n%s",
+			snap.others, dbname, snap.dump)
+	}
+
+	var survived int
+	if err := p.QueryRow(ctx, `SELECT count(*) FROM pg_namespace WHERE nspname = $1`, abandoned).Scan(&survived); err != nil {
+		t.Fatalf("probe %s: %v", abandoned, err)
+	}
+	if survived != 0 {
+		t.Errorf("open() left the abandoned schema %s behind on %s while the only other backend was a non-client one — the reclaim must run: that visitor is not what `DROP SCHEMA ... CASCADE` yields to (card t_26671247). Reading the prune decided on: others=%d\n%s\nBackends at the probe (after open(), for context only):\n%s",
+			abandoned, dbname, snap.others, snap.dump, renderBackends(ctx, p))
+	}
+
+	var ownCount int
+	if err := p.QueryRow(ctx, `SELECT count(*) FROM pg_namespace WHERE nspname = $1`, own).Scan(&ownCount); err != nil {
+		t.Fatalf("probe %s: %v", own, err)
+	}
+	if ownCount == 0 {
+		t.Errorf("open() did not create %s — ensureSchema must run whatever the reclaim did", own)
+	}
+}
+
+// holdNonClientBackend opens a backend that carries this database's datname but
+// is NOT a client backend, and keeps it open for the life of the test.
+//
+// A walsender — a session started with the `replication=database` startup
+// parameter — is the one non-client backend a test can hold deterministically:
+// an autovacuum worker cannot be summoned on demand, and a parallel worker lives
+// only as long as its query, so neither can be raced reliably. The walsender is
+// idle at the protocol level (no replication slot, nothing decoded), so what the
+// guard observes is purely how the peer predicate classifies a backend_type,
+// which is exactly the property under test; it is also a real non-client
+// backend with a datname, which is the class the card is about.
+//
+// IDENTIFY_SYSTEM is the replication handshake, and it must go over the simple
+// protocol — walsender mode does not serve the extended protocol. Its reply is
+// also the proof that the session really is a walsender and not a client backend
+// with a stray parameter.
+//
+// It skips rather than fails when the environment cannot hold one — a server
+// that refuses replication for this role. Reporting a verdict this run cannot
+// support is worse than saying the class went unasserted here.
+func holdNonClientBackend(t *testing.T, ctx context.Context, dbDSN, dbname string) {
+	t.Helper()
+	cfg, err := pgx.ParseConfig(dbDSN)
+	if err != nil {
+		t.Fatalf("parse the throwaway DSN: %v", err)
+	}
+	cfg.RuntimeParams["replication"] = "database"
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		t.Skipf("cannot hold a non-client backend on %s (%v) — with none to hold, this run cannot say whether the peer count ignores one (card t_26671247)", dbname, err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+	if _, err := conn.PgConn().Exec(ctx, "IDENTIFY_SYSTEM").ReadAll(); err != nil {
+		t.Skipf("the replication session on %s did not answer IDENTIFY_SYSTEM (%v), so this run has no non-client backend to observe", dbname, err)
+	}
+}
+
+// awaitNoOtherBackends waits for the database to have no other backend but
+// `conn`, and reports whether it got there inside budget. "Other" is
+// otherBackends — the same CLIENT-backends-only predicate open()'s prune
+// decides on, shared through peerBackendsPredicate so the two cannot drift.
+//
+// Card t_26671247 narrowed that count, and narrowing it was the primary fix for
+// the false red this wait was written to paper over. Before it, an autovacuum
+// worker that the CREATE DATABASE churn sends to a freshly created database (or
+// a parallel worker serving a peer) counted under open()'s predicate, open()
+// suppressed the reclaim exactly as designed, and the guard's instant read of
+// the same count called the suppression a broken reclaim. Such a visitor is not
+// the peer `DROP SCHEMA ... CASCADE` has to yield to, so it no longer counts at
+// all — it cannot suppress the reclaim and cannot make this wait refuse.
+//
+// What remains for the wait is a genuinely transient CLIENT backend: the
+// short-lived session of a neighbouring create/drop-database churn, or this
+// test's own fixture closing. That leaves within milliseconds; a peer test
+// binary never leaves, which is what keeps a refusal meaningful.
 //
 // It reports rather than fails, because both callers have to assert on the
 // answer and the refusal test must be able to observe a false without that false
 // ending the test that is looking for it. `detail` names who was still connected
-// when the budget ran out; `err` is non-nil only when the count itself failed.
+// when the budget ran out — rendered from backendDump, which shows EVERY
+// backend, so a reader can see the infrastructure visitors the count ignores as
+// well as the client backend that caused the refusal; `err` is non-nil only when
+// the count itself failed.
 //
 // The count and the dump both come from the caller's own connection, so the
 // backend this process holds is never the one being waited on: only foreign
@@ -631,22 +896,24 @@ func renderBackends(ctx context.Context, conn *pgxpool.Pool) string {
 }
 
 // TestAwaitNoOtherBackendsWaitsOutATransientVisitor pins BOTH directions of the
-// wait that keeps host contention from reading as a broken reclaim.
+// wait that keeps a transient CLIENT visitor from reading as a broken reclaim.
 //
-// This is the guard for a red that actually happened: with the host at load ~22
-// on 6 cores, TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase read
+// History: this is the guard for a red that actually happened. With the host at
+// load ~22 on 6 cores, TestOpenReclaimsAnAbandonedSchemaOnAnIdleDatabase read
 // `1 other backends` and failed, while nothing in the package is parallel and
-// every throwaway database name is freshly drawn — so there was no peer to blame.
-// The visitor is an autovacuum worker. CREATE DATABASE churn on the shared
-// catalogue draws a worker to ANALYZE pg_catalog.pg_database, the worker counts
-// under open()'s predicate, and open() suppresses the reclaim exactly as
-// designed; the old instant read of that same count called the suppression a
-// broken reclaim.
+// every throwaway database name is freshly drawn — so there was no peer to
+// blame. The visitor was an autovacuum worker: it counted under open()'s
+// predicate and open() suppressed the reclaim exactly as designed, while the old
+// instant read of that same count called the suppression a broken reclaim. Card
+// t_26671247 then removed that visitor from the count entirely
+// (peerBackendsPredicate counts client backends only), so the wait is no longer
+// what carries that case; what is left for it is a transient client session.
 //
-// A pure fake pins the classification without a live autovacuum worker to
-// provoke, and pins the refusal too: a visitor that never leaves must still
-// fail, because a guard that waits out a real peer would let this test pass
-// vacuously — it would call a suppressed reclaim a correct one.
+// The planting here is two real client connections — one that leaves, one that
+// stays — so both directions are pinned against the live predicate rather than a
+// fake: a visitor that leaves must be waited out, and one that never leaves must
+// still refuse, because a guard that waited out a real peer would let this test
+// pass vacuously — it would call a suppressed reclaim a correct one.
 func TestAwaitNoOtherBackendsWaitsOutATransientVisitor(t *testing.T) {
 	if dsnOrSkip(t) == "" {
 		return // dsnOrSkip already skipped

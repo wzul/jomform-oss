@@ -267,14 +267,61 @@ type connSnapshot struct {
 	dump   string
 }
 
-// otherConnectionsDump is open()'s idle predicate — EVERY backend, not just
-// client backends — read together with who those backends are, in one round
-// trip. The count and the dump come from the same snapshot of pg_stat_activity,
-// so a reader can never see a count that disagrees with the names beside it.
+// peerBackendsPredicate is the ONE definition of "another backend this prune's
+// database-wide DDL has to yield to". It is shared rather than restated — the
+// live prune (otherConnectionsDump) and the reclaim guards (otherBackends)
+// build on it — so the guard can never take its verdict on a database that
+// open() would disagree is idle.
+//
+// It counts CLIENT backends and nothing else, and that filter is the fix for
+// card t_26671247. pg_stat_activity also holds NON-CLIENT backends, and
+// PostgreSQL attaches a database to some of them: an autovacuum worker sent to
+// a newly created database, a parallel worker serving some peer's parallel
+// query, a logical walsender, and (in PG18, with io_method=worker) AIO workers.
+// Captured during the QA verify that opened this card, with a server-level
+// sampler running alongside the guard (card t_22f6d75a): `autovacuum worker
+// datname=jomform_reachtest_ca8e2fc7923e` and three further throwaway names
+// from the same capture, plus 48 samples of `parallel worker
+// datname=jomform_test`. Counting any of those as a peer made an otherwise-idle
+// database look busy, the prune issued no DDL by design, and a database nobody
+// was using never reclaimed anything — not a transient yield but the leak this
+// reclaim exists to close, caused by a backend that was never at risk.
+//
+// This is not a PG18-only shape, and not a shape that needs io_method=worker:
+// while fixing this, the same classification was reproduced on the server these
+// tests actually use (PostgreSQL 16.15) — a `replication=database` session
+// appears as `backend_type=walsender` with `datname` set, and the two counts on
+// one database read every-backend 4 / client-backend 3.
+//
+// The hazard the count exists to detect is narrower than "someone is
+// connected": `DROP SCHEMA ... CASCADE` is database-wide DDL that invalidates
+// catalogue entries, and a peer TEST RUN mid-catalogue-read can then die with
+// `could not open relation with OID (SQLSTATE XX000)`. Such a peer is always a
+// client backend — every connection this suite opens is one, and a parallel
+// query keeps its client leader connected, which is still counted here, so the
+// protection is unchanged where it is needed. A non-client backend is not that
+// peer: an autovacuum worker takes its own locks before touching a relation and
+// a lost race costs one background worker that the launcher simply reschedules;
+// an io worker never runs SQL at all. Nothing a lane is waiting on.
+//
+// `backend_type` and its values are the ones documented for pg_stat_activity —
+// https://www.postgresql.org/docs/current/monitoring-stats.html — and a
+// positive filter is deliberate: a new non-client type in a future release must
+// not silently re-introduce the suppression. The reclaim must not be *wider*
+// than this either, so the filter lives in one place.
+const peerBackendsPredicate = `datname = current_database()
+  AND pid <> pg_backend_pid()
+  AND backend_type = 'client backend'`
+
+// otherConnectionsDump is open()'s idle predicate — the peer backends of
+// peerBackendsPredicate — read together with who those backends are, in one
+// round trip. The count and the dump come from the same snapshot of
+// pg_stat_activity, so a reader can never see a count that disagrees with the
+// names beside it.
 const otherConnectionsDump = `SELECT count(*), coalesce(string_agg(
     format('pid=%s type=%s state=%s query=%s', pid, backend_type, coalesce(state,''), left(coalesce(query,''), 120)), E'\n'), '(none)')
   FROM pg_stat_activity
-  WHERE datname = current_database() AND pid <> pg_backend_pid()`
+  WHERE ` + peerBackendsPredicate
 
 // lastPruneSnapshot holds the connection reading the most recent LIVE prune (see
 // pgScratch.connections) took its decision on. connectionSnapshot hands it to
@@ -305,6 +352,14 @@ var lastPruneSnapshot atomic.Pointer[connSnapshot]
 // database looks a moment later: nothing was suppressed, so the guard may not
 // report one. The direction that must never pass — a reclaim that left the
 // schema behind while the prune itself saw nobody — stays a hard failure.
+//
+// Card t_26671247 closed the other half: the count these readings come from
+// (peerBackendsPredicate) is now CLIENT backends only, so the non-client
+// visitors that were doing the transient suppressing — autovacuum workers on a
+// freshly created database, parallel workers — no longer suppress the reclaim
+// at all. They were never the peer the yield protects, and with one on an
+// otherwise-idle database the reclaim was suppressed *forever* rather than
+// transiently, which is the leak this whole mechanism exists to close.
 //
 // It reads a process-global, which is sound because each test binary is its own
 // process and the guard reads it immediately after the open() that set it.
@@ -378,7 +433,7 @@ func pruneScratch(ctx context.Context, keep string, q scratchQuerier) ([]string,
 	}
 
 	// Unattributable (legacy) schemas may be reclaimed only when this is the
-	// sole connection to the database.
+	// sole CLIENT backend on the database (peerBackendsPredicate).
 	solo := true
 	if snap, err := q.connections(ctx); err == nil && snap.others > 0 {
 		solo = false
@@ -402,16 +457,19 @@ func pruneScratch(ctx context.Context, keep string, q scratchQuerier) ([]string,
 //
 //   - a schema a live process still owns is never reclaimable, because dropping
 //     it reproduces the mid-test race this naming scheme exists to prevent, and
-//   - nothing is reclaimed while any other connection exists, because
-//     `DROP SCHEMA ... CASCADE` is database-wide DDL: it invalidates catalogue
-//     entries a peer may be reading, and a peer's `pg_indexes` scan can then die
-//     with `could not open relation with OID (SQLSTATE XX000)`. Cleanup is not
-//     worth a peer's gate run — a leaked empty schema costs nothing.
+//   - nothing is reclaimed while any other CLIENT backend is connected
+//     (peerBackendsPredicate), because `DROP SCHEMA ... CASCADE` is
+//     database-wide DDL: it invalidates catalogue entries a peer may be
+//     reading, and a peer's `pg_indexes` scan can then die with `could not open
+//     relation with OID (SQLSTATE XX000)`. Cleanup is not worth a peer's gate
+//     run — a leaked empty schema costs nothing.
 func reclaimableScratchSchema(schema string, solo bool) bool {
 	if !solo {
 		// `DROP SCHEMA ... CASCADE` is database-wide DDL: it invalidates
 		// catalogue entries a peer may be reading, so it is never issued while
-		// any other connection exists, however abandoned the schema looks.
+		// any other client backend is connected, however abandoned the schema
+		// looks. A non-client backend does not hold this back — see
+		// peerBackendsPredicate for why, and for what that used to cost.
 		return false
 	}
 	// Alone, a schema may be reclaimed if it predates the pid scheme and so
