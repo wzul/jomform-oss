@@ -110,6 +110,49 @@
 // per-route probe so a stalled handler fails by name instead of hanging the
 // package.
 //
+// # A HOST-QUALIFIED PATTERN IS JUDGED BY ITS OWN HANDLER, NOT BY ITS HOST
+// (t_c42eb052)
+//
+// The UNCOVERED branch below used to red on EVERY host-qualified pattern, on the
+// reasoning that a route this guard cannot drive is a route it cannot clear.
+// That is true of a gate route and false of everything else — and the pattern's
+// host is not what separates the two. MEASURED against the guard as merged (PR
+// 799, head f6a3084), with one injection beside `GET /{slug}`:
+//
+//	mux.HandleFunc("GET qa-edge.test/qa-ping",
+//		func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+//
+//	--- FAIL: TestEveryGateRouteHasItsOwnUnlockRoute
+//	the registered pattern "GET qa-edge.test/qa-ping" is host-qualified
+//	(qa-edge.test) ... It is reported as UNCOVERED
+//
+// — a 204 route that resolves no form and can never render the gate, redded. The
+// next host-scoped GET route anyone adds to this mux would have hit it, and the
+// failure would have said nothing about their route.
+//
+// So the branch now asks the question that actually separates the two: WOULD
+// this route render the gate? The walk cannot answer it on the pattern's own
+// host (the fixture's workspace is served only on <slug>.jomform.com), so
+// probeDriveGate supplies the missing input — the fixture's host — and drives the
+// pattern's OWN handler at its OWN path there. That is the same drive that judged
+// every other route in this file, so the discrimination stays a measurement: a
+// route that renders no gate under the most permissive drive this guard has
+// cannot render THIS fixture's gate on any host, and is logged as a measured "not
+// a gate route"; a route that DOES render the gate there is gate-capable, is not
+// passed off as "not a gate route", and stays UNCOVERED. Only a probe that could
+// not RUN at all keeps the old unconditional report, because a probe that did not
+// run proves nothing.
+//
+// The probe re-registers the SAME handler value the mux serves, which is sound
+// only while net/http does not wrap a host-qualified registration: MEASURED on
+// go1.27.0, mux.Handler returns the registered value for both `GET /{slug}` and
+// `GET host/{slug}` (same code pointer, same handlerKey) and that value still
+// runs when it is served on another host.
+// TestServeMuxDoesNotWrapAHostQualifiedHandler pins both halves, and pins that
+// the path values survive the re-registration — a future Go that wrapped the
+// handler in a host check would make every probe answer "no gate" and put the
+// hole straight back.
+//
 // # WHAT IT DOES NOT COVER (stated so the guard is not over-claimed)
 //
 //   - The walk covers the mux PublicHandlers.RegisterRoutes populates. A
@@ -145,6 +188,13 @@
 //     this mux resolves a form that way; adding one is the change that would
 //     need this guard revisited, and it says so here rather than looking
 //     complete while not being so.
+//   - The capability probe judges a host-qualified pattern's (handler, path)
+//     pair on the fixture's host, not on the pattern's literal host. That is the
+//     only drive that can render the fixture's gate, and it is the same drive
+//     every other route gets; but a handler that behaved differently on a host
+//     that does NOT serve a workspace (the inverse of every route in this mux)
+//     would be measured "not a gate route" here. No handler in this mux reads
+//     its host for anything except resolving the workspace.
 package httpapi
 
 import (
@@ -458,6 +508,222 @@ func handlerKey(h http.Handler) string {
 		}
 	}
 	return fmt.Sprintf("%T", h)
+}
+
+// registerProbe registers the host-stripped pattern on the probe mux, turning
+// net/http's registration panic into a report. A probe that cannot be built is a
+// route this guard could not judge, and the caller must SAY so rather than read
+// it as "no gate".
+func registerProbe(probe *http.ServeMux, pat string, hnd http.Handler) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("net/http refused the host-stripped pattern %q: %v", pat, r)
+		}
+	}()
+	probe.Handle(pat, hnd)
+	return nil
+}
+
+// probeDriveGate re-drives ONE pattern's own handler at that pattern's own path
+// on a host that resolves the fixture's workspace, and reports whether that
+// rendered the password gate.
+//
+// It exists for the one thing the walk in TestEveryGateRouteHasItsOwnUnlockRoute
+// cannot do for a host-qualified pattern. Such a pattern is matched only on its
+// own host, and the fixture owns exactly one workspace, served on its
+// <slug>.jomform.com host — so on its own host the handler resolves no form,
+// renders no gate, and the walk cannot tell "not a gate route" from "a gate route
+// it cannot reach". The probe supplies the input that is missing: it strips the
+// host scope off the registration (the same handler value the mux serves, the
+// same path pattern, on a throwaway mux) and drives it on the fixture's host with
+// the same positional value assignments the walk uses.
+//
+// That is the MOST PERMISSIVE drive this guard has, and the same one that judged
+// every other route here: the host is the only channel that names the workspace
+// and the path is the only one that names the form, and both are the fixture's
+// own. A route that renders no gate under it cannot render THIS fixture's gate on
+// any host, so "not a gate route" is a measurement. The converse is why a route
+// that DOES render the gate is still reported UNCOVERED: it is gate-capable, and
+// this guard cannot see its unlock.
+//
+// probed is false when the probe could not be RUN — the host-stripped pattern was
+// refused, or no assignment reached it. A probe that did not run proves nothing,
+// so the caller reports the pattern instead of passing it. note says why.
+func probeDriveGate(hnd http.Handler, pr gateRouteProbe, fixtureHost string, values []string) (rendered, probed bool, note string) {
+	if hnd == nil {
+		return false, false, "the mux matched no handler for it"
+	}
+	probePat := pr.pathPat
+	if pr.method != "" {
+		probePat = pr.method + " " + pr.pathPat
+	}
+	probe := http.NewServeMux()
+	if err := registerProbe(probe, probePat, hnd); err != nil {
+		return false, false, err.Error()
+	}
+	fills := gateFillings(len(pr.wildcard), values)
+	for _, fill := range fills {
+		pth := pr.pathFor(fill)
+		// The probe mux registers exactly ONE pattern, so anything it matches is
+		// that pattern (an empty match is its own no-route reply).
+		if _, matched := muxMatchFor(probe, fixtureHost, pth); matched == "" {
+			continue
+		}
+		req := httptest.NewRequest(http.MethodGet, pth, nil)
+		req.Host = fixtureHost
+		rec := httptest.NewRecorder()
+		probe.ServeHTTP(rec, req)
+		probed = true
+		if strings.Contains(rec.Body.String(), `id="pw"`) {
+			return true, true, ""
+		}
+	}
+	if !probed {
+		return false, false, fmt.Sprintf(
+			"none of its %d path filling(s) reached it once its host scope was stripped", len(fills))
+	}
+	return false, true, ""
+}
+
+// TestServeMuxDoesNotWrapAHostQualifiedHandler pins the net/http property
+// probeDriveGate stands on: a host-qualified registration is matched by the
+// routing tree, NOT wrapped in a host check around the handler. mux.Handler
+// therefore hands back the registered code itself, and re-registering it without
+// the host is the same handler — which is what lets the probe drive a
+// host-qualified route's own handler on a host the pattern would never match.
+//
+// Why the pin: a future net/http that wrapped host-scoped registrations in a
+// host check would make the probe's drive answer with that wrapper's refusal
+// instead of the handler's page, for every route — so every probe would report
+// "no gate" and the UNCOVERED hole would reopen silently. Both halves are
+// asserted, because either alone can pass while the probe is broken:
+//
+//	the same code pointer for `GET /{slug}` and `GET host/{slug}`, and
+//	the host-qualified value still RUNNING when it is served on another host.
+//
+// The last leg pins the other half of the probe's drive: the path values must
+// survive the host-stripped re-registration, or the handler would read an empty
+// slug and render no gate.
+func TestServeMuxDoesNotWrapAHostQualifiedHandler(t *testing.T) {
+	var ran, sawSlug int
+	marker := func(w http.ResponseWriter, r *http.Request) {
+		ran++
+		if r.PathValue("slug") != "" {
+			sawSlug++
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{slug}", marker)
+	mux.HandleFunc("GET probe.test/qa/{slug}", marker)
+
+	bare, barePat := muxMatchFor(mux, "ws.jomform.com", "/it-form")
+	scoped, scopedPat := muxMatchFor(mux, "probe.test", "/qa/it-form")
+	if barePat != "GET /{slug}" || scopedPat != "GET probe.test/qa/{slug}" {
+		t.Fatalf("the mux matched %q / %q for the bare and the host-qualified pattern, want "+
+			"\"GET /{slug}\" / \"GET probe.test/qa/{slug}\" — the probe addresses a pattern by its "+
+			"own host and path, so a different match means it is probing something else",
+			barePat, scopedPat)
+	}
+	if a, b := handlerKey(bare), handlerKey(scoped); a != b {
+		t.Fatalf("the handler the mux serves for `GET /{slug}` (%s) differs from the one it serves "+
+			"for `GET probe.test/qa/{slug}` (%s). net/http now WRAPS a host-qualified registration: "+
+			"probeDriveGate re-registers that value without the host and drives it on the fixture's "+
+			"host, which such a wrapper would refuse — every probe would then read \"no gate\" and a "+
+			"gate route on another host would be passed off as \"not a gate route\". Re-point the "+
+			"probe (drive the pattern's host itself, or reach the handler some other way).", a, b)
+	}
+
+	// The host-qualified value must run when served on a host the pattern does
+	// not match. A host-checking wrapper would answer 404 and never reach marker.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/qa/it-form", nil)
+	req.Host = "ws.jomform.com"
+	scoped.ServeHTTP(rec, req)
+	if ran == 0 {
+		t.Fatalf("the handler the mux serves for a HOST-QUALIFIED pattern did not run when it was "+
+			"served on another host (code %d): net/http is wrapping the registration in a host "+
+			"check, which makes probeDriveGate's drive impossible and its \"no gate\" answers "+
+			"meaningless", rec.Code)
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("serving the host-qualified handler on another host -> %d, want %d", rec.Code, http.StatusNoContent)
+	}
+
+	// Same handler, host stripped, on a probe mux, on the fixture's host: the
+	// drive probeDriveGate makes. The path value must survive it.
+	probe := http.NewServeMux()
+	probe.Handle("GET /qa/{slug}", scoped)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/qa/it-form", nil)
+	req.Host = "ws.jomform.com"
+	probe.ServeHTTP(rec, req)
+	if sawSlug == 0 {
+		t.Fatalf("the host-stripped re-registration served the handler without its path value " +
+			"(PathValue(\"slug\") was empty) — probeDriveGate drives the pattern's own path and " +
+			"relies on the value surviving, or a gate route would render no gate under the probe " +
+			"and be measured \"not a gate route\"")
+	}
+}
+
+// TestGateProbeDriveJudgesTheHandlerOnAResolvingHost pins probeDriveGate in both
+// directions and in both "could not run" shapes, with no database and no fixture:
+// the probe is the discriminator the UNCOVERED branch now rests on, so its
+// verdicts must not depend on a fixture being present.
+//
+// The gate marker is the renderer's own (`id="pw"`), so the "renders" direction
+// uses a handler that writes it exactly when it was given the fixture's form
+// slug — the shape every real gate route here has.
+func TestGateProbeDriveJudgesTheHandlerOnAResolvingHost(t *testing.T) {
+	const fixtureHost, slug = "it-ws.jomform.com", "it-form"
+	// A handler in the shape every gate route here has: it renders the gate
+	// exactly when its path value resolved to the fixture's form slug.
+	gateReading := func(name string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.PathValue(name) != slug {
+				http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
+				return
+			}
+			fmt.Fprintf(w, "<form><input type=\"password\" id=\"pw\"><script>fetch(location.pathname+'/unlock')</script></form>")
+		})
+	}
+	plain := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+
+	prSlug := gateRouteProbeFor("GET qa-edge.test/qa-host/{slug}")
+	prThing := gateRouteProbeFor("GET qa-edge.test/qa-host/{thing}")
+	for _, tc := range []struct {
+		name         string
+		hnd          http.Handler
+		pr           gateRouteProbe
+		wantRendered bool
+		wantProbed   bool
+	}{
+		{"a gate route's handler renders the gate on a host where the fixture resolves",
+			gateReading("slug"), prSlug, true, true},
+		{"a handler that reads a RENAMED wildcard is driven at that name too",
+			gateReading("thing"), prThing, true, true},
+		{"a handler that never renders the gate is measured, not assumed", plain, prSlug, false, true},
+		{"a nil handler is a probe that did not run", nil, prSlug, false, false},
+		{"a pattern net/http refuses is a probe that did not run",
+			plain, gateRouteProbeFor("GET qa-edge.test/{bad"), false, false},
+		{"no filling reaching the pattern is a probe that did not run",
+			plain, gateRouteProbe{pattern: "GET qa-edge.test/qa/x/{a}/{b}", method: "GET",
+				hostPat: "qa-edge.test", pathPat: "/qa/x/{a}/{b}", wildcard: []string{"a"}}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rendered, probed, note := probeDriveGate(tc.hnd, tc.pr, fixtureHost, []string{slug, "it-ws"})
+			if rendered != tc.wantRendered || probed != tc.wantProbed {
+				t.Fatalf("probeDriveGate(%s, %q) = rendered=%v probed=%v (note %q), want rendered=%v probed=%v",
+					tc.name, tc.pr.pattern, rendered, probed, note, tc.wantRendered, tc.wantProbed)
+			}
+			// A probe that did not run must say WHY: the caller prints the note
+			// instead of the pattern being silently cleared.
+			if !probed && note == "" {
+				t.Errorf("probeDriveGate returned probed=false with no note — the caller reports an " +
+					"UNCOVERED pattern with this note as its reason, and an empty one says nothing")
+			}
+		})
+	}
 }
 
 // TestServeMuxRejectsAWildcardHost pins the net/http rule the probe's host
@@ -884,6 +1150,13 @@ func TestEveryGateRouteHasItsOwnUnlockRoute(t *testing.T) {
 		handler string
 		host    string
 		path    string
+		// probeRan / gateCapable / probeNote carry the CAPABILITY PROBE for a
+		// pattern whose host is not the fixture's: whether it could be run at
+		// all, whether it rendered the gate when it was, and — when it could not
+		// be run — why. See probeDriveGate.
+		probeRan    bool
+		gateCapable bool
+		probeNote   string
 	}
 	var judged, unjudged []routeVerdict
 	var slowest time.Duration
@@ -902,6 +1175,7 @@ func TestEveryGateRouteHasItsOwnUnlockRoute(t *testing.T) {
 		var (
 			driven   bool
 			hKey     string
+			hVal     http.Handler
 			firstHst string
 			firstPth string
 			hitRec   *httptest.ResponseRecorder
@@ -933,12 +1207,15 @@ func TestEveryGateRouteHasItsOwnUnlockRoute(t *testing.T) {
 			if elapsed > slowest {
 				slowest, slowestProbe = elapsed, pat+" -> "+pth
 			}
-			if hKey == "" {
+			if hVal == nil {
 				// Record the handler the MUX matched for this route, from the
 				// bare mux (the full chain wraps handlers in middleware, so a
 				// name read from it would not be comparable across patterns).
-				h, _ := muxMatchFor(mux, hst, pth)
-				hKey = handlerKey(h)
+				// The VALUE is kept too: probeDriveGate re-registers it without
+				// the host scope to ask whether this handler can render the gate
+				// at all.
+				hVal, _ = muxMatchFor(mux, hst, pth)
+				hKey = handlerKey(hVal)
 			}
 			if !strings.Contains(rec.Body.String(), `id="pw"`) {
 				continue // not a gate route at this filling
@@ -960,7 +1237,24 @@ func TestEveryGateRouteHasItsOwnUnlockRoute(t *testing.T) {
 			continue
 		}
 		if hitRec == nil {
-			unjudged = append(unjudged, routeVerdict{pattern: pat, handler: hKey, host: firstHst, path: firstPth})
+			v := routeVerdict{pattern: pat, handler: hKey, host: firstHst, path: firstPth}
+			// It rendered no gate — but for a pattern on ANOTHER host that is
+			// not yet a verdict, and it is not a reason to red either. The walk
+			// drove it on a host where the fixture's workspace does not resolve,
+			// so its handler had nothing to render; the question this branch
+			// turns on is whether the route COULD render the gate, and the host
+			// it is registered on is not what answers that. probeDriveGate
+			// supplies the missing input and measures it (t_c42eb052).
+			if firstHst != host {
+				start := time.Now()
+				rendered, probed, note := probeDriveGate(hVal, pr, host, values)
+				elapsed := time.Since(start)
+				if elapsed > slowest {
+					slowest, slowestProbe = elapsed, pat+" -> its own path on "+host+" (capability probe)"
+				}
+				v.gateCapable, v.probeRan, v.probeNote = rendered, probed, note
+			}
+			unjudged = append(unjudged, v)
 			continue
 		}
 		// It renders the gate, so it MUST be a gate route this guard can judge.
@@ -987,13 +1281,15 @@ func TestEveryGateRouteHasItsOwnUnlockRoute(t *testing.T) {
 	// renamed wildcard used to make a gate route disappear from the judged set
 	// while this test still reported green.
 	//
-	// The comparison is on the registered FUNCTION, not the value the mux hands
-	// back: net/http wraps a registration with host scope, so the same function
-	// reached through two different hosts is not comparable as a value. The host
-	// is part of the key for the same reason — the same handler is SUPPOSED to
-	// behave differently on a host that serves no such workspace (measured on QA
+	// The comparison is on the registered FUNCTION as handlerKey names it. The
+	// host is part of the key because the same handler is SUPPOSED to behave
+	// differently on a host that serves no such workspace (measured on QA
 	// sabotage G, where a host-qualified pattern sharing handleWorkspaceRootForm
-	// with /{slug} legitimately did not render the gate).
+	// with /{slug} legitimately did not render the gate) — not because the mux
+	// hides the handler: MEASURED on go1.27.0, mux.Handler hands back the
+	// registered value for a host-qualified pattern too (same handlerKey as the
+	// bare registration), which is what probeDriveGate is built on. See
+	// TestServeMuxDoesNotWrapAHostQualifiedHandler.
 	type verdictCount struct{ gate, notGate int }
 	byHandler := map[string]*verdictCount{}
 	tally := func(v routeVerdict, isGate bool) {
@@ -1024,25 +1320,54 @@ func TestEveryGateRouteHasItsOwnUnlockRoute(t *testing.T) {
 		}
 	}
 
-	// ── a pattern this guard cannot reach is reported, never passed quietly ──
+	// ── a pattern this guard cannot clear is reported, never passed quietly ──
 	// A host-qualified pattern is reachable only on ITS host, and the fixture's
-	// form resolves only on the fixture's workspace host. So such a pattern
-	// cannot be judged here: whether it renders the gate, and whether its unlock
-	// exists, are both unknown. That is stated as a failure rather than left as a
-	// silent "not a gate route", because silence is exactly the hole this card
-	// exists to close (the #722 class: a page that renders a password box nobody
-	// can satisfy). Today PublicHandlers.RegisterRoutes registers NO
-	// host-qualified pattern, so this is a floor against the shape, not a
-	// complaint about current code.
+	// form resolves only on the fixture's workspace host — so whether such a
+	// pattern renders the gate, and whether its unlock exists, cannot be read off
+	// the walk above. Silence is exactly the hole this branch exists to close
+	// (the #722 class: a page that renders a password box nobody can satisfy),
+	// so it is a failure.
+	//
+	// WHAT IT IS NOT: a failure for every host-qualified route. Keying on the
+	// host alone redded an unrelated 204 route and would red the next host-scoped
+	// GET route anyone adds (t_c42eb052, measured on `GET qa-edge.test/qa-ping`),
+	// which says nothing about that route. The branch now keys on the MEASURED
+	// answer to the only question that separates the two — would this route
+	// render the gate? — from probeDriveGate: it drove the pattern's own handler
+	// at its own path on the fixture's host (the most permissive drive this guard
+	// has, and the drive every other route gets), so:
+	//
+	//   - it rendered no gate there  → measured NOT a gate route, logged below;
+	//   - it DID render the gate     → gate-capable, reported here by name;
+	//   - the probe could not run    → reported here by name, with the reason:
+	//     a probe that did not run proves nothing.
+	//
+	// Today PublicHandlers.RegisterRoutes registers NO host-qualified pattern, so
+	// neither report fires on current code; they are floors against the shape.
 	for _, v := range unjudged {
 		if v.host == host {
 			continue
 		}
+		if v.probeRan && !v.gateCapable {
+			t.Logf("  host-qualified route %q driven at %s%s (handler %s) renders no gate for "+
+				"this fixture even when its own path and handler are driven on %s — measured "+
+				"not a gate route", v.pattern, v.host, v.path, v.handler, host)
+			continue
+		}
+		why := v.probeNote
+		if why == "" {
+			why = "probeDriveGate could not run against it"
+		}
+		if v.gateCapable {
+			why = "driven at its own path and handler on " + host + ", where the fixture's form " +
+				"resolves, it DID render the password gate — so it is gate-capable on any host " +
+				"that serves a workspace, and its unlock must exist"
+		}
 		t.Errorf("the registered pattern %q is host-qualified (%s), and this fixture's workspace "+
 			"is served on %s — so this guard cannot tell whether that route renders the password "+
-			"gate, nor whether the gate's unlock exists. It is reported as UNCOVERED instead of "+
+			"gate, nor whether the gate's unlock exists (%s). It is reported as UNCOVERED instead of "+
 			"being passed off as \"not a gate route\". Either serve the fixture on that host or "+
-			"extend this guard to reach it.", v.pattern, v.host, host)
+			"extend this guard to reach it.", v.pattern, v.host, host, why)
 	}
 
 	if len(judged) < gateRouteDiscoveryMin {
