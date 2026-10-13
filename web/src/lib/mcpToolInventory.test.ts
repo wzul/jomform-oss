@@ -249,18 +249,37 @@ test("the tool count on the page is derived from the data, never typed by hand",
 // the 177 literals) and the page contradicted itself — the body right, the head
 // wrong, for as long as nobody edited the head.
 //
-// Every path of the form api/internal/mcpsrv/<file>.go on the page is a claim
-// that the registry IS that file, and such a claim is true only while that file
-// holds EVERY `&mcp.Tool{` literal in the package. One literal elsewhere makes
-// the file a subset of the registry and the claim false — which is exactly what
-// happened, and the reason this is checked per FILE rather than against the
-// joined package source the tests above use.
+// Naming a file as the registry is a claim that the registry IS that file, and
+// such a claim is true only while that file holds EVERY `&mcp.Tool{` literal in
+// the package. One literal elsewhere makes the file a subset of the registry and
+// the claim false — which is exactly what happened, and the reason this is
+// checked per FILE rather than against the joined package source the tests above
+// use.
+//
+// The claim is read in BOTH spellings, because the sentence is the same one
+// either way (card t_69bd144f):
+//   - a PATH, `api/internal/mcpsrv/<file>.go`. Judged whatever <file> is: the
+//     path itself says the claim is about THIS package, so a name that is not a
+//     source file here (a ghost, a `_test.go`) is still a claim and is judged by
+//     its literal count — 0 of the N — exactly as the original guard did.
+//   - a BARE name, `<file>.go` with no directory in front of it. This is the
+//     spelling the guard shipped blind to: "the tool registry in tools.go" was
+//     measured GREEN here while the whole web unit suite stayed 510/510, on a
+//     page whose file name is just as false as the path form. A bare name is
+//     judged ONLY when it really is a source file of the package
+//     (LITERALS_BY_FILE), so a `.go` token belonging to some other tree — prose,
+//     a test file, a file that does not exist — is not read as a claim about
+//     this registry and cannot red a correct page. STATED LIMIT: a bare name
+//     that is not a file here is therefore invisible; the width this test has is
+//     over the package's own files, and the path form keeps the wider reach.
 //
 // Dropping the file name entirely ("the tool registry") is a legitimate state —
 // the card that filed this allows it — so there is deliberately no "must name a
-// path" anchor here, and the positive control is the bite proof's own case:
-// web/scripts/biteproof_mcp_tool_inventory.sh puts the file name back and
-// requires THIS test to go RED.
+// path" anchor here, and the positive controls are the bite proof's own cases:
+// web/scripts/biteproof_mcp_tool_inventory.sh puts the file name back — as a
+// path AND as a bare name — and requires THIS test to go RED on each, and drives
+// the two states that must stay GREEN (no file name, and a bare `.go` token that
+// is not a file of this package) so the widened extraction cannot red prose.
 test("no claim on /docs/mcp names a single FILE as the registry", () => {
   // The anchor first: a metadata description is the sentence a search engine and
   // an agent scraping the page are told what the registry is. If the block is
@@ -271,8 +290,17 @@ test("no claim on /docs/mcp names a single FILE as the registry", () => {
     "/docs/mcp has no metadata description — the surface a search engine and an agent scraping " +
       "the page read is the one this test checks, so its absence must not silence the check",
   );
+  // Both spellings of the claim (see the note above): the PATH form, judged
+  // whatever it names, and the BARE form, judged only when the name is a source
+  // file of this package. The bare pass is what closes the blindness this card
+  // was filed for — it is the same claim and the same per-file count either way.
   const claimed = [
-    ...new Set([...PAGE.matchAll(/api\/internal\/mcpsrv\/([A-Za-z0-9_]+\.go)/g)].map((m) => m[1])),
+    ...new Set([
+      ...[...PAGE.matchAll(/api\/internal\/mcpsrv\/([A-Za-z0-9_]+\.go)/g)].map((m) => m[1]),
+      ...[...PAGE.matchAll(/\b([A-Za-z0-9_]+\.go)\b/g)]
+        .map((m) => m[1])
+        .filter((f) => LITERALS_BY_FILE.has(f)),
+    ]),
   ];
   const wholePackage = [...LITERALS_BY_FILE.values()].reduce((n, c) => n + c, 0);
   assert.ok(

@@ -427,12 +427,23 @@ must_apply "note-only group counted as a category" \
 # the registry while the page's body named the package, and nothing looked at the
 # head. Both legs are proven, because the check's whole content is "claimed file
 # == whole registry":
-#   7a  the file name that SHIPPED (tools.go, 176 of the 177 literals) -> RED
-#   7b  the file that exposed the drift (parity_issue396.go, 1 of 177) -> RED
+#   7a  the file name that SHIPPED (tools.go, 180 of the 181 literals) -> RED
+#   7b  the file that exposed the drift (parity_issue396.go, 1 of 181) -> RED
 # A check that only caught the first would be pinned to one filename rather than
 # to the claim, so 7b is what makes it a rule instead of a blocklist. Both
 # needles are DERIVED from the current per-file literal counts (claim_needle), so
 # a registry that grows moves them with it.
+#   7c (card t_69bd144f) the SAME claim in its BARE spelling — no
+#      `api/internal/mcpsrv/` in front of it — which the guard shipped BLIND to:
+#      it measured GREEN on "the tool registry in tools.go" while the whole web
+#      unit suite stayed 510/510. The extraction was widened for that shape, so
+#      7a is re-driven in this same run: a widen that lost the path form shows up
+#      as a FAIL on 7a next to the pass here, which is the point of carrying both.
+#   7d/7e are the NEGATIVE controls the widened extraction must keep: dropping
+#      the file name entirely ("the tool registry") is a legitimate state the
+#      card allows, and a bare `.go` token that is NOT a source file of this
+#      package is prose rather than a claim about this registry — both must stay
+#      GREEN, or the widening reds sentences it has no business reding.
 restore_all
 C7A=$(claim_needle tools.go)
 C7B=$(claim_needle parity_issue396.go)
@@ -455,6 +466,34 @@ must_apply "a subset file named as the registry" \
   mutate "$PAGE" 'the tool registry in the api/internal/mcpsrv package.' \
                  'the tool registry in api/internal/mcpsrv/parity_issue396.go.' \
   && check "a subset file named as the registry (parity_issue396.go) -> claim" RED "$C7B"
+
+# 7c: the SAME claim in its BARE spelling — the shape this card was filed for.
+# No path, so the path-anchored pass cannot see it; the widened bare pass must,
+# and must report the same derived count the path form reports for tools.go.
+restore_all
+must_apply "the file name bare in the metadata description" \
+  mutate "$PAGE" 'the tool registry in the api/internal/mcpsrv package.' \
+                 'the tool registry in tools.go.' \
+  && check "a single file named as the registry, BARE (tools.go) -> claim" RED "$C7A"
+
+# 7d: the legitimate state the card allows — the file name dropped entirely. An
+# extraction that reds this has over-reached: "the tool registry" claims nothing
+# about one file.
+restore_all
+must_apply "the file name dropped entirely" \
+  mutate "$PAGE" 'the tool registry in the api/internal/mcpsrv package.' \
+                 'the tool registry.' \
+  && check "no file named at all -> claim (legitimate state, must stay GREEN)" GREEN ""
+
+# 7e: prose that happens to carry a `.go` token which is NOT a source file of
+# this package (the widened bare pass reads only names the per-file literal map
+# knows, so this is not a claim and must stay GREEN). Without this control the
+# widen could red every `.go` string on the page and still pass 7c.
+restore_all
+must_apply "a bare .go token that is not a source file of the package" \
+  mutate "$PAGE" 'the tool registry in the api/internal/mcpsrv package.' \
+                 'the tool registry in the api/internal/mcpsrv package, never a stale mirror such as tools_snapshot.go.' \
+  && check "a non-package .go token in prose -> claim (must stay GREEN)" GREEN ""
 
 restore_all
 
