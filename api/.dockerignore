@@ -1,2 +1,35 @@
+# Docker build ignore rules for the api/ build context
+# (`docker build -f api/Dockerfile api/`).
+#
+# NOTE: this file does NOT apply to the repo-root context, which the web image
+# uses (`docker build -f web/Dockerfile .`) and which must keep api/ test files:
+# `npm run build` runs the unit tests first, and
+# web/src/lib/langPlacement.test.ts reads ../../../api/internal/mcpsrv/
+# mcp_parity_test.go at image-build time. The root .dockerignore therefore
+# excludes no _test.go, on purpose.
+
+# Local Go build output (~60 MB); the image builds its own binary.
 bin/
+
+# Test files are not inputs to this build. api/Dockerfile runs `go mod download`
+# and `go build ./cmd/jomform-api` only; neither reads a _test.go. Nothing under
+# api/scripts/ (the biteproof harnesses, which do name _test.go files) is invoked
+# by the build — they run on the host against the checkout — and the runtime
+# stage copies just the binary, so no test file is needed at any stage.
+#
+# WHY `**`, MEASURED NOT ASSUMED (Docker 29.7.1 / buildx 0.36.1, BuildKit):
+# a bare pattern in .dockerignore matches the context ROOT only — `*` never
+# crosses `/`, exactly as in Go's filepath.Match — so `*_test.go` excluded the
+# zero top-level test files and left all 413 nested ones in the context
+# (probe: `find /ctx -name '*_test.go' | wc -l` = 413; a scratch context with
+# root_test.go + sub/x_test.go and the bare rule kept 1 file). Docker documents
+# `**` as matching "any number of directories (including zero)"
+# (docs.docker.com/build/concepts/context/#syntax), and the same probe over
+# this tree returns 0 with `**/*_test.go`.
+#
+# Both forms are kept: `**/*_test.go` is what the documented matcher honours,
+# and the bare `*_test.go` is the root-level rule that holds under a narrower
+# glob implementation, so the exclusion does not depend on one engine's reading
+# of `**`. The whole defect was a pattern that looked sufficient and was not.
 *_test.go
+**/*_test.go
