@@ -1,7 +1,7 @@
 package dbstore
 
 // Guard for the workspace-slug rule's architecture (card t_3541fb75, the rework
-// of PR 691 onto current main).
+// of PR 691 onto current main; the caller side re-walked on card t_fec28096).
 //
 // WHAT REPLACED WHAT. The file this replaces (workspace_slug_comment_guard_test.go)
 // pinned the OPPOSITE state, and it was right to at the time: it asserted that
@@ -22,54 +22,122 @@ package dbstore
 //
 // It reads SOURCE ONLY and needs no database, so it runs in the plain
 // `go test ./...` pass, not only in the integration suite.
+//
+// CARD t_fec28096 — WHY THE CALLER SIDE WALKS THE TREE, AGAIN.
+//
+// The file PR 691 landed to replace the old guard kept the shape half's tree
+// walk and dropped the caller half's: it read a fixed pair of file paths
+// (slugRuleCallers) and checked each for `strings.Contains(src,
+// "ValidateWorkspaceSlug(")`. That is the very defect PR 808 had just fixed one
+// file earlier — a hard-coded list is satisfied by the files it names and blind
+// to every other one — so a caller added in a NEW file was invisible again.
+// Measured on main before this change: a fifth caller in a brand-new
+// internal/httpapi/qa_fifth_caller.go compiled (`go build ./...` RC=0) and left
+// TestWorkspaceSlugRuleHasExactlyOneDefinition AND the whole dbstore package
+// green under -race. The drift this guard claims to catch was the one thing it
+// could not see.
+//
+// The caller half now derives the set by WALKING the api/ tree, and compares it
+// with the reviewed set. Three further decisions are deliberate, not incidental:
+//
+//  1. The walk matches CALLS through the AST (go/parser), not a substring. A
+//     definition is not a call expression, so the rule's own `func
+//     ValidateWorkspaceSlug(slug string) (string, error)` can never be counted
+//     as a call site — which a substring pattern cannot promise: an
+//     arity-specific pattern mis-classifies that definition line as a caller
+//     (the pre-691 definition returned only `error`, and 691's takes `(string,
+//     error)`), so the subtraction is load-bearing there and structural here.
+//  2. Comments are not parsed (`parser.ParseFile(..., 0)`), so a file cannot be
+//     made a caller by a sentence in a comment, nor stop being one by
+//     commenting its call out.
+//  3. The shape half pins the BOUNDS, not the exact identifier: it matches
+//     `len(<ident>) < 3 || len(<ident>) > 40`. The old exact-string match
+//     claimed "a re-implementation cannot hide behind a renamed variable" and
+//     did not deliver it — measured on main: `func qaRenamedVarWriter(s string)
+//     bool { return len(s) < 3 || len(s) > 40 }` in a new file left the guard
+//     green. Its limit, stated rather than implied: a re-implementation that
+//     restates the bounds in another arrangement (`len(s) > 40 || len(s) < 3`,
+//     `len(s) <= 2`) is still not a match on this line — a source pattern
+//     cannot bound every spelling, and the behavioural tests are what catch a
+//     rule that is wrong rather than duplicated.
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
 )
 
 // slugShapeRule is the length leg of the rule, as it is written in the ONE
-// implementation. Matching the exact expression rather than a looser shape is
-// deliberate: a re-implementation cannot hide behind a renamed variable.
+// implementation. It is quoted in this file's messages; the tree-wide scan uses
+// slugShapeRuleRe, which matches the same bounds.
 const slugShapeRule = "len(slug) < 3 || len(slug) > 40"
+
+// slugShapeRuleRe pins the length leg's BOUNDS — 3 and 40, as one conjunction —
+// while leaving the identifier open, so a second implementation cannot escape
+// by renaming its parameter. It matched exactly one file in api/ when it was
+// introduced (internal/dbstore/workspace_slug.go); anything else matching it is
+// a second definition of the same rule and is reported by name.
+var slugShapeRuleRe = regexp.MustCompile(
+	`len\([A-Za-z_][A-Za-z0-9_]*\)\s*<\s*3\s*\|\|\s*len\([A-Za-z_][A-Za-z0-9_]*\)\s*>\s*40`)
+
+// slugRuleDefinitionRe finds the shared rule's definition whatever its ARITY
+// (`func ValidateWorkspaceSlug(slug string) (string, error)` on current main).
+// An arity-specific pattern would either miss the definition or read it as a
+// call site, which is the mis-classification card t_fec28096 records.
+var slugRuleDefinitionRe = regexp.MustCompile(`(?m)^func\s+ValidateWorkspaceSlug\b`)
 
 // slugRuleFile is the ONE place the workspace-slug rule is defined.
 const slugRuleFile = "internal/dbstore/workspace_slug.go"
 
-// slugRuleCallers are the production files that must DELEGATE to it. They are
-// the write paths that can set or MOVE a tenant's public host:
+// slugRuleCallers is the REVIEWED SET of production files that call the shared
+// rule — the write paths that can set or MOVE a tenant's public host, plus the
+// legacy provisioning path in the rule's own package:
 //
-//	httpapi/rest_workspaces.go — POST /v1/workspaces, PATCH /v1/workspaces/{id}
-//	mcpsrv/workspaces.go       — create_workspace, update_workspace
+//	dbstore/workspace.go        — ProvisionLegacyWorkspaceForOwner's derived slug,
+//	                              and the reserved-name probe it runs on candidates
+//	httpapi/rest_workspaces.go  — POST /v1/workspaces, PATCH /v1/workspaces/{id}
+//	mcpsrv/workspaces.go        — create_workspace, update_workspace
 //
-// dbstore/workspace.go's ProvisionLegacyWorkspaceForOwner also calls it, but its
-// call is asserted below in the same file as the rule, so it is covered by the
-// "the one implementation is where this file says it is" check.
+// It is the thing the derived set is COMPARED against, and the only list in this
+// file that is hand-written. It is not the scan: the scan walks the tree, so a
+// caller in a file this list never names is reported by path instead of being
+// invisible (that was the measured defect — see the header).
+//
+// A file may hold more than one call site (`dbstore/workspace.go` holds three),
+// so the assertion is over the SET OF PATHS and never over a count.
 var slugRuleCallers = []string{
+	"internal/dbstore/workspace.go",
 	"internal/httpapi/rest_workspaces.go",
 	"internal/mcpsrv/workspaces.go",
 }
 
 // TestWorkspaceSlugRuleHasExactlyOneDefinition is the core assertion: the shape
-// rule appears in ONE non-test file, and every file that needs it delegates.
+// rule appears in ONE non-test file, that file really defines the rule, and the
+// set of files calling it is exactly the reviewed set.
 //
 // The scan WALKS the whole api/ tree rather than reading a fixed list, because
-// the defect this guard is about is a FOURTH writer reimplementing the rule. A
-// fixed list would report "the copies are gone" the moment the rule was pasted
-// somewhere new — the opposite of what it must say.
+// the defect this guard is about is a FOURTH writer reimplementing the rule — or
+// a new caller of it. A fixed list reports "the copies are gone" the moment the
+// rule was pasted somewhere new — the opposite of what it must say.
 //
 // The assertion is stated as a SET of paths, not a count, so a copy moving
 // between files is reported by name rather than as an off-by-one.
 func TestWorkspaceSlugRuleHasExactlyOneDefinition(t *testing.T) {
-	found := scanAPITreeFor(t, slugShapeRule)
+	found := scanAPITreeMatching(t, fmt.Sprintf("a file matching the shape rule %s", slugShapeRuleRe),
+		slugShapeRuleRe.MatchString)
 
 	// The rule must be there, or the guard is reading the wrong tree and would
 	// pass vacuously.
 	if !found[slugRuleFile] {
-		t.Fatalf("the slug shape rule (%q) is not in %s — the guard's anchor moved and it would "+
+		t.Fatalf("the slug shape rule (%s) is not in %s — the guard's anchor moved and it would "+
 			"pass vacuously", slugShapeRule, slugRuleFile)
 	}
 
@@ -81,18 +149,66 @@ func TestWorkspaceSlugRuleHasExactlyOneDefinition(t *testing.T) {
 	}
 	sort.Strings(extra)
 	if len(extra) > 0 {
-		t.Fatalf("the slug shape rule (%q) is defined in %v as well as %s. That is a SECOND "+
-			"implementation — the drift this rule exists to prevent. Make the extra file(s) delegate "+
-			"to ValidateWorkspaceSlug instead.", slugShapeRule, extra, slugRuleFile)
+		t.Fatalf("the slug shape rule (%s, any parameter name) is defined in %v as well as %s. "+
+			"That is a SECOND implementation — the drift this rule exists to prevent. Make the "+
+			"extra file(s) delegate to ValidateWorkspaceSlug instead.", slugShapeRule, extra,
+			slugRuleFile)
 	}
 
-	// And every write path that can set or move a slug must really call it.
+	// The definition must be in the file this guard names, whatever its arity —
+	// otherwise the caller set below is compared against a rule that lives
+	// somewhere else, and the guard has silently changed its subject.
+	if !slugRuleDefinitionRe.MatchString(readAPIFile(t, slugRuleFile)) {
+		t.Fatalf("no `func ValidateWorkspaceSlug` definition in %s — the guard's anchor moved, and "+
+			"a guard checked against the wrong file proves nothing. Fix slugRuleFile in this test "+
+			"if the rule deliberately moved.", slugRuleFile)
+	}
+
+	// And every file that calls the rule must be a REVIEWED caller. The set is
+	// derived from the tree, so a new caller is named by path instead of passing.
+	callers := scanAPITreeForCallers(t, "ValidateWorkspaceSlug")
+	if len(callers) == 0 {
+		t.Fatalf("no file under api/ calls ValidateWorkspaceSlug — the walk is not covering the " +
+			"tree, and this half of the guard would then pass while proving nothing")
+	}
+
+	got := make([]string, 0, len(callers))
+	for rel := range callers {
+		got = append(got, rel)
+	}
+	sort.Strings(got)
+
+	reviewed := map[string]bool{}
 	for _, rel := range slugRuleCallers {
-		src := readAPIFile(t, rel)
-		if !strings.Contains(src, "ValidateWorkspaceSlug(") {
-			t.Errorf("%s does not call ValidateWorkspaceSlug — it either stopped validating the "+
-				"slug or grew its own copy of the rule, and the rule is then no longer one rule", rel)
+		reviewed[rel] = true
+	}
+	var unexpected []string
+	for _, rel := range got {
+		if !reviewed[rel] {
+			unexpected = append(unexpected, fmt.Sprintf("%s (%s)", rel,
+				strings.Join(sortedCopy(callers[rel]), ", ")))
 		}
+	}
+	if len(unexpected) > 0 {
+		t.Errorf("these files call ValidateWorkspaceSlug but are not reviewed callers of the "+
+			"shared rule:\n\t%s\n"+
+			"Call sites found: %v\nReviewed set:     %v\n"+
+			"A file calling the rule is a SURFACE that enforces the slug rule, and it inherits the "+
+			"reserved-name refusal with it. If the new caller is deliberate, add its path to "+
+			"slugRuleCallers in this test WITH its reason in the same change — the list is not the "+
+			"scan, it is the thing the scan is compared against.",
+			strings.Join(unexpected, "\n\t"), got, slugRuleCallers)
+	}
+	for _, rel := range slugRuleCallers {
+		if len(callers[rel]) == 0 {
+			t.Errorf("%s is listed in slugRuleCallers but no longer calls ValidateWorkspaceSlug — "+
+				"it either stopped validating the slug or grew its own copy of the rule, and the "+
+				"rule is then no longer one rule. Remove the entry only if the surface is really "+
+				"gone, never because the guard is inconvenient.", rel)
+		}
+	}
+	for _, rel := range got {
+		t.Logf("%s calls the shared rule at %s", rel, strings.Join(sortedCopy(callers[rel]), ", "))
 	}
 }
 
@@ -146,7 +262,11 @@ func TestTheReservedLegRunsBeforeTheShapeRule(t *testing.T) {
 	body = body[:end]
 
 	reservedAt := strings.Index(body, "urlguard.ReservedSubdomain(")
-	shapeAt := strings.Index(body, slugShapeRule)
+	shapeLoc := slugShapeRuleRe.FindStringIndex(body)
+	shapeAt := -1
+	if shapeLoc != nil {
+		shapeAt = shapeLoc[0]
+	}
 	if reservedAt < 0 || shapeAt < 0 {
 		t.Fatalf("ValidateWorkspaceSlug no longer contains both legs (reserved at %d, shape at %d) "+
 			"— this guard would otherwise pass on a function that checks neither", reservedAt, shapeAt)
@@ -171,10 +291,10 @@ func TestLegacyProvisionStillValidatesTheDerivedSlug(t *testing.T) {
 	}
 }
 
-// scanAPITreeFor returns every non-test .go file under api/ whose source
-// contains needle, keyed by its api/-relative path. Test files are excluded so
+// scanAPITreeMatching returns every non-test .go file under api/ whose source
+// satisfies match, keyed by its api/-relative path. Test files are excluded so
 // this guard cannot be satisfied by a fixture that happens to spell the rule.
-func scanAPITreeFor(t *testing.T, needle string) map[string]bool {
+func scanAPITreeMatching(t *testing.T, what string, match func(string) bool) map[string]bool {
 	t.Helper()
 	root := filepath.Join("..", "..")
 	found := map[string]bool{}
@@ -196,19 +316,187 @@ func scanAPITreeFor(t *testing.T, needle string) map[string]bool {
 		if rerr != nil {
 			return rerr
 		}
-		if strings.Contains(string(raw), needle) {
+		if match(string(raw)) {
 			rel, _ := filepath.Rel(root, path)
 			found[filepath.ToSlash(rel)] = true
 		}
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walk api/ for %q: %v — the guard cannot run without it", needle, err)
+		t.Fatalf("walk api/ for %s: %v — the guard cannot run without it", what, err)
 	}
 	if len(found) == 0 {
-		t.Fatalf("no file under api/ contains %q — the walk is not covering the tree", needle)
+		t.Fatalf("no file under api/ is %s — the walk is not covering the tree", what)
 	}
 	return found
+}
+
+// scanAPITreeForCallers returns, for every non-test .go file under api/ that
+// CALLS name, the source positions of those calls, keyed by the file's
+// api/-relative path.
+//
+// WHY A WALK AND NOT A LIST. A fixed list is satisfied by the files it names and
+// blind to every other one, so the drift it claims to catch is the one drift it
+// cannot report — measured on main before this change: a fifth caller in
+// internal/httpapi/qa_fifth_caller.go built clean and red-ed nothing in this
+// package. The set of files is therefore DERIVED, and slugRuleCallers is only
+// the thing it is compared against.
+//
+// The parse keeps no comments (`parser.ParseFile(..., 0)`), so a sentence in a
+// comment can neither satisfy this check nor break it.
+func scanAPITreeForCallers(t *testing.T, name string) map[string][]string {
+	t.Helper()
+	root := filepath.Join("..", "..")
+	found := map[string][]string{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "testdata", "vendor":
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		raw, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		fset := token.NewFileSet()
+		file, perr := parser.ParseFile(fset, path, raw, 0)
+		if perr != nil {
+			return perr
+		}
+		rel, rerr := filepath.Rel(root, path)
+		if rerr != nil {
+			return rerr
+		}
+		rel = filepath.ToSlash(rel)
+		for _, pos := range ruleCallSites(file, name) {
+			found[rel] = append(found[rel], fmt.Sprintf("line %d", fset.Position(pos).Line))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk api/ for callers of %s: %v — the guard cannot run without it", name, err)
+	}
+	return found
+}
+
+// ruleCallSites returns the position of every CALL to name inside file.
+//
+// A call is a CallExpr whose callee is the bare name, a qualified
+// `pkg.ValidateWorkspaceSlug`, or a name the rule was BOUND to in this file
+// (`v := dbstore.ValidateWorkspaceSlug` and then `v(slug)`, package-level or
+// local). The binding is covered because the name-only spellings above cannot
+// see it, and a surface that binds the rule first would otherwise be a caller
+// this guard does not report.
+//
+// A DEFINITION is not a call, structurally: the rule's own `func
+// ValidateWorkspaceSlug(slug string) (string, error)` is a FuncDecl name, not a
+// CallExpr. No arity-, name-, or parameter-specific pattern is needed to
+// subtract it — which matters here, because the definition line DOES match the
+// string "ValidateWorkspaceSlug(" that a substring scan looks for.
+//
+// WHAT THIS CANNOT SEE, stated so it is not over-claimed: the rule stored as a
+// func value in a container (`map[string]func(string) (string, error){"v":
+// dbstore.ValidateWorkspaceSlug}`) and called through that container. A wrapper
+// of that shape still reaches the rule by one of the spellings above, and a full
+// re-implementation is the shape-rule half's job.
+func ruleCallSites(file *ast.File, name string) []token.Pos {
+	bound := ruleBoundNames(file, name)
+	var sites []token.Pos
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if callsRule(call.Fun, name, bound) {
+			sites = append(sites, call.Pos())
+		}
+		return true
+	})
+	return sites
+}
+
+// callsRule reports whether a CallExpr's callee expression is a call of the
+// rule: the bare name, a selector ending in the name (`dbstore.`-qualified or,
+// deliberately, a method of the same name — a method is a second implementation,
+// and naming its file is the right report), or a name bound to the rule.
+func callsRule(fun ast.Expr, name string, bound map[string]bool) bool {
+	switch e := fun.(type) {
+	case *ast.Ident:
+		return e.Name == name || bound[e.Name]
+	case *ast.SelectorExpr:
+		return e.Sel != nil && e.Sel.Name == name
+	case *ast.ParenExpr:
+		return callsRule(e.X, name, bound)
+	}
+	return false
+}
+
+// ruleBoundNames returns every name in file that the rule itself is bound to:
+// a package-level `var v = dbstore.ValidateWorkspaceSlug` or a local
+// `v := dbstore.ValidateWorkspaceSlug`. Only a binding to the rule's entry point
+// counts — `v := somethingElse` is not a caller, and resolving arbitrary
+// indirection would be guessing.
+//
+// The map is FILE-scoped rather than scope-precise. That direction is safe HERE
+// because the assertion is over the SET OF FILES: over-reporting a site inside a
+// file that already calls the rule changes nothing, and the only names that can
+// be added are ones assigned the rule itself.
+func ruleBoundNames(file *ast.File, name string) map[string]bool {
+	bound := map[string]bool{}
+	note := func(lhs []ast.Expr, rhs []ast.Expr) {
+		if len(lhs) != len(rhs) {
+			return
+		}
+		for i, l := range lhs {
+			id, ok := l.(*ast.Ident)
+			if !ok || id.Name == "_" {
+				continue
+			}
+			if refersToRule(rhs[i], name) {
+				bound[id.Name] = true
+			}
+		}
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch d := n.(type) {
+		case *ast.ValueSpec:
+			lhs := make([]ast.Expr, 0, len(d.Names))
+			for _, nm := range d.Names {
+				lhs = append(lhs, nm)
+			}
+			note(lhs, d.Values)
+		case *ast.AssignStmt:
+			note(d.Lhs, d.Rhs)
+		}
+		return true
+	})
+	return bound
+}
+
+// refersToRule reports whether e names the rule (bare or qualified).
+func refersToRule(e ast.Expr, name string) bool {
+	switch v := e.(type) {
+	case *ast.Ident:
+		return v.Name == name
+	case *ast.SelectorExpr:
+		return v.Sel != nil && v.Sel.Name == name
+	}
+	return false
+}
+
+// sortedCopy returns in, sorted, without mutating the caller's slice.
+func sortedCopy(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
 }
 
 // readAPIFile reads a file by its api/-relative path, failing (never skipping)
