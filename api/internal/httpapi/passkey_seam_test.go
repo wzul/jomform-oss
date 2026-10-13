@@ -64,6 +64,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -720,6 +721,114 @@ func TestPasskeyLoginPageRendersAPasskeyControl(t *testing.T) {
 	}
 }
 
+// passkeyDocsNeedles is the passkey section's contract: both halves the user
+// needs — that a sign-in control exists, and what to do when an older passkey
+// cannot be used by it. Shared with the locator's own bite proof below, so both
+// read the same list.
+var passkeyDocsNeedles = []struct{ needle, why string }{
+	{"login page", "the docs must say where the passkey sign-in control is, or the feature reads as absent"},
+	{"non-discoverable", "the docs must name the reason an older passkey cannot be used"},
+	{"register a new passkey", "the docs must state the recovery, not leave it implicit"},
+}
+
+// blockCommentSpan matches a /* … */ span so the locator below can blank it out.
+var blockCommentSpan = regexp.MustCompile(`(?s)/\*.*?\*/`)
+
+// blankOutBlockComments replaces the interior of every /* … */ span with spaces,
+// keeping the newlines so the line-anchored expressions still see the same lines.
+// A line comment needs no help (`//` cannot be part of a property line), but a
+// `slug:` line written INSIDE a block comment would otherwise read as the entry's
+// property and the located "section" would be the comment — which is the case
+// named "a block comment inside the entry" in
+// TestPasskeyDocsLocatorIsAnchoredToTheEntry (it is comment-satisfiable without
+// this).
+func blankOutBlockComments(src string) string {
+	return blockCommentSpan.ReplaceAllStringFunc(src, func(span string) string {
+		b := []byte(span)
+		for i, c := range b {
+			if c != '\n' {
+				b[i] = ' '
+			}
+		}
+		return string(b)
+	})
+}
+
+// faqEntryForSlug returns the entry whose `slug` PROPERTY is slug, out of the
+// `const FAQ: FaqEntry[]` array of a /docs page source — for the passkeys
+// section, the object text the page actually renders.
+//
+// THE LOCATOR IS THE PROPERTY LINE, NOT THE FIRST OCCURRENCE OF THE LITERAL
+// (t_1310d487). The passkey guard used to read
+//
+//	start := strings.Index(docs, `slug: "passkeys"`)
+//
+// over the whole file, so the needle was satisfied by a COMMENT that merely
+// named it. Measured on t_925f0571's head 3875b441: a one-line comment above the
+// array mentioning the literal made the guard slice the comment and red a
+// correct, unchanged entry — `the docs passkeys section does not mention
+// "non-discoverable"` / `"register a new passkey"` — which red the api `test`
+// gate for 637s; the same slice PASSED its third needle ("login page") out of
+// that comment, which is the vacuity direction: prose that is not the docs entry
+// satisfied the guard. Anchoring on the property line of an object inside the
+// array the page renders makes a comment neither able to red it nor able to
+// satisfy it; the two directions are driven in
+// TestPasskeyDocsLocatorIsAnchoredToTheEntry below.
+func faqEntryForSlug(docs, slug string) (string, error) {
+	// The entry must be inside the array the page renders: the section is on the
+	// page only because the FAQ map branches on the entry's shape, so an entry
+	// moved into another array in this file would render nowhere.
+	const faqMarker = "const FAQ: FaqEntry[] = ["
+	i := strings.Index(docs, faqMarker)
+	if i < 0 {
+		return "", fmt.Errorf("the page no longer declares `%s` — a slug-anchored section renders only out of that array", faqMarker)
+	}
+	faq := blankOutBlockComments(docs[i+len(faqMarker):])
+	if end := strings.Index(faq, "\n];"); end >= 0 {
+		faq = faq[:end]
+	}
+
+	// A property line, not a mention: the literal must be the whole line
+	// (indentation, `slug:`, the value, an optional comma), so prose inside a `//`
+	// comment cannot be read as the section.
+	propLine := regexp.MustCompile(`(?m)^[ 	]*slug:[ 	]*"` + regexp.QuoteMeta(slug) + `"[ 	]*,?[ 	]*$`)
+	prop := propLine.FindStringIndex(faq)
+	if prop == nil {
+		return "", fmt.Errorf("the FAQ array declares no line reading `slug: \"%s\",` — a mention of the literal inside a comment does not count", slug)
+	}
+
+	// Bound the ENTRY, so the needles cannot be satisfied by a sibling entry: the
+	// object opens on its own line (`  {`) and closes on `  },`.
+	entryOpen := regexp.MustCompile(`(?m)^[ 	]*\{[ 	]*$`)
+	opens := entryOpen.FindAllStringIndex(faq[:prop[0]], -1)
+	if len(opens) == 0 {
+		return "", fmt.Errorf("the `slug: \"%s\",` property is not inside an object literal that opens on its own line — this locator reads the entry between that `{` and its closing `},`", slug)
+	}
+	start := opens[len(opens)-1][0]
+	entryClose := regexp.MustCompile(`(?m)^[ 	]*\},?[ 	]*$`)
+	close := entryClose.FindStringIndex(faq[prop[1]:])
+	if close == nil {
+		return "", fmt.Errorf("the `slug: \"%s\",` entry's object never closes with a `},` line — this locator bounds the entry there", slug)
+	}
+	return faq[start : prop[1]+close[1]], nil
+}
+
+// entryBody returns the value of the `body` string property of an entry returned
+// by faqEntryForSlug.
+//
+// The needles are asserted against that VALUE rather than against the entry's
+// text, so a comment INSIDE the entry cannot satisfy them either: only prose the
+// page renders counts. A shape change (a multi-line or templated body) is refused
+// by name rather than asserted against nothing.
+func entryBody(entry string) (string, error) {
+	bodyLine := regexp.MustCompile(`(?m)^[ 	]*body:[ 	]*"(.*)"[ 	]*,?[ 	]*$`)
+	m := bodyLine.FindStringSubmatch(entry)
+	if m == nil {
+		return "", fmt.Errorf("the entry declares no single-line `body: \"…\"` property — this guard asserts the prose the page renders; teach it the new shape rather than dropping the assertion")
+	}
+	return m[1], nil
+}
+
 // TestPasskeyDocsDescribeTheRecoveryPath covers the half of this change a user
 // actually reads.
 //
@@ -733,25 +842,170 @@ func TestPasskeyLoginPageRendersAPasskeyControl(t *testing.T) {
 func TestPasskeyDocsDescribeTheRecoveryPath(t *testing.T) {
 	docs := webSource(t, "src/app/docs/page.tsx")
 
-	if !strings.Contains(docs, `slug: "passkeys"`) {
-		t.Fatalf("web/src/app/docs/page.tsx has no passkeys section — the feature is undocumented " +
-			"(AGENTS.md documentation parity)")
+	// The section is located by its own `slug` property inside the array the page
+	// renders — never by the first occurrence of the literal in the file, which a
+	// comment can move (t_1310d487).
+	entry, err := faqEntryForSlug(docs, "passkeys")
+	if err != nil {
+		t.Fatalf("web/src/app/docs/page.tsx has no passkeys section — the feature is undocumented "+
+			"(AGENTS.md documentation parity): %v", err)
 	}
-	start := strings.Index(docs, `slug: "passkeys"`)
-	section := docs[start:]
-	if end := strings.Index(section, "\n  },"); end > 0 {
-		section = section[:end]
+	body, err := entryBody(entry)
+	if err != nil {
+		t.Fatalf("web/src/app/docs/page.tsx passkeys entry: %v", err)
 	}
-	// Both halves the user needs: that a control exists, and what to do when an
-	// older passkey cannot be used by it.
-	for _, want := range []struct{ needle, why string }{
-		{"login page", "the docs must say where the passkey sign-in control is, or the feature reads as absent"},
-		{"non-discoverable", "the docs must name the reason an older passkey cannot be used"},
-		{"register a new passkey", "the docs must state the recovery, not leave it implicit"},
-	} {
-		if !strings.Contains(section, want.needle) {
+
+	for _, want := range passkeyDocsNeedles {
+		if !strings.Contains(body, want.needle) {
 			t.Errorf("the docs passkeys section does not mention %q — %s", want.needle, want.why)
 		}
+	}
+}
+
+// TestPasskeyDocsLocatorIsAnchoredToTheEntry is the two-direction bite proof for
+// the locator above, and it runs on every gate rather than on demand.
+//
+// TestPasskeyDocsDescribeTheRecoveryPath reads needles out of a TypeScript file
+// that is full of comments, so "can a comment decide this guard's verdict?" is a
+// question a test has to answer rather than a promise written in a comment. It
+// has happened: on t_925f0571's head 3875b441 a one-line comment above the FAQ
+// array that merely named the literal made the guard slice the comment and red a
+// correct, unchanged entry (the api `test` gate, 637s), and the third needle of
+// that same slice PASSED out of the comment — the vacuity direction (t_1310d487).
+//
+// Every fixture is fed to BOTH locators, and a case is only valid when the
+// pre-fix one really shows the defect it claims: a fixture that does not
+// reproduce the premise would make the anchored answer prove nothing.
+func TestPasskeyDocsLocatorIsAnchoredToTheEntry(t *testing.T) {
+	// The shipped page's shape, trimmed to what the locator reads: a q/a entry,
+	// then the slug-anchored entry whose `body` carries the needles.
+	const pageTemplate = `const FAQ: FaqEntry[] = [
+  {
+    q: "What are the placeholders in emails?",
+    a: "Placeholders are replaced with real values when an email is sent.",
+  },
+  {
+{{INSIDE}}    title: "Passkeys (sign in without a password)",
+    slug: "passkeys",
+    body: "{{BODY}}",
+  },
+];
+`
+	const (
+		fullBody = "The login page offers a passkey button before you type anything. An older passkey " +
+			"may be non-discoverable, which the button cannot use: delete that row and register a new passkey."
+		guttedBody = "Passkeys let you sign in without a password."
+		// A `//` comment above the array naming the literal — the shape that red the
+		// guard on 3875b441.
+		namingLiteral = "// The passkeys entry (slug: \"passkeys\") is asserted by the Go seam guard.\n"
+		// The same comment, now also carrying every needle: the shape that satisfies
+		// the guard about a gutted entry.
+		namingLiteralAndNeedles = "// The passkeys entry (slug: \"passkeys\"): the login page offers the button, an older\n" +
+			"// credential is non-discoverable, and the recovery is to register a new passkey.\n"
+		// A block comment INSIDE the entry carrying the same three needles, with the
+		// `slug:` property on a line of its own — the shape `blankOutBlockComments`
+		// exists for.
+		blockCommentInEntry = "    /*\n      slug: \"passkeys\",\n" +
+			"      login page button, non-discoverable credential, register a new passkey\n    */\n"
+	)
+	build := func(above, inside, body string) string {
+		s := strings.Replace(pageTemplate, "{{INSIDE}}", inside, 1)
+		s = strings.Replace(s, "{{BODY}}", body, 1)
+		return above + s
+	}
+	hasAll := func(s string) bool {
+		for _, want := range passkeyDocsNeedles {
+			if !strings.Contains(s, want.needle) {
+				return false
+			}
+		}
+		return true
+	}
+	// preFixPasskeySection is the locator exactly as it shipped before this card:
+	// the FIRST occurrence of the literal anywhere in the file, sliced to the next
+	// `\n  },`.
+	preFixPasskeySection := func(src string) string {
+		start := strings.Index(src, `slug: "passkeys"`)
+		if start < 0 {
+			return ""
+		}
+		section := src[start:]
+		if end := strings.Index(section, "\n  },"); end > 0 {
+			section = section[:end]
+		}
+		return section
+	}
+
+	noEntry := strings.Replace(build(namingLiteralAndNeedles, "", guttedBody), `slug: "passkeys",`, `slug: "workspaces",`, 1)
+
+	for _, tc := range []struct {
+		name string
+		docs string
+		// wantErr: the anchored locator must REFUSE this page rather than answer.
+		wantErr bool
+		// wantNeedles: what the anchored locator must answer about the located body.
+		wantNeedles bool
+		// preFix: what the PRE-FIX locator answers on this fixture ("green" =
+		// it is satisfied, "red" = it is not) — the premise each case reproduces.
+		preFix string
+	}{
+		{
+			name:        "control: the shipped shape, no comment",
+			docs:        build("", "", fullBody),
+			wantNeedles: true,
+			preFix:      "green",
+		},
+		{
+			name:        "direction 1: a comment naming the literal must not red it",
+			docs:        build(namingLiteral, "", fullBody),
+			wantNeedles: true,
+			preFix:      "red",
+		},
+		{
+			name:        "direction 2: a comment naming every needle must not satisfy it",
+			docs:        build(namingLiteralAndNeedles, "", guttedBody),
+			wantNeedles: false,
+			preFix:      "green",
+		},
+		{
+			name:        "direction 2: a block comment inside the entry must not satisfy it",
+			docs:        build("", blockCommentInEntry, guttedBody),
+			wantNeedles: false,
+			preFix:      "green",
+		},
+		{
+			name:    "no passkeys entry (slug renamed): the guard must refuse, not answer out of the comment",
+			docs:    noEntry,
+			wantErr: true,
+			preFix:  "green",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The premise: the pre-fix locator really behaves the way this fixture
+			// claims, or the case measures nothing.
+			pre := preFixPasskeySection(tc.docs)
+			if got := hasAll(pre); (tc.preFix == "green") != got {
+				t.Fatalf("PRE-FIX locator answered all-needles=%v on this fixture, expected %s — the fixture does not reproduce the premise: %q", got, tc.preFix, pre)
+			}
+
+			entry, err := faqEntryForSlug(tc.docs, "passkeys")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("the anchored locator answered out of %q for a page whose FAQ array has no `slug: \"passkeys\",` property — the comment decided the verdict", entry)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("the anchored locator refused a page it must accept: %v", err)
+			}
+			body, err := entryBody(entry)
+			if err != nil {
+				t.Fatalf("the located entry has no single-line `body:` property: %v", err)
+			}
+			if got := hasAll(body); got != tc.wantNeedles {
+				t.Fatalf("the located body carries all three needles = %v, want %v (body: %q)", got, tc.wantNeedles, body)
+			}
+		})
 	}
 }
 
@@ -778,8 +1032,11 @@ func TestPasskeyDocsSectionIsDeepLinked(t *testing.T) {
 
 	// 1. The destination is real: the section exists and its slug is rendered as the
 	//    element id, or the link would land at the top of /docs without scrolling.
-	if !strings.Contains(docs, `slug: "passkeys"`) {
-		t.Fatalf("web/src/app/docs/page.tsx has no `slug: \"passkeys\"` section — /docs#passkeys would land at the top of the page")
+	//    The entry is located by its own `slug` property line (faqEntryForSlug), not
+	//    by the literal anywhere in the file: a mention inside a comment used to
+	//    satisfy this leg while the entry itself was gone (t_1310d487).
+	if _, err := faqEntryForSlug(docs, "passkeys"); err != nil {
+		t.Fatalf("web/src/app/docs/page.tsx has no `slug: \"passkeys\"` section — /docs#passkeys would land at the top of the page: %v", err)
 	}
 	if !strings.Contains(docs, "id={f.slug}") {
 		t.Fatalf("web/src/app/docs/page.tsx does not render the slug as an id — /docs#passkeys would not scroll")

@@ -58,9 +58,11 @@ type Group = { id: string; labelKey: Key; entries: Entry[]; more?: { href: strin
 // cannot drift from the code. The login page renders the passkey sign-in
 // control but carries no /docs link, so #passkeys is NOT reached from there.
 //
-// Do not write that guard's needle literal in this comment (t_eb1c4dd1): it
-// locates the section with an unanchored string search, so the literal appearing
-// up here first makes it assert against this comment instead of the entry.
+// The Go guard locates this entry by the `slug` property line below, not by the
+// first occurrence of that line's text anywhere in the file (t_1310d487): the
+// unanchored search it used before that card sliced whatever came first, so a
+// comment merely naming the section became the "section" — red on a correct
+// entry, and able to satisfy the guard with the entry's own body gutted.
 //
 // Both shapes are declared in one list only because both render below the FAQ
 // heading; the render branches on the shape.
