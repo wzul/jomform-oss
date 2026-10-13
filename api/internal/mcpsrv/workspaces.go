@@ -600,7 +600,10 @@ func (s *Server) purgeWorkspaceMCP(
 	return nil, map[string]any{
 		"status": "purged", "workspace_id": workspace.ID, "slug": workspace.Slug,
 		"name": workspace.Name, "deleted": deleted,
-		"note": "workspace dipadam KEKAL. Tidak boleh dibatalkan.",
+		"note": "workspace dipadam KEKAL. Tidak boleh dibatalkan. Akaun CHIP yang SUDAH ADA " +
+			"sebelum workspace ini (akaun signup yang dipakai semasa ia dicipta) tidak " +
+			"dimusnahkan — ia dilepaskan semula sebagai akaun tanpa workspace; lihat " +
+			"deleted.accounts_unlinked.",
 	}, nil
 }
 

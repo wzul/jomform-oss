@@ -106,7 +106,13 @@ Parity checklist (dashboard → MCP):
   `restore_workspace` brings one back whole (refused, not silently renamed, when
   its slug was retaken while it sat in the bin), and `purge_workspace` is where
   the hard delete lives — trashed rows only, needs confirm_slug, refuses a
-  workspace that has sales, and is never proposable to chat. The distinction that
+  workspace that has sales, and is never proposable to chat. What it destroys is
+  what the WORKSPACE created: its forms, products, api_keys and any account born
+  with it. An account that existed BEFORE the workspace — the signup account a
+  first-workspace create adopts, or the account the legacy provisioning links —
+  is not destroyed: it is unlinked back to no workspace and reported separately
+  as accounts_unlinked, so a purge can never take a row the merchant had before
+  the workspace existed (card t_9fe4c36a). The distinction that
   keeps this honest: `purge_workspace` IS a registered MCP tool an owner's
   write-scoped API key can call, exactly like `purge_form`/`purge_product`/
   `purge_media` — what the chat guard forbids is the in-app chat PROPOSING a

@@ -449,7 +449,7 @@ func (s *Server) registerTools() {
 	}, s.restoreWorkspaceMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "purge_workspace",
-		Description: "PADAM workspace secara KEKAL dari tong sampah (akaun CHIP, borang, produk, kunci API dan jualannya gugur bersama). AMARAN: tidak boleh dibatalkan. Wajib confirm_slug = slug workspace itu. Hanya workspace DALAM TONG SAMPAH — hantar ke tong sampah dahulu guna delete_workspace. Workspace yang ADA JUALAN ditolak (jualan tidak pernah dimusnahkan atau dijadikan yatim). TIDAK PERNAH DICADANGKAN OLEH CHAT: chat dalam aplikasi tidak boleh mencadangkan alat ini; ia alat MCP untuk pemilik, sama kelas dengan purge_form/purge_product/purge_media.",
+		Description: "PADAM workspace secara KEKAL dari tong sampah (borang, produk, kunci API dan jualannya gugur bersama; akaun CHIP yang DICIPTA bersama workspace itu juga gugur, tetapi akaun yang SUDAH ADA sebelum workspace — akaun signup yang digunakan semasa workspace pertama dicipta — TIDAK dimusnahkan: ia dilepaskan semula sebagai akaun tanpa workspace, dan kiraan accounts_unlinked melaporkannya). AMARAN: tidak boleh dibatalkan. Wajib confirm_slug = slug workspace itu. Hanya workspace DALAM TONG SAMPAH — hantar ke tong sampah dahulu guna delete_workspace. Workspace yang ADA JUALAN ditolak (jualan tidak pernah dimusnahkan atau dijadikan yatim). TIDAK PERNAH DICADANGKAN OLEH CHAT: chat dalam aplikasi tidak boleh mencadangkan alat ini; ia alat MCP untuk pemilik, sama kelas dengan purge_form/purge_product/purge_media.",
 	}, s.purgeWorkspaceMCP)
 	// Issue #181: optional profile phone number parity.
 	addTool(s, &mcp.Tool{

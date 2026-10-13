@@ -1346,12 +1346,75 @@ func (s *WorkspaceStore) Restore(ctx context.Context, workspaceID, ownerUserID s
 //     cascade), then forms, products, api_keys. These are the rows whose
 //     workspace_id/account_id FKs are NO ACTION, so the workspace row cannot go
 //     while they are present.
-//  2. the accounts. They hold the CHIP credentials, and the repo invariant is
-//     that CHIP is never shared between workspaces, so an account orphaned by a
-//     purge would be a credential nobody owns.
+//  2. the accounts the WORKSPACE CREATED — a purge destroys what the workspace
+//     brought into existence and UNLINKS what predates it; see THE ACCOUNT RULE
+//     below, which is the deliberate boundary of this method. They hold the CHIP
+//     credentials, and the repo invariant is that CHIP is never shared between
+//     workspaces, so an account born with a workspace that was left behind
+//     would be a credential nobody owns.
 //  3. the workspace row itself. workspace_settings / workspace_members /
 //     workspace_invites / workspace_legal_pages / workspace_email_settings /
 //     affiliates go with it by CASCADE; users.default_workspace_id is SET NULL.
+//
+// THE ACCOUNT RULE (card t_9fe4c36a) — a purge deletes the accounts the
+// workspace CREATED and UNLINKS the ones that predate it. It never destroys a
+// row that existed before the workspace.
+//
+// WHY THIS NEEDED DECIDING RATHER THAN "fixing". Step 2 used to run
+// `DELETE FROM accounts WHERE workspace_id=$1`, which conflates two different
+// rows behind one column:
+//
+//   - the account Workspaces.Create inserted FOR this workspace — born with it,
+//     empty CHIP creds, and unreachable if left behind, which is why a purge
+//     must take it; and
+//   - the account that EXISTED BEFORE the workspace. The ask-first create does
+//     not insert one: SoleEmptyUnscopedAccount + CreateForAccount LINK the
+//     signup account the user already owns (issue #158), and
+//     ProvisionLegacyWorkspace reuses the same link for a legacy content-carrying
+//     account. That account carries the merchant's own identity — its slug, its
+//     CHIP brand id and encrypted secret key — and the purge destroyed it
+//     because the caller typed the WORKSPACE's slug, not because the account was
+//     the workspace's.
+//
+// MEASURED, not hypothetical (t_eff6e23a, prod, 2026-10-01): a pre-existing
+// unlinked account (created 2026-09-01, workspace_id NULL, read live before the
+// test) was adopted by a first-workspace create, and the purge that followed
+// answered {"purged":{"accounts":1,...}} and destroyed it. It had to be restored
+// by hand from its read-live shape: the purge is the hard delete, so nothing in
+// the product can bring the row back.
+//
+// THE DISCRIMINATOR is accounts.created_at against workspaces.created_at, and it
+// is exact for both write paths rather than a guess about them: Create inserts
+// the workspace first and the account second, so an account the workspace made
+// is never older than it, while every linking path UPDATEs an account that was
+// inserted earlier (at signup, or before the legacy provisioning). The rule is
+// also stable under itself — an account this rule unlinks can be adopted by a
+// LATER workspace and is still older than that one, so it is preserved again.
+// The failure direction is chosen deliberately: an account is preserved only
+// when it is STRICTLY older than the workspace, so a shape the ordering cannot
+// distinguish behaves exactly as it did before this change (deleted), and the
+// destructive branch is never the surprising one.
+//
+// WHAT HAPPENS TO AN UNLINKED ACCOUNT, stated rather than left implicit. It
+// returns to `workspace_id = NULL` — the exact state it was in before the
+// adoption, which is the state SoleEmptyUnscopedAccount looks for, so the next
+// first-workspace create reuses it and no row is stranded. It keeps what it
+// holds (its slug, its CHIP linkage) because the purge names the WORKSPACE and
+// that identity is the merchant's, not the workspace's. It keeps NOTHING of the
+// workspace's: forms, products, sales and api_keys were deleted in step 1 by
+// account_id, so a later reuse cannot hand the next workspace the destroyed
+// one's content. NAMED CONSEQUENCE: a merchant who purges a workspace and
+// immediately creates another gets the same account back, CHIP linkage included
+// — visible and changeable in their CHIP settings, whereas the destroyed row was
+// not recoverable at all. Clearing the credentials here was rejected: it would
+// be a second destructive act (against material the user typed) that the
+// caller's confirmation — the workspace's slug — never named.
+//
+// The two kinds are reported separately (`accounts` deleted, `accounts_unlinked`
+// preserved) so the caller is told which happened instead of inferring it from a
+// total. The behaviour is pinned by
+// TestWorkspacePurgeDoesNotDestroyAnAdoptedLegacyAccount (dbstore) and
+// TestRESTWorkspacePurgeUnlinksAnAdoptedLegacyAccount (httpapi).
 //
 // TWO GUARDS, because a purge cannot be undone:
 //
@@ -1469,13 +1532,34 @@ func (s *WorkspaceStore) Purge(ctx context.Context, workspaceID, ownerUserID str
 		}
 		purged[step.table] = tag.RowsAffected()
 	}
-	// Step 2: the accounts (they hold the CHIP credentials; never orphaned).
+	// Step 2: the accounts, on THE ACCOUNT RULE above — the ones this workspace
+	// CREATED are deleted; the ones that PREDATE it (adopted by the ask-first
+	// create or the legacy provisioning) are UNLINKED, never destroyed.
+	//
+	// BOTH statements must run before step 3: accounts.workspace_id is a plain
+	// nullable FK with NO ACTION, so a preserved account still pointing at the
+	// workspace would make the workspace's own delete fail with a raw 23503 —
+	// silently turning this rule into "the purge refuses", which is not it.
 	if len(accIDs) > 0 {
-		tag, derr := tx.Exec(ctx, `DELETE FROM accounts WHERE workspace_id=$1`, workspaceID)
+		tag, derr := tx.Exec(ctx, `
+			DELETE FROM accounts
+			 WHERE workspace_id = $1
+			   AND created_at >= (SELECT created_at FROM workspaces WHERE id = $1)`,
+			workspaceID)
 		if derr != nil {
 			return nil, derr
 		}
 		purged["accounts"] = tag.RowsAffected()
+
+		unlinked, derr := tx.Exec(ctx, `
+			UPDATE accounts SET workspace_id = NULL, updated_at = now()
+			 WHERE workspace_id = $1
+			   AND created_at < (SELECT created_at FROM workspaces WHERE id = $1)`,
+			workspaceID)
+		if derr != nil {
+			return nil, derr
+		}
+		purged["accounts_unlinked"] = unlinked.RowsAffected()
 	}
 	// Step 3: the workspace itself. Its CASCADE children fall away with it.
 	tag, derr := tx.Exec(ctx,

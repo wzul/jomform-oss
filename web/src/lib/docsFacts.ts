@@ -145,6 +145,11 @@ const DESTINATION_FACTS: Record<string, string[]> = {
     "refuses a workspace that has sales",
     "deleting for good is a separate, second step",
     "check_workspace_deletion",
+    // t_9fe4c36a: the purge's account rule. Deleting for good no longer destroys
+    // an account that existed BEFORE the workspace (the signup account a
+    // first-workspace create adopts) — it detaches it. The claim is here so the
+    // sentence in the guide cannot be cut back to silence about it.
+    "detached from the destroyed workspace instead of being deleted",
   ],
   // PR 691: the entry whose 259-word body the /docs restructure refuses. It is a
   // summary pointing at /docs/workspaces#rename-workspace, so its facts are the
@@ -221,7 +226,7 @@ const PER_ENTRY_FLOOR: Record<string, number> = {
   // DESTINATION_FACTS list above holds. The equality check below fails if a fact
   // is dropped without this floor moving with it.
   "Workspaces (your account's tenant)": 6,
-  "Deleting a workspace": 6,
+  "Deleting a workspace": 7,
   // PR 691: the rename entry's summary, at the count its DESTINATION_FACTS list
   // above holds. The facts are the two authorities, the character-counted cap,
   // the permanent redirect and the no-claimant rule — the things the old
