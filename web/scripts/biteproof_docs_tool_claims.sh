@@ -41,7 +41,12 @@
 # nobody measured — so they are driven as REGRESSION cases instead: OLD RED, NEW RED, with
 # the new column naming the offender. `check` prints which direction it read, so a case whose
 # premise has moved cannot pass as the other kind; a stale premise reads as a `***` line, not
-# as a verdict (measured before this change: 4 such lines, `fail=1`, on the unmutated tree).
+# as a verdict (measured before that change: 4 such lines, `fail=1`, on the unmutated tree).
+# WHICH of the two it reads now depends on WHY the premise is unavailable (card t_bfaedba2):
+# when the two columns gave the SAME ANSWER (the base reader is this tree's reader), the line
+# is `SAME READER … not a finding, and not a bite`, and the run ends in the capability refusal
+# below; only a base that answered DIFFERENTLY and still missed the case's expectation prints
+# the `***` line and counts as a failure.
 #
 # THE FALSE POSITIVE CASES' PREMISE HAS SINCE MOVED THE SAME WAY (card t_ceef983f): the
 # parenthetical narrowing and the four asides that motivated it landed ON `origin/main`, the
@@ -50,8 +55,11 @@
 # landed harness exits 1 with five `***` lines, "OLD guard wanted RED, got GREEN". They are
 # driven as GREEN GREEN (quiet in both columns) instead, which still bites on the tree under
 # test — re-widening the shape turns the NEW column RED. The five DETERMINER/POSSESSIVE cases
-# added with t_ceef983f do still reproduce their premise (the loose shapes are untouched on
-# the base), so they are driven the original way, with the old column naming the word.
+# added with t_ceef983f reproduce their premise (the loose shapes untested on the base, the old
+# column naming the word) at a base that still carries the LOOSE capture — which `origin/main`
+# no longer is, because t_ceef983f's own fix merged there too (#1147): measured on main today,
+# the five read "OLD guard wanted RED, got GREEN" against a base guard byte-identical to this
+# tree's. That is the condition the capability refusal below exists for.
 #
 # Each case: mutate -> assert the mutation is really on disk -> run the OLD guard -> run the
 # NEW guard -> restore the page byte-identically (re-checked with sha256).
@@ -62,7 +70,40 @@
 # parity_issue396.go) — so the "old" column could no longer be GREEN and every case
 # reported "does not reproduce". `origin/main` is the revision the comparison actually
 # means ("before this branch" vs "this branch") and it moves with the base, so no hash
-# has to be maintained here.
+# has to be maintained here. It moves with the base in the OTHER direction too, which is
+# what the capability refusal below handles: once a branch's own guard change has merged,
+# `origin/main` IS that reader, and this file REFUSES rather than printing a verdict.
+#
+# THE BASE READER MUST ANSWER DIFFERENTLY FROM THIS TREE'S (card t_bfaedba2 — the same defect
+# class the api sibling `api/scripts/biteproof_model_default_guard.py` fixed in t_9df01abd).
+# Every case here is a comparison of TWO readers, and the whole product of the file is the
+# difference between them. Nothing used to check that a difference EXISTED: on a base whose
+# guard has caught up to the branch under test (`origin/main` after the branch merged — which
+# is exactly what a re-run on main after #1147 is) BOTH columns run the same reader, so the
+# "the base guard missed this" column is empty by construction and each case printed either
+# `*** … OLD guard wanted RED, got GREEN — the case does not reproduce its premise ***` or,
+# worse, a `FIXED … old guard RED naming …` line that asserts the exact opposite of the `***`
+# line three lines above it (measured on main `d3621211`, 2026-10-11: five of each, then
+# `BITEPROOF FAIL (fail=1)`, EXIT=1 — a reader cannot tell that from a real hole).
+#
+# So, AFTER the cases have run, this file requires that at least one case made the base guard
+# ANSWER DIFFERENTLY from this tree's — its verdict, or the claim text it reported with the
+# line number dropped (`sig_of`) — and otherwise REFUSES: exit 2, NO VERDICT, no
+# `BITEPROOF FAIL`/PASS summary, naming a revision to use instead. The revision is DERIVED
+# from the guard's own history at the base (the parent of a commit there that touched the
+# guard — a merge-base would be wrong on a branch cut from current main, because that IS the
+# caught-up revision) and RE-CHECKED BY CAPABILITY inside that run, so this file never hands
+# over a base that would refuse again. It is deliberately NOT a byte-equality test: the defect
+# is a reader that has CAUGHT UP, and such a reader can differ from this tree's in BYTES while
+# answering identically on every case (the api sibling's t_34ab7a00 measured exactly that), so
+# a byte test would accept it. Bytes are not the property — the property is that the two
+# readers ANSWER differently, which is the only thing a case here can measure.
+#
+# The `FIXED`/`QUIET` line is gated on the same evidence (card t_bfaedba2): it may print ONLY
+# when the OLD column was OBSERVED doing what it describes (verdict matched AND, where the case
+# names one, the old failure named the word). Printing it from the case's static arguments is
+# what produced the contradiction above — on a caught-up base the old column was GREEN with
+# `pass 10 / fail 0` and named nothing, while the line read `old guard RED naming …`.
 #
 # THE VERDICT RULE REQUIRES POSITIVE EVIDENCE THAT THE GUARD RAN (card t_420ca40c).
 # It used to be `if grep -q '^ℹ fail [1-9]'; then RED; else GREEN` — a decision from the
@@ -264,6 +305,20 @@ EMBED_SHA=$(sha256sum "$EMBED" | cut -d' ' -f1)
 
 fail=0
 
+# TWO-LEG BOOKKEEPING (card t_bfaedba2). Every `check` call and the /docs/embed case run the
+# base reader and this tree's reader over the same mutation. Their answers are compared with
+# `sig_of` (verdict + the claim text, line number dropped) and a case whose two answers DIFFER
+# is a case where the "before" column means something. `DISAGREE` is the run's evidence that
+# the base is a different reader at all; with 0 of them the whole comparison is a reader
+# against itself and the run REFUSES at the end instead of printing a count (see
+# `capability_refusal`). `CASE_NO` counts those comparisons, not the `==` section headings.
+# `SAME_READER_CASES` counts the ones where the two readers agreed — reported in the summary,
+# so a pass that rests on a handful of disagreeing cases says so instead of hiding the rest.
+DISAGREE=0
+CASE_NO=0
+SAME_READER_CASES=0
+FIRST_DISAGREE=''
+
 # ONE trap, carrying two properties the shipped version did not have:
 #
 #   * the mutated pages are restored on EVERY exit, interrupts included. Restoring was on
@@ -376,6 +431,34 @@ run_guard() {
   rule_of "$rc"
 }
 
+# sig_of <verdict> <guard-output> — the ANSWER a reader gave, for the two-leg comparison
+# (card t_bfaedba2). The guard's own failure text names the offender as
+# `presents "X" as a tool, but no such tool is registered`, so the signature is the VERDICT
+# plus the claimed names in order, and NOTHING positional: the same claim on a different
+# `file:line` is the same answer, and a renumbered assertion must not read as a reader that
+# changed. That is the "claim text with the line number dropped" half of the capability rule
+# the api sibling uses; the other half is the verdict.
+sig_of() {
+  local names
+  names=$(grep -oE 'presents "[^"]+" as a tool' <<<"$2" | sort | tr '\n' ',')
+  printf '%s|%s' "$1" "$names"
+}
+
+# note_two_legs <label> <old-verdict> <old-out> <new-verdict> <new-out> — records whether the
+# two readers DISAGREED on this mutation, and returns 0 when they did (1 when the answers were
+# identical, which is the `SAME READER` case). NOT a command substitution call site for
+# run_guard (see the channel note); the counters live in the shell.
+note_two_legs() {
+  CASE_NO=$((CASE_NO + 1))
+  if [ "$(sig_of "$2" "$3")" != "$(sig_of "$4" "$5")" ]; then
+    DISAGREE=$((DISAGREE + 1))
+    [ -n "$FIRST_DISAGREE" ] || FIRST_DISAGREE="$1"
+    return 0
+  fi
+  SAME_READER_CASES=$((SAME_READER_CASES + 1))
+  return 1
+}
+
 # The premise check runs the BASE guard, which is not in the tree — it is a copy
 # beside the real guard (same reason as check(): the .ts extension is load-bearing
 # and the guard resolves its paths from import.meta.url).
@@ -484,46 +567,80 @@ check() { # check <label> <old-want> <new-want> [must-name] [old-must-name]
   # FALSE POSITIVE cases prove the defect by grepping the OLD failure for the prose word it
   # reported. (A local, not a command substitution — run_guard inside `$( )` is a subshell
   # and its VERDICT would not come back; see the channel note at the top.)
-  local old_out="$VERDICT_OUT"
-  [ "$VERDICT" = REFUSED ] && refuse "$label" "OLD"
-  if [ "$VERDICT" != "$old_want" ]; then
-    echo "  *** ${label}: OLD guard wanted ${old_want}, got ${VERDICT} — the case does not reproduce its premise ***"
-    grep -E '^ℹ (pass|fail)' <<<"$old_out" | head -2; fail=1
-  elif [ -n "$old_needle" ] && ! grep -qF "$old_needle" <<<"$old_out"; then
-    echo "  *** ${label}: OLD guard ${VERDICT} but its failure does not name ${old_needle} ***"
-    grep -F 'presents' <<<"$old_out" | head -2; fail=1
-  elif [ "$label" = "baseline" ]; then
-    echo "  ok   baseline: old guard ${VERDICT}, as expected"
-  elif [ "$old_want" != "$new_want" ] && [ "$old_want" = "RED" ]; then
-    echo "  ok   ${label}: old guard RED — the false positive reproduces (it reported a claim nobody made)"
-  elif [ "$old_want" = "$new_want" ] && [ "$old_want" = "RED" ]; then
-    echo "  ok   ${label}: old guard RED — caught by BOTH columns, so this claim was not narrowed away"
-  elif [ "$old_want" = "$new_want" ]; then
-    echo "  ok   ${label}: old guard GREEN — quiet in both columns (a control, or a premise " \
-         "that has moved — each section header says which)"
+  local old_v="$VERDICT" old_out="$VERDICT_OUT"
+  [ "$old_v" = REFUSED ] && refuse "$label" "OLD"
+  # BOTH legs run before either line is printed (card t_bfaedba2): whether the two readers
+  # DISAGREED is what decides whether a case's unavailable premise is a `SAME READER` note or
+  # a `***` failure, and that cannot be known from the old leg alone.
+  run_guard "$GUARD"
+  local new_v="$VERDICT" new_out="$VERDICT_OUT"
+  [ "$new_v" = REFUSED ] && refuse "$label" "NEW"
+
+  local same_reader=0
+  if note_two_legs "$label" "$old_v" "$old_out" "$new_v" "$new_out"; then
+    same_reader=0          # the two readers disagreed: a real "before" column
   else
-    echo "  ok   ${label}: old guard GREEN — the gap reproduces (it missed this)"
+    same_reader=1
   fi
 
-  run_guard "$GUARD"
-  [ "$VERDICT" = REFUSED ] && refuse "$label" "NEW"
-  if [ "$VERDICT" != "$new_want" ]; then
-    echo "  *** ${label}: NEW guard wanted ${new_want}, got ${VERDICT} ***"
-    grep -E '^ℹ (pass|fail)' <<<"$VERDICT_OUT" | head -2
+  # `old_confirmed` is the ONLY thing that may license a FIXED/QUIET claim below: those two
+  # lines assert a DIRECTION (the old guard was RED and named the word), and printing them
+  # from the case's static arguments is how a caught-up base produced a
+  # `FIXED … old guard RED naming …` line three lines after a `***` line that had just
+  # measured the old column GREEN (measured on main, five times in one run — card t_bfaedba2).
+  local old_confirmed=0
+  if [ "$old_v" != "$old_want" ]; then
+    if [ "$same_reader" = 1 ]; then
+      echo "  SAME READER ${label}: the base guard (${BASE_REF} ${BASE_REV:0:12}) answered EXACTLY as" \
+           "this tree's on this mutation (${old_v}), so this case's premise (OLD ${old_want}) is not" \
+           "available here — not a finding, and not a bite (the run refuses at the end unless some" \
+           "case's two readers disagreed)"
+    else
+      echo "  *** ${label}: OLD guard wanted ${old_want}, got ${old_v} — the case does not reproduce its premise ***"
+      grep -E '^ℹ (pass|fail)' <<<"$old_out" | head -2; fail=1
+    fi
+  elif [ -n "$old_needle" ] && ! grep -qF "$old_needle" <<<"$old_out"; then
+    echo "  *** ${label}: OLD guard ${old_v} but its failure does not name ${old_needle} ***"
+    grep -F 'presents' <<<"$old_out" | head -2; fail=1
+  else
+    old_confirmed=1
+    if [ "$label" = "baseline" ]; then
+      echo "  ok   baseline: old guard ${old_v}, as expected"
+    elif [ "$old_want" != "$new_want" ] && [ "$old_want" = "RED" ]; then
+      echo "  ok   ${label}: old guard RED — the false positive reproduces (it reported a claim nobody made)"
+    elif [ "$old_want" = "$new_want" ] && [ "$old_want" = "RED" ]; then
+      echo "  ok   ${label}: old guard RED — caught by BOTH columns, so this claim was not narrowed away"
+    elif [ "$old_want" = "$new_want" ]; then
+      echo "  ok   ${label}: old guard GREEN — quiet in both columns (a control, or a premise " \
+           "that has moved — each section header says which)"
+    else
+      echo "  ok   ${label}: old guard GREEN — the gap reproduces (it missed this)"
+    fi
+  fi
+
+  if [ "$new_v" != "$new_want" ]; then
+    echo "  *** ${label}: NEW guard wanted ${new_want}, got ${new_v} ***"
+    grep -E '^ℹ (pass|fail)' <<<"$new_out" | head -2
     # WHAT the new column reported, not only that it was red: on a FALSE POSITIVE case a red
     # new column has to be the guard reading the prose as a phantom, and seeing the message
     # is what separates that from a red for an unrelated reason (a stale mutation, a broken
     # guard, an edit that took this case with it).
-    grep -F 'presents' <<<"$VERDICT_OUT" | head -2; fail=1
-  elif [ -n "$needle" ] && ! grep -qF "$needle" <<<"$VERDICT_OUT"; then
-    echo "  *** ${label}: NEW guard ${VERDICT} but the failure does not name ${needle} ***"
-    grep -F 'presents' <<<"$VERDICT_OUT" | head -2; fail=1
-  elif [ "$new_want" = "GREEN" ] && [ "$old_want" = "RED" ] && [ -n "$old_needle" ]; then
+    grep -F 'presents' <<<"$new_out" | head -2; fail=1
+  elif [ -n "$needle" ] && ! grep -qF "$needle" <<<"$new_out"; then
+    echo "  *** ${label}: NEW guard ${new_v} but the failure does not name ${needle} ***"
+    grep -F 'presents' <<<"$new_out" | head -2; fail=1
+  elif [ "$new_want" = "GREEN" ] && [ "$old_confirmed" = 1 ] && [ "$old_want" = "RED" ] && [ -n "$old_needle" ]; then
     echo "  FIXED ${label}: old guard RED naming ${old_needle}, new guard GREEN — the false positive is gone"
-  elif [ "$new_want" = "GREEN" ] && [ "$old_want" = "RED" ]; then
+  elif [ "$new_want" = "GREEN" ] && [ "$old_confirmed" = 1 ] && [ "$old_want" = "RED" ]; then
     echo "  QUIET ${label}: old guard RED, new guard GREEN — this form is deliberately not caught any more (stated gap)"
+  elif [ "$new_want" = "GREEN" ] && [ "$old_confirmed" = 0 ]; then
+    # NO DIRECTION IS CLAIMED. The new column did what the case predicts, but the old column
+    # was never OBSERVED doing what the line would describe (see `old_confirmed` above), so
+    # the honest line names that instead of inventing a FIXED/QUIET/BITES verdict.
+    echo "  no direction ${label}: new guard GREEN${needle:+, naming $needle} — the OLD column was not" \
+         "confirmed RED${old_needle:+ and naming ${old_needle}}, so no FIXED/QUIET claim is made here"
   else
-    echo "  BITES ${label}: new guard ${VERDICT}${needle:+, naming $needle}"
+    echo "  BITES ${label}: new guard ${new_v}${needle:+, naming $needle}"
   fi
 }
 
@@ -546,6 +663,93 @@ restore_embed() {
   [ "$(sha256sum "$EMBED" | cut -d' ' -f1)" = "$EMBED_SHA" ] \
     && echo "       restored byte-identical" \
     || { echo "  *** RESTORE MISMATCH $EMBED ***"; fail=1; }
+}
+
+# ---- CAPABILITY REFUSAL (card t_bfaedba2) ----------------------------------------
+#
+# The rule the api sibling uses, applied to THIS file: after the cases have run, at least one
+# of them must have made the BASE reader answer DIFFERENTLY from this tree's. `note_two_legs`
+# counts those; with 0 of them the run compared a reader against itself and there is no
+# "before" column to report on, so the run REFUSES — exit 2, no verdict, and NO
+# `BITEPROOF FAIL`/PASS summary (a count there would be a statement about this instrument).
+
+# answer_probe <rev> — 0 when the guard at <rev> ANSWERS DIFFERENTLY from this tree's guard on
+# one measured probe mutation. Both readers are run on the SAME mutated page, so this is the
+# same capability test the cases make, spent on ONE revision instead of the whole case set.
+# The probe is a DETERMINER sentence — the shape the loose `as (the )?X tool` capture read as a
+# claimed tool before FUNCTION_WORDS, and which this tree's guard stays quiet on — so a
+# pre-fix reader is RED naming the word and a caught-up reader is GREEN.
+#
+# A REFUSED leg is never a disagreement (a candidate whose guard cannot load or that runs no
+# test is not a "before" reader, it is a broken one) and the page is restored, byte-checked,
+# before this function returns either way.
+answer_probe() {
+  local rev="$1" tmp="$OLDTMP" ok=1
+  git show "${rev}:${GUARD_IN_REPO}" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  mutate '// QA: the assistant can be used as their tool of choice.'
+  grep -qF 'as their tool of choice' "$PAGE" || ok=0
+  if [ "$ok" = 1 ]; then
+    run_guard "$tmp"
+    local probe_v="$VERDICT" probe_out="$VERDICT_OUT"
+    run_guard "$GUARD"
+    local tree_v="$VERDICT" tree_out="$VERDICT_OUT"
+    if [ "$probe_v" = REFUSED ] || [ "$tree_v" = REFUSED ]; then
+      ok=0
+    elif [ "$(sig_of "$probe_v" "$probe_out")" = "$(sig_of "$tree_v" "$tree_out")" ]; then
+      ok=0
+    fi
+  fi
+  rm -f "$tmp"
+  cp "$PAGE_BAK" "$PAGE"                     # silent: the trap also restores, this keeps the
+  [ "$(sha256sum "$PAGE" | cut -d' ' -f1)" = "$PAGE_SHA" ] || return 1   # next probe clean
+  [ "$ok" = 1 ]
+}
+
+# capability_refusal — print the refusal, DERIVE the revision a re-run should use, and exit 2.
+# The revision is the parent of a commit at the base that touched the guard (a merge-base
+# would be wrong on a branch cut from current main: that IS the caught-up revision), walked
+# newest-first and RE-CHECKED with `answer_probe`, so this file never hands over a base that
+# would refuse again. It names no count for a revision this run did not execute.
+capability_refusal() {
+  local cases_run="$1" rev cand found='' tried=0 probe_ok=0
+  echo >&2
+  echo "REFUSING (exit 2, NO VERDICT): not one of the ${cases_run} two-leg case(s) run here made" >&2
+  echo "the guard at ${BASE_REF} (${BASE_REV:0:12}) ANSWER DIFFERENTLY from this tree's — the same" >&2
+  echo "verdict AND the same claim text (line number dropped) on every mutation. Both columns ran" >&2
+  echo "the SAME READER, so the \"the base guard missed this\" column is empty by CONSTRUCTION and a" >&2
+  echo "BITEPROOF count from this run would be a statement about this instrument, not the guard." >&2
+  echo "That is what a base whose guard has CAUGHT UP to this tree looks like: ${BASE_REF} already" >&2
+  echo "carries the change this tree is proving (measured: $(wc -l < "$OLD_GUARD") lines at the base," >&2
+  echo "$(wc -l < "$GUARD") lines here). The lines above that read \`SAME READER\` are that artefact, not findings." >&2
+  while read -r rev; do
+    [ -n "$rev" ] || continue
+    tried=$((tried + 1))
+    [ "$tried" -gt 12 ] && break
+    cand=$(git rev-parse "${rev}^" 2>/dev/null) || continue
+    if [ -n "$cand" ] && git cat-file -e "${cand}:${GUARD_IN_REPO}" 2>/dev/null; then
+      if answer_probe "$cand"; then found="$cand" probe_ok=1; break; fi
+    fi
+  done <<<"$(git log --format=%H "$BASE_REV" -- ":(top)${GUARD_IN_REPO}" 2>/dev/null)"
+  echo >&2
+  if [ "$probe_ok" = 1 ]; then
+    echo "Point BITEPROOF_BASE at the revision BEFORE this tree's change to the guard. It is" >&2
+    echo "DERIVED from that guard's own history at ${BASE_REF} and RE-CHECKED BY CAPABILITY by this" >&2
+    echo "run — the guard there answers DIFFERENTLY from this tree's on the determiner probe, so it" >&2
+    echo "is a real \"before\" reader:" >&2
+    echo "    BITEPROOF_BASE=${found} bash web/scripts/biteproof_docs_tool_claims.sh" >&2
+    echo "Measured by THIS run: that probe at ${found:0:12} disagreed (the tree's guard is quiet on it," >&2
+    echo "the guard there names the determinative), and ${DISAGREE} of the ${cases_run} case(s) run here" >&2
+    echo "disagreed." >&2
+  else
+    echo "This run could NOT name a replacement base: none of the parents of the ${tried} commit(s)" >&2
+    echo "at ${BASE_REF} that touched ${GUARD_IN_REPO} answers differently from this tree's guard on" >&2
+    echo "the determiner probe. Point BITEPROOF_BASE at a revision where the guard still carried the" >&2
+    echo "behaviour this tree changes; this file will not name a base it did not measure. Measured by" >&2
+    echo "THIS run: ${DISAGREE} of the ${cases_run} case(s) run here disagreed." >&2
+  fi
+  echo "No count for any other revision is asserted here — a revision this run did not execute was" >&2
+  echo "not measured." >&2
+  exit 2
 }
 
 echo
@@ -740,16 +944,31 @@ TMP_E=$(mktemp)
 awk 'NR==2{print "// QA: the snippet is generated as the uploadpic tool."} {print}' "$EMBED" > "$TMP_E" && mv "$TMP_E" "$EMBED"
 if grep -qF 'as the uploadpic tool' "$EMBED"; then
   echo "       mutation on disk: as the uploadpic tool"
-  cp "$OLD_GUARD" "$OLDTMP"; run_guard "$OLDTMP"; rm -f "$OLDTMP"; old_out="$VERDICT_OUT"
-  [ "$VERDICT" = REFUSED ] && refuse "/docs/embed phantom" "OLD"
-  if [ "$VERDICT" = "RED" ] && grep -qF 'presents "uploadpic" as a tool' <<<"$old_out"; then
-    echo '  ok   /docs/embed phantom: old guard RED — caught by BOTH columns, so the walk did not narrow'
-  else echo "  *** /docs/embed phantom: old guard ${VERDICT} (or did not name the phantom) ***"; fail=1; fi
+  cp "$OLD_GUARD" "$OLDTMP"; run_guard "$OLDTMP"; rm -f "$OLDTMP"
+  old_v="$VERDICT"; old_out="$VERDICT_OUT"
+  [ "$old_v" = REFUSED ] && refuse "/docs/embed phantom" "OLD"
   run_guard "$GUARD"
-  [ "$VERDICT" = REFUSED ] && refuse "/docs/embed phantom" "NEW"
-  if [ "$VERDICT" = "RED" ] && grep -qF 'presents "uploadpic" as a tool' <<<"$VERDICT_OUT"; then
-    echo '  BITES /docs/embed phantom: new guard RED, naming presents "uploadpic" as a tool'
-  else echo "  *** /docs/embed phantom: new guard ${VERDICT} (or did not name it) ***"; fail=1; fi
+  new_v="$VERDICT"; new_out="$VERDICT_OUT"
+  [ "$new_v" = REFUSED ] && refuse "/docs/embed phantom" "NEW"
+  # Same two-leg bookkeeping as `check` (card t_bfaedba2): this case is driven inline because
+  # it mutates the OTHER page, and it must feed the same capability rule.
+  if note_two_legs "/docs/embed phantom" "$old_v" "$old_out" "$new_v" "$new_out"; then
+    embed_disagreed=1
+  else
+    embed_disagreed=0
+  fi
+  if [ "$old_v" = "RED" ] && grep -qF 'presents "uploadpic" as a tool' <<<"$old_out"; then
+    echo '  ok   /docs/embed phantom: old guard RED — caught by BOTH columns, so the walk did not narrow'
+    if [ "$new_v" = "RED" ] && grep -qF 'presents "uploadpic" as a tool' <<<"$new_out"; then
+      echo '  BITES /docs/embed phantom: new guard RED, naming presents "uploadpic" as a tool'
+    else echo "  *** /docs/embed phantom: new guard ${new_v} (or did not name it) ***"; fail=1; fi
+  elif [ "$embed_disagreed" = 0 ]; then
+    echo "  SAME READER /docs/embed phantom: the base guard (${BASE_REF} ${BASE_REV:0:12}) answered" \
+         "EXACTLY as this tree's on this mutation (${old_v}), so this case's premise (OLD RED naming" \
+         "the phantom) is not available here — not a finding, and not a bite"
+  else
+    echo "  *** /docs/embed phantom: old guard ${old_v} (or did not name the phantom) ***"; fail=1
+  fi
 else echo "  *** mutation did not apply to $EMBED ***"; fail=1; fi
 restore_embed
 
@@ -774,9 +993,23 @@ assert_applied 'has no tool to call' && check "ordinary prose stays quiet" GREEN
 restore_page
 
 echo
+# ---- THE CAPABILITY RULE, BEFORE ANY VERDICT (card t_bfaedba2) --------------------
+#
+# `note_two_legs` counted the cases whose two readers gave DIFFERENT answers. Zero of them
+# means the base is not a "before" reader at all, and every line above that reported a stale
+# premise was the same reader on both sides — so this run REFUSES, exactly as the api sibling
+# does: exit 2, no verdict, no `BITEPROOF FAIL`/PASS summary, and a DERIVED (then re-checked)
+# replacement base named in the refusal. It runs AFTER the cases because the property it
+# tests can only be read off their answers; a byte-equality fast path would be a weaker
+# version of the same test and would miss a caught-up reader whose bytes differ from this
+# tree's (measured on the api sibling, t_34ab7a00).
+if [ "$DISAGREE" = 0 ]; then
+  capability_refusal "$CASE_NO"
+fi
+
 if [ "$fail" = "0" ]; then
-  echo "BITEPROOF PASS — the five determiner/possessive slot words were RED under the shipped guard and GREEN under this one, each with the old column naming the word it rejected; the guard's own footprint test is RED when BARE_NAME is widened (so the new test catches the class, not just its own literals); the four asides and the stated gap are quiet in both columns, their premise having moved with the narrowing that landed on the base; and every claim phrasing is still caught by both columns."
+  echo "BITEPROOF PASS — ${DISAGREE}/${CASE_NO} two-leg case(s) had a base reader that ANSWERED DIFFERENTLY from this tree's (first: ${FIRST_DISAGREE}), so the \"before\" column is real; ${SAME_READER_CASES} case(s) read the same in both columns. The five determiner/possessive slot words were RED under the shipped guard and GREEN under this one, each with the old column naming the word it rejected; the guard's own footprint test is RED when BARE_NAME is widened (so the new test catches the class, not just its own literals); the four asides and the stated gap are quiet in both columns, their premise having moved with the narrowing that landed on the base; and every claim phrasing is still caught by both columns."
 else
-  echo "BITEPROOF FAIL (fail=$fail)"
+  echo "BITEPROOF FAIL (fail=$fail) — base reader disagreed on ${DISAGREE}/${CASE_NO} two-leg case(s)"
 fi
 exit "$fail"
