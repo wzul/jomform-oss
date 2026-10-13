@@ -165,11 +165,158 @@ const sources = walk(SRC);
  *  match cannot come from inside a literal (e.g. a sentence quoting `d.error`). */
 const stripStrings = (l: string): string => l.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
 const isCommentLine = (l: string): boolean => /^\s*(\/\/|\*|\/\*)/.test(l);
+
+/**
+ * The prose field's own computed key is CODE, not prose — and blanking it was the
+ * second half of the defect card t_d7552433 closes.
+ *
+ * `stripStrings` blanks EVERY string literal, which rewrites `b["error"]` to
+ * `b[""]`: the KEY of a bracket read disappears before any shape rule can see it.
+ * Measured while writing the widening: with the shapes below run on `code` as it
+ * was, an appended `const e = b["error"]` in lib/formPublicURL.ts was still GREEN —
+ * the very mutation this card exists to catch went straight through the new rule.
+ *
+ * So the key literal is masked BEFORE blanking and unmasked AFTER it:
+ *   * a key that is real code survives — `b["error"]`, `b[ "error" ]`, `b['error']`;
+ *   * a key INSIDE a bigger string does not (that literal is blanked whole, and the
+ *     mask with it) — so `'never read b["error"] here'` is still prose, not a read;
+ *   * every index is preserved: the mask token is exactly as long as the literal it
+ *     replaces (7 chars), which the `||`/`??` follow-up rule depends on — it slices
+ *     the code AFTER a read and would be thrown off by a length change;
+ *   * the restore spells the key `"error"` regardless of the quotes it was written
+ *     with. This text is for MATCHING only (reports quote `text`, the raw line), and
+ *     both quote styles are one shape.
+ */
+const PROSE_KEY_TOKEN = "\u0001\u0001\u0001\u0001\u0001\u0001\u0001";
+const PROSE_KEY_LITERAL = /(["'])error\1(?=\s*\])/g;
+const unblankingKey = (text: string): string =>
+  stripStrings(text.replace(PROSE_KEY_LITERAL, PROSE_KEY_TOKEN)).replace(
+    new RegExp(PROSE_KEY_TOKEN, "g"),
+    '"error"',
+  );
+
 type ScanLine = { n: number; text: string; code: string };
 const scanLines = (p: string): ScanLine[] =>
   readFileSync(p, "utf8")
     .split("\n")
-    .map((text, i) => ({ n: i + 1, text, code: stripStrings(text) }));
+    .map((text, i) => ({ n: i + 1, text, code: unblankingKey(text) }));
+
+// ---------------------------------------------------------------------------
+// Reading the failure body's prose field — ONE definition, shared by the three
+// checks below that reason about such a read (card t_d7552433).
+//
+// WHY ONE DEFINITION. The prose-field check matched the DOT spelling only
+// (`const READ = /\.\s*error\b/`), and its comment claimed that did not matter
+// because the rule "does not look at the syntax at all". It is a shape match, and
+// the shapes are the whole reach: measured on that build with a reader appended to
+// `lib/formPublicURL.ts`, `const e = b["error"]` and
+// `const { error } = (body ?? {}) as { error?: unknown }` both left the file
+// 9 pass / 0 fail — GREEN, prose reader undetected — while the dot control at the
+// same site was RED naming `lib/formPublicURL.ts:62`. A bracket read is the
+// natural spelling once the body is typed `Record<string, unknown>`, so the class
+// the check exists to close was reachable again with the guard green. The sibling
+// checks (`BUG` below, and `readsRawBody`) shared the blind spot, which is why the
+// shapes live here ONCE instead of being respelled at each call site — a second
+// spelling of "what a read of this field looks like" is how the three drift apart.
+// ---------------------------------------------------------------------------
+
+/** One read of the prose field: where it ENDS, and what it was read FROM. */
+type ProseRead = {
+  /**
+   * The identifier the read is taken FROM when the source is a plain identifier —
+   * `r.error` → "r", `r["error"]` → "r", `const { error } = r` → "r" — and null
+   * when it is a compound expression (`(body ?? {})["error"]`,
+   * `const { error } = pick(body)`), where no name can be attributed at all.
+   *
+   * The runLoad-outcome exemption needs this, and null must NEVER be read as
+   * "known to be localized": an unattributable read is an offender.
+   */
+  recv: string | null;
+  /** Index just past the read, so a caller can ask what the read FEEDS. */
+  end: number;
+};
+
+/** The spellings ONE read of the field can be written in. The input is `scanLines`'
+ *  `code` — string/template CONTENTS blanked, BUT the field's own bracket key kept
+ *  (see `unblankingKey`) — so a sentence that merely mentions `d.error`, and a
+ *  comment that quotes `b["error"]`, are not reads while `b["error"]` itself is.
+ *  The receiver is optional in both: the DOT form must still match a read with no
+ *  attributable name (`(body as ApiErrorBody)?.error`), which is how the
+ *  pre-widening check's line filter saw those lines. */
+const DOT_READ = /([A-Za-z_$][\w$]*)?\s*\??\s*\.\s*error\b/g;
+const BRACKET_READ = /([A-Za-z_$][\w$]*)?\s*\??\s*(?:\.\s*)?\[\s*["']error["']\s*\]/g;
+/** A binding pattern follows: `const`/`let`/`var` then `{`. */
+const BINDING_HEAD = /\b(?:const|let|var)\s*\{/g;
+
+/** The braces-balanced text of the pattern opening at `code[open]` (a `{`),
+ *  INCLUDING both braces (`{ error }`, `{ a: { error } }`), or undefined when that
+ *  line never closes it (a multi-line pattern — not claimed). The braces are kept
+ *  because `bindsErrorProperty` reads the property in its real position, where the
+ *  closing brace (or a comma) is what ends it. */
+function braceSpan(code: string, open: number): { pattern: string; close: number } | undefined {
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === "{") depth++;
+    else if (code[i] === "}") {
+      depth--;
+      if (depth === 0) return { pattern: code.slice(open, i + 1), close: i };
+    }
+  }
+  return undefined;
+}
+
+/** Does a destructuring pattern bind the property `error`, at any depth —
+ *  `{ error }`, `{ error: m }`, `{ a: { error } }`, `{ error = "" }`?
+ *
+ *  NOT covered on purpose: a destructured FUNCTION PARAMETER
+ *  (`function f({ error }: Body)`). The same text is an object LITERAL in argument
+ *  position (`render({ error: msg })`, a write), and no shape match can tell the
+ *  two apart — a rule that matched both would fail the build on a correct call
+ *  site. `const`/`let`/`var` bindings are unambiguous, so they are the one
+ *  destructure spelling this guard claims. */
+const bindsErrorProperty = (pattern: string): boolean =>
+  /(?:^|[{,\s])error\s*(?::\s*[A-Za-z_$][\w$]*\s*)?(?:=\s*[^,}]*)?(?=[,}])/.test(pattern);
+
+/** `const|let|var { … } = …` bindings in this line whose pattern binds `error`. */
+function bindingDestructuredReads(code: string): ProseRead[] {
+  const out: ProseRead[] = [];
+  for (const m of code.matchAll(BINDING_HEAD)) {
+    const span = braceSpan(code, (m.index ?? 0) + m[0].length - 1);
+    if (!span) continue;
+    if (!bindsErrorProperty(span.pattern)) continue;
+    // The initializer's source identifier when it is a plain one (`= r`), skipping
+    // an annotation the pattern may carry (`: Body = r`).
+    const after = code.slice(span.close + 1);
+    const src = /^\s*(?::[^=]*)?=\s*([A-Za-z_$][\w$]*)?/.exec(after);
+    out.push({ recv: src?.[1] ?? null, end: span.close + 1 });
+  }
+  return out;
+}
+
+/**
+ * Every read of the failure body's prose field `error` in one piece of source,
+ * in EVERY spelling the field can be read with (card t_d7552433):
+ *
+ *     x.error    x?.error                            (dot / optional chain)
+ *     x["error"] x['error']  x?.["error"]            (bracket)
+ *     const { error } = x    const { error: m } = x  (binding destructure)
+ *
+ * Ordered by position, so "the first read on this line" is the first one written.
+ * An assignment to the field (`x["error"] = …`) matches too, exactly as the old
+ * dot rule did — the ban is on touching the field, and a writer of it is a reader
+ * of whatever it just put there.
+ */
+function proseFieldReads(code: string): ProseRead[] {
+  const out: ProseRead[] = [];
+  for (const m of code.matchAll(DOT_READ)) {
+    out.push({ recv: m[1] ?? null, end: (m.index ?? 0) + m[0].length });
+  }
+  for (const m of code.matchAll(BRACKET_READ)) {
+    out.push({ recv: m[1] ?? null, end: (m.index ?? 0) + m[0].length });
+  }
+  for (const r of bindingDestructuredReads(code)) out.push(r);
+  return out.sort((a, b) => a.end - b.end);
+}
 
 // Exceptions, one line each, WITH the reason — so a new occurrence cannot slip
 // in as a silent wildcard. Shared by every check below.
@@ -263,7 +410,17 @@ test("no call site falls back to the server's error prose", () => {
   // DERIVED below (the variable is assigned from a runLoad call in the same
   // file), not hardcoded as a name list, and the sibling check further down
   // covers the case where such a variable is read WITHOUT a fallback.
-  const BUG = /(?<![\w$])([A-Za-z_$][\w$]*)\s*\??\.\s*error\s*(\|\||\?\?)/;
+  //
+  // THE READ IS FOUND IN EVERY SPELLING (card t_d7552433). This check used to
+  // carry its OWN regex for the read, and it was the dot form only — so the
+  // bracket spelling of the very same fallback,
+  //
+  //     setErr(b["error"] || t("x.fail"));
+  //
+  // walked past it. The read is now the shared `proseFieldReads()` and the
+  // fallback is read off what FOLLOWS the read, so the two live in one place and
+  // cannot drift: a new spelling of the read is a new spelling for every check in
+  // this file at once.
   const offenders: string[] = [];
   for (const p of sources) {
     const rel = p.slice(SRC.length);
@@ -282,9 +439,9 @@ test("no call site falls back to the server's error prose", () => {
     }
     scanLines(p).forEach(({ n, text, code: stripped }) => {
       if (isCommentLine(text)) return; // a comment quoting the bug
-      const read = BUG.exec(stripped);
+      const read = proseFieldReads(stripped).find((r) => /^\s*(?:\|\||\?\?)/.test(stripped.slice(r.end)));
       if (!read) return;
-      if (loadVars.has(read[1])) return; // a runLoad outcome — already localized
+      if (read.recv !== null && loadVars.has(read.recv)) return; // a runLoad outcome — already localized
       if (ALLOWED.some((a) => text.includes(a))) return;
       offenders.push(`${rel}:${n}: ${text.trim()}`);
     });
@@ -323,18 +480,33 @@ test("no source file reads the failure BODY's prose field", () => {
   // through a green suite — measured on the "Publish anyway" retry, which answers
   // an uncoded 409.
   //
-  // So this check does not look at the syntax at all: it looks at WHO MAY TOUCH
-  // THE PROSE FIELD. Reading `.error` is apiErr()'s job and nobody else's, and
-  // the ban is derived — any new reader fails the build — so the next module that
-  // wants to "just parse the body into a message field" cannot reintroduce the
-  // class. The exemption list is asserted to be exactly one entry: a growing list
-  // is how a rule like this rots.
+  // So this check does not look at the CALL SITE's syntax — no `||`, no setter
+  // name, no reachability through an alias. It looks at WHO MAY TOUCH THE PROSE
+  // FIELD. Reading `.error` is apiErr()'s job and nobody else's, and the ban is
+  // derived — any new reader fails the build — so the next module that wants to
+  // "just parse the body into a message field" cannot reintroduce the class. The
+  // exemption list is asserted to be exactly one entry: a growing list is how a
+  // rule like this rots.
+  //
+  // IT IS STILL A SHAPE MATCH, AND THE SHAPES ARE THE WHOLE REACH (card
+  // t_d7552433). This comment used to claim the check "does not look at the syntax
+  // at all", which was false: it carried its own `const READ = /\.\s*error\b/`,
+  // dot only. Measured on that build with a reader appended to
+  // `lib/formPublicURL.ts`: `const e = b["error"]` and
+  // `const { error } = (body ?? {}) as { error?: unknown }` both stayed GREEN
+  // (9 pass / 0 fail, reader undetected) while the dot control at the same site
+  // was RED naming `lib/formPublicURL.ts:62`. A bracket read is the natural
+  // spelling once the body is typed `Record<string, unknown>`, so the class was
+  // reachable again with the guard green. The read is now `proseFieldReads()`,
+  // shared with the two neighbouring checks, which catches the dot, the
+  // optional-chain, the bracket and the binding-destructure spelling of the SAME
+  // read — so the claim "any new reader fails the build" is now true of every
+  // spelling the field can be read with, not of one of them.
   assert.deepEqual(
     [...PROSE_READERS_ALLOWED],
     ["lib/apiErr.ts"],
     "the exemption list grew — every entry is a file that may put the API's prose in a `message`",
   );
-  const READ = /\.\s*error\b/;
   const offenders: string[] = [];
   let examined = 0;
   for (const p of sources) {
@@ -352,14 +524,20 @@ test("no source file reads the failure BODY's prose field", () => {
     for (const m of src.matchAll(/(?:^|[;{}(\s])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+runLoad\b/g)) {
       loadVars.add(m[1]);
     }
-    // String/template CONTENTS are blanked, so a sentence that merely mentions
-    // `d.error` (documentation, a comment, an error-message string) is not a read.
+    // String/template CONTENTS are blanked (proseFieldReads takes blanked input), so
+    // a sentence that merely mentions `d.error` — documentation, a comment, an
+    // error-message string — is not a read.
     scanLines(p).forEach(({ n, text, code: stripped }) => {
       if (isCommentLine(text)) return;
-      if (!READ.test(stripped)) return;
-      for (const m of stripped.matchAll(/([A-Za-z_$][\w$]*)\s*\??\.\s*error\b/g)) {
-        if (loadVars.has(m[1])) return; // a runLoad outcome — already localized
-      }
+      const reads = proseFieldReads(stripped);
+      if (reads.length === 0) return;
+      // The line is exempt only when EVERY read on it is a runLoad outcome, which
+      // is the property the exemption is for. It used to be ANY read: the loop
+      // returned on the first one whose name was a loadVar, so
+      // `setErr(r.error || d.error)` hid the second (raw-prose) read behind the
+      // first — the same masking this check exists to remove, and no live line
+      // mixes the two today, so the tightening changes nothing but the reach.
+      if (reads.every((r) => r.recv !== null && loadVars.has(r.recv))) return;
       examined++;
       if (ALLOWED.some((a) => text.includes(a))) return;
       offenders.push(`${rel}:${n}: ${text.trim()}`);
@@ -377,6 +555,61 @@ test("no source file reads the failure BODY's prose field", () => {
   // A floor, so an empty offender list cannot be the result of the walk breaking
   // (a rename of `src/`, a broken glob) rather than of the rule holding.
   assert.ok(examined > 0, "no `.error` read was examined at all — the walk is broken");
+
+  // THE SHAPE TABLE ITSELF, pinned in memory (card t_d7552433). The walk above only
+  // ever exercises the spellings that exist in src/ TODAY — which is precisely how a
+  // dot-only rule looked correct — so the reach is asserted directly against the
+  // shipped helpers: every spelling of a read must be seen, and prose that merely
+  // MENTIONS the field must not. This is the assertion that fails if a future edit
+  // drops a shape, or drops the key-preserving blanking `b["error"]` needs to survive
+  // it, instead of the rule quietly shrinking back to one spelling.
+  const readsIn = (line: string) => proseFieldReads(unblankingKey(line));
+  for (const line of [
+    "const e = b.error;",
+    "const e = b?.error;",
+    "const e = (body as { error?: unknown } | null)?.error;",
+    `const e = b["error"];`,
+    `const e = b['error'];`,
+    `const e = b?.["error"];`,
+    `const e = b[ "error" ];`,
+    "const { error } = b;",
+    "const { error: m } = b;",
+    "const { a: { error } } = b;",
+    `const { error = "" } = b;`,
+  ]) {
+    assert.equal(
+      readsIn(line).length,
+      1,
+      `a read of the prose field was not seen in this spelling (t_d7552433): ${line}`,
+    );
+  }
+  for (const line of [
+    `const s = 'never read b["error"] here';`,
+    `const s = "x.error";`,
+    "const { errorKey } = b;",
+    `const s = "error";`,
+  ]) {
+    assert.equal(
+      readsIn(line).length,
+      0,
+      `prose that only MENTIONS the field was counted as a read: ${line}`,
+    );
+  }
+  // A comment quoting the field is skipped by the walk ITSELF (`isCommentLine`, before
+  // any shape runs), so it is asserted through that predicate rather than the shapes.
+  assert.ok(
+    isCommentLine(`// the prose field, e.g. b["error"], is nobody else's to read`),
+    "a comment quoting the field must be skipped by the walk, not counted as a read",
+  );
+  // A read taken off a COMPOUND expression has no attributable name; it must still be
+  // a read, and its null receiver must never be read as "known to be localized".
+  const compound = readsIn(`const e = (b ?? {})["error"];`);
+  assert.equal(compound.length, 1, "a bracket read on a compound expression was not seen");
+  assert.equal(
+    compound[0].recv,
+    null,
+    "an unattributable read must carry a null receiver, not a guessed one",
+  );
 
   // And the two modules this card is about must stay message-less: the prose had
   // a `message` field to hide in, and that field (not the helper name) is what
@@ -436,11 +669,17 @@ test("a failure body is never rendered without going through apiErr/translateApi
   // if the walk ever stops finding setter-shaped body reads at all.
   const SETTER = /(?<![\w$])set([A-Za-z_$][\w$]*)\s*\(([^;]*?)\)\s*;/g;
   /** Does this expression read an HTTP failure body — the whole body, or the
-   *  `error` prose of one that is not a localized runLoad outcome? */
+   *  `error` prose of one that is not a localized runLoad outcome?
+   *
+   *  The prose read is the SHARED `proseFieldReads()`, in every spelling (card
+   *  t_d7552433). This check used to carry its own dot-only regex, so
+   *  `setUploadMsg(b["error"])` — the natural spelling for a body typed
+   *  `Record<string, unknown>` — was invisible to it while the dot spelling of the
+   *  same call RED'd. */
   const readsRawBody = (arg: string, loadVars: Set<string>): boolean => {
     if (/\.\s*(?:text|json)\s*\(\s*\)/.test(arg)) return true;
-    for (const m of arg.matchAll(/([A-Za-z_$][\w$]*)\s*\??\.\s*error\b/g)) {
-      if (!loadVars.has(m[1])) return true;
+    for (const r of proseFieldReads(arg)) {
+      if (r.recv === null || !loadVars.has(r.recv)) return true;
     }
     return false;
   };
