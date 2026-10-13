@@ -1219,6 +1219,75 @@ function goDurationMinutes(src: string, name: string): number {
   return Number(m[1]);
 }
 
+/**
+ * `needle` as a regex that refuses a LONGER number in its place (t_4912a9bd).
+ *
+ * A bare `String.includes` is a SUBSTRING read, and every number this guard
+ * quotes sits where a longer one still contains it: with the constant at 60, the
+ * 429 string "160 messages an hour" satisfies `includes("60")`, and a docs
+ * sentence's trailing "in bursts of 10" is inside "in bursts of 106". Measured
+ * on the merged tree: the `en` refusal reworded to "160 messages an hour" left
+ * this guard GREEN while the constant was still 60 — a refusal telling the user
+ * a limit the server does not enforce, which is the drift this guard exists for.
+ * So the digits have to END somewhere: no digit may sit immediately before or
+ * after the match. A following "." or "," is ordinary prose ("in bursts of 10.")
+ * and still matches.
+ *
+ * Only DIGITS are boundaries. A thousands separator (`1,060`) is not anchored,
+ * and that is deliberate: the copy these sentences quote is prose, where a
+ * quoted sentence is legitimately followed by a comma ("in bursts of 5, and …"),
+ * so anchoring separators would trade this measured hole for a false red on the
+ * next reword. No sentence or locale string here carries a grouped number.
+ *
+ * The needle is escaped and interpolated as a LITERAL: these are sentences, not
+ * patterns.
+ */
+function quotesExactly(needle: string): RegExp {
+  const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![0-9])${esc}(?![0-9])`);
+}
+
+/** The scope branch the availability probe must answer a 400 with (t_997bb646). */
+const PROBE_400_SCOPE_BRANCH =
+  /if \(r\.status === 400\) \{\s*setErr\(t\("chat\.scopeRequired"\)\);\s*return;/;
+
+/**
+ * The availability probe's whole `!r.ok` branch, AS CODE — comments blanked — or
+ * `null` when the page no longer delimits it.
+ *
+ * Located by its own site, the `runLoad` outcome's `!r.ok` guard — not by a line
+ * number — and the slice runs to the statement after that block
+ * (`setAvailable(r.data.available …`), so it covers the WHOLE branch including
+ * the generic fall-through the scope branch must not replace. It returns `null`
+ * rather than guessing when any of those anchors is gone.
+ *
+ * CODE, NOT RAW SOURCE (t_4912a9bd). The branch is matched with a pattern, and a
+ * raw read is satisfied by a `//` line carrying the same text: measured on the
+ * merged tree, deleting the REAL branch and leaving
+ * `// if (r.status === 400) { setErr(t("chat.scopeRequired")); return; }` in its
+ * place kept this guard GREEN (21 pass / 0 fail) while the page rendered "The
+ * assistant is not available right now." with the composer disabled. The
+ * deletion CONTROL (nothing left behind) was the only mutation that redded it,
+ * so that green was not a dead instrument. `codeOnly` is this repo's shared,
+ * JSX-text-aware blanker and it preserves every byte offset, so this is the SAME
+ * region with the non-code text removed.
+ *
+ * A shared function rather than an inline slice so the bite proof runs the
+ * IDENTICAL reader against a mutated page — the file's doctrine (see the note
+ * above `BIN_VOCAB`): a proof that exercised a paraphrase would prove nothing
+ * about the scan.
+ */
+function probeBranchCode(src: string): string | null {
+  const code = codeOnly(src);
+  const at = code.indexOf("const r = await runLoad(");
+  if (at === -1) return null;
+  const from = code.indexOf("if (!r.ok) {", at);
+  if (from === -1) return null;
+  const end = code.indexOf("setAvailable(r.data.available", from);
+  if (end <= from) return null;
+  return code.slice(from, end);
+}
+
 test("the phase-2 caps the docs quote are read from the constants, so prose and enforcement move together", () => {
   // WHY THIS EXISTS, AND WHY IT IS NOT PR 695's TEST AGAIN.
   //
@@ -1234,7 +1303,19 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
   //
   // The phase-1 pair is in here too: the 60/hour test above pins the constant,
   // but it never made the docs page, the dictionary, or the 429 body follow it.
-  const docs = read(DOCS_PAGE);
+  //
+  // THE DOCS HALF READS RENDERED TEXT, NOT RAW SOURCE (t_4912a9bd). `read`
+  // returns the page's BYTES, and a sentence can live in those bytes without
+  // reaching a reader: `// One answer can put at most 3 proposals in front of
+  // you` is the sentence this guard looks for, in text no user ever sees.
+  // Measured on the merged tree: the guarded sentence moved into a comment near
+  // the imports, with the RENDERED prose given a wrong number ("at most NINE
+  // proposals"), left this guard GREEN (0 fail) — the deletion control (the
+  // sentence removed from the source entirely) was the only mutation that redded
+  // it, so the green was not a dead instrument. `codeOnly` is this repo's shared,
+  // JSX-text-aware blanker: a comment cannot satisfy a sentence, while a string
+  // literal — where this page's copy actually lives — is left untouched.
+  const docs = codeOnly(read(DOCS_PAGE));
   const msgPerHour = goConstNumber(goRest, "chatRatePerHour");
   const burst = goConstNumber(goRest, "chatBurst");
   const confirmPerHour = goConstNumber(goRest, "chatConfirmPerHour");
@@ -1267,6 +1348,12 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
   // constant change and a docs change have to land together. The phrasing is
   // pinned as tightly as the 60/hour test pins the Go line; a copyedit that
   // rewrites the sentence has to update this list, which is the point.
+  //
+  // The match is DIGIT-BOUNDED (`quotesExactly`), not a substring read: with the
+  // constant at 60, a page reading "160 messages per hour, in bursts of 10" used
+  // to satisfy the wanted "60 messages per hour, in bursts of 10" — measured
+  // GREEN — so the guard could report the page quotes the enforced number while
+  // it told the reader a different one (t_4912a9bd).
   const sentences: Array<{ want: string; what: string }> = [
     {
       want: `${msgPerHour} messages per hour, in bursts of ${burst}`,
@@ -1287,7 +1374,7 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
   ];
   for (const { want, what } of sentences) {
     assert.ok(
-      docs.includes(want),
+      quotesExactly(want).test(docs),
       `${DOCS_PAGE} no longer says "${want}" (${what}) — the docs quote the cap the server ` +
         `enforces, so the constant and this sentence cannot move apart`,
     );
@@ -1296,9 +1383,12 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
   // ── 2. the dictionary the page shows on a 429 ────────────────────────────
   // Digit presence, not the whole phrasing: a translation is free to be reworded
   // (and is, in four locales), but the NUMBER a user is told on a refusal has to
-  // be the enforced one. The live rate-limit note (chat.limitNote) needs no pin
-  // here — the page fills its {n} from the wire's limits block, which PR 695's
-  // Go guard already ties to the constant.
+  // be the enforced one — and it has to END there: `includes("60")` is satisfied
+  // by "160 messages an hour", which is how this half could pass while the
+  // refusal quoted a limit the server does not enforce (t_4912a9bd, the same
+  // class the docs half carried). The live rate-limit note (chat.limitNote) needs
+  // no pin here — the page fills its {n} from the wire's limits block, which PR
+  // 695's Go guard already ties to the constant.
   const dictCaps: Array<{ key: string; n: number; what: string }> = [
     { key: "chat.rateLimited", n: msgPerHour, what: "message cap" },
     { key: "chat.confirmRateLimited", n: confirmPerHour, what: "confirmation cap" },
@@ -1308,7 +1398,7 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
     assert.ok(entry, `${key} is gone from the dictionary — the page shows this string on a 429`);
     for (const lang of LANGS) {
       assert.ok(
-        String(entry[lang]).includes(String(n)),
+        quotesExactly(String(n)).test(String(entry[lang])),
         `${key}.${lang} does not quote the enforced ${what} (${n}): "${entry[lang]}" — the UI ` +
           `tells the user a number on a 429, so the constant and this string move together`,
       );
@@ -1410,10 +1500,11 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
 // WHY codeOnly AND NOT THE RAW SOURCE. The sentences below are matched against the
 // page with its COMMENTS blanked (lib/jsxSource.ts, the repo's shared blanker): a
 // comment quoting a number is not what the user reads, and it must not stand in for
-// the sentence. The test above reads the raw source, so a comment CAN satisfy its
-// pins — that is card t_4912a9bd's business, and this guard neither changes it nor
-// depends on it. The page's prose lives in string literals, which the blanker keeps
-// byte for byte, so every pin below still reads what the page renders.
+// the sentence. The test above reads the page through `codeOnly` too (that is card
+// t_4912a9bd itself), so a comment cannot satisfy its pins either, and this guard
+// neither changes that nor depends on it. The page's prose lives in string
+// literals, which the blanker keeps byte for byte, so every pin below still reads
+// what the page renders.
 const docsPage = read(DOCS_PAGE);
 
 /** The word a small count is written as in prose, for the one sentence that spells its number. */
@@ -1670,6 +1761,92 @@ test("the caps-prose guard bites: a moved constant or a reworded sentence is RED
         `READ, not merely mentioned`,
     );
   }
+});
+
+// ── THE CAPS GUARD'S OWN BITE (t_4912a9bd) ───────────────────────────────────
+//
+// That guard compares two prose sources to the Go constants, and each half of the
+// READ could be satisfied by something that is not the claim:
+//
+//   1. `read(DOCS_PAGE)` returned the page's raw BYTES, so the guarded sentence
+//      could sit in a `//` comment while the rendered prose said something else.
+//      Measured on the merged tree (guard = `node --test src/lib/chatPage.test.ts`):
+//      the sentence moved into a comment near the imports with the rendered
+//      sentence changed to "NINE messages per hour, in bursts of NINE" → GREEN
+//      (0 fail), against a CONTROL (the sentence removed from the source
+//      entirely) that was RED (1 fail). A guard satisfied by its own comment is
+//      satisfied by nothing.
+//   2. `String.includes(String(n))` was a SUBSTRING read, so "160 messages an
+//      hour" satisfied `includes("60")` while the constant was still 60 → GREEN,
+//      measured on both halves (the docs sentence and the `en` refusal).
+//
+// So this proof drives the SAME readers the guard uses — `codeOnly` and
+// `quotesExactly` — over the real page source and the real dictionary entry,
+// mutated in memory (nothing is written to disk, the idiom of the prose arm's
+// proof below). BOTH directions are pinned: the shipped page and the shipped
+// refusal must still MATCH, so this test cannot pass by making the reader refuse
+// everything.
+test("BITES: the caps guard reads rendered docs text, and only a bounded number", () => {
+  const shippedDocs = read(DOCS_PAGE);
+  const want = `${goConstNumber(goRest, "chatRatePerHour")} messages per hour, in bursts of ${goConstNumber(goRest, "chatBurst")}`;
+  // Vacuity: the anchor must be on the page, or every mutation below lands
+  // nowhere and this proof asserts nothing.
+  assert.ok(
+    shippedDocs.includes(want),
+    `the docs page no longer carries the sentence this proof mutates (${JSON.stringify(want)}) — ` +
+      `re-anchor the proof rather than letting it mutate nothing`,
+  );
+  assert.ok(
+    quotesExactly(want).test(codeOnly(shippedDocs)),
+    "the unmutated docs page does not satisfy the shipped reader — a red below could not be " +
+      "attributed to the mutation",
+  );
+
+  // HOLE 1 — the sentence in a `//` comment, the rendered prose given a WRONG
+  // number. The pre-fix raw read is shown to be satisfied first (`includes`),
+  // so the hole is demonstrated rather than asserted.
+  const commented = `// ${want}\n${shippedDocs.replace(want, "NINE messages per hour, in bursts of NINE")}`;
+  assert.ok(
+    commented.includes(want) && commented !== shippedDocs,
+    "the comment mutation did not land, so this case proves nothing",
+  );
+  assert.ok(
+    !quotesExactly(want).test(codeOnly(commented)),
+    "a sentence inside a `//` COMMENT satisfies the caps guard again: the reader has gone back to " +
+      "raw source, and a page can state a cap in text no user ever sees (t_4912a9bd)",
+  );
+
+  // HOLE 2 — a LONGER number in the rendered sentence, the constant unchanged.
+  const widened = shippedDocs.replace(want, `1${want}`);
+  assert.ok(
+    widened.includes(want) && widened !== shippedDocs,
+    "the longer-number mutation did not land, so this case proves nothing",
+  );
+  assert.ok(
+    !quotesExactly(want).test(codeOnly(widened)),
+    `"1${want}" satisfies the caps guard again: a substring read lets a page quote a DIFFERENT ` +
+      `number (160 where the server enforces 60) while the guard reports it quotes the enforced one`,
+  );
+
+  // HOLE 3 — the same class on the dictionary half, driven on the real `en`
+  // string the page shows on a 429.
+  const n = goConstNumber(goRest, "chatRatePerHour");
+  const entry = String((DICT["chat.rateLimited"] as Record<string, string>)["en"]);
+  assert.ok(
+    quotesExactly(String(n)).test(entry),
+    `the shipped 429 string does not quote ${n} — the guard above would be red for a reason that ` +
+      `is not this proof's, and a red below would be unattributable`,
+  );
+  const longerEntry = entry.replace(String(n), `1${n}`);
+  assert.ok(
+    longerEntry !== entry && longerEntry.includes(String(n)),
+    "the dictionary mutation did not land, so this case proves nothing",
+  );
+  assert.ok(
+    !quotesExactly(String(n)).test(longerEntry),
+    `a 429 string quoting a LONGER number ("${longerEntry}") satisfies the guard again — the user ` +
+      `would be told a limit the server does not enforce`,
+  );
 });
 
 test("the page reads availability and stops offering the box when it is false", () => {
@@ -1932,10 +2109,17 @@ test("the chat page scopes EVERY call with workspaceQuery() — the shared helpe
   // for a condition the user fixes by choosing a workspace.
   //
   // MEASURED, not assumed (both mutations applied to this tree, the file's test
-  // run alone, then reverted):
+  // run alone, then reverted; the parenthesised totals are the file's size when
+  // each card measured it, which has since grown):
   //   * the 400 branch deleted            -> RED here (19/20)
   //   * `setAvailable(false)` replaced by the scope setErr on the generic path
   //     -> RED here (19/20), because the unavailable branch must survive
+  //
+  // t_4912a9bd re-measured the first of those against the reader this test now
+  // uses: deleting the branch outright was RED, and leaving its text
+  // behind as a `//` comment was GREEN on a raw-source read — measured, 21 pass /
+  // 0 fail, with the page rendering chat.unavailable — and is RED on
+  // `probeBranchCode`, which the bite proof below drives.
   // The browser-level half of the same defect is e2e/chat-probe-400.spec.ts,
   // which drives the built page and fails on the pre-fix build with
   // "locator('p[role=\"alert\"]') element(s) not found".
@@ -1944,28 +2128,24 @@ test("the chat page scopes EVERY call with workspaceQuery() — the shared helpe
   // not by a line number — and the slice runs to the statement after that block
   // (`setAvailable(r.data.available …)`), so it covers the WHOLE !r.ok branch
   // including the generic fall-through the scope branch must not replace.
-  const probeAt = page.indexOf("const r = await runLoad(");
-  assert.ok(
-    probeAt !== -1,
-    "app/chat/page.tsx no longer reads availability through runLoad — this guard cannot judge the " +
-      "probe's status handling and refuses to guess",
-  );
-  const probeFrom = page.indexOf("if (!r.ok) {", probeAt);
-  assert.ok(
-    probeFrom !== -1,
-    "the chat availability probe has no !r.ok branch — the scope refusal would be consumed by " +
-      "runLoad and the page would offer a box whose every message 400s",
-  );
-  const probeEnd = page.indexOf("setAvailable(r.data.available", probeFrom);
-  assert.ok(
-    probeEnd > probeFrom,
-    "could not find the statement after the availability probe's !r.ok branch — this guard refuses " +
-      "to slice a branch it cannot delimit",
-  );
-  const probeBranch = page.slice(probeFrom, probeEnd);
-  assert.match(
+  //
+  // AND IT READS CODE, NOT RAW SOURCE (t_4912a9bd). The reader is
+  // `probeBranchCode` above, so the bite proof below drives the IDENTICAL
+  // function: the branch deleted and its text left as a `//` line kept this
+  // guard GREEN (21 pass / 0 fail) on the merged tree, while the deletion
+  // control redded it.
+  const probeBranch = probeBranchCode(page);
+  assert.notEqual(
     probeBranch,
-    /if \(r\.status === 400\) \{\s*setErr\(t\("chat\.scopeRequired"\)\);\s*return;/,
+    null,
+    "app/chat/page.tsx no longer delimits the availability probe's !r.ok branch — this guard " +
+      "refuses to slice a branch it cannot delimit rather than guessing. It anchors on " +
+      "`const r = await runLoad(`, the `if (!r.ok) {` branch after it, and the " +
+      "`setAvailable(r.data.available …` statement that ends that block (t_4912a9bd)",
+  );
+  assert.match(
+    probeBranch as string,
+    PROBE_400_SCOPE_BRANCH,
     `the availability probe's !r.ok branch does not answer a 400 with t("chat.scopeRequired") — a ` +
       `two-workspace session with no workspace selected would read "The assistant is not available ` +
       `right now." (chat.unavailable) instead of the scope copy, and the composer would be ` +
@@ -1974,7 +2154,7 @@ test("the chat page scopes EVERY call with workspaceQuery() — the shared helpe
   // And the generic branch survives: a 5xx / network failure is still
   // "unavailable", so the scope branch cannot have replaced it.
   assert.match(
-    probeBranch,
+    probeBranch as string,
     /setAvailable\(false\)/,
     "the availability probe no longer closes the box on a genuine failure — the scope branch must " +
       "be ADDITIONAL to the unavailable branch, not a replacement for it",
@@ -2023,6 +2203,90 @@ test("the chat page scopes EVERY call with workspaceQuery() — the shared helpe
     "workspaceQuery() no longer prefers the confirmed scope — a slug the server has NOT confirmed (a " +
       "workspace renamed or deleted while selected) would be sent again on the next fetch, which is the " +
       "stale-scope defect this card exists for",
+  );
+});
+
+// ── THE PROBE BRANCH'S OWN BITE (t_4912a9bd) ─────────────────────────────────
+//
+// The branch assertion above is a PATTERN match, and the reader used to slice the
+// RAW page — so a `//` line carrying the branch satisfied it. Measured on the
+// merged tree (guard = `node --test src/lib/chatPage.test.ts`, the file's test run
+// alone): the REAL 400 branch deleted and
+// `// if (r.status === 400) { setErr(t("chat.scopeRequired")); return; }` left in
+// its place → GREEN (21 pass / 0 fail) while the page rendered "The assistant is
+// not available right now." with the composer disabled; the deletion CONTROL
+// (nothing left behind) was RED (1 fail), so that green was not a dead harness.
+//
+// The mutation below is in memory, on the real page source, and it drives
+// `probeBranchCode` — the IDENTICAL function the assertion above calls, so a
+// regression to a raw slice cannot pass this proof. The hole column is the
+// pre-fix read of the same region (raw source, the same delimiters), so the green
+// is shown rather than asserted.
+test("BITES: a commented-out probe 400 branch cannot satisfy the availability guard", () => {
+  const raw = read("../app/chat/page.tsx");
+  const SCOPE = 'setErr(t("chat.scopeRequired"));';
+  // The pre-fix reader, verbatim: the same region, from RAW source.
+  const rawSlice = (src: string) => {
+    const at = src.indexOf("const r = await runLoad(");
+    const from = src.indexOf("if (!r.ok) {", at);
+    const end = src.indexOf("setAvailable(r.data.available", from);
+    return src.slice(from, end);
+  };
+  // Vacuity: the shipped page satisfies the shipped reader, or a red below could
+  // be the reader rather than this proof's mutation.
+  const shipped = probeBranchCode(raw);
+  assert.notEqual(shipped, null, "the shipped page no longer delimits the probe's !r.ok branch");
+  assert.match(
+    shipped as string,
+    PROBE_400_SCOPE_BRANCH,
+    "the shipped page does not satisfy the branch assertion, so a red below could not be " +
+      "attributed to this proof's own mutation",
+  );
+
+  // The real branch, cut out by the same anchors the reader uses, then replaced
+  // by the single-line comment form of its OWN text.
+  const at = raw.indexOf("if (r.status === 400) {");
+  const scopeAt = raw.indexOf(SCOPE, at);
+  const retAt = raw.indexOf("return;", scopeAt);
+  const closeAt = raw.indexOf("}", retAt);
+  assert.ok(
+    at !== -1 && scopeAt > at && retAt > scopeAt && closeAt > retAt,
+    "the page's first 400 branch is no longer the probe's scope refusal — re-anchor this proof",
+  );
+  const branch = raw.slice(at, closeAt + 1);
+  assert.ok(
+    branch.includes(SCOPE),
+    "the cut branch does not answer a 400 with the scope copy — re-anchor this proof",
+  );
+  const commented =
+    raw.slice(0, at) +
+    `// ${branch.split("\n").map((l) => l.trim()).join(" ")}` +
+    raw.slice(at + branch.length);
+  assert.notEqual(commented, raw, "the comment mutation did not land");
+
+  // THE HOLE, as it was: the RAW-source read still holds the branch's text.
+  assert.match(
+    rawSlice(commented),
+    PROBE_400_SCOPE_BRANCH,
+    "the raw-source read no longer finds the branch in its comment — this case does not reproduce " +
+      "the hole the card closed, and the assertion below would prove nothing",
+  );
+  // THE FIX: the shipped reader cannot be satisfied by it.
+  const after = probeBranchCode(commented);
+  assert.notEqual(after, null, "the mutated page no longer delimits the probe's !r.ok branch");
+  assert.ok(
+    !PROBE_400_SCOPE_BRANCH.test(after as string),
+    "a `//` COMMENT carrying the 400 branch satisfies this guard again: the real branch could be " +
+      "gone while the suite stays green, and a two-workspace session would read \"The assistant is " +
+      "not available right now.\" with the composer disabled (t_4912a9bd)",
+  );
+  // …and the generic branch is still inside the mutated slice, so the assertion
+  // above is not passing because the slice collapsed to nothing.
+  assert.match(
+    after as string,
+    /setAvailable\(false\)/,
+    "the mutated slice lost the generic unavailable branch as well — this proof is not measuring " +
+      "the comment form",
   );
 });
 
