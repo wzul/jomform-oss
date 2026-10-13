@@ -37,6 +37,7 @@ package testdb
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"strings"
 	"testing"
@@ -61,8 +62,9 @@ func Prefix() string {
 	return fmt.Sprintf("jftest:p%d:", os.Getpid())
 }
 
-// PrefixFor returns Prefix plus the test's own name, e.g.
-// "jftest:p48213:TestFoo:". Two tests in one binary therefore do not share it.
+// PrefixFor returns Prefix plus the key part this test owns, e.g.
+// "jftest:p48213:TestFoo-1a2b3c4d:". Two tests in one binary therefore do not
+// share it — see KeyPart for why the test's name on its own is not enough.
 //
 // This is what per-test isolation is built on, and it replaces the two
 // destructive habits that used to provide it: FlushDB of a whole DB, and a
@@ -73,22 +75,44 @@ func Prefix() string {
 // thing, and it costs nothing: the keys expire or are cleaned up with the run.
 func PrefixFor(t *testing.T) string {
 	t.Helper()
-	return Prefix() + sanitizeKeyPart(t.Name()) + ":"
+	return PrefixForName(t.Name())
 }
 
-// sanitizeKeyPart reduces a test name to characters that are safe and readable
-// in a key: everything outside [A-Za-z0-9_-] becomes '_'.
-func sanitizeKeyPart(s string) string {
-	return SanitizeKeyPart(s)
+// PrefixForName is PrefixFor for a name the CALLER supplies instead of the one
+// the test is running under. It exists because injectivity of KeyPart is a
+// property of two names: the test running under one of them cannot check it
+// with a single *testing.T.
+func PrefixForName(name string) string {
+	return Prefix() + KeyPart(name) + ":"
 }
 
-// SanitizeKeyPart is sanitizeKeyPart, exported so a guard in ANOTHER package can
-// compare a key against the same form PrefixFor built it with.
+// KeyPart is the component of a key namespace that belongs to ONE test name:
+// the readable sanitised form (SanitizeKeyPart) plus a short hash of the RAW
+// name, e.g. "TestFoo-1a2b3c4d".
 //
-// The two sides disagreed once: the key was sanitised and the guard's expected
-// name was the raw t.Name(), so a subtest (whose name carries a '/') red a
-// correct tree — a false red that reads as an isolation bug. Rather than let a
-// second copy of the rule live in the guard, the rule itself is reachable.
+// The hash is not decoration. Sanitising alone maps every character outside
+// [A-Za-z0-9_-] to '_', so it is NOT injective: "TestX/a" and "TestX_a" both
+// become "TestX_a". Under the plain sanitised form those two tests share one
+// namespace — the isolation failure this package exists to prevent (two tests
+// in one binary emptying each other's queue), arriving through the NAME instead
+// of through the pid, with no diagnostic anywhere. The RAW name is hashed, not
+// the sanitised one, because the sanitised forms are precisely what collide.
+//
+// A guard comparing a key against a name must compare against this, not against
+// SanitizeKeyPart: the key carries the hash.
+func KeyPart(name string) string {
+	return SanitizeKeyPart(name) + "-" + fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(name)))
+}
+
+// SanitizeKeyPart reduces a name to the readable half of a key-space component:
+// everything outside [A-Za-z0-9_-] becomes '_', and an empty name becomes
+// "test".
+//
+// It is deliberately NOT injective and is not on its own a namespace (see
+// KeyPart, which is what prefixes and comparisons are built from). Exported so
+// a guard can quote the readable half in its message and name the collision it
+// is pinning — not so that a guard can decide ownership with it, which is the
+// false reading card t_e26669bd was filed about.
 func SanitizeKeyPart(s string) string {
 	var b strings.Builder
 	for _, r := range s {

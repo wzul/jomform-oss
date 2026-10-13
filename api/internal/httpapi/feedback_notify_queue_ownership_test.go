@@ -49,16 +49,19 @@ func feedbackQueueOwnershipProblem(q *emailqueue.Queue, pid int, name string) st
 		return fmt.Sprintf("ready key %q does not carry this process's namespace %q — a name two processes share "+
 			"is what concurrent runs collide on: one run's flush deletes the other's job mid-test", key, namespace)
 	}
-	// Compare against the SAME form the key was built with. testdb.PrefixFor
-	// sanitises the test name (everything outside [A-Za-z0-9_-] becomes '_'),
-	// and a subtest's name contains '/'; comparing against the raw t.Name() can
-	// never match, so a correct tree reds for any subtest and for a -run name
-	// carrying a slash. The rule is testdb's own, not a second copy of it.
-	sanitised := testdb.SanitizeKeyPart(name)
-	if !strings.Contains(key, sanitised+":") {
+	// Compare against the SAME component the key was built with. testdb.PrefixFor
+	// builds it with testdb.KeyPart: the readable sanitised form PLUS a hash of
+	// the raw name, because sanitising alone maps every character outside
+	// [A-Za-z0-9_-] to '_' and is therefore not injective — two names can
+	// sanitise to one string (see the injectivity pin below). A subtest's name
+	// carries a '/', so a check against the raw t.Name() can never match either,
+	// and a correct tree reds for any subtest or -run name carrying a slash. The
+	// rule is testdb's own, not a second copy of it.
+	part := testdb.KeyPart(name)
+	if !strings.Contains(key, part+":") {
 		return fmt.Sprintf("ready key %q does not carry this TEST's own name %q (key namespace component %q) — "+
 			"without it two tests in one binary share the queue the old flush-at-entry emptied between them",
-			key, name, sanitised)
+			key, name, part)
 	}
 	return ""
 }
@@ -80,28 +83,75 @@ func TestFeedbackNotifyQueueKeysAreOwnedByThisProcess(t *testing.T) {
 	}
 
 	// Regression pin: the same construction one level down, where the test name
-	// is a SUBTEST PATH. The key is sanitised by PrefixFor and a subtest's name
-	// carries a '/', so a check that compared against the raw t.Name() red a
-	// correct tree here — the failure read as a namespace bug, not as the
-	// sanitisation mismatch it was, and a wrapped body would have hit it. It is
-	// a subtest on purpose: a top-level name has no '/' and cannot catch this.
+	// is a SUBTEST PATH. The key is built from testdb.KeyPart(t.Name()) and a
+	// subtest's name carries a '/', so a check that compared against the raw
+	// t.Name() red a correct tree here — the failure read as a namespace bug, not
+	// as the sanitisation mismatch it was, and a wrapped body would have hit it.
+	// It is a subtest on purpose: a top-level name has no '/' and cannot catch
+	// this.
+	//
+	// The parent's own key part is taken from the test OBJECT before t.Run, not
+	// spelled out as a literal: a hard-coded parent name makes the detector inert
+	// the moment this function is renamed — the collapse stays live while the
+	// assertion names a test that no longer exists (measured on card t_e26669bd:
+	// collapse + rename left this file green before, and is red now).
+	parentPart := testdb.KeyPart(t.Name())
 	t.Run("subtest", func(t *testing.T) {
 		sub := emailqueue.NewQueueWithPrefix(nil, testdb.PrefixFor(t))
 		if why := feedbackQueueOwnershipProblem(sub, pid, t.Name()); why != "" {
 			t.Errorf("a subtest name is reported as not owned by this process: %s", why)
 		}
 		// The name leg must still see this SUBTEST as distinct from its parent:
-		// sanitising must not collapse the two names into one.
-		sanitised := testdb.SanitizeKeyPart(t.Name())
-		parent := testdb.SanitizeKeyPart("TestFeedbackNotifyQueueKeysAreOwnedByThisProcess")
-		if sanitised == parent {
-			t.Fatalf("the subtest's sanitised name %q equals its parent's %q — the per-test name is no longer "+
-				"distinguishing the two, which is the isolation the name exists to give", sanitised, parent)
+		// deriving the key part must not collapse the two names into one.
+		subPart := testdb.KeyPart(t.Name())
+		if subPart == parentPart {
+			t.Fatalf("the subtest's key part %q equals its parent's %q — the per-test name is no longer "+
+				"distinguishing the two, which is the isolation the name exists to give", subPart, parentPart)
 		}
-		if !strings.Contains(sub.ReadyKey(), sanitised+":") {
-			t.Errorf("ready key %q does not carry this subtest's sanitised name %q", sub.ReadyKey(), sanitised)
+		if sub.ReadyKey() == mine {
+			t.Fatalf("the subtest's ready key %q equals the parent test's %q — one namespace for two tests", sub.ReadyKey(), mine)
+		}
+		if !strings.Contains(sub.ReadyKey(), subPart+":") {
+			t.Errorf("ready key %q does not carry this subtest's key part %q", sub.ReadyKey(), subPart)
 		}
 	})
+
+	// INJECTIVITY PIN (card t_e26669bd): the per-test component must distinguish
+	// two DIFFERENT names. The raw NAME is not enough — testdb.SanitizeKeyPart
+	// maps everything outside [A-Za-z0-9_-] to '_' — so "X/a" and "X_a" sanitise
+	// to ONE string, and under the plain sanitised component those two tests share
+	// one queue namespace: the isolation failure this whole guard is about (two
+	// tests in one binary emptying each other's queue), arriving through the NAME
+	// instead of through the pid. The ownership leg is blind to it by construction
+	// — it compares the key against that component, so it accepts BOTH keys for
+	// BOTH names, i.e. it reports a collided namespace as correctly owned.
+	// testdb.KeyPart closes it by hashing the RAW name, and these assertions keep
+	// that from being undone: with the derivation neutralised back to the bare
+	// sanitised name, every other assertion in this file stays green.
+	for _, pair := range [][2]string{
+		{"X/a", "X_a"},             // the pair from the card
+		{"TestX/a/b", "TestX/a_b"}, // subtest paths, where the collision is easiest to hit
+		{"TestX/a", "TestX:a"},     // '/' against another character the rule maps
+	} {
+		readableA, readableB := testdb.SanitizeKeyPart(pair[0]), testdb.SanitizeKeyPart(pair[1])
+		if readableA != readableB {
+			t.Fatalf("the names %q and %q no longer sanitise to the same string (%q vs %q), so this pin is "+
+				"not exercising a collision at all — fix the pair, do not delete the pin", pair[0], pair[1], readableA, readableB)
+		}
+		a := emailqueue.NewQueueWithPrefix(nil, testdb.PrefixForName(pair[0]))
+		b := emailqueue.NewQueueWithPrefix(nil, testdb.PrefixForName(pair[1]))
+		if a.ReadyKey() == b.ReadyKey() {
+			t.Fatalf("the two names %q and %q build ONE ready key %q (both sanitise to %q) — two tests in one "+
+				"binary share that queue and empty it for each other, which is the isolation the per-test name "+
+				"exists to give", pair[0], pair[1], a.ReadyKey(), readableA)
+		}
+		if why := feedbackQueueOwnershipProblem(b, pid, pair[0]); why == "" {
+			t.Fatalf("the ownership check ACCEPTS %q (built for %q) as this test's own name %q — the two names "+
+				"share a key part, so the leg reports a collided namespace as owned by both. %q and %q sanitise "+
+				"to %q; the component must not be the sanitised form alone",
+				b.ReadyKey(), pair[1], pair[0], pair[0], pair[1], readableA)
+		}
+	}
 
 	// Peer processes: same package, same Valkey, different pids. Our key must
 	// satisfy OUR pid's check and no peer's, which is what stops one run's flush
@@ -163,10 +213,10 @@ func TestFeedbackNotifyQueueKeysAreOwnedByThisProcess(t *testing.T) {
 			"would reject it and the control would prove nothing about the prefix rule",
 			prefixOnly.ReadyKey(), testdb.Prefix())
 	}
-	if !strings.Contains(prefixOnly.ReadyKey(), testdb.SanitizeKeyPart(t.Name())+":") {
-		t.Fatalf("the production-prefixed key %q no longer carries this test's name %q, so the NAME leg would "+
-			"reject it and the control would prove nothing about the prefix rule",
-			prefixOnly.ReadyKey(), testdb.SanitizeKeyPart(t.Name()))
+	if !strings.Contains(prefixOnly.ReadyKey(), testdb.KeyPart(t.Name())+":") {
+		t.Fatalf("the production-prefixed key %q no longer carries this test's key part %q, so the NAME leg "+
+			"would reject it and the control would prove nothing about the prefix rule",
+			prefixOnly.ReadyKey(), testdb.KeyPart(t.Name()))
 	}
 	whyPrefix := feedbackQueueOwnershipProblem(prefixOnly, pid, t.Name())
 	if whyPrefix == "" {
