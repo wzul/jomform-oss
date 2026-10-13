@@ -253,6 +253,36 @@ package totpconsume
 // TestSharedRuleHasExactlyOneDefinition reports it against its receiver-qualified
 // expected list, which is where the non-thin variant of the same probe already
 // fails.
+//
+// A CAPTURED BINDING IS IN SCOPE, AND THE CHAIN SAYS WHICH BINDINGS (I)
+//
+// F scoped the `:=` map to the function that ENCLOSES the statement. That closed
+// the sibling reach in both directions — but it cut the scope at the INNERMOST
+// body, so a statement inside a nested function literal was resolved against that
+// literal's own bindings only. A name the ENCLOSING function bound and the literal
+// CAPTURED was therefore not in the map, resolved to nothing (or to the package
+// declaration), and a genuine second implementation read GREEN:
+//
+//	func copy(ctx context.Context, u *dbstore.User, step int64) bool {
+//		col := "totp_last_step"                     // in scope for run()
+//		run := func() bool {
+//			_, err := pool.Exec(ctx, "UPDATE users SET "+col+" = $2 … AND "+col+" < $2", u.ID, step)
+//			return err == nil
+//		}
+//		return run()
+//	}
+//
+// Reproduced as a real second implementation planted in api/internal/httpapi on
+// main (`go build ./...` RC=0, this guard GREEN). Latent — 0 live sites — which is
+// why it was filed rather than treated as a regression: the widening reports
+// nothing new on the api tree.
+//
+// Fixed by giving the statement the scope the language actually gives it: every
+// body it is NESTED IN, outermost first, a nearer binding overwriting a further one
+// for the same name (enclosingFuncBodies + localStringBindingsOnChain). And no
+// more than that: a SIBLING function's binding is still absent from the map, so
+// neither the false alarm F closed nor F's source-order rule comes back. Pinned in
+// both directions, in-memory, by TestBindingsOnTheEnclosingChainAreInScope.
 
 import (
 	"go/ast"
@@ -910,14 +940,203 @@ func TestOnlyTheStoreWritesTheTOTPStepColumn(t *testing.T) {
 //     package const that some unrelated function shadows — the exact MISS this
 //     rule was fixed for.
 //
-// An ambiguous name is therefore reported, never resolved silently. The map is
-// scoped by enclosingFuncDecl so a binding in one function cannot reach a
-// statement in another; without that scope the package reading would be
-// overridden by an unrelated sibling and the copy would read GREEN.
+// An ambiguous name is therefore reported, never resolved silently. The binding
+// map covers every function body the statement sits INSIDE — the enclosing chain,
+// outermost first, nearest binding winning — so a name bound one function out and
+// read inside a nested function literal (a CLOSURE CAPTURE) is in scope, while a
+// binding in a SIBLING function is not; without that scope the package reading
+// would be overridden by an unrelated sibling and the copy would read GREEN.
 func statementWritesTOTPStep(f *ast.File, consts, funcs map[string]string, e sqlExpr) bool {
-	local := localStringBindings(enclosingFuncDecl(f, e.node), e.node.Pos(), consts, funcs)
+	local := localStringBindingsOnChain(enclosingFuncBodies(f, e.node), e.node.Pos(), consts, funcs)
 	return sqlWritesTOTPStep.MatchString(resolveSQLText(e.node, consts, funcs, local)) ||
 		sqlWritesTOTPStep.MatchString(resolveSQLText(e.node, consts, funcs, nil))
+}
+
+// TestBindingsOnTheEnclosingChainAreInScope pins the scope rule for a name bound
+// in a function body the statement is NESTED INSIDE rather than beside it: a
+// CLOSURE CAPTURE. Scoping the binding map to the innermost function body read
+// GREEN for a genuine second implementation whose column local was captured by a
+// nested literal (card t_2a597ac0; the tree-wide check found it only because the
+// api tree happened to hold the shape, so the rule is pinned here directly).
+//
+// Cases 1–3 are the misses; 4–7 are the boundary. The map must cover every body
+// on the enclosing chain and no further:
+//
+//   - a SIBLING function is not on the chain, so a binding there still cannot
+//     reach the statement (case 4 — the false alarm the chain walk must not
+//     reintroduce);
+//   - the map is read in SOURCE ORDER, so a binding made after the statement
+//     cannot reach back (case 5);
+//   - the NEAREST body wins, in both directions — an inner binding overrides a
+//     captured one (case 6) and an inner binding that is innocent keeps an inner
+//     statement innocent (case 7). Merging outward-last instead would convict
+//     case 7 and miss case 6.
+//
+// It runs on in-memory sources, so it holds on a future tree where the api tree no
+// longer contains the trigger shape, and it goes through statementWritesTOTPStep —
+// the same function the tree-wide check uses.
+//
+// BITE (scope): scope the map to the innermost body again (hand
+// localStringBindings only chain[len(chain)-1]) and cases 1, 2 and 3 fail —
+// measured. BITE (order): merge the chain outermost-last instead of
+// outermost-first and cases 6 and 7 fail — measured, both directions of the
+// nearest-wins rule. BITE (reach): hand the map the whole *ast.File (no scope at
+// all) and case 4 fails — measured; case 5 holds even then, because the walk stops
+// at the first binding at or after the statement, which is the separate source-order
+// rule this test also pins.
+func TestBindingsOnTheEnclosingChainAreInScope(t *testing.T) {
+	const preamble = `package probe
+
+func colFn() string { return "totp_last_step" }
+`
+
+	cases := []struct {
+		name  string
+		src   string
+		write bool // does some statement write users.totp_last_step?
+	}{
+		{
+			// The card's probe: the column local is bound in the ENCLOSING
+			// function and read inside a nested literal. The binding is in
+			// scope for the statement (Go's own rule), so it must convict.
+			name: "the column local is captured by a nested literal",
+			src: preamble + `
+func copy() string {
+	col := "totp_last_step"
+	run := func() string { return "UPDATE users SET " + col + " = $2 WHERE col < $2" }
+	return run()
+}
+`,
+			write: true,
+		},
+		{
+			// The same capture, one hop over: the captured local is built from a
+			// package-level helper, so only the local reading can resolve it.
+			name: "the captured local is built from a helper",
+			src: preamble + `
+func copy() string {
+	col := colFn()
+	run := func() string { return "UPDATE users SET " + col + " = $2 WHERE col < $2" }
+	return run()
+}
+`,
+			write: true,
+		},
+		{
+			// Two scopes out: the capture crosses a literal that binds nothing
+			// of its own, so the chain is three bodies deep.
+			name: "the capture comes from two scopes out",
+			src: preamble + `
+func copy() string {
+	col := colFn()
+	outer := func() func() string {
+		return func() string { return "UPDATE users SET " + col + " = $2 WHERE col < $2" }
+	}
+	return outer()()
+}
+`,
+			write: true,
+		},
+		{
+			// The false-alarm control: an UNRELATED function binds the name to
+			// the column, while the nested statement's own chain (and the
+			// package) say "name". A sibling is not in scope, so this is a
+			// products write.
+			name: "a sibling function's binding does not cross",
+			src: `package probe
+
+const col = "name"
+
+func unrelated() string { col := "totp_last_step"; return col }
+
+func innocent() string {
+	run := func() string { return "UPDATE products SET " + col + " = $2 WHERE id = $1" }
+	return run()
+}
+`,
+			write: false,
+		},
+		{
+			// Source order: the rebinding that would make this a TOTP write
+			// happens AFTER the statement, so it is not in scope at the
+			// statement and the statement stays a products write.
+			name: "a binding after the statement does not reach back",
+			src: `package probe
+
+var col = "name"
+
+func innocent() string {
+	run := func() string { return "UPDATE products SET " + col + " = $2 WHERE id = $1" }
+	col = "totp_last_step"
+	return run()
+}
+`,
+			write: false,
+		},
+		{
+			// Nearest wins, inwards: the literal's own binding is the column
+			// even though the enclosing function bound the same name innocently.
+			// Merging the chain outermost-last would read the outer binding and
+			// lose this one.
+			name: "an inner binding overrides the captured one",
+			src: preamble + `
+func copy() string {
+	col := "name"
+	run := func() string { col := "totp_last_step"; return "UPDATE users SET " + col + " = $2 WHERE col < $2" }
+	return run()
+}
+`,
+			write: true,
+		},
+		{
+			// Nearest wins, the other way: the enclosing function binds the
+			// column and the literal rebinds the name innocently, so THIS
+			// statement is a products write. Reading the outer binding would
+			// convict it.
+			name: "an inner binding that is innocent keeps the statement innocent",
+			src: preamble + `
+func innocent() string {
+	col := "totp_last_step"
+	run := func() string { col := "name"; return "UPDATE products SET " + col + " = $2 WHERE id = $1" }
+	return run()
+}
+`,
+			write: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "probe.go", tc.src, 0)
+			if err != nil {
+				t.Fatalf("parse probe source: %v", err)
+			}
+			consts := collectStringConsts(f)
+			funcs := map[string]string{}
+			for _, decl := range f.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv != nil {
+					continue
+				}
+				if ret := singleReturn(fn); ret != nil {
+					if s := resolveSQLText(ret, consts, nil, nil); s != "" {
+						funcs[fn.Name.Name] = s
+					}
+				}
+			}
+			got := ""
+			for _, e := range sqlExpressions(f, funcs) {
+				if statementWritesTOTPStep(f, consts, funcs, e) {
+					got = e.site
+				}
+			}
+			if (got != "") != tc.write {
+				t.Fatalf("statementWritesTOTPStep convicts %q, want write=%v\nsource:\n%s",
+					got, tc.write, tc.src)
+			}
+		})
+	}
 }
 
 // TestBuilderAssembledStatementsAreCaught pins the residual t_599d7ff2 left open and
@@ -2089,6 +2308,15 @@ func collectStringConsts(f *ast.File) map[string]string {
 // bindings at all, so scope nil yields nothing.
 //
 // A nested function literal is a scope of its own and is not descended into.
+//
+// FOR A STATEMENT THAT IS NESTED, the scope is the CHAIN of bodies that ENCLOSE it:
+// each body walked outermost first, a nearer binding overwriting a further one for
+// the same name (localStringBindingsOnChain over enclosingFuncBodies). That is the
+// scope the language actually gives the statement — a name its enclosing function
+// bound and a nested function literal CAPTURED is in scope, while a SIBLING
+// function's binding still is not. Scoping to the innermost body alone read GREEN
+// for a genuine second implementation that captured its column local: measured on
+// the tree-wide check, and pinned by TestBindingsOnTheEnclosingChainAreInScope.
 func localStringBindings(scope ast.Node, before token.Pos, consts, funcs map[string]string) map[string]string {
 	local := map[string]string{}
 	if scope == nil {
@@ -2139,15 +2367,22 @@ func localStringBindings(scope ast.Node, before token.Pos, consts, funcs map[str
 	return local
 }
 
-// enclosingFuncDecl returns the innermost function body a node belongs to — an
-// *ast.FuncDecl's body or a function literal — or nil when the node sits at
-// package level, where there is no local scope.
+// enclosingFuncBodies returns every function body a node sits INSIDE, OUTERMOST
+// first: an *ast.FuncDecl's body and then each *ast.FuncLit whose body encloses
+// the node, innermost last. It is empty when the node sits at package level,
+// where there is no local scope.
 //
-// It exists so localStringBindings can be scoped correctly: only the names bound
-// inside THIS body are in scope for a statement in it.
-func enclosingFuncDecl(f *ast.File, node ast.Node) ast.Node {
-	var best ast.Node
-	span := -1
+// It exists so localStringBindings can be scoped correctly: the names in scope for
+// a statement are those bound in the bodies it is NESTED IN. Only those bodies are
+// on this chain — a SIBLING function is not, however close it sits in the file —
+// and every body the statement is nested in is on it, so a CLOSURE CAPTURE (the
+// column bound one function out and read inside a nested literal) resolves.
+// Scoping to the INNERMOST body alone left that capture out of scope and read
+// GREEN for a genuine second implementation: measured on the tree-wide check with
+// a real second implementation (card t_2a597ac0), and pinned in-memory by
+// TestBindingsOnTheEnclosingChainAreInScope.
+func enclosingFuncBodies(f *ast.File, node ast.Node) []ast.Node {
+	var chain []ast.Node
 	ast.Inspect(f, func(n ast.Node) bool {
 		var body *ast.BlockStmt
 		switch d := n.(type) {
@@ -2161,13 +2396,27 @@ func enclosingFuncDecl(f *ast.File, node ast.Node) ast.Node {
 		if body == nil || node.Pos() < body.Pos() || body.End() < node.End() {
 			return true
 		}
-		// Innermost wins.
-		if size := int(body.End() - body.Pos()); span == -1 || size < span {
-			best, span = n, size
-		}
+		// Pre-order visiting sees an enclosing body before the literals nested
+		// in it, so appending keeps the chain ordered outermost → innermost.
+		chain = append(chain, n)
 		return true
 	})
-	return best
+	return chain
+}
+
+// localStringBindingsOnChain merges the bindings of every body on the enclosing
+// chain, outermost first, so a nearer (later) body overwrites a further (earlier)
+// one for the same name — Go's shadowing rule, read outwards. The map then means
+// exactly "what this name was bound to, at this point, in the scopes the statement
+// is in", and a name bound in a sibling function is still absent from it.
+func localStringBindingsOnChain(chain []ast.Node, before token.Pos, consts, funcs map[string]string) map[string]string {
+	local := map[string]string{}
+	for _, body := range chain {
+		for name, s := range localStringBindings(body, before, consts, funcs) {
+			local[name] = s
+		}
+	}
+	return local
 }
 
 // packageConsts is a memoised collectStringConsts over EVERY production file in
@@ -2647,7 +2896,7 @@ func (s *UserStore) ConsumeTOTPStep() bool {
 				if !ok || len(vs.Names) == 0 {
 					return true
 				}
-				if enclosingFuncDecl(f, vs.Names[0]) == nil {
+				if len(enclosingFuncBodies(f, vs.Names[0])) == 0 {
 					note(enclosingDecl(f, vs.Names[0]), "decl "+vs.Names[0].Name)
 				}
 				return true
