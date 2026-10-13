@@ -287,17 +287,56 @@ notify_configured() {
 # ─── checks ─────────────────────────────────────────────────────────────────
 # Each check_* prints a detail line and returns 0 (healthy) or 1 (failed).
 
+# The marker verdict, and the two ways the OLD one could be wrong.
+#
+# `marker_missing` is a claim about the WHOLE body, so it may only be printed when
+# a matcher actually RAN and found nothing (grep status 1). A `grep` that could not
+# judge (status above 1 — it exits 2/127 when it cannot run at all, the shape this
+# repo's own monitor suite pins) used to take the same branch and print
+# `marker_missing=<marker> body=<first 120 bytes>`: absence asserted by a matcher
+# that never ran, beside a slice constructed not to contain the evidence, with no
+# way for a reader to tell the two apart.
+#
+# So presence is re-measured over the UNTRUNCATED body (`grep -cF`) and the verdict
+# says which of the three it is:
+#   marker_missing    a matcher ran and found nothing
+#   marker_present    the marker IS there, so it is the MATCHER — not the page —
+#                     that failed. The first thing a false page has to answer.
+#   marker_unjudged   neither could be established
+# The body is still trimmed for DISPLAY (a 200 KB page in a summary line is
+# unhelpful), but the line now carries the haystack's size, so a printed slice can
+# never be read as all of the evidence.
+marker_verdict() { # name code marker matcher_status
+  local name="$1" code="$2" marker="$3" mrc="$4" n crc=0 body
+  n=$(grep -cF -- "$marker" <<<"$PROBE_BODY" 2>/dev/null) || crc=$?
+  body="$(printf '%s' "$PROBE_BODY" | tr -d '\n' | cut -c1-120)"
+  if [ "$crc" = 0 ] && [ "$n" -gt 0 ]; then
+    printf '%s code=%s marker_present=%s matcher_status=%s body_bytes=%s body=%s' \
+      "$name" "$code" "$marker" "$mrc" "${#PROBE_BODY}" "$body"
+  elif [ "$mrc" = 1 ] || [ "$crc" = 1 ]; then
+    printf '%s code=%s marker_missing=%s body_bytes=%s body=%s' \
+      "$name" "$code" "$marker" "${#PROBE_BODY}" "$body"
+  else
+    printf '%s code=%s marker_unjudged=%s matcher_status=%s body_bytes=%s body=%s' \
+      "$name" "$code" "$marker" "$mrc" "${#PROBE_BODY}" "$body"
+  fi
+}
+
 check_http() { # name url marker
-  local name="$1" url="$2" marker="$3" i
+  local name="$1" url="$2" marker="$3" i mrc
   for i in $(seq 1 "$ATTEMPTS"); do
     if probe_url "$url"; then
-      if [ -z "$marker" ] || grep -qF -- "$marker" <<<"$PROBE_BODY"; then
+      # Capture grep's own status instead of letting the `if` collapse "found
+      # nothing" into every other non-zero: only status 1 licenses the word
+      # "missing" (see marker_verdict above).
+      mrc=0
+      [ -z "$marker" ] || grep -qF -- "$marker" <<<"$PROBE_BODY" || mrc=$?
+      if [ "$mrc" = 0 ]; then
         printf '%s code=%s bytes=%s' "$name" "$PROBE_CODE" "${#PROBE_BODY}"
         return 0
       fi
       [ "$i" = "$ATTEMPTS" ] && {
-        printf '%s code=%s marker_missing=%s body=%s' "$name" "$PROBE_CODE" \
-          "$marker" "$(printf '%s' "$PROBE_BODY" | tr -d '\n' | cut -c1-120)"
+        marker_verdict "$name" "$PROBE_CODE" "$marker" "$mrc"
         return 1
       }
     else

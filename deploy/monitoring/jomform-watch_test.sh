@@ -67,7 +67,7 @@ contains() { # desc haystack needle
   local rc=0
   grep_has "$2" "$3" || rc=$?
   if [ "$rc" = 0 ]; then ok "$1"
-  elif [ "$rc" = 1 ]; then bad "$1 (missing '$3' in: $(printf '%s' "$2" | tr '\n' ' ' | cut -c1-300))"
+  elif [ "$rc" = 1 ]; then bad "$1 (missing '$3' — 0 matches over the whole ${#2}-byte haystack; the slice below is truncated for DISPLAY, it is not the evidence: $(printf '%s' "$2" | tr '\n' ' ' | cut -c1-300))"
   else bad "$1 (the matcher could not judge the haystack: status $rc, needle '$3' — this is NOT 'not found')"
   fi
 }
@@ -280,6 +280,30 @@ else
   bad "an unjudgeable grep returned status $rc — contains() could not tell it apart from a missing needle"
 fi
 
+# The printed slice is DISPLAY ONLY — the card's third requirement, asserted in both
+# directions. A needle that IS in the haystack but sits past the 300-byte slice the
+# FAIL message prints must still be FOUND (if the slice were what got matched, this
+# would read as `missing`), and a genuine miss must FAIL with a message that says the
+# absence was measured over the WHOLE haystack — so a reader is never handed a
+# truncated slice as the evidence for it.
+PASS_BEFORE=$PASS; FAIL_BEFORE=$FAIL
+contains "probe: needle past the printed slice" "$BIG_HAY" "probe-needle line 200" >/dev/null 2>&1
+DEEP_GOT="$((PASS - PASS_BEFORE))/$((FAIL - FAIL_BEFORE))"
+PASS=$PASS_BEFORE; FAIL=$FAIL_BEFORE
+check "control: a needle sitting past the 300-byte display slice is still FOUND (the slice is display, never the evidence)" \
+  "$DEEP_GOT" "1/0"
+
+PASS_BEFORE=$PASS; FAIL_BEFORE=$FAIL
+contains "probe: absent needle message" "$BIG_HAY" "probe-needle line 99999" >"$SB/miss.msg" 2>&1
+MISS_GOT="$((PASS - PASS_BEFORE))/$((FAIL - FAIL_BEFORE))"
+PASS=$PASS_BEFORE; FAIL=$FAIL_BEFORE
+MISS_MSG="$(cat "$SB/miss.msg")"
+check "control: the same haystack still reports a needle it does not contain as a FAIL (the probe is not a tautology)" \
+  "$MISS_GOT" "0/1"
+contains "the FAIL message grounds the absence in the UNTRUNCATED haystack" \
+  "$MISS_MSG" "0 matches over the whole ${#BIG_HAY}-byte haystack"
+contains "and it still names the needle it did not find" "$MISS_MSG" "missing 'probe-needle line 99999'"
+
 echo "jomform-watch self-test (sandbox $SB, stub server :$PORT)"
 echo "--- healthy path ---"
 
@@ -333,6 +357,56 @@ out=$(run); rc=$?
 check "wrong page body exits 1" "$rc" "1"
 check "wrong page body sends one alert" "$(alert_count)" "1"
 contains "wrong page body names marker_missing" "$(alerts)" "marker_missing"
+
+# 6b. A matcher that never RAN is not a missing marker (card t_1f09fdda). Before
+#     this, a `grep` exiting above 1 took the same branch as a genuine miss and
+#     printed `marker_missing=<marker> body=<first 120 bytes>`: absence asserted by
+#     a matcher that never ran, beside a slice built not to contain the evidence.
+#     Every one of the three false reds recorded on the live gate read that way,
+#     which is why tracing them took three cards. The verdict must name the
+#     matcher's status instead.
+mkdir -p "$SB/fakebin_unjudged"
+cat >"$SB/fakebin_unjudged/grep" <<'EOF'
+#!/usr/bin/env bash
+# A grep that cannot judge anything: status 2, the way grep exits when it cannot
+# run (this suite pins that shape above as "could not judge", not "not found").
+exit 2
+EOF
+chmod +x "$SB/fakebin_unjudged/grep"
+reset; printf 'web_wrong_body' >"$SB/mode"
+out=$(run PATH="$SB/fakebin_unjudged:$PATH" JF_WATCH_ATTEMPTS=1); rc=$?
+check "an unjudgeable matcher still fails the check (a watcher that cannot measure must not say ok)" "$rc" "1"
+contains "and the verdict says the matcher could not judge" "$(alerts)" "marker_unjudged"
+contains "and carries the matcher's status, so the reader sees what happened" "$(alerts)" "matcher_status=2"
+notcontains "a matcher that never ran is NOT reported as a missing marker" "$(alerts)" "marker_missing"
+notcontains "and the verdict does not read as if the page were judged" "$(alerts)" "marker_present"
+
+# 6c. The card's item 2, on exactly the shape it names: the needle IS in the body
+#     and the matcher's status was non-zero. Re-measuring presence over the
+#     UNTRUNCATED body has to make the verdict say the marker is THERE (and name
+#     the matcher that failed) — never "missing", which is the first question a
+#     false page raises.
+mkdir -p "$SB/fakebin_flaky"
+cat >"$SB/fakebin_flaky/grep" <<'EOF'
+#!/usr/bin/env bash
+# Judges everything normally EXCEPT the first question about the web marker, which
+# exits 3 (a matcher that never ran) exactly once and then gets out of the way.
+flag="$(dirname "$0")/.flaked"
+for a in "$@"; do
+  if [ "$a" = "/_next/static/" ] && [ ! -e "$flag" ]; then
+    : >"$flag"; exit 3
+  fi
+done
+exec /usr/bin/grep "$@"
+EOF
+chmod +x "$SB/fakebin_flaky/grep"
+reset
+out=$(run PATH="$SB/fakebin_flaky:$PATH" JF_WATCH_ATTEMPTS=1); rc=$?
+check "a matcher whose status was not 0 still fails the check (the measurement did not happen)" "$rc" "1"
+check "and it pages once, for the web check only" "$(alert_count)" "1"
+contains "a marker that IS present is reported as present rather than missing" "$(alerts)" "marker_present=/_next/static/"
+contains "and the line names the matcher's status, so the reader sees who failed" "$(alerts)" "matcher_status=3"
+notcontains "…the opposite verdict from the one the old message gave on this shape" "$(alerts)" "marker_missing"
 
 # 7. Two 500s then a 200 -> healthy, proving the retry actually retries.
 reset; printf 'web_flaky' >"$SB/mode"
