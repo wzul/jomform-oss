@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { forwardClientAddress } from "../../../lib/clientAddress";
+
 // Dashboard proxies /api/* to the Go API /v1/* so session cookies stay
 // same-origin. /api/auth/login -> {API}/v1/auth/login etc.
 const API = process.env.JOMFORM_API_URL || "http://localhost:8082";
@@ -33,6 +35,15 @@ async function proxy(req: NextRequest) {
     req.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
     new URL(req.url).host;
   if (browserHost) headers.set("X-Forwarded-Host", browserHost);
+
+  // Relay the CLIENT ADDRESS the connection arrived with (card t_ae8791f9). Every
+  // dashboard request reaches the API from this container, so without these the
+  // API's client address — the key of its per-IP rate limit and of the login
+  // lockout — is the container: one bucket for every browser. See
+  // web/src/lib/clientAddress.ts for the measurement, and for why relaying these
+  // is safe (the API's rule in middleware/clientip.go is what decides which value
+  // may be believed, and it is the only reader of them).
+  forwardClientAddress(req.headers, headers);
 
   const init: RequestInit = { method: req.method, headers };
   if (req.method !== "GET" && req.method !== "HEAD") {
