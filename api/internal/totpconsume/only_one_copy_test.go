@@ -191,6 +191,26 @@ package totpconsume
 //     (`col := colFn()`) whenever the package happens to declare a `col`. An
 //     ambiguous name is therefore reported loudly, never resolved silently.
 //
+// THE SAME CLASS, ONE DECLARATION FORM OVER: local `const`/`var` (ValueSpec)
+//
+// A local `const x = "…"` / `var x = "…"` is an *ast.ValueSpec, not an
+// *ast.AssignStmt, so scoping the `:=` map left it in the file-wide const map —
+// keyed by NAME, last declaration winning, and MERGED ACROSS THE DIRECTORY by
+// packageConsts, so a local declaration in one file could decide a statement in
+// another. Measured in both directions again, on a tree that builds: a genuine
+// second implementation whose column const a sibling function shadowed with a
+// local const read GREEN (the guard named nothing), and an innocent
+// `UPDATE products SET …` whose column const a sibling's local const shadowed
+// with the column name was reported as a TOTP write. Fixed the same way, by
+// scope: collectStringConsts now takes PACKAGE-LEVEL declarations only, and a
+// function-local declaration is carried by the same scoped map as a `:=`
+// binding — both forms collected where they are actually in scope, so the reach
+// the ValueSpec map granted is kept (a local const still resolves its own
+// function's statement, and a package const named from another function still
+// resolves). The card's alternative — "report a name that resolves two ways" —
+// was rejected ON MEASUREMENT here: it closes the MISS and entrenches the false
+// alarm. Pinned by TestLocalDeclarationsAreScopedToTheirFunction.
+//
 // THE CONSUMER ALLOWLIST IS KEYED BY SITE, AND WHY THAT IS THE SAME FIX AS G (H)
 //
 // allowedDirectConsumers WAS keyed by FILE, while
@@ -1203,6 +1223,194 @@ func innocent() string { q := "name"; return "UPDATE products SET " + q + " = $2
 	}
 }
 
+// TestLocalDeclarationsAreScopedToTheirFunction is the same scope rule as the
+// test above, for the OTHER declaration form: a local `const x = "…"` /
+// `var x = "…"` is an *ast.ValueSpec, not an *ast.AssignStmt, so scoping the
+// assignment map (card t_15b5a250) left it in the file-wide const map — keyed by
+// NAME, last declaration winning.
+//
+// WHAT THAT COST, measured on the two cases below before the fix (each on a tree
+// that builds, `go build ./...` RC=0, with the probe planted in
+// api/internal/httpapi):
+//
+//   - a GENUINE second implementation whose column const a sibling function
+//     shadowed with `const col = "name"` read GREEN — the guard did not name the
+//     copy at all (the statement resolved to a products update);
+//   - an innocent `UPDATE products SET …` was reported as a TOTP write, because a
+//     sibling function's `const col = "totp_last_step"` overwrote the package
+//     declaration of col that the innocent statement means.
+//
+// So the map had to be scoped, not merely made to "report a name that resolves two
+// ways": convicting on either reading fixes the MISS and entrenches the false
+// alarm, which is the reading this test's second case pins. The reach the
+// ValueSpec map granted is preserved by the scoped map instead — a declaration in
+// its OWN function still resolves (cases 4 and 5) — and a PACKAGE-LEVEL const
+// named from another function is still caught (case 7, the shape dbstore/form.go
+// keeps its statements in).
+//
+// It runs on in-memory sources, so it holds on a future tree where the api tree no
+// longer contains the trigger shape, and it goes through statementWritesTOTPStep —
+// the same function the tree-wide check uses.
+//
+// BITE: put the ValueSpec case back into the file-wide map (collect ValueSpecs with
+// the whole *ast.File instead of package-level declarations + the scoped map) and
+// cases 1, 2, 3, 6 and 7 fail — measured, all five. BITE (reach): drop the ValueSpec
+// arm from localStringBindings and cases 4 and 5 fail — measured, both.
+func TestLocalDeclarationsAreScopedToTheirFunction(t *testing.T) {
+	const preamble = `package probe
+
+func colFn() string { return "totp_last_step" }
+`
+
+	cases := []struct {
+		name  string
+		src   string
+		write bool // does the final statement write users.totp_last_step?
+	}{
+		{
+			// The card's probe: the column const is a package-level declaration
+			// shadowed by an UNRELATED function's local const. The copy's own
+			// function does not shadow it, so the package declaration is the
+			// correct reading and the copy must be caught.
+			name: "sibling function declares a const of the same name",
+			src: preamble + `
+const col = "totp_last_step"
+
+func unrelated() string { const col = "name"; return col }
+
+func copy() string { return "UPDATE users SET " + col + " = $2 WHERE col < $2" }
+`,
+			write: true,
+		},
+		{
+			// The other direction: the local declaration holds the column name
+			// and the package declaration is innocent. Reading the innocent
+			// statement against the sibling's declaration convicts it.
+			name: "sibling function's declaration only, products column",
+			src: `package probe
+
+const col = "name"
+
+func unrelated() string { const col = "totp_last_step"; return col }
+
+func innocent() string { return "UPDATE products SET " + col + " = $2 WHERE id = $1" }
+`,
+			write: false,
+		},
+		{
+			// `var` is the same ValueSpec form and shadows the same way.
+			name: "the var form of a sibling declaration",
+			src: preamble + `
+const col = "totp_last_step"
+
+func unrelated() string { var col = "name"; return col }
+
+func copy() string { return "UPDATE users SET " + col + " = $2 WHERE col < $2" }
+`,
+			write: true,
+		},
+		{
+			// The declaration is in the copy's OWN function, where it is in scope
+			// and is the column: the local reading convicts. Dropping the local
+			// (ValueSpec) reading would read the package declaration and lose it.
+			name: "the declaration is in the copy's own function",
+			src: preamble + `
+const col = "name"
+
+func copy() string { const col = "totp_last_step"; return "UPDATE users SET " + col + " = $2 WHERE col < $2" }
+`,
+			write: true,
+		},
+		{
+			// The reach this map exists for, in the declaration form: a local
+			// const is the column, with no package declaration at all.
+			name: "a local declaration is the column",
+			src: preamble + `
+func copy() string { const col = "totp_last_step"; return "UPDATE users SET " + col + " = $2 WHERE col < $2" }
+`,
+			write: true,
+		},
+		{
+			// A declaration must not reach ACROSS functions: the column is
+			// declared in one function and used in another, where it means
+			// nothing at all — not a TOTP write, and not a products one either.
+			name: "a declaration does not reach into a sibling function",
+			src: preamble + `
+func one() string { const col = "totp_last_step"; return col }
+
+func two() string { return "UPDATE products SET " + col + " = $2 WHERE id = $1" }
+`,
+			write: false,
+		},
+		{
+			// The reach bound the card set: a name that resolves to a
+			// PACKAGE-LEVEL const (dbstore/form.go keeps its statements in such
+			// consts) must keep being caught when a sibling function shadows that
+			// name locally. The const holds a FRAGMENT assembled by a statement
+			// in another function, so the reading runs through the name and not
+			// through the fragment's own literal (which would be caught either
+			// way and so would prove nothing here).
+			name: "a package-level fragment survives a sibling shadow",
+			src: preamble + `
+const stepTail = "totp_last_step = $2, updated_at = now() WHERE id = $1 AND totp_last_step < $2"
+
+func unrelated() string { const stepTail = "name"; return stepTail }
+
+func use() string { return "UPDATE users SET " + stepTail }
+`,
+			write: true,
+		},
+		{
+			// The negative control: nothing anywhere names the column.
+			name: "no column name at all",
+			src: `package probe
+
+func innocent() string { const q = "name"; return "UPDATE products SET " + q + " = $2 WHERE id = $1" }
+`,
+			write: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "probe.go", tc.src, 0)
+			if err != nil {
+				t.Fatalf("parse probe source: %v", err)
+			}
+			consts := collectStringConsts(f)
+			funcs := map[string]string{}
+			for _, decl := range f.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv != nil {
+					continue
+				}
+				if ret := singleReturn(fn); ret != nil {
+					if s := resolveSQLText(ret, consts, nil, nil); s != "" {
+						funcs[fn.Name.Name] = s
+					}
+				}
+				// A statement assembled across statements in the body (card t_65e18bd7).
+				if s := builderAssembled(fn, consts, funcs); s != "" {
+					funcs[fn.Name.Name] = s
+				}
+			}
+
+			got := false
+			for _, e := range sqlExpressions(f, funcs) {
+				if statementWritesTOTPStep(f, consts, funcs, e) {
+					got = true
+				}
+			}
+			if got != tc.write {
+				t.Errorf("resolved as a TOTP write = %v, want %v — a const/var declared inside a "+
+					"function is in scope only there, so it must not decide a statement in another "+
+					"function (and must still decide one in its own)", got, tc.write)
+			}
+		})
+	}
+}
+
 // TestOnlyKnownPackagesCallTheSharedRule pins the set of packages whose
 // production code may call the rule's entry point, totpconsume.ConsumeCode.
 //
@@ -1799,51 +2007,79 @@ func applyFormat(format string, args []string) string {
 	return b.String()
 }
 
-// collectStringConsts maps every const/var name in a file to its string
-// initialiser, so a statement referring to a name (the `%s` argument of a
+// collectStringConsts maps every PACKAGE-LEVEL const/var name in a file to its
+// string initialiser, so a statement referring to a name (the `%s` argument of a
 // Sprintf, or a const holding a fragment) is resolved rather than ignored.
+//
+// PACKAGE-LEVEL ONLY, and that bound is load-bearing. This used to walk the whole
+// file — ast.Inspect over every *ast.ValueSpec, function bodies included — into
+// ONE map keyed by NAME, last declaration winning. A function-local
+// `const x = "…"` (or `var x = "…"`) in an unrelated function therefore overwrote
+// the package-level `x` for every LATER statement in the file, and — because
+// packageConsts merges a directory's files into one map — for statements in every
+// file of the package. Measured on the card's probe, in both directions:
+//
+//   - a genuine second implementation whose column const was shadowed this way
+//     read GREEN (the copy was not named at all);
+//   - an innocent `UPDATE products SET …` whose column const was shadowed by a
+//     local declaration holding the column name was reported as a TOTP write.
+//
+// A local declaration is in scope only inside its own function, so it does not
+// belong in this map at all; localStringBindings carries it, scoped, instead.
 func collectStringConsts(f *ast.File) map[string]string {
 	consts := map[string]string{}
-	ast.Inspect(f, func(n ast.Node) bool {
-		vs, ok := n.(*ast.ValueSpec)
-		if !ok {
-			return true
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || (gd.Tok != token.CONST && gd.Tok != token.VAR) {
+			continue
 		}
-		for i, name := range vs.Names {
-			if i >= len(vs.Values) {
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
 				continue
 			}
-			lit, ok := vs.Values[i].(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				continue
-			}
-			if s, err := strconv.Unquote(lit.Value); err == nil {
-				consts[name.Name] = s
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				if s, err := strconv.Unquote(lit.Value); err == nil {
+					consts[name.Name] = s
+				}
 			}
 		}
-		return true
-	})
+	}
 	return consts
 }
 
 // localStringBindings maps the name a FUNCTION BODY binds to a resolvable string
-// to that string, so a statement assembled after a local assignment is resolved
+// to that string, so a statement assembled after a local binding is resolved
 // rather than left as an opaque identifier:
 //
 //	col := colFn()
+//	const col2 = "totp_last_step"   // a local DECLARATION binds the same way
 //	q := fmt.Sprintf("UPDATE users SET %s = ...", col)
 //
-// This is the same reach collectStringConsts gives a const/var declaration, and
-// the same one the guard has always given a function-local `var x = "..."`
-// (which is resolved via the file-wide const map); `x := "..."` is an
-// *ast.AssignStmt instead of a *ast.ValueSpec, so without this it resolved to
-// nothing.
+// This is the reach collectStringConsts gives a package-level const, moved to the
+// scope the name actually lives in. BOTH declaration forms are collected, because
+// Go binds them the same: `x := "..."` is an *ast.AssignStmt, while `var x = "..."`
+// / `const x = "..."` is an *ast.ValueSpec. Collecting only the assignment form
+// (card t_15b5a250's fix) left the ValueSpec form to the file-wide map, which is
+// the shadowing defect this function's scope exists to prevent — measured as a
+// MISS on a genuine second implementation whose column const a sibling function
+// shadowed with a local const, and as a FALSE ALARM on an innocent update whose
+// column const a local const shadowed with the column name (card t_eb8782eb).
 //
 // ONE STATEMENT AT A TIME, in source order: the map seen at the point of a
 // statement is exactly what an author would have had in scope, so a name
 // re-assigned to something opaque cannot make an earlier statement read wrong.
+// A local declaration is in scope from the end of its own spec, so a ValueSpec
+// that ends at or after the statement contributes nothing either.
 //
-// SCOPED TO THE ENCLOSING FUNCTION, and that scope is load-bearing. The first
+// SCOPED TO THE ENCLOSING FUNCTION, and that scope is load-bearing. An earlier
 // version was handed the whole *ast.File and keyed by NAME only, so an unrelated
 // `x := "..."` anywhere earlier in a file overrode the package declaration of x
 // for every later statement in that file — which silently MISSED a genuine
@@ -1864,26 +2100,39 @@ func localStringBindings(scope ast.Node, before token.Pos, consts, funcs map[str
 			// is not in; its names must not leak out.
 			return false
 		}
-		as, ok := n.(*ast.AssignStmt)
-		if !ok {
+		switch d := n.(type) {
+		case *ast.AssignStmt:
+			if d.End() >= before {
+				// At or after the statement being resolved: not in scope, and
+				// visiting deeper would only see a later re-assignment.
+				return false
+			}
+			for i, lhs := range d.Lhs {
+				if i >= len(d.Rhs) {
+					continue
+				}
+				id, ok := lhs.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				if s := resolveSQLText(d.Rhs[i], consts, funcs, nil); s != "" {
+					local[id.Name] = s
+				}
+			}
 			return true
-		}
-		if as.End() >= before {
-			// At or after the statement being resolved: not in scope, and
-			// visiting deeper would only see a later re-assignment.
-			return false
-		}
-		for i, lhs := range as.Lhs {
-			if i >= len(as.Rhs) {
-				continue
+		case *ast.ValueSpec:
+			if d.End() >= before {
+				return false
 			}
-			id, ok := lhs.(*ast.Ident)
-			if !ok {
-				continue
+			for i, name := range d.Names {
+				if i >= len(d.Values) {
+					continue
+				}
+				if s := resolveSQLText(d.Values[i], consts, funcs, nil); s != "" {
+					local[name.Name] = s
+				}
 			}
-			if s := resolveSQLText(as.Rhs[i], consts, funcs, nil); s != "" {
-				local[id.Name] = s
-			}
+			return true
 		}
 		return true
 	})
@@ -2040,6 +2289,12 @@ func builderAssembled(fn *ast.FuncDecl, consts, funcs map[string]string) string 
 	if fn == nil || fn.Body == nil {
 		return ""
 	}
+	// A part may name a const/var declared in THIS body (`const col = "totp_last_step"`
+	// beside the builder). That name is no longer in the package const map — it is in
+	// scope here and nowhere else — so it comes from the scoped map; without this the
+	// fold would abandon a statement it used to reconstruct, trading away reach the
+	// ValueSpec map granted before it was scoped.
+	local := localStringBindings(fn, fn.End(), consts, funcs)
 	// Which identifiers are builders? Bound by a declaration or assignment whose value is
 	// a `strings.Builder` / `bytes.Buffer` composite or conversion.
 	builders := map[string]bool{}
@@ -2103,7 +2358,7 @@ func builderAssembled(fn *ast.FuncDecl, consts, funcs map[string]string) string 
 			if len(call.Args) != 1 {
 				continue
 			}
-			v := resolveSQLText(call.Args[0], consts, funcs, nil)
+			v := resolveSQLText(call.Args[0], consts, funcs, local)
 			if v == "" {
 				// An unresolvable part: abandon the whole fold rather than quote a
 				// fragment. A partial string cannot be matched as the defect anyway.
