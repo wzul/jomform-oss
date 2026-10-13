@@ -842,7 +842,9 @@ func (s *WorkspaceStore) Rename(ctx context.Context, in WorkspaceRenameInput) (*
 //
 // It answers with the workspace's CURRENT slug, not a workspace id, because the
 // caller's job is to move a request from a former host to the current one
-// (a permanent redirect) rather than to serve the same tenant on two hosts.
+// (a permanent, method-preserving redirect — HTTP 308 with Cache-Control:
+// no-store, see PublicHandlers.AliasHostRedirect) rather than to serve the same
+// tenant on two hosts.
 func (s *WorkspaceStore) CurrentSlugForHost(ctx context.Context, slug string) (string, error) {
 	var cur *string
 	err := s.pool.QueryRow(ctx, `

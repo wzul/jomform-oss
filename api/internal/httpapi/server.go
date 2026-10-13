@@ -168,11 +168,13 @@ func (s *Server) Handler() http.Handler {
 
 	var h http.Handler = mux
 	// Former workspace hosts (migration 000068): a request on a slug a workspace
-	// has RENAMED AWAY from is answered with a permanent redirect to its current
-	// host, so a printed QR stand or a shared link never dies. Wrapped around the
-	// whole router (not per route), because a dozen public handlers read the host
-	// independently — see alias_hosts.go. It is a no-op for every host that is
-	// live, unknown, the apex, or a custom domain.
+	// has RENAMED AWAY from is answered with a permanent, method-preserving
+	// redirect (HTTP 308, no-store) to its current host, so a printed QR stand or
+	// a shared link never dies — and a page left open across the rename still
+	// SUBMITS (a 301 would let a browser re-issue its POST as a GET).
+	// Wrapped around the whole router (not per route), because a dozen public
+	// handlers read the host independently — see alias_hosts.go. It is a no-op
+	// for every host that is live, unknown, the apex, or a custom domain.
 	if s.deps.Public != nil {
 		h = s.deps.Public.AliasHostRedirect(h)
 	}

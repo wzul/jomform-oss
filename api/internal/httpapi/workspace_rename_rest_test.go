@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -200,9 +201,14 @@ func TestRESTRenameSlugAndOldHostStillAnswers(t *testing.T) {
 		t.Fatalf("row = slug:%q name:%q, want %q / %q", got.Slug, got.Name, newSlug, ws.Name)
 	}
 
-	// THE PROOF: a real request on the OLD host is answered with a permanent
-	// redirect to the NEW one, path and query preserved (so a specific form, a
-	// table number or an ?aff= code is not lost).
+	// THE PROOF: a real request on the OLD host is answered with a permanent,
+	// METHOD-PRESERVING redirect (HTTP 308) to the NEW one, path and query
+	// preserved (so a specific form, a table number or an ?aff= code is not
+	// lost). The status is asserted by NAME because 301 is the plausible-looking
+	// wrong answer here: a 301 lets the client re-issue a POST as a GET
+	// (RFC 9110 §15.4.2), which turns a stale buyer page into a 405. The
+	// discriminating test for that case is
+	// TestRESTRenameFormerHostKeepsTheMethodAndIsNotCacheable below.
 	//
 	// Driven through the WHOLE server Handler(), not a hand-built mux, because
 	// the half of this feature that is easiest to get wrong is the WIRING: a
@@ -220,9 +226,11 @@ func TestRESTRenameSlugAndOldHostStillAnswers(t *testing.T) {
 	req.Host = oldSlug + ".jomform.com"
 	rr := httptest.NewRecorder()
 	wrapped.ServeHTTP(rr, req)
-	if rr.Code != http.StatusMovedPermanently {
-		t.Fatalf("a request on the FORMER host %s.jomform.com = %d, want 301 — the printed "+
-			"QR/iframe/affiliate links name that host and must not 404", oldSlug, rr.Code)
+	if rr.Code != http.StatusPermanentRedirect {
+		t.Fatalf("a request on the FORMER host %s.jomform.com = %d, want 308 — the printed "+
+			"QR/iframe/affiliate links name that host and must not 404, and the hop must not "+
+			"let the client drop the request method (301 allows exactly that, RFC 9110 §15.4.2)",
+			oldSlug, rr.Code)
 	}
 	want := "http://" + newSlug + ".jomform.com/f/harga?aff=ALI"
 	if loc := rr.Header().Get("Location"); loc != want {
@@ -247,9 +255,134 @@ func TestRESTRenameSlugAndOldHostStillAnswers(t *testing.T) {
 		req.Host = tc.host
 		rr := httptest.NewRecorder()
 		wrapped.ServeHTTP(rr, req)
-		if rr.Code == http.StatusMovedPermanently {
+		// Both permanent-redirect codes are refused here: the alias hop answers
+		// 308 (see AliasHostRedirect), and a host that must not be treated as a
+		// former workspace must not answer a 301 either — a check for only one
+		// code would go green on the day the other one is emitted.
+		if rr.Code == http.StatusPermanentRedirect || rr.Code == http.StatusMovedPermanently {
 			t.Errorf("%s was redirected to %q — %s", tc.host, rr.Header().Get("Location"), tc.why)
 		}
+	}
+}
+
+// TestRESTRenameFormerHostKeepsTheMethodAndIsNotCacheable is the DISCRIMINATING
+// test for the alias hop, and it is a separate test on purpose: the test above
+// drives a GET and asserts "it redirected", and a GET is the one request a
+// method-dropping redirect cannot hurt — which is exactly how a 301 shipped with
+// the GET assertion green (card t_3a7d83c5, found in prod at v1.18.0).
+//
+// WHAT IT PINS, and why each half is here:
+//
+//  1. A POST on the former host must be answered **308**, not 301. RFC 9110
+//     §15.4.2 (301): "For historical reasons, a user agent MAY change the request
+//     method from POST to GET for the subsequent request ... if this behavior is
+//     undesired, the 308 (Permanent Redirect) status code can be used instead",
+//     and browsers take that option. A 301 here is what turns a page held open
+//     across a rename into a 405 instead of a submission, because the served
+//     pages post to their OWN origin (fetch(location.pathname + "/order") —
+//     public.go, embed.go), so a buyer mid-checkout posts to the FORMER host.
+//  2. The answer must carry Cache-Control: no-store. A 308 with no freshness
+//     information is heuristically cacheable (RFC 9110 §15.4.9; RFC 9111 §3 and
+//     §4.2.2), and a stored former-host redirect is the one way a former host
+//     keeps answering after its row is gone — the alias table's row is removed
+//     when a workspace renames back onto the slug, and a deleted workspace takes
+//     its aliases with it (ON DELETE CASCADE, 000068).
+//  3. The CONTROLS that give those two assertions meaning, measured the way prod
+//     was (t_53ccce90): on the CURRENT host the same path answers 405 to a GET
+//     (the route is POST-only) and 404 to a POST (the request reached the
+//     handler). Without them "it is 308" would not be distinguishable from a
+//     route that simply is not there.
+func TestRESTRenameFormerHostKeepsTheMethodAndIsNotCacheable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-backed REST rename test in -short mode")
+	}
+	pool := bundleTestPool(t)
+	h, ws, token := renameRESTFixture(t, "method")
+	oldSlug := ws.Slug
+	newSlug := "rest-method-" + ws.ID[:6]
+
+	// The rename goes through the real route, so the alias row under test is the
+	// feature's own side-effect and not a hand-written row.
+	rec := sessionReq(t, h, token, http.MethodPatch, "/v1/workspaces/"+ws.ID, `{"slug":"`+newSlug+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH /v1/workspaces/{id} (slug) = %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	srv := newTestServer()
+	srv.deps.Public = &PublicHandlers{
+		Workspaces: dbstore.NewWorkspaceStore(pool),
+		Forms:      dbstore.NewFormStore(pool),
+	}
+	wrapped := srv.Handler()
+
+	const orderBody = `{"form_slug":"harga","buyer_name":"stale tab"}`
+	post := func(host string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/harga/order", strings.NewReader(orderBody))
+		req.Host = host
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		wrapped.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// 1. THE STALE POST. This is the request a page left open across the rename
+	// sends, and the one a 301 mangles.
+	rr := post(oldSlug + ".jomform.com")
+	switch rr.Code {
+	case http.StatusPermanentRedirect:
+		// what the hop must answer
+	case http.StatusMovedPermanently:
+		t.Fatalf("POST on the FORMER host %s.jomform.com = 301: a 301 lets the client re-issue "+
+			"this POST as a GET (RFC 9110 §15.4.2), so the stale page it came from is answered "+
+			"405 by a POST-only route instead of submitting — the hop must be 308", oldSlug)
+	case http.StatusMethodNotAllowed:
+		t.Fatalf("POST on the FORMER host %s.jomform.com = 405: the request was already "+
+			"downgraded to GET before it reached the router, so an order placed from a page "+
+			"open across a rename is lost (Location=%q)", oldSlug, rr.Header().Get("Location"))
+	default:
+		t.Fatalf("POST on the FORMER host %s.jomform.com = %d, want 308 (Location=%q)",
+			oldSlug, rr.Code, rr.Header().Get("Location"))
+	}
+
+	// 2. The hop's own headers.
+	if cc := rr.Header().Get("Cache-Control"); !strings.Contains(cc, "no-store") {
+		t.Errorf("the former-host redirect carries Cache-Control = %q, want no-store: a 308 with "+
+			"no freshness information is heuristically cacheable, so an edge or a browser could "+
+			"keep answering for this host after its alias row is gone", cc)
+	}
+
+	loc := rr.Header().Get("Location")
+	if want := "http://" + newSlug + ".jomform.com/harga/order"; loc != want {
+		t.Fatalf("redirect Location = %q, want %q — the path must survive the move", loc, want)
+	}
+	target, perr := url.Parse(loc)
+	if perr != nil {
+		t.Fatalf("Location %q does not parse: %v", loc, perr)
+	}
+
+	// 3. The POST FOLLOWS THE HOP AS A POST (which is what 308 instructs a client
+	// to do) and reaches the handler on the current host: 404 "no such form", NOT
+	// the 405 a method-downgraded request gets.
+	followed := post(target.Host)
+	if followed.Code == http.StatusMethodNotAllowed {
+		t.Errorf("after the hop, POST %s%s = 405 — the method did not survive it", target.Host, target.RequestURI())
+	}
+	if followed.Code != http.StatusNotFound {
+		t.Errorf("after the hop, POST %s%s = %d, want 404 (the form lookup, i.e. the request "+
+			"reached the POST-only handler). A 405 here is the downgrade this test exists to catch.",
+			target.Host, target.RequestURI(), followed.Code)
+	}
+	// The control that makes 404-vs-405 mean something: the SAME path with a GET
+	// is 405, because the route is POST-only. This is the prod signature QA
+	// measured, reproduced in-test so neither number is taken on faith.
+	getReq := httptest.NewRequest(http.MethodGet, target.RequestURI(), nil)
+	getReq.Host = target.Host
+	getRR := httptest.NewRecorder()
+	wrapped.ServeHTTP(getRR, getReq)
+	if getRR.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET %s%s = %d, want 405 — this is the control showing what a request whose "+
+			"method was dropped at the hop would get (the route is POST-only)",
+			target.Host, target.RequestURI(), getRR.Code)
 	}
 }
 

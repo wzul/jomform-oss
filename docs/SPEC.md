@@ -73,7 +73,7 @@ audit_logs(id, account_id FK, actor, action, entity, entity_id, diff jsonb, crea
 ## 4. Fungsi MVP
 
 **P0 (lancar):**
-1. Auth: email+argon2id, 2FA TOTP, session secure-cookie; account slug boleh ditukar (301 redirect lama→baru)
+1. Auth: email+argon2id, 2FA TOTP, session secure-cookie; account slug boleh ditukar (308 redirect lama→baru, method kekal)
 2. Produk: one-time **atau subscription** (billing period bulan/tahun, trial days)
 3. Form builder: drag-drop blok (header/gambar/teks/produk/kupon/penghantaran), live preview, autosave, tema preset, BM/EN
 4. Public form: SSR pantas, jualan one-time & langganan

@@ -327,8 +327,13 @@ func TestRESTRenameSlugOnlySurvivesALegacyOverLongStoredName(t *testing.T) {
 	req := sessionlessReq(http.MethodGet, "/f/harga?aff=ALI", oldSlug+".jomform.com")
 	rr := newRecorder()
 	wrapped.ServeHTTP(rr, req)
-	if rr.Code != http.StatusMovedPermanently {
-		t.Fatalf("the FORMER host of a long-named workspace = %d, want 301", rr.Code)
+	if rr.Code != http.StatusPermanentRedirect {
+		t.Fatalf("the FORMER host of a long-named workspace = %d, want 308 (method-preserving "+
+			"permanent redirect — see AliasHostRedirect)", rr.Code)
+	}
+	if cc := rr.Header().Get("Cache-Control"); !strings.Contains(cc, "no-store") {
+		t.Errorf("the FORMER host of a long-named workspace carries Cache-Control = %q, want "+
+			"no-store: a stored former-host redirect would outlive its alias row", cc)
 	}
 	if want := "http://" + newSlug + ".jomform.com/f/harga?aff=ALI"; rr.Header().Get("Location") != want {
 		t.Errorf("redirect Location = %q, want %q", rr.Header().Get("Location"), want)

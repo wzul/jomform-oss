@@ -155,7 +155,7 @@ const DESTINATION_FACTS: Record<string, string[]> = {
   "Renaming a workspace": [
     "counted in characters rather than bytes",
     "Only the OWNER can change it",
-    "redirecting permanently (HTTP 301) to the new one",
+    "redirecting permanently (HTTP 308) to the new one",
     "never handed to another workspace",
     "requires confirm=true for an address change",
   ],

@@ -11,8 +11,12 @@
 --
 -- The rule: the old slug is REMEMBERED and keeps resolving to the same
 -- workspace, so the change is additive. A request on a former host is answered
--- with a permanent redirect to the workspace's current host (see
--- PublicHandlers.AliasHostRedirect) rather than serving the tenant twice.
+-- with a permanent, METHOD-PRESERVING redirect — HTTP 308, not 301: a 301 lets a
+-- user agent re-issue a POST as a GET (RFC 9110 §15.4.2), and the served pages
+-- post to their own origin, so a page left open across a rename would submit as a
+-- GET and meet a 405 — carrying Cache-Control: no-store so the answer cannot
+-- outlive this row on a cache's own heuristic. See
+-- PublicHandlers.AliasHostRedirect — rather than serving the tenant twice.
 --
 -- DIFFERENT FROM HOW A FORM-SLUG RENAME BEHAVES, ON PURPOSE. A form's old URL is
 -- a TEMPORARY 301 that a later form claiming that slug wins: two forms in one
