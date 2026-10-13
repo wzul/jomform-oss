@@ -2662,6 +2662,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
         "x-jomform-access": "read"
       },
       "patch": {
+        "description": "Partial update: an omitted title, config, theme or slug keeps the stored value, so a body that renames the form does not have to resend its title. An empty title (or slug) also means \"leave unchanged\" — this route never blanks a form's title. A slug another live form already serves is refused with 409 form.slugInUse, and nothing else in the same request is written; a malformed slug is 400 form.slugInvalid. A rename leaves a temporary 301 from the old URL.",
         "operationId": "updateForm",
         "parameters": [
           {
@@ -2726,7 +2727,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
             "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
           }
         },
-        "summary": "Update a form's title, config or theme",
+        "summary": "Update a form's title, config, theme or slug",
         "tags": [
           "Forms"
         ],

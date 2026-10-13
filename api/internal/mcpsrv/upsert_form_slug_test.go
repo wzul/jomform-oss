@@ -105,6 +105,20 @@ func (st upsertSlugState) storedSlug(t *testing.T, formID string) string {
 	return slug
 }
 
+// storedTitle reads the title straight out of the database. A refused write is
+// asserted against the ROW, not against the tool's error message: the defect
+// this guards (card t_0b7980f5) was a write that landed while the caller was
+// told the save had failed.
+func (st upsertSlugState) storedTitle(t *testing.T, formID string) string {
+	t.Helper()
+	var title string
+	if err := st.pool.QueryRow(context.Background(),
+		`SELECT title FROM forms WHERE id=$1`, formID).Scan(&title); err != nil {
+		t.Fatalf("read stored title: %v", err)
+	}
+	return title
+}
+
 // TestUpsertFormUpdateHonoursSlug: the tool's documented parameter must actually
 // move the form on the update path.
 func TestUpsertFormUpdateHonoursSlug(t *testing.T) {
@@ -180,7 +194,7 @@ func TestUpsertFormUpdateSlugCollisionIsRefused(t *testing.T) {
 	otherForm := st.seedForm(t, takenSlug)
 
 	_, _, err := st.srv.upsertForm(st.ctx, nil, upsertFormIn{
-		FormID: firstForm, Title: "Western menu", Slug: takenSlug,
+		FormID: firstForm, Title: "Refused rename", Slug: takenSlug,
 	})
 	if err == nil {
 		t.Fatalf("upsert_form onto a slug another live form serves succeeded; a collision must be refused "+
@@ -195,6 +209,15 @@ func TestUpsertFormUpdateSlugCollisionIsRefused(t *testing.T) {
 	}
 	if got := st.storedSlug(t, otherForm); got != takenSlug {
 		t.Errorf("the form owning the slug now has %q, want %q untouched", got, takenSlug)
+	}
+	// Card t_0b7980f5: the refusal must not have written the REST of the
+	// upsert either. The title write used to run BEFORE the rename, so a
+	// colliding slug returned an error to the agent while the row it named had
+	// already been changed — the same half-applied save the REST PATCH had.
+	if got := st.storedTitle(t, firstForm); got != "Western menu" {
+		t.Errorf("forms.title = %q after a refused rename, want the seeded \"Western menu\".\n"+
+			"The upsert wrote the title and then failed on the slug, so the agent was told the save "+
+			"did not happen while the form's title had already changed.", got)
 	}
 }
 

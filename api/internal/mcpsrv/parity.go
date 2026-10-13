@@ -618,15 +618,22 @@ func (s *Server) upsertForm(
 	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
 		return nil, nil, errors.New(urlguard.InvalidShapeMessage("config."+field, want))
 	}
-	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, in.Theme); err != nil {
-		return nil, nil, err
-	}
 	// A slug supplied on the UPDATE path renames the form, exactly as the
 	// dashboard's slug field does (same FormStore.RenameSlug, so the same
 	// validation, the same per-workspace uniqueness and the same temporary 301
 	// for the old URL). The tool's own description documents `slug` as "Slug URL
 	// unik" and it was honoured only on create: an agent told to "set the slug"
 	// got back {"status":"updated"} and no change, which is the carded defect.
+	//
+	// The rename runs BEFORE the title/config write, and the order is the point
+	// (card t_0b7980f5): RenameSlug validates the whole rename before writing
+	// anything, so a refused one — a malformed slug, or ErrSlugTaken for a slug
+	// another live form serves — leaves the form's data untouched. Issued second
+	// it did not: the collision error came back after the title/config write had
+	// already committed, so the agent was told the upsert failed while the row
+	// had moved. The two writes are still two statements rather than one
+	// transaction; what this removes is the only refusal that can happen
+	// BETWEEN them.
 	//
 	// An OMITTED slug (empty) keeps the stored value, matching config/theme's
 	// contract, and renaming to the slug the form already has is a no-op. A
@@ -635,6 +642,12 @@ func (s *Server) upsertForm(
 		if _, err := s.deps.Forms.RenameSlug(ctx, acc, in.FormID, in.Slug); err != nil {
 			return nil, nil, err
 		}
+	}
+	// The title is non-empty here (the "title wajib" refusal above), and
+	// Forms.Update keeps the stored value for an empty one, so an upsert can
+	// never blank a form's title (card t_0b7980f5).
+	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, in.Theme); err != nil {
+		return nil, nil, err
 	}
 	// Report the form's slug as it now STANDS, read back rather than echoed from
 	// the request, so the value the agent is told it owns cannot disagree with

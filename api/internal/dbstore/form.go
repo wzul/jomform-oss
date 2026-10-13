@@ -293,6 +293,18 @@ func (s *FormStore) GetByIDInAccounts(ctx context.Context, accountIDs []string, 
 // MCP upsert_form without config) can never write NULL into a NOT NULL
 // jsonb column (SQLSTATE 23502). Callers that want to clear a map send {}.
 //
+// An empty (or whitespace-only) title means "leave unchanged" too, and that
+// is the WHOLE title contract: a title can never be blanked by an update.
+// Before this, `title` was written RAW, so a partial PATCH that carried only
+// a slug — which decodes to the Go zero value "" for an omitted title —
+// answered 200 with the form's title emptied (card t_0b7980f5, measured on
+// prod: PATCH {"slug":"<same>"} → 200 and an empty forms.title). The rule is the one
+// the template routes already apply at their call site (updateOwnTemplate /
+// update_template trim the title and fall back to the stored one), moved into
+// the statement so no caller can miss it; BTRIM also stops a whitespace-only
+// body standing in for a blank title. An UPDATE that genuinely wants to blank
+// a title does not exist: createForm is where a titleless form is made.
+//
 // A slug is NOT part of this statement on purpose: a rename is its own atomic
 // operation (RenameSlug) because it must also leave the temporary 301 behind
 // for the old URL. Keeping it out means every existing caller of Update keeps
@@ -313,7 +325,7 @@ func (s *FormStore) GetByIDInAccounts(ctx context.Context, accountIDs []string, 
 // be the worse outcome.
 func (s *FormStore) Update(ctx context.Context, accountID, id, title string, config, theme map[string]any) error {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE forms SET title=$3, config=COALESCE($4, config), theme=COALESCE($5, theme), updated_at=now()
+		`UPDATE forms SET title=COALESCE(NULLIF(BTRIM($3), ''), title), config=COALESCE($4, config), theme=COALESCE($5, theme), updated_at=now()
 		 WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
 		accountID, id, title, config, theme)
 	if isNoSuchRow(err) {

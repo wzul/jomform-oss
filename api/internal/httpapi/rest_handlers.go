@@ -978,33 +978,37 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 		writeErr(w, http.StatusBadRequest, urlguard.InvalidShapeMessage("config."+field, want))
 		return
 	}
-	// Pass config/theme as-is: Forms.Update COALESCEs nil over the stored
-	// values, so a PATCH that omits either key keeps what's stored instead
-	// of writing NULL into a NOT NULL jsonb column (SQLSTATE 23502, issue
-	// #16). Callers that want to clear a map send {} explicitly.
-	formID := r.PathValue("id")
-	if err := h.Forms.Update(r.Context(), actx.Account.ID, formID,
-		in.Title, in.Config, in.Theme); err != nil {
-		respondErr(w, r, err)
-		return
-	}
-	// The slug is a separate write because a rename is one atomic operation
-	// that must also leave the temporary 301 for the old URL behind it (see
-	// FormStore.RenameSlug). An OMITTED slug keeps the stored value — the same
-	// "leave unchanged" contract config/theme have — because the empty string
-	// is skipped here. That is what the console's form-settings save sends for
-	// every other field, and it is what makes the documented PATCH a partial
-	// update rather than a full replace.
+	// The slug write runs FIRST, and the order IS the point. RenameSlug
+	// validates the whole rename before it writes anything — a malformed slug
+	// is 400, a collision 409 (respondErr maps ErrSlugTaken), a missing form
+	// 404 — so a REFUSED rename now leaves the save untouched. Issued second it
+	// did not: the 409 came back after the title/config write had already
+	// committed, so the dashboard's own save (form-settings page.tsx always
+	// sends a title) changed the form's title and then told the merchant the
+	// save had failed, with the new title still in the page's input beside the
+	// refusal — read as "not saved" while the row had moved (card t_0b7980f5,
+	// browser-observed on prod). The two writes are still two statements rather
+	// than one transaction; what this removes is the only refusal that can
+	// happen BETWEEN them.
 	//
-	// Before this, the field was not read at all: the console POSTed a slug,
-	// the endpoint ignored it, and the save reported {status:"updated"} while
-	// the form's URL had not moved. A merchant concluded the rename worked and
-	// his new URL existed — it 404'd (the carded defect).
+	// An OMITTED slug keeps the stored value — the same "leave unchanged"
+	// contract config/theme (and title, below) have — because the empty string
+	// is skipped here. That is what the console's form-settings save sends for
+	// every other field, and what makes the documented PATCH a partial update
+	// rather than a full replace.
+	//
+	// Before the slug was read here at all, the field was ignored: the console
+	// POSTed a slug, the endpoint dropped it, and the save reported
+	// {status:"updated"} while the form's URL had not moved. A merchant
+	// concluded the rename worked and his new URL existed — it 404'd (the
+	// carded defect).
+	formID := r.PathValue("id")
 	if in.Slug != "" {
 		oldSlug, err := h.Forms.RenameSlug(r.Context(), actx.Account.ID, formID, in.Slug)
 		if err != nil {
-			// A collision is 409 (respondErr maps ErrSlugTaken) and an
-			// invalid slug 400 — never a 200 that changed nothing.
+			// A collision is 409 and an invalid slug 400 — never a 200 that
+			// changed nothing. Because this runs BEFORE the field write, the
+			// refusal also leaves title/config/theme untouched.
 			respondErr(w, r, err)
 			return
 		}
@@ -1012,6 +1016,21 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 			h.recordEvent(r, actx, h.sessionOwnerID(r), "form.slug_renamed",
 				map[string]any{"form_id": formID, "from": oldSlug, "to": strings.ToLower(strings.TrimSpace(in.Slug))})
 		}
+	}
+	// Pass config/theme as-is: Forms.Update COALESCEs nil over the stored
+	// values, so a PATCH that omits either key keeps what's stored instead
+	// of writing NULL into a NOT NULL jsonb column (SQLSTATE 23502, issue
+	// #16). Callers that want to clear a map send {} explicitly.
+	//
+	// TITLE follows the same contract (card t_0b7980f5): an omitted title
+	// decodes to "" and the statement keeps the stored value for an empty or
+	// whitespace-only one, so a slug-only body can no longer return 200 and
+	// empty a live form's title. This endpoint therefore cannot clear a title
+	// at all; a form is created titleless (or not) by createForm.
+	if err := h.Forms.Update(r.Context(), actx.Account.ID, formID,
+		in.Title, in.Config, in.Theme); err != nil {
+		respondErr(w, r, err)
+		return
 	}
 	// Issue #92: audit form update.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.updated", map[string]any{"form_id": formID})
