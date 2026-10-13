@@ -2017,11 +2017,58 @@ func (h *PublicHandlers) findPublicForm(ctx context.Context, r *http.Request, sl
 // jomform.com (no subdomain, no custom domain) 404s so dashboard routes are
 // unaffected. The lookup is by workspace slug for the subdomain and by account
 // slug for a custom domain (they are different namespaces).
+//
+// A LABEL NO WORKSPACE OWNS IS A 404, NOT AN EMPTY STOREFRONT (card t_204a48c4).
+// Traefik's HostRegexp([a-z0-9-]+.jomform.com) is the only wildcard rule, so
+// EVERY label under *.jomform.com reaches this handler — including invented ones
+// — and the storefront listing alone cannot tell the two apart: a slug with no
+// workspace row lists zero forms, which is byte-for-byte what a real workspace
+// with nothing published renders. Measured on prod v1.18.0 (before this check),
+// `notaworkspace-zzz.jomform.com/` answered 200 with `<h1>Kedai
+// notaworkspace-zzz</h1>` and `templates.jomform.com/` — a name no workspace
+// owns — answered 200 with `<h1>Kedai templates</h1>`, indistinguishable from
+// the real `abc.jomform.com/`. So the workspace row's existence is the claim,
+// and it is read here, before anything is written: the same IDBySlug gate
+// handlePublicLegalPage and requestingAccountID (handleAsset) already apply.
+// Without it a reserved-but-unclaimed label (`admin`, `support`, `status`, …)
+// also answers a merchant's or a scanner's status-code check with 200, so
+// urlguard.reservedSubdomains' refusal of a CLAIM is unverifiable from outside.
+//
+// This is deliberately scoped to the WILDCARD branch. The custom-domain branch
+// needs no such check: customDomainOwner resolves the host through the verified
+// account_domains row (then the legacy accounts.custom_domain column), so that
+// host is claimed by construction and its root serves the account's storefront
+// as issue #286/#297 specify.
 func (h *PublicHandlers) handleWorkspaceRoot(w http.ResponseWriter, r *http.Request) {
 	var slug string
 	var byAccount bool
+	// workspaceID carries the subdomain branch's own resolution into the
+	// landing-page block below, so the existence check and the landing-page
+	// lookup are one read of one row and cannot disagree about which workspace
+	// this request is for.
+	var workspaceID string
 	if sub := accountSubdomain(r.Host); sub != "" {
 		slug = sub
+		if h.Workspaces == nil {
+			// No store to resolve the label against: this deployment cannot
+			// tell a claimed label from an invented one, and answering the
+			// shell would be exactly the defect above. Never the production
+			// wiring (cmd/jomform-api/main.go always sets Workspaces), so this
+			// is the honest answer for a partially wired handler rather than
+			// a panic on a nil store.
+			http.NotFound(w, r)
+			return
+		}
+		id, werr := h.Workspaces.IDBySlug(r.Context(), sub)
+		if werr != nil || id == "" {
+			// No live workspace owns this label (deleted_at IS NULL is part of
+			// the lookup, so a trashed workspace's slug is unclaimed too).
+			// 404 — the same answer the bare apex above gets, and the answer
+			// handlePublicLegalPage already gives an unknown workspace.
+			http.NotFound(w, r)
+			return
+		}
+		workspaceID = id
 	} else if cd := customDomainOwner(r.Context(), h.Accounts, h.Domains, r.Host); cd != "" {
 		slug = cd
 		byAccount = true
@@ -2046,13 +2093,14 @@ func (h *PublicHandlers) handleWorkspaceRoot(w http.ResponseWriter, r *http.Requ
 	// subdomain lookup uses the workspace slug, the custom-domain lookup uses the
 	// account slug -> resolve the owning workspace, read its settings.
 	if h.Workspaces != nil {
-		var workspaceID string
+		// The subdomain branch already resolved (and checked) this workspace
+		// above; only the custom-domain branch still has to go from the
+		// ACCOUNT slug to its owning workspace.
 		if byAccount {
+			workspaceID = ""
 			if acc, aerr := h.Accounts.BySlug(r.Context(), slug); aerr == nil && acc != nil {
 				workspaceID, _ = h.Workspaces.WorkspaceIDByAccount(r.Context(), acc.ID)
 			}
-		} else {
-			workspaceID, _ = h.Workspaces.IDBySlug(r.Context(), slug)
 		}
 		if workspaceID != "" {
 			if st, serr := h.Workspaces.Settings(r.Context(), workspaceID); serr == nil &&
