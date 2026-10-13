@@ -52,6 +52,11 @@ type scopeRunner struct {
 	runUser        string
 	confirmUser    string
 	runs           int
+	// confirmErr, when non-nil, is what Confirm answers with instead of a
+	// success. It exists for the POST-CLAIM refusal shapes (card t_1900adef): the
+	// edge's job is to turn whatever the lane returns into a status, a wire
+	// message and a machine code, and that mapping is what those tests own.
+	confirmErr error
 }
 
 func (r *scopeRunner) Ready() bool { return true }
@@ -67,6 +72,9 @@ func (r *scopeRunner) Run(ctx context.Context, _ []chat.Turn, _ string) (*chat.R
 func (r *scopeRunner) Confirm(_ context.Context, writeCtx context.Context, userID, _, _ string) (*chat.Confirmed, error) {
 	if id := mcpsrv.IdentityFromContext(writeCtx); id != nil {
 		r.confirmAccount, r.confirmUser = id.AccountID, id.UserID
+	}
+	if r.confirmErr != nil {
+		return nil, r.confirmErr
 	}
 	return &chat.Confirmed{Tool: "update_product", Result: `{"status":"updated"}`}, nil
 }

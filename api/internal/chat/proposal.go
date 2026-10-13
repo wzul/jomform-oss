@@ -121,6 +121,21 @@ var (
 	// REST layer maps it.
 	ErrProposalArgsInvalid = errors.New("cadangan itu tidak boleh dilaksanakan kerana hujahnya " +
 		"tidak diterima oleh alat itu — minta pembantu menyediakan kad baharu")
+	// ErrProposalRoleRefused is the CONFIRM-side refusal for a confirmed write the
+	// WORKSPACE ROLE gate declined after the token was claimed (card t_1900adef).
+	//
+	// It exists so the specific cause survives the lane. A refused tool result is
+	// plain TEXT (`server menolak: %s` below), and the REST edge can only turn a
+	// refusal into a machine code if it can tell WHICH refusal it was — without
+	// this, every post-claim refusal collapsed into one generic sentence with no
+	// code, so a read_only member whose confirm was refused by their role read
+	// "The change could not be applied. Please try again." for a card whose token
+	// was already spent (the retry it offered cannot work).
+	//
+	// Exported because the REST layer maps it to a status, a wire message and the
+	// code `role.manageRequired`; the match itself is against the gate's OWN
+	// declared wording (mcpsrv.RoleManageRequiredLeadIn), never a second copy.
+	ErrProposalRoleRefused = errors.New("peranan anda dalam workspace ini tidak membenarkan perubahan itu")
 	// errProposalArgsRejected is the PROPOSE-side form of the same verdict. It is
 	// returned with the SPECIFIC detail attached (which required key is absent,
 	// which key is not recognised) because the model is the one who can correct
@@ -157,6 +172,8 @@ func ProposeRefusalKind(err error) string {
 		return "unrenderable"
 	case errors.Is(err, ErrProposalArgsInvalid):
 		return "args_unacceptable"
+	case errors.Is(err, ErrProposalRoleRefused):
+		return "role_refused"
 	case errors.Is(err, errProposalArgsRejected):
 		return "args_rejected"
 	case errors.Is(err, errNoToolSchemaSource):
@@ -1295,7 +1312,20 @@ func (r *Runner) Confirm(ctx context.Context, writeCtx context.Context, userID, 
 		// The server's own gates refused it (workspace role, ownership, or a
 		// validation the card could not have predicted). The token is spent — see
 		// the file header on why a failed execution does not release it.
-		return nil, fmt.Errorf("server menolak: %s", strings.TrimSpace(bound(out, 300)))
+		//
+		// THE ROLE REFUSAL IS THE ONE THIS LANE CAN NAME (card t_1900adef). It is
+		// the only post-claim refusal measured on this route, the one whose remedy
+		// the user cannot guess (another role, not another click), and the one the
+		// REST edge already has a code and a sentence for. It is matched against
+		// the gate's OWN declared wording so a re-wording in mcpsrv cannot leave
+		// the classification matching a sentence nobody writes any more. Anything
+		// else keeps the generic wrap: a cause this lane cannot classify must not
+		// be guessed at, or the page would name a reason the server never gave.
+		detail := strings.TrimSpace(bound(out, 300))
+		if strings.Contains(detail, mcpsrv.RoleManageRequiredLeadIn) {
+			return nil, fmt.Errorf("%w: %s", ErrProposalRoleRefused, detail)
+		}
+		return nil, fmt.Errorf("server menolak: %s", detail)
 	}
 	return &Confirmed{Tool: claimed.Tool, Result: bound(out, MaxToolResultChars), ProposalID: claimed.ID}, nil
 }

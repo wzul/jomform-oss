@@ -2176,6 +2176,18 @@ export const DICT = {
   "chat.proposalUnexecutable": { en: "This proposal cannot be carried out as prepared. Ask the assistant to prepare it again — nothing was changed and nothing was used up.", ms: "Cadangan ini tidak boleh dilaksanakan seperti yang disediakan. Minta pembantu menyediakannya semula — tiada apa-apa diubah dan tiada apa-apa digunakan.", zh: "该提议按当前内容无法执行。请让助手重新准备——未做任何更改，也未消耗任何东西。", ta: "தயார் செய்யப்பட்டபடி இந்த முன்மொழிவை நிறைவேற்ற முடியாது. உதவியாளரை மீண்டும் தயார் செய்யச் சொல்லுங்கள் — எதுவும் மாறவில்லை, எதுவும் செலவாகவில்லை.", ar: "لا يمكن تنفيذ هذا المقترح بصيغته المُعدّة. اطلب من المساعد تحضيره من جديد — لم يتغير شيء ولم يُستهلك شيء." },
   "chat.cancelStale": { en: "That proposal is already settled — nothing to cancel.", ms: "Cadangan itu sudah selesai — tiada apa untuk dibatalkan.", zh: "该提议已结案——无可取消。", ta: "அந்த முன்மொழிவு ஏற்கனவே முடிந்தது — ரத்து செய்ய ஒன்றுமில்லை.", ar: "هذا المقترح محسوم بالفعل — لا شيء لإلغائه." },
   "chat.confirmFail": { en: "The change could not be applied. Please try again.", ms: "Perubahan tidak dapat dilaksanakan. Sila cuba lagi.", zh: "无法应用该更改。请重试。", ta: "மாற்றத்தைப் பயன்படுத்த முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر تطبيق التغيير. يرجى المحاولة مرة أخرى." },
+  // A confirmed write the workspace ROLE refused (t_1900adef). Its OWN sentence,
+  // in its own state, because BOTH halves of chat.confirmFail are wrong for it:
+  // the retry advice cannot work (the refusal arrives AFTER the token is claimed,
+  // so the card is spent) and a generic sentence names no cause when the server
+  // gave one — "you need the manage or admin role here". The sentence therefore
+  // states the cause, that the change did not go through, and that the card cannot
+  // be reused, and offers the only remedy that exists (a fresh card).
+  //
+  // It is deliberately NOT the shared apiErr.manageRequired sentence (which names
+  // the role but not the card's state): the two are different questions, and this
+  // one has to answer the second.
+  "chat.confirmRoleDenied": { en: "This change was not applied because you need the manage or admin role in this workspace, and this card cannot be used again — ask the assistant to prepare a new one.", ms: "Perubahan ini tidak dilaksanakan kerana anda perlukan peranan manage atau admin dalam workspace ini, dan kad ini tidak boleh digunakan lagi — minta pembantu menyediakan kad baharu.", zh: "由于您需要此工作区的 manage 或 admin 角色，该更改未被执行，而且这张卡片不能再次使用——请让助手重新准备一张。", ta: "இந்த பணியிடத்தில் manage அல்லது admin பங்கு தேவை என்பதால் இந்த மாற்றம் நிறைவேற்றப்படவில்லை, மேலும் இந்த அட்டையை மீண்டும் பயன்படுத்த முடியாது — உதவியாளரை புதிய அட்டை தயார் செய்யச் சொல்லுங்கள்.", ar: "لم يُطبَّق هذا التغيير لأنك تحتاج إلى دور manage أو admin في مساحة العمل هذه، ولا يمكن استخدام هذه البطاقة مرة أخرى — اطلب من المساعد تحضير بطاقة جديدة." },
   "chat.cancelFail": { en: "The proposal could not be cancelled. Please try again.", ms: "Cadangan tidak dapat dibatalkan. Sila cuba lagi.", zh: "无法取消该提议。请重试。", ta: "முன்மொழிவை ரத்து செய்ய முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر إلغاء المقترح. يرجى المحاولة مرة أخرى." },
   "chat.confirmRateLimited": { en: "You have reached the confirmation limit (30 an hour). Please try again shortly.", ms: "Anda telah mencapai had pengesahan (30 sejam). Sila cuba sebentar lagi.", zh: "您已达到确认上限（每小时 30 次）。请稍后再试。", ta: "உறுதிப்படுத்தல் வரம்பை அடைந்துவிட்டீர்கள் (மணிக்கு 30). சிறிது நேரத்தில் மீண்டும் முயற்சிக்கவும்.", ar: "بلغت حد التأكيد (30 في الساعة). يرجى المحاولة بعد قليل." },
   // The chat calls carry the selected workspace (?workspace=). When a

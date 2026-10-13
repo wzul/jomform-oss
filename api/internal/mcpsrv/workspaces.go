@@ -86,7 +86,7 @@ func (s *Server) requireWorkspaceWriteRole(ctx context.Context, workspaceID stri
 		return nil, err
 	}
 	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
-		return nil, errors.New("perlu peranan manage atau admin")
+		return nil, errors.New(RoleManageRequiredLeadIn)
 	}
 	return workspace, nil
 }

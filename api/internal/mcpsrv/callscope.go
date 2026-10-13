@@ -474,6 +474,37 @@ func (s *Server) roleForAccount(ctx context.Context, accountID string) (string, 
 	return s.deps.Workspaces.RoleByAccount(ctx, accountID, userID)
 }
 
+// RoleManageRequiredLeadIn is the stable LEAD-IN of every write-role refusal
+// this package writes (issue #162): the workspace-scoped gate below spells it
+// out, and the per-workspace and unscoped gates (requireWorkspaceWriteRole,
+// requireWriteRole) state it on its own.
+//
+// IT IS A DECLARED CONSTANT, not three copies of a sentence, because TWO
+// consumers pair on it BY VALUE and neither can see a Go identifier:
+//
+//   - api/internal/httpapi/errcode.go's message→code table, which decides the
+//     machine code from the wire text. That table keyed this refusal as an EXACT
+//     literal ("perlu peranan manage atau admin") while the confirm path's gate
+//     emitted the one-word-longer wording, so the lookup missed, ErrCodeFor
+//     returned "", and the refusal shipped as the untranslatable class code
+//     `request.badRequest` — #6177's rule failing in the one place it exists to
+//     hold (card t_1900adef, measured on live prod).
+//   - api/internal/chat/proposal.go, which classifies a REFUSED TOOL RESULT: an
+//     MCP tool error arrives as plain text, so the only way for the chat lane to
+//     tell the role refusal from any other is to match it against the wording
+//     the gate itself wrote.
+//
+// Referencing this constant from both sites is what makes a re-wording a
+// compile-time-visible change rather than a silent loss of the code.
+const RoleManageRequiredLeadIn = "perlu peranan manage atau admin"
+
+// RoleManageRequiredMessage is the WORKSPACE-SCOPED wording of that refusal —
+// the sentence requireWriteRoleIn answers with. It is separate from the lead-in
+// because the confirm path surfaces THIS text on the wire (see
+// chatConfirmMessageFor) rather than paraphrasing it, so the cause the user's
+// card was refused for is named by the gate that refused it.
+const RoleManageRequiredMessage = RoleManageRequiredLeadIn + " dalam workspace ini"
+
 // requireWriteRoleIn enforces BOTH write gates for the workspace owning
 // accountID:
 //
@@ -493,7 +524,7 @@ func (s *Server) requireWriteRoleIn(ctx context.Context, accountID string) error
 		return fmt.Errorf("db: %w", err)
 	}
 	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
-		return errors.New("perlu peranan manage atau admin dalam workspace ini")
+		return errors.New(RoleManageRequiredMessage)
 	}
 	return nil
 }

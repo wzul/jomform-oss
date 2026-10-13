@@ -130,6 +130,15 @@ type ChatReply = {
 // try again." would be instructing the user to repeat an action that cannot work
 // without a workspace — and it said that underneath an alert that had already
 // told them to choose one (t_790b1016).
+//
+// "roleDenied" is the mirror image, and it exists for the same reason. The server
+// refuses a confirmed write the workspace ROLE does not allow AFTER it has claimed
+// the token (mcpsrv's write-role gate), so this one IS a failure of the change and
+// the card keeps the failure badge — but the generic failure copy is wrong for it
+// in both halves: it names no cause when the server gave one (the role), and its
+// "try again" invites a click on a card that is already spent (t_1900adef). The
+// cause sentence is carried ONCE, by the page's own role="alert", exactly like the
+// other two named refusals.
 type ProposalState =
   | "pending"
   | "confirming"
@@ -139,6 +148,7 @@ type ProposalState =
   | "stale"
   | "unexecutable"
   | "scopeRequired"
+  | "roleDenied"
   | "failed";
 
 type Msg = {
@@ -467,6 +477,31 @@ export default function ChatPage() {
         setErr(t("chat.confirmRateLimited"));
         return;
       }
+      if (outcome === "roleDenied") {
+        // The confirmed write was refused by the workspace ROLE, AFTER the server
+        // claimed the token. Two things follow, and both are why this is not the
+        // generic failure branch:
+        //
+        //   * the cause is KNOWN and actionable ("you need manage or admin here"),
+        //     so the sentence names it instead of the page guessing; and
+        //   * the card is SPENT — the refusal happens after the atomic claim — so
+        //     "Please try again" would invite the user to press a button that
+        //     cannot work. The sentence says the card cannot be used again and
+        //     points at the only remedy (a fresh card).
+        //
+        // Carried ONCE, by the page's single role="alert" (setErr below), exactly
+        // as the scope and unexecutable refusals are: the card itself renders no
+        // sentence for this state, so the copy cannot appear twice. The badge still
+        // says the change did not go through, which is TRUE of it — unlike
+        // scopeRequired, where nothing was attempted.
+        //
+        // There is no cancel arm here on purpose: a cancel never dispatches the
+        // tool, so the write-role gate cannot refuse one. A branch for a shape that
+        // cannot fire is a branch nothing can ever prove.
+        setState(msgIndex, p.token, "roleDenied");
+        setErr(t("chat.confirmRoleDenied"));
+        return;
+      }
       if (outcome === "stale") {
         // Spent or expired — the card cannot be answered any more. The user needs
         // the assistant to prepare it again, which is what the copy says.
@@ -665,7 +700,11 @@ export default function ChatPage() {
                                       ? t("chat.proposalBadgeUnexecutable")
                                       : state === "scopeRequired"
                                         ? t("chat.proposalBadgeScopeRequired")
-                                        : t("chat.proposalBadgeFailed")}
+                                        : /* roleDenied falls here with "failed", and that is deliberate: the
+                                             write really was attempted and really did not go through, so the
+                                             failure badge is TRUE of it. The card carries no sentence of its own
+                                             — the alert does, once (t_1900adef). */
+                                          t("chat.proposalBadgeFailed")}
                           </span>
                           {/* The title and the summary come from the dictionary,
                               through the KEYS the server sent: the server does not

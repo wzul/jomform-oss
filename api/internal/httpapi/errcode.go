@@ -36,6 +36,8 @@ package httpapi
 import (
 	"net/http"
 	"strings"
+
+	"github.com/wzul/jomform/api/internal/mcpsrv"
 )
 
 // Specific codes: the user-actionable classes the dashboard translates.
@@ -402,6 +404,28 @@ var errCodeByPrefix = []struct {
 	{" mesti bermula dengan https://", CodeURLNotHTTPS},
 	// payments.CaptureSale/ReleaseSale/Refund refusals are surfaced verbatim.
 	{"jualan bukan dalam status boleh-refund", CodeRefundNotAllowed},
+	// The workspace-ROLE refusal, keyed on the LEAD-IN rather than as one more
+	// exact literal (card t_1900adef).
+	//
+	// WHY IT IS NOT AN EXACT KEY. This refusal has TWO spellings in the codebase
+	// and the exact key above only ever matched one of them: the REST edge writes
+	// "perlu peranan manage atau admin" (rest_scope.go, rest_workspaces.go,
+	// rest_legal.go) while the MCP write gates write the same sentence one word
+	// longer for the workspace-scoped case ("… dalam workspace ini",
+	// mcpsrv.requireWriteRoleIn) — which the CHAT CONFIRM path is the only route
+	// to surface. Measured on live prod (v1.19.1): a read_only member's confirmed
+	// write was refused by that gate, the message missed the exact key, ErrCodeFor
+	// answered "", and the 400 shipped as `request.badRequest` — a code the
+	// dashboard deliberately does not translate, so the page could not name the
+	// cause and printed its generic failure copy instead. #6177's rule failing in
+	// the one place it was fixed.
+	//
+	// The prefix is the value of the constant the GATES themselves build their
+	// sentence from, so the pairing is a compile-time reference and a re-wording
+	// cannot silently detach the code again. Only messages that are a role refusal
+	// contain the phrase, and the longest-match rule above cannot let it claim a
+	// message keyed more precisely elsewhere.
+	{prefix: mcpsrv.RoleManageRequiredLeadIn, code: CodeRoleManageRequired},
 	// The chat's 429 bodies are BUILT with fmt.Sprintf around the bucket that
 	// enforces them (rest_chat.go), so no exact key can ever match them: the
 	// wire message is "had chat dicapai (60 mesej sejam). …" and the number in

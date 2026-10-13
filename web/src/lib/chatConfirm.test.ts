@@ -47,7 +47,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { API_ERROR_KEYS, apiErrorCode } from "./apiErr.ts";
-import { WORKSPACE_SCOPE_REQUIRED_CODE, PROPOSAL_ARGS_INVALID_CODE, confirmDecisionFor } from "./chatConfirm.ts";
+import { WORKSPACE_SCOPE_REQUIRED_CODE, PROPOSAL_ARGS_INVALID_CODE, ROLE_MANAGE_REQUIRED_CODE, confirmDecisionFor } from "./chatConfirm.ts";
 import { DICT, LANGS } from "../components/i18nDict.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
@@ -401,3 +401,176 @@ test("the unexecutable card claims neither a failure nor an expiry on the page",
     "the unexecutable card does not wear its own badge — it would read as an expiry or a failure",
   );
 });
+
+// ── THE ROLE REFUSAL ON THE CONFIRM PATH (t_1900adef) ────────────────────────
+//
+// THE DEFECT, measured on live prod (v1.19.1) by the QA lane. A read_only member
+// of a workspace confirmed a prepared change. The write-role gate refused it AFTER
+// the token was claimed, the wire answered
+//
+//     400 {"code":"request.badRequest","error":"cadangan tidak dapat dilaksanakan"}
+//
+// and the page rendered ONE sentence TWICE, naming no cause and advising a retry:
+//
+//     card footer : "The change could not be applied. Please try again."
+//     role=alert  : "The change could not be applied. Please try again."
+//
+// Three separate things were wrong, and this file pins the fix for each:
+//
+//   1. THE SERVER THREW THE CODE AWAY. errcode.go keys its code by wire MESSAGE,
+//      and it keyed this refusal as the exact literal the REST edge writes
+//      ("perlu peranan manage atau admin") while the write gate emits one word
+//      longer ("… dalam workspace ini"), so ErrCodeFor answered "" and writeErr
+//      re-coded the 400 as the untranslatable class code. Fixed on the Go side
+//      (a lead-in rule, pinned by chat_role_refusal_errcode_test.go); what THIS
+//      file pins is the client half — the page's constant must equal the server's
+//      declaration, read out of the Go source, and the code must be mapped.
+//   2. THE PAGE COULD NOT NAME THE CAUSE. It can now, because the answer carries
+//      the code: `roleDenied` is its own outcome with its OWN sentence.
+//   3. IT RENDERED THE SENTENCE TWICE, over a SPENT token, advising a retry that
+//      cannot work. The new state carries its copy exactly once (the alert) and
+//      renders chat.confirmFail nowhere near it.
+test("a 400 naming the role code is its own outcome, never the generic failure", () => {
+  const roleBody = {
+    // The gate's own wire prose, exactly as the confirm route surfaces it
+    // (api/internal/mcpsrv's RoleManageRequiredMessage).
+    error: "perlu peranan manage atau admin dalam workspace ini",
+    code: "role.manageRequired",
+  };
+  // (a) THE MAPPING, executed.
+  assert.equal(
+    confirmDecisionFor(400, roleBody),
+    "roleDenied",
+    "a 400 carrying role.manageRequired is not recognised — the card falls to the generic failure " +
+      "branch, which names no cause and tells the user to retry a card the server has already spent " +
+      "(t_1900adef)",
+  );
+  // (b) THE BITE. With the code test reduced to the bare status — the regression
+  //     shape this route's history is made of — this case flips to something else
+  //     and fails by NAME. Both wrong answers are excluded explicitly: `failed` is
+  //     the copy-with-a-retry and `scopeRequired` is the pre-fix behaviour.
+  for (const wrong of ["failed", "scopeRequired"]) {
+    assert.notEqual(
+      confirmDecisionFor(400, roleBody),
+      wrong,
+      `the role refusal is reported as "${wrong}" — the user either gets a cause they cannot see and a ` +
+        `retry that cannot work, or advice to choose a workspace they already had selected`,
+    );
+  }
+  // (c) The OTHER 400s are unchanged: this branch is not a wildcard.
+  assert.equal(confirmDecisionFor(400, { ...roleBody, code: "request.badRequest" }), "failed");
+  assert.equal(confirmDecisionFor(400, { ...roleBody, code: "" }), "failed");
+  assert.equal(confirmDecisionFor(400, { error: roleBody.error }), "failed", "the PROSE must not decide");
+  assert.equal(confirmDecisionFor(400, { code: "role.manageRequired.extra" }), "failed");
+  assert.equal(confirmDecisionFor(400, { code: "role.adminRequired" }), "failed", "a near-miss code");
+  // (d) The two named 400s stay distinct: the scope refusal must not become a role
+  //     refusal, and vice versa.
+  assert.equal(confirmDecisionFor(400, scopeRefusalBody), "scopeRequired");
+  assert.equal(
+    confirmDecisionFor(400, { code: WORKSPACE_SCOPE_REQUIRED_CODE }),
+    "scopeRequired",
+    "the scope branch stopped working once the role branch was added",
+  );
+});
+
+test("the role code is cross-language, mapped, and defined in every locale", () => {
+  // Read out of the Go source, so a rename on the server fails HERE rather than
+  // silently sending this refusal back down the generic path.
+  const server = goCodeValue("CodeRoleManageRequired");
+  assert.ok(
+    server,
+    "errcode.go declares no CodeRoleManageRequired — the role refusal has no code, so the page is back " +
+      "to printing its generic failure copy for it",
+  );
+  assert.equal(
+    ROLE_MANAGE_REQUIRED_CODE,
+    server,
+    `lib/chatConfirm.ts's ROLE_MANAGE_REQUIRED_CODE is ${JSON.stringify(ROLE_MANAGE_REQUIRED_CODE)} but ` +
+      `errcode.go declares ${JSON.stringify(server)}`,
+  );
+  // Mapped by the SHARED table. It is reused (the REST edge has answered this code
+  // for years) rather than added, so this is a check that the mapping is still
+  // there — the confirm path is a second consumer of it.
+  assert.ok(
+    (server as string) in API_ERROR_KEYS,
+    `${server} has no entry in API_ERROR_KEYS — translateApiErr cannot resolve a refusal the server ` +
+      `named precisely`,
+  );
+  // The page's OWN sentence exists, in every locale, and is not the generic failure
+  // copy in any of them: the point of the split is that they say different things.
+  const own = (DICT as Record<string, Record<string, unknown>>)["chat.confirmRoleDenied"];
+  assert.ok(own, "the dictionary has no chat.confirmRoleDenied — the card would render a raw key");
+  const generic = (DICT as Record<string, Record<string, unknown>>)["chat.confirmFail"];
+  for (const lang of LANGS) {
+    const v = own[lang];
+    assert.ok(
+      typeof v === "string" && v.trim() !== "",
+      `chat.confirmRoleDenied.${lang} is empty — that locale silently shows English`,
+    );
+    assert.notEqual(
+      own[lang],
+      generic[lang],
+      `chat.confirmRoleDenied.${lang} is the generic failure sentence verbatim`,
+    );
+    // THE RETRY. The refusal arrives after the token is claimed, so a sentence that
+    // tells the user to try again is false in every language.
+    const retry: Record<string, RegExp> = {
+      en: /try again/i,
+      ms: /cuba lagi/i,
+      zh: /重试/,
+      ta: /மீண்டும் முயற்சிக்கவும்/,
+      ar: /يرجى المحاولة/,
+    };
+    assert.ok(
+      !retry[lang].test(v as string),
+      `chat.confirmRoleDenied.${lang} tells the user to try again ("${v}") — the token is spent, so ` +
+        `retrying the same card cannot work`,
+    );
+  }
+});
+
+test("the role-denied card carries its sentence ONCE and never the retry copy", () => {
+  const decide = chatPage.slice(chatPage.indexOf("async function decide("));
+  // The page handles the outcome and marks the card with its own state.
+  assert.match(
+    decide,
+    /if \(outcome === "roleDenied"\)[\s\S]{0,1800}?setState\(msgIndex,\s*p\.token,\s*"roleDenied"\)/,
+    "the page has no roleDenied outcome branch, or it does not mark the card with its own state — the " +
+      "card would fall to the generic failure branch and read 'Did not go through' / 'try again' over a " +
+      "token the server already spent (the measured defect)",
+  );
+  // THE SENTENCE IS RENDERED ONCE — the alert, exactly like the scope and
+  // unexecutable refusals.
+  const copySites = [...decide.matchAll(/setErr\(t\("chat\.confirmRoleDenied"\)\)/g)];
+  assert.equal(
+    copySites.length,
+    1,
+    `decide() renders the role-denied copy at ${copySites.length} site(s), want exactly 1 — the card ` +
+      `footer and the alert must not both carry it, which is the duplication QA measured on prod`,
+  );
+  // AND NOTHING ELSE CARRIES IT. The card body has NO render site for this state at
+  // all: the badge ternary falls through to the failure pill and no footer is keyed
+  // on it. That is what makes the copy exactly one node — the count QA measures —
+  // rather than one sentence written twice.
+  assert.ok(
+    !/state === "roleDenied"/.test(chatPage),
+    "the role-denied state has a JSX render site (a footer or a dedicated badge arm). The copy belongs " +
+      "to the page's single role=\"alert\", like the scope and unexecutable refusals; a card-level " +
+      "sentence puts the same words on screen twice, which is the defect (t_1900adef)",
+  );
+  // The pill the card therefore wears is the FAILURE one, deliberately: unlike the
+  // scope refusal, this write really was attempted and really did not go through.
+  assert.match(
+    chatPage,
+    /chat\.proposalBadgeScopeRequired[\s\S]{0,600}?t\("chat\.proposalBadgeFailed"\)/,
+    "the badge ternary's final arm is not chat.proposalBadgeFailed — the role-denied card would wear " +
+      "no pill (or an unrelated one) over a change that did not go through",
+  );
+  // The state exists as a member, or the setState above would not type-check.
+  assert.match(
+    chatPage,
+    /type ProposalState\s*=[\s\S]{0,600}?"roleDenied"/,
+    "ProposalState has no roleDenied member — the setState above would not type-check",
+  );
+});
+

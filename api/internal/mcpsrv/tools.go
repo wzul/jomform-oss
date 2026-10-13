@@ -1038,7 +1038,7 @@ func (s *Server) requireWriteRole(ctx context.Context) (accountID string, err er
 		return "", err
 	}
 	if role != "" && role != dbstore.RoleManage && role != dbstore.RoleAdmin {
-		return "", fmt.Errorf("perlu peranan manage atau admin")
+		return "", errors.New(RoleManageRequiredLeadIn)
 	}
 	return accountID, nil
 }

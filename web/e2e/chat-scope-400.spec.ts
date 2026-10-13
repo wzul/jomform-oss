@@ -69,12 +69,17 @@ test.beforeEach(async ({ page, baseURL }) => {
   await signIn(page, baseURL!);
 });
 import { DICT } from "../src/components/i18nDict";
-import { WORKSPACE_SCOPE_REQUIRED_CODE, PROPOSAL_ARGS_INVALID_CODE } from "../src/lib/chatConfirm";
+import {
+  WORKSPACE_SCOPE_REQUIRED_CODE,
+  PROPOSAL_ARGS_INVALID_CODE,
+  ROLE_MANAGE_REQUIRED_CODE,
+} from "../src/lib/chatConfirm";
 import { sendChatPrompt } from "./chatComposer";
 
 const EN = {
   scopeRequired: DICT["chat.scopeRequired"].en,
   confirmFail: DICT["chat.confirmFail"].en,
+  confirmRoleDenied: DICT["chat.confirmRoleDenied"].en,
   proposalStale: DICT["chat.proposalStale"].en,
   proposalUnexecutable: DICT["chat.proposalUnexecutable"].en,
   confirmRateLimited: DICT["chat.confirmRateLimited"].en,
@@ -172,11 +177,14 @@ async function stubAPI(page: Page, decisionStatus: number, decisionCode = "") {
     // real one), so the stub reproduces the shape a real server sends — the page
     // must branch on the CODE, not on this prose.
     const unexecutable = decisionStatus === 409 && decisionCode === UNEXECUTABLE_CODE;
+    const roleDenied = decisionStatus === 400 && decisionCode === ROLE_CODE;
     const text = unexecutable
       ? UNEXECUTABLE_WIRE_TEXT
-      : decisionStatus === 400 && decisionCode === NON_SCOPE_400_CODE
-        ? NON_SCOPE_400_WIRE_TEXT
-        : (statusText[decisionStatus] ?? "ralat");
+      : roleDenied
+        ? ROLE_WIRE_TEXT
+        : decisionStatus === 400 && decisionCode === NON_SCOPE_400_CODE
+          ? NON_SCOPE_400_WIRE_TEXT
+          : (statusText[decisionStatus] ?? "ralat");
     return r.fulfill({
       status: decisionStatus,
       contentType: "application/json",
@@ -227,6 +235,23 @@ const NON_SCOPE_400_CODE = "request.badRequest";
  * sends, or the test would prove nothing about the page telling them apart.
  */
 const NON_SCOPE_400_WIRE_TEXT = "perlu peranan manage atau admin dalam workspace ini";
+
+/**
+ * The ROLE refusal (t_1900adef). Same 400, same scoped request shape, and the same
+ * wire prose as NON_SCOPE_400_CODE had in the pre-fix reading — what changed is the
+ * CODE the server now attaches to it, which is the whole of this card's server-side
+ * fix. Read from the mirrored constant rather than typed, so a rename fails here.
+ */
+const ROLE_CODE = ROLE_MANAGE_REQUIRED_CODE;
+
+/**
+ * The prose the write gate itself emits for this refusal, which is what the confirm
+ * route now surfaces (api/internal/mcpsrv's RoleManageRequiredMessage). That it is
+ * the SAME string as NON_SCOPE_400_WIRE_TEXT is the point, not a slip: the pre-fix
+ * reading already carried this prose, and the defect was that the code beside it was
+ * the untranslatable class code rather than the role's own. Only the code changed.
+ */
+const ROLE_WIRE_TEXT = NON_SCOPE_400_WIRE_TEXT;
 
 /**
  * A FRESH browser state (cleared storage — the browser keeps localStorage
@@ -411,6 +436,79 @@ test.describe("chat confirm path: a scope refusal is not a failed change", () =>
         `request=${JSON.stringify(decision[0])} ` +
         `alert=${JSON.stringify(await page.locator('p[role="alert"]').textContent())} ` +
         `scopeCopyCount=${await scopeNodes.count()}`,
+    );
+  });
+
+  test("a 400 that names the ROLE code names the cause ONCE and offers no retry", async ({
+    page,
+    baseURL,
+  }) => {
+    // t_1900adef. THE SHAPE QA MEASURED ON LIVE PROD, and the one this file could
+    // not tell apart before: the confirm that a read_only member's own workspace
+    // ROLE refused, AFTER the server claimed the token. Same status, same scoped
+    // request, same wire prose as the test above — only the machine code separates
+    // them, which is exactly why the page must branch on it.
+    //
+    // THE PRE-FIX DOM (measured, `/root/.hermes/profiles/qa/cache/scratch/drive_ui4.cjs`)
+    // carried the generic sentence TWICE and named no cause:
+    //
+    //   <p class="mt-2 font-medium text-red-600">The change could not be applied. Please try again.</p>
+    //   <p role="alert" class="px-4 text-xs text-red-500">The change could not be applied. Please try again.</p>
+    //
+    // Both halves of that are asserted against: the count of the role sentence (1),
+    // the count of the failure sentence (0), and the absence of the retry advice on
+    // a token that is already spent.
+    await stubAPI(page, 400, ROLE_CODE);
+    await freshState(page);
+    const decision = await confirmWithoutScope(page, baseURL, false);
+
+    expect(decision, "the decision must have been sent exactly once").toHaveLength(1);
+    expect(
+      decision[0],
+      `the decision must have gone out SCOPED — that is the shape QA measured (the member had a ` +
+        `workspace selected; their refusal was their role, not the scope). Sent: ${JSON.stringify(decision)}`,
+    ).toContain("workspace=ws-b");
+
+    // THE CAUSE, NAMED, AND EXACTLY ONCE. Counted — the pre-fix defect was two nodes
+    // carrying one sentence that named nothing.
+    await expect(page.locator('p[role="alert"]')).toHaveText(EN.confirmRoleDenied);
+    await expect(
+      page.getByText(EN.confirmRoleDenied, { exact: true }),
+      "the role refusal must be rendered exactly once — the card footer and the alert must not both " +
+        "carry it, which is the duplication QA measured",
+    ).toHaveCount(1);
+
+    // AND NOT THE RETRY. The refusal happens after the token is claimed, so the card
+    // is spent: nothing on the page may invite the user to try the same card again.
+    await expect(
+      page.getByText(EN.confirmFail, { exact: true }),
+      `the page rendered the retry copy ("${EN.confirmFail}") for a refusal whose token is already spent`,
+    ).toHaveCount(0);
+    // Nor the scope copy: this user had a workspace selected all along.
+    await expect(
+      page.getByText(EN.scopeRequired, { exact: true }),
+      "the role refusal rendered the workspace-scope copy — the user already had a workspace selected",
+    ).toHaveCount(0);
+
+    // The card reports the change it actually had: the write was attempted and did
+    // not go through, so it wears the failure badge — and carries no sentence of its
+    // own (that is what keeps the copy to one node).
+    const card = page.locator('[class*="border-sky-200"]').filter({ hasText: CARD_TITLE });
+    await expect(card).toContainText(EN.badgeFailed);
+    await expect(card).not.toContainText(EN.badgeScopeRequired);
+    await expect(card).not.toContainText(EN.confirmRoleDenied);
+    await expect(card).not.toContainText(EN.confirmFail);
+    await expect(
+      card.getByRole("button", { name: EN.confirm }),
+      "the card still offers Confirm over a token the server has spent",
+    ).toHaveCount(0);
+
+    console.log(
+      `OBSERVED role=400 code=${JSON.stringify(ROLE_CODE)} ` +
+        `request=${JSON.stringify(decision[0])} ` +
+        `alert=${JSON.stringify(await page.locator('p[role="alert"]').textContent())} ` +
+        `roleCopyCount=${await page.getByText(EN.confirmRoleDenied, { exact: true }).count()} ` +
+        `confirmFailCount=${await page.getByText(EN.confirmFail, { exact: true }).count()}`,
     );
   });
 

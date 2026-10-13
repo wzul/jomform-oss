@@ -452,6 +452,22 @@ func chatConfirmStatusFor(err error) int {
 
 // chatConfirmMessageFor turns a confirm failure into copy the user can act on.
 // Nothing internal is returned: the details are the server's business.
+//
+// THE ROLE REFUSAL NAMES ITS CAUSE (card t_1900adef). It is the one post-claim
+// refusal this lane can classify, and it answers the GATE'S OWN sentence
+// (mcpsrv.RoleManageRequiredMessage, referenced by name so it cannot drift) rather
+// than the generic line. Two consequences, both intended:
+//
+//   - the wire names the cause for the callers who read prose (curl, API keys,
+//     MCP), and
+//   - the message resolves to the code `role.manageRequired` through errcode.go's
+//     prefix rule, which is what lets the dashboard render its OWN localized
+//     sentence for the refusal instead of a generic failure — and, for a spent
+//     token, one that does not advise a retry that cannot work.
+//
+// Nothing else is surfaced: a refusal this lane cannot classify keeps the generic
+// sentence and the untranslatable class code, because naming a cause the server
+// did not give would be worse than naming none.
 func chatConfirmMessageFor(err error) string {
 	switch {
 	case errors.Is(err, dbstore.ErrChatProposalConsumed):
@@ -464,6 +480,11 @@ func chatConfirmMessageFor(err error) string {
 		// NOT "try again": the token is UNSPENT, and the same card can never
 		// succeed. The remedy is a fresh proposal, and the copy says so.
 		return "cadangan itu tidak boleh dilaksanakan — minta pembantu menyediakan kad baharu"
+	case errors.Is(err, chat.ErrProposalRoleRefused):
+		// The workspace ROLE gate refused the confirmed write, AFTER the token was
+		// claimed. The gate's own wording, so the reason the card was refused is
+		// the reason the user is shown.
+		return mcpsrv.RoleManageRequiredMessage
 	case errors.Is(err, dbstore.ErrChatProposalNotFound):
 		return "cadangan tidak dijumpai"
 	default:

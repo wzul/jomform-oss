@@ -28,6 +28,13 @@
 //                                               reads the token, so nothing was
 //                                               attempted and the token is live
 //                                               (PR 779's rule, t_790b1016).
+//   role.manageRequired     -> "roleDenied"     the write RAN and the workspace
+//                                               role gate refused it, so the
+//                                               token is spent: the card says the
+//                                               change did not go through, names
+//                                               the cause, and must not offer the
+//                                               retry the generic failure copy
+//                                               does (t_1900adef).
 //   any other 400           -> "failed"         a failure of the change, like any
 //                                               other non-2xx. The card says so,
 //                                               which is accurate here: for the
@@ -81,6 +88,23 @@ export const WORKSPACE_SCOPE_REQUIRED_CODE = "workspace.scopeRequired";
  */
 export const PROPOSAL_ARGS_INVALID_CODE = "chat.proposalArgsInvalid";
 
+/**
+ * Mirrors `CodeRoleManageRequired` in api/internal/httpapi/errcode.go (t_1900adef).
+ *
+ * The workspace ROLE refusal, on the confirm route. It is NOT a new code — the REST
+ * edge has answered it for years — but until this card it could never reach a
+ * confirm response: the message the write gate emits is one word longer than the
+ * table's exact key, so `ErrCodeFor` returned "" and the 400 shipped as
+ * `request.badRequest`. A read_only member whose confirmed write was refused by
+ * their role therefore landed on the generic failure copy, which tells them to try
+ * again on a token the server had already spent.
+ *
+ * Read by src/lib/chatConfirm.test.ts out of the Go source, so a rename on the
+ * server fails the web suite rather than silently sending this refusal back down
+ * the generic path (the same cross-language pin as the two codes above).
+ */
+export const ROLE_MANAGE_REQUIRED_CODE = "role.manageRequired";
+
 /** The card outcome for one decision response. */
 export type ConfirmDecision =
   // A missing/unusable workspace scope. The card says what it NEEDS.
@@ -92,6 +116,10 @@ export type ConfirmDecision =
   | "unexecutable"
   // The per-user confirmation bucket refused it.
   | "rateLimited"
+  // The confirmed write was refused by the WORKSPACE ROLE (manager/admin needed).
+  // The token is SPENT — the refusal happens after the claim — so the card cannot
+  // be reused and the copy must not offer a retry (t_1900adef).
+  | "roleDenied"
   // The change itself did not go through.
   | "failed"
   // Confirmed (or cancelled) — the route answers 200.
@@ -110,7 +138,17 @@ export function confirmDecisionFor(status: number, body: unknown): ConfirmDecisi
     // THE branch on the code. A 400 that names a different refusal is a failure of
     // the change, NOT a workspace-scope problem — and it must never be reported as
     // one.
-    return apiErrorCode(body) === WORKSPACE_SCOPE_REQUIRED_CODE ? "scopeRequired" : "failed";
+    //
+    // TWO codes are named on this status now, and they are opposite conditions:
+    // the scope refusal (nothing was attempted, the token is live) and the ROLE
+    // refusal (the write ran and was refused, the token is spent). They share the
+    // 400 deliberately — the status is a MISSING PARAMETER and a permission answer
+    // respectively, and wsfetch.ts reads 401/403 as "the session is gone" — so the
+    // code is the only thing that can tell them apart (t_1900adef).
+    const code = apiErrorCode(body);
+    if (code === WORKSPACE_SCOPE_REQUIRED_CODE) return "scopeRequired";
+    if (code === ROLE_MANAGE_REQUIRED_CODE) return "roleDenied";
+    return "failed";
   }
   if (status === 409) {
     // TWO 409s, and the code separates them. The default is the spent/expired
