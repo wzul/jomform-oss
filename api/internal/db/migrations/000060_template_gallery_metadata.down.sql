@@ -10,13 +10,22 @@
 -- these three legacy templates already carried have NO id key at all, and
 -- NULL <> 'b0-intro' is NULL rather than true, so a bare comparison would drop
 -- every original block instead of keeping it.
+--
+-- `config->'blocks'` is expanded through a `jsonb_typeof(...) = 'array'` CASE,
+-- not COALESCE: COALESCE only replaces SQL NULL, so a NON-NULL non-array (an
+-- object, a string, a number) or a JSON `null` would be handed straight to
+-- jsonb_array_elements and raise SQLSTATE 22023 — the same class the up
+-- migration and dbstore/form.go's formBlocksArray() guard against.
 UPDATE forms f
    SET config = jsonb_set(
                   f.config - 'category',
                   '{blocks}',
                   COALESCE(
                     (SELECT jsonb_agg(b)
-                       FROM jsonb_array_elements(COALESCE(f.config->'blocks', '[]'::jsonb)) b
+                       FROM jsonb_array_elements(
+                              CASE WHEN jsonb_typeof(f.config->'blocks') = 'array'
+                                   THEN f.config->'blocks' ELSE '[]'::jsonb END
+                            ) b
                       WHERE COALESCE(b->>'id', '') <> 'b0-intro'),
                     '[]'::jsonb
                   )
@@ -27,6 +36,9 @@ UPDATE forms f
    AND f.deleted_at IS NULL
    AND EXISTS (
      SELECT 1
-       FROM jsonb_array_elements(COALESCE(f.config->'blocks', '[]'::jsonb)) b
+       FROM jsonb_array_elements(
+              CASE WHEN jsonb_typeof(f.config->'blocks') = 'array'
+                   THEN f.config->'blocks' ELSE '[]'::jsonb END
+            ) b
       WHERE COALESCE(b->>'id', '') = 'b0-intro'
    );

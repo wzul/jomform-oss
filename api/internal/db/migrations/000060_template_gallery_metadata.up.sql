@@ -77,6 +77,9 @@ UPDATE forms f
    AND f.deleted_at IS NULL
    AND NOT EXISTS (
      SELECT 1
-       FROM jsonb_array_elements(COALESCE(f.config->'blocks', '[]'::jsonb)) b
+       FROM jsonb_array_elements(
+              CASE WHEN jsonb_typeof(f.config->'blocks') = 'array'
+                   THEN f.config->'blocks' ELSE '[]'::jsonb END
+            ) b
       WHERE b->>'type' = 'text' AND COALESCE(b->>'value', '') <> ''
    );

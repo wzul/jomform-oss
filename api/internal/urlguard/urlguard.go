@@ -26,6 +26,23 @@
 // https://jomform.com/media/u/{account}/{uuid}.jpg). https-only therefore does
 // not break a single uploaded asset, and no relative-path exception is needed
 // (or wanted — it would weaken the rule).
+//
+// The package owns TWO rules, both about caller-supplied form/template config:
+//
+//  1. the SCHEME rule — Valid/CheckConfig/CheckTheme, described above; and
+//  2. the SHAPE rule — CheckConfigShape/InvalidShapeMessage, added for the
+//     `config.blocks` JSONB class (card t_8fcb546d): a present-but-not-array
+//     `blocks` makes the gallery-metadata predicate's `jsonb_array_elements`
+//     raise SQLSTATE 22023, which fails every id in a bulk publish and the
+//     skip listing with it. The write path has to refuse the shape instead of
+//     storing it.
+//
+// They are kept as separate checks because they answer different questions ("is
+// this URL safe to render" vs "can the database read this config at all"), and
+// because a shape violation is NOT a scheme violation: reporting it with
+// InvalidMessage would tell the caller their object must start with `https://`,
+// which is false. Both live here for the same reason the scheme rule does —
+// one shared rule per class, imported by every write layer (REST and MCP).
 package urlguard
 
 import (
@@ -138,6 +155,56 @@ func CheckConfig(cfg map[string]any) (field, value string) {
 		}
 	}
 	return "", ""
+}
+
+// CheckConfigShape reports a caller-supplied config key that is PRESENT but has
+// a JSON type the reads cannot survive, plus the type it must have. It is the
+// write-side half of the `config.blocks` JSONB class (card t_8fcb546d).
+//
+// Why this exists: dbstore's gallery-metadata predicate expands
+// `config->'blocks'` with `jsonb_array_elements` (the ONE expansion site a
+// caller can reach), and Postgres raises SQLSTATE 22023 on anything that is not
+// an array. One such row is enough to fail a whole bulk statement, because
+// BlockedGalleryTemplates and SetStatusMany expand the key for an entire id set
+// (`id = ANY($2)`) — a well-formed form in the same batch stayed `draft` while
+// the caller saw 500 {"code":"internal"}.
+//
+// The read side now renders a non-array as the empty array (formBlocksArray), so
+// such a row can no longer take the batch down. This check is the other half:
+// the shape must not be STORED in the first place, because a stored non-array is
+// still a row whose description is silently gone.
+//
+// Absent and JSON `null` are both accepted — they mean "no blocks", which is
+// what the predicate already reads them as, and what "empty or omitted = keep
+// existing" means at the update paths.
+//
+// field is "" when the config is clean. Only the keys this repo actually
+// expands are checked: widening a SHAPE rule to every key would reject configs
+// the renderer legitimately tolerates.
+func CheckConfigShape(cfg map[string]any) (field, want string) {
+	if cfg == nil {
+		return "", ""
+	}
+	raw, present := cfg["blocks"]
+	if !present || raw == nil {
+		return "", ""
+	}
+	if _, ok := raw.([]any); !ok {
+		return "blocks", "array"
+	}
+	return "", ""
+}
+
+// InvalidShapeMessage is the user-facing rejection message for a config key
+// whose JSON type is one the reads cannot survive. Like InvalidMessage it names
+// the field, and it is the ONE wording used by every write path (REST returns it
+// as the 400 body, MCP returns it as the tool error). Malay, like every other API
+// validation message in this repo.
+//
+// It is deliberately NOT InvalidMessage: that message states the https:// scheme
+// rule, which says nothing true about a value of the wrong JSON type.
+func InvalidShapeMessage(field, want string) string {
+	return fmt.Sprintf("%s mesti %s — bentuk lain (objek, teks, nombor) ditolak kerana ia menggagalkan penerbitan template", field, want)
 }
 
 // CheckTheme returns the caller-supplied URL field in a form theme map that

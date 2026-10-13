@@ -884,6 +884,15 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("config."+field))
 		return
 	}
+	// Card t_8fcb546d: a present-but-not-array `config.blocks` is refused here.
+	// It used to pass this point unnoticed (the scheme rule's type assertion
+	// simply does not match a non-array), and a template carrying it then made
+	// the gallery-metadata predicate raise SQLSTATE 22023 for every id in a
+	// bulk publish.
+	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidShapeMessage("config."+field, want))
+		return
+	}
 	// Issue #176: auto-generate a unique slug when the merchant leaves it
 	// blank. The slug is unique per workspace (#77), so a generated slug that
 	// collides gets a random suffix appended until it is free.
@@ -961,6 +970,12 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 	// (render_blocks.go). Reject an unsafe scheme with the shared rule.
 	if field, _ := urlguard.CheckConfig(in.Config); field != "" {
 		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("config."+field))
+		return
+	}
+	// Card t_8fcb546d: same present-but-not-array `config.blocks` refusal as
+	// createForm.
+	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidShapeMessage("config."+field, want))
 		return
 	}
 	// Pass config/theme as-is: Forms.Update COALESCEs nil over the stored

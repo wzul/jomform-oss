@@ -168,13 +168,22 @@ func stripLegacyMetadata(t *testing.T, ctx context.Context, p *pgxpool.Pool) {
 		}
 	})
 
+	// The expansion goes through the same `jsonb_typeof(...) = 'array'` CASE the
+	// production predicate uses (dbstore/form.go's formBlocksArray), not
+	// COALESCE: COALESCE only replaces SQL NULL, so a non-array value would be
+	// handed straight to jsonb_array_elements and raise SQLSTATE 22023 on this
+	// fixture too.
 	if _, err := p.Exec(ctx,
 		`UPDATE forms
 		    SET config = jsonb_set(
 		          config - 'category',
 		          '{blocks}',
 		          COALESCE(
-		            (SELECT jsonb_agg(b) FROM jsonb_array_elements(COALESCE(config->'blocks','[]'::jsonb)) b
+		            (SELECT jsonb_agg(b)
+		               FROM jsonb_array_elements(
+		                      CASE WHEN jsonb_typeof(config->'blocks') = 'array'
+		                           THEN config->'blocks' ELSE '[]'::jsonb END
+		                    ) b
 		              WHERE NOT (b->>'type' = 'text' AND COALESCE(b->>'value','') <> '')),
 		            '[]'::jsonb
 		          )

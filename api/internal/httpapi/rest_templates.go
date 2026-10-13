@@ -192,6 +192,15 @@ func (h *RESTHandlers) createOwnTemplate(w http.ResponseWriter, r *http.Request,
 		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("config."+field))
 		return
 	}
+	// Card t_8fcb546d: a PRESENT but non-array `config.blocks` makes the
+	// gallery-metadata predicate's jsonb_array_elements raise SQLSTATE 22023,
+	// which fails the bulk publish and the skip listing for every id in the
+	// batch. The scheme check above silently skipped it (a type assertion that
+	// does not match falls through), so the shape is refused here instead.
+	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidShapeMessage("config."+field, want))
+		return
+	}
 
 	title := strings.TrimSpace(in.Title)
 	config := in.Config
@@ -257,6 +266,13 @@ func (h *RESTHandlers) updateOwnTemplate(w http.ResponseWriter, r *http.Request,
 	}
 	if field, _ := urlguard.CheckConfig(in.Config); field != "" {
 		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("config."+field))
+		return
+	}
+	// Card t_8fcb546d: same present-but-not-array `config.blocks` refusal as
+	// createOwnTemplate — an update that stores the shape reintroduces the
+	// SQLSTATE 22023 failure the read side now tolerates.
+	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
+		writeErr(w, http.StatusBadRequest, urlguard.InvalidShapeMessage("config."+field, want))
 		return
 	}
 	existing, err := h.Forms.TemplateByIDForAccount(r.Context(), actx.Account.ID, r.PathValue("id"))

@@ -212,6 +212,13 @@ func (s *Server) createTemplateMCP(
 	if field, _ := urlguard.CheckConfig(config); field != "" {
 		return nil, nil, errors.New(urlguard.InvalidMessage("config." + field))
 	}
+	// Card t_8fcb546d: the MCP template write path stores config verbatim, so it
+	// refuses a present-but-not-array `config.blocks` exactly as the REST
+	// template routes do — the shape makes the gallery-metadata predicate raise
+	// SQLSTATE 22023 for every id in a bulk publish.
+	if field, want := urlguard.CheckConfigShape(config); field != "" {
+		return nil, nil, errors.New(urlguard.InvalidShapeMessage("config."+field, want))
+	}
 	f := &dbstore.Form{
 		AccountID: acc,
 		Slug:      s.uniqueFormSlug(ctx, acc, "tpl-"+title),
@@ -263,6 +270,11 @@ func (s *Server) updateTemplateMCP(
 	}
 	if field, _ := urlguard.CheckConfig(in.Config); field != "" {
 		return nil, nil, errors.New(urlguard.InvalidMessage("config." + field))
+	}
+	// Card t_8fcb546d: same present-but-not-array `config.blocks` refusal as
+	// create_template.
+	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
+		return nil, nil, errors.New(urlguard.InvalidShapeMessage("config."+field, want))
 	}
 	if err := s.deps.Forms.UpdateTemplate(ctx, acc, in.TemplateID, title, in.Config, in.Theme); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)

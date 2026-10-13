@@ -470,14 +470,50 @@ func (s *FormStore) SlugExistsNotID(ctx context.Context, accountID, slug, except
 // carried were identical. One definition, so a future change to the 23505
 // handling cannot apply to one call site and not the other.
 
+// formBlocksArray renders `config->'blocks'` (the expression named by expr) as
+// a JSON array, whatever the key actually holds.
+//
+// Same class as saleItemsArray (product.go), on the other JSONB array site a
+// caller can reach: `forms.config` is `JSONB NOT NULL DEFAULT '{}'` with no
+// CHECK constraint, and `jsonb_array_elements` raises SQLSTATE 22023 on
+// anything that is not an array. The guard it replaced was
+// `COALESCE(config->'blocks', '[]'::jsonb)`, which is the wrong test: COALESCE
+// only replaces SQL NULL, so a NON-NULL non-array (an object, a string, a
+// number) — and even a JSON `null` — is handed straight to the extraction and
+// raises.
+//
+// Why one odd row is enough: BlockedGalleryTemplates and SetStatusMany expand
+// this key for a WHOLE SET of ids in one statement (`id = ANY($2)`), so a single
+// malformed row fails the bulk publish and the skip listing for every id in the
+// batch — a well-formed form in the same action stayed `draft` while the caller
+// saw 500 {"code":"internal"}.
+//
+// Treating a non-array as empty is the tolerant reading, exactly as
+// saleItemsArray does: the row is then simply a template with no description
+// block, which the #594 rule refuses for the RIGHT reason instead of taking
+// down the batch.
+//
+// The test is `jsonb_typeof(expr) = 'array'`, NOT `COALESCE(expr, '[]'::jsonb)`:
+// the guard has to ask what the value IS, not whether it is present.
+//
+// Keep EVERY expansion of `config->'blocks'` going through this helper — a bare
+// `jsonb_array_elements(config->'blocks')` reintroduces the batch-wide failure
+// it exists to prevent.
+func formBlocksArray(expr string) string {
+	return "CASE WHEN jsonb_typeof(" + expr + ") = 'array' THEN " + expr + " ELSE '[]'::jsonb END"
+}
+
 // galleryMetadataMissingSQL is the predicate that reports a template row as
 // unfit for the gallery: no config.category, or no text block carrying a value
 // (issue #594). The gallery endpoint and the picker read exactly these two
 // things, so a row failing it would render as a bare title.
-const galleryMetadataMissingSQL = `
+//
+// It is a var rather than a const only because it is assembled from
+// formBlocksArray(); the rule it states is fixed at init and never mutated.
+var galleryMetadataMissingSQL = `
 	COALESCE(config->>'category', '') = ''
 	OR NOT EXISTS (
-	     SELECT 1 FROM jsonb_array_elements(COALESCE(config->'blocks', '[]'::jsonb)) b
+	     SELECT 1 FROM jsonb_array_elements(` + formBlocksArray("config->'blocks'") + `) b
 	      WHERE b->>'type' = 'text' AND COALESCE(b->>'value', '') <> ''
 	   )`
 
@@ -491,7 +527,10 @@ const galleryMetadataMissingSQL = `
 // tell "no such form" (0 rows matched) apart from "refused" (matched but
 // blocked): a WHERE clause would collapse both into 0 rows affected and the
 // caller would report "not found" for a row it was looking straight at.
-const setStatusSQL = `
+//
+// var, not const: it embeds galleryMetadataMissingSQL, which is built from
+// formBlocksArray() (see that helper). Never mutated.
+var setStatusSQL = `
 	WITH target AS (
 	  SELECT id, is_template, config FROM forms
 	   WHERE id = $2 AND account_id = $1 AND deleted_at IS NULL
@@ -510,8 +549,9 @@ const setStatusSQL = `
 
 // setStatusWithPasswordSQL is setStatusSQL with the access password written in
 // the same statement (issue #176: the password and the status must never drift
-// apart). Same existence/blocked reporting as setStatusSQL.
-const setStatusWithPasswordSQL = `
+// apart). Same existence/blocked reporting as setStatusSQL — including its
+// var-not-const reason.
+var setStatusWithPasswordSQL = `
 	WITH target AS (
 	  SELECT id, is_template, config FROM forms
 	   WHERE id = $2 AND account_id = $1 AND deleted_at IS NULL

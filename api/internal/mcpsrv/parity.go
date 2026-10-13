@@ -506,6 +506,13 @@ func (s *Server) upsertForm(
 	if field, _ := urlguard.CheckConfig(in.Config); field != "" {
 		return nil, nil, errors.New(urlguard.InvalidMessage("config." + field))
 	}
+	// Card t_8fcb546d: the same present-but-not-array `config.blocks` refusal the
+	// REST form routes apply — the MCP write path stores config verbatim too, and
+	// a non-array blocks makes the gallery-metadata predicate raise SQLSTATE
+	// 22023 for every id in a bulk publish.
+	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
+		return nil, nil, errors.New(urlguard.InvalidShapeMessage("config."+field, want))
+	}
 	if in.FormID == "" {
 		// Issue #176: auto-generate a unique slug when the merchant leaves it
 		// blank (slugified title + random suffix on collision).
@@ -605,6 +612,11 @@ func (s *Server) upsertForm(
 	}
 	if field, _ := urlguard.CheckConfig(in.Config); field != "" {
 		return nil, nil, errors.New(urlguard.InvalidMessage("config." + field))
+	}
+	// Card t_8fcb546d: same present-but-not-array `config.blocks` refusal as the
+	// create path above.
+	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
+		return nil, nil, errors.New(urlguard.InvalidShapeMessage("config."+field, want))
 	}
 	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, in.Theme); err != nil {
 		return nil, nil, err
