@@ -55,7 +55,25 @@ func (h *PublicHandlers) handleQRImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	// CACHING RULE: a cacheable response must be a function of its cache key,
+	// and the key here is the REQUEST PATH while the image encodes the form's
+	// CURRENT slug (formPublicURL reads f.Slug). The two agree only when the
+	// requested slug IS the form's live slug. Anything else arrived through a
+	// rename's temporary 301 fallback (findPublicForm), and those bytes are NOT
+	// a function of the path: a CDN holding them under the old slug serves a
+	// code the form has already left, for the whole TTL, after every later
+	// rename — measured on a workspace behind Cloudflare, where a cached
+	// /qr/{old}.png kept encoding a slug the form had moved off twice.
+	// So cache the live-slug arm and never the fallback arm. Same test the
+	// serving path uses to spot a fallback resolution: f.Slug != slug
+	// (handleWorkspaceRootForm). The fallback arm still renders the canonical
+	// URL — a stand reprinted, or an embedded PNG re-fetched, after a rename
+	// points at the address the form actually serves.
+	if f.Slug == slug {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+	} else {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	w.Write(png)
 }
 
