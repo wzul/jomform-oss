@@ -136,11 +136,21 @@ var (
 // TestDerivedLineAnchorTracksTheSource walks exactly the pins the messages use:
 // each must resolve to one line, and that line must really carry the text the
 // anchor is named by.
+//
+// The last four are token_missing_issue6177_test.go's — the four handlers that
+// used to share one "no token" literal. Their lines are quoted by that file's
+// messages, and they are listed here for the same reason as the four above: the
+// header that used to name them by a typed line number is exactly the kind of
+// pin that rots unnoticed.
 var pins = []derivedLineAnchor{
 	anchorOuterGuard,
 	anchorVerifiedBranch,
 	anchorSignupGenerate,
 	anchorInnerMagicLinkGuard,
+	anchorConnectTokenMissing,
+	anchorVerifyTokenMissing,
+	anchorResetTokenMissing,
+	anchorMagicTokenMissing,
 }
 
 // detectorMailer is a VerifyMailer that DEREFERENCES its receiver, so being
