@@ -157,11 +157,16 @@ def run(args):
 # t.Logf is swallowed on a passing run.
 #
 # The seam is self-checked on every run (selfcheck_bite_control): the same
-# evidence function is fed a REAL vacuous output from a `-run` that matches
-# nothing, and a REAL driven output from the guard, and must reject the first and
-# accept the second. Without that, a future edit could neuter this check (or the
-# guard could stop logging the block) and every case below would still print a
-# verdict — the one failure this fix must not itself be able to acquire.
+# evidence function is fed two REAL outputs — a vacuous one from a `-run` that
+# matches nothing, and a driven one from the guard — and must reject the first
+# and accept the second; plus one REAL output per leg with exactly that leg
+# removed and the other two satisfied, each of which must be rejected BY NAME.
+# Without that, a future edit could neuter any single leg (or the guard could
+# stop logging the block) and every case below would still print a verdict — the
+# one failure this fix must not itself be able to acquire. MEASURED (card
+# t_16dd37f7): with only the per-route leg deleted, the two-reference version of
+# this self-check printed OK while the harness still reported every case green
+# and EXIT=0, because an aggregate check cannot see a single missing leg.
 GUARD_RESULT_PASS = "--- PASS: %s" % GUARD
 GUARD_RESULT_FAIL = "--- FAIL: %s" % GUARD
 GUARD_ENUM_HEADER = "pattern(s) enumerated from the router and driven with a burst of"
@@ -395,22 +400,42 @@ CASES = [
 ]
 
 
-def selfcheck_bite_control():
-    """(ok, message) — prove driving_evidence() can reject a run that did nothing.
+def _drop_lines(out, needle):
+    """`out` with EVERY line containing `needle` removed, or None if none does.
 
-    Runs the guard's -run selector against a name that matches NO test and feeds
-    the result to driving_evidence with a shipped route as the route it must have
-    driven. `go test` exits 0 in that case, so the ONLY thing that can reject it
-    is the evidence check itself. A second leg then feeds the REAL unmutated guard
-    output (already in hand) and requires it to be accepted, so a check that
-    rejected everything would not pass either.
+    The reference shapes below are DERIVED from a real run rather than
+    hand-typed, so they cannot drift from what the guard actually prints.
     """
+    lines = out.splitlines(True)
+    kept = [ln for ln in lines if needle not in ln]
+    if len(kept) == len(lines):
+        return None
+    return "".join(kept)
+
+
+def selfcheck_bite_control():
+    """(ok, message) — prove driving_evidence() checks EACH leg, not the aggregate.
+
+    Every leg — L1 the guard's own result marker, L2 its enumeration-block
+    header, L3 the driven route INSIDE that block — is fed a REAL output that
+    has exactly that leg removed and the other legs still satisfied, and must be
+    rejected naming it. A self-check that only ever saw all-legs-absent and
+    all-legs-present could not tell "the guard drove THIS route" from "the guard
+    ran and logged something": MEASURED (card t_16dd37f7), deleting L3 — the
+    per-route evidence, PR 836's headline fix — left the whole harness at 9/9,
+    self-check OK, EXIT=0, because those were the only two shapes it fed.
+
+    The first two references are the original ones and stay REAL: a `-run` that
+    matches NO test (`go test` exits 0 there, so only the evidence check can
+    reject it) and the guard's own output (so a check that rejected everything
+    would not pass either). The guard is still really RUN here — a self-check
+    that stopped calling run_guard() would itself be the failure mode.
+    """
+    lines = []
     vrc, vout = run_guard_name("TestZZSelfCheckNameThatMatchesNoTest")
     rejected, why = driving_evidence(vout, GUARD_RESULT_PASS, SHIPPED_UNLOCK_ROUTES)
-    lines = [
-        "  vacuous run:  go test -run ^TestZZSelfCheckNameThatMatchesNoTest$ rc=%d" % vrc,
-        "                evidence check says ran=%s (must be NO)" % ("yes" if rejected else "NO"),
-    ]
+    lines.append("  vacuous run:  go test -run ^TestZZSelfCheckNameThatMatchesNoTest$ rc=%d" % vrc)
+    lines.append("                evidence check says ran=%s (must be NO)" % ("yes" if rejected else "NO"))
     if vrc != 0:
         lines.append("  SELF-CHECK UNUSABLE: the vacuous run did not exit 0 (rc=%d), so it is "
                      "not the benign-vacuous shape this check is for" % vrc)
@@ -429,6 +454,62 @@ def selfcheck_bite_control():
         lines.append("  SELF-CHECK FAILED: the real guard output was NOT accepted as evidence "
                      "(rc=%d, missing: %s) — the check is too strict to be useful, or the "
                      "guard stopped logging its enumeration block" % (drc, ", ".join(why2) or "nothing"))
+        return False, "\n".join(lines)
+
+    # One leg at a time, removed from THAT SAME real output, with the other legs
+    # still satisfied — the coverage an aggregate-only check cannot have. Each
+    # row's needle is disjoint from the other legs' evidence (the marker line,
+    # the block's own header line, one pattern line inside the block), which is
+    # what makes "only this leg is missing" true by construction.
+    marker_leg = "the guard's own result marker %r" % GUARD_RESULT_PASS
+    block_leg = "the guard's enumeration block (%r)" % GUARD_ENUM_HEADER
+    route_leg = "the driven route %r inside the enumeration block"
+    one_route = SHIPPED_UNLOCK_ROUTES[1]
+
+    def to_sibling(out):
+        """The real output with every driven route swapped for an unrelated one."""
+        o = out
+        for w in SHIPPED_UNLOCK_ROUTES:
+            if w not in out:
+                return None
+            o = o.replace(w, "POST /qa-sibling-route/{slug}/unlock")
+        return o
+
+    shapes = [
+        ("L1: the result marker %s removed" % GUARD_RESULT_PASS,
+         _drop_lines(dout, GUARD_RESULT_PASS), [marker_leg]),
+        ("L2: the enumeration-block header removed",
+         _drop_lines(dout, GUARD_ENUM_HEADER), [block_leg]),
+        ("L3: %s removed from the block" % one_route,
+         _drop_lines(dout, one_route), [route_leg % one_route]),
+        ("L3: the block names only a SIBLING route",
+         to_sibling(dout), [route_leg % w for w in SHIPPED_UNLOCK_ROUTES]),
+    ]
+    bad = []
+    for label, shape, want in shapes:
+        if shape is None or shape == dout:
+            bad.append("%s — could not derive that shape from the real guard output, so this "
+                       "leg cannot be exercised at all" % label)
+            lines.append("  %-60s UNUSABLE (not derivable from the real output)" % label)
+            continue
+        leg_ok, got = driving_evidence(shape, GUARD_RESULT_PASS, SHIPPED_UNLOCK_ROUTES)
+        named = [w for w in want if w in got]
+        lines.append("  %-60s ran=%s (must be NO)  only-missing=[%s]"
+                     % (label, "yes" if leg_ok else "NO", ", ".join(got) or "nothing"))
+        # `got` must be EXACTLY the removed leg: an extra entry would mean
+        # another leg's evidence went missing too, and the row would no longer
+        # be exercising ONE leg in the presence of the others.
+        if leg_ok or len(named) != len(want) or len(got) != len(want):
+            bad.append("%s — the check must REJECT it, naming ONLY that leg (accepted=%s, "
+                       "named %d/%d of the removed leg, reported %d item(s): %s)"
+                       % (label, "yes" if leg_ok else "NO", len(named), len(want), len(got),
+                          ", ".join(got) or "nothing"))
+    if bad:
+        lines.append("  SELF-CHECK FAILED: driving_evidence() dropped at least one leg, so the "
+                     "verdicts below could be about a guard that never drove this route (the "
+                     "failure card t_16dd37f7 measured):")
+        for b in bad:
+            lines.append("    - %s" % b)
         return False, "\n".join(lines)
     return True, "\n".join(lines)
 
