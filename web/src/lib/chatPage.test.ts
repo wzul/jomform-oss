@@ -1360,6 +1360,318 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
   );
 });
 
+// ── THE PHASE-1 RUNNER CAPS THE SAME PAGE QUOTES (t_306d1389) ─────────────────
+//
+// WHAT THIS CLOSES. The test above pins the PHASE-2 caps' prose. More caps live in
+// api/internal/chat/chat.go and FOUR of them are restated as NUMBERS in the very
+// same "Limits and cost" section of the very same page — sentences no test read.
+// Measured on this tree before this guard existed (the card's own table, and the
+// bite proof below re-derives it): moving MaxTurns 16 -> 33, MaxMessageChars
+// 2000 -> 7777, MaxReplyChars 4000 -> 9999 or MaxSteps 4 -> 9 left the whole web
+// suite GREEN while the rendered page kept advertising the old number — with a
+// CONTROL on the same harness (chatRatePerHour 60 -> 90, a cap the test above DOES
+// read) RED. So the harness worked; these four were simply not in it.
+//
+// ONE CLAIM IN THE CARD IS NOT SO, measured here rather than repeated: the card
+// says six caps "are restated on the same page". Four are. The other two are READ
+// here — a rename or a removal of either reds, because `goConstNumber` throws
+// rather than handing the comparisons `undefined` — but neither has a number on
+// the page to compare against, and they part company on purpose:
+//
+//   * MaxToolResultChars (6000). The section makes that claim WITHOUT a number —
+//     "Each lookup is bounded in size" — so no constant move can make it false.
+//     The CLAIM is pinned instead, so dropping it reds. (rest_chat.go:46 says
+//     "Both numbers are in the docs page"; MaxSteps is, this one is not. That docs
+//     gap is a filed card, not this guard's business to fix.)
+//
+//   * MaxTurnChars (4000). Same shape, and it is the row the card paired WRONG.
+//     The card paired it with the 4000 of "The assistant's own answer is capped at
+//     4000 characters". That sentence is about the model's ANSWER — which is
+//     MaxReplyChars ("bounds the model's own answer before it is stored/echoed",
+//     chat.go:96) — while MaxTurnChars bounds ONE CLIENT-SUPPLIED TURN (buildTurns,
+//     chat.go:770; the new message is bounded by MaxMessageChars, chat.go:772, not
+//     by this one). So the answer sentence pins MaxReplyChars and NOT
+//     MaxTurnChars: pinning it to both would red a page that is still TRUE the
+//     moment MaxTurnChars moves, which is the false RED every guard in this file is
+//     least entitled to. MaxTurnChars is pinned to the claim it actually backs
+//     instead — "not for holding a long document": a pasted document IS one turn,
+//     and the per-turn bound is what makes that sentence true. Moving MaxTurnChars
+//     4000 -> 9999 therefore leaves this guard GREEN with the page CORRECT, and
+//     that verdict is asserted below rather than left to look like a gap.
+//
+// THE COUNT IN "up to five" IS MaxSteps + 1, NOT MaxSteps. The loop is
+// `for step := 0; step < MaxSteps` (chat.go:408) and its LAST round adds the final
+// `ChatWithTools(ctx, turns, nil)` answer call (chat.go:463), so the section counts
+// MODEL CALLS where MaxSteps caps tool ROUND-TRIPS. The +1 is arithmetic on the
+// constant, not a second copy of the number, and the section writes that count as a
+// WORD — so both forms are accepted, because a copyedit that writes "up to 5" is
+// not a defect.
+//
+// WHY codeOnly AND NOT THE RAW SOURCE. The sentences below are matched against the
+// page with its COMMENTS blanked (lib/jsxSource.ts, the repo's shared blanker): a
+// comment quoting a number is not what the user reads, and it must not stand in for
+// the sentence. The test above reads the raw source, so a comment CAN satisfy its
+// pins — that is card t_4912a9bd's business, and this guard neither changes it nor
+// depends on it. The page's prose lives in string literals, which the blanker keeps
+// byte for byte, so every pin below still reads what the page renders.
+const docsPage = read(DOCS_PAGE);
+
+/** The word a small count is written as in prose, for the one sentence that spells its number. */
+const COUNT_WORDS = [
+  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+  "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+  "nineteen", "twenty",
+];
+
+/** `n` as digits, and as a word when the list above covers it. */
+function countForms(n: number): string[] {
+  const word = COUNT_WORDS[n];
+  return word ? [String(n), word] : [String(n)];
+}
+
+/** Every cap the section's prose stands on, by the name it is declared with. */
+const CAP_NAMES = [
+  "MaxTurns",
+  "MaxTurnChars",
+  "MaxMessageChars",
+  "MaxSteps",
+  "MaxToolResultChars",
+  "MaxReplyChars",
+] as const;
+
+/**
+ * The two claims the section makes WITHOUT a number, and the cap each one stands
+ * behind — at MODULE SCOPE so the bite proof below mutates the very strings this
+ * guard pins. A proof keyed on its own copy of the sentence rots into a no-op the
+ * day the sentence is legitimately reworded and this list is updated with it, and
+ * a no-op row reds a tree that is correct.
+ */
+const NUMBERLESS_CLAIMS: Array<{ want: string; what: string; cap: string; why: string }> = [
+  {
+    want: "Each lookup is bounded in size",
+    what: "the bound on one tool's output",
+    cap: "MaxToolResultChars",
+    why:
+      `every tool result the model is shown is truncated to that cap (chat.go:352 and :361), so ` +
+      `without this claim the section is silent about what a lookup costs`,
+  },
+  {
+    want: "not for holding a long document",
+    what: "the bound on one turn's text",
+    cap: "MaxTurnChars",
+    why:
+      `a pasted document is ONE turn and the runner truncates each one (buildTurns, chat.go:770), ` +
+      `so this is the sentence the per-turn cap stands behind`,
+  },
+];
+
+/**
+ * Everything wrong with the runner caps' prose in `docsSrc`, judged against the
+ * constants in `chatSrc`, as sentences.
+ *
+ * Pure over its two sources so the bite proof below can move ONE constant (or
+ * rewrite ONE sentence) and ask the SAME rule for its problems — the idiom of
+ * chatHistoryCap.test.ts's historyCapProblems. Inline assertions would leave that
+ * proof re-stating the checks, which proves nothing about them.
+ */
+function capProseProblems(docsSrc: string, chatSrc: string): string[] {
+  const out: string[] = [];
+  const docs = codeOnly(docsSrc);
+  // Every constant the section's prose stands on. A name that is gone, or is no
+  // longer a numeric literal, THROWS here (goConstNumber) rather than handing the
+  // comparisons `undefined` — which is a substring of nothing, so every check below
+  // would pass vacuously.
+  const caps: Record<string, number> = {};
+  for (const name of CAP_NAMES) caps[name] = goConstNumber(chatSrc, name);
+  for (const [name, n] of Object.entries(caps)) {
+    if (!Number.isFinite(n) || n <= 0) {
+      out.push(
+        `${name} read as ${n} — the section states these as caps a user can rely on, so a cap of ` +
+          `zero or less backs no sentence at all`,
+      );
+    }
+  }
+
+  // ── the four numbers the section states ─────────────────────────────────────
+  // Each entry is the sentence WITH the number built from the constant, so a
+  // constant move and a page edit have to land together (the idiom of the phase-2
+  // `sentences` list above). The phrasing is pinned tightly on purpose: a rewrite
+  // of one of these sentences has to update this list.
+  const stated: Array<{ what: string; want: string[] }> = [
+    {
+      what: `the turn cap (MaxTurns = ${caps.MaxTurns})`,
+      want: [`bounded to the last ${caps.MaxTurns} turns`],
+    },
+    {
+      what: `the message cap (MaxMessageChars = ${caps.MaxMessageChars})`,
+      want: [`and ${caps.MaxMessageChars} characters for your message`],
+    },
+    {
+      what: `the answer cap (MaxReplyChars = ${caps.MaxReplyChars})`,
+      want: [`capped at ${caps.MaxReplyChars} characters`],
+    },
+    {
+      what:
+        `the model-call ceiling (MaxSteps = ${caps.MaxSteps}, so ${caps.MaxSteps} + 1 = ` +
+        `${caps.MaxSteps + 1} calls)`,
+      want: countForms(caps.MaxSteps + 1).map((n) => `up to ${n}`),
+    },
+  ];
+  for (const { what, want } of stated) {
+    if (!want.some((w) => docs.includes(w))) {
+      out.push(
+        `${DOCS_PAGE} no longer quotes ${what} — none of ${JSON.stringify(want)} is in the page's ` +
+          `text. The section states the cap the server enforces, so the constant and this sentence ` +
+          `cannot move apart`,
+      );
+    }
+  }
+
+  // ── the two claims the section makes WITHOUT a number ───────────────────────
+  // Nothing to compare (see the header), so what is pinned is the claim itself —
+  // the sentence each of those two caps stands behind. A copyedit that drops one
+  // leaves the page silent about a bound the server still applies.
+  for (const { want, what, cap, why } of NUMBERLESS_CLAIMS) {
+    if (!docs.includes(want)) {
+      out.push(`${DOCS_PAGE} no longer says "${want}" (${what}, ${cap} = ${caps[cap]}) — ${why}`);
+    }
+  }
+  return out;
+}
+
+test("the runner caps the chat docs quote are read from the constants, so the limits' prose cannot advertise a cap the server stopped applying", () => {
+  // Vacuity, in the neighbours' idiom: prove this is the real page (a section title
+  // and a sentence only it carries) and the real Go source BEFORE any comparison
+  // below is believed.
+  assert.ok(
+    docsPage.includes("Limits and cost") && docsPage.includes("at least one AI model call"),
+    `${DOCS_PAGE} is not the chat docs page this guard means to judge`,
+  );
+  assert.ok(
+    goChat.includes("func (r *Runner) Run") && goChat.includes("MaxToolResultChars"),
+    "api/internal/chat/chat.go is not the runner source this guard reads its caps from",
+  );
+  const problems = capProseProblems(docsPage, goChat);
+  assert.deepEqual(
+    problems,
+    [],
+    `the chat docs' "Limits and cost" prose and the runner's caps disagree:\n  - ${problems.join("\n  - ")}`,
+  );
+});
+
+// ── THE BITE ──────────────────────────────────────────────────────────────────
+//
+// Each row is a mutation of a CONSTANT with the page left alone — exactly the state
+// that measured GREEN before this guard existed — or a page-side rewrite that stops
+// quoting the number. The two controls the header's honesty depends on are measured
+// in the second half: a sentence quoted only in a COMMENT must not satisfy a pin,
+// and the two caps the section states no number for must stay GREEN when they move,
+// because pinning those to a sentence would red a page that is still true.
+test("the caps-prose guard bites: a moved constant or a reworded sentence is RED, and the untouched pair is GREEN", () => {
+  const problems = capProseProblems(docsPage, goChat);
+  assert.deepEqual(
+    problems,
+    [],
+    `CONTROL: the untouched page and the shipped constants are not green:\n  - ${problems.join("\n  - ")}`,
+  );
+
+  // The comment control's source: the SAME sentence the page renders, moved into a
+  // comment, where the user cannot read it. The sentence is taken OFF THE PAGE, so
+  // this control cannot go stale when the cap moves and the page is updated with it
+  // (a hard-coded "the last 16 turns" would become a no-op that reds a correct tree).
+  const turnPin = /bounded to the last \d+ turns/.exec(docsPage);
+  assert.ok(turnPin, "the section no longer states the turn cap — retarget this control");
+  const commented = docsPage
+    .replace(turnPin[0], "bounded to the last few turns")
+    .concat(`\n// The conversation you send is ${turnPin[0]}.\n`);
+
+  /**
+   * `src` with the integer literal `name` is declared with moved by `by`, and the
+   * value it moved to.
+   *
+   * DERIVED FROM THE SHIPPED VALUE rather than written as a literal. A row that
+   * moved MaxSteps to a hard-coded 9 would become a NO-OP the day 9 is what the
+   * runner really ships, and a no-op row reds a tree that is correct — a false RED.
+   * Measured, not reasoned about: on this card's on-disk move run the two
+   * MaxTurnChars / MaxToolResultChars rows below did exactly that with literals.
+   */
+  const moveCap = (src: string, name: string, by: number): { src: string; next: number } => {
+    const m = new RegExp(`\\b${name}\\s*=\\s*(\\d+)\\b`).exec(src);
+    assert.ok(
+      m,
+      `${name} is no longer declared as an integer literal in the chat source — retarget this bite proof`,
+    );
+    const next = Number(m[1]) + by;
+    return { src: src.replace(m[0], `${name} = ${next}`), next };
+  };
+
+  // (1) THE FOUR NUMBERS THE SECTION STATES: the constant moves and the sentence
+  // keeps quoting the shipped value — the state that measured GREEN on this file
+  // before this guard existed (16 -> 33, 2000 -> 7777, 4000 -> 9999, 4 -> 9).
+  for (const name of ["MaxTurns", "MaxMessageChars", "MaxReplyChars", "MaxSteps"]) {
+    const { src: moved, next } = moveCap(goChat, name, 7);
+    assert.notEqual(moved, goChat, `the ${name} move changed nothing — this row would be vacuous`);
+    const found = capProseProblems(docsPage, moved);
+    assert.ok(
+      found.some((s) => s.includes(`${name} = ${next}`)),
+      `${name} moved to ${next} and the section still quotes the shipped value, yet this guard ` +
+        `reports nothing:\n  ${found.length ? found.join("\n  - ") : "(nothing)"}`,
+    );
+  }
+
+  // (2) THE TWO NUMBERLESS CLAIMS: the section stops making the claim the cap stands
+  // behind. The mutation is derived from the PIN itself (NUMBERLESS_CLAIMS), so a
+  // legitimate reword that updates the pin cannot rot this row into a no-op.
+  for (const { want } of NUMBERLESS_CLAIMS) {
+    assert.equal(
+      docsPage.split(want).length - 1,
+      1,
+      `the section does not carry exactly one "${want}" — the row below would prove nothing`,
+    );
+    const found = capProseProblems(docsPage.replace(want, "a different wording entirely"), goChat);
+    assert.ok(
+      found.some((s) => s.includes(`"${want}"`)),
+      `the section drops "${want}" and this guard did not notice:\n  ` +
+        `${found.length ? found.join("\n  - ") : "(nothing)"}`,
+    );
+  }
+
+  // (3) THE COMMENT CONTROL: the same sentence, left only in a comment, must NOT
+  // satisfy the pin. First that the mutated source really does carry it (otherwise
+  // the row proves nothing), then that the guard reds anyway — the comment-stripped
+  // read is what makes the difference, not a coincidence.
+  assert.ok(
+    commented.includes(turnPin[0]),
+    "the comment control does not actually carry the sentence — that row proves nothing",
+  );
+  const commentedProblems = capProseProblems(commented, goChat);
+  assert.ok(
+    commentedProblems.some((s) => s.includes(JSON.stringify(turnPin[0]))),
+    `a number left only in a COMMENT satisfies the pin, which is where the user cannot read it:\n  ` +
+      `${commentedProblems.length ? commentedProblems.join("\n  - ") : "(nothing reported)"}`,
+  );
+
+  // (4) THE TWO CAPS THE SECTION STATES NO NUMBER FOR — MEASURED, not asserted in
+  // prose. Their move leaves the page correct, so the guard stays GREEN (a RED here
+  // would be the false RED the header refuses), and a rename still throws: each one
+  // is READ, not merely mentioned.
+  for (const name of ["MaxTurnChars", "MaxToolResultChars"]) {
+    const { src: moved, next } = moveCap(goChat, name, 1);
+    assert.notEqual(moved, goChat, `the ${name} move changed nothing — this row would be vacuous`);
+    assert.deepEqual(
+      capProseProblems(docsPage, moved),
+      [],
+      `${name} moved to ${next}, a value the page states nowhere, so nothing the page claims became ` +
+        `false — a RED here would be a false RED, which is why the guard pins the CLAIM and not a number`,
+    );
+    assert.throws(
+      () => capProseProblems(docsPage, moved.replace(`${name} = `, `${name}Renamed = `)),
+      `${name} is renamed on the Go side and this guard did not notice — the constant has to be ` +
+        `READ, not merely mentioned`,
+    );
+  }
+});
+
 test("the page reads availability and stops offering the box when it is false", () => {
   assert.match(
     page,
