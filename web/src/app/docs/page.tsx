@@ -33,8 +33,9 @@ export const metadata: Metadata = {
 // guide that carries the full text, like every other cut entry; the guide pages
 // are /docs/workspaces (new, for the first two), /docs/security#two-factor and
 // /docs/api. Fitting them in is why several existing summaries were tightened:
-// the guard caps the whole page at 800 words, and the trimmed bodies are the
-// entries whose full walk-through already lives on a guide.
+// the guard's page budget is 25 words per feature (it was a flat 800 words then
+// — see PAGE_BUDGET_PER_ENTRY in docsIndex.test.ts, card t_7f0dd2b7), and the
+// trimmed bodies are the entries whose full walk-through already lives on a guide.
 type Entry = {
   title: string;
   body: string;
@@ -105,10 +106,11 @@ const GROUPS: Group[] = [
         // wording: main's line asserts the permanence the trash removes. Kept to
         // one line under the 45-word entry limit; the walk-through moved to the
         // guide with it, and docsIndex.test.ts's facts (which are asserted at the
-        // guide, not here) moved with the copy. The trim to fit the page's
-        // 800-word cap is where this line earns its keep: the trash needs MORE
-        // sentence than "Permanent — ..." did, so the page came in at 804 words
-        // on the merge and this wording brings it back under.
+        // guide, not here) moved with the copy. The trim to fit the page's word
+        // budget (a flat 800 then; 25 words per feature since card t_7f0dd2b7)
+        // is where this line earns its keep: the trash needs MORE sentence than
+        // "Permanent — ..." did, so the page came in at 804 words on the merge
+        // and this wording brings it back under.
         body: "Reversible, not destructive: a typed slug confirmation sends it to the Trash, even a full workspace. Restoring is one click; deleting for good is a second step that refuses one with sales.",
       },
       {
@@ -120,11 +122,12 @@ const GROUPS: Group[] = [
         // the walk-through, like every other cut entry.
         //
         // Fitting it in is why two of the summaries above were tightened: the
-        // guard caps the whole page at 800 words (main's own comment says the
-        // cap is what drove the earlier trims too). Those two trims plus the
-        // entry still left the page at 806 words — t_8ebcba5a brought it back
-        // to 797 by tightening four more summaries, each re-saying the same
-        // facts in fewer words; nothing was dropped.
+        // guard capped the whole page at a flat 800 words then (card t_7f0dd2b7
+        // has since made the budget 25 words per feature, so the ceiling moves
+        // with the entry count instead of eating a fixed margin). Those two
+        // trims plus the entry still left the page at 806 words — t_8ebcba5a
+        // brought it back to 797 by tightening four more summaries, each
+        // re-saying the same facts in fewer words; nothing was dropped.
         title: "Activity log (audit trail)",
         href: "/docs/activity",
         body: "Every action in this workspace, newest first, including the destructive ones — a deletion leaves no other trace. Append-only.",

@@ -292,6 +292,19 @@ const HARNESSES: HarnessEntry[] = [
     d3ProbeEnv: { BITEPROOF_PAGE: "src/app/docs/.no-such-page-probe.tsx" },
     d3ProbeNeedle: /missing src\/app\/docs\/\.no-such-page-probe\.tsx/,
   },
+  // CARD t_7f0dd2b7 ADDED THIS ONE. It rewrites `src/app/docs/page.tsx` for every case
+  // (and, for one case, the guard's own `PAGE_BUDGET_PER_ENTRY` line), so it shares its
+  // input with the whole /docs family and must serialise on the family key rather than a
+  // per-script one. Its D3 probe is an unresolvable base ref, reached AFTER the lock is
+  // taken: the base resolution is the first thing that refuses once the lock is held.
+  {
+    label: "biteproof_docs_index_word_budget.sh",
+    script: join(webRoot, "scripts", "biteproof_docs_index_word_budget.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_BASE: "refs/heads/jomform-nonexistent-probe" },
+    d3ProbeNeedle: /cannot resolve refs\/heads\/jomform-nonexistent-probe/,
+  },
   // CARD t_df41e675 ADDED THESE TWO, and the reason is the same one leg E exists for: they
   // mutate the SAME shared sources the rest of the family does, and they shipped with NO
   // lock (`grep -c flock` was 0 in both). `biteproof_save_button.sh` rewrites

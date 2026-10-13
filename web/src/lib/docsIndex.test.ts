@@ -104,6 +104,39 @@ const docsSrc = stripUnrendered(read(DOCS_PAGE));
 // carries one clause more, while still failing any entry that is a paragraph.
 const LIMIT = 45;
 
+// The aggregate word budget for the feature summaries, PER ENTRY.
+//
+// IT IS NOT A FIXED PAGE CAP (card t_7f0dd2b7). This test asserted `total < 800`
+// — a constant — and main arrived at 799: ONE word of headroom. A fixed page cap
+// and a feature list that is REQUIRED to grow cannot both hold. The list is the
+// contract (the parity test below pins it in both directions), `AGENTS.md` makes
+// documentation mandatory for every feature, so every new feature adds an entry
+// — which means a fixed cap can only be paid for by trimming an existing
+// summary. That is exactly how #791 shipped the page RED at 806 words
+// (`48943425`), and why the 9-word trim that bought PR 832's margin (797 at
+// `15337da0`) was 799 again one merge later, when PR 804 re-cut one entry
+// (`5803b567`): the margin was being spent, never held.
+//
+// The budget is therefore DERIVED from the structure the page is designed
+// around, the way `EXPECTED_TOOL_COUNT` pins the tool registry: the page was
+// sized as 800 words for 32 features (measured 798 at `25ac94bf`, the #691
+// baseline the verify lane reproduced), i.e. 25 words per feature, and the
+// ceiling now moves with the entries actually declared — so a new entry with a
+// normal summary can never eat the headroom down to nothing.
+//
+// Measured on this tree: 33 entries, 799 words (24.2 each) against a budget of
+// 25 x 33 = 825. What that still guards, stated honestly in both directions:
+//   * a FATTER page reds — the 33 summaries may grow by 26 words in total (one
+//     fat entry, or a paragraph smuggled in across several) before this fails;
+//   * a TRIM makes it looser, which is the direction the restructure actually
+//     wants, and the facts a trim would silently drop are guarded at the
+//     destination by DESTINATION_FACTS / PER_ENTRY_FLOOR, not by this count;
+//   * the old 800 was in fact the summaries ALONE (the five start-here steps and
+//     the FAQ are not in `total` — they are separate consts below the GROUPS
+//     table), which is why 33 entries at 799 left the chrome nothing: the fixed
+//     cap had already stopped describing the page it was named after.
+const PAGE_BUDGET_PER_ENTRY = 25;
+
 // ── a minimal JS string reader ────────────────────────────────────────────────
 // Returns the unescaped text of the "..." string starting at s[i] (which must be
 // the opening quote) and the index just past its closing quote.
@@ -481,12 +514,20 @@ test("every feature entry is one short line (the wall does not come back)", () =
       `wall:\n  ${long.join("\n  ")}`,
   );
 
-  // And the page as a whole: the original 2,811 words must stay gone. 800 leaves
-  // room for the summaries, the five start-here steps and the FAQ.
+  // And the page as a whole: the original 2,811 words must stay gone, at the
+  // PER-ENTRY budget (see PAGE_BUDGET_PER_ENTRY above). The ceiling is derived
+  // from the entries the page actually declares, so a new feature moves it and
+  // the next entry cannot arrive with one word of headroom left — the trap
+  // t_7f0dd2b7 was filed for.
   const total = entries.reduce((n, e) => n + words(e.body), 0);
+  const budget = PAGE_BUDGET_PER_ENTRY * entries.length;
   assert.ok(
-    total < 800,
-    `the feature summaries total ${total} words — the page is supposed to be read in ~2 minutes`,
+    total <= budget,
+    `the feature summaries total ${total} words against a ${budget}-word budget ` +
+      `(${PAGE_BUDGET_PER_ENTRY} words x ${entries.length} entries) — the page is ` +
+      `supposed to be scanned in one pass, so tighten the summaries instead of ` +
+      `raising the cap. If the page genuinely needs a longer budget, raise ` +
+      `PAGE_BUDGET_PER_ENTRY in the same commit and say in the message why.`,
   );
 });
 
