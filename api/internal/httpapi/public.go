@@ -1730,8 +1730,15 @@ func (h *PublicHandlers) unlockResolvedForm(w http.ResponseWriter, r *http.Reque
 // Chrome is restricting, so the cookie is marked Partitioned to opt into CHIPS —
 // double-keyed by the top-level site, which is the mechanism browsers provide for
 // an embedded widget's own state (MDN: "Cookies Having Independent Partitioned
-// State (CHIPS)"). It also keeps an unlock scoped to the ONE merchant page it was
+// State (CHIPS)"). It also keeps an unlock scoped to the ONE merchant SITE it was
 // entered on instead of being shared across every site the form is embedded on.
+// The partition key is the top-level SITE, not the page: the cookie's Path is
+// "/", so a second page of that same site which embeds the same form (the token
+// is bound to the form id, signFormAccessToken) is unlocked too — while a second
+// merchant's site is a different partition and asks again. The docs paragraph on
+// /docs/embed states this rule and is pinned by
+// TestDocsEmbedPageDoesNotClaimTheGateReappears (card t_87697ea4), which read
+// "the one merchant page" here and on that page before it was corrected.
 // A browser that predates CHIPS ignores the unknown attribute and keeps a plain
 // SameSite=None cookie, so this is never worse than None alone.
 //

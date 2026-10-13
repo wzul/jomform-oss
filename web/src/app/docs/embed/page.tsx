@@ -154,9 +154,11 @@ export default function EmbedDocsPage() {
         (which also posts to{" "}
         <code className="rounded bg-slate-100 px-1">location.pathname + &quot;/unlock&quot;</code>, so it works
         inside the embed just like the button does) sets a signed access cookie so the frame can render the form
-        instead of asking again. That cookie is scoped to the one page it was entered on — it is a{" "}
+        instead of asking again. That cookie is scoped to the top-level site it was entered on, not to the single
+        page — it is a{" "}
         <code className="rounded bg-slate-100 px-1">Partitioned</code> third-party cookie, so unlocking the
-        embedded form on your site does not unlock it on anybody else&apos;s. Partitioning is also what keeps that
+        embedded form on your site does not unlock it on anybody else&apos;s, while a second page of your own site
+        that embeds the same form does not ask for the password again. Partitioning is also what keeps that
         unlock working when a visitor&apos;s browser blocks third-party cookies: the cookie is stored per top-level
         site, so your page keeps it and the buyer is not asked for the password again. A browser that does not
         support partitioned cookies yet ignores the attribute and treats it as an ordinary third-party cookie,

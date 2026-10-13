@@ -396,6 +396,25 @@ func normalizedDocsText(s string) string {
 // updated with it; asserting the gate reappears on a cookie-blocking browser is
 // not.
 //
+// WHAT ELSE IS PINNED (c), added by card t_87697ea4: the SCOPE the paragraph
+// names, because the value word carries the claim and nothing above reads it.
+// The sentence that described the cookie said it was "scoped to the one page it
+// was entered on", which is not what a browser implements: CHIPS partitions by
+// top-level SITE (MDN, Partitioned cookies: "a separate cookie jar per top-level
+// site ... the partition key is based on the site, including the scheme, of the
+// top-level URL"), and four lines later the same paragraph said the cookie is
+// "stored per top-level site" — so the paragraph contradicted itself. The
+// implementation agrees with the second half, not the first:
+// newFormAccessCookie sets Path "/" and the unlock token is bound to the FORM id
+// (signFormAccessToken), so an unlock entered on one page of a merchant's site
+// is also sent on that site's other pages. MEASURED on this tree before the fix,
+// the mutation `"stored per top-level site" -> "stored per top-level page"` left
+// this test AND TestNoDocsClaimTheGateReappearsOnACookieBlockingBrowser AND
+// TestDocsClaimSurfacesCoverTheReaderFacingWebTree all GREEN — no assertion in
+// any of them read the scope noun. So both directions are now pinned: the
+// site-scoped sentences must be PRESENT (a deletion reds) and the narrower
+// page-/domain-scoped shapes must be ABSENT (a swap reds, and names itself).
+//
 // The cookie's behaviour is measured elsewhere: TestEmbeddedPrivateFormUnlockRoundTrip
 // asserts the unlock's Set-Cookie carries Partitioned. This guard is what stops
 // the COPY from drifting back into contradicting that behaviour.
@@ -434,6 +453,59 @@ func TestDocsEmbedPageDoesNotClaimTheGateReappears(t *testing.T) {
 			"State what actually happens (the cookie is stored per top-level site) and keep any " +
 			"caveat to browsers that do not support partitioned cookies yet; update this guard " +
 			"if the wording changes")
+	}
+
+	// (c) The SCOPE the paragraph names must be the scope the browser
+	// implements, in both directions. The value word is what carries the claim:
+	// the false sentence this card corrects ("scoped to the one page it was
+	// entered on") and the narrower swap of the true one ("stored per top-level
+	// site" -> "per top-level page") both kept every assertion above — and both
+	// other docs guards — GREEN, because not one of them reads the scope noun.
+	//
+	// The mechanism sentence, pinned as the literal a READER sees (in the source
+	// it is split across a line break: "...stored per top-level\nsite...").
+	if !strings.Contains(page, "stored per top-level site") {
+		t.Error("the docs no longer say the unlock cookie is 'stored per top-level site' — CHIPS " +
+			"partitions by top-level SITE (MDN, Partitioned cookies: \"a separate cookie jar per " +
+			"top-level site ... the partition key is based on the site, including the scheme, of the " +
+			"top-level URL\"), so this sentence is the mechanism the paragraph exists to explain. " +
+			"If the wording moved, move this pin with it — do not delete the scope from the copy")
+	}
+	// And the scoping sentence itself: site-level, not page-level.
+	if !strings.Contains(page, "scoped to the top-level site") {
+		t.Error("the docs no longer scope the unlock cookie to the top-level SITE — the sentence must " +
+			"state the rule the browser actually implements. This is the assertion the false " +
+			"\"scoped to the one page it was entered on\" (card t_87697ea4) failed: a Partitioned " +
+			"cookie is keyed by top-level site, not by page, and newFormAccessCookie sets Path \"/\" " +
+			"with a token bound to the form id, so an unlock entered on one page is also sent on that " +
+			"site's other pages. Correcting the copy means pinning the corrected wording here, once")
+	}
+	// The true half must SURVIVE the correction: a different merchant's site is
+	// a different partition, so their page is not unlocked by yours.
+	if !strings.Contains(page, "does not unlock it on anybody else's") {
+		t.Error("the docs no longer say an unlock 'does not unlock it on anybody else's' — deleting " +
+			"the scoping clause is not correcting it. The paragraph must still explain why a second " +
+			"merchant's page is not unlocked: their site is a different CHIPS partition")
+	}
+	// The narrower scopes, by name, so a site -> page (or site -> domain) swap
+	// reds here and says which claim did it.
+	for _, claim := range []string{
+		"one page it was entered on",
+		"scoped to the one page",
+		"scoped to the page",
+		"per top-level page",
+		"per top-level domain",
+		"top-level page",
+		"top-level domain",
+	} {
+		if strings.Contains(page, claim) {
+			t.Errorf("the docs scope the unlock cookie by %q — CHIPS scopes a Partitioned cookie to the "+
+				"top-level SITE (scheme + registrable domain), never to a page, and the same paragraph "+
+				"says the cookie is 'stored per top-level site'. An unlock entered on one page of a "+
+				"merchant's site IS sent on that site's other pages (newFormAccessCookie: Path \"/\", "+
+				"token bound to the form id), so the narrower claim is both false and "+
+				"self-contradicting; state the site-level rule instead", claim)
+		}
 	}
 }
 
