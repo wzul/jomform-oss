@@ -177,6 +177,30 @@ type parsedPackage struct {
 	edges  map[string]map[string]bool // func -> callees that are functions in this package
 	sinks  map[string]map[string]bool // func -> write-sink method names it calls directly
 	origin map[string]string          // func -> "file.go" (for readable failures)
+
+	// decls is every function declaration in the package, keyed by name. It is
+	// what lets a registration's tool argument be RESOLVED when it is not an
+	// inline literal: `addTool(s, disable2FATool(), …)` names a function whose
+	// body returns the &mcp.Tool{…}, and a parser that cannot follow that call
+	// reads a registry smaller than the one the server serves.
+	decls map[string][]*ast.FuncDecl
+
+	// regs is EVERY addTool / mcp.AddTool call site the parser saw — including
+	// the ones whose tool argument it could not resolve. A registration shape
+	// the parser does not understand must fail by name and file:line
+	// (TestEveryToolRegistrationYieldsATool) instead of quietly shrinking the
+	// set every Go-side tool guard measures against.
+	regs []registrationSite
+
+	fset *token.FileSet // for file:line in failure messages
+}
+
+// registrationSite is one registration-shaped call site.
+type registrationSite struct {
+	File   string // "tools.go"
+	Line   int    // 1-based line of the call
+	Tool   string // resolved wire name; "" when the parser could not resolve it
+	Reason string // why it did not resolve — carried verbatim into the failure
 }
 
 // parsePackage parses every non-test .go file in this package and extracts the
@@ -193,10 +217,11 @@ func parsePackage(t *testing.T) *parsedPackage {
 		edges:  map[string]map[string]bool{},
 		sinks:  map[string]map[string]bool{},
 		origin: map[string]string{},
+		decls:  map[string][]*ast.FuncDecl{},
+		fset:   fset,
 	}
 	// Pass 1: collect declaration names so a call can be classified as
 	// "reaches another function here" vs "reaches a store method".
-	decls := map[string][]*ast.FuncDecl{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
 			continue
@@ -210,7 +235,7 @@ func parsePackage(t *testing.T) *parsedPackage {
 			if !ok || fd.Name == nil {
 				continue
 			}
-			decls[fd.Name.Name] = append(decls[fd.Name.Name], fd)
+			pkg.decls[fd.Name.Name] = append(pkg.decls[fd.Name.Name], fd)
 			if fd.Body == nil {
 				continue
 			}
@@ -219,14 +244,14 @@ func parsePackage(t *testing.T) *parsedPackage {
 			}
 		}
 	}
-	if len(decls) == 0 {
+	if len(pkg.decls) == 0 {
 		t.Fatal("no function declarations parsed — the guard would pass vacuously")
 	}
 	// Pass 2: build edges (calls into this package) and sinks (calls on the
 	// server's dependencies). A call to a name declared in this package is an
 	// EDGE; it is never also counted as a sink, which is what keeps the scope
 	// gate itself out of the sink set.
-	known := func(name string) bool { _, ok := decls[name]; return ok }
+	known := func(name string) bool { _, ok := pkg.decls[name]; return ok }
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
 			continue
@@ -295,11 +320,20 @@ func (p *parsedPackage) addSink(from, method string) {
 	p.sinks[from][method] = true
 }
 
-// collectTools finds the tool registrations in a file. Both registration shapes
-// used in this package are handled:
+// collectTools finds the tool registrations in a file. EVERY registration shape
+// this package uses is handled:
 //
-//	addTool(s, &mcp.Tool{Name: "x", …}, s.handler)
+//	addTool(s, &mcp.Tool{Name: "x", …}, s.handler)      — inline literal
 //	mcp.AddTool(s.mcp, &mcp.Tool{Name: "x", …}, s.handler)
+//	addTool(s, disable2FATool(), s.handler)             — same-package constructor
+//
+// The third shape is why "an inline literal, or nothing" was not enough:
+// disable2FA's definition lives in a constructor function
+// (parity_issue396.go), so reading only inline literals made the tool — and the
+// guards that sweep the registry to police it — blind to a registered,
+// write-capable tool. A site whose argument STILL does not resolve is recorded in
+// p.regs, so TestEveryToolRegistrationYieldsATool fails on it by name and
+// file:line instead of the tool quietly leaving every guard's view.
 func (p *parsedPackage) collectTools(f *ast.File, file string) {
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -309,10 +343,9 @@ func (p *parsedPackage) collectTools(f *ast.File, file string) {
 		if !isRegistration(call.Fun) {
 			return true
 		}
-		tool := toolLiteral(call.Args)
-		if tool == nil {
-			return true
-		}
+		site := registrationSite{File: file, Line: p.fset.Position(call.Pos()).Line}
+
+		tool, why := p.resolveToolArg(f, call)
 		handler := ""
 		if last := call.Args[len(call.Args)-1]; last != nil {
 			if sel, ok := last.(*ast.SelectorExpr); ok {
@@ -321,12 +354,293 @@ func (p *parsedPackage) collectTools(f *ast.File, file string) {
 				handler = id.Name
 			}
 		}
-		if handler == "" || tool.Name == "" {
+		if tool == nil || tool.Name == "" || handler == "" {
+			if isRegistrationPrimitiveForwarding(f, call) {
+				return true
+			}
+			switch {
+			case tool == nil:
+				site.Reason = "the tool argument is a shape this parser cannot resolve (" + why + ")"
+			case tool.Name == "":
+				site.Reason = "the resolved tool definition carries no `Name:` field, so no guard can key on it"
+			default:
+				site.Reason = "the tool resolves to `" + tool.Name + "` but the registration names no handler function"
+			}
+			p.regs = append(p.regs, site)
 			return true
 		}
+		site.Tool = tool.Name
+		p.regs = append(p.regs, site)
 		p.tools = append(p.tools, toolReg{Name: tool.Name, Description: tool.Description, Handler: handler})
 		return true
 	})
+}
+
+// resolveToolArg resolves a registration call's tool-definition argument. When
+// it cannot, the returned string describes the arguments it saw, so the failure
+// names the shape instead of only the file:line.
+func (p *parsedPackage) resolveToolArg(f *ast.File, call *ast.CallExpr) (*toolReg, string) {
+	var shapes []string
+	for _, a := range call.Args {
+		if reg := p.toolFromExpr(f, call, a); reg != nil {
+			return reg, ""
+		}
+		shapes = append(shapes, describeToolArg(a))
+	}
+	return nil, strings.Join(shapes, ", ")
+}
+
+// toolFromExpr resolves ONE registration argument to a tool definition, or nil
+// when the argument is not one. Understood shapes:
+//
+//	&mcp.Tool{Name: "x", …}   an inline literal
+//	disable2FATool()          a function in THIS package returning one
+//	t                         a local bound to either, e.g. `t := &mcp.Tool{…}`
+//
+// A resolved tool may still carry an empty Name; the caller reports that as a
+// failure rather than dropping the tool.
+func (p *parsedPackage) toolFromExpr(f *ast.File, call *ast.CallExpr, arg ast.Expr) *toolReg {
+	if lit := compositeToolLiteral(arg); lit != nil {
+		return toolFromLiteral(lit)
+	}
+	if ce, ok := arg.(*ast.CallExpr); ok {
+		name := calleeName(ce.Fun)
+		if name == "" {
+			return nil
+		}
+		for _, fd := range p.decls[name] {
+			if out := returnedToolLiteral(fd); out != nil {
+				return out
+			}
+		}
+		return nil
+	}
+	if id, ok := arg.(*ast.Ident); ok {
+		if fd := enclosingFuncDecl(f, call.Pos()); fd != nil {
+			if lit := localToolLiteral(fd.Body, id.Name); lit != nil {
+				return toolFromLiteral(lit)
+			}
+		}
+	}
+	return nil
+}
+
+// returnedToolLiteral reads a constructor's tool definition: the `return
+// &mcp.Tool{…}` among its OWN top-level statements, or `t := &mcp.Tool{…}; return t`.
+//
+// Only top-level returns are read, because a constructor can build helper
+// closures that return unrelated literals — disable2FATool defines
+// `str := func(…) *jsonschema.Schema { return &jsonschema.Schema{…} }`, and
+// accepting that would make the parser invent a nameless tool.
+func returnedToolLiteral(fd *ast.FuncDecl) *toolReg {
+	if fd == nil || fd.Body == nil {
+		return nil
+	}
+	for _, st := range fd.Body.List {
+		ret, ok := st.(*ast.ReturnStmt)
+		if !ok || len(ret.Results) != 1 {
+			continue
+		}
+		if lit := compositeToolLiteral(ret.Results[0]); lit != nil {
+			return toolFromLiteral(lit)
+		}
+		if id, ok := ret.Results[0].(*ast.Ident); ok {
+			if lit := localToolLiteral(fd.Body, id.Name); lit != nil {
+				return toolFromLiteral(lit)
+			}
+		}
+	}
+	return nil
+}
+
+// localToolLiteral finds the `name := &mcp.Tool{…}` (or `var name = …`) a body
+// binds, so a tool held in a local variable is still resolvable.
+func localToolLiteral(body *ast.BlockStmt, name string) *ast.CompositeLit {
+	if body == nil {
+		return nil
+	}
+	var out *ast.CompositeLit
+	ast.Inspect(body, func(n ast.Node) bool {
+		if out != nil {
+			return false
+		}
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			if len(x.Lhs) != len(x.Rhs) {
+				return true
+			}
+			for i, lhs := range x.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name == name {
+					if lit := compositeToolLiteral(x.Rhs[i]); lit != nil {
+						out = lit
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			for i, id := range x.Names {
+				if id.Name == name && i < len(x.Values) {
+					if lit := compositeToolLiteral(x.Values[i]); lit != nil {
+						out = lit
+					}
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// compositeToolLiteral unwraps an expression to an `&mcp.Tool{…}` (or a bare
+// `mcp.Tool{…}`) composite literal. The literal's TYPE must be named Tool, so an
+// unrelated literal — disable2FATool's *jsonschema.Schema helper — is never
+// mistaken for a tool definition.
+func compositeToolLiteral(e ast.Expr) *ast.CompositeLit {
+	if un, ok := e.(*ast.UnaryExpr); ok {
+		if un.Op != token.AND {
+			return nil
+		}
+		e = un.X
+	}
+	lit, ok := e.(*ast.CompositeLit)
+	if !ok || !isToolTypeExpr(lit.Type) {
+		return nil
+	}
+	return lit
+}
+
+// isToolTypeExpr reports whether a type expression names this SDK's Tool type
+// (`mcp.Tool`).
+func isToolTypeExpr(e ast.Expr) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	return ok && sel.Sel != nil && sel.Sel.Name == "Tool"
+}
+
+// toolFromLiteral reads the Name/Description fields of a Tool literal.
+func toolFromLiteral(lit *ast.CompositeLit) *toolReg {
+	out := &toolReg{}
+	for _, el := range lit.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		val, ok := kv.Value.(*ast.BasicLit)
+		if !ok || val.Kind != token.STRING {
+			continue
+		}
+		s := strings.Trim(val.Value, "`\"")
+		switch key.Name {
+		case "Name":
+			out.Name = s
+		case "Description":
+			out.Description = s
+		}
+	}
+	return out
+}
+
+// describeToolArg renders an unresolved argument shape for the failure message.
+func describeToolArg(a ast.Expr) string {
+	switch x := a.(type) {
+	case *ast.Ident:
+		return "identifier `" + x.Name + "`"
+	case *ast.CallExpr:
+		if n := calleeName(x.Fun); n != "" {
+			return "call `" + n + "()`"
+		}
+		return "an unrecognised call"
+	case *ast.SelectorExpr:
+		if x.Sel != nil {
+			return "selector ending in `." + x.Sel.Name + "`"
+		}
+	case *ast.UnaryExpr:
+		if x.Op == token.AND {
+			return "a `&` expression that is not a Tool literal"
+		}
+	}
+	return "an unrecognised expression"
+}
+
+// calleeName names the function a call expression calls: a plain identifier
+// (`disable2FATool()`) or a selector (`mcp.AddTool(…)` → "AddTool").
+func calleeName(fun ast.Expr) string {
+	switch x := fun.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.SelectorExpr:
+		if x.Sel != nil {
+			return x.Sel.Name
+		}
+	case *ast.ParenExpr:
+		return calleeName(x.X)
+	}
+	return ""
+}
+
+// enclosingFuncDecl returns the innermost function declaration of f whose body
+// contains pos.
+func enclosingFuncDecl(f *ast.File, pos token.Pos) *ast.FuncDecl {
+	var best *ast.FuncDecl
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Body == nil || fd.Name == nil {
+			continue
+		}
+		if fd.Pos() <= pos && pos <= fd.End() {
+			if best == nil || fd.Pos() > best.Pos() {
+				best = fd
+			}
+		}
+	}
+	return best
+}
+
+// isFuncParam reports whether name is a parameter of fd.
+func isFuncParam(fd *ast.FuncDecl, name string) bool {
+	if fd == nil || fd.Type == nil || fd.Type.Params == nil {
+		return false
+	}
+	for _, fld := range fd.Type.Params.List {
+		for _, id := range fld.Names {
+			if id.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isRegistrationPrimitiveForwarding reports whether a registration-shaped call is
+// the registration PRIMITIVE forwarding its own argument: addTool (mcp_history.go)
+// takes `t *mcp.Tool` and passes it to mcp.AddTool. That call site registers
+// nothing by itself — the tools are registered by the primitive's callers, every
+// one of which the parser resolves — so it is plumbing, not a shape the parser is
+// blind to. Both halves must hold: the enclosing function takes a *mcp.Tool AND
+// the argument that did not resolve is one of that function's parameters, so a
+// literal-carrying call inside such a helper is still counted as a registration.
+func isRegistrationPrimitiveForwarding(f *ast.File, call *ast.CallExpr) bool {
+	fd := enclosingFuncDecl(f, call.Pos())
+	if fd == nil || fd.Type == nil || fd.Type.Params == nil {
+		return false
+	}
+	hasToolParam := false
+	for _, fld := range fd.Type.Params.List {
+		if star, ok := fld.Type.(*ast.StarExpr); ok && isToolTypeExpr(star.X) {
+			hasToolParam = true
+		}
+	}
+	if !hasToolParam {
+		return false
+	}
+	for _, a := range call.Args {
+		if id, ok := a.(*ast.Ident); ok && isFuncParam(fd, id.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 // serverBoundLocals returns the local variable names in a function body whose
@@ -397,44 +711,6 @@ func isRegistration(fun ast.Expr) bool {
 		return fn.Sel.Name == "AddTool"
 	}
 	return false
-}
-
-// toolLiteral returns the &mcp.Tool{…} composite literal among the call args.
-func toolLiteral(args []ast.Expr) *toolReg {
-	for _, a := range args {
-		un, ok := a.(*ast.UnaryExpr)
-		if !ok || un.Op != token.AND {
-			continue
-		}
-		lit, ok := un.X.(*ast.CompositeLit)
-		if !ok {
-			continue
-		}
-		out := &toolReg{}
-		for _, el := range lit.Elts {
-			kv, ok := el.(*ast.KeyValueExpr)
-			if !ok {
-				continue
-			}
-			key, ok := kv.Key.(*ast.Ident)
-			if !ok {
-				continue
-			}
-			val, ok := kv.Value.(*ast.BasicLit)
-			if !ok || val.Kind != token.STRING {
-				continue
-			}
-			s := strings.Trim(val.Value, "`\"")
-			switch key.Name {
-			case "Name":
-				out.Name = s
-			case "Description":
-				out.Description = s
-			}
-		}
-		return out
-	}
-	return nil
 }
 
 // reachable computes the transitive closure of `seeds` over the call graph.
@@ -640,4 +916,122 @@ func sortedKeys(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// TestEveryToolRegistrationYieldsATool is the property the TypeScript guard got
+// in PR 821, stated on the Go side: every registration in this package must yield
+// a tool with a usable name.
+//
+// WHY A PROPERTY AND NOT A COUNT. Every parser is blind to SOME source shape, and
+// the cost of that blindness is not the missing name — it is that the missing
+// tool leaves the view of every guard built on the parser (the scope-gate sweep,
+// the chat exposure sweep) while the whole suite stays green. A pinned count
+// would catch only the shape that changes the number, and it rots the moment any
+// unrelated tool lands (see t_585ab08b on the TS count pin). This asserts the
+// cause instead: no registration may resolve to nothing, and a shape the parser
+// cannot read fails HERE, by file:line and by the argument it did not understand.
+//
+// The one call site that legitimately resolves to nothing is the registration
+// PRIMITIVE's own forwarding (addTool calling mcp.AddTool with its `t *mcp.Tool`
+// parameter); it is excluded structurally, in collectTools, not by an allowlist
+// entry naming a file and a line.
+func TestEveryToolRegistrationYieldsATool(t *testing.T) {
+	pkg := parsePackage(t)
+	if len(pkg.regs) < 100 {
+		t.Fatalf("found only %d registration call site(s) — this property would pass vacuously", len(pkg.regs))
+	}
+
+	var unresolved []string
+	resolved := 0
+	for _, s := range pkg.regs {
+		if s.Tool == "" {
+			unresolved = append(unresolved, fmt.Sprintf("%s:%d — %s", s.File, s.Line, s.Reason))
+			continue
+		}
+		resolved++
+	}
+	if len(unresolved) > 0 {
+		sort.Strings(unresolved)
+		t.Errorf("%d registration call site(s) did not yield a tool name:\n  %s\n\n"+
+			"The tool each one registers is INVISIBLE to every Go-side guard in this package "+
+			"(the scope-gate sweep, the chat exposure sweeps), which compare against floors and "+
+			"ratios and so stay green while the registry they measure shrinks. Teach the parser "+
+			"the shape — do NOT exempt the tool: an allowlist entry would excuse exactly the "+
+			"blindness this test exists to name.", len(unresolved), strings.Join(unresolved, "\n  "))
+	}
+	if resolved != len(pkg.tools) {
+		t.Errorf("%d registration(s) resolved to a name but the tool set holds %d — every resolved "+
+			"registration must contribute exactly one tool", resolved, len(pkg.tools))
+	}
+
+	seen := map[string]string{}
+	for _, tool := range pkg.tools {
+		if tool.Handler == "" {
+			t.Errorf("tool %q resolved with no handler function — the guards cannot follow it", tool.Name)
+			continue
+		}
+		// The handler must be a function THIS package declares, or every
+		// write-sink and scope-gate question about the tool gets answered from an
+		// empty call graph: a misnamed handler reads as "reaches nothing", which
+		// is exactly how a write tool would pass the scope sweep vacuously.
+		if _, ok := pkg.decls[tool.Handler]; !ok {
+			t.Errorf("tool %q registers handler %q, which is not a function declared in this "+
+				"package — the call graph cannot follow it, so the scope-gate sweep answers "+
+				"\"reaches nothing\" for this tool and passes vacuously", tool.Name, tool.Handler)
+		}
+		if prev, dup := seen[tool.Name]; dup {
+			t.Errorf("tool %q is registered twice (by %s and %s)", tool.Name, prev, pkg.origin[tool.Handler])
+		}
+		seen[tool.Name] = pkg.origin[tool.Handler]
+	}
+	t.Logf("%d registration call sites, %d resolved to a named tool (%d distinct names)",
+		len(pkg.regs), resolved, len(seen))
+}
+
+// TestParsedRegistryMatchesTheWire pins the parser against the AUTHORITY: the set
+// of tools registerTools actually serves over the MCP protocol.
+//
+// The source parse is a convenience — it gives the guards a call graph and a
+// description without a database — but a convenience that disagrees with what the
+// server serves is worse than no parse at all, because every conclusion drawn
+// from it is then a conclusion about a registry that does not exist. This is the
+// assertion that would have caught the `disable2FA` constructor gap on the day it
+// landed: the parse said 176, the wire said 177, and the difference was a
+// registered, write-capable tool no guard could see (card t_5d89bbdc).
+func TestParsedRegistryMatchesTheWire(t *testing.T) {
+	pkg := parsePackage(t)
+	wire := registeredToolNames(t)
+
+	parsed := map[string]bool{}
+	for _, tool := range pkg.tools {
+		parsed[tool.Name] = true
+	}
+
+	var missing, extra []string
+	for name := range wire {
+		if !parsed[name] {
+			missing = append(missing, name)
+		}
+	}
+	for name := range parsed {
+		if !wire[name] {
+			extra = append(extra, name)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(extra)
+
+	if len(missing) > 0 {
+		t.Errorf("the source parser does not see %d tool(s) the server SERVES (%d parsed vs %d on the "+
+			"wire): %v\nThey are registered, so the tools/list a client receives offers them, yet "+
+			"every guard built on this parser treats them as if they did not exist — a write tool "+
+			"here is never checked for the write-scope gate. Teach the parser the registration "+
+			"shape; do not excuse the tool.", len(missing), len(parsed), len(wire), missing)
+	}
+	if len(extra) > 0 {
+		t.Errorf("the source parser sees %d tool(s) the server does NOT serve: %v\nA registration "+
+			"reachable only from dead code, or a shape parsed twice, would put a phantom tool in "+
+			"front of every guard.", len(extra), extra)
+	}
+	t.Logf("parser and wire agree: %d tools", len(wire))
 }
