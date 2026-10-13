@@ -82,9 +82,17 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   //
   // RETIRED WITH ITS GUARD (workspace trash): the DELETE no longer refuses on
   // content, so the server never emits this code any more. Kept OUT of the map
-  // deliberately — apiErr.test.ts fails on a mapping for a code errcode.go no
-  // longer declares, which is what stops this entry rotting into a translation
-  // nothing can reach. The dictionary row is reused by the TRASH view's copy.
+  // deliberately — apiErr.test.ts fails on a mapping for a code errcode.go does
+  // not declare at all ("every code this dictionary maps is one the server still
+  // declares"), which is what stops this entry rotting into a translation nothing
+  // can reach. Re-adding the row below without the code turns that guard red.
+  //
+  // The dictionary row it points at is NOT the Trash view's copy, although this
+  // comment used to claim it was (measured: no call site renders
+  // `apiErr.workspaceNotEmpty`; the Trash section renders its own rows —
+  // `ws.notEmpty` / `ws.notEmptyHint` — because a move to the Trash destroys
+  // nothing and so has nothing to refuse). The row is kept as the retired
+  // refusal's sentence: i18nKeys.test.ts deliberately does not police dead keys.
   // "workspace.notEmpty": "apiErr.workspaceNotEmpty",
   //
   // A refused permanent PURGE: the workspace was ever sold, and a purge destroys

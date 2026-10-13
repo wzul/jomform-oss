@@ -25,6 +25,13 @@
 //      of the Go source (not restated), so adding a code on the server and
 //      forgetting the dictionary fails the build.
 //   5. The dictionary entries are real (all five locales, non-empty).
+//   6. The dictionary maps no code the server has RETIRED. The reverse of 4: that
+//      check reads only the codes errcode.go declares, so a mapping for a code
+//      renamed or retired out of the Go file is invisible to it, and the entry can
+//      never fire. Measured before this landed: switching apiErr.ts's commented-out
+//      `workspace.notEmpty` row back on left the whole file green, so the
+//      retirement's comment claimed a guard nothing enforced. Pinned by re-planting
+//      that retired key in memory (last test), so the predicate is seen to bite.
 //
 // Run with the repo's Node test runner:
 //   npm run test:unit
@@ -53,6 +60,31 @@ function serverSpecificCodes(): string[] {
   const out: string[] = [];
   for (const m of errcodeGo.matchAll(/^\s*Code\w+\s*=\s*"([^"]+)"/gm)) out.push(m[1]);
   return out.sort();
+}
+
+/**
+ * The dictionary's keys that are NOT the value of any `Code*` constant in
+ * errcode.go — i.e. a mapping for a code the server cannot send (card
+ * t_ef27e70a).
+ *
+ * A code the server RETIRED looks exactly like a code it never had: the entry
+ * can never fire, so its translation is unreachable. The reachability check below
+ * cannot see this direction at all — it walks the codes the server DOES declare —
+ * so this is the half that catches a retired row (the `workspace.notEmpty` the
+ * workspace-trash move retired) being switched back on in apiErr.ts.
+ *
+ * ONE key is not a `Code*` constant on purpose: `reserved_subdomain` is
+ * urlguard's policy token (ReservedSubdomainCode), documented at its entry in
+ * apiErr.ts — the name is well formed and simply belongs to JomForm. It is
+ * allow-listed here rather than added to errcode.go, because the Go file's
+ * constants are the shape/scope codes and pretending otherwise would put the
+ * token in a table that never returns it.
+ */
+const NOT_A_ERRCODE_CONSTANT = new Set(["reserved_subdomain"]);
+
+function undeclaredMappings(keys: string[]): string[] {
+  const declared = new Set(serverSpecificCodes());
+  return keys.filter((c) => !declared.has(c) && !NOT_A_ERRCODE_CONSTANT.has(c)).sort();
 }
 
 /**
@@ -655,3 +687,43 @@ test("every declared code is actually reachable (no dead dictionary entries)", (
       `translations are unreachable:\n  ${dead.join("\n  ")}`,
   );
 });
+
+test("every code this dictionary maps is one the server still declares (no mapping for a retired code)", () => {
+  // The OTHER half of the dead-entry drift, and the one this test's sibling
+  // above cannot see: it walks the codes errcode.go DECLARES, so a mapping whose
+  // code was retired/renamed on the server is invisible to it — the key is not
+  // in its list to check. Measured before this guard existed (2026-10-13):
+  // switching the commented-out `"workspace.notEmpty"` row in apiErr.ts back on
+  // left the whole file GREEN, so the retirement's own comment ("apiErr.test.ts
+  // fails on a mapping for a code errcode.go does not declare") was a claim
+  // nothing enforced.
+  //
+  // WHY IT MATTERS rather than being cosmetic: apiErr.ts keeps retired codes OUT
+  // of the map precisely so no translation can be attached to a code the server
+  // cannot send. A re-added row is the drift the retirement was written to stop,
+  // and it also re-arms the mapping if the code ever comes back with different
+  // semantics — the `workspace.notEmpty` refusal is now impossible (a workspace
+  // goes to the Trash instead of being refused for its content).
+  const keys = Object.keys(API_ERROR_KEYS);
+  // Floor: the filter must be looking at the real dictionary, not at nothing.
+  assert.ok(keys.length >= 40, `API_ERROR_KEYS has shrunk to ${keys.length} keys — the check below is vacuous`);
+  assert.deepEqual(
+    undeclaredMappings(keys),
+    [],
+    `these codes are mapped here but no longer declared in errcode.go (the ` +
+      `mapping can never fire, so its translation is unreachable):\n  ` +
+      undeclaredMappings(keys).join("\n  "),
+  );
+
+  // BITE PROOF (in memory, nothing on disk): the retired code planted back into
+  // the key list must be REPORTED by the very predicate above. Without this, a
+  // predicate that returned [] for any input would pass the assertion, and the
+  // guard would be a claim rather than a check.
+  const planted = [...keys, "workspace.notEmpty"];
+  assert.deepEqual(
+    undeclaredMappings(planted),
+    ["workspace.notEmpty"],
+    "the retired code planted back into the dictionary was not reported as undeclared",
+  );
+});
+

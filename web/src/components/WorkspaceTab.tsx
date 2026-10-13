@@ -290,10 +290,20 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
         body: JSON.stringify({ confirm_slug: typed.trim() }),
       });
       if (!res.ok) {
-        // A refusal names what blocks (the workspace still holds forms/sales/…),
-        // so it is rendered from the code (workspace.notEmpty) in the user's own
-        // language rather than from the server's prose (issue #6177). Any other
-        // failure keeps the page's own sentence.
+        // The refusal is rendered from its machine CODE in the user's own
+        // language rather than from the server's Malay prose (issue #6177). The
+        // codes this DELETE can answer are the shape/scope ones:
+        // workspace.confirmSlugMismatch (the typed slug is not this workspace's)
+        // and workspace.notFound (the 404). The last-workspace 403 and an
+        // unparseable payload carry no specific code, so they keep the page's own
+        // sentence — that is what the `t("ws.deleteFail")` argument is for.
+        //
+        // It is NOT workspace.notEmpty, and this comment no longer says it is.
+        // That code retired with its guard when a workspace began going to the
+        // Trash: the DELETE does not refuse on content any more, it bins the
+        // workspace, so no refusal reachable here names blockers — the blocker
+        // list above is informational (it explains the PURGE the API offers).
+        // errcode.go keeps the constant commented out for the same reason.
         const d = await res.json().catch(() => null);
         setErr(apiErr(d, t("ws.deleteFail"), t));
         setConfirmOpen(false);
