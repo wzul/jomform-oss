@@ -26,6 +26,10 @@
 //     directory's own page.tsx, otherwise `/docs/<posix-relative-parent-of-page.tsx>`.
 //     A directory with no page.tsx is not a route; it is only ever a parent, and its
 //     children are still reached.
+//   routesOnDisk(dir, routePrefix): the same walk for ANY route tree under a known
+//     prefix (card t_c9d23e2c, which reads the /legal tree as well as /docs), so
+//     the two trees are read by one walk instead of a second hand-rolled copy.
+//     docsRoutesOnDisk is this function with `/docs`.
 //
 // SCOPE, stated so it is not over-claimed: it walks the filesystem and reports what
 // EXISTS. It does not know Next's special folders (a future `(group)`, `_private` or
@@ -54,12 +58,21 @@ export function filesUnder(root: string): string[] {
 // under a non-route parent (`docsDir/seg/sub/page.tsx` -> `/docs/seg/sub`) is counted
 // rather than skipped.
 export function docsRoutesOnDisk(docsDir: string): string[] {
-  const prefix = `${docsDir.replace(/\/+$/, "")}/`;
+  return routesOnDisk(docsDir, "/docs");
+}
+
+// Every real route under `dir`, as `routePrefix` or `routePrefix/<relative path>`,
+// sorted — the same recursive walk and the same `page.tsx` key as
+// docsRoutesOnDisk, generalized in card t_c9d23e2c so the /legal tree is read by
+// ONE walk rather than a second copy of this loop. A directory that is only a
+// parent is still not a route.
+export function routesOnDisk(dir: string, routePrefix: string): string[] {
+  const base = `${dir.replace(/\/+$/, "")}/`;
   const routes: string[] = [];
-  for (const file of filesUnder(docsDir)) {
+  for (const file of filesUnder(dir)) {
     if (!file.endsWith("/page.tsx")) continue;
-    const rel = file.slice(prefix.length, -"/page.tsx".length); // "" for the index
-    routes.push(rel === "" ? "/docs" : `/docs/${rel}`);
+    const rel = file.slice(base.length, -"/page.tsx".length); // "" for the index
+    routes.push(rel === "" ? routePrefix : `${routePrefix}/${rel}`);
   }
   return routes.sort();
 }

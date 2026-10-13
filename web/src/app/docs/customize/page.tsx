@@ -508,7 +508,10 @@ export default function CustomizeDocsPage() {
           reached by clicking your <strong>account block</strong> — your name and email at the bottom of
           the sidebar, or at the bottom of the menu on a phone — and
           it follows you into any browser you sign in from, on any machine. It never changes what a
-          buyer sees. Until you pick one, the dashboard uses the language last used in that browser,
+          buyer sees. One part of the product does not follow it: this knowledge base and the legal
+          pages are written in English only, so a guide or a policy stays English (and reads
+          left-to-right) even while your dashboard is in Arabic — only the labels on the docs index
+          are translated. Until you pick one, the dashboard uses the language last used in that browser,
           and English if there is none.
         </li>
         <li>

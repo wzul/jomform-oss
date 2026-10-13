@@ -2,6 +2,12 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+
+// Which surfaces are English-only prose, and therefore which document
+// declaration they carry (card t_c9d23e2c). The rule and the measurement live
+// in that module.
+import { isEnglishOnlyProsePath } from "../lib/proseSurfaces";
 
 // Issue #514: the dictionary data now lives in ./i18nDict.ts so the
 // locale-completeness guard in src/lib/i18n.test.ts can import it with the
@@ -41,6 +47,12 @@ function persistLang(l: Lang) {
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = useState<Lang>("en");
 
+  // The route the visitor is ON, as the router sees it — not read once from
+  // `window.location`. Both halves matter: the declaration below depends on it,
+  // so a client-side navigation from /docs to a translated page must move the
+  // declaration back (card t_c9d23e2c).
+  const pathname = usePathname();
+
   // 1. Instant first paint from the legacy browser value, so an existing user
   //    never flashes English while the profile request is in flight.
   useEffect(() => {
@@ -79,10 +91,18 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
+  // The document declaration must match the CONTENT, not the visitor's
+  // preference (card t_c9d23e2c, WCAG 3.1.1). The prose of /docs and /legal is
+  // English-only by design, so those two trees keep an English declaration and
+  // LTR whatever the dashboard locale is — measured live before this change:
+  // with jf_lang=ar, /docs/embed read lang="ar"/dir="rtl" over English prose.
+  // Everything else (the Arabic dashboard included) still follows `lang`, and
+  // RTL is NOT dropped: it belongs to the surfaces whose text really is RTL.
   useEffect(() => {
-    document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
-    document.documentElement.lang = lang;
-  }, [lang]);
+    const prose = isEnglishOnlyProsePath(pathname);
+    document.documentElement.dir = !prose && lang === "ar" ? "rtl" : "ltr";
+    document.documentElement.lang = prose ? "en" : lang;
+  }, [lang, pathname]);
 
   const setLang = useCallback((l: Lang) => {
     setLangState(l);

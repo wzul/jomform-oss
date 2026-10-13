@@ -41,7 +41,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { docsRoutesOnDisk } from "./docsRoutes.ts";
+import { docsRoutesOnDisk, routesOnDisk } from "./docsRoutes.ts";
+import { isEnglishOnlyProsePath, ENGLISH_ONLY_PROSE_PREFIXES } from "./proseSurfaces.ts";
 
 const pathOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 
@@ -205,3 +206,168 @@ test("no docs page or the docs chrome still carries text-slate-400 (2.63:1 at 11
     `text-slate-400 is 2.63:1 on the white page — a serious color-contrast failure: ${offenders.join(", ")}`,
   );
 });
+
+// ══ the document declaration must match the PROSE (card t_c9d23e2c) ══════════
+//
+// THE DEFECT. `components/i18n.tsx` applied the visitor's DASHBOARD locale to
+// `document.documentElement` on every route:
+//
+//     document.documentElement.dir  = lang === "ar" ? "rtl" : "ltr";
+//     document.documentElement.lang = lang;
+//
+// The knowledge base is English-only by design (`app/docs/docsChrome.tsx`: "The
+// docs PROSE stays English: every /docs guide page is static English, and
+// half-translating the knowledge base would be worse than not translating it" —
+// only the index's chrome LABELS are translated), so an Arabic-preferring
+// visitor reading a guide got an ENGLISH document declared as Arabic and
+// mirrored right-to-left. Measured live on jomform.com (v1.18.0, fresh browser
+// state) by card t_6c4ccef4: with `jf_lang=ar`, /docs/embed read `lang="ar"` /
+// `dir="rtl"` with the h1 "Embed a form on your site", every paragraph and every
+// nav label in English; the same reading on /legal/privacy. `jf_lang` is a real
+// user setting (the /profile "Bahasa dashboard" select persists it), so this was
+// user-reachable, and it is WCAG 3.1.1 (Language of Page): the declaration must
+// describe the text the page actually contains.
+//
+// WHAT IS PINNED HERE, and what is NOT:
+//   (a) COVERAGE: every route ON DISK under `src/app/docs` and `src/app/legal`
+//       is matched by the shared rule (`src/lib/proseSurfaces.ts`) that the
+//       provider gates the write on. A new /legal page, a nested docs route, or
+//       a typo'd prefix fails HERE rather than silently shipping an Arabic
+//       declaration over English prose.
+//   (b) THE RULE'S SHAPE: it matches on a SEGMENT boundary (a future
+//       `/docsomething` is not swept in) and it does NOT match a translated
+//       surface, so the RTL an Arabic dashboard needs is untouched.
+//   (c) THE PROVIDER REALLY USES IT, read from `components/i18n.tsx`: the
+//       declaration depends on the rule AND on the ROUTE (a client-side
+//       navigation out of /docs must move the declaration back), and the
+//       direction write is still there for the surfaces whose text is Arabic.
+//
+// WHAT IT DOES NOT COVER. It reads SOURCE and the filesystem, not the served
+// HTML — the executed proof is `web/e2e/a11y-docs-lang.spec.ts` (the `a11y`
+// gate), which drives the default state and `jf_lang=ar` in a real browser and
+// reads `html` lang/dir plus the computed direction out of the live DOM.
+
+const I18N_FILE = pathOf("../components/i18n.tsx");
+const LEGAL_DIR = pathOf("../app/legal");
+
+// The provider's source, and the ONE declaration effect inside it, sliced out
+// around its first statement so a rule below cannot be satisfied by a match
+// somewhere else in the file (the file also builds class strings and reads
+// localStorage).
+const I18N_SRC = readFileSync(I18N_FILE, "utf8");
+const EFFECT_ANCHOR = "const prose = isEnglishOnlyProsePath(pathname);";
+const EFFECT_AT = I18N_SRC.indexOf(EFFECT_ANCHOR);
+const DECLARATION_EFFECT = EFFECT_AT === -1 ? "" : I18N_SRC.slice(EFFECT_AT, EFFECT_AT + 400);
+
+// The English-only prose routes, read from the filesystem by the SAME recursive
+// walk the docs guards already share (docsRoutes.ts).
+const DOCS_DISK = docsRoutesOnDisk(DOCS_DIR);
+const LEGAL_ROUTES = routesOnDisk(LEGAL_DIR, "/legal");
+
+test("the prose-declaration guard is reading real files (it cannot pass vacuously)", () => {
+  assert.ok(I18N_SRC.includes("export function I18nProvider"), `${I18N_FILE} is not the i18n provider`);
+  assert.notEqual(
+    EFFECT_AT,
+    -1,
+    "the provider no longer calls isEnglishOnlyProsePath — the declaration is applied to the " +
+      "visitor's locale again on every route, which is the defect this guard exists for",
+  );
+  assert.ok(
+    ENGLISH_ONLY_PROSE_PREFIXES.length > 0,
+    "the shared rule carries no prefix at all — nothing can be matched by it",
+  );
+  assert.ok(
+    DOCS_DISK.length >= 11 && DOCS_DISK.includes("/docs") && DOCS_DISK.includes("/docs/customize"),
+    `the docs walk found ${DOCS_DISK.length} routes (${DOCS_DISK.slice(0, 3).join(", ")}) — not the tree this ` +
+      "rule was written against",
+  );
+  assert.ok(
+    LEGAL_ROUTES.includes("/legal/privacy") && LEGAL_ROUTES.includes("/legal/terms"),
+    `the /legal walk found ${JSON.stringify(LEGAL_ROUTES)} — the privacy policy and the terms are the two ` +
+      "pages card t_c9d23e2c measured as English prose declared Arabic",
+  );
+});
+
+test("every English-only prose route on disk is matched by the rule the provider uses", () => {
+  const routes = [...DOCS_DISK, ...LEGAL_ROUTES];
+  const missing = routes.filter((r) => !isEnglishOnlyProsePath(r));
+  assert.deepEqual(
+    missing,
+    [],
+    `these routes are English-only prose but the shared rule does not match them: ${missing.join(", ")} — ` +
+      `an English /docs or /legal page reached in a non-default locale would declare that locale ` +
+      `(WCAG 3.1.1) and render RTL over English text`,
+  );
+  assert.ok(
+    routes.length >= 13,
+    `only ${routes.length} routes were read off disk — the walk is not reaching the two trees`,
+  );
+});
+
+test("the rule is a SEGMENT match, and it does not claim a translated surface", () => {
+  for (const r of ["/docs", "/docs/embed", "/docs/api", "/docs/embed/", "/legal", "/legal/privacy", "/legal/terms"]) {
+    assert.ok(
+      isEnglishOnlyProsePath(r),
+      `${r} is an English-only prose surface (its text is static English) but the rule does not match it`,
+    );
+  }
+  for (const r of ["/docssomething", "/legals", "/docsx/y", "/", "/landing", "/mcp", "/products/p1", "", null, undefined]) {
+    assert.equal(
+      isEnglishOnlyProsePath(r),
+      false,
+      `${JSON.stringify(r)} is NOT an English-only prose surface, but the rule claims it is — a bare ` +
+        `string prefix would sweep in /docsomething, and matching a translated page would strip the RTL ` +
+        `an Arabic surface needs`,
+    );
+  }
+});
+
+test("the provider declares English-only prose English, and keeps the direction write", () => {
+  assert.ok(DECLARATION_EFFECT.includes(EFFECT_ANCHOR), "the declaration effect could not be sliced out");
+  // The LANGUAGE follows the rule, not the visitor's locale.
+  assert.match(
+    DECLARATION_EFFECT,
+    /document\.documentElement\.lang\s*=[^;]*prose[^;]*"en"/,
+    "the declaration no longer pins the language of an English-only prose page to English — with " +
+      "jf_lang=ar the document would be declared Arabic over English text (measured on prod: " +
+      "/docs/embed read lang=\"ar\")",
+  );
+  // The DIRECTION is gated the same way, and RTL survives for the surfaces that
+  // need it — "do not simply drop the dir write".
+  assert.match(
+    DECLARATION_EFFECT,
+    /document\.documentElement\.dir\s*=[^;]*prose[^;]*"rtl"/,
+    "the direction write is no longer gated on the rule — an English-only prose page would render RTL " +
+      "again, or the RTL of a genuinely Arabic surface was dropped",
+  );
+  assert.match(
+    DECLARATION_EFFECT,
+    /document\.documentElement\.dir\s*=[^;]*"ltr"/,
+    "the direction write has no ltr branch left",
+  );
+  // The unconditional shape this card removed, named directly.
+  assert.doesNotMatch(
+    I18N_SRC,
+    /document\.documentElement\.lang\s*=\s*lang;/,
+    "the provider writes the visitor's locale to the document again, unqualified — the pre-fix shape",
+  );
+});
+
+test("the declaration follows the ROUTE, not only the language", () => {
+  // A client-side navigation from /docs to a translated page must move the
+  // declaration back: an implementation that read `window.location` once on
+  // mount satisfies every rule above and still leaves the next page wrong.
+  assert.match(
+    I18N_SRC,
+    /import \{ usePathname \} from "next\/navigation";/,
+    "the provider no longer reads the route from the router — the declaration cannot follow a " +
+      "client-side navigation out of the prose tree",
+  );
+  assert.match(
+    I18N_SRC,
+    /\},\s*\[lang,\s*pathname\]\);/,
+    "the declaration effect does not depend on the pathname — it would only run when the language " +
+      "changes, so navigating from /docs to a translated page would keep the English declaration",
+  );
+});
+

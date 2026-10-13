@@ -66,6 +66,39 @@ is selected by the `a11y` project automatically, so a new one is in the gate by
 its name alone. Which specs exist is `npm run a11y -- --list`, not a list here.
 Minor/moderate findings are reported for triage but do not fail the gate.
 
+### The document declaration must match the prose (card `t_c9d23e2c`, WCAG 3.1.1)
+
+`web/src/components/i18n.tsx` writes the dashboard locale to
+`document.documentElement` — `lang`, and `dir="rtl"` for Arabic. The knowledge
+base and the legal pages are written in **English only** (`app/docs/docsChrome.tsx`:
+the /docs prose stays English, and only the index's chrome labels are
+translated), so that write used to declare an English page Arabic and mirror it
+right-to-left. Measured live on jomform.com v1.18.0 (fresh browser state) by card
+`t_6c4ccef4`: with `jf_lang=ar`, `/docs/embed` read `lang="ar"` / `dir="rtl"`
+over English prose (h1 "Embed a form on your site", every nav label English), and
+`/legal/privacy` the same.
+
+The rule now lives in **one place**, `web/src/lib/proseSurfaces.ts`: `/docs` and
+`/legal` are the English-only prose surfaces and keep `lang="en"` and LTR
+whatever the visitor's locale is, while every other surface — the Arabic
+dashboard included — still follows the locale and keeps its RTL. The match is on
+a **segment boundary**, so a future `/docsomething` is not swept in.
+
+Two guards hold it, and both were driven RED on the mutation they exist for:
+
+- `web/src/lib/docsA11y.test.ts` walks the routes **on disk** under
+  `src/app/docs` and `src/app/legal` and fails when one of them is not matched by
+  the rule (a new /legal page or a nested docs route is covered the day it
+  lands), and reads the provider to check the write really is gated on the rule
+  and on the ROUTE — a client-side navigation out of the docs tree must move the
+  declaration back.
+- `web/e2e/a11y-docs-lang.spec.ts` (in the `a11y` gate) drives both states in a
+  real browser — fresh, and `jf_lang=ar` — and reads `html` `lang` / `dir` plus
+  the computed `direction` out of the live DOM. `dir` is written **only** by that
+  effect, after hydration (`app/layout.tsx` sends `<html lang="en">` with no
+  `dir`), so it doubles as the hydration witness: a page that never hydrated
+  fails there instead of passing on the server-rendered value.
+
 ### Confirmation dialogs (also in the automated scan)
 
 The two **typed-slug confirmation dialogs** are scanned by the same gate, in
