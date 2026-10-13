@@ -773,6 +773,41 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 	})
 }
 
+// formURLForAccount resolves the canonical public URL of a form owned by
+// accountID when there is no request host to read it off — the notification
+// path, which renders after the submission is already stored.
+//
+// Priority is the repo's one buyer-facing rule (payments.Service.formPublicURL,
+// mcpsrv.Server.formPublicURLForAccount, RESTHandlers.formURLForAccount): a
+// VERIFIED custom domain first, then the workspace subdomain the public serving
+// path itself resolves (WorkspaceStore.PublicHostSlugByAccount). "" means
+// neither is resolvable.
+//
+// "" IS the correct answer there, not a hole to paper over with a fallback: an
+// account with no workspace and no verified custom domain has NO host that
+// serves its forms — the apex /f/{slug} lookup is gone (issue #77, handleRender:
+// "Bare apex (jomform.com): no workspace subdomain, no custom domain — 404").
+// Substituting one, as the notification path used to with
+// `h.BaseURL + "/f/" + form.Slug`, guaranteed the merchant a dead link, and it
+// did so precisely in the case where nothing could serve it.
+func (h *PublicHandlers) formURLForAccount(ctx context.Context, accountID, slug string) string {
+	if accountID == "" || slug == "" {
+		return ""
+	}
+	if h.Accounts != nil {
+		if acc, aerr := h.Accounts.ByID(ctx, accountID); aerr == nil && acc != nil &&
+			acc.CustomDomain != "" && acc.CustomDomainVerified {
+			return "https://" + strings.TrimRight(acc.CustomDomain, "/") + "/" + slug
+		}
+	}
+	if h.Workspaces != nil {
+		if ws, serr := h.Workspaces.PublicHostSlugByAccount(ctx, accountID); serr == nil && ws != "" {
+			return "https://" + ws + ".jomform.com/" + slug
+		}
+	}
+	return ""
+}
+
 // fireResponseNotifications evaluates a response form's notification rules for
 // the response.submitted event and enqueues the matching emails.
 func (h *PublicHandlers) fireResponseNotifications(ctx context.Context, form *dbstore.Form, fields map[string]any) {
@@ -807,18 +842,18 @@ func (h *PublicHandlers) fireResponseNotifications(ctx context.Context, form *db
 			}
 		}
 	}
-	formURL := ""
-	if h.Workspaces != nil {
-		// The notification's form link must be a host that SERVES the form; the
-		// workspace-only lookup answered "" for signup-created accounts, and the
-		// fallback below is the apex /f/{slug} redirect, not the form's own URL.
-		if slug, serr := h.Workspaces.PublicHostSlugByAccount(ctx, form.AccountID); serr == nil && slug != "" {
-			formURL = "https://" + slug + ".jomform.com/" + form.Slug
-		}
-	}
-	if formURL == "" {
-		formURL = h.BaseURL + "/f/" + form.Slug
-	}
+	// The notification's form link must be a host that SERVES the form — or it
+	// must be omitted. It used to fall back to `h.BaseURL + "/f/" + slug`, and
+	// that fallback could only ever 404: the apex /f/{slug} lookup was removed
+	// on purpose in issue #77 (handleRender, below: "Bare apex (jomform.com):
+	// no workspace subdomain, no custom domain — 404"), and it fired exactly
+	// for the accounts that have no workspace — which are the ones whose forms
+	// are served on a CUSTOM DOMAIN instead. So a merchant configured a
+	// response notification and received a dead link in it. formURLForAccount
+	// resolves the same way every other buyer-facing URL builder in this repo
+	// does, and answers "" when nothing serves the form: {{form_url}} then
+	// renders EMPTY (payments.renderNotification) rather than as a broken URL.
+	formURL := h.formURLForAccount(ctx, form.AccountID, form.Slug)
 	h.Pay.FireFormNotifications(ctx, payments.NotificationRef{
 		FormID:      form.ID,
 		WorkspaceID: workspaceID,
