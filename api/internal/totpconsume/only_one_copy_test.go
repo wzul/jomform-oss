@@ -283,6 +283,54 @@ package totpconsume
 // more than that: a SIBLING function's binding is still absent from the map, so
 // neither the false alarm F closed nor F's source-order rule comes back. Pinned in
 // both directions, in-memory, by TestBindingsOnTheEnclosingChainAreInScope.
+//
+// THE CONSUMER SHAPE IS THE VALUE, NOT THE SPELLING OF THE CALLEE (J)
+//
+// Every consumer predicate used to recognise a consumer by the SPELLING of the
+// callee at one call site: an *ast.CallExpr whose Fun is a *ast.SelectorExpr
+// named ConsumeTOTPStep. A second consumer that takes the accessor as a VALUE
+// instead contains no such callee, so it read GREEN on ALL of the consumer
+// checks — on ANY file, including a brand-new one with no allowlist entry:
+//
+//	func (z *Other) handle2FAEnable(ctx context.Context, userID string, step int64) (bool, error) {
+//		consume := z.Users.ConsumeTOTPStep // a step consumer under a name of its own
+//		return consume(ctx, userID, step)
+//	}
+//
+// Reproduced in a new api/internal/httpapi file (`go build ./...` RC=0) with the
+// direct call in that same file as the CONTROL: the direct call is named by both
+// consumer checks, the method value by neither. Taking the value is the same
+// consumption under a different spelling, and the argument spelling
+// (`callIt(ctx, z.Users.ConsumeTOTPStep, …)`) missed the same way.
+//
+// So the shape the guard tests is the VALUE:
+//
+//   - isStoreAccessorSel: an expression IS the accessor when it is the selector
+//     `x.ConsumeTOTPStep` — whatever x is, and whether the value is a method
+//     value (`x.ConsumeTOTPStep`) or a method expression
+//     (`(*dbstore.UserStore).ConsumeTOTPStep`). A DECLARATION of the method
+//     spells its name as a plain identifier and is not a use of it;
+//   - namesStoreAccessor: a node USES the accessor when that selector appears
+//     anywhere inside it, called or not — the direct call, the binding
+//     `consume := users.ConsumeTOTPStep`, the argument, a `return` of the
+//     method value, and one captured by a closure all contain it.
+//
+// Those two are the ONE consumer-shape predicate the three consumer checks now
+// ask, and the question is the same in each: TestOnlyTheSharedRuleConsumesATOTPStep
+// asks it of every function body (and of every package-level declaration, keyed
+// `decl <Name>`), fnConsumesStep asks it of one body, and
+// unvettedThinConsumerSite asks it of the value a thin body RETURNS. No call
+// graph is needed, and the spelling is not evidence: a name the walk cannot
+// follow is only reachable through a node that already takes the value.
+//
+// Every site either shape names is still judged by the SAME decision point,
+// allowedToConsumeStep, so a deliberate method-value alias is admitted by one
+// line in allowedDirectConsumers exactly like a direct call.
+//
+// The boundary, stated rather than implied: the walk is per node, so a body that
+// reaches the accessor through a name bound in ANOTHER function is caught at the
+// helper that took the value, not at the caller — the same one-hop boundary E
+// draws for statements.
 
 import (
 	"go/ast"
@@ -304,6 +352,10 @@ import (
 // (not by suffix) so a same-named package elsewhere in the module graph cannot
 // slip past the caller check below.
 const sharedRuleImport = "github.com/wzul/jomform/api/internal/totpconsume"
+
+// storeAccessorName is the store method that IS the atomic consumption, spelled
+// once so every consumer check tests the same name.
+const storeAccessorName = "ConsumeTOTPStep"
 
 // sqlWritesTOTPStep matches a WRITE to the users.totp_last_step column inside a
 // SQL string literal. Requiring the UPDATE (rather than a bare
@@ -395,12 +447,19 @@ var _ = [...]string{
 
 // allowedDirectConsumers maps a consume SITE — "repo-relative file (site)",
 // slash-separated from api/, where the site is the funcSiteKey of G: `Recv.Name`
-// for a method, the bare name for a plain function — to why that site is allowed
-// to CALL ConsumeTOTPStep outside the shared rule.
+// for a method, the bare name for a plain function, or `decl <Name>` for a
+// package-level declaration that takes the accessor's value — to why that site
+// is allowed to USE the store accessor outside the shared rule.
+//
+// USE, not "call": a site that CALLS the accessor and a site that binds it as a
+// method value (`consume := users.ConsumeTOTPStep`) consume the same step, and
+// the guard judges both by this one list (J in the header).
 //
 // dbstore is deliberately absent: internal/dbstore/user.go DEFINES the method,
-// it never calls it, and this guard walks call expressions — so an entry for it
-// would be stale by construction and is rejected by the staleness check below.
+// it never uses it, and this guard walks USES of the accessor (a call or a taken
+// method value — J in the header), while a method DECLARATION spells its name as
+// a plain identifier — so an entry for it would be stale by construction and is
+// rejected by the staleness check below.
 //
 // KEYED BY SITE, NOT BY FILE (H in the header). The entry used to name a FILE,
 // and TestOnlyTheSharedRuleConsumesATOTPStep checked only the file, so the one
@@ -447,6 +506,10 @@ func allowedToConsumeStep(site string) bool {
 // in the header), not by the file: an entry written for one function does not
 // cover its neighbours. A stale entry is its own drift and is reported too.
 //
+// What makes a site a consumer is the VALUE (J in the header), not the spelling
+// of a callee: a body that CALLS the accessor and a body that takes it as a
+// method value both contain the selector, and both must be judged here.
+//
 // BITE: add `users.ConsumeTOTPStep(ctx, u.ID, step)` to any handler in
 // internal/httpapi or internal/mcpsrv (the pre-fix state of PR 686's copy) and
 // this test names that file and site and fails.
@@ -456,6 +519,13 @@ func allowedToConsumeStep(site string) bool {
 // `func (z *Other) handle2FAEnable(ctx context.Context, id string, step int64)
 // (bool, error) { return z.Users.ConsumeTOTPStep(ctx, id, step) }` — and this
 // test names that site instead of continuing on the file.
+//
+// BITE (J): take the accessor as a method value instead of calling it —
+// `consume := z.Users.ConsumeTOTPStep; return consume(ctx, id, step)`, or
+// `return callIt(ctx, z.Users.ConsumeTOTPStep, …)` — in a brand-new file, and
+// this test names that site. It read GREEN here (and in
+// TestSharedRuleHasExactlyOneDefinition) before J: the callee at the call site
+// was `consume`, and no check ever looked at what the name held.
 func TestOnlyTheSharedRuleConsumesATOTPStep(t *testing.T) {
 	root := apiRoot(t)
 
@@ -499,21 +569,41 @@ func TestOnlyTheSharedRuleConsumesATOTPStep(t *testing.T) {
 			if !ok {
 				return true
 			}
-			ast.Inspect(fn, func(inner ast.Node) bool {
-				call, ok := inner.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel == nil || sel.Sel.Name != "ConsumeTOTPStep" {
-					return true
-				}
-				site := consumeSite("api/"+rel, fn)
-				found[site] = true
-				return false
-			})
+			// The shape is the VALUE (J in the header): a body that CALLS the
+			// selector and a body that BINDS it as a method value
+			// (`consume := users.ConsumeTOTPStep`, then calls `consume`) are
+			// the same consumer. Asking about the callee's spelling instead is
+			// what let the second one read green on any file.
+			if namesStoreAccessor(fn) {
+				found[consumeSite("api/"+rel, fn)] = true
+			}
 			return false
 		})
+
+		// A package-level declaration is a site too. `var stepFn =
+		// (*dbstore.UserStore).ConsumeTOTPStep` takes the accessor where no
+		// function body is involved, and the name it binds is what a later body
+		// calls — the same consumer, one indirection further out. Keyed
+		// `decl <Name>`, the write-side key (G1), so it cannot collide with a
+		// function site. Only the file's TOP-LEVEL declarations: a declaration
+		// inside a function is that function's site, found above.
+		for _, d := range f.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok || len(vs.Names) == 0 {
+					continue
+				}
+				for _, v := range vs.Values {
+					if namesStoreAccessor(v) {
+						found["api/"+rel+" (decl "+vs.Names[0].Name+")"] = true
+					}
+				}
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -696,10 +786,14 @@ func TestSharedRuleHasExactlyOneDefinition(t *testing.T) {
 		if rerr != nil {
 			return rerr
 		}
-		// The rule's implementation is recognised by the call it must make: the
-		// atomic step consumption. Only the shared package may contain it inside
-		// a function that is not a pure delegation.
-		if !strings.Contains(string(src), "ConsumeTOTPStep(") && !strings.Contains(string(src), "totpconsume.ConsumeCode(") {
+		// The rule's implementation is recognised by the accessor VALUE it must
+		// use: the atomic step consumption, CALLED
+		// (`users.ConsumeTOTPStep(…)`) or TAKEN (`consume :=
+		// users.ConsumeTOTPStep`, J in the header). This door must accept the
+		// taken spelling too — a door that required the call spelling would
+		// skip the very file the method-value consumer sits in, and the walk
+		// behind it would never see it.
+		if !strings.Contains(string(src), storeAccessorName) && !strings.Contains(string(src), "totpconsume.ConsumeCode(") {
 			return nil
 		}
 		rel, rerr := filepath.Rel(root, path)
@@ -728,11 +822,12 @@ func TestSharedRuleHasExactlyOneDefinition(t *testing.T) {
 			//     written for: it contains no rule of its own, and
 			//     TestBothSurfacesCallTheSharedRule requires the surface to
 			//     INVOKE it, so a dead alias is caught there;
-			//   - `return users.ConsumeTOTPStep(…)` is an entry point that
-			//     consumes a step under a name of its own — there is no rule in
-			//     the body, only the consumption — so it is judged by the SAME
-			//     allowlist TestOnlyTheSharedRuleConsumesATOTPStep uses, by site.
-			//     A deliberate alias can be admitted there; a method on a new
+			//   - `return users.ConsumeTOTPStep(…)` — or the same accessor handed
+			//     on as a method value — is an entry point that consumes a step
+			//     under a name of its own: there is no rule in the body, only the
+			//     consumption, so it is judged by the SAME allowlist
+			//     TestOnlyTheSharedRuleConsumesATOTPStep uses, by site. A
+			//     deliberate alias can be admitted there; a method on a new
 			//     receiver inside an already-allowed file cannot ride in on its
 			//     neighbour's entry.
 			//
@@ -743,7 +838,22 @@ func TestSharedRuleHasExactlyOneDefinition(t *testing.T) {
 				thinConsumers = append(thinConsumers, site)
 				return true
 			}
-			if thinDelegationCall(fn) != nil {
+			// A body whose whole substance is ONE expression delegates rather
+			// than implements, whatever that expression is — so it is not an
+			// implementation and is skipped here. This is what keeps ONE shape
+			// from being judged TWICE: the thin-consumer path above has already
+			// judged the bodies that delegate the ACCESSOR (J in the header), so
+			// letting them fall through to the implementation list beside it
+			// would report an allowlisted site a second time. The
+			// rule-delegating shapes (`return totpconsume.ConsumeCode(…)`,
+			// `return checkAndConsumeTOTP(…)`) and the unrelated ones are left
+			// to TestBothSurfacesCallTheSharedRule, as before.
+			//
+			// `singleReturn` rather than "the return expression is a call": a
+			// method value RETURNED (`return users.ConsumeTOTPStep`) is a
+			// delegation too, and testing for the call spelling there is the
+			// same mistake J fixes everywhere else.
+			if singleReturn(fn) != nil {
 				return true
 			}
 			// A non-delegating function that consumes a step IS an implementation.
@@ -2663,60 +2773,74 @@ func singleReturn(fn *ast.FuncDecl) ast.Expr {
 	return ret.Results[0]
 }
 
-// fnConsumesStep reports whether a function body calls anything named
-// ConsumeTOTPStep.
+// fnConsumesStep reports whether a function body USES the store accessor
+// ConsumeTOTPStep as a VALUE — called directly, or bound/passed/returned as the
+// method value itself (`consume := users.ConsumeTOTPStep`). It asks
+// namesStoreAccessor, so how the callee is spelled at any ONE call site is not
+// what decides (J in the header): that spelling test read green for a body that
+// consumed the same step through a name of its own.
 func fnConsumesStep(fn *ast.FuncDecl) bool {
+	return namesStoreAccessor(fn)
+}
+
+// isStoreAccessorSel reports whether an expression IS the store accessor taken as
+// a VALUE: the selector `users.ConsumeTOTPStep`, whoever the receiver expression
+// is and whether the value is then called. A method EXPRESSION
+// (`(*dbstore.UserStore).ConsumeTOTPStep`) is the same selector spelled from the
+// type side, so it is recognised too.
+//
+// Only a selector counts. The accessor's own DECLARATION spells its name as a
+// plain identifier (`func (s *UserStore) ConsumeTOTPStep(…)`) — a declaration,
+// not a use — and dbstore/user.go must not read as a consumer of the accessor it
+// defines.
+func isStoreAccessorSel(expr ast.Expr) bool {
+	sel, ok := expr.(*ast.SelectorExpr)
+	return ok && sel.Sel != nil && sel.Sel.Name == storeAccessorName
+}
+
+// namesStoreAccessor reports whether the store accessor is USED as a value
+// anywhere inside n — called (`users.ConsumeTOTPStep(ctx, id, step)`), bound to
+// a name the body then calls (`consume := users.ConsumeTOTPStep`), handed to
+// another function as an argument (`callIt(ctx, users.ConsumeTOTPStep, …)`),
+// returned, or captured and called by a closure. Every one of those nodes
+// CONTAINS the selector, so taking the value is itself the evidence and no call
+// graph is needed.
+//
+// This is the ONE consumer-shape predicate the three consumer checks ask (J in
+// the header). It replaced a test on the SPELLING of the callee at a call site —
+// an *ast.CallExpr whose Fun was a selector named ConsumeTOTPStep — which read
+// green for a second consumer that took the accessor as a method value, on any
+// file, including a brand-new one with no allowlist entry.
+func namesStoreAccessor(n ast.Node) bool {
 	found := false
-	ast.Inspect(fn, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
+	ast.Inspect(n, func(inner ast.Node) bool {
+		sel, ok := inner.(*ast.SelectorExpr)
+		if !ok || !isStoreAccessorSel(sel) {
 			return true
 		}
-		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil && sel.Sel.Name == "ConsumeTOTPStep" {
-			found = true
-			return false
-		}
-		return true
+		found = true
+		return false
 	})
 	return found
 }
 
-// thinDelegationCall returns the expression a function's body returns when the
-// body is exactly one `return <call>` — i.e. a delegation rather than an
-// implementation — and nil otherwise.
-//
-// It was a bool returning "thin"; the caller has to know WHICH call the
-// delegation makes (the rule, or the store accessor), because those two are
-// judged differently (H in the header). Reporting the call rather than a bool is
-// what makes that distinction impossible to forget at a call site.
-func thinDelegationCall(fn *ast.FuncDecl) *ast.CallExpr {
-	if fn.Body == nil || len(fn.Body.List) != 1 {
-		return nil
-	}
-	ret, ok := fn.Body.List[0].(*ast.ReturnStmt)
-	if !ok || len(ret.Results) != 1 {
-		return nil
-	}
-	call, _ := ret.Results[0].(*ast.CallExpr)
-	return call
-}
-
-// callsStoreAccessor reports whether a call expression invokes the store
-// accessor ConsumeTOTPStep — the one call that consumes a step.
-func callsStoreAccessor(call *ast.CallExpr) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	return ok && sel.Sel != nil && sel.Sel.Name == "ConsumeTOTPStep"
-}
-
-// unvettedThinConsumerSite reports whether fn is a thin delegation TO THE STORE
+// unvettedThinConsumerSite reports whether fn is a thin delegation OF THE STORE
 // ACCESSOR whose SITE no one vetted, and returns the site to name when it is.
+//
+// "Thin delegation of the accessor" is asked of the VALUE the body returns, not
+// of the callee's spelling (J in the header): the single return expression
+// contains the accessor whether it is CALLED (`return users.ConsumeTOTPStep(…)`)
+// or handed on as the method value itself (`return users.ConsumeTOTPStep`, or
+// `return callIt(users.ConsumeTOTPStep, …)`). A body that binds the method value
+// and then calls the bound name is not a single-return body at all — it is
+// caught by fnConsumesStep, on the binding statement.
 //
 // A thin delegation of the RULE (totpconsume.ConsumeCode, or a surface's
 // checkAndConsumeTOTP alias) is not a consumer at all — it contains no rule and
 // no consumption of its own — so it is left to TestBothSurfacesCallTheSharedRule.
 // Neither is a thin delegation of some UNRELATED name (`return decodeBase64(s)`
 // in the same file): a file is read whenever it mentions the accessor, and only
-// "the returned call IS the accessor" makes a function a consumer. A thin
+// "the returned value IS the accessor" makes a function a consumer. A thin
 // delegation of the ACCESSOR does consume a step under a name of its own, and is
 // admissible only on a site someone wrote down.
 //
@@ -2729,8 +2853,8 @@ func callsStoreAccessor(call *ast.CallExpr) bool {
 // in-memory file, so the property does not depend on the api tree happening to
 // contain a colliding pair.
 func unvettedThinConsumerSite(file string, fn *ast.FuncDecl, allowed func(site string) bool) (string, bool) {
-	call := thinDelegationCall(fn)
-	if call == nil || !callsStoreAccessor(call) {
+	ret := singleReturn(fn)
+	if ret == nil || !namesStoreAccessor(ret) {
 		return "", false
 	}
 	site := consumeSite(file, fn)
@@ -2950,9 +3074,15 @@ func (s *UserStore) ConsumeTOTPStep() bool {
 // inherits the entry written for an allowed function beside it, which is the
 // pre-fix shape exactly.
 //
-// BITE: drop the `callsStoreAccessor` test and the third case fails — an
-// unrelated one-line helper in a file that merely mentions the accessor becomes
-// a false red.
+// BITE: make the thin predicate ask for a CALL through the selector again — the
+// old `thinDelegationCall`/`callsStoreAccessor` spelling pair, i.e. "the returned
+// value is a call whose Fun is that selector" — and the third case fails: a
+// single-return body that hands the method value on instead of calling it stops
+// reading as a consumer, which is the pre-fix reading of the whole J class.
+//
+// BITE: make the thin predicate name ANY single-return body instead of one whose
+// return IS the accessor and the fourth case fails — an unrelated one-line
+// helper in a file that merely mentions the accessor becomes a false red.
 func TestThinConsumerIsJudgedBySiteNotFile(t *testing.T) {
 	src := `package probe
 
@@ -2970,6 +3100,12 @@ func (z *Other) handle2FAEnable(ctx context.Context, userID string, step int64) 
 	return z.Users.ConsumeTOTPStep(ctx, userID, step)
 }
 
+// The same consumer under ANOTHER spelling (J in the header): the return value
+// IS the accessor, taken as a method value rather than called here.
+func (z *Other) stepFn() func(context.Context, string, int64) (bool, error) {
+	return z.Users.ConsumeTOTPStep
+}
+
 // Not a consumer at all: the returned call is not the accessor.
 func decodeBase64(s string) string {
 	return base64Std(s)
@@ -2983,6 +3119,7 @@ func checkAndConsumeTOTP(ctx context.Context, userID string, code string) bool {
 	const file = "api/internal/httpapi/auth.go"
 	vettedSite := file + " (Other.handle2FAEnableAllowed)"
 	neighbourSite := file + " (Other.handle2FAEnable)"
+	valueSite := file + " (Other.stepFn)"
 
 	allowed := func(site string) bool { return site == vettedSite }
 
@@ -3014,6 +3151,14 @@ func checkAndConsumeTOTP(ctx context.Context, userID string, code string) bool {
 		t.Errorf("the unvetted thin neighbour was judged %q, want %q — a file-level allowlist lets a "+
 			"second consumer inherit the entry written for the function beside it", got, neighbourSite)
 	}
+	// The method-value spelling is the SAME consumer, judged by the SAME site
+	// (J in the header): nothing about it is a call to `ConsumeTOTPStep` here,
+	// so a predicate that reads the callee's spelling cannot see it.
+	if got := reported["Other.stepFn"]; got != valueSite {
+		t.Errorf("the method-value thin consumer was judged %q, want %q — the consumer shape is the "+
+			"VALUE the body uses, so a body that returns the accessor as a method value is judged "+
+			"like one that calls it", got, valueSite)
+	}
 
 	// A body whose return is NOT the accessor is not a consumer, whatever file
 	// it lives in: reporting one would be a false red that teaches authors to
@@ -3024,6 +3169,169 @@ func checkAndConsumeTOTP(ctx context.Context, userID string, code string) bool {
 				"accessor consumes a step", key, got)
 		}
 	}
+}
+
+// TestConsumerShapeIsTheValueNotTheCallee pins the rule that closes (J) on
+// in-memory sources: whether a body consumes a TOTP step is decided by the VALUE
+// it uses, not by how the callee at any one call site happens to be spelled.
+//
+// WHY THIS EXISTS SEPARATELY, the same reason TestThinConsumerIsJudgedBySiteNotFile
+// exists: the tree-wide checks caught the method-value probe only because that
+// probe was planted in the api tree. The property must survive the tree not
+// containing one — and the shapes below are what a future author reaches for,
+// not what the tree happens to hold today.
+//
+// Each case is parsed from source and asked the SAME two questions the tree-wide
+// checks ask: fnConsumesStep of every body (the question behind both
+// TestOnlyTheSharedRuleConsumesATOTPStep and TestSharedRuleHasExactlyOneDefinition),
+// and the package-level value scan of TestOnlyTheSharedRuleConsumesATOTPStep.
+// `consumers` and `decls` are the keys each question must return, and anything a
+// case does not list must read CLEAR — so a false red fails here as well.
+//
+// BITE: revert fnConsumesStep / namesStoreAccessor to the old spelling test — an
+// *ast.CallExpr whose Fun is a selector named ConsumeTOTPStep — and the method
+// value, the argument and the closure all read CLEAR, which is the pre-fix
+// reading of exactly this class. Drop the package-level scan and `decl stepFn`
+// reads CLEAR.
+func TestConsumerShapeIsTheValueNotTheCallee(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		// consumers are the funcSiteKeys whose BODY must read as a consumer.
+		consumers []string
+		// decls are the package-level declaration names that must read as a
+		// consumer site, in the write-side key shape of G1 (`decl <Name>`).
+		decls []string
+	}{
+		{
+			name: "direct call",
+			src: `package probe
+import "context"
+type Other struct{ Users *UserStore }
+func (z *Other) h(ctx context.Context, id string, step int64) (bool, error) {
+	return z.Users.ConsumeTOTPStep(ctx, id, step)
+}`,
+			consumers: []string{"Other.h"},
+		},
+		{
+			name: "local method value, called through its own name",
+			src: `package probe
+import "context"
+type Other struct{ Users *UserStore }
+func (z *Other) h(ctx context.Context, id string, step int64) (bool, error) {
+	consume := z.Users.ConsumeTOTPStep
+	return consume(ctx, id, step)
+}`,
+			consumers: []string{"Other.h"},
+		},
+		{
+			name: "method value passed as an argument",
+			src: `package probe
+import "context"
+type Other struct{ Users *UserStore }
+func (z *Other) h(ctx context.Context, id string, step int64) (bool, error) {
+	return callIt(ctx, z.Users.ConsumeTOTPStep, id, step)
+}`,
+			consumers: []string{"Other.h"},
+		},
+		{
+			name: "method value called from a closure inside the body",
+			src: `package probe
+import "context"
+type Other struct{ Users *UserStore }
+func (z *Other) h(ctx context.Context, id string, step int64) (bool, error) {
+	run := func() (bool, error) { return z.Users.ConsumeTOTPStep(ctx, id, step) }
+	return run()
+}`,
+			consumers: []string{"Other.h"},
+		},
+		{
+			name: "package-level method expression",
+			src: `package probe
+import "context"
+type Other struct{ Users *UserStore }
+var stepFn = (*UserStore).ConsumeTOTPStep
+func (z *Other) h(ctx context.Context, id string, step int64) (bool, error) {
+	return stepFn(z.Users, ctx, id, step)
+}`,
+			// The DECLARATION that takes the value is a site; the body that
+			// calls the name it bound is one hop out and is not — the boundary
+			// J states. The site is named, so the escape is not silent.
+			decls: []string{"stepFn"},
+		},
+		{
+			name: "not a consumer: the rule, and an unrelated call",
+			src: `package probe
+import "context"
+func ConsumeLike(ctx context.Context, id string, code string) bool { return ConsumeCode(ctx, id, code) }
+func decodeBase64(s string) string { return base64Std(s) }`,
+		},
+		{
+			name: "not a consumer: the accessor's own declaration",
+			src: `package probe
+import "context"
+type UserStore struct{}
+func (s *UserStore) ConsumeTOTPStep(ctx context.Context, id string, step int64) (bool, error) {
+	return true, nil
+}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := parser.ParseFile(token.NewFileSet(), "probe.go", tc.src, 0)
+			if err != nil {
+				t.Fatalf("parse probe source: %v", err)
+			}
+
+			var gotConsumers []string
+			ast.Inspect(f, func(n ast.Node) bool {
+				fn, ok := n.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					return true
+				}
+				if fnConsumesStep(fn) {
+					gotConsumers = append(gotConsumers, funcSiteKey(fn))
+				}
+				return true
+			})
+
+			var gotDecls []string
+			for _, d := range f.Decls {
+				gd, ok := d.(*ast.GenDecl)
+				if !ok {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok || len(vs.Names) == 0 {
+						continue
+					}
+					for _, v := range vs.Values {
+						if namesStoreAccessor(v) {
+							gotDecls = append(gotDecls, vs.Names[0].Name)
+						}
+					}
+				}
+			}
+
+			if got, want := strings.Join(sortedCopy(gotConsumers), ", "), strings.Join(sortedCopy(tc.consumers), ", "); got != want {
+				t.Errorf("bodies read as consumers: [%s], want [%s] — the consumer shape is the VALUE a "+
+					"body uses, not the spelling of the callee at its call sites", got, want)
+			}
+			if got, want := strings.Join(sortedCopy(gotDecls), ", "), strings.Join(sortedCopy(tc.decls), ", "); got != want {
+				t.Errorf("package-level declarations read as consumer sites: [%s], want [%s]", got, want)
+			}
+		})
+	}
+}
+
+// sortedCopy returns l sorted, leaving l untouched — the cases above are table
+// entries, and a helper that sorted them in place would reorder the table.
+func sortedCopy(l []string) []string {
+	out := append([]string(nil), l...)
+	sort.Strings(out)
+	return out
 }
 
 // apiRoot locates the api/ directory from this test file's own location, so the
