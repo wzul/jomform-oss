@@ -719,6 +719,7 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 			ID        string     `json:"id"`
 			Type      string     `json:"type"`
 			Value     string     `json:"value"`
+			Src       string     `json:"src"` // image blocks (card t_99c3a08b)
 			Required  bool       `json:"required"`
 			Condition *Condition `json:"condition"`
 			// Issue #173: per-field settings.
@@ -746,23 +747,32 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 	}
 	type fieldView struct {
 		ID, Type, Value string
-		Required        bool
-		CondJSON        string
-		Placeholder     string
-		Description     string
-		MaxLength       int
-		DefaultValue    string
-		Min, Max        string
-		Step            string
-		Pattern         string
-		Choices         []choiceView
+		// Src is an image block's validated https URL (card t_99c3a08b).
+		Src          string
+		Required     bool
+		CondJSON     string
+		Placeholder  string
+		Description  string
+		MaxLength    int
+		DefaultValue string
+		Min, Max     string
+		Step         string
+		Pattern      string
+		Choices      []choiceView
 	}
 	fields := make([]fieldView, 0, len(cfg.Blocks))
 	for _, b := range cfg.Blocks {
-		// Only input blocks are collectable; text/image/divider/product and
-		// pricing fields are decorative/skipped in response mode.
+		// Card t_99c3a08b: every block the merchant placed is emitted, in the
+		// merchant's own order. A block is either an INPUT the responder fills
+		// in (collectable — the submitted value round-trips as
+		// {block_id: value}) or STATIC content that carries no answer. The
+		// switch below used to drop the static group AND `text`, so a response
+		// form whose only block was `text` rendered as a heading, a Submit
+		// button and nothing else — the shape Wan reported on
+		// test-wan.jomform.com/new-form-ddb3.
 		switch b.Type {
-		case "name", "email", "phone", "textarea", "checkbox", "number",
+		// Input blocks — rendered as a control and collected on submit.
+		case "text", "name", "email", "phone", "textarea", "checkbox", "number",
 			"select", "radio", "date", "time", "website", "address",
 			"consent", "hidden", "list", "repeater", "image-choice", "captcha":
 			fv := fieldView{
@@ -776,6 +786,14 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 				fv.Choices = append(fv.Choices, choiceView{Label: c.Label, Value: c.Value})
 			}
 			fields = append(fields, fv)
+		// Static blocks — rendered exactly as the payment renderer renders
+		// them (render_blocks.go:blockTmpl), never collected. `text` is NOT
+		// one of them: the builder's "Text / label" block is the palette's
+		// only single-line text input (placeholder, max length, default value
+		// and pattern are offered for it), so it is registered above and
+		// painted by responseTmpl's own `text` arm.
+		case "section", "html", "image", "divider":
+			fields = append(fields, fieldView{ID: b.ID, Type: b.Type, Value: b.Value, Src: b.Src})
 		}
 	}
 
@@ -906,6 +924,13 @@ var responseTmpl = template.Must(template.New("response").
   h1 { margin:0 0 8px; font-size:24px; letter-spacing:-0.02em; }
   .lbl { display:block; font-size:12px; color:#6b7280; margin:12px 0 4px; }
   .desc { display:block; font-size:12px; color:#9ca3af; margin:-2px 0 6px; }
+  /* Card t_99c3a08b: the static blocks (section / html / image / divider) are
+     rendered now, so the response page needs their rules — the same shapes the
+     payment renderer paints in blockTmpl. */
+  .section { font-size:18px; font-weight:600; margin:18px 0 6px; color:#17181c; }
+  .text { color:#6b7280; font-size:14px; line-height:1.6; margin:0 0 16px; }
+  .img { max-width:100%; border-radius:12px; border:1px solid #e6e8ec; margin-bottom:14px; }
+  hr { border:0; border-top:1px solid #e6e8ec; margin:16px 0; }
   .chk { display:flex; align-items:center; gap:8px; font-size:14px; margin:8px 0; color:#374151; }
   .chk input[type=checkbox] { width:18px; height:18px; accent-color:var(--jf-primary); margin:0; }
   .rad { display:flex; align-items:center; gap:8px; font-size:14px; margin:8px 0; color:#374151; }
@@ -948,7 +973,12 @@ var responseTmpl = template.Must(template.New("response").
   <h1>{{.Title}}</h1>
 {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
 {{range $f := .Fields}}
-{{if eq .Type "name"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}"{{if .Required}} required{{end}}>
+{{if eq .Type "text"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}" data-id="{{.ID}}"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}{{if .DefaultValue}} value="{{.DefaultValue}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}>
+{{else if eq .Type "section"}}  <div class="section">{{.Value}}</div>
+{{else if eq .Type "html"}}  <div class="text">{{.Value}}</div>
+{{else if eq .Type "image"}}{{if .Src}}  <img class="img" src="{{.Src}}" alt="">
+{{end}}{{else if eq .Type "divider"}}  <hr>
+{{else if eq .Type "name"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}"{{if .Required}} required{{end}}>
 {{else if eq .Type "email"}}  <label class="lbl">{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="{{.ID}}"{{if .Required}} required{{end}}>
 {{else if eq .Type "phone"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="{{.ID}}"{{if .Required}} required{{end}}>
 {{else if eq .Type "textarea"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="{{.ID}}" rows="3"{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}>{{.DefaultValue}}</textarea>
