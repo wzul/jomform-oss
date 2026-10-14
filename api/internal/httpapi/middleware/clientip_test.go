@@ -8,6 +8,15 @@
 // CF-Connecting-IP per request (a fresh bucket each).
 //
 // These tests pin the resolution rule and the limiter behaviour it produces.
+//
+// The same defect was filed a second time from the X-Real-IP side (card
+// t_ce806b13: custom-domain traffic never carries our CF header, so the header a
+// spoofing caller would actually reach for is X-Real-IP). The three
+// bucket-level tests below pin that half header by header — rotation of X-Real-IP
+// ALONE from a caller's own address must not pick a bucket, and the same header
+// from a trusted front must still separate the clients behind it — so the
+// property is measured for every header the rule reads, not only for the one the
+// original card was measured with.
 package middleware
 
 import (
@@ -279,6 +288,77 @@ func TestBehindTheCdnStaysPerVisitor(t *testing.T) {
 
 	if got := countStatus(codes, http.StatusOK); got != 16 {
 		t.Fatalf("200s = %d of %d, want 16 (per-visitor buckets behind the CDN)\ncodes=%v",
+			got, len(codes), codes)
+	}
+}
+
+// TestDirectXRealIPRotationCannotChooseItsBucket is the header this defect was
+// filed twice for (card t_ce806b13): 16 concurrent requests from ONE public
+// address, each carrying nothing but a distinct X-Real-IP — no chain and no CDN
+// header, so no other input can explain a fresh bucket. The socket peer is the
+// only evidence a directly-connected caller leaves, so the burst must drain
+// (burst 10 -> 6x429). Before the fix this header was read unconditionally and
+// the same burst returned 16x200 with ZERO 429s.
+//
+// This is deliberately narrower than TestDirectRequestCannotChooseItsBucket
+// (which rotates all three headers at once): it names the ONE header a
+// custom-domain caller would reach for — custom-domain traffic never carries our
+// CF-Connecting-IP, so X-Real-IP is the only lever such a caller has.
+func TestDirectXRealIPRotationCannotChooseItsBucket(t *testing.T) {
+	h := testProxy().RealIP(RateLimit(okHandler()))
+
+	codes := burstCodes(h, 16, func(i int) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/", nil)
+		r.RemoteAddr = "203.0.113.9:4444" // the caller's real address, as the origin sees it
+		r.Header.Set("X-Real-IP", "198.51.100."+strconv.Itoa(100+i))
+		return r
+	})
+
+	if got := countStatus(codes, http.StatusTooManyRequests); got != 6 {
+		t.Fatalf("429s = %d of %d, want 6 (burst %d drains: one bucket for the one address that reached us)\ncodes=%v",
+			got, len(codes), RateLimitBurst, codes)
+	}
+}
+
+// TestDirectForwardedForRotationCannotChooseItsBucket is the same shape for the
+// other header the rule reads: a distinct X-Forwarded-For per request from one
+// public address must not buy a fresh bucket either. One bucket, burst 10, 6x429.
+func TestDirectForwardedForRotationCannotChooseItsBucket(t *testing.T) {
+	h := testProxy().RealIP(RateLimit(okHandler()))
+
+	codes := burstCodes(h, 16, func(i int) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/", nil)
+		r.RemoteAddr = "203.0.113.9:4444"
+		r.Header.Set("X-Forwarded-For", "198.51.100."+strconv.Itoa(100+i))
+		return r
+	})
+
+	if got := countStatus(codes, http.StatusTooManyRequests); got != 6 {
+		t.Fatalf("429s = %d of %d, want 6 (burst %d drains: a caller-written chain is not a key)\ncodes=%v",
+			got, len(codes), RateLimitBurst, codes)
+	}
+}
+
+// TestBehindTheFrontXRealIPStillSeparatesClients is the other half the card
+// demands: the rule must not over-correct. A request that reached us THROUGH a
+// proxy may still be keyed on the address that proxy recorded, so 16 buyers
+// behind the front, each recorded with its own X-Real-IP (no chain — the front
+// recorded the hop separately), keep 16 buckets and none of them is throttled.
+// Keying them all on the front's own address would be a worse defect than the
+// one this card fixes: one bucket, and one login-failure lockout, for the whole
+// site.
+func TestBehindTheFrontXRealIPStillSeparatesClients(t *testing.T) {
+	h := testProxy().RealIP(RateLimit(okHandler()))
+
+	codes := burstCodes(h, 16, func(i int) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/", nil)
+		r.RemoteAddr = front + ":4444"
+		r.Header.Set("X-Real-IP", "198.51.100."+strconv.Itoa(100+i))
+		return r
+	})
+
+	if got := countStatus(codes, http.StatusOK); got != 16 {
+		t.Fatalf("200s = %d of %d, want 16 (each recorded hop is its own bucket)\ncodes=%v",
 			got, len(codes), codes)
 	}
 }

@@ -317,9 +317,13 @@ func resolveUnlockProbePath(mux *http.ServeMux, pat, host string) (string, strin
 // returns the status codes observed, in any order. No *testing.T: it runs from
 // goroutines.
 //
-// middleware.ClientIP reads CF-Connecting-IP first (else X-Real-IP, else the
-// socket peer), so setting it is how the probe plays "these requests came from
-// one address".
+// The probe plays "these requests came from one address" by writing that address
+// where a directly-connected client's own address really is — the SOCKET PEER
+// (see setTestClientAddr). The forwarding headers are deliberately NOT used:
+// middleware.ClientIP reads one only from a peer a request can arrive through,
+// and CF-Connecting-IP only when the chain shows a Cloudflare edge (cards
+// t_ac16d273 / t_ce806b13 — the header used to be read first and
+// unconditionally, which is what let a caller pick its own bucket).
 func unlockBurstCodes(hnd http.Handler, host, probePath, ip string, n int) []int {
 	codes := make([]int, n)
 	start := make(chan struct{})
