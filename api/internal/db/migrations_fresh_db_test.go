@@ -14,16 +14,21 @@
 // whole 000047 bug class — before the code is merged.
 //
 // TestEveryMigrationHasDownFile is the companion static check: every up
-// migration must ship a rollback file, so the set stays reversible. Two
-// pre-existing gaps are pinned in the allowlist below rather than silently
-// tolerated; a full reverse-rollback integration test cannot be asserted while
-// those gaps exist (rolling back stops at 000001_init.down.sql, which cannot
-// drop users while the spaces table created by 000012 is still present).
+// migration must ship a rollback file, so the set stays reversible.
+// TestEveryDownFileHasMatchingUp is its counterpart and closes the other
+// direction: a down whose slug does not match its own up's is invisible to the
+// up→down walk (the up then simply reads as "no down file"), which is how
+// 000005's rollback sat unreachable under the wrong name. One pre-existing gap
+// is pinned in the allowlist below rather than silently tolerated; a full
+// reverse-rollback integration test cannot be asserted while that gap exists
+// (rolling back stops at 000001_init.down.sql, which cannot drop users while
+// the spaces table created by 000012 is still present).
 //
-// Both tests skip unless JOMFORM_TEST_DATABASE_URL is set, matching the
-// dbstore integration-test convention. The scratch database is dropped on
-// cleanup, so the test is safe to run repeatedly and never touches the
-// database named in the DSN.
+// TestMigrationsApplyFromZero skips unless JOMFORM_TEST_DATABASE_URL is set,
+// matching the dbstore integration-test convention. The scratch database is
+// dropped on cleanup, so the test is safe to run repeatedly and never touches
+// the database named in the DSN. The three static guards read the migrations
+// directory off disk and need no database, so they never skip.
 
 package db
 
@@ -54,9 +59,14 @@ const scratchPrefix = "jomform_migtest_"
 // have no .down.sql. Keyed by version, value explains why it is pinned. These
 // are pre-existing gaps, not endorsements: new migrations must always ship a
 // matching .down.sql or TestEveryMigrationHasDownFile fails.
+//
+// 000005_form_overrides used to be pinned here. It was removed (t_eddfa617)
+// because it never was a gap: its rollback existed all along, named
+// 000005_chip_override.down.sql — a slug mismatch, not a missing file. The pin
+// was inaccurate and it hid the defect, which is the whole reason
+// TestEveryDownFileHasMatchingUp now exists.
 var migrationsWithoutDown = map[string]string{
-	"000005_form_overrides": "predates the down-file rule; tracked as a rollback gap",
-	"000012_spaces":         "predates the down-file rule; tracked as a rollback gap",
+	"000012_spaces": "predates the down-file rule; tracked as a rollback gap",
 }
 
 // migrationUpFiles returns every embedded *.up.sql in the same order the
@@ -288,8 +298,8 @@ func TestMigrationsApplyFromZero(t *testing.T) {
 }
 
 // TestEveryMigrationHasDownFile enforces that each up migration ships a
-// rollback file. The two allowlisted gaps predate the rule and are pinned so
-// they cannot grow silently.
+// rollback file. The one allowlisted gap predates the rule and is pinned so it
+// cannot grow silently.
 //
 // This reads the migrations directory from disk, not migrationFS: the embed
 // directive only pulls in *.up.sql (the runtime runner never needs the downs).
@@ -319,6 +329,54 @@ func TestEveryMigrationHasDownFile(t *testing.T) {
 		if have[version+".down.sql"] {
 			t.Errorf("%s now has a .down.sql (%s) — remove it from migrationsWithoutDown", version, reason)
 		}
+	}
+}
+
+// TestEveryDownFileHasMatchingUp is the counterpart of
+// TestEveryMigrationHasDownFile: that guard walks every *.up.sql and demands a
+// rollback under the SAME version string, so a down file whose slug does not
+// match its own up's is invisible to it AND the up reads as "no down file at
+// all". That is exactly what happened to 000005 — 000005_form_overrides.up.sql
+// adds four forms columns and its rollback landed as
+// 000005_chip_override.down.sql (both in commit 3e4f7c02), so the up passed only
+// via a pinned allowlist entry that called it a pre-existing gap, and the down
+// was unreachable under any name a rollback step would look for.
+//
+// Pairing is exact-name, the same rule in the one direction the up→down walk
+// cannot see: a down file is reachable ONLY as the rollback for the up file it
+// is named after. There is deliberately no allowlist — measured on this tree
+// there are zero orphan downs (91 ups, 90 downs; the single up without a down is
+// the pinned 000012_spaces gap), so a strict check costs nothing and a new
+// orphan cannot hide behind a pin.
+func TestEveryDownFileHasMatchingUp(t *testing.T) {
+	entries, err := os.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("read migrations directory: %v", err)
+	}
+	have := make(map[string]bool)
+	for _, e := range entries {
+		have[e.Name()] = true
+	}
+
+	var downs int
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".down.sql") {
+			continue
+		}
+		downs++
+		version := strings.TrimSuffix(name, ".down.sql")
+		if have[version+".up.sql"] {
+			continue
+		}
+		t.Errorf("migration %s has no %s.up.sql — a rollback file is reachable only as the rollback for the up "+
+			"file it is named after, so this one is an orphan; rename it to match its up (see AGENTS.md 'Adding a "+
+			"migration safely')", name, version)
+	}
+	// A run with no down files at all cannot prove the pairing, and would make
+	// the loop above vacuous — the same fail-loudly shape migrationUpFiles uses.
+	if downs == 0 {
+		t.Fatal("no *.down.sql migrations found on disk — the pairing check above cannot prove anything")
 	}
 }
 
