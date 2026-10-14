@@ -37,7 +37,7 @@
 // than of a prompt, and layer 1 is what keeps the model from wandering: offering
 // 161 tools and trusting the gate would work, but it also invites the model to
 // try. Both are asserted by tests, and the refusal tests are proven to BITE (see
-// chat_refusal_test.go and the phase-2 acceptance file).
+// refusal_i18n_test.go and the phase-2 acceptance file).
 //
 // A MODEL-SET `confirm=true` IS NOT A CONFIRMATION. The MCP tools that carry a
 // Confirm argument (api_key_mcp.go) are confirmed by the human typing into their
@@ -62,6 +62,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -190,15 +191,32 @@ type Turn struct {
 type Step struct {
 	Tool   string `json:"tool"`
 	Status string `json:"status"`
-	// Detail is a short human-readable note for a refusal (the server's own
-	// message). Empty for a successful read.
-	Detail string `json:"detail,omitempty"`
-	// DetailKey is the same field for a PROPOSED step: a dictionary key naming what
-	// the prepared card would change, rather than a sentence. The server does not
-	// know the caller's language, so the step's detail is resolved by the dashboard
-	// exactly like the card's own wording (t_30ffa28a) — the two used to be the same
-	// Malay string, and they stay the same KEY here.
+	// DetailKey names what this step's detail IS, as a dictionary key: for a
+	// PROPOSED step, the card that was prepared (chat.proposal.title.<tool>); for
+	// a REFUSED step, WHY it was refused (chat.refused.*). It is resolved by the
+	// dashboard exactly like the card's own wording (t_30ffa28a): the API does not
+	// receive the caller's language on a JSON call (issue #6177), so a sentence
+	// built here would be one language on every dashboard.
+	//
+	// THERE IS NO PROSE SIBLING, DELIBERATELY. This used to carry a `detail`
+	// sentence the runner wrote in Malay — the allowlist refusal, "RALAT: " plus an
+	// internal error, the proposal lane's message — and the page printed it
+	// verbatim in every locale: an English transcript read
+	//
+	//	assistant tried — update_product — alat "update_product" tidak dibenarkan dalam chat ini
+	//
+	// (card t_3839995c). Deleting the field is what makes that class of defect
+	// unrepresentable rather than merely fixed: there is nothing left on the wire
+	// for a call site to print by accident, which is the same rule the card's own
+	// wording follows (proposal.go). The MODEL's half is not lost — the refusal
+	// text still travels as the tool result, which is fenced into the prompt and
+	// never reaches the browser.
 	DetailKey string `json:"detail_key,omitempty"`
+	// DetailParams are the values interpolated into the DetailKey sentence — e.g.
+	// {"max": "3"} for the per-answer proposal budget. Empty when the sentence has
+	// nothing to substitute. The tool name is NOT one of them: the page prints
+	// `tool` beside the sentence, so it stays the identifier it is.
+	DetailParams map[string]string `json:"detail_params,omitempty"`
 }
 
 // Filed describes a feedback thread the chat filed during this exchange. It is
@@ -418,18 +436,21 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 		// model sees next is well-formed.
 		turns = append(turns, llm.ChatTurn{Role: "assistant", Content: reply.Content, ToolCalls: reply.ToolCalls})
 		for _, tc := range reply.ToolCalls {
-			out, refused, ferr := r.dispatchIn(ctx, caller, tc, rs)
-			switch {
-			case ferr != nil:
+			out, ref, ferr := r.dispatchIn(ctx, caller, tc, rs)
+			if ferr != nil {
+				// A failure BEFORE the tool: the error text is an internal detail
+				// and is one language, so the PROMPT keeps it and the step carries
+				// a code — the page has its own sentence for it.
 				out = "RALAT: " + ferr.Error()
-				refused = true
+				ref = &refusal{key: keyRefusedError}
 			}
 			st := Step{Tool: tc.Name, Status: StepCalled}
-			if refused {
+			if ref != nil {
 				st.Status = StepRefused
-				st.Detail = bound(out, 300)
+				st.DetailKey = ref.key
+				st.DetailParams = ref.params
 			}
-			if tc.Name == ToolSubmitFeedback && !refused {
+			if tc.Name == ToolSubmitFeedback && ref == nil {
 				if f := filedFrom(out); f != nil {
 					res.Filed = f
 				}
@@ -441,7 +462,16 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 			// The card comes from the per-message state (the TOKEN-BEARING one),
 			// not from the tool result: the result the model saw was stripped of
 			// the token, so the browser must get it from here.
-			if tc.Name == ToolProposeWrite {
+			//
+			// ONLY WHEN A CARD WAS ACTUALLY PREPARED (ref == nil). A REFUSED
+			// propose_write used to be relabelled "proposed" here, over the
+			// refusal the branch above had just written — and the page renders
+			// refused steps only, so the merchant was never told the attempt
+			// happened at all. That is the one shape "a refusal is shown, not
+			// swallowed" (the page's own rule) cannot survive, and it would also
+			// make the proposal lane's refusal key unreachable on the wire
+			// (t_3839995c).
+			if tc.Name == ToolProposeWrite && ref == nil {
 				st.Status = StepProposed
 				if n := len(rs.cards); n > 0 {
 					card := rs.cards[n-1]
@@ -473,6 +503,55 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 	return res, nil
 }
 
+// One refusal, two audiences, and only one of them is language-dependent.
+//
+// The wording the MODEL reads is a different thing and stays exactly where it was:
+// the runner returns it as the tool result, which is fenced into the prompt
+// (prompt.go) and never reaches the browser. The wording the PERSON reads is the
+// key below, resolved by the dashboard (web/src/lib/chatRefusal.ts).
+//
+// The keys are pinned in both directions cross-language by
+// web/src/lib/chatRefusal.test.ts, which reads this file: a key here with no
+// dictionary entry renders the raw key to the user, and a reworded key here that
+// the test does not know about fails the web suite.
+const (
+	// keyRefusedWriteTool — the allowlist refused a WRITE tool name. It is the
+	// refusal the chat's whole design produces: the model tried to change
+	// something directly, and the only route to a write is a card the human
+	// confirms.
+	keyRefusedWriteTool = "chat.refused.writeTool"
+	// keyRefusedNotAllowed — any other name this chat may not dispatch: an
+	// invented tool, a typo of a real one, or a read it deliberately excludes
+	// (list_api_keys).
+	keyRefusedNotAllowed = "chat.refused.notAllowed"
+	// keyRefusedProposal — the proposal lane could not prepare the change the
+	// model asked for, so there is no card. WHICH argument the lane objected to
+	// (and why) stays in the text the MODEL receives: that is the half that can
+	// correct the call, and it is not a sentence for the merchant.
+	keyRefusedProposal = "chat.refused.proposal"
+	// keyRefusedProposalLimit — this answer already produced the maximum number
+	// of cards. The sentence interpolates {max}.
+	keyRefusedProposalLimit = "chat.refused.proposalLimit"
+	// keyRefusedTool — the tool itself refused: it ran and declined (a read it
+	// will not serve, a filing the feedback service rejected).
+	keyRefusedTool = "chat.refused.tool"
+	// keyRefusedError — the call failed before it reached the tool (a transport
+	// failure, arguments that could not be parsed).
+	keyRefusedError = "chat.refused.error"
+)
+
+// refusal is the UI's half of a refused tool call: the machine key the dashboard
+// resolves into the visitor's language, plus the values its sentence interpolates.
+// It carries NO sentence — see Step.DetailKey for why that field is gone from the
+// wire.
+//
+// It is nil when a call was NOT refused, so `*refusal` doubles as the boolean
+// dispatch used to return.
+type refusal struct {
+	key    string
+	params map[string]string
+}
+
 // dispatch routes one model-requested call. It is the ONLY place a model-requested
 // call becomes real, and it is where the allowlist is enforced.
 //
@@ -482,7 +561,8 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 // write tools are not in the allowlist at all and the only path to one is
 // Runner.Confirm with a token only the user's browser holds.
 func (r *Runner) dispatch(ctx context.Context, caller toolCaller, tc llm.ToolCall) (string, bool, error) {
-	return r.dispatchIn(ctx, caller, tc, &runState{})
+	out, ref, err := r.dispatchIn(ctx, caller, tc, &runState{})
+	return out, ref != nil, err
 }
 
 // runState carries the per-MESSAGE state a dispatch decision needs.
@@ -502,8 +582,11 @@ type runState struct {
 	cards []ProposalCard
 }
 
-// dispatchIn is dispatch with the per-message state threaded through.
-func (r *Runner) dispatchIn(ctx context.Context, caller toolCaller, tc llm.ToolCall, st *runState) (string, bool, error) {
+// dispatchIn is dispatch with the per-message state threaded through. The second
+// return value is the refusal AS THE UI SEES IT (nil when the call was not
+// refused); the first is the text the MODEL reads back, which is what makes a
+// refusal teachable without putting a sentence in front of a person.
+func (r *Runner) dispatchIn(ctx context.Context, caller toolCaller, tc llm.ToolCall, st *runState) (string, *refusal, error) {
 	if st == nil {
 		st = &runState{}
 	}
@@ -517,17 +600,28 @@ func (r *Runner) dispatchIn(ctx context.Context, caller toolCaller, tc llm.ToolC
 				"DICADANGKAN kepada pengguna dan disahkan oleh mereka (propose_write). "+
 				"Menetapkan confirm=true dalam hujah tidak mengesahkan apa-apa: model yang "+
 				"menulisnya bukan manusia. Cadangkan perubahan itu; pengguna akan sahkan "+
-				"dalam UI.", tc.Name), true, nil
+				"dalam UI.", tc.Name), &refusal{key: keyRefusedWriteTool}, nil
 		}
-		return fmt.Sprintf("alat %q tidak dibenarkan dalam chat ini", tc.Name), true, nil
+		return fmt.Sprintf("alat %q tidak dibenarkan dalam chat ini", tc.Name),
+			&refusal{key: keyRefusedNotAllowed}, nil
 	}
 	if tc.Name == ToolSubmitFeedback {
-		return r.submitFeedback(ctx, tc.Arguments)
+		out, refused, err := r.submitFeedback(ctx, tc.Arguments)
+		if err != nil || !refused {
+			return out, nil, err
+		}
+		return out, &refusal{key: keyRefusedTool}, nil
 	}
 	if tc.Name == ToolProposeWrite {
 		return r.proposeWrite(ctx, caller, tc.Arguments, st)
 	}
-	return caller.call(ctx, tc.Name, tc.Arguments)
+	out, refused, err := caller.call(ctx, tc.Name, tc.Arguments)
+	if err != nil || !refused {
+		return out, nil, err
+	}
+	// The tool ran and declined. Its own message is the tool's (api/internal/mcpsrv),
+	// and it is one language — so the prompt keeps it and the person gets the key.
+	return out, &refusal{key: keyRefusedTool}, nil
 }
 
 // isWriteToolName reports whether a refused name looks like a WRITE tool, so the
@@ -567,20 +661,26 @@ func isWriteToolName(name string) bool {
 // The proposal budget (MaxProposalsPerRun) is enforced by the runner, not by the
 // model: a message can put at most that many decisions in front of the user, so a
 // single answer cannot become a wall of confirmations to click through.
-func (r *Runner) proposeWrite(ctx context.Context, caller toolCaller, argsJSON string, st *runState) (string, bool, error) {
+func (r *Runner) proposeWrite(ctx context.Context, caller toolCaller, argsJSON string, st *runState) (string, *refusal, error) {
 	if st.proposals >= MaxProposalsPerRun {
 		return fmt.Sprintf("had cadangan untuk satu mesej dicapai (%d). Jawab dengan cadangan "+
-			"yang sudah ada; pengguna boleh minta lagi selepas ini.", MaxProposalsPerRun), true, nil
+				"yang sudah ada; pengguna boleh minta lagi selepas ini.", MaxProposalsPerRun),
+			&refusal{key: keyRefusedProposalLimit,
+				params: map[string]string{"max": strconv.Itoa(MaxProposalsPerRun)}}, nil
 	}
 	card, err := r.proposeFromArgs(ctx, caller, argsJSON)
 	if err != nil {
-		return err.Error(), true, nil
+		// The lane's own objection — which argument, and why — goes back to the
+		// MODEL, which is the one that can correct the call; the person gets the
+		// key (a sentence naming an argument key would be neither localized nor
+		// useful to them).
+		return err.Error(), &refusal{key: keyRefusedProposal}, nil
 	}
 	st.proposals++
 	st.cards = append(st.cards, *card)
 	// modelCard is the card as the MODEL may see it: no token, no args_hash.
 	out, _ := json.Marshal(card.withoutSecrets())
-	return string(out), false, nil
+	return string(out), nil, nil
 }
 
 // lastCard returns the most recent card a message produced, which is the

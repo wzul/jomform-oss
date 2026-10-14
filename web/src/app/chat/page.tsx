@@ -25,10 +25,13 @@
 //      /feedback. Filing must be visible at the moment it happens — the thread
 //      also appears on the Feedback page, and a user discovering it later there
 //      would be the wrong order of events.
-//   4. A REFUSED tool call is shown, not hidden. The server returns the steps it
-//      attempted; rendering them is how the user learns the assistant tried
-//      something and was not allowed, rather than experiencing it as a broken
-//      answer.
+//   4. A REFUSED tool call is shown, not hidden — and SAYS WHY, in this visitor's
+//      language. The server returns the steps it attempted; rendering them is how
+//      the user learns the assistant tried something and was not allowed, rather
+//      than experiencing it as a broken answer. The why is a machine key
+//      (`chat.refused.*`) resolved by lib/chatRefusal.ts, because the API does not
+//      know the dashboard's language and its own sentence reached every locale in
+//      one language (t_3839995c; issue #6177).
 //
 //   5. EVERY call carries the active workspace (the `?workspace=` query the
 //      shared workspaceQuery() helper builds). The chat is one of the dashboard
@@ -72,6 +75,10 @@ import {
 } from "../../lib/wsfetch";
 import { translateApiErr } from "../../lib/apiErr";
 import { confirmDecisionFor } from "../../lib/chatConfirm";
+// A REFUSED step's sentence is resolved here from the machine key the server sent
+// — never from a string on the wire (t_3839995c; see the module's header for the
+// defect and for why the server's own sentence reached every locale).
+import { refusalText } from "../../lib/chatRefusal";
 // The card's own wording is rendered through the dictionary from the KEYS the
 // server sends — never from a sentence on the wire (t_30ffa28a; see the module's
 // header for the defect and for why the assistant's `note` is the exception).
@@ -86,7 +93,17 @@ import { dropWorkspaceScopeIfCurrent, workspaceQuery } from "../../lib/workspace
 
 type Turn = { role: "user" | "assistant"; content: string };
 
-type Step = { tool: string; status: string; detail?: string };
+type Step = {
+  tool: string;
+  status: string;
+  // The KEY naming this step's detail, plus the values its sentence
+  // interpolates — for a refused step, why it was refused; for a proposed step,
+  // the card that was prepared. There is deliberately no prose field: the server
+  // does not know this visitor's language (t_3839995c / issue #6177), and
+  // lib/chatRefusal.ts is the only way this becomes text.
+  detail_key?: string;
+  detail_params?: Record<string, string>;
+};
 
 type Filed = { thread_id: string; subject: string; excerpt: string };
 
@@ -638,17 +655,25 @@ export default function ChatPage() {
               ) : null,
             )}
 
-            {/* A refusal is shown: the user should learn the assistant TRIED. */}
+            {/* A refusal is shown: the user should learn the assistant TRIED —
+                and WHY, in THIS visitor's language. The why is a machine key the
+                server sent (`chat.refused.*`), resolved through the dictionary by
+                lib/chatRefusal.ts: the API does not receive the caller's language
+                on a JSON call, so its own sentence reached every locale in Malay
+                (t_3839995c; issue #6177). */}
             {msgs.map((m, i) =>
               m.refused ? (
                 <div key={`r${i}`} className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
                   <span className="font-medium">{t("chat.refused")}</span>
-                  {m.refused.map((s) => (
-                    <span key={s.tool} className="mt-1 block opacity-80">
-                      {s.tool}
-                      {s.detail ? ` — ${s.detail}` : ""}
-                    </span>
-                  ))}
+                  {m.refused.map((s) => {
+                    const why = refusalText(s, t);
+                    return (
+                      <span key={s.tool} className="mt-1 block opacity-80">
+                        {s.tool}
+                        {why ? ` — ${why}` : ""}
+                      </span>
+                    );
+                  })}
                 </div>
               ) : null,
             )}

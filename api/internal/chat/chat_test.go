@@ -129,6 +129,18 @@ func toolCall(id, name, args string) llm.ToolCall {
 	return llm.ToolCall{ID: id, Name: name, Arguments: args}
 }
 
+// toolTurnNames reports whether the tool result the model was handed back names
+// the tool it asked for — the PROMPT half of a refusal, which is the half that
+// must keep explaining itself now that the browser half is a machine key.
+func toolTurnNames(turns []llm.ChatTurn, name string) bool {
+	for _, tr := range turns {
+		if tr.Role == "tool" && tr.Name == name && strings.Contains(tr.Content, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // TestRunAnswersWithoutTools is the trivial path: the model answers directly and
 // nothing is dispatched.
 func TestRunAnswersWithoutTools(t *testing.T) {
@@ -217,8 +229,29 @@ func TestDispatchRefusesAnInventedToolName(t *testing.T) {
 				t.Fatalf("steps = %+v, want one refused step so the UI can show the user the "+
 					"assistant tried and was not allowed", res.Steps)
 			}
-			if !strings.Contains(res.Steps[0].Detail, name) {
-				t.Fatalf("the refusal does not name the tool: %q", res.Steps[0].Detail)
+			// THE UI'S HALF: the step names the tool as an IDENTIFIER and carries a
+			// machine key for WHY. It used to carry a Malay sentence here, which the
+			// page printed verbatim on every dashboard language (card t_3839995c);
+			// the key is what the dashboard resolves instead.
+			if res.Steps[0].Tool != name {
+				t.Fatalf("the refused step does not name the tool it refused: %+v", res.Steps[0])
+			}
+			if !strings.HasPrefix(res.Steps[0].DetailKey, "chat.refused.") {
+				t.Fatalf("the refusal carries detail_key=%q, want a chat.refused.* key — a sentence "+
+					"on this field is the defect the key exists to remove (t_3839995c)",
+					res.Steps[0].DetailKey)
+			}
+			// THE MODEL'S HALF, unchanged: the refusal text still names the tool, so
+			// the model can tell the user what it tried. That text is the prompt's
+			// (it never reaches the browser), which is why it can stay in one
+			// language.
+			if len(model.prompts) < 2 {
+				t.Fatalf("the model was called %d time(s); this assertion needs the round-trip that "+
+					"carries the refusal back", len(model.prompts))
+			}
+			if !toolTurnNames(model.prompts[1], name) {
+				t.Fatalf("the tool result the model read back does not name %q — the refusal stopped "+
+					"being teachable when the sentence left the step: %v", name, model.prompts[1])
 			}
 		})
 	}

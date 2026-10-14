@@ -302,11 +302,11 @@ func proposeRename(t *testing.T, r *Runner, ctx context.Context, productID, newN
 	}
 	defer caller.close()
 	st := &runState{}
-	out, refused, err := r.dispatchIn(ctx, caller, toolCall("p1", ToolProposeWrite, args), st)
+	out, ref, err := r.dispatchIn(ctx, caller, toolCall("p1", ToolProposeWrite, args), st)
 	if err != nil {
 		t.Fatalf("dispatch propose_write: %v", err)
 	}
-	if refused {
+	if ref != nil {
 		t.Fatalf("propose_write was refused (%s) — the lane must exist for this test to mean anything", out)
 	}
 	card := st.lastCard()

@@ -56,11 +56,11 @@ func (f *acceptanceFixture) proposeFormCreation(t *testing.T, r *Runner, ctx con
 	}
 	defer caller.close()
 	st := &runState{}
-	out, refused, err := r.dispatchIn(ctx, caller, toolCall("pf", ToolProposeWrite, args), st)
+	out, ref, err := r.dispatchIn(ctx, caller, toolCall("pf", ToolProposeWrite, args), st)
 	if err != nil {
 		t.Fatalf("dispatch propose_write(upsert_form): %v", err)
 	}
-	if refused {
+	if ref != nil {
 		t.Fatalf("propose_write was REFUSED for upsert_form (%s). It must be proposable once the "+
 			"bin exists (card t_804040be): a refusal here means the capability Wan decided on is "+
 			"not reachable at all", out)
@@ -238,11 +238,11 @@ func TestChatCannotReachAPurgeEvenWhenTheModelNamesOne(t *testing.T) {
 	defer caller.close()
 	args := `{"tool":"purge_form","arguments":{"form_id":` + jsonString(id) +
 		`,"confirm_slug":` + jsonString(slug) + `},"reason":"hapus kekal"}`
-	_, refused, derr := r.dispatchIn(ctx, caller, toolCall("pp", ToolProposeWrite, args), &runState{})
+	_, ref, derr := r.dispatchIn(ctx, caller, toolCall("pp", ToolProposeWrite, args), &runState{})
 	if derr != nil {
 		t.Fatalf("dispatch propose_write(purge_form): %v", derr)
 	}
-	if !refused {
+	if ref == nil {
 		t.Fatal("the proposal lane ACCEPTED purge_form — the assistant can reach a permanent delete. " +
 			"Wan: \"Manusia sahaja boleh purge kekal\"")
 	}

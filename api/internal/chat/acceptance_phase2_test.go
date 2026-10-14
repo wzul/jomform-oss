@@ -102,11 +102,11 @@ func (f *acceptanceFixture) proposeUpdateProduct(t *testing.T, r *Runner, ctx co
 	}
 	defer caller.close()
 	st := &runState{}
-	out, refused, err := r.dispatchIn(ctx, caller, toolCall("p1", ToolProposeWrite, args), st)
+	out, ref, err := r.dispatchIn(ctx, caller, toolCall("p1", ToolProposeWrite, args), st)
 	if err != nil {
 		t.Fatalf("dispatch propose_write: %v", err)
 	}
-	if refused {
+	if ref != nil {
 		t.Fatalf("propose_write was refused (%s) — the proposal lane must exist for the tests "+
 			"below to mean anything", out)
 	}
@@ -274,11 +274,11 @@ func TestChatModelCannotExecuteAWriteEvenWithConfirmInTheArguments(t *testing.T)
 
 	// ── PART 1 — layer 1, the dispatch allowlist. ──
 	for _, a := range attempts {
-		out, refused, derr := r.dispatchIn(ctx, caller, toolCall("w", a.tool, a.args), &runState{})
+		out, ref, derr := r.dispatchIn(ctx, caller, toolCall("w", a.tool, a.args), &runState{})
 		if derr != nil {
 			t.Fatalf("dispatch %s (%s): %v", a.tool, a.shape, derr)
 		}
-		if !refused {
+		if ref == nil {
 			t.Errorf("PHASE 2 WRITE LEAK [%s]: the model performed %s via %s. Result: %s\n"+
 				"A model that calls a write tool directly must be REFUSED — a `confirm` boolean it "+
 				"wrote itself is not a human's confirmation.", a.shape, a.what, a.tool, out)
@@ -644,11 +644,11 @@ func TestChatProposeWriteRefusesTheDestructiveClasses(t *testing.T) {
 
 	for _, tool := range []string{"delete_form", "refund_sale", "archive_product", "cancel_subscription", "create_api_key", "publish_form"} {
 		args := `{"tool":` + jsonString(tool) + `,"arguments":{"form_id":` + jsonString(f.formID) + `}}`
-		out, refused, derr := r.proposeWrite(ctx, caller, args, &runState{})
+		out, ref, derr := r.proposeWrite(ctx, caller, args, &runState{})
 		if derr != nil {
 			t.Fatalf("proposeWrite(%s): %v", tool, derr)
 		}
-		if !refused {
+		if ref == nil {
 			t.Errorf("propose_write ACCEPTED %s (%s) — the destructive classes are not proposable in "+
 				"phase 2 and must be refused, not carded", tool, out)
 		}
@@ -684,11 +684,11 @@ func TestChatProposalBudgetIsPerMessage(t *testing.T) {
 	for i := 0; i <= MaxProposalsPerRun; i++ {
 		args := `{"tool":"update_product","arguments":{"product_id":` + jsonString(f.productID) +
 			`,"name":"Nama ` + string(rune('a'+i)) + `"}}`
-		out, refused, derr := r.proposeWrite(ctx, caller, args, st)
+		out, ref, derr := r.proposeWrite(ctx, caller, args, st)
 		if derr != nil {
 			t.Fatalf("proposeWrite: %v", derr)
 		}
-		if !refused {
+		if ref == nil {
 			accepted++
 			continue
 		}
@@ -700,11 +700,11 @@ func TestChatProposalBudgetIsPerMessage(t *testing.T) {
 		t.Fatalf("accepted %d proposals in one message, want exactly %d", accepted, MaxProposalsPerRun)
 	}
 	// A fresh message gets a fresh budget — the state is per-message, not global.
-	if _, refused, err := r.proposeWrite(f.proposalCtx(), caller,
+	if _, ref, err := r.proposeWrite(f.proposalCtx(), caller,
 		`{"tool":"update_product","arguments":{"product_id":`+jsonString(f.productID)+`,"name":"Selepas itu"}}`,
-		&runState{}); err != nil || refused {
+		&runState{}); err != nil || ref != nil {
 		t.Fatalf("a NEW message's first proposal was refused (err=%v refused=%v) — the budget leaked "+
-			"across messages", err, refused)
+			"across messages", err, ref != nil)
 	}
 }
 

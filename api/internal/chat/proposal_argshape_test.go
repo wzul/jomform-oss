@@ -75,19 +75,24 @@ func TestChatProposeWriteRefusesAnObjectKeyTheToolDoesNotAccept(t *testing.T) {
 	// satisfy the assertion below while proving nothing about the key.
 	good := `{"tool":"update_product","arguments":{"product_id":` + jsonString(f.productID) +
 		`,"name":"Good Shape"},"reason":"menukar nama produk"}`
-	if out, refused, derr := r.proposeWrite(ctx, caller, good, &runState{}); derr != nil || refused {
+	if out, ref, derr := r.proposeWrite(ctx, caller, good, &runState{}); derr != nil || ref != nil {
 		t.Fatalf("the CORRECTLY keyed proposal was refused (err=%v refused=%v out=%s) — the refusal "+
-			"below would then say nothing about the key", derr, refused, out)
+			"below would then say nothing about the key", derr, ref != nil, out)
 	}
 
-	out, refused, derr := r.proposeWrite(ctx, caller, args, &runState{})
+	out, ref, derr := r.proposeWrite(ctx, caller, args, &runState{})
 	if derr != nil {
 		t.Fatalf("proposeWrite(mis-keyed): %v", derr)
 	}
-	if !refused {
+	if ref == nil {
 		t.Fatalf("propose_write ACCEPTED an argument set the target tool would never accept (%s). "+
 			"The card it produced names NO product, so the user is asked to confirm a change that "+
 			"cannot be carried out — and Confirm then spends the token refusing it.", out)
+	}
+	// THE UI'S HALF: the step's key, not a sentence. The page resolves it in the
+	// visitor's language (card t_3839995c) — the server cannot.
+	if ref.key != keyRefusedProposal {
+		t.Errorf("the refused proposal carries %q, want %q", ref.key, keyRefusedProposal)
 	}
 	// The refusal must be usable BY THE MODEL: it is the only party that can fix a
 	// mis-keyed object, so the message has to say which tool and what the schema
