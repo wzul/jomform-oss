@@ -194,6 +194,74 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* use case showcase — recurring class / tuition fees (card t_345b0c87).
+          Every bullet is a behaviour that exists today, and this is the mapping:
+            * "registration form: student, subject / level, session date & time"
+              — the `tpl-tuition` template (Education) ships exactly those blocks
+              (api/internal/db/migrations/000027_template_library.up.sql:47), and
+              the builder's `date`/`time` blocks paint a date/time input
+              (web/src/app/builder/page.tsx:137, rendered by
+              api/internal/httpapi/render_blocks.go dateInputType).
+            * "one-off registration fee, receipt emailed on payment" — a
+              `one_time` product pays on submit and the buyer receipt is sent for
+              it: sendReceiptAsync runs for every sale that is NOT a subscription
+              (api/internal/payments/purchases.go:229).
+            * "monthly class fee auto-charged to the saved card" — a product with
+              type=subscription + billing_period month (api/internal/dbstore/product.go:26)
+              saves the card at checkout (ForceRecurring for SaleTypeSubscription,
+              purchases.go:113) and the hourly due-charge sweep charges that token,
+              with the 3-attempt/24h retry ladder and cancel at day 7
+              (api/internal/payments/recurring.go).
+            * "subscriptions managed from the dashboard or MCP" — the
+              /subscriptions page and the list_subscriptions / cancel_subscription /
+              retry_subscription / update_subscription_card MCP tools
+              (api/internal/mcpsrv/tools.go:122-134).
+          Deliberately NOT written, because the code has no such feature: class
+          slots with remaining seats, a real-time calendar, attendance, or tiered
+          membership. The receipt is claimed for the one-off fee only — a recurring
+          charge sends no buyer receipt (purchases.go, `cur.SaleType !=
+          dbstore.SaleTypeSubscription`). The seat cap in the body is the existing
+          entry limit (forms.entry_limit, api/internal/httpapi/restrictions.go:41). */}
+      <section className="mx-auto max-w-4xl border-t border-slate-100 px-6 py-16">
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-gradient-to-br from-sky-50 via-white to-white p-8">
+          <div className="flex flex-col items-center gap-6 sm:flex-row sm:items-start">
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-sky-100 text-4xl">
+              🎓
+            </div>
+            <div className="text-center sm:text-left">
+              <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">
+                {t("land.tuitiontitle")}
+              </h2>
+              <p className="mt-3 max-w-xl text-sm leading-relaxed text-slate-600">
+                {t("land.tuitionbody")}
+              </p>
+              <ul className="mt-5 grid grid-cols-1 gap-2 text-sm text-slate-600 sm:grid-cols-2">
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.tuition1")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.tuition2")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.tuition3")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.tuition4")}
+                </li>
+              </ul>
+              <div className="mt-6 flex flex-wrap items-center justify-center gap-3 sm:justify-start">
+                <a
+                  href="/builder"
+                  className="rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                >
+                  {t("land.tuitioncta")}
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* use case showcase — Canva→Claude→MCP customization (issue #441) */}
       <section className="mx-auto max-w-4xl border-t border-slate-100 px-6 py-16">
         <div className="mt-6 rounded-2xl border border-slate-200 bg-gradient-to-br from-violet-50 via-white to-white p-8">
