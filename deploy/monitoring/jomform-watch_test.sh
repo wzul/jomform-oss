@@ -31,6 +31,15 @@ command -v sqlite3 >/dev/null 2>&1 || {
   echo "      (a suite that cannot build its fixture must not report ok)" >&2
   exit 1
 }
+# Same rule for curl. The real-transport group further down hands every
+# non-Telegram URL to the REAL curl by absolute path, and the probes themselves
+# are real curl calls — without it that group could not run and would have to be
+# skipped, which is the one thing a suite must not silently do here.
+command -v curl >/dev/null 2>&1 || {
+  echo "FAIL: curl not found — the watchdog's real transport cannot be exercised" >&2
+  exit 1
+}
+REAL_CURL="$(command -v curl)"
 
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
@@ -206,11 +215,15 @@ IMPORT_ERR="pid 123 exited with code 1 Worker's last output: \"python3: Error wh
 CRASH_ERR="pid 124 exited with code 1"
 
 STATE="$SB/state"; LOG="$SB/watch.log"
-write_config() { # token ("" = a config file that names no bot)
+write_config() { # token ("" = a config file that names no bot) [chat list]
   {
     printf '# test config\n'
     printf 'JF_WATCH_TELEGRAM_TOKEN=%s\n' "$1"
-    printf 'JF_WATCH_TELEGRAM_CHAT=2103883\n'
+    # The chat list is a second argument because the real-transport group's
+    # fan-out leg needs TWO chats, and the config FILE is what the watchdog
+    # reads: the script sources it after the environment, so it wins over an
+    # env assignment and an env-only override would be silently ignored.
+    printf 'JF_WATCH_TELEGRAM_CHAT=%s\n' "${2:-2103883}"
   } >"$SB/env"
   chmod 600 "$SB/env"
 }
@@ -750,6 +763,259 @@ out=$(env -i PATH="$PATH" HOME="$HOME" \
   JF_WATCH_KANBAN_DB=auto JF_WATCH_KANBAN_DB_CANDIDATES=/nonexistent/a.db \
   JF_WATCH_ATTEMPT_DELAY=0 bash "$WATCH"); rc=$?
 check "env-only config runs" "$rc" "0"
+
+echo "--- the REAL Telegram transport (no JF_WATCH_NOTIFY_CMD) ---"
+
+# WHY THIS GROUP EXISTS (card t_2418aba0). Every other assertion in this file
+# runs the watchdog with JF_WATCH_NOTIFY_CMD set, and send_message() RETURNS at
+# that override:
+#
+#     if [ -n "$NOTIFY_CMD_OVERRIDE" ]; then printf '%s' "$body" | bash -c "$NOTIFY_CMD_OVERRIDE"; return $?; fi
+#
+# So everything after it — the Telegram POST, the `"ok":true` read, the
+# message_id extraction, the per-chat loop, and the `ok=0 -> rc=1 -> exit 3`
+# branch send_alert takes when nothing was delivered — was DEAD as far as this
+# suite was concerned. A regression in any of them (including the SIGPIPE shape
+# PR 864 fixed at that very `grep`) stayed invisible to the gate.
+#
+# The seam here is PATH, not an env override: a shimmed `curl` answers ONLY the
+# Telegram sendMessage POST from a canned reply and hands every other URL to the
+# real curl, so the probes under test stay the real ones.
+TG_CALLS="$SB/tg_calls"; TG_BODY="$SB/tg_body"; TG_RC="$SB/tg_rc"
+mkdir -p "$SB/fakebin_tg"
+cat >"$SB/fakebin_tg/curl" <<'EOF'
+#!/usr/bin/env bash
+# PATH-shadowed curl for the real-transport legs. It answers only the Telegram
+# sendMessage POST: the reply comes from $TG_BODY (or $TG_BODY.<chat_id>, which
+# is how a leg makes one chat of a fan-out refuse) and the exit status from
+# $TG_RC. Every other URL — the probes — goes to the real curl, by absolute path.
+tg=0; chat=""
+for a in "$@"; do
+  case "$a" in
+    *api.telegram.org*) tg=1 ;;
+    chat_id=*)          chat="${a#chat_id=}" ;;
+  esac
+done
+if [ "$tg" = 1 ]; then
+  # ONE line per POST (the argv carries the multi-line alert text, so newlines
+  # are folded) — so `grep -c '^'` on this file is a POST count, and the chat is
+  # the first field.
+  printf '%s\n' "${chat:-?}|$(printf '%s' "$*" | tr '\n' ' ')" >>"$TG_CALLS"
+  body="$TG_BODY"
+  [ -n "$chat" ] && [ -f "$TG_BODY.$chat" ] && body="$TG_BODY.$chat"
+  rc=0
+  [ -f "$TG_RC" ] && rc="$(cat "$TG_RC")"
+  [ "$rc" = 0 ] || exit "$rc"
+  [ -f "$body" ] && cat "$body"
+  exit 0
+fi
+exec "$REAL_CURL" "$@"
+EOF
+chmod +x "$SB/fakebin_tg/curl"
+
+# Runs the watchdog on the REAL notify transport: no JF_WATCH_NOTIFY_CMD, the
+# token + chat come from the config file, and `curl` is the shim above.
+run_real_notify() { # script [extra env assignments...]
+  local script="$1"; shift
+  env -i PATH="$SB/fakebin_tg:$PATH" HOME="$HOME" \
+    JF_WATCH_ENV_FILE="$SB/env" \
+    JF_WATCH_STATE_DIR="$STATE" \
+    JF_WATCH_LOG_FILE="$LOG" \
+    JF_WATCH_WEB_URL="$BASE/web" \
+    JF_WATCH_HEALTH_URL="$BASE/healthz" \
+    JF_WATCH_NOTIFY_CMD= \
+    JF_WATCH_READY_CMD="$READY_OK" \
+    JF_WATCH_DF_CMD="$DF_OK" \
+    JF_WATCH_KANBAN_DB=auto \
+    JF_WATCH_KANBAN_DB_CANDIDATES=/nonexistent/a.db \
+    JF_WATCH_ATTEMPT_DELAY=0 JF_WATCH_TIMEOUT=5 \
+    TG_BODY="$TG_BODY" TG_RC="$TG_RC" TG_CALLS="$TG_CALLS" REAL_CURL="$REAL_CURL" \
+    "$@" bash "$script"
+}
+
+tg_reset() { # reply_body reply_rc — the canned answer for the next POST(s)
+  rm -f "$TG_BODY" "$TG_RC" "$TG_CALLS"
+  rm -f "$TG_BODY".*
+  if [ -n "$1" ]; then printf '%s' "$1" >"$TG_BODY"; fi
+  printf '%s' "$2" >"$TG_RC"
+  : >"$TG_CALLS"
+}
+
+# Each leg drives one shape of the transport through $1 (the shipped watchdog, or
+# a mutant of it in the controls below) and asserts on the log it wrote. They are
+# functions because the controls re-run them against a mutant.
+
+# (a) DELIVERED: the API's `"ok":true` is read, notify_sent is logged WITH the
+#     extracted message_id, exactly one POST goes to the configured bot, and the
+#     run reports the detected failure as exit 1 (detected AND delivered) — not
+#     the exit 3 that means "could not tell anyone".
+leg_delivered() {
+  reset; printf 'web_down' >"$SB/mode"
+  tg_reset '{"ok":true,"result":{"message_id":4211,"chat":{"id":2103883},"date":1790000000}}' 0
+  out=$(run_real_notify "$1"); rc=$?
+  check "real transport: a delivered alert exits 1 (detected AND delivered, not 3)" "$rc" "1"
+  contains "real transport: the delivery is logged as notify_sent for the configured chat" \
+    "$(cat "$LOG")" "notify_sent chat=2103883"
+  contains "real transport: and the message_id was extracted from the API's reply" \
+    "$(cat "$LOG")" "message_id=4211"
+  notcontains "real transport: a delivered alert is NOT also reported as notify_failed" \
+    "$(cat "$LOG")" "notify_failed"
+  check "real transport: exactly one POST was made" "$(grep -c '^' "$TG_CALLS")" "1"
+  contains "real transport: the POST went to the configured bot's sendMessage endpoint" \
+    "$(cat "$TG_CALLS")" "https://api.telegram.org/botdummy/sendMessage"
+  contains "real transport: and carried the configured chat_id" \
+    "$(cat "$TG_CALLS")" "chat_id=2103883"
+}
+
+# (b) REFUSED: the API answered, and said `"ok":false`. That is not a delivery —
+#     it must read notify_failed, carry the API's own description, and take the
+#     run to exit 3 so an undelivered alert is an incident of its own.
+leg_refused() {
+  reset; printf 'web_down' >"$SB/mode"
+  tg_reset '{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}' 0
+  out=$(run_real_notify "$1"); rc=$?
+  check "real transport: an ok:false reply exits 3 (detected, NOT delivered)" "$rc" "3"
+  contains "real transport: the refused POST is logged as notify_failed" \
+    "$(cat "$LOG")" "notify_failed chat=2103883"
+  contains "real transport: and the API's own description is carried into the log" \
+    "$(cat "$LOG")" "chat not found"
+  contains "real transport: the run names the alert as undeliverable" \
+    "$(cat "$LOG")" "alert_undeliverable"
+  notcontains "real transport: an ok:false reply is never logged as sent" \
+    "$(cat "$LOG")" "notify_sent"
+}
+
+# (c) NO TRANSPORT AT ALL: curl never delivers (no reply, non-zero status). Same
+#     verdict as (b) by a different route — this is the branch that must not be
+#     reachable only through a canned override.
+leg_dead_transport() {
+  reset; printf 'web_down' >"$SB/mode"
+  tg_reset '' 7
+  out=$(run_real_notify "$1"); rc=$?
+  check "real transport: a curl that cannot reach the API exits 3" "$rc" "3"
+  contains "real transport: the dead transport is logged as notify_failed" \
+    "$(cat "$LOG")" "notify_failed chat=2103883"
+  contains "real transport: and the run names the alert as undeliverable" \
+    "$(cat "$LOG")" "alert_undeliverable"
+}
+
+# (d) FAN-OUT: two chats, the first answering ok and the second refusing. The loop
+#     must POST BOTH, report each one's own outcome, and fail the run — a loop
+#     that stopped at the first chat (the control below) would look green here.
+leg_multi_chat() {
+  reset; write_config dummy "111,222"; printf 'web_down' >"$SB/mode"
+  tg_reset '{"ok":true,"result":{"message_id":4211}}' 0
+  printf '%s' '{"ok":false,"description":"Bad Request: chat not found"}' >"$TG_BODY.222"
+  out=$(run_real_notify "$1"); rc=$?
+  check "real transport: a two-chat fan-out with one refusal exits 3" "$rc" "3"
+  check "real transport: BOTH chats were POSTed (the loop does not stop at the first)" \
+    "$(grep -c '^' "$TG_CALLS")" "2"
+  contains "real transport: the first chat is logged as sent" "$(cat "$LOG")" "notify_sent chat=111"
+  contains "real transport: the second chat is logged as failed" "$(cat "$LOG")" "notify_failed chat=222"
+  contains "real transport: and the refusing chat's own reply is what the log carries" \
+    "$(cat "$LOG")" "chat not found"
+}
+
+# (e) The multi-line reply, 20 001 lines with `"ok":true` on line 1. Its size is
+#     asserted because the control below is only valid on THIS shape: the pre-fix
+#     pipe form's false-fail is NOT monotonic in size (measured on this host with
+#     the ok flag always present: 132 B 0/10, 5 181 B 1/10, 25 581 B 0/10,
+#     102 081 B 9/10, and this shape 50/50) — it depends on line boundaries.
+tg_big_reply() {
+  printf '%s\n' '{"ok":true,"result":{"message_id":4211,"chat":{"id":2103883},"date":1790000000}}' >"$SB/tg_big"
+  awk 'BEGIN{for(i=0;i<20000;i++) printf "{\"pad\":\"%040d\"}\n", i}' >>"$SB/tg_big"
+}
+leg_multiline_delivery() {
+  reset; printf 'web_down' >"$SB/mode"
+  tg_reset '' 0
+  cp "$SB/tg_big" "$TG_BODY"
+  out=$(run_real_notify "$1"); rc=$?
+  check "the real path delivers on the 20 001-line reply (ok:true on line 1)" "$rc" "1"
+  contains "…and logs notify_sent rather than a false failure" \
+    "$(cat "$LOG")" "notify_sent chat=2103883"
+  notcontains "…with no notify_failed anywhere in the run" "$(cat "$LOG")" "notify_failed"
+}
+
+tg_big_reply
+check "fixture: the multi-line reply is the measured shape (20 001 lines / 1 020 081 bytes)" \
+  "$(wc -l <"$SB/tg_big")/$(wc -c <"$SB/tg_big")" "20001/1020081"
+
+leg_delivered "$WATCH"
+leg_refused "$WATCH"
+leg_dead_transport "$WATCH"
+leg_multi_chat "$WATCH"
+
+# ── the bite proofs ─────────────────────────────────────────────────────────
+# The group above is evidence only if it goes RED when the transport regresses.
+# So each control drives a MUTATED copy of the watchdog through the SAME leg and
+# asserts the leg's verdict flips. The mutations are the real pre-fix shapes, not
+# arbitrary breakage:
+#   M1  the `"ok":true` read restored to `printf '%s' "$resp" | grep -q …` — the
+#       form PR 864 replaced. On the reply above, `grep -q` exits at line 1 while
+#       the writer still has ~10^6 bytes queued, the writer takes SIGPIPE (141),
+#       and under the watchdog's own `set -uo pipefail` that status wins the
+#       pipeline although grep MATCHED — so a DELIVERED alert reads
+#       `notify_failed` and the run exits 3. (Measured here 50/50; the pipeline's
+#       own status on this host: pipe form 141, herestring 0.)
+#   M2  the multi-chat loop degraded to the first chat only.
+cat >"$SB/mutate.py" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:5]
+s = open(src).read()
+n = s.count(old)
+if n != 1:
+    sys.stderr.write("mutation matched %d sites, want exactly 1\n" % n)
+    sys.exit(1)
+open(dst, "w").write(s.replace(old, new))
+PY
+mutant() { # name old new -> prints the mutant's path (nothing if it did not apply)
+  mkdir -p "$SB/mutants"
+  if python3 "$SB/mutate.py" "$WATCH" "$SB/mutants/$1.sh" "$2" "$3"; then
+    printf '%s' "$SB/mutants/$1.sh"
+  fi
+}
+# The shipped read, the form it replaced, and the loop — verbatim from the watchdog.
+HERE_READ="      && grep -q '\"ok\":true' <<<\"\$resp\"; then"
+PIPE_READ="      && printf '%s' \"\$resp\" | grep -q '\"ok\":true'; then"
+LOOP_ALL="  for chat in \"\${_chats[@]}\"; do"
+LOOP_ONE="  for chat in \"\${_chats[@]:0:1}\"; do"
+
+MUT_PIPE="$(mutant pipe "$HERE_READ" "$PIPE_READ")"
+MUT_LOOP="$(mutant loop "$LOOP_ALL" "$LOOP_ONE")"
+check "control: both mutants were built (each pre-fix line found exactly once)" \
+  "$([ -n "$MUT_PIPE" ] && [ -n "$MUT_LOOP" ] && echo built || echo MISSING)" "built"
+contains "control: the pipe-form mutant carries the pre-fix pipeline read" \
+  "$(cat "$MUT_PIPE" 2>/dev/null)" "$PIPE_READ"
+contains "control: the loop mutant stops after the first chat" \
+  "$(cat "$MUT_LOOP" 2>/dev/null)" "$LOOP_ONE"
+
+# M1, both directions on the same leg: green on the shipped file, red on the
+# mutant. One direction alone would pass on a leg that asserts nothing at all.
+PASS_BEFORE=$PASS; FAIL_BEFORE=$FAIL
+leg_multiline_delivery "$WATCH" >/dev/null 2>&1
+GOT="$((PASS - PASS_BEFORE))/$((FAIL - FAIL_BEFORE))"
+PASS=$PASS_BEFORE; FAIL=$FAIL_BEFORE
+check "control: the shipped herestring form is green on the multi-line reply (3/3)" "$GOT" "3/0"
+
+PASS_BEFORE=$PASS; FAIL_BEFORE=$FAIL
+leg_multiline_delivery "$MUT_PIPE" >/dev/null 2>&1
+GOT="$((PASS - PASS_BEFORE))/$((FAIL - FAIL_BEFORE))"
+PASS=$PASS_BEFORE; FAIL=$FAIL_BEFORE
+check "control: …and the pre-fix pipe form turns the SAME leg red (no false green)" "$GOT" "0/3"
+
+# M2, both directions on the fan-out leg.
+PASS_BEFORE=$PASS; FAIL_BEFORE=$FAIL
+leg_multi_chat "$WATCH" >/dev/null 2>&1
+GOT="$((PASS - PASS_BEFORE))/$((FAIL - FAIL_BEFORE))"
+PASS=$PASS_BEFORE; FAIL=$FAIL_BEFORE
+check "control: the fan-out leg is green on the shipped file (5/5)" "$GOT" "5/0"
+
+PASS_BEFORE=$PASS; FAIL_BEFORE=$FAIL
+leg_multi_chat "$MUT_LOOP" >/dev/null 2>&1
+GOT="$((PASS - PASS_BEFORE))/$((FAIL - FAIL_BEFORE))"
+PASS=$PASS_BEFORE; FAIL=$FAIL_BEFORE
+check "control: …and a loop that stops at the first chat turns it red (the second chat is never POSTed)" \
+  "$GOT" "1/4"
 
 echo "--- heartbeat digest ---"
 
