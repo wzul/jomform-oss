@@ -1096,8 +1096,12 @@ test("the categories in the docs sidebar match the categories on the page", () =
 // group. A per-row sweep is also the wider net — it catches the same class at a
 // group boundary this card never measured (a two-row group's second row, a
 // hand-edited one-row group elsewhere) — and it needs no premise about the
-// layout's formatting, which a hand-written "a single-section group is on one
-// line" assertion would have to guard or cry wolf on a harmless reformat.
+// layout's FORMATTING: the expectation is derived from the same structural fact
+// parseSidebar keys on (`label: "…"` followed by `sections: [`), with any
+// whitespace between the two, so it cannot cry wolf on a reformat the way a
+// hand-written "a single-section group is on one line" assertion would. What it
+// does assume is that a group is still spelled that way, and that assumption is
+// asserted below rather than trusted (t_8e94f213).
 //
 // The expectation is derived independently of the text parse: for each group,
 // the rows are exactly its declared `[start, end)` byte range in the source.
@@ -1144,22 +1148,22 @@ test("a broken sidebar row is reported under the group it is really declared in"
   }
 
   // The expected attribution, derived from the source's own GROUP DECLARATIONS —
-  // a `label: "…"` immediately followed by `sections: [` — and the byte range
-  // each one owns, NOT from the parse under test. The one-line
-  // `sections: [{ … }]` form this card is about sits inside its group's block
-  // either way, so this expectation is identical for a one-line group and a
-  // multi-line one: it states where a row is DECLARED, which is the question.
+  // a `label: "…"` followed by `sections: [` — and the byte range each one owns,
+  // NOT from the parse under test. The separator is `\s*`, NOT a literal
+  // newline: `label: "Email", sections: [` on one line is a one-keystroke edit,
+  // and the whole group on one line is the shape this pin was written for
+  // (t_d722f70c), so a newline here drops that group from the derivation
+  // entirely — its rows then fall into the PREVIOUS declaration's `[from, to)`
+  // range, which keeps the row set and the order, and the run blames the group
+  // above while the parse is right (t_8e94f213, measured against the shipped
+  // parse). It states where a row is DECLARED, which is the question, and it
+  // does so identically for a one-line group and a multi-line one.
   //
   // (`label:` is shared by groups and by sections, so "the last label before the
   // row" would pick a section's own text; a group's label is the one that
   // `sections:` follows.)
   const region = stripUnrendered(navRegion);
-  const decls = [...region.matchAll(/label:[ \t]*"([^"]+)",[ \t]*\n[ \t]*sections:[ \t]*\[/g)];
-  assert.ok(
-    decls.length >= 6,
-    `found only ${decls.length} group declarations in ${DOCS_LAYOUT} — the nav shape moved, so ` +
-      `re-derive this pin's expectation before trusting a verdict`,
-  );
+  const decls = [...region.matchAll(/label:[ \t]*"([^"]+)",\s*sections:[ \t]*\[/g)];
   const expected: string[] = [];
   const declaredUnder = new Map<string, string>();
   decls.forEach((d, i) => {
@@ -1177,10 +1181,43 @@ test("a broken sidebar row is reported under the group it is really declared in"
   assert.ok(sStart !== -1, `${DOCS_LAYOUT} no longer declares NAV_SECTIONS — the nav shape moved`);
   const sEnd = nav.indexOf("\n];", sStart);
   assert.ok(sEnd !== -1, `could not find the end of NAV_SECTIONS in ${DOCS_LAYOUT}`);
-  for (const h of stripUnrendered(nav.slice(sStart, sEnd)).matchAll(/href:\s*"([^"]+)"/g)) {
-    expected.push(h[1]);
-    declaredUnder.set(h[1], "Guides");
+  const navSectionHrefs = [
+    ...stripUnrendered(nav.slice(sStart, sEnd)).matchAll(/href:\s*"([^"]+)"/g),
+  ].map((h) => h[1]);
+  for (const href of navSectionHrefs) {
+    expected.push(href);
+    declaredUnder.set(href, "Guides");
   }
+
+  // Vacuity, EXACTLY — and this is the assertion the t_8e94f213 defect needed.
+  // The floor that used to sit here (`decls.length >= 6`) is a floor on the
+  // COUNT: the layout declares 8 groups in NAV_GROUPS, so 6 satisfies it and a
+  // group that drops out of `decls` is invisible. Neither is the
+  // `expected`/`hrefs` order check below a substitute — a dropped group keeps
+  // the row SET and the source ORDER, so it stays green while every row in that
+  // group is measured against the group above it. So compare the GROUPS the
+  // parse actually carried (minus the NAV_SECTIONS rows, which this derivation
+  // attributes to "Guides" explicitly) with the groups this derivation found. A
+  // group missing here is this pin's OWN premise breaking, so it has to fail as
+  // such — BEFORE the heading comparison below reads a wrong heading out of it
+  // and blames the group above, which is the one thing this pin exists to
+  // prevent. The other direction (a declaration the parse does not carry) is the
+  // parse's regression, and the row-level comparison below is what names it, so
+  // that one is checked last.
+  const navSectionSet = new Set(navSectionHrefs);
+  const parsedGroups = new Set(
+    rows.filter((r) => !navSectionSet.has(r.href)).map((r) => r.group),
+  );
+  const undeclared = [...parsedGroups].filter((g) => !decls.some((d) => d[1] === g));
+  assert.deepEqual(
+    undeclared,
+    [],
+    `the parse carried rows under ${undeclared.length} group(s) that this pin's own ` +
+      `group-declaration scan did not find in ${DOCS_LAYOUT}: ${undeclared.join(", ")}. Every ` +
+      `row in such a group would be measured against the declaration BEFORE it, and the failure ` +
+      `message under test would then name the wrong heading — re-derive this expectation before ` +
+      `trusting a verdict`,
+  );
   assert.deepEqual(
     expected,
     hrefs,
@@ -1201,6 +1238,19 @@ test("a broken sidebar row is reported under the group it is really declared in"
     [],
     `the docs sidebar failure message names the wrong group for these rows (a reader is sent to ` +
       `a heading that does not contain the row):\n  ${wrong.join("\n  ")}`,
+  );
+  // …and the same disagreement in the OTHER direction: a declaration this
+  // derivation found that the parse carried no rows under (a repeated group
+  // label, or a group whose `sections` array is empty). Asserted after the
+  // row-level comparison, so a PARSE regression is still reported as the rows it
+  // misattributes rather than as a count.
+  assert.equal(
+    decls.length,
+    parsedGroups.size,
+    `this pin's group-declaration scan found ${decls.length} declarations in ${DOCS_LAYOUT} but ` +
+      `the parse carried rows under ${parsedGroups.size} of them — the derivation above and ` +
+      `parseSidebar disagree about the nav's shape (a repeated group label, or an empty ` +
+      `\`sections\`); re-derive this expectation against parseSidebar before trusting a verdict`,
   );
   // Vacuity: every row really was mutated and every reported heading was read.
   assert.equal(reported.size, hrefs.length);
