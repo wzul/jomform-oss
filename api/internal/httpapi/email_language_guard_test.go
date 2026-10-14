@@ -87,15 +87,24 @@ const (
 	minJobLiterals   = 8   // the repo builds 11 email-carrying Job literals
 	minScannedFiles  = 100 // the api module has well over 200 non-test .go files
 	minResolvedSites = 10  // email content sites that DO resolve through the dictionary
-	// minSenderSites is the same idea for the render half: the repo sends through
-	// 9 sites reached through an `…Sender` field and 9 through a `…Mailer` field
-	// (plus the sender's own two internal delegations, which the type-based
-	// matcher also sees). A matcher that recognised only one family would still
-	// pass the no-empty-language check on the other by never looking at it, so
-	// the count of sites it DID match is asserted.
-	// 18 is the current truth, kept as a floor: adding an email raises it, and a
-	// matcher that loses a family fails instead of going quiet.
-	minSenderSites = 18
+	// minSenderSites is the same idea for the render half: the repo sends
+	// through 18 sites reached through a named field (`…Sender`, `…Mailer`,
+	// `…VerifyMailer`, `…AuthMailer`) plus a receiver reached through a LOCAL
+	// or a package-level variable, and 2 whose receiver is a bare identifier —
+	// the sender's own internal delegations, `s.SendReceipt(…)` and
+	// `s.SendReceiptWithAttachment(…)` in internal/email/ses.go, where the
+	// receiver is the method receiver and carries no field name at all.
+	// 20 is the current truth, kept as a floor: adding an email raises it, and a
+	// matcher that loses part of its subject fails instead of going quiet.
+	//
+	// The 2 identifier-reached sites are load-bearing, and the floor has to
+	// include them. The matcher this file replaced keyed on the FIELD NAME, so
+	// it recognised exactly the 18 field-reached ones — which is what this floor
+	// used to be, and a reversion to that matcher therefore scored 18 against a
+	// floor of 18 and passed GREEN, certifying two sites it never looked at. A
+	// floor is only a floor if it is the whole count the matcher recognises
+	// today, not the count the narrowest matcher it replaced produced.
+	minSenderSites = 20
 )
 
 // resolution is how an expression's value was produced.
@@ -119,6 +128,15 @@ type site struct {
 	field string
 	value string
 	note  string
+}
+
+// senderSite is one recognised email send: the file it is written in (module
+// relative) and the send method it calls. It exists so a particular site can be
+// pinned BY NAME rather than only through the count — a line number would rot on
+// any edit above it — and so a floor failure can say what WAS seen.
+type senderSite struct {
+	file   string
+	method string
 }
 
 // funcInfo is one function's contribution to the analysis.
@@ -152,7 +170,10 @@ type callSite struct {
 
 // analyzer holds the whole-module view.
 type analyzer struct {
-	fset        *token.FileSet
+	fset *token.FileSet
+	// root is the api module root, so a finding can name a file the way a
+	// reader sees it in the repo.
+	root        string
 	inDictFile  map[string]bool
 	funcsByName map[string][]*funcInfo
 	allFuncs    []*funcInfo
@@ -186,6 +207,12 @@ type analyzer struct {
 	// matcher that stops recognising a family reports nothing instead of
 	// reporting a problem, so the count is floored in the test.
 	senderSites int
+	// senderSiteList is WHICH sends it recognised, as (module-relative file,
+	// method). A count cannot tell "the receiver-reached sites were lost" from
+	// "one was lost and a field-reached one was gained elsewhere", and it is the
+	// first that has to fail — so the two sites the field-name-keyed matcher
+	// could not see at all are asserted by name in the test as well.
+	senderSiteList []senderSite
 }
 
 // isDictionaryFile reports whether a file belongs to the dictionary package, the
@@ -210,6 +237,7 @@ func newAnalyzer(t *testing.T) *analyzer {
 
 	a := &analyzer{
 		fset:           token.NewFileSet(),
+		root:           root,
 		inDictFile:     map[string]bool{},
 		funcsByName:    map[string][]*funcInfo{},
 		resolvedParams: map[string]resolvedValue{},
@@ -364,6 +392,7 @@ func (a *analyzer) walk() {
 			case *ast.CallExpr:
 				if name, ok := a.senderSendCall(fi, node); ok {
 					a.senderSites++
+					a.recordSenderSite(fi, node)
 					if !passesLang(node) {
 						a.senderCallsWithoutLang = append(a.senderCallsWithoutLang, site{
 							pos: a.fset.Position(node.Pos()).String(), field: name,
@@ -1159,6 +1188,43 @@ func (a *analyzer) callProducesMailer(pf *parsedFile, call *ast.CallExpr) bool {
 	return false
 }
 
+// recordSenderSite notes WHICH send was recognised — its file and the method it
+// calls — so a failure can say what the matcher did see and a test can pin a
+// particular site by name.
+func (a *analyzer) recordSenderSite(fi *funcInfo, call *ast.CallExpr) {
+	method := ""
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		method = sel.Sel.Name
+	}
+	a.senderSiteList = append(a.senderSiteList, senderSite{
+		file:   a.moduleRelative(fi.file),
+		method: method,
+	})
+}
+
+// sawSenderSite reports whether one particular send was recognised.
+func (a *analyzer) sawSenderSite(want senderSite) bool {
+	for _, s := range a.senderSiteList {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// moduleRelative names a file the way a reader sees it in the repo, so a finding
+// can be pasted into a shell.
+func (a *analyzer) moduleRelative(path string) string {
+	if a.root == "" {
+		return filepath.ToSlash(path)
+	}
+	rel, err := filepath.Rel(a.root, path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(rel)
+}
+
 // senderSendCall recognises an email send through a mailer — the four methods
 // that hand text to the branded wrapper — and returns a name for the error
 // message.
@@ -1352,10 +1418,12 @@ func TestEveryQueuedEmailDeclaresItsLanguage(t *testing.T) {
 // two: every `…Mailer` site was unchecked while the suite stayed green — and it
 // then recognised only by NAME, so a mailer reached through a differently-named
 // field, or through a local variable, was invisible. Counting the sites it DID
-// recognise fails a matcher that goes narrow again, even though a narrow matcher
-// reports no findings at all. The floor cannot see a shape the matcher never
-// considered (the count simply does not move for a site it does not understand),
-// so the receiver shapes it must understand are asserted directly in
+// recognise fails a matcher that goes narrow again — provided the floor is the
+// WHOLE count the matcher recognises today, which is why it is 20 and not the 18
+// the field-name-keyed matcher scored — even though a narrow matcher reports no
+// findings at all. The floor cannot see a shape the matcher never considered
+// (the count simply does not move for a site it does not understand), so the
+// receiver shapes it must understand are asserted directly in
 // TestEmailSendMatcherCoversEveryReceiverShape.
 func TestEveryEmailSendPassesAResolvedLanguage(t *testing.T) {
 	a := newAnalyzer(t)
@@ -1364,9 +1432,33 @@ func TestEveryEmailSendPassesAResolvedLanguage(t *testing.T) {
 	if a.senderSites < minSenderSites {
 		t.Fatalf("recognised only %d email send site(s) (expected at least %d) — the render "+
 			"matcher has lost part of its subject (an `email.Sender` or a `VerifyMailer` "+
-			"reached through ANY field name, or through a local variable, sends through the "+
-			"branded wrapper), so this guard would pass over whatever it no longer matches",
-			a.senderSites, minSenderSites)
+			"reached through ANY field name, through a local variable, or through the "+
+			"sender's own method receiver, sends through the branded wrapper), so this guard "+
+			"would pass over whatever it no longer matches. It recognised:\n%s",
+			a.senderSites, minSenderSites, renderSenderSites(a.senderSiteList))
+	}
+	// The two receiver-reached sites: the sends whose receiver is a bare
+	// identifier (the method receiver `s`) rather than a named field. They are
+	// what the type-based matcher added to this guard's subject, and exactly what
+	// the field-name-keyed matcher could not see at all, so they are pinned BY
+	// NAME as well as through the count — the count alone cannot tell "both
+	// receiver-reached sites were lost" from "one was lost and a field-reached
+	// site was gained elsewhere", and it is the first that has to fail. The file
+	// and the method are pinned, never the line: a line number moves on any edit
+	// above it, and a guard that reddens for that reason stops being believed.
+	pinned := []senderSite{
+		{file: "internal/email/ses.go", method: "SendReceipt"},
+		{file: "internal/email/ses.go", method: "SendReceiptWithAttachment"},
+	}
+	for _, want := range pinned {
+		if !a.sawSenderSite(want) {
+			t.Errorf("the render matcher no longer recognises %s %s(…) — that call's receiver "+
+				"is the bare identifier `s`, the shape a field-name-keyed matcher cannot see, "+
+				"and one of the two sites this guard would then certify as checked without "+
+				"checking. Either the matcher went narrow again, or the delegation moved; if "+
+				"it moved, move this expectation with it. It recognised:\n%s",
+				want.file, want.method, renderSenderSites(a.senderSiteList))
+		}
 	}
 	if len(a.senderCallsWithoutLang) > 0 {
 		t.Fatalf("%d email send(s) pass no language to the branded wrapper:\n%s",
@@ -1545,6 +1637,17 @@ func TestEmailSendMatcherCoversEveryReceiverShape(t *testing.T) {
 				"shape must be declared, not assumed covered", key)
 		}
 	}
+}
+
+// renderSenderSites formats the sends the matcher recognised for a failure
+// message, so a floor failure says what WAS seen rather than only the number.
+func renderSenderSites(sites []senderSite) string {
+	lines := make([]string, 0, len(sites))
+	for _, s := range sites {
+		lines = append(lines, "  "+s.file+"  "+s.method)
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
 }
 
 // renderSites formats findings deterministically for an error message.
