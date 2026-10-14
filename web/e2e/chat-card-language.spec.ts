@@ -28,6 +28,9 @@
 //
 //   * in each of the five languages the card renders the dictionary's own string;
 //   * the composed value ("{n} times") is interpolated, not shown as a placeholder;
+//   * a count of ONE renders the SINGULAR entry — English "1 time", not "1 times"
+//     (t_212be8da: the count values had no singular form, and English is the default
+//     dashboard language);
 //   * the merchant's own data and the assistant's note are shown VERBATIM (they are
 //     not the server's words, and translating them would be a lie);
 //   * on the English dashboard no Malay sentence from the defect survives.
@@ -62,11 +65,45 @@ const LABEL_NAME = "chat.proposal.label.name";
 const LABEL_CHARGES = "chat.proposal.label.subscriptionCharges";
 const VALUE_CHARGES = "chat.proposal.value.chargeCount";
 
+// The SINGULAR entries of the count values (t_212be8da). The server picks between
+// them by n (api/internal/chat/proposal.go, countedValue), so a card whose count is
+// one arrives with these keys and no parameters at all.
+const VALUE_CHARGES_ONE = "chat.proposal.value.chargeCountOne";
+const VALUE_VARIATION_ONE = "chat.proposal.value.variationSetOne";
+const VALUE_FIELD_ONE = "chat.proposal.value.fieldCountOne";
+const VALUE_ITEM_ONE = "chat.proposal.value.itemCountOne";
+const LABEL_PRODUCT = "chat.proposal.label.product";
+const LABEL_VARIATIONS = "chat.proposal.label.variations";
+const LABEL_CONFIG = "chat.proposal.label.config";
+const LABEL_NOTIFICATIONS = "chat.proposal.label.notifications";
+
 /** The merchant's own data, and the assistant's own wording — both shown as sent. */
 const PRODUCT_NAME = "Tee 2026 (XL)";
+const PRODUCT_ID = "11111111-2222-3333-4444-555555555555";
 const NOTE = "Cadangan menukar nama produk kepada Tee 2026 (XL).";
 
-const PROPOSAL = {
+/** One card as the page receives it, typed structurally so a fixture with a count
+ *  of ONE (which carries NO value_params — the singular entry states the one) is the
+ *  same type as the plural one. */
+type ProposalFixture = {
+  token: string;
+  args_hash: string;
+  tool: string;
+  title_key: string;
+  summary_key: string;
+  fields: Array<{
+    label_key: string;
+    label_raw?: string;
+    value?: string;
+    value_key?: string;
+    value_params?: Record<string, string>;
+  }>;
+  note?: string;
+  expires_at: string;
+  reversible: boolean;
+};
+
+const PROPOSAL: ProposalFixture = {
   token: TOKEN,
   args_hash: "hash-card-lang",
   tool: "update_product",
@@ -75,6 +112,46 @@ const PROPOSAL = {
   fields: [
     { label_key: LABEL_NAME, value: PRODUCT_NAME },
     { label_key: LABEL_CHARGES, value_key: VALUE_CHARGES, value_params: { n: "12" } },
+  ],
+  note: NOTE,
+  expires_at: "2027-01-01T00:00:00Z",
+  reversible: true,
+};
+
+/**
+ * The same tool with every count at ONE: what the server sends for a product whose
+ * variation set has a single row and whose subscription is charged once. The counts
+ * arrive as the SINGULAR key with no value_params — which is why the card cannot say
+ * "1 rows" / "1 times" (t_212be8da).
+ */
+const PRODUCT_ONE_PROPOSAL: ProposalFixture = {
+  token: TOKEN,
+  args_hash: "hash-card-one-product",
+  tool: "update_product",
+  title_key: TITLE_KEY,
+  summary_key: SUMMARY_KEY,
+  fields: [
+    { label_key: LABEL_PRODUCT, value: PRODUCT_ID },
+    { label_key: LABEL_VARIATIONS, value_key: VALUE_VARIATION_ONE },
+    { label_key: LABEL_CHARGES, value_key: VALUE_CHARGES_ONE },
+  ],
+  note: NOTE,
+  expires_at: "2027-01-01T00:00:00Z",
+  reversible: true,
+};
+
+/** A form creation card counting ONE config field and ONE notification: the two
+ *  counts describeFormCreation renders as fieldCount / itemCount. */
+const FORM_ONE_PROPOSAL: ProposalFixture = {
+  token: TOKEN,
+  args_hash: "hash-card-one-form",
+  tool: "upsert_form",
+  title_key: "chat.proposal.title.upsert_form",
+  summary_key: "chat.proposal.summary.upsert_form",
+  fields: [
+    { label_key: "chat.proposal.label.action", value_key: "chat.proposal.value.createForm" },
+    { label_key: LABEL_CONFIG, value_key: VALUE_FIELD_ONE },
+    { label_key: LABEL_NOTIFICATIONS, value_key: VALUE_ITEM_ONE },
   ],
   note: NOTE,
   expires_at: "2027-01-01T00:00:00Z",
@@ -103,7 +180,7 @@ const BUNDLE = {
  * `lang` is what the profile answers: the dashboard language is per-PROFILE, and
  * the page takes it from there (localStorage is only the instant first paint).
  */
-async function stubAPI(page: Page, lang: string) {
+async function stubAPI(page: Page, lang: string, proposal: ProposalFixture = PROPOSAL) {
   const json = (body: unknown) => ({
     status: 200,
     contentType: "application/json",
@@ -116,7 +193,7 @@ async function stubAPI(page: Page, lang: string) {
   await page.route(/(.*)\/api\/rest\/chat(\?.*)?$/, (r) =>
     r.request().method() === "GET"
       ? r.fulfill(json({ available: true, limits: { messages_per_hour: 60, max_message_chars: 2000 } }))
-      : r.fulfill(json({ reply: "Here is the change I would make.", proposals: [PROPOSAL] })),
+      : r.fulfill(json({ reply: "Here is the change I would make.", proposals: [proposal] })),
   );
 }
 
@@ -151,7 +228,7 @@ async function cardRows(page: Page): Promise<Array<[string, string]>> {
 }
 
 /** Open the card and return it, after proving it really rendered. */
-async function openCard(page: Page, baseURL: string | undefined, lang: Lang) {
+async function openCard(page: Page, baseURL: string | undefined, lang: Lang, proposal: ProposalFixture = PROPOSAL) {
   // The Send button's accessible name is localized too, so the shared prologue is
   // told which language this page is in (see e2e/chatComposer.ts).
   await sendChatPrompt(page, baseURL, "rename my product", DICT["chat.send"][lang]);
@@ -160,8 +237,9 @@ async function openCard(page: Page, baseURL: string | undefined, lang: Lang) {
     1,
     { timeout: 20_000 },
   );
-  await expect(card.locator("dt"), "the card's two field rows must render").toHaveCount(2);
-  await expect(card.getByText(PROPOSAL.tool)).toBeVisible();
+  const wantRows = proposal.fields.length;
+  await expect(card.locator("dt"), `the card's ${wantRows} field rows must render`).toHaveCount(wantRows);
+  await expect(card.getByText(proposal.tool)).toBeVisible();
   return card;
 }
 
@@ -235,5 +313,75 @@ test.describe("the confirmation card's own words follow the dashboard language",
     // CONVERSATION's language (here Malay, as the QA run's was), not the server's,
     // and it stays exactly as written rather than being looked up in a dictionary.
     await expect(card).toContainText(NOTE);
+  });
+
+  // ── A COUNT OF ONE (t_212be8da). ────────────────────────────────────────────
+  //
+  // The count values had ONE form per key, so English — the dashboard's DEFAULT
+  // language — read "1 fields" / "1 rows" / "1 times" on the card the merchant is
+  // asked to confirm. The server now sends the SINGULAR key when the count is one
+  // (api/internal/chat/proposal.go, countedValue). What the merchant actually READS
+  // for that key is decided on this side of the wire, which is why it is read out of
+  // the rendered DOM here rather than asserted against the wire.
+  //
+  // Two cards, because the four counts come from two tools: a product (one variation,
+  // one charge) and a form creation (one config field, one notification entry).
+  test("a product card whose counts are ONE reads the singular form in each language", async ({
+    page,
+    baseURL,
+  }) => {
+    for (const lang of LANGS) {
+      await stubAPI(page, lang, PRODUCT_ONE_PROPOSAL);
+      await freshState(page, lang);
+      await openCard(page, baseURL, lang, PRODUCT_ONE_PROPOSAL);
+      const rows = await cardRows(page);
+      expect(
+        rows,
+        `the one-count product card in ${lang} — the SINGULAR entries must be rendered, and the ` +
+          `count entries (which interpolate {n}) are what the card must NOT use at n=1`,
+      ).toEqual([
+        [DICT[LABEL_PRODUCT][lang], PRODUCT_ID],
+        [DICT[LABEL_VARIATIONS][lang], DICT[VALUE_VARIATION_ONE][lang]],
+        [DICT[LABEL_CHARGES][lang], DICT[VALUE_CHARGES_ONE][lang]],
+      ]);
+      console.log(`one-count product card in ${lang}: ${JSON.stringify(rows)}`);
+
+      if (lang === "en") {
+        // The English sentences, in the dashboard's DEFAULT language — the one the
+        // defect was measured in ("1 rows — …" / "1 times" were the pre-fix copy).
+        expect(rows[1][1], "the English card still counts rows in the plural").toMatch(/^1 row — /);
+        expect(rows[2][1], "the English card still counts charges in the plural").toBe("1 time");
+      }
+    }
+  });
+
+  test("a form creation card whose counts are ONE reads the singular form in each language", async ({
+    page,
+    baseURL,
+  }) => {
+    for (const lang of LANGS) {
+      await stubAPI(page, lang, FORM_ONE_PROPOSAL);
+      await freshState(page, lang);
+      await openCard(page, baseURL, lang, FORM_ONE_PROPOSAL);
+      const rows = await cardRows(page);
+      expect(
+        rows,
+        `the one-count form card in ${lang} — "Configuration" / "Notifications" must read the ` +
+          `SINGULAR entries at n=1`,
+      ).toEqual([
+        [DICT["chat.proposal.label.action"][lang], DICT["chat.proposal.value.createForm"][lang]],
+        [DICT[LABEL_CONFIG][lang], DICT[VALUE_FIELD_ONE][lang]],
+        [DICT[LABEL_NOTIFICATIONS][lang], DICT[VALUE_ITEM_ONE][lang]],
+      ]);
+      console.log(`one-count form card in ${lang}: ${JSON.stringify(rows)}`);
+
+      if (lang === "en") {
+        // The English copy, stated as the sentence the merchant reads — and the
+        // pre-fix plural, stated as the one that must NOT be on the card. This is
+        // the default dashboard language, the one the defect was measured in.
+        expect(rows[1][1], "the English card still counts fields in the plural").toBe("1 field");
+        expect(rows[2][1], "the English card still counts items in the plural").toBe("1 item");
+      }
+    }
   });
 });

@@ -215,6 +215,106 @@ test("a composed value is interpolated in the dashboard's language; data is verb
   assert.equal(proposalValue({ label_key: "x" }, tIn("en")), "");
 });
 
+test("a count of ONE has its own entry, and English reads \"1 field\", not \"1 fields\" (t_212be8da)", () => {
+  // ── THE BITE, restated as the pre-fix shape. The COUNT entry interpolated with
+  // n=1 IS what an English merchant read on the card they were asked to confirm:
+  // "Configuration — 1 fields". If this line ever stops reading that way, the
+  // assertions below are no longer looking at the entry the server sends at n=1.
+  assert.equal(
+    proposalValue(
+      { label_key: "chat.proposal.label.config", value_key: "chat.proposal.value.fieldCount", value_params: { n: "1" } },
+      tIn("en"),
+    ),
+    "1 fields",
+    "the count entry no longer reads \"1 fields\" at n=1 — the pre-fix shape this card " +
+      "exists to fix is not what the test below is comparing against",
+  );
+
+  // ── The four count rows, as the server sends them at n=1 (one config field, one
+  // notification entry, one variation, one charge). The English copy is pinned
+  // here, in the dashboard's DEFAULT language, because that is where it read wrong.
+  const oneRows: [ProposalField, string][] = [
+    [{ label_key: "chat.proposal.label.config", value_key: "chat.proposal.value.fieldCountOne" }, "1 field"],
+    [{ label_key: "chat.proposal.label.theme", value_key: "chat.proposal.value.fieldCountOne" }, "1 field"],
+    [{ label_key: "chat.proposal.label.notifications", value_key: "chat.proposal.value.itemCountOne" }, "1 item"],
+    [{ label_key: "chat.proposal.label.subscriptionCharges", value_key: "chat.proposal.value.chargeCountOne" }, "1 time"],
+    [
+      { label_key: "chat.proposal.label.variations", value_key: "chat.proposal.value.variationSetOne" },
+      "1 row — the full list, replacing the existing one",
+    ],
+  ];
+  for (const [row, wantEn] of oneRows) {
+    assert.ok(
+      goProposal.includes(`"${row.value_key}"`),
+      `${row.value_key} is not a key api/internal/chat/proposal.go can emit — the server picks the ` +
+        `singular entry by n (countedValue), so a singular entry nothing sends is a card that still ` +
+        `reads "1 fields"`,
+    );
+    assert.equal(
+      proposalValue(row, tIn("en")),
+      wantEn,
+      `the singular row ${row.value_key} does not read ${JSON.stringify(wantEn)} in English`,
+    );
+    // The singular entry takes no parameters from the server, so a {n} left in it
+    // would reach the card as a literal placeholder in every locale.
+    for (const lang of LANGS) {
+      const rendered = proposalValue(row, tIn(lang));
+      assert.ok(
+        rendered.includes("1") && !rendered.includes("{"),
+        `the singular row ${row.value_key} in ${lang} renders ${JSON.stringify(rendered)} — it must ` +
+          `state the one itself and leave no placeholder behind (the server sends no value_params)`,
+      );
+    }
+  }
+
+  // ── The plural side is untouched: those entries interpolate the number.
+  assert.equal(
+    proposalValue(
+      { label_key: "chat.proposal.label.config", value_key: "chat.proposal.value.fieldCount", value_params: { n: "3" } },
+      tIn("en"),
+    ),
+    "3 fields",
+  );
+  assert.equal(
+    proposalValue(
+      { label_key: "chat.proposal.label.subscriptionCharges", value_key: "chat.proposal.value.chargeCount", value_params: { n: "0" } },
+      tIn("en"),
+    ),
+    "0 times",
+    "zero is the plural form in English (\"0 times\"), and the server sends the count entry for it",
+  );
+
+  // ── THE CLASS, not just these four rows: any value entry that interpolates a
+  // number needs a singular sibling, in all five locales, without a placeholder of
+  // its own. Discovered from the dictionary, so a count added later is caught here
+  // rather than on the card. The list pair is excluded by its own names —
+  // listOne/listMany already carry the singular case (describeList).
+  const dict = DICT as unknown as Record<string, Record<string, string>>;
+  const listPair = new Set(["chat.proposal.value.listOne", "chat.proposal.value.listMany"]);
+  const counts = Object.keys(DICT).filter(
+    (k) => k.startsWith("chat.proposal.value.") && !listPair.has(k) && LANGS.some((l) => dict[k]?.[l]?.includes("{n}")),
+  );
+  assert.ok(
+    counts.length >= 4,
+    `found ${counts.length} interpolated count entries (${counts.join(", ")}) — the scan has drifted from the ` +
+      `dictionary and the singular check below would judge almost nothing`,
+  );
+  for (const k of counts) {
+    const one = dict[`${k}One`];
+    assert.ok(one, `${k} interpolates a number but has no ${k}One entry — at n=1 that card reads ` +
+      `"1 fields" in English, the dashboard's default language`);
+    for (const lang of LANGS) {
+      const v = String(one[lang]).trim();
+      assert.ok(v.length > 0, `${k}One.${lang} is empty — the card would be blank in that language`);
+      assert.ok(
+        !v.includes("{"),
+        `${k}One.${lang} = ${JSON.stringify(v)} carries a placeholder, and the server sends NO ` +
+          `value_params with the singular entry (countedValue) — it would print on the card`,
+      );
+    }
+  }
+});
+
 test("the card's heading renders in the dictionary's language, and the assistant's note does not", () => {
   const card: ProposalCardData = {
     token: "t",

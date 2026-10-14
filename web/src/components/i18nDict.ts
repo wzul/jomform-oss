@@ -2208,14 +2208,27 @@ export const DICT = {
   "chat.proposal.value.no": { en: "No", ms: "Tidak", zh: "否", ta: "இல்லை", ar: "لا" },
   "chat.proposal.value.empty": { en: "(empty)", ms: "(kosong)", zh: "（空）", ta: "(காலி)", ar: "(فارغ)" },
   "chat.proposal.value.unrenderable": { en: "(cannot be shown)", ms: "(tidak dapat dipaparkan)", zh: "（无法显示）", ta: "(காட்ட முடியாது)", ar: "(تعذّر العرض)" },
+  // A count of ONE has its own entry (t_212be8da). The count form interpolates
+  // {n}, and English — the DEFAULT dashboard language — does not read "{n} fields"
+  // correctly at n=1: the card said "Configuration — 1 fields" / "1 items" /
+  // "1 times" on the very screen where the merchant is asked to confirm the change.
+  // Malay, Chinese, Tamil and Arabic do not change the noun after a numeral the way
+  // English does, so their singular entry repeats the words with the one written
+  // out — the same shape as listOne/listMany below. The server picks between the two
+  // keys (api/internal/chat/proposal.go, countedValue) and sends NO {n} with the
+  // singular one, so the singular entry must never contain a placeholder.
   "chat.proposal.value.fieldCount": { en: "{n} fields", ms: "{n} medan", zh: "{n} 个字段", ta: "{n} புலங்கள்", ar: "{n} حقل" },
+  "chat.proposal.value.fieldCountOne": { en: "1 field", ms: "1 medan", zh: "1 个字段", ta: "1 புலம்", ar: "1 حقل" },
   "chat.proposal.value.itemCount": { en: "{n} items", ms: "{n} item", zh: "{n} 项", ta: "{n} உருப்படிகள்", ar: "{n} عنصر" },
+  "chat.proposal.value.itemCountOne": { en: "1 item", ms: "1 item", zh: "1 项", ta: "1 உருப்படி", ar: "1 عنصر" },
   "chat.proposal.value.listOne": { en: "1 item: {name}", ms: "1 item: {name}", zh: "1 项：{name}", ta: "1 உருப்படி: {name}", ar: "عنصر واحد: {name}" },
   "chat.proposal.value.listMany": { en: "{n} items: {name} …", ms: "{n} item: {name} …", zh: "{n} 项：{name} …", ta: "{n} உருப்படிகள்: {name} …", ar: "{n} عنصر: {name} …" },
   "chat.proposal.value.createForm": { en: "Create a new form", ms: "Cipta borang baharu", zh: "创建一个新表单", ta: "புதிய படிவத்தை உருவாக்கு", ar: "إنشاء نموذج جديد" },
   "chat.proposal.value.unlimitedCharges": { en: "No limit (infinite)", ms: "Tiada had (infinite)", zh: "无限制（无限）", ta: "வரம்பு இல்லை (முடிவிலி)", ar: "بلا حد (غير محدود)" },
   "chat.proposal.value.chargeCount": { en: "{n} times", ms: "{n} kali", zh: "{n} 次", ta: "{n} முறை", ar: "{n} مرات" },
+  "chat.proposal.value.chargeCountOne": { en: "1 time", ms: "1 kali", zh: "1 次", ta: "1 முறை", ar: "1 مرة" },
   "chat.proposal.value.variationSet": { en: "{n} rows — the full list, replacing the existing one", ms: "{n} baris — senarai penuh, menggantikan senarai sedia ada", zh: "{n} 行——完整列表，将替换现有列表", ta: "{n} வரிசைகள் — முழுப் பட்டியல், தற்போதைய ஒன்றை மாற்றும்", ar: "{n} صفوف — القائمة الكاملة، وتستبدل القائمة الحالية" },
+  "chat.proposal.value.variationSetOne": { en: "1 row — the full list, replacing the existing one", ms: "1 baris — senarai penuh, menggantikan senarai sedia ada", zh: "1 行——完整列表，将替换现有列表", ta: "1 வரிசை — முழுப் பட்டியல், தற்போதைய ஒன்றை மாற்றும்", ar: "1 صف — القائمة الكاملة، وتستبدل القائمة الحالية" },
   "chat.confirm": { en: "Confirm", ms: "Sahkan", zh: "确认", ta: "உறுதிப்படுத்து", ar: "تأكيد" },
   "chat.cancel": { en: "Cancel", ms: "Batal", zh: "取消", ta: "ரத்து", ar: "إلغاء" },
   "chat.confirmHint": { en: "Nothing has changed yet.", ms: "Belum ada apa-apa yang berubah.", zh: "目前尚未发生任何更改。", ta: "இதுவரை எதுவும் மாறவில்லை.", ar: "لم يتغير شيء بعد." },

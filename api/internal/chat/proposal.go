@@ -297,11 +297,20 @@ const (
 	keyValueFieldCount   = "chat.proposal.value.fieldCount"
 	keyValueItemCount    = "chat.proposal.value.itemCount"
 	keyValueListOne      = "chat.proposal.value.listOne"
-	keyValueListMany     = "chat.proposal.value.listMany"
-	keyValueCreateForm   = "chat.proposal.value.createForm"
-	keyValueUnlimited    = "chat.proposal.value.unlimitedCharges"
-	keyValueChargeCount  = "chat.proposal.value.chargeCount"
-	keyValueVariationSet = "chat.proposal.value.variationSet"
+	// The SINGULAR form of each count (t_212be8da). English inflects and is the
+	// dashboard's DEFAULT language, so one form per key made an English merchant read
+	// "Configuration — 1 fields" and "Number of charges — 1 times" on the very card
+	// they were asked to confirm. listOne/listMany already carried the singular case
+	// for the list row; the bare counts did not. See countedValue.
+	keyValueFieldCountOne   = "chat.proposal.value.fieldCountOne"
+	keyValueItemCountOne    = "chat.proposal.value.itemCountOne"
+	keyValueChargeCountOne  = "chat.proposal.value.chargeCountOne"
+	keyValueVariationSetOne = "chat.proposal.value.variationSetOne"
+	keyValueListMany        = "chat.proposal.value.listMany"
+	keyValueCreateForm      = "chat.proposal.value.createForm"
+	keyValueUnlimited       = "chat.proposal.value.unlimitedCharges"
+	keyValueChargeCount     = "chat.proposal.value.chargeCount"
+	keyValueVariationSet    = "chat.proposal.value.variationSet"
 )
 
 // ProposalField is one specific argument, rendered for the card: the label in the
@@ -522,15 +531,11 @@ func describeFormCreation(args map[string]any, label Labeler) []ProposalField {
 		}
 		lbl := formCreationCountLabels[key]
 		if m, isMap := v.(map[string]any); isMap {
-			fields = append(fields, field(lbl, keyedValue(keyValueFieldCount, map[string]string{
-				"n": strconv.Itoa(len(m)),
-			})))
+			fields = append(fields, field(lbl, countedValue(keyValueFieldCountOne, keyValueFieldCount, len(m))))
 			continue
 		}
 		if list, isList := v.([]any); isList {
-			fields = append(fields, field(lbl, keyedValue(keyValueItemCount, map[string]string{
-				"n": strconv.Itoa(len(list)),
-			})))
+			fields = append(fields, field(lbl, countedValue(keyValueItemCountOne, keyValueItemCount, len(list))))
 			continue
 		}
 		fields = append(fields, field(lbl, renderValue(v)))
@@ -593,6 +598,27 @@ func dataValue(s string) renderedValue { return renderedValue{value: s} }
 // key with the parameters its sentence interpolates.
 func keyedValue(key string, params map[string]string) renderedValue {
 	return renderedValue{key: key, params: params}
+}
+
+// countedValue renders a COUNT of things as one of two dictionary keys: the count
+// ("3 fields", "0 fields") or, when the count is exactly ONE, its SINGULAR form
+// ("1 field").
+//
+// WHY TWO KEYS (t_212be8da). English inflects, and English is the dashboard's
+// DEFAULT language: with one form per key the card read "Configuration — 1 fields",
+// "Configuration — 1 items" and "Number of charges — 1 times" on the very screen
+// where the merchant is asked to confirm the change. Malay, Chinese, Tamil and
+// Arabic do not change the noun after a numeral the way English does, so for them
+// the singular entry repeats the words with the one written out — the same shape
+// describeList already uses for ONE item versus many (keyValueListOne / ListMany).
+//
+// The singular entry takes NO parameters: it states the one itself, and a {n} that
+// nothing interpolates would reach the card as a literal placeholder.
+func countedValue(oneKey, countKey string, n int) renderedValue {
+	if n == 1 {
+		return keyedValue(oneKey, nil)
+	}
+	return keyedValue(countKey, map[string]string{"n": strconv.Itoa(n)})
 }
 
 // field builds one card row: a label KEY and a rendered value. Exactly one of the
@@ -727,15 +753,13 @@ func describeProductUpdate(args map[string]any, label Labeler) []ProposalField {
 		if arr, ok := vars.([]any); ok {
 			n = len(arr)
 		}
-		fields = append(fields, field(keyLabelVariations, keyedValue(keyValueVariationSet,
-			map[string]string{"n": strconv.Itoa(n)})))
+		fields = append(fields, field(keyLabelVariations, countedValue(keyValueVariationSetOne, keyValueVariationSet, n)))
 	}
 	if v, ok := args["subscription_charges"]; ok {
 		if v == nil {
 			fields = append(fields, field(keyLabelCharges, keyedValue(keyValueUnlimited, nil)))
 		} else if n, ok := asInt64(v); ok {
-			fields = append(fields, field(keyLabelCharges, keyedValue(keyValueChargeCount,
-				map[string]string{"n": strconv.FormatInt(n, 10)})))
+			fields = append(fields, field(keyLabelCharges, countedValue(keyValueChargeCountOne, keyValueChargeCount, int(n))))
 		}
 	}
 	return fields
@@ -769,8 +793,7 @@ func describeVariationUpdate(args map[string]any, label Labeler) []ProposalField
 		fields = append(fields, field(keyLabelTrialDays, dataValue(strconv.FormatInt(n, 10))))
 	}
 	if n, ok := asInt64(args["subscription_charges"]); ok {
-		fields = append(fields, field(keyLabelCharges, keyedValue(keyValueChargeCount,
-			map[string]string{"n": strconv.FormatInt(n, 10)})))
+		fields = append(fields, field(keyLabelCharges, countedValue(keyValueChargeCountOne, keyValueChargeCount, int(n))))
 	}
 	if imgs, ok := asStringList(args["images"]); ok {
 		fields = append(fields, field(keyLabelImages, describeList(imgs)))

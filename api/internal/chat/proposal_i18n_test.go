@@ -48,6 +48,7 @@ package chat
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -346,5 +347,164 @@ func TestProposalKeysCoverEveryProposableTool(t *testing.T) {
 			t.Errorf("proposalDocs declares %q, which is NOT in the proposable set — a card for a tool "+
 				"the server would refuse", tool)
 		}
+	}
+}
+
+// TestProposalCountValuesInflectAtOne pins the COUNT rows at the number ONE.
+//
+// THE DEFECT (t_212be8da, found while verifying t_8eb63039's card). Every count
+// value had ONE form per key — "{n} fields", "{n} items", "{n} times", "{n} rows" —
+// so English, which inflects and is the dashboard's DEFAULT language, read
+// "Configuration — 1 fields" and "Number of charges — 1 times" on the very card the
+// merchant is asked to confirm. Malay, Chinese, Tamil and Arabic do not change the
+// noun after a numeral the way English does, and the four of them read correctly at
+// n=1; English did not. chat.proposal.value.listOne / .listMany already carried the
+// singular case for the LIST row, and the bare counts beside them never got one.
+//
+// WHAT IS PINNED HERE. The server CHOOSES the key, so the choice is pinned on the
+// rows the card really renders: at n=1 the singular key and NOTHING to interpolate;
+// at any other n the count key with the number in value_params (English "0 fields"
+// and "3 fields" are both correct — the plural form is the right one for zero too).
+// The singular keys' WORDS live in the dashboard's dictionary and are pinned on the
+// web side (src/lib/chatProposal.test.ts), which reads this file's key literals and
+// fails if the dictionary is missing one.
+//
+// THE BITE. Every case below failed on the pre-fix renderer with
+// "want …fieldCountOne, got …fieldCount" — measured by running this test against the
+// unpatched call sites before the fix landed, not asserted after the fact.
+func TestProposalCountValuesInflectAtOne(t *testing.T) {
+	const fid = "11111111-2222-3333-4444-555555555555"
+	label := func(string, string) string { return "" }
+
+	// rowFor renders one card row for a tool, by its label key.
+	rowFor := func(t *testing.T, tool string, args map[string]any, labelKey string) ProposalField {
+		t.Helper()
+		_, _, fields, ok := Describe(tool, args, label)
+		if !ok {
+			t.Fatalf("Describe(%s) refused %+v", tool, args)
+		}
+		for _, f := range fields {
+			if f.LabelKey == labelKey {
+				return f
+			}
+		}
+		t.Fatalf("Describe(%s) produced no %s row: %+v", tool, labelKey, fields)
+		return ProposalField{}
+	}
+
+	// argsAt gives the SAME row a given number of things to count, so the only
+	// difference between the three renders of a case is n.
+	items := func(n int, build func(int) any) []any {
+		out := make([]any, 0, n)
+		for i := 0; i < n; i++ {
+			out = append(out, build(i))
+		}
+		return out
+	}
+
+	cases := []struct {
+		what     string
+		tool     string
+		labelKey string
+		argsAt   func(n int) map[string]any
+		oneKey   string
+		countKey string
+	}{
+		{
+			what:     "the form's config fields",
+			tool:     "upsert_form",
+			labelKey: keyLabelConfig,
+			argsAt: func(n int) map[string]any {
+				cfg := map[string]any{}
+				for _, k := range items(n, func(i int) any { return "field-" + string(rune('a'+i)) }) {
+					cfg[k.(string)] = 1
+				}
+				return map[string]any{"title": "My form", "config": cfg}
+			},
+			oneKey:   keyValueFieldCountOne,
+			countKey: keyValueFieldCount,
+		},
+		{
+			what:     "the form's notification entries",
+			tool:     "upsert_form",
+			labelKey: keyLabelNotifications,
+			argsAt: func(n int) map[string]any {
+				return map[string]any{
+					"title":         "My form",
+					"notifications": items(n, func(i int) any { return "owner" + string(rune('a'+i)) + "@example.com" }),
+				}
+			},
+			oneKey:   keyValueItemCountOne,
+			countKey: keyValueItemCount,
+		},
+		{
+			what:     "the product's variations",
+			tool:     "update_product",
+			labelKey: keyLabelVariations,
+			argsAt: func(n int) map[string]any {
+				return map[string]any{
+					"product_id": fid,
+					"variations": items(n, func(i int) any { return map[string]any{"name": string(rune('S' + i))} }),
+				}
+			},
+			oneKey:   keyValueVariationSetOne,
+			countKey: keyValueVariationSet,
+		},
+		{
+			what:     "the subscription's number of charges",
+			tool:     "update_product",
+			labelKey: keyLabelCharges,
+			argsAt: func(n int) map[string]any {
+				return map[string]any{"product_id": fid, "subscription_charges": float64(n)}
+			},
+			oneKey:   keyValueChargeCountOne,
+			countKey: keyValueChargeCount,
+		},
+	}
+
+	for _, c := range cases {
+		one := rowFor(t, c.tool, c.argsAt(1), c.labelKey)
+		if one.ValueKey != c.oneKey {
+			t.Errorf("at n=1 %s renders value_key=%q, want %q — one form per key made an English "+
+				"dashboard read \"1 fields\" / \"1 items\" / \"1 times\" on the card the merchant is "+
+				"asked to confirm (t_212be8da)", c.what, one.ValueKey, c.oneKey)
+		}
+		if n, ok := one.ValueParams["n"]; ok {
+			t.Errorf("at n=1 %s carries value_params[n]=%q — the singular key states the one itself, "+
+				"and a parameter nothing interpolates is a placeholder waiting to be printed", c.what, n)
+		}
+
+		// Zero and the plural are the COUNT form: English "0 fields" / "3 fields".
+		for _, n := range []int{0, 2, 3} {
+			row := rowFor(t, c.tool, c.argsAt(n), c.labelKey)
+			if row.ValueKey != c.countKey {
+				t.Errorf("at n=%d %s renders value_key=%q, want %q — only ONE takes the singular form",
+					n, c.what, row.ValueKey, c.countKey)
+			}
+			if row.ValueParams["n"] != strconv.Itoa(n) {
+				t.Errorf("at n=%d %s carries value_params=%v, want n=%d — the number alone is not the "+
+					"sentence the user reads", n, c.what, row.ValueParams, n)
+			}
+		}
+	}
+}
+
+// TestCountedValueChoosesTheSingularKeyAtOne is the boundary in one place: the four
+// rows above prove the call sites use it, this proves the choice is exactly n==1 and
+// nothing else (a `n <= 1` would put "1 field" on an empty config as well).
+func TestCountedValueChoosesTheSingularKeyAtOne(t *testing.T) {
+	for _, n := range []int{-1, 0, 2, 12} {
+		got := countedValue(keyValueFieldCountOne, keyValueFieldCount, n)
+		if got.key != keyValueFieldCount || got.params["n"] != strconv.Itoa(n) {
+			t.Errorf("countedValue(n=%d) = %+v, want the count key %q with n=%d", n, got, keyValueFieldCount, n)
+		}
+	}
+	got := countedValue(keyValueFieldCountOne, keyValueFieldCount, 1)
+	if got.key != keyValueFieldCountOne {
+		t.Errorf("countedValue(n=1) = %+v, want the singular key %q", got, keyValueFieldCountOne)
+	}
+	if got.params != nil {
+		t.Errorf("countedValue(n=1) carries params %v — the singular sentence has nothing to "+
+			"interpolate, and an unused {n} would print as a placeholder", got.params)
 	}
 }
