@@ -48,6 +48,10 @@ type langStrings struct {
 	SubmitResponse   string
 	ThankYou         string
 	ResponseReceived string
+	// Card t_4086b8f0: a `file` block stored BEFORE the write-side refusal
+	// (formfields.UnsupportedBlock) still has to be served honestly — its label
+	// plus this note, instead of a picker whose file could go nowhere.
+	FileUnsupported string
 	// Issue #173: pricing/choice field strings.
 	SelectOption   string
 	SelectShipping string
@@ -116,7 +120,12 @@ var formLangs = map[string]langStrings{
 		NoProductAlert:  "Please select at least one product",
 		SelectVariation: "Select an option", SelectVariationAlert: "Please choose a variation for each product", InStock: "in stock",
 		SubmitResponse: "Submit", ThankYou: "Thank you!", ResponseReceived: "Your response has been received.",
-		SelectOption: "Select an option", SelectShipping: "Select shipping",
+		// Card t_4086b8f0: a `file` block stored before the write-side refusal
+		// (formfields.UnsupportedBlock). It renders its label and this note
+		// rather than a file picker, because the picked file could not go
+		// anywhere — no upload path exists for an anonymous buyer.
+		FileUnsupported: "Attachments cannot be uploaded on this form.",
+		SelectOption:    "Select an option", SelectShipping: "Select shipping",
 		Quantity:     "Quantity",
 		PrivacyLabel: "Privacy Policy", TermsLabel: "Terms of Service", RefundLabel: "Refund Policy",
 		PendingMessage: "This form is not open yet. Please check back later.",
@@ -161,7 +170,9 @@ var formLangs = map[string]langStrings{
 		NoProductAlert:  "Pilih sekurang-kurangnya satu produk",
 		SelectVariation: "Pilih variasi", SelectVariationAlert: "Sila pilih variasi untuk setiap produk", InStock: "stok",
 		SubmitResponse: "Hantar", ThankYou: "Terima kasih!", ResponseReceived: "Respons anda telah diterima.",
-		SelectOption: "Pilih pilihan", SelectShipping: "Pilih penghantaran",
+		// Card t_4086b8f0 — see the `en` block above.
+		FileUnsupported: "Lampiran tidak boleh dimuat naik pada borang ini.",
+		SelectOption:    "Pilih pilihan", SelectShipping: "Pilih penghantaran",
 		Quantity:     "Kuantiti",
 		PrivacyLabel: "Polisi Privasi", TermsLabel: "Terma & Syarat", RefundLabel: "Polisi Bayaran Balik",
 		PendingMessage: "Borang ini belum dibuka lagi. Sila kembali semula kemudian.",
@@ -206,7 +217,8 @@ var formLangs = map[string]langStrings{
 		NoProductAlert:  "请至少选择一种商品",
 		SelectVariation: "请选择规格", SelectVariationAlert: "请为每件商品选择规格", InStock: "有货",
 		SubmitResponse: "提交", ThankYou: "谢谢！", ResponseReceived: "您的回复已收到。",
-		SelectOption: "请选择", SelectShipping: "选择配送方式",
+		FileUnsupported: "此表单不支持上传附件。",
+		SelectOption:    "请选择", SelectShipping: "选择配送方式",
 		Quantity:     "数量",
 		PrivacyLabel: "隐私政策", TermsLabel: "服务条款", RefundLabel: "退款政策",
 		PendingMessage: "此表单尚未开放，请稍后再来。",
@@ -251,7 +263,8 @@ var formLangs = map[string]langStrings{
 		NoProductAlert:  "குறைந்தது ஒரு பொருளையாவது தேர்ந்தெடுக்கவும்",
 		SelectVariation: "மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", SelectVariationAlert: "ஒவ்வொரு பொருளுக்கும் மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", InStock: "கையிருப்பு",
 		SubmitResponse: "சமர்ப்பி", ThankYou: "நன்றி!", ResponseReceived: "உங்கள் பதில் பெறப்பட்டது.",
-		SelectOption: "ஒரு விருப்பத்தைத் தேர்ந்தெடுக்கவும்", SelectShipping: "ஷிப்பிங்கைத் தேர்ந்தெடுக்கவும்",
+		FileUnsupported: "இந்தப் படிவத்தில் இணைப்புகளை பதிவேற்ற முடியாது.",
+		SelectOption:    "ஒரு விருப்பத்தைத் தேர்ந்தெடுக்கவும்", SelectShipping: "ஷிப்பிங்கைத் தேர்ந்தெடுக்கவும்",
 		Quantity:     "அளவு",
 		PrivacyLabel: "தனியுரிமைக் கொள்கை", TermsLabel: "சேவை விதிமுறைகள்", RefundLabel: "பணத்திருப்புக் கொள்கை",
 		PendingMessage: "இந்த படிவம் இன்னும் திறக்கப்படவில்லை. பின்னர் மீண்டும் வரவும்.",
@@ -296,7 +309,8 @@ var formLangs = map[string]langStrings{
 		NoProductAlert:  "يرجى اختيار منتج واحد على الأقل",
 		SelectVariation: "اختر خيارًا", SelectVariationAlert: "يرجى اختيار خيار لكل منتج", InStock: "متوفر",
 		SubmitResponse: "إرسال", ThankYou: "شكراً لك!", ResponseReceived: "تم استلام ردك.",
-		SelectOption: "اختر خيارًا", SelectShipping: "اختر الشحن",
+		FileUnsupported: "لا يمكن تحميل المرفقات في هذا النموذج.",
+		SelectOption:    "اختر خيارًا", SelectShipping: "اختر الشحن",
 		Quantity:     "الكمية",
 		PrivacyLabel: "سياسة الخصوصية", TermsLabel: "شروط الخدمة", RefundLabel: "سياسة الاسترداد",
 		PendingMessage: "هذا النموذج غير مفتوح بعد. يرجى العودة لاحقاً.",

@@ -17,6 +17,7 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/payments"
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
@@ -893,6 +894,15 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		writeErr(w, http.StatusBadRequest, urlguard.InvalidShapeMessage("config."+field, want))
 		return
 	}
+	// Card t_4086b8f0: a block type no renderer can honour (`file` — see
+	// formfields.UnsupportedBlock for why there is no upload path) is refused
+	// here rather than stored, because the buyer's page either drops the block
+	// silently (response mode) or paints a control whose bytes go nowhere
+	// (payment mode).
+	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
+		writeErr(w, http.StatusBadRequest, formfields.UnsupportedBlockMessage(bt))
+		return
+	}
 	// Issue #176: auto-generate a unique slug when the merchant leaves it
 	// blank. The slug is unique per workspace (#77), so a generated slug that
 	// collides gets a random suffix appended until it is free.
@@ -976,6 +986,13 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 	// createForm.
 	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
 		writeErr(w, http.StatusBadRequest, urlguard.InvalidShapeMessage("config."+field, want))
+		return
+	}
+	// Card t_4086b8f0: same unsupported-block refusal as createForm — an update
+	// that stores a `file` block reintroduces the block the buyer's page cannot
+	// serve (and, on an already-stored form, is how the merchant clears it).
+	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
+		writeErr(w, http.StatusBadRequest, formfields.UnsupportedBlockMessage(bt))
 		return
 	}
 	// The slug write runs FIRST, and the order IS the point. RenameSlug

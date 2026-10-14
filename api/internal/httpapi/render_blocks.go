@@ -344,6 +344,15 @@ const iframeHeightJS = `<script>(function(){
 
 // blockTmpl renders each builder block. Prices ride on data-price for the
 // client total; the server remains the price authority on submit.
+//
+// Card t_4086b8f0: the `file` arm is deliberately NOT a file control. It used
+// to be `<input type="file">`, and the submit JS drops the picked file on the
+// floor ("files not sent as text") — the buyer believed an attachment had been
+// sent and the merchant received nothing but the rest of the line items. There
+// is no upload path for an anonymous buyer (formfields.UnsupportedBlock has the
+// whole argument), so the block renders its label and says so. The write paths
+// now refuse a config carrying `file`; this keeps a form stored BEFORE that
+// refusal honest on its own live page.
 var blockTmpl = template.Must(template.New("blocks").
 	Funcs(template.FuncMap{
 		"divf": func(total, div int64) float64 { return float64(total) / float64(div) },
@@ -521,7 +530,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "time"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="time" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
 {{else if eq .Type "website"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="url" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
 {{else if eq .Type "address"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="2"{{if .Required}} required{{end}}></textarea>
-{{else if eq .Type "file"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="file" name="notes" data-id="{{.ID}}">
+{{else if eq .Type "file"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}</label><div class="desc">{{$.Ls.FileUnsupported}}</div>
 {{else if eq .Type "consent"}}  <label class="chk"{{styleAttr .Style}}><input type="checkbox" class="extra" data-id="{{.ID}}" value="1"{{if .Required}} required{{end}}> {{.Value}}</label>
 {{else if eq .Type "hidden"}}  <input type="hidden" name="notes" data-id="{{.ID}}" value="{{.DefaultValue}}"{{styleAttr .Style}}>
 {{else if eq .Type "list"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="3"{{if .Required}} required{{end}}></textarea>
@@ -794,6 +803,16 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		// painted by responseTmpl's own `text` arm.
 		case "section", "html", "image", "divider":
 			fields = append(fields, fieldView{ID: b.ID, Type: b.Type, Value: b.Value, Src: b.Src})
+		// Card t_4086b8f0: `file` is neither an input this page can collect nor
+		// static content, and it must NOT be dropped silently — that is the
+		// whole defect. The write path now refuses a config carrying it
+		// (formfields.UnsupportedBlock, because no upload path exists for an
+		// anonymous buyer), but a form stored BEFORE that refusal can still be
+		// served; it renders the merchant's label and says the attachment
+		// cannot be collected, so the buyer never picks a file that would be
+		// thrown away.
+		case "file":
+			fields = append(fields, fieldView{ID: b.ID, Type: b.Type, Value: b.Value})
 		}
 	}
 
@@ -978,6 +997,7 @@ var responseTmpl = template.Must(template.New("response").
 {{else if eq .Type "html"}}  <div class="text">{{.Value}}</div>
 {{else if eq .Type "image"}}{{if .Src}}  <img class="img" src="{{.Src}}" alt="">
 {{end}}{{else if eq .Type "divider"}}  <hr>
+{{else if eq .Type "file"}}  <label class="lbl">{{.Value}}</label><div class="desc">{{$.Ls.FileUnsupported}}</div>
 {{else if eq .Type "name"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}"{{if .Required}} required{{end}}>
 {{else if eq .Type "email"}}  <label class="lbl">{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="{{.ID}}"{{if .Required}} required{{end}}>
 {{else if eq .Type "phone"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="{{.ID}}"{{if .Required}} required{{end}}>

@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
@@ -219,6 +220,11 @@ func (s *Server) createTemplateMCP(
 	if field, want := urlguard.CheckConfigShape(config); field != "" {
 		return nil, nil, errors.New(urlguard.InvalidShapeMessage("config."+field, want))
 	}
+	// Card t_4086b8f0: a template is cloned onto a real form by use_template, so
+	// a block type no renderer can honour is refused here too.
+	if bt := formfields.UnsupportedBlock(config); bt != "" {
+		return nil, nil, errors.New(formfields.UnsupportedBlockMessage(bt))
+	}
 	f := &dbstore.Form{
 		AccountID: acc,
 		Slug:      s.uniqueFormSlug(ctx, acc, "tpl-"+title),
@@ -275,6 +281,10 @@ func (s *Server) updateTemplateMCP(
 	// create_template.
 	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
 		return nil, nil, errors.New(urlguard.InvalidShapeMessage("config."+field, want))
+	}
+	// Card t_4086b8f0: same unsupported-block refusal as create_template.
+	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
+		return nil, nil, errors.New(formfields.UnsupportedBlockMessage(bt))
 	}
 	if err := s.deps.Forms.UpdateTemplate(ctx, acc, in.TemplateID, title, in.Config, in.Theme); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
@@ -201,6 +202,14 @@ func (h *RESTHandlers) createOwnTemplate(w http.ResponseWriter, r *http.Request,
 		writeErr(w, http.StatusBadRequest, urlguard.InvalidShapeMessage("config."+field, want))
 		return
 	}
+	// Card t_4086b8f0: a template's config is cloned onto a real form
+	// (use_template / useOwnTemplate), so a block type no renderer can honour
+	// must not be storable here either — otherwise the refusal on the form
+	// write paths is simply bypassed through a template.
+	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
+		writeErr(w, http.StatusBadRequest, formfields.UnsupportedBlockMessage(bt))
+		return
+	}
 
 	title := strings.TrimSpace(in.Title)
 	config := in.Config
@@ -273,6 +282,11 @@ func (h *RESTHandlers) updateOwnTemplate(w http.ResponseWriter, r *http.Request,
 	// SQLSTATE 22023 failure the read side now tolerates.
 	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
 		writeErr(w, http.StatusBadRequest, urlguard.InvalidShapeMessage("config."+field, want))
+		return
+	}
+	// Card t_4086b8f0: same unsupported-block refusal as createOwnTemplate.
+	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
+		writeErr(w, http.StatusBadRequest, formfields.UnsupportedBlockMessage(bt))
 		return
 	}
 	existing, err := h.Forms.TemplateByIDForAccount(r.Context(), actx.Account.ID, r.PathValue("id"))

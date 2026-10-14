@@ -17,6 +17,7 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/payments"
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
@@ -513,6 +514,12 @@ func (s *Server) upsertForm(
 	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
 		return nil, nil, errors.New(urlguard.InvalidShapeMessage("config."+field, want))
 	}
+	// Card t_4086b8f0: a block type no renderer can honour (formfields
+	// .UnsupportedBlock) is refused here as well, or the agent's write path
+	// stores a block the buyer's page cannot serve.
+	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
+		return nil, nil, errors.New(formfields.UnsupportedBlockMessage(bt))
+	}
 	if in.FormID == "" {
 		// Issue #176: auto-generate a unique slug when the merchant leaves it
 		// blank (slugified title + random suffix on collision).
@@ -617,6 +624,10 @@ func (s *Server) upsertForm(
 	// create path above.
 	if field, want := urlguard.CheckConfigShape(in.Config); field != "" {
 		return nil, nil, errors.New(urlguard.InvalidShapeMessage("config."+field, want))
+	}
+	// Card t_4086b8f0: same unsupported-block refusal as the create path above.
+	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
+		return nil, nil, errors.New(formfields.UnsupportedBlockMessage(bt))
 	}
 	// A slug supplied on the UPDATE path renames the form, exactly as the
 	// dashboard's slug field does (same FormStore.RenameSlug, so the same
