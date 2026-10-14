@@ -80,8 +80,7 @@ type BlockType =
   | "total"
   // Legacy / decorative
   | "image"
-  | "divider"
-  | "coupon";
+  | "divider";
 
 type Choice = { label: string; value: string; price_sen?: number };
 
@@ -166,7 +165,6 @@ const PALETTE_GROUPS: PaletteGroup[] = [
       { type: "option", icon: "＋" },
       { type: "shipping", icon: "🚚" },
       { type: "total", icon: "Σ" },
-      { type: "coupon", icon: "🏷" },
     ],
   },
 ];
@@ -174,13 +172,13 @@ const PALETTE_GROUPS: PaletteGroup[] = [
 /* Field types that collect a buyer answer (used for required + conditional
    logic + response-mode collection). */
 const fieldTypes: BlockType[] = [
-  "name", "email", "phone", "textarea", "checkbox", "coupon",
+  "name", "email", "phone", "textarea", "checkbox",
   "number", "select", "radio", "date", "time", "website",
   "address", "consent", "hidden", "list", "repeater", "image-choice", "captcha",
 ];
 
 /* Pricing fields that add to the order total (payment-mode only). */
-const pricingTypes: BlockType[] = ["product", "quantity", "option", "shipping", "total", "coupon"];
+const pricingTypes: BlockType[] = ["product", "quantity", "option", "shipping", "total"];
 
 /* Field types that use a choices editor. */
 const choiceTypes: BlockType[] = ["select", "radio", "image-choice", "option", "shipping"];

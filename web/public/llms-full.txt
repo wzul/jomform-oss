@@ -20,7 +20,7 @@ prices, sales, refunds, analytics — without opening a dashboard.
 
 ### Core capabilities
 
-- **Order forms in minutes** — drag-and-drop products, fields, images, coupons. No code.
+- **Order forms in minutes** — drag-and-drop products, fields, images. No code.
 - **Payments** — secure checkout by CHIP: cards, FPX, DuitNow QR, e-wallets. One-time and subscription/recurring via CHIP card tokenization.
 - **Auto-updated sales** — sales status updates itself, receipts sent automatically.
 - **Analytics** — sales analytics, CSV export, PDF receipts. Free forever, no monthly fee.

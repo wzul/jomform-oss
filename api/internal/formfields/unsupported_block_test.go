@@ -38,12 +38,18 @@ func TestUnsupportedBlockRefusesFileInAnyFormMode(t *testing.T) {
 // TestUnsupportedBlockAcceptsEveryServableBlock: the rule must not become a
 // blanket refusal. Every palette type a renderer CAN honour — including the
 // static and pricing types, which are not field types at all — passes.
+//
+// `coupon` is intentionally NOT in this list any more (card t_4975927e): it was
+// withdrawn from the palette, so it is no longer a type a merchant can place.
+// A config that still carries one saves — refusing it would freeze a live form
+// against edits — and the renderer serves it as its label plus the
+// "not applied" note instead of an input that promises a discount.
 func TestUnsupportedBlockAcceptsEveryServableBlock(t *testing.T) {
 	servable := []string{
 		"text", "textarea", "number", "select", "radio", "checkbox", "name", "email",
 		"phone", "date", "time", "website", "section", "html", "image", "divider",
 		"address", "consent", "hidden", "list", "repeater", "image-choice", "captcha",
-		"product", "quantity", "option", "shipping", "total", "coupon",
+		"product", "quantity", "option", "shipping", "total",
 	}
 	for _, typ := range servable {
 		cfg := map[string]any{"blocks": []any{map[string]any{"id": "b1", "type": typ}}}

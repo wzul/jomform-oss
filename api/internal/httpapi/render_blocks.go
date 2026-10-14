@@ -383,6 +383,16 @@ func dateInputType(blockType, format string) string {
 // whole argument), so the block renders its label and says so. The write paths
 // now refuse a config carrying `file`; this keeps a form stored BEFORE that
 // refusal honest on its own live page.
+//
+// Card t_4975927e: the same treatment for `coupon`, which was withdrawn from
+// the palette, from formgen's allowlist and from this renderer. A coupon block
+// painted a real text input (`name="coupon"`) whose typed code NOTHING on the
+// submit/order path ever applied — order.go still charges
+// `payments.SumItems(subtotal, 0, 0)` — so the buyer typed a code, got no error
+// and paid full price. There is no coupon table and no server-side validation,
+// so the block can only be withdrawn; a form that stored one BEFORE the
+// withdrawal renders its label and says the discount is not applied, never an
+// input that promises one it cannot honour.
 var blockTmpl = template.Must(template.New("blocks").
 	Funcs(template.FuncMap{
 		"divf": func(total, div int64) float64 { return float64(total) / float64(div) },
@@ -489,7 +499,7 @@ var blockTmpl = template.Must(template.New("blocks").
   .rad input[type=radio] { margin:0; accent-color:var(--jf-primary); }
   input[type=text],input[type=email],input[type=tel],input[type=number],
   input[type=date],input[type=time],input[type=url],input[type=password],
-  select,textarea,.coupon {
+  select,textarea {
     width:100%; padding:10px 12px; border-radius:8px; border:1px solid #e6e8ec;
     background:#ffffff; color:#17181c; font-size:14px; margin-bottom:10px; }
   select { appearance:auto; }
@@ -559,7 +569,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "repeater"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}} rows="3"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}></textarea>
 {{else if eq .Type "image-choice"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad{{if $b.CSSClass}} {{$b.CSSClass}}{{end}}"><input type="radio" name="notes" data-id="{{$b.ID}}" value="{{.Value}}"{{if $b.Required}} required{{end}}{{if $b.RequiredMsg}} oninvalid="this.setCustomValidity('{{$b.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}> {{.Label}}</label>{{end}}
 {{else if eq .Type "captcha"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
-{{else if eq .Type "coupon"}}  <label class="lbl"{{styleAttr .Style}}>{{$.Ls.CouponLabel}}</label><input type="text" name="coupon" class="coupon{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ID}}">
+{{else if eq .Type "coupon"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}</label><div class="desc">{{$.Ls.CouponUnsupported}}</div>
 {{end}}</span>{{if .Description}}<div class="desc">{{.Description}}</div>{{end}}
 {{end}}
   <div class="total"><span>{{$.Ls.Total}}</span><span id="total">RM0.00</span></div>
@@ -847,6 +857,12 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		// thrown away.
 		case "file":
 			fields = append(fields, fieldView{ID: b.ID, Type: b.Type, Value: b.Value})
+		// Card t_4975927e: same rule for the withdrawn `coupon` block. It is
+		// not collectable and there is no discount to apply, but a form stored
+		// before the block was withdrawn must not lose the merchant's block
+		// silently — responseTmpl paints its label plus the "not applied" note.
+		case "coupon":
+			fields = append(fields, fieldView{ID: b.ID, Type: b.Type, Value: b.Value})
 		}
 	}
 
@@ -1038,6 +1054,7 @@ var responseTmpl = template.Must(template.New("response").
 {{else if eq .Type "image"}}{{if .Src}}  <img class="img{{if .CSSClass}} {{.CSSClass}}{{end}}" src="{{.Src}}" alt=""{{styleAttr .Style}}>
 {{end}}{{else if eq .Type "divider"}}  <hr{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{styleAttr .Style}}>
 {{else if eq .Type "file"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}</label><div class="desc">{{$.Ls.FileUnsupported}}</div>
+{{else if eq .Type "coupon"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}</label><div class="desc">{{$.Ls.CouponUnsupported}}</div>
 {{else if eq .Type "name"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
 {{else if eq .Type "email"}}  <label class="lbl"{{styleAttr .Style}}>{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
 {{else if eq .Type "phone"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>

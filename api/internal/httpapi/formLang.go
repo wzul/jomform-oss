@@ -17,7 +17,6 @@ import (
 type langStrings struct {
 	Lang           string // resolved language code ("en","ms","zh","ta","ar")
 	EmailLabel     string
-	CouponLabel    string
 	Total          string
 	Submit         string
 	ErrorAlert     string
@@ -52,6 +51,10 @@ type langStrings struct {
 	// (formfields.UnsupportedBlock) still has to be served honestly — its label
 	// plus this note, instead of a picker whose file could go nowhere.
 	FileUnsupported string
+	// Card t_4975927e: a `coupon` block stored before the block was withdrawn
+	// still has to be served honestly — its label plus this note, instead of a
+	// text input whose typed code nothing on the server ever applied.
+	CouponUnsupported string
 	// Issue #173: pricing/choice field strings.
 	SelectOption   string
 	SelectShipping string
@@ -115,7 +118,7 @@ type langStrings struct {
 // today's labels.
 var formLangs = map[string]langStrings{
 	"en": {
-		Lang: "en", EmailLabel: "Email", CouponLabel: "Coupon",
+		Lang: "en", EmailLabel: "Email",
 		Total: "Total", Submit: "Proceed to Payment", ErrorAlert: "Error",
 		NoProductAlert:  "Please select at least one product",
 		SelectVariation: "Select an option", SelectVariationAlert: "Please choose a variation for each product", InStock: "in stock",
@@ -124,8 +127,9 @@ var formLangs = map[string]langStrings{
 		// (formfields.UnsupportedBlock). It renders its label and this note
 		// rather than a file picker, because the picked file could not go
 		// anywhere — no upload path exists for an anonymous buyer.
-		FileUnsupported: "Attachments cannot be uploaded on this form.",
-		SelectOption:    "Select an option", SelectShipping: "Select shipping",
+		FileUnsupported:   "Attachments cannot be uploaded on this form.",
+		CouponUnsupported: "Discount codes are not applied on this form.",
+		SelectOption:      "Select an option", SelectShipping: "Select shipping",
 		Quantity:     "Quantity",
 		PrivacyLabel: "Privacy Policy", TermsLabel: "Terms of Service", RefundLabel: "Refund Policy",
 		PendingMessage: "This form is not open yet. Please check back later.",
@@ -165,14 +169,15 @@ var formLangs = map[string]langStrings{
 		StatusCancelled:  "cancelled",
 	},
 	"ms": {
-		Lang: "ms", EmailLabel: "Emel", CouponLabel: "Kod kupon",
+		Lang: "ms", EmailLabel: "Emel",
 		Total: "Jumlah", Submit: "Teruskan ke Pembayaran", ErrorAlert: "Ralat",
 		NoProductAlert:  "Pilih sekurang-kurangnya satu produk",
 		SelectVariation: "Pilih variasi", SelectVariationAlert: "Sila pilih variasi untuk setiap produk", InStock: "stok",
 		SubmitResponse: "Hantar", ThankYou: "Terima kasih!", ResponseReceived: "Respons anda telah diterima.",
 		// Card t_4086b8f0 — see the `en` block above.
-		FileUnsupported: "Lampiran tidak boleh dimuat naik pada borang ini.",
-		SelectOption:    "Pilih pilihan", SelectShipping: "Pilih penghantaran",
+		FileUnsupported:   "Lampiran tidak boleh dimuat naik pada borang ini.",
+		CouponUnsupported: "Kod diskaun tidak digunakan pada borang ini.",
+		SelectOption:      "Pilih pilihan", SelectShipping: "Pilih penghantaran",
 		Quantity:     "Kuantiti",
 		PrivacyLabel: "Polisi Privasi", TermsLabel: "Terma & Syarat", RefundLabel: "Polisi Bayaran Balik",
 		PendingMessage: "Borang ini belum dibuka lagi. Sila kembali semula kemudian.",
@@ -212,13 +217,14 @@ var formLangs = map[string]langStrings{
 		StatusCancelled:  "dibatalkan",
 	},
 	"zh": {
-		Lang: "zh", EmailLabel: "电子邮件", CouponLabel: "优惠券",
+		Lang: "zh", EmailLabel: "电子邮件",
 		Total: "总计", Submit: "前往付款", ErrorAlert: "错误",
 		NoProductAlert:  "请至少选择一种商品",
 		SelectVariation: "请选择规格", SelectVariationAlert: "请为每件商品选择规格", InStock: "有货",
 		SubmitResponse: "提交", ThankYou: "谢谢！", ResponseReceived: "您的回复已收到。",
-		FileUnsupported: "此表单不支持上传附件。",
-		SelectOption:    "请选择", SelectShipping: "选择配送方式",
+		FileUnsupported:   "此表单不支持上传附件。",
+		CouponUnsupported: "此表单不适用折扣码。",
+		SelectOption:      "请选择", SelectShipping: "选择配送方式",
 		Quantity:     "数量",
 		PrivacyLabel: "隐私政策", TermsLabel: "服务条款", RefundLabel: "退款政策",
 		PendingMessage: "此表单尚未开放，请稍后再来。",
@@ -258,13 +264,14 @@ var formLangs = map[string]langStrings{
 		StatusCancelled:  "已取消",
 	},
 	"ta": {
-		Lang: "ta", EmailLabel: "மின்னஞ்சல்", CouponLabel: "கூப்பன்",
+		Lang: "ta", EmailLabel: "மின்னஞ்சல்",
 		Total: "மொத்தம்", Submit: "கட்டணத்திற்குச் செல்லவும்", ErrorAlert: "பிழை",
 		NoProductAlert:  "குறைந்தது ஒரு பொருளையாவது தேர்ந்தெடுக்கவும்",
 		SelectVariation: "மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", SelectVariationAlert: "ஒவ்வொரு பொருளுக்கும் மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", InStock: "கையிருப்பு",
 		SubmitResponse: "சமர்ப்பி", ThankYou: "நன்றி!", ResponseReceived: "உங்கள் பதில் பெறப்பட்டது.",
-		FileUnsupported: "இந்தப் படிவத்தில் இணைப்புகளை பதிவேற்ற முடியாது.",
-		SelectOption:    "ஒரு விருப்பத்தைத் தேர்ந்தெடுக்கவும்", SelectShipping: "ஷிப்பிங்கைத் தேர்ந்தெடுக்கவும்",
+		FileUnsupported:   "இந்தப் படிவத்தில் இணைப்புகளை பதிவேற்ற முடியாது.",
+		CouponUnsupported: "இந்தப் படிவத்தில் தள்ளுபடிக் குறியீடுகள் பயன்படுத்தப்படாது.",
+		SelectOption:      "ஒரு விருப்பத்தைத் தேர்ந்தெடுக்கவும்", SelectShipping: "ஷிப்பிங்கைத் தேர்ந்தெடுக்கவும்",
 		Quantity:     "அளவு",
 		PrivacyLabel: "தனியுரிமைக் கொள்கை", TermsLabel: "சேவை விதிமுறைகள்", RefundLabel: "பணத்திருப்புக் கொள்கை",
 		PendingMessage: "இந்த படிவம் இன்னும் திறக்கப்படவில்லை. பின்னர் மீண்டும் வரவும்.",
@@ -304,13 +311,14 @@ var formLangs = map[string]langStrings{
 		StatusCancelled:  "ரத்துசெய்யப்பட்டது",
 	},
 	"ar": {
-		Lang: "ar", EmailLabel: "البريد الإلكتروني", CouponLabel: "قسيمة",
+		Lang: "ar", EmailLabel: "البريد الإلكتروني",
 		Total: "المجموع", Submit: "الانتقال إلى الدفع", ErrorAlert: "خطأ",
 		NoProductAlert:  "يرجى اختيار منتج واحد على الأقل",
 		SelectVariation: "اختر خيارًا", SelectVariationAlert: "يرجى اختيار خيار لكل منتج", InStock: "متوفر",
 		SubmitResponse: "إرسال", ThankYou: "شكراً لك!", ResponseReceived: "تم استلام ردك.",
-		FileUnsupported: "لا يمكن تحميل المرفقات في هذا النموذج.",
-		SelectOption:    "اختر خيارًا", SelectShipping: "اختر الشحن",
+		FileUnsupported:   "لا يمكن تحميل المرفقات في هذا النموذج.",
+		CouponUnsupported: "لا تُطبَّق رموز الخصم في هذا النموذج.",
+		SelectOption:      "اختر خيارًا", SelectShipping: "اختر الشحن",
 		Quantity:     "الكمية",
 		PrivacyLabel: "سياسة الخصوصية", TermsLabel: "شروط الخدمة", RefundLabel: "سياسة الاسترداد",
 		PendingMessage: "هذا النموذج غير مفتوح بعد. يرجى العودة لاحقاً.",

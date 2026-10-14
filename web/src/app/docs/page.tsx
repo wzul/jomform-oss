@@ -184,7 +184,7 @@ const GROUPS: Group[] = [
       {
         title: "Order forms",
         href: "/docs/customize#builder",
-        body: "Build order and response forms with a drag-and-drop builder — fields, products, images, coupons — and publish to your workspace URL or a custom domain.",
+        body: "Build order and response forms with a drag-and-drop builder — fields, products, images — and publish to your workspace URL or a custom domain.",
       },
       {
         title: "Products",

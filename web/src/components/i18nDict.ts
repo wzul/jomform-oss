@@ -1347,8 +1347,6 @@ export const DICT = {
   "blk.noteHint": { en: "Free-form message", ms: "Mesej bebas", zh: "自由填写的信息", ta: "சுதந்திரமான செய்தி", ar: "رسالة حرة" },
   "blk.checkbox": { en: "Checkbox", ms: "Kotak semak", zh: "复选框", ta: "தேர்வுப்பெட்டி", ar: "مربع اختيار" },
   "blk.checkboxHint": { en: "Extra option", ms: "Pilihan tambahan", zh: "附加选项", ta: "கூடுதல் விருப்பம்", ar: "خيار إضافي" },
-  "blk.coupon": { en: "Coupon", ms: "Kupon", zh: "优惠券", ta: "கூப்பன்", ar: "قسيمة" },
-  "blk.couponHint": { en: "Discount code", ms: "Kod diskaun", zh: "折扣码", ta: "தள்ளுபடி குறியீடு", ar: "كود الخصم" },
   "blk.divider": { en: "Divider", ms: "Pembahagi", zh: "分隔线", ta: "பிரிப்பான்", ar: "فاصل" },
   "blk.dividerHint": { en: "Separator line", ms: "Garis pemisah", zh: "分隔线", ta: "பிரிப்பு கோடு", ar: "خط فاصل" },
   // issue #173: Gravity-Forms-style field palette + per-field settings
@@ -1635,7 +1633,7 @@ export const DICT = {
   "land.step3b": { en: "Sales status updates itself, receipts sent automatically.", ms: "Status jualan naik sendiri, resit hantar automatik.", zh: "跟踪销售、发送收据、分析销售数据。", ta: "விற்பனையைக் கண்காணி, ரசீது அனுப்பி, வளரவும்.", ar: "تتبع المبيعات، أرسل الإيصالات، وحلل." },
   "land.buildForm": { en: "Build a form", ms: "Bina borang", zh: "+ 创建表单", ta: "+ படிவம் உருவாக்கு", ar: "+ أنشئ نموذجاً" },
   "land.login": { en: "Log in", ms: "Log masuk", zh: "登录", ta: "உள்நுழை", ar: "تسجيل الدخول" },
-  "land.f1": { en: "Order form in 5 minutes — drag-and-drop products, fields, images, coupons. No code.", ms: "Borang siap 5 minit — tarik produk, medan, imej, kupon. Tanpa kod.", zh: "拖放式表单构建器", ta: "இழுத்து விடும் படிவவாக்கி", ar: "منشئ نماذج بالسحب والإفلات" },
+  "land.f1": { en: "Order form in 5 minutes — drag-and-drop products, fields, images. No code.", ms: "Borang siap 5 minit — tarik produk, medan, imej. Tanpa kod.", zh: "拖放式表单构建器", ta: "இழுத்து விடும் படிவவாக்கி", ar: "منشئ نماذج بالسحب والإفلات" },
   "land.f2": { en: "Buyers pay online the moment they submit. Card, FPX, DuitNow QR, e-wallets.", ms: "Buyer bayar terus selepas submit. Kad, FPX, DuitNow QR, e-wallet.", zh: "CHIP 支付：卡 / FPX / DuitNow QR / 电子钱包", ta: "CHIP பணம்: கார்டு / FPX / DuitNow QR / மின்னணு பணப்பை", ar: "مدفوعات CHIP: بطاقة / FPX / DuitNow QR / محافظ" },
   "land.f3": { en: "AI-agent native: your ChatGPT/Claude agent controls the whole store via MCP — products, prices, sales, refunds. The most powerful order-form API in Malaysia.", ms: "AI-agent native: agent ChatGPT/Claude kau kawal seluruh kedai melalui MCP — produk, harga, jualan, refund. API borang paling power di Malaysia.", zh: "MCP 原生：AI 代理连接您的商店", ta: "MCP செயல்படும்: AI முகவர் கடையை இணைக்கும்", ar: "جاهز لـ MCP: وكلاء الذكاء يتصلون بمتجرك" },
   "land.f4": { en: "Sales analytics, CSV export, PDF receipts — free forever, no monthly fee.", ms: "Analitik jualan, eksport CSV, resit PDF — percuma selamanya, tiada yuran bulanan.", zh: "分析与 CSV 导出", ta: "பகுப்பாய்வு + CSV ஏற்றுமதி", ar: "تحليلات وتصدير CSV" },

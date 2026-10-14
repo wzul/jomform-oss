@@ -33,7 +33,7 @@ package formfields
 //
 // WHY A DENYLIST AND NOT "every type not in ValidTypes": a config's blocks also
 // carry decorative and pricing types (section, html, image, divider, product,
-// quantity, option, shipping, total, coupon) which are NOT field types and are
+// quantity, option, shipping, total) which are NOT field types and are
 // perfectly servable. The rule is about the (currently one) type that claims to
 // be an input and cannot be one.
 

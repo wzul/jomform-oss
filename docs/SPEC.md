@@ -75,7 +75,7 @@ audit_logs(id, account_id FK, actor, action, entity, entity_id, diff jsonb, crea
 **P0 (lancar):**
 1. Auth: email+argon2id, 2FA TOTP, session secure-cookie; account slug boleh ditukar (308 redirect lama→baru, method kekal)
 2. Produk: one-time **atau subscription** (billing period bulan/tahun, trial days)
-3. Form builder: drag-drop blok (header/gambar/teks/produk/kupon/penghantaran), live preview, autosave, tema preset, BM/EN
+3. Form builder: drag-drop blok (header/gambar/teks/produk/penghantaran), live preview, autosave, tema preset, BM/EN
 4. Public form: SSR pantas, jualan one-time & langganan
 5. Pembayaran CHIP:
    - One-time: `POST /purchases/` → redirect `checkout_url` → verify webhook `purchase.paid`

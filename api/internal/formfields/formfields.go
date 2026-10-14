@@ -164,7 +164,7 @@ func ValidateFields(regs []Field, fields map[string]string) error {
 
 // collectableTypes is the allowlist of builder-block types that collect a
 // value (mirrors the renderer's input set). Decorative/pricing blocks
-// (text, image, divider, product, option, shipping, total, coupon) are never
+// (text, image, divider, product, option, shipping, total) are never
 // part of a field contract.
 var collectableTypes = map[string]bool{
 	"name": true, "email": true, "phone": true, "textarea": true,

@@ -35,7 +35,7 @@ var ValidBlockTypes = map[BlockType]bool{
 	"product": true, "quantity": true, "option": true, "shipping": true,
 	"total": true,
 	// Legacy / decorative
-	"image": true, "divider": true, "coupon": true,
+	"image": true, "divider": true,
 }
 
 // fieldIDUnsafe matches any character that is not safe in a block id.
@@ -248,7 +248,7 @@ func Prompt(userPrompt string) string {
 	sb.WriteString("You are a form-builder assistant for JomForm. Turn the user's request into a JSON form config.\n")
 	sb.WriteString("Reply with ONLY a JSON object (no markdown, no preamble) matching this shape:\n")
 	sb.WriteString(`{"title": "<form title>", "blocks": [{"id": "<unique a-z0-9_- id>", "type": "<block type>", "value": "<field label>", "required": true|false, "placeholder": "<optional>", "choices": [{"label": "...", "value": "..."}]}], "theme": {"primary": "#hex", "background": "#hex", "text": "#hex", "card_background": "#hex", "card_border_radius": "16px", "font_family": "system-ui, sans-serif", "layout": "centered|full_width|split", "spacing": "compact|comfortable|spacious"}}` + "\n")
-	sb.WriteString("Allowed block types (use only these): text, textarea, number, select, radio, checkbox, name, email, phone, date, time, website, section, html, address, file, consent, hidden, list, repeater, image-choice, captcha, product, quantity, option, shipping, total, image, divider, coupon.\n")
+	sb.WriteString("Allowed block types (use only these): text, textarea, number, select, radio, checkbox, name, email, phone, date, time, website, section, html, address, file, consent, hidden, list, repeater, image-choice, captcha, product, quantity, option, shipping, total, image, divider.\n")
 	sb.WriteString("Rules:\n")
 	sb.WriteString("- Each block needs a unique id (a-z, 0-9, _ , -) and a human label in `value`.\n")
 	sb.WriteString("- For select/radio/checkbox/image-choice/option/shipping blocks, provide `choices` (label + value).\n")
