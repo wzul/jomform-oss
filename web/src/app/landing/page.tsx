@@ -282,6 +282,54 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* use case showcase — club / society membership with recurring fees
+          (card t_72d8fbac). Every bullet is a behaviour that exists today: the
+          month|year billing period and the hourly due-charge sweep
+          (api/internal/payments/recurring.go), the card token saved at
+          checkout, the /subscriptions dashboard, and the subscription MCP
+          tools. No receipt bullet — a subscription payment sends no buyer
+          receipt (api/internal/payments/purchases.go skips it for
+          SaleTypeSubscription). */}
+      <section className="mx-auto max-w-4xl border-t border-slate-100 px-6 py-16">
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-gradient-to-br from-teal-50 via-white to-white p-8">
+          <div className="flex flex-col items-center gap-6 sm:flex-row sm:items-start">
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-teal-100 text-4xl">
+              🎟️
+            </div>
+            <div className="text-center sm:text-left">
+              <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">
+                {t("land.membershiptitle")}
+              </h2>
+              <p className="mt-3 max-w-xl text-sm leading-relaxed text-slate-600">
+                {t("land.membershipbody")}
+              </p>
+              <ul className="mt-5 grid grid-cols-1 gap-2 text-sm text-slate-600 sm:grid-cols-2">
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.membership1")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.membership2")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.membership3")}
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--jf-primary)]">✓</span> {t("land.membership4")}
+                </li>
+              </ul>
+              <div className="mt-6 flex flex-wrap items-center justify-center gap-3 sm:justify-start">
+                <a
+                  href="/builder"
+                  className="rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                >
+                  {t("land.membershipcta")}
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* features */}
       <section className="mx-auto max-w-4xl border-t border-slate-100 px-6 py-16">
         <div className="grid grid-cols-1 gap-8 sm:grid-cols-2">
