@@ -63,6 +63,11 @@ const AUTHED_ROUTES: { route: string; appFile: string; what: string }[] = [
     appFile: "../app/settings/page.tsx",
     what: "the eleven-tab strip (card t_4d32da9a added its axe arm)",
   },
+  {
+    route: "/subscriptions",
+    appFile: "../app/subscriptions/page.tsx",
+    what: "the subscription table and its per-row write actions (card t_0fdbe189)",
+  },
 ];
 
 /** Specs selected by the `a11y` project: the prefix IS the selection rule. */

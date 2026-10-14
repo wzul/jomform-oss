@@ -561,7 +561,7 @@ export default function MediaPage() {
                             setConfirmPurge(m);
                             setError("");
                           }}
-                          className="jf-btn-ghost min-h-[44px] text-rose-600 hover:bg-rose-50 sm:min-h-10"
+                          className="jf-btn-ghost min-h-[44px] text-rose-700 hover:bg-rose-50 sm:min-h-10"
                         >
                           {t("media.purge")}
                         </button>

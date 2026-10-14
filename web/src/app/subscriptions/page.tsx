@@ -324,7 +324,7 @@ export default function Subscriptions() {
                             onClick={() => cancelOne(sub)}
                             disabled={busyId === sub.id}
                             title={t("sub.tokenRetained")}
-                            className="jf-btn-ghost px-2.5 py-1 text-xs text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                            className="jf-btn-ghost px-2.5 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:opacity-50"
                           >
                             {busyId === sub.id ? "…" : t("sub.cancel")}
                           </button>

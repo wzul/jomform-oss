@@ -1546,7 +1546,7 @@ function FormSettingsInner() {
                               <button
                                 type="button"
                                 onClick={() => setFsLogo("")}
-                                className="jf-btn-ghost px-3 py-1 text-[11px] text-red-600"
+                                className="jf-btn-ghost px-3 py-1 text-[11px] text-red-700"
                               >
                                 {t("mediaPicker.remove")}
                               </button>
@@ -1726,7 +1726,7 @@ function FormSettingsInner() {
                                       <button
                                         type="button"
                                         onClick={() => setMenuBestSeller("")}
-                                        className="jf-btn-ghost px-2 py-1 text-[11px] text-red-600"
+                                        className="jf-btn-ghost px-2 py-1 text-[11px] text-red-700"
                                       >
                                         {t("set.menuClearBestSeller")}
                                       </button>
@@ -1770,7 +1770,7 @@ function FormSettingsInner() {
                                         <button
                                           type="button"
                                           onClick={() => setMenuCategories((arr) => arr.filter((_, j) => j !== i))}
-                                          className="jf-btn-ghost px-2 py-1 text-[11px] text-red-600"
+                                          className="jf-btn-ghost px-2 py-1 text-[11px] text-red-700"
                                         >
                                           {t("set.menuCatRemove")}
                                         </button>
