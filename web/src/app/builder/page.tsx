@@ -333,6 +333,16 @@ export default function Builder() {
   const dragType = useRef<BlockType | null>(null);
   const dragIdx = useRef<number | null>(null);
   const [dropAt, setDropAt] = useState<number | null>(null);
+  /* Card t_769a5cb9: the drag state the UI PAINTS is state, not a ref.
+     `dragging` used to be computed during render as `dragType.current !== null ||
+     dragIdx.current !== null` while the drag-start handlers only mutated those
+     refs — and a ref mutation schedules no render, so the components committed
+     before the drag kept reading `false` (that is what made the drop-zone tint,
+     the insertion gap and the palette dim dead; the drop path reads the refs
+     directly, which is why the drop worked anyway). Reading a ref during render
+     is the defect, so the flag the three paint sites share is now real render
+     input; the two refs stay as the payload the drop handlers consume. */
+  const [dragging, setDragging] = useState(false);
 
   // Issue #503: 401/403 → /login, the same redirect Shell.signOut() uses.
   const goToLogin = useCallback(() => {
@@ -997,7 +1007,9 @@ export default function Builder() {
      path that drops the selection closes the panel instead of re-creating it. */
   const panelVisible = panelOpen && !!selectedBlock;
 
-  const dragging = dragType.current !== null || dragIdx.current !== null;
+  // `dragging` (the palette dim, the insertion gaps, the drop ghost's tint) is
+  // declared with the other drag state at the top of the component — as STATE,
+  // so the render that paints it is the render the drag started in (t_769a5cb9).
 
   // Issue #61: upload an image for the selected block via the direct S3
   // upload endpoint (presign superseded by the owner's server-side-optimise
@@ -1688,6 +1700,7 @@ export default function Builder() {
                       key={p.type}
                       draggable
                       onDragStart={(e) => paletteDragStart(e, p.type)}
+                      onDragEnd={endDrag}
                       onClick={() => addBlock(p.type)}
                       title={typeHint(p.type)}
                       className={`cursor-grab select-none rounded-lg border border-[var(--jf-border)] bg-white px-2.5 py-2 transition-colors hover:border-[#7170ff]/40 hover:bg-indigo-50 active:cursor-grabbing ${
@@ -1740,11 +1753,7 @@ export default function Builder() {
                 <div
                   draggable
                   onDragStart={(e) => blockDragStart(e, i)}
-                  onDragEnd={() => {
-                    dragIdx.current = null;
-                    dragType.current = null;
-                    setDropAt(null);
-                  }}
+                  onDragEnd={endDrag}
                   onDragOver={(e) => canvasDragOver(e, i + 1)}
                   onDrop={(e) => canvasDrop(e, i + 1)}
                   onClick={() => openBlockPanel(b.id)}
@@ -1981,6 +1990,7 @@ export default function Builder() {
   function paletteDragStart(e: React.DragEvent, t: BlockType) {
     dragType.current = t;
     dragIdx.current = null;
+    setDragging(true);
     e.dataTransfer.effectAllowed = "copy";
     e.dataTransfer.setData("text/plain", `type:${t}`);
   }
@@ -1988,8 +1998,26 @@ export default function Builder() {
   function blockDragStart(e: React.DragEvent, i: number) {
     dragIdx.current = i;
     dragType.current = null;
+    setDragging(true);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", `idx:${i}`);
+  }
+
+  /* Card t_769a5cb9: ONE place where a drag stops. `dragend` fires on the SOURCE
+     element, and for an ABANDONED drag (released outside the canvas) it is the
+     ONLY signal there is — no `drop` runs at all, so `canvasDrop` never got to
+     clear anything. Measured before this existed, with a real held drag released
+     over the palette column: `dragend` was delivered, the trailing drop zone
+     stayed painted at h=40 with its tint, every palette item stayed at
+     `opacity: 0.6`, and `dragType`/`dragIdx` stayed SET — so the next unrelated
+     drag over the canvas was taken for a block drag and dropped a block nobody
+     carried. The block cards already cleared the refs here; the palette items
+     had no `onDragEnd` at all. */
+  function endDrag() {
+    dragType.current = null;
+    dragIdx.current = null;
+    setDropAt(null);
+    setDragging(false);
   }
 
   function canvasDragOver(e: React.DragEvent, i: number) {
@@ -1997,8 +2025,8 @@ export default function Builder() {
     e.stopPropagation();
     // The guard below reads the REFS, not the render-time `dragging` const.
     //
-    // `dragging` (line ~975) is `dragType.current !== null || dragIdx.current !==
-    // null` evaluated during a render, and refs do not schedule one. So the
+    // `dragging` is `dragType.current !== null || dragIdx.current !== null`
+    // evaluated during a render, and refs do not schedule one. So the
     // FIRST `dragover` after `dragstart` ran inside the previous render's
     // closure — where both refs were still null — and returned here: the
     // insertion highlight never appeared while dragging, even though the drop
@@ -2009,6 +2037,10 @@ export default function Builder() {
     // reachable at all; the `setDropAt` below then re-renders, which is the
     // render in which `dragging` reads correctly for the palette's dim and the
     // insertion gaps (card t_93b097c6).
+    //
+    // t_769a5cb9 keeps this check (the refs are the live truth for the drop)
+    // and ALSO moves the painted flag to state, so the dim no longer has to wait
+    // for this first `dragover` to happen at all.
     if (dragType.current === null && dragIdx.current === null) return;
     setDropAt(i);
   }
@@ -2018,9 +2050,7 @@ export default function Builder() {
     e.stopPropagation();
     const t = dragType.current;
     const from = dragIdx.current;
-    dragType.current = null;
-    dragIdx.current = null;
-    setDropAt(null);
+    endDrag();
     if (t !== null) insertAt(i, t, null);
     else if (from !== null) insertAt(i, null, from);
   }
