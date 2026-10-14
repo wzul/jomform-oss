@@ -385,7 +385,20 @@ func TestEveryDownFileHasMatchingUp(t *testing.T) {
 // suffix. A file that does not match carries no number at all, so the
 // uniqueness guard below cannot see it — which is why a non-conforming name is
 // a failure in its own right rather than a skipped entry.
-var migrationFileRE = regexp.MustCompile(`^[0-9]{6}_[a-z0-9_]+\.(up|down)\.sql$`)
+//
+// The slug class allows BOTH '_' and '-' because `make migrate-new` — the
+// workflow AGENTS.md prescribes — produces hyphens: golang-migrate's createCmd
+// echoes NAME verbatim into the filename
+// (`basename := fmt.Sprintf("%s_%s.%s%s", version, name, direction, ext)`,
+// internal/cli/commands.go:122, upstream master), so
+// `make migrate-new NAME=add-column` writes 000071_add-column.up.sql. This
+// guard used to reject exactly that correctly-numbered file and blame the
+// number. The hyphen is a filename character, not a numbering one, so it is
+// accepted here instead of being policed; what stays enforced is the six-digit
+// number and the direction suffix. TestMigrateNewOutputSatisfiesMigrationFileRE
+// pins this regex to the generator's output so the two cannot drift apart
+// again.
+var migrationFileRE = regexp.MustCompile(`^[0-9]{6}_[a-z0-9_-]+\.(up|down)\.sql$`)
 
 // duplicatedMigrationNumbers pins the number collisions that ALREADY exist on
 // main. They are pinned, not endorsed: 27 files across 10 numbers share a
@@ -460,8 +473,10 @@ func TestMigrationNumbersAreUnique(t *testing.T) {
 	for _, e := range entries {
 		name := e.Name()
 		if !migrationFileRE.MatchString(name) {
-			t.Errorf("migration %s does not follow NNNNNN_slug.(up|down).sql — every migration must carry a "+
-				"six-digit number so the uniqueness guard can see it (see AGENTS.md 'Adding a migration safely')", name)
+			t.Errorf("migration %s does not follow NNNNNN_slug.(up|down).sql — it must carry a six-digit number "+
+				"AND a lower-case slug (letters, digits, '_' or '-') so the uniqueness guard can see it (see AGENTS.md "+
+				"'Adding a migration safely'); a name with no six-digit prefix is invisible to this guard rather than a "+
+				"skipped entry", name)
 			continue
 		}
 		switch {
