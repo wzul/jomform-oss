@@ -2,7 +2,8 @@
 //
 // The login breaker keys `jf:loginfail:ip:<addr>` in a Valkey DB every checkout
 // shares, with a 15-minute TTL, and the auth fixture clears only the counters
-// under THIS process's own /24 (testIPFamilyFor). An address that no process can
+// under THIS process's own address block (testIPPoolFor, two /24s). An address
+// that no process can
 // derive is therefore a counter the reclaim can never reach: one run drives it
 // to the lockout threshold, the next lane's run inherits it, and a peer asserts
 // 429 where it wants 401 — the exact cross-process flake the scoped reclaim was
@@ -114,7 +115,7 @@ func TestNoLiteralClientIPInTests(t *testing.T) {
 		t.Fatalf("%d hand-written client address(es) in this package's tests — a test\n"+
 			"address must come from %s(t) so the auth fixture can reclaim its\n"+
 			"jf:loginfail:ip:<addr> / jf:2fa_pending:<ip>:<email> counters on the SHARED\n"+
-			"test Valkey. A literal sits outside every process's /24, so the counter it\n"+
+			"test Valkey. A literal sits outside every process's address block, so the counter it\n"+
 			"writes outlives the run and the next lane inherits it:\n  %s",
 			len(findings), testIPHelperName, strings.Join(findings, "\n  "))
 	}

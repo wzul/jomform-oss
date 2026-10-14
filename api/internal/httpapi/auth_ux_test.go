@@ -334,7 +334,7 @@ func requireUserID(t *testing.T, h *AuthHandlers, email string) string {
 	return u.ID
 }
 
-// mustTOTP returns a current TOTP code for a secret, failing the test.
+// mustTOTP returns the next TOTP code for a secret, failing the test.
 //
 // Issue #528: a TOTP code is now single-use, so this returns a code from a
 // strictly LATER time-step on each call for the same secret — modelling a real
@@ -364,32 +364,55 @@ func requireUserID(t *testing.T, h *AuthHandlers, email string) string {
 //
 // and it is why the test passes 12/12 in isolation and reds occasionally inside a
 // package run. Waiting until the clock is at least `totpBoundaryMargin` seconds
-// into the current step before generating the FIRST code makes all three offsets
-// (base-1, base, base+1) live at least that long, so no generation can race the
+// into the current step before generating a code whose step is the current
+// `base-1` makes that code live at least that long, so no generation can race the
 // boundary. It costs the wait once per secret — usually nothing, since a step is
 // 30s — and the flake it removes used to cost a whole package run.
+//
+// THE SEQUENCE CONTINUES ACROSS -test.count PASSES (card t_7655c2bf). This used
+// to hold a three-entry window per secret and PANIC on the 4th call, so
+// `go test ./internal/httpapi/ -count=2` died here in TestMustTOTPStepsAscend —
+// the same defect class as the per-process test-IP pool in testutil_test.go: a
+// per-process budget that a rerun spends. The window is not a property of the
+// fixture; it is the server's ±1 acceptance around the CURRENT step, and a real
+// authenticator answers a 4th request by waiting for the next step. So the claim
+// is `totpClaim(lastStep, base)` — ascension from the step handed out last, and
+// the ±1 window from the clock — and a claim ahead of the window sleeps until
+// the clock reaches it. Both a later -count pass (claim far behind the clock:
+// pulled up to `base-1`, still ascending) and a 4th code in one window (claim one
+// step ahead: waits) come out of that one rule.
 func mustTOTP(secret string) string {
-	totpStepAlloc.Lock()
-	first := totpStepAlloc.used[secret] == 0
-	totpStepAlloc.Unlock()
+	for {
+		totpStepAlloc.Lock()
+		base := time.Now().Unix() / totpTestPeriod
+		step, waitSteps := totpClaim(totpStepAlloc.used[secret], base)
+		if waitSteps == 0 {
+			totpStepAlloc.used[secret] = step
+		}
+		totpStepAlloc.Unlock()
 
-	if first {
-		waitOutStepBoundary()
+		if waitSteps > 0 {
+			// The step is ahead of the window, so a code at it is not valid yet.
+			// One boundary is enough for every sequence this package asks for
+			// (three codes fill a window); more than that means the per-secret
+			// claim has been corrupted, and sleeping would hide it.
+			if waitSteps > 2 {
+				panic(fmt.Sprintf("mustTOTP: the next step for secret %s is %d steps ahead of the clock (base %d) — no caller in this package asks for that many codes at once",
+					secret, waitSteps, base))
+			}
+			time.Sleep(time.Until(time.Unix((base+waitSteps)*totpTestPeriod, 0)))
+			continue
+		}
+		if step == base-1 && waitOutBoundaryGuard() {
+			// This code dies with the step it belongs to, so the clock needs room
+			// before it is generated (card t_e74defb7). The wait can leave the
+			// clock in the next step, so the claim is re-derived rather than
+			// committed.
+			waitOutStepBoundary()
+			continue
+		}
+		return totpCodeAtStep(secret, step)
 	}
-
-	totpStepAlloc.Lock()
-	base := time.Now().Unix() / totpTestPeriod
-	// Ascending, and it must stay ascending: see the ConsumeTOTPStep note above.
-	window := [3]int64{base - 1, base, base + 1}
-	idx := totpStepAlloc.used[secret]
-	totpStepAlloc.used[secret] = idx + 1
-	totpStepAlloc.Unlock()
-
-	if int(idx) >= len(window) {
-		panic("mustTOTP: exhausted the ±1 drift window for this secret; " +
-			"a real authenticator cannot supply another valid code yet")
-	}
-	return totpCodeAtStep(secret, window[idx])
 }
 
 // totpBoundaryMargin is how far into a step the FIRST code of a secret may be

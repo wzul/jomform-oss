@@ -3,8 +3,11 @@ package httpapi
 import (
 	"fmt"
 	"log/slog"
+	"math/bits"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -68,11 +71,11 @@ func uniqueTestIP() string {
 // that test: every call from the same test gets the same address, and a
 // different test (or the same test on a later -count pass) gets a fresh one.
 //
-// It exists because a test-only address must sit inside the /24 the auth
-// fixture reclaims (testIPFamilyFor), and a hand-written literal never does.
+// It exists because a test-only address must sit inside the address block the
+// auth fixture reclaims (testIPPoolFor), and a hand-written literal never does.
 // `jf:loginfail:ip:<addr>` has a 15-minute TTL in a Valkey DB SHARED by every
 // checkout, and the fixture deliberately deletes only counters under THIS
-// process's /24 — so a literal like 10.20.0.2 is a counter the reclaim can
+// process's block — so a literal like 10.20.0.2 is a counter the reclaim can
 // never clear. One test drives it to the lockout threshold and the next lane's
 // run inherits it, which is the 429-instead-of-401 flake this whole mechanism
 // exists to remove. Measured on the pre-fix tree: after one full run,
@@ -84,11 +87,11 @@ func uniqueTestIP() string {
 //     lockout (TestAuthLoginLockoutAfter10) would find the counter already at
 //     the threshold on the next -count pass, and assert 429 where it wants 401.
 //     Returning a fresh address per pass is what keeps -count deterministic.
-//   - It is NOT a fresh address per call, which would spend the 254-address
-//     per-process budget on call sites rather than on tests: the package has
-//     well over a hundred IP-bearing request sites but only ~60 tests that need
-//     one, so per-call allocation would exhaust maxTestIPsPerProcess after a
-//     couple of -count passes and panic inside a test run.
+//   - It is NOT a fresh address per call, which would spend the per-process
+//     budget on call sites rather than on tests: the package has well over a
+//     hundred IP-bearing request sites but only ~60 tests that need one, so
+//     per-call allocation would exhaust maxTestIPsPerProcess in a pass or two
+//     and panic inside a test run.
 //
 // Tests still share one address across the requests that must be seen as one
 // client (an arm + its email-code, a lockout sequence, a magic-link request and
@@ -139,54 +142,160 @@ var (
 	testIPAddr string
 )
 
-// maxTestIPsPerProcess bounds the per-process counter. Octet 4 is the only one
-// left for the call index, so exceeding it must FAIL LOUDLY rather than wrap: a
-// silent repeat is precisely the stale-counter bug this helper exists to
-// prevent (issue #474). The package has a handful of uniqueTestIP call sites, so
-// even a -count rerun stays far below the bound.
-const maxTestIPsPerProcess = 254
+// testIPHostsPerSlash24 is the number of usable host addresses one /24
+// contributes: .1–.254. The first and last addresses of a block are not handed
+// out, so a test address is always a host address and never the network or
+// broadcast one of its /24.
+const testIPHostsPerSlash24 = 254
 
-// testIPFor is the pure derivation behind uniqueTestIP:
+// testIPSlash24sPerProcess is how many /24s ONE process owns.
 //
-//		10 . <pid low byte> . <pid high byte> . <call index>
+// It has to be more than one. This suite spends 139 uniqueTestIP addresses per
+// pass (measured 2026-10-14 by reading the counter at the end of each pass of a
+// `-count=3` run: 139 / 278 / 417), so `-test.count=3` asks for 417 addresses and
+// a single /24 — 254 — is exhausted during pass 2: the pre-fix run died at call
+// 255, which is the panic card t_7655c2bf measured. Two /24s = 508 addresses
+// covers -count=3 and no more, and -count=4 (556) must therefore panic rather
+// than wrap (see maxTestIPsPerProcess). The block cannot grow further while the
+// pid-churn invariant on testIPPoolCount holds — a /22 (1024 addresses) would
+// need a block count below the measured churn — so a suite that grows past ~169
+// IP-consuming tests per pass needs a different mechanism, not a bigger number
+// here.
+const testIPSlash24sPerProcess = 2
+
+// maxTestIPsPerProcess bounds the per-process counter. Exceeding it must FAIL
+// LOUDLY rather than wrap: a silent repeat is precisely the stale-counter bug
+// this helper exists to prevent (issue #474), because the counter a repeated
+// address reads is one this process already drove to the lockout threshold, and
+// the reclaim that clears it runs once per PROCESS, not once per pass.
+const maxTestIPsPerProcess = testIPHostsPerSlash24 * testIPSlash24sPerProcess
+
+// testIPPoolCount is how many per-process address blocks the fixture can hand
+// out: 10.0.0.0/8 holds 2^24 addresses, a block is two /24s (2^9), so 2^15
+// blocks.
 //
-//	  - Octets 2-3 encode the pid, which the kernel keeps unique among LIVE
-//	    processes, so two `go test` binaries running this package at the same time
-//	    never share an address — and therefore never share the
-//	    `jf:loginfail:ip:<addr>` counter in the shared test Valkey. The mapping is
-//	    injective for pids within the same 64K block; it aliases only for pids
-//	    65536 apart, which two concurrent runs cannot be: processes started at the
-//	    same instant on this host hold pids a handful apart (measured 1-8), and the
-//	    counters have a 15-minute TTL, so no longer-relevant pid can hold one.
+// This number is load-bearing, not a detail: it is the modulus of the pid →
+// block mapping, so two pids that differ by a multiple of it own the SAME
+// addresses. The block must therefore be bigger than the number of pids the
+// host allocates inside the 15-minute TTL of `jf:loginfail:ip:<addr>`, so that
+// a process sharing a peer's block can only be one whose peer's counters have
+// expired. Measured on this host on 2026-10-14 (`cat
+// /proc/sys/kernel/ns_last_pid` a minute apart): 1447 pids/min, i.e. 21705 pids
+// per TTL — well under 32768, whereas a /22 (16384 blocks) would sit UNDER it
+// and re-open the cross-process flake. TestTestIPPoolCountOutlastsTheCounterTTL
+// pins that.
+const testIPPoolCount = 1 << 15
+
+// testIPPool is the block of synthetic client addresses ONE process owns: two
+// consecutive /24s (a /23), each contributing its 254 host addresses. Every
+// address testIPFor can produce from a pid sits inside this block, which is
+// what lets the auth fixture reclaim its own stale login counters without
+// touching a peer's (authTestValkey / reclaimOwnLoginCounters).
 //
-//	    Both pid octets are encoded deliberately. An address that varied by a
-//	    single octet per process would be isolated only while every live pid
-//	    differs in that octet, and on this host that is measurably false: three
-//	    processes started at the same instant held pids 3734250, 3734251 and
-//	    3734252 (low bytes 234, 235, 236) beside processes in the neighbouring
-//	    PID_NR block (low bytes 43, 44, 45), because pid_max is 4194304.
-//	  - Octet 4 is the per-process call index (issue #474's -count case).
-//
-// Encoding the pid in the upper octets — rather than, say, borrowing octet 3 for
-// counter overflow — keeps a process's whole address range inside ONE /24, which
-// is what lets the fixture reclaim its own stale counters without touching a
-// peer's (see authTestValkey / testIPFamilyFor).
-func testIPFor(pid, n uint32) string {
-	if n == 0 || n > maxTestIPsPerProcess {
-		panic(fmt.Sprintf("uniqueTestIP: call %d is outside the %d addresses this process owns in %s* — the fixture's per-process counter must not wrap, because a reused address would read a login-failure counter this process had already driven to the lockout threshold",
-			n, maxTestIPsPerProcess, testIPFamilyFor(pid)))
-	}
-	return fmt.Sprintf("10.%d.%d.%d", pid&0xff, (pid>>8)&0xff, n)
+// It is a struct rather than a prefix string because the block is no longer one
+// /24: ownership is "the address's octets fall inside the block", which a string
+// prefix can no longer express (10.40.4. and 10.40.5. are both inside
+// 10.40.4.0/23, and 10.40.6. is not).
+type testIPPool struct {
+	octet2 uint32 // the block's second octet — fixed
+	octet3 uint32 // the block's third octet — the /23 base, i.e. even
 }
 
-// testIPFamilyFor is the /24 one process owns, as a Valkey key pattern fragment:
-// every address testIPFor can produce from this pid sits inside it.
+// String renders the block as its CIDR, for panic messages and failures. The
+// prefix length is derived from the block's width, so it cannot drift from
+// testIPSlash24sPerProcess.
+func (p testIPPool) String() string {
+	// log2 of the number of /24s in the block: 2 /24s -> a /23.
+	blockBits := bits.Len32(testIPSlash24sPerProcess) - 1
+	return fmt.Sprintf("10.%d.%d.0/%d", p.octet2, p.octet3, 24-blockBits)
+}
+
+// families lists the /24 key-prefix fragments of the block, which is the scope
+// the reclaim SCANs: `jf:loginfail:ip:` + one of these + `*`.
+func (p testIPPool) families() []string {
+	out := make([]string, 0, testIPSlash24sPerProcess)
+	for i := uint32(0); i < testIPSlash24sPerProcess; i++ {
+		out = append(out, fmt.Sprintf("10.%d.%d.", p.octet2, p.octet3+i))
+	}
+	return out
+}
+
+// owns reports whether ip is an address THIS block can hand out — the exact
+// shape testIPFor produces, not merely a string that starts like one.
+func (p testIPPool) owns(ip string) bool {
+	octets, ok := parseTestIPv4(ip)
+	if !ok {
+		return false
+	}
+	return octets[0] == 10 &&
+		octets[1] == p.octet2 &&
+		octets[2] >= p.octet3 && octets[2] < p.octet3+testIPSlash24sPerProcess &&
+		octets[3] >= 1 && octets[3] <= testIPHostsPerSlash24
+}
+
+// testIPPoolFor maps a pid onto the block of addresses that process owns:
 //
-// It is also the scope the auth fixture reclaims stale login counters under
-// (authTestValkey): a process may delete a counter only if the address is one it
-// could have written.
-func testIPFamilyFor(pid uint32) string {
-	return fmt.Sprintf("10.%d.%d.", pid&0xff, (pid>>8)&0xff)
+//	k = pid mod testIPPoolCount  ->  the /23 at 10.(k>>7).((k&0x7f)<<1).0
+//
+// Encoding the pid in both upper octets is deliberate (issue #474): a
+// single-octet derivation isolated two processes only while every live pid
+// differed in that octet, and on this host that is measurably false — three
+// processes started at the same instant held pids 3734250, 3734251 and 3734252
+// (low bytes 234, 235, 236) beside processes in the neighbouring PID_NR block
+// (low bytes 43, 44, 45), because pid_max is 4194304.
+//
+// The mapping is injective for any two pids less than testIPPoolCount apart —
+// including the ones a concurrent `go test` can really hold (measured 1-8, and
+// the block-adjacent +256 case) — and aliases at exactly testIPPoolCount. That
+// alias is the boundary of the guarantee, and it is safe only because of the
+// pid-churn argument on testIPPoolCount; both halves are pinned by
+// TestUniqueTestIPIsPerProcess and TestTestIPPoolCountOutlastsTheCounterTTL.
+func testIPPoolFor(pid uint32) testIPPool {
+	k := pid & (testIPPoolCount - 1)
+	return testIPPool{octet2: k >> 7, octet3: (k & 0x7f) << 1}
+}
+
+// testIPFor is the pure derivation behind uniqueTestIP: call n of a process is
+//
+//	10 . <pid mod testIPPoolCount encoded> . <n mapped onto the block>
+//
+// The call index fills the block a /24 at a time — .1–.254 of the first /24,
+// then .1–.254 of the second — so n=1..254 is the old single-/24 range
+// unchanged, and n carries on into the block's second /24 instead of panicking
+// at 255.
+func testIPFor(pid, n uint32) string {
+	if n == 0 || n > maxTestIPsPerProcess {
+		panic(fmt.Sprintf("uniqueTestIP: call %d is outside the %d addresses this process owns in %s — the fixture's per-process counter must not wrap, because a reused address would read a login-failure counter this process had already driven to the lockout threshold",
+			n, maxTestIPsPerProcess, testIPPoolFor(pid)))
+	}
+	pool := testIPPoolFor(pid)
+	return fmt.Sprintf("10.%d.%d.%d",
+		pool.octet2,
+		pool.octet3+(n-1)/testIPHostsPerSlash24,
+		(n-1)%testIPHostsPerSlash24+1)
+}
+
+// parseTestIPv4 parses a dotted quad the way testIPFor writes one: four decimal
+// octets, no leading zeros (so "10.1.2.01" is not mistaken for "10.1.2.1"), no
+// sign, no port, no extra suffix. A key found by a SCAN pattern that merely
+// starts like an address must not be read as one.
+func parseTestIPv4(ip string) ([4]uint32, bool) {
+	var out [4]uint32
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return out, false
+	}
+	for i, part := range parts {
+		if part == "" || len(part) > 3 || (len(part) > 1 && part[0] == '0') {
+			return out, false
+		}
+		v, err := strconv.Atoi(part)
+		if err != nil || v < 0 || v > 255 || strconv.Itoa(v) != part {
+			return out, false
+		}
+		out[i] = uint32(v)
+	}
+	return out, true
 }
 
 // TestUniqueTestIPIsPerProcess pins the property that makes the fixture safe
@@ -197,11 +306,13 @@ func testIPFamilyFor(pid uint32) string {
 func TestUniqueTestIPIsPerProcess(t *testing.T) {
 	pid := uint32(os.Getpid())
 
-	// One process's whole range must be its own — for the pids a peer can
+	// One process's whole BLOCK must be its own — for the pids a peer can
 	// actually hold beside us. Processes started at the same time hold adjacent
 	// pids (measured 1-8 apart, hence the small offsets) and both make their
 	// first call at index 1; the same-octet peer +256 is here because that is the
-	// offset a single-octet derivation would silently collide on.
+	// offset a single-octet derivation would silently collide on, and +20000
+	// pins that the block is wider than a single /24 (a block per /24 would
+	// collide with a peer a few hundred pids away, which is a live peer).
 	ours := map[string]uint32{}
 	for n := uint32(1); n <= maxTestIPsPerProcess; n++ {
 		ip := testIPFor(pid, n)
@@ -211,16 +322,19 @@ func TestUniqueTestIPIsPerProcess(t *testing.T) {
 		}
 		ours[ip] = n
 	}
-	peers := []uint32{pid + 1, pid + 2, pid + 3, pid + 7, pid + 100, pid + 256, pid + 1000}
+	if len(ours) != maxTestIPsPerProcess {
+		t.Fatalf("%d calls produced only %d distinct addresses — the block is not being filled one address per call", maxTestIPsPerProcess, len(ours))
+	}
+	peers := []uint32{pid + 1, pid + 2, pid + 3, pid + 7, pid + 100, pid + 256, pid + 1000, pid + 20000}
 	for _, peer := range peers {
 		mine, theirs := testIPFor(pid, 1), testIPFor(peer, 1)
 		if mine == theirs {
 			t.Fatalf("pid %d and pid %d derive the same first test IP %s — two concurrent `go test` binaries would share the jf:loginfail:ip counter",
 				pid, peer, mine)
 		}
-		if testIPFamilyFor(pid) == testIPFamilyFor(peer) {
-			t.Fatalf("pid %d and pid %d own the same /24 %s* — the fixture's scoped counter cleanup would clobber the peer's live counters",
-				pid, peer, testIPFamilyFor(pid))
+		if testIPPoolFor(pid) == testIPPoolFor(peer) {
+			t.Fatalf("pid %d and pid %d own the same address block %s — the fixture's scoped counter cleanup would clobber the peer's live counters",
+				pid, peer, testIPPoolFor(pid))
 		}
 		for n := uint32(1); n <= maxTestIPsPerProcess; n++ {
 			theirs := testIPFor(peer, n)
@@ -229,6 +343,16 @@ func TestUniqueTestIPIsPerProcess(t *testing.T) {
 					pid, peer, theirs, whose, n)
 			}
 		}
+	}
+
+	// The alias is the BOUNDARY of that guarantee, so it is stated rather than
+	// assumed: two pids exactly testIPPoolCount apart own the same block. It is
+	// harmless only because a pid that far away is ~23 minutes away in start
+	// time, which outlasts the counters' 15-minute TTL — the argument pinned by
+	// TestTestIPPoolCountOutlastsTheCounterTTL.
+	if testIPPoolFor(pid) != testIPPoolFor(pid+testIPPoolCount) {
+		t.Errorf("pid %d and pid %d (testIPPoolCount apart) own different blocks — the modulus this fixture's safety argument is written against no longer holds",
+			pid, pid+testIPPoolCount)
 	}
 
 	// The counter must not wrap silently: a repeat would read this process's own
@@ -242,5 +366,34 @@ func TestUniqueTestIPIsPerProcess(t *testing.T) {
 			}()
 			_ = testIPFor(pid, n)
 		}()
+	}
+}
+
+// TestTestIPPoolCountOutlastsTheCounterTTL is the guard on the ONE number that
+// makes the pid → block alias harmless, and it exists because that number can be
+// spent by accident. The fixture's safety argument is not "blocks never repeat"
+// — they do, at a multiple of testIPPoolCount apart — it is that a peer sharing
+// a block has been gone long enough for its `jf:loginfail:ip:<addr>` counters
+// (15-minute TTL, in a Valkey DB every checkout shares) to have expired.
+//
+// So the block count must exceed the pids this host allocates inside that TTL.
+// Measured here on 2026-10-14 with
+//
+//	a=$(cat /proc/sys/kernel/ns_last_pid); sleep 60; b=$(cat /proc/sys/kernel/ns_last_pid)
+//
+// -> 1447 pids/min, i.e. 21705 per TTL window. The count is 2^15 = 32768 today;
+// a /22 (16384 blocks, i.e. a 1016-address block) would sit UNDER the measured
+// churn and would therefore let two live processes own the same addresses —
+// which is exactly the cross-process flake this whole mechanism removes. Enlarge
+// a process's block only together with this bound.
+func TestTestIPPoolCountOutlastsTheCounterTTL(t *testing.T) {
+	// measuredPidsPerCounterTTL is the host's pid churn inside the counters'
+	// 15-minute TTL, as measured above. It is a floor for testIPPoolCount, not a
+	// target: leaving it at the measured value means the check fails the moment
+	// the block count drops to the churn the fix was written against.
+	const measuredPidsPerCounterTTL = 21705
+	if testIPPoolCount <= measuredPidsPerCounterTTL {
+		t.Fatalf("testIPPoolCount=%d does not outlast the %d pids this host allocates inside the login counters' 15-minute TTL — two live processes would own the same address block and re-open the cross-process jf:loginfail:ip flake (a block of %d addresses per process is as large as this bound allows)",
+			testIPPoolCount, measuredPidsPerCounterTTL, maxTestIPsPerProcess)
 	}
 }

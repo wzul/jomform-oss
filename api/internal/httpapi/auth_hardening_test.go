@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -38,8 +37,9 @@ var authOnce sync.Once
 // loses its keys to this suite. A whole-database flush is the same defect in a
 // sharper form.
 //
-// So the reclaim is scoped instead: testIP gives each PROCESS its own /24, and
-// only counters under THIS process's /24 are deleted. Tests must still point
+// So the reclaim is scoped instead: testIP gives each PROCESS its own address
+// block (testIPPoolFor — two /24s), and only counters under THIS process's block
+// are deleted. Tests must still point
 // JOMFORM_TEST_VALKEY_URL at a throwaway DB (e.g. .../15), never dev/prod.
 //
 // Only the prefixes this fixture can legitimately own are touched. The sweep used
@@ -75,76 +75,67 @@ func authTestValkey(t *testing.T) *auth.Sessions {
 var loginCounterKeyPrefixes = []string{"jf:loginfail:ip:"}
 
 // reclaimOwnLoginCounters deletes the login-breaker counters under this
-// process's own test-IP /24 only.
+// process's own test-IP block only.
 //
-// Ownership is not assumed: the /24 comes from uniqueTestIP's derivation, so a
-// key is deleted only if exactly one test IP could have produced it. A pattern
-// hit that has no matching address in the family is left alone and reported —
+// Ownership is not assumed: the block comes from uniqueTestIP's derivation, so a
+// key is deleted only if its address is one this process's block can hand out.
+// A pattern hit that is not such an address is left alone and reported —
 // deleting a key we cannot prove we own is how a scoped cleanup turns back into
 // the cross-process clobber it replaced.
 func reclaimOwnLoginCounters(t *testing.T, sess *auth.Sessions) {
 	t.Helper()
 	ctx := context.Background()
-	family := testIPFamilyFor(uint32(os.Getpid()))
+	pool := testIPPoolFor(uint32(os.Getpid()))
 
 	for _, prefix := range loginCounterKeyPrefixes {
-		// SCAN, not KEYS: this runs against a shared DB whose keyspace is not
-		// bounded by the fixture.
-		var cursor uint64
 		var owned []string
-		for {
-			keys, next, err := sess.Client().Scan(ctx, cursor, prefix+family+"*", 100).Result()
-			if err != nil {
-				// A cleanup that cannot run must not silently pass; the
-				// assertions it protects would then depend on a previous run's
-				// leftovers.
-				t.Fatalf("list %s counters under %s%s*: %v", prefix, prefix, family, err)
-			}
-			for _, k := range keys {
-				if ownLoginCounterKey(prefix, k, family) {
-					owned = append(owned, k)
-				} else {
-					t.Logf("leaving %q alone: it matches %s%s* but encodes no address this process owns", k, prefix, family)
+		// Every /24 of the block, because the process's addresses span all of
+		// them: a reclaim that stopped at the block's first /24 would leave the
+		// counters of every call past 254 behind, which is exactly the pass-3
+		// state this fixture has to start from (card t_7655c2bf).
+		for _, family := range pool.families() {
+			// SCAN, not KEYS: this runs against a shared DB whose keyspace is
+			// not bounded by the fixture.
+			var cursor uint64
+			for {
+				keys, next, err := sess.Client().Scan(ctx, cursor, prefix+family+"*", 100).Result()
+				if err != nil {
+					// A cleanup that cannot run must not silently pass; the
+					// assertions it protects would then depend on a previous run's
+					// leftovers.
+					t.Fatalf("list %s counters under %s%s*: %v", prefix, prefix, family, err)
 				}
+				for _, k := range keys {
+					if ownLoginCounterKey(prefix, k, pool) {
+						owned = append(owned, k)
+					} else {
+						t.Logf("leaving %q alone: it matches %s%s* but encodes no address this process owns", k, prefix, family)
+					}
+				}
+				if next == 0 {
+					break
+				}
+				cursor = next
 			}
-			if next == 0 {
-				break
-			}
-			cursor = next
 		}
 		if len(owned) == 0 {
 			continue
 		}
 		if err := sess.Client().Del(ctx, owned...).Err(); err != nil {
-			t.Fatalf("clear %d stale %s counter(s) under %s%s*: %v", len(owned), prefix, prefix, family, err)
+			t.Fatalf("clear %d stale %s counter(s) under %s: %v", len(owned), prefix, prefix, pool)
 		}
 	}
 }
 
-// ownLoginCounterKey reports whether a key found under the process's own /24 is
-// one this process could have written: the key must be exactly the prefix plus a
-// generated address, with nothing appended.
-func ownLoginCounterKey(prefix, key, family string) bool {
+// ownLoginCounterKey reports whether a key found under the process's own block
+// is one this process could have written: the key must be exactly the prefix
+// plus an address the block can hand out, with nothing appended.
+func ownLoginCounterKey(prefix, key string, pool testIPPool) bool {
 	ip := strings.TrimPrefix(key, prefix)
-	if ip == key || !strings.HasPrefix(ip, family) {
+	if ip == key {
 		return false
 	}
-	return validTestIP(ip, family)
-}
-
-// validTestIP reports whether ip has the exact `<family><n>` shape uniqueTestIP
-// produces: a last octet within the per-process bound and without leading zeros,
-// so "10.1.2.01" is rejected rather than mistaken for "10.1.2.1".
-func validTestIP(ip, family string) bool {
-	octet := strings.TrimPrefix(ip, family)
-	if octet == "" || len(octet) > 3 {
-		return false
-	}
-	n, err := strconv.Atoi(octet)
-	if err != nil || n < 1 || n > maxTestIPsPerProcess {
-		return false
-	}
-	return strconv.Itoa(n) == octet
+	return pool.owns(ip)
 }
 
 func authUsers(t *testing.T) *dbstore.UserStore {

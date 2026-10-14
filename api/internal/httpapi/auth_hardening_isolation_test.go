@@ -57,12 +57,13 @@ func TestReclaimLeavesPeersLoginCountersAlone(t *testing.T) {
 	peer := peerCounterKey(pid)
 
 	// The peer sentinel has to be a counter NO process's scoped reclaim can claim,
-	// or the process that owns its /24 deletes it as one of its own stale counters
-	// while this test asserts it survived — the false red peerCounterKey documents.
-	// Checked exhaustively over the pid space here, and pinned on its own by
-	// TestPeerCounterSentinelBelongsToNoProcess.
-	if claimed := pidsClaimingLoginCounter(prefix, peer); len(claimed) > 0 {
-		t.Fatalf("test setup: the peer sentinel %q is claimed by the scoped reclaim of pid ≡ %d (mod 65536), so that process would delete it before the assertion below reads it", peer, claimed[0])
+	// or the process that owns its block deletes it as one of its own stale
+	// counters while this test asserts it survived — the false red peerCounterKey
+	// documents. Checked exhaustively over the block space here, and pinned on its
+	// own by TestPeerCounterSentinelBelongsToNoProcess.
+	if claimed := poolsClaimingLoginCounter(prefix, peer); len(claimed) > 0 {
+		t.Fatalf("test setup: the peer sentinel %q is claimed by the scoped reclaim of pool %s (pid ≡ %d mod %d), so that process would delete it before the assertion below reads it",
+			peer, testIPPoolFor(claimed[0]), claimed[0], testIPPoolCount)
 	}
 
 	// Connect directly first, so the keys are seeded BEFORE the fixture's
@@ -80,34 +81,43 @@ func TestReclaimLeavesPeersLoginCountersAlone(t *testing.T) {
 
 	// A stale counter we own (the -count case: a previous run's leftover inside
 	// our own address range), a live one standing in for a counter under a peer's
-	// /24, and two keys a live process on this DB would own: its session token and
-	// the per-ACCOUNT counter the breaker writes under the production prefix.
+	// block, and two keys a live process on this DB would own: its session token
+	// and the per-ACCOUNT counter the breaker writes under the production prefix.
+	//
+	// TWO of ours are seeded, in the block's two different /24s (the first call
+	// and the last), because the reclaim has to cover the whole block: a cleanup
+	// scoped to the first /24 only would leave every counter past call 254
+	// behind, and that is precisely the pass-3 state this fixture must be able to
+	// start from (card t_7655c2bf).
 	//
 	// All three seeds are named per PROCESS, not literally: the cleanup below
 	// deletes BY NAME, so a fixed name would be this test's own cross-process bug
 	// (see livePeerSeedKeys and peerCounterKey).
 	mine := prefix + testIPFor(pid, maxTestIPsPerProcess)
+	mineInFirstFamily := prefix + testIPFor(pid, 1)
 	liveSession, liveAccountCounter := livePeerSeedKeys(pid)
-	for k, v := range map[string]string{mine: "10", peer: "10", liveSession: "1", liveAccountCounter: "7"} {
+	for k, v := range map[string]string{mine: "10", mineInFirstFamily: "9", peer: "10", liveSession: "1", liveAccountCounter: "7"} {
 		if err := rdb.Set(ctx, k, v, 0).Err(); err != nil {
 			t.Fatalf("seed %s: %v", k, err)
 		}
 	}
 	t.Cleanup(func() {
-		_ = rdb.Del(context.Background(), peer, mine, liveSession, liveAccountCounter).Err()
+		_ = rdb.Del(context.Background(), peer, mine, mineInFirstFamily, liveSession, liveAccountCounter).Err()
 	})
 
 	authOnce = sync.Once{}
 	authTestValkey(t)
 
-	if n, err := rdb.Exists(ctx, mine).Result(); err != nil || n != 0 {
-		t.Errorf("own stale counter %q still present (exists=%d err=%v) — a -count rerun would start from a leftover lockout", mine, n, err)
+	for _, own := range []string{mine, mineInFirstFamily} {
+		if n, err := rdb.Exists(ctx, own).Result(); err != nil || n != 0 {
+			t.Errorf("own stale counter %q still present (exists=%d err=%v) — a -count rerun would start from a leftover lockout", own, n, err)
+		}
 	}
 	for _, tc := range []struct {
 		key  string
 		what string
 	}{
-		{peer, "a login counter under a /24 this process does not own"},
+		{peer, "a login counter under a block this process does not own"},
 		{liveSession, "a live process's session token"},
 		{liveAccountCounter, "a live process's per-account failure counter"},
 	} {
@@ -187,57 +197,77 @@ func livePeerSeedShapesOK(session, account string, pid uint32) string {
 
 // TestOwnLoginCounterKeyRejectsForeignAndMalformedKeys is the unit half: the
 // predicate must accept exactly the addresses uniqueTestIP can produce and
-// reject everything else, including a near-miss that merely shares the prefix.
+// reject everything else, including a near-miss that merely shares the prefix —
+// and including an address one octet outside the block, which is a live peer's.
 func TestOwnLoginCounterKeyRejectsForeignAndMalformedKeys(t *testing.T) {
-	family := testIPFamilyFor(uint32(os.Getpid()))
+	pid := uint32(os.Getpid())
+	pool := testIPPoolFor(pid)
 	prefix := "jf:loginfail:ip:"
+
+	// The neighbour is the block of pid+1: its first /24 sits immediately after
+	// ours (or at the start of the next /16), so these are the addresses a
+	// prefix-only or off-by-one scope check would wrongly claim.
+	neighbour := testIPPoolFor(pid + 1)
 
 	for _, tc := range []struct {
 		key  string
 		want bool
+		what string
 	}{
-		{prefix + family + "1", true},                // our first address
-		{prefix + family + "254", true},              // our last address
-		{prefix + family + "0", false},               // index 0 is never handed out
-		{prefix + family + "255", false},             // beyond the per-process bound
-		{prefix + family + "01", false},              // leading zero: not a shape we emit
-		{prefix + family + "1:extra", false},         // a longer key that merely starts alike
-		{prefix + "10.99.99.1", false},               // another process's /24
-		{prefix + "not-an-ip", false},                //
-		{"jf:loginfail:user:" + family + "1", false}, // per-account key, not per-IP
+		{prefix + testIPFor(pid, 1), true, "our first address, in the block's first /24"},
+		{prefix + testIPFor(pid, testIPHostsPerSlash24), true, "our last address in the block's first /24"},
+		{prefix + testIPFor(pid, testIPHostsPerSlash24+1), true, "our first address in the block's SECOND /24 — the address a single-/24 scope would leave behind"},
+		{prefix + testIPFor(pid, maxTestIPsPerProcess), true, "our last address overall"},
+		{prefix + fmt.Sprintf("10.%d.%d.0", pool.octet2, pool.octet3), false, "index 0 is never handed out"},
+		{prefix + testIPFor(pid, testIPHostsPerSlash24) + ":extra", false, "a longer key that merely starts alike"},
+		{prefix + neighbour.families()[0] + "1", false, "the NEXT block's first address — a live peer's counter"},
+		{prefix + neighbour.families()[1] + "1", false, "the NEXT block's second /24"},
+		{prefix + "10.99.99.1", false, "another /16"},
+		{prefix + "not-an-ip", false, "not an address"},
+		{"jf:loginfail:user:" + testIPFor(pid, 1), false, "per-account key, not per-IP"},
 	} {
-		if got := ownLoginCounterKey(prefix, tc.key, family); got != tc.want {
-			t.Errorf("ownLoginCounterKey(%q) = %v, want %v", tc.key, got, tc.want)
+		if got := ownLoginCounterKey(prefix, tc.key, pool); got != tc.want {
+			t.Errorf("ownLoginCounterKey(%q) = %v, want %v (%s)", tc.key, got, tc.want, tc.what)
+		}
+	}
+
+	// The index one past the block's capacity, and index 0, are outside it by
+	// construction: they are checked by shape rather than by deriving them.
+	for _, o4 := range []string{"0", strconv.Itoa(testIPHostsPerSlash24 + 1)} {
+		key := prefix + fmt.Sprintf("10.%d.%d.%s", pool.octet2, pool.octet3, o4)
+		if ownLoginCounterKey(prefix, key, pool) {
+			t.Errorf("ownLoginCounterKey(%q) = true, but .%s is not a host address this block hands out", key, o4)
 		}
 	}
 }
 
 // peerCounterKey returns the login-counter key the reclaim guard seeds to stand
-// in for a counter under a PEER's /24: a live counter this process's scoped
+// in for a counter under a PEER's block: a live counter this process's scoped
 // reclaim must leave alone.
 //
-// The address is deliberately outside every /24 testIPFor can hand a process.
-// That helper only ever produces 10.<pid low>.<pid high>.<n>, so each of its 65536
-// /24s is owned by some pid (pid mod 65536), and a key inside that space belongs to
-// a process that can really be running: on this host, `go test` binaries started
-// together hold pids 1-8 apart, with an adjacent pair (gap 1) measured across 80
-// simultaneous binaries.
+// The address is deliberately outside every block testIPFor can hand a process.
+// That helper only ever produces 10.<block>.<n>, so each of its 32768 blocks is
+// owned by some pid (pid mod testIPPoolCount), and a key inside that space
+// belongs to a process that can really be running: on this host, `go test`
+// binaries started together hold pids 1-8 apart, with an adjacent pair (gap 1)
+// measured across 80 simultaneous binaries.
 //
 // This key used to be `testIPFamilyFor(pid+1)+"1"` — pid+1's own FIRST test
 // address. The process holding pid+1 therefore reclaimed it as one of ITS OWN
-// stale counters (its SCAN is `prefix+family+"*"`, and ownLoginCounterKey accepts
-// the key under that family) while this process asserted it must still exist: a
-// false red the moment two binaries landed on adjacent pids, with no defect behind
-// it. That is a latent red, not a live one — it did not fire in 0/320 concurrent
-// guard runs — but the assertion has to hold for every pid pair, not the pairs a
-// measurement happened to hit.
+// stale counters (its SCAN is scoped to its own block, and ownLoginCounterKey
+// accepts the key under that block) while this process asserted it must still
+// exist: a false red the moment two binaries landed on adjacent pids, with no
+// defect behind it. That is a latent red, not a live one — it did not fire in
+// 0/320 concurrent guard runs — but the assertion has to hold for every pid
+// pair, not the pairs a measurement happened to hit.
 //
-// 198.0.0.0/8 is outside every family, so no process's reclaim can claim this key
-// (TestPeerCounterSentinelBelongsToNoProcess proves it over the whole pid space).
+// 198.0.0.0/8 is outside every block, so no process's reclaim can claim this key
+// (TestPeerCounterSentinelBelongsToNoProcess proves it over the whole block
+// space).
 // The pid in the address is what keeps two concurrent runs of this test from
 // deleting each other's seed by name in t.Cleanup, exactly as livePeerSeedKeys'
-// pid does — the guard's own cleanup deletes BY NAME, so a shared literal would be
-// the same collision in a different place. The pid's low 24 bits are enough:
+// pid does — the guard's own cleanup deletes BY NAME, so a shared literal would
+// be the same collision in a different place. The pid's low 24 bits are enough:
 // pid_max here is 4194304 = 2^22, so distinct live pids always derive distinct
 // addresses.
 func peerCounterKey(pid uint32) string {
@@ -245,20 +275,22 @@ func peerCounterKey(pid uint32) string {
 		(pid>>16)&0xff, (pid>>8)&0xff, pid&0xff)
 }
 
-// pidsClaimingLoginCounter returns the pids whose own scoped reclaim would claim
-// key as one of its own stale counters: the pids p for which ownLoginCounterKey
-// accepts key under testIPFamilyFor(p). An empty result means no process — present
-// or future — can delete the key, which is the property any key this suite asserts
-// must SURVIVE has to have.
+// poolsClaimingLoginCounter returns the blocks whose own scoped reclaim would
+// claim key as one of their stale counters: the pids p for which
+// ownLoginCounterKey accepts key under testIPPoolFor(p). An empty result means
+// no process — present or future — can delete the key, which is the property any
+// key this suite asserts must SURVIVE has to have.
 //
-// The range is exhaustive rather than a sample of offsets: testIPFamilyFor maps pid
-// mod 65536 onto the 65536 possible /24s one-to-one, so [0, 0xffff] covers every
-// family a reclaim can ever scope to, and pid_max (4194304 = 2^22) is below that
-// modulus, so a live pid always has its representative in the range.
-func pidsClaimingLoginCounter(prefix, key string) []uint32 {
+// The range is exhaustive rather than a sample of offsets: testIPPoolFor maps a
+// pid's low 15 bits onto the 32768 possible blocks one-to-one, so [0,
+// testIPPoolCount) covers every block a reclaim can ever scope to, and pid_max
+// (4194304 = 2^22) is above that range, so a live pid always has its
+// representative in it. Each block index is itself a valid pid, which is why the
+// scan can simply drive the derivation with it.
+func poolsClaimingLoginCounter(prefix, key string) []uint32 {
 	var out []uint32
-	for p := uint32(0); p <= 0xffff; p++ {
-		if ownLoginCounterKey(prefix, key, testIPFamilyFor(p)) {
+	for p := uint32(0); p < testIPPoolCount; p++ {
+		if ownLoginCounterKey(prefix, key, testIPPoolFor(p)) {
 			out = append(out, p)
 		}
 	}
@@ -287,9 +319,10 @@ func TestPeerCounterSentinelBelongsToNoProcess(t *testing.T) {
 		t.Errorf("the peer sentinel %q is not a `%s<address>` login counter — a whole-prefix sweep would not match it, so the bite would stop witnessing the scoping", sentinel, prefix)
 	}
 
-	claimed := pidsClaimingLoginCounter(prefix, sentinel)
+	claimed := poolsClaimingLoginCounter(prefix, sentinel)
 	if len(claimed) > 0 {
-		t.Errorf("the peer sentinel %q is claimed by the scoped reclaim of pid ≡ %d (mod 65536), which deletes it as one of its own stale counters while the guard asserts it survived", sentinel, claimed[0])
+		t.Errorf("the peer sentinel %q is claimed by the scoped reclaim of pool %s (pid ≡ %d mod %d), which deletes it as one of its own stale counters while the guard asserts it survived",
+			sentinel, testIPPoolFor(claimed[0]), claimed[0], testIPPoolCount)
 	}
 
 	// The name carries the pid for the same reason the other two seeds do: the
@@ -303,10 +336,63 @@ func TestPeerCounterSentinelBelongsToNoProcess(t *testing.T) {
 
 	// Positive control: the check above must be able to FAIL on the shape it
 	// replaced, or it is asserting nothing. The pid+1 derivation is claimed by
-	// exactly the process whose /24 it sits in — that IS the false red.
-	old := prefix + testIPFamilyFor(pid+1) + "1"
-	oldClaimed := pidsClaimingLoginCounter(prefix, old)
-	if len(oldClaimed) != 1 || testIPFamilyFor(oldClaimed[0]) != testIPFamilyFor(pid+1) {
-		t.Fatalf("control: the pid+1 derivation %q must be claimed by exactly the process whose /24 it sits in; the scan reported pids %v", old, oldClaimed)
+	// exactly the block it sits in — that IS the false red.
+	old := prefix + testIPFor(pid+1, 1)
+	oldClaimed := poolsClaimingLoginCounter(prefix, old)
+	if len(oldClaimed) != 1 || testIPPoolFor(oldClaimed[0]) != testIPPoolFor(pid+1) {
+		t.Fatalf("control: the pid+1 derivation %q must be claimed by exactly the block it sits in; the scan reported pools %v", old, oldClaimed)
+	}
+}
+
+// TestReclaimScopeCoversTheWholeBlockAndStopsAtTheNeighbour pins BOTH edges of
+// the reclaim's scope, which is the part of card t_7655c2bf that is easiest to
+// get wrong in either direction: the block is now two /24s wide, so a scope that
+// still believes it is one /24 leaves the second half of every process's
+// counters behind (and the pass-3 reuse the widened pool exists to prevent reads
+// them), while a scope that overshoots by a /24 deletes a live peer's counter
+// one octet away.
+//
+// Deterministic, unlike the guard above: the predicate is driven directly, over
+// this process's own block and the block of the very next pid.
+func TestReclaimScopeCoversTheWholeBlockAndStopsAtTheNeighbour(t *testing.T) {
+	pid := uint32(os.Getpid())
+	prefix := loginCounterKeyPrefixes[0]
+	pool, neighbour := testIPPoolFor(pid), testIPPoolFor(pid+1)
+
+	// Every /24 of the block is in scope: the first address, the last address of
+	// the first /24, and the first and last of the second.
+	for _, n := range []uint32{1, testIPHostsPerSlash24, testIPHostsPerSlash24 + 1, maxTestIPsPerProcess} {
+		key := prefix + testIPFor(pid, n)
+		if !ownLoginCounterKey(prefix, key, pool) {
+			t.Errorf("ownLoginCounterKey(%q) = false: call %d is inside this process's own block %s, so the reclaim must be able to clear its stale counter", key, n, pool)
+		}
+	}
+	if got, want := pool.families(), testIPSlash24sPerProcess; len(got) != want {
+		t.Errorf("the reclaim SCANs %d /24 prefix(es) %v, but the block is %d /24s wide — the counters of every call past %d would survive the reclaim",
+			len(got), got, want, testIPHostsPerSlash24)
+	}
+
+	// The next block is NOT in scope, and exactly one block claims its addresses:
+	// the neighbour's own. An off-by-one here is a live peer's counter deleted as
+	// if it were stale.
+	for _, key := range []string{
+		prefix + neighbour.families()[0] + "1",
+		prefix + neighbour.families()[1] + "1",
+	} {
+		if ownLoginCounterKey(prefix, key, pool) {
+			t.Errorf("ownLoginCounterKey(%q) = true for block %s, but that address belongs to the neighbouring block %s", key, pool, neighbour)
+		}
+		claimed := poolsClaimingLoginCounter(prefix, key)
+		if len(claimed) != 1 || testIPPoolFor(claimed[0]) != neighbour {
+			t.Errorf("%q must be claimed by exactly the neighbouring block %s; the scan reported pools %v", key, neighbour, claimed)
+		}
+	}
+
+	// And the two blocks really are disjoint — the property that makes the
+	// boundary check above meaningful rather than a coincidence of two offsets.
+	for n := uint32(1); n <= maxTestIPsPerProcess; n++ {
+		if neighbour.owns(testIPFor(pid, n)) {
+			t.Fatalf("block %s claims %s, an address of the neighbouring block %s — the two blocks overlap", neighbour, testIPFor(pid, n), pool)
+		}
 	}
 }

@@ -147,13 +147,98 @@ func TestMustTOTPStepsAscend(t *testing.T) {
 		prev = step
 	}
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("a FOURTH code must be refused: a real authenticator cannot supply one inside " +
-				"one window, and replaying a spent code is the bug #528 fixed")
+	// A FOURTH code is no longer refused, and this is where that used to be
+	// asserted: mustTOTP held a three-entry window per secret and panicked on the
+	// 4th call, which is what made `go test ./internal/httpapi/ -count=2` die
+	// here — the same defect class as the per-process test-IP pool (card
+	// t_7655c2bf). The property to keep is not "the fixture refuses" but "no step
+	// is ever handed out twice, and every code is inside the ±1 window it was
+	// generated in": totpClaim is asserted over both, including the 4th-code case
+	// (a wait of exactly one step), by TestTOTPClaimCoversEveryFixtureCase, and
+	// the resumption a finished -count pass needs by
+	// TestMustTOTPResumesAfterASpentWindow. The end-to-end evidence that a rerun
+	// works is the package run at -count=2/3 that this card's PR records.
+}
+
+// TestTOTPClaimCoversEveryFixtureCase pins the decision BOTH TOTP fixtures share
+// (totpClaim in totp_step_testhelper_test.go) over the cases they really meet,
+// without sleeping for any of them: a fresh secret, a claim a whole -test.count
+// pass behind the clock, and a 4th code inside one window.
+//
+// The 4th-code case is the one that used to panic (card t_7655c2bf) and is now a
+// wait of exactly one step, so the properties that make waiting correct are
+// asserted here instead: the step always ascends (ConsumeTOTPStep refuses a step
+// that does not), and a code at it is always inside the ±1 window of the base the
+// clock will have when the wait is over.
+func TestTOTPClaimCoversEveryFixtureCase(t *testing.T) {
+	const base = int64(59_000_000)
+	for _, tc := range []struct {
+		what      string
+		last      int64
+		step      int64
+		waitSteps int64
+	}{
+		{"a fresh secret: the earliest step the server accepts", 0, base - 1, 0},
+		{"the 2nd code of one window", base - 1, base, 0},
+		{"the 3rd code of one window", base, base + 1, 0},
+		{"a 4th code in the same window: the window is spent, so wait one step", base + 1, base + 2, 1},
+		{"a claim a whole -count pass behind the clock: pulled up to base-1", base - 40, base - 1, 0},
+		{"a claim the clock has run past", base - 2, base - 1, 0},
+	} {
+		step, wait := totpClaim(tc.last, base)
+		if step != tc.step || wait != tc.waitSteps {
+			t.Errorf("totpClaim(last=%d, base=%d) for %s = (step %d, wait %d), want (%d, %d)",
+				tc.last, base, tc.what, step, wait, tc.step, tc.waitSteps)
 		}
-	}()
-	_ = mustTOTP(secret)
+		if step <= tc.last {
+			t.Errorf("%s: step %d is not later than the %d handed out last — ConsumeTOTPStep "+
+				"(totp_last_step < $2) refuses it as a replay", tc.what, step, tc.last)
+		}
+		if now := base + wait; step < now-1 || step > now+1 {
+			t.Errorf("%s: after waiting %d step(s) the code at step %d is outside the ±1 window of base %d, "+
+				"so the server would answer \"kod tidak sah\"", tc.what, wait, step, now)
+		}
+	}
+}
+
+// TestMustTOTPResumesAfterASpentWindow pins the -test.count case deterministically
+// (card t_7655c2bf). A finished pass leaves this secret's claim a whole pass —
+// many steps — behind the clock, and the fixture has to come back with a code the
+// server accepts NOW, still strictly later than the step handed out last.
+//
+// Priming the per-secret claim instead of running two passes keeps this instant
+// and deterministic; the two- and three-pass runs are the gate evidence. The bite
+// is the old behaviour: a count-based window panics on exactly this call (the
+// primed claim IS this secret's 4th), which is how a rerun died.
+func TestMustTOTPResumesAfterASpentWindow(t *testing.T) {
+	secret := "KRUGKIDROVUWG2ZAMJZG653OEBTG66BA" // unique to this test: totpStepAlloc is keyed by secret
+
+	// A pass's worth of codes behind the clock, as pass 2 finds it.
+	const passSteps = 40
+	baseBefore := time.Now().Unix() / totpTestPeriod
+	primed := baseBefore - passSteps
+	totpStepAlloc.Lock()
+	totpStepAlloc.used[secret] = primed
+	totpStepAlloc.Unlock()
+
+	code := mustTOTP(secret)
+	baseAfter := time.Now().Unix() / totpTestPeriod
+
+	step := int64(-1)
+	for s := baseBefore - 1; s <= baseAfter+1; s++ {
+		if code == totpCodeAtStep(secret, s) {
+			step = s
+			break
+		}
+	}
+	if step < 0 {
+		t.Fatalf("the resumed code matches no step in [%d,%d] — the ±1 window the clock had while it was "+
+			"generated — so the server would refuse it", baseBefore-1, baseAfter+1)
+	}
+	if step <= primed {
+		t.Fatalf("the resumed code is step %d, not later than the primed %d: the sequence has to keep "+
+			"ascending or ConsumeTOTPStep refuses it as a replay", step, primed)
+	}
 }
 
 // waitOutBoundaryGuard reports whether the wait would block. If the host clock is
