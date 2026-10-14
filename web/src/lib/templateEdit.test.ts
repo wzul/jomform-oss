@@ -38,7 +38,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
+  adoptedTarget,
   builderControls,
+  builderHref,
   builderTarget,
   loadPath,
   savePlan,
@@ -56,6 +58,17 @@ const templatesPage = read("../app/templates/page.tsx");
 const goTemplateStore = read("../../../api/internal/dbstore/form.go");
 
 const TEMPLATE_ID = "4283337b-a0ec-464e-98d8-8dd301632de1";
+
+// The body of the `if (isCreate) { … }` branch inside save(). Anchored by index
+// rather than by one long regex so a comment (or a reflowed line) inside the
+// branch cannot make the pins below silently stop matching anything.
+function createBranch(source: string): string {
+  const start = source.indexOf("if (isCreate) {");
+  assert.ok(start >= 0, "app/builder/page.tsx no longer has an `if (isCreate) {` branch — the create path moved");
+  const end = source.indexOf("\n      }", start);
+  assert.ok(end > start, "could not delimit the isCreate branch in app/builder/page.tsx");
+  return source.slice(start, end);
+}
 
 // ── the reported gap ───────────────────────────────────────────────────────
 
@@ -163,6 +176,104 @@ test("a brand-new form is POSTed and then has its status written like any other"
   assert.equal(plan.method, "POST");
   assert.equal(plan.recordPath("ignored"), "/api/rest/forms/ignored");
   assert.equal(plan.canPublish, true);
+});
+
+// ── the create path adopts its identity (t_b3cc2a7a) ──────────────────────
+//
+// The reported defect. A merchant creating a form got "Failed to save." on the
+// SECOND save, and a refresh after create+publish started ANOTHER empty form.
+// One missing step: after the create, the builder never adopted the row it had
+// just made — neither in its target (so the plan still said POST /forms, and
+// POST /api/rest/forms/{id} is not a route -> 405) nor in its URL (so a refresh
+// re-read ?new=1 and began a new form).
+
+test("a create makes the builder adopt the row it just made", () => {
+  const adopted = adoptedTarget("93438fc5-c0df-4c40-901b-e064a649f4d0");
+  assert.deepEqual(adopted, { kind: "form", id: "93438fc5-c0df-4c40-901b-e064a649f4d0" });
+  // THE identity transition, and the exact defect: the plan for a brand-new form
+  // is POST, and the plan for the row that POST answered with must be PATCH.
+  // Before the fix the target stayed {kind:"new"}, so the second Save of a
+  // new-form session re-sent POST to the id-carrying path (405 -> "Failed to
+  // save.", with no machine code to name the cause).
+  assert.equal(savePlan({ kind: "new" }, false).method, "POST");
+  assert.equal(
+    savePlan(adopted!, false).method,
+    "PATCH",
+    "the second save of a new-form session is not a PATCH — it re-POSTs to /forms/{id}, which has no route",
+  );
+  assert.equal(savePlan(adopted!, false).recordPath("ignored"), "/api/rest/forms/ignored");
+  // Acceptance 2: the adopted target keeps the FULL form plan, so a Save after
+  // Publish still writes the status and still runs the publish step.
+  assert.deepEqual(savePlan(adopted!, true).steps, ["writeRecord", "writeStatus", "publish"]);
+  assert.equal(savePlan(adopted!, true).canPublish, true);
+});
+
+test("the adopted URL round-trips through the loader a refresh uses", () => {
+  // Acceptance 3: after a create the URL must carry the new id. A refresh parses
+  // window.location.search with builderTarget — the same loader the mount effect
+  // uses — so the round trip is the testable half of "refresh reopens the same
+  // form": adopt -> URL -> parse -> the SAME form id (not {kind:"new"}, which is
+  // the brand-new empty form, and not a 404).
+  const id = "93438fc5-c0df-4c40-901b-e064a649f4d0";
+  const href = builderHref(adoptedTarget(id)!);
+  assert.equal(href, `/builder?form=${id}`);
+  const search = new URLSearchParams(href.slice(href.indexOf("?")));
+  const reloaded = builderTarget({ form: search.get("form"), template: search.get("template") });
+  assert.deepEqual(reloaded, { kind: "form", id }, "a refresh on the adopted URL does not reopen the form that was just created");
+  assert.equal(loadPath(reloaded)(id), `/api/rest/forms/${id}`);
+  // The bare ?new=1 the URL had before the fix is the failure being pinned.
+  assert.deepEqual(builderTarget({ isNew: true }), { kind: "new" });
+});
+
+test("a created row with no id is not adopted", () => {
+  // A body without an id cannot name a record: adopting it would make the next
+  // save PATCH /forms/undefined and put ?form=undefined in the URL, which a
+  // refresh turns into a 404. The builder keeps its old behaviour instead.
+  assert.equal(adoptedTarget(""), null);
+  assert.equal(adoptedTarget(undefined), null);
+  assert.equal(adoptedTarget(null), null);
+  assert.equal(adoptedTarget("   "), null);
+});
+
+test("the URLs this helper builds are the ones the existing loaders already read", () => {
+  // Acceptance 4: ?form= and ?template= are unchanged, and the template link on
+  // /templates is now literally the same builder URL helper (one rule, so the
+  // two cannot drift).
+  assert.equal(builderHref({ kind: "form", id: "f1" }), "/builder?form=f1");
+  assert.equal(builderHref({ kind: "template", id: "t1" }), "/builder?template=t1");
+  assert.equal(builderHref({ kind: "new" }), "/builder?new=1");
+  assert.equal(templateEditHref("a b&c=d"), builderHref({ kind: "template", id: "a b&c=d" }));
+  assert.deepEqual(builderTarget({ form: "f1" }), { kind: "form", id: "f1" });
+});
+
+test("the builder's create branch adopts the id in BOTH the target and the URL", () => {
+  // The hole acceptance 5 names: nothing pinned the create path's identity
+  // transition, so deleting it left every other test green. Neutralise it (drop
+  // the setTarget/replaceState pair) and this goes red.
+  const branch = createBranch(builderPage);
+  assert.match(
+    branch,
+    /adoptedTarget\(d\.id\)/,
+    "the create branch no longer adopts the id the API returned",
+  );
+  assert.match(
+    branch,
+    /setTarget\(adopted\)/,
+    "the create branch does not re-target the builder at the row it just made — the next save re-POSTs to /forms/{id} (405)",
+  );
+  assert.match(
+    branch,
+    /window\.history\.replaceState\(null, "", builderHref\(adopted\)\)/,
+    "the create branch does not rewrite the URL — a refresh after create+publish starts another new form",
+  );
+});
+
+test("a created row is never adopted as a template", () => {
+  // A template's create path does not exist (the guard test above), and adopting
+  // the form route by mistake would send template writes to /forms/{id}.
+  const adopted = adoptedTarget(TEMPLATE_ID);
+  assert.equal(adopted!.kind, "form");
+  assert.equal(savePlan(adopted!, false).recordPath(TEMPLATE_ID), `/api/rest/forms/${TEMPLATE_ID}`);
 });
 
 test("a template that failed to load cannot be saved as a NEW template", () => {

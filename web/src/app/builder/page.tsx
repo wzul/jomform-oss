@@ -7,7 +7,9 @@ import { workspaceQuery } from "../../lib/workspace";
 import { canMove, moveBlock } from "../../lib/blockReorder";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import {
+  adoptedTarget,
   builderControls,
+  builderHref,
   builderTarget,
   loadPath,
   savePlan,
@@ -704,6 +706,31 @@ export default function Builder() {
         setCurrentId(d.id);
         setSlug(d.slug || "");
         id = d.id;
+        // The builder ADOPTS the row it just made (t_b3cc2a7a). Two things were
+        // missing here and each had its own symptom:
+        //
+        //   setTarget — the target stayed {kind:"new"}, so savePlan kept
+        //   deciding POST for a row that already exists. The next Save then sent
+        //   POST /api/rest/forms/{id}, which is not a route (only POST /forms
+        //   and PATCH /forms/{id} exist) -> 405 with no machine code -> the
+        //   generic "Failed to save." with nothing naming the cause.
+        //
+        //   replaceState — the URL stayed /builder?new=1, and builderTarget
+        //   reads only ?form=/?template=, so a refresh after create+publish
+        //   opened a BRAND-NEW empty form instead of the one just made.
+        //
+        // history.replaceState rather than a router navigation: this must not
+        // re-run the mount effect below, which hydrates from
+        // window.location.search and would reload (and re-parse) over the state
+        // this very save just produced. Replacing the current history entry
+        // means Back still leaves the builder rather than bouncing off a
+        // ?form= entry the user never navigated to. The dropped ?new=1 is
+        // deliberate — the session is no longer a new-form session.
+        const adopted = adoptedTarget(d.id);
+        if (adopted) {
+          setTarget(adopted);
+          window.history.replaceState(null, "", builderHref(adopted));
+        }
       } else if (editingTemplate) {
         // A template has no slug and no public URL; the PUT answers with the
         // stored row, so keep the title canonical (the API trims it).

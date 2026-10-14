@@ -167,7 +167,53 @@ export function builderControls(kind: "template" | "form" | "new") {
   return kind === "template" ? TEMPLATE_BUILDER_CONTROLS : FORM_BUILDER_CONTROLS;
 }
 
+/**
+ * The builder's identity AFTER it creates a form (t_b3cc2a7a).
+ *
+ * The create path POSTs to the collection and the API answers with the new row.
+ * From that moment the session is EDITING that row, and the builder must say so
+ * in its own state AND in its URL. Both halves were missing, and each produced
+ * its own symptom:
+ *
+ *   * the target stayed `{kind:"new"}`, so `savePlan` kept answering POST — and
+ *     the second Save of a new-form session therefore sent
+ *     `POST /api/rest/forms/{id}`. There is no such route (only
+ *     `POST /forms` and `PATCH /forms/{id}`), so the API answered 405, which
+ *     carries no machine `code`, so the builder rendered its generic
+ *     "Failed to save." with no cause named.
+ *   * the URL was never rewritten, so it stayed `/builder?new=1` (or bare).
+ *     A refresh re-ran `builderTarget` on that URL, which reads `?form=` and
+ *     `?template=` only — so it started a BRAND-NEW empty form instead of
+ *     reopening the one just created and published.
+ *
+ * Returns `null` for an id the builder cannot identify (a response body with no
+ * id): adopting an empty id would make the next save PATCH `/forms/undefined`
+ * and write `?form=undefined` into the URL, which a refresh turns into a 404.
+ * Callers keep the pre-existing behaviour in that case rather than inventing an
+ * identity.
+ */
+export function adoptedTarget(id: string | null | undefined): BuilderTarget | null {
+  const created = (id || "").trim();
+  if (!created) return null;
+  // A create can only come from the new-form path: template mode refuses to
+  // create anything when its own row failed to load (see save() in
+  // app/builder/page.tsx), so the adopted identity is always a form.
+  return { kind: "form", id: created };
+}
+
+/**
+ * The URL that CARRIES a builder identity, so a reload/reopen comes back to the
+ * same record. This is the same string shape `builderTarget` parses, which is
+ * what makes the round trip (adopt -> replaceState -> refresh -> same record)
+ * testable without a component renderer.
+ */
+export function builderHref(target: BuilderTarget): string {
+  if (target.kind === "template") return `/builder?template=${encodeURIComponent(target.id)}`;
+  if (target.kind === "form") return `/builder?form=${encodeURIComponent(target.id)}`;
+  return "/builder?new=1";
+}
+
 /** The Templates-page link that opens one of the merchant's own templates. */
 export function templateEditHref(id: string): string {
-  return `/builder?template=${encodeURIComponent(id)}`;
+  return builderHref({ kind: "template", id });
 }
