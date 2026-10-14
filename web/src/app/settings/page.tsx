@@ -1108,13 +1108,29 @@ export default function Settings() {
     return out;
   }
 
-  // Issue #163: role-gate the settings tabs. CHIP credentials and member
-  // management are admin-only; read_only members see no write tabs at all.
+  // Issue #163: role-gate the settings tabs. CHIP credentials, member
+  // management and the Workspace tab are admin-only; read_only members see no
+  // write tabs at all.
+  //
+  // `workspace` BELONGS IN THIS LIST because its PANEL is admin-gated
+  // (`{activeTab === "workspace" && isAdmin && …}` below, #682). A tab the strip
+  // renders whose panel branch is gated further down is a dead end: clicking it
+  // selects a tab and paints NOTHING under the strip. Measured on the built page
+  // as a `manage` member at 320px, before this line changed:
+  //
+  //   after clicking Workspace {"tabCount":10,"selectedCount":1,
+  //     "selected":"Workspace","h2Count":0,"sectionCount":0,"mainTextLen":105}
+  //
+  // — h2Count 0 is the pane: the h1 and the banners only. The strip and the
+  // panel have to agree on WHICH TABS EXIST, which is the same contract the
+  // `activeTab` derivation below enforces from the other side (an intent the
+  // strip cannot render falls back to one it can). Card t_0ef9709c.
+  const ADMIN_ONLY_TABS: readonly SettingsTab[] = ["chip", "members", "workspace"];
   const isAdmin = role === "admin" || role === "owner";
   const isReadOnly = role === "read_only";
   const visibleTabs: SettingsTab[] = isReadOnly
     ? []
-    : TAB_IDS.filter((id) => (id === "chip" || id === "members") ? isAdmin : true);
+    : TAB_IDS.filter((id) => !ADMIN_ONLY_TABS.includes(id) || isAdmin);
 
   // The tab that is actually RENDERED, derived from `tab` (the intent: the
   // stored / URL / clicked tab) and the role filter above.
@@ -2523,8 +2539,10 @@ export default function Settings() {
         )}
         {/* ── Workspace tab: identity + Danger zone (delete workspace) ──
             Owner-only inside the component (an admin member is told to leave
-            via Members instead). Gated to admin here too so a read_only member
-            never sees a write tab. */}
+            via Members instead). Gated to admin here AND filtered out of
+            `visibleTabs` above, so the strip never offers this tab to a role
+            whose panel it would not render — a `manage` member clicking it got
+            an empty pane (card t_0ef9709c). */}
         {activeTab === "workspace" && isAdmin && (
           <WorkspaceTab workspaceId={emelWorkspaceId || activeWorkspaceId} />
         )}

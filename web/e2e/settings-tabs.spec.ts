@@ -52,13 +52,14 @@
 //   * the tab-count wait returns only once the ADMIN tab set this spec stubs is
 //     on screen (all TAB_COUNT tabs, derived from TAB_KEYS). It used to return
 //     as soon as the count was equal for 3 polls of 100ms, and the PRE-bundle
-//     strip (10 tabs: #163 has not resolved `role` yet, so CHIP + Members are
-//     absent) is trivially "stable". Measured under CPU pressure: the old wait
-//     returned 10 after 1299ms while the 12-tab strip did not arrive until
-//     4356ms, so RULE 4 then measured the MEMBER strip against the ADMIN
-//     expectation and reported "the settings strip does not render the tabs
-//     TAB_IDS declares ... (- CHIP, - Members)" — 40 lines away from the real
-//     cause, which is that the session bundle had not resolved.
+//     strip (the member set: `role` has not resolved yet, so the admin-only
+//     CHIP, Members and Workspace tabs are absent — 10 tabs when the measurement
+//     below was taken, 9 since t_0ef9709c) is trivially "stable". Measured under
+//     CPU pressure: the old wait returned 10 after 1299ms while the 12-tab strip
+//     did not arrive until 4356ms, so RULE 4 then measured the MEMBER strip
+//     against the ADMIN expectation and reported "the settings strip does not
+//     render the tabs TAB_IDS declares ... (- CHIP, - Members)" — 40 lines away
+//     from the real cause, which is that the session bundle had not resolved.
 //   * RULE 6 waits for the reveal to land (a bounded poll of the painted frame)
 //     instead of reading once. The mount reveal is an effect, so the strip is
 //     committed with the selection still out of view; the gap between that
@@ -122,8 +123,10 @@ const LANGS = ["en", "ms", "ta", "zh", "ar"] as const;
 // The settings tabs, in render order (`settings/page.tsx` TAB_IDS) with the
 // dictionary key each label comes from. This list is what the page is expected
 // to render, and it is the ONLY place the count lives: `workspace` is last
-// because the page appends it there. `adminOnly` marks the tabs #163 hides from
-// a non-admin member (`chip`, `members`) — the two the settle loop waits for.
+// because the page appends it there. `adminOnly` marks the tabs the page's role
+// filter hides from a non-admin member (`chip`, `members` — and `workspace`
+// since card t_0ef9709c, whose PANEL is `isAdmin`-gated, so a member used to be
+// offered a tab that painted an empty pane) — the ones the settle loop waits for.
 const TAB_KEYS: ReadonlyArray<{ key: keyof typeof DICT; adminOnly?: true }> = [
   { key: "set.tab.chip", adminOnly: true },
   { key: "set.tab.domains" },
@@ -136,7 +139,7 @@ const TAB_KEYS: ReadonlyArray<{ key: keyof typeof DICT; adminOnly?: true }> = [
   { key: "set.tab.legal" },
   { key: "set.tab.currency" },
   { key: "set.tab.affiliates" },
-  { key: "set.tab.workspace" },
+  { key: "set.tab.workspace", adminOnly: true },
 ];
 
 // The count every assertion derives from: the full list, which is what the
@@ -339,9 +342,9 @@ for (const lang of LANGS) {
       //
       // It waits for THAT state, not for "the count stopped changing". The old
       // condition (3 equal polls of 100ms) is satisfied by the PRE-bundle strip:
-      // before the session bundle resolves, #163 renders the 10 member tabs, and
-      // a count that is not moving is trivially "settled". Measured under CPU
-      // pressure, the old loop returned 10 after 1299ms while the 12-tab strip
+      // before the session bundle resolves, the member strip renders the 9 tabs
+      // a member sees, and a count that is not moving is trivially "settled".
+      // Measured under CPU pressure, the old loop returned 10 after 1299ms while the 12-tab strip
       // arrived at 4356ms — RULE 4 then measured the member strip against the
       // admin expectation and blamed TAB_KEYS for the session's race.
       //
@@ -365,7 +368,7 @@ for (const lang of LANGS) {
         settle.timedOut,
         `${lang}@${width}: the settings strip rendered ${settle.count} of the ${TAB_COUNT} tabs ` +
           `TAB_KEYS derives, and never reached ${TAB_COUNT} — the session bundle did not resolve the ` +
-          `admin role this spec stubs (workspaces[0].role = "admin"), so the two adminOnly tabs ` +
+          `admin role this spec stubs (workspaces[0].role = "admin"), so the adminOnly tabs ` +
           `(#163: ${TAB_KEYS.filter((t) => t.adminOnly).map((t) => t.key as string).join(", ")}) were ` +
           `never rendered. This is the SESSION, not TAB_KEYS.`,
       ).toBe(false);

@@ -60,16 +60,28 @@
 //   6. THE AXE ARM                  — a scoped scan of the settings pane, with
 //      the gate's own rule (critical/serious fail), because the a11y family's
 //      public-route scan never sees this page.
+//   7. EVERY TAB A MEMBER SEES      — clicks each one and requires its own pane
+//      (t_0ef9709c: no dead-end tab; pre-fix it fails on the tenth, Workspace).
+//   8. THE ADMIN'S WORKSPACE TAB    — the other direction: the tab must still be
+//      offered to the role whose panel it IS, and paint the identity card.
 //
-// WHAT THIS FILE DOES NOT COVER, DELIBERATELY: a tab that IS rendered while its
-//   PANEL is gated further down. `workspace` is such a tab for a member —
-//   `visibleTabs` keeps it (`#163` filters only `chip`/`members`) while the panel
-//   branch is `isAdmin`-gated, so clicking it paints an empty pane. Measured:
-//   `{selectedCount:1, selected:"Workspace", h2Count:0, sectionCount:0}`. That is
-//   a separate defect (its own card, t_0ef9709c) because it needs a CLICK on a
-//   rendered tab, it is a product-visible decision (hide the tab, or render a
-//   read-only pane), and the arms here are about the first-run LANDING. When it
-//   is fixed by hiding the tab, `ADMIN_ONLY` below has to move with it.
+// THE DEAD-END TAB (card t_0ef9709c, the mirror image of the defect above)
+//   A tab that IS rendered while its PANEL is gated further down. `workspace`
+//   was such a tab for a member: `visibleTabs` filtered only `chip`/`members`
+//   (#163) while the panel branch was `{activeTab === "workspace" && isAdmin &&
+//   …}`, so clicking Workspace selected a tab and painted an EMPTY pane.
+//   Measured on the built page as a `manage` member at 320px, pre-fix:
+//
+//     after clicking Workspace {"tabCount":10,"selectedCount":1,
+//       "selected":"Workspace","firstPanelHeading":"","h2Count":0,
+//       "sectionCount":0,"mainTextLen":105}
+//
+//   (`h2Count 0` is the pane — the h1 and the banners only.) The fix hides the
+//   tab from the role whose panel is gated, so the strip offers exactly the tabs
+//   it can paint; ADMIN_ONLY below moves with the page's filter, and the
+//   click-through and admin arms at the bottom are what keep the two sides in
+//   step. That is the same contract this file's first defect is about — the
+//   strip and the panel agree on which tabs exist — from the other side.
 //
 // THE SESSION IS STUBBED AT THE BROWSER LEVEL (the pattern `e2e/a11y-dialogs.spec.ts`
 // and `e2e/settings-tabs.spec.ts` use): no Go server, no session cookie, no DB —
@@ -119,10 +131,14 @@ function readPageTabIds(): string[] {
   return [...decl[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 }
 
-// The tabs `#163` hides from a member: CHIP credentials and member management
-// are admin-only. This is the PAGE's own filter (its `visibleTabs`), which is
-// what makes the derived list below the set a member really sees.
-const ADMIN_ONLY = ["chip", "members"];
+// The tabs the PAGE's own role filter hides from a member (`visibleTabs`): CHIP
+// credentials and member management (#163), and — since card t_0ef9709c — the
+// Workspace tab, whose PANEL is `isAdmin`-gated, so a member's strip offered a
+// tab that painted an EMPTY pane when it was clicked. This list IS the page's
+// admin-only list; it is the one place the member tab set is derived, so if the
+// page's filter moves, the arms below move with it (and their failure messages
+// carry the tab list that moved).
+const ADMIN_ONLY = ["chip", "members", "workspace"];
 const MEMBER_TAB_IDS = PAGE_TAB_IDS.filter((id) => !ADMIN_ONLY.includes(id));
 // The tab the first run has to land on: the first one the strip can render.
 const LANDING_TAB = MEMBER_TAB_IDS[0];
@@ -130,9 +146,10 @@ const LANDING_TAB = MEMBER_TAB_IDS[0];
 // tab id -> the dictionary key of the panel heading that tab paints. Listed per
 // tab because the LANDING is not pinned to one: the stored tab and the URL can
 // move it, and the assertion below is "the panel is THIS tab's", which needs the
-// expected heading whichever tab wins. `workspace` is absent on purpose: the
-// panel behind it is a component gated on `isAdmin` (`WorkspaceTab`), and its
-// heading is not a settings dictionary string.
+// expected heading whichever tab wins. `workspace` is the component panel
+// (`WorkspaceTab`, admin/owner-gated), whose first heading is its identity card
+// rather than a settings-tab title; a member never reaches it (see ADMIN_ONLY),
+// so it is listed for the ADMIN arms.
 const PANEL_TITLE: Record<string, keyof typeof DICT> = {
   chip: "set.chipTitle",
   domains: "set.domainsTitle",
@@ -141,9 +158,10 @@ const PANEL_TITLE: Record<string, keyof typeof DICT> = {
   webhooks: "set.webhooksTitle",
   emel: "set.emelTitle",
   storefront: "set.sfTitle",
-  legal: "set.lpTitle",
+  legal: "set.legalTitle",
   currency: "set.currencyTitle",
   affiliates: "set.affiliatesTitle",
+  workspace: "ws.identityTitle",
 };
 
 // The derived lists have to describe the page. Fail BEFORE a browser starts, and
@@ -157,7 +175,6 @@ const PANEL_TITLE: Record<string, keyof typeof DICT> = {
     if (!Object.prototype.hasOwnProperty.call(DICT, label)) {
       throw new Error(`settings/page.tsx declares the tab "${id}", which is not in the dictionary (${label})`);
     }
-    if (id === "workspace") continue; // component panel, no settings title
     if (!PANEL_TITLE[id]) {
       throw new Error(
         `settings/page.tsx declares the tab "${id}" and this guard has no panel heading for it. ` +
@@ -173,10 +190,11 @@ const PANEL_TITLE: Record<string, keyof typeof DICT> = {
 const ME = { id: "u1", email: "merchant@example.com", name: "Merchant", lang: "", is_super_admin: false };
 
 /**
- * The bundle a MEMBER sees: `role: "manage"` is not admin, so the two admin-only
- * tabs are filtered out — the state the card measured (ten tabs, no selection,
- * CHIP panel). `is_super_admin: false` so nothing else in the app answers as an
- * admin either.
+ * The bundle a MEMBER sees: `role: "manage"` is not admin, so the three
+ * admin-only tabs are filtered out — the state the original card measured (no
+ * selection, CHIP panel). `is_super_admin: false` so nothing else in the app
+ * answers as an admin either. The strip is NINE tabs since t_0ef9709c hid
+ * `workspace` from this role (it was ten).
  */
 const MEMBER_BUNDLE = {
   me: ME,
@@ -191,6 +209,22 @@ const MEMBER_BUNDLE = {
 const READ_ONLY_BUNDLE = {
   ...MEMBER_BUNDLE,
   workspaces: [{ id: "ws1", name: "Demo", slug: "demo", role: "read_only" }],
+};
+
+/**
+ * The bundle an ADMIN member sees: every declared tab, `workspace` included.
+ * Used by the arm that pins the other direction of t_0ef9709c — hiding the
+ * Workspace tab from a member must not hide it from the role whose panel it IS.
+ */
+const ADMIN_BUNDLE = {
+  ...MEMBER_BUNDLE,
+  workspaces: [{ id: "ws1", name: "Demo", slug: "demo", role: "admin" }],
+};
+
+/** GET /v1/workspaces/{id}/deletion-check — what WorkspaceTab's identity card reads. */
+const DELETION_CHECK = {
+  id: "ws1", name: "Demo", slug: "demo", is_owner: true, role: "admin",
+  last_workspace: false, empty: true, blockers: [], can_delete: true,
 };
 
 async function stubAPI(page: Page, bundle: unknown) {
@@ -209,6 +243,11 @@ async function stubAPI(page: Page, bundle: unknown) {
   await page.route(/(.*)\/api\/auth\/profile$/, (r) => r.fulfill(json({ lang: "" })));
   await page.route(/(.*)\/api\/workspaces\/[^/]+\/affiliates(\?.*)?$/, (r) => r.fulfill(json([])));
   await page.route(/(.*)\/api\/rest\/currency\/rates$/, (r) => r.fulfill(json({ rates: [], cached: false })));
+  // WorkspaceTab (admin/owner roles only) reads these two on mount; without a
+  // route the catch-all answers `{}` and its identity card would report a load
+  // failure instead of painting the heading the admin arm asserts.
+  await page.route(/(.*)\/api\/workspaces\/[^/]+\/deletion-check$/, (r) => r.fulfill(json(DELETION_CHECK)));
+  await page.route(/(.*)\/api\/workspaces\/trash(\?.*)?$/, (r) => r.fulfill(json([])));
 }
 
 /**
@@ -285,15 +324,23 @@ async function readTabState(page: Page, lang: Lang): Promise<TabState> {
 }
 
 /**
- * Waits until the strip renders the member's tab set (the session bundle
+ * Waits until the strip renders the tab set under test (the session bundle
  * resolves `role` asynchronously, and the pre-bundle strip is a different one),
  * then returns the DOM read. A bundle that never resolves fails HERE, naming the
  * session rather than reporting a broken strip.
+ *
+ * `wantIds` is the set the arm expects, so the ADMIN arm waits for the admin set
+ * instead of settling on the nine tabs a member's strip carries.
  */
-async function settleAndRead(page: Page, lang: Lang): Promise<TabState> {
+async function settleAndRead(
+  page: Page,
+  lang: Lang,
+  wantIds: readonly string[] = MEMBER_TAB_IDS,
+  landingTab: string = LANDING_TAB,
+): Promise<TabState> {
   const settle = await page.evaluate(`(async () => {
-    const want = ${MEMBER_TAB_IDS.length};
-    const first = ${JSON.stringify(DICT[`set.tab.${LANDING_TAB}` as keyof typeof DICT][lang])};
+    const want = ${wantIds.length};
+    const first = ${JSON.stringify(DICT[`set.tab.${landingTab}` as keyof typeof DICT][lang])};
     // The tab's label is its VISIBLE span: the tab renders two spans
     // (sm:hidden + hidden sm:inline, one per layout), so textContent is the
     // doubled string "DomainsDomains" — comparing that against the dictionary
@@ -316,11 +363,58 @@ async function settleAndRead(page: Page, lang: Lang): Promise<TabState> {
   })()`) as { count: number; timedOut: boolean };
   expect(
     settle.timedOut,
-    `the strip never rendered the ${MEMBER_TAB_IDS.length} tabs a member sees ` +
-      `(${MEMBER_TAB_IDS.join(", ")}) — it settled at ${settle.count}. The stubbed ` +
-      `dashboard-bundle did not resolve role "manage" for the active workspace.`,
+    `the strip never rendered the ${wantIds.length} tabs this arm expects ` +
+      `(${wantIds.join(", ")}) — it settled at ${settle.count}. Either the stubbed ` +
+      `dashboard-bundle did not resolve the role for the active workspace, or the page ` +
+      `renders a tab set this file does not expect (its ADMIN_ONLY list and the page's own ` +
+      `role filter have to agree).`,
   ).toBe(false);
   return readTabState(page, lang);
+}
+
+/**
+ * Bounded read of the PAINTED strip: returns once the strip has tabs, one of
+ * them is selected, and the pane below has painted a heading — i.e. once the
+ * page is in the state the assertions are about. Returns the last read either
+ * way, so a strip that never paints fails on the caller's OWN assertion (with
+ * the DOM in the message) rather than on a wait.
+ *
+ * Deliberately NOT `settleAndRead`'s "the strip holds exactly N tabs" wait: this
+ * arm has to READ a strip that renders the WRONG tab set, because "the member
+ * strip offers a tab whose panel is not rendered" is the assertion. A wait that
+ * refused to return on an unexpected set would report the defect as a broken
+ * session. The arm is safe to read an early frame because it waits for the
+ * `dashboard-bundle` response first — see the arm.
+ */
+async function waitForStrip(page: Page, lang: Lang): Promise<TabState> {
+  const deadline = Date.now() + 10_000;
+  let s = await readTabState(page, lang);
+  while (Date.now() < deadline) {
+    if (s.tabCount > 0 && s.selectedCount === 1 && s.firstPanelHeading !== "") return s;
+    await page.waitForTimeout(100);
+    s = await readTabState(page, lang);
+  }
+  return s;
+}
+
+/**
+ * Clicks a tab and waits (bounded) for the pane below to paint THAT tab's own
+ * heading. Returns the last read either way, so a pane that never paints a
+ * heading fails on the caller's assertion with the real DOM in the message
+ * instead of hanging here.
+ */
+async function clickTabAndReadPanel(page: Page, id: string, lang: Lang): Promise<TabState> {
+  const label = DICT[`set.tab.${id}` as keyof typeof DICT][lang];
+  const want = DICT[PANEL_TITLE[id]][lang];
+  await page.getByRole("tab", { name: label, exact: true }).click();
+  const deadline = Date.now() + 10_000;
+  let s = await readTabState(page, lang);
+  while (Date.now() < deadline) {
+    if (s.selectedText === label && s.firstPanelHeading === want) return s;
+    await page.waitForTimeout(100);
+    s = await readTabState(page, lang);
+  }
+  return s;
 }
 
 /**
@@ -447,6 +541,85 @@ test("read_only member: no tabs, so no tab panel either (en @320)", async ({ pag
     `read_only: a panel (${JSON.stringify(s.firstPanelHeading)}) is painted under a strip that renders no tab`,
   ).toBe("");
   expect(s.hasChipHeading, "read_only: the admin-only CHIP panel is painted for a member who cannot see its tab").toBe(false);
+});
+
+// ─── The DEAD-END TAB (card t_0ef9709c) ────────────────────────────────────────
+//
+// A tab that IS rendered while its PANEL is gated further down. `workspace` was
+// such a tab for a member: `#163`'s filter hid only `chip`/`members` while the
+// panel branch was `{activeTab === "workspace" && isAdmin && …}`, so clicking
+// Workspace selected a tab and painted an EMPTY pane. Measured pre-fix on the
+// built page as a `manage` member at 320px:
+//
+//   {"tabCount":10,"selectedCount":1,"selected":"Workspace",
+//    "firstPanelHeading":"","h2Count":0,"sectionCount":0,"mainTextLen":105}
+//
+// So this arm does not only count tabs — it CLICKS every tab the strip offers and
+// requires the pane under it to be that tab's. A tab whose panel is not rendered
+// is the defect, whichever of the two sides drifts first.
+test("member: every tab the strip offers paints its own pane — no dead-end tab (en @320)", async ({ page, baseURL }) => {
+  await freshState(page, { jf_lang: "en", jf_workspace: "demo" });
+  // The strip changes when the session bundle lands (`role` arrives with it), so
+  // the read below waits for THAT response rather than for a tab count: on the
+  // pre-fix page the pre-bundle strip is a nine-tab set that would satisfy a
+  // count wait and hide the defect.
+  const bundled = page.waitForResponse((r) => /dashboard-bundle/.test(r.url()));
+  await stubAPI(page, MEMBER_BUNDLE);
+  await page.setViewportSize({ width: PHONE_WIDTH, height: 800 });
+  await page.goto(`${baseURL}/settings`, { waitUntil: "domcontentloaded" });
+  await bundled;
+
+  const s = await waitForStrip(page, "en");
+
+  // The admin-only tabs, named: this is the assertion the card's defect fails.
+  for (const id of ADMIN_ONLY) {
+    expect(
+      s.labels,
+      `the member strip offers the admin-only tab "${id}" ` +
+        `(${JSON.stringify(DICT[`set.tab.${id}` as keyof typeof DICT].en)}) — its panel is not rendered for ` +
+        `this role, so clicking it paints an empty pane. Labels: ${JSON.stringify(s.labels)}`,
+    ).not.toContain(DICT[`set.tab.${id}` as keyof typeof DICT].en);
+  }
+  expect(
+    s.tabCount,
+    `the member strip renders ${MEMBER_TAB_IDS.length} tabs (${MEMBER_TAB_IDS.join(", ")})`,
+  ).toBe(MEMBER_TAB_IDS.length);
+
+  for (const id of MEMBER_TAB_IDS) {
+    const pane = await clickTabAndReadPanel(page, id, "en");
+    expect(
+      pane.firstPanelHeading,
+      `clicking the "${id}" tab paints a pane with no heading of its own ` +
+        `(the pane's first h2 reads ${JSON.stringify(pane.firstPanelHeading)}) — the strip offers a tab whose ` +
+        `panel the page does not render`,
+    ).toBe(DICT[PANEL_TITLE[id]]["en"]);
+  }
+});
+
+// The OTHER direction: hiding a tab is only right for the role whose panel is
+// gated. An admin must still get the Workspace tab — otherwise "no dead-end tab"
+// would quietly take the identity card away from the owners who need it.
+test("admin: the Workspace tab is still offered and its pane is the identity card (en @320)", async ({ page, baseURL }) => {
+  await freshState(page, { jf_lang: "en", jf_workspace: "demo" });
+  await stubAPI(page, ADMIN_BUNDLE);
+  await page.setViewportSize({ width: PHONE_WIDTH, height: 800 });
+  await page.goto(`${baseURL}/settings`, { waitUntil: "domcontentloaded" });
+
+  const s = await settleAndRead(page, "en", PAGE_TAB_IDS, PAGE_TAB_IDS[0]);
+  expect(
+    s.labels.map((l) => l),
+    `the admin strip does not render every declared tab (${PAGE_TAB_IDS.join(", ")})`,
+  ).toEqual(PAGE_TAB_IDS.map((id) => DICT[`set.tab.${id}` as keyof typeof DICT].en));
+
+  const pane = await clickTabAndReadPanel(page, "workspace", "en");
+  expect(
+    pane.selectedText,
+    `the admin strip's Workspace tab does not select when clicked`,
+  ).toBe(DICT["set.tab.workspace"].en);
+  expect(
+    pane.firstPanelHeading,
+    `the admin's Workspace pane paints ${JSON.stringify(pane.firstPanelHeading)}, not the workspace identity card`,
+  ).toBe(DICT["ws.identityTitle"].en);
 });
 
 test("axe: the settings pane on a first run has no critical/serious violation (en @320)", async ({ page, baseURL }) => {
