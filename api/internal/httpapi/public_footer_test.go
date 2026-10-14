@@ -15,13 +15,23 @@ import (
 // footer renders when fields are set.
 func TestBlockFormRendersNoFooter(t *testing.T) {
 	type block struct {
-		Type, Value, Src string
-		ProductID        string
-		PriceSen         int64
-		Required         bool
-		HasPrice         bool
-		CondJSON         string
-		Style            string
+		ID, Type, Value, Src string
+		ProductID            string
+		PriceSen             int64
+		Required             bool
+		HasPrice             bool
+		CondJSON             string
+		Style                string
+		Placeholder          string
+		Description          string
+		CSSClass             string
+		Format               string
+		Pattern              string
+		RequiredMsg          string
+		MaxLength            int
+		DefaultValue         string
+		Min, Max             string
+		Step                 string
 	}
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{
@@ -73,13 +83,23 @@ func TestLegacyFormRendersNoFooter(t *testing.T) {
 // optional footer with business info + privacy/terms/refund links.
 func TestBlockFormRendersOptionalFooter(t *testing.T) {
 	type block struct {
-		Type, Value, Src string
-		ProductID        string
-		PriceSen         int64
-		Required         bool
-		HasPrice         bool
-		CondJSON         string
-		Style            string
+		ID, Type, Value, Src string
+		ProductID            string
+		PriceSen             int64
+		Required             bool
+		HasPrice             bool
+		CondJSON             string
+		Style                string
+		Placeholder          string
+		Description          string
+		CSSClass             string
+		Format               string
+		Pattern              string
+		RequiredMsg          string
+		MaxLength            int
+		DefaultValue         string
+		Min, Max             string
+		Step                 string
 	}
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{
@@ -123,13 +143,23 @@ func TestBlockFormRendersOptionalFooter(t *testing.T) {
 // appears AFTER the closing </form> tag.
 func TestBlockFormFooterBelowCard(t *testing.T) {
 	type block struct {
-		Type, Value, Src string
-		ProductID        string
-		PriceSen         int64
-		Required         bool
-		HasPrice         bool
-		CondJSON         string
-		Style            string
+		ID, Type, Value, Src string
+		ProductID            string
+		PriceSen             int64
+		Required             bool
+		HasPrice             bool
+		CondJSON             string
+		Style                string
+		Placeholder          string
+		Description          string
+		CSSClass             string
+		Format               string
+		Pattern              string
+		RequiredMsg          string
+		MaxLength            int
+		DefaultValue         string
+		Min, Max             string
+		Step                 string
 	}
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{

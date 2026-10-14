@@ -683,6 +683,16 @@ func renderBlockFormPage(t *testing.T, productID string, priceSen int64, vars []
 		BaseImage        string
 		Variations       []variationView
 		Style            string
+		Placeholder      string
+		Description      string
+		CSSClass         string
+		Format           string
+		Pattern          string
+		RequiredMsg      string
+		MaxLength        int
+		DefaultValue     string
+		Min, Max         string
+		Step             string
 	}
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{

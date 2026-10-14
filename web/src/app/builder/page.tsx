@@ -1088,8 +1088,12 @@ export default function Builder() {
         {/* Common: description */}
         {input("description", t("bld.description"), t("bld.descriptionPh"))}
 
-        {/* Common: placeholder (input fields) */}
-        {["text", "textarea", "number", "email", "phone", "date", "time", "website", "address", "captcha", "list", "repeater"].includes(b.type) &&
+        {/* Common: placeholder (input fields). `date` and `time` are NOT in
+            the list (card t_23289ce3): browsers do not paint a placeholder on a
+            date/time input (the control shows its own format hint), so offering
+            it there was a second dead setting. The public renderers emit the
+            attribute for every type that is offered here. */}
+        {["text", "textarea", "number", "email", "phone", "website", "address", "captcha", "list", "repeater"].includes(b.type) &&
           input("placeholder", t("bld.placeholder"), t("bld.placeholderPh"))}
 
         {/* Common: CSS class */}
@@ -1137,25 +1141,12 @@ export default function Builder() {
           </>
         )}
 
-        {/* Name: format simple/full */}
-        {b.type === "name" && (
-          <div>
-            <label htmlFor={fid("nameFormat")} className="text-xs text-[var(--jf-muted)]">
-              {t("bld.nameFormat")}
-            </label>
-            <select
-              id={fid("nameFormat")}
-              value={b.format || "full"}
-              onChange={(e) => upd({ format: e.target.value })}
-              className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
-            >
-              <option value="full">{t("bld.nameFull")}</option>
-              <option value="simple">{t("bld.nameSimple")}</option>
-            </select>
-          </div>
-        )}
-
-        {/* Date/time: format */}
+        {/* Date/time: format. The picker chooses the CONTROL the buyer gets
+            (a date picker, a date+time picker or a time picker), which is what
+            both public renderers now paint (render_blocks.go dateInputType).
+            The `name` block's own format picker is GONE (card t_23289ce3): it
+            had no reader in either renderer and no defined rendering — the name
+            block has always been one `full_name` text input. */}
         {(b.type === "date" || b.type === "time") && (
           <div>
             <label htmlFor={fid("dateFormat")} className="text-xs text-[var(--jf-muted)]">
@@ -1331,11 +1322,15 @@ export default function Builder() {
           </label>
         )}
 
-        {/* Validation: required message + pattern */}
+        {/* Validation: required message + pattern. The pattern is offered only
+            for the input types that HAVE the attribute (card t_23289ce3): the
+            HTML spec ignores `pattern` on anything but text/search/url/tel/
+            email/password inputs, and `<textarea>` has no pattern attribute at
+            all — so a pattern on a number or a note could never fire. */}
         {fieldTypes.includes(b.type) && b.required && (
           <>
             {input("requiredMessage", t("bld.requiredMsg"), t("bld.requiredMsgPh"))}
-            {["text", "textarea", "number", "email", "phone", "website"].includes(b.type) &&
+            {["text", "email", "phone", "website"].includes(b.type) &&
               input("pattern", t("bld.pattern"), t("bld.patternPh"))}
           </>
         )}
@@ -2039,7 +2034,20 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
   const p = products.find((x) => x.id === block.productId);
   switch (block.type) {
     case "text":
-      return <p className="text-sm text-[#374151]">{block.value || "Text…"}</p>;
+      // Card t_23289ce3: this block is a single-line text INPUT on both public
+      // renderers (the builder offers placeholder / max length / default value
+      // for it, settings that only exist for a control, and it is the palette's
+      // only short-answer field). The canvas used to draw the value as prose —
+      // "Paragraph / description" is the palette hint that misled it. The
+      // sketch below is the same non-interactive one every other field uses.
+      return (
+        <div>
+          <p className="mb-1 text-xs text-[var(--jf-muted)]">{block.value || "Text"}</p>
+          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 text-xs text-[var(--jf-muted-on-tint)]">
+            {block.placeholder || ""}
+          </div>
+        </div>
+      );
     case "html":
       return <p className="text-sm text-[#374151]">{block.value || "</>"}</p>;
     case "section":

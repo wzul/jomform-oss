@@ -152,12 +152,17 @@ func TestResponseFormRendersNewFieldTypes(t *testing.T) {
 		CondJSON        string
 		Placeholder     string
 		Description     string
-		MaxLength       int
-		DefaultValue    string
-		Min, Max        string
-		Step            string
-		Pattern         string
-		Choices         []choiceView
+		// Card t_23289ce3: the per-field settings responseTmpl now paints.
+		CSSClass     string
+		Style        string
+		Format       string
+		RequiredMsg  string
+		MaxLength    int
+		DefaultValue string
+		Min, Max     string
+		Step         string
+		Pattern      string
+		Choices      []choiceView
 	}
 	var buf bytes.Buffer
 	err := responseTmpl.Execute(&buf, map[string]any{

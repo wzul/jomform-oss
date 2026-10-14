@@ -28,11 +28,21 @@ func TestBlockFormRendersVariationSelector(t *testing.T) {
 		CondJSON         string
 		Image            string
 		// Issue #471: product image size + layout + full-size fallback URL.
-		ImgSize    string
-		ImgTop     bool
-		BaseImage  string
-		Variations []variationView
-		Style      string
+		ImgSize      string
+		ImgTop       bool
+		BaseImage    string
+		Variations   []variationView
+		Style        string
+		Placeholder  string
+		Description  string
+		CSSClass     string
+		Format       string
+		Pattern      string
+		RequiredMsg  string
+		MaxLength    int
+		DefaultValue string
+		Min, Max     string
+		Step         string
 	}
 	stockZero := 0
 	stockFive := 5

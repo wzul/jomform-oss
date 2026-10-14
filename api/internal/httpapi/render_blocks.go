@@ -342,6 +342,36 @@ const iframeHeightJS = `<script>(function(){
   post();
 })();</script>`
 
+// styleAttr renders a sanitized per-field inline style attribute (issue #388).
+// Returns template.HTMLAttr (a trusted attribute) so html/template does not run
+// the value through its CSS-context filter (which would emit ZgotmplZ for valid
+// CSS). The value is sanitized server-side (customform.SanitizeStyle) and
+// HTML-escaped here — one rule, used by both public renderers.
+func styleAttr(s string) template.HTMLAttr {
+	if s == "" {
+		return ""
+	}
+	return template.HTMLAttr(` style="` + template.HTMLEscapeString(s) + `"`)
+}
+
+// dateInputType maps a date/time block's merchant-chosen `format` to the HTML
+// input type the buyer gets. The panel offers Date / Date & time / Time; an
+// unset format keeps the block's own default (a `date` block is a date picker,
+// a `time` block a time picker) — which is what those two blocks rendered when
+// the format option had no reader at all.
+func dateInputType(blockType, format string) string {
+	switch format {
+	case "date", "time":
+		return format
+	case "datetime":
+		return "datetime-local"
+	}
+	if blockType == "time" {
+		return "time"
+	}
+	return "date"
+}
+
 // blockTmpl renders each builder block. Prices ride on data-price for the
 // client total; the server remains the price authority on submit.
 //
@@ -356,17 +386,9 @@ const iframeHeightJS = `<script>(function(){
 var blockTmpl = template.Must(template.New("blocks").
 	Funcs(template.FuncMap{
 		"divf": func(total, div int64) float64 { return float64(total) / float64(div) },
-		// Issue #388: render a sanitized per-field inline style attribute.
-		// Returns template.HTMLAttr (a trusted attribute) so html/template does
-		// not run the value through its CSS-context filter (which would emit
-		// ZgotmplZ for valid CSS). The value is already sanitized server-side
-		// (customform.SanitizeStyle) and HTML-escaped here.
-		"styleAttr": func(s string) template.HTMLAttr {
-			if s == "" {
-				return ""
-			}
-			return template.HTMLAttr(` style="` + template.HTMLEscapeString(s) + `"`)
-		},
+		// Card t_23289ce3: the date/time format picker's reader.
+		"dateType":  dateInputType,
+		"styleAttr": styleAttr,
 	}).
 	Parse(`<!doctype html>
 <html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -507,38 +529,38 @@ var blockTmpl = template.Must(template.New("blocks").
 <form class="card" id="of" data-slug="{{.Slug}}">
   <h1>{{.Title}}</h1>
 {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
-{{range .Blocks}}
-{{if eq .Type "text"}}  <p class="text"{{styleAttr .Style}}>{{.Value}}</p>
-{{else if eq .Type "image"}}{{if .Src}}  <img class="img" src="{{.Src}}" alt=""{{styleAttr .Style}}>
-{{end}}{{else if eq .Type "divider"}}  <hr{{styleAttr .Style}}>
-{{else if eq .Type "section"}}  <div class="section"{{styleAttr .Style}}>{{.Value}}</div>
-{{else if eq .Type "html"}}  <div class="text"{{styleAttr .Style}}>{{.Value}}</div>
-{{else if eq .Type "total"}}  <div class="total"{{styleAttr .Style}}><span>{{.Value}}</span><span class="total-val">RM0.00</span></div>
-{{else if eq .Type "product"}}  <div class="prod{{if .ImgTop}} menu-card{{end}}"{{styleAttr .Style}}><label>{{if .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}<span class="prow">{{end}}<input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}">{{if not .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}{{end}}<span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span>{{if .ImgTop}}</span>{{end}}</label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
-{{else if eq .Type "quantity"}}  <div class="qtyrow"{{styleAttr .Style}}><label class="lbl" style="margin:0">{{.Value}}</label><input type="number" class="qty" min="1" value="{{if .DefaultValue}}{{.DefaultValue}}{{else}}1{{end}}"></div>
-{{else if eq .Type "option"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="opt" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (+RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
-{{else if eq .Type "shipping"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="ship" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
-{{else if eq .Type "name"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="full_name" data-id="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "email"}}  <label class="lbl"{{styleAttr .Style}}>{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="email" data-id="{{.ID}}" required>
-{{else if eq .Type "phone"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="phone" data-id="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "textarea"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="2"{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}>{{.DefaultValue}}</textarea>
-{{else if eq .Type "number"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="number" name="notes" data-id="{{.ID}}"{{if .Min}} min="{{.Min}}"{{end}}{{if .Max}} max="{{.Max}}"{{end}}{{if .Step}} step="{{.Step}}"{{end}}{{if .Required}} required{{end}}>
-{{else if eq .Type "select"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}><option value="" disabled selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select>
-{{else if eq .Type "radio"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad"><input type="radio" name="notes" data-id="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}
-{{else if eq .Type "checkbox"}}  <label class="chk"{{styleAttr .Style}}><input type="checkbox" class="extra" data-id="{{.ID}}" value="{{.Value}}"> {{.Value}}</label>
-{{else if eq .Type "date"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="date" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "time"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="time" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "website"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="url" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "address"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="2"{{if .Required}} required{{end}}></textarea>
+{{range $b := .Blocks}}
+{{if eq .Type "text"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}{{if .DefaultValue}} value="{{.DefaultValue}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "image"}}{{if .Src}}  <img class="img{{if .CSSClass}} {{.CSSClass}}{{end}}" src="{{.Src}}" alt=""{{styleAttr .Style}}>
+{{end}}{{else if eq .Type "divider"}}  <hr{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{styleAttr .Style}}>
+{{else if eq .Type "section"}}  <div class="section{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}>{{.Value}}</div>
+{{else if eq .Type "html"}}  <div class="text{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}>{{.Value}}</div>
+{{else if eq .Type "total"}}  <div class="total{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><span>{{.Value}}</span><span class="total-val">RM0.00</span></div>
+{{else if eq .Type "product"}}  <div class="prod{{if .ImgTop}} menu-card{{end}}{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><label>{{if .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}<span class="prow">{{end}}<input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}">{{if not .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}{{end}}<span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span>{{if .ImgTop}}</span>{{end}}</label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
+{{else if eq .Type "quantity"}}  <div class="qtyrow{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><label class="lbl" style="margin:0">{{.Value}}</label><input type="number" class="qty" min="1" value="{{if .DefaultValue}}{{.DefaultValue}}{{else}}1{{end}}"></div>
+{{else if eq .Type "option"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="opt{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (+RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
+{{else if eq .Type "shipping"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="ship{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}"><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
+{{else if eq .Type "name"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="full_name" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "email"}}  <label class="lbl"{{styleAttr .Style}}>{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="email" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}} required{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "phone"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="phone" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "textarea"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}} rows="2"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>{{.DefaultValue}}</textarea>
+{{else if eq .Type "number"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="number" name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Min}} min="{{.Min}}"{{end}}{{if .Max}} max="{{.Max}}"{{end}}{{if .Step}} step="{{.Step}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "select"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" disabled selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select>
+{{else if eq .Type "radio"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad{{if $b.CSSClass}} {{$b.CSSClass}}{{end}}"><input type="radio" name="notes" data-id="{{$b.ID}}" value="{{.Value}}"{{if $b.Required}} required{{end}}{{if $b.RequiredMsg}} oninvalid="this.setCustomValidity('{{$b.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}> {{.Label}}</label>{{end}}
+{{else if eq .Type "checkbox"}}  <label class="chk"{{styleAttr .Style}}><input type="checkbox" class="extra{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ID}}" value="{{.Value}}"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}> {{.Value}}</label>
+{{else if eq .Type "date"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="{{dateType .Type .Format}}" name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "time"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="{{dateType .Type .Format}}" name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "website"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="url" name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "address"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}} rows="2"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}></textarea>
 {{else if eq .Type "file"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}</label><div class="desc">{{$.Ls.FileUnsupported}}</div>
-{{else if eq .Type "consent"}}  <label class="chk"{{styleAttr .Style}}><input type="checkbox" class="extra" data-id="{{.ID}}" value="1"{{if .Required}} required{{end}}> {{.Value}}</label>
-{{else if eq .Type "hidden"}}  <input type="hidden" name="notes" data-id="{{.ID}}" value="{{.DefaultValue}}"{{styleAttr .Style}}>
-{{else if eq .Type "list"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="3"{{if .Required}} required{{end}}></textarea>
-{{else if eq .Type "repeater"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}" rows="3"{{if .Required}} required{{end}}></textarea>
-{{else if eq .Type "image-choice"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad"><input type="radio" name="notes" data-id="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}
-{{else if eq .Type "captcha"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="notes" data-id="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "coupon"}}  <label class="lbl">{{$.Ls.CouponLabel}}</label><input type="text" name="coupon" class="coupon" data-id="{{.ID}}">
-{{end}}</span>
+{{else if eq .Type "consent"}}  <label class="chk"{{styleAttr .Style}}><input type="checkbox" class="extra{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ID}}" value="1"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}> {{.Value}}</label>
+{{else if eq .Type "hidden"}}  <input type="hidden" name="notes" data-id="{{.ID}}" value="{{.DefaultValue}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{styleAttr .Style}}>
+{{else if eq .Type "list"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}} rows="3"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}></textarea>
+{{else if eq .Type "repeater"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}} rows="3"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}></textarea>
+{{else if eq .Type "image-choice"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad{{if $b.CSSClass}} {{$b.CSSClass}}{{end}}"><input type="radio" name="notes" data-id="{{$b.ID}}" value="{{.Value}}"{{if $b.Required}} required{{end}}{{if $b.RequiredMsg}} oninvalid="this.setCustomValidity('{{$b.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}> {{.Label}}</label>{{end}}
+{{else if eq .Type "captcha"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "coupon"}}  <label class="lbl"{{styleAttr .Style}}>{{$.Ls.CouponLabel}}</label><input type="text" name="coupon" class="coupon{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ID}}">
+{{end}}</span>{{if .Description}}<div class="desc">{{.Description}}</div>{{end}}
 {{end}}
   <div class="total"><span>{{$.Ls.Total}}</span><span id="total">RM0.00</span></div>
   {{.AntiSpam}}
@@ -732,8 +754,13 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 			Required  bool       `json:"required"`
 			Condition *Condition `json:"condition"`
 			// Issue #173: per-field settings.
-			Placeholder  string `json:"placeholder"`
-			Description  string `json:"description"`
+			Placeholder string `json:"placeholder"`
+			Description string `json:"description"`
+			// Card t_23289ce3: per-field settings this template never read.
+			CSSClass     string `json:"css_class"`
+			Style        string `json:"style"`
+			Format       string `json:"format"`
+			RequiredMsg  string `json:"required_message"`
 			MaxLength    int    `json:"max_length"`
 			DefaultValue string `json:"default_value"`
 			Min          string `json:"min"`
@@ -757,11 +784,16 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 	type fieldView struct {
 		ID, Type, Value string
 		// Src is an image block's validated https URL (card t_99c3a08b).
-		Src          string
-		Required     bool
-		CondJSON     string
-		Placeholder  string
-		Description  string
+		Src         string
+		Required    bool
+		CondJSON    string
+		Placeholder string
+		Description string
+		// Card t_23289ce3: the per-field settings the response page now paints.
+		CSSClass     string
+		Style        string
+		Format       string
+		RequiredMsg  string
 		MaxLength    int
 		DefaultValue string
 		Min, Max     string
@@ -788,6 +820,8 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 				ID: b.ID, Type: b.Type, Value: b.Value, Required: b.Required,
 				CondJSON:    marshalCondition(b.Condition),
 				Placeholder: b.Placeholder, Description: b.Description,
+				CSSClass: b.CSSClass, Style: customform.SanitizeStyle(b.Style),
+				Format: b.Format, RequiredMsg: b.RequiredMsg,
 				MaxLength: b.MaxLength, DefaultValue: b.DefaultValue,
 				Min: b.Min, Max: b.Max, Step: b.Step, Pattern: b.Pattern,
 			}
@@ -898,6 +932,12 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 // payment — just the input blocks and a submit button. On success the form is
 // replaced with a thank-you message (no /t/{ref} payment status).
 var responseTmpl = template.Must(template.New("response").
+	Funcs(template.FuncMap{
+		// Card t_23289ce3: the same per-field settings the payment renderer
+		// emits — the two renderers must not disagree about a block.
+		"styleAttr": styleAttr,
+		"dateType":  dateInputType,
+	}).
 	Parse(`<!doctype html>
 <html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 {{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
@@ -992,31 +1032,32 @@ var responseTmpl = template.Must(template.New("response").
   <h1>{{.Title}}</h1>
 {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
 {{range $f := .Fields}}
-{{if eq .Type "text"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}" data-id="{{.ID}}"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}{{if .DefaultValue}} value="{{.DefaultValue}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}>
-{{else if eq .Type "section"}}  <div class="section">{{.Value}}</div>
-{{else if eq .Type "html"}}  <div class="text">{{.Value}}</div>
-{{else if eq .Type "image"}}{{if .Src}}  <img class="img" src="{{.Src}}" alt="">
-{{end}}{{else if eq .Type "divider"}}  <hr>
-{{else if eq .Type "file"}}  <label class="lbl">{{.Value}}</label><div class="desc">{{$.Ls.FileUnsupported}}</div>
-{{else if eq .Type "name"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "email"}}  <label class="lbl">{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "phone"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "textarea"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="{{.ID}}" rows="3"{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}>{{.DefaultValue}}</textarea>
-{{else if eq .Type "checkbox"}}  <label class="chk"><input type="checkbox" name="{{.ID}}" value="1"{{if .Required}} required{{end}}> {{.Value}}</label>
-{{else if eq .Type "consent"}}  <label class="chk"><input type="checkbox" name="{{.ID}}" value="1"{{if .Required}} required{{end}}> {{.Value}}</label>
-{{else if eq .Type "number"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="number" name="{{.ID}}"{{if .Min}} min="{{.Min}}"{{end}}{{if .Max}} max="{{.Max}}"{{end}}{{if .Step}} step="{{.Step}}"{{end}}{{if .Required}} required{{end}}>
-{{else if eq .Type "select"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select name="{{.ID}}"{{if .Required}} required{{end}}><option value="" disabled selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select>
-{{else if eq .Type "radio"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad"><input type="radio" name="{{$f.ID}}" value="{{.Value}}"{{if $f.Required}} required{{end}}> {{.Label}}</label>{{end}}
-{{else if eq .Type "image-choice"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad"><input type="radio" name="{{$f.ID}}" value="{{.Value}}"{{if $f.Required}} required{{end}}> {{.Label}}</label>{{end}}
-{{else if eq .Type "date"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="date" name="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "time"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="time" name="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "website"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="url" name="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "address"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="{{.ID}}" rows="2"{{if .Required}} required{{end}}></textarea>
-{{else if eq .Type "list"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="{{.ID}}" rows="3"{{if .Required}} required{{end}}></textarea>
-{{else if eq .Type "repeater"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="{{.ID}}" rows="3"{{if .Required}} required{{end}}></textarea>
-{{else if eq .Type "captcha"}}  <label class="lbl">{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}"{{if .Required}} required{{end}}>
-{{else if eq .Type "hidden"}}  <input type="hidden" name="{{.ID}}" value="{{.DefaultValue}}">
+{{if eq .Type "text"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}{{if .DefaultValue}} value="{{.DefaultValue}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "section"}}  <div class="section{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}>{{.Value}}</div>
+{{else if eq .Type "html"}}  <div class="text{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}>{{.Value}}</div>
+{{else if eq .Type "image"}}{{if .Src}}  <img class="img{{if .CSSClass}} {{.CSSClass}}{{end}}" src="{{.Src}}" alt=""{{styleAttr .Style}}>
+{{end}}{{else if eq .Type "divider"}}  <hr{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{styleAttr .Style}}>
+{{else if eq .Type "file"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}</label><div class="desc">{{$.Ls.FileUnsupported}}</div>
+{{else if eq .Type "name"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "email"}}  <label class="lbl"{{styleAttr .Style}}>{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "phone"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "textarea"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}} rows="3"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>{{.DefaultValue}}</textarea>
+{{else if eq .Type "checkbox"}}  <label class="chk{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><input type="checkbox" name="{{.ID}}" value="1"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}> {{.Value}}</label>
+{{else if eq .Type "consent"}}  <label class="chk{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><input type="checkbox" name="{{.ID}}" value="1"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}> {{.Value}}</label>
+{{else if eq .Type "number"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="number" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Min}} min="{{.Min}}"{{end}}{{if .Max}} max="{{.Max}}"{{end}}{{if .Step}} step="{{.Step}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "select"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" disabled selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select>
+{{else if eq .Type "radio"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad{{if $f.CSSClass}} {{$f.CSSClass}}{{end}}"><input type="radio" name="{{$f.ID}}" value="{{.Value}}"{{if $f.Required}} required{{end}}{{if $f.RequiredMsg}} oninvalid="this.setCustomValidity('{{$f.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}> {{.Label}}</label>{{end}}
+{{else if eq .Type "image-choice"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad{{if $f.CSSClass}} {{$f.CSSClass}}{{end}}"><input type="radio" name="{{$f.ID}}" value="{{.Value}}"{{if $f.Required}} required{{end}}{{if $f.RequiredMsg}} oninvalid="this.setCustomValidity('{{$f.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}> {{.Label}}</label>{{end}}
+{{else if eq .Type "date"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="{{dateType .Type .Format}}" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "time"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="{{dateType .Type .Format}}" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "website"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="url" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "address"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}} rows="2"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}></textarea>
+{{else if eq .Type "list"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}} rows="3"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}></textarea>
+{{else if eq .Type "repeater"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}} rows="3"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}></textarea>
+{{else if eq .Type "captcha"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "hidden"}}  <input type="hidden" name="{{.ID}}" value="{{.DefaultValue}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{styleAttr .Style}}>
 {{end}}
+{{if .Description}}<div class="desc">{{.Description}}</div>{{end}}
 {{end}}
   {{.AntiSpam}}
   <button type="submit">{{$.Ls.SubmitResponse}}</button>

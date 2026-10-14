@@ -131,6 +131,16 @@ type productImageBlock struct {
 	ImgTop          bool
 	BaseImage       string
 	Style           string
+	Placeholder     string
+	Description     string
+	CSSClass        string
+	Format          string
+	Pattern         string
+	RequiredMsg     string
+	MaxLength       int
+	DefaultValue    string
+	Min, Max        string
+	Step            string
 	Variations      []struct{}
 }
 

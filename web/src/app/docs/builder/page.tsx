@@ -66,6 +66,62 @@ export default function BuilderDocsPage() {
         </li>
       </ul>
 
+      <h2 className="mt-8 text-xl font-semibold text-slate-900">What each setting does</h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Every one of these reaches the published form. Where a setting appears depends on the field
+        type, and each one shows up like this:
+      </p>
+      <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
+        <li>
+          <strong>Label / text</strong> — the field&apos;s own label. The text block is a
+          single-line answer field: its label is the text you type, and it is the palette&apos;s
+          only short-answer field.
+        </li>
+        <li>
+          <strong>Description</strong> — helper text printed under the field, on every block type.
+        </li>
+        <li>
+          <strong>Placeholder</strong> — the grey hint inside the field, for text, note, number,
+          email, phone, address, website, captcha, list and repeater fields. A date or time field
+          has no placeholder: the picker prints its own format hint instead.
+        </li>
+        <li>
+          <strong>Max length</strong> — how many characters a text or note field accepts.
+        </li>
+        <li>
+          <strong>Default value</strong> — the value a text, note, quantity or hidden field starts
+          with.
+        </li>
+        <li>
+          <strong>CSS class</strong> — your own class name on the field&apos;s control (on the
+          block&apos;s own element for text, section, HTML, image and divider blocks), so a custom
+          CSS rule can target it.
+        </li>
+        <li>
+          <strong>Inline style</strong> — safe CSS only (under Advanced; no background images or
+          external URLs).
+        </li>
+        <li>
+          <strong>Required message</strong> — the words a buyer reads when a required field is left
+          empty, in place of the browser&apos;s own wording.
+        </li>
+        <li>
+          <strong>Validation pattern</strong> — a regular expression the buyer&apos;s answer must
+          match, for text, email, phone and website fields. Browsers ignore a pattern on a number
+          or note field, so it is not offered there.
+        </li>
+        <li>
+          <strong>Format</strong> — on a date or time block: whether the buyer gets a date picker, a
+          date-and-time picker or a time picker.
+        </li>
+        <li>
+          <strong>Choices</strong>, the <strong>product</strong> picker and{" "}
+          <strong>conditional logic</strong> — as before: a dropdown, radio, image-choice, option or
+          shipping block edits its own list of choices, a product block picks the product it sells,
+          and a rule shows or hides a field depending on an earlier answer.
+        </li>
+      </ul>
+
       <h2 className="mt-8 text-xl font-semibold text-slate-900">Reordering, duplicating, removing</h2>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         Each block card carries <strong>↑</strong> and <strong>↓</strong> to move it one position (the

@@ -33,10 +33,13 @@
 // fixed.
 //
 // WHY THE FIVE STATES: the guard scans every block type whose panel renders a
-// select — name and date (their format picker, plus the conditional rule picker,
-// hence 2 each), the `select` block (choices + rule picker), the product block
-// (its product picker) — and keeps a text block as a control that renders none.
-// Scanning only one panel state is what let the defect through the first time.
+// select — the `name` block (the conditional rule picker only: its own
+// simple/full format picker was removed by card t_23289ce3, which found it had
+// no reader in either public renderer), `date` (its format picker plus the rule
+// picker, hence 2), the `select` block (choices + rule picker), the product
+// block (its product picker) — and keeps a text block as a control that renders
+// none. Scanning only one panel state is what let the defect through the first
+// time.
 //
 // WHAT MAKES IT BITE (verified, not assumed): on the pre-fix tree the name-,
 // date- and product-block cases fail with `nameSource: "NONE"` — see the PR.
@@ -68,7 +71,7 @@ const BLOCK = (type: string, extra: Record<string, unknown> = {}) => ({
 // why the count is 2 where the card names one picker: the guard asserts the
 // count so a panel that rendered nothing cannot pass vacuously.
 const CASES = [
-  { label: "name — the format picker", index: 0, selects: 2 },
+  { label: "name — the rule picker (its format picker is gone)", index: 0, selects: 1 },
   { label: "date — the format picker", index: 1, selects: 2 },
   // A `select` block renders the choices editor (guarded by its own card,
   // t_c4abb920) but no format picker: its only <select> is the rule picker.
