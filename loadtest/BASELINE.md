@@ -5,6 +5,127 @@ three load surfaces from issue #103 — public form (buyer path), dashboard
 (authed REST), and payment create-purchase — plus the regression gate and the
 first-bottleneck analysis.
 
+## COST SAFETY — do this BEFORE any load run
+
+**A load run spends real money unless the AI spam judge is turned OFF for the
+workspace under test.** This is the step that was missing: one run of 17,123
+submissions enqueued thousands of AI spam-judge jobs that POSTed to the real
+model endpoint, which never showed up in the run's latency numbers — only on the
+bill. Read this section before starting any sweep.
+
+### Why a load run is an external-spend event
+
+Every response-mode submission calls `PublicHandlers.enqueueSpamJudge`
+(`api/internal/httpapi/public.go`, the end of `handleSubmit`, and the formless
+menu-order path in `order.go`). That enqueues an **async** job, and the queue
+worker (`spamjudge.Handler.Send`) then POSTs to the real model endpoint through
+`llm.Client` (`api/internal/llm`): base URL `LLM_BASE_URL`, default
+`https://ollama.com/v1`, credential `OLLAMA_API_KEY`. Async is the right design
+for the request path and is exactly why the cost is invisible — it never appears
+in a percentile, only as
+
+    WARN spamjudge_judge_failed err="llm: Post \"https://ollama.com/v1/chat/completions\": …"
+    INFO spamjudge_done …
+
+back to back, thousands of times.
+
+The lever is the per-workspace toggle `workspace_settings.spam_judge_enabled`
+(migration `000062_workspace_spam_judge_enabled`, `NOT NULL DEFAULT TRUE`). It is
+read on the **enqueue** — `WorkspaceStore.SpamJudgeEnabledByAccount`,
+`SELECT COALESCE(ss.spam_judge_enabled, TRUE)` — so with it OFF **no judge job is
+enqueued at all** and no AI work is spent.
+
+### The guard (use this, do not hand-roll it)
+
+`loadtest/cost-guard.sh` resolves the workspace (by the k6 `SPACE` subdomain, or
+by uuid), reads the toggle through the same store accessors the API uses, and
+refuses when it cannot prove the judge is OFF:
+
+```bash
+export DATABASE_URL=postgres://…@staging-db:5432/jomform   # the TEST/STAGING database
+
+# 1. CERTIFY (read-only). Exit 0 = safe to start a sweep.
+./loadtest/cost-guard.sh check --space "$SPACE"
+
+# 2. If it refuses because the judge is ON, turn it OFF — and it READS IT BACK,
+#    so "the save said OK" is never mistaken for "the judge is off":
+./loadtest/cost-guard.sh disable --space "$SPACE"
+
+# 3. Then sweep. baseline.sh runs step 1 itself and ABORTS before the first
+#    virtual user when it is not certified (fail-closed, not a warning):
+./loadtest/baseline.sh http://staging.example.com
+```
+
+Exit codes, so a runner (or you) can tell the cases apart:
+
+| Code | Meaning | What to do |
+|---|---|---|
+| 0 | VERIFIED OFF — the sweep may start | nothing |
+| 3 | REFUSED: the judge is ON (or a `disable` did not take effect) | `cost-guard.sh disable`, or dashboard → Settings → AI spam judge |
+| 4 | REFUSED: the state could not be VERIFIED (unreachable DB, unknown slug, missing table) | fix the database URL / the workspace name — never read this as safe |
+| 1 | usage / configuration error (nothing was read or written) | pass `--space`/`--workspace` and `--database-url` |
+
+`baseline.sh` also takes `DATABASE_URL`, `SPACE`, `WORKSPACE_ID` and
+`COST_GUARD` (the guard command, defaulting to `loadtest/cost-guard.sh`), and the
+`GO`/`JF_COST_GUARD_BIN` variables control where the guard binary is built and
+cached.
+
+### The app-mediated alternatives (equally valid ways to turn it off)
+
+- **Dashboard:** Settings → AI spam judge → off. Writes
+  `PUT /v1/workspaces/{id}/settings` with `{"spam_judge_enabled": false}`.
+- **MCP:** `set_workspace_settings` with `spam_judge_enabled=false` (a
+  `readwrite` API key over `POST /mcp`) — `api/internal/mcpsrv/workspaces.go`.
+- **SQL, in the staging schema only** (prefer the guard/dashboard/MCP, which go
+  through the app's read-modify-write):
+
+  ```sql
+  INSERT INTO workspace_settings (workspace_id, spam_judge_enabled)
+  VALUES ('<ws-uuid>', false)
+  ON CONFLICT (workspace_id) DO UPDATE SET spam_judge_enabled = false;
+  ```
+
+  That INSERT shape **is** valid: every other column on that table is
+  `NOT NULL DEFAULT …` (`api/internal/db/migrations/000012_spaces.up.sql`), which
+  is why the app itself can write a bare
+  `INSERT INTO workspace_settings (workspace_id) VALUES ($1)`. A `spam_judge_enabled`
+  with no settings row **reads as ON** — the read must be
+  `SELECT COALESCE((SELECT spam_judge_enabled FROM workspace_settings WHERE workspace_id = '<ws-uuid>'), TRUE);`
+  (one row that merely does not exist yet is the default, i.e. ON).
+
+- **Note on the REST route from a load harness:** `GET/PUT
+  /v1/workspaces/{id}/settings` is **session-only** — `RESTHandlers.workspaceAccessByID`
+  requires a session user, so a Bearer API key gets 401. A load runner therefore
+  cannot read the toggle over REST with a key; that is why the guard reads the
+  database (and why the dashboard/MCP paths above are the app-mediated ones).
+
+### The other lever: point the judge at a local model
+
+If you *want* the judge exercised without external spend, redirect the endpoint
+instead (any OpenAI-compatible server):
+
+```bash
+LLM_BASE_URL=http://127.0.0.1:11434/v1   # plus LLM_MODEL, if you do not want the default
+```
+
+Unsetting `OLLAMA_API_KEY` is **not** the lever: the job is still enqueued, and
+the worker then fails with a credential error and retries with backoff
+(`llm.New` never returns a nil client, so `spamjudge.Handler.Send`'s
+`spamjudge_no_llm` shortcut does not fire).
+
+### Verify it took effect — do not assume
+
+1. `./loadtest/cost-guard.sh check --space "$SPACE"` exits **0**.
+2. After ONE submission, **no `spamjudge_*` line** appears in the API log, and
+   `submissions.is_spam` for that row stays `NULL`. If either is not true, the
+   toggle did not take effect and the sweep must not run.
+
+### Do not do this in production
+
+The judge is a product feature that protects merchants from spam and data-rot
+(`is_spam` rows are deleted by the retention sweep). Turning it off is a
+**test-cost** measure for a test/staging workspace — never a production change.
+
 ## Tooling
 
 - **Driver:** [k6](https://k6.io) (self-hosted, no SaaS dependency; also
@@ -21,6 +142,7 @@ first-bottleneck analysis.
 | `loadtest/dashboard.js` | Dashboard (authed) | `GET /v1/rest/dashboard-bundle`, `/v1/rest/sales`, `/v1/rest/analytics/forms`, `/v1/rest/products` |
 | `loadtest/payment.js` | Payment create-purchase | `POST /{slug}/order` with `payment_method=chip` (→ CHIP create-purchase) |
 | `loadtest/gate.js` | Regression gate | Public-form render + submit at fixed concurrency, fails on threshold breach |
+| `loadtest/cost-guard.sh` | COST SAFETY (run before any sweep) | The AI spam judge must be OFF, or the run spends paid model calls — see "COST SAFETY" above |
 | `loadtest/common.js` | Shared helpers | Env parsing, URL builders, auth headers |
 
 ### Env knobs (all scripts)
