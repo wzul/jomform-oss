@@ -50,10 +50,11 @@
 //   on #ffffff — would report this defect as a pass.
 //
 // The API is stubbed at the browser level (no Go server, no session, no DB), so
-// this runs in the axe gate (`npm run a11y`, part of scripts/preflight.sh)
-// against the build that gate already serves. It lives in its own file because
-// `a11y.spec.ts` scans unauthenticated PUBLIC routes and cannot reach the
-// builder at all.
+// this runs in the `e2e` gate (`npm run e2e`, part of scripts/preflight.sh)
+// against the build that gate already serves — the a11y project's testMatch is
+// `a11y*.spec.ts` only, and this file is not one of them. It lives in its own
+// file because `a11y.spec.ts` scans unauthenticated PUBLIC routes and cannot
+// reach the builder at all.
 import { test, expect, type Page } from "@playwright/test";
 
 import { signIn } from "./auth";

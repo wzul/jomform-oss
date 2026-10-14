@@ -18,7 +18,9 @@
 // (the pattern e2e/affiliate-row.spec.ts and e2e/a11y-dialogs.spec.ts already
 // use — no Go server, no session, no DB) puts the real component in a real
 // browser with no backend at all. No credential is fabricated, so this stays a
-// gate: `npm run a11y` runs the whole `e2e` directory.
+// gate: it runs in the `e2e` gate (`npm run e2e`, part of scripts/preflight.sh) —
+// the project that selects every spec under `web/e2e` that is not named `a11y*`,
+// which is why `npm run a11y` never executed this file's axe arm.
 import { test, expect, type Page } from "@playwright/test";
 
 import { signIn } from "./auth";

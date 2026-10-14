@@ -20,8 +20,8 @@
 //     not have become a wildcard that claims to know a refusal it does not.
 //
 // THE API IS STUBBED AT THE BROWSER LEVEL (no Go server, no session, no DB), the
-// same idiom as workspace-name-cap.spec.ts, so this runs in the axe gate with
-// nothing but the build that gate already serves.
+// same idiom as workspace-name-cap.spec.ts, so this runs in the `e2e` gate
+// (`npm run e2e`) with nothing but the build that gate already serves.
 //
 // WHAT IT DOES NOT COVER (stated honestly): it does not send a real request to
 // the Go API. workspace_rename_reserved_slug_test.go drives the real route and

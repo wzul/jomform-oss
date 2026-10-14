@@ -16,8 +16,9 @@
 // `npm run test:unit` (node --test over src/lib/*.test.ts) has no DOM, and a
 // guard that only asserts "the row is not grid-cols-4" is toothless: it would
 // stay green while a different class re-created the same squeeze. This file runs
-// in the axe gate (`npm run a11y`, part of scripts/preflight.sh) because that is
-// the one gate in this repo that renders the real built page in a real browser.
+// in the `e2e` gate (`npm run e2e`, part of scripts/preflight.sh) — the project
+// that runs every spec under web/e2e that is not named `a11y*` — because that is
+// the gate that renders the real built page in a real browser.
 // It measures the ACTUAL glyph run of the ACTUAL label against the ACTUAL button
 // box, per locale, at 320/360/390/430px — the same measurement the defect was
 // reported with, so the numbers below are the acceptance evidence.
@@ -162,11 +163,11 @@ async function measureStatusChips(page: Page, lang: string): Promise<Chip[]> {
 
 for (const lang of ["en", "ms", "zh", "ta", "ar"] as const) {
   test(`status chips fit their labels in ${lang} at 320/360/390/430px`, async ({ browser }) => {
-    // The axe gate runs this file alongside the axe scans on a shared host, so
-    // the per-test budget is generous: a slow first paint under contention must
-    // not read as a chip defect. (Measured: with the default 5s the zh case
-    // flaked once at 3 workers and passed alone — a scheduling artefact, not a
-    // locale failure.)
+    // The `e2e` gate runs this file alongside the rest of the feature specs on a
+    // shared host, so the per-test budget is generous: a slow first paint under
+    // contention must not read as a chip defect. (Measured: with the default 5s
+    // the zh case flaked once at 3 workers and passed alone — a scheduling
+    // artefact, not a locale failure.)
     test.setTimeout(180_000);
     const expected = STATUSES.map((s) => DICT[`bld.status${s[0].toUpperCase()}${s.slice(1)}` as "bld.statusDraft"][lang]);
     const measured: string[] = [];

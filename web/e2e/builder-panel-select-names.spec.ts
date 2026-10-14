@@ -19,10 +19,11 @@
 // cannot tell "the label is a sibling with no htmlFor" from "the label is
 // associated"; and an assertion on the source text ("the file contains
 // `id={fid(\"nameFormat\")}`") would stay green while a different markup change
-// re-created the same unnamed select. This file runs in the axe gate
-// (`npm run a11y`, part of `scripts/preflight.sh`) because that is the one gate
-// in this repo that renders the real built page in a real browser, and it reads
-// the ACTUAL accessible-name sources off the ACTUAL rendered elements.
+// re-created the same unnamed select. This file runs in the `e2e` gate
+// (`npm run e2e`, part of `scripts/preflight.sh`) — the project that runs every
+// spec under web/e2e that is not named `a11y*` — because that is the gate that
+// renders the real built page in a real browser, and it reads the ACTUAL
+// accessible-name sources off the ACTUAL rendered elements.
 //
 // WHY IT IS NOT JUST AXE AGAIN
 // axe already covers an <input> named only by its `placeholder` (it accepts the

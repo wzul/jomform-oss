@@ -20,8 +20,10 @@
 // specs in this directory use. No Go server, no session, no database: the spec
 // renders the REAL built page and reads the REAL DOM.
 //
-// It joins the axe gate (`npm run a11y`, part of scripts/preflight.sh) because
-// that is the one gate in this repo that serves the built app in a real browser.
+// It runs in the `e2e` gate (`npm run e2e`, part of scripts/preflight.sh) — the
+// project that selects every spec under web/e2e that is not named `a11y*` —
+// because that is the gate in this repo that serves the built app in a real
+// browser.
 // Nothing here asserts on a CSS class — every rule is a property of the rendered
 // output, so a re-arrangement that re-introduced the defect would still fail it.
 import { test, expect, type Page } from "@playwright/test";

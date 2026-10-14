@@ -15,7 +15,7 @@
 //
 // WHY AXE IS NOT THE TEST HERE
 // axe ACCEPTS a placeholder as an accessible name, so a placeholder-only control
-// is invisible to `npm run a11y`. QA proved axe is blind to this class of
+// is invisible to an axe scan. QA proved axe is blind to this class of
 // control with glyph-only probes rather than assuming it, and in the same run axe
 // reported NO findings on the choices panel. So "0 critical" is not evidence for
 // this defect: the guard has to read the ACTUAL name sources off the ACTUAL DOM.

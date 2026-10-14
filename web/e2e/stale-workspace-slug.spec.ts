@@ -35,8 +35,8 @@
 //
 // Run with:
 //
-//   npm run a11y                                       # the whole gate
-//   npx playwright test e2e/stale-workspace-slug.spec.ts
+//   npm run e2e                                        # the gate that runs this file
+//   npx playwright test e2e/stale-workspace-slug.spec.ts --project=feature-e2e
 import { test, expect, type Page } from "@playwright/test";
 
 import { signIn } from "./auth";

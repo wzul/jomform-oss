@@ -42,8 +42,8 @@
 //
 // Run with:
 //
-//   npm run a11y                       # the whole gate (this file included)
-//   npx playwright test e2e/chat-probe-400.spec.ts    # this file alone
+//   npm run e2e                        # the whole gate (this file included)
+//   npx playwright test e2e/chat-probe-400.spec.ts --project=feature-e2e
 import { test, expect, type Page } from "@playwright/test";
 
 import { signIn } from "./auth";

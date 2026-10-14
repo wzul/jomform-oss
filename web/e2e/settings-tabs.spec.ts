@@ -24,10 +24,11 @@
 // This defect lives entirely in the rendered box. A guard that asserts "the
 // strip is not `flex flex-wrap`" is toothless: any other arrangement that
 // re-creates four rows keeps it green. This file measures the RENDERED strip
-// per locale and per width in the real built page, in the axe gate
-// (`npm run a11y`, part of scripts/preflight.sh) — the one gate in this repo
-// that renders the real page in a real browser, and the same gate the
-// affiliate-row guard uses.
+// per locale and per width in the real built page, in the `e2e` gate
+// (`npm run e2e`, part of scripts/preflight.sh) — the project that runs every
+// spec under web/e2e that is not named `a11y*` — because that is the gate that
+// renders this page in a real browser. It is the same gate the affiliate-row
+// guard runs in.
 //
 // THE TAB COUNT IS DERIVED, NOT PINNED
 // This guard is about the strip's BOX, so how many tabs are in it is an INPUT,

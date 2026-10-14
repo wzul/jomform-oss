@@ -23,8 +23,9 @@
 // browser's `dashboard-bundle` fetch, so stubbing that fetch at the browser level
 // (the pattern `e2e/affiliate-row.spec.ts` already uses — "no Go server, no
 // session, no DB") puts the real component in a real browser with no backend at
-// all. No credential is fabricated, so this stays a gate: `npm run a11y` runs the
-// whole `e2e` directory, so these tests run wherever the public scan runs.
+// all. No credential is fabricated, so this stays a gate: the `a11y` project
+// selects its fixtures by FILENAME PREFIX, so this file (`a11y-dialogs.spec.ts`)
+// runs in `npm run a11y` alongside the public-page scan in `a11y.spec.ts`.
 //
 // WHAT IS PINNED, AND WHAT MAKES IT BITE. Each dialog is (1) asserted to be
 // reachable at all — a selector that stops matching FAILS rather than skipping,

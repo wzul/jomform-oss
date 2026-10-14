@@ -30,10 +30,11 @@
 // `npm run test:unit` (node --test over src/lib/*.test.ts) has no DOM, and a guard
 // that asserts "the row is not `flex items-end gap-2`" is toothless: any other
 // arrangement that re-creates the squeeze would keep it green. This file runs in the
-// axe gate (`npm run a11y`, part of scripts/preflight.sh) because that is the one
-// gate in this repo that renders the real built page in a real browser, and it
-// measures the ACTUAL rendered box of the ACTUAL control against the ACTUAL glyph run
-// of its placeholder or label — per locale, at every width the card names.
+// `e2e` gate (`npm run e2e`, part of scripts/preflight.sh) — the project that runs
+// every spec under web/e2e that is not named `a11y*` — because that is the gate
+// that renders the real built page in a real browser, and it measures the ACTUAL
+// rendered box of the ACTUAL control against the ACTUAL glyph run of its
+// placeholder or label — per locale, at every width the card names.
 //
 // WHAT MAKES IT BITE (verified, not assumed)
 // Every rule below is violated directly by the collapse:
