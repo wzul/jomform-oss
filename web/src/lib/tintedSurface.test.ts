@@ -144,11 +144,16 @@ const UNREADABLE_PIN: Array<{ rel: string; expr: string; why: string }> = [
   },
   {
     rel: "components/Shell.tsx",
-    expr: "`${className} flex items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary)]`",
+    expr: "`${className} flex items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary-on-tint)]`",
     why:
       "the avatar's own classes ARE read here (that is the `bg-indigo-100` half, " +
       "which is not this guard's tint and is carded separately); the `className` " +
-      "PROP the caller passes is what the read cannot complete",
+      "PROP the caller passes is what the read cannot complete. Re-read by card " +
+      "`t_44c9a306` when it re-cut PR 1102 onto current `main`: card `t_86755e43` " +
+      "moved this site's own token to `--jf-primary-on-tint` (a DARKER tint is " +
+      "tracked by `src/lib/indigo100Tint.test.ts`), which changed the literal here " +
+      "and therefore moved the pin key — the shape did not move, so the pin is " +
+      "kept with the new text rather than deleted",
   },
   {
     rel: "components/WorkspaceSwitcher.tsx",

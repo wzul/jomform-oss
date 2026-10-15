@@ -524,6 +524,15 @@ export default function ProfilePage() {
                       className="h-20 w-20 rounded-full object-cover ring-1 ring-slate-200"
                     />
                   ) : (
+                    // This 24px (text-2xl) initial IS WCAG large-scale text —
+                    // 18pt, the same Understanding page that defines "18 point"
+                    // gives 18pt = 24px — so the base token's 3.814:1 clears the
+                    // 3:1 floor for large text and is deliberately kept (card
+                    // t_86755e43: swapping a passing site's colour to please the
+                    // 4.5 floor it is not subject to is not a fix). The size class
+                    // is load-bearing: `src/lib/indigo100Tint.test.ts` requires a
+                    // large-scale size on any base token painted on bg-indigo-100,
+                    // and goes RED here if this badge is ever resized smaller.
                     <div className="flex h-20 w-20 items-center justify-center rounded-full bg-indigo-100 text-2xl font-semibold text-[var(--jf-primary)] ring-1 ring-slate-200">
                       {((name || email || "?")[0] || "?").toUpperCase()}
                     </div>

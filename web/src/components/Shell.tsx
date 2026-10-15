@@ -72,7 +72,13 @@ function UserAvatar({
     );
   }
   return (
-    <div className={`${className} flex items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary)]`}>
+    // The tint is Tailwind indigo-100 (#e0e7ff), on which the BASE
+    // `text-[var(--jf-primary)]` measures 3.814:1 — under the 4.5:1 AA floor for
+    // this 12px (text-xs) initial — so the badge takes the on-tint token, which
+    // measures 6.414:1 here (card t_86755e43). The /profile badge's 24px initial
+    // is WCAG large-scale text (24px = 18pt) and keeps the base token: 3.814:1
+    // against its 3:1 floor. `src/lib/indigo100Tint.test.ts` owns both verdicts.
+    <div className={`${className} flex items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary-on-tint)]`}>
       {initial}
     </div>
   );
