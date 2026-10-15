@@ -38,12 +38,14 @@
 //      BELOW the floor. Without it, a spec that accidentally measured the wrong node would
 //      stay green while claiming to cover the defect.
 //
-// A FINDING NOTED, NOT FIXED HERE. The active workspace is conveyed by COLOUR plus a `✓`
-// glyph (`s.slug === value` in the component) and carries no `aria-current`, so a screen
-// reader user cannot tell which workspace is active from the menu rows. This probe
-// identifies the row by MEASURING its painted background, which is the property under test;
-// the missing programmatic state is a separate defect and deserves its own card rather than
-// being silently assumed away here.
+// THE ACTIVE ROW'S PROGRAMMATIC STATE (card t_89797869). This file used to carry the note
+// that the active workspace was conveyed by COLOUR plus a `✓` glyph and nothing else, so
+// the probe below had to identify the active row by MEASURING its painted background — the
+// guard worked AROUND a WCAG 4.1.2 gap instead of pinning the property. That gap is fixed:
+// the component sets `aria-current="true"` on the active row (the same `s.slug === value`
+// predicate the tint and the glyph use, so the three cannot disagree), and the first arm
+// below now asserts THAT attribute and cross-checks the tint against it. The contrast
+// measurement is unchanged — it is a different property.
 //
 // Run with:
 //   npm run a11y                                  # the whole gate (this file included)
@@ -97,6 +99,15 @@ const BUNDLE = {
   form_analytics: [],
   product_analytics: [],
 };
+
+/**
+ * The workspace this file's browser state SELECTS (`freshState` writes `jf_workspace=demo`,
+ * and the switcher marks `s.slug === value`), and the other one. Named here so the assertion
+ * that the marked row is the ACTIVE workspace reads off the bundle rather than a literal —
+ * a renamed fixture then moves both halves instead of silently agreeing with itself.
+ */
+const ACTIVE_WORKSPACE = BUNDLE.workspaces[0];
+const INACTIVE_WORKSPACE = BUNDLE.workspaces[1];
 
 /** Every /api/* call the dashboard shell makes, stubbed at the browser level. */
 async function stubAPI(page: Page) {
@@ -251,11 +262,15 @@ async function measureMenuRows(page: Page, menuSelector: string) {
       const fg = paint(`rgb(${bg.r}, ${bg.g}, ${bg.b})`, cs.color);
       return {
         text: (el.textContent || "").trim().slice(0, 40),
-        // THE ACTIVE ROW IS CONVEYED BY COLOUR, NOT PROGRAMMATICALLY. The component marks
-        // it with the indigo-50 tint plus a `✓` glyph (`s.slug === value`) and sets no
-        // `aria-current`, so this probe identifies it by MEASURING the painted
-        // background — which is also the property under test.
+        // The PAINT. Kept for the contrast property this file owns — and, since card
+        // t_89797869, cross-checked against the row's programmatic state below rather
+        // than being the only way to tell the active row apart.
         onTint: hex(bg).toLowerCase() !== "#ffffff",
+        // The PROGRAMMATIC STATE, i.e. what assistive tech reads. `role` is reported
+        // beside it so an arm that changes the widget role re-anchors this probe
+        // instead of silently finding null.
+        role: el.getAttribute("role"),
+        ariaCurrent: el.getAttribute("aria-current"),
         fg: hex(fg),
         bg: hex(bg),
         ratio: Math.round(ratio(fg, bg) * 1000) / 1000,
@@ -274,7 +289,7 @@ function floorFor(r: { fontSize: string; fontWeight: string }): number {
 }
 
 test.describe("workspace switcher's tinted active item", () => {
-  test("the open menu is scanned, and its rows MEASURE above the contrast floor", async ({ page }) => {
+  test("the open menu is scanned, its active row is marked aria-current, and its rows MEASURE above the contrast floor", async ({ page }) => {
     await stubAPI(page);
     await freshState(page);
     // The Shell — which renders the switcher — is the authenticated chrome, so this is a
@@ -289,15 +304,58 @@ test.describe("workspace switcher's tinted active item", () => {
     const scope = '[role="menu"]';
     const rows = await measureMenuRows(page, scope);
 
-    // (2) The active row must exist — without it the scan would report a clean 0 over a
-    // menu that renders no tinted row (two workspaces are needed for it to render).
-    expect(rows.length, "the switcher menu rendered no rows").toBeGreaterThan(0);
+    // (2) THE PROGRAMMATIC STATE — the property this arm exists for since card t_89797869.
+    // The active workspace used to be marked by COLOUR alone, so this probe could find it
+    // only by measuring a painted background; the state is now read straight off the row,
+    // and the paint is cross-checked AGAINST it in (3). If the two ever disagree, this fails
+    // here rather than measuring whichever row happens to be tinted.
+    const marked = rows.filter((r) => r.ariaCurrent === "true");
+    expect(
+      marked.length,
+      `the switcher marks ${marked.length} row(s) with aria-current="true"; exactly the ACTIVE ` +
+        `workspace must carry it, or a screen reader cannot tell which one is active (WCAG 4.1.2 — ` +
+        `the defect card t_89797869 fixed). Rows measured: ${JSON.stringify(rows)}`,
+    ).toBe(1);
+    expect(
+      marked[0].text,
+      `the row marked aria-current="true" is ${JSON.stringify(marked[0].text)}, not the ACTIVE ` +
+        `workspace the bundle describes (${JSON.stringify(ACTIVE_WORKSPACE.name)}) — the state is ` +
+        `on the wrong row`,
+    ).toContain(ACTIVE_WORKSPACE.name);
+    expect(
+      marked[0].role,
+      `the marked row's role changed to ${JSON.stringify(marked[0].role)}. This arm pins ` +
+        `role="menuitem" + aria-current="true"; if the widget deliberately moves to the ` +
+        `"menuitemradio" + aria-checked variant, re-anchor this assertion rather than dropping it.`,
+    ).toBe("menuitem");
+    // A state carried by EVERY row discriminates nothing, so the inactive workspace must be
+    // clean — without this, marking both rows would satisfy the assertion above.
+    const inactive = rows.filter((r) => r.text.includes(INACTIVE_WORKSPACE.name));
+    expect(
+      inactive.length,
+      `the inactive workspace (${INACTIVE_WORKSPACE.name}) did not render as its own row, so this ` +
+        `arm cannot show that aria-current DISCRIMINATES: ${JSON.stringify(rows)}`,
+    ).toBe(1);
+    expect(
+      inactive[0].ariaCurrent,
+      `the INACTIVE workspace row carries aria-current=${JSON.stringify(inactive[0].ariaCurrent)} ` +
+        `as well — a state on every row tells a screen reader nothing`,
+    ).toBe(null);
+
+    // (3) The PAINT must agree with the state: the tinted row and the marked row are the same
+    // element. This is what keeps the contrast measurement below anchored to the row the app
+    // itself calls active.
     const active = rows.filter((r) => r.onTint);
     expect(
       active.length,
       `no row is painted on the tint, so the TINTED ACTIVE item never rendered and this ` +
         `scan would be green over nothing. Rows measured: ${JSON.stringify(rows)}`,
     ).toBe(1);
+    expect(
+      active[0],
+      `the row painted on the tint is NOT the row marked aria-current="true" — the visual and the ` +
+        `programmatic state disagree. Marked: ${JSON.stringify(marked[0])}, tinted: ${JSON.stringify(active[0])}`,
+    ).toBe(marked[0]);
 
     const tokens = await page.evaluate(() => {
       const cs = getComputedStyle(document.documentElement);
@@ -309,14 +367,15 @@ test.describe("workspace switcher's tinted active item", () => {
     expect(tokens.primary, "the --jf-primary-on-tint token is not defined").not.toBe("");
     expect(tokens.muted, "the --jf-muted-on-tint token is not defined").not.toBe("");
 
-    // (3) THE MEASUREMENT. This is the half the unit guard cannot do: it reads the
+    // (4) THE MEASUREMENT. This is the half the unit guard cannot do: it reads the
     // component as text and cannot compute a painted colour.
     console.log(
       "[switcher rows] " +
         rows
           .map(
             (r) =>
-              `${JSON.stringify(r.text)} fg=${r.fg} bg=${r.bg} ratio=${r.ratio}${r.onTint ? " ACTIVE" : ""}`,
+              `${JSON.stringify(r.text)} role=${r.role} aria-current=${JSON.stringify(r.ariaCurrent)} ` +
+              `fg=${r.fg} bg=${r.bg} ratio=${r.ratio}${r.onTint ? " ACTIVE(tint)" : ""}`,
           )
           .join("\n  "),
     );
@@ -329,7 +388,7 @@ test.describe("workspace switcher's tinted active item", () => {
         `shipped at 4.20:1 once and this is the measurement that catches it:\n  ${below.join("\n  ")}`,
     ).toEqual([]);
 
-    // (4) The gate's axe rule, scoped to the OPEN MENU. `include()` makes axe THROW when
+    // (5) The gate's axe rule, scoped to the OPEN MENU. `include()` makes axe THROW when
     // the subtree is absent, so this cannot pass vacuously either.
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2aa", "wcag21aa"])

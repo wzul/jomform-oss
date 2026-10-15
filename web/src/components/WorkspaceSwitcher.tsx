@@ -194,11 +194,22 @@ export function WorkspaceSwitcher({
         >
           {workspaces.length > 1 ? (
             <div className="max-h-56 overflow-y-auto">
+              {/* WCAG 4.1.2 (Name, Role, Value), card t_89797869: the active
+                  workspace used to be conveyed by COLOUR only — the bg-indigo-50
+                  tint plus the ✓ glyph below — and carried no programmatic
+                  state, so a screen reader user could not tell which row is
+                  active. `aria-current="true"` is that state; the tint and the
+                  glyph stay as the visual cue, and the e2e guard in
+                  web/e2e/a11y-switcher.spec.ts now asserts THIS attribute on the
+                  active row instead of having to infer it from a painted
+                  background. The predicate is the same `s.slug === value` the
+                  tint and the glyph use, so the three cannot disagree. */}
               {workspaces.map((s) => (
                 <button
                   key={s.id}
                   type="button"
                   role="menuitem"
+                  aria-current={s.slug === value ? "true" : undefined}
                   onClick={() => {
                     onSwitch(s.slug);
                     setOpen(false);
