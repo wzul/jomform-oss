@@ -121,12 +121,27 @@ func TestReclaimStaleReleasesDeadClaims(t *testing.T) {
 		t.Fatalf("mark processed: %v", err)
 	}
 
+	// ReclaimStale is deliberately TABLE-wide — it is the sweeper that releases
+	// dead claims across the whole queue (internal/payments/callback_claim.go) —
+	// so its return count is about every 'processing' row left untouched for
+	// DefaultClaimTimeout in this package's scratch schema, not about the three
+	// rows planted here. The row it counts from a sibling is the dead claim the
+	// test above commits (pur_reclaim_*): it stays 'processing' with a fresh
+	// updated_at, so once the gap between the two tests exceeds the 2-minute
+	// DefaultClaimTimeout it joins this count. Asserting `n == 1` therefore made
+	// this test's verdict depend on that leftover row and on how long the run
+	// took, so the count is asserted as the bound this test's own rows
+	// guarantee: the 30-minute-old claim above is released by this sweep, and a
+	// sibling row can only add to the count, never red this. The verdict on the
+	// sweep's actual effect is row-scoped, in the assertState calls below.
 	n, err := es.ReclaimStale(ctx, dbstore.DefaultClaimTimeout)
 	if err != nil {
 		t.Fatalf("ReclaimStale: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("ReclaimStale released %d rows, want 1 (only the stale claim)", n)
+	if n < 1 {
+		t.Fatalf("ReclaimStale released %d rows, and this test's own claim (untouched for 30 minutes, "+
+			"timeout %s) must be one of them — the sweeper did not release a dead claim, so a crashed "+
+			"attempt is never retried and the #517 backlog strands", n, dbstore.DefaultClaimTimeout)
 	}
 	assertState(t, ctx, es, stale, dbstore.WebhookEventPending, false)
 	assertState(t, ctx, es, live, dbstore.WebhookEventProcessing, false)
