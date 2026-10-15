@@ -5,6 +5,15 @@ package auth
 // matched time-step so a caller can consume it and make the code single-use.
 //
 // These tests pin the step-reporting contract the handler layer relies on.
+//
+// Each test here PINS the package clock (pinTOTPClock). That is not decoration:
+// every one of them derives a code from one timeNow() read and lets
+// ValidateTOTPSecretStep take its own, and a 30s period boundary falling between
+// the two reads moves the validator's base one step relative to the codes, so the
+// ±1 window is applied to a code built for a different step. That is how
+// TestIssue528StepToleranceUnchanged came to report "code from step +2 was
+// accepted; the drift window widened" on a contended host (card t_6bf6c940) —
+// nothing had widened; the clock had moved between the reads.
 
 import (
 	"testing"
@@ -13,6 +22,15 @@ import (
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 )
+
+// totpPinnedNow is the instant these tests pin the clock to. It is deliberately
+// one second BEFORE a 30s period boundary — 1577836799 = 30*52594560 - 1, i.e.
+// 2019-12-31T23:59:59Z — the phase at which the old, unpinned test split across a
+// boundary. It is also years away from the live wall clock on purpose: if the pin
+// is ever dropped, the codes generated below sit in a step the live validator is
+// nowhere near and the ±1 case fails outright rather than flaking on whatever
+// phase the wall clock happened to be at.
+var totpPinnedNow = time.Unix(1577836799, 0)
 
 // fixedStepCode generates the code for secret at a given absolute time.
 func fixedStepCode(t *testing.T, secret string, at time.Time) string {
@@ -36,6 +54,9 @@ func TestIssue528ValidateReportsMatchedStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate secret: %v", err)
 	}
+	// Pin before the first read: the code below is built from this test's read
+	// and the window is decided by ValidateTOTPSecretStep's own read.
+	pinTOTPClock(t, totpPinnedNow)
 
 	now := timeNow()
 	code := fixedStepCode(t, secret, now)
@@ -73,6 +94,9 @@ func TestIssue528SameCodeValidatesRepeatedlyWithoutConsumption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate secret: %v", err)
 	}
+	// Both validations below read the clock; pin it so the two reads and the
+	// code's step cannot be separated by a period boundary.
+	pinTOTPClock(t, totpPinnedNow)
 	code := fixedStepCode(t, secret, timeNow())
 
 	first, ok1 := ValidateTOTPSecretStep(secret, code)
@@ -90,26 +114,46 @@ func TestIssue528SameCodeValidatesRepeatedlyWithoutConsumption(t *testing.T) {
 
 // TestIssue528StepToleranceUnchanged pins that the drift window is still the
 // current step ±1 — the fix must not narrow or widen accepted codes.
+//
+// The clock is PINNED and the phase is swept across the period because of how
+// this test used to fail. It read the wall clock to build the step-(base±1) and
+// step-(base+2) codes, and ValidateTOTPSecretStep (totp.go:52, `now := timeNow()`)
+// read it AGAIN to decide the window. A boundary between the two reads makes the
+// validator's base one step later than the base the codes were built from, so the
+// "two steps away" code is only one step away from the validator's now, the ±1
+// window accepts it, and the failure blames the window ("the drift window
+// widened") when nothing widened. The margin is not microseconds either: under a
+// full `go test ./... -race` on a contended host a goroutine can be descheduled
+// for tens of milliseconds between those two reads.
+//
+// One pinned instant for both the codes and the validation means no boundary can
+// fall between them, and sweeping the phase (including the second before a
+// boundary, the position that used to break) asserts the window is the same
+// wherever in the period the clock sits. The ±1 set itself is untouched.
 func TestIssue528StepToleranceUnchanged(t *testing.T) {
 	secret, _, err := GenerateTOTPSecret("window@example.test")
 	if err != nil {
 		t.Fatalf("generate secret: %v", err)
 	}
-	now := timeNow()
-	base := now.Unix() / totpPeriod
+	pinnedBase := totpPinnedNow.Unix() / totpPeriod
+	for _, phase := range []int64{0, 1, totpPeriod / 2, totpPeriod - 1} {
+		now := time.Unix(pinnedBase*totpPeriod+phase, 0)
+		pinTOTPClock(t, now)
+		base := now.Unix() / totpPeriod
 
-	// Codes one step either side must be accepted (Skew: 1 behaviour preserved).
-	for _, delta := range []int64{-1, 0, 1} {
-		at := time.Unix((base+delta)*totpPeriod, 0)
-		code := fixedStepCode(t, secret, at)
-		if _, ok := ValidateTOTPSecretStep(secret, code); !ok {
-			t.Fatalf("code from step %+d was rejected; the ±1 drift window changed", delta)
+		// Codes one step either side must be accepted (Skew: 1 behaviour preserved).
+		for _, delta := range []int64{-1, 0, 1} {
+			at := time.Unix((base+delta)*totpPeriod, 0)
+			code := fixedStepCode(t, secret, at)
+			if _, ok := ValidateTOTPSecretStep(secret, code); !ok {
+				t.Fatalf("%ds into the period: code from step %+d was rejected; the ±1 drift window changed", phase, delta)
+			}
 		}
-	}
-	// A code two steps away must NOT be accepted.
-	at := time.Unix((base+2)*totpPeriod, 0)
-	far := fixedStepCode(t, secret, at)
-	if _, ok := ValidateTOTPSecretStep(secret, far); ok {
-		t.Fatalf("code from step +2 was accepted; the drift window widened")
+		// A code two steps away must NOT be accepted.
+		at := time.Unix((base+2)*totpPeriod, 0)
+		far := fixedStepCode(t, secret, at)
+		if _, ok := ValidateTOTPSecretStep(secret, far); ok {
+			t.Fatalf("%ds into the period: code from step +2 was accepted; the drift window widened", phase)
+		}
 	}
 }
