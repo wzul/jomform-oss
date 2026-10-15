@@ -179,6 +179,17 @@ export default function Dashboard() {
   // (#62748e) measures 4.349:1 — under the 4.5:1 floor for this 10px badge;
   // `--jf-muted-on-tint` (#5b6472) is 5.460:1 on the same tint. Invisible to
   // `mutedText.test.ts` until the shared reader learned to follow a local helper.
+  //
+  // Card t_df0857c6. This map's FALLBACK was the empty string, so any sale status
+  // the map did not name painted the wrapper's classes only — a pill with no
+  // background and no text colour. `authorized` and `refunded` are both legal
+  // sales statuses (`sales_status_check`, migration 000002) and both reach this
+  // table: measured on prod (v1.21.30) the `refunded` pill painted rgb(23,24,28)
+  // on #ffffff while `/sales` paints the same sale with the orange entry below.
+  // So this helper now has the shape its siblings have: `refunded` gets the entry
+  // `/sales` uses, and anything the map does not name gets the design system's
+  // on-tint pair instead of an uncoloured pill. `src/lib/statusBadgeArms.test.ts`
+  // reads both helpers against the DB's own CHECK list so neither can drift back.
   const badge = (s: string) =>
     ({
       pending: "bg-amber-50 text-amber-700 border-amber-200",
@@ -186,7 +197,8 @@ export default function Dashboard() {
       confirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
       failed: "bg-red-50 text-red-700 border-red-200",
       cancelled: "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200",
-    })[s] || "";
+      refunded: "bg-orange-50 text-orange-700 border-orange-200",
+    })[s] || "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200";
 
   // issue #106: per-sale receipt email status label + badge colour.
   const emailLabel = (s?: string) =>
