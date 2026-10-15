@@ -111,12 +111,21 @@ func FromConfig(config map[string]any) []Field {
 	return cfg.RegisteredFields
 }
 
-// Validate re-validates submitted field values against the form's registered
-// field contract (issue #254). Agent JS is client-side only and bypassable, so
-// the server re-validates every field. Returns an error describing the first
-// violation. A form with no registered contract is not enforced.
+// Validate re-validates submitted field values against the form's field
+// contract (issue #254). Agent JS is client-side only and bypassable, so the
+// server re-validates every field. Returns an error describing the first
+// violation. A form with no contract is not enforced.
+//
+// The contract is derived with Contract — i.e. the SAME rule the menu checkout
+// validates against: an explicit registered_fields contract (issue #254) wins,
+// otherwise it comes from the form's own builder blocks (#493). Deriving from
+// the blocks here is the point (card t_589dc006): this used to read
+// registered_fields alone, so a form whose required markers live in
+// config.blocks[].required — the shape every builder-made form has — had
+// NOTHING enforced on its own submit route. A direct POST of {} then stored an
+// empty submission and fired the merchant's notification email.
 func Validate(config map[string]any, fields map[string]string) error {
-	return ValidateFields(FromConfig(config), fields)
+	return ValidateFields(Contract(config), fields)
 }
 
 // ValidateFields re-validates submitted values against an explicit field

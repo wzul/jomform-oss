@@ -104,9 +104,11 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
 		return
 	}
-	// Issue #254: server-side re-validation of registered fields. Agent JS is
-	// client-side only and bypassable, so the server re-validates every field
-	// against the form's registered contract before accepting the order.
+	// Issue #254: server-side re-validation of the form's field contract. Agent
+	// JS is client-side only and bypassable, so the server re-validates every
+	// field before accepting the order — against the registered contract when
+	// the merchant has one, else against the required markers on the form's own
+	// builder blocks (formfields.Validate -> Contract, card t_589dc006).
 	// Issue #493: a formless menu order validates against the contract derived
 	// from the attached extra-info form's builder blocks (FieldsContract); a
 	// menu with no form attached has no contract — nothing to enforce.

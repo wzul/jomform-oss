@@ -75,6 +75,49 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+// Card t_589dc006: Validate derives the contract from the form's builder blocks
+// when the config carries no registered_fields — the same derivation the menu
+// checkout validates against — so a required block is enforced on a form's own
+// submit route. An explicit registered_fields contract still wins.
+func TestValidateFallsBackToBuilderBlocks(t *testing.T) {
+	blocks := map[string]any{
+		"blocks": []any{
+			map[string]any{"id": "nm", "type": "name", "value": "Nama", "required": true},
+			map[string]any{"id": "note", "type": "textarea", "value": "Nota"},
+		},
+	}
+	// Missing required block → rejected, naming the merchant's own label.
+	err := Validate(blocks, map[string]string{"note": "x"})
+	if err == nil || !strings.Contains(err.Error(), "medan wajib tidak diisi: Nama") {
+		t.Errorf("missing required block: got %v, want the required-field error", err)
+	}
+	// A blank required value is missing too.
+	if err := Validate(blocks, map[string]string{"nm": "   "}); err == nil {
+		t.Error("blank required value was accepted")
+	}
+	// Filled → accepted.
+	if err := Validate(blocks, map[string]string{"nm": "Ali", "note": "x"}); err != nil {
+		t.Errorf("valid submission rejected: %v", err)
+	}
+	// Not required → nothing to enforce (the pre-fix acceptance).
+	if err := Validate(map[string]any{
+		"blocks": []any{map[string]any{"id": "nm", "type": "name", "value": "Nama"}},
+	}, map[string]string{}); err != nil {
+		t.Errorf("optional block enforced: %v", err)
+	}
+	// registered_fields still wins over the blocks.
+	if err := Validate(map[string]any{
+		"blocks":            []any{map[string]any{"id": "nm", "type": "name", "value": "Nama", "required": true}},
+		"registered_fields": []any{map[string]any{"field_id": "other", "type": "textarea", "label": "Lain"}},
+	}, map[string]string{}); err != nil {
+		t.Errorf("registered_fields did not win over the blocks: %v", err)
+	}
+	// No contract at all → still nothing enforced.
+	if err := Validate(map[string]any{}, map[string]string{}); err != nil {
+		t.Errorf("empty config enforced something: %v", err)
+	}
+}
+
 func TestFromConfig(t *testing.T) {
 	config := map[string]any{
 		"registered_fields": []Field{{FieldID: "a", Type: "name", Label: "A"}},

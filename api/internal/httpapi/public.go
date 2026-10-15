@@ -646,9 +646,13 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 	if in.Fields == nil {
 		in.Fields = map[string]any{}
 	}
-	// Issue #254: server-side re-validation of registered fields. Agent JS is
-	// client-side only and bypassable, so the server re-validates every field
-	// against the form's registered contract before storing the submission.
+	// Issue #254: server-side re-validation of the form's field contract. Agent
+	// JS is client-side only and bypassable, so the server re-validates every
+	// field before storing the submission — against the registered contract when
+	// the merchant has one, else against the required markers on the form's own
+	// builder blocks (formfields.Validate -> Contract). Without the blocks arm a
+	// blocks-only form (the normal builder shape) had nothing enforced, so a
+	// bare POST stored an empty submission and emailed the merchant (t_589dc006).
 	{
 		strFields := make(map[string]string, len(in.Fields))
 		for k, v := range in.Fields {
