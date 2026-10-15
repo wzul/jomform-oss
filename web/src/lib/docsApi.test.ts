@@ -35,6 +35,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -55,6 +56,20 @@ import { SITE_URL } from "./siteName.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
+/** web/src — the root tsconfig's `@/*` alias points at (tsconfig `paths`). */
+const WEB_SRC = resolvePath(dirname(path("./openapi.ts")), "..");
+
+/**
+ * Resolve a module specifier the way this project's bundler does, so the binding
+ * check below compares FILES rather than spellings: tsconfig maps `@/*` to
+ * `./src/*`, and the page may reach lib/openapi.ts by the alias or by a relative
+ * path. A bare package specifier is returned as written — it cannot be that file.
+ */
+function resolveModuleSpecifier(spec: string, fromFile: string): string {
+  if (spec.startsWith("@/")) return resolvePath(WEB_SRC, spec.slice(2));
+  if (spec.startsWith(".")) return resolvePath(dirname(fromFile), spec);
+  return spec;
+}
 
 /**
  * The page's SOURCE with JSX text wrapping collapsed and comments dropped.
@@ -114,6 +129,70 @@ function anchorHrefs(src: string): string[] {
     // identifier). Keep it verbatim so a caller sees it rather than silently
     // losing an href it should judge.
     out.push(src.slice(i, i + 40));
+  }
+  return out;
+}
+
+/**
+ * The module specifiers in the page's own import statements that bind `name`.
+ *
+ * `anchorHrefs` reads the NAME written in an attribute; this reads what that
+ * name is BOUND TO, which is a different question and the one that decides where
+ * a reader is sent. A page that keeps `href={OPENAPI_PUBLIC_URL}` on both anchors
+ * but takes the identifier from a SECOND module exporting its own copy of the
+ * name renders that copy's URL, while every check named after the identifier —
+ * and every check on the constant, which this file imports from lib/openapi.ts —
+ * stays green. (t_2285b2ef, shape 1.)
+ */
+function importSourcesFor(src: string, name: string): string[] {
+  const out: string[] = [];
+  // One statement at a time: a clause spanning a `;` would be two statements, and
+  // would attribute the name to the wrong specifier.
+  for (const m of src.matchAll(/\bimport\s+(?:type\s+)?([^;]*?)\s+from\s+["']([^"']+)["']/g)) {
+    const named = m[1].match(/\{([\s\S]*)\}/);
+    if (!named) continue; // a default or namespace import binds no bare name
+    for (const entry of named[1].split(",")) {
+      // `A as B` binds B; `type A` binds A.
+      const [imported, local = imported] = entry.trim().replace(/^type\s+/, "").split(/\s+as\s+/);
+      if (local.trim() === name) out.push(m[2]);
+    }
+  }
+  return out;
+}
+
+/**
+ * The attribute region of every `<a …>` opening tag on the page.
+ *
+ * Read by scanning to the tag's closing `>` with brace and quote depth tracked,
+ * so a multi-line tag is read whole and an attribute whose value contains `>`
+ * does not end the tag early. Callers use it for what `anchorHrefs` structurally
+ * cannot see: a JSX spread. A spread is applied AFTER the literal attributes, so
+ * `{...{ href: "https://…" }}` replaces the destination of the `href` above it —
+ * and `anchorHrefs` matches `href=`, so the spread's `href:` is never read.
+ * (t_2285b2ef, shape 2.)
+ */
+function anchorAttributes(src: string): string[] {
+  const out: string[] = [];
+  for (const m of src.matchAll(/<a(?=[\s>])/g)) {
+    const start = (m.index ?? 0) + m[0].length;
+    let i = start;
+    let depth = 0;
+    let quote = "";
+    for (; i < src.length; i++) {
+      const c = src[i];
+      if (quote) {
+        if (c === quote) quote = "";
+        continue;
+      }
+      if (c === '"' || c === "'") {
+        quote = c;
+        continue;
+      }
+      if (c === "{") depth++;
+      else if (c === "}") depth--;
+      else if (depth === 0 && c === ">") break;
+    }
+    out.push(src.slice(start, i));
   }
   return out;
 }
@@ -460,6 +539,23 @@ test("the page links the machine-readable contract it is generated from", () => 
     pageSrc.includes("API_BASE"),
     `${PAGE} no longer names the API host a caller should send requests to`,
   );
+  // The BINDING, not just the name: the page must take the identifier from the
+  // module this test itself reads the constant from. Asserting below that the
+  // page imports lib/openapi.ts is not the same thing — that import can carry
+  // every OTHER name while OPENAPI_PUBLIC_URL comes from a second module that
+  // exports its own copy, and then both anchors render that copy's URL while
+  // every href check and every constant check stays green. (t_2285b2ef, shape 1.)
+  const bound = importSourcesFor(pageRaw, "OPENAPI_PUBLIC_URL").map((spec) =>
+    resolveModuleSpecifier(spec, path(PAGE)),
+  );
+  assert.deepEqual(
+    bound,
+    [path("./openapi.ts")],
+    `${PAGE} must take OPENAPI_PUBLIC_URL from exactly one module, and that module must be ` +
+      `lib/openapi.ts — the module this guard reads the constant from. Bound to ` +
+      `${JSON.stringify(bound)}. A second module exporting the same name, or a copy declared ` +
+      "in the page itself, hands the anchors a destination nothing here has checked.",
+  );
   // The page must NOT import the raw spec: the shaping lives in lib/openapi.ts,
   // and a second import path is a second place to keep correct. (Checked against
   // code lines only — the header comment explains this rule and names the file.)
@@ -513,6 +609,25 @@ test("the contract link is a URL the page's audience can actually fetch", () => 
   //    anchor's link TEXT — both anchors print the URL as their visible label —
   //    so a typed href pointing anywhere at all still passed. The href is the
   //    half a reader follows, so the href attributes are what is read here.
+  //
+  //    First: no anchor may take its destination from a JSX SPREAD. A spread is
+  //    applied AFTER the literal attributes, so `{...{ href: "https://…" }}`
+  //    replaces the href written above it — and `anchorHrefs` matches `href=`, so
+  //    the spread's `href:` is never read: the checks below would certify a
+  //    destination the browser never uses. A spread is refused rather than
+  //    judged, because attributes the guard cannot resolve are attributes it
+  //    cannot certify. (t_2285b2ef, shape 2.)
+  const spreadAnchors = anchorAttributes(pageRaw)
+    .filter((a) => a.includes("..."))
+    .map((a) => a.replace(/\s+/g, " ").trim());
+  assert.deepEqual(
+    spreadAnchors,
+    [],
+    `${PAGE} spreads props into an <a> tag (${JSON.stringify(spreadAnchors)}) — a spread is ` +
+      "applied after the literal attributes, so it can silently replace the href this test " +
+      "reads, and the guard never sees the destination it writes. Write the anchor's " +
+      "attributes out so the href on the page is the href checked here.",
+  );
   const hrefs = anchorHrefs(pageRaw);
   const toContract = hrefs.filter((h) => h === "OPENAPI_PUBLIC_URL");
   assert.ok(
