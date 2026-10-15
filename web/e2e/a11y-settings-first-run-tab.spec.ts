@@ -74,6 +74,13 @@
 //  10. THE ARROW KEYS               — Left/Right/Home/End move the selection, the
 //      focus AND the painted panel across the member strip (with wraparound), the
 //      moved-to tab is revealed into the scroller, and Tab still LEAVES the strip.
+//  11. THE ADMIN'S FIRST-RUN LANDING — NO stored tab on an ADMIN session: the
+//      default intent (`chip`) has to survive the first paint, where the session
+//      bundle has not resolved `role` and the strip cannot render it yet, so the
+//      admin lands on CHIP with the CHIP panel. This is the arm the ten above
+//      CANNOT be: every one of them expects the first tab a MEMBER is shown,
+//      which is exactly what clamping the intent produces — see "WHY THIS ARM
+//      EXISTS" below the admin arm.
 //
 // THE DEAD-END TAB (card t_0ef9709c, the mirror image of the defect above)
 //   A tab that IS rendered while its PANEL is gated further down. `workspace`
@@ -224,10 +231,18 @@ const READ_ONLY_BUNDLE = {
 /**
  * The bundle an ADMIN member sees: every declared tab, `workspace` included.
  * Used by the arm that pins the other direction of t_0ef9709c — hiding the
- * Workspace tab from a member must not hide it from the role whose panel it IS.
+ * Workspace tab from a member must not hide it from the role whose panel it IS
+ * — and by the arm that pins the admin's FIRST-RUN landing (card t_50d602cf).
+ * `is_super_admin: true` as well as the admin role: the merchant whose stored
+ * tab is CHIP in production is a super-admin, and the two gates are read in
+ * different places (`role` from the workspace row filters the strip;
+ * `is_super_admin` adds the platform /admin nav entry in `Shell`), so the
+ * bundle carries both — a bundle that answered admin to one and member to the
+ * other would not be the session this arm means to pin.
  */
 const ADMIN_BUNDLE = {
   ...MEMBER_BUNDLE,
+  me: { ...ME, is_super_admin: true },
   workspaces: [{ id: "ws1", name: "Demo", slug: "demo", role: "admin" }],
 };
 
@@ -721,6 +736,84 @@ test("admin: the Workspace tab is still offered and its pane is the identity car
     pane.firstPanelHeading,
     `the admin's Workspace pane paints ${JSON.stringify(pane.firstPanelHeading)}, not the workspace identity card`,
   ).toBe(DICT["ws.identityTitle"].en);
+});
+
+// ─── THE ADMIN'S FIRST-RUN LANDING (card t_50d602cf) ───────────────────────────
+//
+// WHY THIS ARM EXISTS
+//   `settings/page.tsx` deliberately does NOT clamp the tab INTENT. `tab` is the
+//   stored / URL / clicked tab and it is left alone ("`tab` itself is left alone
+//   on purpose: it is the merchant's intent, the persist effect below writes it,
+//   and an admin's stored "chip" must survive a first paint that has not
+//   resolved `role` yet"), while the VIEW is derived from it:
+//   `activeTab = visibleTabs.includes(tab) ? tab : (visibleTabs[0] ?? null)`.
+//
+//   Nothing pinned that. Every arm above expects the landing `MEMBER_TAB_IDS[0]`
+//   ("Domains") — which is EXACTLY what a clamp produces — so a page that clamps
+//   the intent at initialisation instead of deriving the view passes all of
+//   them: on the first paint `role` is unresolved, so `visibleTabs` is the member
+//   set, an admin's default `chip` is not in it, the clamp rewrites `tab` to
+//   "domains" AND the persist effect writes that back — so once `role` resolves
+//   the admin is on Domains instead of CHIP, with the CHIP credentials one click
+//   away from a merchant who never asked to be moved. The arm below is the only
+//   one that can see it, because it is the only one whose landing is NOT the
+//   first tab a member is shown. (The sibling `e2e/workspace-trash.spec.ts`
+//   preselects `jf_settings_tab = "workspace"` on an admin bundle, but it waits
+//   only for the admin strip to render and then CLICKS its way to its pane — a
+//   clamp changes the landing tab and none of its assertions.)
+//
+//   MEASURED for the parent card (t_7fb39e38, arm E) on prod revision 7e7bdcd2
+//   and on the local HEAD build: 12 tabs, exactly ONE aria-selected = "CHIP",
+//   panel h2 "CHIP Collect".
+test("admin, NO stored tab: the default intent (chip) survives the unresolved first paint, so the landing is CHIP (en @320)", async ({ page, baseURL }) => {
+  // `jf_lang`/`jf_workspace` only — NO `jf_settings_tab`, exactly like the
+  // member first-run arms. The intent this arm pins is `loadStoredTab()`'s
+  // fallback "chip", read during the first paint, before the bundle has
+  // resolved `role`.
+  await freshState(page, { jf_lang: "en", jf_workspace: "demo" });
+  await stubAPI(page, ADMIN_BUNDLE);
+  await page.setViewportSize({ width: PHONE_WIDTH, height: 800 });
+  await page.goto(`${baseURL}/settings`, { waitUntil: "domcontentloaded" });
+
+  // Waits for the ADMIN strip (all twelve tabs, CHIP among them) — i.e. for the
+  // bundle to have resolved `role` — and settles the read on CHIP.
+  const s = await settleAndRead(page, "en", PAGE_TAB_IDS, "chip");
+  const what = "en@320 admin no-stored-tab";
+  expect(s.tabCount, `${what}: the admin strip renders ${PAGE_TAB_IDS.length} tabs`).toBe(PAGE_TAB_IDS.length);
+  expect(
+    s.selectedCount,
+    `${what}: ${s.selectedCount} tabs carry aria-selected on the admin strip ` +
+      `(${s.tabCount} tabs, labels ${JSON.stringify(s.labels)}) — a settled role="tablist" ` +
+      `carries exactly one`,
+  ).toBe(1);
+  expect(
+    s.selectedText,
+    `${what}: the admin landed on ${JSON.stringify(s.selectedText)}, not CHIP — the tab INTENT was ` +
+      `rewritten while \`role\` was still unresolved (a first paint that clamps \`tab\` to the ` +
+      `first tab a member is shown), so the merchant's default did not survive the unresolved ` +
+      `first paint`,
+  ).toBe(DICT["set.tab.chip"].en);
+  expect(
+    s.firstPanelHeading,
+    `${what}: the panel under the strip is ${JSON.stringify(s.firstPanelHeading)}, not the CHIP ` +
+      `credentials panel the selected tab stands for`,
+  ).toBe(DICT["set.chipTitle"].en);
+  expectSettingsAssociation(s, "en", what);
+
+  // The INTENT itself, not only the view: the persist effect writes the tab the
+  // page holds, so a clamp that rewrote the state to "domains" leaves that
+  // value in storage — and the merchant is moved for every later visit too.
+  await expect
+    .poll(
+      () => page.evaluate(`(() => localStorage.getItem("jf_settings_tab"))()`) as Promise<string | null>,
+      {
+        message:
+          `${what}: the stored tab is not the intent this session started with — the page rewrote ` +
+          `"chip" before \`role\` resolved, and persisted the rewrite`,
+        timeout: 5_000,
+      },
+    )
+    .toBe("chip");
 });
 
 test("axe: the settings pane on a first run has no critical/serious violation (en @320)", async ({ page, baseURL }) => {
