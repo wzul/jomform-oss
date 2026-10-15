@@ -33,9 +33,12 @@
 //
 //     What the reader still cannot read is a class list THIS FILE does not own:
 //     a `className` PROP the caller fills in, and a prop-derived ternary. Those
-//     sites are pinned by NAME in `UNREADABLE_PIN` below, with the reason, and
-//     any NEW unreadable className — a sixth site, or a shape the reader cannot
-//     follow — fails the guard instead of joining a blind spot.
+//     sites are pinned by NAME **and COUNT** in `UNREADABLE_PIN` below, with the
+//     reason, and any NEW unreadable className fails the guard instead of
+//     joining a blind spot — a sixth site, a SECOND one on an expression that is
+//     already pinned (card t_f5641ea5: the key used to be `<file> :: <expr>`
+//     with no count, so a duplicate site rode in on an existing pin), or a shape
+//     the reader cannot follow.
 //
 //   A FOURTH round came at the same defect from a different surface and is NOT
 //   covered by this file (card t_5f315891): the builder canvas price spans use
@@ -114,16 +117,33 @@ const FILES = tsxFiles(SRC);
  * that into a per-site question: every unreadable className is on this list with
  * a reason, and a NEW one FAILS.
  *
- * Keyed on `<file> :: <expression>` and NOT on a line number, so an edit
- * anywhere above one of these does not turn the guard red, while an edit to the
- * expression itself does — at which point either the reader can now see it
+ * Keyed on `<file> :: <expression>` — deliberately NOT on a line number, so an
+ * edit anywhere above one of these does not turn the guard red, while an edit to
+ * the expression itself does: at which point either the reader can now see it
  * (delete the pin) or the shape moved and the pin has to be re-read. Both
  * directions are asserted.
+ *
+ * ...AND A COUNT (card t_f5641ea5). `<file> :: <expr>` alone does not name a
+ * SITE, so a file that was already pinned could grow a SECOND unreadable
+ * `className` with the same expression — the filter dropped both and the guard
+ * stayed green while a new site joined the blind spot. Proven before the count
+ * existed: one extra `<div className={className}>` in `components/OperatorNotice.tsx`
+ * left this file 4/4 GREEN, while the same element in an UNPINNED file went RED.
+ * Every pinned expression today is `className` or a prop-derived ternary, i.e.
+ * exactly the shape a new prop-forward reuses. So each entry carries the number
+ * of sites that key may cover, and a key that now has MORE sites than its pin
+ * allows is a failure (`pinVerdict(...).extra`). Lowering a count is the same
+ * kind of deliberate edit as adding a pin: it is how the next site is accepted,
+ * in the open, instead of by accident.
+ *
+ * Measured on the tree this was written against: 5 unreadable sites in 5 files,
+ * every one a distinct key with exactly ONE site — hence every `count: 1` here.
  */
-const UNREADABLE_PIN: Array<{ rel: string; expr: string; why: string }> = [
+const UNREADABLE_PIN: UnreadablePin[] = [
   {
     rel: "app/products/page.tsx",
     expr: "className",
+    count: 1,
     why:
       "the sortable table header's `<th className={className}>`: a PROP, so the " +
       "caller owns the class list and this file cannot judge it",
@@ -131,6 +151,7 @@ const UNREADABLE_PIN: Array<{ rel: string; expr: string; why: string }> = [
   {
     rel: "components/OperatorNotice.tsx",
     expr: "className",
+    count: 1,
     why:
       "`<p className={className}>`: a PROP (the legal-notice paragraph takes the " +
       "caller's classes), so the list is chosen outside this file",
@@ -138,6 +159,7 @@ const UNREADABLE_PIN: Array<{ rel: string; expr: string; why: string }> = [
   {
     rel: "components/SaveButton.tsx",
     expr: "saved ? savedClassName : className",
+    count: 1,
     why:
       "both branches are PROPS (`savedClassName`, `className`) — the saved/resting " +
       "pair is the caller's, and a scan of this file cannot see either",
@@ -145,6 +167,7 @@ const UNREADABLE_PIN: Array<{ rel: string; expr: string; why: string }> = [
   {
     rel: "components/Shell.tsx",
     expr: "`${className} flex items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary-on-tint)]`",
+    count: 1,
     why:
       "the avatar's own classes ARE read here (that is the `bg-indigo-100` half, " +
       "which is not this guard's tint and is carded separately); the `className` " +
@@ -158,28 +181,104 @@ const UNREADABLE_PIN: Array<{ rel: string; expr: string; why: string }> = [
   {
     rel: "components/WorkspaceSwitcher.tsx",
     expr: "`relative ${fullWidth ? \"w-full\" : \"\"} ${className || \"\"}`",
+    count: 1,
     why:
       "the static half and the width branch are read; the `className` PROP the " +
       "caller fills in is not",
   },
 ];
 
-/** Every `className` under the tree that the reader could not fully resolve. */
-function unreadableSites(): Array<{ rel: string; line: number; tag: string; expr: string }> {
-  const out: Array<{ rel: string; line: number; tag: string; expr: string }> = [];
-  for (const rel of FILES) {
-    const code = codeOnly(readFileSync(`${SRC}${rel}`, "utf8"));
-    for (const e of jsxTags(code)) {
-      if (!e.open || !e.tag.classNameUnreadable) continue;
-      out.push({
-        rel,
-        line: code.slice(0, e.tag.openIdx).split("\n").length,
-        tag: e.tag.name,
-        expr: e.tag.classNameExpr,
-      });
-    }
+/**
+ * One `className` the reader could not fully resolve, at a known site.
+ * `line` is where the element's `<` sits, so a failure names the site the way a
+ * reviewer has to look at it. It is NEVER part of a key: a pin has to survive an
+ * edit anywhere above it, which is exactly why the key is `<file> :: <expr>` —
+ * and exactly why that key needs the count below.
+ */
+type UnreadableSite = { rel: string; line: number; tag: string; expr: string };
+
+/** A deliberate exception: ONE expression, in ONE file, covering `count` sites. */
+type UnreadablePin = { rel: string; expr: string; count: number; why: string };
+
+/** The key a pin and a finding are matched on: the file and the expression. */
+function siteKey(rel: string, expr: string): string {
+  return `${rel} :: ${expr}`;
+}
+
+/** Every `className` the reader could not resolve in ONE file's source. */
+function unreadableSitesIn(rel: string, src: string): UnreadableSite[] {
+  const code = codeOnly(src);
+  const out: UnreadableSite[] = [];
+  for (const e of jsxTags(code)) {
+    if (!e.open || !e.tag.classNameUnreadable) continue;
+    out.push({
+      rel,
+      line: code.slice(0, e.tag.openIdx).split("\n").length,
+      tag: e.tag.name,
+      expr: e.tag.classNameExpr,
+    });
   }
   return out;
+}
+
+/** Every `className` under the tree that the reader could not fully resolve. */
+function unreadableSites(): UnreadableSite[] {
+  const out: UnreadableSite[] = [];
+  for (const rel of FILES) out.push(...unreadableSitesIn(rel, readFileSync(`${SRC}${rel}`, "utf8")));
+  return out;
+}
+
+/** `<rel>:<line> — <tag> className={<expr>}` — one site, as a reviewer reads it. */
+function siteLabel(s: UnreadableSite): string {
+  return `${s.rel}:${s.line} — <${s.tag}> className={${s.expr}}`;
+}
+
+/**
+ * Compare the unreadable sites a walk found against the pins that permit them,
+ * in the three directions this guard cares about (cards t_10266084, t_f5641ea5):
+ *
+ *   unpinned  a site whose `<file> :: <expr>` is not on the list at all — "an
+ *             element I cannot read is not one I cleared".
+ *   extra     a site BEYOND the count its key pins: a SECOND unreadable
+ *             className riding in on an existing exception. This direction did
+ *             not exist while the key carried no count, and the planted
+ *             duplicate in the bite proof below passed 4/4 green without it.
+ *   stale     a pin whose sites the walk no longer finds (fewer than `count`):
+ *             the expression moved shape, or the reader resolves it now. A stale
+ *             pin is how the NEXT blind spot would look green.
+ *
+ * Pure (no I/O), so the bite proof can drive it with a planted fixture instead of
+ * a mutated tree.
+ */
+function pinVerdict(sites: UnreadableSite[], pins: UnreadablePin[]) {
+  const allowed = new Map<string, number>();
+  for (const p of pins) {
+    const k = siteKey(p.rel, p.expr);
+    allowed.set(k, (allowed.get(k) ?? 0) + p.count);
+  }
+  const found = new Map<string, UnreadableSite[]>();
+  for (const s of sites) {
+    const k = siteKey(s.rel, s.expr);
+    const list = found.get(k);
+    if (list) list.push(s);
+    else found.set(k, [s]);
+  }
+  const unpinned: UnreadableSite[] = [];
+  const extra: UnreadableSite[] = [];
+  for (const [k, list] of found) {
+    const allow = allowed.get(k);
+    if (allow === undefined) {
+      unpinned.push(...list);
+      continue;
+    }
+    extra.push(...list.slice(allow));
+  }
+  const stale: Array<{ pin: UnreadablePin; found: number }> = [];
+  for (const p of pins) {
+    const n = found.get(siteKey(p.rel, p.expr))?.length ?? 0;
+    if (n < p.count) stale.push({ pin: p, found: n });
+  }
+  return { unpinned, extra, stale };
 }
 
 function allFindings(): string[] {
@@ -209,33 +308,154 @@ test("no className is silently skipped: every unreadable one is a pinned excepti
   // t_10266084: a defect built through a local helper was proven GREEN while the
   // identical defect written inline went RED).
   const found = unreadableSites();
-  const key = (rel: string, expr: string) => `${rel} :: ${expr}`;
-  const pinned = new Set(UNREADABLE_PIN.map((p) => key(p.rel, p.expr)));
-  const unexpected = found.filter((f) => !pinned.has(key(f.rel, f.expr)));
+  const { unpinned, extra, stale } = pinVerdict(found, UNREADABLE_PIN);
   assert.deepEqual(
-    unexpected.map((f) => `${f.rel}:${f.line} — <${f.tag}> className={${f.expr}}`),
+    unpinned.map(siteLabel),
     [],
     `This guard COULD NOT READ the className of the element(s) below, and an element ` +
       `it cannot read is not one it has judged. Resolve the shape in \`./jsxSource.ts\` ` +
       `(\`resolveClassExpr\`: a template, a ternary, a \`+\` chain, an array, an inline ` +
       `class map, a local const and a local helper are all readable), or — when the ` +
       `class list genuinely belongs to the CALLER, as a className prop does — pin it in ` +
-      `UNREADABLE_PIN with the reason. Unreadable sites found:\n  ` +
-      unexpected
-        .map((f) => `${f.rel}:${f.line} — <${f.tag}> className={${f.expr}}`)
-        .join("\n  "),
+      `UNREADABLE_PIN with the reason and the COUNT of sites it covers. ` +
+      `Unreadable sites found:\n  ${unpinned.map(siteLabel).join("\n  ")}`,
+  );
+
+  // Card t_f5641ea5. The key alone did not name a SITE: a file that was already
+  // pinned could grow a SECOND unreadable className with the same expression,
+  // both were filtered out, and the guard stayed green — a new site joining the
+  // blind spot this list exists to bound. The count is what makes "a new
+  // unreadable className fails" true per site and not merely per expression.
+  assert.deepEqual(
+    extra.map(siteLabel),
+    [],
+    `These unreadable classNames are the SECOND (or later) site for an expression that ` +
+      `\`UNREADABLE_PIN\` already covers — a NEW blind spot riding in on an old exception, ` +
+      `which is exactly what the pin's COUNT exists to stop. Either make the shape readable ` +
+      `in \`./jsxSource.ts\`, or accept the extra site deliberately by RAISING that pin's ` +
+      `\`count\` (and saying why in its \`why\`), or PIN it as its own entry when it is a ` +
+      `different prop. Sites past their pin's count:\n  ${extra.map(siteLabel).join("\n  ")}`,
   );
 
   // The other direction: a pin that no longer matches hides the NEXT site that
-  // lands on the same shape, so a stale pin is a failure too.
-  const seen = new Set(found.map((f) => key(f.rel, f.expr)));
-  const stale = UNREADABLE_PIN.filter((p) => !seen.has(key(p.rel, p.expr)));
+  // lands on the same shape, so a stale pin is a failure too — including a pin
+  // whose count is now higher than the sites that exist.
   assert.deepEqual(
-    stale.map((p) => `${p.rel} :: ${p.expr}`),
+    stale.map((s) => `${s.pin.rel} :: ${s.pin.expr} — pinned ${s.pin.count}, found ${s.found}`),
     [],
-    `These entries are pinned as UNREADABLE and the walk no longer finds them: either the ` +
-      `expression changed shape (re-read it and update the pin) or the reader resolves it ` +
-      `now (delete the pin). A stale pin is how the next blind spot would look green.`,
+    `These entries are pinned as UNREADABLE and the walk finds too few sites for them: ` +
+      `either the expression changed shape (re-read it and update the pin), the site was ` +
+      `removed (lower the \`count\`), or the reader resolves it now (delete the pin). A ` +
+      `stale pin is how the next blind spot would look green.`,
+  );
+});
+
+test("a SECOND unreadable className in an already-pinned file fails (in-file bite proof)", () => {
+  // Card t_f5641ea5. Before the pin carried a COUNT, the key `<file> :: <expr>`
+  // named an expression and not a site, so this exact plant — ONE extra
+  // `<div className={className}>` in an already-pinned file — was filtered out
+  // twice and the whole file stayed 4/4 GREEN. Reproduced on a scratch copy of
+  // the tree before this changed (same reader, same command: 4 pass / 0 fail),
+  // while the SAME element in a file that is NOT pinned went red naming both
+  // sites. So this is not a description of the gap, it is the gap: the plant
+  // below is driven through `codeOnly` → `jsxTags` → `pinVerdict`, the real path
+  // the guard takes, against the real pinned file.
+  const rel = "components/OperatorNotice.tsx";
+  const real = readFileSync(`${SRC}${rel}`, "utf8");
+  const realSites = unreadableSitesIn(rel, real);
+  assert.ok(
+    realSites.length >= 1,
+    `${rel} carries no unreadable className at all — this bite proof anchors on the file ` +
+      `that IS pinned for one; re-read it rather than deleting the case`,
+  );
+  // The fixture pin covers exactly what the tree already has, so the PLANT is the
+  // only thing below that can fail. (A hard-coded `count: 1` would make this a
+  // second copy of the real pin list, free to disagree with it.)
+  const pins: UnreadablePin[] = [
+    {
+      rel,
+      expr: realSites[0].expr,
+      count: realSites.length,
+      why: "fixture: the sites this file already holds",
+    },
+  ];
+
+  // Control — the tree as it stands is accepted. Without this, "the plant fails"
+  // could be satisfied by a rule that fails everything (or by a fixture whose
+  // pin never matched in the first place).
+  assert.deepEqual(
+    pinVerdict(realSites, pins),
+    { unpinned: [], extra: [], stale: [] },
+    `the pin built from this file's own sites does not accept them — the fixture, not ` +
+      `the guard, is wrong`,
+  );
+
+  // The plant: a second element whose expression is character-for-character the
+  // one the pin names, inserted straight after the pinned element — the exact
+  // shape the card proved GREEN. Anchored on the pinned element's own closing
+  // tag, so a comment above it or a new sibling elsewhere does not break this.
+  const close = real.indexOf("</p>");
+  assert.ok(
+    close > 0 && real.split("</p>").length - 1 === 1,
+    `${rel} no longer holds exactly one \`</p>\` — this plant anchors on the pinned ` +
+      `element's own closing tag; re-read the plant instead of deleting the case`,
+  );
+  const planted =
+    real.slice(0, close + 4) +
+    "\n    <div className={className}>\n      <span>{t(OPERATOR_KEY)}</span>\n    </div>" +
+    real.slice(close + 4);
+  const plantIdx = planted.indexOf("<div className={className}>");
+  assert.ok(plantIdx > close, `the plant did not land after the pinned element`);
+  const plantLine = planted.slice(0, plantIdx).split("\n").length;
+
+  const plantedVerdict = pinVerdict(unreadableSitesIn(rel, planted), pins);
+  assert.deepEqual(
+    plantedVerdict.unpinned.map(siteLabel),
+    [],
+    `the planted site carries the SAME expression as the existing pin, so the old ` +
+      `key-alone filter dropped it as well — it must be reported as a site past the ` +
+      `pin's count, not as unpinned`,
+  );
+  assert.deepEqual(
+    plantedVerdict.extra.map(siteLabel),
+    [`${rel}:${plantLine} — <div> className={className}`],
+    `the SECOND unreadable className planted in an already-pinned ${rel} was accepted: ` +
+      `this is the card's defect (a new site riding in on an old pin)`,
+  );
+  assert.deepEqual(plantedVerdict.stale, [], `the original pinned site is still there`);
+
+  // Raising the count is how a duplicate site is accepted on purpose, so the
+  // failure above is "the pin was not widened", not a blanket ban on duplicates.
+  assert.deepEqual(
+    pinVerdict(unreadableSitesIn(rel, planted), [{ ...pins[0], count: 2 }]),
+    { unpinned: [], extra: [], stale: [] },
+    `a pin that deliberately covers two sites must accept them`,
+  );
+
+  // And the stale direction with a count: a pin covering more sites than exist
+  // is a failure of its own (that is the site that was re-read or removed).
+  assert.deepEqual(
+    pinVerdict(realSites, [{ ...pins[0], count: pins[0].count + 1 }]).stale.map(
+      (s) => `${s.pin.rel} :: ${s.pin.expr} — pinned ${s.pin.count}, found ${s.found}`,
+    ),
+    [`${rel} :: ${pins[0].expr} — pinned ${pins[0].count + 1}, found ${pins[0].count}`],
+    `a count larger than the sites that exist must be reported, not silently summed`,
+  );
+
+  // Two pins on the same key would have their counts SUMMED, which hides the
+  // same "one entry for two sites" confusion one layer up.
+  const keys = UNREADABLE_PIN.map((p) => siteKey(p.rel, p.expr));
+  assert.deepEqual(
+    keys.filter((k, i) => keys.indexOf(k) !== i),
+    [],
+    `UNREADABLE_PIN has two entries for the same file+expression; their counts would be ` +
+      `added together, so one entry is dead and which one is not obvious`,
+  );
+  const badCounts = UNREADABLE_PIN.filter((p) => !Number.isInteger(p.count) || p.count < 1);
+  assert.deepEqual(
+    badCounts.map((p) => `${p.rel} :: ${p.expr} — count=${p.count}`),
+    [],
+    `every pin must name a whole number of sites of at least 1`,
   );
 });
 
