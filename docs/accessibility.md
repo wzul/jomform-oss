@@ -187,12 +187,24 @@ Pinned per dialog: `role="dialog"` + `aria-modal="true"` + an `aria-labelledby`
 that resolves to the shipped heading, focus in the confirm field on open, the
 confirm button's disabled state at the boundary that actually guards the write —
 disabled with the field empty, **still disabled for a wrong slug of the same
-length**, and enabled only for the **exact** slug — Escape closes, and zero
-critical/serious axe violations within the dialog. The three slug states are one
-boundary: card `t_b2463a72` measured that only the empty state was ever checked,
-so a confirm that armed on any non-empty text (`typed.trim().length === 0` in
-place of the slug comparison) shipped green on both dialogs. A regression there
-now fails `npm run a11y` instead of passing unseen.
+length, for a prefix of the real slug, and for the exact slug in inverted case**;
+enabled for the exact slug, and for the exact slug padded with whitespace (the
+shipped `trim()`); disabled again **while a submit is in flight** (the
+double-submit guard, measured by holding the request open) — Escape closes, and
+zero critical/serious axe violations within the dialog. The workspace dialog
+additionally pins the server's `can_delete`: with `can_delete: false` the dialog
+is not offered at all, and the conjunct that keeps its confirm off in that state
+is held by `web/src/lib/workspaceDeleteConfirmGate.test.ts`, because no browser
+can be driven into it (the guard's header records both measurements).
+
+The slug states are one boundary. Card `t_b2463a72` measured that only the empty
+state was ever checked, so a confirm that armed on any non-empty text
+(`typed.trim().length === 0` in place of the slug comparison) shipped green on
+both dialogs. Card `t_2b129c85` measured the rest: a `startsWith` comparison, a
+case-folded one, and the dropped `busy` / `can_delete` conjuncts each shipped
+green as well. A regression in any of them now fails `npm run a11y` — or, for
+the unreachable `can_delete` term, `npm run test:unit` — instead of passing
+unseen.
 
 ### The workspace switcher's tinted active item
 
