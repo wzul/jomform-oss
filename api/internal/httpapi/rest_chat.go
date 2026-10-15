@@ -274,7 +274,7 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 		respondAIErr(w, r, err, "pembantu chat tidak tersedia")
 		return
 	}
-	h.recordChatEvent(r, res)
+	h.recordChatEvent(r, actx, res)
 	writeJSON(w, http.StatusOK, chatResponseOut{
 		Reply: res.Reply, Steps: res.Steps, Filed: res.Filed,
 		Proposals: res.Proposals, Limits: chatLimits(),
@@ -354,11 +354,11 @@ func (h *RESTHandlers) handleChatConfirm(w http.ResponseWriter, r *http.Request,
 
 	res, err := h.Chat.Confirm(r.Context(), writeCtx, uid, in.Token, in.ArgsHash)
 	if err != nil {
-		h.recordChatConfirmEvent(r, uid, in.Token, "", false, err)
+		h.recordChatConfirmEvent(r, actx, uid, in.Token, "", false, err)
 		writeErr(w, chatConfirmStatusFor(err), chatConfirmMessageFor(err))
 		return
 	}
-	h.recordChatConfirmEvent(r, uid, in.Token, res.Tool, true, nil)
+	h.recordChatConfirmEvent(r, actx, uid, in.Token, res.Tool, true, nil)
 	writeJSON(w, http.StatusOK, chatConfirmResponseOut{
 		Status: "done", Tool: res.Tool, Result: res.Result,
 	})
@@ -415,11 +415,11 @@ func (h *RESTHandlers) handleChatCancel(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if err := h.Chat.Cancel(r.Context(), uid, in.Token); err != nil {
-		h.recordChatConfirmEvent(r, uid, in.Token, "", false, err)
+		h.recordChatConfirmEvent(r, actx, uid, in.Token, "", false, err)
 		writeErr(w, chatConfirmStatusFor(err), chatConfirmMessageFor(err))
 		return
 	}
-	h.recordChatConfirmEvent(r, uid, in.Token, "", true, nil)
+	h.recordChatConfirmEvent(r, actx, uid, in.Token, "", true, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
@@ -492,19 +492,63 @@ func chatConfirmMessageFor(err error) string {
 	}
 }
 
+// chatAuditAccountID is the account a chat-lane audit row is filed on: the account
+// THIS REQUEST RESOLVED (actx.Account), never Accounts.ByOwner(...)[0].
+//
+// THE DEFECT (card t_fdb74390). Both chat recorders asked
+// Accounts.ByOwner(r.Context(), uid) and took [0], i.e. the user's FIRST owned
+// account (ordering key accounts.created_at), while every other part of the lane
+// had already resolved ?workspace= correctly — the identity the tools run under,
+// the account a proposal is stored on and the account a confirmed write lands in.
+// So a conversation held under ?workspace=<second> filed its chat.message and
+// chat.proposal_confirmed rows inside the FIRST owned workspace's account:
+// events.account_id is what the account-scoped Activity history is read through,
+// so the second merchant could not see their own conversation at all and the
+// first workspace's history showed a chat that never happened there.
+//
+// WHY THE RESOLVED ACCOUNT. ?workspace= is the user's own selection, resolved by
+// resolveSessionAccount against the workspaces they can reach (owner OR member)
+// and gated by requireResolvedWorkspaceScope before any row is written — an
+// unresolvable or ambiguous scope is a 403/400 and nothing is recorded. That is
+// the same source of truth every other REST audit row in this package already
+// uses (recordEvent → actx), and the same workspace the chat's tools now run
+// under (issue #747), so the audit row and the work it describes agree.
+//
+// WHY NOT mcpsrv.recordMCPEvent's ownsAccount/accountSurvives FILTER. That filter
+// exists because an MCP call's account comes from its ARGUMENTS — caller-supplied,
+// one hop from a MODEL — so "the call resolved to it" is evidence of reachability
+// only, and a row filed there would sit in a history its owner reads and the
+// caller cannot. Nothing here is caller-supplied: the account comes from the
+// server's own resolution of the caller's ?workspace=, and the READER of that
+// history is resolved by the same rule (Activity reads through resolveAccountScope
+// → AccessBySlug, owner OR member, the same way this request resolved). So the
+// caller can read back the rows they file — including a member of the workspace,
+// for whom the MCP lane's "a stranger's account-scoped history" failure cannot
+// arise. The SURVIVAL half has no analogue either: no chat route deletes an
+// account, so this row cannot lose its foreign key between resolve and insert.
+//
+// AN EMPTY ACCOUNT means the request never resolved one (a bare-mode handler with
+// no AccountCtx); the row is skipped, the way recordEventFor skips an empty
+// account, rather than falling back to a guess — the guess is the bug.
+func chatAuditAccountID(actx *AccountCtx) string {
+	if actx == nil || actx.Account == nil {
+		return ""
+	}
+	return actx.Account.ID
+}
+
 // recordChatConfirmEvent logs the SHAPE of a confirmation attempt: which tool,
 // whether it succeeded. It never records the argument values — a confirmed edit is
 // the merchant's own business, and the audit table is read by operators.
-func (h *RESTHandlers) recordChatConfirmEvent(r *http.Request, uid, token, tool string, ok bool, err error) {
+//
+// The row is filed on the account the request RESOLVED (see chatAuditAccountID):
+// a card approved in one workspace must not show up in another workspace's
+// Activity history.
+func (h *RESTHandlers) recordChatConfirmEvent(r *http.Request, actx *AccountCtx, uid, token, tool string, ok bool, err error) {
 	if h.Events == nil {
 		return
 	}
-	accountID := ""
-	if h.Accounts != nil {
-		if accs, aerr := h.Accounts.ByOwner(r.Context(), uid); aerr == nil && len(accs) > 0 {
-			accountID = accs[0].ID
-		}
-	}
+	accountID := chatAuditAccountID(actx)
 	if accountID == "" {
 		return
 	}
@@ -555,7 +599,11 @@ func chatLimits() chatLimitsOut {
 // answer. It records the SHAPE of the exchange (how many tools, whether a filing
 // happened), never the message or reply text — a chat about a merchant's own
 // customers is not something to copy into an audit table.
-func (h *RESTHandlers) recordChatEvent(r *http.Request, res *chat.Result) {
+//
+// The row is filed on the account the request RESOLVED (see chatAuditAccountID):
+// the workspace the user was chatting in is the workspace whose Activity history
+// must show it, and no other.
+func (h *RESTHandlers) recordChatEvent(r *http.Request, actx *AccountCtx, res *chat.Result) {
 	if h.Events == nil || res == nil {
 		return
 	}
@@ -563,12 +611,7 @@ func (h *RESTHandlers) recordChatEvent(r *http.Request, res *chat.Result) {
 	if uid == "" {
 		return
 	}
-	accountID := ""
-	if h.Accounts != nil {
-		if accs, err := h.Accounts.ByOwner(r.Context(), uid); err == nil && len(accs) > 0 {
-			accountID = accs[0].ID
-		}
-	}
+	accountID := chatAuditAccountID(actx)
 	if accountID == "" {
 		return
 	}
