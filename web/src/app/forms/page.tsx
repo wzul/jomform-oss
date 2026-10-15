@@ -14,6 +14,7 @@ import { formViewAction } from "../../lib/formPublicURL";
 import { acknowledgmentBody, needsProductsIDs, publishConfirmText, publishErrorText, publishOutcome } from "../../lib/publishResult";
 import TemplatePicker from "../../components/TemplatePicker";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
+import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
 
 type FormRow = {
   id: string;
@@ -381,10 +382,17 @@ export default function FormsPage() {
 
         {/* Active / Trash switcher. The live list is the DEFAULT: a fresh
             visitor must never land in the trash. */}
-        <div className="mt-5 flex flex-wrap items-center gap-1 border-b border-[var(--jf-border)]" role="tablist">
+        <div
+          className="mt-5 flex flex-wrap items-center gap-1 border-b border-[var(--jf-border)]"
+          role="tablist"
+          onKeyDown={tablistKeyDown}
+        >
           {(["active", "trash"] as const).map((v) => (
             <button
               key={v}
+              id={tabDomId("forms", v)}
+              aria-controls={panelDomId("forms", v)}
+              tabIndex={tabStop(v, view)}
               type="button"
               role="tab"
               aria-selected={view === v}
@@ -410,7 +418,11 @@ export default function FormsPage() {
         )}
 
         {view === "trash" && (
-          <>
+          <div
+            role="tabpanel"
+            id={panelDomId("forms", "trash")}
+            aria-labelledby={tabDomId("forms", "trash")}
+          >
             <p className="mt-4 max-w-2xl text-sm text-[var(--jf-muted)]">{t("forms.trashNote")}</p>
             <ul className="mt-4 space-y-2">
               {trashed.map((f) => (
@@ -462,11 +474,15 @@ export default function FormsPage() {
                 <li className="rounded-lg text-sm text-[var(--jf-muted)]">{t("forms.trashEmpty")}</li>
               )}
             </ul>
-          </>
+          </div>
         )}
 
         {view === "active" && (
-        <>
+        <div
+          role="tabpanel"
+          id={panelDomId("forms", "active")}
+          aria-labelledby={tabDomId("forms", "active")}
+        >
         {canWrite && ids.length > 0 && (
           <div className="jf-card mt-4 flex flex-wrap items-center gap-2 border-[var(--jf-border)] px-4 py-3">
             <span className="text-sm font-medium">
@@ -635,7 +651,7 @@ export default function FormsPage() {
             <li className="rounded-lg text-sm text-[var(--jf-muted)]">{t("forms.empty")}</li>
           )}
         </ul>
-        </>
+        </div>
         )}
       </div>
 

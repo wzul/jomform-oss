@@ -11,6 +11,7 @@ import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
 import { isValidStepUpCode, stepUpRequired } from "../../lib/stepUp";
 import { apiErr } from "../../lib/apiErr";
+import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
 import { classifyLoadError, fetchJson } from "../../lib/wsfetch";
 import { b64url, fromB64url } from "../../lib/webauthn";
 
@@ -483,11 +484,27 @@ export default function ProfilePage() {
             already carry the role; this is the same one-attribute consistency.
             The guard that pins the whole contract — the tablist, exactly one
             `aria-selected`, and the panel that matches it — is
-            `web/e2e/a11y-profile-tabs.spec.ts`. */}
-        <div role="tablist" className="mt-4 flex flex-wrap gap-1 border-b border-slate-200">
+            `web/e2e/a11y-profile-tabs.spec.ts`.
+
+            Card t_40253ae6: the strip is the FULL ARIA tabs pattern now. Each
+            tab carries `id` + `aria-controls` pointing at the panel it controls,
+            each panel carries `id` + `role="tabpanel"` + `aria-labelledby` back
+            at its tab, the strip is ONE tab stop (roving `tabIndex` — only the
+            selected tab is in the page tab sequence) and Left/Right/Home/End
+            move the selection and the focus across it. The pair of ids and that
+            key math live in `lib/tablist.ts`, so the five strips cannot compose
+            them differently. */}
+        <div
+          role="tablist"
+          className="mt-4 flex flex-wrap gap-1 border-b border-slate-200"
+          onKeyDown={tablistKeyDown}
+        >
           {TAB_IDS.map((id) => (
             <button
               key={id}
+              id={tabDomId("prof", id)}
+              aria-controls={panelDomId("prof", id)}
+              tabIndex={tabStop(id, tab)}
               onClick={() => setTab(id)}
               aria-selected={tab === id}
               role="tab"
@@ -509,7 +526,11 @@ export default function ProfilePage() {
 
         {/* Identity tab */}
         {tab === "identity" && (
-          <>
+          <div
+            role="tabpanel"
+            id={panelDomId("prof", "identity")}
+            aria-labelledby={tabDomId("prof", "identity")}
+          >
             <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("prof.identity")}</h2>
               {/* Issue #133: profile picture upload + preview, fallback to initial. */}
@@ -668,12 +689,16 @@ export default function ProfilePage() {
                 className="jf-btn-primary mt-3"
               >{t("prof.changeEmail")}</button>
             </section>
-          </>
+          </div>
         )}
 
         {/* Security tab */}
         {tab === "security" && (
-          <>
+          <div
+            role="tabpanel"
+            id={panelDomId("prof", "security")}
+            aria-labelledby={tabDomId("prof", "security")}
+          >
             <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("prof.password")}</h2>
               <label className="mt-3 block text-sm" htmlFor="prof-current-pw">{t("prof.currentPw")}</label>
@@ -830,12 +855,17 @@ export default function ProfilePage() {
                 )}
               </section>
             )}
-          </>
+          </div>
         )}
 
         {/* Passkeys tab */}
         {tab === "passkeys" && (
-          <section className="jf-card mt-6 p-6">
+          <section
+            className="jf-card mt-6 p-6"
+            role="tabpanel"
+            id={panelDomId("prof", "passkeys")}
+            aria-labelledby={tabDomId("prof", "passkeys")}
+          >
             <h2 className="text-lg font-semibold">
               {t("prof.passkeys")}{" "}
               {/* AGENTS.md docs-parity rule 4 (t_254d8a81): the same inline "?"
@@ -884,7 +914,12 @@ export default function ProfilePage() {
             workspace. The workspace-level Cloudflare auto-CNAME connect stays in
             Settings → Domains. */}
         {tab === "connected" && (
-          <section className="jf-card mt-6 p-6">
+          <section
+            className="jf-card mt-6 p-6"
+            role="tabpanel"
+            id={panelDomId("prof", "connected")}
+            aria-labelledby={tabDomId("prof", "connected")}
+          >
             <h2 className="text-lg font-semibold">{t("prof.connectedTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
               {t("prof.connectedHelp")}
@@ -922,7 +957,12 @@ export default function ProfilePage() {
             operate across every workspace the user owns, up to the user's role in
             each — so the connection is user-level, not per-workspace. */}
         {tab === "mcp" && (
-          <section className="jf-card mt-6 p-6">
+          <section
+            className="jf-card mt-6 p-6"
+            role="tabpanel"
+            id={panelDomId("prof", "mcp")}
+            aria-labelledby={tabDomId("prof", "mcp")}
+          >
             <h2 className="text-lg font-semibold">
               {t("prof.mcpTitle")}{" "}
               <a

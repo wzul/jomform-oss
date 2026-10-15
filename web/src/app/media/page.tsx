@@ -10,6 +10,7 @@ import { formatDate } from "../../lib/formatDate";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
+import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
 
 // Issue #180: WordPress-media-library-style Media page. Grid of the
 // merchant's uploaded images (thumbnail + name + date + size), filterable by
@@ -481,10 +482,17 @@ export default function MediaPage() {
 
         {/* Active / Trash switcher. The live library is the DEFAULT: a fresh
             visitor must never land in the trash. Same shape as the Forms page. */}
-        <div className="mt-5 flex flex-wrap items-center gap-1 border-b border-[var(--jf-border)]" role="tablist">
+        <div
+          className="mt-5 flex flex-wrap items-center gap-1 border-b border-[var(--jf-border)]"
+          role="tablist"
+          onKeyDown={tablistKeyDown}
+        >
           {(["active", "trash"] as const).map((v) => (
             <button
               key={v}
+              id={tabDomId("media", v)}
+              aria-controls={panelDomId("media", v)}
+              tabIndex={tabStop(v, view)}
               type="button"
               role="tab"
               aria-selected={view === v}
@@ -525,7 +533,11 @@ export default function MediaPage() {
 
         {/* Trash view: the bin, with restore and delete-for-good. */}
         {view === "trash" && (
-          <>
+          <div
+            role="tabpanel"
+            id={panelDomId("media", "trash")}
+            aria-labelledby={tabDomId("media", "trash")}
+          >
             <p className="mt-4 max-w-2xl text-sm text-[var(--jf-muted)]">{t("media.trashNote")}</p>
             <ul className="mt-4 space-y-2">
               {trashed.map((m) => (
@@ -574,11 +586,15 @@ export default function MediaPage() {
                 <li className="rounded-lg text-sm text-[var(--jf-muted)]">{t("media.trashEmpty")}</li>
               )}
             </ul>
-          </>
+          </div>
         )}
 
         {view === "active" && (
-        <>
+        <div
+          role="tabpanel"
+          id={panelDomId("media", "active")}
+          aria-labelledby={tabDomId("media", "active")}
+        >
         {/* Filters */}
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <select
@@ -784,7 +800,7 @@ export default function MediaPage() {
             </div>
           </div>
         )}
-        </>
+        </div>
         )}
 
         {/* Purge confirmation. A permanent delete destroys the object and gives

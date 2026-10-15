@@ -18,6 +18,7 @@ import { apiErr, translateApiErr } from "../../lib/apiErr";
 // the button that was pressed instead of only at the page top.
 import { Toast } from "../../components/Toast";
 import { SaveButton } from "../../components/SaveButton";
+import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
 
 // Issue #323: the CNAME target is consistent across all custom-domain copy.
 const CNAME_TARGET = "custom.jomform.com";
@@ -1243,10 +1244,18 @@ export default function Settings() {
             `-mb-px` stays on the tabs: it merges the active tab's 2px underline
             with the strip's 1px border, which is the intended tab-bar look. */}
         {visibleTabs.length > 0 && (
-        <div ref={tabStripRef} role="tablist" className="jf-tabstrip mt-4 flex gap-1 overflow-x-auto border-b border-slate-200">
+        <div
+          ref={tabStripRef}
+          role="tablist"
+          className="jf-tabstrip mt-4 flex gap-1 overflow-x-auto border-b border-slate-200"
+          onKeyDown={tablistKeyDown}
+        >
           {visibleTabs.map((id) => (
             <button
               key={id}
+              id={tabDomId("set", id)}
+              aria-controls={panelDomId("set", id)}
+              tabIndex={tabStop(id, activeTab)}
               onClick={() => setTab(id)}
               onFocus={(e) => revealTab(e.currentTarget)}
               aria-selected={activeTab === id}
@@ -1295,7 +1304,12 @@ export default function Settings() {
 
         {/* ── CHIP tab ── */}
         {activeTab === "chip" && (
-          <section className="jf-card mt-6 p-6">
+          <section
+            className="jf-card mt-6 p-6"
+            role="tabpanel"
+            id={panelDomId("set", "chip")}
+            aria-labelledby={tabDomId("set", "chip")}
+          >
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">{t("set.chipTitle")}</h2>
               {status && (
@@ -1419,7 +1433,11 @@ export default function Settings() {
 
         {/* ── Domains tab: custom domains + Cloudflare connect ── */}
         {activeTab === "domains" && (
-          <>
+          <div
+            role="tabpanel"
+            id={panelDomId("set", "domains")}
+            aria-labelledby={tabDomId("set", "domains")}
+          >
             <section className="jf-card mt-6 p-6">
               <h2 className="text-lg font-semibold">{t("set.domainsTitle")}</h2>
               <p className="mt-2 max-w-xl text-sm text-[var(--jf-muted)]">
@@ -1795,12 +1813,17 @@ export default function Settings() {
                 <p className="mt-2 text-xs text-[var(--jf-muted)]">{t("set.cfNotConfigured")}</p>
               )}
             </section>
-          </>
+          </div>
         )}
 
         {/* ── Tracking tab: global tracking scripts (GTM/analytics) ── */}
         {activeTab === "tracking" && (
-          <section className="jf-card mt-6 p-6">
+          <section
+            className="jf-card mt-6 p-6"
+            role="tabpanel"
+            id={panelDomId("set", "tracking")}
+            aria-labelledby={tabDomId("set", "tracking")}
+          >
             <h2 className="text-lg font-semibold">{t("set.trackingTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted-on-tint)]">
               {t("set.trackingHelp")} <code className="rounded bg-slate-100 px-1">&lt;script src=&quot;https://…&quot;&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
@@ -1824,7 +1847,12 @@ export default function Settings() {
 
         {/* ── e-Invoice tab: e-Invoice (LHDN) TIN/MSIC ── */}
         {activeTab === "einvoice" && (
-          <section className="jf-card mt-6 p-6">
+          <section
+            className="jf-card mt-6 p-6"
+            role="tabpanel"
+            id={panelDomId("set", "einvoice")}
+            aria-labelledby={tabDomId("set", "einvoice")}
+          >
             <h2 className="text-lg font-semibold">{t("set.einvoiceTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
               {t("set.einvoiceHelp")}
@@ -1853,7 +1881,12 @@ export default function Settings() {
 
         {/* ── Webhooks tab: outbound webhooks ── */}
         {activeTab === "webhooks" && (
-          <section className="jf-card mt-6 p-6">
+          <section
+            className="jf-card mt-6 p-6"
+            role="tabpanel"
+            id={panelDomId("set", "webhooks")}
+            aria-labelledby={tabDomId("set", "webhooks")}
+          >
               <h2 className="text-lg font-semibold">{t("set.webhooksTitle")}</h2>
               <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted-on-tint)]">
                 {t("set.eventsLabel")} <code className="rounded bg-slate-100 px-1">sale.paid</code>,{" "}
@@ -2050,7 +2083,12 @@ export default function Settings() {
 
         {/* ── Emel tab: per-workspace receipt/notification email (issue #107) ── */}
         {activeTab === "emel" && (
-          <section className="jf-card mt-6 p-6">
+          <section
+            className="jf-card mt-6 p-6"
+            role="tabpanel"
+            id={panelDomId("set", "emel")}
+            aria-labelledby={tabDomId("set", "emel")}
+          >
             <h2 className="text-lg font-semibold">{t("set.emelTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
               {t("set.emelHelp")}
@@ -2146,7 +2184,11 @@ export default function Settings() {
         )}
         {/* ── Storefront tab: per-workspace public-form footer (issue #183) ── */}
         {activeTab === "storefront" && (
-          <>
+          <div
+            role="tabpanel"
+            id={panelDomId("set", "storefront")}
+            aria-labelledby={tabDomId("set", "storefront")}
+          >
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.sfTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
@@ -2530,12 +2572,18 @@ export default function Settings() {
               )}
             </div>
           </section>
-          </>
+          </div>
         )}
 
         {/* ── Members tab: workspace members management (issue #163) ── */}
         {activeTab === "members" && isAdmin && (
-          <MembersTab workspaceId={emelWorkspaceId || activeWorkspaceId} />
+          <div
+            role="tabpanel"
+            id={panelDomId("set", "members")}
+            aria-labelledby={tabDomId("set", "members")}
+          >
+            <MembersTab workspaceId={emelWorkspaceId || activeWorkspaceId} />
+          </div>
         )}
         {/* ── Workspace tab: identity + Danger zone (delete workspace) ──
             Owner-only inside the component (an admin member is told to leave
@@ -2544,15 +2592,32 @@ export default function Settings() {
             whose panel it would not render — a `manage` member clicking it got
             an empty pane (card t_0ef9709c). */}
         {activeTab === "workspace" && isAdmin && (
-          <WorkspaceTab workspaceId={emelWorkspaceId || activeWorkspaceId} />
+          <div
+            role="tabpanel"
+            id={panelDomId("set", "workspace")}
+            aria-labelledby={tabDomId("set", "workspace")}
+          >
+            <WorkspaceTab workspaceId={emelWorkspaceId || activeWorkspaceId} />
+          </div>
         )}
         {/* ── Legal tab: per-workspace hosted legal pages (issue #184) ── */}
         {activeTab === "legal" && (
-          <LegalTab workspaceId={emelWorkspaceId || activeWorkspaceId} workspaceSlug={activeWorkspaceSlug} />
+          <div
+            role="tabpanel"
+            id={panelDomId("set", "legal")}
+            aria-labelledby={tabDomId("set", "legal")}
+          >
+            <LegalTab workspaceId={emelWorkspaceId || activeWorkspaceId} workspaceSlug={activeWorkspaceSlug} />
+          </div>
         )}
         {/* ── Currency tab: per-workspace currency + BNM rates (issue #185) ── */}
         {activeTab === "currency" && (
-          <section className="jf-card mt-6 p-6">
+          <section
+            className="jf-card mt-6 p-6"
+            role="tabpanel"
+            id={panelDomId("set", "currency")}
+            aria-labelledby={tabDomId("set", "currency")}
+          >
             <h2 className="text-lg font-semibold">{t("set.currencyTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
               {t("set.currencyHelp")}
@@ -2598,7 +2663,12 @@ export default function Settings() {
         )}
         {/* ── Affiliates tab: affiliate marketing (issue #444) ── */}
         {activeTab === "affiliates" && (
-          <section className="jf-card mt-6 p-6">
+          <section
+            className="jf-card mt-6 p-6"
+            role="tabpanel"
+            id={panelDomId("set", "affiliates")}
+            aria-labelledby={tabDomId("set", "affiliates")}
+          >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">{t("set.affiliatesTitle")}</h2>

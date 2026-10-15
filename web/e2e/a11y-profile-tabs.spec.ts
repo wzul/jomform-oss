@@ -75,6 +75,13 @@
 // THE ARMS
 //   1. THE CONTRACT (en)      — one tablist, every tab inside it, exactly one
 //                               `aria-selected`, and its panel's first `<h2>`.
+//                               Card t_40253ae6 adds the ASSOCIATION to this
+//                               contract, so every arm below carries it: each tab
+//                               names a panel with `aria-controls`, the SELECTED
+//                               tab's resolves (getElementById) to the panel that
+//                               is actually painted, that panel is a
+//                               `role="tabpanel"` labelled by its own tab, and
+//                               the strip is ONE tab stop (roving tabindex).
 //   2. THE CLICK WALK         — clicking each of the five tabs moves the single
 //                               selection and the panel follows it; the strip is
 //                               never left with 0 or 2 selections.
@@ -94,6 +101,28 @@
 //                               (`aria-required-parent` on exactly the tab nodes)
 //                               or this guard is not measuring the defect it was
 //                               written for.
+//   6. THE KEYBOARD (en)      — Left/Right walk the strip with wraparound at both
+//                               ends, Home/End go to the ends, and at EVERY step
+//                               the selection, the painted panel, the
+//                               association and the roving tab stop move with the
+//                               focus; then Tab must LEAVE the strip (a key the
+//                               widget does not own must not be swallowed).
+//   7. THE KEYBOARD (ar)      — the same, in `dir="rtl"`, where Right moves to the
+//                               tab the reader sees on the right (the previous
+//                               one in DOM order) — the choice lib/tablist.ts
+//                               makes, pinned here.
+//   8. THE DETECTOR IS LIVE   — the association arms re-read with `aria-controls`
+//                               and `role="tabpanel"` removed from the live DOM:
+//                               they have to report the pre-fix shape, or they are
+//                               not measuring the two attributes this card adds.
+//
+// WHY THE CARD EXISTS AT ALL (t_40253ae6, filed from the post-deploy verify of
+// v1.21.32): every strip in the app carried `role="tablist"` + `role="tab"` +
+// `aria-selected` and NOTHING carried `aria-controls` or `role="tabpanel"` (grep
+// over `src/`: 0 hits), so no tab was associated with the panel it controls
+// (ARIA 1.2) and no strip had arrow-key navigation. Axe reports NOTHING for
+// either omission — measured 0 violations of any impact on the live signed-in
+// page — which is exactly why the arms have to READ the DOM.
 import { test, expect, type Page } from "@playwright/test";
 
 import { signIn } from "./auth";
@@ -266,6 +295,25 @@ type TabState = {
   firstPanelHeading: string;
   htmlLang: string;
   dir: string;
+  // ── the ARIA tabs ASSOCIATION (card t_40253ae6) ──────────────────────────
+  // Each of these is a property of the RENDERED DOM: a tab's `aria-controls` is
+  // resolved against the document (not string-compared), and the element it
+  // resolves to is compared against the panel that is actually PAINTED (the one
+  // holding the first `<h2>` of `main`). A tab that names a panel which does not
+  // exist, or names the wrong one, shows up here.
+  tabIds: string[];
+  tabsWithoutControls: string[];
+  duplicateTabIds: string[];
+  selectedId: string;
+  selectedControls: string;
+  controlledId: string;
+  controlledRole: string;
+  controlledIsPaintedPanel: boolean;
+  panelLabelledBy: string;
+  tabpanelCount: number;
+  tabStops: number;
+  tabStopIsSelected: boolean;
+  focusedIsTab: boolean;
 };
 
 /**
@@ -296,6 +344,17 @@ async function readTabState(page: Page): Promise<TabState> {
       for (const a of c.querySelectorAll("a")) a.remove();
       return (c.textContent || "").trim();
     };
+    // The ASSOCIATION (card t_40253ae6). The selected tab's aria-controls is
+    // RESOLVED against the document — a string comparison against an expected id
+    // would pass on a panel that is not in the document at all — and the element
+    // it names is compared with the panel that is actually PAINTED: the
+    // [role="tabpanel"] the first h2 of main lives inside.
+    const selTab = sel.length ? sel[0] : null;
+    const controlsAttr = selTab ? (selTab.getAttribute("aria-controls") || "") : "";
+    const controlled = controlsAttr ? document.getElementById(controlsAttr) : null;
+    const painted = headings.length ? headings[0].closest('[role="tabpanel"]') : null;
+    const ids = tabs.map((t) => t.id);
+    const stops = tabs.filter((t) => t.getAttribute("tabindex") === "0");
     return {
       status: 0,
       tabCount: tabs.length,
@@ -307,6 +366,19 @@ async function readTabState(page: Page): Promise<TabState> {
       firstPanelHeading: headings.length ? textOf(headings[0]) : "",
       htmlLang: document.documentElement.lang,
       dir: document.documentElement.dir,
+      tabIds: ids,
+      tabsWithoutControls: tabs.filter((t) => !t.getAttribute("aria-controls")).map(label),
+      duplicateTabIds: ids.filter((id, i) => !!id && ids.indexOf(id) !== i),
+      selectedId: selTab ? selTab.id : "",
+      selectedControls: controlsAttr,
+      controlledId: controlled ? controlled.id : "",
+      controlledRole: controlled ? (controlled.getAttribute("role") || "") : "",
+      controlledIsPaintedPanel: !!controlled && !!painted && controlled === painted,
+      panelLabelledBy: controlled ? (controlled.getAttribute("aria-labelledby") || "") : "",
+      tabpanelCount: document.querySelectorAll('[role="tabpanel"]').length,
+      tabStops: stops.length,
+      tabStopIsSelected: stops.length === 1 && !!selTab && stops[0] === selTab,
+      focusedIsTab: !!document.activeElement && document.activeElement.getAttribute("role") === "tab",
     };
   })()`) as Promise<TabState>;
 }
@@ -424,6 +496,82 @@ function expectContract(s: TabState, lang: Lang, landedOn: string, what: string)
     `${what}: the panel under the strip is ${JSON.stringify(s.firstPanelHeading)}, which is not ` +
       `the selected tab's (${JSON.stringify(DICT[PANEL_TITLE[landedOn]][lang])})`,
   ).toBe(DICT[PANEL_TITLE[landedOn]][lang]);
+  expectAssociation(s, what);
+}
+
+/**
+ * The ARIA tabs ASSOCIATION, read off the live DOM (card t_40253ae6).
+ *
+ * Before this card no tab carried `aria-controls` and no element anywhere in
+ * `src/` carried `role="tabpanel"`, so a screen reader was told nothing about
+ * which panel the selected tab controls. Axe reports NOTHING for the omission
+ * (measured on the live signed-in page: 0 violations of any impact) — which is
+ * why this is an arm and not a rule: the only way to see it is to READ the
+ * association out of the document.
+ *
+ * Every assertion here is about the RENDERED document rather than about an
+ * attribute string:
+ *   * `aria-controls` on the SELECTED tab is RESOLVED with `getElementById` —
+ *     so a tab naming a panel that is not in the document fails here — and the
+ *     element it resolves to must be the panel that is actually PAINTED (the
+ *     one holding the first `<h2>` of `main`). A page whose tab points at
+ *     another tab's panel, or at a detached node, cannot pass.
+ *   * that panel must carry `role="tabpanel"` and `aria-labelledby` naming THE
+ *     TAB (not another one).
+ *   * EVERY tab — selected or not — must carry a non-empty, unique `id` and an
+ *     `aria-controls`: an unselected tab's idref is exempt from axe
+ *     (`aria-valid-attr-value` skips `aria-controls` while `aria-selected` is
+ *     "false"), so nothing else would ever notice one going missing.
+ *   * roving tabindex: exactly ONE tab in the page tab sequence and it is the
+ *     selected one. Without it a keyboard user Tabs through every tab one at a
+ *     time, which is the behaviour the arrow keys replace.
+ */
+function expectAssociation(s: TabState, what: string) {
+  expect(
+    s.tabsWithoutControls,
+    `${what}: ${s.tabsWithoutControls.length} of ${s.tabCount} role="tab" nodes carry NO aria-controls ` +
+      `(${JSON.stringify(s.tabsWithoutControls)}) — no tab is associated with the panel it controls, ` +
+      `and axe does not report it either way (measured: 0 violations of any impact)`,
+  ).toEqual([]);
+  expect(
+    s.tabIds.filter((id) => !id),
+    `${what}: ${s.tabIds.filter((id) => !id).length} tab(s) have no id — a panel's aria-labelledby has ` +
+      `nothing to point at (ids: ${JSON.stringify(s.tabIds)})`,
+  ).toEqual([]);
+  expect(
+    s.duplicateTabIds,
+    `${what}: duplicate tab id(s) ${JSON.stringify(s.duplicateTabIds)} — every idref in the strip is ` +
+      `then ambiguous`,
+  ).toEqual([]);
+  expect(
+    s.controlledRole,
+    `${what}: the selected tab (${JSON.stringify(s.selectedText)}) names ` +
+      `${JSON.stringify(s.selectedControls)}, which does not resolve to an element in the document — ` +
+      `a tab whose panel is not rendered has no announced relationship with what IS on screen`,
+  ).toBe("tabpanel");
+  expect(
+    s.controlledIsPaintedPanel,
+    `${what}: the panel the selected tab controls (#${s.controlledId}) is NOT the panel painted under ` +
+      `the strip — the association points somewhere other than what the reader sees`,
+  ).toBe(true);
+  expect(
+    s.panelLabelledBy,
+    `${what}: the panel #${s.controlledId} is labelled by ${JSON.stringify(s.panelLabelledBy)}, not by ` +
+      `its own tab (#${s.selectedId})`,
+  ).toBe(s.selectedId);
+  expect(
+    s.tabpanelCount,
+    `${what}: ${s.tabpanelCount} role="tabpanel" elements are rendered — the page paints exactly one panel`,
+  ).toBe(1);
+  expect(
+    s.tabStops,
+    `${what}: ${s.tabStops} tab(s) carry tabindex="0" — a tablist is ONE tab stop (roving tabindex), ` +
+      `otherwise the Tab key walks every tab one at a time`,
+  ).toBe(1);
+  expect(
+    s.tabStopIsSelected,
+    `${what}: the strip's single tab stop is not the selected tab (${JSON.stringify(s.selectedText)})`,
+  ).toBe(true);
 }
 
 /** Clicks a tab and waits until the panel under the strip is that tab's. */
@@ -553,4 +701,128 @@ test("axe: every panel of /profile is free of critical/serious violations, and t
     arp?.nodes.length,
     `the neutralised strip must flag every one of its ${TAB_IDS.length} tabs`,
   ).toBe(TAB_IDS.length);
+});
+
+// ─── THE KEYBOARD (card t_40253ae6) ─────────────────────────────────────────
+//
+// APG's tabs pattern, automatic activation: Left/Right move to the previous /
+// next tab with wraparound, Home/End to the ends, and the newly focused tab is
+// activated. Before this card the strips had NO keydown handling at all — the
+// only way across a strip was Tab, one tab at a time — so every arm below is a
+// property the pre-fix page fails outright.
+
+/**
+ * Focuses the strip's tab stop, presses `key`, and waits until the strip has
+ * MOVED: the selection is `id`'s, the panel under the strip is that tab's, and
+ * the focus is on a tab (the moved-to one). Three facts, one wait — a page that
+ * changes the selection without moving focus (or the other way round) cannot
+ * pass any of them.
+ *
+ * The poll returns a joined string so a failure prints the read it timed out on
+ * rather than only the expectation.
+ */
+async function keyMove(page: Page, key: string, id: string, lang: Lang): Promise<TabState> {
+  await page.locator('[role="tab"][aria-selected="true"]').focus();
+  await page.keyboard.press(key);
+  const want = `${DICT[TAB_KEY(id)][lang]}|${DICT[PANEL_TITLE[id]][lang]}|true`;
+  await expect
+    .poll(
+      async () => {
+        const s = await readTabState(page);
+        return `${s.selectedText}|${s.firstPanelHeading}|${s.focusedIsTab}`;
+      },
+      {
+        message:
+          `${key} did not move the strip to "${id}" (${want}): the selection, the painted panel and the ` +
+          `focus have to move together`,
+        timeout: 10_000,
+      },
+    )
+    .toBe(want);
+  return readTabState(page);
+}
+
+test("the arrow keys walk the strip, wrap at both ends, and the focus and the panel follow (en)", async ({ page }) => {
+  const s = await openProfile(page, "en", { jf_lang: "en", jf_workspace: "demo" }, "identity");
+  expectContract(s, "en", "identity", "en keyboard (on arrival)");
+
+  // Right, one tab at a time, through the whole strip: the panel + the
+  // association + the roving tab stop are re-checked at EVERY step, so a strip
+  // that moves the selection but leaves the panel behind fails on the step it
+  // happens.
+  for (let i = 1; i < TAB_IDS.length; i++) {
+    const st = await keyMove(page, "ArrowRight", TAB_IDS[i], "en");
+    expectContract(st, "en", TAB_IDS[i], `en keyboard (ArrowRight -> ${TAB_IDS[i]})`);
+  }
+  // …and the wrap off the last tab back to the first.
+  const wrapped = await keyMove(page, "ArrowRight", TAB_IDS[0], "en");
+  expectContract(wrapped, "en", TAB_IDS[0], "en keyboard (ArrowRight wraps to the first tab)");
+
+  // Left, and the wrap off the FIRST tab to the last.
+  const back = await keyMove(page, "ArrowLeft", TAB_IDS[TAB_IDS.length - 1], "en");
+  expectContract(back, "en", TAB_IDS[TAB_IDS.length - 1], "en keyboard (ArrowLeft wraps to the last tab)");
+  const middle = await keyMove(page, "ArrowLeft", TAB_IDS[TAB_IDS.length - 2], "en");
+  expectContract(middle, "en", TAB_IDS[TAB_IDS.length - 2], "en keyboard (ArrowLeft)");
+
+  // Home/End go to the ends from wherever the focus is.
+  const home = await keyMove(page, "Home", TAB_IDS[0], "en");
+  expectContract(home, "en", TAB_IDS[0], "en keyboard (Home)");
+  const end = await keyMove(page, "End", TAB_IDS[TAB_IDS.length - 1], "en");
+  expectContract(end, "en", TAB_IDS[TAB_IDS.length - 1], "en keyboard (End)");
+
+  // A KEY THIS WIDGET DOES NOT OWN MUST NOT BE SWALLOWED. `Tab` has to leave the
+  // strip — APG says it moves to the next element in the page tab sequence
+  // outside the tablist. If the strip consumed it (the classic roving-tabindex
+  // bug: the handler preventDefaults anything it does not recognise), the focus
+  // would stay on a tab and a keyboard user would be trapped in the strip.
+  await page.keyboard.press("Tab");
+  await expect
+    .poll(async () => (await readTabState(page)).focusedIsTab, {
+      message: "pressing Tab did not leave the tab strip — the strip is swallowing a key it does not own",
+      timeout: 5_000,
+    })
+    .toBe(false);
+});
+
+test("in dir=rtl (ar) the arrow keys follow the reading order and the association holds in Arabic", async ({ page }) => {
+  // The strip lays its first tab out RIGHTMOST under `dir="rtl"`, so "the tab to
+  // the right" is the PREVIOUS one in DOM order. This arm pins that choice (see
+  // lib/tablist.ts): Right from the first tab wraps to the LAST one.
+  const s = await openProfile(page, "ar", { jf_lang: "ar", jf_workspace: "demo" }, "identity");
+  expect(s.dir, "ar: the document direction").toBe("rtl");
+  expectContract(s, "ar", "identity", "ar keyboard (on arrival)");
+
+  const wrapped = await keyMove(page, "ArrowRight", TAB_IDS[TAB_IDS.length - 1], "ar");
+  expectContract(wrapped, "ar", TAB_IDS[TAB_IDS.length - 1], "ar keyboard (ArrowRight wraps to the last tab)");
+
+  const next = await keyMove(page, "ArrowLeft", TAB_IDS[0], "ar");
+  expectContract(next, "ar", TAB_IDS[0], "ar keyboard (ArrowLeft returns to the first tab)");
+
+  const second = await keyMove(page, "ArrowLeft", TAB_IDS[1], "ar");
+  expectContract(second, "ar", TAB_IDS[1], "ar keyboard (ArrowLeft, DOM order)");
+});
+
+test("the association arms measure the live DOM: neutralising aria-controls / role=\"tabpanel\" makes them report the gap", async ({ page }) => {
+  // The arms above are only worth their green if they can go RED, and the defect
+  // they exist for is the ABSENCE of two attributes. So the same read is taken
+  // again with those attributes removed from the live DOM — neutralised BY
+  // VALUE, never by deleting a test — and the predicate has to report exactly the
+  // pre-fix shape: every tab with no aria-controls, a panel that is not a
+  // tabpanel, and not one role="tabpanel" element in the document.
+  const s = await openProfile(page, "en", { jf_lang: "en", jf_workspace: "demo" }, "identity");
+  expectAssociation(s, "en association (on arrival)");
+
+  await page.evaluate(`(() => {
+    for (const t of document.querySelectorAll('[role="tab"]')) t.removeAttribute("aria-controls");
+    for (const p of document.querySelectorAll('[role="tabpanel"]')) p.removeAttribute("role");
+  })()`);
+  const neutral = await readTabState(page);
+  expect(
+    neutral.tabsWithoutControls.length,
+    "with aria-controls removed from the live DOM, every tab still reads as associated — this arm is not " +
+      "measuring the attribute it was written for",
+  ).toBe(TAB_IDS.length);
+  expect(neutral.controlledRole, "the tab still resolves to a tabpanel after its role was removed").toBe("");
+  expect(neutral.tabpanelCount, "role=\"tabpanel\" survived its own removal").toBe(0);
+  expect(neutral.controlledIsPaintedPanel, "the association still reads as painted").toBe(false);
 });

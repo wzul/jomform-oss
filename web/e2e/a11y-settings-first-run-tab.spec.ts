@@ -64,6 +64,16 @@
 //      (t_0ef9709c: no dead-end tab; pre-fix it fails on the tenth, Workspace).
 //   8. THE ADMIN'S WORKSPACE TAB    — the other direction: the tab must still be
 //      offered to the role whose panel it IS, and paint the identity card.
+//   9. THE ASSOCIATION (card t_40253ae6) — every arm above now ALSO reads the ARIA
+//      tabs association off the live DOM: each tab carries `aria-controls`, the
+//      SELECTED tab's resolves to the element that is actually painted, that panel
+//      is a `role="tabpanel"` labelled by its own tab, and the strip is one tab
+//      stop (roving `tabIndex`). It was 0 attributes of either kind before the
+//      card, and axe reports nothing for the omission — so this is read, not
+//      scanned.
+//  10. THE ARROW KEYS               — Left/Right/Home/End move the selection, the
+//      focus AND the painted panel across the member strip (with wraparound), the
+//      moved-to tab is revealed into the scroller, and Tab still LEAVES the strip.
 //
 // THE DEAD-END TAB (card t_0ef9709c, the mirror image of the defect above)
 //   A tab that IS rendered while its PANEL is gated further down. `workspace`
@@ -280,6 +290,23 @@ type TabState = {
   dir: string;
   hasChipHeading: boolean;
   hasReadOnlyNote: boolean;
+  // ── the ARIA tabs ASSOCIATION (card t_40253ae6) ──────────────────────────
+  // The same reads `e2e/a11y-profile-tabs.spec.ts` takes, so the two strips are
+  // judged by one contract: a tab's `aria-controls` is RESOLVED against the
+  // document and compared with the panel that is actually PAINTED, the panel
+  // points back at its own tab, and the strip is one tab stop.
+  tabsWithoutControls: string[];
+  tabIdsWithoutId: number;
+  selectedId: string;
+  selectedControls: string;
+  controlledId: string;
+  controlledRole: string;
+  controlledIsPaintedPanel: boolean;
+  panelLabelledBy: string;
+  tabpanelCount: number;
+  tabStops: number;
+  tabStopIsSelected: boolean;
+  focusedIsTab: boolean;
 };
 
 /**
@@ -308,6 +335,17 @@ async function readTabState(page: Page, lang: Lang): Promise<TabState> {
     const strip = tabs.length ? tabs[0].parentElement : null;
     const sr = strip ? strip.getBoundingClientRect() : null;
     const sb = sel.length ? sel[0].getBoundingClientRect() : null;
+    // The ASSOCIATION (card t_40253ae6): the selected tab's aria-controls is
+    // RESOLVED against the document — never string-compared against an expected
+    // id, which would pass on a panel that is not in the document — and the
+    // element it names is compared with the panel that is actually PAINTED (the
+    // [role="tabpanel"] holding the first h2 of main).
+    const selTab = sel.length ? sel[0] : null;
+    const controlsAttr = selTab ? (selTab.getAttribute("aria-controls") || "") : "";
+    const controlled = controlsAttr ? document.getElementById(controlsAttr) : null;
+    const painted = headings.length ? headings[0].closest('[role="tabpanel"]') : null;
+    const ids = tabs.map((t) => t.id);
+    const stops = tabs.filter((t) => t.getAttribute("tabindex") === "0");
     return {
       tabCount: tabs.length,
       labels: tabs.map(label),
@@ -319,6 +357,18 @@ async function readTabState(page: Page, lang: Lang): Promise<TabState> {
       dir: document.documentElement.dir,
       hasChipHeading: headings.some((h) => (h.textContent || "").trim() === ${chipTitle}),
       hasReadOnlyNote: (main ? main.innerText : "").includes(${readOnlyNote}),
+      tabsWithoutControls: tabs.filter((t) => !t.getAttribute("aria-controls")).map(label),
+      tabIdsWithoutId: ids.filter((id) => !id).length,
+      selectedId: selTab ? selTab.id : "",
+      selectedControls: controlsAttr,
+      controlledId: controlled ? controlled.id : "",
+      controlledRole: controlled ? (controlled.getAttribute("role") || "") : "",
+      controlledIsPaintedPanel: !!controlled && !!painted && controlled === painted,
+      panelLabelledBy: controlled ? (controlled.getAttribute("aria-labelledby") || "") : "",
+      tabpanelCount: document.querySelectorAll('[role="tabpanel"]').length,
+      tabStops: stops.length,
+      tabStopIsSelected: stops.length === 1 && !!selTab && stops[0] === selTab,
+      focusedIsTab: !!document.activeElement && document.activeElement.getAttribute("role") === "tab",
     };
   })()`) as Promise<TabState>;
 }
@@ -442,6 +492,57 @@ function expectOneSelectionMatchesPanel(s: TabState, lang: Lang, what: string) {
     s.hasChipHeading,
     `${what}: the CHIP panel is painted while no CHIP tab is in this strip`,
   ).toBe(false);
+  expectSettingsAssociation(s, lang, what);
+}
+
+/**
+ * The ARIA tabs ASSOCIATION on the settings strip (card t_40253ae6).
+ *
+ * The same contract `e2e/a11y-profile-tabs.spec.ts` asserts, on a strip whose tab
+ * set is FILTERED by role and whose panels are twelve branches (five of them
+ * wrapped here, seven carrying the attributes on their own `<section>`). Before
+ * the card no tab carried `aria-controls` and no element in `src/` carried
+ * `role="tabpanel"`; axe reports nothing for the omission, so the only way to see
+ * it is to read the association out of the document — which is what this does,
+ * resolving the idref rather than comparing strings, and comparing the resolved
+ * element with the panel that is actually painted.
+ */
+function expectSettingsAssociation(s: TabState, lang: Lang, what: string) {
+  expect(
+    s.tabsWithoutControls,
+    `${what}: ${s.tabsWithoutControls.length} of ${s.tabCount} role="tab" nodes carry NO aria-controls ` +
+      `(${JSON.stringify(s.tabsWithoutControls)}) — no tab is associated with the panel it controls, and ` +
+      `axe does not report it either way`,
+  ).toEqual([]);
+  expect(s.tabIdsWithoutId, `${what}: ${s.tabIdsWithoutId} tab(s) have no id for a panel to reference`).toBe(0);
+  expect(
+    s.controlledRole,
+    `${what}: the selected tab (${JSON.stringify(s.selectedText)}) names ` +
+      `${JSON.stringify(s.selectedControls)}, which does not resolve to a role="tabpanel" element — the ` +
+      `association points at nothing, or at something that is not a panel`,
+  ).toBe("tabpanel");
+  expect(
+    s.controlledIsPaintedPanel,
+    `${what}: the panel the selected tab controls (#${s.controlledId}) is NOT the panel painted under the ` +
+      `strip (the one holding the first h2 of main)`,
+  ).toBe(true);
+  expect(
+    s.panelLabelledBy,
+    `${what}: the panel #${s.controlledId} is labelled by ${JSON.stringify(s.panelLabelledBy)}, not by its ` +
+      `own tab (#${s.selectedId})`,
+  ).toBe(s.selectedId);
+  expect(
+    s.tabpanelCount,
+    `${what}: ${s.tabpanelCount} role="tabpanel" elements are rendered — the strip paints exactly one panel`,
+  ).toBe(1);
+  expect(
+    s.tabStops,
+    `${what}: ${s.tabStops} tab(s) carry tabindex="0" — the strip is ONE tab stop (roving tabindex)`,
+  ).toBe(1);
+  expect(
+    s.tabStopIsSelected,
+    `${what}: the strip's single tab stop is not the selected tab (${JSON.stringify(s.selectedText)})`,
+  ).toBe(true);
 }
 
 test("first run, NO storage at all: exactly one aria-selected tab and its panel (en @320)", async ({ page, baseURL }) => {
@@ -643,4 +744,90 @@ test("axe: the settings pane on a first run has no critical/serious violation (e
     blockers.map((v) => v.id),
     `the first-run settings pane has ${blockers.length} critical/serious axe violation(s)`,
   ).toEqual([]);
+});
+
+// ─── THE ARROW KEYS (card t_40253ae6) ───────────────────────────────────────
+//
+// Before this card the settings strip had no keydown handling at all: the only
+// way across its nine tabs was Tab, one at a time, and the reveal that keeps the
+// selection in view only ran on FOCUS — which the keyboard could not move within
+// the strip. This arm walks the strip the way a keyboard user does and requires
+// the selection, the painted panel, the association and the roving tab stop to
+// move with the focus at every step.
+test("the arrow keys walk the member strip, wrap at both ends, and Tab still leaves it (en @320)", async ({ page, baseURL }) => {
+  await freshState(page, { jf_lang: "en", jf_workspace: "demo" });
+  await stubAPI(page, MEMBER_BUNDLE);
+  await page.setViewportSize({ width: PHONE_WIDTH, height: 800 });
+  await page.goto(`${baseURL}/settings`, { waitUntil: "domcontentloaded" });
+
+  const s = await settleAndRead(page, "en");
+  expectOneSelectionMatchesPanel(s, "en", "en@320 keyboard (on arrival)");
+
+  /** Focuses the strip's tab stop, presses a key, and waits for the strip to move. */
+  const press = async (key: string, id: string) => {
+    await page.locator('[role="tab"][aria-selected="true"]').focus();
+    await page.keyboard.press(key);
+    const want = `${DICT[`set.tab.${id}` as keyof typeof DICT]["en"]}|${DICT[PANEL_TITLE[id]]["en"]}|true`;
+    await expect
+      .poll(
+        async () => {
+          const t = await readTabState(page, "en");
+          return `${t.selectedText}|${t.firstPanelHeading}|${t.focusedIsTab}`;
+        },
+        { message: `${key} did not move the strip to "${id}" (${want})`, timeout: 10_000 },
+      )
+      .toBe(want);
+    return readTabState(page, "en");
+  };
+
+  // Right from the landing tab, one tab at a time, re-checking the association
+  // (and the roving tab stop) at EVERY step.
+  for (let i = 1; i < MEMBER_TAB_IDS.length; i++) {
+    const st = await press("ArrowRight", MEMBER_TAB_IDS[i]);
+    expectSettingsAssociation(st, "en", `en@320 keyboard (ArrowRight -> ${MEMBER_TAB_IDS[i]})`);
+  }
+  // …the wrap off the LAST tab back to the first, and off the FIRST back to the last.
+  expectSettingsAssociation(
+    await press("ArrowRight", MEMBER_TAB_IDS[0]),
+    "en",
+    "en@320 keyboard (ArrowRight wraps to the first tab)",
+  );
+  expectSettingsAssociation(
+    await press("ArrowLeft", MEMBER_TAB_IDS[MEMBER_TAB_IDS.length - 1]),
+    "en",
+    "en@320 keyboard (ArrowLeft wraps to the last tab)",
+  );
+  // Home/End, from wherever the focus is.
+  expectSettingsAssociation(await press("Home", MEMBER_TAB_IDS[0]), "en", "en@320 keyboard (Home)");
+  const last = await press("End", MEMBER_TAB_IDS[MEMBER_TAB_IDS.length - 1]);
+  expectSettingsAssociation(last, "en", "en@320 keyboard (End)");
+  // The reveal has to keep up: the tab the keyboard just landed on is the LAST
+  // one in a strip that scrolls at 320px, so an unrevealed selection is a
+  // keyboard user looking at the wrong end of the strip.
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(`(() => {
+          const tabs = [...document.querySelectorAll('[role="tab"]')];
+          if (!tabs.length || !tabs[0].parentElement) return false;
+          const strip = tabs[0].parentElement;
+          const sr = strip.getBoundingClientRect();
+          const sel = tabs.find((t) => t.getAttribute("aria-selected") === "true");
+          if (!sel) return false;
+          const sb = sel.getBoundingClientRect();
+          return sb.left >= sr.left - 1 && sb.right <= sr.right + 1;
+        })()`),
+      { message: "the tab the arrow keys landed on is outside the strip's visible window", timeout: 5_000 },
+    )
+    .toBe(true);
+
+  // Tab must LEAVE the strip: a widget that swallows a key it does not own traps
+  // the keyboard user inside it.
+  await page.keyboard.press("Tab");
+  await expect
+    .poll(async () => (await readTabState(page, "en")).focusedIsTab, {
+      message: "pressing Tab did not leave the settings tab strip — the strip is swallowing the key",
+      timeout: 5_000,
+    })
+    .toBe(false);
 });

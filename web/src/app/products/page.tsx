@@ -10,6 +10,7 @@ import { formatDate } from "../../lib/formatDate";
 import { workspaceQuery, workspaceUrl } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
+import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
 
 type Product = {
   id: string;
@@ -816,10 +817,17 @@ export default function Products() {
 
         {/* Active / Trash switcher. The catalogue is the DEFAULT: a fresh
             visitor must never land in the trash. */}
-        <div className="mt-5 flex flex-wrap items-center gap-1 border-b border-[var(--jf-border)]" role="tablist">
+        <div
+          className="mt-5 flex flex-wrap items-center gap-1 border-b border-[var(--jf-border)]"
+          role="tablist"
+          onKeyDown={tablistKeyDown}
+        >
           {(["active", "trash"] as const).map((v) => (
             <button
               key={v}
+              id={tabDomId("prod", v)}
+              aria-controls={panelDomId("prod", v)}
+              tabIndex={tabStop(v, view)}
               type="button"
               role="tab"
               aria-selected={view === v}
@@ -850,7 +858,11 @@ export default function Products() {
 
         {/* Trash view: the bin, with restore and delete-for-good. */}
         {view === "trash" && (
-          <>
+          <div
+            role="tabpanel"
+            id={panelDomId("prod", "trash")}
+            aria-labelledby={tabDomId("prod", "trash")}
+          >
             <p className="mt-4 max-w-2xl text-sm text-[var(--jf-muted)]">{t("prod.trashNote")}</p>
             {/* The refusal (card t_602c48f5), rendered beside the rows it is about.
                 It is a state no loader writes, so the relist that reports the
@@ -921,11 +933,15 @@ export default function Products() {
                 <li className="rounded-lg text-sm text-[var(--jf-muted)]">{t("prod.trashEmpty")}</li>
               )}
             </ul>
-          </>
+          </div>
         )}
 
         {view === "active" && (
-        <>
+        <div
+          role="tabpanel"
+          id={panelDomId("prod", "active")}
+          aria-labelledby={tabDomId("prod", "active")}
+        >
         {/* Bulk action bar */}
         {canWrite && ids.length > 0 && (
           <div className="jf-card mt-4 flex flex-wrap items-center gap-2 px-4 py-3">
@@ -1436,7 +1452,7 @@ export default function Products() {
             </div>
           </div>
         )}
-        </>
+        </div>
         )}
 
         {/* Purge confirmation. A permanent delete cannot be undone and takes the
