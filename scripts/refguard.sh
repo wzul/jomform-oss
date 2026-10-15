@@ -26,14 +26,50 @@
 #   A convention ("use refs/prhead/<N>") is what the manual already prescribes
 #   and it still did not hold. `git update-ref -d` loops are the cleanup that
 #   failed. The only mechanism that can stop a ref from being created is git's
-#   own `reference-transaction` hook, and it fires for fetch, update-ref, push,
-#   notes — every writer. Measured (see scripts/refguard_test.sh, which runs it
-#   offline): with the hook installed, the documented idiom fails LOUDLY
-#   (`rc=128`, `fatal: ref updates aborted by hook`) in the primary checkout AND
-#   in every linked worktree, while `fetch --prune`, commit, branch, checkout,
-#   merge, rebase, stash, tag, push, worktree add/remove, gc and repack all
-#   still exit 0. The blast radius is exactly "create a refs/remotes ref that git
-#   does not track".
+#   own `reference-transaction` hook, and git invokes it for each writer that
+#   opens a reference transaction — fetch, update-ref, push, notes. Measured
+#   (see scripts/refguard_test.sh, which runs it offline): with the hook
+#   installed, the documented idiom fails LOUDLY (`rc=128`, `fatal: ref updates
+#   aborted by hook`) in the primary checkout AND in every linked worktree, while
+#   `fetch --prune`, commit, branch, checkout, merge, rebase, stash, tag, push,
+#   worktree add/remove, gc and repack all still exit 0. The blast radius is
+#   exactly "create a refs/remotes ref that git does not track".
+#
+# WHAT THE HOOK CANNOT SEE — the boundary of the rule above
+#   The hook is a `reference-transaction` hook, so it sees a ref write ONLY if
+#   the writer opens a reference transaction. `git symbolic-ref` does not: it
+#   writes the symref file directly, the hook is invoked ZERO times, and the ref
+#   IS created. Measured on git 2.43.0, the version on this host:
+#     git symbolic-ref refs/remotes/pr/910 refs/remotes/origin/main   -> rc=0
+#     git branch -r                                          -> pr/910 -> origin/main
+#   which is a hand-made ref wearing exactly the shape of a remote-tracking one —
+#   the reading this tool exists to stop — with the hook given no say in it. A
+#   direct write into refs/ (echo > .git/refs/remotes/pr/1) is out of reach for
+#   the same reason. So the promise is stated as what it is: the hook refuses
+#   every TRANSACTIONAL writer; a writer that bypasses the transaction is a
+#   `scan` matter, not a hook matter. `scan` counts such a symref (one whose
+#   target resolves) and `scan --strict` exits 1 on it. A DANGLING symref is
+#   skipped by `git for-each-ref`, so `scan` does not count that shape — and
+#   `git branch -r` skips it too, so it is junk on disk rather than a false
+#   reading. Every shape stays DELETABLE, which is what keeps the namespace
+#   cleanable — but only in a form that does NOT DEREFERENCE. A symref is
+#   removed with `git symbolic-ref -d` (measured rc=0, file ABSENT, target
+#   intact, and it goes through the transaction) or `git update-ref --no-deref
+#   -d` (measured the same). PLAIN `git update-ref -d <symref>` is NOT a
+#   cleanup: git-update-ref(1) stores the value "possibly dereferencing the
+#   symbolic refs" (`--no-deref` is "update <refname> not the one it points
+#   to"), so it FOLLOWS the symref and deletes its TARGET — measured on git
+#   2.43.0: rc=0, EMPTY stderr, a real `refs/remotes/origin/main` DESTROYED —
+#   and leaves the symref dangling on disk, where `git for-each-ref` skips it,
+#   so `scan` then reports the namespace CLEAN over a file that is still there.
+#   An exit 0 is not evidence that anything was deleted. Both the safe forms
+#   and that destruction are asserted in case 10. Upstream git has been teaching
+#   the refs API to update symrefs
+#   transactionally (`git update-ref --stdin`'s symref-create/symref-delete/
+#   symref-verify; git 2.46 RelNotes, "Updates to symbolic refs can now be made
+#   as a part of ref transaction"), so this boundary is git's and version
+#   dependent, not a property of the guard. scripts/refguard_test.sh asserts the
+#   boundary of the git it actually runs on.
 #
 # IT IS INSTALLED IN THE COMMON GIT DIR, NOT VIA core.hooksPath
 #   `$(git rev-parse --git-path hooks)` resolves to the COMMON dir's hooks
@@ -62,6 +98,9 @@
 #   * DELETION of a mirror. The rule is one-way on purpose: you may remove a
 #     hand-made ref, you may not create or move one. A guard that also refused
 #     deletion would make the namespace uncleanable except by rm-ing pack files.
+#     The FORM matters: remove a symref with `git symbolic-ref -d` (or
+#     `git update-ref --no-deref -d`) — the boundary paragraph above says why
+#     plain `git update-ref -d` is not one.
 #
 # USAGE
 #   refguard.sh install [repo]        install the hook (idempotent)
@@ -79,7 +118,8 @@
 # The `refguard` preflight gate runs scripts/refguard_test.sh, which proves every
 # claim above offline (sandbox repos, no network): that the idiom is refused, in
 # the primary checkout and in a worktree, that the prescribed alternatives still
-# work, and that normal git flow is untouched.
+# work, that normal git flow is untouched, and how far the rule reaches (the
+# `git symbolic-ref` boundary, where `scan` — not the hook — is the detector).
 
 set -uo pipefail
 

@@ -35,11 +35,21 @@
 #      forbidden ref is the LAST line must still be refused.
 #   3. DELETION MUST STAY ALLOWED. You may remove a hand-made ref, you may not
 #      create one. A guard that refused deletion too would make the namespace
-#      uncleanable except by rm-ing pack files.
+#      uncleanable except by rm-ing pack files. The FORM is not free either: the
+#      hook cannot make plain `git update-ref -d <symref>` a cleanup — it
+#      dereferences, destroys the TARGET ref and leaves a false clean, which is
+#      asserted in case 10 because the guard's header used to recommend it.
 #   4. A SECOND REMOTE's namespace is legitimate (`gh pr checkout` adds a fork
 #      remote), so the allow-list comes from `git remote`, not the word "origin".
 #   5. `scan` MUST REFUSE TO REPORT when it cannot reach the live namespace.
 #      "0 stale" from no data is the same false reading the mirrors cause.
+#   6. THE BOUNDARY OF THE RULE, stated rather than assumed. `git symbolic-ref`
+#      does not open a reference transaction, so the hook is invoked ZERO times
+#      and cannot refuse it: the symref IS created under refs/remotes/ and
+#      `git branch -r` reads it as a remote-tracking ref. The guard's header used
+#      to claim the hook fires for "every writer"; it cannot, and case 10 asserts
+#      both the measured boundary and that the header still states it. This is
+#      the one case whose documentation half FAILS on a pre-change guard.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -446,6 +456,181 @@ check "check: a directory that is not a git repo exits 2 (cannot measure)" 2 "$r
 "$GUARD" bogus-command >/dev/null 2>&1; rc=$?
 check "an unknown command exits 2 rather than passing silently" 2 "$rc"
 rm -rf "$NOTREPO"
+
+# --------------------------------------------------------------------------
+# Case 10 — THE BOUNDARY: a writer that does NOT open a reference transaction.
+#
+# The hook is a `reference-transaction` hook, so it sees a ref write only if the
+# writer opens a transaction. `git symbolic-ref` does not: it writes the symref
+# file directly, the hook is invoked ZERO times, and the ref IS created. Measured
+# on git 2.43.0 (the version this suite reports at the top):
+#
+#   git symbolic-ref refs/remotes/pr/910 refs/remotes/origin/main  -> rc=0,
+#   hook ZERO times, and `git branch -r` then reads `pr/910 -> origin/main`
+#
+# i.e. a hand-made ref wearing exactly the shape of a remote-tracking one. The
+# guard cannot close this in the hook (asserted here, not asserted-in-prose: the
+# counter proves the hook was not consulted at all), and the guard's header used
+# to claim the hook fires for "every writer". So this case asserts BOTH halves:
+# the measured boundary, and that the header states it. The documentation half is
+# the part that FAILS on a pre-change guard.
+#
+# The counter is the installed hook: a wrapper that does NOT read stdin — a
+# wrapper that `cat`s stdin feeds the guard an EMPTY transaction and makes the
+# "0 invocations" line meaningless — and that execs the guard under test, so the
+# guard's real verdict still applies to the control.
+# --------------------------------------------------------------------------
+echo "--- the boundary: git symbolic-ref (a non-transactional writer) ---"
+SB5="$SB/symref-work"
+git init -q -b main "$SB5"
+git -C "$SB5" config user.email t@t; git -C "$SB5" config user.name t
+printf 'sym\n' >"$SB5/a.txt"; git -C "$SB5" add a.txt; git -C "$SB5" commit -qm sym
+git -C "$SB5" remote add origin "$SB/remote.git"
+git -C "$SB5" fetch -q origin
+GITDIR5="$(git -C "$SB5" rev-parse --absolute-git-dir)"
+
+mkdir -p "$SB/symref-guard"
+cp "$GUARD" "$SB/symref-guard/refguard.sh"
+chmod 755 "$SB/symref-guard/refguard.sh"
+HOOK5="$GITDIR5/hooks/reference-transaction"
+CNT5="$SB/symref-hookcalls"
+: >"$CNT5"
+printf '#!/usr/bin/env bash\n# refguard test instrumentation: count, then hand the SAME stdin to the guard.\nprintf x >>"%s"\nexec "%s" "$@"\n' \
+  "$CNT5" "$SB/symref-guard/refguard.sh" >"$HOOK5"
+chmod 755 "$HOOK5"
+calls5() { wc -c <"$CNT5" | tr -d ' '; }
+
+# CONTROL — the counter is ALIVE, so a later "0 invocations" means what it says:
+# a transactional mirror is still refused AND still counted.
+before5="$(calls5)"
+git -C "$SB5" fetch origin refs/pull/1/head:refs/remotes/pr/911 >"$SB/sym-ctl.txt" 2>&1; rc=$?
+delta5=$(( $(calls5) - before5 ))
+[ "$rc" -ne 0 ] && ok "boundary control: a transactional writer is still REFUSED (rc=$rc)" \
+                || bad "boundary control: the instrumented hook did not refuse a mirror"
+[ "$delta5" -gt 0 ] && ok "boundary control: ...and the hook WAS invoked ($delta5 time(s)), so the counter works" \
+                    || bad "boundary control: the hook was never invoked — '0 invocations' below would be an artifact"
+
+# THE SYMREF ITSELF. The target is the remote-tracking ref the sandbox actually
+# has (`refs/remotes/origin/$MAIN`, $MAIN coming from sandbox A), so the symref
+# RESOLVES — that is the shape a reader is misled by, and the shape `scan` sees.
+SYMTARGET5="refs/remotes/origin/$MAIN"
+before5="$(calls5)"
+git -C "$SB5" symbolic-ref refs/remotes/pr/910 "$SYMTARGET5" >"$SB/sym-create.txt" 2>&1; rc=$?
+delta5=$(( $(calls5) - before5 ))
+if [ "$delta5" -gt 0 ]; then
+  # A git that DOES route symbolic-ref through the transaction: then the rule
+  # applies and the refusal is the thing to assert. (Not the git this host is
+  # gated with; see the header's boundary paragraph.)
+  [ "$rc" -ne 0 ] && ok "boundary: this git routes symbolic-ref through the transaction and the guard REFUSED it (rc=$rc)" \
+                  || bad "boundary: the hook saw the symbolic-ref and the guard ALLOWED it"
+  check "boundary: ...so no symref was created" "" \
+    "$(git -C "$SB5" symbolic-ref refs/remotes/pr/910 2>/dev/null || true)"
+else
+  check "boundary: git symbolic-ref is NOT refused (the hook gets no say, rc=0)" 0 "$rc"
+  check "boundary: ...the hook was invoked ZERO times for it" 0 "$delta5"
+  check "boundary: ...the symref WAS created, pointing where it was told" "$SYMTARGET5" \
+    "$(git -C "$SB5" symbolic-ref refs/remotes/pr/910 2>/dev/null || true)"
+  check "boundary: ...and it RESOLVES to the target's commit" \
+    "$(git -C "$SB5" rev-parse "$SYMTARGET5" 2>/dev/null)" \
+    "$(git -C "$SB5" rev-parse refs/remotes/pr/910 2>/dev/null)"
+  git -C "$SB5" branch -r >"$SB/sym-branch-r.txt" 2>&1
+  contains "boundary: ...and git branch -r reads it as a remote-tracking ref" "pr/910 -> origin/$MAIN" "$SB/sym-branch-r.txt"
+  git -C "$SB5" for-each-ref --format='%(refname)' refs/remotes/ >"$SB/sym-fer.txt" 2>&1
+  contains "boundary: ...and for-each-ref lists it under refs/remotes/" "refs/remotes/pr/910" "$SB/sym-fer.txt"
+  "$GUARD" scan "$SB5" >"$SB/sym-scan.txt" 2>&1
+  contains "boundary: scan is the detector for this shape — it counts the symref" "mirrors=1" "$SB/sym-scan.txt"
+  contains "boundary: ...and names it" "pr/910" "$SB/sym-scan.txt"
+  "$GUARD" scan "$SB5" --strict >/dev/null 2>&1; rc=$?
+  check "boundary: ...and scan --strict exits 1 on it" 1 "$rc"
+
+  # DELETION still goes through the transaction and is still ALLOWED — it is the
+  # create that bypasses the hook, and the one-way rule is what keeps this shape
+  # (and every mirror) cleanable.
+  before5="$(calls5)"
+  git -C "$SB5" symbolic-ref -d refs/remotes/pr/910 >"$SB/sym-del.txt" 2>&1; rc=$?
+  delta5=$(( $(calls5) - before5 ))
+  check "boundary: deleting the symref stays ALLOWED (rc=0)" 0 "$rc"
+  check "boundary: ...and the symref is gone" "" \
+    "$(git -C "$SB5" symbolic-ref refs/remotes/pr/910 2>/dev/null || true)"
+  [ "$delta5" -gt 0 ] && ok "boundary: ...deletion DOES go through the transaction ($delta5 invocation(s)) — only the create bypasses it" \
+                      || bad "boundary: the symref deletion did not reach the hook at all"
+  "$GUARD" scan "$SB5" >"$SB/sym-clean.txt" 2>&1
+  contains "boundary: after the deletion the namespace reads clean again" "the namespace is clean" "$SB/sym-clean.txt"
+
+  # A DANGLING symref — how far the detection reaches, stated precisely rather
+  # than assumed. `git for-each-ref` (which scan reads) SKIPS a symref whose
+  # target does not exist, so scan does NOT count this shape; `git branch -r`
+  # skips it too, so it is junk on disk rather than a false reading. It is still
+  # deletable, which is what keeps it from accumulating.
+  git -C "$SB5" symbolic-ref refs/remotes/pr/912 refs/prhead/nonexistent >"$SB/sym-dangle.txt" 2>&1; rc=$?
+  check "boundary: a DANGLING symref is created too (rc=0)" 0 "$rc"
+  check "boundary: ...it is really on disk (git wrote the file directly)" "ref: refs/prhead/nonexistent" \
+    "$(cat "$GITDIR5/refs/remotes/pr/912" 2>/dev/null)"
+  "$GUARD" scan "$SB5" >"$SB/sym-dangle-scan.txt" 2>&1
+  contains "boundary: ...but scan does NOT count it (for-each-ref skips a dangling symref)" "mirrors=0" "$SB/sym-dangle-scan.txt"
+  git -C "$SB5" branch -r >"$SB/sym-dangle-branch.txt" 2>&1
+  not_contains "boundary: ...and git branch -r does not list it either (junk, not a false reading)" "pr/912" "$SB/sym-dangle-branch.txt"
+  git -C "$SB5" symbolic-ref -d refs/remotes/pr/912 >/dev/null 2>&1; rc=$?
+  check "boundary: ...and it is deletable (rc=0)" 0 "$rc"
+
+  # DELETION IS NOT ONE THING — the other half of "the namespace stays
+  # cleanable", and the half the guard's header used to state wrongly ("both
+  # exit 0" as if `git update-ref -d` removed the symref). Only a
+  # NON-DEREFERENCING form does. git-update-ref(1): `git update-ref` stores the
+  # value "possibly dereferencing the symbolic refs"; `--no-deref` is "update
+  # <refname> not the one it points to". So the plain form FOLLOWS the symref
+  # and deletes the TARGET. Measured on git 2.43.0, target = the sandbox's own
+  # remote-tracking ref:
+  #
+  #   git update-ref -d refs/remotes/pr/910  -> rc=0, EMPTY stderr, the hook IS
+  #   invoked (it is a transactional write of the TARGET, and deletions are
+  #   allowed), the TARGET REF IS DESTROYED, the symref file is still on disk
+  #   ("ref: refs/remotes/origin/<main>") now dangling, `for-each-ref` empty,
+  #   and `scan` -> mirrors=0 "the namespace is clean".
+  #
+  # i.e. an exit 0 that removed nothing, destroyed a real ref, and handed a
+  # reader a CLEAN reading over a file that is still there — the false-reading
+  # class this tool exists to stop. Hence the header names the forms that ARE a
+  # cleanup, and those are asserted next.
+  TGT5="refs/remotes/origin/$MAIN"
+  TSHA5="$(git -C "$SB5" rev-parse "$TGT5")"
+  git -C "$SB5" symbolic-ref refs/remotes/pr/910 "$TGT5" >"$SB/sym-deref-create.txt" 2>&1
+  before5="$(calls5)"
+  git -C "$SB5" update-ref -d refs/remotes/pr/910 >"$SB/sym-deref.txt" 2>&1; rc=$?
+  delta5=$(( $(calls5) - before5 ))
+  check "boundary: plain 'git update-ref -d <symref>' exits 0 (so the exit code is evidence of nothing)" 0 "$rc"
+  [ "$delta5" -gt 0 ] && ok "boundary: ...and the TARGET deletion went through the transaction ($delta5 hook invocation(s)), which is why the one-way rule cannot stop it" \
+                      || bad "boundary: the dereferenced deletion never reached the hook at all"
+  check "boundary: ...and it DESTROYS the target ref the symref pointed at" "" \
+    "$(git -C "$SB5" rev-parse --verify -q "$TGT5" || true)"
+  check "boundary: ...while the symref file is STILL on disk, now dangling" "ref: $TGT5" \
+    "$(cat "$GITDIR5/refs/remotes/pr/910" 2>/dev/null)"
+  "$GUARD" scan "$SB5" >"$SB/sym-deref-scan.txt" 2>&1
+  contains "boundary: ...and scan reads that as CLEAN — a false clean over a file that is still there" \
+    "the namespace is clean" "$SB/sym-deref-scan.txt"
+
+  # THE FORM THAT IS A CLEANUP: same symref, same kind of target, --no-deref.
+  # `git symbolic-ref -d` (asserted just above) is the other one; both leave the
+  # symref file ABSENT and the target ref INTACT.
+  git -C "$SB5" update-ref "$TGT5" "$TSHA5"          # restore what the plain form destroyed
+  git -C "$SB5" symbolic-ref refs/remotes/pr/910 "$TGT5"
+  git -C "$SB5" update-ref --no-deref -d refs/remotes/pr/910 >"$SB/sym-noderef.txt" 2>&1; rc=$?
+  check "boundary: 'git update-ref --no-deref -d <symref>' exits 0 and the symref file is GONE" "gone" \
+    "$([ -e "$GITDIR5/refs/remotes/pr/910" ] && echo present || echo gone)"
+  check "boundary: ...and the target ref it pointed at SURVIVES" "$TSHA5" \
+    "$(git -C "$SB5" rev-parse --verify -q "$TGT5" || true)"
+fi
+
+# THE DOCUMENTATION HALF — and the half that BITES on a pre-change guard. A
+# guard whose header claims the hook fires for "every writer" states a blast
+# radius it does not have; these three assertions keep the boundary stated.
+# (`--help` prints the header, so the promise a reader gets is the one asserted.)
+"$GUARD" --help >"$SB/sym-help.txt" 2>&1
+contains "boundary: the guard's help names git symbolic-ref as a writer the hook does not see" \
+  "git symbolic-ref" "$SB/sym-help.txt"
+contains "boundary: ...under a heading that says so" "WHAT THE HOOK CANNOT SEE" "$SB/sym-help.txt"
+not_contains "boundary: ...and no longer over-reads the hook as covering 'every writer'" \
+  "every writer" "$SB/sym-help.txt"
 
 echo "---"
 echo "refguard self-test: $PASS passed, $FAIL failed"

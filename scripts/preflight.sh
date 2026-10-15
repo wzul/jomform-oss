@@ -84,8 +84,13 @@
 #                         REFUSED in the primary checkout AND in a linked
 #                         worktree; deletion stays allowed; a second remote's
 #                         namespace stays allowed; normal git flow is untouched;
-#                         and a hook that is missing, non-executable or stale is
-#                         reported NOT ARMED instead of quietly guarding nothing.
+#                         the BOUNDARY of the rule is asserted too — a writer
+#                         that opens no reference transaction (`git symbolic-ref`,
+#                         measured 0 hook invocations) cannot be refused by the
+#                         hook, so `scan` is its detector and the guard's header
+#                         has to say so; and a hook that is missing,
+#                         non-executable or stale is reported NOT ARMED instead of
+#                         quietly guarding nothing.
 #                         Offline: local bare remote + clones, no network, ~10s.
 #   prunewt    helper      deploy/worktrees/prune-kanban-worktrees_test.sh —
 #                         proves the worktree pruner's durability test cannot be
@@ -2819,6 +2824,26 @@ run prunehost "prod container-prune guard decoy suite (age/state/compose/keep ga
 # `reference-transaction` hook (`git update-ref`, `fetch`, `push` all go through
 # it), which is what `scripts/refguard.sh install` puts IN THE COMMON GIT DIR so
 # it covers the primary checkout and every linked worktree the lanes work in.
+#
+# THE RULE HAS A MEASURED BOUNDARY. The hook is a reference-transaction hook, so
+# a writer that opens no transaction cannot be refused by it at all — measured on
+# git 2.43.0, `git symbolic-ref` gets ZERO hook invocations, exits 0, and the ref
+# IS created under `refs/remotes/`, where it reads back as a remote-tracking ref.
+# That is a git boundary, not something the guard can close from the hook, so it
+# is ASSERTED rather than assumed: the suite measures the bypass and requires the
+# guard's own header (`--help`) to state it — those rows are what fails on a
+# guard whose header still over-reads the hook as covering "every writer". The
+# detector for that shape is `scan`/`scan --strict`, not the hook.
+#
+# THE DELETION FORMS ARE PART OF THAT BOUNDARY. "The namespace stays cleanable"
+# is only true of a form that does NOT DEREFERENCE: `git symbolic-ref -d` and
+# `git update-ref --no-deref -d` remove the symref and leave its target alone,
+# while plain `git update-ref -d <symref>` follows it, DESTROYS the target ref
+# (measured: a real `refs/remotes/origin/main`) and leaves the symref on disk,
+# which `for-each-ref` then skips — so `scan` reads the namespace clean over a
+# file that is still there, from a command that exited 0. The suite asserts
+# both forms and that destruction, and the header has to name the ones that are
+# a cleanup.
 #
 # ITS BITE PROOF IS scripts/refguard_bite.sh, ON DEMAND AND NOT WIRED IN — the same
 # convention as the `backup` gate's. t_dc1200ff closed claiming "100 assertions, proven to
