@@ -156,6 +156,27 @@ export default function Products() {
   const [trashed, setTrashed] = useState<TrashedProduct[]>([]);
   const [trashLoaded, setTrashLoaded] = useState(false);
   const [notify, setNotify] = useState("");
+  // The TRASH view's OWN refusal channel (card t_602c48f5 — the third surface of
+  // the defect t_ab4aa85b fixed on /forms and in the Danger zone):
+  //
+  //   * Every refusal branch used to write its sentence to `error` and then fire
+  //     `loadTrash()`, which clears `error` on a successful reload — so the
+  //     sentence was SET and ERASED in the same tick and the merchant never read
+  //     why their action was refused. Measured on the built app in a real browser
+  //     with a 409 on the restore route: `p[role="alert"]` sampled every 100ms
+  //     thirty times was absent at EVERY sample, while the trash listing went from
+  //     one call to two (the wipe is the same-tick relist, not a missing string).
+  //     `loadTrash()` does not touch this state, so the refetch that REPORTS the
+  //     refusal can no longer wipe it.
+  //   * `error` is also this page's LOAD-failure line: it carries a Retry that
+  //     reloads the listing. A refusal changes nothing about the listing, so the
+  //     sentence belongs beside the rows it is about, without a Retry.
+  //
+  // Cleared at the START of the next action that re-issues it (both handlers open
+  // with it) and by the Active/Trash tab switch. THE RULE: a refusal stays
+  // readable until the user's next action — never erased by the refetch that
+  // reports it.
+  const [trashErr, setTrashErr] = useState("");
   const [confirmPurge, setConfirmPurge] = useState<TrashedProduct | null>(null);
   const [purgeTyped, setPurgeTyped] = useState("");
   const [purgeBusy, setPurgeBusy] = useState(false);
@@ -421,9 +442,36 @@ export default function Products() {
 
   async function restoreProduct(id: string) {
     setNotify("");
-    const res = await fetch(`/api/rest/products/${id}/restore${workspaceQuery()}`, { method: "POST" });
+    // The NEXT action on this surface clears the previous refusal — at the START
+    // of the action, never as a side effect of the relist below it (card
+    // t_602c48f5).
+    setTrashErr("");
+    let res: Response;
+    try {
+      res = await fetch(`/api/rest/products/${id}/restore${workspaceQuery()}`, { method: "POST" });
+    } catch {
+      // A transport failure (offline, aborted, DNS) is an ACTION failure like any
+      // other and it must leave a sentence on this surface. Without this branch
+      // the rejection escaped through the row's `void restoreProduct(p.id)`
+      // handler as an unhandled rejection and the merchant saw NOTHING at all —
+      // `purgeProduct` already had its half, this one never did. Same class as the
+      // missing catch card t_ab4aa85b found on /forms' restore.
+      setTrashErr(t("prod.restoreFail"));
+      return;
+    }
     if (!res.ok) {
-      setError(t("prod.restoreFail"));
+      // The sentence is rendered from the machine `code` in the merchant's OWN
+      // language rather than from the server's Malay prose (issue #6177), which is
+      // what `purgeProduct` below already does. Today the only refusal this route
+      // can answer is the row not being in the bin, whose class code
+      // (`request.notFound`) the dictionary deliberately does not translate, so
+      // this falls back to the page's own line; routing it here is what makes a
+      // coded refusal readable the moment the API grows one.
+      //
+      // It goes to `trashErr`, NOT `error`: the relist below clears `error` on
+      // success, so the sentence used to be set and wiped in the same tick.
+      const d = await res.json().catch(() => null);
+      setTrashErr(apiErr(d, t("prod.restoreFail"), t));
       void loadTrash();
       return;
     }
@@ -437,6 +485,9 @@ export default function Products() {
     if (purgeTyped.trim() !== confirmPurge.name) return;
     setPurgeBusy(true);
     setNotify("");
+    // The next purge clears the previous refusal — at the START of the action,
+    // never as a side effect of the relist (card t_602c48f5).
+    setTrashErr("");
     try {
       const res = await fetch(`/api/rest/products/${confirmPurge.id}/purge${workspaceQuery()}`, {
         method: "DELETE",
@@ -447,9 +498,10 @@ export default function Products() {
         // A purge refused for a sale or a subscription names the obstacle in its
         // `code`, so the merchant gets that sentence in their OWN language
         // instead of the server's prose (issue #6177). Anything else falls back
-        // to the page's own line.
+        // to the page's own line. It renders beside the trash rows (`trashErr`),
+        // so the refusal survives the relist below it.
         const d = await res.json().catch(() => null);
-        setError(apiErr(d, t("prod.purgeFail"), t));
+        setTrashErr(apiErr(d, t("prod.purgeFail"), t));
         setConfirmPurge(null);
         setPurgeTyped("");
         void loadTrash();
@@ -460,7 +512,13 @@ export default function Products() {
       setPurgeTyped("");
       void loadTrash();
     } catch {
-      setError(t("prod.purgeFail"));
+      // A transport failure (offline, aborted) is an ACTION failure, so it uses
+      // the same channel rather than the page's load-failure line — and the dialog
+      // is closed with it, because it used to stay open behind a sentence the
+      // relist then wiped.
+      setTrashErr(t("prod.purgeFail"));
+      setConfirmPurge(null);
+      setPurgeTyped("");
     } finally {
       setPurgeBusy(false);
     }
@@ -769,6 +827,10 @@ export default function Products() {
                 setView(v);
                 setError("");
                 setNotify("");
+                // Switching views is the user's next action: the refusal about the
+                // view being left is cleared with the success notice (card
+                // t_602c48f5).
+                setTrashErr("");
               }}
               className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium ${
                 view === v
@@ -790,6 +852,19 @@ export default function Products() {
         {view === "trash" && (
           <>
             <p className="mt-4 max-w-2xl text-sm text-[var(--jf-muted)]">{t("prod.trashNote")}</p>
+            {/* The refusal (card t_602c48f5), rendered beside the rows it is about.
+                It is a state no loader writes, so the relist that reports the
+                refusal cannot erase the sentence — and unlike the page's load-failure
+                line above it carries no Retry, because a refusal changes nothing
+                about the listing and reloading it is not the remedy. */}
+            {trashErr && (
+              <p
+                role="alert"
+                className="mt-3 max-w-2xl rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700"
+              >
+                {trashErr}
+              </p>
+            )}
             <ul className="mt-4 space-y-2">
               {trashed.map((p) => (
                 <li

@@ -285,6 +285,20 @@ const HARNESSES: HarnessEntry[] = [
     d3ProbeNeedle: /BITEPROOF REFUSED: src\/app\/forms\/\.no-such-page-probe\.tsx is missing/,
   },
   {
+    // Card t_602c48f5. Backs the third refusal-survival guard
+    // (`web/e2e/products-trash-refusal.spec.ts`, the /products bin). It rewrites
+    // src/app/products/page.tsx and rebuilds the SAME worktree's .next, then drives
+    // the SAME webServer port as every other harness here — so it takes the family
+    // key rather than a per-script one: two of these in one worktree would rebuild
+    // over each other's app and drive one server between them.
+    label: "biteproof_products_trash_refusal.sh",
+    script: join(webRoot, "scripts", "biteproof_products_trash_refusal.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_PAGE: "src/app/products/.no-such-page-probe.tsx" },
+    d3ProbeNeedle: /BITEPROOF REFUSED: src\/app\/products\/\.no-such-page-probe\.tsx is missing/,
+  },
+  {
     label: "biteproof_mcp_tool_inventory.sh",
     script: join(webRoot, "scripts", "biteproof_mcp_tool_inventory.sh"),
     lockSubdir: FAMILY_LOCK_SUBDIR,
