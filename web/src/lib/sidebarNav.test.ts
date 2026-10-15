@@ -337,6 +337,19 @@ test("the docs no longer send a reader looking for a Profile nav row", () => {
 // the 4.5:1 floor. A scoped rule that goes RED where the repo-wide rule is GREEN is
 // worse than no rule: it sends a lane hunting a contrast defect that is not there,
 // quoting 4.20:1 for a pairing that never renders at that site.
+//
+// ONE READER, TOO — and this file paid for the copy it no longer has. Every
+// `codeOnly` / `jsxTags` call below comes from the same module, because until
+// 5ba1a17e (#1112) this file ALSO carried its own byte-copy of the className
+// reader (`type Seg` / `readExpr` / `classVariants` / `jsxTags` / `ancestorsAt`).
+// That copy was the pre-#1103 parser: it could not follow a class list that is
+// not a literal in the element's own attribute, so a nav row whose classes came
+// from a module-level helper read back EMPTY and the element was SKIPPED. Card
+// t_7d100f49 measured the cost by planting exactly that row into `Shell.tsx` on a
+// scratch copy: this file passed 10/0 (GREEN, blind) while `tintedSurface.test.ts`
+// — the shared reader, same bytes — reported
+// `components/Shell.tsx:143 — <span> paints text-[var(--jf-primary)] on bg-indigo-50`.
+// The bite below makes that shape a permanent failure here.
 
 /** The chrome files this rule owns, with the surface each tints. */
 const CHROME = [
@@ -402,6 +415,76 @@ test("the chrome rule is state-aware: a hover tint that overrides its text is no
   );
 });
 
+test("the chrome rule bites on a nav row built through a helper (card t_7d100f49)", () => {
+  // WHAT WAS WRONG: a class list built outside the element's own attribute was
+  // read as an EMPTY list, so the element was SKIPPED and this guard reported a
+  // clean chrome. Until 5ba1a17e (#1112) that was this file's own copy of the
+  // reader; the shared one (./jsxSource.ts, t_10266084 / PR 1103) reads it. The
+  // measurement that separated the two, on one scratch tree with the row below
+  // planted into `Shell.tsx`:
+  //
+  //   this file, own copy (5ba1a17e^):  pass 10  fail 0                    <- GREEN, blind
+  //   this file, shared reader (HEAD):  ✖ Shell.tsx:143 — <span> paints
+  //                                     text-[var(--jf-primary)] on bg-indigo-50
+  //
+  // This is that reproduction as a permanent assertion, planted into the chrome
+  // file's OWN source text: a reader that stops following a helper-built class
+  // list fails here instead of walking past the row.
+  // The anchor is the nav row's GLYPH, not its class string: the row's own
+  // classes are restyled by other cards (t_07eb69c8 changed this very span), so
+  // pinning them here would fail this bite for a reason unrelated to the read.
+  const NAV_ROW = /<span className="[^"]*">\{n\.icon\}<\/span>/;
+  const shellSrc = read("../components/Shell.tsx");
+  assert.match(
+    shellSrc,
+    NAV_ROW,
+    "the nav row's glyph span moved — re-anchor this bite (and the card's planted row) rather than deleting it",
+  );
+  const HELPER =
+    'const navRowCls = (active: string) =>\n' +
+    '  active === "" ? "bg-indigo-50 text-[var(--jf-primary)]" : "text-[var(--jf-text)]";';
+  const planted = shellSrc
+    .replace(
+      NAV_ROW,
+      "<span className={`flex items-center gap-2.5 rounded-lg px-3 py-3 text-sm ${navRowCls(active)}`}>{n.icon}</span>",
+    )
+    .replace("function NavList({", `${HELPER}\n\nfunction NavList({`);
+  assert.notEqual(planted, shellSrc, "nothing was planted — this bite is vacuous");
+
+  assert.match(
+    tintedSurfaceFindings("Shell.tsx", planted).join("\n"),
+    /paints text-\[var\(--jf-primary\)\] on bg-indigo-50/,
+    "a nav row built through a helper is not reported: an element the guard does not read is " +
+      "not an element it has cleared — its class list read back empty and the row was skipped " +
+      "(the pre-#1112 failure, card t_7d100f49)",
+  );
+
+  // The other direction, so "report everything" cannot be how this passes: the
+  // helper-built OUTLINE-BUTTON shape. Its base token rests on white, where it
+  // measures 4.70:1 and passes, and its hover state overrides BOTH the surface
+  // and the text (on-tint on the tint, 7.07:1). This is the shape the card says
+  // had to be re-checked when the rule moved onto the shared reader — through a
+  // helper — and it fails if the read flattens a conditional class list into one
+  // set of tokens.
+  const hoverHelper =
+    'const navRowCls = (active: string) =>\n' +
+    '  active === ""\n' +
+    '    ? "text-[var(--jf-primary)] hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]"\n' +
+    '    : "text-[var(--jf-text)]";';
+  assert.deepEqual(
+    tintedSurfaceFindings(
+      "fixture.tsx",
+      hoverHelper +
+        "\nexport function P() {\n" +
+        "  return <button className={`rounded ${navRowCls(active)}`}>x</button>;\n" +
+        "}",
+    ),
+    [],
+    "the helper-built outline-button shape is reported — its base token is never painted on the " +
+      "tint, so the read has gone back to flattening a conditional class list into one set of tokens",
+  );
+});
+
 test("the chrome rule and the repo-wide rule cannot drift (one implementation)", () => {
   // What this card fixes is TWO guards disagreeing about ONE class list: a
   // state-unaware copy here, a state-aware one in `tintedSurface.test.ts`. The
@@ -453,7 +536,8 @@ test("the tinted-surface rule is looking at real, reachable markup", () => {
     const src = read(rel);
     const code = codeOnly(src);
     assert.ok(code.length > 1000, `${label} is too small to be the chrome source`);
-    const tintedElements = jsxTags(code).filter((e) =>
+    const tags = jsxTags(code);
+    const tintedElements = tags.filter((e) =>
       e.tag.variants.some((v) => tintStates(v).length > 0),
     );
     assert.ok(
@@ -464,6 +548,25 @@ test("the tinted-surface rule is looking at real, reachable markup", () => {
     assert.ok(
       code.includes("--jf-primary-on-tint"),
       `${label} does not use --jf-primary-on-tint at all — the tinted active surface lost its AA-safe token`,
+    );
+    // The rule above is ALSO green for an element whose class list came back
+    // EMPTY, so count what the reader RESOLVED here. A reader that stopped
+    // following a shape (a template, a helper call, a ternary) would leave this
+    // guard judging fewer elements than it claims — which is the failure card
+    // t_7d100f49 measured: a helper-built nav row was read as empty, skipped, and
+    // this file reported a clean chrome. Measured on the tree this was written
+    // against: Shell.tsx 40 of 41 className attributes, WorkspaceSwitcher.tsx 29
+    // of 30 (the one exception in each is a `className` PROP, pinned in
+    // `tintedSurface.test.ts`'s UNREADABLE_PIN).
+    const resolved = tags.filter(
+      (e) => e.open && e.tag.classNameExpr !== "" && !e.tag.classNameUnreadable,
+    ).length;
+    const floor = label === "Shell.tsx" ? 30 : 20;
+    assert.ok(
+      resolved >= floor,
+      `${label}: the reader resolved only ${resolved} className attributes (below the ${floor} ` +
+        `this guard records) — a shape it used to follow is no longer followed, so the rule above ` +
+        `is judging fewer elements than it claims (a skipped element is not a cleared one)`,
     );
   }
 });
