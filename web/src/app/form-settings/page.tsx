@@ -643,7 +643,15 @@ function FormSettingsInner() {
       const nr = await fetch(`/api/rest/forms/${formId}/notifications${workspaceQuery()}`);
       if (nr.ok) {
         const list = (await nr.json()) as Notification[];
-        setNotifs(list);
+        // The endpoint answers an ARRAY (api/internal/httpapi/rest_form_notifications.go
+        // writes `list`, and `[]` when the store is not wired). A 200 body of any
+        // other shape — a proxy's error object, a stale cache entry — used to be
+        // stored as-is, and `notifs.map` in the render took the WHOLE page down
+        // with `#__next_error__` (no heading, no title, no lang: two more serious
+        // axe nodes on a page that had rendered nothing at all). The sibling
+        // webhooks load below has carried `Array.isArray(...)` for exactly this
+        // reason; the same guard belongs here.
+        setNotifs(Array.isArray(list) ? list : []);
       }
       // Issue #196: load this form's webhooks (form_id filter).
       const sp = activeWorkspaceScope();
@@ -1322,11 +1330,11 @@ function FormSettingsInner() {
                     <h2 className="text-base font-semibold">{t("fs.general")}</h2>
                     <div className="mt-4 space-y-3">
                       <div>
-                        <label className={labelCls}>{t("bld.formTitle")}</label>
-                        <input value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} />
+                        <label className={labelCls} htmlFor="fs-title">{t("bld.formTitle")}</label>
+                        <input id="fs-title" value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} />
                       </div>
                       <div>
-                        <label className={`${labelCls} flex items-center gap-1.5`}>
+                        <label htmlFor="fs-slug" className={`${labelCls} flex items-center gap-1.5`}>
                           {t("fs.slug")}
                           {/* Inline "?" doc link (AGENTS.md docs-parity rule 4):
                               the slug is the one field whose save changes a URL
@@ -1344,6 +1352,7 @@ function FormSettingsInner() {
                           </a>
                         </label>
                         <input
+                          id="fs-slug"
                           value={slug}
                           onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))}
                           className={`${inputCls} font-mono`}
@@ -1401,7 +1410,7 @@ function FormSettingsInner() {
                         )}
                       </div>
                       <div>
-                        <label className={`${labelCls} flex items-center gap-1.5`}>
+                        <label htmlFor="fs-theme-color" className={`${labelCls} flex items-center gap-1.5`}>
                           {t("bld.themeColor")}
                           {/* Inline "?" doc link (AGENTS.md docs-parity rule 4):
                               the colour decides the public form's button, so
@@ -1420,6 +1429,7 @@ function FormSettingsInner() {
                           </a>
                         </label>
                         <input
+                          id="fs-theme-color"
                           type="color"
                           value={fsTheme}
                           onChange={(e) => setFsTheme(e.target.value)}
@@ -1562,6 +1572,7 @@ function FormSettingsInner() {
                         </summary>
                         <div className="mt-2 space-y-2">
                           <textarea
+                            aria-label={t("bld.customJs")}
                             value={fsCustomJS}
                             onChange={(e) => setFsCustomJS(e.target.value)}
                             rows={5}
@@ -1598,6 +1609,7 @@ function FormSettingsInner() {
                           <p className="text-[11px] leading-relaxed text-slate-500">{t("fs.qrHelp")}</p>
                           <div className="flex flex-wrap items-center gap-2">
                             <input
+                              aria-label={t("fs.qrTablePh")}
                               value={qrTable}
                               onChange={(e) => setQrTable(e.target.value)}
                               className="jf-input max-w-[160px] font-mono"
@@ -1971,17 +1983,18 @@ function FormSettingsInner() {
                     <p className="mt-1 text-sm text-[var(--jf-muted)]">{t("fs.confirmationHint")}</p>
                     <div className="mt-4 space-y-3">
                       <div>
-                        <label className={labelCls}>{t("bld.redirSuccess")}</label>
-                        <input value={fsRedS} onChange={(e) => setFsRedS(e.target.value)} placeholder="https://yourapp.com/thanks" className={inputCls} />
+                        <label className={labelCls} htmlFor="fs-redir-success">{t("bld.redirSuccess")}</label>
+                        <input id="fs-redir-success" value={fsRedS} onChange={(e) => setFsRedS(e.target.value)} placeholder="https://yourapp.com/thanks" className={inputCls} />
                       </div>
                       <div>
-                        <label className={labelCls}>{t("bld.redirFailure")}</label>
-                        <input value={fsRedF} onChange={(e) => setFsRedF(e.target.value)} placeholder="https://yourapp.com/fail" className={inputCls} />
+                        <label className={labelCls} htmlFor="fs-redir-failure">{t("bld.redirFailure")}</label>
+                        <input id="fs-redir-failure" value={fsRedF} onChange={(e) => setFsRedF(e.target.value)} placeholder="https://yourapp.com/fail" className={inputCls} />
                       </div>
                       {/* Issue #393: per-form payment-failed message. */}
                       <div>
-                        <label className={labelCls}>{t("fs.failureMessage")}</label>
+                        <label className={labelCls} htmlFor="fs-failure-message">{t("fs.failureMessage")}</label>
                         <textarea
+                          id="fs-failure-message"
                           value={fsFailMsg}
                           onChange={(e) => setFsFailMsg(e.target.value)}
                           rows={3}
@@ -2007,6 +2020,7 @@ function FormSettingsInner() {
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <div className="flex items-center gap-2">
                                 <input
+                                  aria-label={t("fs.confName")}
                                   value={c.name}
                                   onChange={(e) => updateConf(i, { name: e.target.value })}
                                   placeholder={t("fs.confName")}
@@ -2052,8 +2066,9 @@ function FormSettingsInner() {
                             </div>
                             {c.type === "message" ? (
                               <div className="mt-3">
-                                <label className={labelCls}>{t("fs.confMessageBody")}</label>
+                                <label className={labelCls} htmlFor={`fs-conf-${i}-message`}>{t("fs.confMessageBody")}</label>
                                 <textarea
+                                  id={`fs-conf-${i}-message`}
                                   value={c.message}
                                   onChange={(e) => updateConf(i, { message: e.target.value })}
                                   rows={3}
@@ -2063,8 +2078,9 @@ function FormSettingsInner() {
                               </div>
                             ) : (
                               <div className="mt-3">
-                                <label className={labelCls}>{t("fs.confRedirectUrl")}</label>
+                                <label className={labelCls} htmlFor={`fs-conf-${i}-redirect`}>{t("fs.confRedirectUrl")}</label>
                                 <input
+                                  id={`fs-conf-${i}-redirect`}
                                   value={c.redirect_url}
                                   onChange={(e) => updateConf(i, { redirect_url: e.target.value })}
                                   placeholder="https://yourapp.com/thanks"
@@ -2126,29 +2142,29 @@ function FormSettingsInner() {
                     <div className="mt-4 space-y-3">
                       <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--jf-muted)]">{t("bld.scheduleTitle")}</p>
                       <div>
-                        <label className={labelCls}>{t("bld.startAt")}</label>
-                        <input type="datetime-local" value={rsStart} onChange={(e) => setRsStart(e.target.value)} className={inputCls} />
+                        <label className={labelCls} htmlFor="fs-rs-start">{t("bld.startAt")}</label>
+                        <input id="fs-rs-start" type="datetime-local" value={rsStart} onChange={(e) => setRsStart(e.target.value)} className={inputCls} />
                       </div>
                       <div>
-                        <label className={labelCls}>{t("bld.endAt")}</label>
-                        <input type="datetime-local" value={rsEnd} onChange={(e) => setRsEnd(e.target.value)} className={inputCls} />
+                        <label className={labelCls} htmlFor="fs-rs-end">{t("bld.endAt")}</label>
+                        <input id="fs-rs-end" type="datetime-local" value={rsEnd} onChange={(e) => setRsEnd(e.target.value)} className={inputCls} />
                       </div>
                       <div>
-                        <label className={labelCls}>{t("bld.pendingMessage")}</label>
-                        <textarea value={rsPending} onChange={(e) => setRsPending(e.target.value)} rows={2} className={inputCls} />
+                        <label className={labelCls} htmlFor="fs-rs-pending">{t("bld.pendingMessage")}</label>
+                        <textarea id="fs-rs-pending" value={rsPending} onChange={(e) => setRsPending(e.target.value)} rows={2} className={inputCls} />
                       </div>
                       <div>
-                        <label className={labelCls}>{t("bld.expiredMessage")}</label>
-                        <textarea value={rsExpired} onChange={(e) => setRsExpired(e.target.value)} rows={2} className={inputCls} />
+                        <label className={labelCls} htmlFor="fs-rs-expired">{t("bld.expiredMessage")}</label>
+                        <textarea id="fs-rs-expired" value={rsExpired} onChange={(e) => setRsExpired(e.target.value)} rows={2} className={inputCls} />
                       </div>
                       <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--jf-muted)]">{t("bld.entryLimitTitle")}</p>
                       <div>
-                        <label className={labelCls}>{t("bld.entryLimit")}</label>
-                        <input type="number" min={0} value={rsLimit} onChange={(e) => setRsLimit(e.target.value)} placeholder="100" className={inputCls} />
+                        <label className={labelCls} htmlFor="fs-rs-limit">{t("bld.entryLimit")}</label>
+                        <input id="fs-rs-limit" type="number" min={0} value={rsLimit} onChange={(e) => setRsLimit(e.target.value)} placeholder="100" className={inputCls} />
                       </div>
                       <div>
-                        <label className={labelCls}>{t("bld.limitMessage")}</label>
-                        <textarea value={rsLimitMsg} onChange={(e) => setRsLimitMsg(e.target.value)} rows={2} className={inputCls} />
+                        <label className={labelCls} htmlFor="fs-rs-limit-msg">{t("bld.limitMessage")}</label>
+                        <textarea id="fs-rs-limit-msg" value={rsLimitMsg} onChange={(e) => setRsLimitMsg(e.target.value)} rows={2} className={inputCls} />
                       </div>
                       <div className="pt-1">
                         <button onClick={saveRestrictions} disabled={!canWrite} className="jf-btn-primary">
@@ -2198,7 +2214,7 @@ function FormSettingsInner() {
 
                     <div className="mt-4 space-y-4">
                       <div>
-                        <label className={labelCls}>
+                        <label className={labelCls} htmlFor="fs-emel-subject">
                           {t("fs.emelSubject")} <span className="text-[var(--jf-muted)]">{t("fs.emelInheritHint")}</span>{" "}
                           {/* The per-field rule, stated at the field it applies to
                               (AGENTS.md documentation-parity rule). */}
@@ -2214,6 +2230,7 @@ function FormSettingsInner() {
                           </a>
                         </label>
                         <input
+                          id="fs-emel-subject"
                           value={emelSubject}
                           onChange={(e) => setEmelSubject(e.target.value)}
                           disabled={!canWrite}
@@ -2222,7 +2239,7 @@ function FormSettingsInner() {
                         />
                       </div>
                       <div>
-                        <label className={labelCls}>
+                        <label className={labelCls} htmlFor="fs-emel-body">
                           {t("fs.emelBody")} <span className="text-[var(--jf-muted)]">{t("fs.emelPlaceholders")}</span>{" "}
                           <a
                             href="/docs/customize#language"
@@ -2236,6 +2253,7 @@ function FormSettingsInner() {
                           </a>
                         </label>
                         <textarea
+                          id="fs-emel-body"
                           value={emelBody}
                           onChange={(e) => setEmelBody(e.target.value)}
                           disabled={!canWrite}
@@ -2283,10 +2301,11 @@ function FormSettingsInner() {
                       />
 
                       <div>
-                        <label className={labelCls}>
+                        <label className={labelCls} htmlFor="fs-emel-merchant-email">
                           {t("fs.emelMerchantEmail")} <span className="text-[var(--jf-muted)]">{t("fs.emelInheritHint")}</span>
                         </label>
                         <input
+                          id="fs-emel-merchant-email"
                           value={emelMerchantEmail}
                           onChange={(e) => setEmelMerchantEmail(e.target.value)}
                           disabled={!canWrite}
@@ -2383,7 +2402,7 @@ function FormSettingsInner() {
                             </select>
                           </div>
                           <div>
-                            <label className={labelCls}>
+                            <label className={labelCls} htmlFor="fs-notif-to">
                               {t("fs.notifTo")} <span className="text-[var(--jf-muted)]">{t("fs.notifToHint")}</span>{" "}
                               <a
                                 href="/docs/placeholders"
@@ -2395,10 +2414,10 @@ function FormSettingsInner() {
                                 ?
                               </a>
                             </label>
-                            <input value={edTo} onChange={(e) => setEdTo(e.target.value)} className={inputCls} placeholder="{admin_email}" />
+                            <input id="fs-notif-to" value={edTo} onChange={(e) => setEdTo(e.target.value)} className={inputCls} placeholder="{admin_email}" />
                           </div>
                           <div>
-                            <label className={labelCls}>
+                            <label className={labelCls} htmlFor="fs-notif-subject">
                               {t("fs.notifSubject")}{" "}
                               {/* The per-field language rule, stated at the field it
                                   applies to — the same affordance the per-form RECEIPT
@@ -2418,10 +2437,10 @@ function FormSettingsInner() {
                                 ?
                               </a>
                             </label>
-                            <input value={edSubject} onChange={(e) => setEdSubject(e.target.value)} className={inputCls} placeholder="Jualan baharu — {{ref_code}}" />
+                            <input id="fs-notif-subject" value={edSubject} onChange={(e) => setEdSubject(e.target.value)} className={inputCls} placeholder="Jualan baharu — {{ref_code}}" />
                           </div>
                           <div>
-                            <label className={labelCls}>
+                            <label className={labelCls} htmlFor="fs-notif-body">
                               {t("fs.notifBody")} <span className="text-[var(--jf-muted)]">{t("fs.notifPlaceholders")}</span>{" "}
                               {/* The per-field LANGUAGE rule for this field (card
                                   t_864adaee). The placeholder link below answers a
@@ -2446,7 +2465,7 @@ function FormSettingsInner() {
                                 ?
                               </a>
                             </label>
-                            <textarea value={edBody} onChange={(e) => setEdBody(e.target.value)} rows={6} className={`${inputCls} font-mono text-xs`} />
+                            <textarea id="fs-notif-body" value={edBody} onChange={(e) => setEdBody(e.target.value)} rows={6} className={`${inputCls} font-mono text-xs`} />
                           </div>
                           <div>
                             <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -2511,16 +2530,16 @@ function FormSettingsInner() {
                     </div>
                     <div className="mt-4 space-y-3">
                       <div>
-                        <label className={labelCls}>{t("fs.chipBrandId")}</label>
-                        <input value={ovBrand} onChange={(e) => setOvBrand(e.target.value)} placeholder="Brand ID" className={inputCls} />
+                        <label className={labelCls} htmlFor="fs-chip-brand">{t("fs.chipBrandId")}</label>
+                        <input id="fs-chip-brand" value={ovBrand} onChange={(e) => setOvBrand(e.target.value)} placeholder="Brand ID" className={inputCls} />
                       </div>
                       <div>
-                        <label className={labelCls}>{t("set.secretKey")}</label>
-                        <input value={ovSecret} onChange={(e) => setOvSecret(e.target.value)} type="text" placeholder="sk_live_… / sk_test_…" className={inputCls} />
+                        <label className={labelCls} htmlFor="fs-chip-secret">{t("set.secretKey")}</label>
+                        <input id="fs-chip-secret" value={ovSecret} onChange={(e) => setOvSecret(e.target.value)} type="text" placeholder="sk_live_… / sk_test_…" className={inputCls} />
                       </div>
                       <div>
-                        <label className={labelCls}>{t("set.emailFallback")}</label>
-                        <input value={ovFallback} onChange={(e) => setOvFallback(e.target.value)} type="email" placeholder="Email fallback (one-time forms)" className={inputCls} />
+                        <label className={labelCls} htmlFor="fs-chip-fallback">{t("set.emailFallback")}</label>
+                        <input id="fs-chip-fallback" value={ovFallback} onChange={(e) => setOvFallback(e.target.value)} type="email" placeholder="Email fallback (one-time forms)" className={inputCls} />
                       </div>
                       <p className="text-[11px] text-[var(--jf-muted)]">{t("bld.emptyDefaults")}</p>
                       <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -2558,8 +2577,9 @@ function FormSettingsInner() {
                             </div>
                             <div className="mt-2 grid gap-3 sm:grid-cols-2">
                               <div>
-                                <label className={labelCls}>{t("fs.chipFeedName")}</label>
+                                <label className={labelCls} htmlFor={`fs-feed-${f.id}-name`}>{t("fs.chipFeedName")}</label>
                                 <input
+                                  id={`fs-feed-${f.id}-name`}
                                   value={f.name}
                                   onChange={(e) => updateChipFeed(f.id, { name: e.target.value })}
                                   placeholder={t("fs.chipFeedNamePh")}
@@ -2567,8 +2587,9 @@ function FormSettingsInner() {
                                 />
                               </div>
                               <div>
-                                <label className={labelCls}>{t("fs.chipBrandId")}</label>
+                                <label className={labelCls} htmlFor={`fs-feed-${f.id}-brand`}>{t("fs.chipBrandId")}</label>
                                 <input
+                                  id={`fs-feed-${f.id}-brand`}
                                   value={f.brand_id}
                                   onChange={(e) => updateChipFeed(f.id, { brand_id: e.target.value })}
                                   placeholder="Brand ID"
@@ -2576,11 +2597,12 @@ function FormSettingsInner() {
                                 />
                               </div>
                               <div>
-                                <label className={labelCls}>
+                                <label className={labelCls} htmlFor={`fs-feed-${f.id}-secret`}>
                                   {t("set.secretKey")}{" "}
                                   <span className="text-[var(--jf-muted)]">{t("fs.chipSecretKeep")}</span>
                                 </label>
                                 <input
+                                  id={`fs-feed-${f.id}-secret`}
                                   value={f.secret_key}
                                   onChange={(e) => updateChipFeed(f.id, { secret_key: e.target.value })}
                                   type="text"
@@ -2589,8 +2611,9 @@ function FormSettingsInner() {
                                 />
                               </div>
                               <div>
-                                <label className={labelCls}>{t("set.emailFallback")}</label>
+                                <label className={labelCls} htmlFor={`fs-feed-${f.id}-fallback`}>{t("set.emailFallback")}</label>
                                 <input
+                                  id={`fs-feed-${f.id}-fallback`}
                                   value={f.email_fallback}
                                   onChange={(e) => updateChipFeed(f.id, { email_fallback: e.target.value })}
                                   type="email"
@@ -2602,9 +2625,10 @@ function FormSettingsInner() {
 
                             {/* Conditional logic */}
                             <div className="mt-3">
-                              <label className={labelCls}>{t("fs.chipFeedConditional")}</label>
+                              <label className={labelCls} htmlFor={`fs-feed-${f.id}-cond`}>{t("fs.chipFeedConditional")}</label>
                               <div className="mt-1">
                                 <select
+                                  id={`fs-feed-${f.id}-cond`}
                                   value={f.condition?.field_id || ""}
                                   onChange={(e) =>
                                     updateChipFeed(f.id, {
@@ -2670,9 +2694,9 @@ function FormSettingsInner() {
                             rendered cut, exactly as the domains and settings webhooks rows
                             did before #709. `basis-56` + `min-w-0` keeps the 224px desktop
                             preference without the shrink floor. */}
-                        <input value={whUrl} onChange={(e) => setWhUrl(e.target.value)} required type="url"
+                        <input aria-label={t("fs.webhooks")} value={whUrl} onChange={(e) => setWhUrl(e.target.value)} required type="url"
                           placeholder="https://yourapp.com/jomform-hook" className="jf-input min-w-0 max-w-xl flex-1 basis-56 sm:basis-auto" />
-                        <input value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
+                        <input aria-label={t("set.signingSecret")} value={whSecret} onChange={(e) => setWhSecret(e.target.value)} required type="text"
                           placeholder={t("set.signingSecret")} className="jf-input w-48" />
                         <button className="jf-btn-primary" disabled={!canWrite}>{t("set.add")}</button>
                       </div>

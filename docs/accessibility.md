@@ -310,9 +310,66 @@ pins the two defects by name — `button[aria-sort]` must be zero, the sorted `<
 must carry the state and it must MOVE on a sort click, every `<select>` must have
 a non-empty accessible name — and runs a full-page axe scan failing on
 critical/serious. A `button[aria-sort]` regression, or an unlabelled control
-added to that page, now reds `npm run a11y` instead of shipping unseen. Other
-table pages (`/sales`, `/forms`, `/media`) remain on the manual checklist below;
-the pattern here is what to copy when one of them is gated.
+added to that page, now reds `npm run a11y` instead of shipping unseen.
+
+### The rest of the signed-in routes — one route, one full-document scan (card t_9500edf3)
+
+`/products` was the first signed-in page with a TABLE to be scanned, and it was
+alone for a while: **twelve** authenticated routes were reached by NO a11y-family
+spec at all. That is the shape that let 15 critical `aria-required-parent` nodes
+ship green on `/profile` + `/settings`, and the shape that hid two more criticals
+on `/profile` until its first full-document scan ran. `web/e2e/a11y-authed-pages.spec.ts`
+now reaches every one of them — `/sales`, `/deliveries`, `/templates`, `/media`,
+`/chat`, `/spam`, `/subscriptions`, `/activity`, `/feedback`, `/form-settings`,
+`/builder`, `/connect` — with the session and the API stubbed at the browser
+level, and runs a **full-document** axe scan per route, failing on
+critical/serious. `src/lib/a11yAuthedCoverage.test.ts` pins each route to a page
+on disk AND to a spec that really runs axe, so one cannot quietly fall out again —
+and, because that route→spec half is a substring search any sibling naming the
+path would satisfy, a second rule in the same file reads
+`a11y-authed-pages.spec.ts`'s own `ROUTES` table and fails BY NAME when one of the
+twelve is no longer an entry. (The substring limitation itself is the standing
+follow-up `t_2275886d`.)
+
+**A reachable route is asserted, not assumed.** Each arm requires the document to
+have been served **2xx** (a 404 renders Next's "not found" page, which has no
+landmarks and no controls — the lesson of `t_81b2a928`), requires the route **not
+to have bounced** (the middleware redirect is followed by `page.goto`, so it
+answers 200 and would otherwise be scanned as `/login`), and requires the CLIENT
+render to have **settled** before axe runs: a React marker on the page's own
+`<h1>`, the page's dictionary title, the shell, and a MEASURED floor on the
+rendered text. That last part is not politeness — these routes are statically
+prerendered, so the served markup alone is not evidence that the client component
+ran. An arm that scans a loading shell is worse than no arm: it reports the route
+as clean.
+
+**`/form-settings` is walked tab by tab, and that is where this paid off.** A tab
+is one click away in the SAME document, so the scan covers all seven of them; the
+first run found **nine critical `label` nodes across three tabs** — General (the
+title, slug and colour inputs), Restrictions (two `datetime-local` inputs and
+three textareas) and Notifications (the email body textarea). Every one was a
+sibling `<label>` with no `for`/`id`, i.e. the exact class `/profile` had been
+fixed for, and every one is fixed. The same walk also refuses a control whose only
+name is its **placeholder** — the class axe cannot see, because axe accepts a
+placeholder as a name, so a clean scan does not prove the field is named.
+
+**Two redirect shells have no document of their own, and the spec says so rather
+than reporting a scan of nothing.** `/space-picker` is a permanent 307 to
+`/workspace-picker`; `/post-login` resolves the post-login target and replaces the
+location within a frame. A full-document scan of either measures whatever it
+landed on, so the arms assert that each LANDS on a route this family scans
+(`/workspace-picker`, and the dashboard) instead of claiming coverage of the
+shell.
+
+**What is still NOT covered (stated, not hidden).** `/forms` is reached by
+`a11y-dialogs.spec.ts`, but that scan is scoped to the dialog subtree
+(`AxeBuilder().include('[role="dialog"]')`), so its DOCUMENT — the table, its
+toolbar and its filters — is still outside every axe scan; `/forms` is therefore
+the next route to add to this file, not a route to assume. `/admin`'s document is
+in the same position (its feedback ROW is measured, by
+`a11y-admin-feedback-row.spec.ts`). The dashboard's own contrast remains measured
+out-of-band and held by the source guard below, with the exceptions this file
+names.
 
 
 > **Do not reuse a running server.** `web/playwright.config.ts` sets
@@ -332,15 +389,15 @@ the pattern here is what to copy when one of them is gated.
 > cookie from the Go API. The `web/e2e/a11y.spec.ts` gate covers the public
 > routes only; the dashboard's own colours are measured out-of-band against a
 > standalone build with a real session cookie, and held in place by the source
-> guard documented below rather than by the gate. Three exceptions ARE scanned —
-> the pair of typed-slug confirmation dialogs, the canvas price spans and the
-> `/products` table with its create row (see "Confirmation dialogs", "The builder
-> canvas" and "A dashboard page with a TABLE" above) — because stubbing the
-> session-dependent fetch at the browser level puts the real component in the
-> browser without needing a credential. The `/products` entry exists because that
-> page carried two critical axe violations while this note described the surface
-> as covered out-of-band (card t_3fbc6953); the other dashboard pages with a table
-> (`/sales`, `/forms`, `/media`) are still measured out-of-band.
+> guard documented below rather than by the gate. Several exceptions ARE scanned —
+> the pair of typed-slug confirmation dialogs, the canvas price spans,
+> `/products` with its create row, and, since card `t_9500edf3`, EVERY signed-in
+> dashboard route this file lists above — because stubbing the session-dependent
+> fetch at the browser level puts the real component in the browser without
+> needing a credential. What is still measured out-of-band is what no arm reaches:
+> a route's DOCUMENT when only a subtree of it is scanned (`/forms`, `/admin` —
+> see the section above), a dynamic `/products/[id]`-style segment, and any state
+> the browser-level stubs do not render.
 
 ### Muted text and AA (source guard)
 

@@ -1,4 +1,5 @@
-// The a11y gate must actually SCAN a signed-in dashboard page (card t_b589a807).
+// The a11y gate must actually SCAN a signed-in dashboard page (card t_b589a807),
+// and every signed-in route must be one of them (card t_9500edf3).
 //
 // THE BUG. `web/e2e/a11y.spec.ts` holds the axe PAGE LIST and it was seven
 // PUBLIC routes only (`/login`, `/landing`, `/reset-password`, `/magic-link`,
@@ -7,7 +8,23 @@
 // `npm run a11y` was GREEN while `/profile` carried 5 and `/settings` 10
 // critical axe `aria-required-parent` nodes (a `role="tab"` whose required
 // parent `role="tablist"` did not exist anywhere in either file). `t_d334fb02`
-// closed the dialog half of that gap; this is the page half.
+// closed the dialog half of that gap; `t_b589a807` closed the page half for
+// `/profile`, and THIS contract now covers the routes `t_9500edf3` measured as
+// still unreachable: twelve of them (`/sales`, `/deliveries`, `/templates`,
+// `/media`, `/chat`, `/spam`, `/activity`, `/feedback`, `/form-settings`,
+// `/builder`, `/connect` — and `/subscriptions`, whose DOCUMENT had no
+// full-document scan either) plus the two shells that only exist to redirect.
+//
+// TWO KINDS OF ENTRY, and the difference is stated rather than smoothed over.
+// A route entry names a page that is LOADED and SCANNED. `/space-picker` and
+// `/post-login` are not that: the first is a permanent 307 to
+// `/workspace-picker`, the second resolves the post-login target and
+// `location.replace`s within a frame, so there is no document of their own for
+// axe to judge — the scan under their name is of the route they land on, and
+// `a11y-authed-pages.spec.ts` asserts that the landing route is itself covered.
+// They are listed because the card named them and because an entry for them is
+// how the next reader learns they are covered BY their target; they are NOT
+// evidence that the shell was scanned, and the `what` text says so.
 //
 // WHY A SOURCE-CONTRACT TEST AND NOT A BROWSER TEST. This repo has no DOM/JSX
 // unit runner (no vitest/jest — see src/lib/buttonWrap.test.ts). What CANNOT
@@ -66,7 +83,81 @@ const AUTHED_ROUTES: { route: string; appFile: string; what: string }[] = [
   {
     route: "/subscriptions",
     appFile: "../app/subscriptions/page.tsx",
-    what: "the subscription table and its per-row write actions (card t_0fdbe189)",
+    what: "the subscription table and its per-row write actions (card t_0fdbe189); its ROW is measured by a11y-subscriptions-row, its DOCUMENT by a11y-authed-pages",
+  },
+  // Card t_9500edf3: the twelve routes that no a11y-family spec scanned at all.
+  // Every one is reached with the session + API stubbed at the browser level, and
+  // every one gets a FULL-DOCUMENT axe scan in a11y-authed-pages.spec.ts — the
+  // entry exists so the route cannot quietly fall out again.
+  {
+    route: "/sales",
+    appFile: "../app/sales/page.tsx",
+    what: "the sales table, filters, search, date range and CSV export",
+  },
+  {
+    route: "/deliveries",
+    appFile: "../app/deliveries/page.tsx",
+    what: "the email-delivery table, its event-type filter and the per-sale timeline",
+  },
+  {
+    route: "/templates",
+    appFile: "../app/templates/page.tsx",
+    what: "the templates list and its save/clone/rename/delete actions",
+  },
+  {
+    route: "/media",
+    appFile: "../app/media/page.tsx",
+    what: "the media grid, its upload control, filters and per-item actions",
+  },
+  {
+    route: "/chat",
+    appFile: "../app/chat/page.tsx",
+    what: "the assistant page, its transcript region and its composer",
+  },
+  {
+    route: "/spam",
+    appFile: "../app/spam/page.tsx",
+    what: "the spam review queue (flagged submissions + flagged sales)",
+  },
+  {
+    route: "/activity",
+    appFile: "../app/activity/page.tsx",
+    what: "the workspace audit trail, its filters and its pagination",
+  },
+  {
+    route: "/feedback",
+    appFile: "../app/feedback/page.tsx",
+    what: "the feedback thread list and the file-a-report form",
+  },
+  {
+    route: "/form-settings",
+    appFile: "../app/form-settings/page.tsx",
+    what: "all seven tabs of the per-form settings page (it carried nine critical `label` nodes across three of them)",
+  },
+  {
+    route: "/builder",
+    appFile: "../app/builder/page.tsx",
+    what: "the builder's own chrome: palette, canvas and publish controls",
+  },
+  {
+    route: "/connect",
+    appFile: "../app/connect/page.tsx",
+    what: "the social-connect landing step",
+  },
+  {
+    route: "/workspace-picker",
+    appFile: "../app/workspace-picker/page.tsx",
+    what: "the multi-workspace login picker",
+  },
+  {
+    route: "/space-picker",
+    appFile: "../app/space-picker/page.tsx",
+    what: "a legacy PATH only: it 307s to /workspace-picker, so the document scanned under this route is the picker's, and a11y-authed-pages asserts that redirect rather than claiming a scan of the shell",
+  },
+  {
+    route: "/post-login",
+    appFile: "../app/post-login/page.tsx",
+    what: "a redirect shell: it resolves the post-login target and replaces the location within a frame, so the document scanned under it is the route it lands on (asserted in a11y-authed-pages)",
   },
 ];
 
@@ -116,4 +207,54 @@ test("each signed-in route is visited by an a11y-family spec that runs axe", () 
         `Specs found: ${A11Y_SPECS.join(", ")}`,
     );
   }
+});
+
+/**
+ * The twelve routes card `t_9500edf3` exists for must still be ENTRIES in the
+ * table of the spec that scans them.
+ *
+ * WHY THIS IS A SEPARATE RULE FROM THE ONE ABOVE. That rule is a SUBSTRING
+ * search over the family's texts, so ANY sibling spec that mentions the route
+ * satisfies it — `a11y-singlechar-text.spec.ts` names eleven of these twelve in
+ * its own `ROUTES` table, so deleting this file's arm for one of them would
+ * leave the rule above green (the same weakness QA filed against the `/profile`
+ * entry as `t_2275886d`). This one reads the scanner's own `ROUTES` table out of
+ * `a11y-authed-pages.spec.ts` and requires every route below to be an entry, so
+ * an arm that is deleted or renamed fails here BY NAME instead.
+ */
+const A11Y_AUTHED_PAGES = "a11y-authed-pages.spec.ts";
+
+/** The card's twelve, without any query string (the table carries `?form=`). */
+const REQUIRED_SCANNED_ROUTES = [
+  "/sales",
+  "/deliveries",
+  "/templates",
+  "/media",
+  "/chat",
+  "/spam",
+  "/subscriptions",
+  "/activity",
+  "/feedback",
+  "/form-settings",
+  "/builder",
+  "/connect",
+];
+
+test("a11y-authed-pages still carries an arm for every route this contract exists for", () => {
+  const file = `${E2E_DIR}/${A11Y_AUTHED_PAGES}`;
+  assert.ok(existsSync(file), `${A11Y_AUTHED_PAGES} is gone — the signed-in scans it carries are too`);
+  const src = readFileSync(file, "utf8");
+  const listed = [...src.matchAll(/path:\s*"([^"]+)"/g)].map((m) => m[1].split("?")[0]);
+  assert.ok(
+    listed.length > 0,
+    `no \`path: "…"\` entry was parsed out of ${A11Y_AUTHED_PAGES} — this rule would be vacuous` +
+      ` (its ROUTES table is a different shape now; re-point this reader at it rather than deleting the rule)`,
+  );
+  assert.deepEqual(
+    REQUIRED_SCANNED_ROUTES.filter((r) => !listed.includes(r)),
+    [],
+    `route(s) with no arm left in ${A11Y_AUTHED_PAGES}: the table holds ${JSON.stringify(listed)}. ` +
+      `A route deleted from that table is a route axe no longer scans — and the substring rule above cannot ` +
+      `see it, because another spec in the family names the same path`,
+  );
 });
