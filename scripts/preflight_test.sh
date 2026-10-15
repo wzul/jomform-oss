@@ -1747,6 +1747,7 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
     backup)   printf '%s\n' 'deploy/backup/*' ;;
     host)     printf '%s\n' 'deploy/host/*' 'deploy/vps/*' ;;
     prunewt)  printf '%s\n' 'deploy/worktrees/*' ;;
+    prunesync) printf '%s\n' 'deploy/worktrees/check-prune-kanban-worktrees-host*.sh' 'deploy/worktrees/install-prune-kanban-worktrees.sh' ;;
     prunehost) printf '%s\n' 'deploy/host/*' ;;
     refguard) printf '%s\n' 'scripts/refguard.sh' 'scripts/refguard_test.sh' ;;
     selftest) printf '%s\n' 'scripts/preflight.sh' 'scripts/preflight_test.sh' ;;

@@ -97,6 +97,32 @@
 #                         a live worker's worktree is still kept.
 #                         Offline: a sandbox repo with its own bare `origin`, a
 #                         fake `hermes kanban show`, no board, no network.
+#   prunesync  host       deploy/worktrees/check-prune-kanban-worktrees-host_test.sh —
+#                         the verifier of "the copy that RUNS is the copy the repo
+#                         MERGED", and its own bite. The cron job
+#                         `prune-kanban-worktrees` resolves its script under
+#                         $HERMES_HOME/scripts — OUTSIDE the checkout — and the only
+#                         thing that ever updates that copy is the MANUAL installer, so
+#                         every merge touching deploy/worktrees/* left the running pruner
+#                         stale until a lane remembered. Measured three times, each
+#                         hash-verified: e3137b91 running from before 2026-10-08, with a
+#                         real live-process guard (`has_process_matching`) absent from
+#                         the copy the nightly job executed; the SUITE at 620fbd5b on
+#                         2026-10-10 after a card had already declared the install
+#                         satisfied; and 05474f06/97ff705a on 2026-10-15 (missing #1158's
+#                         reaped-pid skip and #1161's artefact count). The harness proves
+#                         the checker BITES on those exact historical bytes (by sha256)
+#                         and the gate then runs the checker against the REAL host, so
+#                         drift is loud instead of remembered. It never writes: the
+#                         repair it names is revision-exact
+#                         (`install-prune-kanban-worktrees.sh --from-ref origin/main`),
+#                         which installs the MERGED bytes rather than a lane's tree.
+#                         Offline + ~1s read-only comparison; a machine with no pruner
+#                         and no job pointing at one is a NOTE naming the 0 pairs it
+#                         compared, never a pass-by-default.
+#                         Cost: the live half is a ~1s read-only comparison; the gate
+#                         measured 123s inside a full 21-gate run (the harness drives the
+#                         installer's full proof path — the pruner's own suite twice).
 #   prunehost  host       deploy/host/jomform-container-prune_test.sh — the
 #                         prod container-prune guard's decoy suite: five planted
 #                         decoy containers in a PRIVATE dockerd of the suite's
@@ -258,7 +284,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet gofmt test govuln web lint webimage a11y e2e npmaudit gitleaks monitor tmpkey backup host prunewt prunehost refguard selftest)
+GATE_NAMES=(build vet gofmt test govuln web lint webimage a11y e2e npmaudit gitleaks monitor tmpkey backup host prunewt prunesync prunehost refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -508,6 +534,7 @@ pw_declared() {
     web|a11y|e2e|lint)    printf '%s\n' 'web/*' ;;
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor|tmpkey|backup|host|prunewt|refguard) printf '%s\n' 'deploy/*' 'scripts/*' ;;
+    prunesync)             printf '%s\n' 'deploy/worktrees/*' ;;
     prunehost)             printf '%s\n' 'deploy/host/*' ;;
     selftest)              printf '%s\n' 'scripts/*' 'GATE-INVENTORY.md' ;;
     gitleaks)              printf '%s\n' '*' ;;
@@ -532,6 +559,7 @@ pw_sources() {
     backup)                printf '%s\n' 'deploy/backup/*' ;;
     host)                  printf '%s\n' 'deploy/host/*' 'deploy/vps/*' ;;
     prunewt)               printf '%s\n' 'deploy/worktrees/*' ;;
+    prunesync)             printf '%s\n' 'deploy/worktrees/check-prune-kanban-worktrees-host*.sh' 'deploy/worktrees/install-prune-kanban-worktrees.sh' ;;
     prunehost)             printf '%s\n' 'deploy/host/*' ;;
     refguard)              printf '%s\n' 'scripts/refguard.sh' 'scripts/refguard_test.sh' ;;
     selftest)              printf '%s\n' 'scripts/preflight.sh' 'scripts/preflight_test.sh' ;;
@@ -2684,6 +2712,71 @@ prunewt_run() {
   bash "$REPO_ROOT/deploy/worktrees/prune-kanban-worktrees_test.sh"
 }
 run prunewt "worktree pruner self-test (a stale refs/remotes/pr/N mirror is not durability; real durability still prunes)" prunewt_run
+
+# prunesync — IS THE PRUNER THE HOST RUNS THE PRUNER THE REPO MERGED? Same family as
+# `monitor`/`tmpkey`/`backup`/`prunewt`/`prunehost`, and the same defect class the
+# pruner itself was twice repaired for: "the artifact that runs is not the artifact that
+# was verified".
+#
+# WHAT GOES WRONG WITHOUT IT. The cron job `prune-kanban-worktrees` (`no_agent`, 04:00)
+# resolves `script: prune-kanban-worktrees.sh` under $HERMES_HOME/scripts, a copy OUTSIDE
+# the checkout. The only thing that puts a new revision there is the MANUAL installer
+# deploy/worktrees/install-prune-kanban-worktrees.sh, and nothing ran it automatically —
+# so every merge touching deploy/worktrees/* left the RUNNING copy stale until a lane
+# remembered. Measured, hash-verified, three times:
+#   * 2026-10-08 — the running pruner was e3137b91 (from #797's revision) and did NOT
+#     contain `has_process_matching`, a real live-process guard, while the nightly job
+#     kept executing it; fixed by hand during t_a7312c6c. This one was NOT cosmetic.
+#   * 2026-10-10 — the running SUITE was 620fbd5b against a merged 7c2b39e5: t_82b6ae3c
+#     had already declared the install satisfied two days earlier.
+#   * 2026-10-15 — the running pair was 05474f06/97ff705a, missing #1158's reaped-pid
+#     skip and #1161's artefact count (11 non-comment lines). Measured while writing this
+#     gate, which is why it exists.
+# A manual step with no verifier is the failure mode, so this gate is the verifier.
+#
+# THE TWO HALVES, and why both:
+#   1. the harness (check-prune-kanban-worktrees-host_test.sh) proves the checker BITES —
+#      its 2026-10-08 fixture IS the bytes that were running then, asserted by sha256,
+#      and the checker must report that pair as drift naming the missing guard, while the
+#      SAME bytes against their own revision read green (the control), plus the
+#      verdicts that must never read green (EMPTY copy, armed job with no script, an
+#      unresolvable reference) and a read-only arm. A verifier nobody has seen fail is
+#      not evidence.
+#   2. the checker itself then runs against the REAL host: the copy under
+#      $HERMES_HOME/scripts vs `git show origin/main:deploy/worktrees/<name>`. The
+#      reference is the MERGED revision, deliberately not this working tree — a lane's
+#      unmerged copies are not what the host may run, and comparing against them would
+#      either red every lane that touches deploy/worktrees/* or push it to install
+#      unmerged bytes on a destructive nightly job.
+#
+# IT NEVER WRITES, and that is the point rather than a limitation: a check that "fixed"
+# the host inside a lane's gate run would install bytes nobody merged. Drift is loud and
+# the repair is one revision-exact command, which the failure output names:
+#     deploy/worktrees/install-prune-kanban-worktrees.sh --from-ref origin/main
+# (that installer re-runs the revision's own suite from the installed location, so what
+# gets verified is the artifact that will run).
+#
+# A MACHINE WITH NO PRUNER IS A NOTE, NOT A FAILURE — e.g. a plain clone or a host the
+# installer was never run on. The checker says so in its own output and reports the 0
+# pairs it compared; what it must never do is report a byte-identical verdict it did not
+# make. A job that IS armed while its script is gone is the opposite case and FAILS.
+#
+# COST: the live half is a couple of `git show`s and two sha256s (~1s). The harness is
+# offline — a throwaway repo with its own bare origin, a fake Hermes home, copies of the
+# shipped scripts; no host, no cron, no board — but it drives the installer's FULL proof
+# path (the pruner's own suite, run once on the extracted revision and again from the
+# installed location) plus its three guard mutations, so this gate is not free: measured
+# 123s inside a full 21-gate run on the agent host, 2026-10-15.
+#
+# ONE STATED LIMIT: the live half is a check of HOST state, so a per-tree result record
+# made before the host moved could vouch for it on identical bytes (the same shape
+# `refguard` has). The reference and its commit date are printed on every run, and
+# `--only prunesync` re-runs it without touching the record.
+prunesync_run() {
+  bash "$REPO_ROOT/deploy/worktrees/check-prune-kanban-worktrees-host_test.sh" || return 1
+  bash "$REPO_ROOT/deploy/worktrees/check-prune-kanban-worktrees-host.sh"
+}
+run prunesync "host pruner drift: the copy the cron RUNS must be the revision the branch MERGED (harness proves it bites, then the real host is compared)" prunesync_run
 
 # prunehost — the prod container-prune guard's decoy suite. Same shape of gate as
 # `monitor`/`tmpkey`/`backup` and for the same reason: `deploy/host/jomform-container-prune.sh`

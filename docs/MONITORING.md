@@ -309,6 +309,43 @@ path (the agent host has two copies, in `/root/.hermes/scripts` and
 installs, then **re-runs the self-test from the installed location**, and reports
 whether the cron job that names that filename exists.
 
+#### Keeping the copy that RUNS level with the merged revision
+
+Installing is a **manual** step, and a manual step with no verifier is exactly how
+the drift happened — measured three times on this host, each hash-verified:
+
+| running copy | merged revision | what it cost |
+|---|---|---|
+| `e3137b91` (until 2026-10-08) | had moved on through #797…#1050 | the running pruner did **not** contain `has_process_matching`, a real live-process guard, while the nightly job kept executing it |
+| suite `620fbd5b` (2026-10-10) | suite `7c2b39e5` (#1066) | the proof harness was stale two days after a card had declared the install satisfied |
+| `05474f06` / `97ff705a` (2026-10-15) | `e60897d5` / `7871e173` | 11 non-comment lines absent, including #1158's reaped-pid skip and #1161's artefact count |
+
+The `prunesync` preflight gate is the verifier. It runs
+`deploy/worktrees/check-prune-kanban-worktrees-host_test.sh` (offline; its
+2026-10-08 fixture *is* the bytes that were running then, pinned by sha256, and it
+proves the checker bites) and then
+`deploy/worktrees/check-prune-kanban-worktrees-host.sh`, which compares every file
+the installer puts on the host with `git show origin/main:deploy/worktrees/<name>`
+and exits non-zero on any difference:
+
+```bash
+deploy/worktrees/check-prune-kanban-worktrees-host.sh          # read-only verdict
+deploy/worktrees/install-prune-kanban-worktrees.sh --from-ref origin/main   # the repair
+```
+
+The check **never writes**: it compares the *merged* revision, not your working
+tree — a lane's unmerged copies are not what the host may run — and the repair it
+prints is `--from-ref`, which extracts that revision's bytes and installs those.
+A machine with no pruner at all (a plain clone) is a NOTE that says how many pairs
+it compared (zero), never a byte-identical verdict it did not make; a cron job that
+is armed while its script is gone is a failure. The one limit stated in the gate's
+row: the live half reads **host** state, so a per-tree gate record written before
+the host moved could vouch for it on identical bytes — `--only prunesync` re-runs
+it without touching the record.
+
+`/root/agents` is deliberately not part of this: nothing resolves a job to that
+copy (it is a leftover), so the checker holds no opinion about it.
+
 ### The offline self-test
 
 `deploy/worktrees/prune-kanban-worktrees_test.sh` runs in the preflight gate
