@@ -137,7 +137,14 @@ function NavList({
                       : "text-[var(--jf-muted)] hover:bg-slate-50 hover:text-[var(--jf-text)]"
                   }`}
                 >
-                  <span className="w-4 text-center text-xs opacity-70">{n.icon}</span>
+                  {/* The icon keeps the row's own ink token (t_07eb69c8). It used to
+                      carry `opacity-70`, which composites `--jf-muted` #6b7280 over
+                      the sidebar's white to #979ca6 — MEASURED 2.755:1 at 12px, well
+                      under the 4.5 AA floor — and the active row's
+                      `--jf-primary-on-tint` over `bg-indigo-50` to #766fda, 3.714:1.
+                      At full strength the same two pairs are 4.834:1 and 7.068:1, so
+                      the fix is to stop dimming the glyph, not to invent a token. */}
+                  <span className="w-4 text-center text-xs">{n.icon}</span>
                   {n.label}
                 </Link>
               </li>

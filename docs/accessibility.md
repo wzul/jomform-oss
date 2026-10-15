@@ -66,6 +66,72 @@ is selected by the `a11y` project automatically, so a new one is in the gate by
 its name alone. Which specs exist is `npm run a11y -- --list`, not a list here.
 Minor/moderate findings are reported for triage but do not fail the gate.
 
+### axe cannot judge a SINGLE-CHARACTER element (card `t_07eb69c8`)
+
+The `a11y` gate fails on critical/serious **violations**, and axe-core 4.13.0 cannot
+produce one for text one character long. In `web/node_modules/axe-core/axe.js`:
+
+```
+27197  if (ignoreUnicode && textIsEmojis(visibleText)) { messageKey: 'nonBmp'; return void 0; }
+27277  var shortTextContent = visibleText.length === 1;
+27280  } else if (!isValid && shortTextContent && !ignoreLength) missing = 'shortTextContent';
+27294  if (... || shortTextContent && !ignoreLength && !isValid) { ...; return void 0; }   // cantTell
+31351  shortTextContent: 'Element content is too short to determine if it is actual text content',
+31352  nonBmp: 'Element content contains only non-text characters',
+```
+
+The rule's answer for such a node depends on nothing but its LENGTH: a one-character
+element that PASSES is a `pass`, and one that FAILS is an `incomplete` (`cantTell`) —
+never a violation, and so never a red gate. Measured live (axe injected into a
+production build, fresh state, the sidebar's own nav glyph on the dashboard: 12px/400,
+`--jf-muted` #6b7280 at `opacity-70` over the sidebar's white = #979ca6 =
+**2.755:1** against a 4.5 floor):
+
+- the real one-character node: `violations: []`, and `incomplete` carries it twice
+  over — "Element content contains only non-text characters" for the pictographic
+  glyphs and "Element content is too short to determine if it is actual text
+  content" for the letter-like ones;
+- the SAME paint on a two-character node planted in the same nav: a
+  `color-contrast` **serious** violation — "insufficient color contrast of 2.58
+  (foreground color: #9298a6, background color: #eef2ff, font size: 9.0pt (12px))".
+
+Nothing about the colour, the token or the surface differs between those two nodes.
+
+**The site it hid, and the fix.** A rendered-page census measured every visible
+element whose OWN text is exactly one character, on its own painted surface and at
+its own composited `opacity`: 21 of the 28 routes visited rendered such an element,
+319 in total. Exactly one family was under its floor, and it was on every signed-in
+page — **the sidebar nav glyph** (`Shell.tsx`, the one span per nav item, the same
+component for the desktop sidebar and the mobile drawer), where `opacity-70` dimmed
+the row's own token to 2.755:1 over the sidebar's white and 3.714:1 on the active
+row's `bg-indigo-50`. The fix is the alpha, not a new token: the row's existing
+`--jf-muted` at full strength is 4.834:1 on white and `--jf-primary-on-tint` is
+7.068:1 on the tint. That is the same shape the `/chat` confirmation card's
+`opacity-70` lines already got (card `t_f5f269a8`). After it the census re-runs at
+the same 319 elements over the same 21 routes with **no** element under its floor —
+including the two avatar-initial circles this tree also carries, which PR 1102 fixed
+to 6.414:1 (the 12px sidebar initial) and 3.814:1 at 24px (the `/profile` one, which
+is WCAG large text against its 3:1 floor).
+
+`web/e2e/a11y-singlechar-text.spec.ts` is the guard and is in the `a11y` gate by its
+filename prefix. One test per route asserts that the page was not redirected, that
+its own shell rendered, that it found at least the MEASURED number of
+single-character elements, and that every one of them — with no exemption — clears
+the floor its own measured size and weight imply; its last arm reproduces the
+pre-fix paint on the real elements, requires the measurement to drop below the
+floor, requires live axe to report NOTHING for it, and then requires axe to name the
+same paint on a two-character node — the blindness and the liveness of the rule in
+one run. Its `ROUTES` table is the authority for what is scanned, and every element
+it measured is printed as a `[single-char]` line in the gate's own output.
+
+**What this does NOT cover (stated, not hidden).** Only the routes in that table are
+scanned: a single-character element on any other surface — a dynamic
+`/products/[id]`-style segment, a page that only renders with real data, the
+`/admin` page, which this spec's browser-level stubs do not render — is still judged
+by nothing, and the fix for that is to add the route. And axe is still the wrong
+guard for this class: this file exists because the rule cannot see it, not because
+the rule changed.
+
 ### The document declaration must match the prose (card `t_c9d23e2c`, WCAG 3.1.1)
 
 `web/src/components/i18n.tsx` writes the dashboard locale to
