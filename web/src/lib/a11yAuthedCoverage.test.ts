@@ -42,9 +42,24 @@
 //       /a11y.*\.spec\.ts/`), so a signed-in axe spec is in the gate by its name
 //       alone — and a spec that stops visiting the route, or stops running axe,
 //       has silently reduced coverage. Both are asserted below, per route.
+//   (c) THE SPEC ACTUALLY VISITS THE ROUTE (card t_2275886d): the (b) half used
+//       to be a SUBSTRING SEARCH over the spec's whole file text, so a spec that
+//       only STUBBED the API path satisfied the route — `$` sat inside the
+//       match class of `/(.*)\/api\/auth\/profile$/`, so seven specs that never
+//       load `/profile` counted as its visitor, and a route named in a comment
+//       counted too (`e2e/a11y-profile-tabs.spec.ts` lists "/products",
+//       "/media", "/forms", "/settings" in its header). Measured: moving the one
+//       spec that visits `/profile` out of `e2e/` left this file GREEN, 829
+//       passed / 0 failed. A visit is now read out of the ARGUMENTS of `goto(`
+//       calls — a string or template literal, or a name bound to one in the same
+//       file — and nothing else. `visits()` below is the whole rule, and the
+//       second test pins its shape so it cannot quietly become a substring
+//       search again. A goto of a route the APP redirects (`/space-picker` 307s
+//       to `/workspace-picker`) counts for the route it lands on, because the
+//       browser really does end up there and the document really is scanned.
 //
 // The assertion is deliberately about the CONTRACT (route exists, a gate spec
-// visits it and runs axe), never about a class name or an attribute: the
+// VISITS it and runs axe), never about a class name or an attribute: the
 // attribute that fixes the defect is measured by the browser spec itself, which
 // also neutralises it in the live DOM and requires the axe rule to fire again.
 //
@@ -55,6 +70,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const pathOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
@@ -64,6 +80,32 @@ const CONFIG = readFileSync(pathOf("../../playwright.config.ts"), "utf8");
 
 /** The axe scanner: a spec that visits a route without it is not a scan. */
 const SCANNER = "AxeBuilder";
+
+/**
+ * The /settings strip's size, MEASURED out of the page's own source.
+ *
+ * This description used to read "the **eleven**-tab strip" — a typed count —
+ * and by the time card t_2275886d ran, the array behind it held TWELVE ids
+ * (`src/app/settings/page.tsx:59`) of which three are admin-only
+ * (`ADMIN_ONLY_TABS`: chip, members, workspace), so a member session renders
+ * nine and a `read_only` member renders no strip at all. A typed count is what
+ * GATE-INVENTORY.md says rots, so these are read from the file and the test
+ * below fails if the parse ever comes back empty.
+ */
+const SETTINGS_PAGE_SRC = readFileSync(pathOf("../app/settings/page.tsx"), "utf8");
+
+function tabIdsIn(declaration: string): string[] {
+  const m = SETTINGS_PAGE_SRC.match(new RegExp(`const ${declaration}[^=]*=\\s*\\[([^\\]]*)\\]`));
+  return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : [];
+}
+
+const SETTINGS_TAB_IDS = tabIdsIn("TAB_IDS");
+const SETTINGS_ADMIN_ONLY = tabIdsIn("ADMIN_ONLY_TABS");
+const SETTINGS_TABS = {
+  ids: SETTINGS_TAB_IDS.length,
+  adminOnly: SETTINGS_ADMIN_ONLY.length,
+  member: SETTINGS_TAB_IDS.length - SETTINGS_ADMIN_ONLY.length,
+};
 
 /**
  * A route a signed-in surface must be scanned at, and the page file behind it.
@@ -78,7 +120,10 @@ const AUTHED_ROUTES: { route: string; appFile: string; what: string }[] = [
   {
     route: "/settings",
     appFile: "../app/settings/page.tsx",
-    what: "the eleven-tab strip (card t_4d32da9a added its axe arm)",
+    what:
+      `the settings tab strip — MEASURED from src/app/settings/page.tsx: ${SETTINGS_TABS.ids} ids in ` +
+      `TAB_IDS, ${SETTINGS_TABS.adminOnly} of them admin-only, so ${SETTINGS_TABS.member} on a member session ` +
+      `(card t_4d32da9a added its axe arm)`,
   },
   {
     route: "/subscriptions",
@@ -166,10 +211,235 @@ const A11Y_SPECS = readdirSync(E2E_DIR).filter(
   (f) => f.startsWith("a11y") && f.endsWith(".spec.ts"),
 );
 
-/** Does this spec text visit `route`? A quoted/bracketed path, or one that
- *  continues into a query string (`/settings?tab=members`). */
-function visits(text: string, route: string): boolean {
-  return new RegExp(`${route.replace(/[/]/g, "\\/")}(\\?|["'\`$)])`).test(text);
+/**
+ * `src` with its comments blanked out and its string/template bodies kept.
+ *
+ * Quote state is tracked so a `//` inside a string or a regex (a URL, the
+ * `/(.*)\/api\/.*$/` stubs) is not mistaken for a comment. Mis-stripping can
+ * only ever REMOVE text here, which loses a visit and fails loudly — it can
+ * never invent one.
+ */
+function withoutComments(src: string): string {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < src.length && src[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
+      i += 2;
+      out += " ";
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      const quote = c;
+      out += c;
+      i += 1;
+      while (i < src.length && src[i] !== quote) {
+        if (src[i] === "\\") {
+          out += src[i];
+          i += 1;
+        }
+        if (i < src.length) {
+          out += src[i];
+          i += 1;
+        }
+      }
+      if (i < src.length) {
+        out += src[i];
+        i += 1;
+      }
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
+/** The FIRST argument of every `goto(` call in `src`, as the source text it was
+ *  written as. Reads the argument list rather than the file: the second argument
+ *  (`{ waitUntil: … }`) and every `page.route(...)` call are simply not read. */
+function gotoArguments(src: string): string[] {
+  const text = withoutComments(src);
+  const args: string[] = [];
+  const call = /\bgoto\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = call.exec(text))) {
+    const open = m.index + m[0].length - 1;
+    let i = open + 1;
+    let depth = 0;
+    let quote: string | null = null;
+    for (; i < text.length; i++) {
+      const c = text[i];
+      if (quote) {
+        if (c === "\\") i++;
+        else if (c === quote) quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") {
+        quote = c;
+        continue;
+      }
+      if (c === "(") depth++;
+      else if (c === ")") {
+        if (depth === 0) break;
+        depth--;
+      } else if (c === "," && depth === 0) break;
+    }
+    args.push(text.slice(open + 1, i).trim());
+  }
+  return args;
+}
+
+/** Reads the string/template literal starting at `src[at]`; an interpolation
+ *  (`${baseURL}`, `${FORM_ID}`) becomes a `*`, so it cannot be read as a route
+ *  segment. Returns null when `src[at]` does not open a literal. */
+function readLiteral(src: string, at: number): { value: string; end: number } | null {
+  const quote = src[at];
+  if (quote !== '"' && quote !== "'" && quote !== "`") return null;
+  let out = "";
+  let i = at + 1;
+  while (i < src.length && src[i] !== quote) {
+    if (src[i] === "\\") {
+      out += src[i + 1] ?? "";
+      i += 2;
+      continue;
+    }
+    if (quote === "`" && src[i] === "$" && src[i + 1] === "{") {
+      let depth = 0;
+      for (i += 1; i < src.length; i++) {
+        if (src[i] === "{") depth++;
+        else if (src[i] === "}") {
+          depth--;
+          if (depth === 0) break;
+        }
+      }
+      out += "*";
+      i += 1;
+      continue;
+    }
+    out += src[i];
+    i += 1;
+  }
+  if (i >= src.length) return null;
+  return { value: out, end: i + 1 };
+}
+
+/** Every literal bound to `name` in `src`: an assignment (`const path = "…"`), a
+ *  parameter default (`path = "…"`), or a table entry (`{ path: "…" }`). Those
+ *  are the two shapes the signed-in specs navigate by — a helper called with the
+ *  route as a default, and a `ROUTES` table read through `route.path`. A name
+ *  that is only a TYPE (`path: string`) or only passed positionally binds to
+ *  nothing, and then the spec is not counted. `name === "…"` (a comparison) is
+ *  deliberately NOT a binding. */
+function bindingsOf(src: string, name: string): string[] {
+  const found: string[] = [];
+  const at = new RegExp(`(^|[^\\w$])${name}(?![\\w$])`, "g");
+  for (const m of src.matchAll(at)) {
+    let i = m.index + m[0].length;
+    while (/\s/.test(src[i] ?? "")) i++;
+    if (src[i] === "?" && src[i + 1] === ":") i += 2;
+    else if (src[i] === ":" && src[i + 1] !== ":") i += 1;
+    else if (src[i] === "=" && src[i + 1] !== "=") i += 1;
+    else continue;
+    while (/\s/.test(src[i] ?? "")) i++;
+    const lit = readLiteral(src, i);
+    if (lit) found.push(lit.value);
+  }
+  return found;
+}
+
+/** The routes one `goto` argument can be. A literal IS a route; a bare name (or
+ *  `x.name`) is resolved through `bindingsOf`; anything else — a stub, a
+ *  `page.path` read off a table this file does not own, a concatenation —
+ *  resolves to nothing rather than to a guess. */
+function argumentRoutes(arg: string, src: string): string[] {
+  const lit = readLiteral(arg, 0);
+  if (lit && lit.end === arg.length) return [lit.value];
+  if (/^[A-Za-z_$][\w$]*$/.test(arg)) return bindingsOf(src, arg);
+  const member = arg.match(/^[A-Za-z_$][\w$]*\.([A-Za-z_$][\w$]*)$/);
+  if (member) return bindingsOf(src, member[1]);
+  return [];
+}
+
+/** The pathname a goto value lands on: a leading absolute prefix — an
+ *  interpolation such as `${baseURL}` or a scheme and host — is dropped, as is
+ *  any `?query`. `/settings?tab=members` and `${baseURL}/settings` are both
+ *  `/settings`. */
+function pathnameOf(value: string): string {
+  let v = value;
+  const slash = v.indexOf("/");
+  if (slash > 0) v = v.slice(slash);
+  if (v.startsWith("//")) v = v.replace(/^\/\/[^/]*/, "");
+  return v.split(/[?#]/)[0];
+}
+
+/**
+ * The app's OWN redirect table, read from `src/app/<route>/page.tsx`.
+ *
+ * A `goto` of a route that 307s LANDS on its target, so the target is visited:
+ * `/space-picker` is a permanent redirect to `/workspace-picker`
+ * (`src/app/space-picker/page.tsx:8`), and the spec that scans the picker
+ * document reaches it that way. A rule that only accepted the literal route
+ * would call that route uncovered and turn the gate RED on a scan that really
+ * happens.
+ */
+const APP_DIR = pathOf("../app");
+
+function collectRedirects(dir: string, route: string, into: Map<string, string>): void {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      // A route group — `(dashboard)` — and a private folder (`_x`) add no path
+      // segment: skip the grouping rather than map a URL that does not exist.
+      const here =
+        entry.name.startsWith("(") || entry.name.startsWith("_")
+          ? route
+          : `${route === "/" ? "" : route}/${entry.name}`;
+      collectRedirects(join(dir, entry.name), here, into);
+      continue;
+    }
+    if (entry.name !== "page.tsx" || route === "/") continue;
+    const src = withoutComments(readFileSync(join(dir, entry.name), "utf8"));
+    const call = src.match(/\b(?:permanentRedirect|redirect)\s*\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/);
+    const lit = call ? readLiteral(call[1], 0) : null;
+    if (lit) into.set(route, pathnameOf(lit.value));
+  }
+}
+
+const APP_REDIRECTS = new Map<string, string>();
+collectRedirects(APP_DIR, "/", APP_REDIRECTS);
+
+/** Does a goto of `from` land on `route`? Directly, one segment deeper, or
+ *  through the app's own redirect table (bounded, so a cycle cannot hang the
+ *  run). */
+function landsOn(from: string, route: string): boolean {
+  let at = from;
+  for (let hop = 0; hop < 4; hop++) {
+    if (at === route || at.startsWith(`${route}/`)) return true;
+    const next = APP_REDIRECTS.get(at);
+    if (!next || next === at) return false;
+    at = next;
+  }
+  return false;
+}
+
+/** Does this spec source VISIT `route`? Only the arguments of `goto(` calls
+ *  count, so a `page.route(/(.*)\/api\/auth\/profile$/, …)` stub, a route named
+ *  in a comment and a route that only appears in a prose list are all NOT
+ *  visits — each of those satisfied the substring predicate this replaces. A
+ *  visit one segment DEEPER (`/profile/security` for `/profile`) counts: those
+ *  are the page's own sub-routes, and so does a route the app redirects to,
+ *  because the browser really does end up there. */
+function visits(src: string, route: string): boolean {
+  return gotoArguments(src)
+    .flatMap((arg) => argumentRoutes(arg, src))
+    .map(pathnameOf)
+    .some((p) => landsOn(p, route));
 }
 
 test("the a11y project still selects its specs by the a11y filename prefix", () => {
@@ -191,6 +461,96 @@ test("every signed-in route the gate claims to scan is a page on disk", () => {
   }
 });
 
+test("a visit is an argument of page.goto — a route stub, a comment or a prose list is NOT one", () => {
+  // The shapes the substring predicate accepted, verbatim: the stub the seven
+  // signed-in specs share (its `$` sits inside the match class of the regex, so
+  // the API path it stubs read as a visit of `/profile`), a route named in a
+  // comment, and a route that only ever appears inside a string that is not a
+  // navigation.
+  //
+  // NOTE — no API path below (or in this prose) follows a backtick or a double
+  // quote directly: `api/internal/httpapi/route_parity_test.go` extracts
+  // quote-delimited API-path literals out of web/src WITHOUT stripping comments,
+  // so a path written that way in PROSE is read as a frontend call and fails
+  // that guard (measured: the full preflight's `test` gate, tree 5040d100).
+  const notAVisit = [
+    `await page.route(/(.*)\\/api\\/auth\\/profile$/, (r) => r.fulfill(json({ lang: "" })));`,
+    `// The strip's routes: "/products", "/media", "/forms", "/settings".`,
+    `const NOTE = "/profile is scanned in its own spec";`,
+    `await page.goto("/login", { waitUntil: "networkidle" });`,
+  ].join("\n");
+  assert.equal(
+    visits(notAVisit, "/profile"),
+    false,
+    "a page.route() stub for the account's profile endpoint is not a visit of /profile — " +
+      "this is the defect card t_2275886d exists for",
+  );
+  assert.equal(
+    visits(notAVisit, "/settings"),
+    false,
+    "a route named in a comment is not a visit of /settings — the /settings entry was satisfied by one",
+  );
+
+  const cases: [string, string, boolean, string][] = [
+    [`await page.goto("/profile", { waitUntil: "domcontentloaded" });`, "/profile", true, "a string literal"],
+    ["await page.goto(`/profile`);", "/profile", true, "a template literal with no interpolation"],
+    ["await page.goto(`${baseURL}/settings`);", "/settings", true, "an absolute base inside the template"],
+    [`await page.goto("/settings?tab=members");`, "/settings", true, "a ?query suffix"],
+    [`await page.goto("/profile/security");`, "/profile", true, "a trailing path segment"],
+    [`await page.goto("/profile-ish");`, "/profile", false, "a path that only STARTS with the route"],
+    [`await page.goto("/subscriptions-lite");`, "/subscriptions", false, "a path that only STARTS with the route"],
+    [`await page.goto("/profile");\nawait page.route("**/api/rest/sales", (r) => r.abort());`, "/profile", true, "a stub beside a real visit"],
+    [
+      `async function open(p: Page, path = "/profile") {\n  await p.goto(path, { waitUntil: "domcontentloaded" });\n}`,
+      "/profile",
+      true,
+      "a helper's parameter default",
+    ],
+    [
+      `const ROUTES: Route[] = [{ path: "/settings" }];\nfor (const r of ROUTES) await page.goto(r.path, {});`,
+      "/settings",
+      true,
+      "a route table read through `route.path`",
+    ],
+    [
+      `const ROUTES: Route[] = [{ path: "/sales" }];\nfor (const r of ROUTES) await page.goto(r.path, {});`,
+      "/settings",
+      false,
+      "another route's table entry",
+    ],
+    // A legacy path the app itself 307s (`src/app/space-picker/page.tsx`) LANDS
+    // on its target, so the target is visited — the shape PR #1243's spec scans
+    // `/workspace-picker` by. A rule that only read the literal would call that
+    // route uncovered and turn a real scan red.
+    [`await page.goto("/space-picker");`, "/workspace-picker", true, "a route the app 307s to"],
+    [`await page.goto("/space-picker");`, "/profile", false, "a redirect to a DIFFERENT route"],
+  ];
+  for (const [src, route, expected, what] of cases) {
+    assert.equal(
+      visits(src, route),
+      expected,
+      `${what}: visits(${JSON.stringify(src)}, ${JSON.stringify(route)}) must be ${expected}`,
+    );
+  }
+});
+
+test("the /settings entry carries the tab count READ out of the page, not a typed one", () => {
+  assert.ok(
+    SETTINGS_TABS.ids > 0 && SETTINGS_TABS.adminOnly > 0 && SETTINGS_TABS.member < SETTINGS_TABS.ids,
+    `the tab census parsed out of src/app/settings/page.tsx is vacuous (${JSON.stringify(SETTINGS_TABS)}): ` +
+      `TAB_IDS = ${JSON.stringify(SETTINGS_TAB_IDS)}, ADMIN_ONLY_TABS = ${JSON.stringify(SETTINGS_ADMIN_ONLY)}. ` +
+      `The regexes here have to be re-pointed at whatever the declarations look like now — not deleted, ` +
+      `because then the description below is a guess again`,
+  );
+  const entry = AUTHED_ROUTES.find((r) => r.route === "/settings")!;
+  assert.ok(
+    entry.what.includes(`${SETTINGS_TABS.member} on a member session`),
+    `the /settings entry no longer carries the MEASURED tab count (it reads ${JSON.stringify(entry.what)}). ` +
+      `It used to read "the eleven-tab strip" while TAB_IDS held 12 ids and a member session rendered 9 — ` +
+      `a typed count inside a description rots the moment the page changes`,
+  );
+});
+
 test("each signed-in route is visited by an a11y-family spec that runs axe", () => {
   for (const { route, what } of AUTHED_ROUTES) {
     // `a11y.spec.ts` is the public PAGES list; the signed-in surfaces live in
@@ -202,8 +562,10 @@ test("each signed-in route is visited by an a11y-family spec that runs axe", () 
     });
     assert.ok(
       scanners.length > 0,
-      `${route} (${what}) is visited by NO a11y-family spec that runs ${SCANNER}. ` +
-        `The axe gate would be green for a critical violation on it — the exact gap this contract exists for. ` +
+      `${route} (${what}) is visited by NO a11y-family spec that runs ${SCANNER}: no spec has a ` +
+        `page.goto argument that resolves to it (a stub for its API path, a route named in a comment ` +
+        `and a route in a prose list are not visits — t_2275886d). The axe gate would be green for a ` +
+        `critical violation on it — the exact gap this contract exists for. ` +
         `Specs found: ${A11Y_SPECS.join(", ")}`,
     );
   }
