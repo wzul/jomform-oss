@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/wzul/jomform/api/internal/textutil"
 )
 
 // Subscription lifecycle values.
@@ -21,6 +23,14 @@ const (
 	ChargePaid    = "paid"
 	ChargeFailed  = "failed"
 )
+
+// subChargeFailureReasonMax bounds the gateway reason recorded with a failed
+// recurring charge (migration 000057, issue #562). It is the value the merchant
+// reads to tell an expired card from an invalid recurring token from a gateway
+// outage; 500 characters is enough for a CHIP error and stops a pathological
+// upstream message becoming an unbounded row. It is counted in CHARACTERS — see
+// AddChargeFailedWithReason for why a byte bound loses the whole charge row.
+const subChargeFailureReasonMax = 500
 
 // ErrNoDueSubs returned when the due-subscriptions scan finds nothing.
 var ErrNoDueSubs = errors.New("no due subscriptions")
@@ -595,9 +605,16 @@ func (s *SubscriptionStore) Reactivate(ctx context.Context, accountID, subID str
 // token from a gateway outage. The reason is truncated to keep a pathological
 // upstream message from bloating the row.
 func (s *SubscriptionStore) AddChargeFailedWithReason(ctx context.Context, subID string, amountSen int64, attempt int, reason string) error {
-	if len(reason) > 500 {
-		reason = reason[:500]
-	}
+	// The cap is applied on a RUNE boundary, never on a byte index: reason is
+	// the gateway's own error text (payments.recurring passes err.Error()),
+	// which carries arbitrary UTF-8 — a localised provider message, an accented
+	// name, an em-dash — and slicing bytes at 500 can land mid-character. The
+	// resulting invalid UTF-8 is refused by Postgres ("invalid byte sequence for
+	// encoding UTF8", SQLSTATE 22021), so the INSERT fails and NO charge row is
+	// written at all: the caller only logs it (sub_charge_reason_not_recorded),
+	// so the subscription keeps failing with no visible cause — the exact
+	// silent-failure shape issue #562 added the column to prevent.
+	reason = textutil.Truncate(reason, subChargeFailureReasonMax)
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO subscription_charges (subscription_id, chip_purchase_id, amount_sen, status, attempt, failure_reason)
 		 VALUES ($1, NULL, $2, 'failed', $3, NULLIF($4,''))`,
