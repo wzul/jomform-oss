@@ -775,15 +775,15 @@ func disable2FATool() *mcp.Tool {
 			"password (untuk akaun yang menyertai melalui pautan emel dan tidak mempunyai kata laluan " +
 			"yang boleh digunakan). Menghantar kedua-duanya ditolak oleh skema, dan tanpa kedua-duanya " +
 			"panggilan ditolak. Kunci API sahaja tidak pernah memadai untuk mematikan faktor kedua. " +
-			"(Borang profil dashboard meminta kod 2FA semasa.) " +
+			"(Borang di dashboard (Profil → Keselamatan) meminta kod 2FA semasa.) " +
 			// Issue #63/#713: this sentence arrived on main from PR 713, which
 			// changed the tool's plain Description. This tool's definition was
 			// written before that landed (the branch was cut from #686's head),
 			// so the union has to carry the clause here too — otherwise the
 			// revocation behaviour is undocumented while it still happens.
 			"Mematikan 2FA juga membatalkan SEMUA peranti dipercayai akaun — peranti yang " +
-			"melangkau faktor yang kini dibuang tidak boleh kekal dikecualikan (sama seperti REST; " +
-			"guna list_trusted_devices untuk semak).",
+			"melangkau faktor yang kini dibuang tidak boleh kekal dikecualikan (sama seperti REST dan " +
+			"borang profil dashboard; guna list_trusted_devices untuk semak baki peranti).",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{

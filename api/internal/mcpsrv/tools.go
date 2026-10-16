@@ -83,7 +83,7 @@ func (s *Server) registerTools() {
 
 	addTool(s, &mcp.Tool{
 		Name:        "create_product_variation",
-		Description: "Tambah SATU variasi pada produk (cth: Saiz M). Boleh tetapkan kitaran langganan variasi sendiri (billing_period month|year, trial_days, subscription_charges). Biarkan kosong = variasi mewarisi kitaran produk.",
+		Description: "Tambah SATU variasi pada produk (cth: Saiz M), dengan harga, stok, gambar dan kitaran langganannya sendiri (billing_period month|year, trial_days, subscription_charges). Biarkan kosong = variasi mewarisi kitaran produk.",
 	}, s.createProductVariation)
 
 	addTool(s, &mcp.Tool{
@@ -99,7 +99,7 @@ func (s *Server) registerTools() {
 	// ── Sales ───────────────────────────────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "list_sales",
-		Description: "Senarai rekod terkini (terbaru dahulu). Tanpa form_id ini ialah SELURUH set rekod akaun: jualan DAN respons borang mode 'response' (sale_type 'response', submission_id + data) — sama seperti halaman Sales. Dengan form_id, mode borang itu menentukan jualan atau respons. Setiap jualan: refunded_sen, outstanding_sen, refund_status (none|partial|full) — issue #518. Status ialah soalan bayaran, jadi menetapkan status mengecualikan bahagian respons.",
+		Description: "Senarai rekod terkini (terbaru dahulu). Tanpa form_id ini ialah SELURUH set rekod akaun: jualan DAN respons borang mode 'response' (sale_type 'response', submission_id + data) — sama seperti halaman Sales, bukan senarai kosong atau separa. Dengan form_id, mode borang itu menentukan: borang bayaran → jualan, borang respons → respons. Setiap jualan: refunded_sen (telah direfund), outstanding_sen (baki boleh refund), refund_status (none|partial|full) — issue #518. Status ialah soalan bayaran, jadi menetapkan status mengecualikan bahagian respons.",
 	}, s.listSales)
 
 	addTool(s, &mcp.Tool{
@@ -184,7 +184,7 @@ func (s *Server) registerTools() {
 	}, s.releaseSaleMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "refund_sale",
-		Description: "Refund jualan yang telah dibayar (paid/confirmed). amount_sen = jumlah refund separa; kosong = refund penuh baki yang tinggal. Mesti > 0 dan refunded_sen + amount_sen <= total_sen (refund melebihi baki ditolak sebelum CHIP, issue #518). Refund separa merekod jumlah dan jualan kekal paid/confirmed (refund_status=partial); hanya baki penuh direfund barulah status jadi refunded.",
+		Description: "Refund jualan yang telah dibayar (paid/confirmed). amount_sen = jumlah refund separa; kosong = refund penuh baki yang tinggal. Mesti > 0 dan refunded_sen + amount_sen <= total_sen (refund melebihi baki ditolak sebelum CHIP, issue #518). Refund separa merekod jumlah dan jualan kekal paid/confirmed (refund_status=partial); hanya baki penuh direfund barulah status jadi refunded. Balasan: refunded_sen, outstanding_sen, refund_status, fully_refunded.",
 	}, s.refundSaleMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "capture_all_pending_sales",
@@ -231,7 +231,7 @@ func (s *Server) registerTools() {
 	}, s.generateForm)
 	addTool(s, &mcp.Tool{
 		Name:        "publish_form",
-		Description: "Publish borang — live di <workspace>.jomform.com/<slug> atau custom domain. status=private (dengan password) menjadikannya borang ber-kata laluan; status=draft menarik balik.",
+		Description: "Publish borang — live di <workspace>.jomform.com/<slug> atau custom domain. status=private (dengan password) menjadikannya borang ber-kata laluan; status=draft menarik balik. Borang bayaran tanpa produk ditolak SEKALI dengan mesej jelas (ia tidak boleh menerima bayaran) — hantar acknowledge=true untuk teruskan. Borang response dan borang yang sudah live tidak pernah ditanya.",
 	}, s.publishFormMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "unpublish_form",
@@ -267,11 +267,11 @@ func (s *Server) registerTools() {
 	}, s.restoreFormMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "purge_form",
-		Description: "Padam borang secara KEKAL dari tong sampah (submissions/notifikasi/confirmations/tetapan emel borang/webhook borang gugur bersama). AMARAN: tidak boleh dibatalkan. Wajib confirm_slug = slug borang itu. Borang yang ADA JUALAN ditolak (sales tidak pernah dimusnahkan atau dijadikan yatim). Hanya borang dalam tong sampah — padam dulu guna delete_form.",
+		Description: "Padam borang secara KEKAL dari tong sampah (submissions/notifikasi/confirmations/tetapan emel borang/webhook borang gugur bersama). AMARAN: tidak boleh dibatalkan. Wajib confirm_slug = slug borang itu. Borang yang ADA JUALAN ditolak (sales tidak pernah dimusnahkan atau dijadikan yatim — sales.form_id ialah ON DELETE SET NULL, jadi padam kekal akan menjadikan jualan yatim secara senyap). Hanya borang dalam tong sampah — padam dulu guna delete_form.",
 	}, s.purgeFormMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "bulk_forms",
-		Description: "Tindakan pukal atas banyak borang sekali gus: action=publish|draft|delete dengan ids[] (maks 500).",
+		Description: "Tindakan pukal atas banyak borang sekali gus: action=publish|draft|delete dengan ids[] (maks 500). Borang bayaran tanpa produk DIKECUALIKAN dari publish dan dipulangkan dalam needs_products — hantar acknowledge=true untuk menerbitkannya juga.",
 	}, s.bulkFormsMCP)
 	// ── Parity: settings/webhooks ──────────────────────────────────────────
 	addTool(s, &mcp.Tool{
@@ -345,19 +345,19 @@ func (s *Server) registerTools() {
 	}, s.setAffiliateCommission)
 	addTool(s, &mcp.Tool{
 		Name:        "create_workspace",
-		Description: "Cipta workspace baharu. Nama sehingga 120 aksara (dikira sebagai AKSARA, bukan bait). Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com. Nama yang dikhaskan untuk JomForm (cth: www, api, app, mail, s3, docs, mcp, templates, custom, support, help, status, billing, admin, account, login, payments, checkout, cdn, assets) ditolak.",
+		Description: "Cipta workspace baharu. Nama sehingga 120 aksara (dikira sebagai AKSARA, bukan bait). Slug 3-40 aksara (a-z, 0-9, dash); URL jadi https://<slug>.jomform.com. Nama yang dikhaskan untuk JomForm (cth: www, api, app, mail, s3, docs, mcp, templates, custom, support, help, status, billing, admin, account, login, payments, checkout, cdn, assets) ditolak — nama itu milik JomForm atau melindungi pengguna daripada penipuan (cth: billing.jomform.com yang menyamar sebagai saluran rasmi JomForm).",
 	}, s.createWorkspace)
 	addTool(s, &mcp.Tool{
 		Name:        "update_workspace",
-		Description: "Tukar NAMA dan/atau SLUG (alamat awam) satu workspace. Medan kosong = kekal. Nama sehingga 120 AKSARA (bukan bait; sama had dengan cipta). Menukar nama perlukan peranan manage/admin; menukar SLUG hanya PEMILIK, dan perlukan confirm=true — slug ialah hos awam tenant (https://<slug>.jomform.com) yang sudah tercetak dalam QR, iframe dan pautan affiliate. Slug LAMA disimpan sebagai alias dan TERUS BERFUNGSI (pindah kekal ke slug baharu), jadi pautan yang sudah tersebar tidak mati. Pulangkan previous_url + previous_url_redirects. Nama yang dikhaskan untuk JomForm (senarai sama seperti create_workspace: www, api, billing, support, docs, mcp, templates, …) DITOLAK sebagai status=refused dengan code reserved_subdomain — nama itu milik JomForm atau melindungi pengguna daripada penipuan, dan slug workspace tidak berubah.",
+		Description: "Tukar NAMA dan/atau SLUG (alamat awam) satu workspace. Medan kosong = kekal. Nama sehingga 120 AKSARA (bukan bait; sama had dengan cipta). Menukar nama perlukan peranan manage/admin; menukar SLUG hanya PEMILIK, dan perlukan confirm=true — slug ialah hos awam tenant (https://<slug>.jomform.com) yang sudah tercetak dalam QR, iframe dan pautan affiliate. Slug LAMA disimpan sebagai alias dan TERUS BERFUNGSI (pindah kekal ke slug baharu), jadi pautan yang sudah tersebar tidak mati. Pulangkan previous_url + previous_url_redirects. Nama yang dikhaskan untuk JomForm (senarai sama seperti create_workspace: www, api, billing, support, docs, mcp, templates, …) DITOLAK sebagai status=refused dengan code reserved_subdomain — nama itu milik JomForm atau melindungi pengguna daripada penipuan, dan slug workspace tidak berubah. REST: PATCH /v1/workspaces/{id}.",
 	}, s.updateWorkspace)
 	addTool(s, &mcp.Tool{
 		Name:        "get_workspace_settings",
-		Description: "Baca tetapan storefront satu workspace: footer, company_reg, privacy/terms/refund URL, contact, menu.",
+		Description: "Baca tetapan storefront satu workspace: footer, company_reg, privacy/terms/refund URL, contact, menu, indexing, sound_enabled dan spam_judge_enabled (true = hidup/lalai).",
 	}, s.getWorkspaceSettings)
 	addTool(s, &mcp.Tool{
 		Name:        "set_workspace_settings",
-		Description: "Set tetapan storefront workspace: footer_text, company_reg, privacy_url/terms_url/refund_url (mesti https://), contact_phone, contact_address, business_name, menu_json. Omit medan = kekal.",
+		Description: "Set tetapan storefront workspace: footer_text, company_reg, privacy_url/terms_url/refund_url (mesti https://), contact_phone, contact_address, business_name, menu_json, default_lang (bahasa lalai borang AWAM untuk workspace ini — en, ms, zh, ta atau ar; ini bahasa pembeli, bukan bahasa dashboard anda), indexing, sound_enabled dan spam_judge_enabled (false = MATIKAN AI spam detection untuk workspace ini — tiada job AI dihantar langsung dan is_spam tidak lagi ditetapkan, jadi /spam kekal kosong). Omit medan = kekal.",
 	}, s.setWorkspaceSettings)
 	// Issue #360: customizable landing page (MCP parity).
 	addTool(s, &mcp.Tool{
@@ -378,7 +378,7 @@ func (s *Server) registerTools() {
 	// document it and expose the per-workspace sound toggle.
 	addTool(s, &mcp.Tool{
 		Name:        "get_realtime_status",
-		Description: "Baca status notifikasi masa-nyata workspace (issue #447): stream_url (SSE /v1/rest/events/stream — saluran masa-nyata untuk jualan/respon), senarai event, dan sound_enabled (bunyi beep pada dashboard). Read-only.",
+		Description: "Baca status notifikasi masa-nyata workspace (issue #447): stream_url (SSE /v1/rest/events/stream — saluran masa-nyata untuk jualan/respon), senarai event (sale.paid, sale.failed, response.submitted, subscription.charged, sale.refunded), dan sound_enabled (bunyi beep pada dashboard). Read-only. Sambungkan ke stream untuk notifikasi segera pada skrin dapur/pesanan.",
 	}, s.getRealtimeStatus)
 	addTool(s, &mcp.Tool{
 		Name:        "set_realtime_sound",
@@ -386,11 +386,11 @@ func (s *Server) registerTools() {
 	}, s.setRealtimeSound)
 	addTool(s, &mcp.Tool{
 		Name:        "get_menu_page",
-		Description: "Baca konfigurasi menu restoran satu BORANG (issue #497): form_id. Pulangkan enabled, categories ([{name, product_ids}]), best_seller, best_seller_ids (senarai, #485), order_form_slug (borang maklumat tambahan pesanan, #491). Menu ialah tetapan PER-BORANG dan dipapar di URL borang itu sendiri. Kosong jika borang tiada menu.",
+		Description: "Baca konfigurasi menu restoran satu BORANG (issue #497): form_id. Pulangkan enabled, categories ([{name, product_ids}]), best_seller, best_seller_ids (senarai, #485), order_form_slug (borang maklumat tambahan pesanan, #491/#493). Menu ialah tetapan PER-BORANG dan dipapar di URL borang itu sendiri. Kosong jika borang tiada menu.",
 	}, s.getMenuPage)
 	addTool(s, &mcp.Tool{
 		Name:        "set_menu_page",
-		Description: "Set menu restoran untuk satu BORANG (issue #497): form_id, enabled (true = borang ini jadi menu di URL-nya; false = borang kembali normal), categories ([{name, product_ids}]), best_seller (ID produk) atau best_seller_ids (senarai ID untuk seksyen Best Seller, #485 — mengatasi best_seller), order_form_slug (pilihan, #491 — borang diterbitkan dalam akaun sama untuk kumpul maklumat tambahan semasa checkout menu; kosong = checkout nama + emel sahaja, kedua-duanya tetap wajib untuk CHIP). Produk menu datang dari blok produk BORANG itu sendiri (bukan semua produk akaun), jadi produk akaun lain tidak boleh bocor masuk; kategori/best-seller mesti merujuk produk yang dirujuk oleh borang. Halaman menu menunjukkan nombor meja dari ?table=N dan ada penapis kategori + carian. Borang tanpa blok produk memaparkan keadaan kosong.",
+		Description: "Set menu restoran untuk satu BORANG (issue #497): form_id, enabled (true = borang ini jadi menu di URL-nya; false = borang kembali normal), categories ([{name, product_ids}]), best_seller (ID produk) atau best_seller_ids (senarai ID untuk seksyen Best Seller, #485 — mengatasi best_seller), order_form_slug (pilihan, #491/#493 — borang diterbitkan dalam akaun sama yang medan bloknya menjadi medan tambahan semasa checkout menu; medan dirender dengan label/required borang itu, disahkan server-side, dan disimpan pada jualan; kosong = checkout nama + emel sahaja, kedua-duanya tetap wajib untuk CHIP). Produk menu datang dari blok produk BORANG itu sendiri (bukan semua produk akaun), jadi produk akaun lain tidak boleh bocor masuk; kategori/best-seller mesti merujuk produk yang dirujuk oleh borang. Halaman menu menunjukkan nombor meja dari ?table=N dan ada penapis kategori + carian. Borang tanpa blok produk memaparkan keadaan kosong.",
 	}, s.setMenuPage)
 	// Issue #185: per-workspace currency + BNM rates (MCP parity).
 	addTool(s, &mcp.Tool{
@@ -433,11 +433,11 @@ func (s *Server) registerTools() {
 	}, s.setDefaultWorkspace)
 	addTool(s, &mcp.Tool{
 		Name:        "delete_workspace",
-		Description: "Hantar workspace ke TONG SAMPAH (pemilik sahaja). Tiada apa-apa dimusnahkan: borang, produk, jualan, akaun CHIP dan kunci API semuanya kekal, dan restore_workspace membawanya kembali. DUA syarat: (1) confirm_slug wajib sepadan dengan slug workspace; (2) anda mesti ada sekurang-kurangnya satu workspace LAIN — workspace terakhir tidak boleh dibuang. Workspace yang PENUH boleh masuk tong sampah (guard 'mesti kosong' sudah dibuang); padam KEKAL hanya melalui purge_workspace, dan chat tidak pernah boleh mencadangkan alat itu — ia alat MCP untuk pemilik, bukan untuk chat. Guna check_workspace_deletion dahulu untuk lihat can_delete.",
+		Description: "Hantar workspace ke TONG SAMPAH (pemilik sahaja — ahli admin tidak boleh; mereka keluar melalui remove_workspace_member). Tiada apa-apa dimusnahkan: borang, produk, jualan, akaun CHIP dan kunci API semuanya kekal, dan restore_workspace membawanya kembali. DUA syarat: (1) confirm_slug wajib sepadan dengan slug workspace; (2) anda mesti ada sekurang-kurangnya satu workspace LAIN — workspace terakhir tidak boleh dibuang, kerana satu pengguna wajib ada satu workspace. Workspace yang PENUH boleh masuk tong sampah (guard 'mesti kosong' sudah dibuang); padam KEKAL hanya melalui purge_workspace, dan chat tidak pernah boleh mencadangkan alat itu — ia alat MCP untuk pemilik, bukan untuk chat. Guna check_workspace_deletion dahulu untuk lihat can_delete.",
 	}, s.deleteWorkspaceMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "check_workspace_deletion",
-		Description: "Semak sama ada satu workspace boleh dihantar ke tong sampah (baca sahaja, tiada kesan). Pulangkan can_delete, empty, last_workspace, is_owner dan blockers[] (setiap kategori + kiraan). can_delete = pemilik DAN bukan workspace terakhir — kandungan TIDAK lagi menyekat (blockers[] dilaporkan untuk rujukan sebelum purge).",
+		Description: "Semak sama ada satu workspace boleh dihantar ke tong sampah (baca sahaja, tiada kesan). Pulangkan can_delete, empty, last_workspace, is_owner dan blockers[] (setiap kategori + kiraan). can_delete = pemilik DAN bukan workspace terakhir — kandungan TIDAK lagi menyekat (blockers[] dilaporkan untuk rujukan sebelum purge). Guna ini dahulu supaya anda boleh menyatakan sebabnya, bukan gagal selepas menekan.",
 	}, s.checkWorkspaceDeletionMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "list_trashed_workspaces",
@@ -464,7 +464,7 @@ func (s *Server) registerTools() {
 	// Language placement: the dashboard UI language is per-PROFILE.
 	addTool(s, &mcp.Tool{
 		Name:        "update_profile_language",
-		Description: "Set bahasa UI dashboard anda: en, ms, zh, ta, ar (kosong = buang, kembali ikut pelayar). Ini bahasa DASHBOARD sahaja dan ia per-profil — bahasa borang awam ditetapkan per-borang atau per-workspace, bukan di sini.",
+		Description: "Set bahasa DASHBOARD pilihan pada profil anda (per-user, ikut anda ke mana-mana pelayar): en, ms, zh, ta atau ar (kosong = auto, ikut nilai terakhir pelayar itu, kemudian en). Ini bahasa DASHBOARD sahaja dan ia per-profil — bahasa borang awam ditetapkan per-borang (config.lang) atau per-workspace (default_lang melalui set_workspace_settings), bukan di sini.",
 	}, s.updateProfileLanguage)
 
 	// ── Parity: per-workspace email templates (issue #107) ────────────────────
@@ -480,7 +480,7 @@ func (s *Server) registerTools() {
 	// ── Parity: per-form notification email (issue #177, overrides #107/#453) ──
 	addTool(s, &mcp.Tool{
 		Name:        "get_form_email_settings",
-		Description: "Baca tetapan emel SATU borang: override per-borang (subjek/badan resit, hantar resit, notifikasi merchant, HTML), tetapan workspace yang diwarisi, dan nilai efektif (resolusi per-borang -> workspace -> lalai). Kosong/null = ikut tetapan workspace.",
+		Description: "Baca tetapan emel SATU borang (issue #453): override per-borang (subjek/badan resit, hantar resit, notifikasi merchant, HTML), tetapan workspace yang diwarisi, dan nilai efektif (resolusi per-borang -> workspace -> lalai). Kosong/null = ikut tetapan workspace.",
 	}, s.getFormEmailSettings)
 	addTool(s, &mcp.Tool{
 		Name:        "set_form_email_settings",
@@ -545,7 +545,7 @@ func (s *Server) registerTools() {
 	// ── Parity: event tracking (issue #92) ────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "list_events",
-		Description: "Log audit/tingkah-laku akaun (terbaru dahulu). Boleh tapis event_name, from/to (RFC3339), dan page/limit. Read-only.",
+		Description: "Log audit/tingkah-laku akaun (terbaru dahulu). Boleh tapis event_name, from/to (RFC3339), dan page/limit. Read-only. Pada dashboard, log yang sama dipaparkan pada halaman Activity — dan workspace-scoped di sana melalui ?workspace=<slug>.",
 	}, s.listEvents)
 
 	// ── Parity: email delivery status (issue #194) ────────────────────────
@@ -650,7 +650,7 @@ func (s *Server) registerTools() {
 	// the backlog count (read-only) so agents can observe the purge.
 	addTool(s, &mcp.Tool{
 		Name:        "purge_unverified_accounts",
-		Description: "Laporkan bilangan akaun belum disahkan (emel) yang lebih lama daripada ambang dan akan dipadam automatik oleh sweep. Admin sahaja; read-only — tidak memadam apa-apa.",
+		Description: "Laporkan bilangan akaun belum disahkan (emel) yang lebih lama daripada ambang, DIPECAH kepada berapa yang sweep akan padam dan berapa yang TERSEKAT (akaun masih memegang jualan atau langganan, jadi ia tidak akan dipadam). Admin sahaja; read-only — tidak memadam apa-apa.",
 	}, s.purgeUnverifiedAccounts)
 
 	// ── Super-admin: platform-wide monitoring (issue #386) ─────────────
@@ -680,11 +680,11 @@ func (s *Server) registerTools() {
 	}, s.adminEmailDeliveries)
 	addTool(s, &mcp.Tool{
 		Name:        "admin_dead_letter_events",
-		Description: "Senarai peristiwa callback masuk yang di-park sebagai dead letter (issue #574): dedup_key, event_type, bilangan cubaan, sebab, masa. Selepas #569 peristiwa yang tak boleh diproses di-park sebagai 'dead' dan BERHENTI dicuba — sebelum ini ia tidak kelihatan sama sekali (tiada MCP/REST membaca webhook_events). Super-admin sahaja; read-only; diaudit.",
+		Description: "Senarai peristiwa callback masuk yang di-park sebagai dead letter (issue #574): dedup_key, event_type, bilangan cubaan, sebab, masa. Selepas #569 peristiwa yang tak boleh diproses di-park sebagai 'dead' dan BERHENTI dicuba — sebelum ini ia tidak kelihatan sama sekali (tiada MCP/REST membaca webhook_events). Super-admin sahaja; read-only; diaudit. Di halaman /admin senarai yang sama dipaparkan dengan butang requeue setiap baris (GET /v1/admin/dead-letters, issue #579), supaya operator nampak callback yang gagal tanpa perlu klien MCP.",
 	}, s.adminDeadLetterEvents)
 	addTool(s, &mcp.Tool{
 		Name:        "admin_requeue_dead_letter_event",
-		Description: "Hidupkan semula peristiwa dead letter supaya sweep replay mencubanya lagi (issue #574), selepas punca dibetulkan. dedup_key dari admin_dead_letter_events. Kiraan cubaan di-reset supaya ia tidak di-park semula oleh sweep yang sama sebelum sempat berjalan. Super-admin sahaja; diaudit.",
+		Description: "Hidupkan semula peristiwa dead letter supaya sweep replay mencubanya lagi (issue #574), selepas punca dibetulkan. dedup_key dari admin_dead_letter_events. Kiraan cubaan di-reset supaya ia tidak di-park semula oleh sweep yang sama sebelum sempat berjalan. Super-admin sahaja; diaudit. Dari halaman /admin tindakan yang sama boleh dijalankan (POST /v1/admin/dead-letters/requeue, issue #579).",
 	}, s.adminRequeueDeadLetterEvent)
 	addTool(s, &mcp.Tool{
 		Name:        "admin_system_health",
@@ -699,15 +699,15 @@ func (s *Server) registerTools() {
 	// matching REST endpoints (GET/POST/DELETE /v1/admin/suppressions).
 	addTool(s, &mcp.Tool{
 		Name:        "admin_list_suppressions",
-		Description: "Senarai alamat yang disekat daripada dihantar emel (issue #601): emel, sebab (hard_bounce|complaint|manual), sumber, nota, siapa tambah dan bila. Boleh cari (q, padan emel atau nota) dan berhalaman (page/limit). Super-admin sahaja; read-only; diaudit.",
+		Description: "Senarai alamat yang disekat daripada dihantar emel (issue #601): emel, sebab (hard_bounce|complaint|manual), sumber, nota, siapa tambah dan bila. Boleh cari (q, padan emel atau nota) dan berhalaman (page/limit). Super-admin sahaja; read-only; diaudit. Di halaman /admin senarai yang sama dipaparkan dengan kotak carian dan pager (GET /v1/admin/suppressions, issue #601).",
 	}, s.adminListSuppressions)
 	addTool(s, &mcp.Tool{
 		Name:        "admin_add_suppression",
-		Description: "Tambah alamat ke senarai sekatan secara manual supaya tiada emel dihantar kepadanya (issue #601). reason: hard_bounce|complaint|manual (lalai manual), note pilihan. Idempotent — alamat yang sudah dalam senarai tidak menghasilkan ralat. Super-admin sahaja; diaudit.",
+		Description: "Tambah alamat ke senarai sekatan secara manual supaya tiada emel dihantar kepadanya (issue #601). reason: hard_bounce|complaint|manual (lalai manual), note pilihan. Idempotent — alamat yang sudah dalam senarai tidak menghasilkan ralat. Super-admin sahaja; diaudit. Dari halaman /admin ia ditambah melalui borang manual (POST /v1/admin/suppressions, issue #601).",
 	}, s.adminAddSuppression)
 	addTool(s, &mcp.Tool{
 		Name:        "admin_remove_suppression",
-		Description: "Buang alamat dari senarai sekatan supaya penghantaran emel kepadanya bermula semula (issue #601) — untuk kes positif palsu. Super-admin sahaja; diaudit.",
+		Description: "Buang alamat dari senarai sekatan supaya penghantaran emel kepadanya bermula semula (issue #601) — untuk kes positif palsu. Super-admin sahaja; diaudit. Dari halaman /admin ia dibuang dengan butang + pengesahan (DELETE /v1/admin/suppressions/{email}, issue #601).",
 	}, s.adminRemoveSuppression)
 
 	// ── Parity: in-app feedback (system-owned, two-way thread) ──────────
@@ -750,7 +750,7 @@ func (s *Server) registerTools() {
 	// ── Parity: analytics (issue #396) ────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_form_analytics",
-		Description: "Analitik per-borang: bilangan entri (submissions), paid/confirmed/failed/pending, dan hasil (RM) — NET selepas refund. `submissions` bermaksud entri yang direkod untuk borang itu, dibaca dari jadual yang borang itu tulis: borang respons (mode=response) dikira dari `submissions`, borang bayaran dari `sales` (semua status). Medan `mode` disertakan supaya label betul. Merentas semua workspace anda. Read-only.",
+		Description: "Analitik per-borang: bilangan entri (submissions), paid/confirmed/failed/pending, dan hasil (RM) — NET selepas refund. submissions = entri yang direkod untuk borang itu, dibaca dari jadual yang borang tulis: mode=response → jadual submissions; borang bayaran → sales (semua status). mode disertakan supaya label betul. Merentas semua workspace anda. Read-only.",
 	}, s.formAnalytics)
 	addTool(s, &mcp.Tool{
 		Name:        "get_product_analytics",
@@ -781,7 +781,7 @@ func (s *Server) registerTools() {
 	// Issue #397: per-domain TLS config + status.
 	addTool(s, &mcp.Tool{
 		Name:        "set_domain_tls_mode",
-		Description: "Tetapkan mode TLS per-domain: auto (Let's Encrypt, default) atau custom (bring-your-own-cert).",
+		Description: "Tetapkan mode TLS per-domain: auto (Let's Encrypt, default) atau custom (bring-your-own-cert). Dalam mode custom, muat naik sijil dengan set_domain_custom_cert.",
 	}, s.setDomainTLSModeMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "set_domain_custom_cert",

@@ -54,7 +54,10 @@
 // WHAT IT DOES NOT COVER (stated honestly): it is a source scan. It proves the
 // two SETS agree and that the count is derived; it does NOT prove the served
 // HTML (that is `npm run build` plus a browser read of /docs/mcp), it does NOT
-// check that a row's DESCRIPTION is accurate or matches the Go description, and
+// check that a row's DESCRIPTION is accurate or matches the Go description (that
+// half is pinned in GO instead — api/internal/mcpsrv/docs_mcp_page_description_test.go
+// requires every row to carry the registered description verbatim, read over
+// tools/list rather than off the Go source; card t_3a0d74d2), and
 // it does not check the ORDER or the group a tool is filed under.
 //
 // Run with:
