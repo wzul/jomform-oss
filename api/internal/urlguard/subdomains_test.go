@@ -18,15 +18,21 @@ package urlguard
 //     check fail on both.
 //
 // And the rule itself has to stay ONE rule: the copy-paste failure mode is a
-// second list in the other validator. TestBothSlugValidatorsConsumeThisRule
-// reads the REST and MCP sources and fails if either stops calling into this
-// package.
+// second, hand-rolled list in another package. That fact has ONE home — the guard
+// that owns the rule and DERIVES the set of files calling it by walking api/,
+// api/internal/dbstore/workspace_slug_rule_guard_test.go
+// (TestWorkspaceSlugRuleHasExactlyOneDefinition, merged as PR 1192). This file
+// does not restate it: why, and what the version that stood here could not see,
+// is in the section comment below.
 //
 // THE LIST'S COVERAGE LIMIT, stated so this is not over-claimed: it proves the
-// labels that are WRITTEN DOWN are routed-or-sensitive and reachable from both
-// validators. It cannot know that some other sensitive name exists (a new
-// product name, a new mail alias). That is a human review decision, and this is
-// the file that makes it cheap to make.
+// labels that are WRITTEN DOWN are routed-or-sensitive, that the ONE rule
+// consults this list, and that the list has not been copied into the rule or the
+// two transports. It cannot know that some other sensitive name exists (a new
+// product name, a new mail alias) — that is a human review decision, and this is
+// the file that makes it cheap to make. Nor can it see a caller of the rule in a
+// file it does not name: that set is derived, and asserted, in the dbstore guard
+// above.
 
 import (
 	"fmt"
@@ -758,19 +764,42 @@ func TestTraefikWildcardExcludesStaticallyRoutedHosts(t *testing.T) {
 }
 
 // --- one rule, one implementation ------------------------------------------
+//
+// WHERE THE TWO HALVES OF "ONE RULE" ARE ASSERTED, and why the caller half is no
+// longer restated here.
+//
+//  1. THAT THE TRANSPORTS DELEGATE. dbstore.ValidateWorkspaceSlug is the ONE slug
+//     rule and the REST and MCP writers call it — asserted in the package that
+//     owns the rule, over a set DERIVED by walking api/:
+//     api/internal/dbstore/workspace_slug_rule_guard_test.go,
+//     TestWorkspaceSlugRuleHasExactlyOneDefinition.
+//  2. THAT THE RULE CONSULTS THIS PACKAGE'S LIST — asserted below, and in that
+//     same dbstore file too (TestTheReservedLegLivesInTheOneRule, which pins the
+//     shared refusal wording beside it).
+//
+// Half 1 used to be restated HERE, as a fixed pair of paths checked with
+// strings.Contains. That spelling is the defect this file's own comment used to
+// describe, not a cheaper guard: it is satisfied by the files it names and blind
+// to every other one. Measured before this change — a caller of the rule in a
+// brand-new file (api/internal/httpapi/qa_sixth_caller.go) compiled clean
+// (`go build ./...` RC=0) and left TestBothSlugValidatorsConsumeThisRule GREEN,
+// while the dbstore guard's walk red the same file by path. Restating the fact
+// here would also mean a second hand-written list of paths for ONE fact — two
+// things to keep in step, the class of defect this section exists to prevent. So
+// the assertion lives where the set is derived, and this comment stands where a
+// check that could not see the drift it claimed to catch used to be.
 
-func TestBothSlugValidatorsConsumeThisRule(t *testing.T) {
-	// The card's first requirement, made mechanical: the reserved-name rule must
-	// be consumed through ONE implementation, and a future edit that adds a
-	// second, hand-rolled list anywhere must fail here.
-	//
-	// WHERE THE ONE IMPLEMENTATION IS. dbstore.ValidateWorkspaceSlug is the
-	// shared slug rule (PR 691 made both writers delegate to it), and it is the
-	// thing that consumes this package's list — so the reserved leg lives in ONE
-	// function, and the two transports reuse it rather than each calling in.
-	// That is a STRONGER form of the same requirement: with two callers, the
-	// list could still be bypassed by one of them re-implementing the check, so
-	// the transports are asserted to DELEGATE, not merely to mention urlguard.
+// TestTheOneRuleConsumesThisList pins the direction that belongs to this package:
+// the reserved-name refusal is enforced INSIDE the shared rule, so a caller that
+// reaches the rule inherits it instead of each transport restating the list.
+//
+// Its limits, stated rather than implied: it proves the rule file NAMES
+// urlguard.ReservedSubdomain, and it reads source, so it cannot tell the call from
+// a sentence about one — the behaviour behind it (a reserved label is refused,
+// with the shared wording, before the shape leg) is asserted in
+// dbstore/workspace_slug_reserved_sentinel_test.go. Which files CALL the rule is
+// not this test's subject; see the section comment above.
+func TestTheOneRuleConsumesThisList(t *testing.T) {
 	root := repoRoot(t)
 	rule := filepath.Join("api", "internal", "dbstore", "workspace_slug.go")
 	src := mustReadFile(t, filepath.Join(root, rule))
@@ -778,21 +807,23 @@ func TestBothSlugValidatorsConsumeThisRule(t *testing.T) {
 		t.Errorf("%s does not call urlguard.ReservedSubdomain — the reserved-name "+
 			"rule has drifted into a second (or missing) implementation there", rule)
 	}
+}
+
+// TestTheRuleAndTransportsHoldNoCopyOfTheReservedList is the tripwire for the
+// copy-paste failure the section above is about. reservedSubdomains is unexported,
+// so the compiler already stops another package from NAMING the list through this
+// package; what it cannot stop is the list being pasted into the rule or a
+// transport under the same name, which is how a second copy would start. Any
+// mention in these three files fails, code or comment.
+//
+// Scope, stated so it is not over-claimed: it reads the rule and the two
+// transports by path. A copy under that name in a fourth file is not seen here,
+// and a copied list under a DIFFERENT name is not seen by any source read (the
+// behavioural tests are what catch a rule that is wrong rather than duplicated).
+func TestTheRuleAndTransportsHoldNoCopyOfTheReservedList(t *testing.T) {
+	root := repoRoot(t)
 	for _, rel := range []string{
-		filepath.Join("api", "internal", "httpapi", "rest_workspaces.go"),
-		filepath.Join("api", "internal", "mcpsrv", "workspaces.go"),
-	} {
-		src := mustReadFile(t, filepath.Join(root, rel))
-		if !strings.Contains(src, "dbstore.ValidateWorkspaceSlug(") {
-			t.Errorf("%s does not call dbstore.ValidateWorkspaceSlug — it either "+
-				"stopped validating the slug or grew its own copy of the rule, and "+
-				"the reserved-name rule is then no longer one implementation", rel)
-		}
-	}
-	// The private list must stay private: no caller may reach into it, or there
-	// are two things to keep in step again.
-	for _, rel := range []string{
-		rule,
+		filepath.Join("api", "internal", "dbstore", "workspace_slug.go"),
 		filepath.Join("api", "internal", "httpapi", "rest_workspaces.go"),
 		filepath.Join("api", "internal", "mcpsrv", "workspaces.go"),
 	} {
