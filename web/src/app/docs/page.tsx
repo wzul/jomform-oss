@@ -64,6 +64,8 @@ type Group = { id: string; labelKey: Key; entries: Entry[]; more?: { href: strin
 // unanchored search it used before that card sliced whatever came first, so a
 // comment merely naming the section became the "section" — red on a correct
 // entry, and able to satisfy the guard with the entry's own body gutted.
+// web/src/lib/passkeyDocs.test.ts asks the same question of the same property
+// (t_ec01dcc2), so neither guard can be answered by prose naming the literal.
 //
 // Both shapes are declared in one list only because both render below the FAQ
 // heading; the render branches on the shape.
