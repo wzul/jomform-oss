@@ -17,10 +17,11 @@
 // reason the feedback tools refuse an API key (see mcpsrv/feedback_mcp.go).
 //
 // RATE LIMITED PER USER, because every message is at least one LLM call and up
-// to ChatMaxSteps of them. A message limit alone would understate the cost, so
-// the limit below is stated alongside the step cap it multiplies with. A rate
-// limit is the right guard here for the same reason it is on the feedback lane:
-// it delays a loud user rather than misjudging one.
+// to chat.MaxSteps + 1 of them: one call per tool round-trip, plus the call that
+// answers from what the round-trips gathered. A message limit alone would
+// understate the cost, so the limit below is stated alongside the step cap it
+// multiplies with. A rate limit is the right guard here for the same reason it
+// is on the feedback lane: it delays a loud user rather than misjudging one.
 package httpapi
 
 import (
@@ -43,8 +44,9 @@ const (
 	// the "ask, read, ask again" rhythm of a single sitting without making the
 	// first messages of a conversation wait.
 	//
-	// The COST bound is this times chat.MaxSteps tool round-trips per message,
-	// i.e. at most 240 model calls per user per hour, each capped at
+	// The COST bound is this times (chat.MaxSteps + 1) model calls per message —
+	// one call per tool round-trip, plus the one that answers from what they
+	// gathered. So at most 300 model calls per user per hour, each capped at
 	// chat.MaxToolResultChars of context per tool. Both numbers are in the docs
 	// page next to the feature so the limit is not a surprise.
 	chatRatePerHour = 60.0
