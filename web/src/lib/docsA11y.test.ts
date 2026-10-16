@@ -371,3 +371,106 @@ test("the declaration follows the ROUTE, not only the language", () => {
   );
 });
 
+// ══ a translated chrome label declares its own language (card t_0e2d71f4) ════
+//
+// THE DEFECT, the residue of the fix above. `/docs` now correctly declares the
+// document `lang="en"` (its prose is English) — and measured live on prod
+// v1.21.119 with `jf_lang=ar` (card t_86a8aabd), 46 of its elements contained
+// Arabic while 0 of them declared a language of their own. So "وثائق JomForm",
+// the section headings and the doc-link buttons were a language CHANGE inside an
+// English document with nothing announcing it: WCAG 3.1.2 (Language of Parts), a
+// screen reader pronounces them with an English voice. It is not a regression of
+// PR 1201 — before that fix the WHOLE document was declared `ar`, so the
+// undeclared part was the English prose, the larger error. This is what is left.
+//
+// axe does NOT flag this class (it has no rule for text in another language
+// inside a correctly declared document), so the gate cannot see it. The executed
+// proof is the DOM sweep in `web/e2e/a11y-docs-lang.spec.ts`; this leg pins the
+// SOURCE, so a revert fails `npm run test:unit` without a browser.
+//
+// THE SINGLE RENDER SITE is the `T` island in `app/docs/docsChrome.tsx`: every
+// translated label on the /docs index goes through it (the sidebar and every
+// guide page are static English — measured: every other prose route renders 0
+// Arabic elements). So the island's own body is what is read, and it is read with
+// COMMENTS STRIPPED: the island's header names `lang` and `en` in prose, and a
+// rule a comment can satisfy is the shape this repo's guards already refuse.
+const CHROME_FILE = pathOf("../app/docs/docsChrome.tsx");
+const CHROME_SRC = readFileSync(CHROME_FILE, "utf8");
+
+// `/* … */` blocks and `//` lines removed. Deliberately simple — the island holds
+// no string literal containing `//` or `/*` (asserted below), so the strip cannot
+// eat live code.
+const stripJsComments = (src: string): string =>
+  src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+const ISLAND_AT = CHROME_SRC.indexOf("export function T(");
+const ISLAND = ISLAND_AT === -1 ? "" : stripJsComments(CHROME_SRC.slice(ISLAND_AT));
+
+test("the label-language guard is reading the T island (it cannot pass vacuously)", () => {
+  assert.notEqual(
+    ISLAND_AT,
+    -1,
+    `${CHROME_FILE} no longer declares the T island — it is the one place a translated /docs label ` +
+      `is rendered, so this guard would prove nothing`,
+  );
+  assert.ok(ISLAND.includes("useI18n"), `the T island slice is not the island: ${JSON.stringify(ISLAND.slice(0, 80))}`);
+  assert.ok(
+    /return\s*<?/.test(ISLAND),
+    "the island slice holds no return, so the rules below could pass without reading the render",
+  );
+  assert.ok(ISLAND.includes("t("), "the island no longer looks a label up in the dictionary");
+});
+
+test("the T island declares the language of a translated label (WCAG 3.1.2)", () => {
+  // The label is rendered inside an element carrying `lang`, bound to a VALUE —
+  // a literal would freeze one language onto all five locales.
+  assert.match(
+    ISLAND,
+    /lang=\{/,
+    "the T island renders its label with no `lang` attribute of its own — inside the English /docs " +
+      "document a translated label is a language change nothing declares (WCAG 3.1.2; measured live " +
+      "on prod v1.21.119 with jf_lang=ar: 46 Arabic elements on /docs, 0 carrying a lang)",
+  );
+  assert.doesNotMatch(
+    ISLAND,
+    /lang="(en|ms|zh|ta|ar)"/,
+    "the T island hard-codes a label language — the label's language is the RESOLVED locale, and a " +
+      "constant would declare an English label as Arabic (or the reverse) for four of the five locales",
+  );
+  // English is the document's own language: a label already in it must add
+  // nothing, so the island has to single English out.
+  assert.match(
+    ISLAND,
+    /===?\s*"en"/,
+    "the island no longer treats English differently — every /docs label would then carry a lang " +
+      "attribute, declaring the visitor's locale over text that is already the document's language",
+  );
+  // The pre-fix shape, named directly, so the revert cannot come back green with
+  // the comment above still in place.
+  assert.doesNotMatch(
+    ISLAND,
+    /return\s*<>\{t\(k\)\}<\/>;/,
+    "the T island is back to returning the label as a bare text node with no language — the exact " +
+      "shape card t_0e2d71f4 removed",
+  );
+});
+
+test("the label-language rules cannot be satisfied by a comment in the island", () => {
+  // Non-vacuity for the strip, and it is self-contained: the file's header (the
+  // island's own documentation) names both `lang` and the criterion, so if the
+  // strip were a no-op the rules above could be satisfied by PROSE. This test
+  // fails only if that stops being true — never merely because the fix is gone,
+  // which the test above reports.
+  assert.match(
+    CHROME_SRC,
+    /WCAG 3\.1\.2/,
+    "the island's header no longer names the criterion the strip exists to remove — re-point this check " +
+      "at whatever comment the rules above could be satisfied by",
+  );
+  assert.doesNotMatch(
+    stripJsComments(CHROME_SRC),
+    /WCAG 3\.1\.2/,
+    "a comment survived the strip, so the rules above could be satisfied by prose instead of code",
+  );
+});
+

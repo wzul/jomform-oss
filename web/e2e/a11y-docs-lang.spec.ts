@@ -216,3 +216,150 @@ test.describe("the document declaration matches the prose (WCAG 3.1.1)", () => {
     expect((await declaration(page)).direction).toBe("rtl");
   });
 });
+
+// ══ a translated label declares its own language (card t_0e2d71f4) ══════════
+//
+// WCAG 3.1.2, LANGUAGE OF PARTS — the sibling of everything above. Those cases
+// judge the PAGE's declaration; these judge the PARTS of an English page that are
+// written in another language.
+//
+// THE DEFECT, measured live on prod v1.21.119 (revision 8062ca65) with
+// `jf_lang=ar` (card t_86a8aabd): /docs correctly declared the document
+// `lang="en"` — its prose is English — while 46 of the elements on it contained
+// Arabic and 0 of them declared a language of their own. So the translated chrome
+// ("وثائق JomForm", the section headings, the doc-link buttons) was a language
+// CHANGE inside an English document with nothing announcing it, and a screen
+// reader pronounces it with an English voice. Only /docs is affected: every other
+// prose route renders 0 Arabic elements, and its chrome is static English.
+//
+// SCOPE: this sweep runs on /docs only, because the /docs index is the surface
+// this card fixes (its chrome is the only translated one). It is deliberately NOT
+// pointed at /legal: a sweep over those two routes fails today for an unrelated
+// reason — the operator sentence (`components/OperatorNotice.tsx`) is rendered in
+// the visitor's locale inside a document PR 1201 pins to English — which is filed
+// and fixed separately as t_b13ee0cc, not here.
+//
+// WHY A DOM ASSERTION AND NOT AN axe PAGE. axe does not flag this class at all —
+// it has no rule for "text in another language inside a correctly declared
+// document" — so the only proof is reading the served DOM. The source half of
+// this guard is `src/lib/docsA11y.test.ts`.
+//
+// WHAT MAKES IT BITE. The sweep takes every element whose OWN text (its direct
+// text nodes — an ancestor's innerText contains the label too, and the language
+// of a part is decided by the NEAREST declaration) contains Arabic, and requires
+// that element to resolve, through its own or an ancestor's `lang`, to Arabic.
+// Before the fix every one of them resolved to the document's "en", so the sweep
+// is RED on the pre-fix build. The non-vacuity count below is what stops this
+// passing for free on a page that rendered no Arabic at all.
+/** Every element whose OWN text is Arabic but whose nearest `lang` is not Arabic.
+ *
+ *  Non-rendered containers are skipped deliberately: Next's RSC payload lives in
+ *  `<script>` tags inside <body>, and a static English page that merely MENTIONS
+ *  Arabic (the language-name lists in the guides) would otherwise be reported as
+ *  a passage with an undeclared language. */
+async function mislabelledArabic(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const arabic = /[\u0600-\u06FF]/;
+    const out: string[] = [];
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
+      if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(el.tagName)) continue;
+      const own = Array.from(el.childNodes)
+        .filter((n) => n.nodeType === 3)
+        .map((n) => n.textContent ?? "")
+        .join("")
+        .trim();
+      if (!own || !arabic.test(own)) continue;
+      const declared = (el.closest("[lang]")?.getAttribute("lang") ?? "").toLowerCase();
+      if (declared === "ar" || declared.startsWith("ar-")) continue;
+      // The NEAREST declaration is what announces this text — printed with it, so a
+      // failure names both the passage and the language it is being read in.
+      out.push(
+        `<${el.tagName.toLowerCase()}> ${JSON.stringify(own.slice(0, 40))} — nearest lang=${declared ? `"${declared}"` : "(none)"}`,
+      );
+    }
+    return out;
+  });
+}
+
+/** How many elements carry Arabic in their OWN text — the non-vacuity count. */
+async function arabicOwnText(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const arabic = /[\u0600-\u06FF]/;
+    return Array.from(document.querySelectorAll<HTMLElement>("body *")).filter(
+      (el) =>
+        !["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(el.tagName) &&
+        Array.from(el.childNodes).some((n) => n.nodeType === 3 && arabic.test(n.textContent ?? "")),
+    ).length;
+  });
+}
+
+/** Every INNERMOST element whose text is exactly `text`, and its own `lang`. */
+async function labelsOf(page: Page, text: string): Promise<{ tag: string; lang: string | null }[]> {
+  return page.evaluate(
+    (t) =>
+      Array.from(document.querySelectorAll<HTMLElement>("body *"))
+        .filter((e) => e.childElementCount === 0 && (e.textContent ?? "").trim() === t)
+        .map((e) => ({ tag: e.tagName.toLowerCase(), lang: e.getAttribute("lang") })),
+    text,
+  );
+}
+
+test.describe("a translated label declares its own language (WCAG 3.1.2)", () => {
+  test("with jf_lang=ar every Arabic label on /docs declares Arabic, and the page stays English", async ({
+    page,
+  }) => {
+    await freshState(page, "ar");
+    await page.goto("/docs", { waitUntil: "networkidle" });
+
+    // Reachability first: the locale really was applied, so there IS Arabic on the
+    // page to judge. Without this the sweep could pass because nothing rendered.
+    await expect(
+      page.getByRole("heading", { name: DICT["docs.title"].ar }),
+      "this case is only meaningful on a page that really rendered Arabic",
+    ).toBeVisible({ timeout: 30_000 });
+    expect(
+      await arabicOwnText(page),
+      "/docs rendered no element with Arabic in its own text, so the rule below would prove nothing",
+    ).toBeGreaterThanOrEqual(8);
+
+    const wrong = await mislabelledArabic(page);
+    expect(
+      wrong,
+      `these elements hold Arabic text inside the English /docs document but nothing declares Arabic — ` +
+        `WCAG 3.1.2 (Language of Parts), a screen reader reads them with an English voice:\n  ${wrong.join("\n  ")}`,
+    ).toEqual([]);
+
+    // The heading the card measured, read straight out of the live DOM: the
+    // element carrying the Arabic label declares Arabic itself.
+    const heading = await labelsOf(page, DICT["docs.title"].ar);
+    expect(heading, "/docs did not render the Arabic heading card t_0e2d71f4 measured").not.toEqual([]);
+    expect(heading.map((l) => l.lang), "the Arabic label must declare Arabic on the element that holds it").toEqual(
+      heading.map(() => "ar"),
+    );
+
+    // …and the document declaration this fix must NOT have moved (the fix is a
+    // language of PARTS; the page is still English and still LTR).
+    expect(await declaration(page)).toEqual({ lang: "en", dir: "ltr", direction: "ltr" });
+  });
+
+  for (const lang of ["en", null] as const) {
+    test(`with the locale ${lang ?? "unset (a fresh visitor)"} a label adds no language at all`, async ({ page }) => {
+      await freshState(page, lang);
+      await page.goto("/docs", { waitUntil: "networkidle" });
+
+      await expect(page.getByRole("heading", { name: DICT["docs.title"].en })).toBeVisible({ timeout: 30_000 });
+      expect(await arabicOwnText(page), `/docs rendered Arabic in its own text with jf_lang=${lang}`).toBe(0);
+      expect(await mislabelledArabic(page)).toEqual([]);
+
+      // The English label is the document's own language, so it declares nothing:
+      // an element carrying lang= here would be a declaration the page does not need
+      // (and, for a locale the reader did not pick, a wrong one).
+      const heading = await labelsOf(page, DICT["docs.title"].en);
+      expect(heading.length, "/docs did not render its English heading").toBeGreaterThan(0);
+      expect(
+        heading.map((l) => l.lang),
+        "an English label must add no lang of its own — the document already declares English",
+      ).toEqual(heading.map(() => null));
+    });
+  }
+});
