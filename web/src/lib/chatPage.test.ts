@@ -1468,26 +1468,31 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
 // rather than handing the comparisons `undefined` — but neither has a number on
 // the page to compare against, and they part company on purpose:
 //
-//   * MaxToolResultChars (6000). The section makes that claim WITHOUT a number —
-//     "Each lookup is bounded in size" — so no constant move can make it false.
-//     The CLAIM is pinned instead, so dropping it reds. (rest_chat.go:46 says
-//     "Both numbers are in the docs page"; MaxSteps is, this one is not. That docs
-//     gap is a filed card, not this guard's business to fix.)
+//   * MaxToolResultChars (6000) WAS the second numberless claim ("Each lookup is
+//     bounded in size"), so no constant move could make it false. Card t_902ab8bb
+//     closed that: the section now STATES the figure — "Each lookup's result is
+//     trimmed to 6000 characters before the assistant reads it" — because that is
+//     the number a user can act on (it is why a long list comes back summarised
+//     rather than wholesale, and why an answer can be partial). It is pinned in
+//     `stated` below with the other four, and moving it REDS.
 //
-//   * MaxTurnChars (4000). Same shape, and it is the row the card paired WRONG.
-//     The card paired it with the 4000 of "The assistant's own answer is capped at
-//     4000 characters". That sentence is about the model's ANSWER — which is
-//     MaxReplyChars ("bounds the model's own answer before it is stored/echoed",
-//     chat.go:96) — while MaxTurnChars bounds ONE CLIENT-SUPPLIED TURN (buildTurns,
-//     chat.go:770; the new message is bounded by MaxMessageChars, chat.go:772, not
-//     by this one). So the answer sentence pins MaxReplyChars and NOT
-//     MaxTurnChars: pinning it to both would red a page that is still TRUE the
-//     moment MaxTurnChars moves, which is the false RED every guard in this file is
-//     least entitled to. MaxTurnChars is pinned to the claim it actually backs
-//     instead — "not for holding a long document": a pasted document IS one turn,
-//     and the per-turn bound is what makes that sentence true. Moving MaxTurnChars
-//     4000 -> 9999 therefore leaves this guard GREEN with the page CORRECT, and
-//     that verdict is asserted below rather than left to look like a gap.
+//   * MaxTurnChars (4000) is therefore the ONLY cap here the section states no
+//     number for, and that is a DECISION, not an unfiled gap. It bounds ONE
+//     CLIENT-SUPPLIED TURN (buildTurns, chat.go:770). The new message is bounded by
+//     MaxMessageChars (chat.go:772) and the assistant's own answer by MaxReplyChars,
+//     so every turn an honest client sends is already under 4000: a sentence stating
+//     it would tell a user nothing they can act on, and would invite reading "4000"
+//     as the length of their own message — which is 2000. The figure bites only a
+//     hand-built client replaying a huge transcript, which is the reader the docs
+//     page is not written for. So the CLAIM this cap backs is pinned instead — "not
+//     for holding a long document": a pasted document IS one turn, and the per-turn
+//     bound is what makes that sentence true. Note also that the 4000 of "The
+//     assistant's own answer is capped at 4000 characters" is MaxReplyChars and NOT
+//     this constant: pinning that sentence to both would red a page that is still
+//     TRUE the moment MaxTurnChars moves, which is the false RED every guard in this
+//     file is least entitled to. Moving MaxTurnChars 4000 -> 9999 therefore leaves
+//     this guard GREEN with the page CORRECT, and that verdict is asserted below
+//     rather than left to look like a gap.
 //
 // THE COUNT IN "up to five" IS MaxSteps + 1, NOT MaxSteps. The loop is
 // `for step := 0; step < MaxSteps` (chat.go:408) and its LAST round adds the final
@@ -1531,21 +1536,17 @@ const CAP_NAMES = [
 ] as const;
 
 /**
- * The two claims the section makes WITHOUT a number, and the cap each one stands
+ * The claims the section still makes WITHOUT a number, and the cap each one stands
  * behind — at MODULE SCOPE so the bite proof below mutates the very strings this
  * guard pins. A proof keyed on its own copy of the sentence rots into a no-op the
  * day the sentence is legitimately reworded and this list is updated with it, and
  * a no-op row reds a tree that is correct.
+ *
+ * ONE entry, since t_902ab8bb: MaxToolResultChars used to sit here too and now has a
+ * number on the page, so it is pinned in `stated` like the other four. What is left
+ * is the cap whose figure has no honest sentence to carry it (see the header).
  */
 const NUMBERLESS_CLAIMS: Array<{ want: string; what: string; cap: string; why: string }> = [
-  {
-    want: "Each lookup is bounded in size",
-    what: "the bound on one tool's output",
-    cap: "MaxToolResultChars",
-    why:
-      `every tool result the model is shown is truncated to that cap (chat.go:352 and :361), so ` +
-      `without this claim the section is silent about what a lookup costs`,
-  },
   {
     want: "not for holding a long document",
     what: "the bound on one turn's text",
@@ -1583,7 +1584,7 @@ function capProseProblems(docsSrc: string, chatSrc: string): string[] {
     }
   }
 
-  // ── the four numbers the section states ─────────────────────────────────────
+  // ── the five numbers the section states ─────────────────────────────────────
   // Each entry is the sentence WITH the number built from the constant, so a
   // constant move and a page edit have to land together (the idiom of the phase-2
   // `sentences` list above). The phrasing is pinned tightly on purpose: a rewrite
@@ -1602,10 +1603,18 @@ function capProseProblems(docsSrc: string, chatSrc: string): string[] {
       want: [`capped at ${caps.MaxReplyChars} characters`],
     },
     {
-      what:
-        `the model-call ceiling (MaxSteps = ${caps.MaxSteps}, so ${caps.MaxSteps} + 1 = ` +
+      what: `the model-call ceiling (MaxSteps = ${caps.MaxSteps}, so ${caps.MaxSteps} + 1 = ` +
         `${caps.MaxSteps + 1} calls)`,
       want: countForms(caps.MaxSteps + 1).map((n) => `up to ${n}`),
+    },
+    {
+      // t_902ab8bb: this one was a NUMBERLESS claim until the section was given the
+      // figure. It is stated as a per-lookup bound because that is the number a user
+      // can act on — it is why a long list comes back summarised.
+      what: `the per-lookup cap (MaxToolResultChars = ${caps.MaxToolResultChars})`,
+      want: [
+        `trimmed to ${caps.MaxToolResultChars} characters before the assistant reads it`,
+      ],
     },
   ];
   for (const { what, want } of stated) {
@@ -1656,9 +1665,9 @@ test("the runner caps the chat docs quote are read from the constants, so the li
 // that measured GREEN before this guard existed — or a page-side rewrite that stops
 // quoting the number. The two controls the header's honesty depends on are measured
 // in the second half: a sentence quoted only in a COMMENT must not satisfy a pin,
-// and the two caps the section states no number for must stay GREEN when they move,
-// because pinning those to a sentence would red a page that is still true.
-test("the caps-prose guard bites: a moved constant or a reworded sentence is RED, and the untouched pair is GREEN", () => {
+// and the one cap the section genuinely states no number for must stay GREEN when it
+// moves, because pinning it to a sentence would red a page that is still true.
+test("the caps-prose guard bites: a moved constant or a reworded sentence is RED, and the one genuinely numberless cap stays GREEN", () => {
   const problems = capProseProblems(docsPage, goChat);
   assert.deepEqual(
     problems,
@@ -1696,10 +1705,18 @@ test("the caps-prose guard bites: a moved constant or a reworded sentence is RED
     return { src: src.replace(m[0], `${name} = ${next}`), next };
   };
 
-  // (1) THE FOUR NUMBERS THE SECTION STATES: the constant moves and the sentence
+  // (1) THE FIVE NUMBERS THE SECTION STATES: the constant moves and the sentence
   // keeps quoting the shipped value — the state that measured GREEN on this file
-  // before this guard existed (16 -> 33, 2000 -> 7777, 4000 -> 9999, 4 -> 9).
-  for (const name of ["MaxTurns", "MaxMessageChars", "MaxReplyChars", "MaxSteps"]) {
+  // before this guard existed (16 -> 33, 2000 -> 7777, 4000 -> 9999, 4 -> 9, and
+  // 6000 -> 1234 for the per-lookup cap, which was the state until t_902ab8bb gave
+  // that cap a number on the page).
+  for (const name of [
+    "MaxTurns",
+    "MaxMessageChars",
+    "MaxReplyChars",
+    "MaxSteps",
+    "MaxToolResultChars",
+  ]) {
     const { src: moved, next } = moveCap(goChat, name, 7);
     assert.notEqual(moved, goChat, `the ${name} move changed nothing — this row would be vacuous`);
     const found = capProseProblems(docsPage, moved);
@@ -1710,7 +1727,7 @@ test("the caps-prose guard bites: a moved constant or a reworded sentence is RED
     );
   }
 
-  // (2) THE TWO NUMBERLESS CLAIMS: the section stops making the claim the cap stands
+  // (2) THE NUMBERLESS CLAIM: the section stops making the claim the cap stands
   // behind. The mutation is derived from the PIN itself (NUMBERLESS_CLAIMS), so a
   // legitimate reword that updates the pin cannot rot this row into a no-op.
   for (const { want } of NUMBERLESS_CLAIMS) {
@@ -1742,11 +1759,12 @@ test("the caps-prose guard bites: a moved constant or a reworded sentence is RED
       `${commentedProblems.length ? commentedProblems.join("\n  - ") : "(nothing reported)"}`,
   );
 
-  // (4) THE TWO CAPS THE SECTION STATES NO NUMBER FOR — MEASURED, not asserted in
-  // prose. Their move leaves the page correct, so the guard stays GREEN (a RED here
-  // would be the false RED the header refuses), and a rename still throws: each one
-  // is READ, not merely mentioned.
-  for (const name of ["MaxTurnChars", "MaxToolResultChars"]) {
+  // (4) THE ONE CAP THE SECTION STILL STATES NO NUMBER FOR — MEASURED, not asserted
+  // in prose. Its move leaves the page correct, so the guard stays GREEN (a RED here
+  // would be the false RED the header refuses), and a rename still throws: it is
+  // READ, not merely mentioned. MaxToolResultChars used to sit in this loop too; it
+  // now has a number on the page, so it moved up to row (1), where a move REDS.
+  for (const name of ["MaxTurnChars"]) {
     const { src: moved, next } = moveCap(goChat, name, 1);
     assert.notEqual(moved, goChat, `the ${name} move changed nothing — this row would be vacuous`);
     assert.deepEqual(

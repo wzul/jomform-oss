@@ -47,8 +47,14 @@ const (
 	// The COST bound is this times (chat.MaxSteps + 1) model calls per message —
 	// one call per tool round-trip, plus the one that answers from what they
 	// gathered. So at most 300 model calls per user per hour, each capped at
-	// chat.MaxToolResultChars of context per tool. Both numbers are in the docs
-	// page next to the feature so the limit is not a surprise.
+	// chat.MaxToolResultChars of context per tool.
+	//
+	// WHAT THE DOCS PAGE CARRIES, next to the feature: the messages per hour
+	// above, the model calls one message may take, and — since t_902ab8bb — the
+	// per-tool cap on chat.MaxToolResultChars. So no limit a user meets is a
+	// surprise. The per-hour MODEL-CALL TOTAL is not on that page: it is
+	// arithmetic on the two figures the page does state, and this comment is the
+	// only place the total is written down, so do not claim otherwise here.
 	chatRatePerHour = 60.0
 	chatBurst       = 10.0
 	// chatMaxHistory is the number of prior turns the client may send. The

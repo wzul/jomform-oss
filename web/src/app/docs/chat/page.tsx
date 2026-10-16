@@ -100,7 +100,7 @@ const SECTIONS: Section[] = [
     id: "limits",
     title: "Limits and cost",
     body: [
-      "Every message you send is at least one AI model call, and up to five if the assistant has to look several things up. Each lookup is bounded in size, and the answer is bounded too, so one question cannot become an unbounded bill.",
+      "Every message you send is at least one AI model call, and up to five if the assistant has to look several things up. Each lookup's result is trimmed to 6000 characters before the assistant reads it, and the answer is bounded too, so one question cannot become an unbounded bill.",
       "A single user can send 60 messages per hour, in bursts of 10. That is a real conversation's pace with room to spare; if you hit it, wait a moment rather than switching to a second account, because the limit exists to keep the feature affordable for everyone.",
       "Confirmations are limited separately, at 30 per hour in bursts of 5. Confirming costs no model call — that limit is about pace, not spend: it keeps a person deciding each card deliberately instead of clicking through a stack of them.",
       "One answer can put at most 3 proposals in front of you, so a single reply cannot become a wall of confirmations to click through.",
