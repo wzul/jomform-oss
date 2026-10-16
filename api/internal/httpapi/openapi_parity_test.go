@@ -71,7 +71,9 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -82,6 +84,8 @@ import (
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
+
+	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 )
 
 // registeredRESTRoute is one mux registration parsed out of RegisterRoutes.
@@ -1243,6 +1247,556 @@ func TestChatRatePoliciesAreDerivedNotRestated(t *testing.T) {
 			}
 		}
 	}
+}
+
+// ── the per-IP rate sentences (card t_9cdfa18e) ──────────────────────────────
+//
+// The chat lane above is guarded because its cap is a named constant in
+// rest_chat.go. These FOUR sentences are a different shape: the number that
+// enforces them lives in a middleware.RateLimitWith call in rest.go, another
+// file, and until this guard the contract's per-IP sentences were typed copies
+// of those call sites. Move one — RateLimitWith(2, 6) -> RateLimitWith(9, 6) on
+// /v1/rest/uploads/image — and api/openapi/openapi.json (and /docs/api, which
+// renders the same sentence) went on promising 2/s while the route admitted 9/s,
+// with every guard green: TestOpenAPIRateLimitsMatchTheCode asserts only that a
+// RateMiddleware route carries SOME middleware.RateLimit wrap, never what that
+// wrap was given, and it never reads the Rate string.
+//
+// The numbers are never restated in this file. The sentence is rendered from the
+// constants the registration passes (aiGenerateRatePolicy / uploadRatePolicy in
+// openapi_routes.go), and the guard reads the registration BACK OUT of rest.go
+// to check that what a caller is promised is what the server applies.
+
+// perIPPolicyCase is one /v1/rest route whose documented per-IP sentence must
+// quote the numbers its OWN registration passes.
+//
+// The numbers are read out of rest.go — through the package's constants,
+// in-process — rather than written here: a case that restated 2/6 would be a
+// third copy of the cap, exactly the shape this guard exists to remove.
+type perIPPolicyCase struct {
+	Path   string
+	Method string
+	// Unit is the time unit the sentence quotes: "hour" or "second". It is the
+	// one part of a sentence the call site cannot imply — a limiter is always
+	// handed tokens per second — so it is stated, and the number is then checked
+	// against the registration in that unit.
+	Unit string
+	// Consts are the package identifiers the sentence must be BUILT from AND that
+	// the registration must PASS, in the order rate, burst.
+	Consts []string
+}
+
+func perIPPolicyCases() []perIPPolicyCase {
+	return []perIPPolicyCase{
+		{Path: "/v1/rest/forms/ai-generate", Method: "POST", Unit: "hour",
+			Consts: []string{"aiGenerateRatePerHour", "aiGenerateBurst"}},
+		{Path: "/v1/rest/uploads/image", Method: "POST", Unit: "second",
+			Consts: []string{"uploadRatePerSecond", "uploadBurst"}},
+		{Path: "/v1/rest/uploads/avatar", Method: "POST", Unit: "second",
+			Consts: []string{"uploadRatePerSecond", "uploadBurst"}},
+		{Path: "/v1/rest/uploads/asset", Method: "POST", Unit: "second",
+			Consts: []string{"uploadRatePerSecond", "uploadBurst"}},
+	}
+}
+
+// restGORateWrap is the rate-limit wrap one /v1/rest registration in rest.go
+// carries.
+type restGORateWrap struct {
+	// Kind is "with" for middleware.RateLimitWith(rate, burst), "bare" for
+	// middleware.RateLimit (whose numbers are, by its own body, the exported
+	// middleware.RateLimitRate / RateLimitBurst), and "" when the registration
+	// carries no wrap at all.
+	Kind  string
+	Rate  ast.Expr
+	Burst ast.Expr
+	Line  int
+}
+
+// restGoRateWraps reads the limiter ARGUMENTS out of rest.go's registrations.
+//
+// It parses the file with go/parser instead of joining lines the way
+// restGoRoutes does, because what is read here is an expression nested inside
+// `middleware.RateLimitWith(a, b)(handler)`: only a real parse tells
+// `RateLimitWith(uploadRatePerSecond, uploadBurst)` apart from
+// `RateLimitWith(9, 6)` — the difference this guard exists for.
+func restGoRateWraps(t *testing.T) map[string]restGORateWrap {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset,
+		filepath.Join(rootDir, "api", "internal", "httpapi", "rest.go"), nil,
+		parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("cannot parse rest.go: %v", err)
+	}
+	patternRe := regexp.MustCompile(`^(GET|POST|PUT|PATCH|DELETE) (/v1/rest/[^ ]+)$`)
+	out := map[string]restGORateWrap{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "Handle" && sel.Sel.Name != "HandleFunc") {
+			return true
+		}
+		if id, ok := sel.X.(*ast.Ident); !ok || id.Name != "mux" {
+			return true
+		}
+		if len(call.Args) < 2 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		pattern, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			return true
+		}
+		m := patternRe.FindStringSubmatch(pattern)
+		if m == nil {
+			return true
+		}
+		w := restGORateWrap{Line: fset.Position(call.Pos()).Line}
+		ast.Inspect(call.Args[1], func(n ast.Node) bool {
+			inner, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			fn, ok := inner.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkgID, ok := fn.X.(*ast.Ident)
+			if !ok || pkgID.Name != "middleware" {
+				return true
+			}
+			switch fn.Sel.Name {
+			case "RateLimitWith":
+				if len(inner.Args) == 2 {
+					w.Kind, w.Rate, w.Burst = "with", inner.Args[0], inner.Args[1]
+				}
+			case "RateLimit":
+				w.Kind = "bare"
+			}
+			return true
+		})
+		out[routeKey(m[1], m[2])] = w
+		return true
+	})
+	return out
+}
+
+// capConstValues maps this package's rate-cap constants to their values, read
+// from the SYMBOLS rather than restated, so the evaluator below resolves a
+// registration's `aiGenerateRatePerHour/3600.0` to the number the limiter is
+// really handed, and a constant that moves moves this map with it.
+func capConstValues() map[string]float64 {
+	return map[string]float64{
+		"aiGenerateRatePerHour": aiGenerateRatePerHour,
+		"aiGenerateBurst":       aiGenerateBurst,
+		"uploadRatePerSecond":   uploadRatePerSecond,
+		"uploadBurst":           uploadBurst,
+		"chatRatePerHour":       chatRatePerHour,
+		"chatBurst":             chatBurst,
+		"chatConfirmPerHour":    chatConfirmPerHour,
+		"chatConfirmBurst":      chatConfirmBurst,
+	}
+}
+
+// rateExprValue evaluates one limiter argument from rest.go.
+//
+// Only the shapes a cap can honestly be written in are accepted — a number, one
+// of the package's cap constants, or a sum/product/quotient of those (the hourly
+// cap is divided by 3600 at the call site). Anything else is an ERROR rather
+// than a silent zero: a guard that cannot tell what a registration passes must
+// not certify that it passes the documented number.
+func rateExprValue(t *testing.T, expr ast.Expr, consts map[string]float64) (float64, bool) {
+	t.Helper()
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		if e.Kind == token.INT || e.Kind == token.FLOAT {
+			v, err := strconv.ParseFloat(e.Value, 64)
+			if err != nil {
+				t.Errorf("cannot read the limiter argument %s: %v", e.Value, err)
+				return 0, false
+			}
+			return v, true
+		}
+		t.Errorf("a limiter argument for a documented cap is the %s literal %s — this guard only reads "+
+			"numbers", e.Kind, e.Value)
+		return 0, false
+	case *ast.Ident:
+		v, ok := consts[e.Name]
+		if !ok {
+			names := make([]string, 0, len(consts))
+			for n := range consts {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			t.Errorf("the limiter argument is %s, which this guard cannot resolve to a number. Name the cap in "+
+				"one of the package constants (%s) so the published contract can quote what the registration "+
+				"passes.", e.Name, strings.Join(names, ", "))
+			return 0, false
+		}
+		return v, true
+	case *ast.ParenExpr:
+		return rateExprValue(t, e.X, consts)
+	case *ast.UnaryExpr:
+		if e.Op == token.SUB {
+			v, ok := rateExprValue(t, e.X, consts)
+			return -v, ok
+		}
+	case *ast.BinaryExpr:
+		a, okA := rateExprValue(t, e.X, consts)
+		b, okB := rateExprValue(t, e.Y, consts)
+		if !okA || !okB {
+			return 0, false
+		}
+		switch e.Op {
+		case token.ADD:
+			return a + b, true
+		case token.SUB:
+			return a - b, true
+		case token.MUL:
+			return a * b, true
+		case token.QUO:
+			return a / b, true
+		}
+	}
+	t.Errorf("the limiter argument is %T, which this guard cannot evaluate — a cap has to be a number or a "+
+		"package constant", expr)
+	return 0, false
+}
+
+// limiterNumbers returns the rate (tokens per SECOND, which is what a limiter is
+// handed) and the burst this registration applies, read out of rest.go.
+func (w restGORateWrap) limiterNumbers(t *testing.T) (rate, burst float64, ok bool) {
+	t.Helper()
+	switch w.Kind {
+	case "with":
+		consts := capConstValues()
+		r, okR := rateExprValue(t, w.Rate, consts)
+		b, okB := rateExprValue(t, w.Burst, consts)
+		return r, b, okR && okB
+	case "bare":
+		// A bare middleware.RateLimit wrap IS RateLimitRate/RateLimitBurst — that
+		// is its own body — so a sentence for such a route has to quote those.
+		return middleware.RateLimitRate, middleware.RateLimitBurst, true
+	}
+	t.Errorf("rest.go line %d registers a /v1/rest route with no middleware rate wrap at all, so there is "+
+		"nothing for the contract to quote", w.Line)
+	return 0, 0, false
+}
+
+// perIPPolicyRe is the shape of a per-IP sentence. The guard and the sentence
+// have to agree on it: if they do not, the parse below certifies nothing.
+var perIPPolicyRe = regexp.MustCompile(
+	`^([0-9]+(?:\.[0-9]+)?) per (hour|second) per IP, burst ([0-9]+(?:\.[0-9]+)?)$`)
+
+// parsePerIPPolicy splits a published sentence into its numbers and its unit.
+func parsePerIPPolicy(policy string) (rate float64, unit string, burst float64, ok bool) {
+	m := perIPPolicyRe.FindStringSubmatch(policy)
+	if m == nil {
+		return 0, "", 0, false
+	}
+	r, errR := strconv.ParseFloat(m[1], 64)
+	b, errB := strconv.ParseFloat(m[3], 64)
+	if errR != nil || errB != nil {
+		return 0, "", 0, false
+	}
+	return r, m[2], b, true
+}
+
+// rateWithinTolerance compares two cap numbers. The tolerance exists only
+// because an hourly cap is the limiter's per-second number times 3600
+// (5/3600*3600 is not exactly 5 in binary floating point); it is far smaller
+// than any real change to a cap.
+func rateWithinTolerance(a, b float64) bool {
+	const eps = 1e-9
+	scale := math.Max(1, math.Max(math.Abs(a), math.Abs(b)))
+	return math.Abs(a-b) <= eps*scale
+}
+
+// inUnit converts a limiter rate (tokens per second) into the unit a sentence
+// quotes.
+func inUnit(rate float64, unit string) (float64, bool) {
+	switch unit {
+	case "second":
+		return rate, true
+	case "hour":
+		return rate * 3600, true
+	}
+	return 0, false
+}
+
+// identsIn collects every identifier name in an expression — including the Sel
+// of a selector, so a cap written as middleware.RateLimitRate counts as naming
+// RateLimitRate.
+func identsIn(expr ast.Expr) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			out[id.Name] = true
+		}
+		return true
+	})
+	return out
+}
+
+// TestMiddlewareRatePoliciesQuoteTheRegisteredCaps pins each per-IP sentence to
+// the numbers its own registration in rest.go passes. It reads the call site
+// (restGoRateWraps → the limiter's arguments, through the package constants) and
+// compares against the sentence in the document the generator produces NOW, and
+// in the two JSON artifacts ON DISK.
+//
+// WHY THE ARTIFACTS ARE READ TOO. The in-memory document is the code's own
+// answer, so it catches a registration that moved; the on-disk bytes are what a
+// developer actually downloads, so they catch a registration that moved and was
+// never regenerated — the half a code-only comparison misses, because a stale
+// artifact agrees with the stale sentence.
+func TestMiddlewareRatePoliciesQuoteTheRegisteredCaps(t *testing.T) {
+	wraps := restGoRateWraps(t)
+	// ANCHOR, not courtesy: a parse that saw a handful of registrations would
+	// make every lookup below a miss dressed up as a pass.
+	if len(wraps) < 50 {
+		t.Fatalf("parsed %d /v1/rest registrations out of rest.go — that is not the route table, so the "+
+			"lookups below would check nothing", len(wraps))
+	}
+	sources := []struct{ name, body string }{
+		{"the document the generator produces (in memory)", generatedArtifact(t, "api/openapi/openapi.json")},
+		{"api/openapi/openapi.json", readRootFile(t, "api/openapi/openapi.json")},
+		{"web/public/openapi.json", readRootFile(t, "web/public/openapi.json")},
+	}
+	for _, src := range sources {
+		paths := parseSpecPaths(t, src.name, src.body)
+		if len(paths) < 50 {
+			t.Errorf("%s has %d paths — that is not the API, so the lookups below would check nothing",
+				src.name, len(paths))
+			continue
+		}
+		for _, c := range perIPPolicyCases() {
+			wrap, ok := wraps[routeKey(c.Method, c.Path)]
+			if !ok {
+				t.Errorf("rest.go registers no %s %s — the anchor moved", c.Method, c.Path)
+				continue
+			}
+			limiterRate, limiterBurst, ok := wrap.limiterNumbers(t)
+			if !ok {
+				continue
+			}
+			wantRate, ok := inUnit(limiterRate, c.Unit)
+			if !ok {
+				t.Errorf("the case for %s %s states the unit %q, which is neither \"hour\" nor \"second\"",
+					c.Method, c.Path, c.Unit)
+				continue
+			}
+			op, ok := paths[c.Path][strings.ToLower(c.Method)]
+			if !ok {
+				t.Errorf("%s: no %s %s in the document — the anchor moved", src.name, c.Method, c.Path)
+				continue
+			}
+			if op.RateLimit == nil {
+				t.Errorf("%s: %s %s carries no x-jomform-rate-limit, so the contract promises a lane the "+
+					"server throttles without saying so", src.name, c.Method, c.Path)
+				continue
+			}
+			gotRate, gotUnit, gotBurst, shapeOK := parsePerIPPolicy(op.RateLimit.Policy)
+			if !shapeOK {
+				t.Errorf("%s: %s %s documents the rate policy %q, which does not quote the cap as "+
+					"\"<N> per hour|second per IP, burst <N>\" — the sentence and this guard have to agree on "+
+					"the shape", src.name, c.Method, c.Path, op.RateLimit.Policy)
+				continue
+			}
+			if gotUnit != c.Unit {
+				t.Errorf("%s: %s %s documents %q, but the case says this sentence quotes a cap per %s — "+
+					"either the sentence or the case moved", src.name, c.Method, c.Path, op.RateLimit.Policy,
+					c.Unit)
+				continue
+			}
+			if !rateWithinTolerance(gotRate, wantRate) || !rateWithinTolerance(gotBurst, limiterBurst) {
+				t.Errorf("%s: %s %s documents %g per %s per IP, burst %g, but rest.go line %d hands its limiter "+
+					"%g per second, burst %g — i.e. %g per %s, burst %g. The published contract tells the caller "+
+					"a limit the server does not apply.\n(The sentence is built from the constants; if you moved "+
+					"one, run: cd api && go run ./cmd/openapi-gen)",
+					src.name, c.Method, c.Path, gotRate, gotUnit, gotBurst, wrap.Line,
+					limiterRate, limiterBurst, wantRate, c.Unit, limiterBurst)
+			}
+			// The same sentence is appended to the description, the copy a human
+			// reads in the rendered reference.
+			if !strings.Contains(op.Description, "Rate limit: "+op.RateLimit.Policy+".") {
+				t.Errorf("%s: %s %s's description does not carry \"Rate limit: %s.\" — the extension and the "+
+					"prose have diverged", src.name, c.Method, c.Path, op.RateLimit.Policy)
+			}
+		}
+	}
+}
+
+// TestEveryMiddlewareRateSentenceIsGuarded is the anchor that closes the door
+// this defect came in by. The four guards above only walk the routes their case
+// table names, so a NEW throttled route could arrive with a typed sentence and
+// every one of them would stay green. The contract's set of RateMiddleware
+// entries and the case table must therefore be the SAME set, in both directions.
+func TestEveryMiddlewareRateSentenceIsGuarded(t *testing.T) {
+	var inRegistry []string
+	for _, d := range restRouteDocs {
+		if d.RateSource != RateMiddleware {
+			continue
+		}
+		if d.Rate == "" {
+			t.Errorf("%s %s declares RateSource=%s with an empty Rate — a throttled route that documents no "+
+				"limit", d.Method, d.Path, d.RateSource)
+			continue
+		}
+		inRegistry = append(inRegistry, routeKey(d.Method, d.Path))
+	}
+	var inCases []string
+	for _, c := range perIPPolicyCases() {
+		inCases = append(inCases, routeKey(c.Method, c.Path))
+	}
+	if len(inRegistry) < 4 {
+		t.Fatalf("the registry holds %d per-IP sentences — fewer than the four known throttled routes, so "+
+			"this guard would compare almost nothing (%v)", len(inRegistry), inRegistry)
+	}
+	sort.Strings(inRegistry)
+	sort.Strings(inCases)
+	if equalStrings(inRegistry, inCases) {
+		return
+	}
+	for _, key := range inRegistry {
+		if !containsString(inCases, key) {
+			t.Errorf("%s is published with a middleware rate sentence but has no case in perIPPolicyCases() — "+
+				"its numbers are therefore not checked against the registration in rest.go. Add it, and derive "+
+				"its sentence from the cap instead of typing it.", key)
+		}
+	}
+	for _, key := range inCases {
+		if !containsString(inRegistry, key) {
+			t.Errorf("perIPPolicyCases() holds %s, which the contract no longer publishes a middleware rate "+
+				"sentence for — a stale case certifies nothing", key)
+		}
+	}
+}
+
+// TestMiddlewareRatePoliciesAreDerivedNotRestated is the half a value comparison
+// cannot express (the same reasoning as the chat lane's guard): a literal that
+// happens to be the right number compares equal to the constant. It checks BOTH
+// ends of the copy — the sentence in openapi_routes.go, and the argument the
+// registration in rest.go passes.
+func TestMiddlewareRatePoliciesAreDerivedNotRestated(t *testing.T) {
+	pkg := parseRESTPackage(t)
+	file, err := parser.ParseFile(token.NewFileSet(),
+		filepath.Join(rootDir, "api", "internal", "httpapi", "openapi_routes.go"),
+		nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("cannot parse openapi_routes.go: %v", err)
+	}
+	rates, entries := registryRateFields(t, file)
+	if entries < 50 {
+		t.Fatalf("walked only %d contract entries in restRouteDocs — the registry's shape moved, so this "+
+			"guard would check nothing", entries)
+	}
+	wraps := restGoRateWraps(t)
+	for _, c := range perIPPolicyCases() {
+		expr, ok := rates[c.Path]
+		if !ok {
+			t.Errorf("no contract entry for %s %s — the anchor moved", c.Method, c.Path)
+			continue
+		}
+		requireRateBuiltFrom(t, fmt.Sprintf("%s %s's Rate", c.Method, c.Path), expr, pkg, c.Consts)
+
+		wrap, ok := wraps[routeKey(c.Method, c.Path)]
+		if !ok {
+			t.Errorf("rest.go registers no %s %s — the anchor moved", c.Method, c.Path)
+			continue
+		}
+		if wrap.Kind == "bare" {
+			// middleware.RateLimit takes no arguments to inspect; its numbers are
+			// the exported middleware constants, and the value guard already holds
+			// the sentence to them.
+			continue
+		}
+		if wrap.Kind != "with" {
+			t.Errorf("rest.go line %d registers %s %s without a rate wrap, so the contract documents a limit "+
+				"nothing applies", wrap.Line, c.Method, c.Path)
+			continue
+		}
+		for i, arg := range []struct {
+			expr ast.Expr
+			role string
+		}{{wrap.Rate, "rate"}, {wrap.Burst, "burst"}} {
+			if i >= len(c.Consts) {
+				break
+			}
+			if !identsIn(arg.expr)[c.Consts[i]] {
+				t.Errorf("rest.go line %d passes %s to the limiter's %s argument for %s %s, which does not name "+
+					"%s — the registration is restating the cap, so the contract can quote a number the route "+
+					"does not apply", wrap.Line, sourceOf(arg.expr), arg.role, c.Method, c.Path, c.Consts[i])
+			}
+		}
+	}
+}
+
+// requireRateBuiltFrom asserts a contract Rate expression is a CALL — not a
+// literal — whose callee's body names every one of consts. That is what makes
+// the published sentence move with the cap instead of drifting from it.
+func requireRateBuiltFrom(t *testing.T, what string, expr ast.Expr, pkg *restPackage, consts []string) {
+	t.Helper()
+	if lit, isLit := expr.(*ast.BasicLit); isLit {
+		t.Errorf("%s is the string literal %s — a literal is a copy of the cap that no test can tell from the "+
+			"truth. Build it from %s instead.", what, lit.Value, strings.Join(consts, " / "))
+		return
+	}
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		t.Errorf("%s is %T, not a call — the sentence has to be built from the constants that enforce the "+
+			"cap (%s)", what, expr, strings.Join(consts, " / "))
+		return
+	}
+	fn, ok := call.Fun.(*ast.Ident)
+	if !ok {
+		t.Errorf("%s calls %T — expected a package-level helper", what, call.Fun)
+		return
+	}
+	decls := pkg.funcs[fn.Name]
+	if len(decls) == 0 {
+		t.Errorf("%s calls %s, which is not declared in this package", what, fn.Name)
+		return
+	}
+	named := map[string]bool{}
+	for _, d := range decls {
+		ast.Inspect(d, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok {
+				named[id.Name] = true
+			}
+			return true
+		})
+	}
+	for _, want := range consts {
+		if !named[want] {
+			t.Errorf("%s is built by %s, which does not name %s — so the sentence is not derived from the "+
+				"constant that enforces this route's cap (%s)", what, fn.Name, want, strings.Join(consts, " / "))
+		}
+	}
+}
+
+// sourceOf renders an expression for a failure message.
+func sourceOf(expr ast.Expr) string {
+	var b strings.Builder
+	if err := printer.Fprint(&b, token.NewFileSet(), expr); err != nil {
+		return fmt.Sprintf("%T", expr)
+	}
+	return b.String()
+}
+
+// containsString reports whether xs holds want.
+func containsString(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
 }
 
 // TestOpenAPISpecIsValidFor31 validates the artifact that ships, with a real

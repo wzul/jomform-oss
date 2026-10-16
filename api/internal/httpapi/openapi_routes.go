@@ -27,10 +27,14 @@
 //		                     call in the handler, BOTH directions. This matters
 //		                     because the honest fact about this API is that almost
 //		                     nothing is throttled, and that fact is exactly the one
-//		                     that rots silently. Where the cap is a CONSTANT (the
-//		                     chat lane) the sentence is rendered from it rather
+//		                     that rots silently. Where the cap is a CONSTANT — the
+//		                     chat lane (t_da26169c) and the four per-IP sentences
+//		                     (t_9cdfa18e) — the sentence is rendered from it rather
 //		                     than typed: a literal there is a copy of the number
-//		                     that no test can tell from the truth (t_da26169c).
+//		                     that no test can tell from the truth. The per-IP
+//		                     sentences are additionally pinned to the numbers their
+//		                     own rest.go registration passes, by a guard that reads
+//		                     those call sites.
 //
 //	  Regenerate the published artifacts with:
 //
@@ -146,6 +150,32 @@ func chatConfirmRatePolicy() string {
 	return fmt.Sprintf("%g confirmations per hour per user, burst %g", chatConfirmPerHour, chatConfirmBurst)
 }
 
+// aiGenerateRatePolicy and uploadRatePolicy are the same treatment for the
+// contract's PER-IP sentences: the numbers come from the constants rest.go's
+// middleware.RateLimitWith call sites pass (aiGenerateRatePerHour/aiGenerateBurst,
+// uploadRatePerSecond/uploadBurst), because those call sites are the thing that
+// enforces them.
+//
+// WHY BUILT, NOT WRITTEN OUT. These four sentences were typed copies of the call
+// sites until t_9cdfa18e: moving a registration (RateLimitWith(2, 6) -> 9, 6)
+// left the published contract and /docs/api promising 2/s to the caller, and
+// TestOpenAPIRateLimitsMatchTheCode only asserted that the route carried a
+// middleware.RateLimit WRAP, never the numbers it was given. Built from the
+// constant, that edit moves the document, a stale artifact is caught by
+// TestGeneratedArtifactsAreInSync, and the sentence itself is checked against
+// the numbers its own registration passes by
+// TestMiddlewareRatePoliciesQuoteTheRegisteredCaps.
+//
+// The unit is the unit the constant is named in: aiGenerateRatePerHour is quoted
+// per hour while the limiter is handed aiGenerateRatePerHour/3600.0 per second.
+func aiGenerateRatePolicy() string {
+	return fmt.Sprintf("%g per hour per IP, burst %g", aiGenerateRatePerHour, aiGenerateBurst)
+}
+
+func uploadRatePolicy() string {
+	return fmt.Sprintf("%g per second per IP, burst %g", uploadRatePerSecond, uploadBurst)
+}
+
 // restRouteDocs is the contract for every /v1/rest/* route.
 //
 // Order follows rest.go's RegisterRoutes so a reader can diff the two by eye;
@@ -189,7 +219,7 @@ var restRouteDocs = []restRouteDoc{
 	{Method: "POST", Path: "/v1/rest/forms/ai-generate", Handler: "aiGenerateForm", Tag: "Forms",
 		Summary: "Draft a form config from a prompt (AI)", Access: AccessWrite, Body: true, Resp: "Form",
 		RespDesc:   "A draft form config (blocks + theme) to review and then save.",
-		Rate:       "5 per hour per IP, burst 3",
+		Rate:       aiGenerateRatePolicy(),
 		RateSource: RateMiddleware,
 		Desc:       "This route calls a language model and is charged accordingly, which is why it — and only it among the form routes — is throttled."},
 	{Method: "POST", Path: "/v1/rest/forms/bulk", Handler: "bulkForms", Tag: "Forms",
@@ -432,18 +462,18 @@ var restRouteDocs = []restRouteDoc{
 	{Method: "POST", Path: "/v1/rest/uploads/image", Handler: "uploadImage", Tag: "Media",
 		Summary: "Upload an image (multipart)", Access: AccessWrite,
 		RespDesc:   "The stored media item with its public https URL.",
-		Rate:       "2 per second per IP, burst 6",
+		Rate:       uploadRatePolicy(),
 		RateSource: RateMiddleware,
 		Desc:       "multipart/form-data with the file in file. Send the bytes, not JSON."},
 	{Method: "POST", Path: "/v1/rest/uploads/avatar", Handler: "uploadAvatar", Tag: "Media",
 		Summary: "Upload a profile avatar (multipart)", Access: AccessWrite,
 		RespDesc:   "The stored avatar with its public https URL.",
-		Rate:       "2 per second per IP, burst 6",
+		Rate:       uploadRatePolicy(),
 		RateSource: RateMiddleware},
 	{Method: "POST", Path: "/v1/rest/uploads/asset", Handler: "uploadAsset", Tag: "Media",
 		Summary: "Upload a code asset (multipart: css/js/html/svg/woff2)", Access: AccessWrite,
 		RespDesc:   "The stored asset, which stays unserved until its scan passes.",
-		Rate:       "2 per second per IP, burst 6",
+		Rate:       uploadRatePolicy(),
 		RateSource: RateMiddleware,
 		Desc:       "Merchant-only. A code asset is scanned before it is served."},
 	{Method: "PUT", Path: "/v1/rest/profile/avatar", Handler: "updateProfileAvatar", Tag: "Profile",

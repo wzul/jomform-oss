@@ -20,6 +20,33 @@ import (
 	"github.com/wzul/jomform/api/internal/tlsmgr"
 )
 
+// The per-IP caps this file's registrations apply to /v1/rest routes through a
+// middleware.RateLimitWith wrap.
+//
+// WHY THEY ARE NAMED (t_9cdfa18e). These four numbers used to live only in the
+// call sites below, and the published contract's per-IP Rate sentences were
+// hand-typed copies of them in openapi_routes.go. A copy has no owner: the
+// call site could move to 9/s while api/openapi/openapi.json — and /docs/api,
+// which renders the same sentences — went on promising 2/s, with every guard
+// green. Named here, the registration and the sentence read ONE number
+// (aiGenerateRatePolicy / uploadRatePolicy in openapi_routes.go render from
+// these), and openapi_parity_test.go reads the number back out of these very
+// call sites to pin the sentence to what the server really passes.
+//
+// The unit in the name is the unit the CONTRACT quotes. The limiter itself
+// always takes tokens per second, so the hourly cap is divided by 3600 at the
+// call site — the same shape rest_chat.go uses for chatRatePerHour.
+const (
+	// aiGenerateRatePerHour / aiGenerateBurst bound POST /v1/rest/forms/ai-generate.
+	// An LLM call costs money, so this is the tightest per-IP cap in the API.
+	aiGenerateRatePerHour = 5.0
+	aiGenerateBurst       = 3.0
+	// uploadRatePerSecond / uploadBurst bound the three upload routes
+	// (image / avatar / asset) — one bucket each, same numbers for all three.
+	uploadRatePerSecond = 2.0
+	uploadBurst         = 6.0
+)
+
 // RESTHandlers serves /v1/rest/* merchant resources.
 type RESTHandlers struct {
 	Accounts          *dbstore.AccountStore
@@ -209,8 +236,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/forms/trash", h.authed(h.listTrashedForms))
 	mux.Handle("POST /v1/rest/forms", h.authed(h.createForm))
 	// Issue #256: AI form builder — draft a form config from a prompt. Tight
-	// per-IP rate limit because LLM calls cost money (5/hour, burst 3).
-	mux.Handle("POST /v1/rest/forms/ai-generate", middleware.RateLimitWith(5.0/3600.0, 3)(h.authed(h.aiGenerateForm)))
+	// per-IP rate limit because LLM calls cost money (aiGenerateRatePerHour,
+	// burst aiGenerateBurst — the contract quotes these same constants).
+	mux.Handle("POST /v1/rest/forms/ai-generate", middleware.RateLimitWith(aiGenerateRatePerHour/3600.0, aiGenerateBurst)(h.authed(h.aiGenerateForm)))
 	mux.Handle("POST /v1/rest/forms/bulk", h.authed(h.bulkForms))
 	mux.Handle("GET /v1/rest/forms/{id}", h.authed(h.getForm))
 	mux.Handle("PATCH /v1/rest/forms/{id}", h.authed(h.updateForm))
@@ -433,16 +461,16 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// Issue #61: image-block direct upload. Rate-limited (owner decision)
 	// to curb abuse; auth is account-scoped via h.authed.
 	mux.Handle("POST /v1/rest/uploads/image",
-		middleware.RateLimitWith(2, 6)(h.authed(h.uploadImage)))
+		middleware.RateLimitWith(uploadRatePerSecond, uploadBurst)(h.authed(h.uploadImage)))
 	// Issue #133: avatar upload — downscales to a small profile image.
 	mux.Handle("POST /v1/rest/uploads/avatar",
-		middleware.RateLimitWith(2, 6)(h.authed(h.uploadAvatar)))
+		middleware.RateLimitWith(uploadRatePerSecond, uploadBurst)(h.authed(h.uploadAvatar)))
 	// Issue #361: merchant code-asset upload (CSS/JS/HTML/SVG/woff2) for
 	// customising a landing/workspace page. Stored tenant-scoped and served as
 	// hardened static content on the workspace/custom domain. Customer uploads
 	// stay images-only; these are merchant-only.
 	mux.Handle("POST /v1/rest/uploads/asset",
-		middleware.RateLimitWith(2, 6)(h.authed(h.uploadAsset)))
+		middleware.RateLimitWith(uploadRatePerSecond, uploadBurst)(h.authed(h.uploadAsset)))
 	// Issue #133: set/clear the session user's avatar_url. Validated to be a
 	// JomForm-hosted media URL (from the upload bucket) to avoid storing
 	// arbitrary external URLs.
