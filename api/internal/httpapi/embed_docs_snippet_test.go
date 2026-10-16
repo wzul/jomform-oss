@@ -444,8 +444,9 @@ func TestDocsEmbedPageDoesNotClaimTheGateReappears(t *testing.T) {
 	// cookie-blocking browser.
 	if !strings.Contains(page, "Partitioned") {
 		t.Error("the docs no longer name the Partitioned (CHIPS) cookie — that attribute is why " +
-			"the unlock survives on the embedding page and why it is scoped to it; the paragraph " +
-			"must keep saying so")
+			"the unlock survives on the embedding page, and why it is confined to the top-level " +
+			"site that page sits on instead of being shared with every other site the form is " +
+			"embedded on; the paragraph must keep saying so")
 	}
 	if !strings.Contains(page, "keeps that unlock working when a visitor's browser blocks third-party cookies") {
 		t.Error("the docs no longer state that the unlock KEEPS WORKING when a browser blocks " +
@@ -682,8 +683,12 @@ func docsClaimSurface(root, path string) bool {
 // the root deliberately: an api/*.go comment may quote the wrong phrasing while
 // describing the defect, so judging it would make the guard cry wolf on its own
 // documentation — and node_modules is skipped for the same reason, a dependency's
-// vendored prose being text this repo does not own. Everything else under web/
-// that can carry prose IS judged, including the web unit tests and the e2e specs
+// vendored prose being text this repo does not own. That is a SUBSTRING scan's
+// limit rather than the tree's, and api/ is not unguarded: card t_a29148e5's
+// TestNoAPISourceStatesTheUnlockCookieIsScopedToAPage judges the same claim there,
+// by telling a quoted MENTION (allowed) from a STATEMENT (a failure). Everything
+// else under web/ that can carry prose IS judged, including the web unit tests
+// and the e2e specs
 // (the pre-fix walk already covered web/src/*.test.ts through its .ts case). That
 // is deliberate rather than accidental: a web test should only contain this
 // sentence if it is asserting about it, so a match there is worth a look, and
@@ -1367,7 +1372,10 @@ func TestEmbeddedPrivateFormUnlockRoundTrip(t *testing.T) {
 		t.Errorf("the unlock cookie is not Partitioned (Set-Cookie: %q). A bare SameSite=None "+
 			"cookie is exactly the third-party cookie browsers are restricting; CHIPS "+
 			"(Partitioned) is what an embedded widget must use for its own state, and it also "+
-			"scopes the unlock to the one merchant page it was entered on", setCookie)
+			"scopes the unlock to the top-level SITE it was entered on — the cookie's Path is "+
+			"\"/\" and the token is bound to the form id, so a second page of that same site is "+
+			"unlocked too, while a second merchant's site is a different partition and asks "+
+			"again", setCookie)
 	}
 	if !strings.Contains(setCookie, "Secure") {
 		t.Errorf("the unlock cookie is not Secure (Set-Cookie: %q). SameSite=None without Secure "+
@@ -1393,6 +1401,95 @@ func TestEmbeddedPrivateFormUnlockRoundTrip(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the embed after unlocking is missing the form's own field %s — the unlock "+
 				"returned a cookie the form does not accept. body: %.400s", want, body)
+		}
+	}
+}
+
+// TestUnlockCookieCarriesToAnotherPageOfTheSameSite pins the MECHANISM the
+// corrected failure message in TestEmbeddedPrivateFormUnlockRoundTrip names: the
+// unlock cookie's Path is "/" and its token is bound to the FORM id, so an unlock
+// entered on one page of a site is accepted on that site's other pages (card
+// t_a29148e5, following card t_87697ea4 / PR 1200). The message the repo used to
+// print claimed the opposite scope — "the one merchant page it was entered on" —
+// and a message that states a mechanism nobody measures is prose that can drift
+// away from the behaviour, so this is the behaviour half of the same correction
+// (the prose guard, unlock_scope_prose_guard_test.go, is the wording half).
+//
+// WHAT THIS DOES AND DOES NOT COVER. It drives the SERVER side of the carry: a
+// cookie minted by the unlock on one page is accepted, on another page of the
+// same host, for the same form. The browser side — that the cookie is sent at all
+// on a page of the same top-level site, and only there — is CHIPS partitioning
+// plus ordinary cookie matching, not server behaviour: MDN ("a separate cookie
+// jar per top-level site") is why the docs page, not this test, is where the site
+// rule is pinned, and RFC 6265 §5.4 (a cookie-path that is a prefix ending in "/"
+// path-matches every request path) is why `Path: "/"` is the half a browser acts
+// on. httptest does not implement cookie matching, so the carry here is the
+// server accepting the token anywhere; the Path itself is asserted below.
+func TestUnlockCookieCarriesToAnotherPageOfTheSameSite(t *testing.T) {
+	if os.Getenv("JOMFORM_TEST_DATABASE_URL") == "" {
+		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping unlock scope carry guard")
+	}
+	h, ws, slug := embedPrivateFixture(t)
+	hnd := publicServer(h)
+	// Prod semantics (the helper oauth_test.go exists for): a real buyer unlocks
+	// over https on a site that is not the workspace's own, which is the case the
+	// message is about.
+	setProdMode(t)
+	host := ws + ".jomform.com"
+
+	pageA := "/" + slug
+	pageB := "/embed/f/" + ws + "/" + slug
+
+	// CONTROL: page B on its own shows the gate, so the assertion at the bottom
+	// is the cookie's doing and not a form that never gates.
+	if rec := publicGet(t, hnd, host, pageB); !strings.Contains(rec.Body.String(), `id="pw"`) {
+		t.Fatalf("fixture check: GET %s with no cookie -> %d and no password gate, so this test "+
+			"cannot tell an unlocked page from an ungated one. body: %.300s",
+			pageB, rec.Code, rec.Body.String())
+	}
+
+	// The buyer unlocks on page A: the page the form itself is served on.
+	rec := publicPostJSON(t, hnd, host, pageA+"/unlock", map[string]any{"password": gateFixturePassword})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST %s/unlock on the form's own page -> %d, want 200 (body %.300s)",
+			pageA, rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	var access *http.Cookie
+	for _, c := range cookies {
+		if c.Name == formAccessCookie {
+			access = c
+		}
+	}
+	if access == nil {
+		t.Fatalf("the unlock set no %s cookie (got %v) — that cookie is the whole unlock",
+			formAccessCookie, cookies)
+	}
+	// The first half of the mechanism the message names, read off the cookie: a
+	// page-scoped Path is exactly what would leave the site's other pages gated.
+	if access.Path != "/" {
+		t.Errorf("the unlock cookie's Path is %q, want \"/\" — the Path is what puts the cookie "+
+			"on the site's other pages, and the corrected message says so", access.Path)
+	}
+
+	// ── page B of the SAME site, carrying the cookie set on page A ──────────
+	other := embedGetWithCookies(t, hnd, host, pageB, cookies)
+	if other.Code != http.StatusOK {
+		t.Fatalf("GET %s carrying the cookie minted on %s -> %d, want 200 (body %.300s)",
+			pageB, pageA, other.Code, other.Body.String())
+	}
+	body := other.Body.String()
+	if strings.Contains(body, `id="pw"`) {
+		t.Errorf("GET %s carrying the cookie minted on %s still shows the password gate — the "+
+			"unlock is NOT carried to the site's other pages, which is the claim the corrected "+
+			"failure message makes and the rule the docs page states. body: %.300s",
+			pageB, pageA, body)
+	}
+	for _, want := range []string{`name="bname"`, `name="bemail"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET %s after unlocking on %s is missing the form's own field %s — the "+
+				"cookie was accepted but the form is not what was served. body: %.300s",
+				pageB, pageA, want, body)
 		}
 	}
 }
