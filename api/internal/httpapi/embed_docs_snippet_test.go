@@ -463,6 +463,24 @@ func TestDocsEmbedPageDoesNotClaimTheGateReappears(t *testing.T) {
 	// site" -> "per top-level page") both kept every assertion above — and both
 	// other docs guards — GREEN, because not one of them reads the scope noun.
 	//
+	// THE PIN LIST — the paragraph's reader-facing sentences, pinned as the
+	// literals a READER sees, so a future edit moves all of them with the wording
+	// and none can be dropped silently. Five of them:
+	//   1. "keeps that unlock working when a visitor's browser blocks third-party
+	//      cookies" (assertion (b) above),
+	//   2. "stored per top-level site" — the mechanism,
+	//   3. "scoped to the top-level site" — the rule, not the page,
+	//   4. "does not unlock it on anybody else's" — a second merchant's site is a
+	//      different partition,
+	//   5. "while a second page of your own site that embeds the same form does
+	//      not ask for the password again" — the CONSEQUENCE of the site scope
+	//      for the reader's own pages, added by card t_9f24e22e, which measured
+	//      that deleting exactly this clause left this test GREEN on tree
+	//      431573e5 (= 54e97546, PR 1200) while every assertion fired for the
+	//      other four.
+	// `Partitioned` is pinned too, as the attribute NAME rather than a sentence
+	// (assertion (b)) — it is the reason the scope is what it is.
+	//
 	// The mechanism sentence, pinned as the literal a READER sees (in the source
 	// it is split across a line break: "...stored per top-level\nsite...").
 	if !strings.Contains(page, "stored per top-level site") {
@@ -487,6 +505,24 @@ func TestDocsEmbedPageDoesNotClaimTheGateReappears(t *testing.T) {
 		t.Error("the docs no longer say an unlock 'does not unlock it on anybody else's' — deleting " +
 			"the scoping clause is not correcting it. The paragraph must still explain why a second " +
 			"merchant's page is not unlocked: their site is a different CHIPS partition")
+	}
+	// The CONSEQUENCE of the site scope on the reader's OWN site, which is the
+	// half PR 1200 added and the reason the paragraph states the site-level rule
+	// at all: the partition key is the top-level site and Path is "/", so a
+	// second page of that same site which embeds the same form is already
+	// unlocked. Deleting it is not correcting the sentence — pin #5 of the list
+	// above, in the same style as pins 2-4. MEASURED on tree 431573e5
+	// (= 54e97546): with every other word identical, deleting exactly this clause
+	// left this test GREEN, so the copy could state the rule and silently drop
+	// the one effect it exists to explain.
+	if !strings.Contains(page, "while a second page of your own site that embeds the same form does not ask for the password again") {
+		t.Error("the docs no longer say that a second page of your OWN site which embeds the same form " +
+			"is 'not asked for the password again' — that is the site-scope consequence for the reader's " +
+			"own pages, and it is the reason the paragraph states the top-level-SITE rule instead of a " +
+			"page-level one (newFormAccessCookie: Path \"/\", unlock token bound to the form id, so an " +
+			"unlock entered on one page of the site is also sent on that site's other pages). The " +
+			"consequence must stay; if the wording moved, move this pin with it — do not delete the " +
+			"site-scope effect from the copy")
 	}
 	// The narrower scopes, by name, so a site -> page (or site -> domain) swap
 	// reds here and says which claim did it.
