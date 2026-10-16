@@ -11,6 +11,7 @@ import { workspaceQuery, workspaceUrl } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
+import { matchesTypedValue } from "../../lib/typedConfirm";
 
 type Product = {
   id: string;
@@ -483,7 +484,17 @@ export default function Products() {
 
   async function purgeProduct() {
     if (!confirmPurge || purgeBusy) return;
-    if (purgeTyped.trim() !== confirmPurge.name) return;
+    // ONE rule, shared with the server (textutil.SameTypedValue): both sides are
+    // trimmed. The comparison used to trim ONLY the caller's value and compare it
+    // against the raw stored name, which no padded stored name can satisfy —
+    // TrimSpace can never return a value with a leading/trailing space, and a
+    // product name is stored verbatim — so for such a product this button could
+    // NEVER enable and the row could not be purged from anywhere (card
+    // t_1ee11d1f). The button below uses the same expression, so the guard and
+    // the control cannot disagree. (The pre-fix expression is deliberately NOT
+    // spelled out here: lib/typedConfirm.test.ts greps for it, and a comment
+    // quoting it would satisfy the regression scan for the wrong reason.)
+    if (!matchesTypedValue(purgeTyped, confirmPurge.name)) return;
     setPurgeBusy(true);
     setNotify("");
     // The next purge clears the previous refusal — at the START of the action,
@@ -1493,7 +1504,7 @@ export default function Products() {
                 <button
                   type="button"
                   onClick={() => void purgeProduct()}
-                  disabled={purgeBusy || purgeTyped.trim() !== confirmPurge.name}
+                  disabled={purgeBusy || !matchesTypedValue(purgeTyped, confirmPurge.name)}
                   className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-40"
                 >
                   {t("prod.purge")}

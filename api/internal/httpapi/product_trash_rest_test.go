@@ -264,6 +264,112 @@ func TestRESTProductPurgeRefusesAWrongConfirmation(t *testing.T) {
 	}
 }
 
+// TestRESTProductPurgeAcceptsAPaddedStoredName is the regression guard for card
+// t_1ee11d1f: a product whose STORED name carries leading/trailing whitespace
+// could not be purged by ANYONE — the caller repeating the exact stored bytes
+// included.
+//
+// WHY IT WAS UNREACHABLE. The handler compared `TrimSpace(in.ConfirmName)`
+// against the RAW `p.Name`. TrimSpace never returns a string with a leading or
+// trailing space, so an equality against a padded stored name has NO input that
+// can satisfy it: the comparison was unsatisfiable, not merely strict. The whole
+// path is reachable because createProduct stores the name verbatim
+// (`Name: in.Name`) — a paste, or a name typed with a trailing space, is enough.
+//
+// END-TO-END ON PURPOSE — create over the wire, bin, then purge — so this also
+// pins the half that makes the state reachable, instead of seeding the row
+// directly and assuming the create path pads. Each acceptance is paired with a
+// ROW assertion (a 200 that purged nothing must not pass) and the refusal leg is
+// paired with one too (a 400 that purged anyway must not pass either).
+func TestRESTProductPurgeAcceptsAPaddedStoredName(t *testing.T) {
+	ctx := context.Background()
+	h, pool, accountID, key := productBinFixture(t)
+	ps := dbstore.NewProductStore(pool)
+
+	// The card's own repro, in its own order: POST a name with a trailing space.
+	const padded = "QA Padded "
+	code, raw := tplReq(t, h, key, http.MethodPost, "/v1/rest/products",
+		`{"name":"`+padded+`","price_sen":1100}`)
+	if code != http.StatusCreated {
+		t.Fatalf("POST /v1/rest/products with a trailing space in the name = %d, want 201 "+
+			"(body %s) — this state has to be reachable for the purge defect to be real", code, raw)
+	}
+	var created map[string]any
+	if err := json.Unmarshal(raw, &created); err != nil {
+		t.Fatalf("create body is not the product object: %v (%s)", err, raw)
+	}
+	if got, _ := created["name"].(string); got != padded {
+		t.Fatalf("created name = %q, want %q stored VERBATIM — if the create path ever starts "+
+			"trimming, this guard is testing a state no caller can reach", got, padded)
+	}
+	id, _ := created["id"].(string)
+	if id == "" {
+		t.Fatalf("create answered no id: %s", raw)
+	}
+
+	// Bin it, so the purge's trashed-only precondition is a real store state.
+	if code, raw = tplReq(t, h, key, http.MethodDelete, "/v1/rest/products/"+id, ""); code != http.StatusOK {
+		t.Fatalf("DELETE /v1/rest/products/%s = %d, want 200 (body %s)", id, code, raw)
+	}
+
+	// Read the padding back through the BIN, not through the create response —
+	// an echoing handler would pass the check above without the padding ever
+	// reaching the row.
+	if code, raw = tplReq(t, h, key, http.MethodGet, "/v1/rest/products/trash", ""); code != http.StatusOK {
+		t.Fatalf("GET /v1/rest/products/trash = %d, want 200 (body %s)", code, raw)
+	}
+	if row := productBinRow(t, raw, id); row["name"] != padded {
+		t.Fatalf("the trashed row's name = %v, want %q — the padding did not survive the store, "+
+			"so this guard is not exercising the defect", row["name"], padded)
+	}
+
+	// 1. The EXACT stored bytes must purge. Before this card: 400
+	//    product.confirmNameMismatch, on every value a caller could send.
+	if code, raw = tplReq(t, h, key, http.MethodDelete, "/v1/rest/products/"+id+"/purge",
+		`{"confirm_name":"`+padded+`"}`); code != http.StatusOK {
+		t.Fatalf("purge with the EXACT stored name %q = %d, want 200 — the confirmation is "+
+			"unreachable for this row (body %s)", padded, code, raw)
+	}
+	if _, err := ps.GetTrashed(ctx, accountID, id); err == nil {
+		t.Error("the accepted purge answered 200 but the product is still in the bin")
+	}
+
+	// 2. ...and so must the name a MERCHANT can see and type. Trailing whitespace
+	//    is invisible in the dialog and in the error prose, so a confirmation that
+	//    only the stored bytes can satisfy is still a trap — the dashboard's field
+	//    asks for the name as rendered.
+	second := seedTrashedProduct(t, ctx, pool, accountID, " QA Padded Two ", 1200)
+	if code, raw = tplReq(t, h, key, http.MethodDelete, "/v1/rest/products/"+second.ID+"/purge",
+		`{"confirm_name":"QA Padded Two"}`); code != http.StatusOK {
+		t.Fatalf("purge of %q with the VISIBLE name = %d, want 200 (body %s)",
+			second.Name, code, raw)
+	}
+	if _, err := ps.GetTrashed(ctx, accountID, second.ID); err == nil {
+		t.Error("the accepted purge answered 200 but the padded product is still in the bin")
+	}
+
+	// 3. The gate still GATES. Same padded row, a value the caller made up:
+	//    refused with its own code, and the row survives.
+	third := seedTrashedProduct(t, ctx, pool, accountID, "QA Padded Three ", 1300)
+	code, raw = tplReq(t, h, key, http.MethodDelete, "/v1/rest/products/"+third.ID+"/purge",
+		`{"confirm_name":"not the name"}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("purge of %q with a WRONG name = %d, want 400 — trimming both sides must not "+
+			"turn the confirmation into a formality (body %s)", third.Name, code, raw)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("the refusal body is not the error envelope: %v (%s)", err, raw)
+	}
+	if got := body["code"]; got != CodeProductConfirmNameMismatch {
+		t.Errorf("a wrong name against a padded row answered code = %v, want %q",
+			got, CodeProductConfirmNameMismatch)
+	}
+	if _, err := ps.GetTrashed(ctx, accountID, third.ID); err != nil {
+		t.Fatalf("the REFUSED purge removed the product anyway: %v", err)
+	}
+}
+
 // TestRESTProductPurgeRefusesAProductWithSales pins the sales refusal and its
 // wire shape.
 //

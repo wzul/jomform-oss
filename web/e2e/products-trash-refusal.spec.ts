@@ -101,7 +101,7 @@ type Counts = { counts: () => { trashCalls: number } };
  * survive a reload that actually completes, so a stub that withheld the second
  * listing would hide the very wipe this file pins.
  */
-async function stubAPI(page: Page): Promise<Counts> {
+async function stubAPI(page: Page, trashed: typeof TRASHED = TRASHED): Promise<Counts> {
   const json = (status: number, body: unknown) => ({
     status,
     contentType: "application/json",
@@ -132,7 +132,7 @@ async function stubAPI(page: Page): Promise<Counts> {
   await page.route(/(.*)\/api\/rest\/products(\?.*)?$/, (r) => r.fulfill(json(200, [])));
   await page.route(/(.*)\/api\/rest\/products\/trash(\?.*)?$/, (r) => {
     trashCalls += 1;
-    return r.fulfill(json(200, [TRASHED]));
+    return r.fulfill(json(200, [trashed]));
   });
   // The RESTORE refusal as the shipped handler really answers it: the row is not
   // in the bin any more → respondErr → 404 "tidak dijumpai" → class code
@@ -153,7 +153,7 @@ async function stubAPI(page: Page): Promise<Counts> {
  * catalogue is the default — a new visitor must never land in the bin). The
  * trashed row's name is the loaded signal.
  */
-async function openTrash(page: Page): Promise<Counts> {
+async function openTrash(page: Page, trashed: typeof TRASHED = TRASHED): Promise<Counts> {
   await page.addInitScript(() => {
     // Nothing is inherited from another spec: a leftover jf_lang / jf_workspace
     // would make this render a state no new visitor has (the board has been bitten
@@ -167,11 +167,15 @@ async function openTrash(page: Page): Promise<Counts> {
       /* storage unavailable */
     }
   });
-  const stub = await stubAPI(page);
+  const stub = await stubAPI(page, trashed);
   await page.goto("/products", { waitUntil: "networkidle" });
 
   await page.getByRole("tab", { name: "Trash", exact: true }).click();
-  await expect(page.locator("li", { hasText: TRASHED.name }).first()).toBeVisible({ timeout: 45_000 });
+  // The row's name is matched TRIMMED: a row under test may deliberately carry a
+  // trailing space, and Playwright's string text-matching normalises whitespace —
+  // an untrimmed needle would match for the wrong reason (and a trimmed one keeps
+  // this reading the same row the assertion below is about).
+  await expect(page.locator("li", { hasText: trashed.name.trim() }).first()).toBeVisible({ timeout: 45_000 });
   await expect(page.locator("html"), "the reading is the ENGLISH default").toHaveAttribute("lang", "en");
   return stub;
 }
@@ -393,3 +397,95 @@ for (const action of ["restore", "purge"] as const) {
     console.log(`t_602c48f5 evidence (${action} transport): alert="${await readLine(line)}"`);
   });
 }
+
+// ─── card t_1ee11d1f ──────────────────────────────────────────────────────────
+//
+// A stored name with a TRAILING SPACE, and its permanent delete.
+//
+// THE DEFECT. The dialog's guard and the button were both armed by
+// `purgeTyped.trim() !== confirmPurge.name` — the caller's side trimmed, the
+// STORED side raw. TrimSpace can never return a string with a leading or
+// trailing space, so for a row stored as `"Kopi Padded "` that comparison had no
+// satisfying input at all: the destructive button could never enable, and the
+// merchant could not even see why (the padding is invisible in the row, in the
+// field and in the server's refusal prose). The server had the same shape
+// (`TrimSpace(in.ConfirmName) != p.Name`), so REST and MCP were equally stuck —
+// that half is pinned in api/internal/httpapi/product_trash_rest_test.go and
+// api/internal/mcpsrv/product_purge_name_mcp_test.go.
+//
+// WHAT THIS LEG PROVES, on the real built page: the value a merchant can SEE and
+// type arms the button; an empty field and a wrong value do NOT (without both of
+// those controls, a button that is simply always enabled would pass); and the
+// press really sends a confirmation the shared rule accepts.
+const PADDED = { ...TRASHED, id: "p_padded_guard", name: "Kopi Padded " };
+
+test("a stored name with a trailing space: the visible name arms the button, and the purge is sent", async ({ page }) => {
+  test.setTimeout(120_000);
+  await openTrash(page, PADDED);
+
+  // The purge route answers 200 and records what it was handed. Registered LAST,
+  // so it wins over the stub's 409 (sold product) refusal route.
+  let purgeBody: unknown = null;
+  await page.route(/(.*)\/api\/rest\/products\/[^/?]+\/purge(\?.*)?$/, (r) => {
+    purgeBody = r.request().postDataJSON();
+    return r.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "purged", product_id: PADDED.id, name: PADDED.name }),
+    });
+  });
+
+  const row = page.locator("li", { hasText: PADDED.name.trim() }).first();
+  await row.getByRole("button", { name: "Delete for good", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 20_000 });
+
+  const field = dialog.getByLabel("Product name");
+  const confirm = dialog.getByRole("button", { name: "Delete for good", exact: true });
+
+  // The two controls that keep the enablement assertion from being vacuous.
+  await expect(field).toHaveValue("");
+  await expect(
+    confirm,
+    "an EMPTY field must not arm a permanent delete — a button that is armed by anything " +
+      "would pass the assertion below while confirming nothing",
+  ).toBeDisabled();
+  await field.fill("not the name");
+  await expect(confirm, "a WRONG value must not arm a permanent delete").toBeDisabled();
+
+  // THE CARD'S ACCEPTANCE. "Kopi Padded" is what the merchant sees; the stored
+  // row's trailing space is invisible everywhere. Before this card the button
+  // could never reach this state.
+  await field.fill(PADDED.name.trim());
+  await expect(
+    confirm,
+    "the VISIBLE name of a product stored with a trailing space must arm the button — the " +
+      "old one-sided trim compared the caller's trimmed value against the raw stored one, " +
+      "which no input can satisfy (card t_1ee11d1f)",
+  ).toBeEnabled();
+
+  await confirm.click();
+
+  // It was really sent, and the value trims to the stored name — the rule the
+  // server applies. The stored bytes are NOT required of the caller, which is the
+  // point: the padding is invisible to them.
+  await expect.poll(() => purgeBody, { timeout: 10_000 }).not.toBeNull();
+  const sent = String((purgeBody as { confirm_name?: string } | null)?.confirm_name ?? "");
+  expect(
+    sent.trim(),
+    `the purge must carry a confirmation that trims to the stored name ` +
+      `(sent ${JSON.stringify(sent)} for stored ${JSON.stringify(PADDED.name)})`,
+  ).toBe(PADDED.name.trim());
+
+  // An accepted purge closes the dialog and does NOT leave the generic failure.
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.getByRole("alert").filter({ hasText: /couldn't delete this product/ }),
+    "an ACCEPTED purge must not render the page's failure sentence",
+  ).toHaveCount(0);
+
+  console.log(
+    `t_1ee11d1f evidence (padded stored name): field="${PADDED.name.trim()}" armed=true ` +
+      `empty_armed=false wrong_armed=false sent=${JSON.stringify(sent)} dialog_closed=true`,
+  );
+});

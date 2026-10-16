@@ -118,3 +118,58 @@ func TestTruncateStraddlingBodyIsValidUTF8(t *testing.T) {
 		}
 	}
 }
+
+// TestSameTypedValueTrimsBothSides is the unit-level pin for the typed
+// confirmation rule (card t_1ee11d1f). The defect was that only the CALLER's side
+// was trimmed (`TrimSpace(typed) == stored`), which no padded stored value can
+// ever satisfy — TrimSpace never returns a string with a leading or trailing
+// space, so a product named `"Kopi "` could not be purged by anyone, the exact
+// stored bytes included.
+//
+// The cases that must FAIL are as load-bearing as the ones that must pass: this
+// function is the whole confirmation gate on two surfaces, and a helper that
+// answered true for everything would let any value destroy any product. The
+// last group is that boundary — wrong case, a substring, a different value, and
+// the two blank shapes (blank stored vs blank typed) — plus the exact case the
+// REST suite already relies on: a padded CALLER with an unpadded stored name.
+func TestSameTypedValueTrimsBothSides(t *testing.T) {
+	cases := []struct {
+		name   string
+		typed  string
+		stored string
+		want   bool
+	}{
+		// The defect: a padded STORED value, named back exactly as stored.
+		{"a stored name with a trailing space is confirmed by the stored bytes", "Kopi ", "Kopi ", true},
+		{"...and by the name a merchant can actually see and type", "Kopi", "Kopi ", true},
+		{"a stored name with a leading space", "Kopi", " Kopi", true},
+		{"a stored name padded on both sides", " Kopi ", "Kopi ", true},
+		{"a stored name padded with a tab and a newline", "Kopi", "	Kopi\n", true},
+		{"a stored name that is only padding around the value", "  Kopi  ", "Kopi", true},
+
+		// The behaviour that already held and must not regress: the CALLER pads.
+		{"a padded caller against an unpadded stored name", "  Kopi  ", "Kopi", true},
+		{"both sides padded", "  Kopi  ", " Kopi ", true},
+
+		// The gate's boundary — these must stay mismatches.
+		{"an unpadded stored name, unpadded caller", "Kopi", "Kopi", true},
+		{"a different value", "Teh", "Kopi", false},
+		{"the right value with the wrong case", "kopi", "Kopi", false},
+		{"a substring of the stored value", "Kop", "Kopi", false},
+		{"the stored value plus an inner word", "Kopi Ais", "Kopi", false},
+		{"internal whitespace is NOT ignored", "Kopi  Ais", "Kopi Ais", false},
+		{"a caller padded with two spaces still matches", "Kopi  ", "Kopi", true},
+		{"a blank caller against a real stored name", "", "Kopi", false},
+		{"a whitespace-only caller against a real stored name", "   ", "Kopi", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SameTypedValue(tc.typed, tc.stored); got != tc.want {
+				t.Fatalf("SameTypedValue(%q, %q) = %v, want %v — this function is the whole "+
+					"confirmation gate on the REST and MCP purge paths (card t_1ee11d1f)",
+					tc.typed, tc.stored, got, tc.want)
+			}
+		})
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/payments"
+	"github.com/wzul/jomform/api/internal/textutil"
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
@@ -473,7 +474,12 @@ func (h *RESTHandlers) purgeProduct(w http.ResponseWriter, r *http.Request, actx
 		respondErr(w, r, err)
 		return
 	}
-	if strings.TrimSpace(in.ConfirmName) != p.Name {
+	// textutil.SameTypedValue trims BOTH sides. Trimming only the caller's value
+	// (the shape here before card t_1ee11d1f) made a padded stored name
+	// unconfirmable by anyone, the exact stored bytes included: TrimSpace can
+	// never return a string with a leading/trailing space, and the create path
+	// below stores the name verbatim. The caller still has to name the product.
+	if !textutil.SameTypedValue(in.ConfirmName, p.Name) {
 		writeErr(w, http.StatusBadRequest,
 			"taip nama produk ("+p.Name+") untuk sahkan pemadaman kekal")
 		return

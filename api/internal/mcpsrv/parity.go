@@ -19,6 +19,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/payments"
+	"github.com/wzul/jomform/api/internal/textutil"
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
@@ -1217,7 +1218,11 @@ func (s *Server) purgeProductMCP(
 	if err != nil {
 		return nil, nil, err
 	}
-	if strings.TrimSpace(in.ConfirmName) != p.Name {
+	// textutil.SameTypedValue trims BOTH sides — the rule the REST handler applies
+	// too. Trimming only the caller's side made a product whose stored name carries
+	// padding unconfirmable over MCP as well: `{"name":"Kopi "}` is stored verbatim,
+	// and TrimSpace(typed) can never equal "Kopi " (card t_1ee11d1f).
+	if !textutil.SameTypedValue(in.ConfirmName, p.Name) {
 		return nil, map[string]any{
 			"status": "refused",
 			"error": "taip nama produk untuk sahkan pemadaman kekal (produk: " + p.Name + "). " +

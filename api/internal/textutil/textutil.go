@@ -11,7 +11,34 @@
 // implementation, one place to fix it.
 package textutil
 
-import "unicode/utf8"
+import (
+	"strings"
+	"unicode/utf8"
+)
+
+// SameTypedValue reports whether a caller's TYPED confirmation and the STORED
+// value it is asked to name back are the same value, ignoring leading and
+// trailing whitespace on BOTH sides.
+//
+// The typed-confirmation gates (a product's NAME, a form's or a workspace's
+// slug) all ask the caller to repeat the stored value before something
+// irreversible happens, and all of them trimmed only the CALLER's side. That
+// direction is safe on its own, but the comparison was then
+// `TrimSpace(typed) == stored`, which no padded STORED value can ever satisfy:
+// TrimSpace never returns a string with a leading or trailing space, so a row
+// whose stored value carries padding is unconfirmed-able by everyone — the exact
+// stored bytes included. A product name is stored VERBATIM
+// (httpapi.createProduct and the MCP upsert both take the name as given), so a
+// paste or a name typed with a trailing space is enough to reach that state, and
+// the only escape left to the merchant is renaming the product first.
+//
+// Both sides therefore go through the same trimming here. The gate keeps its
+// meaning — the caller still has to name the thing being destroyed, and a
+// different value is still a mismatch — while staying reachable for every stored
+// value.
+func SameTypedValue(typed, stored string) bool {
+	return strings.TrimSpace(typed) == strings.TrimSpace(stored)
+}
 
 // Truncate caps s to at most n CHARACTERS (runes), cutting on a rune boundary.
 //
