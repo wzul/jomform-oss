@@ -28,6 +28,10 @@
 //     braces: it keeps a run clear of a PEER still built from a pre-fix fixture,
 //     which FlushDBs its hardcoded number (/3, /4, /7, /11, /12, /13) and would
 //     delete the prefixed keys too if this run happened to be on that number.
+//  3. A run that is KILLED before its t.Cleanup cannot delete its keys at all —
+//     and no test key carries a TTL, so nothing else would ever remove them.
+//     pruneDeadValkeyKeys (valkey_prune.go) reclaims them on the next run: every
+//     key under jftest: whose OWNING pid is gone, and only those.
 //
 // Nothing here ever calls FlushDB. Deleting a key this process did not write is
 // what made the old fixtures destructive, and it is never needed once the keys
@@ -39,7 +43,9 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -47,6 +53,19 @@ import (
 
 // ValkeyEnv is the environment variable holding the integration-test Valkey URL.
 const ValkeyEnv = "JOMFORM_TEST_VALKEY_URL"
+
+// keyNamespaceRoot is the prefix EVERY test key lives under — production keys
+// are `jf:...`, so this root is the whole of what the suite can have written.
+// The reclaim below scans it, and the guard in internal/httpapi asserts that a
+// test prefix starts with it.
+const keyNamespaceRoot = "jftest:"
+
+// keyNamespacePrefix is the fixed leading component of Prefix(): the pid (and
+// nothing else) follows it, e.g. "jftest:p48213:". It is ONE expression because
+// two places depend on its exact shape — Prefix builds a key namespace with it,
+// and keyOwnerPID (below) reads the owning process back out of a key name. A
+// second copy of the rule is how the two would drift.
+const keyNamespacePrefix = keyNamespaceRoot + "p"
 
 // Prefix returns the key namespace this test PROCESS owns, e.g.
 // "jftest:p48213:". Pid-derived, so two concurrent runs of the same package write
@@ -59,7 +78,29 @@ const ValkeyEnv = "JOMFORM_TEST_VALKEY_URL"
 // It is the right namespace when state must survive across the tests of one
 // binary; use PrefixFor when each test needs its own.
 func Prefix() string {
-	return fmt.Sprintf("jftest:p%d:", os.Getpid())
+	return fmt.Sprintf("%s%d:", keyNamespacePrefix, os.Getpid())
+}
+
+// keyOwnerPID reads the pid a test key namespace was built for out of the key
+// itself, e.g. jftest:p48213:TestFoo-1a2b3c4d:delayed → 48213. ok is false when
+// the name carries no usable jftest:p<pid>: namespace at all, which includes a
+// key of the production shape (jf:emailq:jobs) and a jftest: key that predates
+// the pid scheme: neither can be attributed to a process, and an unattributable
+// key is never deleted (see reclaimableValkeyKey).
+func keyOwnerPID(key string) (int, bool) {
+	rest, ok := strings.CutPrefix(key, keyNamespacePrefix)
+	if !ok {
+		return 0, false
+	}
+	i := strings.IndexByte(rest, ':')
+	if i <= 0 {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(rest[:i])
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
 }
 
 // PrefixFor returns Prefix plus the key part this test owns, e.g.
@@ -72,7 +113,14 @@ func Prefix() string {
 // the test had not written, so each one also cleared a live process's or a peer
 // run's state — a fixture cannot be allowed to reach outside its own keys to
 // make its assertions deterministic. A name of its own is the deterministic
-// thing, and it costs nothing: the keys expire or are cleaned up with the run.
+// thing, and it costs nothing: the keys are deleted at test cleanup, and a run
+// KILLED before that cleanup cannot leak them either — the next run reclaims
+// them (pruneDeadValkeyKeys, valkey_prune.go), keyed on the pid in this very
+// prefix.
+//
+// Nothing in the suite relies on a test key EXPIRING: no code sets a TTL on
+// one, so an unreclaimed key lives forever. Any statement that they expire has
+// to come with the TTL that makes it true.
 func PrefixFor(t *testing.T) string {
 	t.Helper()
 	return PrefixForName(t.Name())
@@ -158,23 +206,21 @@ func Keyspace() int {
 // dequeued job is its own, must not inherit an earlier test's keys. A test that
 // genuinely needs state shared with its siblings in the same binary can build
 // its own prefix on Prefix() instead.
+//
+// Before the caller writes anything, the FIRST call in this process also runs
+// pruneDeadValkeyKeys once: the keys a KILLED run left behind are reclaimed
+// here, because that is the only hook every Valkey-backed suite passes through.
 func Valkey(t *testing.T) (*goredis.Client, string) {
 	t.Helper()
 	raw := os.Getenv(ValkeyEnv)
 	if raw == "" {
 		t.Skipf("%s not set; skipping Valkey integration test", ValkeyEnv)
 	}
-	// go-redis only understands redis://; the deployment uses valkey://. Any DB
-	// in the configured URL is replaced by this run's own.
-	u := strings.TrimPrefix(raw, "valkey://")
-	if i := strings.LastIndex(u, "/"); i >= 0 {
-		u = u[:i]
-	}
-	opts, err := goredis.ParseURL(fmt.Sprintf("redis://%s/%d", u, Keyspace()))
+	valkeyPruneOnce.Do(func() { pruneDeadValkeyKeys(context.Background()) })
+	rdb, err := newValkeyClient(Keyspace())
 	if err != nil {
-		t.Fatalf("parse %s: %v", ValkeyEnv, err)
+		t.Fatalf("%v", err)
 	}
-	rdb := goredis.NewClient(opts)
 	prefix := PrefixFor(t)
 	t.Cleanup(func() {
 		deleteOwnKeys(t, rdb, prefix)
@@ -184,6 +230,42 @@ func Valkey(t *testing.T) (*goredis.Client, string) {
 		t.Fatalf("test valkey unavailable: %v", err)
 	}
 	return rdb, prefix
+}
+
+// valkeyPruneOnce makes the reclaim of a killed run's keys run at most once per
+// test process: the first Valkey-backed test pays for the scan, and every test
+// after it does not.
+var valkeyPruneOnce sync.Once
+
+// valkeyAddr returns the configured Valkey endpoint with any DB index stripped —
+// what go-redis needs before this run's own index is appended. The deployment
+// uses valkey://, which go-redis does not understand, so the scheme is
+// normalised here rather than at every call site.
+func valkeyAddr() (string, error) {
+	u := strings.TrimPrefix(os.Getenv(ValkeyEnv), "valkey://")
+	if i := strings.LastIndex(u, "/"); i >= 0 {
+		u = u[:i]
+	}
+	if u == "" {
+		return "", fmt.Errorf("%s names no host", ValkeyEnv)
+	}
+	return u, nil
+}
+
+// newValkeyClient returns a client on the given DB number of the configured
+// endpoint. It is the ONE place a test client is built, so the test namespace
+// and the reclaim of a killed run's keys always address the same server — the
+// reclaim needs the OTHER reserved indexes too, and it gets them from here.
+func newValkeyClient(db int) (*goredis.Client, error) {
+	addr, err := valkeyAddr()
+	if err != nil {
+		return nil, err
+	}
+	opts, err := goredis.ParseURL(fmt.Sprintf("redis://%s/%d", addr, db))
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", ValkeyEnv, err)
+	}
+	return goredis.NewClient(opts), nil
 }
 
 // deleteOwnKeys removes the keys under prefix by SCAN, not KEYS, and never a key
