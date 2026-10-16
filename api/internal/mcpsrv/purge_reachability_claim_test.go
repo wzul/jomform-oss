@@ -85,13 +85,18 @@ package mcpsrv
 // AFile pins both directions of the quotation rule against the real files. That
 // combination is what keeps an exemption from rotting into a place to park a claim.
 //
-// KNOWN OPEN, DELIBERATELY NOT FIXED HERE (card t_2a686ada): web/src/components/
-// i18nDict.ts still tells the merchant the permanent delete of a workspace "lives
-// in the Trash view" / "is a separate, human-only step in the Trash view", which is
-// a CAPABILITY the dashboard does not have (the Trash section offers Restore
-// only, deliberately — see WorkspaceTab.tsx's header). That one needs a product
-// decision, not a wording fix, so it is not asserted either way here; the docs
-// sentence it contradicts IS pinned below.
+// WAS OPEN HERE, NOW SHIPPED ELSEWHERE (card t_2a686ada). This header used to
+// record, as KNOWN OPEN, that web/src/components/i18nDict.ts told the merchant the
+// permanent delete of a workspace "lives in the Trash view" / "is a separate,
+// human-only step in the Trash view" — a CAPABILITY the dashboard does not have
+// (the Trash section offers Restore only, deliberately — see WorkspaceTab.tsx's
+// header). That one did NOT need a product decision: it was a wording defect, it
+// was fixed as one, and it shipped. Every locale of ws.dangerHelp, ws.notEmptyHint
+// and ws.confirmBody now says the permanent step is reached through the REST API or
+// an MCP client acting for the owner. That fact is owned by its own sibling guard,
+// web/src/lib/trashCopyClaims.test.ts, which pins the corrected copy per locale and
+// bites on the pre-fix wording; nothing about it is asserted in this file, and
+// nothing here treats it as unfixed.
 //
 // This test reads SOURCE ONLY and needs no database, so it runs in the plain
 // `go test ./...` pass.

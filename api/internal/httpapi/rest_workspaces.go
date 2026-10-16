@@ -985,11 +985,14 @@ func (h *RESTHandlers) restoreWorkspace(w http.ResponseWriter, r *http.Request, 
 //     acting for the owner is not the in-app chat.
 //
 // So "only a person can ever purge" is NOT what this repo enforces, and no
-// comment here may say it. Widening the rule to the literal reading would mean
-// taking the tool out of the MCP registry for every purge tool, not just this
-// one — an open decision on the board, not something to slip in beside a comment.
-// The guard that keeps this statement honest is
-// mcpsrv/purge_reachability_claim_test.go.
+// comment here may say it. Widening the rule to that literal reading — taking the
+// tool out of the MCP registry for every purge tool, not just this one — is a
+// question that has been ASKED AND ANSWERED, against it (card t_cf87b437): the
+// rule is the in-app assistant lane's, so the MCP purge class stays registered
+// and an owner's write-scoped client still reaches it. It remains not something
+// to slip in beside a comment: a registry change of that size is Wan's call, not
+// a drive-by edit, and he has made it. The guard that keeps this statement honest
+// is mcpsrv/purge_reachability_claim_test.go.
 //
 // A LIVE workspace is a 404 here: the only way in is trash → purge, enforced in
 // the store.
