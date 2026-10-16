@@ -1510,7 +1510,14 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
 // neither changes that nor depends on it. The page's prose lives in string
 // literals, which the blanker keeps byte for byte, so every pin below still reads
 // what the page renders.
-const docsPage = read(DOCS_PAGE);
+//
+// THE CONST IS READ THROUGH codeOnly ITSELF (t_629da97d), not only inside
+// capProseProblems: the two claims this module makes about the page OUTSIDE that
+// function — the vacuity check in the test below, and the `turnPin` the comment
+// control is derived from — are positive prose claims too, and a `//` line could
+// have satisfied them. capProseProblems then blanks an already-blanked source, which
+// is a no-op: every byte offset, and every newline, is preserved.
+const docsPage = codeOnly(read(DOCS_PAGE));
 
 /** The word a small count is written as in prose, for the one sentence that spells its number. */
 const COUNT_WORDS = [
@@ -1805,7 +1812,9 @@ test("the caps-prose guard bites: a moved constant or a reworded sentence is RED
 // refusal must still MATCH, so this test cannot pass by making the reader refuse
 // everything.
 test("BITES: the caps guard reads rendered docs text, and only a bounded number", () => {
-  const shippedDocs = read(DOCS_PAGE);
+  // Through `codeOnly` like the guard it proves (t_629da97d): the anchor must be text
+  // the page RENDERS, or a `//` line could anchor a mutation as well as satisfy a pin.
+  const shippedDocs = codeOnly(read(DOCS_PAGE));
   const want = `${goConstNumber(goRest, "chatRatePerHour")} messages per hour, in bursts of ${goConstNumber(goRest, "chatBurst")}`;
   // Vacuity: the anchor must be on the page, or every mutation below lands
   // nowhere and this proof asserts nothing.
@@ -2936,40 +2945,147 @@ test("the nav entry and the page exist together, and the docs page is reachable"
   );
 });
 
-test('the inline "?" doc link points at the docs page that documents the boundary', () => {
-  assert.ok(
-    page.includes('href="/docs/chat"'),
-    'the assistant has no inline "?" doc link (AGENTS.md DOCUMENTATION PARITY step 4)',
-  );
-  const docs = read(DOCS_PAGE);
+// ── THE INLINE "?" LINK'S PAGE, READ AS THE USER READS IT (t_629da97d) ────────
+//
+// WHAT WAS WRONG. This guard and the creation guard below read the docs page with
+// `read(DOCS_PAGE)` — its raw BYTES — and then made POSITIVE claims about prose the
+// user reads ("the page names submit_feedback", "the page names purge_form"). A `//`
+// comment satisfies a positive claim exactly as well as the rendered sentence does,
+// and this page's own header comments already name both tools (page.tsx:9, :13-14).
+// Measured on the merged tree (the guard itself, `node --test
+// src/lib/chatPage.test.ts`, 35 tests): every RENDERED occurrence of the two names
+// taken out of the page — the string literals AND the JSX text in the "Related:"
+// line — with the comments left carrying them, kept this file GREEN (35 pass / 0
+// fail), against a CONTROL (the same names deleted from the file entirely) that was
+// RED and named this test. A guard satisfied by its own comment is satisfied by
+// nothing.
+//
+// `codeOnly` is this repo's shared, JSX-text-aware blanker (lib/jsxSource.ts): a
+// comment cannot satisfy a pin, while JSX text and string literals — where this
+// page's copy actually lives — are kept byte for byte, so the guard still reads
+// exactly what the page renders.
+//
+// THE RULE IS A PURE FUNCTION over the two sources, so the bite proof below runs the
+// IDENTICAL reader against a mutated page: a proof that re-stated the checks would
+// prove nothing about them (the file's doctrine — see capProseProblems).
+
+/**
+ * `src` with every occurrence of `name` that `codeOnly` KEEPS — JSX text and string
+ * literals, i.e. what the page actually renders — replaced by `replacement`. An
+ * occurrence the reader already blanks (a `//` line) is left where it is, so the RAW
+ * source still carries the name while nothing the user reads does.
+ *
+ * This is the mutation the guard below exists to refuse, so it has to reproduce the
+ * shape the page really has; the proof asserts BOTH halves rather than assuming them.
+ */
+function unrender(src: string, name: string, replacement: string): string {
+  const code = codeOnly(src);
+  let out = "";
+  let from = 0;
+  for (let at = src.indexOf(name); at !== -1; at = src.indexOf(name, from)) {
+    out += src.slice(from, at);
+    out += code.slice(at, at + name.length) === name ? replacement : name;
+    from = at + name.length;
+  }
+  return out + src.slice(from);
+}
+
+/** Every problem with the boundary the inline "?" leads to, as sentences. */
+function docLinkProblems(pageSrc: string, docsSrc: string): string[] {
+  const out: string[] = [];
+  const page = codeOnly(pageSrc);
+  const docs = codeOnly(docsSrc);
+  if (!page.includes('href="/docs/chat"')) {
+    out.push('the assistant has no inline "?" doc link (AGENTS.md DOCUMENTATION PARITY step 4)');
+  }
   // The page must say what the assistant CANNOT do — that is the feature.
-  assert.ok(
-    /cannot change/i.test(docs) || /cannot delete/i.test(docs),
-    "the docs page does not state what the assistant cannot do — the boundary is the whole design",
-  );
-  assert.ok(
-    docs.includes("submit_feedback"),
-    "the docs page does not name the MCP tool behind the one write (submit_feedback)",
-  );
-  // Phase 2: the docs page must document the confirmation lane too — how a
-  // proposal is confirmed, and that the assistant cannot confirm it itself.
-  assert.ok(
-    docs.includes("propose_write"),
-    "the docs page does not name propose_write — the phase-2 tool would be undocumented " +
-      "(AGENTS.md DOCUMENTATION PARITY step 2)",
-  );
-  assert.ok(
-    /confirm/i.test(docs),
-    "the docs page does not explain confirmation — the whole phase-2 design is that a human " +
-      "confirms and the server executes",
-  );
+  if (!/cannot change/i.test(docs) && !/cannot delete/i.test(docs)) {
+    out.push(
+      "the docs page does not state what the assistant cannot do — the boundary is the whole design",
+    );
+  }
+  if (!docs.includes("submit_feedback")) {
+    out.push("the docs page does not name the MCP tool behind the one write (submit_feedback)");
+  }
+  // Phase 2: the docs page must document the confirmation lane too — how a proposal
+  // is confirmed, and that the assistant cannot confirm it itself.
+  if (!docs.includes("propose_write")) {
+    out.push(
+      "the docs page does not name propose_write — the phase-2 tool would be undocumented " +
+        "(AGENTS.md DOCUMENTATION PARITY step 2)",
+    );
+  }
+  if (!/confirm/i.test(docs)) {
+    out.push(
+      "the docs page does not explain confirmation — the whole phase-2 design is that a human " +
+        "confirms and the server executes",
+    );
+  }
   // The workspace scope is user-VISIBLE: a member of two workspaces can hit the
-  // refusal, so it must be documented where the inline "?" leads, or the user
-  // reads a 403 with no explanation of what to do about it.
-  assert.ok(
-    /selected workspace/i.test(docs),
-    "the docs page does not say a confirmation writes in the SELECTED workspace — a user who hits " +
-      "the scope refusal has nothing telling them why, or that choosing a workspace is the fix",
+  // refusal, so it must be documented where the inline "?" leads, or the user reads
+  // a 403 with no explanation of what to do about it.
+  if (!/selected workspace/i.test(docs)) {
+    out.push(
+      "the docs page does not say a confirmation writes in the SELECTED workspace — a user who " +
+        "hits the scope refusal has nothing telling them why, or that choosing a workspace is the fix",
+    );
+  }
+  return out;
+}
+
+test('the inline "?" doc link points at the docs page that documents the boundary', () => {
+  const problems = docLinkProblems(page, read(DOCS_PAGE));
+  assert.deepEqual(
+    problems,
+    [],
+    `the inline "?" doc link and the docs page it points at disagree:\n  - ${problems.join("\n  - ")}`,
+  );
+});
+
+test('BITES: the "?" doc-link claims read RENDERED prose — a name left in a comment does not satisfy them', () => {
+  const docsSrc = read(DOCS_PAGE);
+  assert.deepEqual(
+    docLinkProblems(page, docsSrc),
+    [],
+    "CONTROL: the shipped page and the docs page it points at are not green — a red below could " +
+      "not be attributed to the mutation",
+  );
+
+  const buried = unrender(
+    unrender(docsSrc, "submit_feedback", "the report tool"),
+    "propose_write",
+    "the proposal lane",
+  );
+  // THE MUTATION'S SHAPE, asserted rather than assumed: the raw read is still satisfied
+  // (the page's own comments name both tools) while nothing the page renders does. That
+  // is the state measured GREEN on this file before t_629da97d.
+  for (const name of ["submit_feedback", "propose_write"]) {
+    assert.ok(
+      buried.includes(name),
+      `the mutation left ${name} nowhere in the RAW source — it measures a DELETION, not a pin a ` +
+        `comment can satisfy`,
+    );
+    assert.ok(
+      !codeOnly(buried).includes(name),
+      `the mutation still RENDERS ${name} — it would prove nothing about the reader`,
+    );
+  }
+
+  const found = docLinkProblems(page, buried);
+  for (const name of ["submit_feedback", "propose_write"]) {
+    assert.ok(
+      found.some((s) => s.includes(name)),
+      `a page that names ${name} only in a COMMENT satisfies this guard again: the reader has gone ` +
+        `back to raw source, so the name can be dropped from the prose a user reads while the guard ` +
+        `stays green. Reported:\n  ${found.length ? found.join("\n  - ") : "(nothing)"}`,
+    );
+  }
+  // The other pins are untouched by this mutation, so they must not be what reds here.
+  assert.deepEqual(
+    found.filter((s) => !s.includes("submit_feedback") && !s.includes("propose_write")),
+    [],
+    "the mutation reds a pin it did not touch — retarget it rather than reading the two above as " +
+      "this reader's work",
   );
 });
 
@@ -2990,16 +3106,186 @@ test('the inline "?" doc link points at the docs page that documents the boundar
 // read the page's prose alone would pass on a tree where the Go set moved out
 // from under it — which is exactly the direction that shipped this defect. So the
 // set is derived from `chat_tools.go` and both halves are asserted against it.
-test("the docs say the assistant may CREATE a form, and that a permanent purge stays human-only", () => {
-  const docs = read(DOCS_PAGE);
+/**
+ * The two sentences the creation guard pins by PATTERN, at module scope so the bite
+ * proof below takes the very strings the guard looks for OFF the page (the idiom of
+ * NUMBERLESS_CLAIMS): a proof keyed on its own copy of a sentence rots into a no-op
+ * the day the sentence is legitimately reworded and this list is updated with it.
+ */
+const UPSERT_CREATE_SENTENCE =
+  "The fourth creates: upsert_form is proposable, and a confirmed card CREATES a new form when it names none, or UPDATES the one it names.";
+const PURGE_HUMAN_ONLY_SENTENCE =
+  "The one step with no inverse is deleting a form for good, purge_form: it destroys the form and everything attached to it, and no restore brings it back. It is human-only and the assistant can never propose it";
 
-  // Vacuity, in the file's idiom: prove this is the page that carries the section,
-  // and the Go file that carries the set, before either claim is believed.
+/**
+ * `src` with the string-literal body `sentence` moved onto a `//` line immediately
+ * above the literal that renders it, and `replacement` left in the literal. The RAW
+ * source still carries the sentence — the state that measured GREEN before
+ * t_629da97d — while nothing the user reads does.
+ *
+ * ADJACENT rather than appended: the two pins below are patterns with a bounded
+ * window, so a comment at the end of the file would not satisfy the raw read either,
+ * and a mutation the raw reader already refuses measures a deletion rather than the
+ * hole this guard is about.
+ */
+function sentenceInAComment(src: string, sentence: string, replacement: string): string {
+  const at = src.indexOf(sentence);
   assert.ok(
-    docs.includes("What it may propose"),
-    `${DOCS_PAGE} is not the chat docs page this guard means to judge (its "What it may propose" ` +
-      `section is missing)`,
+    at !== -1,
+    `the page no longer renders ${JSON.stringify(sentence)} — retarget this control rather than ` +
+      `letting it mutate nothing`,
   );
+  assert.ok(
+    !sentence.includes("\n"),
+    "the sentence spans a line break — this control is written for one string literal",
+  );
+  const lineStart = src.lastIndexOf("\n", at) + 1;
+  const indent = /^\s*/.exec(src.slice(lineStart, at + 1))?.[0] ?? "";
+  return (
+    src.slice(0, lineStart) +
+    `${indent}// ${sentence}\n` +
+    src.slice(lineStart, at) +
+    replacement +
+    src.slice(at + sentence.length)
+  );
+}
+
+/**
+ * Every problem with the /docs/chat CREATION copy, as sentences.
+ *
+ * Pure over `docsSrc` so the bite proof below runs the IDENTICAL reader against a
+ * page whose tool names live only in a comment. The page is read through `codeOnly`
+ * (t_629da97d — see the note above docLinkProblems): every claim here is about prose
+ * the user reads, and this page's own comments name tools too.
+ */
+function creationDocsProblems(docsSrc: string): string[] {
+  const out: string[] = [];
+  const docs = codeOnly(docsSrc);
+
+  // Vacuity, in the file's idiom: prove this is the page that carries the section
+  // before either claim is believed.
+  if (!docs.includes("What it may propose")) {
+    out.push(
+      `${DOCS_PAGE} is not the chat docs page this guard means to judge (its "What it may ` +
+        `propose" section is missing)`,
+    );
+  }
+
+  // ── 1. The sentence that shipped the contradiction cannot come back. ──
+  if (/creating anything new/i.test(docs)) {
+    out.push(
+      'the docs page claims the proposable set excludes "creating anything new" again — #958 ' +
+        "(t_804040be) makes upsert_form proposable, so that sentence is the shipped defect",
+    );
+  }
+  // The surrounding sentence it lived in is gone too: the old copy framed the whole
+  // set as field edits with "no new object created", which is the same false claim
+  // one clause longer.
+  if (/no new object created/i.test(docs)) {
+    out.push(
+      'the docs page still describes the set as field edits with "no new object created" — a ' +
+        "confirmed upsert_form card CAN create a new form, so the framing is false",
+    );
+  }
+
+  // ── 2. The creation is stated, and it says WHICH HALF. ──
+  // `upsert_form` is BOTH a create and an update, so a page that only said "edits a form"
+  // would misdescribe a card that is about to create one. The card's own summary states
+  // both halves for exactly this reason — and since t_30ffa28a that sentence is a
+  // DICTIONARY entry (proposalDocs["upsert_form"].summaryKey →
+  // chat.proposal.summary.upsert_form; src/lib/chatProposal.test.ts fails if the key has
+  // no entry), so the English page has to say the same thing.
+  if (!docs.includes("upsert_form")) {
+    out.push(
+      "the docs page no longer names upsert_form — the proposable creation would be " +
+        'undocumented, and the page is the inline "?" the chat panel points at (AGENTS.md ' +
+        "DOCUMENTATION PARITY)",
+    );
+  }
+  if (!/upsert_form[\s\S]{0,200}(CREATES a new form|creates a new form)[\s\S]{0,120}(UPDATES|updates)/.test(docs)) {
+    out.push(
+      "the docs page names upsert_form but does not say it CREATES a new form (when it names none) " +
+        "as well as UPDATES one it names — the two halves are the difference the confirmation is " +
+        'FOR, and the Go card summary states both (proposal.go proposalDocs["upsert_form"])',
+    );
+  }
+
+  // ── 3. The bin is named — it is the whole reason the creation is admissible. ──
+  // Wan's decision was "the assistant may take it as far as the bin; only a person
+  // purges". A page that allowed the creation but never mentioned the bin would leave
+  // the user without the recovery path the decision rests on.
+  if (!/(to the trash|the trash|from the trash)/i.test(docs)) {
+    out.push(
+      "the docs page allows a created form but never names the trash/bin — the recoverability of " +
+        "a mistaken creation is the entire justification for letting the assistant create one " +
+        '(Wan, t_804040be: "assistant boleh buat sampai masuk ke bin")',
+    );
+  }
+
+  // ── 4. The permanent step is stated as human-only. ──
+  if (!docs.includes("purge_form")) {
+    out.push(
+      "the docs page never names purge_form — the ONE step with no inverse is the thing a user " +
+        "confirming a created form most needs to be told about",
+    );
+  }
+  if (!/purge_form[\s\S]{0,200}(never propose|cannot propose|never be proposed|is not proposable)/i.test(docs)) {
+    out.push(
+      "the docs page names purge_form but does not say the assistant can never propose it — a " +
+        "reader would be left believing a permanent delete is one click away in the chat, which is " +
+        'the opposite of Wan\'s rule ("Manusia sahaja boleh purge kekal")',
+    );
+  }
+
+  // ── 5. The bin is the PERSON's action, not the assistant's. ──
+  // The creation above is admissible because a form is BINNED, not destroyed — but the bin
+  // itself is not an assistant capability. delete_form/restore_form are not proposable AND
+  // not in the chat's read allowlist, so the chat has no lane to bin or restore a form at
+  // all; only purge_form is called out as human-only, yet it is not the only step that is.
+  // The rework copy shipped the same class of defect it set out to fix, one claim over:
+  // "the assistant can take a form as far as the trash" credited the model with an action
+  // the server gives it no route to take.
+  const credited = assistantBinClaims(docs);
+  if (credited.length > 0) {
+    out.push(
+      "the docs page credits the ASSISTANT with binning, trashing, restoring or deleting a form — " +
+        "delete_form/restore_form are not proposable and not in the chat's read allowlist, so the " +
+        "bin is the person's action on the forms page, never the assistant's. Offending phrasing(s): " +
+        `${JSON.stringify(credited)}. (The shipped rework copy said "the assistant can take a form ` +
+        'as far as the trash"; the infinitive, passive and bare-verb re-wordings of that claim are ' +
+        "the same defect one phrasing over.)",
+    );
+  }
+  // Positive control: the page must actually attribute the bin to the person rather than
+  // dropping the recovery path that justifies the creation. A copy that simply deleted the
+  // false sentence would pass a negative-only guard while leaving the reader with no idea
+  // who bins the form.
+  if (
+    !/bin belongs to (you|the person|the owner)|not the assistant[\s\S]{0,60}(forms page|trash)|you[\s\S]{0,40}move[s]? it to the trash/i.test(
+      docs,
+    )
+  ) {
+    out.push(
+      "the docs page never says the BIN is the person's action — a reader told the assistant may " +
+        "create a form needs to know who can bin it, and the page must not leave that to the " +
+        'assistant (Wan, t_804040be: "assistant boleh buat sampai masuk ke bin"; the bin is the ' +
+        "person's steps on the forms page)",
+    );
+  }
+  return out;
+}
+
+test("the docs say the assistant may CREATE a form, and that a permanent purge stays human-only", () => {
+  // The prose half, through the shared reader: `codeOnly` inside creationDocsProblems,
+  // and a PURE rule so the bite proof below drives the IDENTICAL reader (t_629da97d).
+  const problems = creationDocsProblems(read(DOCS_PAGE));
+  assert.deepEqual(
+    problems,
+    [],
+    `the /docs/chat creation copy and the proposable set disagree:\n  - ${problems.join("\n  - ")}`,
+  );
+
+  // ── the Go half: the page's claims are only TRUE while the set says so ──
   const setMatch = goChatTools.match(/var chatProposableTools\s*=\s*\[\]string\{([\s\S]*?)\}/);
   assert.ok(
     setMatch,
@@ -3013,43 +3299,6 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
     `parsed ${proposable.length} name(s) out of chatProposableTools — the extractor has drifted ` +
       `from the literal's shape, so every claim below would be judged against nothing`,
   );
-
-  // ── 1. The sentence that shipped the contradiction cannot come back. ──
-  assert.doesNotMatch(
-    docs,
-    /creating anything new/i,
-    "the docs page claims the proposable set excludes \"creating anything new\" again — #958 " +
-      "(t_804040be) makes upsert_form proposable, so that sentence is the shipped defect",
-  );
-  // The surrounding sentence it lived in is gone too: the old copy framed the whole
-  // set as field edits with "no new object created", which is the same false claim
-  // one clause longer.
-  assert.doesNotMatch(
-    docs,
-    /no new object created/i,
-    "the docs page still describes the set as field edits with \"no new object created\" — a " +
-      "confirmed upsert_form card CAN create a new form, so the framing is false",
-  );
-
-  // ── 2. The creation is stated, and it says WHICH HALF. ──
-  // `upsert_form` is BOTH a create and an update, so a page that only said "edits
-  // a form" would misdescribe a card that is about to create one. The card's own
-  // summary states both halves for exactly this reason — and since t_30ffa28a that
-  // sentence is a DICTIONARY entry (proposalDocs["upsert_form"].summaryKey →
-  // chat.proposal.summary.upsert_form; src/lib/chatProposal.test.ts fails if the
-  // key has no entry), so the English page has to say the same thing.
-  assert.ok(
-    docs.includes("upsert_form"),
-    "the docs page no longer names upsert_form — the proposable creation would be undocumented, " +
-      "and the page is the inline \"?\" the chat panel points at (AGENTS.md DOCUMENTATION PARITY)",
-  );
-  assert.match(
-    docs,
-    /upsert_form[\s\S]{0,200}(CREATES a new form|creates a new form)[\s\S]{0,120}(UPDATES|updates)/,
-    "the docs page names upsert_form but does not say it CREATES a new form (when it names none) " +
-      "as well as UPDATES one it names — the two halves are the difference the confirmation is FOR, " +
-      "and the Go card summary states both (proposal.go proposalDocs[\"upsert_form\"])",
-  );
   // The claim is only true while the tool is really proposable — read from Go, not
   // asserted from the page's own words.
   assert.ok(
@@ -3057,32 +3306,6 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
     `the docs page tells the user a confirmed card can create a form, but upsert_form is NOT in ` +
       `chat_tools.go's chatProposableTools (${proposable.join(", ")}) — the page and the server ` +
       `disagree, and the page is wrong`,
-  );
-
-  // ── 3. The bin is named — it is the whole reason the creation is admissible. ──
-  // Wan's decision was "the assistant may take it as far as the bin; only a person
-  // purges". A page that allowed the creation but never mentioned the bin would
-  // leave the user without the recovery path the decision rests on.
-  assert.match(
-    docs,
-    /(to the trash|the trash|from the trash)/i,
-    "the docs page allows a created form but never names the trash/bin — the recoverability of a " +
-      "mistaken creation is the entire justification for letting the assistant create one " +
-      "(Wan, t_804040be: \"assistant boleh buat sampai masuk ke bin\")",
-  );
-
-  // ── 4. The permanent step is stated as human-only, and it really is. ──
-  assert.ok(
-    docs.includes("purge_form"),
-    "the docs page never names purge_form — the ONE step with no inverse is the thing a user " +
-      "confirming a created form most needs to be told about",
-  );
-  assert.match(
-    docs,
-    /purge_form[\s\S]{0,200}(never propose|cannot propose|never be proposed|is not proposable)/i,
-    "the docs page names purge_form but does not say the assistant can never propose it — a reader " +
-      "would be left believing a permanent delete is one click away in the chat, which is the " +
-      "opposite of Wan's rule (\"Manusia sahaja boleh purge kekal\")",
   );
   // And the page's claim is true: purge_form must NOT be proposable.
   assert.ok(
@@ -3093,14 +3316,7 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
       "TestChatNeverProposesAPermanentDelete pins the same rule from the Go side)",
   );
 
-  // ── 5. The bin is the PERSON's action, not the assistant's. ──
-  // The creation above is admissible because a form is BINNED, not destroyed — but
-  // the bin itself is not an assistant capability. delete_form/restore_form are not
-  // proposable AND not in the chat's read allowlist, so the chat has no lane to bin
-  // or restore a form at all; only purge_form is called out as human-only, yet it is
-  // not the only step that is. The rework copy shipped the same class of defect it
-  // set out to fix, one claim over: "the assistant can take a form as far as the
-  // trash" credited the model with an action the server gives it no route to take.
+  // ── the read allowlist: the chat has no lane to reach the bin at all. ──
   // The set is read from Go so the copy cannot drift in EITHER direction.
   const readSetMatch = goChatTools.match(/var chatReadTools\s*=\s*\[\]string\{([\s\S]*?)\}/);
   assert.ok(
@@ -3123,47 +3339,72 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
         `(read allowlist: ${readTools.join(", ")})`,
     );
   }
-  // And the page itself: no sentence may name the assistant as the AGENT that bins,
-  // trashes, restores or deletes a form. The page MAY name the trash — the fix does,
-  // to attribute the action to the person — so the guard keys on the assistant as
-  // the actor, not on the word "trash" appearing anywhere and NOT on adjacency. The
-  // scan is STRUCTURAL (see the arm's header): it normalises each clause and asserts
-  // the assistant is the subject or the agent of a bin verb, so every phrasing below
-  // — the infinitive ("ask the assistant to bin"), the passive ("…binned by the
-  // assistant"), the bare verb ("the assistant bins"), the perfect ("the assistant
-  // has binned"), the periphrastic future ("the assistant is going to delete"), the
-  // relative clause ("the assistant is the one who bins"), the possessive genitive
-  // ("binning a form is the assistant's job"), the fronted gerund ("restoring a form
-  // is something the assistant does"), the appositive ("the assistant, not you,
-  // deletes"), the light verb + gerund ("the assistant handles the binning"), the
-  // copular predication ("binning is what the assistant is for"), the topicalised
-  // cleft ("it is to the assistant that the form is binned"), the reversed nominal
-  // ("the binner of a form is the assistant") and the non-restrictive relative
-  // ("the assistant, whose job is to bin a form") — is RED by the same rule, not by
-  // a shape written for it (the actor-adjacency shape this replaces caught only the
-  // one phrasing the rework happened to remove).
-  const credited = assistantBinClaims(docs);
+});
+
+// ── THE CREATION GUARD'S OWN BITE (t_629da97d) ───────────────────────────────
+//
+// The same hole as the "?" guard's, in the reader t_4912a9bd did not own: this half
+// read `read(DOCS_PAGE)` — the page's raw BYTES — and then claimed positively that the
+// page NAMES upsert_form and purge_form, and that it says what each one does. A `//`
+// line satisfies a positive claim as well as the rendered sentence does, and the pins
+// here are PATTERNS with a bounded window, so the comment has to sit where the sentence
+// was, not at the end of the file.
+test('BITES: the creation guard reads RENDERED docs prose — a tool named only in a comment does not satisfy it', () => {
+  const shipped = read(DOCS_PAGE);
   assert.deepEqual(
-    credited,
+    creationDocsProblems(shipped),
     [],
-    "the docs page credits the ASSISTANT with binning, trashing, restoring or deleting a form — " +
-      "delete_form/restore_form are not proposable and not in the chat's read allowlist, so the " +
-      "bin is the person's action on the forms page, never the assistant's. Offending phrasing(s): " +
-      `${JSON.stringify(credited)}. (The shipped rework copy said \"the assistant can take a form as ` +
-      "far as the trash\"; the infinitive, passive and bare-verb re-wordings of that claim are the " +
-      "same defect one phrasing over.)",
+    "CONTROL: the shipped page is not green — a red below could not be attributed to the mutation",
   );
-  // Positive control: the page must actually attribute the bin to the person rather
-  // than dropping the recovery path that justifies the creation. A copy that simply
-  // deleted the false sentence would pass a negative-only guard while leaving the
-  // reader with no idea who bins the form.
-  assert.match(
-    docs,
-    /bin belongs to (you|the person|the owner)|not the assistant[\s\S]{0,60}(forms page|trash)|you[\s\S]{0,40}move[s]? it to the trash/i,
-    "the docs page never says the BIN is the person's action — a reader told the assistant may " +
-      "create a form needs to know who can bin it, and the page must not leave that to the " +
-      "assistant (Wan, t_804040be: \"assistant boleh buat sampai masuk ke bin\"; the bin is the " +
-      "person's steps on the forms page)",
+
+  const buried = sentenceInAComment(
+    sentenceInAComment(
+      shipped,
+      UPSERT_CREATE_SENTENCE,
+      "The fourth creates a new form when it names none, or updates the one it names.",
+    ),
+    PURGE_HUMAN_ONLY_SENTENCE,
+    "The one step with no inverse is deleting a form for good: it destroys the form and everything " +
+      "attached to it, and no restore brings it back. It is human-only and the assistant can never " +
+      "propose it",
+  );
+
+  const pins: Array<[string, RegExp]> = [
+    [
+      "upsert_form",
+      /upsert_form[\s\S]{0,200}(CREATES a new form|creates a new form)[\s\S]{0,120}(UPDATES|updates)/,
+    ],
+    ["purge_form", /purge_form[\s\S]{0,200}(never propose|cannot propose|never be proposed|is not proposable)/i],
+  ];
+  // THE MUTATION'S SHAPE, asserted rather than assumed: the RAW source still satisfies
+  // both pins, and nothing the page RENDERS carries either name.
+  for (const [name, pin] of pins) {
+    assert.ok(
+      buried.includes(name) && pin.test(buried),
+      `the mutation must leave the RAW source satisfying the ${name} pin — otherwise it measures a ` +
+        `DELETION rather than a name a comment can carry`,
+    );
+    assert.ok(
+      !codeOnly(buried).includes(name),
+      `the mutation still RENDERS ${name} — it would prove nothing about the reader`,
+    );
+  }
+
+  const found = creationDocsProblems(buried);
+  for (const [name] of pins) {
+    assert.ok(
+      found.some((s) => s.includes(name)),
+      `a page that names ${name} only in a COMMENT satisfies the creation guard again: the reader ` +
+        `has gone back to raw source, so the tool can be dropped from the prose a user reads while ` +
+        `the guard stays green. Reported:\n  ${found.length ? found.join("\n  - ") : "(nothing)"}`,
+    );
+  }
+  // The other pins are untouched by this mutation, so they must not be what reds here.
+  assert.deepEqual(
+    found.filter((s) => !s.includes("upsert_form") && !s.includes("purge_form")),
+    [],
+    "the mutation reds a pin it did not touch — retarget it rather than reading the two above as " +
+      "this reader's work",
   );
 });
 
@@ -3184,7 +3425,10 @@ test("the docs say the assistant may CREATE a form, and that a permanent purge s
 // shipped defect sentence it did catch. Nothing on disk is written: the mutation is
 // in memory, on the real page source read at module load.
 test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, both genitive orders, the gerund, both appositive variants, the it-cleft, the periphrastic passive, the nominal, the light verb + gerund, the copular predication, the topicalised cleft, the reversed nominal, the non-restrictive relative, the pro-verb across a clause boundary, the claim reported inside an information verb's clause, the bin gerund such a verb reports and a claim behind an auxiliary chain inside the reported clause", () => {
-  const shipped = read(DOCS_PAGE);
+  // Through `codeOnly` like the creation guard this proves (t_629da97d): the anchor the
+  // injections land on has to be text the page RENDERS, or the proof would be measuring
+  // the raw bytes while the guard reads the prose.
+  const shipped = codeOnly(read(DOCS_PAGE));
   const anchor = "A creation is the one shape the field-edit rule does not cover,";
   // Vacuity: if the anchor is gone the injections below land nowhere and this
   // proof would pass while testing nothing.
