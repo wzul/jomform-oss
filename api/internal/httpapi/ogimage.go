@@ -383,20 +383,94 @@ func ogDrawJFMonogram(img *image.RGBA, box image.Rectangle) {
 	ogDrawText(img, ogFaceTitle, "JF", box.Min.X+box.Dx()/2, box.Min.Y+box.Dy()/2+22, ogIndigo600)
 }
 
-// ogImageCache caches rendered PNGs keyed by form ID so repeated social
-// crawler hits don't re-render. Bounded by the number of distinct forms.
-var ogImageCache sync.Map // formID -> []byte
+// ogImageCacheKey is the set of inputs the rendered card is a function of.
+//
+// The cache used to be keyed on the form ID ALONE ("var ogImageCache sync.Map //
+// formID -> []byte"), while renderOGImage reads six values: it draws the form
+// TITLE, the subtitle (the workspace name plus the request HOST — the domain the
+// preview advertises), tints the gradient with the THEME colour and draws the
+// form's LOGO. So the first card rendered for a form was served for every later
+// request for that form, whatever the request carried:
+//
+//   - a form is resolvable on its workspace subdomain AND on a verified custom
+//     domain, and the second host got the FIRST host's card — a social preview
+//     naming an address that was not requested (measured: two hosts served
+//     byte-identical cards, 58686 bytes);
+//   - a title / theme / logo change was never reflected: the entry has no TTL
+//     and no invalidation, so it outlived every edit for the life of the
+//     process (measured: the card served after a title+theme PATCH was the
+//     pre-edit card, byte-for-byte), and the 24h Cache-Control then handed the
+//     same bytes to the CDN.
+//
+// CACHING RULE: an entry may only be keyed on values the payload is a function
+// of — here, all six. A struct key is used rather than a concatenated string so
+// no two different input sets can ever collide on a separator.
+type ogImageCacheKey struct {
+	formID, title, workspace, domain, themePrimary, logoURL string
+}
 
-// cachedOGImage returns the cached PNG for a form, rendering + caching on miss.
+// ogImageCacheMax bounds the process cache. The full key means a form EDIT
+// creates a new key and the entry it supersedes is never read again, so without
+// a bound a busy workspace would hold every revision it ever rendered (~50KB
+// per card). FIFO eviction is safe by construction: a dropped entry costs one
+// render and can never serve a wrong card.
+const ogImageCacheMax = 256
+
+type ogImageCacheEntry struct {
+	png []byte
+	seq uint64
+}
+
+var (
+	ogImageCacheMu  sync.Mutex
+	ogImageCache    = map[ogImageCacheKey]ogImageCacheEntry{}
+	ogImageCacheSeq uint64
+)
+
+// ogImageCacheGet returns the cached card for exactly this input set.
+func ogImageCacheGet(key ogImageCacheKey) ([]byte, bool) {
+	ogImageCacheMu.Lock()
+	defer ogImageCacheMu.Unlock()
+	e, ok := ogImageCache[key]
+	if !ok {
+		return nil, false
+	}
+	return e.png, true
+}
+
+// ogImageCachePut stores a rendered card, dropping the oldest entry when the
+// cap is exceeded.
+func ogImageCachePut(key ogImageCacheKey, png []byte) {
+	ogImageCacheMu.Lock()
+	defer ogImageCacheMu.Unlock()
+	ogImageCacheSeq++
+	ogImageCache[key] = ogImageCacheEntry{png: png, seq: ogImageCacheSeq}
+	if len(ogImageCache) > ogImageCacheMax {
+		var oldest ogImageCacheKey
+		oldestSeq := ^uint64(0)
+		for k, e := range ogImageCache {
+			if e.seq < oldestSeq {
+				oldest, oldestSeq = k, e.seq
+			}
+		}
+		delete(ogImageCache, oldest)
+	}
+}
+
+// cachedOGImage returns the PNG for one input set, rendering + caching on miss.
 func cachedOGImage(formID, title, workspace, domain, themePrimary, logoURL string) ([]byte, error) {
-	if v, ok := ogImageCache.Load(formID); ok {
-		return v.([]byte), nil
+	key := ogImageCacheKey{
+		formID: formID, title: title, workspace: workspace,
+		domain: domain, themePrimary: themePrimary, logoURL: logoURL,
+	}
+	if png, ok := ogImageCacheGet(key); ok {
+		return png, nil
 	}
 	pngBytes, err := renderOGImage(title, workspace, domain, themePrimary, logoURL)
 	if err != nil {
 		return nil, err
 	}
-	ogImageCache.Store(formID, pngBytes)
+	ogImageCachePut(key, pngBytes)
 	return pngBytes, nil
 }
 
