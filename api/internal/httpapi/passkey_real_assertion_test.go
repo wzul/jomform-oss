@@ -33,8 +33,10 @@ package httpapi
 //     a real authenticator produces: register through the real endpoints with
 //     UP|UV|AT|BE|BS and the prod AAGUID, then sign in with a real-shaped
 //     assertion (UP|UV|BE|BS, non-empty userHandle). It asserts the stored flag
-//     octet, that the stored flags are restored by the store, that login/finish
-//     answers 200, and that the session it minted is live. Every one of those
+//     octet, that the stored AAGUID is the 16 raw bytes the authenticator
+//     attested (read straight out of the column), that the stored flags are
+//     restored by the store, that login/finish answers 200, and that the
+//     session it minted is live. Every one of those
 //     fails against the pre-fix store: BE never reaches the row, ByUser returns
 //     the zero value, and the login is refused with the 401 the customer saw.
 //
@@ -184,6 +186,26 @@ func storedPasskeyFlags(t *testing.T, pool *pgxpool.Pool, credID []byte) int {
 	return flags
 }
 
+// storedPasskeyAAGUID reads the raw `aaguid` bytes back out of the row, the way
+// storedPasskeyFlags reads the flags octet.
+//
+// It reads the COLUMN and not what PasskeyStore.ByUser returns, because those
+// are two different code paths and the defect class this file guards lives
+// between them: the store used to hard-code the value it WROTE and drop the
+// column on the way back IN, so the ceremony compared the assertion against
+// something that had never been in the row. Asserting only the read path would
+// leave the write path's representation pinned by nothing but agreement between
+// the two halves.
+func storedPasskeyAAGUID(t *testing.T, pool *pgxpool.Pool, credID []byte) []byte {
+	t.Helper()
+	var aaguid []byte
+	if err := pool.QueryRow(context.Background(),
+		`SELECT aaguid FROM passkeys WHERE id=$1`, credID).Scan(&aaguid); err != nil {
+		t.Fatalf("read the stored AAGUID: %v", err)
+	}
+	return aaguid
+}
+
 // TestPasskeyLoginAcceptsARealAssertion is the regression guard for the card: a
 // passkey registered in the shape a real authenticator attests must sign in.
 //
@@ -192,6 +214,13 @@ func storedPasskeyFlags(t *testing.T, pool *pgxpool.Pool, credID []byte) int {
 // assertion or at the 401 from login/finish, while every pre-existing passkey
 // test stays green, because each of those signs an assertion that agrees with
 // the broken store.
+//
+// The AAGUID arm is the third half of the same row: byte-reverse the value
+// PasskeyStore.Save writes — a pure value change, so the bytes stay bytea-legal
+// and the signature is untouched — and this test goes red at the stored-AAGUID
+// assertion below, before it ever reaches the ceremony. The flags and the
+// ceremony are unaffected by that mutation; the row is what a later ceremony,
+// or any other reader of `passkeys.aaguid`, gets.
 func TestPasskeyLoginAcceptsARealAssertion(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
@@ -216,6 +245,24 @@ func TestPasskeyLoginAcceptsARealAssertion(t *testing.T) {
 			"never reached the row, so the login ceremony compares the assertion's BackupEligible bit "+
 			"against a value that was never recorded and refuses every synced passkey", got,
 			byte(realPasskeyRegistrationFlags))
+	}
+
+	// The other 16 bytes of the same row. The AAGUID is what tells a relying
+	// party WHICH authenticator attested the credential, and the column holds it
+	// as the raw bytes it is: the fixture's are non-ASCII on purpose, so a write
+	// path that reinterpreted them as text either fails the INSERT
+	// (SQLSTATE 22021) or stores a re-spelled value — and neither of those
+	// shows up in the flags above, nor in the login ceremony, which never reads
+	// this column at all (only the row does).
+	//
+	// TestPasskeyRegistrationAcceptsStandardBase64 asserts the same bytes
+	// through PasskeyStore.ByUser, i.e. what the store HANDS the ceremony. This
+	// arm pins what the row HOLDS, so the ceremony guard pins the
+	// representation it stores without depending on a sibling test for it.
+	if got := storedPasskeyAAGUID(t, pool, fx.authn.id); !bytes.Equal(got, fx.aaguid) {
+		t.Fatalf("the stored AAGUID is %x, want %x — the 16 raw AAGUID bytes the authenticator "+
+			"attested did not reach the row (or reached it re-spelled), so nothing that reads "+
+			"`passkeys.aaguid` gets what the credential was created with", got, fx.aaguid)
 	}
 
 	// And they must come back out, in the bits the library reads.
