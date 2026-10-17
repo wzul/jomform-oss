@@ -105,6 +105,48 @@
 # what produced the contradiction above — on a caught-up base the old column was GREEN with
 # `pass 10 / fail 0` and named nothing, while the line read `old guard RED naming …`.
 #
+# THE PASS PARAGRAPH IS BUILT FROM THIS RUN'S PER-CASE EVIDENCE (card t_3dee2bae) — the last
+# un-gated claim line in this file, and the defect above one level UP: the summary. Its four
+# trailing assertions were literals while only the `${DISAGREE}/${CASE_NO}` clause ahead of
+# them was derived, so a run that read none of them printed all four. The sharpest is the
+# determiner sentence: the five cases in FALSE POSITIVE 5-9 (`possessive (their)`,
+# `demonstrative (this)`, `possessive (your)`, `quantifier (any)`, `article backoff (the)`) are
+# declared `check … RED GREEN`, and on a base whose guard has CAUGHT UP on that class each one prints
+# `SAME READER` — which does NOT set fail=1 (only the `***` branch does) — so a run whose only
+# disagreement is some OTHER two-leg case reaches fail=0 and asserted five RED/GREEN readings
+# it had not made. Every sentence that names a family is now gated on that family's own
+# recorded outcome (`CASE_CLASS`, written by `check` and by the inline /docs/embed case): the
+# determiner sentence only when all five read FIXED_NAMED (the same evidence its `FIXED` line
+# needs), the footprint sentence only when the BARE_NAME widening read RED with the footprint
+# test among its failures, the "four asides and the stated gap are quiet in both columns"
+# sentence only when all five read GREEN in both columns, and "every claim phrasing is still
+# caught by both columns" only when all four caught-by-both cases read RED in both. A sentence
+# whose evidence is missing is REPLACED — not dropped — by one that names what this run read,
+# so a PASS still says what it rests on. TWO OF THE FOUR GATES ARE DEFENCE IN DEPTH RATHER
+# THAN REACHABLE TODAY, stated rather than implied: the self-bite case sets fail=1 whenever it
+# does not read RED (so every PASS has it), and the four caught-by-both cases can only read
+# `SAME READER` on a tree whose guard stopped catching them — where their premise is
+# unavailable rather than the claim true.
+#
+# MEASURED (this host, node v26.7.0, the pages byte-identical after every run and `git status`
+# clean; the harness is run from `web/`): (1) the named base `2ba8fe02` — the run in which all
+# four families ARE observed — prints a PASS paragraph BYTE-IDENTICAL to the pre-fix bytes, so
+# the gating costs an honest run nothing. (2) the default base (origin/main, whose guard has
+# caught up on the determiners) with ONLY the refusal call no-op'd: the pre-fix bytes printed
+# `BITEPROOF PASS` 0/19 AND the determiner sentence, with five `SAME READER` lines for exactly
+# those five cases; the gated bytes print instead `the five determiner/possessive slot cases
+# were NOT read as RED-under-the-base/GREEN-here in this run — … (read SAME_READER) — so no
+# claim about them is made here`. (3) a base that has CAUGHT UP on the determiners but DISAGREES
+# ELSEWHERE: no revision of the guard on `origin/main` is one — the guard has not changed since
+# #1147, so every base from #1147 on answers identically on all 19 cases and an earlier base
+# disagrees on the five determiners too — so the property is reproduced with a base BUILT for
+# it: `origin/main`'s tree with ONE extra claim shape in the guard that fires only on the
+# /docs/embed case's mutation. At that base the five determiners read `SAME READER` while
+# `/docs/embed phantom` disagrees (1/19); the pre-fix bytes print `BITEPROOF PASS` 1/19 WITH
+# the five-determiner sentence, and so do the gated bytes with that one gate forced
+# unconditional (`if read_as FIXED_NAMED …` -> `if true`) — so the gate is what suppresses the
+# claim — while the gated bytes as shipped print the honest line instead.
+#
 # THE VERDICT RULE REQUIRES POSITIVE EVIDENCE THAT THE GUARD RAN (card t_420ca40c).
 # It used to be `if grep -q '^ℹ fail [1-9]'; then RED; else GREEN` — a decision from the
 # ABSENCE of a failure line. A guard that never started therefore read GREEN: a missing
@@ -318,6 +360,19 @@ DISAGREE=0
 CASE_NO=0
 SAME_READER_CASES=0
 FIRST_DISAGREE=''
+
+# PER-CASE OUTCOME RECORD (card t_3dee2bae). `check` and the inline /docs/embed case write
+# HERE the outcome each case actually READ this run, keyed by the case's label. The PASS
+# paragraph at the end of this file is built from these records: a sentence that names a
+# family of cases may print only when EVERY case of that family was observed reading what
+# the sentence describes. Printing such a sentence from the case's static arguments is the
+# defect t_bfaedba2 closed for the `FIXED`/`QUIET` lines, one level up — in the summary
+# rather than in a case line — and it is what let this file assert the five determiner
+# cases unobserved on a run whose only disagreement was some other case.
+declare -A CASE_CLASS=()
+# The self-bite case is not one of the two-leg cases (it compares a mutated copy of THIS
+# tree's guard against this tree's), so it records its own flag rather than a class.
+SELFBITE_SEEN=0
 
 # ONE trap, carrying two properties the shipped version did not have:
 #
@@ -589,36 +644,48 @@ check() { # check <label> <old-want> <new-want> [must-name] [old-must-name]
   # `FIXED … old guard RED naming …` line three lines after a `***` line that had just
   # measured the old column GREEN (measured on main, five times in one run — card t_bfaedba2).
   local old_confirmed=0
+  local new_class=''        # what the new-column cascade below decided, applied at the end
   if [ "$old_v" != "$old_want" ]; then
     if [ "$same_reader" = 1 ]; then
+      CASE_CLASS["$label"]=SAME_READER
       echo "  SAME READER ${label}: the base guard (${BASE_REF} ${BASE_REV:0:12}) answered EXACTLY as" \
            "this tree's on this mutation (${old_v}), so this case's premise (OLD ${old_want}) is not" \
            "available here — not a finding, and not a bite (the run refuses at the end unless some" \
            "case's two readers disagreed)"
     else
+      CASE_CLASS["$label"]=PREMISE_MISSING
       echo "  *** ${label}: OLD guard wanted ${old_want}, got ${old_v} — the case does not reproduce its premise ***"
       grep -E '^ℹ (pass|fail)' <<<"$old_out" | head -2; fail=1
     fi
   elif [ -n "$old_needle" ] && ! grep -qF "$old_needle" <<<"$old_out"; then
+    CASE_CLASS["$label"]=OLD_NAME_MISSING
     echo "  *** ${label}: OLD guard ${old_v} but its failure does not name ${old_needle} ***"
     grep -F 'presents' <<<"$old_out" | head -2; fail=1
   else
     old_confirmed=1
+    # The class this case is HEADING FOR, from the case's own wants; the new-column cascade
+    # below overrides it for the outcomes that only the new column can decide.
     if [ "$label" = "baseline" ]; then
+      CASE_CLASS["$label"]=BASELINE
       echo "  ok   baseline: old guard ${old_v}, as expected"
     elif [ "$old_want" != "$new_want" ] && [ "$old_want" = "RED" ]; then
+      CASE_CLASS["$label"]=FALSE_POSITIVE
       echo "  ok   ${label}: old guard RED — the false positive reproduces (it reported a claim nobody made)"
     elif [ "$old_want" = "$new_want" ] && [ "$old_want" = "RED" ]; then
+      CASE_CLASS["$label"]=BOTH_RED
       echo "  ok   ${label}: old guard RED — caught by BOTH columns, so this claim was not narrowed away"
     elif [ "$old_want" = "$new_want" ]; then
+      CASE_CLASS["$label"]=QUIET_BOTH
       echo "  ok   ${label}: old guard GREEN — quiet in both columns (a control, or a premise " \
            "that has moved — each section header says which)"
     else
+      CASE_CLASS["$label"]=GAP
       echo "  ok   ${label}: old guard GREEN — the gap reproduces (it missed this)"
     fi
   fi
 
   if [ "$new_v" != "$new_want" ]; then
+    new_class=NEW_FAIL
     echo "  *** ${label}: NEW guard wanted ${new_want}, got ${new_v} ***"
     grep -E '^ℹ (pass|fail)' <<<"$new_out" | head -2
     # WHAT the new column reported, not only that it was red: on a FALSE POSITIVE case a red
@@ -627,21 +694,37 @@ check() { # check <label> <old-want> <new-want> [must-name] [old-must-name]
     # guard, an edit that took this case with it).
     grep -F 'presents' <<<"$new_out" | head -2; fail=1
   elif [ -n "$needle" ] && ! grep -qF "$needle" <<<"$new_out"; then
+    new_class=NEW_NAME_MISSING
     echo "  *** ${label}: NEW guard ${new_v} but the failure does not name ${needle} ***"
     grep -F 'presents' <<<"$new_out" | head -2; fail=1
   elif [ "$new_want" = "GREEN" ] && [ "$old_confirmed" = 1 ] && [ "$old_want" = "RED" ] && [ -n "$old_needle" ]; then
+    new_class=FIXED_NAMED
     echo "  FIXED ${label}: old guard RED naming ${old_needle}, new guard GREEN — the false positive is gone"
   elif [ "$new_want" = "GREEN" ] && [ "$old_confirmed" = 1 ] && [ "$old_want" = "RED" ]; then
+    new_class=QUIET_FROM_RED
     echo "  QUIET ${label}: old guard RED, new guard GREEN — this form is deliberately not caught any more (stated gap)"
   elif [ "$new_want" = "GREEN" ] && [ "$old_confirmed" = 0 ]; then
     # NO DIRECTION IS CLAIMED. The new column did what the case predicts, but the old column
     # was never OBSERVED doing what the line would describe (see `old_confirmed` above), so
     # the honest line names that instead of inventing a FIXED/QUIET/BITES verdict.
+    new_class=NO_DIRECTION
     echo "  no direction ${label}: new guard GREEN${needle:+, naming $needle} — the OLD column was not" \
          "confirmed RED${old_needle:+ and naming ${old_needle}}, so no FIXED/QUIET claim is made here"
   else
     echo "  BITES ${label}: new guard ${new_v}${needle:+, naming $needle}"
   fi
+
+  # RECORD WHAT THIS CASE READ (card t_3dee2bae), for the PASS paragraph at the end of this
+  # file. The FIRST cascade's terminal outcomes are decided there and are NOT overridable
+  # here: a `SAME READER` note (the base reader answered EXACTLY as this tree's) is the one
+  # record the summary must never lose, and the new-column cascade would otherwise relabel
+  # it — the case still meets its new-column want, so it falls through to the `no direction`
+  # branch and would be recorded as a case that read the new guard when in fact it never
+  # read a "before" column at all.
+  case "${CASE_CLASS[$label]:-}" in
+    SAME_READER|PREMISE_MISSING|OLD_NAME_MISSING) : ;;
+    *) CASE_CLASS["$label"]="${new_class:-${CASE_CLASS[$label]:-UNKNOWN}}" ;;
+  esac
 }
 
 mutate() { # mutate <text-to-insert> — inserted after the page's 2-line title/comment head
@@ -885,6 +968,7 @@ if grep -qF 'const BARE_NAME = String.raw`[a-z][a-z0-9_-]*`;' "$WIDETMP"; then
   run_guard "$WIDETMP"
   [ "$VERDICT" = REFUSED ] && refuse "BARE_NAME widened" "NEW"
   if [ "$VERDICT" = "RED" ] && grep -qF "footprint on ordinary English is a CLOSED class" <<<"$VERDICT_OUT"; then
+    SELFBITE_SEEN=1
     echo '  BITES BARE_NAME widened: the footprint test is RED, so the class is pinned and a widening cannot move the cliff silently'
     grep -F 'the loose shapes reach' <<<"$VERDICT_OUT" | head -1
   else
@@ -958,15 +1042,19 @@ if grep -qF 'as the uploadpic tool' "$EMBED"; then
     embed_disagreed=0
   fi
   if [ "$old_v" = "RED" ] && grep -qF 'presents "uploadpic" as a tool' <<<"$old_out"; then
+    CASE_CLASS["/docs/embed phantom"]=BOTH_RED
     echo '  ok   /docs/embed phantom: old guard RED — caught by BOTH columns, so the walk did not narrow'
     if [ "$new_v" = "RED" ] && grep -qF 'presents "uploadpic" as a tool' <<<"$new_out"; then
       echo '  BITES /docs/embed phantom: new guard RED, naming presents "uploadpic" as a tool'
-    else echo "  *** /docs/embed phantom: new guard ${new_v} (or did not name it) ***"; fail=1; fi
+    else CASE_CLASS["/docs/embed phantom"]=NEW_FAIL
+      echo "  *** /docs/embed phantom: new guard ${new_v} (or did not name it) ***"; fail=1; fi
   elif [ "$embed_disagreed" = 0 ]; then
+    CASE_CLASS["/docs/embed phantom"]=SAME_READER
     echo "  SAME READER /docs/embed phantom: the base guard (${BASE_REF} ${BASE_REV:0:12}) answered" \
          "EXACTLY as this tree's on this mutation (${old_v}), so this case's premise (OLD RED naming" \
          "the phantom) is not available here — not a finding, and not a bite"
   else
+    CASE_CLASS["/docs/embed phantom"]=PREMISE_MISSING
     echo "  *** /docs/embed phantom: old guard ${old_v} (or did not name the phantom) ***"; fail=1
   fi
 else echo "  *** mutation did not apply to $EMBED ***"; fail=1; fi
@@ -1007,8 +1095,68 @@ if [ "$DISAGREE" = 0 ]; then
   capability_refusal "$CASE_NO"
 fi
 
+# ---- THE PASS PARAGRAPH READS ITS OWN EVIDENCE (card t_3dee2bae) ------------------
+#
+# Each of the four sentences below names a FAMILY of cases, and each is printed only when
+# every case of that family was OBSERVED reading what the sentence describes (`CASE_CLASS`,
+# written by `check` and by the inline /docs/embed case above). A sentence whose evidence is
+# absent is REPLACED — not dropped — by one that names what this run actually read, so a
+# PASS still says what it rests on. The sentences were one literal string before this, so a
+# run that read none of them printed all four: most sharply the determiner sentence on a
+# base whose guard has CAUGHT UP on those five `check … RED GREEN` cases (each prints `SAME
+# READER`, which does not set fail=1 — only the `***` branch does), where a run whose only
+# disagreement is some other two-leg case reaches `fail=0` and used to assert five
+# RED/GREEN readings it had not made.
+DET_SLOT_CASES=( "possessive (their)" "demonstrative (this)" "possessive (your)" \
+                 "quantifier (any)" "article backoff (the)" )
+ASIDE_QUIET_CASES=( "prose gloss (deprecated)" "prose gloss (overview)" "plural marker (s)" \
+                    "card-id citation (t_cde2e73a)" "single-word parenthetical not caught (stated gap)" )
+CAUGHT_BOTH_CASES=( "single-word phantom" "header-comment parenthetical" \
+                    "parenthetical wrapped across lines" "/docs/embed phantom" )
+
+# read_as <class> <label>... — 0 when EVERY label was recorded reading <class> in THIS run.
+read_as() {
+  local want="$1"; shift
+  local l
+  for l in "$@"; do
+    [ "${CASE_CLASS[$l]:-}" = "$want" ] || return 1
+  done
+}
+# not_read_as <class> <label>... — the labels that did NOT read <class>, as
+# `label (read CLASS)`, for the sentences that have to say what this run read instead.
+not_read_as() {
+  local want="$1"; shift
+  local l out=''
+  for l in "$@"; do
+    [ "${CASE_CLASS[$l]:-}" = "$want" ] && continue
+    out="${out}${out:+, }${l} (read ${CASE_CLASS[$l]:-nothing})"
+  done
+  printf '%s' "$out"
+}
+
+if read_as FIXED_NAMED "${DET_SLOT_CASES[@]}"; then
+  det_sentence='The five determiner/possessive slot words were RED under the shipped guard and GREEN under this one, each with the old column naming the word it rejected'
+else
+  det_sentence="the five determiner/possessive slot cases were NOT read as RED-under-the-base/GREEN-here in this run — $(not_read_as FIXED_NAMED "${DET_SLOT_CASES[@]}") — so no claim about them is made here"
+fi
+if [ "$SELFBITE_SEEN" = 1 ]; then
+  selfbite_sentence="the guard's own footprint test is RED when BARE_NAME is widened (so the new test catches the class, not just its own literals)"
+else
+  selfbite_sentence='the BARE_NAME widening case did not read RED in the footprint test in this run, so no claim about it is made here'
+fi
+if read_as QUIET_BOTH "${ASIDE_QUIET_CASES[@]}"; then
+  aside_sentence='the four asides and the stated gap are quiet in both columns, their premise having moved with the narrowing that landed on the base'
+else
+  aside_sentence="the four asides and the stated gap were NOT all quiet in both columns in this run — $(not_read_as QUIET_BOTH "${ASIDE_QUIET_CASES[@]}")"
+fi
+if read_as BOTH_RED "${CAUGHT_BOTH_CASES[@]}"; then
+  caught_sentence='every claim phrasing is still caught by both columns'
+else
+  caught_sentence="the claim phrasings were NOT all caught by both columns in this run — $(not_read_as BOTH_RED "${CAUGHT_BOTH_CASES[@]}")"
+fi
+
 if [ "$fail" = "0" ]; then
-  echo "BITEPROOF PASS — ${DISAGREE}/${CASE_NO} two-leg case(s) had a base reader that ANSWERED DIFFERENTLY from this tree's (first: ${FIRST_DISAGREE}), so the \"before\" column is real; ${SAME_READER_CASES} case(s) read the same in both columns. The five determiner/possessive slot words were RED under the shipped guard and GREEN under this one, each with the old column naming the word it rejected; the guard's own footprint test is RED when BARE_NAME is widened (so the new test catches the class, not just its own literals); the four asides and the stated gap are quiet in both columns, their premise having moved with the narrowing that landed on the base; and every claim phrasing is still caught by both columns."
+  echo "BITEPROOF PASS — ${DISAGREE}/${CASE_NO} two-leg case(s) had a base reader that ANSWERED DIFFERENTLY from this tree's (first: ${FIRST_DISAGREE}), so the \"before\" column is real; ${SAME_READER_CASES} case(s) read the same in both columns. ${det_sentence}; ${selfbite_sentence}; ${aside_sentence}; and ${caught_sentence}."
 else
   echo "BITEPROOF FAIL (fail=$fail) — base reader disagreed on ${DISAGREE}/${CASE_NO} two-leg case(s)"
 fi
