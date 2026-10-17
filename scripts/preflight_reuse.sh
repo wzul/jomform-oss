@@ -29,7 +29,12 @@
 #
 # USAGE
 #   scripts/preflight_reuse.sh                  # decide for the working tree
-#   scripts/preflight_reuse.sh --tree <sha>     # decide for an explicit tree
+#   scripts/preflight_reuse.sh --tree <sha>     # decide for an explicit tree —
+#                                               # <sha> must be a 40-character
+#                                               # lowercase hex tree sha; any
+#                                               # other value is REFUSED (exit 2)
+#                                               # rather than answered about the
+#                                               # working tree (see EXIT CODES)
 #   scripts/preflight_reuse.sh --show           # print the record (evidence);
 #                                               # rc 0 when it is reusable, 1
 #                                               # when it is not or there is none
@@ -60,7 +65,13 @@
 #      0: `--show` answers "is this record reusable", the decide path answers
 #      "what may I skip". Both directions fail SAFE — rc=1 means "gate
 #      normally", never "you may skip a gate you did not earn".
-#   2  usage error
+#   2  usage error — an unknown or misplaced argument, and EVERY unusable
+#      EXPLICIT tree: `--tree` with no value, `--tree <value>` that is not a
+#      40-character lowercase hex tree sha, and `--tree` in a mode that reads no
+#      tree at all (`--report`, `--source`). An explicit tree is never traded
+#      for the working tree: an unusable one is refused and the refusal NAMES
+#      the value, so a lane that mistyped a sha learns it instead of reading a
+#      verdict about its own checkout.
 
 EXIT_UNUSED=""
 # Applied only when EXECUTED: sourcing must not change the caller's shell options
@@ -69,6 +80,7 @@ EXIT_UNUSED=""
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then set -uo pipefail; fi
 
 PR_TREE=""
+PR_TREE_MISSING=0     # 1 when `--tree` was written with NO value at all
 PR_MODE="decide"      # decide | show | report | source
 PR_SHOW_TREE=""
 PR_REPORT_HOURS="24"
@@ -85,13 +97,76 @@ pr_args() {
                     case "${2:-}" in [0-9]*) PR_REPORT_HOURS="$2"; shift ;; esac ;;
       --decide)     PR_MODE="decide" ;;
       --source)     PR_MODE="source" ;;
-      --tree)       PR_TREE="${2:-}"; shift ;;
+      --tree)       PR_TREE=""; PR_TREE_MISSING=0
+                    if [ $# -ge 2 ]; then PR_TREE="$2"; else PR_TREE_MISSING=1; fi
+                    shift ;;
       --tree=*)     PR_TREE="${1#*=}" ;;
       -*)           echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
       *)            echo "unexpected argument: $1 (see --help)" >&2; exit 2 ;;
     esac
     shift
   done
+}
+
+# ---- the explicit tree is validated before ANY mode answers -------------------
+# `--tree <sha>` is the flag a lane reaches for when the bytes it cares about are
+# NOT in its working tree (the tree it just pushed, a merge-tree result, the bytes
+# a bite mutation is about), so the answer must belong to the tree it named. Two
+# shapes used to be answered with a decision about the WORKING tree instead — the
+# one question this tool exists to answer correctly:
+#
+#   * `--tree` with NO value fell through to the library fallback silently
+#     (measured: rc=1 and "no reusable record for tree <this checkout>");
+#   * `--tree <anything>` was accepted as a tree name, and the value is ALSO the
+#     record's FILENAME (`gr_file` builds `<store>/<value>.json`), so a value that
+#     is not a sha was answered as "no record for tree <that value>" — a
+#     decision-shaped answer about something that is not a tree — and a value
+#     carrying `/` or `.` built a path OUTSIDE the store (both fail SAFE for the
+#     reuse decision, because `gr_record_usable` refuses a record whose own `tree`
+#     field is not the requested string, but "the consumer and the runner
+#     answering different questions" is the defect class this file's neighbours
+#     are built around: `preflight.sh`'s drift check 21, docs/PREFLIGHT-REUSE.md
+#     rule 6).
+#
+# So an unusable EXPLICIT tree is a USAGE error (exit 2), naming the value, before
+# any mode runs. EVERY such shape is refused by THIS function, behind one call
+# site, so the pre-fix behaviour is exactly "that call site is gone" — no part of
+# the policy is left in the argument parser, where a bite could not delete it
+# alone. The rule is the record format's own rule: a record file is named by
+# `git write-tree`'s output, which is exactly 40 lowercase hex characters, so
+# anything else can never name a record — it can only be a mistake, and a mistake
+# must not be answered as a verdict. The one shape deliberately NOT an error is an
+# EMPTY value (`--tree ""`, `--tree=`): that is the documented "this shell did not
+# ask for a tree" spelling (`--tree "$MAYBE_EMPTY"` with MAYBE_EMPTY unset), and
+# the library fallback still applies — pinned by `selftest` check 41's
+# `--show --tree ""` leg. `--tree` with NO value at all is a DIFFERENT shape
+# (`PR_TREE_MISSING`) and is refused: nobody writes the flag to mean nothing, and
+# it used to fall back to the working tree silently. `--report`/`--source` read no
+# tree at all, so there the flag is refused rather than silently ignored (a report
+# that was asked about a tree and answered about the ledger is the same shape one
+# mode over).
+pr_tree_arg_guard() {
+  if [ "${PR_TREE_MISSING:-0}" = 1 ]; then
+    echo "preflight_reuse: --tree needs a tree sha (see --help)" >&2
+    return 2
+  fi
+  local v="${PR_TREE:-}"
+  [ -n "$v" ] || return 0
+  case "$PR_MODE" in
+    report|source)
+      echo "preflight_reuse: --tree $v is meaningless with --$PR_MODE, which reads no tree (the report sums the reuse ledger) — refusing rather than ignoring the flag" >&2
+      return 2 ;;
+  esac
+  case "$v" in
+    *[!0-9a-f]*)
+      echo "preflight_reuse: --tree $v is not a tree sha (40 lowercase hex characters) — refusing, rather than answering about the working tree" >&2
+      return 2 ;;
+  esac
+  if [ "${#v}" -ne 40 ]; then
+    echo "preflight_reuse: --tree $v is ${#v} characters; a tree sha is 40 lowercase hex characters (the record file is named by \`git write-tree\`) — refusing, rather than answering about the working tree" >&2
+    return 2
+  fi
+  return 0
 }
 
 # ---- library mode: no argument handling, no output, no side effects -----------
@@ -264,6 +339,12 @@ pr_show() {
 # ---- main (only when EXECUTED, never when sourced) ---------------------------
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   pr_args "$@"
+  # THE EXPLICIT TREE IS CHECKED BEFORE ANY MODE ANSWERS (card t_916280c4). One
+  # line on purpose: it is the whole guard, so a bite can restore the pre-fix
+  # shape by deleting exactly it and nothing else. See pr_tree_arg_guard for why
+  # a value that cannot be a tree sha must be an error rather than a verdict
+  # about the working tree.
+  pr_tree_arg_guard || exit $?
   PREFLIGHT_REUSE_REPO="$(git -C "$(dirname "${BASH_SOURCE[0]}")/.." rev-parse --show-toplevel 2>/dev/null)"
   if [ -z "${PREFLIGHT_REUSE_REPO:-}" ] || [ ! -d "$PREFLIGHT_REUSE_REPO" ]; then
     echo "preflight_reuse: must run from inside the git repository" >&2

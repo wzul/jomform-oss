@@ -925,6 +925,90 @@ else
 fi
 restore_and_verify
 
+# --- case 12: THE EXPLICIT-TREE GUARD REMOVED FROM THE CONSUMER (the pre-fix
+# shape, card t_916280c4). `--tree` names the bytes the caller cares about — usually
+# bytes that are NOT in its working tree — and the value is ALSO the record's
+# FILENAME (`gr_file` builds `<store>/<value>.json`). The pre-fix consumer took any
+# value as a tree name, so `--tree` with NO value fell through to the library
+# fallback and `--tree banana` was answered as "no reusable record for tree banana":
+# both are verdict-shaped answers about something that is not a tree, the first of
+# them about the WORKING tree — the one question this consumer must never answer by
+# accident — while `--report --tree <sha>` dropped the flag and printed the ledger.
+#
+# The mutation is a ONE-LINE DELETE of the guard's CALL SITE, and that is the whole
+# pre-fix shape because EVERY refusal lives behind it (the parser only records that
+# the flag was written with no value; it refuses nothing). It is verified BY VALUE
+# before it spends a selftest run: on the shipped bytes `--tree banana` exits 2
+# naming the value, while on the mutant all three pre-fix shapes come back — `--tree`
+# with no value is answered about the WORKING tree, `--tree banana` is answered as a
+# decision about [banana], and `--report --tree <sha>` prints the ledger with the
+# flag dropped (rc=0) — and a well-formed 40-hex value takes the SAME rc=1 "no
+# record" path in both, so the red below can only be the guard.
+echo "== case 12: the explicit-tree guard removed (the pre-fix shape) =="
+work12="$( ( . "$RESULT"; gr_tree_sha "$REPO_ROOT" ) )"
+hex12="$(printf 'biteproof_preflight_reuse case 12' | sha256sum | cut -c1-40)"
+if [ -z "$work12" ]; then
+  bad "case 12 — the working tree could not be identified, so the fallback the mutant takes cannot be asserted"
+else
+  case12_ship="$(bash "$REUSE" --tree banana 2>&1)"; case12_ship_rc=$?
+  case12_ship_noval="$(bash "$REUSE" --tree 2>&1)"; case12_ship_noval_rc=$?
+  case12_ship_ok="$(bash "$REUSE" --tree "$hex12" 2>&1)"; case12_ship_ok_rc=$?
+  if [ "$case12_ship_rc" -ne 2 ] || ! grep -qF 'is not a tree sha' <<<"$case12_ship"; then
+    bad "case 12 — the SHIPPED consumer must refuse \`--tree banana\` as a usage error naming the value (rc=$case12_ship_rc, [$(printf '%s' "$case12_ship" | tr '\n' ' ')]), so there is no guard here to sabotage"
+  elif [ "$case12_ship_noval_rc" -ne 2 ] || ! grep -qF -- '--tree needs a tree sha' <<<"$case12_ship_noval"; then
+    bad "case 12 — the SHIPPED consumer must refuse \`--tree\` with NO value (rc=2) instead of falling back to the WORKING tree: rc=$case12_ship_noval_rc [$(printf '%s' "$case12_ship_noval" | tr '\n' ' ')]"
+  elif [ "$case12_ship_ok_rc" -ne 1 ]; then
+    bad "case 12 — a well-formed 40-hex value must take the rc=1 'gate normally' path on the SHIPPED bytes (rc=$case12_ship_ok_rc, [$(printf '%s' "$case12_ship_ok" | tr '\n' ' ')]), else the mutation below could not be told apart from a consumer that refuses everything"
+  else
+    # The one-line delete that IS the pre-fix shape: the guard's call site, gone.
+    GUARD12='  pr_tree_arg_guard || exit $?'
+    awk -v drop="$GUARD12" '$0 == drop { next } { print }' "$REUSE" > "$WORK/preflight_reuse.mutated12" \
+      && cp "$WORK/preflight_reuse.mutated12" "$REUSE" && chmod "$MODE_REUSE" "$REUSE"
+    if [ "$(grep -cF -- "$GUARD12" "$REUSE")" != "0" ]; then
+      bad "case 12 — the guard's call site is still present after the mutation, so the pre-fix shape was not reproduced"
+    elif [ "$(diff "$WORK/preflight_reuse.sh.orig" "$REUSE" | grep -c '^[<>]')" != "1" ]; then
+      bad "case 12 — the mutation is NOT surgical ($(diff "$WORK/preflight_reuse.sh.orig" "$REUSE" | grep -c '^[<>]') changed lines, want 1), so a red below could be about something other than the explicit-tree guard"
+    elif ! bash -n "$REUSE"; then
+      bad "case 12 — the mutation left preflight_reuse.sh syntactically invalid, so any red below would be a parse error rather than the guard under test"
+    else
+      # The fallback the mutant takes is the working tree of the MUTATED file, and
+      # the sabotage itself moves that sha (a tracked file changed), so it is read
+      # again here rather than reused from before the mutation — the same trap case 9
+      # documents.
+      work12_mut="$( ( . "$RESULT"; gr_tree_sha "$REPO_ROOT" ) )"
+      case12_mut_noval="$(bash "$REUSE" --tree 2>&1)"; case12_mut_noval_rc=$?
+      case12_mut="$(bash "$REUSE" --tree banana 2>&1)"; case12_mut_rc=$?
+      case12_mut_rep="$(bash "$REUSE" --report 1 --tree "$hex12" 2>&1)"; case12_mut_rep_rc=$?
+      case12_mut_ok="$(bash "$REUSE" --tree "$hex12" 2>&1)"; case12_mut_ok_rc=$?
+      if grep -qF 'is not a tree sha' <<<"$case12_mut"; then
+        bad "case 12 — the mutant STILL refuses \`--tree banana\` as a usage error, so the guard was never removed and this case proves nothing"
+      elif [ -z "$work12_mut" ] || [ "$work12_mut" = "$work12" ]; then
+        bad "case 12 — the mutated working tree was not re-identified ([$work12_mut] vs [$work12] before the mutation), so the fallback this case measures cannot be asserted"
+      elif [ "$case12_mut_noval_rc" -ne 1 ] || ! grep -qF "for tree $(printf '%.7s' "$work12_mut")" <<<"$case12_mut_noval"; then
+        bad "case 12 — the mutation did not reproduce the SILENT FALLBACK: \`--tree\` with NO value must again be answered about the WORKING tree ($(printf '%.7s' "$work12_mut")), got rc=$case12_mut_noval_rc [$(printf '%s' "$case12_mut_noval" | tr '\n' ' ')]"
+      elif [ "$case12_mut_rc" -ne 1 ] || ! grep -qF 'for tree banana' <<<"$case12_mut"; then
+        bad "case 12 — the mutation did not reproduce the VERDICT-SHAPED answer about a non-tree: \`--tree banana\` must again read as a decision about [banana] (rc=1), got rc=$case12_mut_rc [$(printf '%s' "$case12_mut" | tr '\n' ' ')]"
+      elif [ "$case12_mut_rep_rc" -ne 0 ] || ! grep -qF 'reuse ledger' <<<"$case12_mut_rep"; then
+        bad "case 12 — the mutation did not reproduce the DROPPED FLAG in \`--report\`: the ledger must print and the process exit 0 again with \`--tree\` ignored, got rc=$case12_mut_rep_rc [$(printf '%s' "$case12_mut_rep" | tr '\n' ' ')]"
+      elif [ "$case12_mut_ok_rc" -ne 1 ]; then
+        bad "case 12 — the mutation broke MORE than the guard: a well-formed 40-hex value no longer takes the rc=1 'gate normally' path (rc=$case12_mut_ok_rc, [$(printf '%s' "$case12_mut_ok" | tr '\n' ' ')]), so a red below would be unattributable"
+      else
+        rc12=0
+        selftest_run "$WORK/case12.log" || rc12=$?
+        # ONLY check 42 can fire: it is the one check that asks the consumer to
+        # REFUSE an unusable tree, and the legs that read a well-formed sha are
+        # asserted UNMOVED by the value legs above rather than by widening this
+        # needle — a needle wide enough to accept a broken premise is the
+        # false-green shape this harness exists to remove.
+        verdict "case 12" "$WORK/case12.log" "$rc12" \
+          "check 42" \
+          "with the explicit-tree guard removed, an unusable \`--tree\` is answered as a refusal about the WORKING tree again and check 42 reds naming exactly that"
+      fi
+    fi
+  fi
+fi
+restore_and_verify
+
 # --- the tree must be as dirty as it was found: a case that leaked a mutation past
 # its restore would poison every lane after it, and the sha checks above cannot see
 # an ADDED file.
@@ -938,7 +1022,7 @@ fi
 
 echo "---"
 if [ "$FAIL" -eq 0 ]; then
-  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, hashing the test-DB host's SPELLING into it, putting the all-or-nothing credential strip or the unconditional step-2 strip back, removing the scheme guard that refuses an un-strippable DSN, killing the TTL horizon, dropping the documented \`--tree\` wiring from the consumer's decide path, dropping the consumer's \`--show\` status channel, or letting its printed verdict fall through to status 0 each turns the REAL selftest gate red, naming that property"
+  echo "biteproof: $PASS checks passed, 0 failed — the reuse guards BITE: the healthy tree passes, and moving the refusal back after the selection filter, disabling the ledger dedupe, hashing node into the fingerprint, hashing the test-DB host's SPELLING into it, putting the all-or-nothing credential strip or the unconditional step-2 strip back, removing the scheme guard that refuses an un-strippable DSN, killing the TTL horizon, dropping the documented \`--tree\` wiring from the consumer's decide path, dropping the consumer's \`--show\` status channel, letting its printed verdict fall through to status 0, or dropping its explicit-tree guard (so an unusable \`--tree\` is answered as a refusal about the working tree) each turns the REAL selftest gate red, naming that property"
 else
   echo "biteproof: $PASS passed, $FAIL failed — a reuse guard does NOT hold something it claims to"
 fi

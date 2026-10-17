@@ -144,6 +144,15 @@ it is not what a merger needs when it decides to squash.
 # a bite mutation is about, i.e. bytes that are no longer in your working tree.
 # `--tree <sha>` and `--tree=<sha>` both reach the DECISION (not just --show).
 ./scripts/preflight_reuse.sh --tree <tree-sha>
+#   <tree-sha> must be a FULL 40-character lowercase hex tree sha, because that is
+#   what a record file is named by (`git write-tree`). Any other value — a word, a
+#   path, an abbreviation — is refused with exit 2 NAMING the value, and `--tree`
+#   is refused in `--report`/`--source` too, which read no tree. Before this rule
+#   an unusable `--tree` was answered as a decision about the WORKING tree, and
+#   `--report --tree <sha>` was answered as a report with the flag dropped: the
+#   same "consumer and runner answering different questions" shape rule 6 below is
+#   about. `--tree ""` / `--tree=` is the ONE deliberate exception — it means
+#   "this shell did not ask for a tree", so the fallback still applies.
 
 ./scripts/preflight_reuse.sh --show            # the raw record (evidence)
 #   exit 0 -> the record it printed IS reusable for this tree under the current
@@ -218,7 +227,12 @@ reads the evidence and not just the verdict.
    that tree. A lane asking about bytes that are no longer in its working tree —
    the tree it just pushed, or the tree a bite mutation is about — must not be
    answered about the working tree instead (that silently wrong answer cost a full
-   gate run for bytes already vouched for; card `t_912df3a4`).
+   gate run for bytes already vouched for; card `t_912df3a4`). The corollary is
+   that an explicit tree the tool cannot use is an ERROR, not a subject: `--tree`
+   with no value, a value that is not a 40-character lowercase hex tree sha, and
+   `--tree` in a mode that reads no tree (`--report`, `--source`) all exit 2
+   naming the value, so a mistyped sha cannot be answered as "no record" and a
+   `--report` cannot be handed a tree it silently drops (cards `t_916280c4`).
 7. **A gate the caller skipped is not a reuse.** Before the reuse decision, the
    vouched set is compared against what this run was actually going to execute.
    A record may vouch for `monitor` while the run is `--only vet`; naming

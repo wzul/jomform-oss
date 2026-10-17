@@ -3872,6 +3872,85 @@ if [ -n "$probe_tree" ]; then
   fi
 fi
 
+# 42. AN UNUSABLE EXPLICIT TREE IS A USAGE ERROR, NEVER A VERDICT ABOUT THE WORKING
+#     TREE (card t_916280c4). `--tree <sha>` names the bytes the caller cares
+#     about — usually bytes that are NOT in its working tree — and the value is
+#     ALSO the record's FILENAME (`gr_file` builds `<store>/<value>.json`), so a
+#     value that cannot be a tree sha has to be refused BEFORE any mode answers it.
+#     Measured on the parent revision, from a repo root with the test env sourced:
+#
+#       $ bash scripts/preflight_reuse.sh --tree          # flag written, no value
+#       -> "no reusable record for tree <this checkout>", rc=1   # silent fallback
+#       $ bash scripts/preflight_reuse.sh --tree banana
+#       -> "no reusable record for tree banana", rc=1     # a VERDICT-shaped answer
+#                                                         # about something that is
+#                                                         # not a tree at all
+#       $ bash scripts/preflight_reuse.sh --report 1 --tree <sha>
+#       -> the ledger, rc=0                               # the flag is dropped
+#
+#     The first two are decisions about the WORKING tree — the one question this
+#     tool must never answer by accident (`preflight.sh`'s own drift check 21 is
+#     the same class) — and the third is a report that was asked about a tree.
+#     `../gate/<sha>` is the sharpest form of the second: the value built a path
+#     OUTSIDE the record store. That direction fails safe for the reuse decision
+#     itself (`gr_record_usable` refuses a record whose own `tree` field is not the
+#     requested string), but a consumer that cannot be asked about a tree is not a
+#     consumer this repo can rely on, and the value reaches `gr_ledger`'s JSON
+#     unescaped once a record does match.
+#
+#     THE WIRING HALF IS CHECK 40's JOB, NOT THIS ONE'S. Check 40 pins that
+#     `--tree <sha>` REACHES the decision, and the bite harness's case 9 requires
+#     check 40 — and only check 40 — to be the red when that wiring is removed. A
+#     leg here asserting "the answer names the requested tree" would make case 9's
+#     red unattributable, so every leg below is about the REFUSAL, and the one leg
+#     that drives a well-formed sha asserts only that it is NOT refused as a usage
+#     error (rc=1, the documented "gate normally" path) — true on the shipped bytes
+#     and on a mutant that lost the wiring.
+if [ -n "$probe_tree" ]; then
+  work42="$probe_tree"
+  short42="$(printf '%.7s' "$work42")"
+  hex42="$(printf 'preflight_test check 42' | sha256sum | cut -c1-40)"
+  hex7_42="$(printf '%.7s' "$hex42")"
+  esc42="../gate/$hex42"
+  noval42="$(./scripts/preflight_reuse.sh --tree 2>&1)"; rc_noval42=$?
+  ban42="$(./scripts/preflight_reuse.sh --tree banana 2>&1)"; rc_ban42=$?
+  esc_out42="$(./scripts/preflight_reuse.sh --tree "$esc42" 2>&1)"; rc_esc42=$?
+  show_esc42="$(./scripts/preflight_reuse.sh --show --tree ../../etc/passwd 2>&1)"; rc_showesc42=$?
+  abbr42="$(./scripts/preflight_reuse.sh --tree "$hex7_42" 2>&1)"; rc_abbr42=$?
+  rep42="$(./scripts/preflight_reuse.sh --report 1 --tree "$hex42" 2>&1)"; rc_rep42=$?
+  rep_ok42="$(./scripts/preflight_reuse.sh --report 1 2>&1)"; rc_repok42=$?
+  src42="$(./scripts/preflight_reuse.sh --source --tree "$hex42" 2>&1)"; rc_src42=$?
+  ok42="$(./scripts/preflight_reuse.sh --tree "$hex42" 2>&1)"; rc_ok42=$?
+  if [ -z "$short42" ]; then
+    bad "check 42 cannot identify the sandbox working tree, so the fallback every leg below discriminates against (the WORKING tree) cannot be asserted"
+  elif [ "$rc_noval42" -ne 2 ] || ! grep -qF -- '--tree needs a tree sha' <<<"$noval42" || \
+       grep -qF "for tree $short42" <<<"$noval42"; then
+    bad "check 42 — \`--tree\` with NO value must be a usage error (rc=2) naming the flag, never a fallback to the WORKING tree ($short42): rc=$rc_noval42 [$(printf '%s' "$noval42" | tr '\n' ' ')]"
+  elif [ "$rc_ban42" -ne 2 ] || ! grep -qF 'is not a tree sha' <<<"$ban42" || \
+       ! grep -qF 'banana' <<<"$ban42" || grep -qF "for tree $short42" <<<"$ban42"; then
+    bad "check 42 — \`--tree banana\` must be refused (rc=2) NAMING the value, rather than answered as a decision about it or about the working tree: rc=$rc_ban42 [$(printf '%s' "$ban42" | tr '\n' ' ')]"
+  elif [ "$rc_esc42" -ne 2 ] || ! grep -qF 'is not a tree sha' <<<"$esc_out42" || \
+       ! grep -qF "$esc42" <<<"$esc_out42"; then
+    bad "check 42 — a \`--tree\` carrying a path ($esc42 — the value that escapes the record store) must be refused (rc=2) naming it: rc=$rc_esc42 [$(printf '%s' "$esc_out42" | tr '\n' ' ')]"
+  elif [ "$rc_showesc42" -ne 2 ] || grep -qF '/etc/passwd.json' <<<"$show_esc42"; then
+    bad "check 42 — a value that is NOT a tree sha must be refused BEFORE it is turned into a record path: \`--show --tree ../../etc/passwd\` must exit 2 without ever naming that path: rc=$rc_showesc42 [$(printf '%s' "$show_esc42" | tr '\n' ' ')]"
+  elif [ "$rc_abbr42" -ne 2 ] || ! grep -qF 'is 7 characters' <<<"$abbr42"; then
+    bad "check 42 — an ABBREVIATED sha ($hex7_42) can never name a record (a record file is named by \`git write-tree\`'s full 40-hex output), so it must be refused (rc=2) rather than answered as 'no record': rc=$rc_abbr42 [$(printf '%s' "$abbr42" | tr '\n' ' ')]"
+  elif [ "$rc_rep42" -ne 2 ] || ! grep -qF -- '--report' <<<"$rep42" || \
+       ! grep -qF -- '--tree' <<<"$rep42"; then
+    bad "check 42 — \`--tree\` is meaningless in \`--report\` mode (the report sums the reuse ledger, not a tree) and must be refused (rc=2) rather than silently ignored: rc=$rc_rep42 [$(printf '%s' "$rep42" | tr '\n' ' ')]"
+  elif [ "$rc_repok42" -ne 0 ]; then
+    bad "check 42 — the CONTROL for the leg above: \`--report\` WITHOUT \`--tree\` must still exit 0, else 'always 2' would satisfy it: rc=$rc_repok42 [$(printf '%s' "$rep_ok42" | tr '\n' ' ')]"
+  elif [ "$rc_src42" -ne 2 ] || ! grep -qF -- '--source' <<<"$src42"; then
+    bad "check 42 — \`--tree\` is meaningless in \`--source\` mode too (it only hands the library to the caller) and must be refused (rc=2), not ignored: rc=$rc_src42 [$(printf '%s' "$src42" | tr '\n' ' ')]"
+  elif [ "$rc_ok42" -ne 1 ] || grep -qF 'is not a tree sha' <<<"$ok42" || \
+       grep -qF -- '--tree needs a tree sha' <<<"$ok42" || grep -qF 'meaningless with' <<<"$ok42"; then
+    bad "check 42 — the OTHER direction: a well-formed 40-hex tree sha must NOT be refused as a usage error, it takes the documented rc=1 'gate normally' path: rc=$rc_ok42 [$(printf '%s' "$ok42" | tr '\n' ' ')]"
+  else
+    ok "check 42 — an unusable \`--tree\` is a USAGE error, never a verdict about the WORKING tree ($short42): no value / 'banana' / '$esc42' / '../../etc/passwd' / a 7-character abbreviation each exit 2 naming the value and never name a record path, \`--tree\` is refused in \`--report\` (while plain \`--report\` still exits 0) and in \`--source\`, and a well-formed 40-hex value still takes the documented rc=1 'no record' path"
+  fi
+fi
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
