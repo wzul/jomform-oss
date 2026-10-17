@@ -3,8 +3,9 @@ package httpapi
 // t_0a2d413c — a passkey could be REGISTERED and then never used to SIGN IN.
 //
 // THE MECHANISM, measured on prod (v1.21.44): register/start and register/finish
-// answered 200 and the row landed in `passkeys` with a real iCloud-Keychain
-// AAGUID, but every login/finish answered 401 "passkey tidak sah". The reason was
+// answered 200 and the row landed in `passkeys` with a real provider's AAGUID
+// (Bitwarden's — see nonASCIIProdAAGUID below), but every login/finish answered
+// 401 "passkey tidak sah". The reason was
 // not in the API log at all, because the verifier's error was discarded.
 //
 // go-webauthn's login validation compares the STORED credential's
@@ -93,13 +94,29 @@ const (
 		protocol.FlagBackupState // 0x1d
 )
 
-// appleKeychainAAGUID is the AAGUID the production row carried
-// (d548826e79b4db40a3d811116f7e8349) — a real iCloud-Keychain/Touch-ID
-// authenticator, and non-ASCII, which is the property that made the pre-fix
-// TEXT column reject the INSERT (card t_df9233f6, migration 000075). Using it
-// here keeps the registration half of this test on the shape prod actually
-// stores.
-var appleKeychainAAGUID = []byte{
+// nonASCIIProdAAGUID is the AAGUID the production row carried
+// (d548826e79b4db40a3d811116f7e8349, 16 bytes, read back from `passkeys` on
+// prod). It is named for the property this test depends on — the bytes are
+// non-ASCII, which is what made the pre-fix TEXT column reject the INSERT (card
+// t_df9233f6, migration 000075) — and not for a vendor, because the vendor this
+// constant used to be named after was wrong: it is Bitwarden's passkey-provider
+// AAGUID, not Apple's (and not an iCloud Keychain value):
+//
+//   - Bitwarden's client declares it for its own provider —
+//     `export const AAGUID = new Uint8Array([0xd5, 0x48, …])` in
+//     libs/common/src/platform/services/fido2/fido2-authenticator.service.ts
+//     (bitwarden/clients), and the same value in the desktop plugin
+//     authenticator's authenticator-info blob.
+//   - The community AAGUID list maps d548826e-79b4-db40-a3d8-11116f7e8349 to
+//     "Bitwarden" (github.com/passkeydeveloper/passkey-authenticator-aaguids,
+//     aaguid.json). Apple's iCloud Keychain entries there are the separate
+//     fbfc3007-154e-4ecc-8c0b-6e020557d7bd ("Apple Passwords") and
+//     dd4ec289-e01d-41c9-bb89-70fa845d4bf2 ("iCloud Keychain (Managed)") —
+//     different values, so this constant must not be read as an attribution.
+//
+// Using it here keeps the registration half of this test on the shape prod
+// actually stores.
+var nonASCIIProdAAGUID = []byte{
 	0xd5, 0x48, 0x82, 0x6e, 0x79, 0xb4, 0xdb, 0x40,
 	0xa3, 0xd8, 0x11, 0x11, 0x6f, 0x7e, 0x83, 0x49,
 }
@@ -189,7 +206,7 @@ func TestPasskeyLoginAcceptsARealAssertion(t *testing.T) {
 
 	// ── the registration half ───────────────────────────────────────────────
 	fx := registerRealPasskey(t, h, ah, pool, user, session,
-		realPasskeyRegistrationFlags, realPasskeyCredID("real-assert"), appleKeychainAAGUID)
+		realPasskeyRegistrationFlags, realPasskeyCredID("real-assert"), nonASCIIProdAAGUID)
 
 	// The flags must reach the COLUMN, not merely the in-memory credential: the
 	// login ceremony reads them back out of Postgres through a different
@@ -259,7 +276,8 @@ func TestPasskeyLoginAcceptsARealAssertion(t *testing.T) {
 // rows that already exist in `passkeys`.
 //
 // Before this fix EVERY row held the sentinel 0 (PasskeyStore.Save hard-coded
-// it), including the iCloud-Keychain credential measured on prod. Fixing only
+// it), including the credential measured on prod (whose AAGUID is Bitwarden's —
+// see nonASCIIProdAAGUID). Fixing only
 // the write path would leave every user who had already registered a passkey
 // locked out, with the same 401 and the same missing reason in the log — so the
 // login path adopts the assertion's flags for a row that holds no recorded
