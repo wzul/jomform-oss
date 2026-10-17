@@ -526,9 +526,18 @@ func (s *Server) updateProfileAvatar(ctx context.Context, _ *mcp.CallToolRequest
 
 type passkeyOut struct {
 	ID        string `json:"id"`
-	CreatedAt string `json:"created_at,omitempty"`
+	CreatedAt string `json:"created_at"`
 }
 
+// listPasskeys lists the caller's passkeys. `created_at` carries the row's real
+// timestamp (RFC 3339, UTC), read through PasskeyStore.ListCreatedAt.
+//
+// It used to be declared with omitempty and never set: ByUser reads no
+// timestamp, so the field was silently dropped from every response — the MCP
+// half of the same defect as REST `GET /v1/auth/passkeys` answering
+// `"created_at": ""` (card t_96c7c227). The two surfaces report the same field
+// from the same query, and the parity rule keeps them in step; omitempty is
+// gone so a regression here is a wrong value rather than a vanished key.
 func (s *Server) listPasskeys(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[passkeyOut], error) {
 	if s.deps.Passkeys == nil {
 		return nil, nil, errors.New("passkey store tidak tersedia")
@@ -537,13 +546,13 @@ func (s *Server) listPasskeys(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 	if userID == "" {
 		return nil, nil, errors.New("auth diperlukan")
 	}
-	creds, err := s.deps.Passkeys.ByUser(ctx, userID)
+	creds, err := s.deps.Passkeys.ListCreatedAt(ctx, userID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	out := make([]passkeyOut, 0, len(creds))
 	for _, c := range creds {
-		out = append(out, passkeyOut{ID: base64URLMCP(c.ID)})
+		out = append(out, passkeyOut{ID: base64URLMCP(c.ID), CreatedAt: c.CreatedAt.UTC().Format(time.RFC3339)})
 	}
 	return nil, newListOut(out), nil
 }

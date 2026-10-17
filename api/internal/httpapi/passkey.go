@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -638,18 +639,25 @@ func (h *RESTHandlers) passkeyList(w http.ResponseWriter, r *http.Request, actx 
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
 		return
 	}
-	creds, err := h.Passkeys.ByUser(r.Context(), uid)
+	creds, err := h.Passkeys.ListCreatedAt(r.Context(), uid)
 	if err != nil {
 		respondErr(w, r, err)
 		return
 	}
+	// `created_at` is the row's real timestamp, formatted here rather than left
+	// to the encoder: the column is timestamptz, so its representation in a
+	// public response is the endpoint's contract, and pinning it to RFC 3339 in
+	// UTC keeps it stable whatever the server's location or the driver's
+	// default. Before card t_96c7c227 the field was declared and never set, so
+	// every row carried "" — the store read no timestamp and this loop had
+	// nothing to put in it.
 	type row struct {
 		ID        string `json:"id"`
 		CreatedAt string `json:"created_at"`
 	}
 	out := make([]row, 0, len(creds))
 	for _, c := range creds {
-		out = append(out, row{ID: base64URL(c.ID)})
+		out = append(out, row{ID: base64URL(c.ID), CreatedAt: c.CreatedAt.UTC().Format(time.RFC3339)})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

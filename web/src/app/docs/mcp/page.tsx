@@ -214,7 +214,7 @@ const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: 
       { name: "update_profile_timezone", desc: "Set zona waktu IANA pilihan pada profil anda (kosong = Auto, ikut pelayar/PC). Contoh: Asia/Kuala_Lumpur, UTC." },
       { name: "update_profile_language", desc: "Set bahasa DASHBOARD pilihan pada profil anda (per-user, ikut anda ke mana-mana pelayar): en, ms, zh, ta atau ar (kosong = auto, ikut nilai terakhir pelayar itu, kemudian en). Ini bahasa DASHBOARD sahaja dan ia per-profil \u2014 bahasa borang awam ditetapkan per-borang (config.lang) atau per-workspace (default_lang melalui set_workspace_settings), bukan di sini." },
       { name: "update_profile_avatar", desc: "Set avatar profil (URL mesti imej yang dihoskan JomForm dari upload bucket). Kosong = buang avatar." },
-      { name: "list_passkeys", desc: "Senarai passkey (WebAuthn) akaun anda: id. Read-only." },
+      { name: "list_passkeys", desc: "Senarai passkey (WebAuthn) akaun anda: id, created_at. Read-only." },
       { name: "delete_passkey", desc: "Padam satu passkey (id dari list_passkeys)." },
       { name: "list_social_accounts", desc: "Senarai akaun sosial yang dipautkan (google|azure_ad|github|cloudflare): provider, emel, nama, picture, linked_at. Read-only." },
       { name: "unlink_social_account", desc: "Nyah-pautkan akaun sosial (provider dari list_social_accounts)." },

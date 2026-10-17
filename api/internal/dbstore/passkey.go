@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -178,6 +179,46 @@ func (s *PasskeyStore) ByUser(ctx context.Context, userID string) ([]webauthn.Cr
 			Authenticator: webauthn.Authenticator{SignCount: sc, AAGUID: []byte(aaguid)},
 		})
 		_ = tr
+	}
+	return out, rows.Err()
+}
+
+// PasskeyListRow is one row of a passkey LIST: the credential id plus the
+// timestamp the row was created with.
+//
+// The timestamp is a second query rather than a field on
+// [webauthn.Credential], which has no place for it, and [PasskeyStore.ByUser]
+// does not read the column. That gap is card t_96c7c227: `GET
+// /v1/auth/passkeys` declared a `created_at` in every row and could never fill
+// it, so the public response carried `"created_at": ""` for every credential —
+// while the column itself is `TIMESTAMPTZ NOT NULL DEFAULT now()` and always
+// has the value. The LIST endpoints read it through here.
+type PasskeyListRow struct {
+	ID        []byte
+	CreatedAt time.Time
+}
+
+// ListCreatedAt returns the user's credentials with the `created_at` the row
+// holds, for the LIST surfaces that report when a passkey was registered
+// (REST `GET /v1/auth/passkeys`, MCP `list_passkeys`).
+//
+// A zero CreatedAt here means the column was not selected — the defect this
+// method replaced — not a row without a timestamp: the column is NOT NULL with
+// a default, so every stored credential has one.
+func (s *PasskeyStore) ListCreatedAt(ctx context.Context, userID string) ([]PasskeyListRow, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, created_at FROM passkeys WHERE user_id=$1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PasskeyListRow
+	for rows.Next() {
+		var r PasskeyListRow
+		if err := rows.Scan(&r.ID, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

@@ -830,7 +830,7 @@ func (s *Server) registerTools() {
 	// ── Parity: passkeys (issue #396) ────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "list_passkeys",
-		Description: "Senarai passkey (WebAuthn) akaun anda: id. Read-only.",
+		Description: "Senarai passkey (WebAuthn) akaun anda: id, created_at. Read-only.",
 	}, s.listPasskeys)
 	addTool(s, &mcp.Tool{
 		Name:        "delete_passkey",
