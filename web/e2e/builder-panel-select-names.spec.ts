@@ -33,14 +33,25 @@
 // the same argument the panel's own code comment makes for the fields PR #701
 // fixed.
 //
-// WHY THE FIVE STATES: the guard scans every block type whose panel renders a
+// WHY THE CASES: the guard scans every block type whose panel renders a
 // select — the `name` block (the conditional rule picker only: its own
 // simple/full format picker was removed by card t_23289ce3, which found it had
 // no reader in either public renderer), `date` (its format picker plus the rule
 // picker, hence 2), the `select` block (choices + rule picker), the product
-// block (its product picker) — and keeps a text block as a control that renders
-// none. Scanning only one panel state is what let the defect through the first
-// time.
+// block (its product picker), the `text` block (the rule picker — card
+// t_7fb80479 made it a field type, so its panel carries the conditional logic
+// the other inputs have) — and keeps a DISPLAY block (`section`) as the control
+// that renders none. Scanning only one panel state is what let the defect
+// through the first time.
+//
+// THE CONTROL MOVED (card t_7fb80479): it used to be the text block, on the
+// premise that its panel renders no select. That was true only because `text`
+// was missing from the builder's field-type list, which is the drift the card
+// fixed — a text block collects an answer, so it can be the SOURCE of a
+// conditional rule and its panel therefore renders the rule picker like the
+// name/select blocks. A `section` is a display block and is not a field type,
+// so its panel still renders no select at all and the empty-reading control
+// keeps its point.
 //
 // WHAT MAKES IT BITE (verified, not assumed): on the pre-fix tree the name-,
 // date- and product-block cases fail with `nameSource: "NONE"` — see the PR.
@@ -67,10 +78,12 @@ const BLOCK = (type: string, extra: Record<string, unknown> = {}) => ({
 });
 
 // The block types whose panel renders the controls this card fixed, in the
-// order the canvas lists them. Each also renders the conditional-logic rule
-// picker (they are field types and the form has more than one block), which is
-// why the count is 2 where the card names one picker: the guard asserts the
-// count so a panel that rendered nothing cannot pass vacuously.
+// order the canvas lists them. The field types (name/date/select/product/text)
+// also render the conditional-logic rule picker (the form has more than one
+// block), which is why the count is 2 where the card names one picker: the
+// guard asserts the count so a panel that rendered nothing cannot pass
+// vacuously. `section` is the control: a display block, not a field type, so
+// its panel renders no select at all.
 const CASES = [
   { label: "name — the rule picker (its format picker is gone)", index: 0, selects: 1 },
   { label: "date — the format picker", index: 1, selects: 2 },
@@ -78,7 +91,8 @@ const CASES = [
   // t_c4abb920) but no format picker: its only <select> is the rule picker.
   { label: "select — choices + rule picker", index: 2, selects: 1 },
   { label: "product — the product picker", index: 3, selects: 1 },
-  { label: "text — no select at all (control)", index: 4, selects: 0 },
+  { label: "text — a field type now, so its panel has the rule picker", index: 4, selects: 1 },
+  { label: "section — no select at all (control)", index: 5, selects: 0 },
 ] as const;
 
 type Reading = {
@@ -136,6 +150,7 @@ async function stubAPI(page: Page) {
             }),
             BLOCK("product", { product_id: "p1" }),
             BLOCK("text"),
+            BLOCK("section"),
           ],
         },
         theme: {},

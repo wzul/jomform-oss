@@ -48,16 +48,11 @@ func (s *Server) listTemplatesMCP(
 		if m, ok := f.Config["mode"].(string); ok {
 			mode = m
 		}
-		if blocks, ok := f.Config["blocks"].([]any); ok {
-			for _, b := range blocks {
-				if bm, ok := b.(map[string]any); ok && bm["type"] == "text" {
-					if s2, ok := bm["value"].(string); ok {
-						desc = s2
-						break
-					}
-				}
-			}
-		}
+		// Description = the form's intro line (card t_7fb80479): the first
+		// section/html block's value, falling back to the first text block's
+		// value for a row written while `text` still meant prose. Never a
+		// field's label — `text` is an input now, and its value is the label.
+		desc = formfields.Description(f.Config)
 		out = append(out, templateOut{
 			ID: f.ID, Slug: f.Slug, Title: f.Title,
 			Description: desc, Category: cat, Mode: mode, Theme: f.Theme,

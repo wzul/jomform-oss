@@ -37,17 +37,11 @@ func (h *RESTHandlers) listTemplates(w http.ResponseWriter, r *http.Request) {
 		if m, ok := f.Config["mode"].(string); ok {
 			mode = m
 		}
-		// Description = the first text block's value (a short intro line).
-		if blocks, ok := f.Config["blocks"].([]any); ok {
-			for _, b := range blocks {
-				if bm, ok := b.(map[string]any); ok && bm["type"] == "text" {
-					if s, ok := bm["value"].(string); ok {
-						desc = s
-						break
-					}
-				}
-			}
-		}
+		// Description = the form's intro line (card t_7fb80479): the first
+		// section/html block's value, falling back to the first text block's
+		// value for a row written while `text` still meant prose. Never a
+		// field's label — `text` is an input now, and its value is the label.
+		desc = formfields.Description(f.Config)
 		out = append(out, row{ID: f.ID, Slug: f.Slug, Title: f.Title, Description: desc, Category: cat, Mode: mode, Theme: f.Theme})
 	}
 	writeJSON(w, http.StatusOK, out)

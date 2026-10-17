@@ -180,6 +180,11 @@ func TestIssue493ClientCollectsExtraFields(t *testing.T) {
 // The field-contract derivation reads a form's builder blocks, keeps only
 // collectable input types, uses the block id as the field id, and prefers an
 // explicit registered_fields contract when one is present (#254).
+//
+// Card t_7fb80479: `text` IS one of those input types — both renderers paint
+// it as `<input type="text">` — so the leading text block is a field here. It
+// used to be excluded (the block's old prose reading), which meant a text
+// field's answer was never part of the contract the checkout validates against.
 func TestIssue493ContractFromBuilderBlocks(t *testing.T) {
 	cfg := map[string]any{
 		"blocks": []any{
@@ -194,14 +199,17 @@ func TestIssue493ContractFromBuilderBlocks(t *testing.T) {
 		},
 	}
 	got := formfields.Contract(cfg)
-	if len(got) != 2 {
-		t.Fatalf("Contract returned %d fields, want 2 (%+v)", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("Contract returned %d fields, want 3 (%+v)", len(got), got)
 	}
-	if got[0].FieldID != "addr" || got[0].Type != "address" || !got[0].Required || got[0].Placeholder != "No 1" {
-		t.Errorf("addr field = %+v", got[0])
+	if got[0].FieldID != "title" || got[0].Type != "text" || got[0].Label != "Order" {
+		t.Errorf("title field = %+v", got[0])
 	}
-	if got[1].FieldID != "spice" || len(got[1].Choices) != 1 || got[1].Choices[0].Value != "biasa" {
-		t.Errorf("spice field = %+v", got[1])
+	if got[1].FieldID != "addr" || got[1].Type != "address" || !got[1].Required || got[1].Placeholder != "No 1" {
+		t.Errorf("addr field = %+v", got[1])
+	}
+	if got[2].FieldID != "spice" || len(got[2].Choices) != 1 || got[2].Choices[0].Value != "biasa" {
+		t.Errorf("spice field = %+v", got[2])
 	}
 	// An explicit registered_fields contract wins.
 	reg := formfields.Contract(map[string]any{

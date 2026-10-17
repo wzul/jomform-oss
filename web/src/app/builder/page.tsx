@@ -27,6 +27,7 @@ import {
 } from "../../lib/publishResult";
 import TemplatePicker from "../../components/TemplatePicker";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
+import { formDescription } from "../../lib/formDescription";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
 
@@ -185,10 +186,19 @@ const PALETTE_GROUPS: PaletteGroup[] = [
   },
 ];
 
-/* Field types that collect a buyer answer (used for required + conditional
-   logic + response-mode collection). */
+/* Field types that collect a buyer answer (used for the required toggle, the
+   required message, the validation pattern, conditional logic and
+   response-mode collection).
+   Card t_7fb80479: `text` is one of them. The palette places it in the
+   Standard group with placeholder / max length / default value / pattern, and
+   both public renderers paint `<input type="text">` — leaving it out made this
+   panel lie about the block, because a merchant could not mark their only
+   short-answer field required or patterned while the renderers (and now the
+   server-side contract) honoured both. The list mirrors
+   formfields.ValidTypes (api/internal/formfields) and the field list in
+   /docs/customize + /docs/mcp. */
 const fieldTypes: BlockType[] = [
-  "name", "email", "phone", "textarea", "checkbox",
+  "name", "email", "phone", "textarea", "text", "checkbox",
   "number", "select", "radio", "date", "time", "website",
   "address", "consent", "hidden", "list", "repeater", "image-choice", "captcha",
 ];
@@ -662,7 +672,14 @@ export default function Builder() {
     const plan = savePlan(target, publish);
     const config = {
       mode,
-      description: (blocks.find((b) => b.type === "text")?.value || "").slice(0, 300),
+      // Card t_7fb80479: the description is the form's INTRO line — the first
+      // section/html block, falling back to a `text` block only for a form
+      // written before that type settled. It used to read the first `text`
+      // block unconditionally, which now describes the form with one of its
+      // FIELDS' labels ("Cuba. Nama"). One rule, shared with the two API
+      // derivations (api/internal/formfields Description) — see
+      // lib/formDescription. The 300-char cap is this writer's own.
+      description: formDescription(blocks).slice(0, 300),
       // Issue #186: merchant-configured CHIP client field mapping. Only
       // non-empty entries are persisted; empty = implicit default.
       chip_mapping: Object.fromEntries(

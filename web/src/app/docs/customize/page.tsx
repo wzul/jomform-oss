@@ -202,7 +202,7 @@ export default function CustomizeDocsPage() {
       </h2>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         Build beautiful order forms with a drag-and-drop builder. Add fields (name, email, phone,
-        textarea, number, select, radio, checkbox, date, time, website, address, consent, hidden,
+        textarea, text, number, select, radio, checkbox, date, time, website, address, consent, hidden,
         list, repeater, image-choice, captcha), attach products, and publish to your own workspace
         URL or a custom domain. Forms can be <strong>payment forms</strong> or{" "}
         <strong>response-only</strong> — the mode decides what the form collects and what its entries

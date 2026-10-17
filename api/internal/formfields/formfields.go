@@ -118,8 +118,21 @@ func intAnswers(answers map[string]string) map[string]int64 {
 // ValidTypes is the allowlist of input field types JomForm renders and
 // records. The agent cannot invent a type — JomForm keeps authority over
 // field types (issue #254).
+//
+// Card t_7fb80479: `text` is in this list because it IS an input field. The
+// builder's palette places "Text / label" in the Standard group beside
+// textarea/number/select with placeholder / max length / default value /
+// pattern — settings that only mean something for a control — and BOTH public
+// renderers paint it as `<input type="text">` whose label is the block's value
+// (payment renderer since t_23289ce3, response renderer since t_99c3a08b).
+// Prose stays available as `section`/`html`, which are display blocks and not
+// field types. The block had two meanings before this card: response mode
+// painted a control while the payment renderer painted `<p class="text">`, and
+// the lists below excluded it, so an agent could not register the one field
+// the palette offers for a short answer.
 var ValidTypes = map[string]bool{
 	"name": true, "email": true, "phone": true, "textarea": true,
+	"text":   true,
 	"number": true, "select": true, "radio": true, "checkbox": true,
 	"date": true, "time": true, "website": true, "address": true,
 	"consent": true, "hidden": true, "list": true, "repeater": true,
@@ -252,15 +265,78 @@ func ValidateFields(regs []Field, fields map[string]string) error {
 }
 
 // collectableTypes is the allowlist of builder-block types that collect a
-// value (mirrors the renderer's input set). Decorative/pricing blocks
-// (text, image, divider, product, option, shipping, total) are never
-// part of a field contract.
+// value (mirrors the renderer's input set). Display/pricing blocks
+// (image, divider, product, option, shipping, total) are never part of a
+// field contract.
+//
+// Card t_7fb80479: `text` IS collectable, because the renderers paint it as a
+// text input. Leaving it out (its old reading — prose) meant a required text
+// field was never enforced server-side: the panel's `required` was an HTML
+// attribute a direct POST could ignore, and Validate had nothing to check
+// against. `section`/`html` remain display blocks and stay out.
 var collectableTypes = map[string]bool{
 	"name": true, "email": true, "phone": true, "textarea": true,
+	"text":   true,
 	"number": true, "select": true, "radio": true, "checkbox": true,
 	"date": true, "time": true, "website": true, "address": true,
 	"consent": true, "hidden": true, "list": true, "repeater": true,
 	"image-choice": true, "captcha": true,
+}
+
+// proseBlockTypes are the block types that carry display copy instead of an
+// answer: the intro line a form opens with. `html` is escaped exactly like
+// `section` in both renderers, so both are prose.
+var proseBlockTypes = map[string]bool{"section": true, "html": true}
+
+// blocksOf decodes a form config's builder blocks. Returns nil for a config
+// with no blocks, or one this package cannot read — every reader here reports
+// only what it recognises.
+func blocksOf(config map[string]any) []block {
+	if config == nil {
+		return nil
+	}
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return nil
+	}
+	var cfg struct {
+		Blocks []block `json:"blocks"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return nil
+	}
+	return cfg.Blocks
+}
+
+// Description returns the sentence that introduces a form — its intro line.
+//
+// Card t_7fb80479: the description is read from the form's PROSE, never from a
+// field's label. Three places derive it (the template gallery, MCP
+// list_templates, and the builder's save) and all three read the first `text`
+// block's value — which was right while `text` meant prose, and is wrong now
+// that `text` is an input whose value is its LABEL: a merchant's
+// name-collecting form described itself as "Cuba. Nama" instead of its intro.
+//
+// The first `section`/`html` block with a value wins, wherever the merchant
+// placed it. A form written under the old content model — the seeded template
+// library wrote its intro into a `text` block, and those rows are migrated by
+// card t_d46c21e0 — falls back to its first `text` block, so its gallery card
+// keeps the description it has today on either side of that migration.
+func Description(config map[string]any) string {
+	var legacy string
+	for _, b := range blocksOf(config) {
+		v := strings.TrimSpace(b.Value)
+		if v == "" {
+			continue
+		}
+		if proseBlockTypes[b.Type] {
+			return v
+		}
+		if b.Type == "text" && legacy == "" {
+			legacy = v
+		}
+	}
+	return legacy
 }
 
 // block is the subset of a builder block the contract derivation reads.
@@ -292,22 +368,13 @@ func Contract(config map[string]any) []Field {
 	if regs := FromConfig(config); len(regs) > 0 {
 		return regs
 	}
-	if config == nil {
-		return nil
-	}
-	raw, err := json.Marshal(config)
-	if err != nil {
-		return nil
-	}
-	var cfg struct {
-		Blocks []block `json:"blocks"`
-	}
-	if json.Unmarshal(raw, &cfg) != nil || len(cfg.Blocks) == 0 {
+	bs := blocksOf(config)
+	if len(bs) == 0 {
 		return nil
 	}
 	var out []Field
 	seen := map[string]bool{}
-	for _, b := range cfg.Blocks {
+	for _, b := range bs {
 		id := strings.TrimSpace(b.ID)
 		if id == "" || !collectableTypes[b.Type] || seen[id] {
 			continue

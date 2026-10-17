@@ -1332,7 +1332,7 @@ export const DICT = {
   "bld.imageTypeUnsupported": { en: "That image type is not supported (PNG/JPEG/WebP/GIF only).", ms: "Jenis imej itu tidak disokong (PNG/JPEG/WebP/GIF sahaja).", zh: "不支持该图片类型（仅限 PNG/JPEG/WebP/GIF）。", ta: "அந்த பட வகை ஆதரிக்கப்படவில்லை (PNG/JPEG/WebP/GIF மட்டும்).", ar: "نوع الصورة هذا غير مدعوم (PNG/JPEG/WebP/GIF فقط)." },
   // palette block labels
   "blk.text": { en: "Text", ms: "Teks", zh: "文本", ta: "உரை", ar: "نص" },
-  "blk.textHint": { en: "Paragraph / description", ms: "Perenggan / penerangan", zh: "段落 / 描述", ta: "பத்தி / விளக்கம்", ar: "فقرة / وصف" },
+  "blk.textHint": { en: "Short answer / one line", ms: "Jawapan pendek / satu baris", zh: "简短回答 / 单行", ta: "குறுகிய பதில் / ஒரு வரி", ar: "إجابة قصيرة / سطر واحد" },
   "blk.image": { en: "Image", ms: "Imej", zh: "图片", ta: "படம்", ar: "صورة" },
   "blk.imageHint": { en: "Product photo / banner", ms: "Foto produk / banner", zh: "商品图片 / 横幅", ta: "பொருள் படம் / பேனர்", ar: "صورة منتج / لافتة" },
   "blk.product": { en: "Product", ms: "Produk", zh: "商品", ta: "பொருள்", ar: "منتج" },
