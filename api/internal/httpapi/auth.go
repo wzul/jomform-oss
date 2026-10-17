@@ -41,8 +41,9 @@ type AuthHandlers struct {
 	CookieDomain string
 
 	// Issue #42 hardening.
-	//   LoginLimiter tracks failed logins per IP + email in Valkey (nil only in
-	//   bare-mode tests). VerifyKey signs the /verify email-confirmation link.
+	//   LoginLimiter tracks failed logins per source IP in Valkey — the
+	//   lockout is address-keyed, never account-keyed (nil only in bare-mode
+	//   tests). VerifyKey signs the /verify email-confirmation link.
 	//   VerifyMailer delivers that email.
 	LoginLimiter *auth.LoginLimiter
 	VerifyKey    []byte
@@ -361,10 +362,13 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Brute-force gate (issue #42): after FailLockoutThreshold failures from an
 	// IP within 15min the login is refused outright with 429 + Retry-After.
+	// The gate is address-keyed only — a failure for an existing account is
+	// counted against its source IP, never against the account, so a 429 can
+	// never tell a caller whether the email exists (see loginlimiter.go).
 	// When the Valkey limiter is unavailable we fail open (availability beats
 	// brute-force rate here); the per-IP RateLimit + argon2 cost remain.
 	if a.LoginLimiter != nil {
-		locked, _, _, err := a.LoginLimiter.Status(r.Context(), ip, email)
+		locked, _, _, err := a.LoginLimiter.Status(r.Context(), ip)
 		if err != nil {
 			// limiter backend down → log, don't block logins.
 			slog.Warn("loginfail_status_error", "err", err, "ip", ip)
@@ -382,7 +386,7 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// response timing) matches a real password check; a brute-forcer cannot
 		// distinguish "no such user" from "wrong password" by timing either.
 		_, _ = auth.VerifyPassword(req.Password, auth.DummyPasswordHash)
-		a.failLogin(w, r, ip, "", false)
+		a.failLogin(w, r, ip)
 		return
 	}
 
@@ -390,7 +394,7 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// argon2 cost, so response timing stays uniform across known/unknown.
 	ok, verifyErr := auth.VerifyPassword(req.Password, user.PasswordHash)
 	if verifyErr != nil || !ok {
-		a.failLogin(w, r, ip, email, true)
+		a.failLogin(w, r, ip)
 		return
 	}
 
@@ -446,7 +450,7 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if !totpOK && !emailOK {
-				a.failLogin(w, r, ip, email, true)
+				a.failLogin(w, r, ip)
 				return
 			}
 			// Issue #72: trust-device (jf_trust) is NEVER issued for an
@@ -459,10 +463,10 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Success resets the failure counters so a legitimate owner who later
+	// Success resets the failure counter so a legitimate owner who later
 	// mistypes can't be locked out by stale history.
 	if a.LoginLimiter != nil {
-		if err := a.LoginLimiter.Reset(r.Context(), ip, email); err != nil {
+		if err := a.LoginLimiter.Reset(r.Context(), ip); err != nil {
 			slog.Warn("loginfail_reset_error", "err", err, "ip", ip)
 		}
 	}
@@ -502,19 +506,17 @@ func (a *AuthHandlers) firstAccountID(r *http.Request, userID string) string {
 	return accs[0].ID
 }
 
-// failLogin handles a rejected login attempt: record the failure in Valkey and
-// emit a uniform 401. A recorded (real) user takes an extra artificial delay so
-// a brute-forcer cannot distinguish "no such user" from "wrong password" by
-// timing alone — unknown-email attempts return immediately.
-func (a *AuthHandlers) failLogin(w http.ResponseWriter, r *http.Request, ip, email string, known bool) {
+// failLogin handles a rejected login attempt: record the failure against the
+// caller's address and emit a uniform 401.
+//
+// It is deliberately indifferent to whether the email exists: the failure is
+// counted per IP only (an account-keyed counter would make this path answer
+// "does this user exist?" — see loginlimiter.go), the body is identical for a
+// known and an unknown email, and the caller has already paid the same argon2
+// cost in both cases, so neither the message nor the timing separates them.
+func (a *AuthHandlers) failLogin(w http.ResponseWriter, r *http.Request, ip string) {
 	if a.LoginLimiter != nil {
-		rec := email
-		if !known {
-			// Unknown emails share the per-IP counter only — never key the
-			// per-account counter with a non-existent user.
-			rec = ""
-		}
-		if err := a.LoginLimiter.RecordFailure(r.Context(), ip, rec); err != nil {
+		if err := a.LoginLimiter.RecordFailure(r.Context(), ip); err != nil {
 			slog.Warn("loginfail_record_error", "err", err, "ip", ip)
 		}
 	}

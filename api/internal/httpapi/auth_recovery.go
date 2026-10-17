@@ -473,11 +473,11 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	// Successful login resets the failure counters (issue #345) so a user who
+	// Successful login resets the failure counter (issue #345) so a user who
 	// was locked out on the password path isn't re-locked by stale history
 	// after signing in via a magic link. Fail-open (log only, never block).
 	if a.LoginLimiter != nil {
-		if err := a.LoginLimiter.Reset(r.Context(), middleware.ClientIP(r), user.Email); err != nil {
+		if err := a.LoginLimiter.Reset(r.Context(), middleware.ClientIP(r)); err != nil {
 			slog.Warn("loginfail_reset_error_magiclink", "err", err, "ip", middleware.ClientIP(r))
 		}
 	}

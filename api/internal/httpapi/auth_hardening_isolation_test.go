@@ -22,30 +22,36 @@ import (
 	"github.com/wzul/jomform/api/internal/auth"
 )
 
-// livePeerSeedKeys returns the two PRODUCTION-prefix keys the reclaim guard seeds
-// to stand in for what a live process on the shared DB owns: a `jf:session:`
-// token and the per-ACCOUNT `jf:loginfail:user:` counter the breaker writes. Both
-// SHAPES are what the assertions read; the NAME carries the pid, which is what
-// this process alone can produce.
+// livePeerSeedKey returns the PRODUCTION-prefix key the reclaim guard seeds to
+// stand in for what a live process on the shared DB owns: a `jf:session:` token.
+// That SHAPE is what the assertions read; the NAME carries the pid, which is
+// what this process alone can produce.
 //
-// The pid is load-bearing, not decoration. The guard's t.Cleanup deletes these by
+// The seed was a PAIR — the session token plus a `jf:loginfail:user:`
+// per-account counter — and the second half is gone with the counter: the login
+// breaker wrote it and read it from nowhere, so the API no longer has that
+// prefix and a key under it would stand for no live key at all. The session seed
+// still covers what the pair was there to prove (a foreign production prefix
+// survives the scoped reclaim), and the login counter that must survive is the
+// peer sentinel below, which is keyed on the `jf:loginfail:ip:` prefix the
+// breaker really writes.
+//
+// The pid is load-bearing, not decoration. The guard's t.Cleanup deletes this by
 // name, so a fixed name is a cross-process collision of the class the scoped
 // reclaim exists to remove: a second `go test` binary on the same Valkey DB
 // deletes this process's live seed, and the guard fails on itself. Measured on a
-// fixed name, 4 of 100 concurrent guard-test binaries red. Naming them per
-// process is the fix; TestLivePeerSeedKeysArePerProcess pins it.
-func livePeerSeedKeys(pid uint32) (session, accountCounter string) {
-	own := strconv.Itoa(int(pid))
-	return "jf:session:PEER-LIVE-SESSION-" + own,
-		"jf:loginfail:user:peer-live-" + own + "@example.test"
+// fixed name, 4 of 100 concurrent guard-test binaries red. Naming it per process
+// is the fix; TestLivePeerSeedKeyIsPerProcess pins it.
+func livePeerSeedKey(pid uint32) string {
+	return "jf:session:PEER-LIVE-SESSION-" + strconv.Itoa(int(pid))
 }
 
 // TestReclaimLeavesPeersLoginCountersAlone proves the fixture's one-time cleanup
-// is scoped to this process's own test-IP /24: a counter under a /24 this process
-// does not own must survive, and one under ours must be cleared so a -count rerun
-// starts deterministic. Keys that merely sit on the PRODUCTION prefixes — a live
-// API's session token, an account-keyed counter — must survive too, whatever this
-// process is doing.
+// is scoped to this process's own test-IP block: a counter under a block this
+// process does not own must survive, and one under ours must be cleared so a
+// -count rerun starts deterministic. A key that merely sits on a PRODUCTION
+// prefix — a live API's session token — must survive too, whatever this process
+// is doing.
 //
 // It drives authTestValkey — the real wiring — rather than the helper, so a
 // regression back to a whole-prefix sweep fails here. authOnce is reset so the
@@ -81,8 +87,8 @@ func TestReclaimLeavesPeersLoginCountersAlone(t *testing.T) {
 
 	// A stale counter we own (the -count case: a previous run's leftover inside
 	// our own address range), a live one standing in for a counter under a peer's
-	// block, and two keys a live process on this DB would own: its session token
-	// and the per-ACCOUNT counter the breaker writes under the production prefix.
+	// block, and a key a live process on this DB would own: its session token, on
+	// a PRODUCTION prefix this reclaim must never touch.
 	//
 	// TWO of ours are seeded, in the block's two different /24s (the first call
 	// and the last), because the reclaim has to cover the whole block: a cleanup
@@ -92,17 +98,17 @@ func TestReclaimLeavesPeersLoginCountersAlone(t *testing.T) {
 	//
 	// All three seeds are named per PROCESS, not literally: the cleanup below
 	// deletes BY NAME, so a fixed name would be this test's own cross-process bug
-	// (see livePeerSeedKeys and peerCounterKey).
+	// (see livePeerSeedKey and peerCounterKey).
 	mine := prefix + testIPFor(pid, maxTestIPsPerProcess)
 	mineInFirstFamily := prefix + testIPFor(pid, 1)
-	liveSession, liveAccountCounter := livePeerSeedKeys(pid)
-	for k, v := range map[string]string{mine: "10", mineInFirstFamily: "9", peer: "10", liveSession: "1", liveAccountCounter: "7"} {
+	liveSession := livePeerSeedKey(pid)
+	for k, v := range map[string]string{mine: "10", mineInFirstFamily: "9", peer: "10", liveSession: "1"} {
 		if err := rdb.Set(ctx, k, v, 0).Err(); err != nil {
 			t.Fatalf("seed %s: %v", k, err)
 		}
 	}
 	t.Cleanup(func() {
-		_ = rdb.Del(context.Background(), peer, mine, mineInFirstFamily, liveSession, liveAccountCounter).Err()
+		_ = rdb.Del(context.Background(), peer, mine, mineInFirstFamily, liveSession).Err()
 	})
 
 	authOnce = sync.Once{}
@@ -119,7 +125,6 @@ func TestReclaimLeavesPeersLoginCountersAlone(t *testing.T) {
 	}{
 		{peer, "a login counter under a block this process does not own"},
 		{liveSession, "a live process's session token"},
-		{liveAccountCounter, "a live process's per-account failure counter"},
 	} {
 		if n, err := rdb.Exists(ctx, tc.key).Result(); err != nil || n != 1 {
 			t.Errorf("%s was deleted from the shared DB: %q (exists=%d err=%v)", tc.what, tc.key, n, err)
@@ -127,22 +132,22 @@ func TestReclaimLeavesPeersLoginCountersAlone(t *testing.T) {
 	}
 }
 
-// TestLivePeerSeedKeysArePerProcess is the deterministic half of the concurrency
+// TestLivePeerSeedKeyIsPerProcess is the deterministic half of the concurrency
 // fix above. The reclaim guard's own flake is probabilistic (4 of 100 concurrent
 // binaries on a fixed name), so a rate measurement alone cannot keep it from
 // coming back; this pins the property that removes it, in one process.
 //
-// The property is NEGATIVE, which is why it needs stating: the two seeded keys
-// must be names no OTHER live process can also produce. That is the difference
-// between this fixture and the whole-prefix sweep it replaced — a fixed literal
-// satisfies every assertion in the guard (the shapes are right, the keys exist)
+// The property is NEGATIVE, which is why it needs stating: the seeded key must be
+// a name no OTHER live process can also produce. That is the difference between
+// this fixture and the whole-prefix sweep it replaced — a fixed literal
+// satisfies every assertion in the guard (the shape is right, the key exists)
 // and is still a cross-process clobber, because the cleanup deletes BY NAME.
-func TestLivePeerSeedKeysArePerProcess(t *testing.T) {
+func TestLivePeerSeedKeyIsPerProcess(t *testing.T) {
 	pid := uint32(os.Getpid())
-	session, account := livePeerSeedKeys(pid)
+	session := livePeerSeedKey(pid)
 
-	if why := livePeerSeedShapesOK(session, account, pid); why != "" {
-		t.Errorf("the fixture's seeds do not keep the shapes the reclaim guard asserts on: %s", why)
+	if why := livePeerSeedShapeOK(session, pid); why != "" {
+		t.Errorf("the fixture's seed does not keep the shape the reclaim guard asserts on: %s", why)
 	}
 
 	// The names a concurrent `go test` binary would seed MUST differ from ours,
@@ -150,47 +155,34 @@ func TestLivePeerSeedKeysArePerProcess(t *testing.T) {
 	// instant hold adjacent pids (and the +256 block-adjacent case is the one a
 	// single-octet derivation aliases on).
 	for _, peer := range []uint32{pid + 1, pid + 2, pid + 3, pid + 7, pid + 8, pid + 256, pid + 1000} {
-		peerSession, peerAccount := livePeerSeedKeys(peer)
-		if peerSession == session {
+		if livePeerSeedKey(peer) == session {
 			t.Errorf("pid %d and pid %d seed the same session key %q — one process's cleanup deletes the other's live seed", pid, peer, session)
-		}
-		if peerAccount == account {
-			t.Errorf("pid %d and pid %d seed the same account-counter key %q — one process's cleanup deletes the other's live seed", pid, peer, account)
 		}
 	}
 
-	// Positive control: the two checks above must be able to FAIL. The literals
-	// this change replaced are the exact revert a future edit would make, so
-	// assert the shape check rejects them — otherwise the assertions above could
-	// be vacuous and a revert would surface only as a 4-in-100 flake.
+	// Positive control: the check above must be able to FAIL. The literal this
+	// change replaced is the exact revert a future edit would make, so assert the
+	// shape check rejects it — otherwise the assertion above could be vacuous and
+	// a revert would surface only as a 4-in-100 flake.
 	fixedSession := "jf:session:PEER-LIVE-SESSION"
-	fixedAccount := "jf:loginfail:user:peer-live@example.test"
-	if livePeerSeedShapesOK(fixedSession, fixedAccount, pid) == "" {
-		t.Errorf("control: the fixed literals %q / %q pass the shape check, so the check cannot catch a revert to them", fixedSession, fixedAccount)
+	if livePeerSeedShapeOK(fixedSession, pid) == "" {
+		t.Errorf("control: the fixed literal %q passes the shape check, so the check cannot catch a revert to it", fixedSession)
 	}
-	if fixedSession == session || fixedAccount == account {
-		t.Errorf("the fixture seeds a fixed literal (%q / %q) — a concurrent run deletes it by name", fixedSession, fixedAccount)
+	if fixedSession == session {
+		t.Errorf("the fixture seeds a fixed literal (%q) — a concurrent run deletes it by name", fixedSession)
 	}
 }
 
-// livePeerSeedShapesOK reports the first way a pair of seed keys fails to carry
-// the shapes TestReclaimLeavesPeersLoginCountersAlone reads, or "" when both are
-// in shape. Split out so the control above can prove it rejects the fixed
-// literals, rather than the check being asserted only against the values it was
-// written for.
-func livePeerSeedShapesOK(session, account string, pid uint32) string {
+// livePeerSeedShapeOK reports the first way the seed key fails to carry the shape
+// TestReclaimLeavesPeersLoginCountersAlone reads, or "" when it is in shape.
+// Split out so the control above can prove it rejects the fixed literal, rather
+// than the check being asserted only against the value it was written for.
+func livePeerSeedShapeOK(session string, pid uint32) string {
 	if !strings.HasPrefix(session, "jf:session:") {
 		return fmt.Sprintf("session seed %q is not under the production `jf:session:` prefix the assertion reads", session)
 	}
-	if !strings.HasPrefix(account, "jf:loginfail:user:") {
-		return fmt.Sprintf("account-counter seed %q is not under the production `jf:loginfail:user:` prefix the assertion reads", account)
-	}
-	own := strconv.Itoa(int(pid))
-	if !strings.HasSuffix(session, "-"+own) {
+	if own := strconv.Itoa(int(pid)); !strings.HasSuffix(session, "-"+own) {
 		return fmt.Sprintf("session seed %q does not encode this process's pid — a fixed name is what two concurrent runs collide on", session)
-	}
-	if !strings.Contains(account, own) {
-		return fmt.Sprintf("account-counter seed %q does not encode this process's pid — a fixed name is what two concurrent runs collide on", account)
 	}
 	return ""
 }
@@ -224,7 +216,7 @@ func TestOwnLoginCounterKeyRejectsForeignAndMalformedKeys(t *testing.T) {
 		{prefix + neighbour.families()[1] + "1", false, "the NEXT block's second /24"},
 		{prefix + "10.99.99.1", false, "another /16"},
 		{prefix + "not-an-ip", false, "not an address"},
-		{"jf:loginfail:user:" + testIPFor(pid, 1), false, "per-account key, not per-IP"},
+		{"jf:loginfail:user:" + testIPFor(pid, 1), false, "a key that shares only the `jf:loginfail:` head — not the ip: counter the reclaim reads"},
 	} {
 		if got := ownLoginCounterKey(prefix, tc.key, pool); got != tc.want {
 			t.Errorf("ownLoginCounterKey(%q) = %v, want %v (%s)", tc.key, got, tc.want, tc.what)
@@ -265,7 +257,7 @@ func TestOwnLoginCounterKeyRejectsForeignAndMalformedKeys(t *testing.T) {
 // (TestPeerCounterSentinelBelongsToNoProcess proves it over the whole block
 // space).
 // The pid in the address is what keeps two concurrent runs of this test from
-// deleting each other's seed by name in t.Cleanup, exactly as livePeerSeedKeys'
+// deleting each other's seed by name in t.Cleanup, exactly as livePeerSeedKey's
 // pid does — the guard's own cleanup deletes BY NAME, so a shared literal would
 // be the same collision in a different place. The pid's low 24 bits are enough:
 // pid_max here is 4194304 = 2^22, so distinct live pids always derive distinct

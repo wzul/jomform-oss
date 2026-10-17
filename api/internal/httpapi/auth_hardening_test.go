@@ -64,14 +64,15 @@ func authTestValkey(t *testing.T) *auth.Sessions {
 // loginCounterKeyPrefixes are the shared-Valkey keys the auth fixture's test IPs
 // reach. The login breaker's per-IP counter is the only one: the coarse per-IP
 // token buckets (RateLimit / RegistrationLimit) are process-local maps in
-// middleware/ratelimit.go, and the per-ACCOUNT counter is keyed by an email the
-// tests mint per run, so that one cannot go stale.
+// middleware/ratelimit.go, and the breaker keys nothing on an email at all (the
+// lockout is per source address — see auth/loginlimiter.go), so the email-keyed
+// counters that would outlive a run do not exist.
 //
 // The PER-IP counter can go stale, and that is why this reclaim exists: it is
 // keyed by an address, and every test address in this package now comes from
-// testIP, which is inside the /24 this process owns. A hand-written address
-// would sit outside every process's /24 and survive here for its full 15-minute
-// TTL — so TestNoLiteralClientIPInTests refuses one.
+// testIP, which is inside the block this process owns. A hand-written address
+// would sit outside every process's block and survive here for its full
+// 15-minute TTL — so TestNoLiteralClientIPInTests refuses one.
 var loginCounterKeyPrefixes = []string{"jf:loginfail:ip:"}
 
 // reclaimOwnLoginCounters deletes the login-breaker counters under this
@@ -449,4 +450,112 @@ func TestAuthAllRoutesRateLimited(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("GET /v1/auth/me status = %d, want 401", rec.Code)
 	}
+}
+
+// TestAuthFailedLoginsAreCountedPerAddressNotPerAccount pins the lockout's scope,
+// both directions of it.
+//
+// The breaker counts failures per SOURCE ADDRESS and nothing else. It used to
+// also write a per-account counter under `jf:loginfail:user:<email>` that no code
+// ever read: ten failures for one account produced a key sitting at 10 while the
+// account stayed wide open (measured on prod), and the file's own comment
+// advertised the per-account protection all the same. This test is what says the
+// counter is gone: the burst below is ten failures for ONE verified account,
+// spread one per address, and afterwards
+//
+//	(a) no `jf:loginfail:user:` key exists for that account at all,
+//	(b) each of the ten addresses carries exactly its own count of 1 (which is
+//	    also what makes the burst genuinely spread — if the requests ever stopped
+//	    presenting the address, every failure would land on httptest's default
+//	    192.0.2.1 and this half would fail), and
+//	(c) the CORRECT password for that account still logs in from an eleventh,
+//	    untouched address: one account's attacker cannot lock the owner out.
+//
+// (c) is the tripwire for the other resolution of the same mismatch: ENFORCING a
+// per-account lockout is a change of lockout semantics (it needs a 429 that
+// answers "does this account exist?" to an attacker spending one attempt per
+// address, and it hands anyone a way to lock a known user out of their account),
+// so it must not arrive as a silent edit — it arrives as this test going red, and
+// whoever changes it has to argue for it in the same change. See
+// auth/loginlimiter.go for the reasoning.
+func TestAuthFailedLoginsAreCountedPerAddressNotPerAccount(t *testing.T) {
+	h, _, _ := authTestFixture(t)
+	mux := loginMux(h)
+	rdb := h.Sessions.Client()
+	ctx := context.Background()
+
+	email := fmt.Sprintf("perip-%s@example.test", runKey())
+	// Eleven addresses: ten for the burst and one kept completely clean, so (c)
+	// shows the account is open rather than showing a fresh address is.
+	ips := make([]string, 0, 11)
+	for i := 0; i < 11; i++ {
+		ips = append(ips, uniqueTestIP())
+	}
+	registerAndVerify(t, h, email, "password123", ips[0])
+
+	accountKey := "jf:loginfail:user:" + email
+	t.Cleanup(func() {
+		keys := append([]string{accountKey}, keysForIPs(ips)...)
+		if err := rdb.Del(context.Background(), keys...).Err(); err != nil {
+			t.Logf("cleanup: delete %v: %v", keys, err)
+		}
+	})
+
+	for i := 0; i < 10; i++ {
+		rec := postJSON(mux, "/v1/auth/login", map[string]any{
+			"email": email, "password": "WRONG",
+		}, ips[i])
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d from %s: status = %d, want 401 (body %s)", i+1, ips[i], rec.Code, rec.Body.String())
+		}
+	}
+
+	// (a) The account counter must not exist. The exact key and a SCAN for any
+	// case variant of it, since the prefix lower-cased its email.
+	if n, err := rdb.Exists(ctx, accountKey).Result(); err != nil || n != 0 {
+		t.Errorf("a per-account failure counter was written: %q exists=%d err=%v — the breaker must key on the address alone", accountKey, n, err)
+	}
+	var cursor uint64
+	var accountHits []string
+	for {
+		keys, next, err := rdb.Scan(ctx, cursor, "jf:loginfail:user:*"+email, 100).Result()
+		if err != nil {
+			t.Fatalf("scan per-account counters: %v", err)
+		}
+		accountHits = append(accountHits, keys...)
+		if next == 0 {
+			break
+		}
+		cursor = next
+	}
+	if len(accountHits) > 0 {
+		t.Errorf("per-account failure counter(s) written under the account prefix: %v — the login breaker must count per source address only", accountHits)
+	}
+
+	// (b) Each address carries its own single failure: the ten attempts were
+	// spread, so none of them can explain a lockout of the account.
+	for i, ip := range ips[:10] {
+		got, err := rdb.Get(ctx, "jf:loginfail:ip:"+ip).Result()
+		if err != nil || got != "1" {
+			t.Errorf("address %d (%s): counter = %q err=%v, want \"1\" — the ten failures must be one per address, below the delay and lockout thresholds", i+1, ip, got, err)
+		}
+	}
+
+	// (c) The account is NOT locked: its owner can still log in, from an address
+	// that has never failed.
+	rec := postJSON(mux, "/v1/auth/login", map[string]any{
+		"email": email, "password": "password123",
+	}, ips[10])
+	if rec.Code != http.StatusOK {
+		t.Fatalf("correct password from an unused address: status = %d, want 200 — ten failures for one account must not lock that account (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// keysForIPs maps addresses to the login breaker's counter keys.
+func keysForIPs(ips []string) []string {
+	out := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		out = append(out, "jf:loginfail:ip:"+ip)
+	}
+	return out
 }
