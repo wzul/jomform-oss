@@ -719,6 +719,19 @@ func main() {
 						}
 					}
 				}
+				// Card t_77dc59f5: an abandoned passkey ceremony leaves its
+				// challenge row behind — PutChallenge prunes on the way in, so a
+				// deployment that keeps serving ceremonies stays clean, and this
+				// tick is what drains the table on one that has gone quiet. Prod
+				// held 82 such rows with none of them live; every row is a
+				// server-side ceremony that outlived its 5-minute TTL.
+				if passkeysStore != nil {
+					if n, err := passkeysStore.PruneExpiredChallenges(ctx); err != nil {
+						slog.Warn("passkey_challenge_sweep", "err", err)
+					} else if n > 0 {
+						slog.Info("passkey_challenge_sweep", "deleted", n)
+					}
+				}
 				cancel()
 				<-ticker.C
 			}

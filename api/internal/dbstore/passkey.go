@@ -265,12 +265,52 @@ func (s *PasskeyStore) UserFor(ctx context.Context, userID, email string) (*Pass
 }
 
 // PutChallenge stores a one-shot challenge (5 min TTL).
+//
+// CARD t_77dc59f5. The expired rows are swept ON THE WAY IN, and that placement
+// is the point: this INSERT was the table's only writer and TakeChallenge its
+// only deleter, so a ceremony the user ABANDONED — the passkey prompt dismissed,
+// the tab closed, the phone never answered — left its row on disk forever. This
+// is not a theoretical leak, it is a measurement: `passkey_challenges` on prod
+// held 82 rows with ZERO of them live, the newest expiry 3h20m old, every one of
+// them a stored server-side ceremony that has outlived its own 5-minute
+// contract, plus the index entry the planner still has to step over.
+//
+// What makes the sweep safe to run here is the consume predicate: TakeChallenge
+// only ever removes a row with `expires_at > now()`, so a row this deletes is by
+// definition one no /finish can use — there is no ceremony to race. A LIVE row
+// is left alone (the DELETE carries the expiry predicate, it is not a wipe), and
+// the new row is inserted AFTER the delete, never before it, so the sweep cannot
+// take back the challenge it just minted.
+//
+// A deployment that stops serving ceremonies would still keep its last row, so
+// the API's hourly retention sweep calls PruneExpiredChallenges too — see
+// cmd/jomform-api. The two together are the fix: rows that accumulate while the
+// product is in use, and the rows left by the last ceremony before it went quiet.
 func (s *PasskeyStore) PutChallenge(ctx context.Context, key, value, kind string) error {
+	if _, err := s.PruneExpiredChallenges(ctx); err != nil {
+		return err
+	}
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO passkey_challenges (key, value, kind, expires_at) VALUES ($1,$2,$3, now()+interval '5 minutes')
 		 ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, kind=EXCLUDED.kind, expires_at=now()+interval '5 minutes'`,
 		key, value, kind)
 	return err
+}
+
+// PruneExpiredChallenges deletes every challenge whose TTL has passed and
+// reports how many rows went. See PutChallenge (card t_77dc59f5) for why the
+// table needed it and why an expired row is safe to remove.
+//
+// It walks `idx_passkey_challenges_exp`, so with nothing expired it is an index
+// probe that locks no row at all. The error is returned rather than swallowed:
+// a prune failure nobody can see is the shape that let 82 dead rows accumulate
+// unnoticed, and the next ceremony (or the next hourly tick) retries it.
+func (s *PasskeyStore) PruneExpiredChallenges(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM passkey_challenges WHERE expires_at <= now()`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // TakeChallenge reads+deletes a challenge (single use).
