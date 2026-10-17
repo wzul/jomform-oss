@@ -29,17 +29,21 @@
 #     check is not what fires): the BASE guard REDS ("the feature summaries total
 #     821 words"), the tree is GREEN. That is the trap removed, driven rather
 #     than argued.
-#   * CASE 2, the hair trigger the card measured — ONE word added to one summary:
-#     the BASE reds at exactly 800, the tree stays GREEN. This is the shape that
-#     would have blocked every lane's build today.
+#   * CASE 2, the hair trigger the card measured — the SMALLEST edit that trips the fixed
+#     cap: the BASE reds at exactly the cap while the tree stays GREEN. Its SIZE is DERIVED
+#     from the cap's real headroom on this page (2 words at 798 against 800; it was 1 while
+#     the page carried 799), because a hand-typed size is the same staleness trap the base
+#     column fell into (card t_8715a2af). This is the shape that would have blocked every
+#     lane's build.
 #   * CASE 3, the direction that must NOT be lost — a page made FATTER by 28
 #     words with no new entry: RED in both columns, naming the budget. A fix that
 #     only bought headroom would be GREEN here, so this is the control that says
 #     the budget is still a budget.
 #   * CASE 4, the DERIVED ceiling itself — the constant moved 25 -> 24 words per
 #     entry, page untouched: the tree REDS naming the 792-word budget for 33
-#     entries while the BASE is GREEN (799 < 800). A discriminating pair: the red
-#     can only come from the derived budget, not from the old fixed cap.
+#     entries while the BASE is GREEN (the page's total sits under the fixed cap). A
+#     discriminating pair: the red can only come from the derived budget, not from the old
+#     fixed cap.
 #   * CASE 5, NEGATIVE CONTROL — a summary TRIMMED by ~10 words: GREEN in both
 #     columns, so the check has not become "any edit reds".
 #
@@ -52,6 +56,12 @@
 #
 # Run:  bash web/scripts/biteproof_docs_index_word_budget.sh
 #       BITEPROOF_BASE=<rev> bash web/scripts/biteproof_docs_index_word_budget.sh
+#
+# The base column defaults to `origin/main`, and once the fix is merged that guard IS
+# the guard of this tree — it cannot "miss" the trap because it does not hold it. The
+# default run then REFUSES (exit 2, NO VERDICT) and DERIVES the revision to point
+# BITEPROOF_BASE at. A refusal is not a failure: it says the base cannot hold the trap.
+# Exit 0 = PASS, exit 2 = refused/no verdict, exit 1..n = that many failing checks.
 set -uo pipefail
 
 # The script's OWN absolute path is resolved BEFORE the `cd` below, because the child
@@ -168,6 +178,7 @@ git cat-file -e "${BASE_REV}:${GUARD_IN_REPO}" 2>/dev/null || {
   exit 2
 }
 OLD_GUARD=$(mktemp)
+PIN_PROBE=$(mktemp)
 git show "${BASE_REV}:${GUARD_IN_REPO}" > "$OLD_GUARD"
 
 # CAPABILITY REFUSAL. What this harness needs from the base is the guard that carries
@@ -178,33 +189,62 @@ git show "${BASE_REV}:${GUARD_IN_REPO}" > "$OLD_GUARD"
 # `biteproof_model_default_guard.py` apply, for the same reason: a hand-typed revision
 # goes stale, and a base that has caught up makes every BASE leg say "does not
 # reproduce the trap" — a statement about the base, not about this branch).
-PIN_RE='total < 800'
-FIXED_RE='PAGE_BUDGET_PER_ENTRY'
-if ! grep -qF "$PIN_RE" "$OLD_GUARD"; then
+#
+# JUDGED BY THE DECLARATION, NOT BY A SUBSTRING (card t_8715a2af). This refusal used a
+# plain substring (`grep -qF 'total < 800'`), and the FIXED guard quotes that very
+# string while explaining what it replaced (`src/lib/docsIndex.test.ts`: "This test
+# asserted `total < 800`"). The substring match therefore read the COMMENT, accepted the
+# fixed guard as the "old" column, and every BASE leg then reported a statement about
+# the base ("does not reproduce the trap") with exit 3 — the harness was born red on its
+# default path from the moment the fix merged. Anything can quote the string a pin is
+# named after, so the pin is now the ASSERTION LINE itself (indent + `total < 800,` +
+# end of line), and the fix is detected as a DECLARATION too (`^const
+# PAGE_BUDGET_PER_ENTRY =`) rather than as a mention — the fixed guard names that
+# constant in its comments as well (`see PAGE_BUDGET_PER_ENTRY above`), so the same trap
+# would swallow the opposite rule.
+PIN_RE='total < 800'                                    # what a reader calls it (echo only)
+PIN_DECL_RE='^[[:space:]]*total < 800,[[:space:]]*$'    # the pre-fix ASSERTION line
+FIXED_RE='PAGE_BUDGET_PER_ENTRY'                        # what a reader calls it (echo only)
+FIXED_DECL_RE='^const PAGE_BUDGET_PER_ENTRY[[:space:]]*='
+# carry_pin <file> — the base can hold the trap only if it ASSERTS the fixed cap and does
+# NOT declare the derived one. Both halves are needed: the assertion alone no longer
+# proves the guard is pre-fix (the same file could have gained the derived budget).
+carry_pin() {
+  grep -qE "$PIN_DECL_RE" "$1" || return 1
+  grep -qE "$FIXED_DECL_RE" "$1" && return 1
+  return 0
+}
+if ! carry_pin "$OLD_GUARD"; then
   echo >&2
   echo "BITEPROOF REFUSED (exit 2, NO VERDICT): the base guard (${BASE_REF} ${BASE_REV:0:12}) does not" >&2
-  echo "carry the pre-fix fixed cap \`${PIN_RE}\` any more, so it cannot hold the trap every case drives." >&2
-  grep -qF "$FIXED_RE" "$OLD_GUARD" && \
+  echo "carry the pre-fix fixed cap \`${PIN_RE}\` as an ASSERTION any more, so it cannot hold the trap" >&2
+  echo "every case drives." >&2
+  grep -qE "$FIXED_DECL_RE" "$OLD_GUARD" && \
     echo "  (it does declare the fix: ${FIXED_RE})" >&2
+  grep -qE "$PIN_DECL_RE" "$OLD_GUARD" && \
+    echo "  (it also asserts \`${PIN_RE}\` — but a guard that declares the fix is not the pre-fix one)" >&2
   suggested=""
   while read -r rev; do
     [ -n "$rev" ] || continue
-    if grep -qF "$PIN_RE" <<<"$(git show "${rev}:${GUARD_IN_REPO}" 2>/dev/null)"; then suggested="$rev"; break; fi
+    git show "${rev}:${GUARD_IN_REPO}" > "$PIN_PROBE" 2>/dev/null || continue
+    carry_pin "$PIN_PROBE" || continue
+    suggested="$rev"; break
   done < <(git -C "$TOP" log --format='%H' -- "$GUARD_IN_REPO" 2>/dev/null)
   if [ -n "$suggested" ]; then
-    echo "  Point BITEPROOF_BASE at the newest revision whose guard still carries \`${PIN_RE}\`:" >&2
+    echo "  Point BITEPROOF_BASE at the newest revision whose guard still ASSERTS \`${PIN_RE}\`" >&2
+    echo "  and does not declare the fix:" >&2
     echo "    BITEPROOF_BASE=${suggested} bash web/scripts/${0##*/}" >&2
   else
-    echo "  (no revision in ${GUARD_IN_REPO}'s history carries \`${PIN_RE}\` either — set" >&2
-    echo "   BITEPROOF_BASE by hand)" >&2
+    echo "  (no revision in ${GUARD_IN_REPO}'s history asserts \`${PIN_RE}\` without declaring the" >&2
+    echo "   fix either — set BITEPROOF_BASE by hand)" >&2
   fi
-  rm -f "$OLD_GUARD"
+  rm -f "$OLD_GUARD" "$PIN_PROBE"
   exit 2
 fi
 
 BAK=$(mktemp -d)
 OUT_FILE=$(mktemp)
-trap 'rm -f "$OLD_GUARD" "$OUT_FILE" "$OLD_COPY"; rm -rf "$BAK"' EXIT
+trap 'rm -f "$OLD_GUARD" "$PIN_PROBE" "$OUT_FILE" "$OLD_COPY"; rm -rf "$BAK"' EXIT
 
 sha_of() { sha256sum "$1" | cut -d' ' -f1; }
 FILES=("$GUARD" "$PAGE")
@@ -249,6 +289,52 @@ run_base_guard() {
 }
 
 nfail() { sed -nE 's/^ℹ fail ([0-9]+)$/\1/p' "$OUT_FILE" | head -1; }
+
+# ---- CASE 2's filler size, DERIVED from the fixed cap's REAL headroom ----------
+# CASE 2 is the hair trigger: the SMALLEST edit that trips the fixed cap. That size is not a
+# constant, it is the cap's headroom, and the headroom moves with the page — the tag carried
+# 799 words (one word was enough), this tree carries 798 (it takes two). A hand-typed "one
+# word" therefore goes stale and reports "the case does not reproduce the trap" against a base
+# doing exactly what it should (card t_8715a2af). BOTH numbers come from the guards rather
+# than from a re-implementation: the cap is the base guard's own assertion line, and the
+# page's total is read out of the base guard's OWN message when its cap is lowered so it reds.
+CAP_DECL_RE='^([[:space:]]*)total < ([0-9]+),[[:space:]]*$'
+BASE_CAP=$(sed -nE "s/${CAP_DECL_RE}/\2/p" "$OLD_GUARD" | head -1)
+case "$BASE_CAP" in ''|*[!0-9]*)
+  echo >&2
+  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): cannot read the fixed cap out of the base guard's" >&2
+  echo "assertion \`${PIN_DECL_RE}\`, so CASE 2's filler size cannot be derived." >&2
+  exit 2 ;;
+esac
+# page_total_words — the page's summary total, from the base guard's own READER (lower the cap
+# until the assertion reds and read the number it prints). Nothing here re-counts words: a
+# second counting rule would be one more thing to rot.
+page_total_words() {
+  cp "$OLD_GUARD" "$OLD_COPY"
+  sed -i -E "s/${CAP_DECL_RE}/\1total < 1,/" "$OLD_COPY"
+  run_guard "$OLD_COPY" >/dev/null
+  rm -f "$OLD_COPY"
+  sed -nE 's/.*the feature summaries total ([0-9]+) words.*/\1/p' "$OUT_FILE" | head -1
+}
+PAGE_TOTAL=$(page_total_words)
+case "$PAGE_TOTAL" in ''|*[!0-9]*)
+  echo >&2
+  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): the base guard reported no word total for this page," >&2
+  echo "so CASE 2's filler size cannot be derived — and a hand-typed size is exactly what went" >&2
+  echo "stale in the base column (card t_8715a2af)." >&2
+  exit 2 ;;
+esac
+CASE2_FILLER_ROOM=20   # the per-entry LIMIT is 45 and the Sales body carries 23, so 22 fit; 20 with margin
+CASE2_DEFICIT=$((BASE_CAP - PAGE_TOTAL))
+if [ "$CASE2_DEFICIT" -lt 1 ] || [ "$CASE2_DEFICIT" -gt "$CASE2_FILLER_ROOM" ]; then
+  echo >&2
+  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): CASE 2's hair trigger would have to add ${CASE2_DEFICIT}" >&2
+  echo "word(s) to reach the fixed cap at ${BASE_CAP} from this page's ${PAGE_TOTAL} — outside the" >&2
+  echo "1..${CASE2_FILLER_ROOM} one summary can take without crossing the per-entry LIMIT (a wider gap" >&2
+  echo "needs a SPLIT filler like CASE 3's, which this harness does not have)." >&2
+  exit 2
+fi
+CASE2_FILLER="Bite proof filler words that keep this summary inside its own per-entry limit while still pushing the page exactly onto the fixed cap."
 
 fail=0
 passed=0
@@ -397,9 +483,12 @@ m_add_entry && check "a new entry with a normal summary" RED "words — the page
 restore_all
 
 echo
-echo "== CASE 2: ONE word added to one summary (the hair trigger the card measured) =="
-echo "          (base: RED at exactly 800; tree: GREEN — 800 against a 825-word budget)"
-m_grow_words "Bite." && check "one added word" RED "the feature summaries total 800 words" GREEN -
+echo "== CASE 2: the SMALLEST edit that trips the fixed cap — ${CASE2_DEFICIT} word(s) here (${PAGE_TOTAL} -> ${BASE_CAP}) =="
+echo "          (the size is DERIVED from the cap's real headroom on this page; it was ONE word at the tag's 799)"
+echo "          (base: RED at exactly ${BASE_CAP}; tree: GREEN — ${BASE_CAP} against a derived budget)"
+CASE2_WORDS=$(printf '%s' "$CASE2_FILLER" | cut -d' ' -f1-"$CASE2_DEFICIT")
+m_grow_words "$CASE2_WORDS" && assert_on_disk "$PAGE" "$CASE2_WORDS" "the derived CASE 2 filler is on disk" && \
+  check "the smallest edit that trips the fixed cap" RED "the feature summaries total ${BASE_CAP} words" GREEN -
 restore_all
 
 echo
@@ -414,7 +503,7 @@ restore_all
 
 echo
 echo "== CASE 4: the DERIVED ceiling moved 25 -> 24 words per entry, the page untouched =="
-echo "          (base: GREEN — 799 is under the old 800; tree: RED naming the 792-word budget)"
+echo "          (base: GREEN — the page's ${PAGE_TOTAL} sits under the fixed cap; tree: RED naming the 792-word budget)"
 m_lower_cap && check "the per-entry budget lowered" GREEN - RED "(24 words x 33 entries)"
 restore_all
 
@@ -448,7 +537,7 @@ fi
 
 echo
 if [ "$fail" = "0" ]; then
-  echo "BITEPROOF PASS — $passed checks: a new entry with a normal summary leaves the tree GREEN while the base guard reds, one added word no longer breaks the build, a fatter page still reds naming the derived budget, the moved constant reds while the base stays green, and a trim stays green."
+  echo "BITEPROOF PASS — $passed checks: a new entry with a normal summary leaves the tree GREEN while the base guard reds, the smallest edit that trips the fixed cap (${CASE2_DEFICIT} word(s) derived from its headroom) no longer breaks the build, a fatter page still reds naming the derived budget, the moved constant reds while the base stays green, and a trim stays green."
 else
   echo "BITEPROOF FAIL ($fail failing check(s), $passed passing)"
 fi
