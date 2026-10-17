@@ -201,6 +201,40 @@ const scanLines = (p: string): ScanLine[] =>
     .split("\n")
     .map((text, i) => ({ n: i + 1, text, code: unblankingKey(text) }));
 
+/**
+ * One file's blanked lines as ONE code buffer, plus a lookup from a buffer offset
+ * to the index of the line it sits on. The two shapes this file claims that span
+ * lines — a setter call whose argument starts below it (card t_b6cd0f72) and a
+ * destructured parameter broken over several lines (card t_69966a9a) — share this
+ * one buffer-and-lookup, so the two walks cannot drift apart on what "the line a
+ * match starts on" means.
+ */
+function joinLines(lines: ScanLine[]): { code: string; lineAt: (i: number) => number } {
+  const code = lines.map((l) => l.code).join("\n");
+  const starts: number[] = [];
+  for (let i = 0, off = 0; i < lines.length; i++) {
+    starts.push(off);
+    off += lines[i].code.length + 1;
+  }
+  /** The index of the line whose first character is at or before `idx`. */
+  const lineAt = (idx: number): number => {
+    let lo = 0;
+    let hi = starts.length - 1;
+    let best = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (starts[mid] <= idx) {
+        best = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return best;
+  };
+  return { code, lineAt };
+}
+
 // ---------------------------------------------------------------------------
 // Reading the failure body's prose field — ONE definition, shared by the three
 // checks below that reason about such a read (card t_d7552433).
@@ -248,21 +282,52 @@ const BRACKET_READ = /([A-Za-z_$][\w$]*)?\s*\??\s*(?:\.\s*)?\[\s*["']error["']\s
 /** A binding pattern follows: `const`/`let`/`var` then `{`. */
 const BINDING_HEAD = /\b(?:const|let|var)\s*\{/g;
 
-/** The braces-balanced text of the pattern opening at `code[open]` (a `{`),
- *  INCLUDING both braces (`{ error }`, `{ a: { error } }`), or undefined when that
- *  line never closes it (a multi-line pattern — not claimed). The braces are kept
- *  because `bindsErrorProperty` reads the property in its real position, where the
- *  closing brace (or a comma) is what ends it. */
-function braceSpan(code: string, open: number): { pattern: string; close: number } | undefined {
+/**
+ * The index of the bracket that closes the one at `open` — a `(`/`{`/`[` — over a
+ * whole file's `code`, or undefined when it never closes. Brackets nest, so the
+ * `}` of an inner object does not close an outer pattern and the `(` of a call
+ * inside a pattern does not close the parameter list.
+ *
+ * WHY IT TAKES A WHOLE FILE, NOT A LINE. Two shapes this file claims span lines:
+ * a setter call whose argument starts below it (card t_b6cd0f72) and a
+ * destructured parameter broken over several lines (card t_69966a9a). Both need
+ * the CODE AROUND the shape to find its end, so the match is taken over the file
+ * joined back into one buffer.
+ *
+ * A `(`/`{` inside a COMMENT or a regex literal is counted like code — the same
+ * exposure `stripStrings` leaves everywhere (it blanks string literals, not
+ * comments).
+ */
+function matchingBracket(code: string, open: number): number | undefined {
+  const o = code[open];
+  const c = o === "{" ? "}" : o === "(" ? ")" : "]";
   let depth = 0;
   for (let i = open; i < code.length; i++) {
-    if (code[i] === "{") depth++;
-    else if (code[i] === "}") {
+    if (code[i] === o) depth++;
+    else if (code[i] === c) {
       depth--;
-      if (depth === 0) return { pattern: code.slice(open, i + 1), close: i };
+      if (depth === 0) return i;
     }
   }
   return undefined;
+}
+
+/** The braces-balanced text of the pattern opening at `code[open]` (a `{`),
+ *  INCLUDING both braces (`{ error }`, `{ a: { error } }`), or undefined when it
+ *  never closes. The braces are kept because `bindsErrorProperty` reads the
+ *  property in its real position, where the closing brace (or a comma) is what
+ *  ends it.
+ *
+ *  This used to walk only the line it was handed, and the comment said a
+ *  multi-line pattern was "not claimed". That was a fact about the WALK, not
+ *  about the pattern: `bindingDestructuredReads` below still feeds it one line at
+ *  a time (and so still does not see a `const` pattern broken over lines — a
+ *  reach hole measured and filed separately). The span itself is whole-file
+ *  correct, which is what lets the parameter spelling be claimed in the shape it
+ *  is actually written in. */
+function braceSpan(code: string, open: number): { pattern: string; close: number } | undefined {
+  const close = matchingBracket(code, open);
+  return close === undefined ? undefined : { pattern: code.slice(open, close + 1), close };
 }
 
 /** Does a destructuring pattern bind the property `error`, at any depth —
@@ -316,6 +381,117 @@ function proseFieldReads(code: string): ProseRead[] {
   }
   for (const r of bindingDestructuredReads(code)) out.push(r);
   return out.sort((a, b) => a.end - b.end);
+}
+
+// ---------------------------------------------------------------------------
+// The DESTRUCTURED FUNCTION PARAMETER that binds the prose field (card
+// t_69966a9a) — the spelling `proseFieldReads` above cannot hold.
+//
+// THE HOLE, MEASURED ON THE SHIPPED GUARD (tree 1bd37f45). Appending
+//
+//     export function _probeErrorMessage({ error }: { error?: unknown }): string {
+//       return String(error ?? "");
+//     }
+//
+// to `lib/formPublicURL.ts` left ALL THREE checks that reason about such a read
+// green (10 pass / 0 fail), while the `const { error } = b` spelling of the same
+// helper reded on the same site. The read is a bare identifier in the body, and
+// nothing in `x.error` / `x["error"]` / `const { error } = x` matches the
+// pattern that BOUND it.
+//
+// WHY IT IS SCANNED OVER THE FILE WHILE THE SPELLINGS ABOVE ARE SCANNED PER LINE.
+// A parameter binding is not a read written inside one line; what makes the text
+// `{ error }` a binding rather than an object literal is the context AROUND the
+// `(` — the `function` keyword before it, or the `=>` after it — and either can
+// sit on another line, because a parameter list broken over lines is the ordinary
+// shape for a component with more than one prop:
+//
+//     export function PublishError({
+//       error,
+//     }: Props) {
+//
+// So the pattern is matched over the file joined back into one buffer, and
+// reported on the line it starts on.
+//
+// WHY THIS IS A DECISION AND NOT A WIDENING. The pattern text is IDENTICAL in a
+// parameter list and in an object literal ARGUMENT (`render({ error: msg })` — a
+// WRITE). No shape match separates the two texts; only the context does, and
+// exactly two contexts are unambiguous:
+//   * `function …(` before the `(` — `function` cannot take an expression, so a
+//     `{ … }` there is always a binding, never a literal. The `(?<![\w$.])` keeps
+//     a method NAMED `function` (`obj.function({ error: msg })`) out of the rule.
+//   * `=>` after the `)` — the paren group IS an arrow's parameter list; a
+//     parenthesised object literal followed by `=>` is not a construct.
+// A call site produces neither, so a correct call site cannot red — pinned as a
+// control beside the shape table below.
+//
+// WHAT IT MEANS FOR THE OTHER TWO CHECKS. Neither can fire on this shape, and
+// that is a property of the shape, not of the rule: the fallback rule asks what
+// FOLLOWS a read (a parameter pattern is followed by `:`/`)`/`,`, never `||`),
+// and the setter rule asks what a setter's ARGUMENT reads (a caller passing the
+// whole body — `setErr(errorMessage(body))` — reads no field at all). The ban is
+// therefore where this spelling bites, and the ban is what forces the decision
+// the card is about: the prose may travel through apiErr and nowhere else.
+//
+// NOT claimed, each measured absent from src/ on 2026-10-17, so they are stated
+// rather than guessed at:
+//   * a METHOD's parameter (`class C { h({ error }: Body) {} }`) — its only
+//     signal is the `{` after the `)`, which `switch (x) {` produces too;
+//   * a `catch` clause's (`catch ({ error }) {}`) — a binding position, but not a
+//     function's parameter, so outside this card's class;
+//   * a parenthesised destructuring ASSIGNMENT (`({ error } = body)`) — the same
+//     read as the `const` spelling, with no position signal of its own.
+// Claimed, and deliberately so: a FUNCTION TYPE (`type H = ({ error }: Body) =>
+// void`) matches the `=>` signal. A signature names the field without reading it;
+// there are none in src/ today, and a legitimate one is an ALLOWED entry with its
+// reason — the mechanism this file already uses for a call site that must keep a
+// shape the rule bans.
+// ---------------------------------------------------------------------------
+
+/** One destructured parameter pattern that binds the prose field. */
+type ParamRead = {
+  /** Index of the `(` that opens the parameter list — where the report anchors. */
+  start: number;
+  /** Index just past the pattern's closing brace — the read's end. */
+  end: number;
+  /** The pattern itself, braces included (`{ error }`). */
+  pattern: string;
+  /** The whole parameter list, `(` to `)`, whitespace-normalised for a report. */
+  span: string;
+};
+
+/** The `(` of a `function` declaration/expression (named, anonymous, generic or
+ *  not, `async` or not) or of an arrow's parameter list — the two positions a
+ *  destructured parameter can open in. */
+const PARAM_HEAD = /(?<![\w$.])function\s*\*?\s*(?:[A-Za-z_$][\w$]*)?\s*(?:<[^<>]*>)?\s*$/;
+/** A paren group is an arrow's parameter list when `=>` follows it. */
+const ARROW_TAIL = /^\s*=>/;
+/** A paren group that opens with a destructuring pattern. */
+const PAREN_BRACE = /\(\s*\{/g;
+
+function paramFieldBindings(code: string): { reads: ParamRead[]; sites: number } {
+  const reads: ParamRead[] = [];
+  let sites = 0;
+  for (const m of code.matchAll(PAREN_BRACE)) {
+    const open = m.index ?? 0;
+    const pattern = braceSpan(code, open + m[0].length - 1);
+    if (!pattern) continue;
+    const close = matchingBracket(code, open);
+    if (close === undefined || close < pattern.close) continue;
+    if (!PARAM_HEAD.test(code.slice(0, open)) && !ARROW_TAIL.test(code.slice(close + 1))) continue;
+    sites++;
+    if (!bindsErrorProperty(pattern.pattern)) continue;
+    // The value a parameter binds from is supplied by the CALLER, so no receiver
+    // can be attributed to the read — null, which the walk below never reads as
+    // "known to be localized".
+    reads.push({
+      start: open,
+      end: pattern.close + 1,
+      pattern: pattern.pattern,
+      span: code.slice(open, close + 1).replace(/\s+/g, " ").trim(),
+    });
+  }
+  return { reads, sites };
 }
 
 // Exceptions, one line each, WITH the reason — so a new occurrence cannot slip
@@ -509,6 +685,10 @@ test("no source file reads the failure BODY's prose field", () => {
   );
   const offenders: string[] = [];
   let examined = 0;
+  /** Destructured parameters the whole-file scan classified as parameter
+   *  positions, whether or not they bind the field. A floor, so "the parameter
+   *  spelling is claimed" cannot be true only of the shape table in memory. */
+  let paramSites = 0;
   for (const p of sources) {
     // NOTE: this walk's `rel` carries a leading "/" (SRC resolves to the src
     // directory itself), so it is normalised here rather than compared raw.
@@ -527,7 +707,8 @@ test("no source file reads the failure BODY's prose field", () => {
     // String/template CONTENTS are blanked (proseFieldReads takes blanked input), so
     // a sentence that merely mentions `d.error` — documentation, a comment, an
     // error-message string — is not a read.
-    scanLines(p).forEach(({ n, text, code: stripped }) => {
+    const lines = scanLines(p);
+    lines.forEach(({ n, text, code: stripped }) => {
       if (isCommentLine(text)) return;
       const reads = proseFieldReads(stripped);
       if (reads.length === 0) return;
@@ -542,6 +723,29 @@ test("no source file reads the failure BODY's prose field", () => {
       if (ALLOWED.some((a) => text.includes(a))) return;
       offenders.push(`${rel}:${n}: ${text.trim()}`);
     });
+
+    // THE PARAMETER SPELLING (card t_69966a9a), which cannot be seen line by line
+    // — the context that makes `{ error }` a binding (a `function` head, or a `=>`
+    // tail) may sit on another line. See `paramFieldBindings` for why this is the
+    // one shape with a whole-file pass of its own, and `matchingBracket` for the
+    // span match both shapes share.
+    const buf = joinLines(lines);
+    const params = paramFieldBindings(buf.code);
+    paramSites += params.sites;
+    for (const r of params.reads) {
+      const line = lines[buf.lineAt(r.start)];
+      if (isCommentLine(line.text)) continue;
+      examined++;
+      // The pattern is tested beside the line: a parameter list broken over
+      // several lines has no single line that spells the exception in full.
+      if (ALLOWED.some((a) => r.pattern.includes(a) || line.text.includes(a))) continue;
+      // The line as it was written, plus the whole parameter list when the line
+      // does not contain it (the multi-line spelling — the pattern is otherwise
+      // invisible in the report).
+      offenders.push(
+        `${rel}:${line.n}: ${line.text.trim()}${line.text.includes(r.pattern) ? "" : ` ${r.span}`}`,
+      );
+    }
   }
   assert.deepEqual(
     offenders,
@@ -555,6 +759,15 @@ test("no source file reads the failure BODY's prose field", () => {
   // A floor, so an empty offender list cannot be the result of the walk breaking
   // (a rename of `src/`, a broken glob) rather than of the rule holding.
   assert.ok(examined > 0, "no `.error` read was examined at all — the walk is broken");
+  // The same floor for the parameter spelling: the whole-tree pass must have
+  // classified at least one real destructured parameter (components/docsChrome.tsx
+  // carries `export function T({ k }: { k: Key })`, which binds no `error` — the
+  // shape is present in the tree even when it is not an offender).
+  assert.ok(
+    paramSites > 0,
+    "the whole-file pass classified no destructured parameter anywhere in src/ — it is " +
+      "not looking at real code, so a parameter binding this field would go unseen",
+  );
 
   // THE SHAPE TABLE ITSELF, pinned in memory (card t_d7552433). The walk above only
   // ever exercises the spellings that exist in src/ TODAY — which is precisely how a
@@ -601,6 +814,69 @@ test("no source file reads the failure BODY's prose field", () => {
     isCommentLine(`// the prose field, e.g. b["error"], is nobody else's to read`),
     "a comment quoting the field must be skipped by the walk, not counted as a read",
   );
+
+  // THE PARAMETER SPELLING TOO (card t_69966a9a), pinned in memory in BOTH
+  // directions. The walk above only exercises the parameters the tree HAS (one
+  // today, in components/docsChrome.tsx, binding no `error`), so the shape this
+  // card is about is asserted here: the helper the card measured must be seen, and
+  // the object literal a CALL SITE passes must not — the two are the same text,
+  // separated only by the context around the `(`.
+  const paramReadsIn = (src: string) => paramFieldBindings(unblankingKey(src));
+  for (const src of [
+    // The exact helper the card measured green on the shipped guard, verbatim.
+    `export function _probeErrorMessage({ error }: { error?: unknown }): string {\n  return String(error ?? "");\n}`,
+    "function f({ error }: Body) { return String(error); }",
+    "export default function PublishError({ error }: Props) {",
+    "const h = ({ error }: Body) => String(error);",
+    "const h = async ({ error }: Body) => String(error);",
+    "function f<T>({ error }: Body) {",
+    "function f ({ error }: Body) {",
+    `function f({ error = "" }: Body) {`,
+    "function f({ error: m }: Body) {",
+    "function f({ a: { error } }: Body) {",
+    // The multi-line spelling — the reason this pass is whole-file.
+    "export function PublishError({\n  error,\n}: Props) {",
+  ]) {
+    assert.equal(
+      paramReadsIn(src).reads.length,
+      1,
+      `the prose field bound by a parameter was not seen (t_69966a9a): ${src}`,
+    );
+  }
+  for (const src of [
+    // The card's control: the SAME pattern text in argument position is a WRITE.
+    "render({ error: msg });",
+    "setErr({ error: msg });",
+    `setErr(t("x.fail", { error: msg }));`,
+    "const o = pick({ error: msg });",
+    // A method NAMED `function` is a call site, not a parameter list.
+    "obj.function({ error: msg });",
+    "function f({ errorKey }: Body) {",
+    // The ANNOTATION mentions the field; the pattern does not bind it.
+    "function f({ ok }: { error?: unknown }) {",
+    // A string that spells the shape is blanked before any shape runs.
+    `const s = "function f({ error }: Body)";`,
+  ]) {
+    assert.equal(
+      paramReadsIn(src).reads.length,
+      0,
+      `a write or a mere mention was counted as a parameter read (t_69966a9a): ${src}`,
+    );
+  }
+  // The scan must be classifying POSITIONS, not just matching a regex: the arrow
+  // tail alone must not turn a paren group into a parameter list (this is the
+  // control above, asserted through the counter that the walk's floor uses).
+  assert.equal(
+    paramReadsIn("function f({ k }: { k: Key }) {").sites,
+    1,
+    "a real destructured parameter was not classified as a parameter position",
+  );
+  assert.equal(
+    paramReadsIn("render({ error: msg });").sites,
+    0,
+    "a call site was classified as a parameter position — the rule could red a correct call",
+  );
+
   // A read taken off a COMPOUND expression has no attributable name; it must still be
   // a read, and its null receiver must never be read as "known to be localized".
   const compound = readsIn(`const e = (b ?? {})["error"];`);
@@ -719,28 +995,10 @@ test("a failure body is never rendered without going through apiErr/translateApi
     // shape of the code is unchanged) and matched as a whole; a match's offset is
     // mapped back to the line it STARTS on for the report. There is no formatter in
     // web/ that emits the multi-line shape today, so this is a future hole — which
-    // is why it is closed here rather than by reformatting call sites.
-    const joined = lines.map((l) => l.code).join("\n");
-    const starts: number[] = [];
-    for (let i = 0, off = 0; i < lines.length; i++) {
-      starts.push(off);
-      off += lines[i].code.length + 1;
-    }
-    const lineAt = (idx: number): number => {
-      let lo = 0;
-      let hi = starts.length - 1;
-      let best = 0;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (starts[mid] <= idx) {
-          best = mid;
-          lo = mid + 1;
-        } else {
-          hi = mid - 1;
-        }
-      }
-      return best;
-    };
+    // is why it is closed here rather than by reformatting call sites. The
+    // buffer-and-lookup is `joinLines`, shared with the parameter pass in the check
+    // above so the two agree on where a match starts.
+    const { code: joined, lineAt } = joinLines(lines);
     for (const m of joined.matchAll(SETTER)) {
       const li = lineAt(m.index ?? 0);
       const firstLine = lines[li];
