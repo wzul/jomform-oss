@@ -1111,9 +1111,9 @@ var responseTmpl = template.Must(template.New("response").
 {{end}}{{else if eq .Type "divider"}}  <hr{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{styleAttr .Style}}>
 {{else if eq .Type "file"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}</label><div class="desc">{{$.Ls.FileUnsupported}}</div>
 {{else if eq .Type "coupon"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}</label><div class="desc">{{$.Ls.CouponUnsupported}}</div>
-{{else if eq .Type "name"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
-{{else if eq .Type "email"}}  <label class="lbl"{{styleAttr .Style}}>{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
-{{else if eq .Type "phone"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "name"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}" data-jf-client="full_name"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "email"}}  <label class="lbl"{{styleAttr .Style}}>{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="{{.ID}}" data-jf-client="email"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
+{{else if eq .Type "phone"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="{{.ID}}" data-jf-client="phone"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
 {{else if eq .Type "textarea"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><textarea name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}} rows="3"{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>{{.DefaultValue}}</textarea>
 {{else if eq .Type "checkbox"}}  <label class="chk{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><input type="checkbox" name="{{.ID}}" value="1"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}> {{.Value}}</label>
 {{else if eq .Type "consent"}}  <label class="chk{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><input type="checkbox" name="{{.ID}}" value="1"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}> {{.Value}}</label>
@@ -1173,10 +1173,19 @@ var responseTmpl = template.Must(template.New("response").
     // Issue #489: QR ordering — echo the ?table=N the QR stand / menu page
     // carried into the form URL so sales.table_number is populated.
     table_number:(new URLSearchParams(location.search).get('table')||'')};
-    // Map the first name/email/phone blocks into the client object too.
-    var nm=form.querySelector('input[type=text]'); if(nm) body.client.full_name=nm.value;
-    var em=form.querySelector('input[type=email]'); if(em) body.client.email=em.value;
-    var ph=form.querySelector('input[type=tel]'); if(ph) body.client.phone=ph.value;
+    // Map the name/email/phone BLOCKS into the client object. Each of those
+    // three arms tags its own control with data-jf-client, so the mapping
+    // follows the block the merchant placed — never a position, and never an
+    // input type. The type was a proxy for "the name field" and stopped being
+    // one once a 'text' block rendered a real input[type=text] (card
+    // t_99c3a08b): "the first text input" is then the text/label field, so
+    // client.full_name carried the wrong answer into data["full_name"], the
+    // submissions Buyer column and the CSV export (card t_98d67234). The
+    // "|| input[type=...]" half is the OLD lookup, kept only for a form that
+    // has no name/email/phone block at all, so that case maps as it always did.
+    var nm=form.querySelector('[data-jf-client=full_name]')||form.querySelector('input[type=text]'); if(nm) body.client.full_name=nm.value;
+    var em=form.querySelector('[data-jf-client=email]')||form.querySelector('input[type=email]'); if(em) body.client.email=em.value;
+    var ph=form.querySelector('[data-jf-client=phone]')||form.querySelector('input[type=tel]'); if(ph) body.client.phone=ph.value;
     fetch(location.pathname+'/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json()})
       .then(function(d){
