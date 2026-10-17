@@ -163,8 +163,74 @@ function jsString(s: string, i: number): [string, number] {
 
 type Entry = { title: string; slug?: string; href?: string; body: string };
 
+// One category's declaration: the two facts the page renders from it — `id` is the
+// anchor (`id={g.id}`) and `labelKey` is the translated heading (`<T k={g.labelKey} />`).
+// Either can be absent, which is what the category test reports.
+type GroupDecl = { id?: string; labelKey?: string };
+
+// ── the categories the page's own renderer keys on ────────────────────────────
+// A category IS the object the page maps over — `{GROUPS.map((g) => (` with
+// `id={g.id}` and `<T k={g.labelKey} />` (src/app/docs/page.tsx) — so this reads
+// that object and takes each fact from inside its own byte range.
+//
+// Card t_9de48f54: `groupIds` used to be a text scan requiring `id: "…",` and
+// `labelKey:` to be two ADJACENT LINES (`/id: "([^"]+)",\n\s+labelKey/g`), so the
+// one-keystroke reformat `id: "email", labelKey: "docs.catEmail",` dropped that
+// category out of the list while the labelKey scan still counted it — and the run
+// failed on "a category has no label", about a labelKey sitting right there in the
+// source. Brace depth has no line, indent or spacing premise at all. The premise
+// it does have — a category is an object directly inside the array literal, and
+// both facts sit within that object's range — is asserted against the table by the
+// category test below (an id scan with no adjacency premise either), not trusted,
+// so a read that cannot see a category is reported as the read it is.
+//
+// Depth is counted over `{`/`}`, not `[`/`]`: the array literal's `[` is not the
+// first bracket in `region` (`Group[]` in the annotation above the table is), and
+// every `[` a category owns belongs to an `entries`/`more` array. String literals
+// are stepped over with `jsString`, so a brace inside a summary body cannot move
+// the depth; jsString's own assertion is this file's existing answer to source it
+// cannot read. `region` is already the COMMENT-STRIPPED page (`docsSrc`), so there
+// are no comment braces to step over.
+function readGroupDeclarations(region: string): GroupDecl[] {
+  const decls: GroupDecl[] = [];
+  const fact = (block: string, prop: string): string | undefined => {
+    const prefix = `${prop}: "`;
+    const at = block.indexOf(prefix);
+    if (at === -1) return undefined;
+    return jsString(block, at + prefix.length - 1)[0];
+  };
+  let depth = 0;
+  let from = -1;
+  for (let i = 0; i < region.length; ) {
+    const c = region[i];
+    if (c === '"') {
+      i = jsString(region, i)[1];
+      continue;
+    }
+    if (c === "{") {
+      depth += 1;
+      if (depth === 1) from = i;
+    } else if (c === "}") {
+      if (depth === 1 && from !== -1) {
+        const block = region.slice(from, i + 1);
+        decls.push({ id: fact(block, "id"), labelKey: fact(block, "labelKey") });
+        from = -1;
+      }
+      depth -= 1;
+    }
+    i += 1;
+  }
+  return decls;
+}
+
 // ── parse the GROUPS table ────────────────────────────────────────────────────
-function parseGroups(src: string): { entries: Entry[]; labelKeys: string[]; groupIds: string[] } {
+function parseGroups(src: string): {
+  entries: Entry[];
+  labelKeys: string[];
+  groupIds: string[];
+  declaredIds: string[];
+  groupDecls: GroupDecl[];
+} {
   const start = src.indexOf("const GROUPS");
   assert.ok(start !== -1, `${DOCS_PAGE} no longer declares a GROUPS table — the guard's anchor moved`);
   const end = src.indexOf("\n];", start);
@@ -208,11 +274,17 @@ function parseGroups(src: string): { entries: Entry[]; labelKeys: string[]; grou
   }
 
   const labelKeys = [...region.matchAll(/labelKey: "([^"]+)"/g)].map((m) => m[1]);
-  const groupIds = [...region.matchAll(/id: "([^"]+)",\n\s+labelKey/g)].map((m) => m[1]);
-  return { entries, labelKeys, groupIds };
+  // Every `id: "…"` the table declares, whatever sits between it and the next
+  // property — the independent reading the category test compares the structural
+  // read against, so a category that drops out of one of them is caught as a
+  // disagreement about the table instead of as "a category has no label".
+  const declaredIds = [...region.matchAll(/id: "([^"]+)"/g)].map((m) => m[1]);
+  const groupDecls = readGroupDeclarations(region);
+  const groupIds = groupDecls.flatMap((d) => (d.id === undefined ? [] : [d.id]));
+  return { entries, labelKeys, groupIds, declaredIds, groupDecls };
 }
 
-const { entries, labelKeys, groupIds } = parseGroups(docsSrc);
+const { entries, labelKeys, groupIds, declaredIds, groupDecls } = parseGroups(docsSrc);
 
 // Resolve a /docs href (with an optional #anchor) to the page that must carry it.
 function resolve(pathname: string): string | undefined {
@@ -542,7 +614,41 @@ test("the five start-here steps are above the feature list", () => {
 });
 
 test("every category is a named, translated group", () => {
-  assert.ok(groupIds.length >= 6, `only ${groupIds.length} named categories — the page is not categorised`);
+  // ── the exact comparison of the two readings of the table, and FIRST ─────────
+  // The structural read and the id scan have to agree about the SAME table, and
+  // this runs BEFORE the `labelKeys.length === groupIds.length` check below
+  // (t_9de48f54, the shape t_8e94f213 landed for the sidebar pin): that one reads a
+  // disagreement as a fact about the PAGE — "a category has no label" — while the
+  // label may be right there in the source. The floor that used to sit here
+  // (`groupIds.length >= 6`) was a floor on the COUNT: the page declares 8
+  // categories, so one that dropped out was invisible. Neither side of this
+  // comparison is a count the table can satisfy while missing a category: both are
+  // read from the table itself.
+  assert.deepEqual(
+    groupIds,
+    declaredIds,
+    `${DOCS_PAGE} declares ${declaredIds.length} category id(s) (${declaredIds.join(", ")}) but ` +
+      `the GROUPS read attributed ${groupIds.length} (${groupIds.join(", ")}) — a category the read ` +
+      `cannot see would otherwise be reported below as "a category has no label". Re-derive the ` +
+      `read before trusting a verdict`,
+  );
+  // Every category the read reached must carry BOTH facts the page renders from it.
+  // Named per category, because the guard was silent here: deleting one category's
+  // `labelKey:` line left both lists at 7 and the whole file green, while that
+  // category would render a raw key (measured on the shipped guard, t_9de48f54).
+  const incomplete = groupDecls
+    .map((d, i) => ({ ...d, i }))
+    .filter((d) => d.id === undefined || d.labelKey === undefined)
+    .map(
+      (d) =>
+        `${d.id ?? `category #${d.i + 1} (the ${d.i + 1}th object in the GROUPS array)`} — ` +
+        `declares no ${d.id === undefined ? "id" : "labelKey"}`,
+    );
+  assert.deepEqual(
+    incomplete,
+    [],
+    `these categories in ${DOCS_PAGE} are missing a fact the page renders:\n  ${incomplete.join("\n  ")}`,
+  );
   assert.deepEqual([...new Set(groupIds)].length, groupIds.length, "two categories share an id");
   for (const id of groupIds) {
     // Each category id must be a real anchor target on the page.
