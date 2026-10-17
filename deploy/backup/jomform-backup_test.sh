@@ -140,7 +140,33 @@ for a in "\${args[@]:-}"; do [ "\$a" = "--s3-no-check-bucket" ] && NO_CHECK=1; d
 cmd="\${1:-}"; shift || true
 case "\$cmd" in
   listremotes)
-    if [ "\$MODE" = "no-remote" ]; then echo "other:"; else echo "r2jomform:"; fi ;;
+    case "\$MODE" in
+      no-remote) echo "other:" ;;
+      # The shape the LIVE config has: more than one remote, so rclone's
+      # listremotes command prints several lines — with a real rclone, one
+      # write() per line. The needle is the FIRST line on purpose: a matcher that
+      # reads this list through a pipe and exits at its first match leaves the
+      # writer with whole lines still queued, the writer takes SIGPIPE, and
+      # set -o pipefail turns that 141 into the pipeline's status even though
+      # grep MATCHED — a remote that IS configured read as "not configured", a
+      # fail-closed nightly backup and a false "remote unavailable" alarm email.
+      # See the two cases below. (No backticks in this heredoc: it is unquoted,
+      # so a backquoted word in a comment would be substituted by the shell
+      # when the stub is written — a comment must not run anything.)
+      #
+      # The PAUSE after the needle is what makes those cases CONTROLS rather than
+      # coin tosses: it guarantees the early-exit reader has closed the pipe
+      # before the next write, so a pipe matcher refuses on EVERY run instead of
+      # most of them (measured on this host: 196/200 refusals with no pause,
+      # 200/200 with one). Under the shipped here-string matcher the pause only
+      # costs 0.5s and changes no verdict.
+      multi-remote)
+        printf 'r2jomform:\n'
+        sleep 0.5
+        printf 'archive-daily:\n'
+        printf 'media-mirror:\n' ;;
+      *) echo "r2jomform:" ;;
+    esac ;;
   copy)
     # Record every write invocation so a case can assert the flag was carried.
     printf 'copy %s\\n' "\$*" >>"$CASE_DIR/rclone-writes.log"
@@ -641,6 +667,44 @@ assert_contains "alert body warns about same-host dump" "not an offsite backup" 
 assert_contains "the R2 credential remedy is named" "issue a NEW R2 API token" "$RUN_LOG"
 assert_contains "the credentials file is named" "/root/.config/rclone/rclone.conf" "$RUN_LOG"
 assert_not_contains "no OAuth reconnect hint (an S3 remote has none)" "rclone config reconnect" "$RUN_LOG"
+teardown_case
+
+echo "case: multi-remote config, needle FIRST -> the CONFIGURED remote is ACCEPTED"
+# The nightly config carries more than one remote, and `rclone listremotes` prints
+# one line per remote. A matcher that reads that list through a PIPE and exits at
+# its first match (`listremotes | grep -qx "$REMOTE:"`) leaves the writer with
+# lines still queued: the writer takes SIGPIPE, `set -o pipefail` makes 141 the
+# pipeline's status although grep MATCHED, and a remote that IS configured is
+# refused as "not configured" — the run fails closed and mails a false
+# "Backup FAILED — remote unavailable" alert to the super-admins.
+#
+# The stub prints the needle FIRST and pauses before the remaining names (see its
+# `listremotes` branch), so this case reads a pipe matcher as a refusal on EVERY
+# run rather than most of them: it is a control, not a coin toss. Both directions
+# are asserted — the case below requires the same list to still REFUSE a remote
+# that is genuinely absent — because an accepted-only control would be satisfied
+# by a matcher loosened to accept anything (`grep -q .`).
+setup_case; touch_rclone_conf
+rc="$(run_backup STUB_RCLONE_MODE=multi-remote --)"
+assert_eq "multi-remote: exit code" "exit=0" "$rc"
+assert_contains "multi-remote: log says OK" "jomform-backup OK" "$RUN_LOG"
+assert_contains "multi-remote: the upload was verified" "verified r2jomform:jfbackup-test/daily/" "$RUN_LOG"
+assert_not_contains "multi-remote: the configured remote was NOT refused" "rclone remote unavailable" "$RUN_LOG"
+assert_not_contains "multi-remote: no false FAILED line" "jomform-backup FAILED" "$RUN_LOG"
+assert_not_contains "multi-remote: no false alarm was raised" "Backup FAILED" "$CASE_DIR/alerts.log"
+teardown_case
+
+echo "case: multi-remote config, needle ABSENT -> the absent remote is still REFUSED"
+# Same three-name list; a remote that is not in it must still be caught, which is
+# the half a matcher loosened to accept anything cannot satisfy.
+setup_case; touch_rclone_conf
+rc="$(run_backup STUB_RCLONE_MODE=multi-remote JFBACKUP_REMOTE=absent-remote --)"
+assert_eq "multi-remote absent: exit code" "exit=1" "$rc"
+assert_contains "multi-remote absent: log names the remote" "rclone remote unavailable" "$RUN_LOG"
+assert_contains "multi-remote absent: the refusal names the missing remote" \
+  "rclone remote 'absent-remote:' is not configured" "$RUN_LOG"
+assert_not_contains "multi-remote absent: the run did not report OK" "jomform-backup OK" "$RUN_LOG"
+assert_contains "multi-remote absent: the alarm was raised" "Backup FAILED" "$CASE_DIR/alerts.log"
 teardown_case
 
 echo "case: rclone missing entirely -> the dump still happens and the run FAILS loudly"

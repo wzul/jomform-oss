@@ -506,6 +506,23 @@ job a `PATH` that resolves nothing).
   run exits non-zero, logs the rclone error, writes `last-failure.json` and sends
   the alert. The alert body says explicitly that a local dump on the same host as
   the database is not an offsite backup.
+- **A CONFIGURED remote must not be read as unconfigured** — `rclone listremotes`
+  prints one line per remote (one `write()` per line with a real rclone), and the
+  membership test reads that list from a **here-string**, never through a pipe: a
+  `grep -qx` that exits at its first match can leave a pipe writer with whole
+  lines still queued, and under `set -o pipefail` the writer's SIGPIPE makes 141
+  the pipeline's status even though `grep` matched — a remote that IS configured
+  is refused as "not configured", the nightly backup fails closed and a false
+  "remote unavailable" alarm is mailed to the super-admins. The case drives a stub
+  whose remote list carries three names with the needle **first**, and the stub
+  pauses between writes so the early-exit reader really has closed the pipe before
+  the next write: that is what makes the case fail on **every** run against a pipe
+  matcher instead of most of them (196/200 refusals with no pause, 200/200 with
+  one, measured here). It asserts the run exits 0, uploads and verifies, and raises
+  no alarm — and a second case asserts the same three-name list still REFUSES a
+  remote that is genuinely absent, so a matcher loosened to accept anything cannot
+  satisfy the pair. The bite harness reverts only the matcher body to the pipe form
+  and requires the accepted direction to go red.
 - **`pg_dump` produced an empty archive** — the dump is inspected with
   `pg_restore --list` and a run that yields no `TABLE DATA` entries fails rather
   than uploading a plausible-looking file.
@@ -665,8 +682,9 @@ It covers, in addition to the seam: the R2/weekly/retention groups named above �
 every write missing `--s3-no-check-bucket`, the Drive `reconnect` hint restored in
 place of the R2 remedy, the weekly gate disabled and separately forced always-on,
 the media archive no longer promoted into a tier, each retention budget reverted to
-its old value, the weekly prune call removed, and the `JFBACKUP_KEEP_*` overrides
-ignored.
+its old value, the weekly prune call removed, the `JFBACKUP_KEEP_*` overrides
+ignored, and the remote-check matcher reverted to `rclone listremotes | grep -qx`
+(which refuses a remote that IS configured, see the multi-remote cases above).
 
 ### Running the suite needs nothing but bash
 
@@ -690,8 +708,8 @@ ungated. `scripts/preflight_test.sh` check 2 now fails if the gate is advertised
 has no `run backup` call site (verified by de-wiring it: `listed but never run:
 [backup]`).
 
-The **bite proof** (`jomform-backup_bite.sh`, ~42 minutes — 39 mutations, each a
-full suite run) is deliberately *not* a per-run gate: 42 minutes on every merge is
+The **bite proof** (`jomform-backup_bite.sh`, ~45 minutes — 40 mutations, each a
+full suite run) is deliberately *not* a per-run gate: 45 minutes on every merge is
 how a gate gets skipped. Run it on demand whenever the seam or the failure paths
 change:
 

@@ -547,6 +547,41 @@ bite_target() {
 }
 
 # =============================================================================
+# The remote check's matcher — a configured remote must not be refused
+# =============================================================================
+# `rclone listremotes` prints one line per remote, one write() per line with a real
+# rclone. The matcher in require_remote reads that list from a here-string instead
+# of through a pipe ON PURPOSE: `grep -qx` exits at its first match, so a pipe
+# reader can be gone while the writer still has whole lines queued — the writer
+# takes SIGPIPE, and under `set -o pipefail` the pipeline reports 141 although
+# grep MATCHED. A remote that IS configured is then refused as "not configured":
+# the nightly backup fails closed and mails a false "remote unavailable" alarm.
+#
+# This mutation changes ONLY the matcher body (the two other preconditions and
+# every word of the refusal are untouched), so the red it must produce is about
+# the read SHAPE and nothing else. What makes it bite is a config with more than
+# one remote: the suite's two multi-remote cases drive a stub whose needle is the
+# FIRST line and whose writer PAUSES before the rest, which is what turns the race
+# into a deterministic red (196/200 refusals with no pause, 200/200 with one).
+echo
+echo "### the remote check's matcher (a configured remote must not be refused)"
+
+bite_py "the remote check reads listremotes through a pipe again (a configured remote is refused)" \
+  'multi-remote: exit code|the configured remote was NOT refused|no false alarm was raised' <<'PY'
+import os
+p = os.environ["MUTATE_TARGET"]
+s = open(p).read()
+old = '''  remotes="$(rclone --config "$RCLONE_CONFIG" listremotes 2>/dev/null || :)"
+  grep -qx "${REMOTE}:" <<<"$remotes" \\
+'''
+assert old in s, "anchor not found"
+new = '''  rclone --config "$RCLONE_CONFIG" listremotes 2>/dev/null \\
+    | grep -qx "${REMOTE}:" \\
+'''
+open(p, "w").write(s.replace(old, new, 1))
+PY
+
+# =============================================================================
 # Containment mutations — the guard is a refusal rule, not containment
 # =============================================================================
 # The README's hand-run section and the two cases at the end of the suite assert
