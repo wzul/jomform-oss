@@ -43,6 +43,7 @@ import {
   builderHref,
   builderTarget,
   loadPath,
+  saveFormAsTemplate,
   savePlan,
   templateConfigWithStoredKeys,
   templateEditHref,
@@ -471,4 +472,188 @@ test("the new template-mode strings exist in all five locales", () => {
       );
     }
   }
+});
+
+// ── "Save as template" on an UNSAVED form (t_c33effe4) ─────────────────────
+//
+// THE DEFECT, MEASURED ON A RUNNING STACK (review stack, fresh browser state,
+// /builder?new=1, title typed, ONE click on "Save as template"):
+//
+//   POST /api/rest/forms/?workspace=…        201   <- the form WAS created
+//   POST /api/rest/forms/{id}/status?…       200
+//   -- no POST /api/rest/templates at all --
+//
+// and the DOM carried neither "Saved as a template." nor "Failed to save as
+// template." — the button looked like it had done nothing beyond saving the
+// draft. A form that already had an id was fine, because the block that ran was
+// skipped.
+//
+// THE MECHANISM: `saveAsTemplate` awaited `save(false)` and then RE-READ
+// `currentId`. `currentId` is a value captured by the RENDER's closure, so the
+// `setCurrentId` inside save() re-rendered the component and changed nothing
+// about the variable the already-running handler held. The re-read saw its own
+// stale null and returned — before either `setTplMsg` arm, which is why there was
+// no message either.
+//
+// These tests drive `saveFormAsTemplate` — the helper the button now delegates
+// its whole decision to — so the behaviour is exercised, not just the wiring.
+// The source pins below keep the page pointing at that helper.
+
+test("an UNSAVED form is snapshotted from the id its own save wrote", async () => {
+  // The reported case end to end: no id yet, the save writes one, and the
+  // template POST must use THAT id. Pre-fix it returned early and posted
+  // nothing at all.
+  const seen: string[] = [];
+  const outcome = await saveFormAsTemplate({
+    currentId: null,
+    ensureSaved: async () => {
+      seen.push("save");
+      return "8f2c4e10-0000-4000-8000-000000000001"; // what POST /api/rest/forms answered
+    },
+    snapshot: async (id) => {
+      seen.push(`snapshot:${id}`);
+      return true;
+    },
+  });
+  assert.equal(outcome, "saved");
+  assert.deepEqual(
+    seen,
+    ["save", "snapshot:8f2c4e10-0000-4000-8000-000000000001"],
+    "the template was not posted, or was posted for an id the save never produced (t_c33effe4)",
+  );
+});
+
+test("a form that already has an id is snapshotted WITHOUT a second save", async () => {
+  let saved = false;
+  let snapped = "";
+  const outcome = await saveFormAsTemplate({
+    currentId: "existing-form",
+    ensureSaved: async () => {
+      saved = true;
+      return "some-other-form";
+    },
+    snapshot: async (id) => {
+      snapped = id;
+      return true;
+    },
+  });
+  assert.equal(outcome, "saved");
+  assert.equal(snapped, "existing-form", "the template snapshotted something other than the form on screen");
+  assert.equal(saved, false, "the button saved a form that was already saved — a write the merchant did not ask for");
+});
+
+test("a save that wrote NOTHING creates no template", async () => {
+  // The property the old `if (!currentId) return` guard existed for: a failed
+  // save leaves its own error on screen, and an error screen must not become a
+  // template. Kept, and now pinned rather than implied.
+  for (const written of [null, "", undefined as unknown as string | null]) {
+    let posted = false;
+    const outcome = await saveFormAsTemplate({
+      currentId: null,
+      ensureSaved: async () => written,
+      snapshot: async () => {
+        posted = true;
+        return true;
+      },
+    });
+    assert.equal(outcome, "skipped", `a ${JSON.stringify(written)} id produced a template`);
+    assert.equal(posted, false, "a template was POSTed for a form the save did not write");
+  }
+  // An empty `currentId` is not an identity either — same rule as adoptedTarget.
+  let posted = false;
+  const outcome = await saveFormAsTemplate({
+    currentId: "",
+    ensureSaved: async () => null,
+    snapshot: async () => {
+      posted = true;
+      return true;
+    },
+  });
+  assert.equal(outcome, "skipped");
+  assert.equal(posted, false);
+});
+
+test("every finished attempt reports a sentence — the silent path is gone", async () => {
+  // The other half of the symptom was NO feedback at all. A rejected snapshot, a
+  // snapshot that throws and a SAVE that throws must each answer "failed" (the
+  // caller renders "Failed to save as template." for it); only a save that
+  // reported no id is allowed to answer "skipped", and that path already has the
+  // save's own error on screen.
+  const rejected = await saveFormAsTemplate({
+    currentId: "f1",
+    ensureSaved: async () => null,
+    snapshot: async () => false,
+  });
+  assert.equal(rejected, "failed");
+
+  const throwingSnapshot = await saveFormAsTemplate({
+    currentId: "f1",
+    ensureSaved: async () => null,
+    snapshot: async () => {
+      throw new Error("network");
+    },
+  });
+  assert.equal(throwingSnapshot, "failed");
+
+  // Pre-fix this rejected out of the click handler: no message, and an
+  // unhandled rejection in the console.
+  const throwingSave = await saveFormAsTemplate({
+    currentId: null,
+    ensureSaved: async () => {
+      throw new Error("network");
+    },
+    snapshot: async () => true,
+  });
+  assert.equal(throwingSave, "failed");
+});
+
+// The body of the `saveAsTemplate` handler, anchored by index (the same reason
+// createBranch() is: a comment or a reflowed line inside the body must not make
+// the pins below silently stop matching anything).
+function saveAsTemplateBody(): string {
+  const start = builderPage.indexOf("async function saveAsTemplate()");
+  assert.ok(start >= 0, "app/builder/page.tsx no longer has a `saveAsTemplate` handler — the button's wiring moved");
+  const end = builderPage.indexOf("\n  }", start);
+  assert.ok(end > start, "could not delimit saveAsTemplate in app/builder/page.tsx");
+  return builderPage.slice(start, end);
+}
+
+test("the button takes the id from the tested helper, never from a re-read of state", () => {
+  const body = saveAsTemplateBody();
+  assert.match(body, /saveFormAsTemplate\(\{/, '"Save as template" no longer goes through the tested helper');
+  assert.match(
+    body,
+    /ensureSaved: \(\) => save\(false\)/,
+    "the handler no longer saves the form before snapshotting it",
+  );
+  assert.match(body, /form_id: id/, "the template POST no longer snapshots the resolved id");
+  // The pre-fix shape, verbatim: await the save, then read `currentId` again.
+  // That read is the defect — the value belongs to a render that is already
+  // gone by the time the await returns.
+  assert.doesNotMatch(
+    body,
+    /await save\(false\)[\s\S]{0,120}?currentId/,
+    "saveAsTemplate reads `currentId` after awaiting its save again: that value is captured by the render's closure, so an unsaved form gets its row created and the template is silently never posted (t_c33effe4)",
+  );
+});
+
+test("save() reports the id it wrote, and null when any step failed", () => {
+  assert.match(
+    builderPage,
+    /async function save\(publish: boolean\): Promise<string \| null>/,
+    'save() no longer reports the id it wrote — that return value is exactly what "Save as template" needs, and without it the handler is back to reading stale state',
+  );
+  const start = builderPage.indexOf("async function save(publish: boolean)");
+  assert.ok(start >= 0, "app/builder/page.tsx no longer has save(publish)");
+  const end = builderPage.indexOf("async function copyPublishUrl", start);
+  assert.ok(end > start, "could not delimit save() in app/builder/page.tsx");
+  const body = builderPage.slice(start, end);
+  assert.match(body, /\n    return id;/, "save() no longer returns the id it wrote");
+  // `return;` answers undefined, which a caller cannot tell apart from "the save
+  // failed" — every failure path must answer the explicit null.
+  assert.doesNotMatch(
+    body,
+    /\n\s+return;/,
+    "save() still has a bare `return;` — that reports undefined rather than \"nothing was written\"",
+  );
 });

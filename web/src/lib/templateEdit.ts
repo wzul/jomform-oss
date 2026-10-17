@@ -217,3 +217,71 @@ export function builderHref(target: BuilderTarget): string {
 export function templateEditHref(id: string): string {
   return builderHref({ kind: "template", id });
 }
+
+/**
+ * The id "Save as template" snapshots, and the save it may need first
+ * (t_c33effe4).
+ *
+ * A form has to exist before it can be snapshotted, so the button saves when the
+ * session has no id yet. That save WRITES the id — but through `setCurrentId`,
+ * and `currentId` is a value captured by the RENDER's closure, not a live
+ * binding: the re-render `setCurrentId` queues cannot rebind a handler that is
+ * already awaiting. The old code awaited the save and then re-read `currentId`,
+ * so it read its own stale `null` and returned. On an UNSAVED form that meant
+ * the row WAS created (POST /api/rest/forms 201 + status 200) while the template
+ * was never posted and no message was shown at all — the early return skipped
+ * both `setTplMsg` arms, so the merchant got neither "Saved as a template." nor
+ * "Failed to save as template.".
+ *
+ * So the id a save WROTE is taken as a value and never re-read from state.
+ * `ensureSaved` is called ONLY when there is no id yet: an already-saved form
+ * must not be saved again, which is a write the merchant did not ask for.
+ */
+async function templateSnapshotId(
+  currentId: string | null,
+  ensureSaved: () => Promise<string | null>,
+): Promise<string | null> {
+  if (currentId) return currentId;
+  return (await ensureSaved()) || null;
+}
+
+/** What "Save as template" must report back to the merchant. */
+export type TemplateSaveOutcome = "saved" | "failed" | "skipped";
+
+/**
+ * The whole decision behind the builder's "Save as template" button, so the
+ * three things it must never do are testable without a component renderer:
+ *
+ *   - never create a template for a form the save did NOT write ("skipped" — a
+ *     failed save leaves its own error on screen, and an error screen must not
+ *     become a template. That is what the old `if (!currentId) return` was for,
+ *     and it is kept);
+ *   - never snapshot a STALE id: the id is the save's return value, never a
+ *     re-read of the `currentId` this render closed over (t_c33effe4);
+ *   - never fail in silence: every finished attempt answers "saved" or "failed",
+ *     so the caller always has a sentence to render. A save that throws is one
+ *     of those ("failed") — it wrote no id and rendered nothing itself.
+ *
+ * `snapshot` performs the template POST and answers whether it was accepted; it
+ * may throw (a network drop), which is also a "failed".
+ */
+export async function saveFormAsTemplate(deps: {
+  currentId: string | null;
+  ensureSaved: () => Promise<string | null>;
+  snapshot: (id: string) => Promise<boolean>;
+}): Promise<TemplateSaveOutcome> {
+  let id: string | null;
+  try {
+    id = await templateSnapshotId(deps.currentId, deps.ensureSaved);
+  } catch {
+    // The save itself blew up: it wrote nothing and showed nothing, so this is
+    // the one path that WOULD have been silent.
+    return "failed";
+  }
+  if (!id) return "skipped";
+  try {
+    return (await deps.snapshot(id)) ? "saved" : "failed";
+  } catch {
+    return "failed";
+  }
+}
