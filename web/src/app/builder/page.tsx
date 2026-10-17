@@ -66,6 +66,13 @@ type BlockType =
   | "html"
   // Advanced
   | "address"
+  // Card t_c28b45ea: `file` is no longer PLACEABLE — the palette below does not
+  // offer it and the AI generator's allowlist does not accept it — but it stays
+  // in this union and in the dictionary because a form saved BEFORE that
+  // withdrawal can still carry the block, and the canvas draws its chip
+  // (typeLabel reads `blk.file`). Nothing here collects it: the API refuses a
+  // config that carries the block, and both public renderers print the
+  // merchant's label plus a note instead of a picker.
   | "file"
   | "consent"
   | "hidden"
@@ -148,7 +155,15 @@ const PALETTE_GROUPS: PaletteGroup[] = [
     icon: "⚙",
     items: [
       { type: "address", icon: "⌂" },
-      { type: "file", icon: "📎" },
+      // Card t_c28b45ea: no `file` item. The block cannot be served to anyone:
+      // no public upload route exists, so no renderer may collect an attachment,
+      // and the API refuses a config that carries the block
+      // (formfields.UnsupportedBlock — "blok file tidak disokong"). Offering it
+      // here only let a merchant assemble a form that could not then be saved;
+      // the same withdrawal the withdrawn discount-code block got (card
+      // t_4975927e, whose guard scans this file for that block's name, so this
+      // rationale names it only by role). A form that already stores the block
+      // still loads and still shows its label chip.
       { type: "consent", icon: "✓" },
       { type: "hidden", icon: "👁" },
       { type: "list", icon: "☰" },

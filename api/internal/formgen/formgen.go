@@ -22,6 +22,19 @@ type BlockType string
 // ValidBlockTypes is the allowlist of block types the AI builder accepts.
 // It matches the builder palette (issue #173) plus the registered-field
 // contract types (issue #254). Unknown types are rejected.
+//
+// Card t_c28b45ea: `file` is NOT in this map and NOT in the builder palette,
+// because nothing in this product can serve the block. No renderer can collect
+// it (the response page and the payment page both print the merchant's label
+// plus a note instead of a picker) and no write path will store it —
+// `formfields.UnsupportedBlock` refuses a config carrying `file`, because every
+// upload endpoint sits behind an authenticated account and the public mux has no
+// upload route, so an anonymous buyer has no way to deposit bytes. A generator
+// that still offered the type would hand an MCP agent a block that is refused
+// two calls later, at `upsert_form`: the same third-surface defect `coupon` had
+// (card t_4975927e, formgen/coupon_withdrawn_test.go). A legacy stored form that
+// already carries a `file` block is untouched by this — it still renders its
+// label plus the note on both public renderers.
 var ValidBlockTypes = map[BlockType]bool{
 	// Standard
 	"text": true, "textarea": true, "number": true, "select": true,
@@ -29,7 +42,7 @@ var ValidBlockTypes = map[BlockType]bool{
 	"phone": true, "date": true, "time": true, "website": true,
 	"section": true, "html": true,
 	// Advanced
-	"address": true, "file": true, "consent": true, "hidden": true,
+	"address": true, "consent": true, "hidden": true,
 	"list": true, "repeater": true, "image-choice": true, "captcha": true,
 	// Pricing
 	"product": true, "quantity": true, "option": true, "shipping": true,
@@ -248,7 +261,7 @@ func Prompt(userPrompt string) string {
 	sb.WriteString("You are a form-builder assistant for JomForm. Turn the user's request into a JSON form config.\n")
 	sb.WriteString("Reply with ONLY a JSON object (no markdown, no preamble) matching this shape:\n")
 	sb.WriteString(`{"title": "<form title>", "blocks": [{"id": "<unique a-z0-9_- id>", "type": "<block type>", "value": "<field label>", "required": true|false, "placeholder": "<optional>", "choices": [{"label": "...", "value": "..."}]}], "theme": {"primary": "#hex", "background": "#hex", "text": "#hex", "card_background": "#hex", "card_border_radius": "16px", "font_family": "system-ui, sans-serif", "layout": "centered|full_width|split", "spacing": "compact|comfortable|spacious"}}` + "\n")
-	sb.WriteString("Allowed block types (use only these): text, textarea, number, select, radio, checkbox, name, email, phone, date, time, website, section, html, address, file, consent, hidden, list, repeater, image-choice, captcha, product, quantity, option, shipping, total, image, divider.\n")
+	sb.WriteString("Allowed block types (use only these): text, textarea, number, select, radio, checkbox, name, email, phone, date, time, website, section, html, address, consent, hidden, list, repeater, image-choice, captcha, product, quantity, option, shipping, total, image, divider.\n")
 	sb.WriteString("Rules:\n")
 	sb.WriteString("- Each block needs a unique id (a-z, 0-9, _ , -) and a human label in `value`.\n")
 	sb.WriteString("- For select/radio/checkbox/image-choice/option/shipping blocks, provide `choices` (label + value).\n")
