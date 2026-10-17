@@ -2455,28 +2455,88 @@ run webimage "docker build -f web/Dockerfile . (the shipping web image, cache-on
 #   (reuseExistingServer is OFF) and we hand it a FREE port. A leftover
 #   `next-server` from an earlier run would otherwise be reused and axe would
 #   report a clean pass for a build this tree never produced. The port is
-#   discovered here rather than fixed, so a stale server cannot collide either.
+#   CLAIMED here rather than fixed (see the claim block below): a stale server on
+#   a candidate port is skipped, and no other live gate can take the port this one
+#   claimed.
 #   Needs web/build to have produced .next, hence the order.
 # ---------------------------------------------------------------------------
-# ---- shared: RESERVE a port for a playwright web server --------------------
+# ---- shared: CLAIM a port for a playwright web server ----------------------
 #
-# BOTH the a11y gate and the e2e gate start the app's own production server, so
-# both need a port that is free AND cannot be taken between the pick and the bind.
-# The reservation is `nc -l -p <port>`: it binds and listens, so `ss` sees it and
-# an unprivileged competitor is refused with EADDRINUSE (verified on this host
-# before it was used). Callers MUST release it immediately before the server
-# starts, so nothing is reused — the gate still starts its OWN server, which is
-# what `reuseExistingServer: false` exists to protect.
+# BOTH the a11y gate and the e2e gate start the app's own production server, so both
+# need a port that is free AND that no other gate can take before this gate's server
+# binds to it.
 #
-# A retry was the alternative and is deliberately NOT used: it hides the race
-# behind a green instead of removing it, and a genuine EADDRINUSE (a peer holding
-# the whole range) must still be reported.
+# WHAT THIS USED TO DO, AND HOW IT LOST A 12-MINUTE RUN (card t_df1719c1, measured on
+# the merge lane of PR 1203, 2026-10-13). The port was "reserved" with `nc -l -p
+# <port>` and that reservation was RELEASED immediately before handing
+# `A11Y_PORT=<port>` to npm: reserve -> release -> bind. That is a TOCTOU window, and
+# it is seconds wide — `next start` does not listen until it has booted — so a second
+# gate probing inside it saw the port free and took it too. The loser cannot fall back
+# (`reuseExistingServer` is false BY DESIGN, so it never trusts a server it did not
+# start) and dies in 3s:
+#
+#     [WebServer] Error: listen EADDRINUSE: address already in use :::3100
+#     PREFLIGHT FAIL: gate 'a11y' (...) exited 1 after 3s
+#
+# The holder was another LANE'S LIVE GATE, not a leftover: this host runs up to
+# PREFLIGHT_SLOT_COUNT (2) gate runs at once, and the two web-server gates then aimed
+# at the same default port. A FALSE red with no defect behind it is the shape this
+# script exists to remove.
+#
+# The window had a second half, which made it worse than a coincidence: the `ss`
+# confirmation after the `nc` bind could not tell WHOSE listener it was looking at.
+# When a peer already held the port, the loser's `nc` failed silently, the post-bind
+# `ss` still showed the PEER's LISTEN row, and the loser read that as its own
+# reservation and returned the same port. Two gates, one port, on purpose.
+#
+# THE FIX: AN EXCLUSIVE PER-PORT CLAIM, HELD FOR THIS GATE'S WHOLE LIFETIME.
+# `flock` on a per-port file is an atomic test-and-set (`flock` is open-file-
+# description scoped, so two processes that open the same file are mutually
+# exclusive — a check-then-bind can never be), and the descriptor is kept open until
+# this gate's server has exited, so no window is left between the pick and the bind.
+# A peer that finds port P claimed moves to P+1, and the two concurrent runs therefore
+# use DIFFERENT ports — which is what each gate prints. Measured on this host before
+# it was used: a held claim refuses a second process AND a child of the holder that
+# inherited the descriptor, and closing the descriptor frees it.
+#
+# A FOREIGN LISTENER is not covered by the claim (a leftover `next-server`, or a peer
+# running a pre-t_df1719c1 copy of this script), so a candidate that has a LISTEN row
+# right now is skipped. That is what keeps `reuseExistingServer: false` honest: this
+# gate always starts its OWN server, on a port that was free when it claimed it.
+#
+# THE ONE LABELLED RETRY in the runner below covers the residue a claim cannot: a
+# non-conforming holder that binds the claimed port in the moment between the claim and
+# `next start`. It fires ONCE, only on EADDRINUSE, and says so in the gate's own
+# output. A hidden re-run is the thing this repo refuses; a labelled one cannot
+# misreport a real failure, because a real failure fails again on the fresh port.
+#
+# The claim files are `<PREFLIGHT_LOCK_FILE>.a11yport<N>` in the same /var/lock tmpfs
+# the slot pool uses, and are left behind like the slot files: flock releases on
+# process death, so a file with no holder costs nothing and can never block a later
+# run. That name is NOT `.slot<N>` deliberately — `*.slot<N>` is the SLOT POOL's
+# namespace, and a run whose PREFLIGHT_LOCK_FILE landed in it is refused above.
 A11Y_RESERVED_PORT=""
-A11Y_RESERVE_PID=""
-a11y_port_reserve() {  # sets A11Y_RESERVED_PORT / A11Y_RESERVE_PID
+A11Y_PORT_CLAIM_FD=""
+A11Y_PORT_CLAIM_FILE=""
+
+# The claim file for port $1. A DIFFERENT PATH PER PORT is what makes the claim an
+# atomic test-and-set: the take below relies on a FRESH open of a DIFFERENT file per
+# candidate, exactly like the slot pool above.
+a11y_port_claim_path() { printf '%s.a11yport%s' "$PREFLIGHT_LOCK_FILE" "$1"; }
+
+a11y_port_claim() {  # sets A11Y_RESERVED_PORT / A11Y_PORT_CLAIM_FD / A11Y_PORT_CLAIM_FILE
   A11Y_RESERVED_PORT=""
-  A11Y_RESERVE_PID=""
-  local candidate ss_out
+  A11Y_PORT_CLAIM_FD=""
+  A11Y_PORT_CLAIM_FILE=""
+  # NO SILENT FALLBACK when flock is missing. Without it the port cannot be claimed,
+  # and an unclaimed port is exactly the collision this function exists to make
+  # impossible — picking a port and hoping is the defect, not a degradation. The slot
+  # pool says the same thing earlier; this says why it is fatal HERE.
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "flock is missing — the web-server gates cannot claim a port exclusively, and an unclaimed port is the collision this gate refuses to risk. Install util-linux (the slot pool needs it too)." >&2
+    return 1
+  fi
+  local candidate fd ss_out
   # NOT `ss … | grep -q LISTEN`. This gate runs under `set -uo pipefail`, and `grep -q`
   # exits at its first match; if `ss` is still writing, it takes SIGPIPE and the
   # pipeline reports 141 although grep MATCHED. MEASURED HONESTLY (card t_39b04c34):
@@ -2491,38 +2551,44 @@ a11y_port_reserve() {  # sets A11Y_RESERVED_PORT / A11Y_RESERVE_PID
   # where the writers emit more than one write(). A here-string has no writer process,
   # so there is nothing left to signal, and the change is free and provably correct.
   for candidate in $(seq 3100 3140); do
-    ss_out="$(ss -lntn "sport = :$candidate" 2>/dev/null || :)"
-    if ! grep -q LISTEN <<<"$ss_out"; then
-      if command -v nc >/dev/null 2>&1; then
-        nc -l -p "$candidate" >/dev/null 2>&1 &
-        A11Y_RESERVE_PID=$!
-        sleep 0.3
-        ss_out="$(ss -lntn "sport = :$candidate" 2>/dev/null || :)"
-        if grep -q LISTEN <<<"$ss_out"; then
-          A11Y_RESERVED_PORT="$candidate"
-          return 0
-        fi
-        kill "$A11Y_RESERVE_PID" >/dev/null 2>&1 || :
-        wait "$A11Y_RESERVE_PID" 2>/dev/null || :
-        A11Y_RESERVE_PID=""
-        continue
-      fi
-      A11Y_RESERVED_PORT="$candidate"
-      return 0
+    fd=""
+    # A FRESH OPEN of a DIFFERENT file per candidate, then a NON-BLOCKING flock: this
+    # is the atomic test-and-set. A candidate whose claim is already held by another
+    # live gate is skipped WITHOUT a wait — the point is to find a port nobody else
+    # holds, never to queue behind one.
+    if ! exec {fd}>>"$(a11y_port_claim_path "$candidate")" || ! flock -o -n "$fd" 2>/dev/null; then
+      if [ -n "$fd" ]; then exec {fd}>&-; fi
+      continue
     fi
+    # The claim binds only THIS script. A foreign listener is not covered by it, so a
+    # port that is listening right now is skipped rather than scanned:
+    # `reuseExistingServer` is false because a leftover server would serve a build this
+    # tree never produced (see the a11y gate header above).
+    ss_out="$(ss -lntn "sport = :$candidate" 2>/dev/null || :)"
+    if grep -q LISTEN <<<"$ss_out"; then
+      exec {fd}>&-
+      continue
+    fi
+    A11Y_PORT_CLAIM_FD="$fd"
+    A11Y_PORT_CLAIM_FILE="$(a11y_port_claim_path "$candidate")"
+    A11Y_RESERVED_PORT="$candidate"
+    return 0
   done
-  echo "no free port in 3100-3140 for the web server" >&2
+  echo "no port in 3100-3140 could be claimed for the web server: every candidate is either claimed by another live gate ($(a11y_port_claim_path 3100), …) or has a server listening on it" >&2
   return 1
 }
 
-# Release the reservation so the server can take the port. Safe when the holder
-# already died (a peer stole the port from it too): there is simply nothing to free.
+# Release the claim. CLOSING THE DESCRIPTOR IS THE WHOLE RELEASE — flock's lock lives
+# on the open file description, and this is the descriptor that holds it. It is called
+# after the gate's server has exited (or after a failed claim, where there is simply
+# nothing to close). The claim file itself is left in place: flock releases on process
+# death, so a file with no holder is inert and can never block a later run.
 a11y_port_release() {
-  if [ -n "$A11Y_RESERVE_PID" ]; then
-    kill "$A11Y_RESERVE_PID" >/dev/null 2>&1 || :
-    wait "$A11Y_RESERVE_PID" 2>/dev/null || :
+  if [ -n "$A11Y_PORT_CLAIM_FD" ]; then
+    exec {A11Y_PORT_CLAIM_FD}>&-
   fi
-  A11Y_RESERVE_PID=""
+  A11Y_PORT_CLAIM_FD=""
+  A11Y_PORT_CLAIM_FILE=""
 }
 
 # ---- web/a11y: the axe family only -----------------------------------------
@@ -2537,12 +2603,48 @@ a11y_port_release() {
 # lost by the split; they are owned by the `e2e` gate below, and the selftest
 # asserts every spec belongs to exactly one family so a new spec cannot fall
 # between the two.
+#
+# ---- the runner both web-server gates share --------------------------------
+# $1 = the name it prints, $2 = the npm script.
+#
+# THE CLAIM IS HELD FOR THE WHOLE GATE, not just until npm starts (see the claim block
+# above for why reserve->release->bind lost a 12-minute run): `npm run …` is a
+# foreground child here, so the descriptor stays open — and the lock stays held — until
+# the gate's server has exited. `A11Y_PORT` is the claimed port, so playwright starts
+# the app's OWN server there and never reuses anything.
+#
+# THE RETRY IS LABELLED AND BOUNDED: it fires at most once, only when the first attempt
+# failed AND its output names EADDRINUSE, and it prints the port it abandoned and the
+# one it took. Anything else — including a second EADDRINUSE, and every failure that is
+# not a port collision — returns the real exit code untouched.
+a11y_gate_run() {
+  local name="$1" script="$2" attempt=0 port last="" log rc
+  while :; do
+    a11y_port_claim || return 1
+    port="$A11Y_RESERVED_PORT"
+    if [ "$attempt" -eq 0 ]; then
+      echo "$name: starting the app's own server on port $port (exclusive claim $A11Y_PORT_CLAIM_FILE, held until this gate's server exits; never reusing a leftover)"
+    else
+      echo "$name: RETRY $attempt/1 on a freshly claimed port $port — port $last was taken between the claim and the bind (EADDRINUSE). This is a HOST RACE, labelled and not hidden: the first attempt's output is above, and a genuine failure fails again on the fresh port."
+    fi
+    log="$(mktemp "${TMPDIR:-/tmp}/preflight-$name-claim.XXXXXX")"
+    A11Y_PORT="$port" npm run "$script" 2>&1 | tee "$log"
+    rc=${PIPESTATUS[0]}
+    a11y_port_release
+    if [ "$rc" -eq 0 ]; then rm -f "$log"; return 0; fi
+    if [ "$attempt" -ge 1 ] || ! grep -q EADDRINUSE "$log"; then
+      rm -f "$log"
+      return "$rc"
+    fi
+    rm -f "$log"
+    last="$port"
+    attempt=1
+  done
+}
+
 a11y_run() {
   cd "$REPO_ROOT/web" || return 1
-  a11y_port_reserve || return 1
-  echo "a11y: starting the app's own server on port $A11Y_RESERVED_PORT (never reusing a leftover)"
-  a11y_port_release
-  A11Y_PORT="$A11Y_RESERVED_PORT" npm run a11y
+  a11y_gate_run a11y a11y
 }
 
 # ---- web/e2e: the feature end-to-end specs ---------------------------------
@@ -2558,10 +2660,7 @@ a11y_run() {
 # and the specs would then pass against the wrong code.
 e2e_run() {
   cd "$REPO_ROOT/web" || return 1
-  a11y_port_reserve || return 1
-  echo "e2e:  starting the app's own server on port $A11Y_RESERVED_PORT (never reusing a leftover)"
-  a11y_port_release
-  A11Y_PORT="$A11Y_RESERVED_PORT" npm run e2e
+  a11y_gate_run e2e e2e
 }
 
 run a11y "cd web && npm run a11y (axe-core family; the feature specs are gate \`e2e\`)" a11y_run
