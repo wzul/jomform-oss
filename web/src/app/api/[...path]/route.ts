@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { forwardClientAddress } from "../../../lib/clientAddress";
+import { relayResponseHeaders } from "../../../lib/proxyResponseHeaders";
 
 // Dashboard proxies /api/* to the Go API /v1/* so session cookies stay
 // same-origin. /api/auth/login -> {API}/v1/auth/login etc.
@@ -55,24 +56,15 @@ async function proxy(req: NextRequest) {
   // 302 to Google from /v1/auth/oauth/google). We forward the status + Location
   // header to the browser so it performs the redirect itself (issue #273).
   const r = await fetch(path, { ...init, redirect: "manual" });
+  // Relay the response headers the browser needs, from ONE declared list
+  // (lib/proxyResponseHeaders.ts): the body's Content-Type, the redirect's
+  // Location, every Set-Cookie, and the API's Retry-After — the header the login
+  // lockout (429 + `Retry-After: 900`, auth.go) and the per-IP throttle
+  // (middleware/ratelimit.go) state their backoff in, which this hop used to
+  // drop, so a locked-out dashboard could not tell when its window clears.
+  // Built, not the upstream set passed through: see the module for why.
   const respHeaders = new Headers();
-  const ct = r.headers.get("content-type");
-  if (ct) respHeaders.set("Content-Type", ct);
-  // Forward the Location header on redirect responses so the browser follows
-  // the OAuth provider redirect (Google, etc.) instead of the proxy serving
-  // the provider's HTML from jomform.com.
-  const location = r.headers.get("location");
-  if (location) respHeaders.set("Location", location);
-  // OAuth flows (e.g. Cloudflare, issue #22) set multiple cookies per
-  // response (state + PKCE verifier); forward ALL of them, not just the first.
-  const getCookies =
-    typeof r.headers.getSetCookie === "function" ? r.headers.getSetCookie() : [];
-  if (getCookies.length > 0) {
-    for (const c of getCookies) respHeaders.append("Set-Cookie", c);
-  } else {
-    const setCookie = r.headers.get("set-cookie");
-    if (setCookie) respHeaders.set("Set-Cookie", setCookie);
-  }
+  relayResponseHeaders(r.headers, respHeaders);
 
   return new NextResponse(r.body, { status: r.status, headers: respHeaders });
 }
