@@ -143,6 +143,13 @@ func menuExtraContract(config map[string]any) []formfields.Field {
 		if f.Type == "name" || f.Type == "email" {
 			continue
 		}
+		// Card t_9e875bca: a block's conditional-logic rule is deliberately NOT
+		// carried onto the menu checkout's contract. The menu page does not emit
+		// the rule yet (menuExtraFields has no data-condition), so enforcing it
+		// here would drop or excuse an answer for a field the buyer was shown —
+		// the menu checkout keeps its pre-existing behaviour until its own
+		// renderer can honour the rule.
+		f.Condition = nil
 		out = append(out, f)
 	}
 	return out

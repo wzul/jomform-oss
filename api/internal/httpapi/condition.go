@@ -1,53 +1,32 @@
 // Builder conditional logic: show/hide blocks based on earlier answers.
-// The public renderer evaluates conditions server-side: hidden blocks are
-// skipped, their answers excluded, and their prices not counted.
+//
+// The rule itself lives in formfields (Condition.Met) — ONE evaluator for the
+// three places that must agree about whether a block was visible: the public
+// renderer (which emits the block's data-condition attribute), the browser
+// script that hides the block, and the submit path (the contract's `required`
+// check plus the answers that are stored). Before card t_9e875bca the attribute
+// was never emitted and the script had nothing to act on, so a merchant's
+// conditional logic did nothing on any public form.
 package httpapi
 
 import (
 	"encoding/json"
-	"strconv"
-	"strings"
+
+	"github.com/wzul/jomform/api/internal/formfields"
 )
 
 // Condition describes when a block should be VISIBLE in the public form.
-type Condition struct {
-	FieldID string `json:"field_id"`
-	Op      string `json:"op"` // equals | not_equals | contains | gt | lt | not_empty
-	Value   string `json:"value"`
-}
+//
+// It is an ALIAS of formfields.Condition, not a copy: formfields owns the rule
+// (Met) because that is the package the submit path validates against, and the
+// CHIP-feed router and the confirmation picker share it from here.
+type Condition = formfields.Condition
 
 // conditionMet evaluates one condition against submitted answers.
 // answers maps block-id → submitted string; nums maps block-id → numeric.
+// A nil condition matches (the default CHIP feed, the default confirmation).
 func conditionMet(cond *Condition, answers map[string]string, nums map[string]int64) bool {
-	if cond == nil {
-		return true
-	}
-	v := strings.TrimSpace(answers[cond.FieldID])
-	switch cond.Op {
-	case "equals":
-		if cond.Value == "" {
-			return v != ""
-		}
-		return strings.EqualFold(v, strings.TrimSpace(cond.Value))
-	case "not_equals":
-		c := *cond
-		c.Op = "equals"
-		return !conditionMet(&c, answers, nums)
-	case "contains":
-		return strings.Contains(strings.ToLower(v), strings.ToLower(strings.TrimSpace(cond.Value)))
-	case "gt":
-		return nums[cond.FieldID] > parseNum(cond.Value)
-	case "lt":
-		return nums[cond.FieldID] < parseNum(cond.Value)
-	case "not_empty":
-		return v != ""
-	}
-	return true
-}
-
-func parseNum(s string) int64 {
-	n, _ := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-	return n
+	return cond.Met(answers, nums)
 }
 
 // marshalCondition serializes a condition for data-condition attributes.

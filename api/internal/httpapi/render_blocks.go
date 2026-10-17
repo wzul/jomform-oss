@@ -308,6 +308,9 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		// Issue #456: postMessage auto-height for the iframe embed. No-op on a
 		// direct visit (the script only runs when framed).
 		"HeightJS": template.HTML(iframeHeightJS),
+		// Card t_9e875bca: the conditional-logic script. Both renderers emit the
+		// SAME constant so a payment form and a response form cannot drift.
+		"ConditionJS": template.HTML(blockConditionJS),
 	}); err != nil {
 		slog.Error("form_render_blocks", "err", err)
 	}
@@ -340,6 +343,84 @@ const iframeHeightJS = `<script>(function(){
   if(window.ResizeObserver){try{new ResizeObserver(post).observe(document.documentElement);}catch(e){}}
   if(window.MutationObserver){try{new MutationObserver(post).observe(document.documentElement,{subtree:true,childList:true,attributes:true});}catch(e){}}
   post();
+})();</script>`
+
+// blockConditionJS is the client half of the builder's conditional logic. BOTH
+// public renderers emit it verbatim (template.HTML) so a payment form and a
+// response form behave identically — before card t_9e875bca the payment
+// renderer carried a private copy that watched an attribute no template
+// emitted, and the response renderer had no script at all.
+//
+// The block wrapper (the element carrying `data-condition`) is the unit that is
+// shown or hidden, and a hidden block's controls are DISABLED rather than merely
+// hidden: a `required`, `pattern` or `type=email` constraint on a display:none
+// control still runs and blocks the submit in Chrome ("An invalid form control
+// with name=… is not focusable"), which is exactly the failure a hidden
+// conditional field must not cause. Disabling also keeps the hidden answer out
+// of the payload, matching what the server stores
+// (formfields.VisibleAnswers).
+//
+// Both renderers interpolate nothing into this script and the body contains no
+// "</script>" sequence, so it is safe to inline.
+const blockConditionJS = `<script>(function(){
+  var blocks=document.querySelectorAll('[data-condition]');
+  if(!blocks.length)return;
+  // fieldVal reads the answer a condition references. Every rendered arm tags
+  // its own control with the block id (data-id), so that lookup comes first;
+  // name/id are the fallback for a hand-written page. A radio or checkbox block
+  // is one answer made of many controls: the CHECKED control answers, and a
+  // control that belongs to a hidden block (disabled) contributes nothing —
+  // conditions are evaluated over the answers the submission will carry.
+  function fieldVal(id){
+    var els=document.querySelectorAll('[data-id="'+id+'"]');
+    if(!els.length)els=document.querySelectorAll('[name="'+id+'"]');
+    if(!els.length)return '';
+    var el=els[0];
+    if(els.length>1||el.type==='radio'||el.type==='checkbox'){
+      var group=false;
+      for(var i=0;i<els.length;i++){
+        var t=els[i].type;
+        if(t!=='radio'&&t!=='checkbox')continue;
+        group=true;
+        if(els[i].disabled)continue;
+        if(els[i].checked)return els[i].value;
+      }
+      if(group)return '';
+    }
+    if(el.disabled)return '';
+    return el.value;
+  }
+  function evalCond(c){
+    var v=String(fieldVal(c.field_id)).trim();
+    var w=String(c.value).trim();
+    switch(c.op){
+      // The Go evaluator (formfields.Condition.Met) is the authority; this
+      // mirrors it op for op so the page cannot hide a block the server keeps.
+      case 'equals':return c.value===''?v!=='':v.toLowerCase()===w.toLowerCase();
+      case 'not_equals':return c.value===''?v==='':v.toLowerCase()!==w.toLowerCase();
+      case 'contains':return v.toLowerCase().indexOf(w.toLowerCase())>=0;
+      case 'gt':return parseFloat(v)>parseFloat(c.value);
+      case 'lt':return parseFloat(v)<parseFloat(c.value);
+      case 'not_empty':return v!=='';
+    }
+    return true;
+  }
+  function refresh(){
+    // Two passes: a condition may reference a field whose own block is
+    // conditional, and hiding that block changes the answer this one reads.
+    for(var pass=0;pass<2;pass++){
+      blocks.forEach(function(el){
+        try{
+          var show=evalCond(JSON.parse(el.dataset.condition));
+          el.style.display=show?'':'none';
+          el.querySelectorAll('input,select,textarea').forEach(function(x){x.disabled=!show;});
+        }catch(e){}
+      });
+    }
+  }
+  document.addEventListener('input',refresh);
+  document.addEventListener('change',refresh);
+  refresh();
 })();</script>`
 
 // styleAttr renders a sanitized per-field inline style attribute (issue #388).
@@ -539,7 +620,7 @@ var blockTmpl = template.Must(template.New("blocks").
 <form class="card" id="of" data-slug="{{.Slug}}">
   <h1>{{.Title}}</h1>
 {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
-{{range $b := .Blocks}}
+{{range $b := .Blocks}}{{if .CondJSON}}<div class="jf-block" data-condition="{{.CondJSON}}">{{end}}
 {{if eq .Type "text"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}{{if .DefaultValue}} value="{{.DefaultValue}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
 {{else if eq .Type "image"}}{{if .Src}}  <img class="img{{if .CSSClass}} {{.CSSClass}}{{end}}" src="{{.Src}}" alt=""{{styleAttr .Style}}>
 {{end}}{{else if eq .Type "divider"}}  <hr{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{styleAttr .Style}}>
@@ -570,7 +651,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "image-choice"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{range .Choices}}<label class="rad{{if $b.CSSClass}} {{$b.CSSClass}}{{end}}"><input type="radio" name="notes" data-id="{{$b.ID}}" value="{{.Value}}"{{if $b.Required}} required{{end}}{{if $b.RequiredMsg}} oninvalid="this.setCustomValidity('{{$b.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}> {{.Label}}</label>{{end}}
 {{else if eq .Type "captcha"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="notes" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
 {{else if eq .Type "coupon"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}</label><div class="desc">{{$.Ls.CouponUnsupported}}</div>
-{{end}}</span>{{if .Description}}<div class="desc">{{.Description}}</div>{{end}}
+{{end}}</span>{{if .Description}}<div class="desc">{{.Description}}</div>{{end}}{{if .CondJSON}}</div>{{end}}
 {{end}}
   <div class="total"><span>{{$.Ls.Total}}</span><span id="total">RM0.00</span></div>
   {{.AntiSpam}}
@@ -662,6 +743,10 @@ var blockTmpl = template.Must(template.New("blocks").
     var fields={};
     document.querySelectorAll('[data-id]').forEach(function(el){
       if(!el.dataset.id)return;
+      // A control inside a HIDDEN conditional block is disabled by the
+      // conditional-logic script, and its answer is not part of this
+      // submission (the server drops it too, formfields.VisibleAnswers).
+      if(el.disabled)return;
       if(el.type==='checkbox'){if(el.checked)fields[el.dataset.id]=el.value;}
       else if(el.type==='radio'){if(el.checked)fields[el.dataset.id]=el.value;}
       else if(el.type==='file'){/* files not sent as text */}
@@ -689,42 +774,10 @@ var blockTmpl = template.Must(template.New("blocks").
           else{location.href=url;}
         }
         else{alert('{{.Ls.ErrorAlert}}'+(d.error?': '+d.error:''));}});
-  // Conditional logic: show/hide blocks with data-condition based on earlier inputs.
-  (function(){
-    var conds=document.querySelectorAll('[data-condition]');
-    if(!conds.length)return;
-    function fieldVal(id){
-      var el=document.querySelector('[name="'+id+'"],#'+id);
-      if(!el)return '';
-      return (el.type==='checkbox')?(el.checked?el.value:''):el.value;
-    }
-    function evalCond(c){
-      var v=fieldVal(c.field_id);
-      switch(c.op){
-        case 'equals':return c.value===''?v.trim()!=='':v.toLowerCase()===String(c.value).toLowerCase();
-        case 'not_equals':return !(v.toLowerCase()===String(c.value).toLowerCase());
-        case 'contains':return v.toLowerCase().indexOf(String(c.value).toLowerCase())>=0;
-        case 'gt':return parseFloat(v)>parseFloat(c.value);
-        case 'lt':return parseFloat(v)<parseFloat(c.value);
-        case 'not_empty':return v.trim()!=='';
-      }
-      return true;
-    }
-    function refresh(){
-      conds.forEach(function(el){
-        try{
-          var c=JSON.parse(el.dataset.condition);
-          el.style.display=evalCond(c)?'':'none';
-        }catch(e){}
-      });
-    }
-    document.addEventListener('input',refresh);
-    document.addEventListener('change',refresh);
-    refresh();
-  })();
   });
 })();
 </script>
+{{.ConditionJS}}
 {{if .ThemeJS}}<script>
 {{.ThemeJS}}
 </script>
@@ -938,6 +991,9 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		// Issue #456: postMessage auto-height for the iframe embed. No-op on a
 		// direct visit (the script only runs when framed).
 		"HeightJS": template.HTML(iframeHeightJS),
+		// Card t_9e875bca: the same conditional-logic script the payment
+		// renderer emits — a response form's block carries data-condition too.
+		"ConditionJS": template.HTML(blockConditionJS),
 	}); err != nil {
 		slog.Error("form_render_response", "err", err)
 	}
@@ -1047,7 +1103,7 @@ var responseTmpl = template.Must(template.New("response").
 <form class="card" id="of" data-slug="{{.Slug}}">
   <h1>{{.Title}}</h1>
 {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
-{{range $f := .Fields}}
+{{range $f := .Fields}}{{if .CondJSON}}<div class="jf-block" data-condition="{{.CondJSON}}">{{end}}
 {{if eq .Type "text"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .MaxLength}} maxlength="{{.MaxLength}}"{{end}}{{if .DefaultValue}} value="{{.DefaultValue}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
 {{else if eq .Type "section"}}  <div class="section{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}>{{.Value}}</div>
 {{else if eq .Type "html"}}  <div class="text{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}>{{.Value}}</div>
@@ -1074,7 +1130,7 @@ var responseTmpl = template.Must(template.New("response").
 {{else if eq .Type "captcha"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
 {{else if eq .Type "hidden"}}  <input type="hidden" name="{{.ID}}" value="{{.DefaultValue}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{styleAttr .Style}}>
 {{end}}
-{{if .Description}}<div class="desc">{{.Description}}</div>{{end}}
+{{if .Description}}<div class="desc">{{.Description}}</div>{{end}}{{if .CondJSON}}</div>{{end}}
 {{end}}
   {{.AntiSpam}}
   <button type="submit">{{$.Ls.SubmitResponse}}</button>
@@ -1098,6 +1154,10 @@ var responseTmpl = template.Must(template.New("response").
     var fields={};
     var els=form.querySelectorAll('[name]');
     els.forEach(function(el){
+      // A control inside a HIDDEN conditional block is disabled by the
+      // conditional-logic script; its answer is not part of this submission
+      // (the server drops it too, formfields.VisibleAnswers).
+      if(el.disabled)return;
       if(el.type==='checkbox'){fields[el.name]=el.checked?'1':'';}
       else if(el.type==='radio'){if(el.checked)fields[el.name]=el.value;}
       else if(el.type==='file'){fields[el.name]=el.files&&el.files[0]?el.files[0].name:'';}
@@ -1139,6 +1199,7 @@ var responseTmpl = template.Must(template.New("response").
   });
 })();
 </script>
+{{.ConditionJS}}
 {{if .ThemeJS}}<script>
 {{.ThemeJS}}
 </script>

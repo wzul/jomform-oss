@@ -44,6 +44,75 @@ type Field struct {
 	Placeholder  string   `json:"placeholder,omitempty"`
 	DefaultValue string   `json:"default_value,omitempty"`
 	Choices      []Choice `json:"choices,omitempty"`
+	// Condition is the block's conditional-logic rule, when the contract was
+	// derived from builder blocks (Contract). A field whose condition is false
+	// for a submission is NOT part of it: not required, not validated, and its
+	// answer is dropped (VisibleAnswers) — the buyer never saw the field.
+	Condition *Condition `json:"condition,omitempty"`
+}
+
+// Condition is a block's conditional-logic rule (the builder's "conditional
+// logic" panel): the block is shown only while the answer to FieldID satisfies
+// Op. It is ONE definition, shared by the public renderer (which emits it as
+// the block's `data-condition` attribute), the browser script that hides the
+// block, and this package's submit-side re-evaluation — so the page and the
+// server cannot disagree about whether a block was visible.
+type Condition struct {
+	FieldID string `json:"field_id"`
+	Op      string `json:"op"` // equals | not_equals | contains | gt | lt | not_empty
+	Value   string `json:"value"`
+}
+
+// Met reports whether the condition holds for the given answers. answers maps
+// field id → submitted value; nums maps field id → that value's numeric form
+// for gt/lt (a nil map is allowed and reads as 0 — that is what the callers
+// without numbers, e.g. the CHIP feed router, have always passed).
+//
+// An unknown (or empty) Op matches: a rule the server cannot parse must never
+// hide a field the buyer could see.
+func (c *Condition) Met(answers map[string]string, nums map[string]int64) bool {
+	if c == nil {
+		return true
+	}
+	v := strings.TrimSpace(answers[c.FieldID])
+	switch c.Op {
+	case "equals":
+		if c.Value == "" {
+			return v != ""
+		}
+		return strings.EqualFold(v, strings.TrimSpace(c.Value))
+	case "not_equals":
+		cc := *c
+		cc.Op = "equals"
+		return !cc.Met(answers, nums)
+	case "contains":
+		return strings.Contains(strings.ToLower(v), strings.ToLower(strings.TrimSpace(c.Value)))
+	case "gt":
+		return nums[c.FieldID] > parseNum(c.Value)
+	case "lt":
+		return nums[c.FieldID] < parseNum(c.Value)
+	case "not_empty":
+		return v != ""
+	}
+	return true
+}
+
+// parseNum reads the numeric side of a gt/lt condition. A value that is not an
+// integer reads as 0, which is the historical behaviour of the comparison.
+func parseNum(s string) int64 {
+	n, _ := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	return n
+}
+
+// intAnswers is the numeric view of the answers that gt/lt compare against.
+func intAnswers(answers map[string]string) map[string]int64 {
+	nums := make(map[string]int64, len(answers))
+	for k, v := range answers {
+		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+			nums[k] = n
+		}
+	}
+	return nums
 }
 
 // ValidTypes is the allowlist of input field types JomForm renders and
@@ -136,7 +205,18 @@ func ValidateFields(regs []Field, fields map[string]string) error {
 	if len(regs) == 0 {
 		return nil // no contract registered — nothing to enforce
 	}
+	nums := intAnswers(fields)
 	for _, r := range regs {
+		// Card t_9e875bca: a block whose conditional-logic rule is false for
+		// THIS submission was hidden on the page the buyer filled in, so its own
+		// `required` marker (and any pattern/type check) does not apply — the
+		// buyer could not have filled it. Without this, a form with a required
+		// conditional field rejected every submission made while the field was
+		// hidden. The value itself is dropped by VisibleAnswers before it is
+		// stored, so there is nothing left to type-check either.
+		if r.Condition != nil && !r.Condition.Met(fields, nums) {
+			continue
+		}
 		val, present := fields[r.FieldID]
 		if r.Required {
 			if !present || strings.TrimSpace(val) == "" {
@@ -185,12 +265,13 @@ var collectableTypes = map[string]bool{
 
 // block is the subset of a builder block the contract derivation reads.
 type block struct {
-	ID           string `json:"id"`
-	Type         string `json:"type"`
-	Value        string `json:"value"`
-	Required     bool   `json:"required"`
-	Placeholder  string `json:"placeholder"`
-	DefaultValue string `json:"default_value"`
+	ID           string     `json:"id"`
+	Type         string     `json:"type"`
+	Value        string     `json:"value"`
+	Required     bool       `json:"required"`
+	Condition    *Condition `json:"condition"`
+	Placeholder  string     `json:"placeholder"`
+	DefaultValue string     `json:"default_value"`
 	Choices      []struct {
 		Label string `json:"label"`
 		Value string `json:"value"`
@@ -243,6 +324,7 @@ func Contract(config map[string]any) []Field {
 			Required:     b.Required,
 			Placeholder:  b.Placeholder,
 			DefaultValue: b.DefaultValue,
+			Condition:    b.Condition,
 		}
 		for _, c := range b.Choices {
 			f.Choices = append(f.Choices, Choice{Label: c.Label, Value: c.Value})
@@ -250,4 +332,46 @@ func Contract(config map[string]any) []Field {
 		out = append(out, f)
 	}
 	return out
+}
+
+// VisibleAnswers returns the answers to RECORD for a submission: the submitted
+// answers minus every field whose conditional-logic rule is false for them.
+// The second result is the set of hidden field ids, for a caller that has to
+// prune a differently-typed map (the response route carries map[string]any).
+//
+// The contract is the right unit: the builder offers the conditional-logic panel
+// for exactly the collectable types (fieldTypes in web/src/app/builder/page.tsx
+// — name, email, phone, textarea, number, select, radio, checkbox, date, time,
+// website, address, consent, hidden, list, repeater, image-choice, captcha), and
+// those are the contract's types. A hand-written config that attached a rule to
+// some other block type would have that rule honoured on the page and ignored
+// here — the same asymmetry a rule on a block the renderer drops already has.
+//
+// Why the server drops the answers at all: the public renderers hide a
+// conditional block whose rule is false and disable its controls, so the buyer
+// never sees it and its answer never leaves the page. A client is not
+// authoritative — a direct POST can name any field — so the same rule is applied
+// here to what is stored (and to what the confirmation, notification and
+// CHIP-feed logic downstream read). Conditions are evaluated against the
+// SUBMITTED answers in one pass, so a field that is itself hidden contributes no
+// answer and cannot keep a dependent block visible.
+func VisibleAnswers(regs []Field, answers map[string]string) (map[string]string, map[string]bool) {
+	visible := make(map[string]string, len(answers))
+	for k, v := range answers {
+		visible[k] = v
+	}
+	nums := intAnswers(answers)
+	var hidden map[string]bool
+	for i := range regs {
+		r := &regs[i]
+		if r.Condition == nil || r.Condition.Met(answers, nums) {
+			continue
+		}
+		if hidden == nil {
+			hidden = make(map[string]bool, 1)
+		}
+		hidden[r.FieldID] = true
+		delete(visible, r.FieldID)
+	}
+	return visible, hidden
 }

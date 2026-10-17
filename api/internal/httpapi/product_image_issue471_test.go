@@ -142,6 +142,11 @@ type productImageBlock struct {
 	Min, Max        string
 	Step            string
 	Variations      []struct{}
+	// CondJSON is the block's conditional-logic rule (card t_9e875bca). The
+	// template reads it for EVERY block in the range — a conditional block is
+	// wrapped in the element the page's script shows/hides — so a fixture that
+	// hand-builds the view needs the field even when it renders no rule.
+	CondJSON string
 }
 
 func renderProductBlock(t *testing.T, b productImageBlock) string {

@@ -108,16 +108,27 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	// JS is client-side only and bypassable, so the server re-validates every
 	// field before accepting the order — against the registered contract when
 	// the merchant has one, else against the required markers on the form's own
-	// builder blocks (formfields.Validate -> Contract, card t_589dc006).
+	// builder blocks (formfields.Contract, card t_589dc006).
 	// Issue #493: a formless menu order validates against the contract derived
 	// from the attached extra-info form's builder blocks (FieldsContract); a
 	// menu with no form attached has no contract — nothing to enforce.
+	//
+	// Card t_9e875bca: the contract also carries each block's conditional-logic
+	// rule, and VisibleAnswers applies it to this submission — a block the page
+	// hid is neither required nor stored (the builder offered the rule, the
+	// renderer now emits it, and this is the same rule the server enforces).
 	if tgt.FieldsForm != nil {
-		if err := formfields.Validate(tgt.FieldsForm.Config, in.Fields); err != nil {
+		regs := formfields.Contract(tgt.FieldsForm.Config)
+		in.Fields, _ = formfields.VisibleAnswers(regs, in.Fields)
+		if err := formfields.ValidateFields(regs, in.Fields); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	} else if len(tgt.FieldsContract) > 0 {
+		// A menu order validates against the contract derived from the attached
+		// extra-info form's blocks. That page does not emit data-condition yet
+		// (card t_9e875bca keeps the menu renderer out of scope), so its contract
+		// deliberately carries no rules — nothing to apply here.
 		if err := formfields.ValidateFields(tgt.FieldsContract, in.Fields); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return

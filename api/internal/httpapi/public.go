@@ -650,9 +650,15 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 	// JS is client-side only and bypassable, so the server re-validates every
 	// field before storing the submission — against the registered contract when
 	// the merchant has one, else against the required markers on the form's own
-	// builder blocks (formfields.Validate -> Contract). Without the blocks arm a
+	// builder blocks (formfields.Contract). Without the blocks arm a
 	// blocks-only form (the normal builder shape) had nothing enforced, so a
 	// bare POST stored an empty submission and emailed the merchant (t_589dc006).
+	//
+	// Card t_9e875bca: the contract carries each block's conditional-logic rule
+	// too. A block the page HID for this submission (its rule is false for these
+	// answers) was never shown to the buyer, so it is not required and its answer
+	// is not stored — the browser script disables a hidden block's controls, and
+	// this is the same rule enforced where a client cannot bypass it.
 	{
 		strFields := make(map[string]string, len(in.Fields))
 		for k, v := range in.Fields {
@@ -669,7 +675,19 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 				}
 			}
 		}
-		if err := formfields.Validate(form.Config, strFields); err != nil {
+		// The rule is applied to BOTH maps: strFields (what is validated) and
+		// in.Fields (what is stored, and what the confirmation / notification /
+		// spam-judge logic downstream reads). Evaluated in one pass over the
+		// submitted answers, so a field that is itself hidden contributes no
+		// answer and cannot keep a dependent block visible.
+		regs := formfields.Contract(form.Config)
+		strFields, hidden := formfields.VisibleAnswers(regs, strFields)
+		for k := range in.Fields {
+			if hidden[k] {
+				delete(in.Fields, k)
+			}
+		}
+		if err := formfields.ValidateFields(regs, strFields); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
