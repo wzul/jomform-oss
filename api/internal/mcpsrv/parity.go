@@ -436,8 +436,19 @@ func (s *Server) setFormChipMapping(
 }
 
 type upsertFormIn struct {
-	FormID string         `json:"form_id,omitempty" jsonschema:"Kosong = borang baru; isi = kemaskini"`
-	Slug   string         `json:"slug" jsonschema:"Slug URL unik"`
+	FormID string `json:"form_id,omitempty" jsonschema:"Kosong = borang baru; isi = kemaskini"`
+	// Card t_186b675c: slug MUST carry `omitempty`. The schema generator treats
+	// every field without it as a REQUIRED property, and the schema is enforced
+	// BEFORE the handler runs — so `json:"slug"` made the tool's own description
+	// ("slug (pilihan) … kosongkan untuk kekalkan slug sedia ada", tools.go)
+	// unreachable: a call that omitted slug was refused with
+	//   validating "arguments": validating root: required: missing properties:
+	//   ["slug"]
+	// and never reached the handler. The handler implements exactly what the
+	// description promises — an omitted slug auto-generates one on create
+	// (issue #176) and keeps the stored one on update — so the three now agree.
+	// Pinned in both directions by upsert_form_slug_optional_test.go.
+	Slug   string         `json:"slug,omitempty" jsonschema:"Slug URL unik (pilihan): kosong = jana automatik pada cipta, kekalkan slug sedia ada pada kemaskini. a-z, 0-9, sengkang; 1-40 aksara."`
 	Title  string         `json:"title" jsonschema:"Tajuk borang"`
 	Config map[string]any `json:"config,omitempty" jsonschema:"Block config — ambil contoh dari get_form"`
 	// Issue #254: optional custom styling/theme (colors, fonts, logo, layout,
