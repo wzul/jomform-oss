@@ -288,7 +288,7 @@ const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: 
   {
     group: "Media",
     tools: [
-      { name: "list_media", desc: "Senarai media yang dimuat naik akaun (perpustakaan media): thumbnail/url, nama, tarikh, saiz. Boleh tapis form_id dan source (merchant|customer). Read-only." },
+      { name: "list_media", desc: "Senarai media yang dimuat naik akaun (perpustakaan media): url, nama, tarikh, saiz, dan thumbnail/medium/full bagi imej yang saiznya dijana. Boleh tapis form_id dan source (merchant|customer). Read-only." },
       { name: "upload_media", desc: "Muat naik media/aset ke workspace anda (issue #363): kind='image' (png/jpeg/webp/gif \u2014 dioptimumkan, EXIF dibuang, disimpan sebagai JPEG jadi URL berakhir .jpg; GIF animasi jadi JPEG pegun (bingkai pertama sahaja); thumbnail/medium/full dijana untuk setiap imej), kind='asset' (css/js/html/svg/woff2 \u2014 disimpan asli, dikaji sebelum dipapar) atau kind='pdf' (disimpan asli, terus boleh guna). hantar content fail sebagai base64 di 'data'. Pulangkan URL untuk diguna sebagai image_url/logo_url landing atau <link>/<script> landing page." },
       { name: "delete_media", desc: "Hantar media ke TONG SAMPAH (deleted_at diisi). Byte TIDAK dimusnahkan dan kuota TIDAK dilepaskan \u2014 objek masih di storan, jadi ia masih dikira terhadap had 1GB. URL yang sama terus berfungsi selepas restore_media. Guna purge_media untuk memusnahkan byte secara kekal." },
       { name: "list_deleted_media", desc: "Senarai media dalam TONG SAMPAH: id, key, url, mime, size, form_id, deleted_at dan object_present. object_present=false bermakna byte sudah tiada dalam storan (dipadam operator atau lifecycle rule) \u2014 restore akan DITOLAK." },

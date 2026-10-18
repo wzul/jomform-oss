@@ -76,25 +76,26 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 		// Issue #382: expose the generated thumbnail/medium/full variant URLs
 		// for raster images. They are derived from the object key (the
 		// variants share the full-size key's namespace), so no extra column is
-		// needed. The store may be unconfigured in tests or when S3_* is unset
-		// — then sizes are omitted (storeUnavailable also catches a nil
-		// *ObjectStore behind the interface).
+		// needed — BUT a derived key is not a written object, and this is where
+		// the library used to advertise variants that were never generated
+		// (t_466ff771): uploadAvatar writes no variants, so the account's own
+		// avatar row handed out three URLs that all 404'd. The store is asked
+		// what exists and only confirmed variants are advertised; the media grid
+		// then falls back to the base url, which is real. The store may be
+		// unconfigured in tests or when S3_* is unset — then sizes are omitted
+		// (storeUnavailable also catches a nil *ObjectStore behind the
+		// interface).
 		if !storeUnavailable(h.Store) && isSizedImage(m.Mime) {
-			sizes := map[string]string{}
-			for _, size := range objstore.ImageSizes {
-				if vkey := buildVariantKey(m.Key, size); vkey != "" {
-					sizes[string(size)] = h.Store.PublicURL(vkey)
-				}
-			}
-			if len(sizes) > 0 {
-				rm.Sizes = sizes
-			}
+			rm.Sizes = objstore.VariantURLs(r.Context(), m.Key, h.Store, h.Store.PublicURL)
 		}
 		// Issue #383: expose the auto-generated PDF preview thumbnail URL,
-		// derived from the object key (no extra column needed).
+		// derived from the object key (no extra column needed). Same rule: the
+		// render is best-effort (Ghostscript missing, bounded timeout) and a
+		// preview that was never written must not be advertised — the grid
+		// prefers `preview` over the base url, so a dead one shows a broken tile.
 		if !storeUnavailable(h.Store) && m.Mime == "application/pdf" {
 			if pkey := buildPDFPreviewKey(m.Key); pkey != "" {
-				rm.Preview = h.Store.PublicURL(pkey)
+				rm.Preview = objstore.PublicURLIfPresent(r.Context(), pkey, h.Store, h.Store.PublicURL)
 			}
 		}
 		out = append(out, rm)

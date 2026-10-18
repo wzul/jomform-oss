@@ -875,6 +875,67 @@ func BuildPDFPreviewKey(fullKey string) string {
 	return fullKey[:dot] + "-preview.jpg"
 }
 
+// ObjectExister is the HEAD probe a lister uses to confirm that an object is
+// really in the bucket before it advertises a URL for it.
+type ObjectExister interface {
+	ObjectExists(ctx context.Context, key string) (bool, error)
+}
+
+// PublicURLIfPresent returns publicURL(key) only when the object at key is
+// confirmed present, and "" otherwise.
+//
+// "Otherwise" includes a failed HEAD, deliberately: the caller is about to hand
+// a URL to a browser, so an unconfirmed object and a missing one have the same
+// answer. Advertising a URL that 404s is the failure this prevents; the
+// alternative (dropping a real URL on a transient store hiccup) degrades to the
+// caller's fallback instead of showing a broken image.
+func PublicURLIfPresent(ctx context.Context, key string, exists ObjectExister, publicURL func(string) string) string {
+	if key == "" || exists == nil || publicURL == nil {
+		return ""
+	}
+	present, err := exists.ObjectExists(ctx, key)
+	if err != nil || !present {
+		return ""
+	}
+	return publicURL(key)
+}
+
+// VariantURLs maps the size variants that ACTUALLY EXIST for fullKey to their
+// public URLs. It returns nil when none of them exist.
+//
+// A variant URL is DERIVED from the base key (BuildVariantKey), so nothing stops
+// a lister from computing all three whether or not they were generated — and
+// that is exactly the bug this function exists to prevent (t_466ff771). The
+// object store, not the media row's mime type, is the authority on what exists:
+//   - uploadAvatar is single-rendition (a ≤256px JPEG) and writes no variants,
+//     so its media row advertised -thumbnail/-medium/-full URLs that all 404'd;
+//   - the upload path only WARNS when a variant write fails, so a partial write
+//     could leave a row advertising a URL nothing ever wrote;
+//   - rows written before any fix keep their state, so a read-time check is the
+//     only thing that can make them honest.
+//
+// Callers advertise the returned map only; an absent variant is one the client
+// must fall back from (the media grid renders the base url instead).
+func VariantURLs(ctx context.Context, fullKey string, exists ObjectExister, publicURL func(string) string) map[string]string {
+	if exists == nil || publicURL == nil {
+		return nil
+	}
+	sizes := map[string]string{}
+	for _, size := range ImageSizes {
+		vkey := BuildVariantKey(fullKey, size)
+		if vkey == "" {
+			continue
+		}
+		if u := PublicURLIfPresent(ctx, vkey, exists, publicURL); u != "" {
+			sizes[string(size)] = u
+		}
+	}
+	if len(sizes) == 0 {
+		return nil
+	}
+	return sizes
+}
+
 // RenderPDFPreview renders the first page of a PDF to a JPEG thumbnail using
 // Ghostscript (the same approach WordPress uses, issue #383). The render is
 // bounded: only the first page is rendered, the output is size-capped to

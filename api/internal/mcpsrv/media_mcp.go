@@ -77,7 +77,7 @@ func (s *Server) listMedia(ctx context.Context, _ *mcp.CallToolRequest, in listM
 		}
 		total += tot
 		for _, m := range items {
-			out = append(out, s.mediaOutFromRow(m))
+			out = append(out, s.mediaOutFromRow(ctx, m))
 		}
 	}
 	return nil, map[string]any{
@@ -373,7 +373,14 @@ func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*m
 
 // mediaOutFromRow builds a mediaOut from a stored media row, deriving the
 // generated image-size variant URLs from the object key (issue #382).
-func (s *Server) mediaOutFromRow(m *dbstore.Media) mediaOut {
+//
+// t_466ff771: the derivation is only a KEY — the object has to be there before
+// the tool hands the agent a URL for it. An avatar row (uploadAvatar writes no
+// variants) used to come back with three -thumbnail/-medium/-full URLs that all
+// 404'd, and the same for a PDF whose best-effort preview was never rendered.
+// objstore.VariantURLs / PublicURLIfPresent ask the store, so the tool and
+// GET /v1/rest/media answer the same thing (MCP parity, AGENTS.md).
+func (s *Server) mediaOutFromRow(ctx context.Context, m *dbstore.Media) mediaOut {
 	out := mediaOut{
 		ID: m.ID, FormID: m.FormID, Key: m.Key, URL: m.URL,
 		Mime: m.Mime, Size: m.Size, Source: m.Source,
@@ -381,21 +388,13 @@ func (s *Server) mediaOutFromRow(m *dbstore.Media) mediaOut {
 		CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if s.deps.Store != nil && objstore.IsSizedImage(m.Mime) {
-		sizes := map[string]string{}
-		for _, size := range objstore.ImageSizes {
-			if vkey := objstore.BuildVariantKey(m.Key, size); vkey != "" {
-				sizes[string(size)] = s.deps.Store.PublicURL(vkey)
-			}
-		}
-		if len(sizes) > 0 {
-			out.Sizes = sizes
-		}
+		out.Sizes = objstore.VariantURLs(ctx, m.Key, s.deps.Store, s.deps.Store.PublicURL)
 	}
 	// Issue #383: expose the auto-generated PDF preview thumbnail URL,
 	// derived from the object key (no extra column needed).
 	if s.deps.Store != nil && m.Mime == "application/pdf" {
 		if pkey := objstore.BuildPDFPreviewKey(m.Key); pkey != "" {
-			out.Preview = s.deps.Store.PublicURL(pkey)
+			out.Preview = objstore.PublicURLIfPresent(ctx, pkey, s.deps.Store, s.deps.Store.PublicURL)
 		}
 	}
 	return out

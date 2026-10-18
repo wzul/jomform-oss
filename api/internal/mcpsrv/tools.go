@@ -584,7 +584,7 @@ func (s *Server) registerTools() {
 	// ── Parity: media library (issue #180) ───────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "list_media",
-		Description: "Senarai media yang dimuat naik akaun (perpustakaan media): thumbnail/url, nama, tarikh, saiz. Boleh tapis form_id dan source (merchant|customer). Read-only.",
+		Description: "Senarai media yang dimuat naik akaun (perpustakaan media): url, nama, tarikh, saiz, dan thumbnail/medium/full bagi imej yang saiznya dijana. Boleh tapis form_id dan source (merchant|customer). Read-only.",
 	}, s.listMedia)
 	// Issue #363: media upload parity — the agent pushes image + code assets
 	// + PDFs over MCP, mirroring the dashboard upload. Images serve
