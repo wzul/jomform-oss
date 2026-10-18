@@ -348,3 +348,69 @@ startup banner) reports the same stamps this script logs and writes into the OCI
 labels. The ARG defaults mirror `api/internal/version/version.go`, so a bare
 `docker build` reports `dev`/`none`/`unknown` rather than an empty string;
 `api/internal/version/dockerfile_wiring_test.go` fails if that wiring is lost.
+## A purged media object must stop being served — at the origin AND at the edge
+
+`DELETE /v1/rest/media/{id}/purge` removes the row and the object. The **origin**
+then answers 404 immediately, and for a while that was the whole check — which is
+why the gap went unseen: the CDN in front keeps its own copy and never asks the
+origin, so the same URL kept being downloadable from the edge. Measured on prod
+2026-10-18, after a successful purge: origin 404 (with a cache-buster) and edge
+`200` with `cache-control: public, max-age=86400`, `cf-cache-status: HIT`,
+`age: 35`.
+
+Two things close it, and the deployment is expected to have both:
+
+1. **A bounded freshness lifetime (always on).** `/media` and `/assets` answer
+   `Cache-Control: public, max-age=300` (`httpapi.mediaCacheControl`). Nothing has
+   to be purged for a deleted object to stop being served; the worst case is that
+   window. Rendering is unaffected because media objects are IMMUTABLE — a new
+   upload is a new key, so the bytes behind a URL never change and a re-fetch can
+   only return the same object (or a 404 once it has been purged).
+2. **An edge purge in the same request (configure it).** When
+   `JF_CF_PURGE_TOKEN` + `JF_CF_PURGE_ZONE_ID` are set (see
+   `deploy/.env.example`), the purge asks Cloudflare to drop the object's URLs —
+   sent as **prefixes**, because a CDN keys on the full URL and an exact-URL purge
+   would leave every query variant (`?v=…`, `?t=…`, whatever a page or an embed
+   appends) cached — and the response says what happened:
+
+   ```json
+   {"status":"purged","media_id":"…","key":"u/…/x.png",
+    "edge":"purged","edge_urls":["https://jomform.com/media/u/…/x.png", "…-thumbnail.png", "…"]}
+   ```
+
+   `edge` is one of `purged`, `not_configured`, `out_of_zone`, `failed`. A purge
+   that did NOT happen still returns 200 (the bytes are already gone and no error
+   brings them back) but names itself, and adds `edge_max_age_s` — the window that
+   then bounds the staleness. Cloudflare's own `200` means the purge was
+   **accepted**; the proof is a following request for the URL answering
+   `CF-Cache-Status: MISS` (or 404).
+
+The token needs the **Zone → Cache Purge** permission on the zone the public
+media URLs live in (`S3_PUBLIC_BASE`, i.e. `https://jomform.com/media`). Purge is
+by URL prefix, which is unaffected by custom cache keys; if the zone's cache key
+includes a header (`Accept-Language`, `CF-IPCountry`, …) the purge covers the
+default key only.
+
+### Measuring it — probe both ends, never just the origin
+
+`scripts/media-purge-probe.sh` is the check. It probes the origin with a
+cache-buster and the edge bare **and** with a query appended (a separate CDN
+entry), optionally purges through the app's own route, and decides:
+
+```bash
+scripts/media-purge-probe.sh \
+  --origin https://halo.example.com \
+  --edge   https://jomform.com \
+  --path   /media/u/<account>/<uuid>.png \
+  --purge  <trashed-media-id> --api https://halo.example.com --token "$JOMFORM_API_TOKEN"
+```
+
+- **PASS** — origin 404 and the edge 404 (bare and with a query), or the edge's
+  declared lifetime is within `--window` (default 300s), in which case it prints
+  how many seconds are left of that window;
+- **FAIL** — the origin still serves the object, or the edge declares a lifetime
+  longer than the window (the shape this section exists for).
+
+Exit codes: `0` pass, `1` fail, `2` the probe could not decide (transport error).
+A check that stops at the origin reports a clean purge while the object is still
+downloadable — that is the mistake this script is built to prevent.

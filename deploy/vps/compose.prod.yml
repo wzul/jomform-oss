@@ -94,6 +94,14 @@ services:
       PORT: "8080"
       JF_CF_OAUTH_CLIENT_ID: ${JF_CF_OAUTH_CLIENT_ID}
       JF_CF_OAUTH_CLIENT_SECRET: ${JF_CF_OAUTH_CLIENT_SECRET}
+      # Media purge → CDN edge invalidation. Optional but strongly recommended:
+      # without them a purged media object keeps being served from Cloudflare's
+      # edge until its (now bounded) freshness lifetime expires. The token needs
+      # the Zone → Cache Purge permission on the zone the public media URLs live
+      # in; see deploy/DEPLOY.md and scripts/media-purge-probe.sh. Empty = off.
+      JF_CF_PURGE_TOKEN: ${JF_CF_PURGE_TOKEN}
+      JF_CF_PURGE_ZONE_ID: ${JF_CF_PURGE_ZONE_ID}
+      JF_CF_PURGE_HOSTS: ${JF_CF_PURGE_HOSTS}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY}
       LLM_BASE_URL: ${LLM_BASE_URL}
       LLM_MODEL: ${LLM_MODEL}

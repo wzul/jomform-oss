@@ -2429,7 +2429,9 @@ func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
 	// image/png. Non-image types are returned unchanged.
 	w.Header().Set("Content-Type", objstore.ServedContentType(ct, body))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	// Same policy as /media: a code asset can be purged too, so its edge copy
+	// must have the same bounded lifetime (see mediaCacheControl).
+	w.Header().Set("Cache-Control", mediaCacheControl)
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")

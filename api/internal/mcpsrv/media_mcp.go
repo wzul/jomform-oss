@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/assetgate"
+	"github.com/wzul/jomform/api/internal/cdnpurge"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/objstore"
 )
@@ -608,17 +609,51 @@ func (s *Server) purgeMediaMCP(
 	}
 	// Best-effort: the row is already gone, so a storage failure must not fail
 	// the request — it is logged so a sweep can find the orphan.
+	var objectURLs []string
 	if s.deps.Store != nil {
 		for _, k := range mediaObjectKeysMCP(key) {
 			if derr := s.deps.Store.DeleteObject(ctx, k); derr != nil {
 				slog.Warn("mcp_media_purge_object", "err", derr, "key", k)
 			}
 		}
+		objectURLs = mediaObjectURLsMCP(s.deps.Store, key)
 	}
-	return nil, map[string]any{
+	// The edge copy goes in the same call, after the bytes are gone, so a request
+	// in between can only miss the origin and never re-fill the CDN with the
+	// object we just destroyed. Same contract as the REST handler: a purge that
+	// is not configured or refused is NAMED in the answer rather than failing it
+	// (the row and bytes are already gone), together with the window that bounds
+	// the damage.
+	edge := cdnpurge.PurgeObjectURLs(ctx, objectURLs)
+	if edge.Err != nil {
+		slog.Warn("mcp_media_purge_edge", "err", edge.Err, "key", key, "status", edge.Status)
+	}
+	out := map[string]any{
 		"status": "purged", "media_id": in.MediaID, "key": key,
 		"bytes_released": size, "quota_released": true,
-	}, nil
+	}
+	for k, v := range edge.Fields() {
+		out[k] = v
+	}
+	if edge.Status != cdnpurge.StatusPurged {
+		out["edge_max_age_s"] = cdnpurge.MediaMaxAgeSeconds
+	}
+	return nil, out, nil
+}
+
+// mediaObjectURLsMCP is the MCP lane's counterpart of httpapi.mediaObjectURLs:
+// the base object URL plus each derived variant, as the store advertises them —
+// the URLs a form, product or the media grid renders, and therefore the ones the
+// CDN holds.
+func mediaObjectURLsMCP(store *objstore.ObjectStore, key string) []string {
+	keys := mediaObjectKeysMCP(key)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if u := store.PublicURL(k); u != "" {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // mediaObjectKeysMCP is httpapi.mediaObjectKeys' counterpart in this package:

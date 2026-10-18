@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/wzul/jomform/api/internal/cdnpurge"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/objstore"
 )
@@ -333,23 +334,74 @@ func (h *RESTHandlers) purgeMedia(w http.ResponseWriter, r *http.Request, actx *
 	// so the purge leaves nothing behind in the bucket. Best-effort: the row is
 	// already gone, so a storage failure must not fail the request — it is
 	// logged so a sweep can find the orphan.
+	var objectURLs []string
 	if !storeUnavailable(h.Store) {
 		for _, k := range mediaObjectKeys(key) {
 			if err := h.Store.DeleteObject(r.Context(), k); err != nil {
 				slog.Warn("media_purge_object", "err", err, "key", k)
 			}
 		}
+		objectURLs = mediaObjectURLs(h.Store, key)
 	}
-	// The bytes leave the bucket here.
+	// The bytes leave the bucket above; the EDGE copy leaves the CDN here, in
+	// the same request.
 	//
-	// There is NO quota call here, on purpose: MediaStore.Purge releases the
-	// counter in the SAME transaction as the row delete, so that the counter and
-	// the rows cannot drift apart across a crash. Releasing again from the handler
-	// would subtract the same bytes twice and eat into the account's OTHER media
-	// (clamped at zero, so it would look like a successful purge and only show up
-	// as a quota that no longer matches the bucket).
-	h.recordEvent(r, actx, h.sessionOwnerID(r), "media.purged", map[string]any{"media_id": id, "key": key})
-	respond(w, http.StatusOK, map[string]string{"status": "purged", "media_id": id, "key": key})
+	// This ordering is deliberate: the object is deleted FIRST, so a request that
+	// arrives between the two steps can only miss the origin (404) — never
+	// re-populate the CDN with the bytes we just destroyed. The reverse order
+	// would leave a window where the edge is cleared and then instantly filled
+	// again from an object that still exists.
+	//
+	// The object's URL and every derived variant URL are sent as prefixes, so
+	// every query variant of the same object goes with them — a page, an embed or
+	// a tracking link that appends `?something` creates a separate CDN entry, and
+	// those queries are not enumerable from here (see internal/cdnpurge).
+	//
+	// A purge that is not configured, or that the CDN refuses, does NOT fail this
+	// response: the row and the bytes are already gone and no error can bring
+	// them back. It is NAMED in the response instead (`edge`), together with the
+	// freshness window that then bounds the damage, because a silent skip would
+	// leave an operator believing the edge was cleared.
+	edge := cdnpurge.PurgeObjectURLs(r.Context(), objectURLs)
+	if edge.Err != nil {
+		slog.Warn("media_purge_edge", "err", edge.Err, "key", key, "status", edge.Status)
+	}
+	// Two things are deliberately absent here:
+	//
+	//   - a quota release. MediaStore.Purge releases the counter in the SAME
+	//     transaction as the row delete, so releasing it again from the handler
+	//     would subtract the same bytes twice and eat into the account's OTHER
+	//     media (clamped at zero, so it would look like a successful purge);
+	//   - a silent skip of the edge purge. The response and this audit event both
+	//     carry the outcome, so an operator reading the activity log later can
+	//     tell a purge that cleared the CDN from one that did not.
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "media.purged",
+		map[string]any{"media_id": id, "key": key, "edge": edge.Status})
+	out := map[string]any{"status": "purged", "media_id": id, "key": key}
+	for k, v := range edge.Fields() {
+		out[k] = v
+	}
+	if edge.Status != cdnpurge.StatusPurged {
+		// Name the residual window: how long the CDN may still answer from its
+		// own copy now that no purge removed it.
+		out["edge_max_age_s"] = mediaCacheMaxAgeSeconds
+	}
+	respond(w, http.StatusOK, out)
+}
+
+// mediaObjectURLs is every caller-visible URL a purge invalidates: the base
+// object plus each derived variant, as the store advertises them. They are the
+// URLs a form, a product or the media grid actually renders, so they are the
+// ones the CDN holds.
+func mediaObjectURLs(store ObjectStoreIface, key string) []string {
+	keys := mediaObjectKeys(key)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if u := store.PublicURL(k); u != "" {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // mediaObjectKeys returns the base object key plus every derived key the upload

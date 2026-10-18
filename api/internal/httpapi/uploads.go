@@ -27,6 +27,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -203,6 +204,53 @@ func optimizeAvatar(data []byte, ext string) ([]byte, error) {
 
 // ── HTTP handlers ────────────────────────────────────────────────────────────
 
+// mediaCacheControl is the freshness lifetime every /media and /assets response
+// declares, and it is the SELF-HEALING half of the purge contract.
+//
+// It used to be `public, max-age=86400`. That is wrong for objects that can be
+// destroyed: `DELETE /v1/rest/media/{id}/purge` removes the row and the object,
+// the origin then answers 404 — and the CDN kept serving its own copy for up to
+// a day, so a purged (or trashed-then-purged) object stayed downloadable by
+// anyone holding the URL. Measured live on 2026-10-18: origin 404 with a
+// cache-buster, and the same object 200 from the edge with
+// `cf-cache-status: HIT`, `age: 35`, `cache-control: public, max-age=86400`.
+// Measuring only the origin is exactly how that stayed invisible, because the
+// origin is honest the moment the bytes go.
+//
+// So the lifetime is bounded to minutes. A purge also asks the CDN to drop the
+// entry in the same request (httpapi purgeMedia → internal/cdnpurge), which
+// makes the window zero when that is configured; this constant is what bounds
+// it when it is not, and what bounds the copies no purge reaches (a different
+// zone, an operator's own CDN, a browser that already holds the bytes).
+//
+// Shortening it cannot serve stale content: every media object is stored under an
+// immutable per-upload key, so the bytes behind a URL never change (a re-upload is
+// a new key), and a page that references the stored URL simply re-fetches the same
+// object — or gets a 404 once it has been purged. The cost is one origin re-fetch
+// per object per window instead of one per day, which is the price of being able
+// to delete.
+const mediaCacheControl = "public, max-age=300"
+
+// mediaCacheMaxAgeSeconds is the same figure as a number, for responses that
+// report the residual edge window (mediaCacheControl must stay the single
+// source of truth, so it is derived from the header text and tested for it).
+var mediaCacheMaxAgeSeconds = cacheMaxAgeSeconds(mediaCacheControl)
+
+// cacheMaxAgeSeconds parses the max-age of a Cache-Control value. It returns 0
+// when the value declares no max-age, which a caller must treat as "unbounded
+// is impossible" rather than "fresh for ever".
+func cacheMaxAgeSeconds(cacheControl string) int {
+	for _, part := range strings.Split(cacheControl, ",") {
+		part = strings.TrimSpace(part)
+		if v, ok := strings.CutPrefix(part, "max-age="); ok {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
 // handleMedia serves GET /media/{key} — a public, unauthenticated route that
 // streams an uploaded object from the media bucket (issue #145). The key is
 // validated to a safe `u/...` path (no traversal), the object's stored
@@ -271,7 +319,7 @@ func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 	// image/png. Non-image types are returned unchanged.
 	w.Header().Set("Content-Type", objstore.ServedContentType(ct, body))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", mediaCacheControl)
 	if isCodeAsset(ct) {
 		// Code assets: never framed, never embedded cross-origin.
 		w.Header().Set("X-Frame-Options", "DENY")
