@@ -1,5 +1,5 @@
 // Package formgen turns a natural-language prompt into a validated JomForm
-// form config (issue #256). The LLM (deepseek-v4.1-flash via the internal
+// form config (issue #256). The LLM (deepseek-v4.1-flash:1017 via the internal
 // llm client) drafts a JSON form config; this package parses and validates it
 // against the known builder block types so the output is safe to load into
 // the builder. The LLM output is treated as untrusted: unknown block types,

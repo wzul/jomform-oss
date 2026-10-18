@@ -28,7 +28,7 @@ import (
 // AI draft, legal draft) failed on every call while the UI still offered it.
 // TestDefaultModelIsNotRetired in model_default_guard_test.go fails by name if
 // this constant is ever pointed back at a retired id.
-const DefaultModel = "deepseek-v4.1-flash"
+const DefaultModel = "deepseek-v4.1-flash:1017"
 
 // ErrCredential is returned when the provider REJECTS the API key (HTTP 401 or
 // 403). It exists so a caller can tell "this deployment has no working model

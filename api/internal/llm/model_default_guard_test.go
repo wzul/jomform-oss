@@ -58,7 +58,7 @@
 // modelToken matches the id's FAMILY, and modelFamilies names the families this
 // guard judges. The provider list is the trap this closes: it serves other
 // families too (measured from this host with the prod deployment's own key on
-// 2026-09-28, card t_1f50b935: `gpt-oss:120b` → HTTP 200, `deepseek-v4.1-flash`
+// 2026-09-28, card t_1f50b935: `gpt-oss:120b` → HTTP 200, `deepseek-v4.1-flash:1017`
 // → HTTP 200, while `qwen3-coder:480b` and `deepseek-v3.1:671b` → HTTP 410), so
 // a mention of a dead id from another family is exactly the same defect. A
 // family that is not on the list cannot be judged, so an id-shaped token
@@ -131,12 +131,12 @@ import (
 
 // workingModel is the model prod actually runs (LLM_MODEL) and the value this
 // repo must default to.
-const workingModel = "deepseek-v4.1-flash"
+const workingModel = "deepseek-v4.1-flash:1017"
 
 // retiredModelFamily is the retired family PREFIX. Any id starting with it is a
 // retired id, tagged or not — the provider's 410 was on the tagged one, and the
 // untagged spelling is the same dead family. The prefix does not match
-// `deepseek-v4.1-flash` (`.` where the family has `-`), so the working model is
+// `deepseek-v4.1-flash:1017` (`.` where the family has `-`), so the working model is
 // unaffected by the deny rule.
 var retiredModelFamily = "deepseek-v4-" + "flash"
 
@@ -175,7 +175,7 @@ var modelFamilies = []string{
 //   - the inner `.`/`:` of a real id are kept — a tagged id is a DIFFERENT id
 //     and must not be normalised into the untagged one;
 //   - the family must be followed by an ID SEPARATOR and nothing else will do:
-//     `-` (the shape every hyphenated id uses — `deepseek-v4.1-flash`), a
+//     `-` (the shape every hyphenated id uses — `deepseek-v4.1-flash:1017`), a
 //     leading DIGIT (the `gemma4` shape), or a `:` with an id-shaped tail (the
 //     `id:tag` spelling — `gpt-oss:120b`, `mistral:7b` — which is the only
 //     branch that reaches a family carrying no hyphen, because the other two

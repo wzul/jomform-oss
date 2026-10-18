@@ -275,7 +275,7 @@ def cases():
         "a tool file in a SUBdirectory of the registry package",
         {},
         {SUBDIR_REL: "// Package sub is a throwaway subdirectory written by a bite proof.\n"
-                     "// It names the shipped model id deepseek-v4.1-flash so the repo walk\n"
+                     "// It names the shipped model id deepseek-v4.1-flash:1017 so the repo walk\n"
                      "// sees the file and the registry reader has to decide about it.\n"
                      "package sub\n"},
         (True,),                     # the old reader never looked

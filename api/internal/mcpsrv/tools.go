@@ -227,7 +227,7 @@ func (s *Server) registerTools() {
 	// gets a validated form config (blocks + styling) drafted by the LLM.
 	addTool(s, &mcp.Tool{
 		Name:        "generate_form",
-		Description: "Jana konfigurasi borang (blok + gaya) dari prompt semula jadi (issue #256) via deepseek-v4.1-flash. Output disahkan server-side terhadap jenis blok JomForm; harga produk kekal dari DB (server authority). Semak/edit dulu, kemudian simpan guna upsert_form.",
+		Description: "Jana konfigurasi borang (blok + gaya) dari prompt semula jadi (issue #256) via deepseek-v4.1-flash:1017. Output disahkan server-side terhadap jenis blok JomForm; harga produk kekal dari DB (server authority). Semak/edit dulu, kemudian simpan guna upsert_form.",
 	}, s.generateForm)
 	addTool(s, &mcp.Tool{
 		Name:        "publish_form",
@@ -531,7 +531,7 @@ func (s *Server) registerTools() {
 	// ── Parity: per-workspace hosted legal pages (issue #184) ────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "generate_legal_page",
-		Description: "Jana draf halaman undang-undang (privacy|terms|refund) untuk workspace melalui LLM (deepseek-v4.1-flash) dengan template yang diisi butiran perniagaan. Pulangkan draf untuk semakan — belum disimpan sehingga set_legal_page dipanggil.",
+		Description: "Jana draf halaman undang-undang (privacy|terms|refund) untuk workspace melalui LLM (deepseek-v4.1-flash:1017) dengan template yang diisi butiran perniagaan. Pulangkan draf untuk semakan — belum disimpan sehingga set_legal_page dipanggil.",
 	}, s.generateLegalPage)
 	addTool(s, &mcp.Tool{
 		Name:        "get_legal_page",

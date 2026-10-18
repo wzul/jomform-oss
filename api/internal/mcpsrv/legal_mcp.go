@@ -75,7 +75,7 @@ type generateLegalPageIn struct {
 	EffectiveDate  string `json:"effective_date,omitempty" jsonschema:"Tarikh berkuat kuasa"`
 }
 
-// generateLegalPage drafts a legal page via the LLM (deepseek-v4.1-flash) with a
+// generateLegalPage drafts a legal page via the LLM (deepseek-v4.1-flash:1017) with a
 // prompt template filled with the merchant's business details. Returns the
 // draft for review — it is NOT saved until set_legal_page is called.
 func (s *Server) generateLegalPage(
