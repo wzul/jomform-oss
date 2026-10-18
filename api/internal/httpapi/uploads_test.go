@@ -135,18 +135,10 @@ func TestOptimizeShrinksLargeUnderCap(t *testing.T) {
 	}
 }
 
-// TestOptimizeWebpSmallPassThrough: a small valid WebP ≤2MB stores as-is with
-// no reprocessing.
-func TestOptimizeWebpSmallPassthrough(t *testing.T) {
-	small := append([]byte("RIFF\x00\x00\x00\x00WEBPVP8 "), make([]byte, 64)...)
-	out, err := optimizeImage(small, ".webp")
-	if err != nil {
-		t.Fatalf("optimize webp: %v", err)
-	}
-	if !bytes.Equal(out, small) {
-		t.Fatalf("small webp should pass through byte-for-byte, got %d bytes", len(out))
-	}
-}
+// TestOptimizeWebpIsReencodedToJPEG: the ≤2MB WebP pass-through is gone
+// (t_05fd8d2a) — a passed-through WebP base with JPEG size variants is two
+// representations for one media item. The WebP path is covered together with
+// PNG/JPEG/GIF by TestOptimizedArtifactsAreOneJPEGType.
 
 // TestOptimizeAvatarDownscalesSmall (issue #133): a large image fed to the
 // avatar optimiser must be downscaled to avatar size (≤maxAvatarEdge on the

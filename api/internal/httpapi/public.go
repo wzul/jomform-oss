@@ -2424,7 +2424,10 @@ func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", ct)
+	// t_05fd8d2a: publish what the bytes ARE, not what the uploader once
+	// recorded — a pre-fix PNG upload is JPEG bytes whose metadata says
+	// image/png. Non-image types are returned unchanged.
+	w.Header().Set("Content-Type", objstore.ServedContentType(ct, body))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Header().Set("X-Frame-Options", "DENY")

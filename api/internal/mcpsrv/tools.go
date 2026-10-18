@@ -593,7 +593,7 @@ func (s *Server) registerTools() {
 	// immediately.
 	addTool(s, &mcp.Tool{
 		Name:        "upload_media",
-		Description: "Muat naik media/aset ke workspace anda (issue #363): kind='image' (png/jpeg/webp/gif — dioptimumkan, strip EXIF, terus boleh guna; png/jpeg/webp dapat saiz thumbnail/medium/full), kind='asset' (css/js/html/svg/woff2 — disimpan asli, dikaji sebelum dipapar) atau kind='pdf' (disimpan asli, terus boleh guna). hantar content fail sebagai base64 di 'data'. Pulangkan URL untuk diguna sebagai image_url/logo_url landing atau <link>/<script> landing page.",
+		Description: "Muat naik media/aset ke workspace anda (issue #363): kind='image' (png/jpeg/webp/gif — dioptimumkan, EXIF dibuang, disimpan sebagai JPEG jadi URL berakhir .jpg; thumbnail/medium/full dijana untuk setiap imej), kind='asset' (css/js/html/svg/woff2 — disimpan asli, dikaji sebelum dipapar) atau kind='pdf' (disimpan asli, terus boleh guna). hantar content fail sebagai base64 di 'data'. Pulangkan URL untuk diguna sebagai image_url/logo_url landing atau <link>/<script> landing page.",
 	}, s.uploadMedia)
 
 	// Tong sampah media: padam = hantar ke bin (objek TIDAK dimusnahkan), pulih

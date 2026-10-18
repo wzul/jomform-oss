@@ -95,7 +95,7 @@ func (s *Server) listMedia(ctx context.Context, _ *mcp.CallToolRequest, in listM
 // the background scan to flip them to 'ok' before they render.
 
 type uploadMediaIn struct {
-	Kind string `json:"kind" jsonschema:"Jenis fail: 'image' (png/jpeg/webp/gif — dioptimumkan, strip EXIF; png/jpeg/webp dapat saiz thumbnail/medium/full), 'asset' (css/js/html/svg/woff2 — disimpan asli, scan-gated) atau 'pdf' (disimpan asli)"`
+	Kind string `json:"kind" jsonschema:"Jenis fail: 'image' (png/jpeg/webp/gif — dioptimumkan, EXIF dibuang, disimpan sebagai JPEG; setiap imej dapat saiz thumbnail/medium/full), 'asset' (css/js/html/svg/woff2 — disimpan asli, scan-gated) atau 'pdf' (disimpan asli)"`
 	Data string `json:"data" jsonschema:"Fail content base64-encoded. Imej ≤20MB input / ≤2MB stored; asset ≤20MB input / ≤2MB stored; pdf ≤20MB input / ≤2MB stored."`
 }
 
@@ -154,7 +154,6 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 	if msg := objstore.MagicByteMismatch(objstore.KindRasterImage, "", "", ext); msg != "" {
 		return nil, mediaOut{}, errors.New(msg)
 	}
-	mime := objstore.ImageUploadMIME[ext]
 	stored, err := objstore.OptimizeImage(raw, ext)
 	if err != nil {
 		return nil, mediaOut{}, err
@@ -162,32 +161,46 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 	if len(stored) > objstore.MaxStoredBytes {
 		return nil, mediaOut{}, errors.New("imej gagal dimampatkan bawah 2MB; cuba imej lain")
 	}
+	// t_05fd8d2a: the stored artifact is JPEG, so its key extension and its
+	// stored content-type come from the BYTES, never from the uploaded file's
+	// type — this tool shares the dashboard's pipeline and used to record
+	// image/png over JPEG bytes too.
+	storedMIME, storedExt, ok := objstore.ImageArtifactMeta(stored)
+	if !ok {
+		return nil, mediaOut{}, errors.New("jenis imej simpanan tidak dapat ditentukan")
+	}
 	// Issue #384/#545: reserve ATOMICALLY before storing, then settle to the true
 	// stored total (base + variants) once every object is written.
-	key := objstore.BuildUploadKey(acc, ext)
+	key := objstore.BuildUploadKey(acc, storedExt)
 	if err := s.reserveQuota(ctx, acc, int64(len(stored))); err != nil {
 		return nil, mediaOut{}, err
 	}
-	if err := s.deps.Store.PutObject(ctx, key, mime, stored); err != nil {
+	if err := s.deps.Store.PutObject(ctx, key, storedMIME, stored); err != nil {
 		s.releaseQuota(ctx, acc, int64(len(stored)))
 		return nil, mediaOut{}, fmt.Errorf("store: %w", err)
 	}
 	// Issue #382: generate + store thumbnail/medium/full variants for raster
-	// images (png/jpeg/webp). GIFs are animated and stored as-is, so they get
-	// no sized variants.
+	// images. GIFs are re-encoded to a still JPEG by the optimiser (they always
+	// were), so after t_05fd8d2a they are sized like any other stored JPEG.
 	sizes := map[string]string{}
 	storedTotal := int64(len(stored))
-	if objstore.IsSizedImage(mime) {
+	if objstore.IsSizedImage(storedMIME) {
 		for _, size := range objstore.ImageSizes {
 			variant, verr := objstore.OptimizeImageSize(raw, ext, size)
 			if verr != nil {
+				continue
+			}
+			// One representation per media item (see uploads.go): a variant of
+			// another type would sit on a key nothing links to.
+			vMIME, vExt, vok := objstore.ImageArtifactMeta(variant)
+			if !vok || vMIME != storedMIME || vExt != storedExt {
 				continue
 			}
 			vkey := objstore.BuildVariantKey(key, size)
 			if vkey == "" {
 				continue
 			}
-			if verr := s.deps.Store.PutObject(ctx, vkey, "image/jpeg", variant); verr != nil {
+			if verr := s.deps.Store.PutObject(ctx, vkey, vMIME, variant); verr != nil {
 				continue
 			}
 			storedTotal += int64(len(variant))
@@ -197,9 +210,9 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 	s.settleQuota(ctx, acc, int64(len(stored)), storedTotal)
 	// Issue #92: audit upload.image (best-effort).
 	s.recordMCPMediaEvent(ctx, acc, "upload.image", map[string]any{
-		"mime": mime, "out_bytes": len(stored),
+		"mime": storedMIME, "out_bytes": len(stored),
 	})
-	out := s.mediaOutFrom(ctx, acc, key, mime, int64(len(stored)))
+	out := s.mediaOutFrom(ctx, acc, key, storedMIME, int64(len(stored)))
 	out.Sizes = sizes
 	return nil, out, nil
 }

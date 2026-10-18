@@ -483,6 +483,42 @@ func SniffImageType(data []byte) (string, bool) {
 	return "", false
 }
 
+// ImageArtifactMeta reports the MIME type and canonical upload-key extension of
+// a STORED image artifact, taken from its bytes.
+//
+// OptimizeImage/OptimizeImageSize re-encode (PNG/GIF/WebP → JPEG), so the
+// artifact's type is a property of the artifact, NOT of the file the merchant
+// uploaded. Every writer must take the stored content-type and the key
+// extension from here: recording the INPUT's type is what made a `.png` key
+// hold JPEG bytes served as `image/png` while its size variants declared
+// `image/jpeg` (t_05fd8d2a).
+func ImageArtifactMeta(data []byte) (mime, ext string, ok bool) {
+	ext, ok = SniffImageType(data)
+	if !ok {
+		return "", "", false
+	}
+	return ImageUploadMIME[ext], ext, true
+}
+
+// ServedContentType returns the content-type to publish for a stored object.
+//
+// The stored content-type is written by whoever uploaded the object, so it can
+// disagree with the bytes: uploads made before t_05fd8d2a recorded the INPUT
+// image type and then stored the optimised JPEG. For a claimed raster image the
+// bytes win, so a legacy `.png` key holding JPEG bytes is served `image/jpeg`
+// instead of publishing a type the body does not have. Every other type is
+// returned unchanged — css/js/html/svg/woff2/pdf are not raster images, and the
+// image sniffer must not be allowed to judge them.
+func ServedContentType(storedType string, body []byte) string {
+	switch storedType {
+	case "image/png", "image/jpeg", "image/webp", "image/gif":
+		if mime, _, ok := ImageArtifactMeta(body); ok {
+			return mime
+		}
+	}
+	return storedType
+}
+
 // SniffAssetType inspects the leading bytes — NOT the client-supplied
 // extension or content-type — and returns the canonical storage extension if
 // the blob is a merchant code asset on the allowlist (issue #361):
@@ -892,10 +928,20 @@ func RenderPDFPreview(data []byte) ([]byte, error) {
 }
 
 // OptimizeImage re-encodes data so the stored artifact is ≤MaxStoredBytes.
+//
+// The stored artifact is ALWAYS JPEG, whatever the accepted input format is:
+// PNG/JPEG/GIF/WebP all become JPEG. One representation is what lets the
+// object key extension, the object's stored content-type, the media row and the
+// bytes agree — recording the INPUT's type over re-encoded bytes is what
+// published a `.png` key holding JPEG bytes as `image/png` while its
+// -thumbnail/-medium/-full siblings declared `image/jpeg` (t_05fd8d2a).
+//
+// The old ≤2MB WebP pass-through is gone for the same reason: a WebP base with
+// JPEG variants is two representations for one media item, and
+// golang.org/x/image/webp is decode-only, so the variants cannot be WebP
+// either. Callers must take the stored type from ImageArtifactMeta(stored), not
+// from the input they were handed.
 func OptimizeImage(data []byte, ext string) ([]byte, error) {
-	if len(data) <= MaxStoredBytes && ext == ".webp" {
-		return data, nil
-	}
 	isGIF := ext == ".gif"
 
 	img, err := decodeImage(data)

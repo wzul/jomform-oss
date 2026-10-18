@@ -264,7 +264,10 @@ func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "media tidak tersedia")
 		return
 	}
-	w.Header().Set("Content-Type", ct)
+	// t_05fd8d2a: publish what the bytes ARE, not what the uploader once
+	// recorded — a pre-fix PNG upload is JPEG bytes whose metadata says
+	// image/png. Non-image types are returned unchanged.
+	w.Header().Set("Content-Type", objstore.ServedContentType(ct, body))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	if isCodeAsset(ct) {
@@ -452,14 +455,26 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 		writeErr(w, http.StatusBadRequest, "imej gagal dimampatkan bawah 2MB; cuba imej lain")
 		return
 	}
+	// t_05fd8d2a: the stored artifact's type is a property of the BYTES, never
+	// of the file that was uploaded. The optimiser re-encodes to JPEG, so the
+	// key extension, the object's content-type and the media row must all be
+	// read off `stored` — taking them from the input's `ext`/`mime` published a
+	// `.png` key holding JPEG bytes as `image/png`.
+	storedMIME, storedExt, ok := objstore.ImageArtifactMeta(stored)
+	if !ok {
+		recordUploadFailure("optimize_failed")
+		slog.Error("upload_artifact_type", "account", actx.Account.ID, "out_bytes", len(stored))
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 	// Issue #384/#545: reserve against the 1GB per-workspace cap ATOMICALLY before
 	// storing anything. The previous code read the used total, compared, then
 	// stored, so concurrent uploads all passed against the same snapshot.
-	key := buildUploadKey(actx.Account.ID, ext)
+	key := buildUploadKey(actx.Account.ID, storedExt)
 	if !h.reserveMediaQuota(w, r.Context(), actx.Account.ID, int64(len(stored))) {
 		return
 	}
-	if err := h.Store.PutObject(r.Context(), key, mime, stored); err != nil {
+	if err := h.Store.PutObject(r.Context(), key, storedMIME, stored); err != nil {
 		h.releaseMediaQuota(r.Context(), actx.Account.ID, int64(len(stored)))
 		recordUploadFailure("store")
 		slog.Error("upload_put", "err", err, "account", actx.Account.ID)
@@ -468,23 +483,34 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	}
 
 	// Issue #382: generate + store thumbnail/medium/full variants for raster
-	// images (png/jpeg/webp). GIFs are animated and stored as-is, so they get
-	// no sized variants. Variant keys share the full-size key's namespace.
+	// images. GIFs are re-encoded to a still JPEG by the optimiser (they always
+	// were), so after t_05fd8d2a they are sized like any other stored JPEG.
+	// Variant keys share the full-size key's namespace.
 	//
 	// Issue #545: variant bytes were previously stored WITHOUT being counted, so
 	// up to ~64% of an upload's real bytes were invisible to the quota. Their real
 	// sizes are now summed and settled against the reservation.
 	sizes := map[string]string{}
 	storedTotal := int64(len(stored))
-	if isSizedImage(mime) {
+	if isSizedImage(storedMIME) {
 		for _, size := range objstore.ImageSizes {
 			variant, verr := optimizeImageSize(data, ext, size)
 			if verr != nil {
 				slog.Warn("upload_size_failed", "err", verr, "size", size, "account", actx.Account.ID)
 				continue
 			}
+			// One representation per media item: the media library derives every
+			// variant key from the BASE key's extension, so a variant of another
+			// type would land on a key nothing links to. Skip rather than publish
+			// an object no URL can reach.
+			vMIME, vExt, vok := objstore.ImageArtifactMeta(variant)
+			if !vok || vMIME != storedMIME || vExt != storedExt {
+				slog.Warn("upload_size_type_mismatch", "size", size, "account", actx.Account.ID,
+					"base_mime", storedMIME, "variant_mime", vMIME)
+				continue
+			}
 			vkey := buildVariantKey(key, size)
-			if verr := h.Store.PutObject(r.Context(), vkey, "image/jpeg", variant); verr != nil {
+			if verr := h.Store.PutObject(r.Context(), vkey, vMIME, variant); verr != nil {
 				slog.Warn("upload_size_put", "err", verr, "size", size, "key", vkey)
 				continue
 			}
@@ -497,14 +523,14 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 
 	slog.Info("upload_ok",
 		"account", actx.Account.ID, "key", key,
-		"in_bytes", len(data), "out_bytes", len(stored), "stored_total", storedTotal, "mime", mime)
+		"in_bytes", len(data), "out_bytes", len(stored), "stored_total", storedTotal, "mime", storedMIME)
 	// Issue #92: audit image upload.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "upload.image", map[string]any{
-		"mime": mime, "in_bytes": len(data), "out_bytes": len(stored),
+		"mime": storedMIME, "in_bytes": len(data), "out_bytes": len(stored),
 	})
 	// Issue #180: record the object in the media library (best-effort). The row
 	// carries the true stored total so the usage report matches real storage.
-	h.recordMedia(r, actx, key, mime, storedTotal, dbstore.MediaSourceMerchant, "")
+	h.recordMedia(r, actx, key, storedMIME, storedTotal, dbstore.MediaSourceMerchant, "")
 	respond(w, http.StatusOK, map[string]any{"url": h.Store.PublicURL(key), "sizes": sizes})
 }
 
@@ -567,8 +593,6 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	mime := imageUploadMIME[ext]
-
 	stored, err := optimizeAvatar(data, ext)
 	if err != nil {
 		recordUploadFailure("optimize_failed")
@@ -580,15 +604,25 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 		writeErr(w, http.StatusBadRequest, "imej avatar tidak dapat dimampatkan")
 		return
 	}
+	// t_05fd8d2a: an avatar is re-encoded to JPEG, so its key extension, its
+	// stored content-type and its media row all come from the BYTES — not from
+	// the (possibly PNG) file that was uploaded.
+	storedMIME, storedExt, ok := objstore.ImageArtifactMeta(stored)
+	if !ok {
+		recordUploadFailure("optimize_failed")
+		slog.Error("upload_avatar_artifact_type", "account", actx.Account.ID, "out_bytes", len(stored))
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 
 	// Issue #545: the avatar path previously stored without ANY quota check, so it
 	// could be the upload that tipped an account over the cap uncounted. It now
 	// reserves like every other path.
-	key := buildUploadKey(actx.Account.ID, ext)
+	key := buildUploadKey(actx.Account.ID, storedExt)
 	if !h.reserveMediaQuota(w, r.Context(), actx.Account.ID, int64(len(stored))) {
 		return
 	}
-	if err := h.Store.PutObject(r.Context(), key, mime, stored); err != nil {
+	if err := h.Store.PutObject(r.Context(), key, storedMIME, stored); err != nil {
 		h.releaseMediaQuota(r.Context(), actx.Account.ID, int64(len(stored)))
 		recordUploadFailure("store")
 		slog.Error("upload_avatar_put", "err", err, "account", actx.Account.ID)
@@ -598,12 +632,12 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 
 	slog.Info("upload_avatar_ok",
 		"account", actx.Account.ID, "key", key,
-		"in_bytes", len(data), "out_bytes", len(stored), "mime", mime)
+		"in_bytes", len(data), "out_bytes", len(stored), "mime", storedMIME)
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "upload.avatar", map[string]any{
-		"mime": mime, "in_bytes": len(data), "out_bytes": len(stored),
+		"mime": storedMIME, "in_bytes": len(data), "out_bytes": len(stored),
 	})
 	// Issue #180: record the avatar in the media library (best-effort).
-	h.recordMedia(r, actx, key, mime, int64(len(stored)), dbstore.MediaSourceMerchant, "")
+	h.recordMedia(r, actx, key, storedMIME, int64(len(stored)), dbstore.MediaSourceMerchant, "")
 	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
 }
 
