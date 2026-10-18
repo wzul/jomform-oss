@@ -1508,6 +1508,11 @@ export const DICT = {
   "fs.confMessage": { en: "Message", ms: "Mesej", zh: "消息", ta: "செய்தி", ar: "رسالة" },
   "fs.confRedirect": { en: "Redirect", ms: "Redirect", zh: "重定向", ta: "திருப்பிவிடு", ar: "إعادة توجيه" },
   "fs.confMessageBody": { en: "Message (HTML, sanitized)", ms: "Mesej (HTML, disanitasi)", zh: "消息（HTML，已净化）", ta: "செய்தி (HTML, சுத்திகரிக்கப்பட்டது)", ar: "الرسالة (HTML، منقّاة)" },
+  // Card t_0da81d94: the confirmation / failure bodies are built in the BUYER's
+  // language when the merchant leaves them blank (the dictionary's
+  // ResponseReceived / PaymentFailedBody), so the field says what blank means
+  // instead of showing a sentence in one language to every merchant.
+  "fs.builtInDefaultPlaceholder": { en: "Built-in default (shown in the form's language)", ms: "Lalai terbina (dipaparkan dalam bahasa borang)", zh: "内置默认（按表单语言显示）", ta: "உள்ளமைந்த இயல்புநிலை (படிவத்தின் மொழியில் காட்டப்படும்)", ar: "الافتراضي المضمّن (يُعرض بلغة النموذج)" },
   "fs.confRedirectUrl": { en: "Redirect URL (https://)", ms: "URL redirect (https://)", zh: "重定向链接（https://）", ta: "திருப்பு URL (https://)", ar: "رابط إعادة التوجيه (https://)" },
   "fs.confConditional": { en: "Enable conditional logic", ms: "Aktifkan logik bersyarat", zh: "启用条件逻辑", ta: "நிபந்தனை தர்க்கத்தை இயக்கு", ar: "تفعيل المنطق الشرطي" },
   "fs.confFieldId": { en: "Field ID", ms: "ID medan", zh: "字段 ID", ta: "புல ID", ar: "معرف الحقل" },

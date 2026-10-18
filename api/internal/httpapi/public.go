@@ -787,11 +787,21 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 		})
 		return
 	}
+	// Card t_0da81d94: an EMPTY message is the built-in default — the server does
+	// not own that sentence, the page's dictionary does. Resolve it here, in the
+	// page's own language, so the submit response (which is what the buyer's JS
+	// paints) matches the page it came from. The server used to send a BM
+	// constant to every locale, so an English page thanked the buyer in BM under
+	// its English heading; a merchant-authored message is still served verbatim.
+	message := conf.Message
+	if message == "" {
+		message = h.effectiveLangStrings(r.Context(), form).ResponseReceived
+	}
 	respond(w, http.StatusCreated, map[string]string{
 		"status":       "submitted",
 		"id":           sub.ID,
 		"confirmation": "message",
-		"message":      conf.Message,
+		"message":      message,
 	})
 }
 
@@ -1439,9 +1449,15 @@ const iv = setInterval(async () => {
 	// Issue #393: on a failed payment, show the merchant's per-form failure
 	// message (HTML-sanitized) instead of the success confirmation. When the
 	// merchant has not set one, fall back to the buyer-facing default.
-	message := dbstore.DefaultConfirmationMessage
+	//
+	// Card t_0da81d94: both built-ins are DICTIONARY lookups, not prose the
+	// server owns — dbstore.DefaultConfirmationMessage / DefaultFailureMessage
+	// are empty for exactly this reason — so they are resolved from `ls`, the
+	// page's own language, computed just above. The BM constants that used to sit
+	// here thanked every English workspace's buyers in Malay.
+	message := htmlEsc(ls.ResponseReceived)
 	if sale.Status == dbstore.SaleFailed {
-		message = dbstore.DefaultFailureMessage
+		message = htmlEsc(ls.PaymentFailedBody)
 		if form != nil && form.FailureMessage != "" {
 			message = confirmationSanitizer.Sanitize(form.FailureMessage)
 		}

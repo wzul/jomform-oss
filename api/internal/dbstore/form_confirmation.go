@@ -37,14 +37,34 @@ type Confirmation struct {
 // DefaultConfirmationName is the name of the always-present default.
 const DefaultConfirmationName = "Default Confirmation"
 
-// DefaultConfirmationMessage is the sensible default message shown when the
+// DefaultConfirmationMessage is the built-in default message — shown when the
 // merchant has not customised anything.
-const DefaultConfirmationMessage = "Terima kasih! Maklum balas anda telah diterima."
+//
+// It is deliberately EMPTY, and that is the whole rule (card t_0da81d94):
+// a built-in default is not prose the SERVER owns, it is a dictionary lookup on
+// the page that renders it. The buyer-facing renderers resolve
+// Ls.ResponseReceived when the message is empty — the client-side fallback is
+// literally `var msg = d.message || '{{$.Ls.ResponseReceived}}'`
+// (httpapi/render_blocks.go, render_custom.go) and the thank-you page uses the
+// page's own langStrings — so an empty message means "the built-in default, in
+// the buyer's language".
+//
+// It used to be the BM sentence "Terima kasih! Maklum balas anda telah
+// diterima." here. Every form's default confirmation row persisted it, so it
+// was served verbatim on EVERY form regardless of the page's locale: a
+// workspace set to English thanked its buyers in BM under an English heading
+// (measured on prod, t_41b9c427's verify). A sentence written in one language
+// cannot follow a dictionary. Migration 000076 normalises the rows the old
+// constant left behind; nothing may write prose here again.
+const DefaultConfirmationMessage = ""
 
-// DefaultFailureMessage is the sensible default shown to a buyer when a
-// payment fails and the merchant has not set a per-form failure message
-// (issue #393).
-const DefaultFailureMessage = "Pembayaran gagal. Sila cuba lagi."
+// DefaultFailureMessage is the built-in body shown to a buyer when a payment
+// fails and the merchant has not set a per-form failure message (issue #393).
+//
+// Empty for the same reason as DefaultConfirmationMessage above: the built-in
+// wording is Ls.PaymentFailedBody, resolved in the buyer's language by the
+// thank-you page (issue #393's per-form override still wins when set).
+const DefaultFailureMessage = ""
 
 // DefaultConfirmation returns the always-present default confirmation. It has
 // no condition (matches always) and is the fallback when no other

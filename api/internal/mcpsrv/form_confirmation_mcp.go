@@ -70,7 +70,7 @@ type confirmationIn struct {
 	ID          string `json:"id,omitempty"`
 	Name        string `json:"name" jsonschema:"Nama pengesahan"`
 	Type        string `json:"type" jsonschema:"message | redirect"`
-	Message     string `json:"message,omitempty" jsonschema:"Mesej HTML (disanitasi, tiada XSS) bila type=message"`
+	Message     string `json:"message,omitempty" jsonschema:"Mesej HTML (disanitasi, tiada XSS) bila type=message; kosong = mesej lalai terbina, dipaparkan ikut bahasa pembeli"`
 	RedirectURL string `json:"redirect_url,omitempty" jsonschema:"URL https:// bila type=redirect"`
 	Condition   *struct {
 		FieldID string `json:"field_id"`

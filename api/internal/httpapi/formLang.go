@@ -47,6 +47,11 @@ type langStrings struct {
 	SubmitResponse   string
 	ThankYou         string
 	ResponseReceived string
+	// Card t_0da81d94: the built-in body of a confirmation / thank-you page is
+	// a DICTIONARY lookup, not prose the server owns. PaymentFailedBody is the
+	// failed-payment arm (issue #393's per-form failure_message still wins when
+	// the merchant set one); ResponseReceived above is both.
+	PaymentFailedBody string
 	// Card t_4086b8f0: a `file` block stored BEFORE the write-side refusal
 	// (formfields.UnsupportedBlock) still has to be served honestly — its label
 	// plus this note, instead of a picker whose file could go nowhere.
@@ -123,6 +128,7 @@ var formLangs = map[string]langStrings{
 		NoProductAlert:  "Please select at least one product",
 		SelectVariation: "Select an option", SelectVariationAlert: "Please choose a variation for each product", InStock: "in stock",
 		SubmitResponse: "Submit", ThankYou: "Thank you!", ResponseReceived: "Your response has been received.",
+		PaymentFailedBody: "We could not complete your payment. Please try again.",
 		// Card t_4086b8f0: a `file` block stored before the write-side refusal
 		// (formfields.UnsupportedBlock). It renders its label and this note
 		// rather than a file picker, because the picked file could not go
@@ -174,6 +180,9 @@ var formLangs = map[string]langStrings{
 		NoProductAlert:  "Pilih sekurang-kurangnya satu produk",
 		SelectVariation: "Pilih variasi", SelectVariationAlert: "Sila pilih variasi untuk setiap produk", InStock: "stok",
 		SubmitResponse: "Hantar", ThankYou: "Terima kasih!", ResponseReceived: "Respons anda telah diterima.",
+		// The pre-#57 hardcoded BM wording is preserved for `ms` (see the note
+		// at the top of this dictionary).
+		PaymentFailedBody: "Pembayaran gagal. Sila cuba lagi.",
 		// Card t_4086b8f0 — see the `en` block above.
 		FileUnsupported:   "Lampiran tidak boleh dimuat naik pada borang ini.",
 		CouponUnsupported: "Kod diskaun tidak digunakan pada borang ini.",
@@ -222,6 +231,7 @@ var formLangs = map[string]langStrings{
 		NoProductAlert:  "请至少选择一种商品",
 		SelectVariation: "请选择规格", SelectVariationAlert: "请为每件商品选择规格", InStock: "有货",
 		SubmitResponse: "提交", ThankYou: "谢谢！", ResponseReceived: "您的回复已收到。",
+		PaymentFailedBody: "无法完成付款，请重试。",
 		FileUnsupported:   "此表单不支持上传附件。",
 		CouponUnsupported: "此表单不适用折扣码。",
 		SelectOption:      "请选择", SelectShipping: "选择配送方式",
@@ -269,6 +279,7 @@ var formLangs = map[string]langStrings{
 		NoProductAlert:  "குறைந்தது ஒரு பொருளையாவது தேர்ந்தெடுக்கவும்",
 		SelectVariation: "மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", SelectVariationAlert: "ஒவ்வொரு பொருளுக்கும் மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", InStock: "கையிருப்பு",
 		SubmitResponse: "சமர்ப்பி", ThankYou: "நன்றி!", ResponseReceived: "உங்கள் பதில் பெறப்பட்டது.",
+		PaymentFailedBody: "கட்டணத்தை முடிக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.",
 		FileUnsupported:   "இந்தப் படிவத்தில் இணைப்புகளை பதிவேற்ற முடியாது.",
 		CouponUnsupported: "இந்தப் படிவத்தில் தள்ளுபடிக் குறியீடுகள் பயன்படுத்தப்படாது.",
 		SelectOption:      "ஒரு விருப்பத்தைத் தேர்ந்தெடுக்கவும்", SelectShipping: "ஷிப்பிங்கைத் தேர்ந்தெடுக்கவும்",
@@ -316,6 +327,7 @@ var formLangs = map[string]langStrings{
 		NoProductAlert:  "يرجى اختيار منتج واحد على الأقل",
 		SelectVariation: "اختر خيارًا", SelectVariationAlert: "يرجى اختيار خيار لكل منتج", InStock: "متوفر",
 		SubmitResponse: "إرسال", ThankYou: "شكراً لك!", ResponseReceived: "تم استلام ردك.",
+		PaymentFailedBody: "تعذّر إتمام الدفع. يرجى المحاولة مرة أخرى.",
 		FileUnsupported:   "لا يمكن تحميل المرفقات في هذا النموذج.",
 		CouponUnsupported: "لا تُطبَّق رموز الخصم في هذا النموذج.",
 		SelectOption:      "اختر خيارًا", SelectShipping: "اختر الشحن",

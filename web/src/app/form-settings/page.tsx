@@ -1999,7 +1999,7 @@ function FormSettingsInner() {
                           onChange={(e) => setFsFailMsg(e.target.value)}
                           rows={3}
                           className={`${inputCls} font-mono text-xs`}
-                          placeholder="Pembayaran gagal. Sila cuba lagi."
+                          placeholder={t("fs.builtInDefaultPlaceholder")}
                         />
                         <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("fs.failureMessageHint")}</p>
                       </div>
@@ -2073,7 +2073,7 @@ function FormSettingsInner() {
                                   onChange={(e) => updateConf(i, { message: e.target.value })}
                                   rows={3}
                                   className={`${inputCls} font-mono text-xs`}
-                                  placeholder="Terima kasih! Maklum balas anda telah diterima."
+                                  placeholder={t("fs.builtInDefaultPlaceholder")}
                                 />
                               </div>
                             ) : (
