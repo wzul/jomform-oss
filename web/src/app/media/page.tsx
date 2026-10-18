@@ -188,7 +188,7 @@ export default function MediaPage() {
         setUploadMsg(apiErr(d, t("media.uploadFail"), t));
         return;
       }
-      // t_d55ce0d4: the optimiser stores a GIF as a still JPEG (first frame),
+      // t_d55ce0d4: the optimiser stores a GIF as one still image (first frame),
       // so say it at the moment of upload too — not only in the hint above.
       setUploadMsg(t(file.type === "image/gif" ? "media.uploadedGifStill" : "media.uploaded"));
       // Refresh the grid so the new item (with its sizes) appears.
@@ -467,11 +467,13 @@ export default function MediaPage() {
           >
             <p className="text-sm font-medium text-[var(--jf-muted)]">{t("media.dropHint")}</p>
             <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("media.uploadTypes")}</p>
-            {/* t_d55ce0d4: what the optimiser actually does to an image. The
-                upload path stores every raster input as a still JPEG, so an
-                animated GIF loses its animation — the merchant is told here,
-                where they upload, instead of finding out afterwards. */}
-            <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("media.stillJpeg")}</p>
+            {/* t_ffc7f502: what the optimiser actually does to an image. An
+                opaque image is stored as JPEG (EXIF stripped); one that carries
+                transparency is stored as PNG, because a JPEG artifact would
+                drop the alpha channel and paint the merchant's transparent
+                background opaque. An animated GIF loses its animation. Said
+                here, where they upload, instead of afterwards. */}
+            <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("media.imageStorage")}</p>
             {uploadMsg && <p className="mt-2 text-sm text-[#4f46e5]">{uploadMsg}</p>}
             <input
               ref={fileInputRef}

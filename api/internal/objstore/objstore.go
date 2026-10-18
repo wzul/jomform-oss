@@ -18,7 +18,7 @@ import (
 	_ "image/gif" // sniff GIF headers
 	"image/jpeg"
 	_ "image/jpeg" // sniff JPEG headers
-	_ "image/png"  // sniff PNG headers
+	"image/png"    // decode + encode PNG (transparency-preserving artifacts)
 	"io"
 	"os/exec"
 	"strings"
@@ -486,12 +486,14 @@ func SniffImageType(data []byte) (string, bool) {
 // ImageArtifactMeta reports the MIME type and canonical upload-key extension of
 // a STORED image artifact, taken from its bytes.
 //
-// OptimizeImage/OptimizeImageSize re-encode (PNG/GIF/WebP → JPEG), so the
-// artifact's type is a property of the artifact, NOT of the file the merchant
-// uploaded. Every writer must take the stored content-type and the key
-// extension from here: recording the INPUT's type is what made a `.png` key
-// hold JPEG bytes served as `image/png` while its size variants declared
-// `image/jpeg` (t_05fd8d2a).
+// OptimizeImage/OptimizeImageSize/OptimizeAvatar re-encode, so the artifact's
+// type is a property of the artifact, NOT of the file the merchant uploaded:
+// opacity decides it — JPEG for an opaque input, PNG for one that carries
+// transparency (t_ffc7f502). Every writer must take the stored content-type and
+// the key extension from here: recording the INPUT's type is what made a `.png`
+// key hold JPEG bytes served as `image/png` while its size variants declared
+// `image/jpeg` (t_05fd8d2a), and guessing JPEG is what made a transparent PNG
+// opaque.
 func ImageArtifactMeta(data []byte) (mime, ext string, ok bool) {
 	ext, ok = SniffImageType(data)
 	if !ok {
@@ -826,13 +828,14 @@ func SizeLongEdge(s ImageSize) int {
 // IsSizedImage reports whether a stored content-type is a raster image that
 // gets thumbnail/medium/full variants (issue #382).
 //
-// image/gif is NOT a stored type of the upload path: the optimiser re-encodes
-// every accepted raster input to JPEG, so a GIF upload is stored as a still
-// JPEG and sized like any other one (t_d55ce0d4 — the earlier claim that a GIF
-// was "stored as-is, no re-encode" was never true). The exclusion is kept for
-// LEGACY rows whose media.mime was written as image/gif before t_05fd8d2a:
-// their bytes are JPEG, so variants are neither linked nor regenerable from
-// that row. SVG is a code asset, not a sized raster.
+// image/png is included because it IS a stored type whenever the upload carried
+// transparency (t_ffc7f502): the optimiser keeps such an image as PNG, and its
+// variants are PNG too. image/gif is NOT a stored type of the upload path: a GIF
+// upload is stored as a still image (JPEG, or PNG when its first frame carries
+// transparency) and sized like any other one (t_d55ce0d4). The gif exclusion is
+// kept for LEGACY rows whose media.mime was written as image/gif before
+// t_05fd8d2a: their bytes are JPEG, so variants are neither linked nor
+// regenerable from that row. SVG is a code asset, not a sized raster.
 func IsSizedImage(ct string) bool {
 	switch ct {
 	case "image/png", "image/jpeg", "image/webp":
@@ -996,31 +999,43 @@ func RenderPDFPreview(data []byte) ([]byte, error) {
 
 // OptimizeImage re-encodes data so the stored artifact is ≤MaxStoredBytes.
 //
-// The stored artifact is ALWAYS JPEG, whatever the accepted input format is:
-// PNG/JPEG/GIF/WebP all become JPEG. One representation is what lets the
-// object key extension, the object's stored content-type, the media row and the
-// bytes agree — recording the INPUT's type over re-encoded bytes is what
-// published a `.png` key holding JPEG bytes as `image/png` while its
-// -thumbnail/-medium/-full siblings declared `image/jpeg` (t_05fd8d2a).
+// The stored artifact is JPEG for an OPAQUE input and PNG for an input that
+// actually carries transparency (t_ffc7f502). JPEG has no alpha channel — Go's
+// encoder writes the source pixels' RGB and drops A — so a transparent PNG used
+// to come out of here as an opaque box whose background was whatever colour the
+// exporter had stored under alpha=0 (usually black). Every accepted image is
+// re-encoded, so every transparent logo/image_url/builder image went opaque the
+// moment it was uploaded and nothing said so.
 //
-// The old ≤2MB WebP pass-through is gone for the same reason: a WebP base with
-// JPEG variants is two representations for one media item, and
-// golang.org/x/image/webp is decode-only, so the variants cannot be WebP
-// either. Callers must take the stored type from ImageArtifactMeta(stored), not
-// from the input they were handed.
+// So the representation follows the pixels, not the input format:
+//   - an image with any non-opaque pixel is stored as PNG, which keeps the
+//     alpha channel; its key extension, stored content-type, media row and size
+//     variants all say image/png (the one-representation rule of t_05fd8d2a —
+//     the rule was that key/type/bytes agree, never that the type is JPEG);
+//   - an opaque image (including a PNG whose alpha channel is all-opaque) is
+//     stored as JPEG exactly as before.
 //
-// A GIF is decoded to its FIRST frame (t_d55ce0d4): an animated GIF is
-// therefore stored as a still JPEG and its animation is not kept. That is the
-// policy, not an accident — the media page and the MCP upload_media
-// description tell the merchant/agent so before the upload, and
-// TestAnimatedGIFUploadIsStoredAsOneStillJPEG pins the conversion. GIF gets no
-// carve-out here (it used to skip the quality loop) because it is now just
-// another raster input.
+// Re-encoding is still what strips EXIF/GPS/phone metadata (privacy) on both
+// paths, and the ≤2MB stored cap still holds. PNG has no quality knob, so a
+// transparent artifact's only size lever is resolution: it is downscaled to
+// MaxStoredLongEdge and, if it still does not fit, REJECTED with a message that
+// names transparency. It is never silently flattened onto a colour — that would
+// be the same class of bug in a different disguise.
+//
+// A GIF is decoded to its FIRST frame (t_d55ce0d4): an animated GIF is stored as
+// a still image and its animation is not kept. That is the policy, not an
+// accident — the media page and the MCP upload_media description tell the
+// merchant/agent so before the upload, and
+// TestAnimatedGIFUploadIsStoredAsOneStillJPEG pins the conversion.
+//
+// Callers must take the stored type from ImageArtifactMeta(stored), not from the
+// input they were handed.
 func OptimizeImage(data []byte, ext string) ([]byte, error) {
 	img, err := decodeImage(data)
 	if err != nil {
 		return nil, errors.New("gagal decode imej")
 	}
+	transparent := imageHasAlpha(img)
 
 	b := img.Bounds()
 	long := b.Dx()
@@ -1029,6 +1044,11 @@ func OptimizeImage(data []byte, ext string) ([]byte, error) {
 	}
 	if long > MaxLongEdge {
 		img = imaging.Fit(img, MaxLongEdge, MaxLongEdge, imaging.Lanczos)
+	}
+
+	// Transparency-preserving path: PNG only, and the only lever is resolution.
+	if transparent {
+		return encodeTransparentPNG(img)
 	}
 
 	out := encodeJPEG(img, JPEGQuality)
@@ -1051,11 +1071,40 @@ func OptimizeImage(data []byte, ext string) ([]byte, error) {
 	return out, nil
 }
 
+// encodeTransparentPNG encodes img as PNG for an artifact that must keep its
+// alpha channel, shrinking it to MaxStoredLongEdge when the first encode exceeds
+// the stored cap. It never drops the alpha channel and never composites onto a
+// colour — an image that cannot fit is refused (see OptimizeImage), because a
+// silent flatten is exactly what t_ffc7f502 is about.
+//
+// PNG has no quality knob, so the retry after a downscale uses
+// png.BestCompression: it is slower, but it only runs for an artifact that
+// would otherwise be refused, and it buys back resolution for a borderline
+// photographic cutout (a flat logo never gets here — it is kilobytes).
+func encodeTransparentPNG(img image.Image) ([]byte, error) {
+	out := encodePNG(img, png.DefaultCompression)
+	if len(out) == 0 {
+		return nil, errors.New("gagal encode imej")
+	}
+	if len(out) > MaxStoredBytes {
+		if b := img.Bounds(); b.Dx() > MaxStoredLongEdge || b.Dy() > MaxStoredLongEdge {
+			img = imaging.Fit(img, MaxStoredLongEdge, MaxStoredLongEdge, imaging.Lanczos)
+			out = encodePNG(img, png.BestCompression)
+		}
+	}
+	if len(out) > MaxStoredBytes {
+		return nil, errors.New("imej lutsinar tidak dapat dimampatkan bawah 2MB; kecilkan imej atau eksport tanpa latar lutsinar")
+	}
+	return out, nil
+}
+
 // OptimizeImageSize re-encodes data into a specific image size variant (issue
-// #382). It decodes once, fits the long edge to the size's target, and
-// re-encodes to JPEG q~80 (stripping EXIF by construction). The thumbnail and
-// medium variants are always small enough to skip the 2MB cap loop; the full
-// variant reuses OptimizeImage's downscale-to-cap behaviour.
+// #382). It decodes once, fits the long edge to the size's target, and encodes
+// to the SAME representation the base artifact gets (t_ffc7f502): PNG when the
+// image carries transparency, JPEG otherwise. A JPEG variant of a transparent
+// base would sit on a `.png` key and lose the alpha the base kept — the media
+// library derives every variant key from the base key, so the variant must have
+// the base's type. Re-encoding still strips EXIF by construction.
 func OptimizeImageSize(data []byte, ext string, size ImageSize) ([]byte, error) {
 	if size == SizeFull {
 		return OptimizeImage(data, ext)
@@ -1064,9 +1113,13 @@ func OptimizeImageSize(data []byte, ext string, size ImageSize) ([]byte, error) 
 	if err != nil {
 		return nil, errors.New("gagal decode imej")
 	}
+	transparent := imageHasAlpha(img)
 	edge := SizeLongEdge(size)
 	if b := img.Bounds(); b.Dx() > edge || b.Dy() > edge {
 		img = imaging.Fit(img, edge, edge, imaging.Lanczos)
+	}
+	if transparent {
+		return encodeTransparentPNG(img)
 	}
 	out := encodeJPEG(img, JPEGQuality)
 	if len(out) > MaxStoredBytes {
@@ -1082,8 +1135,10 @@ func OptimizeImageSize(data []byte, ext string, size ImageSize) ([]byte, error) 
 }
 
 // OptimizeAvatar re-encodes data into a small avatar (≤MaxAvatarEdge on the
-// long edge). Like OptimizeImage it re-encodes to JPEG q~80 so EXIF/GPS/phone
-// metadata is stripped and the artifact is tiny.
+// long edge). Like OptimizeImage, the artifact keeps transparency: a source with
+// any non-opaque pixel is stored as PNG (t_ffc7f502), an opaque one as JPEG
+// q~80. Either way the re-encode strips EXIF/GPS/phone metadata and the
+// artifact is tiny.
 func OptimizeAvatar(data []byte, ext string) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, errors.New("fail kosong")
@@ -1092,8 +1147,12 @@ func OptimizeAvatar(data []byte, ext string) ([]byte, error) {
 	if err != nil {
 		return nil, errors.New("gagal decode imej")
 	}
+	transparent := imageHasAlpha(img)
 	if b := img.Bounds(); b.Dx() > AvatarLongEdge || b.Dy() > AvatarLongEdge {
 		img = imaging.Fit(img, AvatarLongEdge, AvatarLongEdge, imaging.Lanczos)
+	}
+	if transparent {
+		return encodeTransparentPNG(img)
 	}
 	out := encodeJPEG(img, JPEGQuality)
 	for _, q := range []int{70, 60} {
@@ -1110,6 +1169,46 @@ func OptimizeAvatar(data []byte, ext string) ([]byte, error) {
 
 func decodeImage(data []byte) (image.Image, error) {
 	return imaging.Decode(bytes.NewReader(data), imaging.AutoOrientation(true))
+}
+
+// imageHasAlpha reports whether img has ANY pixel that is not fully opaque —
+// i.e. whether the pixels carry transparency that a JPEG artifact cannot
+// represent (t_ffc7f502).
+//
+// It asks the concrete image type first: Go's standard image types implement
+// Opaque(), which is the exact question and needs no per-pixel loop. The
+// interface assertion (rather than a type switch) keeps it correct for the
+// types imaging.Decode and imaging.Fit hand back (NRGBA, RGBA, Paletted, YCbCr,
+// Gray, NYCbCrA…) without listing them, and the scan is the fallback for a type
+// that does not implement it.
+//
+// An image whose alpha channel exists but is all-0xffff is OPAQUE: nothing is
+// lost by storing it as JPEG, so it keeps the JPEG path.
+func imageHasAlpha(img image.Image) bool {
+	if o, ok := img.(interface{ Opaque() bool }); ok {
+		return !o.Opaque()
+	}
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if _, _, _, a := img.At(x, y).RGBA(); a != 0xffff {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// encodePNG encodes to PNG, the only format the optimiser emits that has an
+// alpha channel. It is used for artifacts that must keep their transparency
+// (t_ffc7f502); everything else stays on encodeJPEG.
+func encodePNG(img image.Image, level png.CompressionLevel) []byte {
+	var buf bytes.Buffer
+	enc := png.Encoder{CompressionLevel: level}
+	if err := enc.Encode(&buf, img); err != nil {
+		return nil
+	}
+	return buf.Bytes()
 }
 
 // encodeJPEG re-encodes to JPEG at the given quality. Re-encoding is what

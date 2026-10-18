@@ -45,16 +45,18 @@ const docsMCP = readFileSync(
   "utf8",
 );
 
-// What each locale must say. "JPEG" is the stored format; the other two
-// fragments are that language's words for "animated GIF" and "first frame" — a
-// locale that kept only the English sentence (or dropped the animation half)
-// fails here.
+// What each locale must say. The two animation fragments are that language's
+// words for "animated GIF" and "first frame" — a locale that kept only the
+// English sentence (or dropped the animation half) fails here. The stored
+// FORMAT is asserted separately: t_ffc7f502 keeps a transparent image as PNG, so
+// only the pre-upload storage sentence names JPEG; the GIF success message names
+// the loss (a still image), not a format.
 const REQUIRED: Record<Lang, string[]> = {
-  en: ["JPEG", "animated GIF", "first frame"],
-  ms: ["JPEG", "GIF animasi", "bingkai pertama"],
-  zh: ["JPEG", "动画", "第一帧"],
-  ta: ["JPEG", "அனிமேஷன்", "முதல் சட்டக"],
-  ar: ["JPEG", "المتحرك", "الإطار الأول"],
+  en: ["animated GIF", "first frame"],
+  ms: ["GIF animasi", "bingkai pertama"],
+  zh: ["动画", "第一帧"],
+  ta: ["அனிமேஷன்", "முதல் சட்டக"],
+  ar: ["المتحرك", "الإطار الأول"],
 };
 
 function slice(source: string, startAnchor: string, endAnchor: string): string {
@@ -68,9 +70,9 @@ function slice(source: string, startAnchor: string, endAnchor: string): string {
 // ── (1) the disclaimer exists, in every locale ─────────────────────────────
 
 test("(1) the still-JPEG disclaimer is complete in all five locales", () => {
-  for (const key of ["media.stillJpeg", "media.uploadedGifStill"] as const) {
+  for (const key of ["media.imageStorage", "media.uploadedGifStill"] as const) {
     const entry = DICT[key];
-    assert.ok(entry, `DICT is missing ${key} — the merchant is not told the GIF becomes a still JPEG`);
+    assert.ok(entry, `DICT is missing ${key} — the merchant is not told the GIF becomes a still image`);
     for (const lang of LANGS) {
       const text = entry[lang];
       assert.ok(
@@ -85,6 +87,15 @@ test("(1) the still-JPEG disclaimer is complete in all five locales", () => {
       }
     }
   }
+  // The storage sentence still has to name the format an opaque image gets:
+  // "we keep your transparency" is not a licence to stop saying what happens to
+  // everything else.
+  for (const lang of LANGS) {
+    assert.ok(
+      DICT["media.imageStorage"][lang].includes("JPEG"),
+      `media.imageStorage.${lang} no longer names JPEG — an opaque image is still stored as JPEG`,
+    );
+  }
 });
 
 // ── (2) it is shown where the merchant uploads ─────────────────────────────
@@ -92,14 +103,14 @@ test("(1) the still-JPEG disclaimer is complete in all five locales", () => {
 test("(2) the media page shows the disclaimer inside the upload zone", () => {
   const zone = slice(mediaPage, 't("media.dropHint")', "accept={ACCEPTED_TYPES.join");
   assert.ok(
-    zone.includes('t("media.stillJpeg")'),
+    zone.includes('t("media.imageStorage")'),
     "the drag-and-drop upload zone no longer renders the still-JPEG disclaimer — " +
       "the merchant would only find out after uploading",
   );
   // Order matters: the disclaimer must come BEFORE the upload message, i.e. it
   // is read before an upload happens, not as a post-hoc explanation.
   assert.ok(
-    zone.indexOf('t("media.stillJpeg")') < zone.indexOf("{uploadMsg &&"),
+    zone.indexOf('t("media.imageStorage")') < zone.indexOf("{uploadMsg &&"),
     "the still-JPEG disclaimer renders after the upload result instead of before it",
   );
 });
@@ -119,7 +130,7 @@ test("(3) a successful GIF upload reports the still-JPEG conversion", () => {
 
 test("(4) the logo picker shows the same disclaimer", () => {
   assert.ok(
-    mediaPicker.includes('t("media.stillJpeg")'),
+    mediaPicker.includes('t("media.imageStorage")'),
     "MediaPicker uploads through /uploads/image but no longer states that the image is " +
       "stored as a still JPEG",
   );
@@ -130,7 +141,8 @@ test("(4) the logo picker shows the same disclaimer", () => {
 test("(5) the MCP docs row for upload_media states the GIF conversion", () => {
   const row = slice(docsMCP, '{ name: "upload_media"', '{ name: "delete_media"');
   assert.ok(
-    row.includes("GIF animasi jadi JPEG pegun"),
-    "the upload_media docs row no longer states that an animated GIF is stored as a still JPEG",
+    row.includes("GIF animasi jadi imej pegun"),
+    "the upload_media docs row no longer states that an animated GIF is stored as one still " +
+      "image (first frame only)",
   );
 });

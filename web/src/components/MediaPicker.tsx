@@ -162,9 +162,10 @@ export default function MediaPicker({
               }}
             />
           </div>
-          {/* t_d55ce0d4: this picker uploads through the same optimiser, so an
-              animated GIF becomes a still JPEG here as well. */}
-          <p className="mt-2 text-xs text-[var(--jf-muted)]">{t("media.stillJpeg")}</p>
+          {/* t_ffc7f502: this picker uploads through the same optimiser, so the
+              same rules apply here: opaque images become JPEG, an image with a
+              transparent background stays PNG, an animated GIF keeps one frame. */}
+          <p className="mt-2 text-xs text-[var(--jf-muted)]">{t("media.imageStorage")}</p>
           {uploadMsg && <p className="mt-2 text-xs text-[#4f46e5]">{uploadMsg}</p>}
 
           {showUrl && (

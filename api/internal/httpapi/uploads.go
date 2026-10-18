@@ -3,8 +3,10 @@
 // This implements the live owner decision on #61: PRESIGN IS SUPERSEDED by a
 // direct multipart upload endpoint. The builder client sends the raw bytes to
 // the API; the server validates content-type + size, then server-side
-// optimises the image (downscale long edge to 1920px, re-encode JPEG q~80 /
-// PNG→JPEG, strip EXIF by re-encoding) so the stored artifact is ≤2MB. The
+// optimises the image (downscale long edge to 1920px, re-encode to JPEG q~80 —
+// or PNG when the image carries transparency, which JPEG cannot represent
+// (t_ffc7f502) — and strip EXIF by re-encoding) so the stored artifact is
+// ≤2MB. The
 // result is pushed to S3/MinIO at a path-safe, account-scoped key
 // `u/{accountID}/{uuid}.{ext}` — the account id and a server-generated UUID
 // only, so a client can never control the object key.
@@ -456,9 +458,10 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 		return
 	}
 	// t_05fd8d2a: the stored artifact's type is a property of the BYTES, never
-	// of the file that was uploaded. The optimiser re-encodes to JPEG, so the
-	// key extension, the object's content-type and the media row must all be
-	// read off `stored` — taking them from the input's `ext`/`mime` published a
+	// of the file that was uploaded. The optimiser re-encodes (JPEG for an
+	// opaque image, PNG when it carries transparency — t_ffc7f502), so the key
+	// extension, the object's content-type and the media row must all be read
+	// off `stored` — taking them from the input's `ext`/`mime` published a
 	// `.png` key holding JPEG bytes as `image/png`.
 	storedMIME, storedExt, ok := objstore.ImageArtifactMeta(stored)
 	if !ok {
@@ -483,8 +486,10 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	}
 
 	// Issue #382: generate + store thumbnail/medium/full variants for raster
-	// images. GIFs are re-encoded to a still JPEG by the optimiser (they always
-	// were), so after t_05fd8d2a they are sized like any other stored JPEG.
+	// images. A GIF is re-encoded to a still image by the optimiser (they always
+	// were), so after t_05fd8d2a it is sized like any other one; a transparent
+	// image is PNG and gets PNG variants (t_ffc7f502), which is why the variant
+	// type is checked against the base below.
 	// Variant keys share the full-size key's namespace.
 	//
 	// Issue #545: variant bytes were previously stored WITHOUT being counted, so
@@ -604,9 +609,10 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 		writeErr(w, http.StatusBadRequest, "imej avatar tidak dapat dimampatkan")
 		return
 	}
-	// t_05fd8d2a: an avatar is re-encoded to JPEG, so its key extension, its
-	// stored content-type and its media row all come from the BYTES — not from
-	// the (possibly PNG) file that was uploaded.
+	// t_05fd8d2a: an avatar is re-encoded (JPEG, or PNG when it carries
+	// transparency — t_ffc7f502), so its key extension, its stored content-type
+	// and its media row all come from the BYTES — not from the (possibly PNG)
+	// file that was uploaded.
 	storedMIME, storedExt, ok := objstore.ImageArtifactMeta(stored)
 	if !ok {
 		recordUploadFailure("optimize_failed")
