@@ -77,6 +77,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { signIn } from "./auth";
+import { SETTLE_TIMEOUT_MS, settledLine, waitForSettled } from "./settle";
 import { DICT } from "../src/components/i18nDict";
 
 // The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
@@ -949,7 +950,20 @@ test.describe("a11y: the redirect shells land on a route that IS scanned", () =>
       SCANNED_PATHS,
       `/post-login landed on ${landed}, which no a11y spec scans — the shell would be uncovered by construction`,
     ).toContain(landed);
-    await page.waitForTimeout(1500);
+    // A BOUNDED CONDITION WAIT, not `waitForTimeout(1500)` (t_14837ea0): the fixed
+    // sleep was the same lost bet as the single-character scan's, and a scan taken
+    // before the landed route hydrates measures the PLACEHOLDER document — a
+    // reading of the wrong page can be green, which is worse than a flake. Measured
+    // on this tree: `/post-login` lands on `/`, and the wait returns in 3 ms with
+    // navLinks=14, hydrated=true.
+    const settled = await waitForSettled(page, { wantsShell: true, mainCountsAsChrome: true });
+    console.log(settledLine(`/post-login → ${landed}`, settled));
+    expect(
+      settled.timedOut,
+      `/post-login → ${landed} never settled: after ${SETTLE_TIMEOUT_MS}ms it was hydrated=${settled.hydrated}, ` +
+        `navLinks=${settled.navLinks}, hasMain=${settled.hasMain}, bodyText=${settled.bodyText} — the scan below ` +
+        `would be measuring a placeholder document`,
+    ).toBe(false);
     await scanDocument(page, `/post-login → ${landed}`);
   });
 });

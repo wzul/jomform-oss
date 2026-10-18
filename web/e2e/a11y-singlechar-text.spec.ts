@@ -96,6 +96,7 @@ import AxeBuilder from "@axe-core/playwright";
 import type { AxeResults, Result } from "axe-core";
 
 import { signIn } from "./auth";
+import { SETTLE_TIMEOUT_MS, settledLine, waitForSettled } from "./settle";
 
 // The gate's own rule, kept identical to e2e/a11y.spec.ts so the two cannot drift.
 const IMPACTS = ["critical", "serious"] as const;
@@ -347,7 +348,20 @@ async function open(page: Page, baseURL: string | undefined, route: Route) {
   if (route.authed) await signIn(page, baseURL);
   await stubAPI(page);
   await page.goto(route.path, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1500);
+  // A BOUNDED CONDITION WAIT, not a fixed sleep (t_14837ea0). This used to be
+  // `await page.waitForTimeout(1500)` — a bet that the stubbed `dashboard-bundle`
+  // fetch plus hydration finishes in 1500 ms. The Shell renders AFTER that fetch
+  // resolves, so on a loaded host the bet lost and `/` reddened with "rendered no
+  // sidebar nav" on a page that was correct (measured: 1 failure in 2 runs of the
+  // same tree). The wait now returns on the first frame the page is really
+  // rendered and reaches its ceiling otherwise, WITHOUT throwing — the arm's own
+  // reachability assertion below is still what fails, so a shell that genuinely
+  // never renders is still RED, with the state the wait saw in the message.
+  const settled = await waitForSettled(page, {
+    wantsShell: route.authed && route.path !== "/builder",
+  });
+  console.log(settledLine(route.path, settled));
+  return settled;
 }
 
 /** The locale the page is rendering in, read after the app has hydrated. */
@@ -361,7 +375,7 @@ test.describe("a11y: single-character text is measured against its own floor", (
       page,
       baseURL,
     }) => {
-      await open(page, baseURL, route);
+      const settled = await open(page, baseURL, route);
 
       // (1) NO REDIRECT. A dashboard path without the cookie is bounced to /login
       // by web/src/middleware.ts, and a scan of the login page would be a clean 0
@@ -378,17 +392,26 @@ test.describe("a11y: single-character text is measured against its own floor", (
       };
 
       // (2) THE PAGE'S OWN SHELL RENDERED. Without this the count assertion below
-      // could be satisfied by chrome that is not the route's.
+      // could be satisfied by chrome that is not the route's. The wait in `open()`
+      // is bounded, not a sleep, so a shell that genuinely never renders is still
+      // RED here — the message carries what the wait saw and how long it waited.
+      const waited = `waited ${settled.waitedMs}ms (ceiling ${SETTLE_TIMEOUT_MS}ms): hydrated=${settled.hydrated}, bodyText=${settled.bodyText}`;
       if (route.authed && route.path !== "/builder") {
         // The sidebar routes: the Shell's nav is the thing that carries the fixed
         // glyphs, so its absence is the failure this arm is about.
-        expect(navLinks, `${route.path} rendered no sidebar nav — the shell did not render`).toBeGreaterThanOrEqual(10);
+        expect(
+          navLinks,
+          `${route.path} rendered no sidebar nav — the shell did not render [${waited}]`,
+        ).toBeGreaterThanOrEqual(10);
       } else {
         // Public routes (and /builder, which paints its own chrome): a `<main>`
         // landmark is the page's own rendered body.
-        expect(hasMain, `${route.path} rendered no <main>`).toBe(true);
+        expect(hasMain, `${route.path} rendered no <main> [${waited}]`).toBe(true);
       }
-      expect(bodyText, `${route.path} rendered almost no text — the loading shell is not a scan`).toBeGreaterThan(200);
+      expect(
+        bodyText,
+        `${route.path} rendered almost no text — the loading shell is not a scan [${waited}]`,
+      ).toBeGreaterThan(200);
       // FRESH STATE, asserted: the init script clears storage on every navigation,
       // so a non-default locale here can only be one the APP itself persisted —
       // a leftover `jf_lang` from an earlier run (this board has had `ar` change a
