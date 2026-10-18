@@ -20,6 +20,8 @@ import (
 	_ "image/jpeg" // sniff JPEG headers
 	"image/png"    // decode + encode PNG (transparency-preserving artifacts)
 	"io"
+	"net"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -227,6 +229,72 @@ func (o *ObjectStore) PublicURL(key string) string {
 		return ""
 	}
 	return o.publicBase + "/" + key
+}
+
+// MerchantURL returns the URL a MERCHANT is handed for an object: the `url` in a
+// media list row, an upload response or an MCP tool result — the string the
+// library's View / Copy URL buttons use and a form pastes into a <link>.
+//
+// IMAGES keep the store's canonical URL (PublicURL). They are served publicly on
+// the media host, deliberately embeddable cross-origin, and every stored row
+// already points there, so nothing about them changes.
+//
+// CODE ASSETS (css/js/html/svg/woff2) do not. Serving one is tenant-scoped: the
+// request Host must resolve to the key's own account (issue #379) and the
+// response carries Cross-Origin-Resource-Policy: same-origin (issue #361). The
+// canonical media host resolves to NO account (bare jomform.com is nobody's
+// workspace), so it 404s the very object it just advertised, and a stylesheet
+// linked from a form on the workspace host could never apply: the copy URL was
+// a dead end that only worked after hand-editing the host. Measured on
+// v1.21.224 (d29bffc0), 2026-10-18 — the same key, both hosts:
+//
+//	https://jomform.com/media/u/<acct>/x.css        → 404 "media tidak tersedia"
+//	https://<workspace>.jomform.com/media/…/x.css   → 200 text/css; charset=utf-8
+//
+// So a code asset is advertised on the account's PUBLIC host — the host its
+// forms are served from (a verified custom domain first, then the workspace
+// subdomain, the repo's one public-URL priority) — which is also the only origin
+// a same-origin policy allows the asset to be loaded from.
+//
+// tenantHost == "": the account has neither a verified custom domain nor a
+// resolvable workspace, or the store has no public base. The canonical URL is
+// returned unchanged then — no better than before, and never a host that cannot
+// serve the object (see PublicHandlers.formURLForAccount for why "" is the
+// honest answer instead of an invented host).
+//
+// Scheme and port are the canonical URL's, so a dev deployment with a
+// host-mapped local base (http://localhost:8080/media) still gets a URL a
+// browser on that host-map can reach.
+func MerchantURL(canonical, mime, tenantHost string) string {
+	if canonical == "" || tenantHost == "" || !IsCodeAsset(mime) {
+		return canonical
+	}
+	return PublicURLOnHost(canonical, tenantHost)
+}
+
+// PublicURLOnHost returns a public object URL with its host replaced by host,
+// keeping the scheme, the port and the path. It is the mechanical half of
+// MerchantURL, exported so a caller that must invalidate the CDN for an object
+// whose advertised host is the tenant host does not have to fake a content-type
+// to say so.
+//
+// "" in, or an unparseable URL, returns canonical unchanged: a caller that
+// cannot build the URL must get the old one, never an empty string where a
+// working URL used to be.
+func PublicURLOnHost(canonical, host string) string {
+	if canonical == "" || host == "" {
+		return canonical
+	}
+	u, err := url.Parse(canonical)
+	if err != nil || u.Host == "" {
+		return canonical
+	}
+	if port := u.Port(); port != "" {
+		u.Host = net.JoinHostPort(host, port)
+	} else {
+		u.Host = host
+	}
+	return u.String()
 }
 
 // GetObject streams an object's bytes and content-type from the bucket.

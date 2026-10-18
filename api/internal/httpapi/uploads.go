@@ -514,7 +514,7 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 		if isCodeAsset(mime) {
 			h.scanCodeAsset(r, actx, rec, key, mime, data)
 		}
-		resp := map[string]string{"url": h.Store.PublicURL(key)}
+		resp := map[string]string{"url": h.merchantMediaURL(r.Context(), actx.Account, h.Store.PublicURL(key), mime)}
 		if previewURL != "" {
 			resp["preview"] = previewURL
 		}
@@ -612,7 +612,10 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	// Issue #180: record the object in the media library (best-effort). The row
 	// carries the true stored total so the usage report matches real storage.
 	h.recordMedia(r, actx, key, storedMIME, storedTotal, dbstore.MediaSourceMerchant, "")
-	respond(w, http.StatusOK, map[string]any{"url": h.Store.PublicURL(key), "sizes": sizes})
+	respond(w, http.StatusOK, map[string]any{
+		"url":   h.merchantMediaURL(r.Context(), actx.Account, h.Store.PublicURL(key), storedMIME),
+		"sizes": sizes,
+	})
 }
 
 // uploadAvatar handles POST /v1/rest/uploads/avatar (multipart). It accepts a
@@ -720,7 +723,8 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 	})
 	// Issue #180: record the avatar in the media library (best-effort).
 	h.recordMedia(r, actx, key, storedMIME, int64(len(stored)), dbstore.MediaSourceMerchant, "")
-	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
+	respond(w, http.StatusOK, map[string]string{
+		"url": h.merchantMediaURL(r.Context(), actx.Account, h.Store.PublicURL(key), storedMIME)})
 }
 
 // uploadAsset handles POST /v1/rest/uploads/asset (multipart). It accepts a
@@ -826,7 +830,8 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	// Issue #364: code-asset scan gate (shared with the media-page upload).
 	h.scanCodeAsset(r, actx, rec, key, mime, data)
 
-	respond(w, http.StatusOK, map[string]string{"url": h.Store.PublicURL(key)})
+	respond(w, http.StatusOK, map[string]string{
+		"url": h.merchantMediaURL(r.Context(), actx.Account, h.Store.PublicURL(key), mime)})
 }
 
 // scanCodeAsset runs the issue #364 code-asset scan gate on a freshly stored

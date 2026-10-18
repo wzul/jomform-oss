@@ -69,7 +69,8 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 	out := make([]restMedia, 0, len(items))
 	for _, m := range items {
 		rm := restMedia{
-			ID: m.ID, FormID: m.FormID, Key: m.Key, URL: m.URL,
+			ID: m.ID, FormID: m.FormID, Key: m.Key,
+			URL:  h.merchantMediaURL(r.Context(), actx.Account, m.URL, m.Mime),
 			Mime: m.Mime, Size: m.Size, Source: m.Source,
 			ScanStatus: m.ScanStatus, ScanReason: m.ScanReason,
 			CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
@@ -202,7 +203,9 @@ func (h *RESTHandlers) listTrashedMedia(w http.ResponseWriter, r *http.Request, 
 	out := make([]restTrashedMedia, 0, len(items))
 	for _, m := range items {
 		row := restTrashedMedia{
-			ID: m.ID, Key: m.Key, URL: m.URL, Mime: m.Mime, Size: m.Size,
+			ID: m.ID, Key: m.Key,
+			URL:  h.merchantMediaURL(r.Context(), actx.Account, m.URL, m.Mime),
+			Mime: m.Mime, Size: m.Size,
 			FormID: m.FormID, ObjectPresent: true,
 		}
 		if m.DeletedAt != nil {
@@ -291,7 +294,8 @@ func (h *RESTHandlers) restoreMedia(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "media.restored", map[string]any{"media_id": id, "key": m.Key})
-	respond(w, http.StatusOK, map[string]string{"status": "restored", "media_id": id, "url": m.URL})
+	respond(w, http.StatusOK, map[string]string{"status": "restored", "media_id": id,
+		"url": h.merchantMediaURL(r.Context(), actx.Account, m.URL, m.Mime)})
 }
 
 // purgeMedia: DELETE /v1/rest/media/{id}/purge
@@ -342,6 +346,18 @@ func (h *RESTHandlers) purgeMedia(w http.ResponseWriter, r *http.Request, actx *
 			}
 		}
 		objectURLs = mediaObjectURLs(h.Store, key)
+		// The url the library ADVERTISED for this object is what a CDN actually
+		// holds: for a code asset that is the account's public host, not the
+		// canonical media host (see merchantMediaURL). Purging only the
+		// canonical prefix would clear an entry nobody fetched while the copy
+		// the merchant's form loads stayed behind — bounded only by the
+		// freshness lifetime. Cloudflare drops a prefix that matches nothing,
+		// so the tenant host costs nothing when the object was never served
+		// there or the host is outside the purge zone.
+		if host := h.publicHostFor(r.Context(), actx.Account); host != "" {
+			objectURLs = append(objectURLs,
+				objstore.PublicURLOnHost(h.Store.PublicURL(key), host))
+		}
 	}
 	// The bytes leave the bucket above; the EDGE copy leaves the CDN here, in
 	// the same request.

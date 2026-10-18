@@ -4789,7 +4789,7 @@
     },
     "/v1/rest/media/{id}/restore": {
       "post": {
-        "description": "Clears deleted_at, so the same URL works again — the bytes were never removed. If the object is no longer in the store the restore is refused with 409 and nothing is changed, because restoring would put a broken URL back in the library. Quota is untouched: the bytes were never released on soft delete.\n\nResponse: status=restored, the media id and its (unchanged) public URL.",
+        "description": "Clears deleted_at, so the same URL works again — the bytes were never removed. If the object is no longer in the store the restore is refused with 409 and nothing is changed, because restoring would put a broken URL back in the library. Quota is untouched: the bytes were never released on soft delete.\n\nResponse: status=restored, the media id and the public URL that serves it (a code asset's URL is on the workspace's own host; an image's is the media host).",
         "operationId": "restoreMedia",
         "parameters": [
           {

@@ -65,9 +65,14 @@ func TestCSSWithLeadingCommentUploadsAsCSS(t *testing.T) {
 	if err := json.Unmarshal([]byte(respBody), &resp); err != nil {
 		t.Fatalf("decode upload response %q: %v", respBody, err)
 	}
-	key := strings.TrimPrefix(resp.URL, fakeMediaPrefix)
+	// t_0fe14ba5: the url a CODE asset is handed is on the WORKSPACE host — the
+	// canonical media host resolves to no account and 404s a code asset
+	// (issue #379) — so the key is read from the host the response names. This
+	// assertion is also the shape guard for that decision.
+	mediaURLBase := "https://" + host + "/media/"
+	key := strings.TrimPrefix(resp.URL, mediaURLBase)
 	if key == resp.URL || key == "" {
-		t.Fatalf("unexpected public url %q (want the fake store's %q prefix)", resp.URL, fakeMediaPrefix)
+		t.Fatalf("unexpected public url %q (want the workspace host %q prefix)", resp.URL, mediaURLBase)
 	}
 	if !strings.HasSuffix(key, ".css") {
 		t.Fatalf("comment-led stylesheet stored under %q, want a .css key", key)

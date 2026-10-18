@@ -372,6 +372,22 @@ func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*m
 	return nil, out, nil
 }
 
+// merchantMediaURL is the MCP lane's counterpart of httpapi's
+// RESTHandlers.merchantMediaURL — the url `list_media`, `upload_media` and the
+// bin tools hand the agent: an IMAGE keeps the canonical media-host url a form
+// embeds cross-origin, a CODE ASSET is advertised on the account's public host
+// (verified custom domain first, then the workspace subdomain) because /media
+// serves one only to a request whose Host resolves to the key's own account
+// (issue #379). The rule itself is objstore.MerchantURL so REST and MCP cannot
+// drift; the IsCodeAsset() return only skips the host lookup for images, whose
+// url never changes.
+func (s *Server) merchantMediaURL(ctx context.Context, accountID, canonical, mime string) string {
+	if !objstore.IsCodeAsset(mime) {
+		return canonical
+	}
+	return objstore.MerchantURL(canonical, mime, s.publicHostForID(ctx, accountID))
+}
+
 // mediaOutFromRow builds a mediaOut from a stored media row, deriving the
 // generated image-size variant URLs from the object key (issue #382).
 //
@@ -383,7 +399,8 @@ func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*m
 // GET /v1/rest/media answer the same thing (MCP parity, AGENTS.md).
 func (s *Server) mediaOutFromRow(ctx context.Context, m *dbstore.Media) mediaOut {
 	out := mediaOut{
-		ID: m.ID, FormID: m.FormID, Key: m.Key, URL: m.URL,
+		ID: m.ID, FormID: m.FormID, Key: m.Key,
+		URL:  s.merchantMediaURL(ctx, m.AccountID, m.URL, m.Mime),
 		Mime: m.Mime, Size: m.Size, Source: m.Source,
 		ScanStatus: m.ScanStatus, ScanReason: m.ScanReason,
 		CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
@@ -405,7 +422,9 @@ func (s *Server) mediaOutFromRow(ctx context.Context, m *dbstore.Media) mediaOut
 // reading its scan status from the media row.
 func (s *Server) mediaOutFrom(ctx context.Context, acc, key, mime string, size int64) mediaOut {
 	out := mediaOut{
-		Key: key, URL: s.deps.Store.PublicURL(key), Mime: mime, Size: size,
+		Key:  key,
+		URL:  s.merchantMediaURL(ctx, acc, s.deps.Store.PublicURL(key), mime),
+		Mime: mime, Size: size,
 		Source:    dbstore.MediaSourceMerchant,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
@@ -617,6 +636,14 @@ func (s *Server) purgeMediaMCP(
 			}
 		}
 		objectURLs = mediaObjectURLsMCP(s.deps.Store, key)
+		// The url the library ADVERTISED for a code asset is the account's
+		// public host, not the canonical media host (see merchantMediaURL), so
+		// that is where the CDN may hold a copy. Same reasoning as the REST
+		// purge; a prefix that matches nothing costs nothing.
+		if host := s.publicHostForID(ctx, acc); host != "" {
+			objectURLs = append(objectURLs,
+				objstore.PublicURLOnHost(s.deps.Store.PublicURL(key), host))
+		}
 	}
 	// The edge copy goes in the same call, after the bytes are gone, so a request
 	// in between can only miss the origin and never re-fill the CDN with the

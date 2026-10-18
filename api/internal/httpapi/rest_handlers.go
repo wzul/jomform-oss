@@ -758,10 +758,35 @@ func (h *RESTHandlers) formURLForAccount(ctx context.Context, acc *dbstore.Accou
 	if acc == nil {
 		return ""
 	}
-	if acc.CustomDomain != "" && acc.CustomDomainVerified {
-		return "https://" + strings.TrimRight(acc.CustomDomain, "/") + "/" + slug
+	host := h.publicHostFor(ctx, acc)
+	if host == "" {
+		return ""
 	}
-	return formURL(h.publicHostSlugFor(ctx, acc.ID), slug)
+	return "https://" + host + "/" + slug
+}
+
+// publicHostFor returns the host an account's public pages are served from — a
+// VERIFIED custom domain first, then {workspace-slug}.jomform.com — the repo's
+// one public-URL priority (see PublicHandlers.formURLForAccount). "" when
+// neither resolves.
+//
+// It takes the account row rather than an id because every caller that needs a
+// public host for an ASSET already holds the authenticated account (the media
+// list, an upload response, a purge), and re-reading it would add a query to a
+// path that does not need one. A caller with only an id reads the row first;
+// see mcpsrv.Server.publicHostForID.
+func (h *RESTHandlers) publicHostFor(ctx context.Context, acc *dbstore.Account) string {
+	if acc == nil {
+		return ""
+	}
+	if acc.CustomDomain != "" && acc.CustomDomainVerified {
+		return strings.TrimRight(acc.CustomDomain, "/")
+	}
+	slug := h.publicHostSlugFor(ctx, acc.ID)
+	if slug == "" {
+		return ""
+	}
+	return slug + ".jomform.com"
 }
 
 // publicHostSlugFor resolves the subdomain host an account's forms are publicly

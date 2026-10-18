@@ -11,6 +11,7 @@ import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
+import { canInlineMediaPreview } from "../../lib/mediaThumb";
 
 // Issue #180: WordPress-media-library-style Media page. Grid of the
 // merchant's uploaded images (thumbnail + name + date + size), filterable by
@@ -82,11 +83,12 @@ function nameFromKey(key: string): string {
 }
 
 // Issue #361: media items now include merchant code files (CSS/JS/HTML/SVG/
-// woff2) alongside images. isImage decides whether to render a real thumbnail
-// or a code-file tile (extension badge) for the media library grid.
-function isImage(mime: string): boolean {
-  return mime.startsWith("image/");
-}
+// woff2) alongside images. canInlineMediaPreview decides whether to render a
+// real thumbnail or a code-file tile (extension badge) for the media library
+// grid. t_0fe14ba5: SVG is a code asset whose advertised url is now on the
+// workspace host, and code assets are served `Cross-Origin-Resource-Policy:
+// same-origin` — an <img> from the dashboard would be blocked, so SVG gets the
+// badge like every other code file.
 
 // Extension badge label for a code file (e.g. "CSS", "JS", "HTML") or a PDF
 // (issue #382).
@@ -649,7 +651,7 @@ export default function MediaPage() {
                 className="jf-card group overflow-hidden text-left"
               >
                 <div className="flex h-32 items-center justify-center overflow-hidden bg-slate-100">
-                  {isImage(m.mime) || m.preview ? (
+                  {canInlineMediaPreview(m.mime, !!m.preview) ? (
                     /* eslint-disable-next-line @next/next/no-img-element */
                     <img
                       src={m.preview || m.sizes?.thumbnail || m.url}
@@ -715,7 +717,7 @@ export default function MediaPage() {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex h-56 items-center justify-center overflow-hidden bg-slate-100">
-                {isImage(detail.mime) || detail.preview ? (
+                {canInlineMediaPreview(detail.mime, !!detail.preview) ? (
                   /* eslint-disable-next-line @next/next/no-img-element */
                   <img
                     src={detail.preview || detail.url}

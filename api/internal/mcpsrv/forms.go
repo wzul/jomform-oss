@@ -273,23 +273,38 @@ func (s *Server) publicHostSlugFor(ctx context.Context, accountID string) string
 	return slug
 }
 
-// formPublicURL builds the canonical workspace-scoped public URL for a form
-// (issue #77). Returns "" when the workspace slug is unknown.
-func formPublicURL(workspaceSlug, slug string) string {
-	if workspaceSlug == "" {
-		return ""
-	}
-	return "https://" + workspaceSlug + ".jomform.com/" + slug
-}
-
 // formPublicURLForAccount builds the canonical public URL for a form,
 // preferring a verified custom domain over the workspace subdomain (issue #83).
 // Returns "" when neither is resolvable.
 func (s *Server) formPublicURLForAccount(ctx context.Context, accountID, slug string) string {
+	host := s.publicHostForID(ctx, accountID)
+	if host == "" {
+		return ""
+	}
+	return "https://" + host + "/" + slug
+}
+
+// publicHostForID returns the host an account's public pages are served from: a
+// VERIFIED custom domain first, then {workspace-slug}.jomform.com — the repo's
+// one public-URL priority (see httpapi.PublicHandlers.formURLForAccount). ""
+// when neither resolves.
+//
+// media_mcp.go uses it for the URL a CODE ASSET is advertised on: /media serves
+// a code asset only when the request Host resolves to the key's own account
+// (issue #379), so the canonical media host 404s the very URL the library used
+// to hand out — see objstore.MerchantURL.
+func (s *Server) publicHostForID(ctx context.Context, accountID string) string {
+	if accountID == "" {
+		return ""
+	}
 	if s.deps.Accounts != nil {
-		if acc, aerr := s.deps.Accounts.ByID(ctx, accountID); aerr == nil && acc.CustomDomain != "" && acc.CustomDomainVerified {
-			return "https://" + strings.TrimRight(acc.CustomDomain, "/") + "/" + slug
+		if acc, aerr := s.deps.Accounts.ByID(ctx, accountID); aerr == nil && acc != nil &&
+			acc.CustomDomain != "" && acc.CustomDomainVerified {
+			return strings.TrimRight(acc.CustomDomain, "/")
 		}
 	}
-	return formPublicURL(s.publicHostSlugFor(ctx, accountID), slug)
+	if slug := s.publicHostSlugFor(ctx, accountID); slug != "" {
+		return slug + ".jomform.com"
+	}
+	return ""
 }

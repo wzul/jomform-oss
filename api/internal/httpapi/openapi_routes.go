@@ -454,7 +454,7 @@ var restRouteDocs = []restRouteDoc{
 		RespDesc: "The workspace's trashed media, each with deleted_at (RFC3339) and object_present.",
 		Desc:     "object_present reports whether the bytes are still in the store. A row can be in the bin while the object is already gone (removed by an operator or a bucket lifecycle rule), which is why a restore checks rather than assumes."},
 	{Method: "POST", Path: "/v1/rest/media/{id}/restore", Handler: "restoreMedia", Tag: "Media",
-		Summary: "Restore a media item from the trash", Access: AccessWrite, RespDesc: "status=restored, the media id and its (unchanged) public URL.",
+		Summary: "Restore a media item from the trash", Access: AccessWrite, RespDesc: "status=restored, the media id and the public URL that serves it (a code asset's URL is on the workspace's own host; an image's is the media host).",
 		Desc: "Clears deleted_at, so the same URL works again — the bytes were never removed. If the object is no longer in the store the restore is refused with 409 and nothing is changed, because restoring would put a broken URL back in the library. Quota is untouched: the bytes were never released on soft delete."},
 	{Method: "DELETE", Path: "/v1/rest/media/{id}/purge", Handler: "purgeMedia", Tag: "Media",
 		Summary: "Destroy a trashed media item for good", Access: AccessWrite, RespDesc: "status=purged, the media id and the object key that was removed.",
