@@ -1,4 +1,4 @@
--- Rollback for 000076_template_intro_section.
+-- Rollback for 000077_template_intro_section.
 --
 -- Puts the 14 library templates' intro block back to `text` — the shape
 -- 000027/000060 seeded — so the rollback is exactly inverse to the up migration

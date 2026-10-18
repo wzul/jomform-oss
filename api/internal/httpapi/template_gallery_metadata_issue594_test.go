@@ -133,7 +133,7 @@ func migrationSQL594(t *testing.T) string {
 // rows. This is the pre-fix production state, reproduced on purpose.
 //
 // "No intro block" means no PROSE block (section/html) either, not just no
-// `text` block: 000076_template_intro_section retypes these rows' intro to
+// `text` block: 000077_template_intro_section retypes these rows' intro to
 // `section`, and the description derivation (formfields.Description) reads a
 // section first, so a strip that only removed `text` blocks would leave the
 // description behind and this reproduction would be partial.
@@ -178,7 +178,7 @@ func stripLegacyMetadata(t *testing.T, ctx context.Context, p *pgxpool.Pool) {
 	})
 
 	// The block predicate drops the row's INTRO whatever shape it has: the
-	// legacy `text` block (the pre-000076 content model) and the `section` this
+	// legacy `text` block (the pre-000077 content model) and the `section` this
 	// package's t_d46c21e0 migration writes. Keeping the row's own field blocks.
 	if _, err := p.Exec(ctx,
 		`UPDATE forms

@@ -13,7 +13,7 @@ package httpapi
 // (and, because `text` is collectable, as an extra field in a menu checkout).
 //
 // WHAT THESE TESTS PIN. Not one template: the class, through the REAL call
-// sites. They rewind the library to the pre-fix shape with migration 000076's
+// sites. They rewind the library to the pre-fix shape with migration 000077's
 // own down migration, assert the defect is really there (label + the input the
 // card reproduces), apply the up migration's SQL as extracted from the embedded
 // set, and then assert the intro reaches the page as prose and that nothing
@@ -47,8 +47,8 @@ import (
 // `section`; introMigrationDown is its rollback (also the rewind the tests use
 // to put the pre-fix content model back).
 const (
-	introMigrationUp   = "000076_template_intro_section.up.sql"
-	introMigrationDown = "000076_template_intro_section.down.sql"
+	introMigrationUp   = "000077_template_intro_section.up.sql"
+	introMigrationDown = "000077_template_intro_section.down.sql"
 )
 
 // seededLibraryIntros is the whole shipped gallery: slug -> the mode whose
