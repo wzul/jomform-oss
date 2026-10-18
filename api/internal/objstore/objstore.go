@@ -538,6 +538,16 @@ func SniffAssetType(data []byte) (string, bool) {
 	if len(data) == 0 {
 		return "", false
 	}
+	// t_adc169da: a PDF is a binary container, not text. Its compressed
+	// streams almost always carry a 0x7B (`{`) byte, which the CSS brace
+	// heuristic below reads as a stylesheet — so an ordinary Chrome-printed
+	// invoice was classified `.css` and the media upload then rejected it as
+	// "not matching its extension" (MagicByteMismatch) before the `%PDF-`
+	// signature was ever consulted. `%PDF-` is definitive, so decline here and
+	// let SniffPDFType classify it, whatever order the caller sniffs in.
+	if bytes.HasPrefix(data, []byte("%PDF-")) {
+		return "", false
+	}
 	t := strings.TrimLeftFunc(string(data), func(r rune) bool {
 		return r <= ' ' // skip leading whitespace/newlines
 	})
