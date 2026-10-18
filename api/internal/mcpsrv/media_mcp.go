@@ -209,11 +209,28 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 		}
 	}
 	s.settleQuota(ctx, acc, int64(len(stored)), storedTotal)
+	// t_aaff87ac: record the library row the way the dashboard's recordMedia
+	// (httpapi/media.go) does. This path used to store the bytes and write NO
+	// row at all, so an image uploaded through MCP was invisible to list_media
+	// and GET /v1/rest/media, and the tool had no id to report. The row carries
+	// the true stored total (base + variants), which is the size both tools
+	// must answer with.
+	if s.deps.Media != nil {
+		rec := &dbstore.Media{
+			AccountID: acc, Key: key, URL: s.deps.Store.PublicURL(key),
+			Mime: storedMIME, Size: storedTotal, Source: dbstore.MediaSourceMerchant,
+		}
+		if err := s.deps.Media.Create(ctx, rec); err != nil {
+			return nil, mediaOut{}, fmt.Errorf("media: %w", err)
+		}
+	}
 	// Issue #92: audit upload.image (best-effort).
 	s.recordMCPMediaEvent(ctx, acc, "upload.image", map[string]any{
 		"mime": storedMIME, "out_bytes": len(stored),
 	})
-	out := s.mediaOutFrom(ctx, acc, key, storedMIME, int64(len(stored)))
+	// t_aaff87ac: report the STORED TOTAL (base + variants), the same number the
+	// row carries and list_media returns.
+	out := s.mediaOutFrom(ctx, acc, key, storedMIME, storedTotal)
 	out.Sizes = sizes
 	return nil, out, nil
 }
@@ -367,7 +384,9 @@ func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*m
 	s.recordMCPMediaEvent(ctx, acc, "upload.pdf", map[string]any{
 		"mime": mime, "bytes": len(raw),
 	})
-	out := s.mediaOutFrom(ctx, acc, key, mime, int64(len(raw)))
+	// t_aaff87ac: report the STORED TOTAL (PDF + preview), the same number the
+	// row carries and list_media returns — not the bytes the caller sent.
+	out := s.mediaOutFrom(ctx, acc, key, mime, storedTotal)
 	out.Preview = previewURL
 	return nil, out, nil
 }
@@ -419,7 +438,14 @@ func (s *Server) mediaOutFromRow(ctx context.Context, m *dbstore.Media) mediaOut
 }
 
 // mediaOutFrom builds a mediaOut for a freshly stored object, best-effort
-// reading its scan status from the media row.
+// reading its scan status — and its size — from the media row.
+//
+// t_aaff87ac: `size` MUST come from the row when the row exists. The row records
+// the STORED total (base + generated preview / image variants), which is what
+// list_media and GET /v1/rest/media report for the same id; answering with the
+// caller's byte count made two tools describing one row disagree (prod: a
+// 27,617-byte PDF reported 27617 here and 32210 there). The argument is the
+// fallback for the case where no row was written.
 func (s *Server) mediaOutFrom(ctx context.Context, acc, key, mime string, size int64) mediaOut {
 	out := mediaOut{
 		Key:  key,
@@ -431,6 +457,7 @@ func (s *Server) mediaOutFrom(ctx context.Context, acc, key, mime string, size i
 	if s.deps.Media != nil {
 		if m, err := s.deps.Media.ByKey(ctx, acc, key); err == nil && m != nil {
 			out.ID = m.ID
+			out.Size = m.Size
 			out.ScanStatus = m.ScanStatus
 			out.ScanReason = m.ScanReason
 		} else if objstore.IsCodeAsset(mime) {

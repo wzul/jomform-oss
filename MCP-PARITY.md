@@ -123,7 +123,12 @@ Parity checklist (dashboard → MCP):
   `GET /v1/workspaces/trash`, `POST /v1/workspaces/{id}/restore`,
   `DELETE /v1/workspaces/{id}/purge`.
 - Media library / asset upload (image + code, tenant-scoped, scan-gated,
-  #361/#364) → `list_media`, `upload_media`
+  #361/#364) → `list_media`, `upload_media`.
+  Both tools describe the same row, so size is the same number in both: the
+  STORED total the row carries (base object + generated image variants /
+  PDF preview), not the bytes the caller uploaded. upload_media also records
+  the library row for images exactly as the dashboard's image upload
+  does, so an MCP-uploaded image appears in list_media / GET /v1/rest/media.
 - Media trash (soft delete → restore or permanent purge) → `delete_media`,
   `list_deleted_media`, `restore_media`, `purge_media`.
   `delete_media` marks the row and leaves the OBJECT in place, so the bin is
