@@ -801,8 +801,19 @@ func formTrackingHead(f *dbstore.Form) string {
 // renderResponseForm renders a response-only form (issue #171): input blocks
 // only, a submit button, no product list and no payment step. On submit the
 // buyer's field values are POSTed to /order as {client, fields:{block_id:value}}
-// and the server stores a submission. Returns false when the form has no
-// blocks (caller falls back to the legacy layout).
+// and the server stores a submission.
+//
+// A response form with ZERO blocks is still a response form, and it is rendered
+// here (card t_2612f421). The guard used to return false on an empty block
+// list, "so the caller falls back to the legacy layout" — but the only layout
+// that fallback can reach is the legacy PAYMENT template, whose submit handler
+// refuses to post unless a product is ticked. A response form has no products
+// by design, so the served page was a "Proceed to Payment" button whose only
+// reachable outcome was the NoProductAlert: no request, no submission, no way
+// for the visitor to respond. The page for an empty config is therefore the
+// response layout with its title, its submit button and no fields to fill;
+// false is returned only when the config cannot be read at all, which a
+// JSON-decoded map cannot trigger.
 func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Request, f *dbstore.Form) bool {
 	raw, err := json.Marshal(f.Config)
 	if err != nil {
@@ -836,7 +847,10 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 			} `json:"choices"`
 		} `json:"blocks"`
 	}
-	if json.Unmarshal(raw, &cfg) != nil || len(cfg.Blocks) == 0 {
+	// Card t_2612f421: an EMPTY block list is not a reason to decline — the
+	// caller would fall through to the legacy PAYMENT layout, which a response
+	// form can never submit. See the function comment.
+	if json.Unmarshal(raw, &cfg) != nil {
 		return false
 	}
 

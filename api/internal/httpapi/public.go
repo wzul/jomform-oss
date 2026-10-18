@@ -1667,6 +1667,20 @@ func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *db
 		if h.renderResponseForm(w, r, f) {
 			return
 		}
+		// Card t_2612f421: a response form must NEVER reach the legacy PAYMENT
+		// template below. `renderLegacy` paints formTmpl, whose submit handler
+		// refuses to post unless a product is ticked — and a response form has
+		// no products by design, so that page is a dead end (measured on two
+		// published prod forms: response mode, blocks: [], "Proceed to
+		// Payment" button, alert-only submit, no request).
+		//
+		// renderResponseForm now accepts every config it can decode, so this
+		// branch is unreachable in practice. It stays so a future guard added
+		// there cannot silently restore the fallthrough, and it fails loudly
+		// instead of serving a payment page the form can never submit.
+		slog.Error("form_render_response_failed", "form", f.ID, "slug", f.Slug)
+		http.Error(w, "Borang tidak dapat dipaparkan", http.StatusInternalServerError)
+		return
 	}
 	if h.renderBlocks(w, r, f) {
 		return
