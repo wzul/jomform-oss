@@ -529,6 +529,11 @@ func ServedContentType(storedType string, body []byte) string {
 // Issue #455: SVG is text/XML with no binary magic bytes, so it is an explicit
 // allowed exception — the root element (optionally behind an XML prolog or
 // comment) is its signature.
+//
+// t_8881000c: a leading comment identifies NEITHER language. `/* ... */` is
+// byte-identical in a stylesheet and in a script, and a stylesheet very
+// commonly opens with a licence/theme comment, so the comment is stepped over
+// and the signature is read from what follows it.
 func SniffAssetType(data []byte) (string, bool) {
 	if len(data) == 0 {
 		return "", false
@@ -552,33 +557,83 @@ func SniffAssetType(data []byte) (string, bool) {
 	if len(data) >= 4 && bytes.Equal(data[:4], []byte{'w', 'O', 'F', 'F'}) {
 		return ".woff2", true
 	}
-	for _, p := range []string{
-		"/*", "//", `"`, "'", "`",
-		"const ", "let ", "var ", "function ", "class ", "async ", "await ", "return ",
-		"if ", "else ", "for ", "while ", "do ", "switch ", "case ", "try ", "catch ",
-		"throw ", "new ", "typeof ", "instanceof ", "in ", "of ", "yield ", "this",
-		"document.", "window.", "alert(", "fetch(",
-		"import ", "export ", "function",
-		"(function", "(async", "(()", "((",
-	} {
-		if strings.HasPrefix(lower, p) {
-			return ".js", true
+	// t_8881000c: step over leading comments before looking for a signature.
+	// A `/* ... */` opener used to be read as a JS signature here, ahead of the
+	// CSS heuristics below, so a stylesheet that opened with a licence/theme
+	// comment was stored `.js`/text/javascript. Under the nosniff header this
+	// route sends, a browser then REFUSES it as a `<link rel="stylesheet">` and
+	// the merchant's CSS silently does not apply.
+	code, hadComment := skipLeadingComments(t)
+	sig := strings.ToLower(code)
+	if sig != "" {
+		for _, p := range []string{
+			`"`, "'", "`",
+			"const ", "let ", "var ", "function ", "class ", "async ", "await ", "return ",
+			"if ", "else ", "for ", "while ", "do ", "switch ", "case ", "try ", "catch ",
+			"throw ", "new ", "typeof ", "instanceof ", "in ", "of ", "yield ", "this",
+			"document.", "window.", "alert(", "fetch(",
+			"console.", "require(", "module.exports", "exports.",
+			"import ", "export ", "function",
+			"(function", "(async", "(()", "((",
+		} {
+			if strings.HasPrefix(sig, p) {
+				return ".js", true
+			}
+		}
+		first := string(sig[0])
+		hasBrace := strings.Contains(sig, "{") && first != "{" && first != "("
+		if strings.HasPrefix(sig, "@charset") ||
+			strings.HasPrefix(sig, "@import") ||
+			strings.HasPrefix(sig, "@media") ||
+			strings.HasPrefix(sig, "@supports") ||
+			strings.HasPrefix(sig, "@font-face") ||
+			strings.HasPrefix(sig, "@keyframes") ||
+			strings.HasPrefix(sig, "@layer") ||
+			strings.HasPrefix(sig, "@container") ||
+			hasBrace {
+			return ".css", true
 		}
 	}
-	first := string(t[0])
-	hasBrace := strings.Contains(lower, "{") && first != "{" && first != "("
-	if strings.HasPrefix(lower, "@charset") ||
-		strings.HasPrefix(lower, "@import") ||
-		strings.HasPrefix(lower, "@media") ||
-		strings.HasPrefix(lower, "@supports") ||
-		strings.HasPrefix(lower, "@font-face") ||
-		strings.HasPrefix(lower, "@keyframes") ||
-		strings.HasPrefix(lower, "@layer") ||
-		strings.HasPrefix(lower, "@container") ||
-		hasBrace {
-		return ".css", true
+	// Whatever followed the comment matched neither language. A comment-led
+	// body (a script whose first statement has no listed signature, or a body
+	// that is nothing but comments) keeps its pre-existing classification: it
+	// was `.js` when the comment itself was taken as the signature.
+	if hadComment {
+		return ".js", true
 	}
 	return "", false
+}
+
+// skipLeadingComments steps over every leading block comment (`/* ... */`) and
+// line comment (`// ...`) plus the whitespace between them, and returns what
+// remains and whether any comment was skipped.
+//
+// It exists so a leading comment is never itself read as a code signature
+// (t_8881000c). An unterminated comment leaves no readable signature, so it
+// returns an empty remainder and reports the skip.
+func skipLeadingComments(body string) (string, bool) {
+	rest, skipped := body, false
+	for {
+		rest = strings.TrimLeftFunc(rest, func(r rune) bool { return r <= ' ' })
+		switch {
+		case strings.HasPrefix(rest, "/*"):
+			end := strings.Index(rest[2:], "*/")
+			if end < 0 {
+				return "", true
+			}
+			rest = rest[2+end+2:]
+			skipped = true
+		case strings.HasPrefix(rest, "//"):
+			nl := strings.IndexByte(rest, '\n')
+			if nl < 0 {
+				return "", true
+			}
+			rest = rest[nl+1:]
+			skipped = true
+		default:
+			return rest, skipped
+		}
+	}
 }
 
 func headerFormat(data []byte) string {
