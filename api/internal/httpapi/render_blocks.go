@@ -916,6 +916,19 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		// silently — responseTmpl paints its label plus the "not applied" note.
 		case "coupon":
 			fields = append(fields, fieldView{ID: b.ID, Type: b.Type, Value: b.Value})
+		// Card t_ec5fdf4b: the pricing blocks are the ONE group this page
+		// deliberately does not paint, and the case is written out so the
+		// decision is in the code rather than in the absence of an arm. Each
+		// one is meaningless without the payment step (a price, a quantity, an
+		// add-on, a shipping choice, an order total), so a response page has
+		// nothing honest to render for it. Unlike `coupon` — a placed block
+		// that still shows as its label plus the not-applied note, never as
+		// an input — these carry a price and are payment-mode-only. A form
+		// that reaches this page carrying one is the mode-flip case (the
+		// builder filters the pricing group out of the response palette, but
+		// does not remove blocks already placed), and the page must not
+		// invent a price for a form that cannot be paid.
+		case "product", "quantity", "option", "shipping", "total":
 		}
 	}
 
