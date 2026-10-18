@@ -15,7 +15,9 @@
 //   (3) uploading a GIF reports it at the moment of success, not just in the
 //       hint ("Uploaded ✓" for a GIF would be the same silence again);
 //   (4) the logo picker, which uploads through the same endpoint, shows it;
-//   (5) the MCP docs row for upload_media states it, so an agent uploading on
+//   (5) the picker's own SUCCESS message branches on image/gif like the media
+//       page — the hint before the upload is not the result line after it;
+//   (6) the MCP docs row for upload_media states it, so an agent uploading on
 //       the merchant's behalf is told too (the Go parity test keeps that row
 //       equal to the registered tool description).
 //
@@ -136,9 +138,40 @@ test("(4) the logo picker shows the same disclaimer", () => {
   );
 });
 
-// ── (5) agents are told too ────────────────────────────────────────────────
+// ── (5) the picker's own success line branches too ─────────────────────────
+//
+// The picker uploads through the SAME endpoint and renders the same pre-upload
+// hint, but its success line used to be the generic `t("media.uploaded")` — so
+// a GIF uploaded from the logo picker answered a bare "Uploaded ✓" while /media
+// answered "…saved as a still image (first frame only)". Item (4) above only
+// pins the hint, which is why that slipped through.
 
-test("(5) the MCP docs row for upload_media states the GIF conversion", () => {
+test("(5) the logo picker's success message branches on image/gif like the media page", () => {
+  // Scope the assertion to uploadFile's body: a ternary parked anywhere else in
+  // the file would not be the line that runs after an upload.
+  const uploader = slice(mediaPicker, "async function uploadFile", "if (!open) return null;");
+  assert.ok(
+    uploader.includes("setUploadMsg"),
+    "the MediaPicker uploadFile slice does not contain the success line — the slice " +
+      "anchors moved and this guard would pass vacuously",
+  );
+  assert.match(
+    uploader,
+    /file\.type === "image\/gif"\s*\?\s*"media\.uploadedGifStill"\s*:\s*"media\.uploaded"/,
+    "the logo picker's upload success message no longer branches on image/gif — an animated " +
+      'GIF uploaded from the picker would report a bare "Uploaded ✓" again',
+  );
+  // The generic line must not survive as a second, unconditional assignment: a
+  // branch followed by an unconditional reset would still leave the bare message.
+  assert.ok(
+    !/setUploadMsg\(t\("media\.uploaded"\)\)/.test(uploader),
+    'the picker still sets t("media.uploaded") unconditionally somewhere in uploadFile',
+  );
+});
+
+// ── (6) agents are told too ────────────────────────────────────────────────
+
+test("(6) the MCP docs row for upload_media states the GIF conversion", () => {
   const row = slice(docsMCP, '{ name: "upload_media"', '{ name: "delete_media"');
   assert.ok(
     row.includes("GIF animasi jadi imej pegun"),

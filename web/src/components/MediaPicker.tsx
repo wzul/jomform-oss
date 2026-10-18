@@ -104,7 +104,10 @@ export default function MediaPicker({
         setUploadMsg(apiErr(d, t("media.uploadFail"), t));
         return;
       }
-      setUploadMsg(t("media.uploaded"));
+      // The same GIF the merchant picked is stored as one still image (first
+      // frame), so this picker must answer like /media does — a bare
+      // "Uploaded ✓" here is the same silence the hint above removes.
+      setUploadMsg(t(file.type === "image/gif" ? "media.uploadedGifStill" : "media.uploaded"));
       load();
     } catch {
       setUploadMsg(t("media.uploadFail"));
