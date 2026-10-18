@@ -18,6 +18,14 @@
 -- booking, tuition, event, donation, ecommerce) keep the default payment mode
 -- with a product block the merchant fills in.
 
+-- Card t_d46c21e0: the `text` block these rows open with is the palette's
+-- short-answer FIELD, so migration 000076_template_intro_section retypes those
+-- intro blocks to `section` — on the rows as stored, which is where production
+-- keeps them. The VALUES below are left as they were written: this file has
+-- already run everywhere, and schema_migrations keys on its filename, so an
+-- edit here would fix a fresh database only. Read the pair together; 000076 also
+-- records why a merchant's own `text` block is deliberately out of scope.
+--
 -- 1. System account that owns the template gallery.
 INSERT INTO users (email, password_hash)
 VALUES ('templates@system.jomform', '!system-template-account!')

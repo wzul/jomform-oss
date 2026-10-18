@@ -39,8 +39,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -130,9 +128,20 @@ func migrationSQL594(t *testing.T) string {
 }
 
 // stripLegacyMetadata rewinds the three gallery templates to the shape they
-// had before migration 000060 — no config.category, no intro text block — and
+// had before migration 000060 — no config.category, no intro block at all — and
 // registers the restore, so the rest of the package still sees the migrated
 // rows. This is the pre-fix production state, reproduced on purpose.
+//
+// "No intro block" means no PROSE block (section/html) either, not just no
+// `text` block: 000076_template_intro_section retypes these rows' intro to
+// `section`, and the description derivation (formfields.Description) reads a
+// section first, so a strip that only removed `text` blocks would leave the
+// description behind and this reproduction would be partial.
+//
+// The expansion goes through the same `jsonb_typeof(...) = 'array'` CASE the
+// production predicate uses (dbstore/form.go's formBlocksArray), not COALESCE:
+// COALESCE only replaces SQL NULL, so a non-array value would be handed straight
+// to jsonb_array_elements and raise SQLSTATE 22023 on this fixture too.
 func stripLegacyMetadata(t *testing.T, ctx context.Context, p *pgxpool.Pool) {
 	t.Helper()
 	saved := map[string]string{}
@@ -168,11 +177,9 @@ func stripLegacyMetadata(t *testing.T, ctx context.Context, p *pgxpool.Pool) {
 		}
 	})
 
-	// The expansion goes through the same `jsonb_typeof(...) = 'array'` CASE the
-	// production predicate uses (dbstore/form.go's formBlocksArray), not
-	// COALESCE: COALESCE only replaces SQL NULL, so a non-array value would be
-	// handed straight to jsonb_array_elements and raise SQLSTATE 22023 on this
-	// fixture too.
+	// The block predicate drops the row's INTRO whatever shape it has: the
+	// legacy `text` block (the pre-000076 content model) and the `section` this
+	// package's t_d46c21e0 migration writes. Keeping the row's own field blocks.
 	if _, err := p.Exec(ctx,
 		`UPDATE forms
 		    SET config = jsonb_set(
@@ -184,7 +191,8 @@ func stripLegacyMetadata(t *testing.T, ctx context.Context, p *pgxpool.Pool) {
 		                      CASE WHEN jsonb_typeof(config->'blocks') = 'array'
 		                           THEN config->'blocks' ELSE '[]'::jsonb END
 		                    ) b
-		              WHERE NOT (b->>'type' = 'text' AND COALESCE(b->>'value','') <> '')),
+		              WHERE NOT (b->>'type' IN ('text', 'section', 'html')
+		                         AND COALESCE(b->>'value','') <> '')),
 		            '[]'::jsonb
 		          )
 		        )
@@ -419,13 +427,8 @@ func TestGalleryMetadataMigrationIsTargetedAndIdempotent(t *testing.T) {
 
 // migrationDown594 reads the rollback file. Only *.up.sql files are embedded
 // and applied at boot (db.migrationFS), so the down file is read from the
-// checkout — the same relative-to-the-repo layout a Go test always runs with.
+// checkout — the shared reader lives in template_intro_prose_test.go.
 func migrationDown594(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join("..", "db", "migrations", strings.TrimSuffix(migrationName594, ".up.sql")+".down.sql")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read down migration: %v", err)
-	}
-	return string(b)
+	return migrationDownSQL(t, strings.TrimSuffix(migrationName594, ".up.sql")+".down.sql")
 }
