@@ -399,7 +399,7 @@ export default function TemplatesPage() {
                     <button
                       onClick={() => void remove(tpl.id)}
                       disabled={busy}
-                      className="jf-btn-ghost min-h-[44px] text-rose-700 hover:bg-rose-50 sm:min-h-10 disabled:opacity-50"
+                      className="jf-btn-ghost min-h-[44px] text-rose-700 sm:min-h-10 disabled:opacity-50"
                     >
                       {t("forms.delete")}
                     </button>

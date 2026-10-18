@@ -13,10 +13,13 @@
 //     cancel        text-rose-600 #ec003f   rest #ffffff 4.527:1   PASSES at rest
 //
 //   …and then measured the state nobody had looked at, because the class list
-//   says `hover:bg-rose-50` and everyone read the hover surface off the class:
+//   said `hover:bg-rose-50` and everyone read the hover surface off the class:
 //
 //     both buttons, HOVERED, are painted on #f3f4f6 — NOT on the rose-50/sky-50
-//     their `hover:bg-*` names, and NOT on white.
+//     their `hover:bg-*` named, and NOT on white. (Those utilities were dead —
+//     the unlayered rule won — and card t_ac414593 has since DELETED them. This
+//     file still pins the pixel, so deleting them is proved to be a no-op and a
+//     later move of the `.jf-*` rules into a layer cannot pass unnoticed.)
 //
 //   `.jf-btn-ghost` declares its own three backgrounds in `globals.css` and those
 //   rules are UNLAYERED, so they beat Tailwind's `@layer utilities` regardless of
@@ -465,8 +468,8 @@ test.describe("the /subscriptions action-row buttons clear AA on the surfaces th
       ).toBeGreaterThan(PRE_FIX_UPDATE_RATIO);
     }
     // …and so must the sibling: its defect lived in the HOVER state, which is the
-    // one a source guard attributing `hover:bg-rose-50` would have measured
-    // wrongly (4.121:1 rather than the painted 4.114:1).
+    // one a source guard attributing a (since deleted, dead) `hover:bg-rose-50`
+    // would have measured wrongly (4.121:1 rather than the painted 4.114:1).
     for (const m of [cancelRest, cancelHover, cancelDown]) {
       expect(
         m.ratio,
@@ -487,8 +490,10 @@ test.describe("the /subscriptions action-row buttons clear AA on the surfaces th
           m.bg === GHOST_REST
             ? `The ghost button paints its own three surfaces; ` +
               `src/lib/ghostButtonInk.test.ts reads them from globals.css and names the step that clears all three.`
-            : `This is the ghost button's own hover/pressed surface — the class list's ` +
-              `\`hover:bg-*\` does NOT apply to it, so judge the pixel, not the utility.`,
+            : `This is the ghost button's own hover/pressed surface — a \`hover:bg-*\` ` +
+              `utility on the element cannot apply to it (unlayered rule wins; card t_ac414593 ` +
+              `deleted the last nine, and src/lib/ghostButtonInk.test.ts now forbids new ones), ` +
+              `so judge the pixel, not the class list.`,
         ),
       ).toBeGreaterThanOrEqual(AA_FLOOR);
     }

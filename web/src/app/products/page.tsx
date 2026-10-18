@@ -930,7 +930,7 @@ export default function Products() {
                               setPurgeTyped("");
                               setError("");
                             }}
-                            className="jf-btn-ghost min-h-[44px] text-rose-700 hover:bg-rose-50 sm:min-h-10"
+                            className="jf-btn-ghost min-h-[44px] text-rose-700 sm:min-h-10"
                           >
                             {t("prod.purge")}
                           </button>
@@ -961,7 +961,7 @@ export default function Products() {
               <button
                 onClick={bulkArchive}
                 disabled={busy}
-                className="jf-btn-ghost px-3 py-1.5 text-xs text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                className="jf-btn-ghost px-3 py-1.5 text-xs text-rose-700 disabled:opacity-50"
               >
                 {t("prod.bulkArchive")}
               </button>
@@ -1106,7 +1106,7 @@ export default function Products() {
                         </button>
                         <button
                           onClick={() => archiveOne(p)}
-                          className="jf-btn-ghost px-2.5 py-1 text-xs text-rose-700 hover:bg-rose-50"
+                          className="jf-btn-ghost px-2.5 py-1 text-xs text-rose-700"
                           title={t("prod.archiveOneTitle")}
                         >
                           ✕

@@ -460,7 +460,7 @@ export default function FormsPage() {
                               setPurgeTyped("");
                               setErr("");
                             }}
-                            className="jf-btn-ghost min-h-[44px] text-rose-700 hover:bg-rose-50 sm:min-h-10"
+                            className="jf-btn-ghost min-h-[44px] text-rose-700 sm:min-h-10"
                           >
                             {t("forms.purge")}
                           </button>
@@ -506,7 +506,7 @@ export default function FormsPage() {
               <button
                 onClick={() => bulk("delete")}
                 disabled={busy}
-                className="jf-btn-ghost px-3 py-1.5 text-xs text-rose-700 hover:bg-rose-50"
+                className="jf-btn-ghost px-3 py-1.5 text-xs text-rose-700"
               >
                 {t("forms.delete")}
               </button>

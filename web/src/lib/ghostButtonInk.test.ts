@@ -72,17 +72,26 @@
 //   longer paints. The three rules are parsed out of `globals.css`, and a missing
 //   or unparseable rule is a FAILURE, never a skip.
 //
-//   ONE CONSEQUENCE HAS TO BE SAID OUT LOUD, because it is why the sites above
-//   were written the way they were: those buttons also carry Tailwind's
-//   `hover:bg-rose-50` / `hover:bg-sky-50`, and it has NO EFFECT. Tailwind v4 puts
-//   its utilities in `@layer utilities`, and `.jf-btn-ghost:hover:not(:disabled)`
+//   ONE CONSEQUENCE HAD TO BE SAID OUT LOUD, because it is why the sites above
+//   were written the way they were: those buttons ALSO carried Tailwind's
+//   `hover:bg-rose-50` / `hover:bg-sky-50`, and it had NO EFFECT. Tailwind v4
+//   puts its utilities in `@layer utilities`, and `.jf-btn-ghost:hover:not(:disabled)`
 //   is written OUTSIDE any layer, so the unlayered rule wins the cascade
 //   regardless of specificity. Measured in Chromium on the built app: the hovered
 //   pixel of that sky button is `#f3f4f6`, not the `#f0f9ff` its `hover:bg-sky-50`
-//   names (`e2e/a11y-subscriptions-row.spec.ts` pins the pixel). A site whose
+//   named (`e2e/a11y-subscriptions-row.spec.ts` pins the pixel). A site whose
 //   author believed the hover surface was `rose-50` / `sky-50` would have measured
 //   4.121:1 / 3.661:1 — wrong in the same direction — so this guard judges the
-//   surfaces the CSS rule actually paints and ignores the dead utility.
+//   surfaces the CSS rule actually paints.
+//
+//   Those nine dead `hover:bg-*` utilities have since been DELETED (card
+//   t_ac414593), and the arm at the bottom of this file keeps them out: a `bg-*`
+//   utility on a ghost button cannot win this cascade, so writing one is a claim
+//   about a pixel that will never be painted. Deleting was chosen over moving the
+//   `.jf-*` rules into `@layer components` because that move would also activate
+//   every OTHER utility these buttons write (padding, font-size, min-height) and
+//   resize 84 of the 106 ghost elements in `web/src` — a different change, with
+//   its own re-derivation, not a cleanup.
 //
 // Run with:
 //
@@ -471,4 +480,101 @@ test("a PASSING label is left alone in every state, and a hover override is hono
   assert.equal(two.length, 1, `expected one finding, got ${two.length}: ${two.join(" | ")}`);
   assert.match(two[0], /text-rose-500/);
   assert.match(two[0], /:hover/);
+});
+
+// ─── a `bg-*` utility on a ghost button cannot paint: it is DEAD ────────────
+//
+// `.jf-btn-ghost` paints its own background from an UNLAYERED rule, and Tailwind
+// v4 emits every utility inside `@layer utilities`. In the cascade an unlayered
+// declaration beats every layer REGARDLESS of specificity, so a background
+// utility on a ghost button loses in every state — `hover:bg-rose-50` no more
+// than `bg-white`. Measured in Chromium on the built app: with the pointer on
+// `/subscriptions`' cancel button the painted surface was `#f3f4f6` (the CSS
+// rule's), never the `#fff1f2` the class list named; `e2e/a11y-subscriptions-row.spec.ts`
+// pins that pixel.
+//
+// Nine sites carried one and this card deleted them. The reason it is a guard and
+// not a one-off cleanup: reading the hover surface off the class list is how
+// eleven sub-AA labels reached the tree behind four green colour guards and a
+// green axe gate (card t_0fdbe189). The next author to write `hover:bg-<tint>` on
+// a ghost button is entitled to know it cannot apply BEFORE they measure a pixel
+// that will never be painted.
+const BACKGROUND_UTILITY = /^bg-/;
+
+/**
+ * Every `bg-*` utility found on a `.jf-btn-ghost` element, as `file:line — tokens`.
+ *
+ * Self-closing elements (`<button … />`) arrive only as a CLOSE event from the
+ * scanner, so every event is walked and deduped by `openIdx`: filtering on
+ * `event.open` would silently ignore half the shapes a button is written in.
+ */
+function deadBackgroundsIn(rel: string, src: string): string[] {
+  const code = codeOnly(src);
+  const lineAt = (idx: number) => code.slice(0, idx).split("\n").length;
+  const seen = new Set<number>();
+  const out: string[] = [];
+  for (const e of jsxTags(code)) {
+    const tag = e.tag;
+    if (seen.has(tag.openIdx) || !isGhost(tag)) continue;
+    seen.add(tag.openIdx);
+    if (tag.classNameUnreadable) {
+      out.push(
+        `${rel}:${lineAt(tag.openIdx)} — this ghost button's class list could not be read, so this ` +
+          `arm cannot tell whether it carries a dead \`bg-*\` utility; inline the class list here or ` +
+          `extend \`jsxSource.resolveClassExpr\` rather than letting the element go unjudged`,
+      );
+      continue;
+    }
+    const bad = tag.variants
+      .flatMap((v) => v.split(/\s+/))
+      .filter((cls) => cls.length > 0 && BACKGROUND_UTILITY.test(splitState(cls)[1]));
+    if (bad.length > 0) out.push(`${rel}:${lineAt(tag.openIdx)} — ${bad.join(" ")}`);
+  }
+  return out;
+}
+
+test("no `.jf-btn-ghost` element carries a `bg-*` utility — the unlayered rule paints it", () => {
+  const findings = FILES.flatMap((rel) => deadBackgroundsIn(rel, readFileSync(`${SRC}${rel}`, "utf8")));
+  assert.deepEqual(
+    findings,
+    [],
+    `${findings.length} background utilit(ies) on a \`${GHOST_CLASS}\` button cannot ever paint:\n  ` +
+      findings.join("\n  ") +
+      `\n\`${GHOST_CLASS}\` (and its :hover / :active) declare their backgrounds OUTSIDE any ` +
+      `@layer in globals.css, while Tailwind v4 emits utilities inside \`@layer utilities\`, and ` +
+      `an unlayered declaration beats every layer regardless of specificity. Delete the utility ` +
+      `(the button's own hover/pressed colour is the CSS rule's) — or, if the tint is genuinely ` +
+      `wanted, move the \`.jf-*\` rules into \`@layer components\` and re-derive every guard that ` +
+      `reads the ghost surfaces, including the pixel pinned in e2e/a11y-subscriptions-row.spec.ts.`,
+  );
+  // Coverage: the arm has to be looking at ghosts at all, or it passes vacuously.
+  let ghosts = 0;
+  for (const rel of FILES) {
+    const seen = new Set<number>();
+    for (const e of jsxTags(codeOnly(readFileSync(`${SRC}${rel}`, "utf8")))) {
+      if (seen.has(e.tag.openIdx) || !isGhost(e.tag)) continue;
+      seen.add(e.tag.openIdx);
+      ghosts += 1;
+    }
+  }
+  assert.ok(ghosts >= 50, `the walk found only ${ghosts} .jf-btn-ghost elements in web/src`);
+});
+
+test("a `bg-*` utility on a ghost button is REPORTED — the defect this arm keeps out", () => {
+  const fixture =
+    `export const A = () => (\n` +
+    `  <button className="jf-btn-ghost text-rose-700 hover:bg-rose-50">Cancel</button>\n` +
+    `);\n` +
+    `export const B = () => <button className="jf-btn-ghost text-rose-700 bg-white" />;\n` +
+    `export const C = () => <button className="rounded bg-white hover:bg-rose-50">Not a ghost</button>;\n`;
+  const found = deadBackgroundsIn("fixture.tsx", fixture);
+  assert.equal(found.length, 2, `expected two findings, got ${found.length}: ${found.join(" | ")}`);
+  // The exact shape the nine deleted sites had…
+  assert.match(found[0], /fixture\.tsx:2/);
+  assert.match(found[0], /hover:bg-rose-50/);
+  // …and a self-closing element, which the scanner reports only as a close event.
+  assert.match(found[1], /fixture\.tsx:4/);
+  assert.match(found[1], /bg-white/);
+  // A non-ghost element's background utility is that element's business, not this rule's.
+  assert.doesNotMatch(found.join(" "), /Not a ghost|rounded/);
 });
