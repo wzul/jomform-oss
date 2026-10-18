@@ -34,13 +34,25 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// requiredBlocks is the field set both fixtures carry: name, email and date
-// required, one optional textarea — no registered_fields anywhere.
+// requiredBlocks is the field set both fixtures carry: name, email, date and
+// text required, one optional textarea — no registered_fields anywhere.
+//
+// The `text` block is card t_28e6658d's subject: `formfields.collectableTypes`
+// left `text` out (reading it as prose) while both renderers painted it as an
+// `<input type="text">` with `required`/`pattern`, so a required text block was
+// an HTML attribute a direct POST could ignore. It is in the allowlist now
+// (card t_7fb80479), and the case below that leaves ONLY the text block empty
+// is what pins the submit route's half of it: the other required blocks are
+// filled, so the 400 can only come from this one.
 func requiredBlocks(required bool) []any {
 	return []any{
 		map[string]any{"id": "nm", "type": "name", "value": "Nama", "required": required},
 		map[string]any{"id": "em", "type": "email", "value": "Emel", "required": required},
 		map[string]any{"id": "dt", "type": "date", "value": "Tarikh", "required": required},
+		map[string]any{
+			"id": "txt", "type": "text", "value": "Syarikat", "required": required,
+			"placeholder": "Sdn Bhd",
+		},
 		map[string]any{"id": "note", "type": "textarea", "value": "Nota"},
 	}
 }
@@ -164,6 +176,19 @@ func TestResponseSubmitEnforcesRequiredBlocks(t *testing.T) {
 		{"empty fields map", `{"fields":{}}`, "medan wajib tidak diisi: Nama"},
 		{"only the first required block", `{"fields":{"nm":"Ali"}}`, "medan wajib tidak diisi: Emel"},
 		{"blank required value", `{"fields":{"nm":"   ","em":"ali@example.test","dt":"2026-10-10"}}`, "medan wajib tidak diisi: Nama"},
+		// Card t_28e6658d: every OTHER required block is answered, so this 400
+		// can only be the `text` block — the one the old allowlist dropped (its
+		// `required` was an HTML attribute a direct POST could ignore).
+		{
+			"all required blocks but the text one",
+			`{"fields":{"nm":"Ali","em":"ali@example.test","dt":"2026-10-10"}}`,
+			"medan wajib tidak diisi: Syarikat",
+		},
+		{
+			"the text block answered with blanks only",
+			`{"fields":{"nm":"Ali","em":"ali@example.test","dt":"2026-10-10","txt":"   "}}`,
+			"medan wajib tidak diisi: Syarikat",
+		},
 	}
 	for _, c := range cases {
 		rec := postSlug(t, h, host, respSlug, c.body)
@@ -182,7 +207,7 @@ func TestResponseSubmitEnforcesRequiredBlocks(t *testing.T) {
 	// A payload that fills every required block is still accepted, exactly as
 	// before the fix, and round-trips the values.
 	body := `{"client":{"full_name":"Ali","email":"ali@example.test"},` +
-		`"fields":{"nm":"Ali","em":"ali@example.test","dt":"2026-10-10","note":"Ok"}}`
+		`"fields":{"nm":"Ali","em":"ali@example.test","dt":"2026-10-10","txt":"Acme Sdn Bhd","note":"Ok"}}`
 	rec := postSlug(t, h, host, respSlug, body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("complete submit status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
@@ -206,6 +231,12 @@ func TestResponseSubmitEnforcesRequiredBlocks(t *testing.T) {
 	}
 	if sub.Data["dt"] != "2026-10-10" || sub.Data["note"] != "Ok" {
 		t.Errorf("stored data = %v, want the submitted values", sub.Data)
+	}
+	// Card t_28e6658d: the text block's answer is stored under its block id like
+	// every other input's — the contract now carries it, so this is the same
+	// field the submit route validated, not a copy collected by accident.
+	if sub.Data["txt"] != "Acme Sdn Bhd" {
+		t.Errorf("stored data[txt] = %v, want the text block's answer", sub.Data["txt"])
 	}
 }
 
@@ -249,8 +280,28 @@ func TestFormOrderEnforcesRequiredBlocks(t *testing.T) {
 		t.Fatalf("a refused order recorded %d sales, want 0", len(sales))
 	}
 
-	full := `{` + client +
+	// Card t_28e6658d: the same case one block further in — every required
+	// block answered EXCEPT the `text` one. A merchant's text field is the
+	// palette's only short-answer field, so this is the order a buyer would
+	// place after filling everything the page showed as required; it must be
+	// refused, and refused for the text block.
+	textOnly := `{` + client +
 		`"fields":{"nm":"Ali","em":"ali@example.test","dt":"2026-10-10"},` + items + `}`
+	rec = postSlug(t, h, host, orderSlug, textOnly)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("order without the text answer: status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "medan wajib tidak diisi: Syarikat") {
+		t.Errorf("order without the text answer: body %s, want the text block's message", rec.Body.String())
+	}
+	if sales, err = h.Sales.ListByAccount(ctx, accountID, 10); err != nil {
+		t.Fatalf("list sales: %v", err)
+	} else if len(sales) != 0 {
+		t.Fatalf("a refused order recorded %d sales, want 0", len(sales))
+	}
+
+	full := `{` + client +
+		`"fields":{"nm":"Ali","em":"ali@example.test","dt":"2026-10-10","txt":"Acme Sdn Bhd"},` + items + `}`
 	rec = postSlug(t, h, host, orderSlug, full)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("complete order status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
