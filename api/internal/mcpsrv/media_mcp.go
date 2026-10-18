@@ -95,7 +95,7 @@ func (s *Server) listMedia(ctx context.Context, _ *mcp.CallToolRequest, in listM
 // the background scan to flip them to 'ok' before they render.
 
 type uploadMediaIn struct {
-	Kind string `json:"kind" jsonschema:"Jenis fail: 'image' (png/jpeg/webp/gif — dioptimumkan, EXIF dibuang, disimpan sebagai JPEG; setiap imej dapat saiz thumbnail/medium/full), 'asset' (css/js/html/svg/woff2 — disimpan asli, scan-gated) atau 'pdf' (disimpan asli)"`
+	Kind string `json:"kind" jsonschema:"Jenis fail: 'image' (png/jpeg/webp/gif — dioptimumkan, EXIF dibuang, disimpan sebagai JPEG; GIF animasi jadi JPEG pegun, bingkai pertama sahaja; setiap imej dapat saiz thumbnail/medium/full), 'asset' (css/js/html/svg/woff2 — disimpan asli, scan-gated) atau 'pdf' (disimpan asli)"`
 	Data string `json:"data" jsonschema:"Fail content base64-encoded. Imej ≤20MB input / ≤2MB stored; asset ≤20MB input / ≤2MB stored; pdf ≤20MB input / ≤2MB stored."`
 }
 

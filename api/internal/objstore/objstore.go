@@ -824,9 +824,15 @@ func SizeLongEdge(s ImageSize) int {
 }
 
 // IsSizedImage reports whether a stored content-type is a raster image that
-// gets thumbnail/medium/full variants (issue #382). GIFs are excluded — they
-// are animated and stored as-is (no re-encode), so they have no generated
-// sizes. SVG is a code asset, not a sized raster.
+// gets thumbnail/medium/full variants (issue #382).
+//
+// image/gif is NOT a stored type of the upload path: the optimiser re-encodes
+// every accepted raster input to JPEG, so a GIF upload is stored as a still
+// JPEG and sized like any other one (t_d55ce0d4 — the earlier claim that a GIF
+// was "stored as-is, no re-encode" was never true). The exclusion is kept for
+// LEGACY rows whose media.mime was written as image/gif before t_05fd8d2a:
+// their bytes are JPEG, so variants are neither linked nor regenerable from
+// that row. SVG is a code asset, not a sized raster.
 func IsSizedImage(ct string) bool {
 	switch ct {
 	case "image/png", "image/jpeg", "image/webp":
@@ -941,9 +947,15 @@ func RenderPDFPreview(data []byte) ([]byte, error) {
 // golang.org/x/image/webp is decode-only, so the variants cannot be WebP
 // either. Callers must take the stored type from ImageArtifactMeta(stored), not
 // from the input they were handed.
+//
+// A GIF is decoded to its FIRST frame (t_d55ce0d4): an animated GIF is
+// therefore stored as a still JPEG and its animation is not kept. That is the
+// policy, not an accident — the media page and the MCP upload_media
+// description tell the merchant/agent so before the upload, and
+// TestAnimatedGIFUploadIsStoredAsOneStillJPEG pins the conversion. GIF gets no
+// carve-out here (it used to skip the quality loop) because it is now just
+// another raster input.
 func OptimizeImage(data []byte, ext string) ([]byte, error) {
-	isGIF := ext == ".gif"
-
 	img, err := decodeImage(data)
 	if err != nil {
 		return nil, errors.New("gagal decode imej")
@@ -961,7 +973,7 @@ func OptimizeImage(data []byte, ext string) ([]byte, error) {
 	out := encodeJPEG(img, JPEGQuality)
 
 	for _, q := range []int{70, 60, 50} {
-		if len(out) <= MaxStoredBytes || isGIF {
+		if len(out) <= MaxStoredBytes {
 			break
 		}
 		if len(out) > MaxStoredBytes {

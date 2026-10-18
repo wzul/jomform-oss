@@ -188,7 +188,9 @@ export default function MediaPage() {
         setUploadMsg(apiErr(d, t("media.uploadFail"), t));
         return;
       }
-      setUploadMsg(t("media.uploaded"));
+      // t_d55ce0d4: the optimiser stores a GIF as a still JPEG (first frame),
+      // so say it at the moment of upload too — not only in the hint above.
+      setUploadMsg(t(file.type === "image/gif" ? "media.uploadedGifStill" : "media.uploaded"));
       // Refresh the grid so the new item (with its sizes) appears.
       setPage(1);
       load();
@@ -465,6 +467,11 @@ export default function MediaPage() {
           >
             <p className="text-sm font-medium text-[var(--jf-muted)]">{t("media.dropHint")}</p>
             <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("media.uploadTypes")}</p>
+            {/* t_d55ce0d4: what the optimiser actually does to an image. The
+                upload path stores every raster input as a still JPEG, so an
+                animated GIF loses its animation — the merchant is told here,
+                where they upload, instead of finding out afterwards. */}
+            <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("media.stillJpeg")}</p>
             {uploadMsg && <p className="mt-2 text-sm text-[#4f46e5]">{uploadMsg}</p>}
             <input
               ref={fileInputRef}

@@ -162,6 +162,9 @@ export default function MediaPicker({
               }}
             />
           </div>
+          {/* t_d55ce0d4: this picker uploads through the same optimiser, so an
+              animated GIF becomes a still JPEG here as well. */}
+          <p className="mt-2 text-xs text-[var(--jf-muted)]">{t("media.stillJpeg")}</p>
           {uploadMsg && <p className="mt-2 text-xs text-[#4f46e5]">{uploadMsg}</p>}
 
           {showUrl && (
