@@ -265,9 +265,19 @@ func ValidateFields(regs []Field, fields map[string]string) error {
 }
 
 // collectableTypes is the allowlist of builder-block types that collect a
-// value (mirrors the renderer's input set). Display/pricing blocks
-// (image, divider, product, option, shipping, total) are never part of a
-// field contract.
+// value: the blocks a renderer paints as an answer control keyed by the block
+// id. Display/pricing blocks (image, divider, section, html, product, quantity,
+// option, shipping, total) are never part of a field contract, and the two
+// withdrawn block types (`file`, `coupon`) print a note instead of a control.
+//
+// "Mirrors the renderer's input set" is not a claim any more — it is checked.
+// httpapi/contract_renderer_parity_test.go drives both public renderers and the
+// menu checkout with one block of every palette type and fails when the two
+// answers disagree: a block that paints an answer control but is missing here is
+// a field the menu checkout never renders and never validates (that is exactly
+// how `text` went missing, card t_4a466bc5), and an entry with no control asks
+// the buyer for something they cannot see. Add a renderer arm and its entry in
+// the same change, or the build says so.
 //
 // Card t_7fb80479: `text` IS collectable, because the renderers paint it as a
 // text input. Leaving it out (its old reading — prose) meant a required text
