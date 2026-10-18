@@ -145,6 +145,41 @@
 //   `html, body { background: var(--jf-bg) }`), which is what keeps the
 //   tab-strip defect at 4.48:1 reported.
 //
+// THE SAME BLIND SPOT FOR THE GRAY FAMILY — a surface declared by a CSS RULE
+//
+//   `.jf-btn-ghost` is not a transparent button. `globals.css` paints three
+//   backgrounds on it,
+//
+//     .jf-btn-ghost                       { background: #fff     }
+//     .jf-btn-ghost:hover:not(:disabled)  { background: #f3f4f6 }
+//     .jf-btn-ghost:active:not(:disabled) { background: #e5e7eb }
+//
+//   and those rules are UNLAYERED, so they beat Tailwind's `@layer utilities`
+//   whatever the specificity — a `hover:bg-*` on such a button never paints.
+//   Every rule above (and every other guard in this repo) attributes a muted
+//   token to a surface it can SEE: a `bg-*` utility, a surface ancestor, or the
+//   page background. A background declared in a CSS RULE is invisible to that
+//   model (`jf-card`/`jf-input` are special-cased to white; `.jf-btn-ghost` was
+//   not), so the RESTING state was judged on the white the button happens to sit
+//   on and passed:
+//
+//     text-slate-500 (#62748e)   rest #ffffff 4.764:1   PASSES
+//                                :hover #f3f4f6 4.329:1 UNDER AA
+//                                :active #e5e7eb 3.848:1 UNDER AA
+//
+//   That was one real site (`app/form-settings/page.tsx`, the condition editor's
+//   "Remove condition") and it was MEASURED in Chromium on the built app, not
+//   argued from the class list. Rule (d) below reads the three backgrounds out of
+//   `globals.css`, resolves each gray token's colour from the installed theme,
+//   and judges every surface the token is actually painted on — so a moved
+//   surface or a palette change re-derives the verdict instead of keeping a
+//   remembered one, and an unreadable rule FAILS rather than shrinking.
+//
+//   OWNERSHIP: rule (d) owns the GRAY family on a `.jf-btn-ghost` element, the
+//   same way `ghostButtonInk.test.ts` owns red/rose/sky there. No site is judged
+//   by both: that file matches `text-(red|rose|sky)-N` only, this rule matches
+//   `text-(slate|gray|zinc|neutral|stone)-N` and the two muted tokens only.
+//
 // Run with:
 //
 //   npm run test:unit
@@ -268,8 +303,259 @@ function canonicalSurface(cls: string): string {
   return cls;
 }
 
+// ── surfaces declared by a CSS RULE, not by a utility (the ghost button) ────
+//
+// `.jf-btn-ghost` paints three backgrounds of its own in `globals.css`, so the
+// surface under a label MOVES when the pointer arrives. The rules are unlayered,
+// which is why a `hover:bg-*` utility on the same element never applies. These
+// values are READ from the stylesheet and the palette is READ from the installed
+// Tailwind theme, so the verdict is computed for the bytes in this tree.
+//
+// The derivation below is deliberately local to this file — `dangerText`,
+// `emeraldText` and `ghostButtonInk` each keep their own — so a helper defect
+// here cannot blind another guard.
+
+type RGB = [number, number, number];
+
+/** WCAG 2.x relative luminance / contrast — https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio */
+function channel(c: number): number {
+  const v = c / 255;
+  return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+}
+function luminance([r, g, b]: RGB): number {
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+function contrast(a: RGB, b: RGB): number {
+  const la = luminance(a), lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+const hexOf = (rgb: RGB) => "#" + rgb.map((v) => v.toString(16).padStart(2, "0")).join("");
+
+/** `#rgb` / `#rrggbb` as sRGB. */
+function parseHex(value: string): RGB | null {
+  const h = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(value.trim());
+  if (!h) return null;
+  const s = h[1].length === 3 ? h[1].split("").map((c) => c + c).join("") : h[1];
+  return [0, 2, 4].map((i) => parseInt(s.slice(i, i + 2), 16)) as RGB;
+}
+
 /**
- * Elements that can carry an inherited colour into a surface they paint
+ * Tailwind v4's palette is OKLCH, so this resolves OKLCH to the sRGB a browser
+ * paints (Björn Ottosson's OKLab -> linear sRGB, then the sRGB transfer function).
+ */
+function oklchToRgb(L: number, C: number, hDeg: number): RGB {
+  const h = (hDeg * Math.PI) / 180;
+  const a = C * Math.cos(h), b = C * Math.sin(h);
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3;
+  const out = [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+  ];
+  return out.map((v) => {
+    const c = Math.max(0, Math.min(1, v));
+    const e = c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055;
+    return Math.round(e * 255);
+  }) as RGB;
+}
+
+/**
+ * The installed Tailwind palette (`web/node_modules/tailwindcss/theme.css` —
+ * `web/Dockerfile`'s build stage runs `npm ci` with `WORKDIR /repo/web`, and
+ * `buildContext.test.ts` pins that, so this read is valid in the image too).
+ */
+function tailwindPalette(): Map<string, RGB> {
+  const theme = readFileSync(
+    fileURLToPath(new URL("../../node_modules/tailwindcss/theme.css", import.meta.url)),
+    "utf8",
+  );
+  const out = new Map<string, RGB>();
+  for (const m of theme.matchAll(/--color-([a-z0-9-]+):\s*([^;]+);/g)) {
+    const ok = /^oklch\(\s*([\d.]+)%\s+([\d.]+)\s+([\d.]+)/.exec(m[2].trim());
+    if (!ok) continue;
+    out.set(m[1], oklchToRgb(parseFloat(ok[1]) / 100, parseFloat(ok[2]), parseFloat(ok[3])));
+  }
+  return out;
+}
+const PALETTE = tailwindPalette();
+
+/** The app's own custom properties (`--jf-muted` & co) out of `globals.css`. */
+const GLOBALS_CSS = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
+const CSS_TOKENS = new Map<string, RGB>();
+for (const m of GLOBALS_CSS.matchAll(/--(jf-[a-z0-9-]+):\s*(#[0-9a-fA-F]{3,6})\s*;/g)) {
+  const rgb = parseHex(m[2]);
+  if (rgb) CSS_TOKENS.set(m[1], rgb);
+}
+
+/** The AA floor for normal-size text (WCAG 2.1 SC 1.4.3). */
+const AA_FLOOR = 4.5;
+
+type GhostSurface = { state: "" | "hover" | "active"; rule: string; rgb: RGB };
+
+/** The three rules `.jf-btn-ghost` paints its own background with, in pointer order. */
+const GHOST_RULES: Array<{ state: GhostSurface["state"]; rule: string; re: RegExp }> = [
+  { state: "", rule: ".jf-btn-ghost", re: /(?:^|\n)\.jf-btn-ghost\s*\{([^}]*)\}/ },
+  {
+    state: "hover",
+    rule: ".jf-btn-ghost:hover:not(:disabled)",
+    re: /\.jf-btn-ghost:hover:not\(:disabled\)\s*\{([^}]*)\}/,
+  },
+  {
+    state: "active",
+    rule: ".jf-btn-ghost:active:not(:disabled)",
+    re: /\.jf-btn-ghost:active:not\(:disabled\)\s*\{([^}]*)\}/,
+  },
+];
+
+/**
+ * The three backgrounds `.jf-btn-ghost` declares, keyed by the state they apply
+ * in. A missing rule, a rule with no `background`, or a value that does not
+ * resolve THROWS: an unreadable stylesheet must fail loudly, never shrink the
+ * guard into judging a surface the app does not paint.
+ */
+function ghostSurfaces(): GhostSurface[] {
+  return GHOST_RULES.map(({ state, rule, re }) => {
+    const m = re.exec(GLOBALS_CSS);
+    if (!m) throw new Error(`globals.css no longer declares \`${rule}\` — re-derive rule (d), do not delete it`);
+    const bg = /background(?:-color)?:\s*([^;]+);/.exec(m[1]);
+    if (!bg) throw new Error(`\`${rule}\` declares no background — rule (d) cannot judge a surface it cannot read`);
+    const raw = bg[1].trim();
+    const tok = /^var\(\s*--([a-z0-9-]+)\s*\)$/.exec(raw);
+    const rgb = tok ? (CSS_TOKENS.get(tok[1]) ?? null) : parseHex(raw);
+    if (!rgb) throw new Error(`\`${rule}\` background \`${raw}\` did not resolve to a colour`);
+    return { state, rule, rgb };
+  });
+}
+const GHOST = ghostSurfaces();
+
+/** The class that puts those surfaces under a label. */
+const GHOST_CLASS = "jf-btn-ghost";
+
+/**
+ * A GRAY text token — this rule's family, and only this one. Red/rose/sky on a
+ * ghost button is `ghostButtonInk.test.ts`'s family; keeping the two patterns
+ * disjoint is what stops two guards judging one class.
+ */
+const GHOST_GRAY_RE =
+  /^(?:text-(?:slate|gray|zinc|neutral|stone)-\d{2,3}|text-\[var\(--jf-muted(?:-on-tint)?\)\])$/;
+
+/** The sRGB a gray token paints, resolved from the installed theme. */
+function grayTokenRgb(tok: string): RGB | null {
+  const tw = /^text-(slate|gray|zinc|neutral|stone)-(\d{2,3})$/.exec(tok);
+  if (tw) return PALETTE.get(`${tw[1]}-${tw[2]}`) ?? null;
+  const cssVar = /^text-\[var\(--(jf-muted(?:-on-tint)?)\)\]$/.exec(tok);
+  if (cssVar) return CSS_TOKENS.get(cssVar[1]) ?? null;
+  return null;
+}
+
+/** Pseudo-class segments that name a STATE for this rule (a breakpoint is not one). */
+const GHOST_STATES = new Set(["hover", "focus", "focus-visible", "active", "visited", "disabled", "checked"]);
+
+/**
+ * The ghost surfaces a token written under `state` is ACTUALLY painted on:
+ *
+ *   no state (or only a breakpoint)  every state — the background moves UNDER a
+ *                                    resting label, which is the whole defect: it
+ *                                    is fine on white and fails once hovered;
+ *   hover                            hover + active (a press begins with the
+ *                                    pointer already there);
+ *   active                           active;
+ *   any other pseudo-class           the RESTING surface, because `.jf-btn-ghost`
+ *                                    re-paints its background on :hover/:active
+ *                                    and on those two states only.
+ */
+function ghostSurfacesFor(state: string): GhostSurface[] {
+  const segs = state.split(":").filter(Boolean);
+  if (segs.includes("active")) return GHOST.filter((g) => g.state === "active");
+  if (segs.includes("hover")) return GHOST.filter((g) => g.state !== "");
+  if (segs.some((s) => GHOST_STATES.has(s))) return GHOST.filter((g) => g.state === "");
+  return GHOST;
+}
+
+/**
+ * The lightest SLATE step that clears AA on all three ghost surfaces — the
+ * replacement this rule recommends, computed from the installed theme (never
+ * remembered) and the LIGHTEST such step so the visual hierarchy is kept.
+ */
+function safeSlateStep(): { token: string; rgb: RGB; worst: number } | null {
+  let best: { token: string; rgb: RGB; worst: number } | null = null;
+  for (const [name, rgb] of PALETTE) {
+    if (!/^slate-\d+$/.test(name)) continue;
+    const worst = Math.min(...GHOST.map((g) => contrast(rgb, g.rgb)));
+    if (worst < AA_FLOOR) continue;
+    if (!best || luminance(rgb) > luminance(best.rgb)) best = { token: `text-${name}`, rgb, worst };
+  }
+  return best;
+}
+
+/**
+ * Rule (d): every GRAY label on a `.jf-btn-ghost` button, judged on every
+ * surface that button paints — including the two the resting state never shows.
+ *
+ * One finding per element, naming every surface with its ratio, because the
+ * resting one PASSES and a finding that named only the failing ratio would hide
+ * that the label is fine until the pointer arrives.
+ */
+function ghostGrayFindings(
+  rel: string,
+  events: ReturnType<typeof jsxTags>,
+  lineAt: (idx: number) => number,
+): string[] {
+  const out: string[] = [];
+  for (const e of events) {
+    const tag = e.tag;
+    const isGhostButton = tag.variants.some((v) =>
+      v.split(/\s+/).some((cls) => splitState(cls)[1] === GHOST_CLASS),
+    );
+    if (!isGhostButton) continue;
+
+    for (const v of tag.variants) {
+      for (const cls of v.split(/\s+/)) {
+        const [state, tok] = splitState(cls);
+        if (!tok || !GHOST_GRAY_RE.test(tok)) continue;
+        const rgb = grayTokenRgb(tok);
+        if (!rgb) {
+          out.push(
+            `${rel}:${lineAt(tag.openIdx)} — <${tag.name}> paints ${tok} on a \`${GHOST_CLASS}\` button, ` +
+              `but that token's colour did not resolve from the installed theme. Rule (d) fails rather ` +
+              `than judging a surface/token pair it cannot read: re-anchor it (or drop the token).`,
+          );
+          continue;
+        }
+        const painted = ghostSurfacesFor(state);
+        const rows = painted.map((s) => ({ surface: s, ratio: contrast(rgb, s.rgb) }));
+        const bad = rows.filter((r) => r.ratio < AA_FLOOR);
+        if (bad.length === 0) continue;
+
+        const st = state.replace(/:+$/, "");
+        const where = st ? ` in the ${st} state` : "";
+        const table = rows
+          .map(
+            (r) =>
+              `${r.surface.state || "rest"} ${hexOf(r.surface.rgb)} ${r.ratio.toFixed(3)}:1`,
+          )
+          .join(", ");
+        const safe = safeSlateStep();
+        out.push(
+          `${rel}:${lineAt(tag.openIdx)} — <${tag.name}> paints ${tok} (${hexOf(rgb)}) on a ` +
+            `\`${GHOST_CLASS}\` button${where}, which measures ${table}: under the ${AA_FLOOR}:1 AA floor ` +
+            `on ${bad.map((r) => `\`${r.surface.rule}\` (${r.ratio.toFixed(3)}:1)`).join(" and ")} — the ` +
+            `surface${bad.length > 1 ? "s" : ""} the button itself paints (globals.css, unlayered: it beats ` +
+            `any \`bg-*\` utility on the same element). ` +
+            (safe
+              ? `Use ${safe.token} (${hexOf(safe.rgb)}, worst ghost surface ${safe.worst.toFixed(3)}:1).`
+              : `No gray step clears all three surfaces; re-colour the site.`),
+        );
+      }
+    }
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * Elements that can carry an inherited colour into a surface it paints
  * themselves. Rule (b2) is restricted to these: a block child starts its own
  * line box, so the ancestor's colour never lands on the child's background in
  * the way this defect needs.
@@ -686,6 +972,13 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
     );
   }
 
+  // (d) A GRAY label on a `.jf-btn-ghost` button, judged on the three surfaces
+  //     the button ITSELF paints. This is the branch the rules above structurally
+  //     cannot reach: they attribute a token to a `bg-*` utility, a surface
+  //     ancestor or the page background, and `.jf-btn-ghost`'s backgrounds live
+  //     in a CSS RULE. See the header block for the measured numbers.
+  findings.push(...ghostGrayFindings(rel, events, lineAt));
+
   // A finding must be reported once per site, not once per variant.
   return [...new Set(findings)];
 }
@@ -745,7 +1038,9 @@ test("no muted-gray text token is painted on a surface it fails AA on (repo-wide
       `  text-[var(--jf-muted)]            (#6b7280) — default muted line, NOT on slate-100/200/indigo-50\n` +
       `  text-[var(--jf-muted-on-tint)]    (#5b6472) — muted line ON a solid tint\n` +
       `  text-slate-400 / text-[#9ca3af]   are below AA on EVERY light surface in this app\n` +
-      `  text-slate-500                    is 4.48:1 on --jf-bg although it passes on white\n\n` +
+      `  text-slate-500                    is 4.48:1 on --jf-bg although it passes on white\n` +
+      `  a GRAY label on a .jf-btn-ghost button is judged on the button's own three surfaces\n` +
+      `  (#ffffff / #f3f4f6 / #e5e7eb, read from globals.css) — a resting label moves with the pointer\n\n` +
       findings.join("\n"),
   );
 });
@@ -1250,5 +1545,149 @@ test("a class string held in a variable is judged on the surface that renders it
   }
 
   assert.deepEqual(problems, [], problems.join("\n"));
+});
+
+// ─── rule (d): a GRAY label on a `.jf-btn-ghost` button ─────────────────────
+//
+// THE DEFECT this test pins (card t_ee95fbba, measured in Chromium on the built
+// app): the condition editor's "Remove condition" button —
+// `jf-btn-ghost px-2 py-1 text-xs text-slate-500` — PASSES at rest on the
+// button's own white (4.764:1), which is why nothing saw it, and drops under AA
+// the moment the pointer arrives, because `.jf-btn-ghost` re-paints its own
+// background from an UNLAYERED `globals.css` rule:
+//
+//     rest    #ffffff   4.764:1   PASSES
+//     :hover  #f3f4f6   4.329:1   UNDER AA
+//     :active #e5e7eb   3.848:1   UNDER AA
+//
+// axe never hovers a button and the rules above cannot see a background declared
+// in a CSS rule, so this site was green under every gate the repo had.
+test("a gray label on a .jf-btn-ghost button is judged on the button's own three surfaces", () => {
+  const problems: string[] = [];
+  const names = (f: string[]) => f.join(" | ");
+  const button = (cls: string) =>
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="jf-card">',
+      `      <button className="${cls}">Remove condition</button>`,
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n");
+
+  // (1) The site as it shipped, verbatim. It must be found, with ALL THREE
+  //     surfaces named — the resting one passes and is the reason for the blind
+  //     spot, so a finding that quoted only the failing ratio would hide it.
+  const shipped = findingsIn("fixture.tsx", button("jf-btn-ghost px-2 py-1 text-xs text-slate-500"));
+  if (shipped.length !== 1) {
+    problems.push(`the shipped ghost site must be reported once, got ${names(shipped)}`);
+  } else {
+    const f = shipped[0];
+    for (const [what, re] of [
+      ["the token", /text-slate-500/],
+      ["its resolved colour", /#62748e/],
+      ["the PASSING resting surface", /rest #ffffff 4\.764:1/],
+      ["the hovered ratio", /4\.329:1/],
+      ["the pressed ratio", /3\.848:1/],
+      ["the hovered rule", /\.jf-btn-ghost:hover:not\(:disabled\)/],
+      ["the pressed rule", /\.jf-btn-ghost:active:not\(:disabled\)/],
+      ["the computed safe step", /text-slate-600/],
+      ["the file:line", /fixture\.tsx:4/],
+    ] as const) {
+      if (!re.test(f)) problems.push(`the finding does not name ${what}: ${f}`);
+    }
+  }
+
+  // (2) The fix — `text-slate-600`, the step the app already paints on the nine
+  //     other ghost buttons — leaves the site alone in every state.
+  const fixed = findingsIn("fixture.tsx", button("jf-btn-ghost px-2 py-1 text-xs text-slate-600"));
+  if (fixed.length !== 0) problems.push(`the FIXED site was reported: ${names(fixed)}`);
+
+  // (3) The same token on a button WITHOUT the ghost class is not this rule's
+  //     business: it sits on the card's white (4.76:1) and passes.
+  const control = findingsIn("fixture.tsx", button("rounded border px-2 py-1 text-xs text-slate-500"));
+  if (control.length !== 0) problems.push(`a non-ghost control was reported: ${names(control)}`);
+
+  // (4) The muted tokens are MEASURED, not remembered:
+  //     `--jf-muted` is 4.393:1 on the hover surface (the card body quotes 4.16 —
+  //     the guard's own derivation wins, and this pins that it computed rather
+  //     than copied), and `--jf-muted-on-tint` clears all three (worst 4.831:1)
+  //     so it must NOT be reported. A guard that assumed "the muted token is
+  //     lighter, therefore bad" would fail one of these two arms.
+  const muted = findingsIn("fixture.tsx", button("jf-btn-ghost text-xs text-[var(--jf-muted)]"));
+  if (!muted.some((f) => f.includes("text-[var(--jf-muted)]") && f.includes("4.393:1"))) {
+    problems.push(`--jf-muted on a ghost button was not measured on its hover surface: ${names(muted)}`);
+  }
+  const onTint = findingsIn("fixture.tsx", button("jf-btn-ghost text-xs text-[var(--jf-muted-on-tint)]"));
+  if (onTint.length !== 0) {
+    problems.push(
+      `--jf-muted-on-tint clears every ghost surface (4.831:1 worst) and must not be reported: ${names(onTint)}`,
+    );
+  }
+
+  // (5) An even lighter step is still a defect, so the rule is about the
+  //     SURFACES rather than about one token name.
+  const slate400 = findingsIn("fixture.tsx", button("jf-btn-ghost text-xs text-slate-400"));
+  if (!slate400.some((f) => f.includes("text-slate-400") && f.includes("2.390:1"))) {
+    problems.push(`text-slate-400 on a ghost button was not reported: ${names(slate400)}`);
+  }
+
+  // (6) A state-qualified token is judged on the surfaces that state paints: a
+  //     resting `text-slate-600` with a lighter `hover:` override is a defect
+  //     ON HOVER, and the finding says so instead of blaming the resting state.
+  const hoverOverride = findingsIn(
+    "fixture.tsx",
+    button("jf-btn-ghost text-xs text-slate-600 hover:text-slate-500"),
+  );
+  if (!hoverOverride.some((f) => f.includes("text-slate-500") && f.includes("in the hover state"))) {
+    problems.push(`a hover-only regression on a ghost button was not reported: ${names(hoverOverride)}`);
+  }
+
+  assert.deepEqual(problems, [], problems.join("\n"));
+});
+
+test("rule (d) reads the stylesheet, and is looking at real, reachable markup", () => {
+  // The surfaces were READ from globals.css, not defaulted: if any of the three
+  // moves, every verdict this rule computed was about a pixel the app no longer
+  // paints, so fail loudly and re-derive rather than keep the old reading.
+  assert.deepEqual(
+    GHOST.map((g) => `${g.state || "rest"} ${hexOf(g.rgb)}`),
+    ["rest #ffffff", "hover #f3f4f6", "active #e5e7eb"],
+    "the three surfaces .jf-btn-ghost paints have MOVED — re-derive rule (d), its header numbers and the " +
+      "browser arm that pins the hovered pixel",
+  );
+
+  // …and the walk reaches the family it judges. A rename of the ghost class or of
+  // the gray tokens, or a broken walk, would otherwise read as a clean pass.
+  let ghosts = 0;
+  let grayGhosts = 0;
+  for (const rel of FILES) {
+    for (const e of jsxTags(codeOnly(sourceOf(rel)))) {
+      const isGhostButton = e.tag.variants.some((v) =>
+        v.split(/\s+/).some((cls) => splitState(cls)[1] === GHOST_CLASS),
+      );
+      if (!isGhostButton) continue;
+      ghosts += 1;
+      const gray = e.tag.variants.some((v) =>
+        v.split(/\s+/).some((cls) => {
+          const [, bareCls] = splitState(cls);
+          return bareCls !== "" && GHOST_GRAY_RE.test(bareCls);
+        }),
+      );
+      if (gray) grayGhosts += 1;
+    }
+  }
+  assert.ok(ghosts >= 50, `the walk found only ${ghosts} .jf-btn-ghost elements in web/src`);
+  assert.ok(
+    grayGhosts >= 9,
+    `the walk found only ${grayGhosts} ghost buttons carrying a gray label — if the class or the tokens ` +
+      `were renamed, re-anchor rule (d) rather than trusting a green run`,
+  );
+
+  // The recommendation is computed from the installed theme too: if the palette
+  // darkens so that 500 passes, the guard must stop recommending 600.
+  assert.equal(safeSlateStep()?.token, "text-slate-600", "the computed safe slate step moved");
 });
 

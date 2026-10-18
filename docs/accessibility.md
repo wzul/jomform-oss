@@ -435,7 +435,7 @@ white) are below AA on every light surface in the app, and `text-slate-500`
 the guard compares a token against the surface it is *paired with* rather than
 banning a class outright.
 
-The guard checks four shapes, because this defect took all four:
+The guard checks five shapes, because this defect took all five:
 
 1. the same class list renders a light surface **and** a token that cannot clear
    it there;
@@ -446,7 +446,16 @@ The guard checks four shapes, because this defect took all four:
    token cannot clear on — `<p class="…jf-muted">Brand <code class="bg-slate-100">ID</code></p>`
    is 4.41:1, and it shipped;
 4. `text-[#9ca3af]`, which has no AA-safe placement in the app at all (2.54:1 at
-   its best, on white).
+   its best, on white);
+5. a **GRAY label on a `.jf-btn-ghost` button**, judged on the three surfaces the
+   button paints itself — `.jf-btn-ghost`, `:hover:not(:disabled)` and
+   `:active:not(:disabled)` in `globals.css` (#ffffff / #f3f4f6 / #e5e7eb, read
+   from the stylesheet on every run, never remembered). Those rules are
+   unlayered, so a `hover:bg-*` utility on the same button never paints and the
+   label lands on a darker surface the moment the pointer arrives:
+   `text-slate-500` (#62748e) is 4.76:1 at rest and fails hovered (4.33:1) and
+   pressed (3.85:1) — measured in Chromium on the built app. Resting-only scans
+   cannot see it (axe never hovers a button), which is why this is a source rule.
 
 A token is only reported when the pairing is real, so `--jf-muted` on the page
 background and on white is fine, and an inline child that declares its own colour

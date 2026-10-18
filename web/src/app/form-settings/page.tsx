@@ -2492,7 +2492,7 @@ function FormSettingsInner() {
                                   t={t}
                                   compact
                                 />
-                                <button onClick={() => setEdHasCond(false)} className="jf-btn-ghost px-2 py-1 text-xs text-slate-500">
+                                <button onClick={() => setEdHasCond(false)} className="jf-btn-ghost px-2 py-1 text-xs text-slate-600">
                                   {t("fs.notifCondRemove")}
                                 </button>
                               </div>
