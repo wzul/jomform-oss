@@ -294,9 +294,12 @@ fi
 
 # ---------------------------------------------------------------------------
 # 6. Build with provenance stamps (build args + OCI labels).
-#    api/Dockerfile should declare ARG VERSION / COMMIT / BUILD_DATE and wire
-#    them into the go build -ldflags -X version.* values; until it does, the
-#    labels below still tie the image to the exact commit.
+#    api/Dockerfile declares ARG VERSION / COMMIT / BUILD_DATE and wires all
+#    three into the go build -ldflags -X version.* values, so the binary — and
+#    therefore /version, `--version` and the startup banner — reports exactly
+#    the stamps logged above and set as the OCI labels below. A build that
+#    passes no --build-arg still reports dev/none/unknown, never "".
+#    api/internal/version/dockerfile_wiring_test.go fails when that wiring rots.
 # ---------------------------------------------------------------------------
 info "building $IMAGE:$VERSION from $DOCKERFILE (context: $CONTEXT)"
 docker build \

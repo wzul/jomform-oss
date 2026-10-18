@@ -339,9 +339,12 @@ does **not** do.
 
 ## Prerequisite
 
-The api image Dockerfile (`api/Dockerfile`) is being added by the Dockerfile
-issue. Until it lands, the script exits with a clear error pointing at it.
-When it lands it should declare `ARG VERSION`, `ARG COMMIT`, `ARG BUILD_DATE`
-and wire them into the `go build -ldflags "-X ...version.Version=$VERSION -X
-...version.Commit=$COMMIT"` line; the OCI labels set by this script already
-carry provenance regardless.
+The api image Dockerfile (`api/Dockerfile`) must be present, and the script
+exits with a clear error pointing at it when it is not. It declares `ARG
+VERSION`, `ARG COMMIT` and `ARG BUILD_DATE` and wires all three into the `go
+build -ldflags "-X ...version.Version=$VERSION -X ...version.Commit=$COMMIT -X
+...version.Date=$BUILD_DATE"` line, so `/version` (and `--version`, and the
+startup banner) reports the same stamps this script logs and writes into the OCI
+labels. The ARG defaults mirror `api/internal/version/version.go`, so a bare
+`docker build` reports `dev`/`none`/`unknown` rather than an empty string;
+`api/internal/version/dockerfile_wiring_test.go` fails if that wiring is lost.

@@ -9,10 +9,19 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# Provenance stamps. `deploy/build-and-ship.sh` passes all three as --build-arg
+# (VERSION from `git describe`, COMMIT from `git rev-parse --short`, BUILD_DATE
+# from `date -u`), and each one is wired into the binary below so /version,
+# `--version` and the startup banner report the same values the OCI labels
+# carry. The defaults here mirror api/internal/version/version.go exactly, so a
+# bare `docker build` still reports dev/none/unknown instead of an empty string.
+# api/internal/version/dockerfile_wiring_test.go fails the build if a version
+# variable is added without both an ARG and its -X wiring.
 ARG VERSION=dev
 ARG COMMIT=none
+ARG BUILD_DATE=unknown
 RUN CGO_ENABLED=0 go build -trimpath \
-  -ldflags "-s -w -X github.com/wzul/jomform/api/internal/version.Version=${VERSION} -X github.com/wzul/jomform/api/internal/version.Commit=${COMMIT}" \
+  -ldflags "-s -w -X github.com/wzul/jomform/api/internal/version.Version=${VERSION} -X github.com/wzul/jomform/api/internal/version.Commit=${COMMIT} -X github.com/wzul/jomform/api/internal/version.Date=${BUILD_DATE}" \
   -o /jomform-api ./cmd/jomform-api
 
 FROM alpine:3.20
