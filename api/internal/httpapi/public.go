@@ -2426,8 +2426,10 @@ func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	// t_05fd8d2a: publish what the bytes ARE, not what the uploader once
 	// recorded — a pre-fix PNG upload is JPEG bytes whose metadata says
-	// image/png. Non-image types are returned unchanged.
-	w.Header().Set("Content-Type", objstore.ServedContentType(ct, body))
+	// image/png. t_5f6a5d37: the same for a pre-t_8881000c code asset recorded
+	// under the other member of the css/js pair; the row is corrected with it so
+	// the media library and MCP listings agree.
+	publishServedContentType(r.Context(), w, h.Media, key, ct, body)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// Same policy as /media: a code asset can be purged too, so its edge copy
 	// must have the same bounded lifetime (see mediaCacheControl).

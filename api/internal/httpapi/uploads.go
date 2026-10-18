@@ -251,6 +251,32 @@ func cacheMaxAgeSeconds(cacheControl string) int {
 	return 0
 }
 
+// publishServedContentType writes the Content-Type for an object being served
+// and, when the bytes contradict a legacy css/js record, corrects media.mime in
+// the same breath (t_5f6a5d37).
+//
+// objstore.ServedContentType is what the bytes say to publish; media.mime is
+// what the media library (GET /v1/rest/media), MCP list_media/
+// list_deleted_media and the trash bin report. Serving one type while every
+// listing names the other is the same silent wrongness this card removes one
+// layer down, so a corrected object corrects its row too — once: after the
+// rewrite the stored row equals the served type, so the branch is dead for
+// every later request.
+//
+// It never fails the response. A missing media row (legacy object), an
+// unconfigured store in tests, or an unreachable DB must not turn a working
+// stylesheet into a 500; the correction is bookkeeping.
+func publishServedContentType(ctx context.Context, w http.ResponseWriter, media *dbstore.MediaStore, key, storedType string, body []byte) {
+	served := objstore.ServedContentType(storedType, body)
+	w.Header().Set("Content-Type", served)
+	if served == storedType || !objstore.IsCodeAsset(storedType) || media == nil {
+		return
+	}
+	if _, err := media.CorrectMimeByKey(ctx, objstore.AccountIDFromKey(key), key, served); err != nil {
+		slog.Warn("media_mime_correct", "key", key, "err", err)
+	}
+}
+
 // handleMedia serves GET /media/{key} — a public, unauthenticated route that
 // streams an uploaded object from the media bucket (issue #145). The key is
 // validated to a safe `u/...` path (no traversal), the object's stored
@@ -316,8 +342,10 @@ func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	// t_05fd8d2a: publish what the bytes ARE, not what the uploader once
 	// recorded — a pre-fix PNG upload is JPEG bytes whose metadata says
-	// image/png. Non-image types are returned unchanged.
-	w.Header().Set("Content-Type", objstore.ServedContentType(ct, body))
+	// image/png. t_5f6a5d37: the same for a pre-t_8881000c code asset recorded
+	// under the other member of the css/js pair; the row is corrected with it so
+	// the media library and MCP listings agree.
+	publishServedContentType(r.Context(), w, h.Media, key, ct, body)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", mediaCacheControl)
 	if isCodeAsset(ct) {

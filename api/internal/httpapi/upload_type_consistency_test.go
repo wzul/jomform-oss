@@ -255,8 +255,10 @@ func TestLegacyMislabeledObjectServedByItsBytes(t *testing.T) {
 }
 
 // TestServedContentType pins which stored types the serve path is allowed to
-// correct: only claimed raster images. Code assets and PDFs keep their metadata
-// because the image sniffer cannot judge them.
+// correct: claimed raster images (t_05fd8d2a) and the css/js pair (t_5f6a5d37,
+// whose legacy comment-led bodies are pinned in asset_serve_legacy_test.go).
+// html/svg/woff2/pdf keep their metadata: their signatures cannot be confused
+// with each other.
 func TestServedContentType(t *testing.T) {
 	jpeg := fakeJPEG(t)
 	png := tinyPNG(t)

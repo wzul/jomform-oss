@@ -532,6 +532,31 @@ func (s *MediaStore) ByKey(ctx context.Context, accountID, key string) (*Media, 
 	return m, err
 }
 
+// CorrectMimeByKey rewrites a media row's recorded mime to the type its bytes
+// actually are (t_5f6a5d37). It is the write half of the serve-path correction:
+// a merchant code asset uploaded before t_8881000c was recorded under the wrong
+// member of the css/js pair (a comment-led stylesheet stored `.js`/
+// text/javascript), and the media library, MCP list_media/list_deleted_media
+// and the trash bin all report media.mime — correcting the row is what keeps
+// every surface naming the type the object is actually served with.
+//
+// Scoped to the account and to non-deleted rows, and a no-op when the row
+// already records `mime`, so the serve path writes at most once per object.
+// rewritten=false with a nil error means there was nothing to rewrite.
+func (s *MediaStore) CorrectMimeByKey(ctx context.Context, accountID, key, mime string) (bool, error) {
+	if s == nil || s.pool == nil || accountID == "" || key == "" || mime == "" {
+		return false, nil
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE media SET mime = $3
+		 WHERE key = $1 AND account_id = $2 AND deleted_at IS NULL AND mime <> $3`,
+		key, accountID, mime)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // scanStatusFromKey reports whether a stored asset at `key` may be served.
 // Serving is gated on scan_status: only 'ok' (scanned + benign) is allowed.
 // 'pending'/'scanning'/'needs_review'/'quarantined' are all fail-closed.

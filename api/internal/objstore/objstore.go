@@ -508,17 +508,59 @@ func ImageArtifactMeta(data []byte) (mime, ext string, ok bool) {
 // disagree with the bytes: uploads made before t_05fd8d2a recorded the INPUT
 // image type and then stored the optimised JPEG. For a claimed raster image the
 // bytes win, so a legacy `.png` key holding JPEG bytes is served `image/jpeg`
-// instead of publishing a type the body does not have. Every other type is
-// returned unchanged — css/js/html/svg/woff2/pdf are not raster images, and the
-// image sniffer must not be allowed to judge them.
+// instead of publishing a type the body does not have.
+//
+// t_5f6a5d37: the same rule now covers the css/js pair, for the objects
+// t_8881000c could not reach. A leading `/* ... */` comment is byte-identical
+// in a stylesheet and a script, so uploads made before that fix recorded a
+// comment-led stylesheet as `.js`/`text/javascript`. Nothing rewrote those rows,
+// and a browser under `X-Content-Type-Options: nosniff` refuses a stylesheet
+// served as text/javascript — silently, so the merchant's CSS simply does not
+// apply. These two types are the only allowlisted pair whose signatures
+// overlap; a body the sniffer cannot positively identify keeps its recorded
+// type, so a comment-only asset is never re-labelled on a guess. html/svg/
+// woff2/pdf have unambiguous signatures and are returned unchanged.
 func ServedContentType(storedType string, body []byte) string {
 	switch storedType {
 	case "image/png", "image/jpeg", "image/webp", "image/gif":
 		if mime, _, ok := ImageArtifactMeta(body); ok {
 			return mime
 		}
+	case "text/javascript; charset=utf-8", "text/javascript",
+		"application/javascript; charset=utf-8", "application/javascript":
+		if ext, ok := servedCodeExt(body); ok && ext == ".css" {
+			return UploadAssetMIME[".css"]
+		}
+	case "text/css; charset=utf-8", "text/css":
+		if ext, ok := servedCodeExt(body); ok && ext == ".js" {
+			return UploadAssetMIME[".js"]
+		}
 	}
 	return storedType
+}
+
+// servedCodeExt reports the code language a stored body POSITIVELY identifies
+// (".css" or ".js"), or ok=false when it cannot be told apart from the other.
+//
+// It is deliberately stricter than SniffAssetType: an empty or comment-only
+// body is ambiguous, and SniffAssetType answers `.js` for it to preserve the
+// pre-t_8881000c upload classification. The serve path has the opposite duty —
+// it must only move an object when its bytes say so — so the fallback is
+// declined here and the recorded type stands.
+//
+// Markup is declined too: css/js never open with `<`, and an html/svg document
+// that happens to contain a `{` in a <style> block must not be re-labelled as a
+// stylesheet.
+func servedCodeExt(body []byte) (string, bool) {
+	if len(body) == 0 || bytes.HasPrefix(body, []byte("%PDF-")) {
+		return "", false
+	}
+	t := trimLeadingBlanks(string(body))
+	code, _ := skipLeadingComments(t)
+	if code == "" || strings.HasPrefix(code, "<") {
+		return "", false
+	}
+	return sniffCodeLanguage(code)
 }
 
 // SniffAssetType inspects the leading bytes — NOT the client-supplied
@@ -548,9 +590,7 @@ func SniffAssetType(data []byte) (string, bool) {
 	if bytes.HasPrefix(data, []byte("%PDF-")) {
 		return "", false
 	}
-	t := strings.TrimLeftFunc(string(data), func(r rune) bool {
-		return r <= ' ' // skip leading whitespace/newlines
-	})
+	t := trimLeadingBlanks(string(data))
 	lower := strings.ToLower(t)
 	if strings.HasPrefix(lower, "<!doctype html") || strings.HasPrefix(lower, "<html") {
 		return ".html", true
@@ -574,35 +614,8 @@ func SniffAssetType(data []byte) (string, bool) {
 	// route sends, a browser then REFUSES it as a `<link rel="stylesheet">` and
 	// the merchant's CSS silently does not apply.
 	code, hadComment := skipLeadingComments(t)
-	sig := strings.ToLower(code)
-	if sig != "" {
-		for _, p := range []string{
-			`"`, "'", "`",
-			"const ", "let ", "var ", "function ", "class ", "async ", "await ", "return ",
-			"if ", "else ", "for ", "while ", "do ", "switch ", "case ", "try ", "catch ",
-			"throw ", "new ", "typeof ", "instanceof ", "in ", "of ", "yield ", "this",
-			"document.", "window.", "alert(", "fetch(",
-			"console.", "require(", "module.exports", "exports.",
-			"import ", "export ", "function",
-			"(function", "(async", "(()", "((",
-		} {
-			if strings.HasPrefix(sig, p) {
-				return ".js", true
-			}
-		}
-		first := string(sig[0])
-		hasBrace := strings.Contains(sig, "{") && first != "{" && first != "("
-		if strings.HasPrefix(sig, "@charset") ||
-			strings.HasPrefix(sig, "@import") ||
-			strings.HasPrefix(sig, "@media") ||
-			strings.HasPrefix(sig, "@supports") ||
-			strings.HasPrefix(sig, "@font-face") ||
-			strings.HasPrefix(sig, "@keyframes") ||
-			strings.HasPrefix(sig, "@layer") ||
-			strings.HasPrefix(sig, "@container") ||
-			hasBrace {
-			return ".css", true
-		}
+	if ext, ok := sniffCodeLanguage(code); ok {
+		return ext, true
 	}
 	// Whatever followed the comment matched neither language. A comment-led
 	// body (a script whose first statement has no listed signature, or a body
@@ -612,6 +625,77 @@ func SniffAssetType(data []byte) (string, bool) {
 		return ".js", true
 	}
 	return "", false
+}
+
+// sniffCodeLanguage classifies a css/js body from the statement that follows
+// any leading comment (see skipLeadingComments). ok is false when the bytes
+// identify neither language: an empty remainder (comment-only or unterminated
+// comment), or a statement with no listed signature.
+//
+// Callers that must not GUESS depend on that distinction: the serve path
+// corrects a legacy object's recorded type only from a positive classification
+// (t_5f6a5d37, servedCodeExt), while the upload path keeps its historical
+// `.js` fallback (SniffAssetType).
+func sniffCodeLanguage(code string) (string, bool) {
+	if code == "" {
+		return "", false
+	}
+	// A signature is always at the very start, so the case-folding is bounded
+	// to the first bytes; the brace test below needs no case.
+	head := code
+	if len(head) > 64 {
+		head = head[:64]
+	}
+	head = strings.ToLower(head)
+	for _, p := range []string{
+		`"`, "'", "`",
+		"const ", "let ", "var ", "function ", "class ", "async ", "await ", "return ",
+		"if ", "else ", "for ", "while ", "do ", "switch ", "case ", "try ", "catch ",
+		"throw ", "new ", "typeof ", "instanceof ", "in ", "of ", "yield ", "this",
+		"document.", "window.", "alert(", "fetch(",
+		"console.", "require(", "module.exports", "exports.",
+		"import ", "export ", "function",
+		"(function", "(async", "(()", "((",
+		// t_5f6a5d37: a minified bundle commonly opens with a bare IIFE
+		// (`!function(){...}()`, `!(()=>{})()`) or a defensive `;` before it.
+		// Without these the brace heuristic below read such a script as a
+		// stylesheet — at upload, and (worse) at serve, where the correction
+		// would have re-labelled a correctly stored script as text/css.
+		"!function", "!async", "!(", ";",
+	} {
+		if strings.HasPrefix(head, p) {
+			return ".js", true
+		}
+	}
+	first := string(code[0])
+	// A brace is the CSS tie-breaker only when the body does not open with
+	// syntax CSS cannot start a stylesheet with: a bare block (`{`), a
+	// parenthesised expression, an array literal, or an operator.
+	hasBrace := strings.Contains(code, "{") &&
+		first != "{" && first != "(" && first != "[" &&
+		first != "!" && first != ";"
+	if strings.HasPrefix(head, "@charset") ||
+		strings.HasPrefix(head, "@import") ||
+		strings.HasPrefix(head, "@media") ||
+		strings.HasPrefix(head, "@supports") ||
+		strings.HasPrefix(head, "@font-face") ||
+		strings.HasPrefix(head, "@keyframes") ||
+		strings.HasPrefix(head, "@layer") ||
+		strings.HasPrefix(head, "@container") ||
+		hasBrace {
+		return ".css", true
+	}
+	return "", false
+}
+
+// trimLeadingBlanks drops a UTF-8 BOM and any leading whitespace, so a
+// signature is read from the first real byte. Without the BOM case a
+// BOM-prefixed script matched no signature at all (the `{` in its body then
+// made the brace heuristic call it CSS) — at upload, and now at serve too,
+// where that would have re-labelled a correctly stored script.
+func trimLeadingBlanks(s string) string {
+	s = strings.TrimPrefix(s, "\ufeff")
+	return strings.TrimLeftFunc(s, func(r rune) bool { return r <= ' ' })
 }
 
 // skipLeadingComments steps over every leading block comment (`/* ... */`) and
