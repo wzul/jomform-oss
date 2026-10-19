@@ -644,6 +644,16 @@ func servedCodeExt(body []byte) (string, bool) {
 // byte-identical in a stylesheet and in a script, and a stylesheet very
 // commonly opens with a licence/theme comment, so the comment is stepped over
 // and the signature is read from what follows it.
+//
+// t_1dbd027c: the same is true of a DOCUMENT. `/* ... */` is a legal prefix on
+// nothing in html/svg, but merchants ship hand-written pages that open with a
+// banner comment, and the markup checks used to run only on the original body,
+// before the comment was stepped over — so such a page fell through to the
+// comment-led `.js` fallback and was stored `...js`/text/javascript, which a
+// browser refuses to render under nosniff. The markup signature is therefore
+// read from the post-comment remainder as well, and BEFORE the css/js
+// heuristics (an html page with a `<style>` block carries a `{`, which the
+// brace rule would otherwise read as a stylesheet).
 func SniffAssetType(data []byte) (string, bool) {
 	if len(data) == 0 {
 		return "", false
@@ -659,18 +669,8 @@ func SniffAssetType(data []byte) (string, bool) {
 		return "", false
 	}
 	t := trimLeadingBlanks(string(data))
-	lower := strings.ToLower(t)
-	if strings.HasPrefix(lower, "<!doctype html") || strings.HasPrefix(lower, "<html") {
-		return ".html", true
-	}
-	if strings.HasPrefix(lower, "<svg") {
-		return ".svg", true
-	}
-	// Issue #455: XML documents (typically an SVG exported/hand-authored with
-	// an `<?xml ...?>` prolog and/or a leading comment) have no binary magic.
-	// Classify by root element so a real SVG is not rejected.
-	if root := xmlRootElement(lower); root == "svg" {
-		return ".svg", true
+	if ext, ok := sniffMarkupSignature(t); ok {
+		return ext, true
 	}
 	if len(data) >= 4 && bytes.Equal(data[:4], []byte{'w', 'O', 'F', 'F'}) {
 		return ".woff2", true
@@ -682,6 +682,9 @@ func SniffAssetType(data []byte) (string, bool) {
 	// route sends, a browser then REFUSES it as a `<link rel="stylesheet">` and
 	// the merchant's CSS silently does not apply.
 	code, hadComment := skipLeadingComments(t)
+	if ext, ok := sniffMarkupSignature(code); ok {
+		return ext, true
+	}
 	if ext, ok := sniffCodeLanguage(code); ok {
 		return ext, true
 	}
@@ -691,6 +694,33 @@ func SniffAssetType(data []byte) (string, bool) {
 	// was `.js` when the comment itself was taken as the signature.
 	if hadComment {
 		return ".js", true
+	}
+	return "", false
+}
+
+// sniffMarkupSignature reports the markup type a trimmed body identifies
+// (".html" or ".svg"), or ok=false when it is not markup on the allowlist.
+//
+// It is the html/svg half of SniffAssetType, shared by both read positions: the
+// original body (issue #455 — an SVG behind an `<?xml ...?>` prolog or a
+// `<!-- -->` comment) and the post-comment remainder (t_1dbd027c — a document
+// whose first line is a `/* ... */` banner).
+func sniffMarkupSignature(s string) (string, bool) {
+	if s == "" {
+		return "", false
+	}
+	lower := strings.ToLower(s)
+	if strings.HasPrefix(lower, "<!doctype html") || strings.HasPrefix(lower, "<html") {
+		return ".html", true
+	}
+	if strings.HasPrefix(lower, "<svg") {
+		return ".svg", true
+	}
+	// Issue #455: XML documents (typically an SVG exported/hand-authored with
+	// an `<?xml ...?>` prolog and/or a leading comment) have no binary magic.
+	// Classify by root element so a real SVG is not rejected.
+	if root := xmlRootElement(lower); root == "svg" {
+		return ".svg", true
 	}
 	return "", false
 }

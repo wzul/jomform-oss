@@ -124,3 +124,105 @@ func TestCSSWithLeadingCommentUploadsAsCSS(t *testing.T) {
 		t.Fatalf("served body differs from the upload (%d vs %d bytes)", rec.Body.Len(), len(body))
 	}
 }
+
+// TestCommentLedMarkupUploadsAsItsDocumentType is t_1dbd027c's acceptance test:
+// a document whose first line is a `/* ... */` banner must be stored under a
+// `.html`/`.svg` key with the markup content-type — not smuggled into `.js` by
+// the comment-led fallback, which a browser refuses to render under nosniff.
+func TestCommentLedMarkupUploadsAsItsDocumentType(t *testing.T) {
+	ctx := context.Background()
+	h, accountID, raw, host := cssCommentUploadFixture(t)
+
+	cases := []struct {
+		name       string
+		filename   string
+		partCT     string
+		body       string
+		wantSuffix string
+		wantMIME   string
+	}{
+		{
+			name:       "html-doctype-behind-block-comment",
+			filename:   "page.html",
+			partCT:     "text/html",
+			body:       "/* Acme page banner 2026 */\n<!doctype html><html><body>hi</body></html>\n",
+			wantSuffix: ".html",
+			wantMIME:   "text/html; charset=utf-8",
+		},
+		{
+			name:       "svg-behind-block-comment",
+			filename:   "logo.svg",
+			partCT:     "image/svg+xml",
+			body:       "/* Acme logo banner 2026 */\n<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"1\" height=\"1\"/></svg>\n",
+			wantSuffix: ".svg",
+			wantMIME:   "image/svg+xml",
+		},
+	}
+
+	mediaURLBase := "https://" + host + "/media/"
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			body := []byte(c.body)
+			code, respBody := signatureUpload(t, h, raw, "/v1/rest/uploads/image", c.filename, c.partCT, body)
+			if code != http.StatusOK {
+				t.Fatalf("comment-led %s upload = %d, want 200 (body %s)", c.wantSuffix, code, respBody)
+			}
+			var resp struct {
+				URL string `json:"url"`
+			}
+			if err := json.Unmarshal([]byte(respBody), &resp); err != nil {
+				t.Fatalf("decode upload response %q: %v", respBody, err)
+			}
+			key := strings.TrimPrefix(resp.URL, mediaURLBase)
+			if key == resp.URL || key == "" {
+				t.Fatalf("unexpected public url %q (want the workspace host %q prefix)", resp.URL, mediaURLBase)
+			}
+			if !strings.HasSuffix(key, c.wantSuffix) {
+				t.Fatalf("comment-led document stored under %q, want a %s key", key, c.wantSuffix)
+			}
+
+			stored, storedCT, err := h.Store.GetObject(ctx, key)
+			if err != nil {
+				t.Fatalf("GetObject(%q): %v", key, err)
+			}
+			if storedCT != c.wantMIME {
+				t.Fatalf("stored content-type = %q, want %q", storedCT, c.wantMIME)
+			}
+			if !bytes.Equal(stored, body) {
+				t.Fatalf("stored bytes differ from the upload (%d vs %d bytes)", len(stored), len(body))
+			}
+
+			m, err := h.Media.ByKey(ctx, accountID, key)
+			if err != nil {
+				t.Fatalf("media row ByKey(%q): %v", key, err)
+			}
+			if m == nil {
+				t.Fatalf("no media row recorded for %q", key)
+			}
+			if m.Mime != c.wantMIME {
+				t.Fatalf("media.mime = %q, want %q", m.Mime, c.wantMIME)
+			}
+
+			// Served on the workspace host: the markup content-type is what makes
+			// the document render. A fresh code asset is withheld until the
+			// scanner clears it (issue #364), which is a different question from
+			// its TYPE — mark it scanned as the scanner would.
+			if err := h.Media.SetScanStatus(ctx, accountID, m.ID, "ok", ""); err != nil {
+				t.Fatalf("mark media row scanned: %v", err)
+			}
+			rec := restMediaServe(t, h, host, key)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET /media/%s on %s = %d (%s), want 200", key, host, rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Type"); got != c.wantMIME {
+				t.Fatalf("served content-type = %q, want %q", got, c.wantMIME)
+			}
+			if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+			}
+			if !bytes.Equal(rec.Body.Bytes(), body) {
+				t.Fatalf("served body differs from the upload (%d vs %d bytes)", rec.Body.Len(), len(body))
+			}
+		})
+	}
+}
