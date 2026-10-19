@@ -197,17 +197,21 @@ export default function Landing() {
       {/* use case showcase — recurring class / tuition fees (card t_345b0c87).
           Every bullet is a behaviour that exists today, and this is the mapping:
             * "registration form: student, subject / level, session date & time"
-              — the `tpl-tuition` template (Education) ships exactly those blocks
-              (api/internal/db/migrations/000027_template_library.up.sql:47), and
-              the builder's `date`/`time` blocks paint a date/time input
-              (web/src/app/builder/page.tsx:137, rendered by
-              api/internal/httpapi/render_blocks.go dateInputType).
+              — two sources, because no shipped template carries a date or time
+              block: `tpl-tuition` (Education) ships the registration form —
+              student name, parent email/phone, subject/level and the
+              registration-fee product — in its `blocks` JSON
+              (api/internal/db/migrations/000027_template_library.up.sql:55-57).
+              The session date & time is added in the builder from the palette's
+              own `date`/`time` blocks (web/src/app/builder/page.tsx:145-146,
+              PALETTE_GROUPS), painted by
+              api/internal/httpapi/render_blocks.go `dateInputType` (:443).
             * "one-off registration fee, receipt emailed on payment" — a
               `one_time` product pays on submit and the buyer receipt is sent for
               it: sendReceiptAsync runs for every sale that is NOT a subscription
               (api/internal/payments/purchases.go:229).
             * "monthly class fee auto-charged to the saved card" — a product with
-              type=subscription + billing_period month (api/internal/dbstore/product.go:26)
+              type=subscription + billing_period month (api/internal/dbstore/product.go:25-26)
               saves the card at checkout (ForceRecurring for SaleTypeSubscription,
               purchases.go:113) and the hourly due-charge sweep charges that token,
               with the 3-attempt/24h retry ladder and cancel at day 7
