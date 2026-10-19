@@ -37,8 +37,92 @@ func NewSessions(valkeyURL string) (*Sessions, error) {
 	return &Sessions{rdb: goredis.NewClient(opts)}, nil
 }
 
-// sessionKey namespaces session tokens in the keyspace.
-func sessionKey(token string) string { return "jf:session:" + token }
+// ─── session key layout ─────────────────────────────────────────────────────
+//
+// The session cookie carries the raw 256-bit token; the keyspace only ever
+// holds its SHA-256. Keying a session by the raw token made the key itself a
+// full login — anything that could read the keyspace (a dump, a snapshot/AOF
+// file, MONITOR) could present the token as the cookie for up to SessionTTL.
+// Every other credential in this file (password reset, trust cookie, step-up
+// grant) was already stored hashed; the session was the one that was not. The
+// token is 256 bits of `crypto/rand`, so a plain SHA-256 is enough: there is
+// nothing to brute-force and no secret to rotate (which is why this needs no
+// SESSION_SECRET-style key).
+const sessionKeyPrefix = "jf:session:"
+
+// sessionKey namespaces a session by the SHA-256 of its token.
+func sessionKey(token string) string { return sessionKeyPrefix + hashOf(token) }
+
+// legacySessionKey is the pre-hash layout: the raw token AS the key name. It is
+// only ever READ, to migrate a session minted before the re-keying (see
+// getSessionValue) so a deploy does not log everyone out. Every legacy key
+// carries at most SessionTTL, so this path drains by itself one TTL after the
+// deploy — at that point it can be deleted outright.
+func legacySessionKey(token string) string { return sessionKeyPrefix + token }
+
+// getSessionValue returns the stored session value for a RAW token (the value
+// the cookie carries).
+//
+// It reads the hashed key and, on a miss only, falls back to the legacy
+// raw-token key so pre-deploy sessions keep working. A legacy hit is migrated
+// in the same call: re-SET under the hashed key with the REMAINING TTL (so a
+// remember-me session keeps its deadline instead of being extended to a fresh
+// SessionTTL) and DEL the raw key. The migration runs under WATCH, so it can
+// never resurrect a session that was logged out between the read and the write:
+// if the legacy key changes underneath it, EXEC aborts and the answer is
+// re-read from the hashed key, which is authoritative.
+func (s *Sessions) getSessionValue(ctx context.Context, token string) (string, error) {
+	if token == "" {
+		return "", goredis.Nil
+	}
+	v, err := s.rdb.Get(ctx, sessionKey(token)).Result()
+	if err == nil || !errors.Is(err, goredis.Nil) {
+		return v, err
+	}
+	return s.migrateLegacySession(ctx, token)
+}
+
+// migrateLegacySession reads a pre-deploy (raw-token-keyed) session, re-keys it
+// by the token's hash with its remaining TTL, deletes the raw key and returns
+// the value. redis.Nil means there is no session under either layout.
+func (s *Sessions) migrateLegacySession(ctx context.Context, token string) (string, error) {
+	legacy := legacySessionKey(token)
+	var value string
+	err := s.rdb.Watch(ctx, func(tx *goredis.Tx) error {
+		v, gerr := tx.Get(ctx, legacy).Result()
+		if gerr != nil {
+			return gerr
+		}
+		ttl, terr := tx.PTTL(ctx, legacy).Result()
+		if terr != nil {
+			return terr
+		}
+		if ttl <= 0 {
+			// The key expired between GET and PTTL (or carries no expiry to
+			// carry over). Serve the value we read — the session was live a
+			// moment ago — but do not mint a durable copy of it.
+			value = v
+			return nil
+		}
+		value = v
+		_, perr := tx.TxPipelined(ctx, func(pipe goredis.Pipeliner) error {
+			pipe.Set(ctx, sessionKey(token), v, ttl)
+			pipe.Del(ctx, legacy)
+			return nil
+		})
+		return perr
+	}, legacy)
+	if errors.Is(err, goredis.TxFailedErr) {
+		// The legacy key moved under us: another request migrated it (the
+		// hashed key now holds the session) or a logout deleted it. Only the
+		// hashed key may answer.
+		return s.rdb.Get(ctx, sessionKey(token)).Result()
+	}
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
 
 // value encodes the stored userID together with the session's issued-at
 // timestamp (unix ns), the remember flag (issue #69) and the magic flag
@@ -142,7 +226,7 @@ func (s *Sessions) CreateSession(ctx context.Context, userID string, ttl time.Du
 
 // Get resolves a session token to its userID.
 func (s *Sessions) Get(ctx context.Context, token string) (string, error) {
-	v, err := s.rdb.Get(ctx, sessionKey(token)).Result()
+	v, err := s.getSessionValue(ctx, token)
 	if err != nil {
 		return "", err
 	}
@@ -153,7 +237,7 @@ func (s *Sessions) Get(ctx context.Context, token string) (string, error) {
 // GetCreated resolves a session token to its userID and issuance time. It is
 // used by session resolution to reject sessions older than a password reset.
 func (s *Sessions) GetCreated(ctx context.Context, token string) (string, time.Time, error) {
-	v, err := s.rdb.Get(ctx, sessionKey(token)).Result()
+	v, err := s.getSessionValue(ctx, token)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -169,7 +253,7 @@ func (s *Sessions) Remembered(ctx context.Context, token string) bool {
 	if token == "" {
 		return false
 	}
-	v, err := s.rdb.Get(ctx, sessionKey(token)).Result()
+	v, err := s.getSessionValue(ctx, token)
 	if err != nil {
 		return false
 	}
@@ -185,7 +269,7 @@ func (s *Sessions) Magic(ctx context.Context, token string) bool {
 	if token == "" {
 		return false
 	}
-	v, err := s.rdb.Get(ctx, sessionKey(token)).Result()
+	v, err := s.getSessionValue(ctx, token)
 	if err != nil {
 		return false
 	}
@@ -210,9 +294,27 @@ func ValidAfter(issued time.Time, cut time.Time) bool {
 	return issued.After(cut) || issued.Equal(cut)
 }
 
-// Destroy removes a session (logout).
+// Destroy removes a session (logout). Both layouts are deleted: the hashed key
+// and — during the one-TTL migration window — the legacy raw-token key, so a
+// logout also ends a session that was minted before the re-keying and has not
+// been migrated yet.
 func (s *Sessions) Destroy(ctx context.Context, token string) error {
-	return s.rdb.Del(ctx, sessionKey(token)).Err()
+	if token == "" {
+		return nil
+	}
+	return s.rdb.Del(ctx, sessionKey(token), legacySessionKey(token)).Err()
+}
+
+// TTL reports the remaining lifetime of a session token, following the redis
+// PTTL convention: a negative duration means the key carries no expiry (-1) or
+// does not exist (-2). It exists so callers that need the server-side deadline
+// (the remember-me cookie tests) do not have to know — or reproduce — the key
+// layout.
+func (s *Sessions) TTL(ctx context.Context, token string) (time.Duration, error) {
+	if token == "" {
+		return -2, nil
+	}
+	return s.rdb.PTTL(ctx, sessionKey(token)).Result()
 }
 
 // Ping verifies the Valkey connection for readiness probes.
@@ -324,8 +426,10 @@ func randomToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// hashOf returns the hex SHA-256 of a token (tokens stored only hashed, so a
-// Valkey leak never exposes usable credential/password-reset tokens).
+// hashOf returns the hex SHA-256 of a token. Every credential this file stores
+// is keyed by it — sessions, password resets, trust cookies, step-up grants — so
+// a Valkey leak (dump, snapshot/AOF file, MONITOR) never exposes a usable
+// token: the raw value exists only in the cookie or the emailed link.
 func hashOf(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])

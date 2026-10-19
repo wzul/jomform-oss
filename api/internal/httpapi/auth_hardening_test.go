@@ -45,8 +45,8 @@ var authOnce sync.Once
 // Only the prefixes this fixture can legitimately own are touched. The sweep used
 // to also clear `jf:session:*`, but every session in this package is minted by
 // its own test and dies with it, so nothing here needs a reclaim; a test that
-// asserts on a live session reads the key it just created (auth_ux_test.go) and
-// must not have it swept out from under it.
+// asserts on a live session reads the key it just created (auth_ux_test.go, via
+// Sessions.TTL) and must not have it swept out from under it.
 func authTestValkey(t *testing.T) *auth.Sessions {
 	t.Helper()
 	valkeyURL := os.Getenv("JOMFORM_TEST_VALKEY_URL")

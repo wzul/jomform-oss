@@ -154,10 +154,10 @@ func TestAuthRememberMeCheckedLongSession(t *testing.T) {
 // requireSessionTTL returns the remaining TTL of a session token server-side.
 func requireSessionTTL(t *testing.T, h *AuthHandlers, token string) time.Duration {
 	t.Helper()
-	// The Session store doesn't expose TTL directly; derive it from issued +
-	// configured TTL is wrong (unchecked=24h). Instead read the live Valkey TTL
-	// via the shared client.
-	ttl, err := h.Sessions.Client().TTL(context.Background(), "jf:session:"+token).Result()
+	// The session key is derived from the token's SHA-256 inside the store (a
+	// Valkey dump carries no usable token), so the test must not rebuild the key
+	// itself — Sessions.TTL is the accessor for exactly this measurement.
+	ttl, err := h.Sessions.TTL(context.Background(), token)
 	if err != nil {
 		t.Fatalf("read session TTL: %v", err)
 	}
