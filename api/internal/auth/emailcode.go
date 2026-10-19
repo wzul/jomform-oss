@@ -1,13 +1,22 @@
 // Email backup-code (issue #72) and magic-link (issue #73) token stores.
 //
 // Both share the PasswordReset design: a raw secret travels to the user's
-// inbox, only its SHA-256 is stored in Valkey, and it is single-use (atomic
-// GetDel on consume) so a leaked key can never be replayed.
+// inbox, only a digest is stored in Valkey, and it is single-use (atomic
+// GetDel on consume) so a leaked key can never be replayed. The DIGEST differs
+// between the two, and the reason is the size of the secret: a magic-link token
+// is 256 bits of `crypto/rand`, so a plain SHA-256 is one-way by construction,
+// while the emailed 2FA backup code is six digits — a bare hash of it is
+// invertible by enumeration, so it is keyed with a server-side secret instead
+// (see the Email2FA section below).
 package auth
 
 import (
 	"context"
+	"crypto/hkdf"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -24,28 +33,87 @@ import (
 //   - gated on a short pending flag (`jf:2fa_pending:{ip}:{email}`) that is
 //     only armed when a *correct-password* login returned `totp_required`, so
 //     a blind attacker who knows the email can't harvest codes;
-//   - stored hashed under `jf:2faemail:{userID}` (SHA-256, 10 min TTL);
-//   - single-use — verified against the stored hash and then consumed via an
+//   - stored under `jf:2faemail:{userID}` as an HMAC-SHA256 keyed with a
+//     server-side secret derived from ENCRYPTION_KEY (10 min TTL);
+//   - single-use — verified against the stored digest and then consumed via an
 //     atomic GetDel so it can never be replayed.
+//
+// The digest is KEYED, not merely hashed. The code space is exactly 1,000,000
+// values (Generate6Digit), so an unsalted SHA-256 of it is not one-way in any
+// useful sense: whoever can read the keyspace — a dump, a snapshot/AOF file,
+// MONITOR — enumerates ("%06d" % n) for n < 1e6 and the stored hex names the
+// live code, offline, in well under a second. That hands out the SECOND FACTOR
+// for a password they already have, for the whole Email2FACodeTTL window. With
+// HMAC the reader also needs the server key, which lives in the process
+// environment and never in Valkey. (The session re-keying in session.go is the
+// same threat model one credential to the right; there a bare SHA-256 is
+// enough because a session token is 256 bits.)
+//
+// There is deliberately NO fallback that accepts a pre-keying `sha256(code)`
+// value: keeping one would keep the inversion alive for every code still in
+// flight. Codes are re-issuable and the value lives 10 minutes, so a deploy
+// costs a user at most one re-request — unlike a session, which lives 14 days
+// and therefore earns its migration path.
 const (
 	Email2FACodeKeyPrefix = "jf:2faemail:" // + {userID}
 	Email2FACodeTTL       = 10 * time.Minute
 
 	Email2FAPendingPrefix = "jf:2fa_pending:" // + {ip}:{email}
 	Email2FAPendingTTL    = 5 * time.Minute
+
+	// emailCodeKeyInfo pins the subkey's purpose. HKDF's info string is what
+	// separates this key from the other uses of the same ENCRYPTION_KEY bytes
+	// (AES-GCM at rest, email-verification link signing), so one master secret
+	// never signs two different things with the same key.
+	emailCodeKeyInfo = "jomform/email2fa-code/v1"
 )
+
+// EmailCodeKey derives the HMAC key that authenticates the emailed 2FA backup
+// code from the AES-GCM ENCRYPTION_KEY bytes (32 bytes, decoded from the
+// 64-char hex env var). It returns an error rather than a zero value when the
+// master key is absent or the wrong size, because a keyless digest is exactly
+// the defect this replaces.
+func EmailCodeKey(encryptionKey []byte) ([]byte, error) {
+	if len(encryptionKey) != 32 {
+		return nil, errors.New("email 2fa code key: ENCRYPTION_KEY must be 32 bytes")
+	}
+	return hkdf.Key(sha256.New, encryptionKey, nil, emailCodeKeyInfo, 32)
+}
 
 func email2FaCodeKey(userID string) string { return Email2FACodeKeyPrefix + userID }
 func email2FaPendingKey(ip, email string) string {
 	return Email2FAPendingPrefix + ip + ":" + strings.ToLower(email)
 }
 
-// Email2FA exposes the email-backup-code store sharing the session client.
-func (s *Sessions) Email2FA() *Email2FA { return &Email2FA{rdb: s.rdb} }
+// emailCodeDigest binds the code to the server key AND to the account it was
+// issued to: hex(HMAC-SHA256(k, "v1|" + userID + "|" + code)). Binding the
+// userID means a digest lifted from one user's key and replayed onto another
+// user's key (a keyspace WRITE, not just a read) does not verify.
+func emailCodeDigest(key []byte, userID, code string) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("v1|"))
+	mac.Write([]byte(userID))
+	mac.Write([]byte("|"))
+	mac.Write([]byte(code))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// Email2FA exposes the email-backup-code store sharing the session client and
+// its server-side code key.
+func (s *Sessions) Email2FA() *Email2FA { return &Email2FA{rdb: s.rdb, codeKey: s.emailCodeKey} }
 
 type Email2FA struct {
 	rdb *goredis.Client
+	// codeKey is the HMAC key from EmailCodeKey. Empty means the deployment was
+	// wired without ENCRYPTION_KEY: the store then refuses to arm a code rather
+	// than falling back to a hash anyone can invert.
+	codeKey []byte
 }
+
+// ErrEmail2FAKeyMissing is returned by Store when the store has no server-side
+// code key. It is a wiring error, not a user error: outside dev ENCRYPTION_KEY
+// is required, so this can only fire on a dev instance that never set one.
+var ErrEmail2FAKeyMissing = errors.New("email 2fa code store: no server key configured")
 
 // Generate6Digit returns a cryptographically-random 000000-999999 code.
 func Generate6Digit() (string, error) {
@@ -59,18 +127,22 @@ func Generate6Digit() (string, error) {
 // Store arms a code for userID for Email2FACodeTTL. A later store for the same
 // user replaces the previous (unconsumed) code.
 func (e *Email2FA) Store(ctx context.Context, userID, code string) error {
-	return e.rdb.Set(ctx, email2FaCodeKey(userID), hashOf(code), Email2FACodeTTL).Err()
+	if len(e.codeKey) == 0 {
+		return ErrEmail2FAKeyMissing
+	}
+	return e.rdb.Set(ctx, email2FaCodeKey(userID), emailCodeDigest(e.codeKey, userID, code), Email2FACodeTTL).Err()
 }
 
 // ErrEmail2FAInvalid is returned when the supplied code does not match any
 // live emailed code for the user (absent, expired, already consumed, or wrong).
 var ErrEmail2FAInvalid = errors.New("email 2fa code invalid")
 
-// Consume verifies code against the stored hash and, on match, atomically
+// Consume verifies code against the stored digest and, on match, atomically
 // consumes it via GetDel so it can only ever be used once. A wrong code does
-// not consume (a typo doesn't burn the valid code).
+// not consume (a typo doesn't burn the valid code). A store with no code key
+// can never match anything, so it fails closed with ErrEmail2FAInvalid.
 func (e *Email2FA) Consume(ctx context.Context, userID, code string) error {
-	if code == "" {
+	if code == "" || len(e.codeKey) == 0 {
 		return ErrEmail2FAInvalid
 	}
 	key := email2FaCodeKey(userID)
@@ -81,7 +153,9 @@ func (e *Email2FA) Consume(ctx context.Context, userID, code string) error {
 		}
 		return err
 	}
-	if stored != hashOf(code) {
+	// Constant-time compare: the value is a MAC, and hmac.Equal exists so the
+	// comparison cannot be turned into an oracle.
+	if !hmac.Equal([]byte(stored), []byte(emailCodeDigest(e.codeKey, userID, code))) {
 		// Mismatch — leave the stored code intact so a typo doesn't burn it.
 		return ErrEmail2FAInvalid
 	}

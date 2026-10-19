@@ -53,7 +53,7 @@ func authTestValkey(t *testing.T) *auth.Sessions {
 	if valkeyURL == "" {
 		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping auth hardening integration test")
 	}
-	sess, err := auth.NewSessions(valkeyURL)
+	sess, err := auth.NewSessions(valkeyURL, auth.WithEmailCodeKey(testEmailCodeKey(t)))
 	if err != nil {
 		t.Fatalf("valkey sessions: %v", err)
 	}
@@ -180,6 +180,19 @@ var testVerifyKey = func() []byte {
 	}
 	return key
 }()
+
+// testEmailCodeKey derives the server-side key the emailed 2FA backup code is
+// authenticated with (card t_a3f3aca5), from the same 32-byte test secret the
+// verification links use. Without it the Email2FA store fails closed by design,
+// so the fixture has to wire it for the end-to-end 2FA flow to run at all.
+func testEmailCodeKey(t *testing.T) []byte {
+	t.Helper()
+	key, err := auth.EmailCodeKey(testVerifyKey)
+	if err != nil {
+		t.Fatalf("derive email code key: %v", err)
+	}
+	return key
+}
 
 // authTestFixture wires a full AuthHandlers over real Postgres + Valkey.
 func authTestFixture(t *testing.T) (*AuthHandlers, *dbstore.UserStore, *recorderMailer) {

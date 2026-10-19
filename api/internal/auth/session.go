@@ -22,19 +22,40 @@ const SessionTTL = 14 * 24 * time.Hour
 // Sessions stores browser sessions in Valkey.
 type Sessions struct {
 	rdb *goredis.Client
+
+	// emailCodeKey is the HMAC key the emailed 2FA backup code is authenticated
+	// with (EmailCodeKey). It is optional at construction because most stores
+	// sharing this client never touch it; the Email2FA store fails closed when
+	// it is absent rather than storing an invertible digest.
+	emailCodeKey []byte
+}
+
+// SessionOption configures a store that rides on the session Valkey client.
+type SessionOption func(*Sessions)
+
+// WithEmailCodeKey wires the server-side key (from EmailCodeKey) that the
+// emailed 2FA backup code is authenticated with. Production passes it; without
+// it the Email2FA store refuses to arm a code, because a six-digit secret has
+// no business being stored under a bare hash.
+func WithEmailCodeKey(key []byte) SessionOption {
+	return func(s *Sessions) { s.emailCodeKey = key }
 }
 
 // NewSessions wires a Valkey client. go-redis only accepts redis:// /
 // rediss:// URL schemes, so a valkey:// prefix (RESP-compatible, same wire
 // protocol) is transparently rewritten before parsing.
-func NewSessions(valkeyURL string) (*Sessions, error) {
+func NewSessions(valkeyURL string, opts ...SessionOption) (*Sessions, error) {
 	normalized := strings.TrimPrefix(valkeyURL, "valkey://")
 	normalized = "redis://" + normalized
-	opts, err := goredis.ParseURL(normalized)
+	o, err := goredis.ParseURL(normalized)
 	if err != nil {
 		return nil, fmt.Errorf("parse valkey url: %w", err)
 	}
-	return &Sessions{rdb: goredis.NewClient(opts)}, nil
+	s := &Sessions{rdb: goredis.NewClient(o)}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
 // ─── session key layout ─────────────────────────────────────────────────────

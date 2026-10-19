@@ -97,7 +97,21 @@ func main() {
 		}
 	}
 
-	sessions, err := auth.NewSessions(cfg.ValkeyURL)
+	// AES-GCM key for at-rest encryption AND email-verification link signing.
+	decryptKey := mustHexKey(cfg.EncryptionKey)
+
+	// The emailed 2FA backup code is a six-digit secret, so the digest stored in
+	// Valkey is KEYED, not merely hashed (auth.EmailCodeKey): a bare SHA-256 of a
+	// 1,000,000-value space is inverted by enumeration, so a keyspace read would
+	// hand out the second factor. In dev ENCRYPTION_KEY is optional; the store
+	// then fails closed (a code is never armed) rather than falling back to the
+	// invertible hash.
+	emailCodeKey, emailKeyErr := auth.EmailCodeKey(decryptKey)
+	if emailKeyErr != nil {
+		log.Warn("email 2fa backup code disabled: ENCRYPTION_KEY not configured", "err", emailKeyErr)
+	}
+
+	sessions, err := auth.NewSessions(cfg.ValkeyURL, auth.WithEmailCodeKey(emailCodeKey))
 	if err != nil {
 		log.Error("valkey", "err", err)
 		if !cfg.IsDev() {
@@ -114,8 +128,6 @@ func main() {
 		curStore = currency.New(sessions.Client(), log)
 	}
 
-	// AES-GCM key for at-rest encryption AND email-verification link signing.
-	decryptKey := mustHexKey(cfg.EncryptionKey)
 	// Transactional sender (SESv2 API), nil when SMTP env is absent. Reused by
 	// payment receipts and the email-verification flow.
 	//
