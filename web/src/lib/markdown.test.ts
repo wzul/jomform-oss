@@ -80,11 +80,36 @@ const visible = (html: string) =>
 // process.cpuUsage() is the load-invariant estimator of the same work: time a
 // process is DESCHEDULED does not accrue to it, so contention cancels out of the
 // number instead of being added to it. Same bytes, idle vs that 6-spinner
-// contention: `'[' x 16000` 3.72 -> 3.26 ms of CPU. NOTHING BELOW IS RAISED —
-// the quantity under each ceiling changed, the ceilings did not, and the
-// separation they exist for is unchanged: the fix costs ~2-7 ms of CPU at 16000
-// characters where the pre-fix patterns burn 176-368 ms of it at the same sizes
-// (and 774 ms for the 33-bubble case).
+// contention: `'[' x 16000` 3.72 -> 3.26 ms of CPU. The ceilings were left alone
+// in that change, and the separation they exist for was unchanged: the fix costs
+// ~2-7 ms of CPU at 16000 characters where the pre-fix patterns burn 176-368 ms
+// of it at the same sizes.
+//
+// THE FIRST SAMPLE OF A SHAPE IS NOT THE RENDERER'S COST, AND A CEILING THAT
+// TAKES ONE SAMPLE MEASURES THE WARM-UP. That is the gate flake this file was
+// then carded for: `webimage` (the `docker build` of web/Dockerfile, i.e. the
+// shipping artifact, run with the SAME `npm run build`) redded at 335 ms against
+// the 300 ms transcript ceiling below, while the same bytes passed on the host
+// and the same tree passed the gate on an immediate re-run. Measured in
+// `node:24-alpine` (that Dockerfile's base image) with this file's own renderer:
+//
+//     one 33-bubble transcript, in order    566.0 ms  <- the sample the test took
+//                                           44.3     58.4     277.8    104.7
+//     the same render after ONE warm-up      30.0  (min of 5)
+//     same bytes, host, first sample        198.8 ms
+//
+// So the number the ceiling rejected was V8's first-touch cost for a NEW shape —
+// compiling the paths it reaches, first-touch heap pages, and the concurrent GC
+// threads whose CPU is billed to this process — not the renderer's work. Host
+// load was not the cause: those samples were taken with nothing else on the box
+// and still range from 44 to 278 ms against a warm 30 ms, and over 100 draws in
+// one process the single-sample estimator reached 441.6 ms (2 of 100 draws over
+// the 300 ms ceiling) where a warm best-of-3 never exceeded 62.6 ms. Nothing in
+// the fix below raises a ceiling: every CPU measurement warms the shape first and
+// then takes a best-of-N minimum, which is what the per-render measurements in
+// this file already did — the two WHOLE-TRANSCRIPT cases were the only
+// single-sample timings in the file, and they are now measured the same way as
+// the rest.
 const cpuMillis = (fn: () => void): number => {
   const before = process.cpuUsage();
   fn();
@@ -94,10 +119,40 @@ const cpuMillis = (fn: () => void): number => {
   return (delta.user + delta.system) / 1000;
 };
 
-/** Best-of-N (min) of the process CPU milliseconds one render of `src` costs. */
+/**
+ * Best-of-N (min) of the process CPU milliseconds one render of `src` costs,
+ * after ONE DISCARDED WARM-UP render of the same shape (see the header: the
+ * first sample of a new shape carries ~10x the steady-state cost, and it is the
+ * warm-up, not the renderer).
+ */
 const bestOfCpu = (src: string, reps: number): number => {
+  render(src); // discarded warm-up — never part of the measurement
   let best = Infinity;
   for (let r = 0; r < reps; r++) best = Math.min(best, cpuMillis(() => render(src)));
+  return best;
+};
+
+/** How many <Markdown> this file's chat-transcript fixture mounts (see below). */
+const TRANSCRIPT_BUBBLES = 33;
+
+/**
+ * Best-of-N (min) of the CPU milliseconds one FULL transcript costs: 33 bubbles
+ * of `src` rendered in one synchronous pass, which is what the /chat page does.
+ * Warm-up and minimum for the same reason as `bestOfCpu` — this is the case that
+ * used to take ONE sample, and one sample is what redded the 300 ms ceiling at
+ * 335 ms on bytes whose warm cost is 30 ms.
+ */
+const transcriptCpu = (src: string, reps = 3): number => {
+  for (let k = 0; k < TRANSCRIPT_BUBBLES; k++) render(src); // discarded warm-up
+  let best = Infinity;
+  for (let r = 0; r < reps; r++) {
+    best = Math.min(
+      best,
+      cpuMillis(() => {
+        for (let k = 0; k < TRANSCRIPT_BUBBLES; k++) render(src);
+      }),
+    );
+  }
   return best;
 };
 
@@ -389,14 +444,15 @@ test("an adversarial answer at the cap renders in milliseconds, not tenths of a 
   // The severity case from the card: the /chat page mounting its whole transcript
   // (33 <Markdown> in one synchronous render — this file's fixture; the page's
   // history cap bounds what it SENDS, not what it renders). 8000 ms of frozen tab
-  // was the symptom; the fix is ~66 ms.
-  const total = cpuMillis(() => {
-    for (let k = 0; k < 33; k++) render(small);
-  });
+  // was the symptom; the fix is ~40-57 ms of CPU warm (measured in
+  // node:24-alpine, idle and under 8 host spinners). `transcriptCpu` warms the
+  // shape first and takes a best-of-3 minimum — a single sample measures V8's
+  // first-touch cost, see "HOW THE TWO PERF GUARDS MEASURE TIME" above.
+  const total = transcriptCpu(small);
   assert.ok(
     total < 3000,
     `33 bubbles of ${CAP} adversarial characters took ${total.toFixed(0)} ms of CPU (ceiling 3000 ms) — ` +
-      `a full conversation freezes the tab. The quadratic scan measured ~8000 ms, the fix ~66 ms.`,
+      `a full conversation freezes the tab. The quadratic scan measured ~8000 ms, the fix ~40-57 ms.`,
   );
 });
 
@@ -516,8 +572,18 @@ test("an adversarial `[`-heavy answer renders in milliseconds, not a frozen tab"
   // The ceilings are UNCHANGED from the wall-clock version this replaced, at
   // exactly the size that redded it: 40 ms at 16000 characters where the fix
   // costs ~2-7 ms of CPU and the pre-fix patterns burn 176-368 ms, and 300 ms for
-  // the full conversation where the fix costs ~25-45 ms and the pre-fix patterns
-  // burn 774 ms. Restoring the pre-fix patterns fails rather than squeaks by.
+  // the full conversation where the fix costs ~30-52 ms warm and the pre-fix
+  // patterns burn ~900-1057 ms. Restoring the pre-fix patterns fails rather than
+  // squeaks by.
+  //
+  // WHAT MADE THIS GATE FLAKE WAS THE MEASUREMENT, NOT THE CEILING. The
+  // whole-transcript case below used to be the ONE single-sample timing in this
+  // file, and one sample of a new shape is V8's first-touch cost: measured in
+  // node:24-alpine (the `webimage` gate's base image) the first 33-bubble render
+  // of these bytes took 566.0 ms and the warm minimum 30.0 ms, which redded the
+  // 300 ms ceiling at 335 ms on an operation whose steady-state cost is 30 ms.
+  // `transcriptCpu` warms the shape and takes a best-of-3 minimum; the ceiling
+  // stays where it is, so the net is not weakened for the flake.
   const CAP = 4000;
   // The shapes the wall-clock ceiling guarded, each also asserted as COUNTED
   // link-delimiter work (the sibling test above): the count is the half that
@@ -537,11 +603,16 @@ test("an adversarial `[`-heavy answer renders in milliseconds, not a frozen tab"
       `${src.length} characters of '['-heavy text examined ${linkWork} characters of link delimiters ` +
         `(${(linkWork / src.length).toFixed(1)}x the length; a single pass is 1.0x) — the per-'[' closer search is back`,
     );
-    const t = bestOfCpu(src, 3);
+    // Best of 5 (warm, see `bestOfCpu`): measured in node:24-alpine over 12
+    // trials, idle and under 8 host spinners, the worst best-of-5 was 7.5 ms
+    // against the 40 ms ceiling, while a best-of-3 occasionally caught a GC
+    // spike (24.6 ms). The pre-fix patterns measure 206-481 ms here, so the
+    // margin on the side that matters is unchanged.
+    const t = bestOfCpu(src, 5);
     assert.ok(
       t < 40,
       `a ${src.length}-character '['-heavy answer took ${t.toFixed(1)} ms of CPU to render (ceiling 40 ms). ` +
-        `The fix measures ~2-7 ms here; the pre-fix patterns measured 176-368 ms.`,
+        `The fix measures ~2-8 ms here; the pre-fix patterns measured 176-368 ms.`,
     );
   }
 
@@ -558,13 +629,38 @@ test("an adversarial `[`-heavy answer renders in milliseconds, not a frozen tab"
 
   // The severity case: a full transcript (33 <Markdown> in one synchronous render,
   // this file's fixture).
-  const total = cpuMillis(() => {
-    for (let k = 0; k < 33; k++) render("[".repeat(CAP));
-  });
+  //
+  // TWO BOUNDS, because the absolute one alone is what flaked. The RELATIVE bound
+  // is the environment-invariant half: an ordinary answer of the same length and
+  // the same bubble count is measured with the same warm-up and the same
+  // best-of-3, so a slower CPU, a dev-build of react-dom, or a container whose
+  // background GC is heavier moves both numbers together — while the pre-fix
+  // patterns, whose cost is quadratic in the answer, cannot stay inside a small
+  // multiple of it. Measured (node:24-alpine, idle and under 8 host spinners):
+  //     fix     adversarial 29.5-32.6 ms   ordinary 32.3-45.0 ms   ratio 0.66-1.01
+  //     pre-fix adversarial 899-941 ms     ordinary 31.8-39.0 ms   ratio 24.2-28.2
+  // The absolute 300 ms ceiling stays as the "frozen tab" backstop it always was;
+  // warm, the fix measures 26-52 ms over 12 trials (6x margin) and the pre-fix
+  // patterns ~900 ms (3x over).
+  const bubble = "[".repeat(CAP);
+  const adversarial = transcriptCpu(bubble);
+  // Same size, same bubble count, no Markdown delimiter in it at all.
+  const ordinary = transcriptCpu("laporan biasa tanpa sebarang penanda ".repeat(200).slice(0, CAP));
   assert.ok(
-    total < 300,
-    `33 bubbles of ${CAP} '['-heavy characters took ${total.toFixed(0)} ms of CPU (ceiling 300 ms) — ` +
-      `a full conversation freezes the tab. The pre-fix patterns measured 774 ms, the fix ~25-45 ms.`,
+    ordinary > 0,
+    "the ordinary-answer control measured 0 ms of CPU — the relative bound below would be vacuous",
+  );
+  assert.ok(
+    adversarial <= 3 * ordinary + 100,
+    `33 bubbles of ${CAP} '['-heavy characters took ${adversarial.toFixed(0)} ms of CPU against ` +
+      `${ordinary.toFixed(0)} ms for 33 ordinary answers of the same length — an adversarial answer ` +
+      `costs more than 3x an ordinary one of the same size. The pre-fix patterns measured ~900 ms ` +
+      `against ~35 ms (25x) here; the fix ~30 ms against ~35 ms.`,
+  );
+  assert.ok(
+    adversarial < 300,
+    `33 bubbles of ${CAP} '['-heavy characters took ${adversarial.toFixed(0)} ms of CPU (ceiling 300 ms) — ` +
+      `a full conversation freezes the tab. The pre-fix patterns measured ~900-1057 ms, the fix ~30-52 ms.`,
   );
 });
 
