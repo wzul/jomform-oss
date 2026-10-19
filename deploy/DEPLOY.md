@@ -406,12 +406,35 @@ scripts/media-purge-probe.sh \
   --purge  <trashed-media-id> --api https://halo.example.com --token "$JOMFORM_API_TOKEN"
 ```
 
-- **PASS** — origin 404 and the edge 404 (bare and with a query), or the edge's
-  declared lifetime is within `--window` (default 300s), in which case it prints
-  how many seconds are left of that window;
-- **FAIL** — the origin still serves the object, or the edge declares a lifetime
-  longer than the window (the shape this section exists for).
+- **PASS** — origin 404 and the edge is 404 (bare and with a query), **or** every
+  served edge copy is bounded by the lifetime the origin itself declares, within
+  `--window` (default 300s) — it then prints how many seconds are left;
+- **FAIL** — the origin still serves the object after the purge, or an edge copy
+  cannot expire inside the window: the origin declares a lifetime longer than it,
+  the entry's `age` already exceeds the lifetime the origin declares now (it was
+  filled under a longer TTL), or `--await-expiry` measured it still serving past
+  the window.
 
-Exit codes: `0` pass, `1` fail, `2` the probe could not decide (transport error).
+With no `--purge` the run is a **read-only probe**: the object is supposed to
+still be served, so `200` at the origin is the healthy answer and only the edge
+copy is judged.
+
+**The edge's own `cache-control` is not its lifetime.** A CDN may REWRITE the
+client-facing header — Cloudflare's zone setting *Browser Cache TTL* does — so a
+browser can be handed `max-age=14400` while the shared edge entry still expires
+on the origin's 300s (measured on this stack 2026-10-18: the entry went
+`cf-cache-status: EXPIRED` at t+302s under a `max-age=14400` header). The probe
+therefore judges a served copy against the **origin's** declared lifetime, and an
+edge value above it is reported as a rewrite, not as staleness. That inference
+cannot tell a rewrite from a real edge-cache-TTL override on a *fresh* entry, so
+`--await-expiry` measures instead: it re-probes the copy until it stops serving
+(404, `cf-cache-status: EXPIRED`/`REVALIDATED`, or an `age` that resets on a
+refill) or `--window` + 5s elapses. It costs up to `--window` seconds per served
+copy and the observation wins over any header.
+
+Exit codes: `0` pass, `1` fail, `2` the probe could not decide — a transport
+error, a usage error, or a served copy whose lifetime cannot be read anywhere
+(the origin already 404s, so it declares none; re-probe an object the origin
+still serves, or pass `--await-expiry`).
 A check that stops at the origin reports a clean purge while the object is still
 downloadable — that is the mistake this script is built to prevent.

@@ -67,6 +67,16 @@
 #                         card's live key), and that a row which survives the
 #                         delete is a FAILURE, not a quiet success
 #                         (offline: fake ssh/scp/docker/curl, no host)
+#   mediaprobe suite      scripts/media-purge-probe_test.sh — the media purge
+#                         probe's verdict suite: a CDN that REWRITES the
+#                         client-facing `cache-control` (max-age=14400 over an
+#                         origin's 300) must read PASS, probe-only mode must not
+#                         be judged as a failed purge, a pre-fix edge entry whose
+#                         `age` exceeds the origin's declared lifetime must stay
+#                         FAIL, and an edge that PINS a fresh entry must still
+#                         FAIL — proven by MEASUREMENT (--await-expiry), not by
+#                         the header. (offline: a stub origin+edge on loopback,
+#                         port 0, python3; no network, no prod, ~35s)
 #   backup     suite      deploy/backup/jomform-backup_test.sh — the nightly
 #                         Postgres + media backup's own failure-path suite: a
 #                         copy that "exits 0" having landed nothing, a same-size
@@ -289,7 +299,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet gofmt test govuln web lint webimage a11y e2e npmaudit gitleaks monitor tmpkey backup host prunewt prunesync prunehost refguard selftest)
+GATE_NAMES=(build vet gofmt test govuln web lint webimage a11y e2e npmaudit gitleaks monitor tmpkey mediaprobe backup host prunewt prunesync prunehost refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -539,6 +549,7 @@ pw_declared() {
     web|a11y|e2e|lint)    printf '%s\n' 'web/*' ;;
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor|tmpkey|backup|host|prunewt|refguard) printf '%s\n' 'deploy/*' 'scripts/*' ;;
+    mediaprobe)            printf '%s\n' 'scripts/*' ;;
     prunesync)             printf '%s\n' 'deploy/worktrees/*' ;;
     prunehost)             printf '%s\n' 'deploy/host/*' ;;
     selftest)              printf '%s\n' 'scripts/*' 'GATE-INVENTORY.md' ;;
@@ -561,6 +572,7 @@ pw_sources() {
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor)               printf '%s\n' 'deploy/monitoring/*' ;;
     tmpkey)                printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
+    mediaprobe)            printf '%s\n' 'scripts/media-purge-probe.sh' 'scripts/media-purge-probe_test.sh' ;;
     backup)                printf '%s\n' 'deploy/backup/*' ;;
     host)                  printf '%s\n' 'deploy/host/*' 'deploy/vps/*' ;;
     prunewt)               printf '%s\n' 'deploy/worktrees/*' ;;
@@ -2742,6 +2754,24 @@ tmpkey_run() {
   bash "$REPO_ROOT/deploy/tmp-apikey_test.sh"
 }
 run tmpkey "temp-key helper self-test (no tag in the id, exact-name delete, survivor is a failure)" tmpkey_run
+
+# mediaprobe — the media purge probe's verdict suite. Same shape of gate as
+# `monitor`/`tmpkey` and for the same reason: `scripts/media-purge-probe.sh` is
+# only ever run against a live stack, so what is testable in the repo is its own
+# verdict logic. The defect it exists to close is a FALSE FAIL that shipped and
+# failed a healthy stack: a CDN may rewrite the client-facing `cache-control`
+# (Cloudflare's "Browser Cache TTL") to hours while the shared edge entry still
+# expires on the origin's 300s, so reading that header as "the edge lifetime"
+# reported STALE on every purge without a CDN credential — the supported
+# `edge: not_configured` mode. The suite pins both directions: the rewrite is
+# PASS, and an entry that really does outlive the window (a pre-fix fill whose
+# `age` exceeds the origin's declared lifetime, an origin declaring 86400, or an
+# edge PINNING a fresh entry — measured by `--await-expiry`, not inferred) stays
+# FAIL. Offline: a stub origin+edge on loopback (python3, port 0), no network.
+mediaprobe_run() {
+  bash "$REPO_ROOT/scripts/media-purge-probe_test.sh"
+}
+run mediaprobe "media purge probe verdict suite (CDN-rewritten header is PASS, real staleness still FAIL)" mediaprobe_run
 
 # backup — the nightly Postgres + media backup's failure-path suite. Same shape of
 # gate as `monitor`/`tmpkey` and for the same reason: `deploy/backup/jomform-backup.sh`
