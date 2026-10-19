@@ -10,6 +10,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
 import { workspaceQuery, workspaceUrl } from "../lib/workspace";
 import { apiErr } from "../lib/apiErr";
+// t_04ea7f88: the tile render decision and its badge label are the SAME ones
+// app/media/page.tsx uses. Do not hand-roll `mime.startsWith("image/")` here
+// again — that copy is what made this picker an <img> on a tenant-host SVG.
+import { canInlineMediaPreview, extBadge } from "../lib/mediaThumb";
 
 type MediaItem = {
   id: string;
@@ -23,6 +27,12 @@ type MediaItem = {
   created_at: string;
 };
 
+// Which library rows this picker offers. The logo is an image, so only image
+// types are listed — but image/svg+xml IS one of them (it is in ACCEPTED_TYPES
+// below, and the upload path accepts it), and it is a code asset whose URL is
+// on the workspace host with `Cross-Origin-Resource-Policy: same-origin`.
+// Offering it is deliberate; rendering it through <img> is not — see the tile
+// below, which uses canInlineMediaPreview().
 function isImage(mime: string): boolean {
   return mime.startsWith("image/");
 }
@@ -221,13 +231,26 @@ export default function MediaPicker({
                     }`}
                   >
                     <div className="flex h-20 items-center justify-center overflow-hidden bg-slate-100">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={m.preview || m.sizes?.thumbnail || m.url}
-                        alt={nameFromKey(m.key)}
-                        className="h-full w-full object-cover"
-                        loading="lazy"
-                      />
+                      {/* t_04ea7f88: same rule as the /media grid. An SVG is a
+                          code asset whose url is on the tenant host and served
+                          `Cross-Origin-Resource-Policy: same-origin`, so an <img>
+                          here is blocked by the browser (HTTP 200, broken-image
+                          icon — nothing errors). It gets the extension badge;
+                          the tile stays a button, and selecting it still returns
+                          m.url, which the published form loads same-origin. */}
+                      {canInlineMediaPreview(m.mime, !!m.preview) ? (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img
+                          src={m.preview || m.sizes?.thumbnail || m.url}
+                          alt={nameFromKey(m.key)}
+                          className="h-full w-full object-cover"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="flex h-12 w-12 items-center justify-center rounded-lg border bg-white text-center text-[11px] font-bold text-[#4f46e5]">
+                          {extBadge(m.mime)}
+                        </div>
+                      )}
                     </div>
                     <p className="truncate px-2 py-1 text-[11px] text-[var(--jf-muted)]">
                       {nameFromKey(m.key)}

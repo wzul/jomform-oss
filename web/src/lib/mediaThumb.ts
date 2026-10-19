@@ -36,3 +36,21 @@ export function canInlineMediaPreview(mime: string, hasPreview: boolean): boolea
   if (!mime.startsWith("image/")) return false;
   return !isCodeAssetMime(mime);
 }
+
+// The tile label for an item that canInlineMediaPreview() refuses to inline:
+// a code file's extension badge (e.g. "SVG", "CSS"), "PDF" for a document, and
+// the first four characters of anything else.
+//
+// This lives here, next to the decision it labels, because it used to be a
+// private copy inside app/media/page.tsx — and the picker's copy of the whole
+// rule is exactly what drifted (t_04ea7f88): the grid learned to badge an SVG
+// and the logo picker kept an <img> on a tenant-host URL. One rule, one label.
+export function extBadge(mime: string): string {
+  if (mime === "application/pdf") return "PDF";
+  if (mime === "text/css; charset=utf-8") return "CSS";
+  if (mime === "text/javascript; charset=utf-8" || mime === "application/javascript; charset=utf-8") return "JS";
+  if (mime === "text/html; charset=utf-8") return "HTML";
+  if (mime === "image/svg+xml") return "SVG";
+  if (mime === "font/woff2") return "WOFF2";
+  return mime.slice(0, 4).toUpperCase();
+}

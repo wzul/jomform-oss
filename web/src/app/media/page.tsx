@@ -11,7 +11,7 @@ import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
-import { canInlineMediaPreview } from "../../lib/mediaThumb";
+import { canInlineMediaPreview, extBadge } from "../../lib/mediaThumb";
 import { purgeNotice } from "../../lib/mediaPurge";
 
 // Issue #180: WordPress-media-library-style Media page. Grid of the
@@ -86,22 +86,14 @@ function nameFromKey(key: string): string {
 // Issue #361: media items now include merchant code files (CSS/JS/HTML/SVG/
 // woff2) alongside images. canInlineMediaPreview decides whether to render a
 // real thumbnail or a code-file tile (extension badge) for the media library
-// grid. t_0fe14ba5: SVG is a code asset whose advertised url is now on the
+// grid; extBadge() is that badge's label — both come from lib/mediaThumb so the
+// logo picker (components/MediaPicker.tsx) applies the same rule and cannot
+// drift from this grid again (t_04ea7f88).
+//
+// t_0fe14ba5: SVG is a code asset whose advertised url is now on the
 // workspace host, and code assets are served `Cross-Origin-Resource-Policy:
 // same-origin` — an <img> from the dashboard would be blocked, so SVG gets the
 // badge like every other code file.
-
-// Extension badge label for a code file (e.g. "CSS", "JS", "HTML") or a PDF
-// (issue #382).
-function extBadge(mime: string): string {
-  if (mime === "application/pdf") return "PDF";
-  if (mime === "text/css; charset=utf-8") return "CSS";
-  if (mime === "text/javascript; charset=utf-8" || mime === "application/javascript; charset=utf-8") return "JS";
-  if (mime === "text/html; charset=utf-8") return "HTML";
-  if (mime === "image/svg+xml") return "SVG";
-  if (mime === "font/woff2") return "WOFF2";
-  return mime.slice(0, 4).toUpperCase();
-}
 
 export default function MediaPage() {
   const { t } = useI18n();
