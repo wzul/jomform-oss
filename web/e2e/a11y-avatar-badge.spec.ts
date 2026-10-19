@@ -81,6 +81,18 @@
 //      must be one of the two vetted tokens, and when it is the BASE one the
 //      measured size must be >= 24px — i.e. the large-text justification is
 //      re-derived from the live DOM instead of remembered.
+//   5. THE INITIAL IS WAITED FOR, never measured on first paint (card t_129fdb48).
+//      `Shell.tsx:176` paints the tinted circle from its FIRST render and only
+//      fills the letter once the session bundle's `me` lands (`session.tsx:427`,
+//      the /api/rest/dashboard-bundle read — the client keeps NO per-page
+//      /api/auth/me round-trip), so "tinted" and "showing the initial" are TWO
+//      different states. Waiting for the ELEMENT returned in the first one, and
+//      the text assertion then measured `?`: on tree b7f0eca1 one full a11y gate
+//      run failed exactly this way and the re-run of the SAME bytes passed
+//      (measured text="?", surface=#e0e7ff, ratio=6.414). `assertTinted` now
+//      polls the MEASUREMENT — bounded, see INITIAL_WAIT_MS — until the badge
+//      shows a letter, and the slow-session arm delays the stub so the wait
+//      itself is what the suite exercises instead of host load.
 //
 // AXE CANNOT JUDGE THESE TWO SITES — MEASURED, AND WHY THE MEASUREMENT IS THE PROOF
 //   Both badges render a SINGLE CHARACTER, and axe-core refuses a verdict on that
@@ -183,8 +195,14 @@ const BUNDLE = {
   product_analytics: [],
 };
 
-/** Every /api/* read the chrome and the two pages make, stubbed in the browser. */
-async function stubAPI(page: Page) {
+/**
+ * Every /api/* read the chrome and the two pages make, stubbed in the browser.
+ *
+ * `bundleDelayMs` holds the SESSION read (dashboard-bundle, the one that carries
+ * `me`) open for that long, which is how the slow-session arm below makes the
+ * "tinted, still `?`" window deterministic instead of waiting for a loaded host.
+ */
+async function stubAPI(page: Page, opts: { bundleDelayMs?: number } = {}) {
   const json = (body: unknown) => ({
     status: 200,
     contentType: "application/json",
@@ -193,7 +211,10 @@ async function stubAPI(page: Page) {
   // Catch-all FIRST, specific routes AFTER it: Playwright resolves matching
   // routes in reverse registration order, so the later (specific) ones win.
   await page.route(/(.*)\/api\/.*$/, (route) => route.fulfill(json({})));
-  await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, (r) => r.fulfill(json(BUNDLE)));
+  await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, async (r) => {
+    if (opts.bundleDelayMs) await new Promise((res) => setTimeout(res, opts.bundleDelayMs));
+    await r.fulfill(json(BUNDLE));
+  });
   await page.route(/(.*)\/api\/auth\/me$/, (r) => r.fulfill(json(ME)));
   await page.route(/(.*)\/api\/auth\/profile$/, (r) => r.fulfill(json({ lang: "" })));
   await page.route(/(.*)\/api\/rest\/currency\/rates$/, (r) =>
@@ -292,9 +313,12 @@ function floorFor(m: Measured): number {
  * Open a dashboard route at a FRESH, DEFAULT-LOCALE state and return after the
  * document has rendered. Both assertions are the card's own rule: the locale a
  * new visitor gets is asserted, not assumed.
+ *
+ * `bundleDelayMs` is passed through to `stubAPI` for the one arm that has to
+ * prove the badge's initial is WAITED FOR rather than measured on first paint.
  */
-async function openFresh(page: Page, path: string) {
-  await stubAPI(page);
+async function openFresh(page: Page, path: string, opts: { bundleDelayMs?: number } = {}) {
+  await stubAPI(page, opts);
   await freshState(page);
   await page.goto(path, { waitUntil: "domcontentloaded" });
   expect(
@@ -304,12 +328,54 @@ async function openFresh(page: Page, path: string) {
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
 }
 
+/**
+ * How long the badge may take to fill in its initial before the measurement
+ * gives up. BOUNDED on purpose: an unbounded poll converts a false RED into a
+ * hang, which is worse to receive, and a wait for the expected state must still
+ * FAIL when that state never arrives. The stubbed session read resolves in
+ * milliseconds, so this bound is orders of magnitude above the measured gap —
+ * it exists to fail, not to accommodate a slow build.
+ */
+const INITIAL_WAIT_MS = 10_000;
+
+/**
+ * Wait, BOUNDED, for the badge to show a real initial instead of the
+ * pre-session `?` placeholder, and return the measurement taken in THAT state.
+ *
+ * WHY (card t_129fdb48): `Shell.tsx:176` renders the tinted circle from the
+ * first paint and fills the letter from the session bundle (`session.tsx:427`),
+ * so "tinted" and "showing the initial" are two DIFFERENT states. Waiting for
+ * the ELEMENT returns in the first one, and the text assertion then measures
+ * `?` — measured on tree b7f0eca1 as one failed a11y gate run followed by a
+ * pass on the same bytes. The rule this follows is "wait for the state the
+ * assertion is about": poll the MEASUREMENT that names the state (`m.text`),
+ * never something merely adjacent to it, and never a fixed sleep.
+ *
+ * The app upper-cases the initial (`toUpperCase`), so a single A-Z letter is the
+ * settled shape. On timeout this returns the LAST measurement, so the caller's
+ * own assertion fails naming the value it actually saw (`"?"`) instead of a
+ * bare timeout with no measurement in it.
+ */
+async function waitForInitial(page: Page, sel: string): Promise<Measured> {
+  const deadline = Date.now() + INITIAL_WAIT_MS;
+  let m: Measured = await page.evaluate(MEASURE, sel);
+  while (!/^[A-Z]$/.test(m.text)) {
+    if (Date.now() >= deadline) break;
+    await page.waitForTimeout(100);
+    m = await page.evaluate(MEASURE, sel);
+  }
+  return m;
+}
+
 /** The shared non-vacuity check: the badge exists, is visible, and is TINTED. */
 async function assertTinted(page: Page, sel: string) {
   const badge = page.locator(sel);
   await expect(badge, `no element matched ${sel}`).toHaveCount(1);
   await expect(badge).toBeVisible();
-  const m: Measured = await page.evaluate(MEASURE, sel);
+  // ONE measurement, taken in the SETTLED state (see waitForInitial), so the
+  // tint, the text and the ratio every arm asserts on all describe the same
+  // instant — a second measurement here would reintroduce the window.
+  const m: Measured = await waitForInitial(page, sel);
   expect(
     m.surface.toLowerCase(),
     `${sel} is painted ${m.surface}, not the indigo-100 tint (#e0e7ff) this card is ` +
@@ -361,6 +427,33 @@ test.describe("avatar-initial badges on bg-indigo-100", () => {
       `axe's color-contrast rule produced no node for the badge, so the scan above covered ` +
         `something else. Nodes: ${JSON.stringify(analysed)}`,
     ).toBe(true);
+  });
+
+  test("the initial is WAITED FOR when the session read is slow — the t_129fdb48 flake", async ({
+    page,
+  }) => {
+    // THE RACE, MADE DETERMINISTIC. The badge is tinted from the first render
+    // and only fills its letter once the session bundle lands, so a measurement
+    // taken as soon as the element exists can read `?`. On a host also running
+    // another lane's gate that window opened by itself; held open here instead,
+    // so the bounded wait in `assertTinted` is under test on every run rather
+    // than left to host load. Pre-fix this arm measured `?` and failed with the
+    // same output the full gate produced on tree b7f0eca1 — that is the bug.
+    await openFresh(page, "/settings?tab=workspace", { bundleDelayMs: 2000 });
+    const m = await assertTinted(page, SHELL_BADGE);
+    console.log(
+      `[slow session] text=${JSON.stringify(m.text)} surface=${m.surface} fg=${m.fg} ` +
+        `ratio=${m.ratio} ${m.fontSize}/${m.fontWeight}`,
+    );
+    expect(
+      m.text,
+      "the sidebar badge was measured before the session read landed, so this is the false " +
+        "RED of card t_129fdb48 (the pre-hydration `?`), not a contrast defect",
+    ).toMatch(/^O$/);
+    expect(
+      m.ratio,
+      `the sidebar avatar initial is below its floor: ${JSON.stringify(m)}`,
+    ).toBeGreaterThanOrEqual(floorFor(m));
   });
 
   test("the /profile identity badge is LARGE text — MEASURED against ITS floor", async ({ page }) => {
