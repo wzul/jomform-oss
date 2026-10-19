@@ -137,7 +137,7 @@ audit_logs(id, account_id FK, actor, action, entity, entity_id, diff jsonb, crea
 
 - `deploy/docker-compose.yml`: api · web · render · postgres:18 · valkey:9.1-alpine · minio (+ createbuckets init container)
 - MinIO console internal sahaja; S3 endpoint expose via subpath/domain sendiri (cth. `s3.<domain>`); TLS via Traefik; volume persisten
-- Production vars: `DATABASE_URL`, `VALKEY_URL`, `S3_ENDPOINT/KEY/SECRET/BUCKET`, `CHIP_*` tiada global (per-account), `SESSION_SECRET`, `ENCRYPTION_KEY` (AES-GCM untuk chip_secret_key_enc)
+- Production vars: `DATABASE_URL`, `VALKEY_URL`, `S3_ENDPOINT/KEY/SECRET/BUCKET`, `CHIP_*` tiada global (per-account), `ENCRYPTION_KEY` (AES-GCM untuk chip_secret_key_enc)
 - Health checks: `/healthz` api, `/readyz` DB+Valkey+S3
 - Backups: `pg_dump` nightly + S3 offsite; MinIO bucket versioning untuk media bucket
 

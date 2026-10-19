@@ -134,7 +134,6 @@ func TestTheVersionProbeNeverStartsTheServer(t *testing.T) {
 	prodEnv := []string{
 		"APP_ENV=prod",
 		"DATABASE_URL=postgres://jomform:jomform@" + db.addr() + "/jomform?sslmode=disable&connect_timeout=5",
-		"SESSION_SECRET=" + strings.Repeat("s", 32),
 		"ENCRYPTION_KEY=" + strings.Repeat("ab", 32),
 		"PATH=" + os.Getenv("PATH"),
 	}

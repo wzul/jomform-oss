@@ -54,7 +54,7 @@ tail -1 /var/lib/jomform-backup/last-run.json
 cp deploy/vps/.env.prod.example ~/jomform.env
 chmod 600 ~/jomform.env
 #    the example ships with EMPTY secrets on purpose: an unfilled copy fails at
-#    startup (SESSION_SECRET / ENCRYPTION_KEY / POSTGRES_PASSWORD) rather than
+#    startup (ENCRYPTION_KEY / POSTGRES_PASSWORD) rather than
 #    running with a placeholder that looks like a credential.
 
 # 3. see what it would do, then do it
@@ -88,11 +88,12 @@ deploy/vps/drift-check.sh --host root@<new-host>
 - **HOST secrets may be minted** (`POSTGRES_PASSWORD`, and `MINIO_ROOT_PASSWORD`
   if the media is restored into a freshly-initialised bucket), because the
   database and the object store are rebuilt from the backup, not copied.
-- **`SESSION_SECRET` is neither, measured 2026-10-19.** It is required at startup
-  outside dev but nothing in the API reads it past that check — sessions are
-  opaque random tokens in Valkey, not signed cookies — so regenerating it signs
-  **nobody** out. Carry the current value because the config refuses to boot
-  without one.
+- **`SESSION_SECRET` is not part of the contract any more.** It was a startup
+  requirement that nothing read: sessions are opaque 32-byte random tokens in
+  Valkey, not signed cookies, so there was nothing for a signing secret to sign.
+  It was removed from the compose and the config together — an env file inherited
+  from an older host may keep the line, but nothing reads it and the compose no
+  longer passes it.
 
 `bootstrap-host.sh` DERIVES the required key list from `compose.prod.yml` and
 refuses an env file that is missing one — a key added to the compose without

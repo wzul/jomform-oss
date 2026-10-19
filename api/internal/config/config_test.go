@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,7 +33,6 @@ func TestLoadDevDefaults(t *testing.T) {
 func TestLoadEncryptionKeyValidation(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
 	t.Setenv("APP_ENV", "prod")
-	t.Setenv("SESSION_SECRET", "x")
 	t.Setenv("ENCRYPTION_KEY", "short")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error for short ENCRYPTION_KEY")
@@ -41,6 +41,31 @@ func TestLoadEncryptionKeyValidation(t *testing.T) {
 	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 	if _, err := Load(); err != nil {
 		t.Fatalf("unexpected error for valid key: %v", err)
+	}
+}
+
+// TestProdConfigNeedsNoSessionSecret pins the decision that SESSION_SECRET is
+// not part of the contract. It was a startup REQUIREMENT with no reader: config
+// loaded and validated it and nothing else in the API touched it. Sessions are
+// opaque 32-byte random tokens stored in Valkey (internal/auth/session.go), not
+// signed cookies, so there is nothing for a signing secret to sign — demanding
+// one only forced every deployment to carry and protect a dead credential.
+//
+// A prod Load must therefore succeed with no SESSION_SECRET in the environment.
+// If the requirement is ever re-added, this fails — and whoever adds it has to
+// say what the value signs instead of reinstating a key nobody reads.
+func TestProdConfigNeedsNoSessionSecret(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("SESSION_SECRET", "")
+	t.Setenv("ENCRYPTION_KEY", strings.Repeat("ab", 32))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("prod Load refused a config with no SESSION_SECRET: %v", err)
+	}
+	if cfg.IsDev() {
+		t.Fatalf("expected the config to load as prod, got env %q", cfg.Env)
 	}
 }
 

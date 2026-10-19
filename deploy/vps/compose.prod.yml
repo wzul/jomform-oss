@@ -80,7 +80,6 @@ services:
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       S3_BUCKET: jomform-media
       S3_REGION: us-east-1
-      SESSION_SECRET: ${SESSION_SECRET}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       APP_BASE_URL: https://jomform.com
       SES_SMTP_HOST: ${SES_SMTP_HOST}

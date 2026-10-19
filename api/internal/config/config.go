@@ -23,8 +23,7 @@ type Config struct {
 	// (issue #145). It must point at the public media route (e.g.
 	// https://jomform.com/media), NOT the internal S3/MinIO endpoint. When
 	// empty, the API derives it from AppBaseURL + "/media".
-	S3PublicBase  string
-	SessionSecret string
+	S3PublicBase string
 	// EncryptionKey must decode to exactly 32 bytes (hex) — used for AES-GCM
 	// encryption of per-account CHIP secret keys at rest.
 	EncryptionKey string
@@ -144,7 +143,6 @@ func Load() (*Config, error) {
 		S3Bucket:       getEnv("S3_BUCKET", "jomform-media"),
 		S3Region:       getEnv("S3_REGION", "us-east-1"),
 		S3PublicBase:   os.Getenv("S3_PUBLIC_BASE"),
-		SessionSecret:  os.Getenv("SESSION_SECRET"),
 		EncryptionKey:  os.Getenv("ENCRYPTION_KEY"),
 		AppBaseURL:     getEnv("APP_BASE_URL", "http://localhost:8080"),
 		Env:            getEnv("APP_ENV", "dev"),
@@ -211,9 +209,6 @@ func Load() (*Config, error) {
 
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
-	}
-	if cfg.SessionSecret == "" && !cfg.IsDev() {
-		return nil, fmt.Errorf("SESSION_SECRET is required outside dev")
 	}
 	if cfg.EncryptionKey != "" {
 		if len(cfg.EncryptionKey) != 64 {
