@@ -12,6 +12,7 @@ import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
 import { canInlineMediaPreview } from "../../lib/mediaThumb";
+import { purgeNotice } from "../../lib/mediaPurge";
 
 // Issue #180: WordPress-media-library-style Media page. Grid of the
 // merchant's uploaded images (thumbnail + name + date + size), filterable by
@@ -382,7 +383,23 @@ export default function MediaPage() {
         void loadTrash();
         return;
       }
-      setNotify(t("media.purged"));
+      // t_cb4e3d99: the response NAMES the edge outcome, so the toast must not
+      // claim more than it confirmed. `edge: purged` means the CDN accepted the
+      // purge; any other value comes with `edge_max_age_s`, the window the edge
+      // may still answer from its own copy. Discarding the body here is what
+      // made "File deleted for good." a false claim on every deployment with no
+      // CDN credential configured. purgeNotice() holds the decision so the
+      // unit suite can execute it.
+      let body: unknown = null;
+      try {
+        body = await res.json();
+      } catch {
+        // An unreadable body is NOT a licence to claim the copy is gone:
+        // purgeNotice(null) falls back to the line that admits a residual copy.
+        body = null;
+      }
+      const notice = purgeNotice(body);
+      setNotify(t(notice.key, notice.params));
       setConfirmPurge(null);
       void loadTrash();
       // The quota bar moves on a purge, so the live list (which carries usage)
