@@ -32,6 +32,12 @@ playwright/.cache/
 .env
 .env.*
 !.env.example
+# The PRODUCTION env contract for deploy/vps/compose.prod.yml. It ships on
+# purpose: the fresh-host runbook tells the operator to `cp` it, and the `host`
+# gate fails if its key set stops matching the compose. It holds placeholders
+# only, never a working secret — the `.env.*` rule above would otherwise silence
+# the whole thing (a gitignored template is not a template).
+!deploy/vps/.env.prod.example
 *.pem
 *.key
 

@@ -367,8 +367,9 @@ Two things close it, and the deployment is expected to have both:
    upload is a new key, so the bytes behind a URL never change and a re-fetch can
    only return the same object (or a 404 once it has been purged).
 2. **An edge purge in the same request (configure it).** When
-   `JF_CF_PURGE_TOKEN` + `JF_CF_PURGE_ZONE_ID` are set (see
-   `deploy/.env.example`), the purge asks Cloudflare to drop the object's URLs —
+   `JF_CF_PURGE_TOKEN` + `JF_CF_PURGE_ZONE_ID` are set (production:
+   `deploy/vps/.env.prod.example`; dev: `deploy/.env.example`), the purge asks
+   Cloudflare to drop the object's URLs —
    sent as **prefixes**, because a CDN keys on the full URL and an exact-URL purge
    would leave every query variant (`?v=…`, `?t=…`, whatever a page or an embed
    appends) cached — and the response says what happened:

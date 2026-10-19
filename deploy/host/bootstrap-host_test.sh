@@ -20,8 +20,22 @@
 #      credentials and the data move are deliberately out of scope, and the
 #      script must SAY so — an operator who believes the bootstrap moved the data
 #      cuts over to an empty database.
+#   5. THE TEMPLATE IT SENDS THE OPERATOR TO IS NOT IN THE REPO. Measured
+#      2026-10-18: `deploy/HOST-SETUP.md` said `cp deploy/vps/.env.prod.example`
+#      while no such file had ever been committed, so the first step of a
+#      migration was a `cp` that failed — and the only template that did exist
+#      (`deploy/.env.example`) is the DEV shape. The guards here are: the file
+#      exists, git does not IGNORE it (`.gitignore` has `.env.*`, and a silenced
+#      template is the same defect one layer down), its key set EQUALS the
+#      compose's in BOTH directions, and a copy of it survives the documented
+#      `cp` → `chmod 600` → bootstrap path.
+#   6. THE RUNBOOK NAMES A PATH THAT IS NOT THERE. That is the defect above, in
+#      general form, and it is cheap to check: every `deploy/...` path named in
+#      `deploy/HOST-SETUP.md` must resolve in the repo.
 #
 # Hermetic: a stubbed `docker`/`id` on PATH, and `--root` pointed at a temp dir.
+# The only things read outside the temp dir are the repo's own files under
+# deploy/, which is what cases 5 and 6 are about.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -138,6 +152,59 @@ grep -q "PLANTED_KEY" "$WORK/compose.planted.yml" && ok "the planted compose car
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/good.env" --compose-src "$WORK/compose.planted.yml"
 [ "$RC" -ne 0 ] && ok "exit code (exit=$RC)" || bad "a compose key no env file can supply was NOT refused"
 echo "$OUT" | grep -q "PLANTED_KEY" && ok "names the planted key (the contract is derived, not written)" || bad "did not name the planted key"
+
+echo "case: the repo SHIPS the env template the runbook tells an operator to copy"
+EXAMPLE="$HERE/../vps/.env.prod.example"
+ROOT_DIR_REPO="$(cd "$HERE/../.." && pwd)"
+if [ ! -s "$EXAMPLE" ]; then
+  bad "deploy/vps/.env.prod.example is missing — the runbook's first migration step is a cp that cannot work"
+else
+  ok "deploy/vps/.env.prod.example exists and is not empty"
+  # ...and git does not IGNORE it. A silenced template is the same defect one
+  # layer down: it sits in the author's tree, this harness reads it, and the PR
+  # does not contain it. Probe the PATTERNS (--no-index), not the index, so the
+  # question is still asked after the file is tracked.
+  if git -C "$HERE" rev-parse --git-dir >/dev/null 2>&1; then
+    if git -C "$HERE" check-ignore --no-index -q "$EXAMPLE" 2>/dev/null; then
+      bad "deploy/vps/.env.prod.example is GITIGNORED — it would never be committed"
+    else
+      ok "not gitignored (it actually ships)"
+    fi
+  fi
+
+  echo "case: the template's key set EQUALS the compose's, in BOTH directions"
+  EXAMPLE_KEYS="$(grep -oE '^[A-Z_]+=' "$EXAMPLE" | tr -d '=' | sort -u)"
+  COMPOSE_KEYS="$(grep -oE '\$\{[A-Z_]+' "$COMPOSE" | tr -d '${' | sort -u)"
+  MISSING_FROM_EXAMPLE="$(comm -23 <(echo "$COMPOSE_KEYS") <(echo "$EXAMPLE_KEYS"))"
+  STALE_IN_EXAMPLE="$(comm -13 <(echo "$COMPOSE_KEYS") <(echo "$EXAMPLE_KEYS"))"
+  [ -z "$MISSING_FROM_EXAMPLE" ] && ok "no key the compose reads is missing from the example" \
+    || bad "the example is missing compose key(s): $(echo "$MISSING_FROM_EXAMPLE" | tr '\n' ' ')"
+  [ -z "$STALE_IN_EXAMPLE" ] && ok "the example carries no key the compose does not read" \
+    || bad "the example carries stale key(s): $(echo "$STALE_IN_EXAMPLE" | tr '\n' ' ')"
+
+  echo "case: the documented procedure (cp example → chmod 600 → bootstrap) works"
+  cp "$EXAMPLE" "$WORK/copied.env"
+  chmod 600 "$WORK/copied.env"
+  run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/copied.env"
+  [ "$RC" -eq 0 ] && ok "the bootstrap accepts a copy of the shipped example (exit=$RC)" \
+    || bad "the bootstrap REFUSED a copy of the shipped example (exit=$RC): $OUT"
+  echo "$OUT" | grep -q "env contract: all $KEY_COUNT keys" \
+    && ok "and reports the derived key count ($KEY_COUNT)" \
+    || bad "did not report the derived key count"
+fi
+
+echo "case: every deploy/ path named in the runbook exists in the repo"
+RUNBOOK="$HERE/../HOST-SETUP.md"
+if [ ! -s "$RUNBOOK" ]; then
+  bad "deploy/HOST-SETUP.md is missing"
+else
+  MISSING_PATHS=""
+  while IFS= read -r p; do
+    [ -e "$ROOT_DIR_REPO/$p" ] || MISSING_PATHS="$MISSING_PATHS $p"
+  done < <(grep -oE 'deploy/[A-Za-z0-9_./-]+' "$RUNBOOK" | sed 's/[.,)]$//' | sort -u)
+  [ -z "$MISSING_PATHS" ] && ok "every deploy/... path it names resolves" \
+    || bad "the runbook names path(s) that do not exist:$MISSING_PATHS"
+fi
 
 echo "case: a host that is not running docker is refused"
 run_exclusive "$WORK/nodock" --root "$WORK/opt" --env-file "$WORK/good.env"

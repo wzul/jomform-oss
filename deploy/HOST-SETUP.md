@@ -12,7 +12,7 @@ production, in ways that would have failed SILENTLY.
 | prod compose | did not exist in the repo | `/opt/jomform/compose.yml`, 130 lines | nothing to deploy from |
 | `deploy/docker-compose.yml` | the DEV shape | — | `POSTGRES_PASSWORD` defaulting to `jomform_dev`, and `pgdata` mounted at `/var/lib/postgresql/data` while the pinned `postgres:18` image keeps its data dir under `/var/lib/postgresql` — i.e. an **empty database** or a **known password** |
 | `deploy/vps/traefik-jomform.yml` | 55 lines, Traefik **v2** syntax (`Host(...)`, `certResolver: le`, `entryPoints: [websecure]`) | 179 lines, **v3** (`HostRegexp`, `letsencrypt`, block sequences) | routing that does not match production |
-| `deploy/.env.example` | 15 keys, and `SMTP_*` names | 19 keys, and the API reads `SES_*` | a deployment with **no working email** and several empty credentials |
+| `deploy/.env.example` | the DEV shape: a different key set, and `SMTP_*` names | the production contract: its own key set, and the API reads `SES_*` | a deployment with **no working email** and several empty credentials |
 
 The repo now holds the production files **byte-for-byte**, and
 `deploy/vps/drift-check.sh` is how that claim is checked rather than believed.
@@ -21,8 +21,12 @@ The repo now holds the production files **byte-for-byte**, and
 
 - `deploy/vps/compose.prod.yml` — the production stack, as installed.
 - `deploy/vps/traefik-jomform.yml`, `traefik-docker-compose.yml` — the edge, as installed.
-- `deploy/vps/.env.prod.example` — the 19 keys the compose reads, marked as
-  ACCOUNT secrets (carry over) vs HOST secrets (may be minted).
+- `deploy/vps/.env.prod.example` — every key the compose reads, marked as
+  ACCOUNT secrets (carry over) vs HOST secrets (may be minted). The count is
+  deliberately NOT written down here: `deploy/host/bootstrap-host_test.sh` (the
+  `host` gate) derives the key set from `compose.prod.yml` and fails if the
+  example and the compose disagree in either direction, so a key added to one and
+  not the other is red and a number in this sentence could only rot.
 - `deploy/vps/drift-check.sh` — repo vs host, per file. Exit 1 on any drift.
 - `deploy/host/bootstrap-host.sh` — installs the files, the external network, the
   stack and the two cron lines. **Dry-run by default**; `--apply` needs root.
@@ -49,6 +53,9 @@ tail -1 /var/lib/jomform-backup/last-run.json
 #    password manager (or copy the current host's /opt/jomform/.env over ssh)
 cp deploy/vps/.env.prod.example ~/jomform.env
 chmod 600 ~/jomform.env
+#    the example ships with EMPTY secrets on purpose: an unfilled copy fails at
+#    startup (SESSION_SECRET / ENCRYPTION_KEY / POSTGRES_PASSWORD) rather than
+#    running with a placeholder that looks like a credential.
 
 # 3. see what it would do, then do it
 deploy/host/bootstrap-host.sh --env-file ~/jomform.env
@@ -70,7 +77,7 @@ deploy/vps/drift-check.sh --host root@<new-host>
 
 ## The env contract — the part that breaks a migration
 
-`deploy/vps/.env.prod.example` is the authority; the two rules that matter:
+`deploy/vps/.env.prod.example` is the authority; the rules that matter:
 
 - **ACCOUNT secrets must be inherited, never regenerated.**
   `ENCRYPTION_KEY` is the sharp one: it encrypts data at rest (per-account CHIP
@@ -78,15 +85,23 @@ deploy/vps/drift-check.sh --host root@<new-host>
   **unreadable**, and the rows look like corruption. Same reasoning for the
   provider credentials (`SES_*`, `JF_CF_OAUTH_*`, `JF_GOOGLE_*`, `OLLAMA_API_KEY`):
   they are issued elsewhere, so a new host reuses the same client.
-  `SESSION_SECRET` is the soft one — regenerating it signs everyone out.
 - **HOST secrets may be minted** (`POSTGRES_PASSWORD`, and `MINIO_ROOT_PASSWORD`
   if the media is restored into a freshly-initialised bucket), because the
   database and the object store are rebuilt from the backup, not copied.
+- **`SESSION_SECRET` is neither, measured 2026-10-19.** It is required at startup
+  outside dev but nothing in the API reads it past that check — sessions are
+  opaque random tokens in Valkey, not signed cookies — so regenerating it signs
+  **nobody** out. Carry the current value because the config refuses to boot
+  without one.
 
 `bootstrap-host.sh` DERIVES the required key list from `compose.prod.yml` and
 refuses an env file that is missing one — a key added to the compose without
 being added to the example is caught there rather than by a deployment with an
-empty credential.
+empty credential. `deploy/host/bootstrap-host_test.sh` (the `host` gate) asserts
+the stronger property on the checked-in file: the example's key set EQUALS the
+compose's **in both directions**, so a stale key left in the example is red as
+well, and the gate also proves the documented `cp` → `chmod 600` → bootstrap path
+works on a copy of it.
 
 ## Data
 
