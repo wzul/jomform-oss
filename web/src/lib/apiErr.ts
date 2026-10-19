@@ -228,6 +228,30 @@ export function apiErrorKey(body: unknown): Key | "" {
 }
 
 /**
+ * A per-SURFACE re-mapping of one or more codes, passed into `apiErr`.
+ *
+ * WHY THIS EXISTS (card t_adf8e1e6). The dictionary above is keyed on the CODE
+ * alone, which implicitly assumes a code means the same thing wherever it is
+ * read. One code breaks that assumption by DESIGN: `/v1/auth/login` answers
+ * `401 login.invalid` for a bad password AND for a bad 2FA code, because
+ * distinguishing them would tell an attacker which half of the credential pair
+ * is wrong (`failLogin` in api/internal/httpapi/auth.go). That is the right
+ * wire contract and it must not change.
+ *
+ * The CONSEQUENCE was a wrong sentence on the second screen: the user passed the
+ * password check, the page moved to the code step, and a wrong/expired code came
+ * back as "Email or password is incorrect." — naming a credential that had just
+ * been proven correct and saying nothing about the code. The step knows which
+ * credential it just sent; the wire deliberately does not. So the surface
+ * supplies its own sentence for the codes whose meaning depends on the step,
+ * and every other code keeps the dictionary's answer.
+ *
+ * Absent, unknown or uncoded → `apiErrorKey`, i.e. exactly the pre-override
+ * behaviour, so a caller that passes nothing is unaffected.
+ */
+export type SurfaceErrorKeys = Readonly<Record<string, Key>>;
+
+/**
  * The one call site rule. `fallback` is the calling page's OWN translated
  * message; the server's prose is NEVER returned.
  *
@@ -238,13 +262,19 @@ export function apiErrorKey(body: unknown): Key | "" {
  *
  * Note the parameter is the whole parsed body, not a string: taking `body.error`
  * would make the prose reachable again by construction, which is the bug.
+ *
+ * `surface` is the optional per-step override documented on `SurfaceErrorKeys`
+ * (card t_adf8e1e6). It is checked FIRST, because a surface that names a code is
+ * saying something the code alone cannot.
  */
 export function apiErr(
   body: unknown,
   fallback: string,
   t: (k: Key) => string,
+  surface?: SurfaceErrorKeys,
 ): string {
-  const key = apiErrorKey(body);
+  const code = apiErrorCode(body);
+  const key = (code === "" ? undefined : surface?.[code]) ?? apiErrorKey(body);
   return key === "" ? fallback : t(key);
 }
 

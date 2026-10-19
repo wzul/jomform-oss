@@ -7,6 +7,7 @@ import { resolvePostLogin } from "../../lib/postLogin";
 import { browserNextTarget } from "../../lib/nextTarget";
 import { b64url, fromB64url } from "../../lib/webauthn";
 import { apiErr } from "../../lib/apiErr";
+import { totpErr } from "../../lib/loginTotpErr";
 
 type Mode = "login" | "register" | "forgot" | "magic";
 type SocialProvider = { id: string; name: string };
@@ -284,7 +285,14 @@ export default function Login() {
     const d = await r.json().catch(() => ({}));
     // Wrong code is a genuine error — inline, red, under the code input (#42
     // login-limiter UX stays intact for repeated failures).
-    setError(apiErr(d, t("login.genericError"), t));
+    //
+    // Card t_adf8e1e6: this step's failure is about the CODE, not the password.
+    // The server answers `login.invalid` for both on purpose (uniform 401 — see
+    // api/internal/httpapi/auth.go's failLogin), so the sentence is chosen HERE,
+    // where we know the password was already accepted: `totpErr` re-maps that one
+    // code to "That code is invalid or expired. Request a new one." and leaves
+    // every other code — and a non-JSON/unknown failure — on the generic sentence.
+    setError(totpErr(d, t));
     setCode("");
     codeRef.current?.focus();
   }

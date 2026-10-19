@@ -76,6 +76,13 @@ export const DICT = {
   "login.totpTitle": { en: "Enter 2FA code", ms: "Masukkan kod 2FA", zh: "输入 2FA 验证码", ta: "2FA குறியீட்டை உள்ளிடவும்", ar: "أدخل رمز التحقق الثنائي" },
   "login.totpDesc": { en: "Open your authenticator app and enter the 6-digit code for {email}.", ms: "Buka aplikasi pengesah anda dan masukkan kod 6 digit untuk {email}.", zh: "打开验证器应用，为 {email} 输入 6 位验证码。", ta: "உங்கள் அங்கீகாரப் பயன்பாட்டைத் திறந்து, {email} க்கான 6 இலக்க குறியீட்டை உள்ளிடவும்.", ar: "افتح تطبيق المصادقة وأدخل الرمز المكوّن من 6 أرقام لـ {email}." },
   "login.totpSubmit": { en: "Verify & sign in", ms: "Sahkan & log masuk", zh: "验证并登录", ta: "சரிபார்த்து உள்நுழை", ar: "تحقق وسجّل الدخول" },
+  // Card t_adf8e1e6: the 2FA step's OWN failure sentence. The server answers a
+  // bad CODE with the same deliberately uniform 401 + `login.invalid` it uses for
+  // a bad password (no-enumeration), so the step-2 surface has to re-map that one
+  // code to a sentence about the code — "Email or password is incorrect." tells a
+  // user who was proven correct one screen earlier to doubt a credential that was
+  // not the problem, and never mentions expiry or re-requesting.
+  "login.totpInvalid": { en: "That code is invalid or expired. Request a new one.", ms: "Kod itu tidak sah atau telah tamat tempoh. Minta kod baharu.", zh: "该验证码无效或已过期。请重新获取。", ta: "அந்தக் குறியீடு தவறானது அல்லது காலாவதியானது. புதிய குறியீட்டைக் கோருங்கள்.", ar: "رمز التحقق هذا غير صالح أو منتهي الصلاحية. اطلب رمزاً جديداً." },
   "login.totpBack": { en: "Change email / use another account", ms: "Ganti emel / Guna akaun lain", zh: "更换邮箱 / 使用其他账户", ta: "மின்னஞ்சலை மாற்று / மற்றொரு கணக்கைப் பயன்படுத்து", ar: "تغيير البريد الإلكتروني / استخدام حساب آخر" },
   // issue #72: 2FA email one-time backup code
   "login.emailCodeLink": { en: "No authenticator app access? Send a code via email", ms: "Tak ada akses aplikasi pengesah? Hantar kod melalui emel", zh: "没有验证器应用？通过电子邮件发送验证码", ta: "அங்கீகாரப் பயன்பாட்டு அணுகல் இல்லையா? மின்னஞ்சல் வழியாக குறியீடு அனுப்பு", ar: "لا يمكن الوصول إلى تطبيق المصادقة؟ أرسل رمزاً عبر البريد الإلكتروني" },
