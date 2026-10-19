@@ -622,7 +622,9 @@ export default function Products() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch("/api/rest/uploads/image", { method: "POST", body: fd });
+      // t_e19368af: the scope must be on the URL, or the upload lands in the
+      // session's first owned account instead of the selected workspace.
+      const r = await fetch(workspaceUrl("/api/rest/uploads/image"), { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.url) {
         setDrawerError(t("prod.uploadFail"));

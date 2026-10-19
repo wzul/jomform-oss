@@ -7,7 +7,8 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
-import { workspaceQuery } from "../../lib/workspace";
+import { workspaceQuery, workspaceUrl } from "../../lib/workspace";
+import { mediaListUrl } from "../../lib/mediaListUrl";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
@@ -177,7 +178,13 @@ export default function MediaPage() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch("/api/rest/uploads/image", { method: "POST", body: fd });
+      // The scope is part of the URL, not an option (card t_e19368af): without
+      // ?workspace= the API resolves the session's FIRST owned account
+      // (resolveSessionAccount), so an upload made while the switcher says `abc`
+      // was written into the first workspace's library and charged to ITS quota
+      // — measured on prod: abc 0 → 0 bytes, first account +142, and the file
+      // was unreachable from the workspace being worked in.
+      const r = await fetch(workspaceUrl("/api/rest/uploads/image"), { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         setUploadMsg(apiErr(d, t("media.uploadFail"), t));
@@ -215,7 +222,11 @@ export default function MediaPage() {
     // anything else → a visible message.
     const r = await runLoad(
       () => fetchJson<{ items?: unknown[]; total?: number; usage?: MediaUsage }>(
-        `/api/rest/media?${params.toString()}${workspaceQuery()}`,
+        // t_e19368af: built by mediaListUrl, NOT `${params}${workspaceQuery()}`.
+        // workspaceQuery() opens with `?`, so appending it after a query string
+        // produced `?page=1&limit=24?workspace=abc` — the scope arrived as part
+        // of `limit` and the API answered about the first owned account.
+        mediaListUrl(params),
       ),
       { onUnauth: goToLogin, message: t("media.loadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );

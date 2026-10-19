@@ -108,7 +108,10 @@ export default function MediaPicker({
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch("/api/rest/uploads/image", { method: "POST", body: fd });
+      // t_e19368af: unscoped, this resolved the session's FIRST owned account, so
+      // a file picked while the switcher said another workspace was written into
+      // the first workspace's library and charged to its quota.
+      const r = await fetch(workspaceUrl("/api/rest/uploads/image"), { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         setUploadMsg(apiErr(d, t("media.uploadFail"), t));

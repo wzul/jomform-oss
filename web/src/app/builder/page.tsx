@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useI18n } from "../../components/i18n";
-import { workspaceQuery } from "../../lib/workspace";
+import { workspaceQuery, workspaceUrl } from "../../lib/workspace";
 import { canMove, moveBlock } from "../../lib/blockReorder";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import {
@@ -1091,7 +1091,9 @@ export default function Builder() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch("/api/rest/uploads/image", { method: "POST", body: fd });
+      // t_e19368af: scope the write to the workspace the switcher names — an
+      // unscoped upload resolves the session's first owned account.
+      const r = await fetch(workspaceUrl("/api/rest/uploads/image"), { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.url) {
         setLoadErr(apiErr(d, t("bld.uploadImageFail"), t));

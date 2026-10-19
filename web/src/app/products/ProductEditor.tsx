@@ -10,7 +10,7 @@ import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
-import { workspaceQuery } from "../../lib/workspace";
+import { workspaceQuery, workspaceUrl } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 
@@ -196,7 +196,8 @@ export default function ProductEditor({ productId }: { productId?: string }) {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch("/api/rest/uploads/image", { method: "POST", body: fd });
+      // t_e19368af: scope the write to the workspace the switcher names.
+      const r = await fetch(workspaceUrl("/api/rest/uploads/image"), { method: "POST", body: fd });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.url) {
         setError(t("prod.uploadFail"));

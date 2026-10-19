@@ -49,6 +49,36 @@ type restMedia struct {
 // ?source=merchant|customer filters. Returns {"items":[...],"page":N,
 // "limit":N,"total":N}.
 func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	// THE SCOPE IS RESOLVED FIRST, and that ordering is the fix (card t_e19368af).
+	//
+	// This was the last dashboard list endpoint that read actx.Account.ID without
+	// asking scopeOr403, so ?workspace=<slug> had exactly two outcomes: the slug was
+	// the caller's and resolveSessionAccount had switched actx.Account to that
+	// workspace's account, or the slug was unknown/another account's slug and
+	// resolveSessionAccount SILENTLY fell back to the first owned account while this
+	// handler answered 200 with THAT account's rows. Measured on prod: an unknown
+	// slug, and an ACCOUNT slug where a WORKSPACE slug belongs, both listed the first
+	// account's library. Every other list endpoint answers that pair with 403
+	// "workspace tidak dijumpai" (scopeOr403); a typo'd or stale scope must not answer
+	// about a different workspace. The gate therefore runs before the Media==nil
+	// early return too: an unwired store is not a reason to answer a bad scope with
+	// 200.
+	scope, ok := h.scopeOr403(w, r, actx)
+	if !ok {
+		return
+	}
+	// A resolved workspace lists the account(s) LINKED TO IT. actx.Account is
+	// resolveSessionAccount's answer for the same slug, so it agrees for the normal
+	// one-account workspace; the scope is what makes an account-less workspace list
+	// NOTHING instead of falling back to the caller's first owned account (the
+	// fallback resolveSessionAccount documents for an empty workspace).
+	accountID := actx.Account.ID
+	if scope.Workspace != "" {
+		accountID = ""
+		if len(scope.Accounts) > 0 {
+			accountID = scope.Accounts[0]
+		}
+	}
 	if h.Media == nil {
 		respond(w, http.StatusOK, map[string]any{"items": []restMedia{}, "page": 1, "limit": 20, "total": 0})
 		return
@@ -60,9 +90,9 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 		writeErr(w, http.StatusBadRequest, "source mesti merchant|customer")
 		return
 	}
-	items, total, err := h.Media.ListPage(r.Context(), actx.Account.ID, formID, source, page, limit)
+	items, total, err := h.Media.ListPage(r.Context(), accountID, formID, source, page, limit)
 	if err != nil {
-		slog.Error("media_list", "err", err, "account", actx.Account.ID)
+		slog.Error("media_list", "err", err, "account", accountID)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -108,9 +138,9 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 	// shown matches what is actually enforced; fall back to the media sum.
 	usage := map[string]any{"limit": objstore.MaxWorkspaceBytes}
 	if h.Media != nil {
-		if used, err := h.Media.UsedBytes(r.Context(), actx.Account.ID); err == nil {
+		if used, err := h.Media.UsedBytes(r.Context(), accountID); err == nil {
 			usage["used"] = used
-		} else if used, err := h.Media.TotalBytes(r.Context(), actx.Account.ID); err == nil {
+		} else if used, err := h.Media.TotalBytes(r.Context(), accountID); err == nil {
 			usage["used"] = used
 		}
 	}
