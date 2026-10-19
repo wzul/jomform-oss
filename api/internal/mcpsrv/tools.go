@@ -613,7 +613,7 @@ func (s *Server) registerTools() {
 	}, s.restoreMediaMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "purge_media",
-		Description: "Padam media secara KEKAL dari tong sampah. AMARAN: tidak boleh dibatalkan. Inilah satu-satunya tempat byte dipadam dari storan DAN kuota 1GB dilepaskan (varians saiz + pratonton PDF turut dipadam), serta tempat salinan EDGE CDN dibuang dalam panggilan yang sama supaya URL tersebut berhenti boleh dimuat turun. Jawapan membawa 'edge' (purged | not_configured | no_urls | out_of_zone | failed) dan 'edge_urls'; bila tiada kredensial CDN ia menyebut 'edge_max_age_s' — tempoh maksimum edge masih boleh menyajikan salinannya. Hanya media dalam tong sampah — hantar ke bin dulu guna delete_media.",
+		Description: "Padam media secara KEKAL dari tong sampah. AMARAN: tidak boleh dibatalkan. Inilah satu-satunya tempat byte dipadam dari storan DAN kuota 1GB dilepaskan (varians saiz + pratonton PDF turut dipadam), serta tempat salinan EDGE CDN dibuang dalam panggilan yang sama supaya URL tersebut berhenti boleh dimuat turun. Jawapan membawa 'edge' (purged | not_configured | no_urls | out_of_zone | failed) dan 'edge_urls' hanya apabila CDN menerima sekurang-kurangnya satu permintaan purge; pada not_configured, no_urls dan out_of_zone medan itu tiada sama sekali, dan pada failed ia menyenaraikan yang diterima sahaja; bila tiada kredensial CDN ia menyebut 'edge_max_age_s' — tempoh maksimum edge masih boleh menyajikan salinannya. Hanya media dalam tong sampah — hantar ke bin dulu guna delete_media.",
 	}, s.purgeMediaMCP)
 
 	// ── Parity: form template gallery (issue #174) ────────────────────────
