@@ -38,6 +38,7 @@ import (
 	"strings"
 
 	"github.com/wzul/jomform/api/internal/mcpsrv"
+	"github.com/wzul/jomform/api/internal/objstore"
 )
 
 // Specific codes: the user-actionable classes the dashboard translates.
@@ -178,6 +179,15 @@ const (
 	// Uploads / media.
 	CodeUploadStorageQuota    = "upload.storageQuota"
 	CodeUploadTypeUnsupported = "upload.typeUnsupported"
+	// An SVG whose bytes are not a well-formed XML document (t_20af3915). The
+	// type classification is right — it IS an SVG — but the browser parses an
+	// `image/svg+xml` response as XML, and text before the root element (the
+	// `/* ... */` banner on a hand-written file) is a fatal parse error, so the
+	// asset would be stored and never render. The page's generic "Upload failed"
+	// sentence cannot tell the merchant that their file needs fixing, and the
+	// API's prose is never rendered (issue #6177), so this class needs its own
+	// code and its own localized sentence.
+	CodeUploadSVGInvalid = "upload.svgInvalid"
 
 	// Custom-domain TLS material.
 	CodeDomainCertInvalid = "domain.certInvalid"
@@ -454,6 +464,13 @@ var errCodeByPrefix = []struct {
 	{"taip slug borang (", CodeFormConfirmSlugMismatch},
 	{"taip slug workspace (", CodeWorkspaceConfirmSlugMismatch},
 	{"taip nama produk (", CodeProductConfirmNameMismatch},
+	// The SVG well-formedness refusal (t_20af3915). A prefix because the message
+	// carries the decoder's own diagnostic after the lead-in ("…: teks sebelum
+	// elemen akar" / "…: XML syntax error on line 1: …"), which names the line
+	// the merchant has to fix and is therefore not a fixed literal. The lead-in
+	// is the constant BOTH the REST handlers and the MCP tool build the sentence
+	// from, so the wire message and this code cannot drift apart.
+	{prefix: objstore.SVGNotXMLMessageLeadIn, code: CodeUploadSVGInvalid},
 }
 
 // ErrCodeFor returns the machine code for a wire message, or "" when the

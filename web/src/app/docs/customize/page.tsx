@@ -22,7 +22,7 @@ const STEPS: { title: string; body: string }[] = [
   },
   {
     title: "3. Upload your media",
-    body: "Use upload_media to upload your design assets (logo, hero image, and code assets like css/js/html/svg/woff2). Images are optimised and served immediately; code assets are scanned before being served.",
+    body: "Use upload_media to upload your design assets (logo, hero image, and code assets like css/js/html/svg/woff2). Images are optimised and served immediately; code assets are scanned before being served. An SVG must be a well-formed XML document: a browser renders it as XML, so a file with text before the <svg> tag (for example a /* */ banner) is refused rather than stored as a broken image.",
   },
   {
     title: "4. Apply the theme and landing page",

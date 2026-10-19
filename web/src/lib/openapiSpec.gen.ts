@@ -7580,7 +7580,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
     },
     "/v1/rest/uploads/asset": {
       "post": {
-        "description": "Merchant-only. A code asset is scanned before it is served.\n\nResponse: The stored asset, which stays unserved until its scan passes.\n\nRate limit: 2 per second per IP, burst 6.",
+        "description": "Merchant-only. A code asset is scanned before it is served. An svg must be a well-formed XML document: a body with text before the root element (for example a /* */ banner) is refused with 400 upload.svgInvalid, because a browser parses image/svg+xml as XML and would show a parsererror instead of the image.\n\nResponse: The stored asset, which stays unserved until its scan passes.\n\nRate limit: 2 per second per IP, burst 6.",
         "operationId": "uploadAsset",
         "responses": {
           "200": {
@@ -7716,7 +7716,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
     },
     "/v1/rest/uploads/image": {
       "post": {
-        "description": "multipart/form-data with the file in file. Send the bytes, not JSON.\n\nResponse: The stored media item with its public https URL.\n\nRate limit: 2 per second per IP, burst 6.",
+        "description": "multipart/form-data with the file in file. Send the bytes, not JSON. An svg must be a well-formed XML document: a body with text before the root element (for example a /* */ banner) is refused with 400 upload.svgInvalid, because a browser parses image/svg+xml as XML and would show a parsererror instead of the image.\n\nResponse: The stored media item with its public https URL.\n\nRate limit: 2 per second per IP, burst 6.",
         "operationId": "uploadImage",
         "responses": {
           "200": {

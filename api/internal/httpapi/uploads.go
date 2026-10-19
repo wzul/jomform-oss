@@ -187,6 +187,20 @@ func sniffPDFType(data []byte) (string, bool)   { return objstore.SniffPDFType(d
 func magicByteMismatch(kind objstore.UploadKind, declaredFilename, declaredMIME, sniffedExt string) string {
 	return objstore.MagicByteMismatch(kind, declaredFilename, declaredMIME, sniffedExt)
 }
+
+// svgWellFormednessError returns the 400 message for an `.svg` upload whose
+// bytes are not a well-formed XML document, or "" when the document is fine.
+//
+// WHY THE UPLOAD PATH HAS TO ASK (t_20af3915). An SVG is served as
+// `image/svg+xml` with `X-Content-Type-Options: nosniff`, so the browser parses
+// it as XML. A body with text before the root element — the `/* ... */` banner
+// merchants put on hand-written files — is a fatal XML parse error, so the
+// asset is stored, is listed, and never renders. The type classification is
+// right (v1.21.233); the document is not. Refusing it at upload is the only
+// point where the merchant still has the file in hand and can fix it. See
+// objstore.ValidateXMLDocument for what "well-formed" means here.
+func svgWellFormednessError(data []byte) string { return objstore.SVGNotXMLError(data) }
+
 func buildUploadKey(accountID, ext string) string { return objstore.BuildUploadKey(accountID, ext) }
 func buildVariantKey(fullKey string, size objstore.ImageSize) string {
 	return objstore.BuildVariantKey(fullKey, size)
@@ -456,6 +470,15 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 			recordUploadFailure("asset_too_large")
 			writeErr(w, http.StatusRequestEntityTooLarge, "fail melebihi had 2MB")
 			return
+		}
+		// t_20af3915: an SVG is served as image/svg+xml, so the browser parses
+		// it as XML — a document that is not well-formed never renders.
+		if ext == ".svg" {
+			if msg := svgWellFormednessError(data); msg != "" {
+				recordUploadFailure("svg_not_xml")
+				writeErr(w, http.StatusBadRequest, msg)
+				return
+			}
 		}
 		// Issue #384: reject an upload that would push the workspace over the 1GB
 		// per-workspace storage quota.
@@ -802,6 +825,15 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 		recordUploadFailure("asset_too_large")
 		writeErr(w, http.StatusRequestEntityTooLarge, "fail melebihi had 2MB")
 		return
+	}
+	// t_20af3915: an SVG is served as image/svg+xml, so the browser parses it as
+	// XML — a document that is not well-formed never renders.
+	if ext == ".svg" {
+		if msg := svgWellFormednessError(data); msg != "" {
+			recordUploadFailure("svg_not_xml")
+			writeErr(w, http.StatusBadRequest, msg)
+			return
+		}
 	}
 
 	// Issue #545: reserve atomically before storing (see uploadImage).

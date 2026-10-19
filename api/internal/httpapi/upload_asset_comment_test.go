@@ -150,10 +150,17 @@ func TestCommentLedMarkupUploadsAsItsDocumentType(t *testing.T) {
 			wantMIME:   "text/html; charset=utf-8",
 		},
 		{
-			name:       "svg-behind-block-comment",
+			// t_20af3915: this case used a `/* ... */` banner, which classifies as
+			// `.svg` correctly but is NOT a well-formed XML document (text before
+			// the root), so the upload is now refused at validation — see
+			// TestSVGUploadRefusesANonWellFormedDocument. The classification half
+			// is exercised here with the XML-legal control that a browser really
+			// renders; the `/* */` shape is still pinned as `.svg` by
+			// TestSniffAssetTypeCommentLedMarkup, which is about the TYPE only.
+			name:       "svg-behind-xml-comment",
 			filename:   "logo.svg",
 			partCT:     "image/svg+xml",
-			body:       "/* Acme logo banner 2026 */\n<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"1\" height=\"1\"/></svg>\n",
+			body:       "<!-- Acme logo banner 2026 -->\n<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"1\" height=\"1\"/></svg>\n",
 			wantSuffix: ".svg",
 			wantMIME:   "image/svg+xml",
 		},

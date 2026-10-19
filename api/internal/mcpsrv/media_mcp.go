@@ -266,6 +266,16 @@ func (s *Server) uploadMediaAsset(ctx context.Context, acc string, raw []byte) (
 	if msg := objstore.MagicByteMismatch(objstore.KindAsset, "", "", ext); msg != "" {
 		return nil, mediaOut{}, errors.New(msg)
 	}
+	// t_20af3915: an SVG is served as image/svg+xml, so the browser parses it as
+	// XML — a document that is not well-formed never renders. This is the same
+	// rule (and the same message) the dashboard's /uploads/asset applies; an
+	// agent uploading through MCP must not be able to store what the dashboard
+	// refuses.
+	if ext == ".svg" {
+		if msg := objstore.SVGNotXMLError(raw); msg != "" {
+			return nil, mediaOut{}, errors.New(msg)
+		}
+	}
 	mime := objstore.UploadAssetMIME[ext]
 	// Issue #545: this MCP path had NO quota check at all.
 	key := objstore.BuildUploadKey(acc, ext)

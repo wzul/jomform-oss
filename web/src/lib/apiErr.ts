@@ -167,6 +167,11 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   // Uploads / media.
   "upload.storageQuota": "apiErr.storageQuota",
   "upload.typeUnsupported": "apiErr.uploadTypeUnsupported",
+  // An SVG that is not well-formed XML (t_20af3915). Its own sentence because
+  // the page's generic "Upload failed" hides the one thing the merchant has to
+  // do: fix the file. The refusal is not about the TYPE (an SVG is supported)
+  // and not about the quota, so neither existing row can say it.
+  "upload.svgInvalid": "apiErr.uploadSvgInvalid",
 
   // Custom-domain TLS material.
   "domain.certInvalid": "apiErr.certInvalid",
