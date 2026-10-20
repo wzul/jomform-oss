@@ -45,13 +45,17 @@ type SettingsBody = {
   failure_message?: string;
 };
 
+/** The title/slug/theme write (PATCH /forms/{id}). Card t_106955f6 reads its
+ *  `theme` map: it must carry the keys the General tab does not own. */
+type PatchBody = { title?: string; slug?: string; theme?: Record<string, unknown> };
+
 type Stub = {
   /** Every body the page PUT to /forms/{id}/settings, in order. */
   settingsPuts: SettingsBody[];
   /** Every method+url the page asked for, so "it saved nothing" is sayable. */
   calls: string[];
-  /** Every body the page PATCHed to /forms/{id} — the title/slug write. */
-  formPatches: { title?: string; slug?: string }[];
+  /** Every body the page PATCHed to /forms/{id} — the title/slug/theme write. */
+  formPatches: PatchBody[];
 };
 
 /**
@@ -64,7 +68,11 @@ async function stubAPI(
   // `storedLogo` seeds a `logo_url` the server ALREADY holds — a legacy row.
   // The picker refuses a non-https paste, so this is the only route by which a
   // non-https `fsLogo` can exist in the page (card t_19c55242).
-  opts: { settingsStatus?: number; storedLogo?: string } = {},
+  //
+  // `storedTheme` seeds the `theme` jsonb the server holds (card t_106955f6):
+  // the General Save's payload is judged against it, because the real PATCH
+  // REPLACES the whole document when the key is present.
+  opts: { settingsStatus?: number; storedLogo?: string; storedTheme?: Record<string, unknown> } = {},
 ): Promise<Stub> {
   const json = (status: number, body: unknown) => ({
     status,
@@ -150,9 +158,17 @@ async function stubAPI(
   });
   // The form itself: GET answers the fake server's row (so a reload reads back
   // what was saved), PATCH answers the title/slug/theme write.
+  //
+  // The fake server holds `theme` the way the real one does (card t_106955f6):
+  // a PATCH carrying a theme REPLACES the stored document, so a payload that
+  // dropped a key really does lose it on the next GET — the round trip the
+  // merchant sees, not just a recorded body.
+  let storedTheme: Record<string, unknown> = { ...(opts.storedTheme ?? {}) };
   await page.route(/(.*)\/api\/rest\/forms\/[^/]+$/, (route) => {
     if (route.request().method() === "PATCH") {
-      stub.formPatches.push(route.request().postDataJSON() as { title?: string; slug?: string });
+      const body = route.request().postDataJSON() as PatchBody;
+      stub.formPatches.push(body);
+      if (body.theme && typeof body.theme === "object") storedTheme = { ...body.theme };
       return route.fulfill(json(200, { status: "updated", slug: "demo-form" }));
     }
     return route.fulfill(
@@ -164,7 +180,7 @@ async function stubAPI(
         url: "https://demo.example.com/demo-form",
         mode: "payment",
         config: { blocks: [] },
-        theme: {},
+        theme: storedTheme,
         ...stored,
       }),
     );
@@ -512,4 +528,116 @@ test("the Confirmation tab's Save refuses the same stored non-https logo, and wr
   console.log(`OBSERVED Confirmation settings PUTs: ${JSON.stringify(stub.settingsPuts)}`);
   expect(stub.settingsPuts.length, "the control Save writes exactly once").toBe(1);
   expect(stub.settingsPuts[0].logo_url, "the control Save carries the https logo").toBe(NEW_LOGO);
+});
+
+// Card t_106955f6 — the General Save must not delete theme keys it does not own.
+//
+// THE DEFECT, measured on prod (form 08a43fd7…, v1.21.259), one click on this
+// very button:
+//
+//   before  {"layout":"centered","primary":"#b45309","spacing":"comfortable",
+//            "product_image_size":"large","product_image_layout":"image-top"}
+//   after   {"primary":"#b45309","product_image_size":"large",
+//            "product_image_layout":"image-top"}
+//
+// The API's PATCH REPLACES the whole `theme` jsonb when the key is present, and
+// the page built that map from the four keys THIS TAB owns. `layout` and
+// `spacing` are read by the block renderer's CSS conditionals
+// (`{{if .ThemeLayout}}body{justify-content:…;padding:…} .card{max-width:…}{{end}}`,
+// `{{if .ThemeSpacing}}.card{padding:…}{{end}}`), so a routine save silently
+// re-styled the buyer's page — a form that served centring and 48px card padding
+// started serving neither, with no error and nothing in the UI.
+//
+// WHY THIS CASE AND NOT A UNIT TEST ALONE
+// The unit suite pins the payload builder (src/lib/formSettingsTheme.test.ts);
+// this case pins that the PAGE USES IT — it drives the real button in a real
+// browser and reads the body the browser actually sent. A handler that rebuilt
+// the map inline, or a call site that passed the wrong base, is invisible to the
+// builder's own tests.
+//
+// `storedTheme` seeds the row's jsonb. The fake server REPLACES it on a PATCH
+// exactly like the API does, so a payload that dropped a key really loses it on
+// the reload — the merchant's round trip, not just a recorded body.
+const STORED_THEME: Record<string, unknown> = {
+  layout: "centered",
+  spacing: "comfortable",
+  background: "#eeeeee",
+  text: "#111111",
+  card_background: "#ffffff",
+  card_border_radius: "12px",
+  font_family: "Georgia, serif",
+  custom_css: ".card { box-shadow: none; }",
+  custom_js: "window.__jfOld = true;",
+  primary: "#5e6ad2",
+  product_image_size: "large",
+  product_image_layout: "image-top",
+};
+
+test("the General Save keeps every theme key this tab does not own", async ({ page }) => {
+  test.setTimeout(120_000);
+  const stub = await stubAPI(page, { storedTheme: STORED_THEME });
+  await page.goto(`/form-settings?form=${FORM_ID}`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("html"), "the reading is the ENGLISH default").toHaveAttribute("lang", "en");
+  await expect(page.locator("#fs-title")).toHaveValue("Demo form", { timeout: 45_000 });
+
+  // PREMISE: the page really READ the stored theme — the round trip starts from
+  // it. Without this, an empty theme would make "nothing was deleted" vacuous.
+  await expect(
+    page.locator("#fs-theme-color"),
+    "premise: the colour input is hydrated from the stored theme",
+  ).toHaveValue("#5e6ad2");
+  const jsField = page.locator(`textarea[aria-label="${DICT["bld.customJs"].en}"]`);
+  expect(
+    await jsField.inputValue(),
+    "premise: the custom-JS field is hydrated from the stored theme",
+  ).toBe("window.__jfOld = true;");
+
+  // A real edit on this tab: the colour. Everything else it writes is unchanged,
+  // which is exactly the case that used to delete the rest of the document.
+  await page.locator("#fs-theme-color").fill("#b45309");
+  await saveGeneralTab(page);
+  await expect(banner(page), "the save must report success").toHaveAttribute("data-tone", "success", {
+    timeout: 30_000,
+  });
+  await expect.poll(() => stub.formPatches.length, { timeout: 30_000 }).toBe(1);
+
+  const first = stub.formPatches[0];
+  console.log(`OBSERVED General Save PATCH body: ${JSON.stringify(first)}`);
+
+  // THE DEFECT, asserted on the exact body the browser sent. `toBeDefined` first
+  // so a body with NO theme is reported as such rather than as 12 mismatches.
+  expect(first.theme, "the General Save must send a theme").toBeDefined();
+  expect(
+    first.theme,
+    `the PATCH body replaced the theme document instead of updating it: ${JSON.stringify(first.theme)}. ` +
+      `The API writes a present theme as-is, so every key missing here is DELETED from the form — and ` +
+      `layout/spacing/custom_css are what the public page renders from.`,
+  ).toEqual({ ...STORED_THEME, primary: "#b45309" });
+
+  // The page's own reload must show the same document (the fake server replaced
+  // its row with the PATCH body above) — the reading a merchant gets.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("#fs-title")).toHaveValue("Demo form", { timeout: 45_000 });
+  expect(
+    await page.locator(`textarea[aria-label="${DICT["bld.customJs"].en}"]`).inputValue(),
+    "after the save+reload the stored custom JS is still there",
+  ).toBe("window.__jfOld = true;");
+
+  // ── The one owned key that can be REMOVED. Clearing the custom-JS field must
+  // drop the key from the payload (a round trip that only ever ADDED keys would
+  // make the field impossible to clear), while the unowned ones still survive.
+  await page.locator("summary", { hasText: DICT["bld.customJs"].en }).click();
+  await jsField.fill("");
+  await saveGeneralTab(page);
+  await expect.poll(() => stub.formPatches.length, { timeout: 30_000 }).toBe(2);
+
+  const second = stub.formPatches[1];
+  console.log(`OBSERVED second PATCH body (custom JS cleared): ${JSON.stringify(second)}`);
+  const expectedCleared: Record<string, unknown> = { ...STORED_THEME, primary: "#b45309" };
+  delete expectedCleared.custom_js;
+  expect(
+    second.theme,
+    "a cleared custom-JS field must DROP the key, and must not take the rest of the theme with it",
+  ).toEqual(expectedCleared);
+  expect("custom_js" in (second.theme ?? {}), "an empty field must not store an empty custom_js").toBe(false);
 });

@@ -22,6 +22,10 @@ import { activeWorkspaceScope, enterWorkspace, workspaceQuery, workspaceUrl } fr
 import { defaultNotificationEvent, formEntriesAction } from "../../lib/formMode";
 import { acknowledgmentBody, publishConfirmText, publishErrorText, publishOutcome } from "../../lib/publishResult";
 import { apiErr } from "../../lib/apiErr";
+// t_106955f6: the General Save writes the theme it READ laid over the keys this
+// tab owns — the API's PATCH replaces the whole jsonb, so an owned-keys-only map
+// deleted `layout`/`spacing`/`background`/`font`/`custom_css` on every save.
+import { generalSaveTheme } from "../../lib/formSettingsTheme";
 // t_c845d0f6: the logo FIELD preview applies the SAME rule as the media grid and
 // the picker's tiles. It needs the chosen row's mime, not just its url — a code
 // asset's url is on the tenant host with CORP same-origin, so an <img> here is a
@@ -815,16 +819,29 @@ function FormSettingsInner() {
       showMsgFail(t("url.notHttps"));
       return;
     }
-    // Issue #388: include the power-user custom JS in the theme. The server
-    // scans it (deterministic code-asset scan) and rejects obviously
-    // malicious JS before it is ever served on the buyer's page.
-    const theme: Record<string, unknown> = { primary: fsTheme };
-    if (fsCustomJS.trim() !== "") theme.custom_js = fsCustomJS;
-    // Issue #471: product image size + layout. The server validates these
-    // against the same allowlist and the renderer applies them (incl. the
-    // matching media variant per size).
-    theme.product_image_size = fsImgSize;
-    theme.product_image_layout = fsImgLayout;
+    // This tab owns four theme keys: Issue #388's power-user custom JS (the
+    // server scans it — deterministic code-asset scan — and rejects obviously
+    // malicious JS before it is ever served on the buyer's page), Issue #471's
+    // product image size + layout (the server validates these against the same
+    // allowlist and the renderer applies them, incl. the matching media variant
+    // per size), and the primary colour.
+    //
+    // Card t_106955f6: the payload is those four laid over the theme the page
+    // READ, never those four alone. The API's PATCH REPLACES the whole `theme`
+    // jsonb when the key is present, so a map built only from this tab's keys
+    // silently deleted every other one (`layout`, `spacing`, `background`,
+    // `text`, `card_background`, `card_border_radius`, `font_family`,
+    // `custom_css`) — and the block renderer emits its layout/spacing CSS only
+    // when those keys exist, so one click on this button re-styled the buyer's
+    // page (measured on prod: `layout:"centered"`/`spacing:"comfortable"`
+    // vanished from a form that had both). `custom_js` is the one owned key that
+    // can be cleared, which generalSaveTheme does by dropping it.
+    const theme = generalSaveTheme(form?.theme, {
+      primary: fsTheme,
+      productImageSize: fsImgSize,
+      productImageLayout: fsImgLayout,
+      customJS: fsCustomJS,
+    });
     // logo_url and allow_embed are NOT fields of this PATCH (its body is
     // title|slug|config|theme) — they belong to PUT /forms/{id}/settings and
     // are written below, by the same function the Confirmation tab's Save uses.
@@ -852,6 +869,13 @@ function FormSettingsInner() {
       showMsgFail(apiErr(d, t("prof.failed"), t));
       return;
     }
+    // Adopt the theme this save just landed (card t_106955f6). The `load()` at
+    // the end of this function re-reads the row, but until it resolves
+    // `form.theme` is the PRE-save map — and a second click in that window would
+    // rebuild the payload from stale page state, resurrecting a `custom_js` the
+    // merchant had just cleared. The PATCH above already committed this write,
+    // so adopting it is reading back, not guessing.
+    setForm((prev) => (prev ? { ...prev, theme } : prev));
     // Apply status (draft | private | published).
     const statusBody: { status: string; password?: string; acknowledge?: boolean } = { status };
     if (status === "private") statusBody.password = accessPw;
