@@ -28,6 +28,7 @@ import {
 import TemplatePicker from "../../components/TemplatePicker";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { formDescription } from "../../lib/formDescription";
+import { blockTypeLabel, isWithdrawnBlockType } from "../../lib/withdrawnBlock";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
 
@@ -186,6 +187,18 @@ const PALETTE_GROUPS: PaletteGroup[] = [
   },
 ];
 
+/* Card t_3abab22c: every type the palette OFFERS, derived from the palette
+   itself so there is one list and no second one to drift from it. A stored
+   block whose type is absent from this set was withdrawn from the palette
+   after that form was saved; the canvas still draws such a block (the write
+   path does not refuse it, deliberately), but it must draw it as a stored
+   label + a note rather than as a working control — the same thing the public
+   renderers do. See lib/withdrawnBlock.ts for why this is not a special case
+   for one block: the rule is about the PALETTE, not about one type. */
+const OFFERED_BLOCK_TYPES: ReadonlySet<string> = new Set(
+  PALETTE_GROUPS.flatMap((group) => group.items.map((item) => item.type)),
+);
+
 /* Field types that collect a buyer answer (used for the required toggle, the
    required message, the validation pattern, conditional logic and
    response-mode collection).
@@ -242,7 +255,15 @@ export default function Builder() {
   const { t } = useI18n();
   const router = useRouter();
   /* translated palette/field labels; block type "textarea" displays as "Note" */
-  const typeLabel = (bt: BlockType) => t((bt === "textarea" ? "blk.note" : `blk.${bt}`) as import("../../components/i18n").Key);
+  /* Card t_3abab22c: a stored block whose type left the palette has no
+     dictionary entry left either, and `t()` hands back the KEY when an entry is
+     missing — so this used to paint `blk.<type>` on the card's badge (uppercased
+     by the card's styling) instead of a word. blockTypeLabel only steps in when
+     the dictionary gave the key back, so every offered type is unchanged. */
+  const typeLabel = (bt: BlockType) => {
+    const key = (bt === "textarea" ? "blk.note" : `blk.${bt}`) as import("../../components/i18n").Key;
+    return blockTypeLabel(key, t(key));
+  };
   const typeHint = (bt: BlockType) => t((bt === "textarea" ? "blk.noteHint" : `blk.${bt}Hint`) as import("../../components/i18n").Key);
   const [products, setProducts] = useState<Product[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
@@ -2117,6 +2138,21 @@ export default function Builder() {
 function BlockPreview({ block, products }: { block: Block; products: Product[] }) {
   const { t } = useI18n();
   const p = products.find((x) => x.id === block.productId);
+  /* Card t_3abab22c: a block whose type the palette no longer offers can only
+     come from a form saved BEFORE its withdrawal (nothing can add it now, and
+     the write path deliberately still accepts it). Falling through to `default`
+     painted the empty, bordered, input-shaped box a real field gets — a control
+     the public renderers replaced with the merchant's label plus a note, so the
+     canvas promised a buyer-visible field that does not exist. Draw what the
+     buyer actually gets: the stored label and the note, and no box. */
+  if (isWithdrawnBlockType(block.type, OFFERED_BLOCK_TYPES)) {
+    return (
+      <div>
+        <p className="mb-1 text-xs text-[var(--jf-muted)]">{block.value || "Field"}</p>
+        <p className="text-[11px] text-[var(--jf-muted-on-tint)]">{t("bld.withdrawnBlock")}</p>
+      </div>
+    );
+  }
   switch (block.type) {
     case "text":
       // Card t_23289ce3: this block is a single-line text INPUT on both public

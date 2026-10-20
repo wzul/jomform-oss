@@ -1234,6 +1234,7 @@ export const DICT = {
   "bld.dragToAdd": { en: "Drag to add", ms: "Tarik untuk tambah", zh: "拖动添加", ta: "இழுத்து சேர்க்க", ar: "اسحب للإضافة" },
   "bld.dragHere": { en: "Drag blocks here — or click one on the left.", ms: "Tarik blok ke sini — atau klik satu di kiri.", zh: "将模块拖到这里 — 或点击左侧的模块。", ta: "பிளாக்குகளை இங்கே இழுக்கவும் — அல்லது இடதுபுறம் ஒன்றைக் கிளிக் செய்யவும்.", ar: "اسحب العناصر إلى هنا — أو انقر على أحد العناصر على اليسار." },
   "bld.blockSettings": { en: "Block settings", ms: "Tetapan blok", zh: "模块设置", ta: "பிளாக் அமைப்புகள்", ar: "إعدادات العنصر" },
+  "bld.withdrawnBlock": { en: "No longer offered in the builder. Buyers see this label and a note — not a field.", ms: "Tidak lagi ditawarkan dalam pembina. Pembeli melihat label ini dan satu nota — bukan medan.", zh: "构建器中已不再提供。买家只会看到这个标签和一条说明——不是输入字段。", ta: "பில்டரில் இனி வழங்கப்படுவதில்லை. வாங்குபவர்கள் இந்த லேபிளையும் ஒரு குறிப்பையும் மட்டுமே காண்பார்கள் — புலம் அல்ல.", ar: "لم يعد متاحاً في المنشئ. يرى المشترون هذا العنوان وملاحظة — وليس حقل إدخال." },
   "bld.selectBlock": { en: "Select a block to edit.", ms: "Pilih blok untuk edit.", zh: "选择要编辑的模块。", ta: "திருத்த ஒரு பிளாக்கைத் தேர்ந்தெடுக்கவும்.", ar: "اختر عنصراً للتحرير." },
   "bld.textLabel": { en: "Text / label", ms: "Teks / label", zh: "文本 / 标签", ta: "உரை / லேபிள்", ar: "النص / التسمية" },
   "bld.imageUrl": { en: "Image URL", ms: "URL imej", zh: "图片链接", ta: "படம் URL", ar: "رابط الصورة" },
