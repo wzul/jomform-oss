@@ -1514,6 +1514,10 @@ export const DICT = {
   "fs.failureMessageHint": { en: "Shown to the buyer when a payment fails. Leave blank to use the default. The failure redirect (if set) takes precedence.", ms: "Dipaparkan kepada pembeli bila pembayaran gagal. Kosongkan untuk guna lalai. Redirect gagal (jika ditetapkan) diutamakan.", zh: "支付失败时向买家显示。留空则使用默认值。失败跳转（若设置）优先。", ta: "கட்டணம் தோல்வியடையும் போது வாங்குபவருக்குக் காட்டப்படும். இயல்புநிலையைப் பயன்படுத்த காலியாக விடவும். தோல்வி திருப்புதல் (அமைத்தால்) முன்னுரிமை.", ar: "يُعرض للمشتري عند فشل الدفع. اتركه فارغاً لاستخدام الافتراضي. توجيه الفشل (إن تم ضبطه) له الأولوية." },
   // Issue #179: per-form confirmations (Gravity-Forms-style).
   "fs.confirmations": { en: "Confirmations", ms: "Pengesahan", zh: "确认", ta: "உறுதிப்படுத்தல்கள்", ar: "التأكيدات" },
+  // Card t_1463b71e: the Confirmation tab had two Save buttons with the same
+  // label over two different writes. Each now names the write it performs.
+  "fs.saveConfirmationSettings": { en: "Save confirmation settings", ms: "Simpan tetapan pengesahan", zh: "保存确认设置", ta: "உறுதிப்படுத்தல் அமைப்புகளைச் சேமி", ar: "حفظ إعدادات التأكيد" },
+  "fs.saveConfirmations": { en: "Save confirmations", ms: "Simpan pengesahan", zh: "保存确认", ta: "உறுதிப்படுத்தல்களைச் சேமி", ar: "حفظ التأكيدات" },
   "fs.confirmationsHint": { en: "What buyers see after submitting. The first matching confirmation (by conditional logic) is shown; the default always matches.", ms: "Apa yang pembeli lihat selepas hantar. Pengesahan pertama yang padan (ikut logik bersyarat) dipaparkan; lalai sentiasa padan.", zh: "买家提交后看到的内容。显示第一个匹配的确认（按条件逻辑）；默认始终匹配。", ta: "சமர்ப்பித்த பிறகு வாங்குபவர்கள் பார்ப்பது. முதல் பொருந்தும் உறுதிப்படுத்தல் (நிபந்தனை தர்க்கத்தால்) காட்டப்படும்; இயல்புநிலை எப்போதும் பொருந்தும்.", ar: "ما يراه المشترون بعد الإرسال. يُعرض أول تأكيد مطابق (حسب المنطق الشرطي)؛ الافتراضي يطابق دائماً." },
   "fs.confName": { en: "Confirmation name", ms: "Nama pengesahan", zh: "确认名称", ta: "உறுதிப்படுத்தல் பெயர்", ar: "اسم التأكيد" },
   "fs.confDefault": { en: "Default", ms: "Lalai", zh: "默认", ta: "இயல்புநிலை", ar: "افتراضي" },

@@ -802,6 +802,19 @@ function FormSettingsInner() {
 
   async function saveGeneral() {
     setMsg("");
+    setFsLogoErr("");
+    const id = formId;
+    if (!id) return;
+    // Card t_1463b71e: the General tab RENDERS the logo picker and the "Allow
+    // embedding" toggle, so this Save persists them — a visible change must
+    // never be discarded by the button next to it. The https rule is checked
+    // BEFORE the PATCH so a refused logo does not leave the title/slug/status
+    // half-written.
+    if (fsLogo.trim() && !fsLogo.trim().startsWith("https://")) {
+      setFsLogoErr(t("url.notHttps"));
+      showMsgFail(t("url.notHttps"));
+      return;
+    }
     // Issue #388: include the power-user custom JS in the theme. The server
     // scans it (deterministic code-asset scan) and rejects obviously
     // malicious JS before it is ever served on the buyer's page.
@@ -812,9 +825,10 @@ function FormSettingsInner() {
     // matching media variant per size).
     theme.product_image_size = fsImgSize;
     theme.product_image_layout = fsImgLayout;
+    // logo_url and allow_embed are NOT fields of this PATCH (its body is
+    // title|slug|config|theme) — they belong to PUT /forms/{id}/settings and
+    // are written below, by the same function the Confirmation tab's Save uses.
     const payload = { slug: slug.toLowerCase().replace(/[^a-z0-9-]/g, "-"), title, theme };
-    const id = formId;
-    if (!id) return;
     const r = await fetch(`/api/rest/forms/${id}${workspaceQuery()}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -872,6 +886,11 @@ function FormSettingsInner() {
         return;
       }
     }
+    // Card t_1463b71e: the logo + embed toggle this tab renders. Written LAST
+    // so a refusal here is reported, and so the reload below can only run once
+    // every field on this tab has actually landed. No reload on failure on
+    // purpose: discarding the merchant's input is exactly the symptom.
+    if (!(await putFormDisplaySettings())) return;
     showMsgOk(t("fs.saved"));
     void load();
   }
@@ -923,20 +942,37 @@ function FormSettingsInner() {
     return sections;
   }
 
-  async function saveConfirmation() {
-    setMsg("");
+  // Card t_1463b71e: ONE writer for the per-form display settings (logo, embed
+  // toggle, redirects, payment-failed message).
+  //
+  // The page had TWO saves over this one endpoint and they drifted: the logo
+  // picker and the "Allow embedding" toggle are rendered on the GENERAL tab,
+  // whose Save sent only {slug,title,theme}, so both changes were dropped and
+  // the following reload removed the badge from the preview — while the
+  // merchant read "Saved ✓". Only the CONFIRMATION tab's Save wrote them, and
+  // nothing said so. Every Save that owns one of these fields now goes through
+  // here, so a field cannot be rendered under a button that never writes it.
+  //
+  // A failure is reported in the page banner as well as at the logo field: the
+  // field error alone was invisible from the Confirmation tab (the logo input
+  // lives on the General tab), so a rejected save there showed nothing at all.
+  async function putFormDisplaySettings(): Promise<boolean> {
+    if (!formId) return false;
     setFsLogoErr("");
-    if (!formId) return;
     // Issue #501: catch a non-https logo before the round-trip so the
     // merchant sees the problem at the field, and surface the server's
     // message if it still rejects the value (the server is the authority).
     if (fsLogo.trim() && !fsLogo.trim().startsWith("https://")) {
       setFsLogoErr(t("url.notHttps"));
-      return;
+      showMsgFail(t("url.notHttps"));
+      return false;
     }
     const r = await fetch(`/api/rest/forms/${formId}/settings${workspaceQuery()}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
+      // allow_embed is *bool on the handler and defaults to TRUE when omitted,
+      // so the toggle is always sent explicitly — a body carrying only
+      // logo_url would switch embedding back on behind the merchant's back.
       body: JSON.stringify({
         redirect_success: fsRedS, redirect_failure: fsRedF,
         allow_embed: fsEmbed, logo_url: fsLogo, failure_message: fsFailMsg,
@@ -944,9 +980,18 @@ function FormSettingsInner() {
     });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      setFsLogoErr(apiErr(d, t("prof.failed"), t));
-      return;
+      const reason = apiErr(d, t("prof.failed"), t);
+      setFsLogoErr(reason);
+      showMsgFail(reason);
+      return false;
     }
+    return true;
+  }
+
+  async function saveConfirmation() {
+    setMsg("");
+    if (!formId) return;
+    if (!(await putFormDisplaySettings())) return;
     showMsgOk(t("fs.saved"));
   }
 
@@ -2103,8 +2148,14 @@ function FormSettingsInner() {
                         <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("fs.failureMessageHint")}</p>
                       </div>
                       <div className="pt-1">
+                        {/* Card t_1463b71e: this button saves the display
+                            settings (redirects + failed message); the one at
+                            the bottom of the tab saves the confirmations list.
+                            Two buttons both reading "Save" on one screen is
+                            what made a dropped field invisible — each now
+                            names what it writes. */}
                         <button onClick={saveConfirmation} disabled={!canWrite} className="jf-btn-primary">
-                          {t("fs.save")}
+                          {t("fs.saveConfirmationSettings")}
                         </button>
                       </div>
                     </div>
@@ -2227,7 +2278,7 @@ function FormSettingsInner() {
                           {t("fs.confAdd")}
                         </button>
                         <button onClick={saveConfirmations} disabled={!canWrite} className="jf-btn-primary">
-                          {t("fs.save")}
+                          {t("fs.saveConfirmations")}
                         </button>
                       </div>
                     </div>
