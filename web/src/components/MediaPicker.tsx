@@ -13,7 +13,7 @@ import { apiErr } from "../lib/apiErr";
 // t_04ea7f88: the tile render decision and its badge label are the SAME ones
 // app/media/page.tsx uses. Do not hand-roll `mime.startsWith("image/")` here
 // again — that copy is what made this picker an <img> on a tenant-host SVG.
-import { canInlineMediaPreview, extBadge } from "../lib/mediaThumb";
+import { canInlineMediaPreview, extBadge, type SelectedMedia } from "../lib/mediaThumb";
 
 type MediaItem = {
   id: string;
@@ -54,7 +54,13 @@ export default function MediaPicker({
 }: {
   open: boolean;
   onClose: () => void;
-  onSelect: (url: string) => void;
+  // t_c845d0f6: the ROW travels with the url, not just the url. The page that
+  // hosts this picker draws a preview of the chosen item and cannot tell a
+  // code asset from an image given only a URL string — and for a code asset
+  // that preview was a broken-image icon (tenant-host URL + CORP same-origin).
+  // The second argument is optional because a PASTED url has no row: the page
+  // then keeps the plain <img>, which is right for an external https link.
+  onSelect: (url: string, media?: SelectedMedia) => void;
   current?: string;
 }) {
   const { t } = useI18n();
@@ -226,7 +232,7 @@ export default function MediaPicker({
                   <button
                     key={m.id}
                     type="button"
-                    onClick={() => onSelect(m.url)}
+                    onClick={() => onSelect(m.url, { mime: m.mime, preview: m.preview })}
                     className={`group overflow-hidden rounded-lg border text-left ${
                       current === m.url
                         ? "border-[#7170ff] ring-2 ring-[#7170ff]/40"

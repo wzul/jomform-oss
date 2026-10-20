@@ -54,3 +54,29 @@ export function extBadge(mime: string): string {
   if (mime === "font/woff2") return "WOFF2";
   return mime.slice(0, 4).toUpperCase();
 }
+
+// ── A CHOSEN item, not a library row (t_c845d0f6) ───────────────────────────
+//
+// /form-settings keeps only the chosen url (`logo_url`), so the mime has to
+// travel BESIDE it: MediaPicker hands the row's mime to onSelect, and a page
+// reload resolves the row from /api/rest/media (the same library read the
+// picker makes). With the mime known, the preview applies the one rule above.
+//
+// A url with NO known mime is still rendered as an <img>, deliberately. It is
+// either a pasted external https:// link (not a library row, not tenant-scoped,
+// so nothing blocks it) or a library read that failed — and refusing to render
+// there would replace a working preview with an empty box. What must NOT happen
+// is guessing the mime from the url's extension: that would be a THIRD copy of
+// the code-asset rule (this file is the first, objstore.IsCodeAsset the second)
+// and it is the kind of copy that already drifted once (t_04ea7f88).
+export type SelectedMedia = { mime: string; preview?: string };
+
+// selectedNeedsBadge is "this chosen item must be drawn as an extension badge
+// instead of an <img>". The failure it prevents is SILENT: for a code asset the
+// browser answers HTTP 200 and paints a broken-image icon, nothing throws, and
+// no console message the app can read appears (CORP: same-origin on
+// <workspace>.jomform.com). A selected-but-unknown item stays inline.
+export function selectedNeedsBadge(sel: SelectedMedia | null | undefined): boolean {
+  if (!sel) return false;
+  return !canInlineMediaPreview(sel.mime, !!sel.preview);
+}

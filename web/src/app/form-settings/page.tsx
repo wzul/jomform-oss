@@ -18,10 +18,15 @@ import { useSession } from "../../components/session";
 import { Switch } from "../../components/Switch";
 import MediaPicker from "../../components/MediaPicker";
 import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
-import { activeWorkspaceScope, enterWorkspace, workspaceQuery } from "../../lib/workspace";
+import { activeWorkspaceScope, enterWorkspace, workspaceQuery, workspaceUrl } from "../../lib/workspace";
 import { defaultNotificationEvent, formEntriesAction } from "../../lib/formMode";
 import { acknowledgmentBody, publishConfirmText, publishErrorText, publishOutcome } from "../../lib/publishResult";
 import { apiErr } from "../../lib/apiErr";
+// t_c845d0f6: the logo FIELD preview applies the SAME rule as the media grid and
+// the picker's tiles. It needs the chosen row's mime, not just its url — a code
+// asset's url is on the tenant host with CORP same-origin, so an <img> here is a
+// broken tile on the dashboard while the published form loads it fine.
+import { extBadge, selectedNeedsBadge, type SelectedMedia } from "../../lib/mediaThumb";
 
 type FormDetail = {
   id: string;
@@ -469,6 +474,17 @@ function FormSettingsInner() {
   const [accessPw, setAccessPw] = useState("");
   const [fsTheme, setFsTheme] = useState("#5e6ad2");
   const [fsLogo, setFsLogo] = useState("");
+  // t_c845d0f6: the mime of the CHOSEN media row, carried beside the url so the
+  // preview can apply the shared code-asset rule. `url` is kept with it: the
+  // value is only used while it still describes the current `fsLogo`, so a
+  // late-arriving lookup can never label a logo the merchant has since replaced.
+  const [fsLogoMedia, setFsLogoMedia] = useState<(SelectedMedia & { url: string }) | null>(null);
+  // TRUE while a reloaded logo's mime is still being resolved from the library.
+  // The preview paints a same-size placeholder in that window instead of the
+  // <img> it is about to replace: without it an SVG logo flashes the broken-image
+  // icon it showed permanently before this fix, and a DOM read a few ms after
+  // load could still catch the broken frame.
+  const [fsLogoLookupDone, setFsLogoLookupDone] = useState(true);
   // Issue #501: visible inline error for a rejected (non-https) logo URL, so
   // the merchant sees it at the field instead of getting a silently broken
   // image on the buyer's page.
@@ -585,6 +601,33 @@ function FormSettingsInner() {
       setStatus(d.status === "private" ? "private" : d.status === "published" ? "published" : d.status === "unlisted" ? "unlisted" : "draft");
       setFsTheme((d.theme?.primary as string) || "#5e6ad2");
       setFsLogo(d.logo_url || "");
+      // t_c845d0f6: after a RELOAD the page has only `logo_url` — the picker's
+      // callback that carries the mime has not run. Look the row up in the same
+      // library read the picker uses, so an SVG logo previews as an extension
+      // badge instead of a broken <img> on a tenant-host URL (HTTP 200,
+      // CORP same-origin, nothing errors). Best-effort by design: a url that is
+      // not a library row (a pasted external link) or a failed read leaves the
+      // mime unknown and the preview renders exactly as it did before this fix.
+      setFsLogoMedia(null);
+      setFsLogoLookupDone(!d.logo_url);
+      if (d.logo_url) {
+        const logoUrl = d.logo_url;
+        fetch(workspaceUrl("/api/rest/media?limit=100"))
+          .then((r) => (r.ok ? r.json() : null))
+          .then((md: { items?: { url?: string; mime?: string; preview?: string }[] } | null) => {
+            const hit = (Array.isArray(md?.items) ? md.items : []).find((m) => m.url === logoUrl);
+            if (hit && typeof hit.mime === "string" && hit.mime) {
+              // Never overwrite a row a PICK already delivered while this read
+              // was in flight — the pick is the newer information.
+              setFsLogoMedia((prev) => prev ?? { url: logoUrl, mime: hit.mime as string, preview: hit.preview });
+            }
+          })
+          .catch(() => {
+            // no mime: the preview keeps its pre-fix <img>, which is the right
+            // answer for the external-url case and a no-op for this one.
+          })
+          .finally(() => setFsLogoLookupDone(true));
+      }
       setFsEmbed(d.allow_embed !== false);
       // Issue #388: hydrate the power-user custom JS from the theme.
       setFsCustomJS((d.theme?.custom_js as string) || "");
@@ -1208,6 +1251,20 @@ function FormSettingsInner() {
   // action is the honest state; no label can be true before the mode is known.
   const entries = formEntriesAction(form, formId);
 
+  // t_c845d0f6: how the chosen logo is previewed. `fsLogoMedia` is only trusted
+  // while it still describes `fsLogo` (a pick sets both, a reload resolves the
+  // row, "Remove" clears the url). When the row's mime is known, the SHARED
+  // rule decides — an SVG is a code asset on the tenant host with
+  // `Cross-Origin-Resource-Policy: same-origin`, so an <img> here paints a
+  // broken tile and nothing errors (HTTP 200). It gets the same extension badge
+  // the media grid and the picker's tiles draw; the url itself is untouched and
+  // still saved, so the published form keeps rendering it (same-origin there).
+  const logoMedia = fsLogoMedia && fsLogoMedia.url === fsLogo ? fsLogoMedia : null;
+  const logoBadge = logoMedia && selectedNeedsBadge(logoMedia) ? extBadge(logoMedia.mime) : "";
+  // Between "the form loaded with a logo_url" and "the library answered", the
+  // mime is unknown, so the <img> is not painted yet (see fsLogoLookupDone).
+  const logoPending = !!fsLogo && !logoMedia && !fsLogoLookupDone;
+
   return (
     <Shell active="forms">
       <div className="w-full flex-1 px-6 py-8">
@@ -1533,12 +1590,39 @@ function FormSettingsInner() {
                             action group already use. */}
                         <div className="mt-1 flex flex-wrap items-center gap-3">
                           {fsLogo ? (
-                            /* eslint-disable-next-line @next/next/no-img-element */
-                            <img
-                              src={fsLogo}
-                              alt={t("mediaPicker.title")}
-                              className="h-12 w-12 rounded-lg border border-[var(--jf-border)] object-contain"
-                            />
+                            /* t_c845d0f6: the SELECTED logo is previewed with the
+                               same rule as the picker's tiles. It used to be a
+                               plain image tag pointed straight at the chosen
+                               url: for a code asset (SVG/CSS/JS/HTML/WOFF2) that
+                               url is on the tenant host and served
+                               `Cross-Origin-Resource-Policy: same-origin`, so
+                               the dashboard painted a broken-image icon at HTTP
+                               200 with nothing in the console — while the
+                               published form, same-origin with it, showed the
+                               logo fine. Known mime → shared rule; unknown mime
+                               (a pasted external link) → the image tag as
+                               before. */
+                            logoBadge ? (
+                              <div
+                                role="img"
+                                aria-label={logoBadge}
+                                title={logoBadge}
+                                className="flex h-12 w-12 items-center justify-center rounded-lg border border-[var(--jf-border)] bg-white text-center text-[11px] font-bold text-[#4f46e5]"
+                              >
+                                {logoBadge}
+                              </div>
+                            ) : logoPending ? (
+                              /* the mime is still resolving — same box, no text,
+                                 so an SVG logo never flashes its broken frame */
+                              <div className="h-12 w-12 rounded-lg border border-[var(--jf-border)] bg-slate-50" />
+                            ) : (
+                              /* eslint-disable-next-line @next/next/no-img-element */
+                              <img
+                                src={fsLogo}
+                                alt={t("mediaPicker.title")}
+                                className="h-12 w-12 rounded-lg border border-[var(--jf-border)] object-contain"
+                              />
+                            )
                           ) : (
                             <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-dashed border-[var(--jf-border)] text-[10px] text-[var(--jf-muted)]">
                               {t("mediaPicker.noLogo")}
@@ -1555,7 +1639,10 @@ function FormSettingsInner() {
                             {fsLogo && (
                               <button
                                 type="button"
-                                onClick={() => setFsLogo("")}
+                                onClick={() => {
+                                  setFsLogo("");
+                                  setFsLogoMedia(null);
+                                }}
                                 className="jf-btn-ghost px-3 py-1 text-[11px] text-red-700"
                               >
                                 {t("mediaPicker.remove")}
@@ -2743,8 +2830,14 @@ function FormSettingsInner() {
       <MediaPicker
         open={logoPickerOpen}
         onClose={() => setLogoPickerOpen(false)}
-        onSelect={(url) => {
+        onSelect={(url, media) => {
           setFsLogo(url);
+          // t_c845d0f6: a picked ROW brings its mime, so the preview can apply
+          // the shared code-asset rule immediately (no lookup round-trip). A
+          // pasted url brings none — the known mime is kept only while it still
+          // describes this same url, otherwise the preview stays an <img>.
+          setFsLogoMedia((prev) => (media ? { url, ...media } : prev && prev.url === url ? prev : null));
+          setFsLogoLookupDone(true);
           setLogoPickerOpen(false);
         }}
         current={fsLogo}

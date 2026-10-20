@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { canInlineMediaPreview, extBadge, isCodeAssetMime } from "./mediaThumb.ts";
+import { canInlineMediaPreview, extBadge, isCodeAssetMime, selectedNeedsBadge } from "./mediaThumb.ts";
 
 test("code assets are recognised by their stored content-type", () => {
   for (const mime of [
@@ -143,5 +143,114 @@ test("extBadge is declared once, in lib/mediaThumb, and used by both surfaces", 
   assert.equal(extBadge("application/pdf"), "PDF");
   // Fallback for a content-type the table does not name: first four characters.
   assert.equal(extBadge("application/zip"), "APPL");
+});
+
+// ── the SELECTED-logo preview on /form-settings uses the same rule (t_c845d0f6)
+//
+// THE DEFECT this pins: `t_04ea7f88` fixed the picker's TILES, but the page that
+// HOSTS the picker kept previewing the chosen logo through a plain
+// `<img src={fsLogo}>` (app/form-settings/page.tsx, beside "Choose from media
+// library"). `fsLogo` is the row's url, and for a code asset that url is the
+// TENANT host served `Cross-Origin-Resource-Policy: same-origin` — so the
+// dashboard (a different origin) painted a broken-image icon right after the
+// merchant picked an SVG, while the published form rendered it fine.
+//
+// WHY THIS IS A SOURCE-SCAN AND NOT A RENDER TEST: the failure is SILENT —
+// HTTP 200 image/svg+xml, no throw, no console error the app can read, the pick
+// still succeeds and the field still saves. The ONLY symptom is a broken-image
+// icon in a 48px box, which is why a green suite never saw it. Measured in real
+// Chromium on the pre-fix build: the preview <img> read {complete:true,
+// naturalWidth:0} while an image row's <img> read naturalWidth:1.
+//
+// The page holds only a URL string, so the mime has to ride BESIDE it: the
+// picker hands over the row, and a reload resolves the row from /api/rest/media
+// (the library read the picker already makes). Deciding from the URL's
+// extension instead would be a third copy of the rule — the shape that already
+// drifted once.
+test("the form-settings logo preview badges a code asset instead of inlining it (t_c845d0f6)", () => {
+  // 1. the decision itself, unit-level. null = no known mime (a PASTED external
+  //    url, or a library read that failed): that must keep its <img>, or the
+  //    fix would replace a working preview with an empty box.
+  assert.equal(selectedNeedsBadge({ mime: "image/svg+xml" }), true);
+  assert.equal(selectedNeedsBadge({ mime: "text/css; charset=utf-8" }), true);
+  assert.equal(selectedNeedsBadge({ mime: "font/woff2" }), true);
+  assert.equal(selectedNeedsBadge({ mime: "image/png" }), false);
+  assert.equal(selectedNeedsBadge({ mime: "image/gif" }), false);
+  assert.equal(selectedNeedsBadge({ mime: "application/pdf", preview: "https://cdn.example/p.jpg" }), false);
+  assert.equal(selectedNeedsBadge(null), false, "an unknown url must keep its <img>");
+
+  const page = readFileSync(
+    fileURLToPath(new URL("../app/form-settings/page.tsx", import.meta.url)),
+    "utf8",
+  );
+
+  // 2. the page imports the SHARED rule rather than deciding anything itself.
+  const thumbImport = /import\s*\{([^}]*)\}\s*from\s*"\.\.\/\.\.\/lib\/mediaThumb"/.exec(page);
+  assert.ok(
+    thumbImport,
+    "app/form-settings/page.tsx does not import from lib/mediaThumb at all — a local copy of the " +
+      "preview rule is exactly how an SVG logo became a broken <img>",
+  );
+  assert.match(thumbImport[1], /\bselectedNeedsBadge\b/, "the page does not import selectedNeedsBadge");
+  assert.match(thumbImport[1], /\bextBadge\b/, "the page does not import extBadge for the badge label");
+  assert.ok(
+    page.includes("selectedNeedsBadge(logoMedia)") && page.includes("extBadge(logoMedia.mime)"),
+    "the logo preview does not decide from the chosen row's mime — it must not fall back to the url string",
+  );
+
+  // 3. the render: the badge is the guard's branch, and there is exactly ONE
+  //    <img src={fsLogo}>, inside the else — a second copy is the defect back.
+  const badgeBranch = page.indexOf("logoBadge ? (");
+  assert.ok(badgeBranch > 0, "form-settings no longer branches the logo preview on logoBadge");
+  const imgSrc = page.indexOf("src={fsLogo}");
+  assert.ok(imgSrc > 0, "form-settings no longer renders <img src={fsLogo}> for a plain image logo");
+  assert.ok(
+    imgSrc > badgeBranch,
+    "the logo <img> is rendered outside the logoBadge guard — an SVG logo (tenant-host url, " +
+      "CORP same-origin) paints a broken image and nothing errors",
+  );
+  assert.equal(
+    (page.match(/src=\{fsLogo\}/g) || []).length,
+    1,
+    "a second, unguarded <img src={fsLogo}> was added — every render of the chosen logo must go " +
+      "through the shared rule",
+  );
+  const badgeBranchSrc = page.slice(badgeBranch, imgSrc);
+  assert.ok(
+    badgeBranchSrc.includes("{logoBadge}") && badgeBranchSrc.includes('role="img"'),
+    "the badge branch does not render the extension badge for a code asset",
+  );
+  assert.ok(
+    badgeBranchSrc.includes("logoPending ? ("),
+    "the preview paints the <img> while the reloaded logo's mime is still resolving — an SVG logo " +
+      "then flashes the broken frame this card removed",
+  );
+
+  // 4. the mime travels with the picked url (no lookup needed on a fresh pick)…
+  const picker = readFileSync(
+    fileURLToPath(new URL("../components/MediaPicker.tsx", import.meta.url)),
+    "utf8",
+  );
+  assert.match(
+    picker,
+    /onSelect\(m\.url, \{ mime: m\.mime/,
+    "MediaPicker hands over only the url again, so the hosting page cannot tell an SVG from an " +
+      "image and previews it as a broken <img>",
+  );
+  assert.match(
+    page,
+    /onSelect=\{\(url, media\) =>/,
+    "form-settings ignores the row MediaPicker hands over",
+  );
+
+  // 5. …and after a RELOAD, when only `logo_url` survives, the row is resolved
+  //    from the media library — otherwise the preview is broken again on the
+  //    very next page load, which is the common path.
+  assert.match(
+    page,
+    /workspaceUrl\("\/api\/rest\/media\?limit=100"\)/,
+    "form-settings no longer resolves the chosen logo's mime from /api/rest/media, so after a " +
+      "reload an SVG logo is a broken <img> again",
+  );
 });
 
