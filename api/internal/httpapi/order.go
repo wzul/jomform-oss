@@ -400,7 +400,7 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		}
 		if err := h.Pay.CreateChipPurchaseForSaleWithOverride(r.Context(), sale, ov); err != nil {
 			slog.Error("chip_create_for_sale", "err", fmt.Sprintf("%+v", err), "sale", sale.RefCode)
-			writeErr(w, http.StatusBadGateway, "gagal mencipta pembayaran")
+			h.answerChipPurchaseFailed(w, r, sale)
 			return
 		}
 		respond(w, http.StatusCreated, map[string]string{

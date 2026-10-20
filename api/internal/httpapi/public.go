@@ -1029,6 +1029,10 @@ type legacyFormView struct {
 	// direct visit (the script only runs when framed). template.HTML so the
 	// <script> block is emitted verbatim.
 	HeightJS template.HTML
+	// Card t_e2024698: the buyer-visible payment-failure renderer shared by
+	// every public order surface (payfail.go). template.JS so it is emitted
+	// verbatim rather than quoted as a string literal inside <script>.
+	PayFailJS template.JS
 	// Language placement: the resolved buyer-facing language (per-form
 	// config.lang ?? workspace default ?? "en") and its chrome strings. The
 	// legacy layout used to be hardcoded Malay regardless of the workspace.
@@ -1155,6 +1159,7 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
       {{if .Footer.RefundURL}}<a href="{{.Footer.RefundURL}}" target="_blank" rel="noopener">{{.Ls.RefundLabel}}</a>{{end}}
     </div>{{end}}
   </footer>{{end}}
+<script>{{.PayFailJS}}</script>
 <script>
 // Card t_4861f7d8 / issue #471: product image variant fallback, the same rule
 // the block renderer ships. A larger size points the <img> at the medium/full
@@ -1193,7 +1198,20 @@ document.getElementById('of').addEventListener('submit', async (e) => {
   const r = await fetch(location.pathname + '/order', {
     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
   });
-  const data = await r.json();
+  let data = null;
+  try {
+    data = await r.json();
+  } catch (e) {
+    // Card t_e2024698: an unreadable answer (an edge error page, a proxy 5xx)
+    // used to become an unhandled rejection — the buyer's click did nothing.
+    jfPayFail({}); return;
+  }
+  // A literal JSON null parses fine and then throws on the property reads
+  // below; report it as the same actionable failure rather than dying silently.
+  if (!data) { jfPayFail({}); return; }
+  // Card t_e2024698: the payment could not be started. Say so in-app, with the
+  // reference, instead of leaving the buyer on a dead button.
+  if (data.status === 'payment_error') { jfPayFail(data); return; }
   if (data.checkout_url) { location.href = data.checkout_url; }
   else if (data.next) { location.href = data.next; }
   else { alert(data.error || '{{.Ls.ErrorAlert}}'); }
@@ -1369,6 +1387,7 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 		AntiSpam:   template.HTML(antiSpamRenderFields()),
 		NoIndex:    h.formNoIndex(r, f),
 		HeightJS:   template.HTML(iframeHeightJS),
+		PayFailJS:  payFailJS(ls),
 		Lang:       ls.Lang,
 		Ls:         ls,
 		CtaPrimary: cta.Primary, CtaHover: cta.Hover, CtaActive: cta.Active,

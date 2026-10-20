@@ -52,6 +52,15 @@ type langStrings struct {
 	// failed-payment arm (issue #393's per-form failure_message still wins when
 	// the merchant set one); ResponseReceived above is both.
 	PaymentFailedBody string
+	// Card t_e2024698: the payment could not even be STARTED — the CHIP
+	// purchase creation failed before the buyer ever reached a checkout page
+	// (rejected merchant key, provider outage). That is a different situation
+	// from PaymentFailedBody (a payment that was attempted and declined), so it
+	// carries different copy: it says nothing was charged and tells the buyer to
+	// contact the merchant with the reference. The four public order surfaces
+	// render it in-app through payFailJS; before, the api answered 502 and the
+	// edge substituted its own error page, so the buyer saw nothing actionable.
+	PaymentUnavailable string
 	// Card t_4086b8f0: a `file` block stored BEFORE the write-side refusal
 	// (formfields.UnsupportedBlock) still has to be served honestly — its label
 	// plus this note, instead of a picker whose file could go nowhere.
@@ -129,6 +138,8 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "Select an option", SelectVariationAlert: "Please choose a variation for each product", InStock: "in stock",
 		SubmitResponse: "Submit", ThankYou: "Thank you!", ResponseReceived: "Your response has been received.",
 		PaymentFailedBody: "We could not complete your payment. Please try again.",
+		PaymentUnavailable: "We could not start the payment, so nothing was charged. " +
+			"Please contact the merchant and quote the reference below.",
 		// Card t_4086b8f0: a `file` block stored before the write-side refusal
 		// (formfields.UnsupportedBlock). It renders its label and this note
 		// rather than a file picker, because the picked file could not go
@@ -183,6 +194,8 @@ var formLangs = map[string]langStrings{
 		// The pre-#57 hardcoded BM wording is preserved for `ms` (see the note
 		// at the top of this dictionary).
 		PaymentFailedBody: "Pembayaran gagal. Sila cuba lagi.",
+		PaymentUnavailable: "Kami tidak dapat memulakan pembayaran, jadi tiada caj dikenakan. " +
+			"Sila hubungi penjual dan nyatakan rujukan di bawah.",
 		// Card t_4086b8f0 — see the `en` block above.
 		FileUnsupported:   "Lampiran tidak boleh dimuat naik pada borang ini.",
 		CouponUnsupported: "Kod diskaun tidak digunakan pada borang ini.",
@@ -232,6 +245,8 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "请选择规格", SelectVariationAlert: "请为每件商品选择规格", InStock: "有货",
 		SubmitResponse: "提交", ThankYou: "谢谢！", ResponseReceived: "您的回复已收到。",
 		PaymentFailedBody: "无法完成付款，请重试。",
+		PaymentUnavailable: "无法开始付款，因此未收取任何费用。" +
+			"请联系商家并提供下方的参考编号。",
 		FileUnsupported:   "此表单不支持上传附件。",
 		CouponUnsupported: "此表单不适用折扣码。",
 		SelectOption:      "请选择", SelectShipping: "选择配送方式",
@@ -280,6 +295,8 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", SelectVariationAlert: "ஒவ்வொரு பொருளுக்கும் மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", InStock: "கையிருப்பு",
 		SubmitResponse: "சமர்ப்பி", ThankYou: "நன்றி!", ResponseReceived: "உங்கள் பதில் பெறப்பட்டது.",
 		PaymentFailedBody: "கட்டணத்தை முடிக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.",
+		PaymentUnavailable: "கட்டணத்தைத் தொடங்க முடியவில்லை, எனவே எந்தக் கட்டணமும் வசூலிக்கப்படவில்லை. " +
+			"கீழே உள்ள குறிப்பு எண்ணுடன் வணிகரைத் தொடர்பு கொள்ளுங்கள்.",
 		FileUnsupported:   "இந்தப் படிவத்தில் இணைப்புகளை பதிவேற்ற முடியாது.",
 		CouponUnsupported: "இந்தப் படிவத்தில் தள்ளுபடிக் குறியீடுகள் பயன்படுத்தப்படாது.",
 		SelectOption:      "ஒரு விருப்பத்தைத் தேர்ந்தெடுக்கவும்", SelectShipping: "ஷிப்பிங்கைத் தேர்ந்தெடுக்கவும்",
@@ -328,6 +345,8 @@ var formLangs = map[string]langStrings{
 		SelectVariation: "اختر خيارًا", SelectVariationAlert: "يرجى اختيار خيار لكل منتج", InStock: "متوفر",
 		SubmitResponse: "إرسال", ThankYou: "شكراً لك!", ResponseReceived: "تم استلام ردك.",
 		PaymentFailedBody: "تعذّر إتمام الدفع. يرجى المحاولة مرة أخرى.",
+		PaymentUnavailable: "تعذّر بدء الدفع، ولم يتم خصم أي مبلغ. " +
+			"يرجى التواصل مع التاجر وذكر الرقم المرجعي أدناه.",
 		FileUnsupported:   "لا يمكن تحميل المرفقات في هذا النموذج.",
 		CouponUnsupported: "لا تُطبَّق رموز الخصم في هذا النموذج.",
 		SelectOption:      "اختر خيارًا", SelectShipping: "اختر الشحن",

@@ -72,6 +72,9 @@ func (h *PublicHandlers) renderCustomForm(w http.ResponseWriter, r *http.Request
 		// Issue #456: postMessage auto-height for the iframe embed. No-op on a
 		// direct visit (the script only runs when framed).
 		"HeightJS": template.HTML(iframeHeightJS),
+		// Card t_e2024698: the buyer-visible payment-failure renderer shared by
+		// every public order surface (payfail.go).
+		"PayFailJS": payFailJS(ls),
 	}); err != nil {
 		slog.Error("form_render_custom", "err", err)
 	}
@@ -126,6 +129,7 @@ var customFormTmpl = template.Must(template.New("custom").Parse(`<!doctype html>
   {{.AntiSpam}}
   <button type="button" id="jf-submit">{{$.Ls.SubmitResponse}}</button>
 </div>
+<script>{{.PayFailJS}}</script>
 <script>
 (function(){
   var frame=document.getElementById('jf-custom');
@@ -174,6 +178,9 @@ var customFormTmpl = template.Must(template.New("custom").Parse(`<!doctype html>
     fetch(location.pathname+'/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json()})
       .then(function(d){
+        // Card t_e2024698: the payment could not be started — paint the
+        // failure in-app with the reference instead of a bare alert.
+        if(d&&d.status==='payment_error'){jfPayFail(d);return;}
         if(d.status==='submitted'){
           if(d.confirmation==='redirect'&&d.redirect_url){
             if(window.self!==window.top){window.top.location.href=d.redirect_url;}
@@ -187,7 +194,10 @@ var customFormTmpl = template.Must(template.New("custom").Parse(`<!doctype html>
           alert('{{$.Ls.ErrorAlert}}'+(d.error?': '+d.error:''));
         }
       })
-      .catch(function(){alert('{{$.Ls.ErrorAlert}}');});
+      // Card t_e2024698: a non-JSON answer (an edge error page, a proxy 5xx)
+      // used to reach only this generic alert — report it as the same
+      // actionable failure now.
+      .catch(function(){jfPayFail({});});
   });
   form.addEventListener('click',function(){
     try{

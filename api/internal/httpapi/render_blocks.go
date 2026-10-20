@@ -308,6 +308,10 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		// Issue #456: postMessage auto-height for the iframe embed. No-op on a
 		// direct visit (the script only runs when framed).
 		"HeightJS": template.HTML(iframeHeightJS),
+		// Card t_e2024698: the buyer-visible payment-failure renderer every
+		// order surface shares (payfail.go). template.JS so the function body
+		// is emitted verbatim.
+		"PayFailJS": payFailJS(ls),
 		// Card t_9e875bca: the conditional-logic script. Both renderers emit the
 		// SAME constant so a payment form and a response form cannot drift.
 		"ConditionJS": template.HTML(blockConditionJS),
@@ -668,6 +672,7 @@ var blockTmpl = template.Must(template.New("blocks").
     {{if .Footer.RefundURL}}<a href="{{.Footer.RefundURL}}" target="_blank" rel="noopener">{{$.Ls.RefundLabel}}</a>{{end}}
   </div>{{end}}
 </footer>{{end}}
+<script>{{.PayFailJS}}</script>
 <script>
 (function(){
   var boxes=document.querySelectorAll('.p');
@@ -764,6 +769,11 @@ var blockTmpl = template.Must(template.New("blocks").
       table_number:(new URLSearchParams(location.search).get('table')||'')};
     fetch(location.pathname+'/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json()}).then(function(d){
+        // Card t_e2024698: the payment could not be started. Paint it in-app —
+        // the api answers this state with a status the edge passes through, so
+        // this branch is what the buyer actually reads. Anything else that is
+        // not a checkout keeps the old alert.
+        if(d&&d.status==='payment_error'){jfPayFail(d);return;}
         if(d.checkout_url||d.next){
           var url=d.checkout_url||d.next;
           // Issue #60: when embedded in a merchant site, CHIP checkout and the
@@ -773,7 +783,12 @@ var blockTmpl = template.Must(template.New("blocks").
           if(window.self!==window.top){window.top.location.href=url;}
           else{location.href=url;}
         }
-        else{alert('{{.Ls.ErrorAlert}}'+(d.error?': '+d.error:''));}});
+        else{alert('{{.Ls.ErrorAlert}}'+(d.error?': '+d.error:''));}})
+      // Card t_e2024698: without this, a non-JSON answer (an edge error page, a
+      // proxy 5xx) made r.json() reject and the buyer's click did NOTHING — no
+      // message at all. Any unreadable answer is reported as the same
+      // actionable failure.
+      .catch(function(){jfPayFail({});});
   });
 })();
 </script>
@@ -1018,6 +1033,8 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		// Issue #456: postMessage auto-height for the iframe embed. No-op on a
 		// direct visit (the script only runs when framed).
 		"HeightJS": template.HTML(iframeHeightJS),
+		// Card t_e2024698: see the payment renderer's map above.
+		"PayFailJS": payFailJS(ls),
 		// Card t_9e875bca: the same conditional-logic script the payment
 		// renderer emits — a response form's block carries data-condition too.
 		"ConditionJS": template.HTML(blockConditionJS),
@@ -1173,6 +1190,7 @@ var responseTmpl = template.Must(template.New("response").
     {{if .Footer.RefundURL}}<a href="{{.Footer.RefundURL}}" target="_blank" rel="noopener">{{$.Ls.RefundLabel}}</a>{{end}}
   </div>{{end}}
 </footer>{{end}}
+<script>{{.PayFailJS}}</script>
 <script>
 (function(){
   var form=document.getElementById('of');
@@ -1227,11 +1245,17 @@ var responseTmpl = template.Must(template.New("response").
           }
           var msg=d.message||'{{$.Ls.ResponseReceived}}';
           form.innerHTML='<div class="ok"><h1>✓ {{$.Ls.ThankYou}}</h1><div class="msg">'+msg+'</div></div>';
+        } else if(d&&d.status==='payment_error'){
+          // Card t_e2024698: the payment could not be started — say so in-app,
+          // with the reference, instead of an alert the buyer can dismiss.
+          jfPayFail(d);
         } else {
           alert('{{$.Ls.ErrorAlert}}'+(d.error?': '+d.error:''));
         }
       })
-      .catch(function(){alert('{{$.Ls.ErrorAlert}}');});
+      // Card t_e2024698: a non-JSON answer must not leave the buyer with
+      // nothing at all.
+      .catch(function(){jfPayFail({});});
   });
 })();
 </script>
