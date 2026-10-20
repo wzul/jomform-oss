@@ -65,14 +65,18 @@ test("the answered-flag starts false and the loader settles it on BOTH paths", (
 
   const start = settings.indexOf("const loadCfStatus = useCallback(");
   assert.ok(start >= 0, "loadCfStatus is gone");
-  const end = settings.indexOf("}, []);", start);
-  assert.ok(end > start, "could not delimit loadCfStatus's body");
-  const body = settings.slice(start, end);
+  // The body ends at the useCallback's dependency array, whatever it names —
+  // card t_88485157 re-keyed the loader on the active workspace, and a
+  // delimiter hard-coded to `[]` would silently slice PAST the function and
+  // assert against unrelated code (which is how it broke).
+  const tail = /\n {2}\}, \[[^\]]*\]\);/.exec(settings.slice(start));
+  assert.ok(tail, "could not delimit loadCfStatus's body (no `}, […]` dependency array)");
+  const body = settings.slice(start, start + tail.index + tail[0].length);
 
   // A `.finally` runs on resolution, rejection and a non-2xx answer alike, which
   // is the shape that covers every way the request can end. `then`/`catch`
   // spellings are accepted too, as long as the setter appears on both paths.
-  const viaFinally = /\.finally\(\(\) => setCfStatusLoaded\(true\)\)/.test(body);
+  const viaFinally = /\.finally\(/.test(body) && /setCfStatusLoaded\(true\)/.test(body.slice(body.indexOf(".finally(")));
   const setters = body.match(/setCfStatusLoaded\(true\)/g) ?? [];
   assert.ok(
     viaFinally || setters.length >= 2,
@@ -94,7 +98,10 @@ test("no status-derived branch renders before the answer", () => {
   // (asserted below as the reason it is deliberately absent from this list).
   const branches: Array<{ name: string; pattern: RegExp }> = [
     { name: "the negative answer (set.cfNotConfigured)", pattern: /\{cfStatusLoaded && !cfConfigured && \(/ },
-    { name: "the login link (/api/cf/start)", pattern: /\{cfStatusLoaded && !cfLinked && \(\s*\/\* eslint-disable-next-line/ },
+    // The href is held in state (card t_88485157) rather than written inline, so
+    // the anchor is named by its binding. The `eslint-disable-next-line` note this
+    // used to pin was prose that moved; what must hold is the GATE, then the anchor.
+    { name: "the login link (/api/cf/start)", pattern: /\{cfStatusLoaded && !cfLinked && \(\s*<a href=\{cfStartHref\}/ },
     { name: "the manual-token toggle", pattern: /\{cfStatusLoaded && !cfLinked && \(\s*<button\s*\n\s*onClick=\{\(\) => \{ setCfManualOpen/ },
   ];
   for (const { name, pattern } of branches) {

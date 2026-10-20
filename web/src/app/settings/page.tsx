@@ -369,7 +369,7 @@ export default function Settings() {
   // Issue #29: routed through the shared session cache — the first page of
   // the session fetches the bundle once; later pages (dashboard, forms,
   // products, profile) reuse it. Saves call reloadSession() to re-fetch.
-  const { bundle, anon, reload: reloadSession, role, user } = useSession();
+  const { bundle, anon, reload: reloadSession, role, user, workspace } = useSession();
   // Phone tab strip: the settings tab strip is one scrolling row, not a wrapped
   // block (see the tab bar below). This ref points at it.
   const tabStripRef = useRef<HTMLDivElement | null>(null);
@@ -666,10 +666,62 @@ export default function Settings() {
     }
   }
 
+  // THE CLOUDFLARE SECTION IS ACCOUNT-SCOPED, SO IT MUST BE WORKSPACE-SCOPED
+  // (card t_88485157). The cf routes read and write `actx.Account` — `cfStatus`
+  // reads that account's sealed token, `cfDisconnect` clears it — and each
+  // workspace owns its own account. An UNSCOPED call resolves the session user's
+  // FIRST-OWNED account (`resolveSessionAccount`: "Otherwise the user's first
+  // owned account is used"), so the panel described and mutated a different
+  // account than the one whose domains this tab lists. Measured on prod
+  // v1.21.257: on a second, unlinked workspace the panel still rendered
+  // "Cloudflare connected ✓ … Disconnect", and pressing Disconnect there deleted
+  // the FIRST account's token — a link the user could not even see. Every call
+  // below therefore carries `?workspace=`.
+  //
+  // `cfStatusSeq` drops an answer that is no longer about the scope on screen: a
+  // switch can leave the previous request in flight, and applying it would be
+  // the same lie in a different tense.
+  const cfStatusSeq = useRef(0);
+  // The (workspace, URL) pair already asked about. A switch must re-read even
+  // when the URL it builds happens to be identical, which is why the key carries
+  // `workspace` and not just the query — the effect can re-run with the same
+  // scope (mount, then the session publishing one), and that first load DOES
+  // send the read twice: measured on the built app, `/settings?tab=domains`
+  // issued `/api/cf/status?workspace=<ws>` twice before the panel settled. One
+  // extra GET on load is the cost of never applying a reply to the wrong scope;
+  // the seq guard drops the superseded answer.
+  const cfStatusAsked = useRef("");
+  // The OAuth link's href. `/api/cf/callback` seals the token against the account
+  // it resolves (see cfLinkTarget in cf_oauth.go), so the link must name the
+  // workspace on screen or it links the first-owned account. Held in state and
+  // updated in an effect rather than computed during render: `workspaceQuery()`
+  // reads the browser scope, which the server render does not have, and building
+  // it inline would be a hydration mismatch. Keyed on `workspace` (not on the
+  // status fetch) so the href follows the switcher even when the section is in
+  // its pending state.
+  const [cfStartHref, setCfStartHref] = useState("/api/cf/start");
+  useEffect(() => {
+    setCfStartHref(`/api/cf/start${workspaceQuery()}`);
+  }, [workspace]);
+
   const loadCfStatus = useCallback(() => {
-    return fetch("/api/cf/status")
+    const q = workspaceQuery();
+    const asked = `${workspace}|${q}`;
+    if (cfStatusAsked.current === asked) return Promise.resolve();
+    cfStatusAsked.current = asked;
+    const seq = ++cfStatusSeq.current;
+    // The PREVIOUS workspace's answer is not this workspace's answer, and the
+    // badge and the Disconnect button are gated on `cfLinked` rather than on
+    // `cfStatusLoaded` — so they must be dropped here or they keep describing an
+    // account the merchant has switched away from while the new read is in
+    // flight.
+    setCfLinked(false);
+    setCfConfigured(false);
+    setCfStatusLoaded(false);
+    return fetch(`/api/cf/status${q}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
+        if (seq !== cfStatusSeq.current) return; // a newer scope was asked for
         if (d) {
           setCfLinked(!!d.linked);
           setCfConfigured(d.configured !== false);
@@ -681,8 +733,10 @@ export default function Settings() {
       // panel with no `cfNotConfigured` note and no explanation — a section that
       // never settles. See the `cfStatusLoaded` declaration for the measured
       // defect this flag exists to prevent.
-      .finally(() => setCfStatusLoaded(true));
-  }, []);
+      .finally(() => {
+        if (seq === cfStatusSeq.current) setCfStatusLoaded(true);
+      });
+  }, [workspace]);
 
   useEffect(() => {
     loadCfStatus();
@@ -1717,17 +1771,19 @@ export default function Settings() {
                 {/* Cloudflare's authorize URL, not a Next page: the API route
                     answers with a redirect to Cloudflare's consent screen, which
                     a `next/link` client-side transition cannot follow. `<a>` is
-                    correct; the rule is a false positive on the API routes. */}
+                    correct. The href carries the workspace scope (card
+                    t_88485157) — it is held in state rather than built inline
+                    because `workspaceQuery()` reads the browser scope, which the
+                    server render does not have. */}
                 {cfStatusLoaded && !cfLinked && (
-                  /* eslint-disable-next-line @next/next/no-html-link-for-pages */
-                  <a href="/api/cf/start" className="jf-btn-primary inline-block">
+                  <a href={cfStartHref} className="jf-btn-primary inline-block">
                     {t("set.cfLogin")}
                   </a>
                 )}
                 {cfLinked && (
                   <button
                     onClick={async () => {
-                      await fetch("/api/cf/disconnect", { method: "POST" });
+                      await fetch(`/api/cf/disconnect${workspaceQuery()}`, { method: "POST" });
                       setCfLinked(false);
                     }}
                     className="jf-btn-ghost text-slate-600"
@@ -1806,7 +1862,7 @@ export default function Settings() {
                           ? { account_email: cfAccEmail, api_token: cfSecret, account_name: cfAccName }
                           : { account_email: cfAccEmail, api_key: cfSecret, account_name: cfAccName };
                         const r = await fetch(
-                          cfKind === "apitoken" ? "/api/cf/api-token" : "/api/cf/global-key",
+                          `${cfKind === "apitoken" ? "/api/cf/api-token" : "/api/cf/global-key"}${workspaceQuery()}`,
                           { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
                         );
                         const d = await r.json().catch(() => ({}));

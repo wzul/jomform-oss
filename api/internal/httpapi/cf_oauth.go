@@ -20,11 +20,11 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/cryptoutil"
+	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 const (
 	cfAuthURL = "https://dash.cloudflare.com/oauth2/auth"
-	cfAPIBase = "https://api.cloudflare.com/client/v4"
 	// cfOAuthScope is the Cloudflare OAuth scope set requested on the consent
 	// screen. Without a scope param Cloudflare shows "0 total permissions" and
 	// disables the Authorize button (issue #288). For auto-CNAME (#22) we need:
@@ -36,6 +36,14 @@ const (
 	// request scope 'zone:read'". account.read is not required for the zone/DNS
 	// calls below, so it is omitted.
 	cfOAuthScope = "zone.read dns.write"
+	// cfOAuthWSCookie carries the WORKSPACE the merchant started the flow on from
+	// /cf/start to /cf/callback (card t_88485157). The flow leaves our origin for
+	// Cloudflare's consent screen and comes back as a plain GET on the registered
+	// redirect URI, so the `?workspace=` scope cannot ride on the query string;
+	// without this the callback resolved the session user's FIRST-OWNED account
+	// and linked the wrong workspace's account — invisibly, because nothing in
+	// the UI names the account a link landed on.
+	cfOAuthWSCookie = "cf_oauth_ws"
 )
 
 // cfTokenURL is a var rather than a const only so a test can point the token
@@ -43,6 +51,12 @@ const (
 // the client-authentication rule lives in cfSetClientAuth and is decided by
 // what is posted. Nothing at runtime reassigns it.
 var cfTokenURL = "https://dash.cloudflare.com/oauth2/token"
+
+// cfAPIBase is the Cloudflare API root the verification calls below use. A var
+// for the same reason as cfTokenURL: the flow's account resolution is proven by
+// driving /cf/callback end to end, and that path verifies the minted token by
+// calling Cloudflare. Nothing at runtime reassigns it.
+var cfAPIBase = "https://api.cloudflare.com/client/v4"
 
 func cfClientID() string     { return os.Getenv("JF_CF_OAUTH_CLIENT_ID") }
 func cfClientSecret() string { return os.Getenv("JF_CF_OAUTH_CLIENT_SECRET") }
@@ -116,6 +130,30 @@ func (h *RESTHandlers) cfStart(w http.ResponseWriter, r *http.Request, actx *Acc
 			"Cloudflare auto-setup belum dikonfigur (JF_CF_OAUTH_CLIENT_ID/SECRET). Tambah CNAME manual sementara.")
 		return
 	}
+	// WHICH ACCOUNT THIS LINK WILL LAND ON (card t_88485157). `/cf/callback`
+	// seals the token against the account IT resolves, and that used to be the
+	// session user's first-owned account — so starting the flow from a second
+	// workspace linked the wrong account, invisibly. The scope is carried to the
+	// callback in a cookie (the flow leaves our origin and returns as a plain GET
+	// on the redirect URI, so the query string does not survive).
+	if slug := strings.TrimSpace(r.URL.Query().Get("workspace")); slug != "" {
+		if !h.cfScopeResolvedToThisAccount(r, slug, actx) {
+			// `authed` silently falls back to the first-owned account for a slug
+			// the caller cannot reach (resolveSessionAccount). Carrying that
+			// fallback into the callback is the defect, so the flow refuses here
+			// instead of linking an account the caller did not ask for.
+			writeErr(w, http.StatusForbidden, "workspace tidak dijumpai")
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: cfOAuthWSCookie, Value: slug, Path: "/", HttpOnly: true, Secure: true, MaxAge: 600})
+	} else {
+		// An UNSCOPED start must not inherit the scope of an earlier flow the user
+		// abandoned at the consent screen: that cookie lives 10 minutes, so a stale
+		// one would make THIS flow link the workspace a previous one named. The
+		// cookie is rewritten on every start — to the scope, or to nothing.
+		http.SetCookie(w, &http.Cookie{Name: cfOAuthWSCookie, Value: "", Path: "/", HttpOnly: true, Secure: true, MaxAge: -1})
+	}
+
 	state := randTokenHex(16)
 	verifier := randTokenHex(48) // RFC 7636: 43-128 chars
 	sum := sha256.Sum256([]byte(verifier))
@@ -184,15 +222,18 @@ func (h *RESTHandlers) cfCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Seal + persist against the logged-in account (Wan: jangan tak store).
+	// Seal + persist against the account the merchant is actually looking at
+	// (Wan: jangan tak store). WHICH account that is comes from the workspace the
+	// flow STARTED on — see cfLinkTarget (card t_88485157): an unscoped flow used
+	// to seal the token against the first-owned account.
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
 		writeErr(w, http.StatusUnauthorized, "login dahulu")
 		return
 	}
-	accs, aerr := h.Accounts.ByOwner(r.Context(), uid)
-	if aerr != nil || len(accs) == 0 {
-		writeErr(w, http.StatusForbidden, "tiada akaun vendor")
+	target, why := h.cfLinkTarget(r, uid)
+	if target == nil {
+		writeErr(w, http.StatusForbidden, why)
 		return
 	}
 	blob, _ := json.Marshal(cfCred{Kind: cfKindOAuth, Access: tok.Access, Refresh: tok.Refresh})
@@ -201,12 +242,87 @@ func (h *RESTHandlers) cfCallback(w http.ResponseWriter, r *http.Request) {
 		respondErr(w, r, err)
 		return
 	}
-	if err := h.Accounts.SaveCFToken(r.Context(), accs[0].ID, sealed); err != nil {
+	if err := h.Accounts.SaveCFToken(r.Context(), target.ID, sealed); err != nil {
 		respondErr(w, r, err)
 		return
 	}
-	slog.Info("cf_oauth_linked", "account", accs[0].ID)
+	slog.Info("cf_oauth_linked", "account", target.ID)
+	// The scope cookie exists only for this round trip: a later flow must not
+	// inherit it, and a stale one would name a workspace the user may have left.
+	http.SetCookie(w, &http.Cookie{Name: cfOAuthWSCookie, Value: "", Path: "/", HttpOnly: true, Secure: true, MaxAge: -1})
 	http.Redirect(w, r, "/settings?cloudflare=linked", http.StatusFound)
+}
+
+// cfScopeResolvedToThisAccount reports whether a `?workspace=<slug>` scope
+// actually resolved to the account `authed` handed this request.
+//
+// WHY IT IS NOT JUST "the query had a slug": resolveSessionAccount resolves the
+// account from the slug when it is the caller's (owner OR member) and SILENTLY
+// falls back to the first-owned account when it is not — so carrying the slug
+// straight into the OAuth callback would seal the link against whichever account
+// the fallback picked. Only a scope that was HONOURED may travel.
+func (h *RESTHandlers) cfScopeResolvedToThisAccount(r *http.Request, slug string, actx *AccountCtx) bool {
+	if actx == nil || actx.Account == nil || h.Workspaces == nil {
+		return false
+	}
+	uid := h.sessionOwnerID(r)
+	if uid == "" {
+		return false
+	}
+	ws, ok, err := h.Workspaces.AccessBySlug(r.Context(), slug, uid)
+	if err != nil || !ok {
+		return false
+	}
+	for _, id := range ws.Accounts {
+		if id == actx.Account.ID {
+			return true
+		}
+	}
+	return false
+}
+
+// cfLinkTarget resolves the account `/cf/callback` seals the credential against.
+//
+// THE DEFECT IT CLOSES (card t_88485157): the callback used
+// `Accounts.ByOwner(uid)[0]` unconditionally, so linking Cloudflare while the
+// switcher was on a second workspace wrote the token onto the FIRST-OWNED
+// account. The panel then showed the selected workspace as unlinked (correctly,
+// after the same card's scoping fix) while the token sat somewhere the merchant
+// could not see it, and auto-CNAME never applied to the workspace they were in.
+//
+// The workspace travels in cfOAuthWSCookie, written by cfStart only for a scope
+// that was really honoured, and is resolved here through the SAME ownership rule
+// every other scoped request uses (Workspaces.AccessBySlug → that workspace's
+// account). An inaccessible slug is REFUSED, never silently replaced by the
+// first account — the silent replacement is the bug. An absent cookie is a flow
+// started before this cookie existed, or an unscoped caller; that keeps the
+// legacy first-owned answer, which is also the true one for a single-workspace
+// user.
+func (h *RESTHandlers) cfLinkTarget(r *http.Request, userID string) (*dbstore.Account, string) {
+	slug := ""
+	if c, err := r.Cookie(cfOAuthWSCookie); err == nil {
+		slug = strings.TrimSpace(c.Value)
+	}
+	if slug != "" {
+		if h.Workspaces == nil {
+			return nil, "workspace tidak dijumpai"
+		}
+		ws, ok, err := h.Workspaces.AccessBySlug(r.Context(), slug, userID)
+		if err != nil || !ok {
+			return nil, "workspace tidak dijumpai"
+		}
+		for _, id := range ws.Accounts {
+			if a, e := h.Accounts.ByID(r.Context(), id); e == nil && a != nil {
+				return a, ""
+			}
+		}
+		return nil, "tiada akaun vendor"
+	}
+	accs, err := h.Accounts.ByOwner(r.Context(), userID)
+	if err != nil || len(accs) == 0 {
+		return nil, "tiada akaun vendor"
+	}
+	return accs[0], ""
 }
 
 // cfStatus tells the settings UI whether Cloudflare is linked (decryptable

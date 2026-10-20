@@ -217,9 +217,19 @@ func (s *AccountStore) SaveSigningKeys(ctx context.Context, accountID, pubB64, p
 // SaveCFToken stores the sealed Cloudflare OAuth token blob for the account.
 // The blob is a sealed JSON {"access","refresh"} produced by the caller;
 // an empty string unlinks. (Issue #22 — restored after #15 Option B.)
+//
+// THE COLUMN IS NOT NULL (migration 000016 adds it with a NOT NULL constraint
+// and an empty-string default), so an unlink must write the EMPTY STRING, not
+// NULL. This used to be a NULLIF against the empty string, which turned an
+// unlink into NULL and made the UPDATE fail with SQLSTATE 23502 — i.e.
+// `POST /v1/cf/disconnect` answered 500 on every call while the panel still
+// painted "not linked" from its optimistic local state, so the button looked
+// like it worked. Measured on the built API (card t_88485157): POST
+// /v1/cf/disconnect -> 500 `null value in column "cf_token_enc"`. CFToken
+// already COALESCEs, so an empty string and NULL read the same.
 func (s *AccountStore) SaveCFToken(ctx context.Context, accountID, sealed string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE accounts SET cf_token_enc=NULLIF($2,''), updated_at=now() WHERE id=$1`,
+		`UPDATE accounts SET cf_token_enc=$2, updated_at=now() WHERE id=$1`,
 		accountID, sealed)
 	return err
 }

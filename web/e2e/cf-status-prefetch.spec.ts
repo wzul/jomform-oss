@@ -198,8 +198,11 @@ test("a deployment where auto-setup IS configured never paints the negative sent
   const pendingStates = await states(page);
   expect(pending).not.toContain(NOT_CONFIGURED);
   // The login affordance is read from its anchor: the phrase also opens the
-  // section's help text, so a text test cannot tell the two apart.
-  await expect(page.locator('a[href="/api/cf/start"]')).toHaveCount(0);
+  // section's help text, so a text test cannot tell the two apart. PREFIX match,
+  // because the href carries the workspace scope (card t_88485157) — an exact
+  // selector for the unscoped path is now satisfied by the link's absence, which
+  // would make this whole assertion vacuous.
+  await expect(page.locator('a[href^="/api/cf/start"]')).toHaveCount(0);
   expect(pendingStates).not.toContain("not-conf");
   expect(pendingStates).not.toContain("login");
 
@@ -244,7 +247,12 @@ test("with no client id the honest negative answer still appears once the fetch 
   // deployment really has no client id, the sentence is what the merchant must
   // see, and the unlinked branch offers the login.
   await expect(page.getByText(NOT_CONFIGURED)).toBeVisible();
-  await expect(page.locator('a[href="/api/cf/start"]')).toHaveText(LOGIN);
+  // The href carries the scope of the only workspace the bundle has: an unscoped
+  // start would link the caller's first-owned account whatever workspace they are
+  // looking at (card t_88485157). Retrying locator (not a one-shot attribute read)
+  // because the scope is published by the session bundle, which can land after the
+  // status answer this arm holds.
+  await expect(page.locator('a[href="/api/cf/start?workspace=demo"]')).toHaveText(LOGIN);
   expect(await states(page)).toEqual(["loading", "not-conf"]);
 });
 
