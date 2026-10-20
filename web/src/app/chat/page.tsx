@@ -78,7 +78,8 @@ import { confirmDecisionFor } from "../../lib/chatConfirm";
 // A REFUSED step's sentence is resolved here from the machine key the server sent
 // — never from a string on the wire (t_3839995c; see the module's header for the
 // defect and for why the server's own sentence reached every locale).
-import { refusalText } from "../../lib/chatRefusal";
+import { refusalHeading, refusalText } from "../../lib/chatRefusal";
+import { answerText } from "../../lib/chatAnswer";
 // The card's own wording is rendered through the dictionary from the KEYS the
 // server sends — never from a sentence on the wire (t_30ffa28a; see the module's
 // header for the defect and for why the assistant's `note` is the exception).
@@ -130,6 +131,11 @@ type Proposal = ProposalCardData;
 
 type ChatReply = {
   reply: string;
+  // The KEY of the answer's sentence when the model wrote no prose of its own
+  // (t_7f1694cb). The API does not know this visitor's language, so the fallback is
+  // a dictionary key, resolved by lib/chatAnswer.ts — the same rule the refusal
+  // block follows. Absent whenever `reply` carries real words.
+  reply_key?: string;
   steps?: Step[];
   filed?: Filed;
   proposals?: Proposal[];
@@ -391,7 +397,11 @@ export default function ChatPage() {
         ...prev,
         {
           role: "assistant",
-          content: d.reply ?? "",
+          // The answer the visitor reads. The model's own words when it wrote any;
+          // otherwise the dictionary sentence the server named (t_7f1694cb), so a
+          // refused proposal cannot end the turn with an empty bubble. Both empty
+          // stays empty — the page must not invent a sentence of its own.
+          content: answerText(d.reply, d.reply_key, t),
           filed: d.filed,
           refused: refused.length ? refused : undefined,
           proposals: proposals.length ? proposals : undefined,
@@ -660,11 +670,16 @@ export default function ChatPage() {
                 server sent (`chat.refused.*`), resolved through the dictionary by
                 lib/chatRefusal.ts: the API does not receive the caller's language
                 on a JSON call, so its own sentence reached every locale in Malay
-                (t_3839995c; issue #6177). */}
+                (t_3839995c; issue #6177).
+
+                The HEADING is a key decision too (t_7f1694cb): "That action is not
+                allowed here." is right for a forbidden tool and wrong for a
+                proposal whose arguments were refused, so refusalHeading() picks it
+                from the steps in this block rather than from a constant here. */}
             {msgs.map((m, i) =>
               m.refused ? (
                 <div key={`r${i}`} className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  <span className="font-medium">{t("chat.refused")}</span>
+                  <span className="font-medium">{refusalHeading(m.refused, t)}</span>
                   {m.refused.map((s) => {
                     const why = refusalText(s, t);
                     return (

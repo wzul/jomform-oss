@@ -231,7 +231,18 @@ type Filed struct {
 // Result is one answered message.
 type Result struct {
 	Reply string `json:"reply"`
-	Steps []Step `json:"steps"`
+	// ReplyKey names a DICTIONARY SENTENCE for the answer when the model wrote
+	// none of its own — the page resolves it in the caller's language, which the
+	// API does not know (issue #6177). It is empty whenever Reply carries prose.
+	//
+	// WHY THIS EXISTS (card t_7f1694cb). A model whose proposal was refused is
+	// free to end the turn having written nothing, and on prod it did: the
+	// merchant's whole answer was an amber refusal block and `reply: ""`. Silently
+	// passing that through is the one shape the page cannot repair — it has no
+	// sentence to print — so the runner names one instead. A key, not a sentence,
+	// for the same reason every refusal carries one (t_3839995c).
+	ReplyKey string `json:"reply_key,omitempty"`
+	Steps    []Step `json:"steps"`
 	// Filed is non-nil when the model filed feedback during this exchange.
 	Filed *Filed `json:"filed,omitempty"`
 	// Proposals are the write proposals this exchange produced, in the order the
@@ -392,6 +403,31 @@ func bound(s string, max int) string {
 	return string(r[:max]) + "…[dipotong]"
 }
 
+// answerOrKey stores the model's own words as the answer, or — when it wrote none
+// — the key of the sentence the dashboard renders instead.
+//
+// WHY AN EMPTY ANSWER MUST NOT BE PASSED THROUGH (card t_7f1694cb). The proposal
+// lane gives its objection to the MODEL, which is right (the model is the only one
+// that can correct the call), and a model is free to answer that with nothing at
+// all. On prod it did: the merchant's entire answer to "Create a form called My New
+// Form with one text field" was a refusal block and `reply: ""`, and the page has
+// no sentence of its own to fall back on. So the runner names one — a KEY, because
+// the API does not know the caller's language (issue #6177) and a sentence written
+// here would reach all five locales in one language (t_3839995c).
+//
+// WHAT COUNTS AS SILENCE. Whitespace is silence: a model that emits "\n\n" has said
+// nothing, and the page would render an empty bubble. The check trims for the
+// DECISION only — the prose itself is stored exactly as it arrived, because
+// leading blank lines in a Markdown answer are harmless and rewriting a model's
+// answer is not this function's job.
+func (res *Result) answerOrKey(content string) {
+	res.Reply = bound(content, MaxReplyChars)
+	res.ReplyKey = ""
+	if strings.TrimSpace(res.Reply) == "" {
+		res.ReplyKey = keyReplyNoAnswer
+	}
+}
+
 // Run answers one user message and returns the reply plus what happened.
 //
 // ctx MUST carry the caller's identity (mcpsrv.WithAuthIdentity) — see the REST
@@ -429,7 +465,7 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 			return nil, err
 		}
 		if len(reply.ToolCalls) == 0 {
-			res.Reply = bound(reply.Content, MaxReplyChars)
+			res.answerOrKey(reply.Content)
 			return res, nil
 		}
 		// Record the assistant's own tool-request turn so the conversation the
@@ -495,7 +531,7 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 			if ferr != nil {
 				return nil, ferr
 			}
-			res.Reply = bound(final.Content, MaxReplyChars)
+			res.answerOrKey(final.Content)
 			return res, nil
 		}
 	}
@@ -538,6 +574,14 @@ const (
 	// keyRefusedError — the call failed before it reached the tool (a transport
 	// failure, arguments that could not be parsed).
 	keyRefusedError = "chat.refused.error"
+	// keyReplyNoAnswer — the model wrote no prose, so the answer is a sentence the
+	// dashboard renders. NOT a refusal: a turn that ends with nothing is the same
+	// silence whether or not something was refused, and this covers both
+	// (t_7f1694cb). It is deliberately outside the refusal family — it is the
+	// assistant's own bubble, not a step's detail, and the page's two guards
+	// extract different prefixes ("chat.refused." from the steps, "chat.reply."
+	// from this file).
+	keyReplyNoAnswer = "chat.reply.noAnswer"
 )
 
 // refusal is the UI's half of a refused tool call: the machine key the dashboard

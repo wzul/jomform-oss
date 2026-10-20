@@ -2098,6 +2098,21 @@ export const DICT = {
   "chat.filed": { en: "Feedback filed — we will reply in your Feedback threads.", ms: "Maklum balas dihantar — kami akan membalas dalam thread Maklum Balas anda.", zh: "反馈已提交——我们会在您的反馈对话中回复。", ta: "கருத்து அனுப்பப்பட்டது — உங்கள் கருத்து உரையாடல்களில் நாங்கள் பதிலளிப்போம்.", ar: "تم إرسال الملاحظات — سنرد في محادثات ملاحظاتك." },
   "chat.viewThread": { en: "Open my threads", ms: "Buka thread saya", zh: "打开我的对话", ta: "எனது உரையாடல்களைத் திற", ar: "افتح محادثاتي" },
   "chat.refused": { en: "That action is not allowed here.", ms: "Tindakan itu tidak dibenarkan di sini.", zh: "此处不允许该操作。", ta: "அந்தச் செயல் இங்கே அனுமதிக்கப்படாது.", ar: "هذا الإجراء غير مسموح به هنا." },
+  // ── THE BLOCK'S HEADING IS A DECISION TOO (t_7f1694cb) ────────────────────
+  //
+  // `chat.refused` above is the claim "this ACTION is not allowed", and it is the
+  // right claim for a forbidden tool. It is the WRONG claim for a proposal whose
+  // ARGUMENTS were refused: creating a form IS proposable — the chat exists to
+  // prepare exactly that — so a merchant whose natural "create a form called …"
+  // request was refused read a sentence telling them the feature was off-limits,
+  // followed by an empty reply (measured on v1.21.149).
+  //
+  // The page no longer hard-codes a heading: it asks lib/chatRefusal.ts, which
+  // picks this key when EVERY refused step is the proposal lane and the generic
+  // one otherwise (a block that also holds a forbidden tool call really does
+  // contain something not allowed). That decision is EXECUTED by
+  // src/lib/chatRefusal.test.ts, and the browser half is e2e/chat-refusal-language.
+  "chat.refusedHeading.proposal": { en: "That change could not be prepared.", ms: "Perubahan itu tidak dapat disediakan.", zh: "该更改未能准备。", ta: "அந்த மாற்றத்தைத் தயார் செய்ய முடியவில்லை.", ar: "لم يُتمكن من تحضير ذلك التغيير." },
   // ── WHY A REFUSAL HAPPENED, in the visitor's language (t_3839995c) ─────────
   //
   // Why these exist, and why the sentence is not on the wire. A refused tool call
@@ -2125,6 +2140,20 @@ export const DICT = {
   "chat.refused.proposalLimit": { en: "This answer already prepared {max} changes to confirm. Settle those first, then ask again.", ms: "Jawapan ini sudah menyediakan {max} perubahan untuk disahkan. Selesaikan yang itu dahulu, kemudian tanya lagi.", zh: "本次回答已准备了 {max} 项待确认的更改。请先处理这些，然后再提问。", ta: "இந்தப் பதில் ஏற்கனவே {max} மாற்றங்களை உறுதிப்படுத்தலுக்குத் தயார் செய்துள்ளது. அவற்றை முதலில் முடித்துவிட்டு மீண்டும் கேளுங்கள்.", ar: "أعدّ هذا الرد بالفعل {max} تغييرات للتأكيد. أنهِ تلك أولاً ثم اسأل مرة أخرى." },
   "chat.refused.tool": { en: "The tool refused the call, so nothing changed.", ms: "Alat itu menolak panggilan tersebut, jadi tiada apa-apa berubah.", zh: "该工具拒绝了此次调用，因此没有任何更改。", ta: "அந்தக் கருவி அழைப்பை மறுத்தது, எனவே எதுவும் மாறவில்லை.", ar: "رفضت الأداة هذا الطلب، فلم يتغير شيء." },
   "chat.refused.error": { en: "The call failed before it reached the tool, so nothing changed.", ms: "Panggilan itu gagal sebelum sampai ke alat, jadi tiada apa-apa berubah.", zh: "调用尚未到达工具就失败了，因此没有任何更改。", ta: "கருவியை அடையும் முன்பே அழைப்பு தோல்வியடைந்தது, எனவே எதுவும் மாறவில்லை.", ar: "فشل الطلب قبل وصوله إلى الأداة، فلم يتغير شيء." },
+  // ── THE ANSWER WHEN THE MODEL WROTE NONE (t_7f1694cb) ─────────────────────
+  //
+  // The assistant's own bubble, not a step's detail — a different family from the
+  // keys above, and the Go constant that names it (chat.go, keyReplyNoAnswer) is
+  // guarded from this side by src/lib/chatAnswer.test.ts. The defect: a model whose
+  // proposal was refused may end the turn having written nothing, and on prod it
+  // did — the whole answer was a refusal block and an empty bubble. The runner now
+  // sends this key instead of prose, because the API does not know the visitor's
+  // language (issue #6177).
+  //
+  // It says nothing was changed (true: writes need a human Confirmation) and asks
+  // for the detail the refusal was about, so the next turn is one the model can
+  // actually prepare.
+  "chat.reply.noAnswer": { en: "I could not finish that for you, and nothing was changed. Tell me the exact details — for a new form, its name and the fields you want — and I will try again.", ms: "Saya tidak dapat menyelesaikannya untuk anda, dan tiada apa-apa diubah. Beritahu saya butiran yang tepat — untuk borang baharu, namanya dan medan yang anda mahu — dan saya akan cuba lagi.", zh: "我无法为您完成这项操作，也没有任何更改。请告诉我具体细节——如果是新建表单，请给我表单名称和所需字段——我会再试一次。", ta: "அதை என்னால் முடிக்க முடியவில்லை, எதுவும் மாற்றப்படவில்லை. சரியான விவரங்களைச் சொல்லுங்கள் — புதிய படிவமாக இருந்தால், அதன் பெயரும் நீங்கள் விரும்பும் புலங்களும் — நான் மீண்டும் முயற்சிக்கிறேன்.", ar: "لم أتمكن من إنجاز ذلك، ولم يتغير شيء. أخبرني بالتفاصيل الدقيقة — إن كان نموذجًا جديدًا، فاسمه والحقول التي تريدها — وسأحاول مرة أخرى." },
   "chat.docs": { en: "What the assistant can and cannot do", ms: "Apa yang pembantu boleh dan tidak boleh lakukan", zh: "助手能做什么、不能做什么", ta: "உதவியாளர் என்ன செய்ய முடியும், முடியாது", ar: "ما يستطيع المساعد فعله وما لا يستطيع" },
   "chat.limitNote": { en: "Up to {n} messages an hour. This is a limit, not a judgement — it keeps the feature affordable for everyone.", ms: "Sehingga {n} mesej sejam. Ini had, bukan penilaian — ia menjaga kos ciri ini untuk semua orang.", zh: "每小时最多 {n} 条消息。这是限额，不是评判——它让这项功能对所有人都可负担。", ta: "மணிக்கு அதிகபட்சம் {n} செய்திகள். இது ஒரு வரம்பு, தீர்ப்பு அல்ல — அனைவருக்கும் இந்த அம்சம் மலிவாக இருக்க இது உதவுகிறது.", ar: "{n} رسالة في الساعة كحد أقصى. هذا حد وليس حكمًا — فهو يبقي هذه الميزة في متناول الجميع." },
   // Proposal confirmation (phase 2). The card is a DECISION, so the copy has to

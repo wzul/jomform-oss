@@ -65,3 +65,34 @@ export function refusalText(s: RefusedStep, t: Translate): string {
   if (!s.detail_key) return "";
   return t(s.detail_key as Key, s.detail_params);
 }
+
+/**
+ * The keys whose refusal means "the assistant could not put THIS change
+ * together" rather than "the assistant may not do that". Both are the proposal
+ * lane: one is its argument gate, the other its per-answer budget.
+ */
+const PROPOSAL_LANE_KEYS = ["chat.refused.proposal", "chat.refused.proposalLimit"];
+
+/**
+ * The heading for a refusal BLOCK, in the dashboard's language.
+ *
+ * THE DEFECT (t_7f1694cb). The block's heading was hard-coded to `chat.refused` —
+ * "That action is not allowed here." — for every refusal. That is the right claim
+ * for a forbidden tool, and the WRONG claim for a proposal whose ARGUMENTS were
+ * refused: creating a form IS proposable, so a merchant whose natural
+ * "create a form called …" request was rejected read a sentence telling them the
+ * feature was off-limits, over an empty reply. The heading must not contradict the
+ * rest of the page.
+ *
+ * THE RULE. The proposal heading when EVERY refused step is the proposal lane:
+ * nothing in the block is a forbidden action, so nothing in it is "not allowed".
+ * The generic heading otherwise — a block that also holds a forbidden tool call
+ * really does contain something the assistant may not do, and understating THAT
+ * would be the same defect in the other direction. An unkeyed step is not
+ * proposal-lane (it is an unknown), so it keeps the generic heading.
+ */
+export function refusalHeading(steps: RefusedStep[], t: Translate): string {
+  const allProposal =
+    steps.length > 0 && steps.every((s) => PROPOSAL_LANE_KEYS.includes(s.detail_key ?? ""));
+  return allProposal ? t("chat.refusedHeading.proposal" as Key) : t("chat.refused" as Key);
+}

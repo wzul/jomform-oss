@@ -84,9 +84,13 @@ type chatRequestIn struct {
 }
 
 type chatResponseOut struct {
-	Reply string      `json:"reply"`
-	Steps []chat.Step `json:"steps"`
-	Filed *chat.Filed `json:"filed,omitempty"`
+	Reply string `json:"reply"`
+	// ReplyKey names a dictionary sentence for the ANSWER when the model wrote none
+	// of its own (t_7f1694cb) — the page resolves it in the caller's language, which
+	// this handler does not know. Empty whenever Reply carries prose.
+	ReplyKey string      `json:"reply_key,omitempty"`
+	Steps    []chat.Step `json:"steps"`
+	Filed    *chat.Filed `json:"filed,omitempty"`
 	// Proposals are the confirmation cards this exchange produced (phase 2). The
 	// TOKEN they carry goes to the browser and is never sent to the model; without
 	// a click on one of these cards, no proposed write can happen.
@@ -284,7 +288,7 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 	}
 	h.recordChatEvent(r, actx, res)
 	writeJSON(w, http.StatusOK, chatResponseOut{
-		Reply: res.Reply, Steps: res.Steps, Filed: res.Filed,
+		Reply: res.Reply, ReplyKey: res.ReplyKey, Steps: res.Steps, Filed: res.Filed,
 		Proposals: res.Proposals, Limits: chatLimits(),
 	})
 }

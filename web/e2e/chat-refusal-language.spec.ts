@@ -103,8 +103,10 @@ const BUNDLE = {
  *
  * `lang` is what the profile answers: the dashboard language is per-PROFILE, and
  * the page takes it from there (localStorage is only the instant first paint).
+ * `reply` defaults to this file's mixed refusal block and is overridden by the
+ * silent-proposal arm below, which needs a different wire entirely.
  */
-async function stubAPI(page: Page, lang: string) {
+async function stubAPI(page: Page, lang: string, reply: unknown = REPLY) {
   const json = (body: unknown) => ({
     status: 200,
     contentType: "application/json",
@@ -117,7 +119,7 @@ async function stubAPI(page: Page, lang: string) {
   await page.route(/(.*)\/api\/rest\/chat(\?.*)?$/, (r) =>
     r.request().method() === "GET"
       ? r.fulfill(json({ available: true, limits: { messages_per_hour: 60, max_message_chars: 2000 } }))
-      : r.fulfill(json(REPLY)),
+      : r.fulfill(json(reply)),
   );
 }
 
@@ -229,5 +231,96 @@ test.describe("a refused tool call's why follows the dashboard language", () => 
     await expect(block).toContainText(DICT["chat.refused"].en);
     await expect(block).toContainText(DICT[KEY_WRITE_TOOL].en);
     await expect(block).toContainText("update_product");
+  });
+});
+
+// ── A REFUSED PROPOSAL THAT ENDS WITH NO MODEL PROSE (t_7f1694cb) ─────────────
+//
+// THE DEFECT, measured live on prod v1.21.149. This is the wire the merchant's
+// transcript actually carried for "Create a form called My New Form with one text
+// field for the customer's name.":
+//
+//     steps: propose_write:refused (chat.refused.proposal) x2
+//     reply: ""
+//
+// and the page rendered ONE amber block headed "That action is not allowed here."
+// with nothing else — no answer at all. Two separate wrongs, both visible only in a
+// rendered DOM:
+//
+//   1. the heading claimed the ACTION was forbidden, when creating a form is exactly
+//      what the chat exists to propose and only the ARGUMENTS were refused; and
+//   2. `reply: ""` left the assistant's bubble empty, so the merchant was never
+//      told what to send instead.
+//
+// The server now names a dictionary sentence (`reply_key`) instead of passing the
+// silence through (api/internal/chat/chat.go, answerOrKey), and the page picks the
+// heading from the steps (src/lib/chatRefusal.ts, refusalHeading). Both halves are
+// decided in a language neither the API nor the Go test knows, so only the DOM can
+// show what a merchant reads — which is why this arm exists rather than another
+// source scan.
+const SILENT_PROPOSAL_REPLY = {
+  reply: "",
+  reply_key: "chat.reply.noAnswer",
+  steps: [
+    { tool: "propose_write", status: "refused", detail_key: "chat.refused.proposal" },
+    { tool: "propose_write", status: "refused", detail_key: "chat.refused.proposal" },
+  ],
+};
+
+test.describe("a refused proposal with no model prose still answers the merchant", () => {
+  test("the block is not headed 'not allowed', and the bubble carries an answer", async ({
+    page,
+    baseURL,
+  }) => {
+    for (const lang of LANGS) {
+      await stubAPI(page, lang, SILENT_PROPOSAL_REPLY);
+      await freshState(page, lang);
+      await sendChatPrompt(page, baseURL, "Create a form called My New Form", DICT["chat.send"][lang]);
+
+      const block = page.locator(BLOCK);
+      await expect(
+        block,
+        "the refusal block must render — otherwise this test proves nothing",
+      ).toHaveCount(1, { timeout: 20_000 });
+      await expect(block.locator("span.block"), "the refused steps must each have a line").toHaveCount(2);
+
+      const blockText = (await block.innerText()).trim();
+      const transcript = (await page.locator('[role="log"]').innerText()).trim();
+      console.log(`silent-proposal turn in ${lang}: block=${JSON.stringify(blockText)}`);
+
+      // (1) THE HEADING says the change could not be prepared — in this dashboard's
+      // language, and NOT the "not allowed" claim the defect shipped.
+      await expect(block).toContainText(DICT["chat.refusedHeading.proposal"][lang]);
+      expect(
+        blockText.includes(DICT["chat.refused"][lang]),
+        `the block still claims the action is not allowed in ${lang}: ${blockText} — creating a ` +
+          `form IS proposable; only the arguments were refused (t_7f1694cb)`,
+      ).toBe(false);
+
+      // (2) THE ANSWER is the dictionary's sentence, in this language, and it lands
+      // in the assistant's own BUBBLE rather than inside the refusal block (a
+      // sentence folded into the block would read as part of the refusal).
+      const answer = page.locator('div[class*="bg-slate-50"]');
+      await expect(
+        answer,
+        "the assistant's bubble must render — the defect's transcript had the refusal block and " +
+          "nothing else",
+      ).toHaveCount(1);
+      await expect(answer).toContainText(DICT["chat.reply.noAnswer"][lang]);
+      console.log(`silent-proposal answer in ${lang}: ${JSON.stringify((await answer.innerText()).trim())}`);
+      expect(
+        blockText.includes(DICT["chat.reply.noAnswer"][lang]),
+        `the answer is rendered inside the refusal block in ${lang}, not as the assistant's own ` +
+          `answer: ${blockText}`,
+      ).toBe(false);
+
+      // (3) NOTHING RAW. A key that did not resolve reaches the merchant as itself.
+      for (const raw of ["chat.reply.", "chat.refused.", "chat.refusedHeading."]) {
+        expect(
+          transcript.includes(raw),
+          `the transcript shows the raw KEY ${raw} in ${lang}:\n${transcript}`,
+        ).toBe(false);
+      }
+    }
   });
 });

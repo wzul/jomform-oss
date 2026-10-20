@@ -40,12 +40,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { DICT, LANGS } from "../components/i18nDict.ts";
-import { refusalText, type RefusedStep } from "./chatRefusal.ts";
+import { refusalHeading, refusalText, type RefusedStep } from "./chatRefusal.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
 const page = read("../app/chat/page.tsx");
 const goChat = read("../../../api/internal/chat/chat.go");
+const chatRefusal = read("./chatRefusal.ts");
 
 /**
  * `t()` as the page gets it, over the real dictionary, so a missing key shows up
@@ -71,9 +72,17 @@ test("the guard is looking at the real files (it cannot pass vacuously)", () => 
     "api/internal/chat/chat.go is not the file this guard means to judge",
   );
   assert.ok(
-    page.includes("refusalText(") && page.includes('t("chat.refused")'),
+    page.includes("refusalText(") && page.includes("refusalHeading("),
     "app/chat/page.tsx is not the chat page, or it no longer renders a refusal through " +
       "lib/chatRefusal — this guard would then judge nothing",
+  );
+  // The generic heading still exists, in the module the page now asks (t_7f1694cb):
+  // a heading hard-coded in the page is how the shipped defect read "not allowed"
+  // over a proposal whose arguments were refused.
+  assert.ok(
+    chatRefusal.includes('t("chat.refused"') && chatRefusal.includes("chat.refusedHeading.proposal"),
+    "lib/chatRefusal.ts no longer decides the block's heading — the page would be back to one " +
+      "constant for every refusal (t_7f1694cb)",
   );
   const keys = refusalKeysInGo(goChat);
   assert.ok(
@@ -191,4 +200,80 @@ test("a sentence's parameters are interpolated, and a keyless step renders as NO
   // assistant tried.
   assert.equal(refusalText({ tool: "x", status: "refused" }, tIn("en")), "");
   assert.equal(refusalText({ tool: "x", status: "refused", detail_key: "" }, tIn("en")), "");
+});
+
+// ── THE BLOCK'S HEADING (t_7f1694cb) ──────────────────────────────────────────
+//
+// The defect's second half: every refusal block was headed "That action is not
+// allowed here.", including a block whose only content was a proposal whose
+// ARGUMENTS were refused — "create a form" IS proposable, so the heading told the
+// merchant the feature was off-limits. The decision now lives in refusalHeading()
+// and is exercised below.
+const proposalOnly: RefusedStep[] = [
+  { tool: "propose_write", status: "refused", detail_key: "chat.refused.proposal" },
+  { tool: "propose_write", status: "refused", detail_key: "chat.refused.proposal" },
+];
+
+test("a block of nothing but proposal refusals is NOT headed 'not allowed'", () => {
+  for (const lang of LANGS) {
+    const heading = refusalHeading(proposalOnly, tIn(lang));
+    assert.equal(
+      heading,
+      DICT["chat.refusedHeading.proposal"][lang],
+      `the all-proposal block's heading did not come from the dictionary in ${lang}`,
+    );
+    assert.notEqual(
+      heading,
+      tIn(lang)("chat.refused"),
+      `the all-proposal block is still headed "not allowed" in ${lang} — creating a form IS ` +
+        `proposable; only its arguments were refused (t_7f1694cb)`,
+    );
+    assert.ok(
+      !heading.includes("chat.refused"),
+      `the heading rendered as a raw key in ${lang}: ${heading}`,
+    );
+  }
+  // The pre-fix behaviour, spelled out: one constant for every block. The rule above
+  // must disagree with it, or this test would pass on the defect.
+  const preFix = (lang: string) => tIn(lang)("chat.refused");
+  assert.notEqual(refusalHeading(proposalOnly, tIn("en")), preFix("en"));
+  // The English sentence must not carry the claim the defect made.
+  assert.ok(
+    !DICT["chat.refusedHeading.proposal"].en.toLowerCase().includes("not allowed"),
+    "the proposal heading still claims the action is not allowed",
+  );
+});
+
+test("the per-answer budget is the proposal lane too, and is headed the same way", () => {
+  const budget: RefusedStep[] = [
+    { tool: "propose_write", status: "refused", detail_key: "chat.refused.proposalLimit", detail_params: { max: "3" } },
+  ];
+  assert.equal(refusalHeading(budget, tIn("en")), DICT["chat.refusedHeading.proposal"].en);
+});
+
+test("a block that also holds a forbidden tool keeps the generic heading", () => {
+  // The mixed case is real (e2e/chat-refusal-language.spec.ts stubs exactly this
+  // pair): a forbidden write tool next to a proposal refusal. Something in that
+  // block IS not allowed, so understating it would be the same defect inverted.
+  const mixed: RefusedStep[] = [
+    { tool: "update_product", status: "refused", detail_key: "chat.refused.writeTool" },
+    { tool: "propose_write", status: "refused", detail_key: "chat.refused.proposalLimit" },
+  ];
+  for (const lang of LANGS) {
+    assert.equal(refusalHeading(mixed, tIn(lang)), DICT["chat.refused"][lang]);
+  }
+  // An unkeyed step is an unknown, not the proposal lane.
+  assert.equal(refusalHeading([{ tool: "propose_write", status: "refused" }], tIn("en")), DICT["chat.refused"].en);
+  // ...and a block with no steps cannot claim the proposal heading either.
+  assert.equal(refusalHeading([], tIn("en")), DICT["chat.refused"].en);
+});
+
+test("both headings exist in all five locales", () => {
+  for (const key of ["chat.refused", "chat.refusedHeading.proposal"] as const) {
+    const entry = DICT[key] as Record<string, string> | undefined;
+    assert.ok(entry, `${key} is missing from the dictionary`);
+    for (const lang of LANGS) {
+      assert.ok(String(entry![lang]).trim().length > 0, `${key}.${lang} is empty`);
+    }
+  }
 });
