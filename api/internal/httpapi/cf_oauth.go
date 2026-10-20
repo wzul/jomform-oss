@@ -23,9 +23,8 @@ import (
 )
 
 const (
-	cfAuthURL  = "https://dash.cloudflare.com/oauth2/auth"
-	cfTokenURL = "https://dash.cloudflare.com/oauth2/token"
-	cfAPIBase  = "https://api.cloudflare.com/client/v4"
+	cfAuthURL = "https://dash.cloudflare.com/oauth2/auth"
+	cfAPIBase = "https://api.cloudflare.com/client/v4"
 	// cfOAuthScope is the Cloudflare OAuth scope set requested on the consent
 	// screen. Without a scope param Cloudflare shows "0 total permissions" and
 	// disables the Authorize button (issue #288). For auto-CNAME (#22) we need:
@@ -39,9 +38,33 @@ const (
 	cfOAuthScope = "zone.read dns.write"
 )
 
+// cfTokenURL is a var rather than a const only so a test can point the token
+// exchange at a local stub and assert the exact form that goes on the wire —
+// the client-authentication rule lives in cfSetClientAuth and is decided by
+// what is posted. Nothing at runtime reassigns it.
+var cfTokenURL = "https://dash.cloudflare.com/oauth2/token"
+
 func cfClientID() string     { return os.Getenv("JF_CF_OAUTH_CLIENT_ID") }
 func cfClientSecret() string { return os.Getenv("JF_CF_OAUTH_CLIENT_SECRET") }
 
+// cfOAuthConfigured reports whether this deployment offers the Cloudflare
+// auto-setup flow. The client ID alone is the switch, deliberately — the secret
+// is NOT part of the test, and adding it would not make the flow safer:
+//
+//   - JomForm's Cloudflare OAuth client is registered as a public PKCE client
+//     (token_endpoint_auth_method "none"), so the token exchange authenticates
+//     with the code_verifier and a client secret is refused, not required.
+//   - Measured against Cloudflare's token endpoint: with the production client
+//     ID and no secret a code exchange answers invalid_grant (client
+//     authentication passed, the code was fake), while the SAME request
+//     carrying any client_secret answers invalid_client. So a secret set on a
+//     public-client deployment is what breaks the flow.
+//
+// A deployment that registers a confidential client instead
+// (token_endpoint_auth_method client_secret_post) sets
+// JF_CF_OAUTH_CLIENT_SECRET, and cfSetClientAuth sends it. The status
+// endpoints, the flow handlers and deploy/vps/.env.prod.example all state this
+// one rule; cf_scope_test.go and cf_oauth_test.go pin it.
 func cfOAuthConfigured() bool { return cfClientID() != "" }
 
 // publicBase is the externally-reachable origin, used as the OAuth
@@ -360,13 +383,22 @@ func cfUnseal(key []byte, sealed string) (*cfCred, error) {
 	return &cred, nil
 }
 
+// cfSetClientAuth adds client authentication to a token request. The secret is
+// sent ONLY when the deployment sets one (a confidential client registration);
+// for the public PKCE client JomForm registers, presenting a secret — even the
+// real one — is answered with invalid_client, so the absence of a secret is a
+// complete configuration, not a missing half. See cfOAuthConfigured.
+func cfSetClientAuth(form url.Values) {
+	form.Set("client_id", cfClientID())
+	if s := cfClientSecret(); s != "" {
+		form.Set("client_secret", s)
+	}
+}
+
 // cfExchangeCode swaps the OAuth code for the access+refresh token pair.
 func cfExchangeCode(ctx context.Context, code, verifier string) (*cfTokenPair, error) {
 	form := url.Values{}
-	form.Set("client_id", cfClientID())
-	if cfClientSecret() != "" {
-		form.Set("client_secret", cfClientSecret())
-	}
+	cfSetClientAuth(form)
 	form.Set("code", code)
 	form.Set("grant_type", "authorization_code")
 	form.Set("redirect_uri", cfRedirectURI())
@@ -377,10 +409,7 @@ func cfExchangeCode(ctx context.Context, code, verifier string) (*cfTokenPair, e
 // cfRefresh swaps a refresh token for a fresh pair.
 func cfRefresh(ctx context.Context, refreshToken string) (*cfTokenPair, error) {
 	form := url.Values{}
-	form.Set("client_id", cfClientID())
-	if cfClientSecret() != "" {
-		form.Set("client_secret", cfClientSecret())
-	}
+	cfSetClientAuth(form)
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", refreshToken)
 	return cfTokenRequest(ctx, form)

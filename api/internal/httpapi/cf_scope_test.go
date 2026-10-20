@@ -12,7 +12,10 @@ import (
 )
 
 func TestCFStartAuthorizeURLIncludesScope(t *testing.T) {
-	// cfOAuthConfigured() requires a client id set.
+	// cfOAuthConfigured() requires a client id set — and deliberately NOT the
+	// secret: JomForm's Cloudflare client is a public PKCE client, so the
+	// exchange must not present one. See cfOAuthConfigured's comment and
+	// TestCFOAuthConfiguredIsClientIDOnly.
 	os.Setenv("JF_CF_OAUTH_CLIENT_ID", "test-client-id")
 	t.Cleanup(func() { os.Unsetenv("JF_CF_OAUTH_CLIENT_ID") })
 
