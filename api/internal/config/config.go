@@ -58,14 +58,18 @@ type Config struct {
 	//     before the bounce-ratio breaker can trip (default 20).
 	//   BreakerRatio: bounce ratio above which verification mail is paused
 	//     (default 0.05 = 5%).
-	//   SNSConfigSet: the SES configuration-set name that emits Bounce and
-	//     Complaint notifications to the SNS topic → our notifications endpoint
-	//     (documentation only; the endpoint does not need it to verify).
 	//   SNSNotifEnabled: false (default) disables the /v1/internal/ses/notifications
 	//     endpoint entirely; set to "true" in the deployment that receives SNS.
+	//
+	// There is deliberately NO configuration-set field here. The configuration set
+	// is AWS-side wiring (attach it to the sending identity, or set it as the
+	// identity's default), and no SESv2 SendEmail call in this repo names one — so
+	// an env key for it would be a value the process stores and nothing consumes.
+	// That is exactly the defect the `host` gate now refuses (see
+	// deploy/host/bootstrap-host_test.sh); it used to be stored as SNSConfigSet
+	// and read by nothing.
 	BreakerMinSends int64
 	BreakerRatio    float64
-	SNSConfigSet    string
 	SNSNotifEnabled bool
 
 	// Event-tracking retention (issue #92). The periodic sweep deletes events
@@ -167,7 +171,6 @@ func Load() (*Config, error) {
 		// defaults rather than crash the server.
 		BreakerMinSends: parsePositiveInt64(os.Getenv("SES_BREAKER_MIN_SENDS"), 20),
 		BreakerRatio:    parseRatio(os.Getenv("SES_BREAKER_RATIO"), 0.05),
-		SNSConfigSet:    os.Getenv("SES_CONFIG_SET"),
 		SNSNotifEnabled: strings.EqualFold(os.Getenv("SES_SNS_NOTIF_ENABLED"), "true"),
 
 		// Event-tracking retention (issue #92). Defaults to 90 days; the

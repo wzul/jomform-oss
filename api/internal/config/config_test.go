@@ -93,7 +93,6 @@ func TestLoadSESReputationEnvOverrides(t *testing.T) {
 	t.Setenv("SES_BREAKER_MIN_SENDS", "10")
 	t.Setenv("SES_BREAKER_RATIO", "0.03")
 	t.Setenv("SES_SNS_NOTIF_ENABLED", "true")
-	t.Setenv("SES_CONFIG_SET", "jomform-prod")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -106,9 +105,6 @@ func TestLoadSESReputationEnvOverrides(t *testing.T) {
 	}
 	if !cfg.SNSNotifEnabled {
 		t.Error("SNSNotifEnabled should be true when env set")
-	}
-	if cfg.SNSConfigSet != "jomform-prod" {
-		t.Errorf("SNSConfigSet = %q, want jomform-prod", cfg.SNSConfigSet)
 	}
 }
 

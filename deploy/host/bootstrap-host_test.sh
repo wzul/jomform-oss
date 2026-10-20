@@ -32,17 +32,37 @@
 #   6. THE RUNBOOK NAMES A PATH THAT IS NOT THERE. That is the defect above, in
 #      general form, and it is cheap to check: every `deploy/...` path named in
 #      `deploy/HOST-SETUP.md` must resolve in the repo.
+#   7. IT AGREES WITH THE TEMPLATE AND STILL CONTRADICTS THE CODE. Cases 5 and 6
+#      compare the compose with the template in BOTH directions, so the two can
+#      stay perfectly in step and both be wrong about the API: SESSION_SECRET was
+#      required at startup, read into the config struct, and its value reached
+#      nothing — and every gate stayed green for months (card t_6f2b4462 removed
+#      it; card t_0e8eb983 added the guard). So the contract is derived in the
+#      OTHER direction too, from the API SOURCE: every env key the `api` service
+#      sets must be READ by non-test Go code, and a key that is read only to
+#      prove it is non-empty (the SESSION_SECRET shape) is refused as well. Each
+#      check is bite-proofed against a fixture, never against the live tree. Code
+#      is what counts: comments are stripped before the read set is derived, so a
+#      read that was deleted and left behind in a comment does not pass either.
 #
 # Hermetic: a stubbed `docker`/`id` on PATH, and `--root` pointed at a temp dir.
 # The only things read outside the temp dir are the repo's own files under
-# deploy/, which is what cases 5 and 6 are about.
+# deploy/ (cases 5 and 6) and under api/ (the env-contract cases at 7).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$HERE/bootstrap-host.sh"
 COMPOSE="$HERE/../vps/compose.prod.yml"
+# The API SOURCE, for the env contract in the other direction (case 7).
+# Spelled `$HERE/../../api` rather than resolved through a subshell on purpose:
+# scripts/preflight.sh DERIVES a gate's inputs from the path literals in its own
+# sources, so this literal is what makes the `host` gate's dependency table claim
+# api/* — a guard that reads the API source has to re-run when the API source
+# changes, or it is a guard nobody runs on the change it guards.
+API_SRC="$HERE/../../api"
 [ -x "$SCRIPT" ] || { echo "bootstrap-host_test: $SCRIPT is not executable" >&2; exit 1; }
 [ -s "$COMPOSE" ] || { echo "bootstrap-host_test: missing $COMPOSE" >&2; exit 1; }
+[ -d "$API_SRC" ] || { echo "bootstrap-host_test: missing $API_SRC (the env-contract cases derive the read set from the API source)" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
@@ -102,6 +122,109 @@ run_exclusive() { # run_exclusive <dir> <args...> — PATH is ONLY <dir>
   set -e
 }
 
+# ── deriving the env contract in the OTHER direction: compose → API source ────
+# api_env_keys <compose> — the env keys the `api` SERVICE sets, one per line.
+# Scoped to that ONE service block on purpose: postgres, valkey, minio and
+# minio-init legitimately carry env the Go process never sees
+# (POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD), so a whole-file grep would demand the
+# API read keys it cannot.
+api_env_keys() {
+  awk '
+    /^  [A-Za-z0-9_.-]+:[[:space:]]*$/ { svc = $1; sub(/:$/, "", svc); in_svc = (svc == "api"); in_env = 0; next }
+    in_svc && /^    environment:[[:space:]]*$/ { in_env = 1; next }
+    in_svc && in_env && /^    [A-Za-z]/ { in_env = 0 }
+    in_svc && in_env && /^      [A-Z][A-Z0-9_]*:/ { k = $1; sub(/:$/, "", k); print k }
+  ' "$1" | sort -u
+}
+
+# strip_comments <file> — the file's code with comments removed, string literals
+# kept. A commented-out `os.Getenv("KEY")` is NOT a read: the key was taken out of
+# the binary and left in the source as a comment, which is the same false green as
+# never reading it (measured: commenting out the JF_CF_OAUTH_CLIENT_SECRET read
+# kept the text-only version of this case green). Tracks interpreted strings (with
+# escapes), line comments and block comments — enough for Go, and it only has to
+# remove comments, never to parse them exactly.
+strip_comments() {
+  awk '
+    { out = ""; i = 1; n = length($0)
+      while (i <= n) {
+        c = substr($0, i, 1)
+        if (in_block) {
+          if (c == "*" && substr($0, i+1, 1) == "/") { in_block = 0; i += 2 } else { i++ }
+          continue
+        }
+        if (in_str) {
+          out = out c
+          if (c == "\\") { out = out substr($0, i+1, 1); i += 2; continue }
+          if (c == "\"") { in_str = 0 }
+          i++; continue
+        }
+        if (c == "\"") { in_str = 1; out = out c; i++; continue }
+        if (c == "/" && substr($0, i+1, 1) == "*") { in_block = 1; i += 2; continue }
+        if (c == "/" && substr($0, i+1, 1) == "/") { break }
+        out = out c; i++
+      }
+      print out
+    }' "$1"
+}
+
+# api_read_keys <api-src> — the env names the API source READS, one per line.
+# Non-test files only: a key a TEST sets is not the binary reading it. Comments are
+# stripped first, so a read that only survives in a comment does not count.
+#   (a) the literal inside an env-read call — os.Getenv("X"),
+#       os.LookupEnv("X"), getEnv("X", fallback). getEnv is config.go's
+#       default-valued helper and it is how APP_ENV and PORT are read, so they are
+#       FOUND here rather than allowlisted.
+#   (b) the literal bound to an identifier or struct field whose NAME mentions env
+#       — cdnpurge's EnvToken/EnvZoneID/EnvHosts, social.go's IDEnv/SecretEnv.
+#       Those sites pass a VARIABLE to os.Getenv, so (a) cannot see them; reading
+#       them as "unread" would be a false red, and allowlisting them is the rot
+#       this case exists to avoid.
+api_read_keys() {
+  local dir="$1" f
+  {
+    find "$dir" -name '*.go' ! -name '*_test.go' -print0 2>/dev/null \
+      | while IFS= read -r -d '' f; do strip_comments "$f"; done
+  } | { grep -oE '(os\.(Getenv|LookupEnv)|getEnv)\([[:space:]]*"[A-Z][A-Z0-9_]*"|[A-Za-z0-9_]*[Ee][Nn][Vv][A-Za-z0-9_]*[[:space:]]*[:=][[:space:]]*"[A-Z][A-Z0-9_]*"' || true; } \
+    | grep -oE '"[A-Z][A-Z0-9_]*"' | tr -d '"' | sort -u || true
+}
+
+# config_env_fields <api-src> — "<field> <KEY>" for every field in
+# api/internal/config/config.go assigned from an env read. All three shapes in
+# that file (`Field: os.Getenv("K")`, `Field: getEnv("K", …)`,
+# `Field: parsePositiveInt(os.Getenv("K"), …)`) put the key in a quoted literal on
+# the assignment line, so one pass over those lines is enough.
+config_env_fields() {
+  local cfg="$1/internal/config/config.go"
+  if [ ! -s "$cfg" ]; then
+    echo "bootstrap-host_test: missing $cfg — the env-contract case cannot derive the field map" >&2
+    return 1
+  fi
+  grep -nE '^[[:space:]]+[A-Z][A-Za-z0-9]*:[[:space:]]' "$cfg" \
+    | grep -E 'os\.Getenv\("[A-Z]|getEnv\("[A-Z]' \
+    | sed -E 's/^[0-9]+:[[:space:]]+([A-Z][A-Za-z0-9]*):.*\("([A-Z][A-Z0-9_]*)".*/\1 \2/' \
+    | sort -u
+}
+
+# unconsumed_env_keys <api-src> — keys that are READ and then never CONSUMED.
+# Every reference to the field outside its own assignment is inspected: when all
+# of them are emptiness tests (`if cfg.X == ""`), the value exists only to prove
+# that it exists — the exact shape of SESSION_SECRET, which the "is the key named
+# in the source" half cannot catch BECAUSE THE KEY WAS READ. A field with no
+# reference at all is the same defect in its simpler form.
+unconsumed_env_keys() {
+  local dir="$1" field key refs consumers
+  config_env_fields "$dir" | while read -r field key; do
+    refs="$(grep -rnE --include='*.go' --exclude='*_test.go' "\.$field\b" "$dir" 2>/dev/null \
+      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)"
+    if [ -z "$refs" ]; then printf '%s\n' "$key"; continue; fi
+    # A reference that is NOT a presence/emptiness test is a CONSUMER.
+    consumers="$(printf '%s\n' "$refs" | grep -vE \
+      "\.$field[[:space:]]*(==|!=)[[:space:]]*\"\"|\"\"[[:space:]]*(==|!=)[[:space:]]*\.$field|len\(\s*\.$field\s*\)[[:space:]]*(==|!=)[[:space:]]*0|\.$field[[:space:]]*=[[:space:]]*\"\"" || true)"
+    if [ -z "$consumers" ]; then printf '%s\n' "$key"; fi
+  done
+}
+
 echo "case: DRY-RUN is the default, prints the plan, and changes NOTHING"
 mkdir -p "$WORK/opt"
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/good.env"
@@ -152,6 +275,137 @@ grep -q "PLANTED_KEY" "$WORK/compose.planted.yml" && ok "the planted compose car
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/good.env" --compose-src "$WORK/compose.planted.yml"
 [ "$RC" -ne 0 ] && ok "exit code (exit=$RC)" || bad "a compose key no env file can supply was NOT refused"
 echo "$OUT" | grep -q "PLANTED_KEY" && ok "names the planted key (the contract is derived, not written)" || bad "did not name the planted key"
+
+echo "case: every env key the compose passes to the api service is READ by the API source"
+# The cases above hold the compose and the template in step with each OTHER — and
+# that is exactly why SESSION_SECRET rode through them green. They can agree with
+# each other and both be wrong about the code. This asks the code.
+API_KEYS="$(api_env_keys "$COMPOSE")"
+READ_KEYS="$(api_read_keys "$API_SRC")"
+API_KEYS_N="$(printf '%s\n' "$API_KEYS" | grep -c '[^[:space:]]' || true)"
+READ_KEYS_N="$(printf '%s\n' "$READ_KEYS" | grep -c '[^[:space:]]' || true)"
+if [ "${API_KEYS_N:-0}" -lt 10 ] || [ "${READ_KEYS_N:-0}" -lt 10 ]; then
+  bad "the derivation produced almost nothing (api-service keys=$API_KEYS_N, read names=$READ_KEYS_N) — a deriver that has gone blind cannot be a green guard"
+else
+  ok "derived $API_KEYS_N api-service key(s) from the compose and $READ_KEYS_N name(s) read by api/ source"
+fi
+LEAKED="$(printf '%s\n' "$API_KEYS" | grep -xE 'POSTGRES_PASSWORD|MINIO_ROOT_PASSWORD|JOMFORM_API_URL' || true)"
+[ -z "$LEAKED" ] && ok "the key set is SCOPED to the api block (no other service's env is demanded of the API)" \
+  || bad "the api key set includes another service's key(s): $(printf '%s' "$LEAKED" | tr '\n' ' ')"
+# The one escape hatch, and it is deliberately empty: a key belongs here only when
+# the CONTAINER RUNTIME reads it (a timezone, a healthcheck's variable) and the Go
+# process legitimately never will. A key the API simply forgot to read is the
+# defect this case exists for, not an allowlist entry. Every entry is checked
+# below, so an exemption for a key the compose has stopped passing also reds.
+API_ENV_RUNTIME_ONLY=""
+STALE_ALLOW=""
+for k in $API_ENV_RUNTIME_ONLY; do
+  printf '%s\n' "$API_KEYS" | grep -qx "$k" || STALE_ALLOW="${STALE_ALLOW} $k"
+done
+[ -z "$STALE_ALLOW" ] && ok "the runtime-only allowlist is ${API_ENV_RUNTIME_ONLY:-EMPTY} and names no key the compose has stopped passing" \
+  || bad "the runtime-only allowlist names key(s) the compose no longer passes (a stale exemption is an unchecked skip):${STALE_ALLOW}"
+UNREAD="$(comm -23 <(printf '%s\n' "$API_KEYS") <(printf '%s\n' "$READ_KEYS" $API_ENV_RUNTIME_ONLY))"
+[ -z "$UNREAD" ] && ok "no api key is passed to the API and read by no non-test source file" \
+  || bad "the compose passes key(s) no API code reads: $(printf '%s' "$UNREAD" | tr '\n' ' ')"
+
+echo "case: that READ check BITES — an unread key planted in a COPY of the compose is NAMED"
+sed 's/^      APP_ENV: prod$/      APP_ENV: prod\n      PLANTED_UNREAD_KEY: ${PLANTED_UNREAD_KEY}/' "$COMPOSE" > "$WORK/compose.unread.yml"
+grep -q 'PLANTED_UNREAD_KEY' "$WORK/compose.unread.yml" \
+  && ok "the planted compose carries the new key" \
+  || bad "the mutation did not apply — the assertion below would pass vacuously"
+PLANTED_UNREAD="$(comm -23 <(api_env_keys "$WORK/compose.unread.yml") <(printf '%s\n' "$READ_KEYS"))"
+printf '%s\n' "$PLANTED_UNREAD" | grep -qx 'PLANTED_UNREAD_KEY' \
+  && ok "the check names the planted key ($(printf '%s' "$PLANTED_UNREAD" | tr '\n' ' '))" \
+  || bad "an unread key planted in the api service's environment was NOT named — the check cannot see the class it exists for"
+
+echo "case: a read that only survives in a COMMENT is not a read"
+# Measured on the live tree while building this case: commenting out the
+# `JF_CF_OAUTH_CLIENT_SECRET` read in api/internal/httpapi/cf_oauth.go left every
+# assertion green, because the literal was still in the comment. Text is not code.
+mkdir -p "$WORK/commentsrc/internal/x"
+cat > "$WORK/commentsrc/internal/x/x.go" <<'GOFIX'
+package x
+
+import "os"
+
+// token := os.Getenv("LINE_COMMENTED_KEY")
+/*
+	old := os.Getenv("BLOCK_COMMENTED_KEY")
+*/
+var Token = os.Getenv("LIVE_READ_KEY")
+GOFIX
+COMMENT_KEYS="$(api_read_keys "$WORK/commentsrc")"
+printf '%s\n' "$COMMENT_KEYS" | grep -qx 'LIVE_READ_KEY' \
+  && ok "still sees a live read" \
+  || bad "lost the live read in the same fixture — the exclusion below would prove nothing"
+for ghost in LINE_COMMENTED_KEY BLOCK_COMMENTED_KEY; do
+  printf '%s\n' "$COMMENT_KEYS" | grep -qx "$ghost" \
+    && bad "counted $ghost as read, though it appears only in a comment — a commented-out read is not a read" \
+    || ok "does not count $ghost (it appears only in a comment)"
+done
+
+echo "case: a key that is READ and then never CONSUMED is refused (the SESSION_SECRET shape)"
+# The half above cannot see this shape: SESSION_SECRET was read (os.Getenv) into
+# config, and its value reached nothing. A grep for the key says "read" and the
+# gate stays green, which is precisely how it rode through for months.
+# Scoped to api/internal/config/ on purpose: that is the one place this repo turns
+# env into typed config, so it is where a value can be stored and then orphaned.
+# A key read anywhere else is consumed at the point it is read.
+FIELD_MAP_N="$(config_env_fields "$API_SRC" | grep -c '[^[:space:]]' || true)"
+[ "${FIELD_MAP_N:-0}" -ge 20 ] \
+  && ok "derived $FIELD_MAP_N config field(s) assigned from an env read" \
+  || bad "derived only ${FIELD_MAP_N:-0} field(s) from api/internal/config/config.go — the map is broken, so 'nothing unconsumed' would prove nothing"
+UNCONSUMED="$(unconsumed_env_keys "$API_SRC")"
+[ -z "$UNCONSUMED" ] && ok "every key read into the config is consumed by code, not just checked for emptiness" \
+  || bad "these key(s) are read and nothing consumes them: $(printf '%s' "$UNCONSUMED" | tr '\n' ' ')"
+# The bite: the historical shape in a FIXTURE (the live tree is never mutated), with
+# a consumed field beside it as the control so the red stays attributable.
+mkdir -p "$WORK/bitesrc/internal/config" "$WORK/bitesrc/internal/dbstore"
+cat > "$WORK/bitesrc/internal/config/config.go" <<'GOFIX'
+package config
+
+import (
+	"fmt"
+	"os"
+)
+
+type Config struct {
+	SessionSecret string
+	DatabaseURL   string
+}
+
+func Load() *Config {
+	return &Config{
+		SessionSecret: os.Getenv("SESSION_SECRET"),
+		DatabaseURL:   os.Getenv("DATABASE_URL"),
+	}
+}
+
+// The shape card t_6f2b4462 removed: the value is read at startup and reaches
+// nothing — the only reference to it proves it is not empty.
+func (c *Config) Req() error {
+	if c.SessionSecret == "" {
+		return fmt.Errorf("SESSION_SECRET is required")
+	}
+	return nil
+}
+GOFIX
+cat > "$WORK/bitesrc/internal/dbstore/store.go" <<'GOFIX'
+package dbstore
+
+import "example/internal/config"
+
+// A real consumer of a config value: the control arm, and the reason the fixture
+// is not "flag every field".
+func Open(c *config.Config) { _ = c.DatabaseURL }
+GOFIX
+BITESRC="$(unconsumed_env_keys "$WORK/bitesrc")"
+printf '%s\n' "$BITESRC" | grep -qx 'SESSION_SECRET' \
+  && ok "names SESSION_SECRET (read at startup, its value consumed by nothing)" \
+  || bad "did NOT name SESSION_SECRET in the historical shape — the check cannot see the defect it was filed for"
+printf '%s\n' "$BITESRC" | grep -qx 'DATABASE_URL' \
+  && bad "also flagged DATABASE_URL, which dbstore consumes — the check is not reading consumption, so its red would not be attributable" \
+  || ok "does not flag DATABASE_URL (a consumed field) — the red above is about consumption, not about being in a struct"
 
 echo "case: the repo SHIPS the env template the runbook tells an operator to copy"
 EXAMPLE="$HERE/../vps/.env.prod.example"

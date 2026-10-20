@@ -166,12 +166,14 @@ created**. Results are cached in Valkey (`jf:mx:{sha256(domain)}`): **positive
 | `SES_REGION` | `ap-southeast-1` | AWS region |
 | `SES_BREAKER_MIN_SENDS` | `20` | min verification sends in the trailing hour before the ratio can trip the breaker |
 | `SES_BREAKER_RATIO` | `0.05` | bounce ratio above which verification mail is paused |
-| `SES_CONFIG_SET` | — | SES configuration-set name that emits Bounce/Complaint to SNS (documentation only) |
 | `SES_SNS_NOTIF_ENABLED` | `false` | set `true` on the deployment that receives SNS so the `/v1/internal/ses/notifications` endpoint is registered |
 
 AWS side (out of repo): create a configuration set, an SNS topic, subscribe the
 API's HTTPS endpoint with subscription confirmation accepted, and connect the
-configuration set's `Bounce` and `Complaint` event types to the topic. SES will
+configuration set's `Bounce` and `Complaint` event types to the topic. The
+configuration-set NAME is not an API variable and there is no env key for it —
+attach the set to the sending identity (or make it that identity's default), and
+SES stamps every send with it. SES will
 sign every SNS message; the API verifies the signature (RSASSA-PKCS1-v1_5
 SHA-1, certificate fetched from the AWS-hosted `SigningCertURL`) before
 recording anything — **no unauthenticated write**.
