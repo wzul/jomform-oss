@@ -231,6 +231,18 @@ export default function Settings() {
   // Cloudflare OAuth link state (issue #22): Login vs Disconnect+✓ per #9.
   const [cfLinked, setCfLinked] = useState(false);
   const [cfConfigured, setCfConfigured] = useState(false);
+  // Whether `/api/cf/status` has ANSWERED — and the reason the two states above
+  // are not read until it has. Both start at `false`, which is the NEGATIVE
+  // answer, so rendering them before the fetch resolves paints a claim the
+  // deployment may not deserve. Measured on prod v1.21.252 (card t_3c0cc8ce):
+  // the Domains panel rendered "Cloudflare auto-setup is not configured on this
+  // deployment — add the CNAME record manually." at t=661ms and swapped to
+  // "Cloudflare connected ✓" at t=1019ms on a deployment where auto-setup IS
+  // configured, while the same panel simultaneously offered "Log in with
+  // Cloudflare" to an account already linked. ~358ms of a false instruction to
+  // do the DNS work by hand. Set on the failure path too, or a request that
+  // never answers would leave the panel permanently answerless.
+  const [cfStatusLoaded, setCfStatusLoaded] = useState(false);
   // Cloudflare manual connect (issue #82): API token / global key form.
   const [cfManualOpen, setCfManualOpen] = useState(false);
   const [cfKind, setCfKind] = useState<"apitoken" | "globalkey">("apitoken");
@@ -663,7 +675,13 @@ export default function Settings() {
           setCfConfigured(d.configured !== false);
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      // BOTH paths, deliberately: a rejected fetch or a non-2xx answer is not an
+      // answer either, and a flag set only where the JSON parsed would leave the
+      // panel with no `cfNotConfigured` note and no explanation — a section that
+      // never settles. See the `cfStatusLoaded` declaration for the measured
+      // defect this flag exists to prevent.
+      .finally(() => setCfStatusLoaded(true));
   }, []);
 
   useEffect(() => {
@@ -1700,7 +1718,7 @@ export default function Settings() {
                     answers with a redirect to Cloudflare's consent screen, which
                     a `next/link` client-side transition cannot follow. `<a>` is
                     correct; the rule is a false positive on the API routes. */}
-                {!cfLinked && (
+                {cfStatusLoaded && !cfLinked && (
                   /* eslint-disable-next-line @next/next/no-html-link-for-pages */
                   <a href="/api/cf/start" className="jf-btn-primary inline-block">
                     {t("set.cfLogin")}
@@ -1717,7 +1735,7 @@ export default function Settings() {
                     {t("set.cfDisconnect")}
                   </button>
                 )}
-                {!cfLinked && (
+                {cfStatusLoaded && !cfLinked && (
                   <button
                     onClick={() => { setCfManualOpen(!cfManualOpen); setCfManualErr(""); }}
                     className="jf-btn-ghost text-slate-600"
@@ -1809,7 +1827,10 @@ export default function Settings() {
                   </button>
                 </div>
               )}
-              {!cfConfigured && (
+              {/* The NEGATIVE answer, so only once there IS an answer: this is
+                  the note that painted for ~358ms on a configured deployment
+                  before `/api/cf/status` resolved (card t_3c0cc8ce). */}
+              {cfStatusLoaded && !cfConfigured && (
                 <p className="mt-2 text-xs text-[var(--jf-muted)]">{t("set.cfNotConfigured")}</p>
               )}
             </section>
