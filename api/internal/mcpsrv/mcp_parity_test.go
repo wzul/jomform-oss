@@ -107,10 +107,10 @@ var mcpParityStaleChecklistEntries = map[string]string{
 	"set_einvoice_settings": "renamed — registered tool is set_einvoice",
 	// System settings: the registered writer is set_system_setting (singular).
 	"set_system_settings": "renamed — registered tool is set_system_setting",
-	// Cloudflare: the registered tools are connect_cloudflare_api_token /
-	// connect_cloudflare_global_key.
-	"set_cloudflare_api_token":  "renamed — registered tool is connect_cloudflare_api_token",
-	"set_cloudflare_global_key": "renamed — registered tool is connect_cloudflare_global_key",
+	// Cloudflare: the checklist now names the registered tools
+	// (get_cloudflare_status / connect_cloudflare_api_token /
+	// connect_cloudflare_global_key / disconnect_cloudflare), so the old
+	// set_* names and the three baseline entries were removed.
 	// Domain TLS: the registered custom-cert tool is set_domain_custom_cert,
 	// and there is no get_domain_tls reader (get_domain_tls_email reads the
 	// ACME email only).
@@ -214,12 +214,9 @@ var mcpParityBaselineTools = []string{
 	"set_system_setting",
 	// Registered counterparts of renamed checklist entries (the checklist
 	// still names the old names — see mcpParityStaleChecklistEntries).
-	"connect_cloudflare_api_token",
-	"connect_cloudflare_global_key",
 	"set_domain_custom_cert",
 	"unlink_social_account",
-	// Cloudflare status + profile fields.
-	"get_cloudflare_status",
+	// Profile fields.
 	"update_profile_avatar",
 	"update_profile_phone",
 	"update_profile_timezone",

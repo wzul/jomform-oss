@@ -502,6 +502,12 @@ func main() {
 			// the dashboard's retry button are one implementation: both pick
 			// the message to re-send and both go out through the same channel.
 			RetryFeedbackNotify: rest.RetryFeedbackNotify,
+			// get_cloudflare_status publishes `configured`, the same word
+			// GET /v1/rest/cf/status publishes for "this deployment has the
+			// Cloudflare OAuth app". Wired to the REST rule itself so the two
+			// surfaces cannot answer differently; the tool used to hard-code
+			// false, which made every deployment look unconfigured over MCP.
+			CFOAuthConfigured: httpapi.CFOAuthConfigured,
 		}, chip.New(cfg.ChipAPIBaseURL), decryptKey, pay)
 		deps.MCP = mcpSrv
 

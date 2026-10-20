@@ -355,7 +355,7 @@ const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: 
   {
     group: "Cloudflare",
     tools: [
-      { name: "get_cloudflare_status", desc: "Baca status pautan Cloudflare akaun: linked, configured. Read-only." },
+      { name: "get_cloudflare_status", desc: "Baca status pautan Cloudflare akaun: linked (kredensial Cloudflare akaun ini boleh dibaca) dan configured — sama maksud dengan /rest/cf/status: DEPLOYMENT ini ada app OAuth Cloudflare, jadi aliran auto-CNAME boleh ditawarkan. Pautan OAuth hanya boleh diselesaikan dalam pelayar; dari MCP guna connect_cloudflare_api_token atau connect_cloudflare_global_key. Read-only." },
       { name: "connect_cloudflare_api_token", desc: "Pautkan Cloudflare via API token (disahkan serta-merta, disimpan terenkripsi)." },
       { name: "connect_cloudflare_global_key", desc: "Pautkan Cloudflare via global API key (disahkan serta-merta, disimpan terenkripsi)." },
       { name: "disconnect_cloudflare", desc: "Nyah-pautkan Cloudflare dari akaun." },

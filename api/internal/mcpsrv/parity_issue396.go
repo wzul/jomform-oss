@@ -1224,7 +1224,16 @@ func submissionCSVText(v any) string {
 // ─── Cloudflare (issue #396) ──────────────────────────────────────────────
 
 type cloudflareStatusOut struct {
-	Linked     bool `json:"linked"`
+	Linked bool `json:"linked"`
+	// Configured answers the DEPLOYMENT question — "this installation can
+	// offer the Cloudflare OAuth (auto-CNAME) flow" — which is exactly what
+	// GET /v1/rest/cf/status reports under the same name, from the same rule
+	// (deps.CFOAuthConfigured ← httpapi.CFOAuthConfigured ←
+	// JF_CF_OAUTH_CLIENT_ID). It is NOT "the OAuth link can be completed
+	// through MCP": that flow is browser-only, which is why there is no
+	// connect_cloudflare_oauth tool and why the tool description points at the
+	// two manual kinds. It used to be a hard-coded false, so every deployment
+	// answered false here while REST answered true — one word, two meanings.
 	Configured bool `json:"configured"`
 }
 
@@ -1239,7 +1248,11 @@ func (s *Server) getCloudflareStatus(ctx context.Context, _ *mcp.CallToolRequest
 			linked = true
 		}
 	}
-	return nil, cloudflareStatusOut{Linked: linked, Configured: cfOAuthConfiguredMCP()}, nil
+	configured := false
+	if s.deps.CFOAuthConfigured != nil {
+		configured = s.deps.CFOAuthConfigured()
+	}
+	return nil, cloudflareStatusOut{Linked: linked, Configured: configured}, nil
 }
 
 type connectCFAPITokenIn struct {
@@ -1434,8 +1447,6 @@ type cfCredMCP struct {
 	AccountEmail string        `json:"account_email,omitempty"`
 	AccountName  string        `json:"account_name,omitempty"`
 }
-
-func cfOAuthConfiguredMCP() bool { return false } // OAuth link is browser-only; manual kinds are MCP-connectable
 
 func cfUnsealMCP(key []byte, sealed string) (*cfCredMCP, error) {
 	plain, err := cryptoutil.Decrypt(key, sealed)

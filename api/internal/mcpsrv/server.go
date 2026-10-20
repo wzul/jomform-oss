@@ -117,6 +117,15 @@ type Deps struct {
 	// whom.
 	// Nil → the retry_feedback_notify tool errors.
 	RetryFeedbackNotify func(ctx context.Context, threadID string) (string, error)
+	// CFOAuthConfigured reports whether THIS DEPLOYMENT can offer the
+	// Cloudflare OAuth (auto-CNAME) flow — the same fact GET /v1/rest/cf/status
+	// publishes as `configured`, because JF_CF_OAUTH_CLIENT_ID is set
+	// (httpapi/cf_oauth.go: cfOAuthConfigured). The get_cloudflare_status tool
+	// publishes that same word, so it must be answered by that same rule:
+	// wired from httpapi.CFOAuthConfigured (an mcpsrv → httpapi import would be
+	// a cycle), never by reading the env a second time here.
+	// Nil (bare-mode tests, nothing wired) → configured:false.
+	CFOAuthConfigured func() bool
 }
 
 // Server wraps the MCP *Server with JomForm deps.

@@ -157,8 +157,12 @@ Parity checklist (dashboard → MCP):
 - 2FA → `get_2fa_status`, `enable_2fa`, `disable_2fa`
 - System settings → `get_system_settings`, `set_system_settings`
 - Sales export → `export_sales_csv`
-- Cloudflare → `set_cloudflare_api_token`, `set_cloudflare_global_key`,
-  `disconnect_cloudflare`
+- Cloudflare → `get_cloudflare_status`, `connect_cloudflare_api_token`,
+  `connect_cloudflare_global_key`, `disconnect_cloudflare`
+  (get_cloudflare_status reports linked + configured; configured is the
+  DEPLOYMENT fact — this install has the Cloudflare OAuth app — the same value
+  and meaning as GET /v1/rest/cf/status. The OAuth link itself is browser-only,
+  which is why the two connect kinds are the MCP path.)
 - Webhook signing key → `get_webhook_signing_key`
 - CHIP refund → `refund_sale`
 - Domain TLS config (#397) → `get_domain_tls`, `set_domain_tls_mode`,

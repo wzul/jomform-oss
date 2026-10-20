@@ -895,7 +895,7 @@ func (s *Server) registerTools() {
 	// ── Parity: Cloudflare (issue #396) ──────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_cloudflare_status",
-		Description: "Baca status pautan Cloudflare akaun: linked, configured. Read-only.",
+		Description: "Baca status pautan Cloudflare akaun: linked (kredensial Cloudflare akaun ini boleh dibaca) dan configured — sama maksud dengan /rest/cf/status: DEPLOYMENT ini ada app OAuth Cloudflare, jadi aliran auto-CNAME boleh ditawarkan. Pautan OAuth hanya boleh diselesaikan dalam pelayar; dari MCP guna connect_cloudflare_api_token atau connect_cloudflare_global_key. Read-only.",
 	}, s.getCloudflareStatus)
 	addTool(s, &mcp.Tool{
 		Name:        "connect_cloudflare_api_token",
