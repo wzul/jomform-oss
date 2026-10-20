@@ -7,8 +7,11 @@
 package httpapi
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/wzul/jomform/api/internal/cdnpurge"
@@ -48,6 +51,14 @@ type restMedia struct {
 // the merchant's uploaded media, newest first. Optional ?form=<id> and
 // ?source=merchant|customer filters. Returns {"items":[...],"page":N,
 // "limit":N,"total":N}.
+//
+// t_b3991178: `?url=<a media url the caller already stores>` instead asks for
+// that ONE row, by name (see listMediaByURL). A page that persisted only a url —
+// /form-settings keeps `logo_url` and nothing else — cannot name the row it
+// holds by paging this list, because the paging window (100, maxPageLimit) is
+// newest-first: a logo older than the newest 100 rows is simply not in the page,
+// and the caller is left guessing. Answering "which row is this url" is the
+// store's job, not the browser's.
 func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	// THE SCOPE IS RESOLVED FIRST, and that ordering is the fix (card t_e19368af).
 	//
@@ -83,6 +94,10 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 		respond(w, http.StatusOK, map[string]any{"items": []restMedia{}, "page": 1, "limit": 20, "total": 0})
 		return
 	}
+	if want := strings.TrimSpace(r.URL.Query().Get("url")); want != "" {
+		h.listMediaByURL(w, r, actx, accountID, want)
+		return
+	}
 	page, limit := parsePageLimit(r)
 	formID := r.URL.Query().Get("form")
 	source := r.URL.Query().Get("source")
@@ -98,53 +113,146 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 	}
 	out := make([]restMedia, 0, len(items))
 	for _, m := range items {
-		rm := restMedia{
-			ID: m.ID, FormID: m.FormID, Key: m.Key,
-			URL:  h.merchantMediaURL(r.Context(), actx.Account, m.URL, m.Mime),
-			Mime: m.Mime, Size: m.Size, Source: m.Source,
-			ScanStatus: m.ScanStatus, ScanReason: m.ScanReason,
-			CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
-		}
-		// Issue #382: expose the generated thumbnail/medium/full variant URLs
-		// for raster images. They are derived from the object key (the
-		// variants share the full-size key's namespace), so no extra column is
-		// needed — BUT a derived key is not a written object, and this is where
-		// the library used to advertise variants that were never generated
-		// (t_466ff771): uploadAvatar writes no variants, so the account's own
-		// avatar row handed out three URLs that all 404'd. The store is asked
-		// what exists and only confirmed variants are advertised; the media grid
-		// then falls back to the base url, which is real. The store may be
-		// unconfigured in tests or when S3_* is unset — then sizes are omitted
-		// (storeUnavailable also catches a nil *ObjectStore behind the
-		// interface).
-		if !storeUnavailable(h.Store) && isSizedImage(m.Mime) {
-			rm.Sizes = objstore.VariantURLs(r.Context(), m.Key, h.Store, h.Store.PublicURL)
-		}
-		// Issue #383: expose the auto-generated PDF preview thumbnail URL,
-		// derived from the object key (no extra column needed). Same rule: the
-		// render is best-effort (Ghostscript missing, bounded timeout) and a
-		// preview that was never written must not be advertised — the grid
-		// prefers `preview` over the base url, so a dead one shows a broken tile.
-		if !storeUnavailable(h.Store) && m.Mime == "application/pdf" {
-			if pkey := buildPDFPreviewKey(m.Key); pkey != "" {
-				rm.Preview = objstore.PublicURLIfPresent(r.Context(), pkey, h.Store, h.Store.PublicURL)
-			}
-		}
-		out = append(out, rm)
+		out = append(out, h.mediaItem(r.Context(), actx.Account, m))
 	}
-	// Issue #384/#545: surface the per-workspace storage usage so the merchant
-	// knows their remaining quota. Best-effort — a usage read failure never fails
-	// the list. Read from the quota COUNTER (the enforced figure) so the number
-	// shown matches what is actually enforced; fall back to the media sum.
+	respond(w, http.StatusOK, map[string]any{"items": out, "page": page, "limit": limit, "total": total, "usage": h.mediaUsage(r.Context(), accountID)})
+}
+
+// listMediaByURL answers GET /v1/rest/media?url=<url>: the ONE row this account
+// owns for that url, or an empty list when the url is not a row of this library.
+//
+// The empty case is the important one and it is NOT an error: a pasted
+// `https://cdn.example/logo.png` is not a library row, so the caller keeps its
+// own fallback (it renders the url inline, which is correct for an external
+// image). A 404 here would turn "not a library row" into "the library is
+// broken", and a page cannot tell those apart from a status alone.
+//
+// The response keeps the list envelope (items 0-or-1, page 1, limit 1, total,
+// usage) so one response shape covers both reads: a caller that already parses
+// the library list does not learn a second schema.
+//
+// `accountID` is the scope-resolved account the LIST reads (scopeOr403 +
+// workspace), not actx.Account.ID: a ?workspace= scope that resolves to another
+// of the caller's accounts must look the row up in THAT account's library, the
+// same one the list would have paged. Handing this function the unscoped
+// fallback would answer "not a library row" for a row the caller legitimately
+// owns.
+func (h *RESTHandlers) listMediaByURL(w http.ResponseWriter, r *http.Request, actx *AccountCtx, accountID, want string) {
+	row, err := h.mediaRowByStoredURL(r.Context(), accountID, want)
+	if err != nil {
+		slog.Error("media_lookup_url", "err", err, "account", accountID)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	items := []restMedia{}
+	if row != nil {
+		items = append(items, h.mediaItem(r.Context(), actx.Account, row))
+	}
+	respond(w, http.StatusOK, map[string]any{
+		"items": items, "page": 1, "limit": 1, "total": len(items),
+		"usage": h.mediaUsage(r.Context(), accountID),
+	})
+}
+
+// mediaRowByStoredURL resolves the row a caller names by url, scoped to the
+// caller's account. Nil (no error) means "this url is not a row of this
+// library", which includes every url that is not on a media key.
+//
+// It resolves by the OBJECT KEY, not by comparing url strings, and that
+// distinction is the second half of t_b3991178. A row's advertised host is not
+// stable: <workspace>.jomform.com, a renamed workspace and a verified custom
+// domain all serve the same key, and a caller stores the url that was advertised
+// when it picked the asset. An equality match against the requested string would
+// therefore answer "unknown" for every logo picked before a host change, which is
+// the same broken-tile outcome by a slower route. The key is the identity;
+// mediaKeyFromStoredURL extracts it and MediaStore.ByKey does the account-scoped
+// read.
+func (h *RESTHandlers) mediaRowByStoredURL(ctx context.Context, accountID, raw string) (*dbstore.Media, error) {
+	key := mediaKeyFromStoredURL(raw)
+	if key == "" || accountID == "" {
+		return nil, nil
+	}
+	return h.Media.ByKey(ctx, accountID, key)
+}
+
+// mediaKeyFromStoredURL extracts the object key (`u/{account}/{file}`) from a
+// media url, whatever host it advertises. It accepts http and https because the
+// url is never fetched — this is a lookup key, not an outbound request — and the
+// account scope is enforced by ByKey, not by the host.
+//
+// Anything that is not a well-formed absolute url, or whose path does not end in
+// exactly the three key segments, returns "" (not a media row). Key validation
+// reuses objstore.MediaKeyFromPath, so the traversal rules the /media route
+// enforces apply here too rather than being re-implemented.
+func mediaKeyFromStoredURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return ""
+	}
+	segs := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
+	if len(segs) < 3 {
+		return ""
+	}
+	return objstore.MediaKeyFromPath(strings.Join(segs[len(segs)-3:], "/"))
+}
+
+// mediaItem builds the JSON row for one stored media item. Shared by the
+// paginated list and the single-row ?url= read so the two can never describe the
+// same row differently.
+func (h *RESTHandlers) mediaItem(ctx context.Context, acc *dbstore.Account, m *dbstore.Media) restMedia {
+	rm := restMedia{
+		ID: m.ID, FormID: m.FormID, Key: m.Key,
+		URL:  h.merchantMediaURL(ctx, acc, m.URL, m.Mime),
+		Mime: m.Mime, Size: m.Size, Source: m.Source,
+		ScanStatus: m.ScanStatus, ScanReason: m.ScanReason,
+		CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	// Issue #382: expose the generated thumbnail/medium/full variant URLs
+	// for raster images. They are derived from the object key (the
+	// variants share the full-size key's namespace), so no extra column is
+	// needed — BUT a derived key is not a written object, and this is where
+	// the library used to advertise variants that were never generated
+	// (t_466ff771): uploadAvatar writes no variants, so the account's own
+	// avatar row handed out three URLs that all 404'd. The store is asked
+	// what exists and only confirmed variants are advertised; the media grid
+	// then falls back to the base url, which is real. The store may be
+	// unconfigured in tests or when S3_* is unset — then sizes are omitted
+	// (storeUnavailable also catches a nil *ObjectStore behind the
+	// interface).
+	if !storeUnavailable(h.Store) && isSizedImage(m.Mime) {
+		rm.Sizes = objstore.VariantURLs(ctx, m.Key, h.Store, h.Store.PublicURL)
+	}
+	// Issue #383: expose the auto-generated PDF preview thumbnail URL,
+	// derived from the object key (no extra column needed). Same rule: the
+	// render is best-effort (Ghostscript missing, bounded timeout) and a
+	// preview that was never written must not be advertised — the grid
+	// prefers `preview` over the base url, so a dead one shows a broken tile.
+	if !storeUnavailable(h.Store) && m.Mime == "application/pdf" {
+		if pkey := buildPDFPreviewKey(m.Key); pkey != "" {
+			rm.Preview = objstore.PublicURLIfPresent(ctx, pkey, h.Store, h.Store.PublicURL)
+		}
+	}
+	return rm
+}
+
+// mediaUsage is the per-workspace storage figure every media read carries (issue
+// #384/#545), so a single-row read does not answer with a different envelope than
+// the list it is a filter of. Best-effort — a usage read failure never fails the
+// response. Read from the quota COUNTER (the enforced figure) so the number shown
+// matches what is actually enforced; fall back to the media sum.
+func (h *RESTHandlers) mediaUsage(ctx context.Context, accountID string) map[string]any {
 	usage := map[string]any{"limit": objstore.MaxWorkspaceBytes}
 	if h.Media != nil {
-		if used, err := h.Media.UsedBytes(r.Context(), accountID); err == nil {
+		if used, err := h.Media.UsedBytes(ctx, accountID); err == nil {
 			usage["used"] = used
-		} else if used, err := h.Media.TotalBytes(r.Context(), accountID); err == nil {
+		} else if used, err := h.Media.TotalBytes(ctx, accountID); err == nil {
 			usage["used"] = used
 		}
 	}
-	respond(w, http.StatusOK, map[string]any{"items": out, "page": page, "limit": limit, "total": total, "usage": usage})
+	return usage
 }
 
 // deleteMedia handles DELETE /v1/rest/media/{id} — moves the media row to the

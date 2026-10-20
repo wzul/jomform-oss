@@ -27,6 +27,11 @@ import { apiErr } from "../../lib/apiErr";
 // asset's url is on the tenant host with CORP same-origin, so an <img> here is a
 // broken tile on the dashboard while the published form loads it fine.
 import { extBadge, selectedNeedsBadge, type SelectedMedia } from "../../lib/mediaThumb";
+// t_b3991178: the reload lookup asks the server for the ONE row behind
+// `logo_url` (GET /api/rest/media?url=…). The library list is a 100-row
+// newest-first window, so scanning it left an older logo — or one whose host
+// changed — with no mime, i.e. the broken <img> again.
+import { mediaLookupPath, mediaRowFromLookup } from "../../lib/mediaLookup";
 
 type FormDetail = {
   id: string;
@@ -602,24 +607,31 @@ function FormSettingsInner() {
       setFsTheme((d.theme?.primary as string) || "#5e6ad2");
       setFsLogo(d.logo_url || "");
       // t_c845d0f6: after a RELOAD the page has only `logo_url` — the picker's
-      // callback that carries the mime has not run. Look the row up in the same
-      // library read the picker uses, so an SVG logo previews as an extension
-      // badge instead of a broken <img> on a tenant-host URL (HTTP 200,
-      // CORP same-origin, nothing errors). Best-effort by design: a url that is
-      // not a library row (a pasted external link) or a failed read leaves the
-      // mime unknown and the preview renders exactly as it did before this fix.
+      // callback that carries the mime has not run. Ask the server for that ONE
+      // row (t_b3991178), so an SVG logo previews as an extension badge instead
+      // of a broken <img> on a tenant-host URL (HTTP 200, CORP same-origin,
+      // nothing errors). Best-effort by design: a url that is not a library row
+      // (a pasted external link) or a failed read leaves the mime unknown and
+      // the preview renders exactly as it did before this fix.
       setFsLogoMedia(null);
       setFsLogoLookupDone(!d.logo_url);
       if (d.logo_url) {
         const logoUrl = d.logo_url;
-        fetch(workspaceUrl("/api/rest/media?limit=100"))
+        // t_b3991178: ask the server for THIS ONE row instead of scanning the
+        // newest page of the library. The page only holds `logo_url`, and the
+        // library read is a 100-row newest-first window, so a logo older than
+        // that window — or one whose advertised host changed since it was
+        // picked — matched no row, left the mime unknown, and painted the
+        // broken <img> this whole class of bug is about. The server resolves
+        // the url to the object key, so neither limitation applies.
+        fetch(workspaceUrl(mediaLookupPath(logoUrl)))
           .then((r) => (r.ok ? r.json() : null))
-          .then((md: { items?: { url?: string; mime?: string; preview?: string }[] } | null) => {
-            const hit = (Array.isArray(md?.items) ? md.items : []).find((m) => m.url === logoUrl);
-            if (hit && typeof hit.mime === "string" && hit.mime) {
+          .then((md) => {
+            const hit = mediaRowFromLookup(md);
+            if (hit) {
               // Never overwrite a row a PICK already delivered while this read
               // was in flight — the pick is the newer information.
-              setFsLogoMedia((prev) => prev ?? { url: logoUrl, mime: hit.mime as string, preview: hit.preview });
+              setFsLogoMedia((prev) => prev ?? { url: logoUrl, ...hit });
             }
           })
           .catch(() => {

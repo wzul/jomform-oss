@@ -163,10 +163,10 @@ test("extBadge is declared once, in lib/mediaThumb, and used by both surfaces", 
 // naturalWidth:0} while an image row's <img> read naturalWidth:1.
 //
 // The page holds only a URL string, so the mime has to ride BESIDE it: the
-// picker hands over the row, and a reload resolves the row from /api/rest/media
-// (the library read the picker already makes). Deciding from the URL's
-// extension instead would be a third copy of the rule — the shape that already
-// drifted once.
+// picker hands over the row, and a reload resolves the row from
+// GET /api/rest/media?url= (one row, by object key — t_b3991178). Deciding from
+// the URL's extension instead would be a third copy of the rule — the shape
+// that already drifted once.
 test("the form-settings logo preview badges a code asset instead of inlining it (t_c845d0f6)", () => {
   // 1. the decision itself, unit-level. null = no known mime (a PASTED external
   //    url, or a library read that failed): that must keep its <img>, or the
@@ -245,10 +245,13 @@ test("the form-settings logo preview badges a code asset instead of inlining it 
 
   // 5. …and after a RELOAD, when only `logo_url` survives, the row is resolved
   //    from the media library — otherwise the preview is broken again on the
-  //    very next page load, which is the common path.
+  //    very next page load, which is the common path. t_b3991178: the read is
+  //    the SINGLE-ROW lookup, not a page of the library (the list is a 100-row
+  //    newest-first window, so an older logo matched no row and fell back to
+  //    the broken <img>); lib/mediaLookup.test.ts pins that half.
   assert.match(
     page,
-    /workspaceUrl\("\/api\/rest\/media\?limit=100"\)/,
+    /workspaceUrl\(mediaLookupPath\(logoUrl\)\)/,
     "form-settings no longer resolves the chosen logo's mime from /api/rest/media, so after a " +
       "reload an SVG logo is a broken <img> again",
   );

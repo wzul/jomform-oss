@@ -445,7 +445,8 @@ var restRouteDocs = []restRouteDoc{
 
 	// ── Media and uploads ────────────────────────────────────────────────────
 	{Method: "GET", Path: "/v1/rest/media", Handler: "listMedia", Tag: "Media",
-		Summary: "List uploaded media", Access: AccessRead, Resp: "MediaList"},
+		Summary: "List uploaded media", Access: AccessRead, Resp: "MediaList",
+		Desc: "Newest first and paginated (?page/?limit; the limit caps at 100), with optional ?form=<id> and ?source=merchant|customer filters. Pass ?url=<a media URL this workspace owns> instead of ?page to ask for that ONE row: the URL is resolved to its object key, so a row older than the newest 100 rows — or a URL whose advertised host has changed since it was stored — is still found. A URL this workspace does not own answers an EMPTY items list with 200, not 404: 'not in this library' is an ordinary answer, not a failed request."},
 	{Method: "DELETE", Path: "/v1/rest/media/{id}", Handler: "deleteMedia", Tag: "Media",
 		Summary: "Move a media item to the trash", Access: AccessWrite, Resp: "Deleted",
 		Desc: "This marks the row trashed. The object itself is NOT removed from storage and the bytes keep counting against the workspace's 1GB quota: the bin holds real storage, so it is not a free tier. Destroy the object for good with DELETE /v1/rest/media/{id}/purge, which is also where the quota is released."},
