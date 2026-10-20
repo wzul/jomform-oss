@@ -1,10 +1,21 @@
-# Pinned to the patch release that clears the GO-2026-6617 class of stdlib
-# advisories (net/http HPACK, html/template, crypto/tls, mime/multipart,
-# os — all "Fixed in go1.27.2"). api/go.mod carries `toolchain go1.27.2` for
-# the host gates, but this image runs GOTOOLCHAIN=local (its own
-# /usr/local/go/go.env), so a `toolchain` line is IGNORED here and only the
-# base image decides which stdlib the shipped binary is built against.
-FROM golang:1.27.2-alpine AS build
+# Pinned to the patch release that clears BOTH the GO-2026-6617 class of stdlib
+# advisories (net/http HPACK, html/template, crypto/tls, mime/multipart, os —
+# all "Fixed in go1.27.2") AND the crypto/x509 change in go1.27.3 that refuses
+# certificate chains through the eight eMudhra intermediate CA keys revoked for
+# cACompromise (CVE-2026-111943 / go.dev/issue/82345). This line is the toolchain
+# the SHIPPED binary is built with, so it decides which stdlib — and which
+# intermediates are trusted — prod runs with, on every outbound TLS call: CHIP,
+# SES, S3/MinIO, Cloudflare, MCP OAuth providers and merchant-configured webhook
+# URLs (any host in the world).
+# api/go.mod carries `toolchain go1.27.3` for the host gates, but this image runs
+# GOTOOLCHAIN=local (its own /usr/local/go/go.env), so a `toolchain` line is
+# IGNORED here and only the base image decides which stdlib the shipped binary is
+# built against.
+# api/internal/version/go_toolchain_pin_test.go fails the build if this tag — or
+# go.mod's `toolchain` line — drops below go1.27.3. It exists because govulncheck
+# reported "No vulnerabilities found" while 1.27.2 was pinned (the advisory DB
+# had not caught up), so the govuln gate would NOT have forced this fix.
+FROM golang:1.27.3-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
