@@ -438,3 +438,60 @@ error, a usage error, or a served copy whose lifetime cannot be read anywhere
 still serves, or pass `--await-expiry`).
 A check that stops at the origin reports a clean purge while the object is still
 downloadable — that is the mistake this script is built to prevent.
+
+## Reconciling the media store against the `media` table
+
+Stored bytes and the `media` table can disagree, and when they do
+`accounts.media_used_bytes` matches neither. Two measured causes: every MCP image
+upload before v1.21.231 stored the base + thumbnail/medium/full objects and
+reserved quota but wrote **no row**, so the app could never list, trash or purge
+them; and rows written before #545 record only the base object's size.
+
+`api/cmd/media-reconcile` (package `api/internal/mediareconcile`) reconciles the
+three views. Report mode is the default and read-only — the pool opens with
+`default_transaction_read_only=on` **and** an `UPDATE` probe must be rejected with
+SQLSTATE 25006 before anything is listed, so it does not rely on the flag alone.
+It groups every object under `u/` by account + base uuid, attaches the `media` row
+in **both** states (a trashed row still owns its bytes), and scans the surfaces
+that can name a uuid: `users.avatar_url`, `forms.config` / `theme` / `logo_url`
+(which covers template forms — `is_template = true`, there is no `templates`
+table), `products.images`, `product_variations.images`,
+`workspace_settings.landing_page_json` / `menu_json`,
+`workspace_legal_pages.content`.
+
+Classification is evidence-first: a row wins (`rowed`); a reference wins over any
+ruling (`keep`); then an explicit `deletable` ruling from a decisions file; and
+`adopt` — create the row, add no bytes — is the default. There is **no default
+delete**, and a `deletable` ruling on a referenced group is refused and reported
+as refused.
+
+Nothing is deleted through the app: a row-less object has no id to `DELETE`, and a
+purge subtracts the ROW's size, which for a row-less object was never charged
+that way, leaving the counter below the truth. Deletion is per object key in the
+store, after a second reference check, and then `accounts.media_used_bytes` is
+recomputed as `min(SUM(size) of every object under u/<account>/ listed AFTER the
+deletes, 1 GiB cap)` — never `old - size` per object, never `SUM(media.size)`.
+
+The binary is static, so it runs inside the api container, which already carries
+`DATABASE_URL` and `S3_*`:
+
+```bash
+cd api && CGO_ENABLED=0 go build -trimpath -o /tmp/media-reconcile ./cmd/media-reconcile
+scp /tmp/media-reconcile host:/tmp/
+ssh host 'docker cp /tmp/media-reconcile <api-container>:/tmp/'
+ssh host 'docker exec <api-container> /tmp/media-reconcile -json /tmp/report.json'
+```
+
+**First run, 2026-10-20** (read-only report, then one approved cleanup): the
+bucket held 44 objects / 3,199,411 B against 2 media rows. One account had 12
+row-less groups; 9 were referenced by `products.images` and one of those is the
+account's live avatar, so "no row" does not mean "unreferenced". The 3
+unreferenced groups (a pre-fix MCP probe, 4 objects, and two byte-identical copies
+of the avatar — same ETag and size, the referenced copy kept) were ruled
+deletable, re-checked, and deleted by key: 6 objects / 61,849 B. Both counters
+were then derived from a fresh store listing: the affected account went
+3,074,848 → 3,131,665 (an INCREASE — the increment-maintained counter had been
+below the store's truth), the other stayed 5,897. Every remaining row-less group
+is referenced and was left alone. Details and the decisions format:
+`api/cmd/media-reconcile/README.md`.
+
