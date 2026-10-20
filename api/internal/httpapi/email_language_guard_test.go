@@ -34,6 +34,15 @@
 //     examined exactly like the four that exist today. These are the calls that
 //     hand text to the branded wrapper, and so the place where "what the
 //     recipient reads" and "what the client is told it is" could disagree.
+//  4. CENSUS — a matcher's SILENCE is not evidence. A receiver shape it has no
+//     rule for is skipped without a word, so the guard would keep reporting
+//     green over a send it never looked at; that is how three mailer-carrying
+//     receiver shapes (a METHOD call, a slice/map INDEX and a TYPE ASSERTION)
+//     stayed invisible while this file said all twenty sites pass. So every
+//     send-shaped call the walk meets has its receiver SHAPE classified, and a
+//     shape the matcher cannot decide — no rule for it, or a rule whose inputs
+//     do not resolve — FAILS the guard and names the shape and the call site.
+//     A new blind spot of this class is then a red run, not a green one.
 //
 // The analyzer reports anything it cannot resolve instead of skipping it, and it
 // carries floors on what it found. A guard that silently stops covering its
@@ -41,6 +50,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -160,6 +170,33 @@ type funcInfo struct {
 	// `m := h.Mailer; m.Send(…)` and `pkgMailer.Send(…)`, where the receiver is
 	// an ident and carries no field name at all.
 	mailerIdents map[string]bool
+	// identTypes are the identifiers in scope for this function whose DECLARED
+	// type the module can name: the method receiver and parameters, a local
+	// declared or assigned from a typed expression, and the package-level
+	// variables of the package. It is what lets a METHOD-call receiver
+	// (`o.make().Send(…)`) be matched: `canonicalFuncName` cannot name `o.make`
+	// — there is no package in it — so the method has to be found from the
+	// receiving TYPE, and that type is only knowable from `o`'s declaration.
+	identTypes map[string]typedExpr
+}
+
+// typedExpr is a type expression together with the file that declares it, so a
+// type written `Mailer` in one file and `email.Sender` in another canonicalises
+// to one name. Carrying the declaring file (rather than just the rendered name)
+// is what lets a CONTAINER type be taken apart: the element of `[]Mailer` is
+// only nameable once you know which file to resolve `Mailer` against.
+type typedExpr struct {
+	expr ast.Expr
+	pf   *parsedFile
+}
+
+// canonical renders the type as `<package>.<Type>`, resolving that file's
+// import aliases.
+func (t typedExpr) canonical() (string, bool) {
+	if t.pf == nil {
+		return "", false
+	}
+	return canonicalTypeName(t.expr, t.pf)
 }
 
 // callSite is one call expression inside a function.
@@ -194,15 +231,27 @@ type analyzer struct {
 	// another). A package-scope `var m Mailer` is not a local, so the
 	// per-function body walk never sees it — see markPkgMailerVars.
 	pkgMailerVars map[string]map[string]bool
+	// pkgVarTypes are the DECLARED types of the package-scope variables, keyed
+	// the same way, so a method-call receiver reached through one
+	// (`pkgOwner.owner.make().Send(…)`) can have its receiving type resolved.
+	pkgVarTypes map[string]map[string]typedExpr
 
 	// Findings.
 	copyOutsideDict        []site
 	unresolved             []site
 	jobsWithoutLang        []site
 	senderCallsWithoutLang []site
-	dictSites              int
-	emailJobCount          int
-	filesScanned           int
+	// receiverCensus counts the send-shaped calls the walk met per receiver
+	// SHAPE, and undecided are the ones the matcher had no rule for (or a rule
+	// whose inputs did not resolve). The census exists because a matcher that
+	// does not understand a shape says NOTHING: the count of recognised sites
+	// does not move, no finding is filed, and the guard certifies a send it
+	// never looked at. TestEverySendReceiverShapeIsDecided fails on these.
+	receiverCensus map[recvShape]int
+	undecided      []site
+	dictSites      int
+	emailJobCount  int
+	filesScanned   int
 	// senderSites counts the email sends the render matcher recognised. A
 	// matcher that stops recognising a family reports nothing instead of
 	// reporting a problem, so the count is floored in the test.
@@ -242,6 +291,7 @@ func newAnalyzer(t *testing.T) *analyzer {
 		funcsByName:    map[string][]*funcInfo{},
 		resolvedParams: map[string]resolvedValue{},
 		byPath:         map[string]*parsedFile{},
+		receiverCensus: map[recvShape]int{},
 	}
 
 	werr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -363,6 +413,7 @@ func (a *analyzer) walk() {
 
 	// Phase 1: assignments and call sites, for every function.
 	for _, fi := range a.allFuncs {
+		a.markIdentTypes(fi)
 		a.markMailerIdents(fi)
 		inDict := a.inDictFile[fi.file]
 		ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
@@ -390,15 +441,25 @@ func (a *analyzer) walk() {
 					a.checkJobLiteral(fi, node, inDict)
 				}
 			case *ast.CallExpr:
-				if name, ok := a.senderSendCall(fi, node); ok {
-					a.senderSites++
-					a.recordSenderSite(fi, node)
-					if !passesLang(node) {
-						a.senderCallsWithoutLang = append(a.senderCallsWithoutLang, site{
-							pos: a.fset.Position(node.Pos()).String(), field: name,
-							note: "no language argument",
-						})
-					}
+				verdict, isSend := a.classifySend(fi, node)
+				if !isSend {
+					return true
+				}
+				// EVERY send-shaped call is censused, matched or not: a
+				// receiver shape the matcher has no rule for is a site it
+				// silently skips, and skipping it is exactly the failure this
+				// census turns loud.
+				a.noteReceiverShape(fi, node, verdict)
+				if !verdict.matched {
+					return true
+				}
+				a.senderSites++
+				a.recordSenderSite(fi, node)
+				if !passesLang(node) {
+					a.senderCallsWithoutLang = append(a.senderCallsWithoutLang, site{
+						pos: a.fset.Position(node.Pos()).String(), field: verdict.name,
+						note: "no language argument",
+					})
 				}
 			}
 			return true
@@ -817,6 +878,11 @@ type mailerIndex struct {
 	// `email.Sender` and the `VerifyMailer` interface. Nothing here mentions a
 	// field name.
 	types map[string]bool
+	// declared are the canonical names of EVERY type the module declares, so a
+	// receiver type that is not in here is out of scope by construction (an
+	// imported type's methods are not the module's to guard) rather than
+	// merely unfound.
+	declared map[string]bool
 	// pkgs are the packages declaring one of those types, so a constructor in
 	// such a package (`email.New`) is recognised as producing a mailer.
 	pkgs map[string]bool
@@ -824,22 +890,65 @@ type mailerIndex struct {
 	// types — `Sender`, `Mailer`, `VerifyMailer`, `AuthMailer` today, and
 	// whatever a newly added one is called tomorrow.
 	fieldNames map[string]bool
-	// funcResults maps a canonically-named function or method (`httpapi.Make`,
-	// `email.New`) to the canonical types the module DECLARES it returns. A
-	// call used as the receiver of a send — `Make().Send(…)` — carries no field
-	// name and no local's identity, so the callee's declared result type is the
-	// only thing that can identify it.
-	funcResults map[string]map[string]bool
+	// fieldTypes are the struct field names with the DECLARED type of every
+	// field of that name in the module, so the type of `h.Anything` can be
+	// resolved and a method called on the value it holds (`h.Anything.make()`)
+	// can be found. A name declared with two different types is ambiguous and
+	// resolves to nothing, which the census reports rather than guesses at.
+	fieldTypes map[string][]typedExpr
+	// funcResults maps a canonically-named FUNCTION (`httpapi.Make`,
+	// `email.New`) to the types the module DECLARES it returns. A call used as
+	// the receiver of a send — `Make().Send(…)` — carries no field name and no
+	// local's identity, so the callee's declared result type is the only thing
+	// that can identify it.
+	funcResults map[string][]typedExpr
+	// methodResults is the same for a METHOD, keyed
+	// `<ReceivingType>.<Method>` (`httpapi.qaProbeOwner.make`). A method-call
+	// receiver (`o.make().Send(…)`) has no package in its callee — `o.make` is
+	// never a key in funcResults, whose keys are `<package>.<Name>` — so the
+	// method has to be found from the receiving type.
+	methodResults map[string][]typedExpr
+}
+
+// mailerType reports whether a declared type name is one of the module's own
+// mailer types.
+func (a *analyzer) mailerType(t typedExpr) bool {
+	key, ok := t.canonical()
+	return ok && a.mailers.types[key]
+}
+
+// resultsCarryMailer reports whether any of a callee's DECLARED results is a
+// mailer type — the test a call receiver (`Make().Send(…)`) is matched on.
+func (a *analyzer) resultsCarryMailer(results []typedExpr) bool {
+	for _, res := range results {
+		if a.mailerType(res) {
+			return true
+		}
+	}
+	return false
+}
+
+// singleResult is a callee's declared result when it has exactly one, so a
+// local assigned from a call (`o := Make()`, `list := Mailers()`) has a type
+// the module can name.
+func singleResult(results []typedExpr) (typedExpr, bool) {
+	if len(results) != 1 {
+		return typedExpr{}, false
+	}
+	return results[0], true
 }
 
 // buildMailerIndex derives the mailer types, their packages, and every struct
 // field holding one, from the module source.
 func (a *analyzer) buildMailerIndex() {
 	a.mailers = &mailerIndex{
-		types:       map[string]bool{},
-		pkgs:        map[string]bool{},
-		fieldNames:  map[string]bool{},
-		funcResults: map[string]map[string]bool{},
+		types:         map[string]bool{},
+		declared:      map[string]bool{},
+		pkgs:          map[string]bool{},
+		fieldNames:    map[string]bool{},
+		fieldTypes:    map[string][]typedExpr{},
+		funcResults:   map[string][]typedExpr{},
+		methodResults: map[string][]typedExpr{},
 	}
 	for _, pf := range a.parsed {
 		for _, decl := range pf.file.Decls {
@@ -851,19 +960,30 @@ func (a *analyzer) buildMailerIndex() {
 				// What this declaration's RESULT names, so a call used as the
 				// receiver of a send (`Make().Send(…)`) can be recognised even
 				// though it carries no field name and no local's identity. The
-				// key carries the declaring PACKAGE, because a bare `New` means
-				// `payments.New` in one file and `email.New` in another.
+				// key carries the declaring PACKAGE (or, for a method, the
+				// RECEIVING TYPE), because a bare `New` means `payments.New` in
+				// one file and `email.New` in another.
 				if d.Type.Results != nil {
-					canon := pf.pkgName + "." + d.Name.Name
+					var results []typedExpr
 					for _, res := range d.Type.Results.List {
-						key, ok := canonicalTypeName(res.Type, pf)
-						if !ok {
+						if _, ok := canonicalTypeName(res.Type, pf); !ok {
 							continue
 						}
-						if a.mailers.funcResults[canon] == nil {
-							a.mailers.funcResults[canon] = map[string]bool{}
+						results = append(results, typedExpr{expr: res.Type, pf: pf})
+					}
+					if len(results) > 0 {
+						if d.Recv != nil && len(d.Recv.List) > 0 {
+							// A METHOD: reachable only through a receiving type,
+							// so it is keyed on that type and never on a package
+							// (`o.make` is not `<pkg>.make`).
+							if recvType, ok := canonicalTypeName(d.Recv.List[0].Type, pf); ok {
+								key := recvType + "." + d.Name.Name
+								a.mailers.methodResults[key] = append(a.mailers.methodResults[key], results...)
+							}
+						} else {
+							key := pf.pkgName + "." + d.Name.Name
+							a.mailers.funcResults[key] = append(a.mailers.funcResults[key], results...)
 						}
-						a.mailers.funcResults[canon][key] = true
 					}
 				}
 				// A method on a named type that declares an email-shaped send.
@@ -875,12 +995,15 @@ func (a *analyzer) buildMailerIndex() {
 					a.mailers.types[key] = true
 				}
 			case *ast.GenDecl:
-				// An interface that requires an email-shaped send.
+				// An interface that requires an email-shaped send, and — for
+				// every type the module declares — the canonical name, so a
+				// receiver type not in `declared` is known to be imported.
 				for _, spec := range d.Specs {
 					ts, ok := spec.(*ast.TypeSpec)
 					if !ok {
 						continue
 					}
+					a.mailers.declared[pf.pkgName+"."+ts.Name.Name] = true
 					it, ok := ts.Type.(*ast.InterfaceType)
 					if !ok || it.Methods == nil || !interfaceSendsEmail(it) {
 						continue
@@ -896,7 +1019,10 @@ func (a *analyzer) buildMailerIndex() {
 		}
 	}
 	// And now the FIELDS, keyed on the type they are declared with: a field is
-	// a mailer field however it is named, as long as it holds a mailer.
+	// a mailer field however it is named, as long as it holds a mailer. Every
+	// field's type is recorded (not only the mailers') because a method called
+	// on a field's value (`h.Anything.make()`) is looked up from the type that
+	// field declares.
 	for _, pf := range a.parsed {
 		ast.Inspect(pf.file, func(n ast.Node) bool {
 			st, ok := n.(*ast.StructType)
@@ -904,12 +1030,13 @@ func (a *analyzer) buildMailerIndex() {
 				return true
 			}
 			for _, f := range st.Fields.List {
-				key, ok := canonicalTypeName(f.Type, pf)
-				if !ok || !a.mailers.types[key] {
-					continue
-				}
 				for _, name := range f.Names {
-					if name.Name != "_" {
+					if name.Name == "_" {
+						continue
+					}
+					a.mailers.fieldTypes[name.Name] = append(
+						a.mailers.fieldTypes[name.Name], typedExpr{expr: f.Type, pf: pf})
+					if key, ok := canonicalTypeName(f.Type, pf); ok && a.mailers.types[key] {
 						a.mailers.fieldNames[name.Name] = true
 					}
 				}
@@ -1045,6 +1172,7 @@ func (a *analyzer) markMailerIdents(fi *funcInfo) {
 // and the same pair in the other order agree.
 func (a *analyzer) markPkgMailerVars() {
 	a.pkgMailerVars = map[string]map[string]bool{}
+	a.pkgVarTypes = map[string]map[string]typedExpr{}
 	for round := 0; round < 4; round++ {
 		changed := false
 		for _, pf := range a.parsed {
@@ -1064,7 +1192,22 @@ func (a *analyzer) markPkgMailerVars() {
 						continue
 					}
 					for i, name := range vs.Names {
-						if name.Name == "_" || a.pkgMailerVars[dir][name.Name] {
+						if name.Name == "_" {
+							continue
+						}
+						// The DECLARED type, whichever round this is: a
+						// package-scope `var owner qaProbeOwner` is what a
+						// method-call receiver reached through it has to be
+						// resolved against, mailer or not.
+						if t, ok := a.pkgVarDeclType(scope, pf, vs, i); ok {
+							if a.pkgVarTypes[dir] == nil {
+								a.pkgVarTypes[dir] = map[string]typedExpr{}
+							}
+							if _, seen := a.pkgVarTypes[dir][name.Name]; !seen {
+								a.pkgVarTypes[dir][name.Name] = t
+							}
+						}
+						if a.pkgMailerVars[dir][name.Name] {
 							continue
 						}
 						mailer := false
@@ -1180,12 +1323,191 @@ func (a *analyzer) callProducesMailer(pf *parsedFile, call *ast.CallExpr) bool {
 	if !ok {
 		return false
 	}
-	for res := range a.mailers.funcResults[key] {
-		if a.mailers.types[res] {
-			return true
+	return a.resultsCarryMailer(a.mailers.funcResults[key])
+}
+
+// pkgVarDeclType is the declared type of one package-scope variable, when the
+// declaration names one — explicitly (`var owner qaProbeOwner`) or through a
+// composite literal / single-result call initialiser.
+func (a *analyzer) pkgVarDeclType(
+	scope *funcInfo, pf *parsedFile, vs *ast.ValueSpec, i int,
+) (typedExpr, bool) {
+	if vs.Type != nil {
+		if _, ok := canonicalTypeName(vs.Type, pf); !ok {
+			return typedExpr{}, false
+		}
+		return typedExpr{expr: vs.Type, pf: pf}, true
+	}
+	if len(vs.Values) <= i {
+		return typedExpr{}, false
+	}
+	return a.exprType(scope, pf, vs.Values[i], 0)
+}
+
+// markIdentTypes records the DECLARED type of the identifiers in one function
+// whose type the module can name: the method receiver and parameters, a local
+// declared or assigned from a typed expression, and the package-level variables
+// of the package (which are in scope here).
+//
+// It exists for one purpose: a METHOD-call receiver (`o.make().Send(…)`) is not
+// nameable from its callee — `o.make` has no package in it — so the method has
+// to be found from the receiving TYPE, and that type is only knowable from `o`'s
+// declaration. One forward pass is enough, because a Go function body declares a
+// name before it uses it.
+func (a *analyzer) markIdentTypes(fi *funcInfo) {
+	fi.identTypes = map[string]typedExpr{}
+	pf := a.byPath[fi.file]
+	if pf == nil {
+		return
+	}
+	for name, t := range a.pkgVarTypes[filepath.Dir(fi.file)] {
+		fi.identTypes[name] = t
+	}
+	mark := func(fl *ast.FieldList) {
+		if fl == nil {
+			return
+		}
+		for _, f := range fl.List {
+			for _, n := range f.Names {
+				if n.Name != "_" {
+					fi.identTypes[n.Name] = typedExpr{expr: f.Type, pf: pf}
+				}
+			}
 		}
 	}
-	return false
+	mark(fi.decl.Recv)
+	mark(fi.decl.Type.Params)
+
+	ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
+		switch stmt := n.(type) {
+		case *ast.AssignStmt:
+			for i, lhs := range stmt.Lhs {
+				id, ok := lhs.(*ast.Ident)
+				if !ok || id.Name == "_" || len(stmt.Rhs) == 0 {
+					continue
+				}
+				rhs := stmt.Rhs[0]
+				if len(stmt.Rhs) > 1 {
+					if i >= len(stmt.Rhs) {
+						continue
+					}
+					rhs = stmt.Rhs[i]
+				}
+				if t, ok := a.exprType(fi, pf, rhs, 0); ok {
+					fi.identTypes[id.Name] = t
+				}
+			}
+		case *ast.ValueSpec:
+			for i, name := range stmt.Names {
+				switch {
+				case stmt.Type != nil:
+					fi.identTypes[name.Name] = typedExpr{expr: stmt.Type, pf: pf}
+				case len(stmt.Values) > i:
+					if t, ok := a.exprType(fi, pf, stmt.Values[i], 0); ok {
+						fi.identTypes[name.Name] = t
+					}
+				}
+			}
+		}
+		return true
+	})
+}
+
+// exprType names the type of a VALUE expression, when the module can: an
+// identifier with a declared type, a container INDEX (the element of a slice,
+// array or map), a TYPE ASSERTION (the asserted type), a composite literal of a
+// named type, a call with exactly one declared result, and a struct FIELD.
+//
+// It returns false rather than guessing. Every caller turns a false into an
+// UNDECIDED receiver shape, which the census fails on — so an unnamed type is a
+// red run that asks for a rule, never a silently skipped site.
+func (a *analyzer) exprType(
+	fi *funcInfo, pf *parsedFile, expr ast.Expr, depth int,
+) (typedExpr, bool) {
+	if pf == nil || depth > 4 {
+		return typedExpr{}, false
+	}
+	switch e := unparen(expr).(type) {
+	case *ast.Ident:
+		t, ok := fi.identTypes[e.Name]
+		return t, ok
+	case *ast.CompositeLit:
+		if _, ok := canonicalTypeName(e.Type, pf); !ok {
+			return typedExpr{}, false
+		}
+		return typedExpr{expr: e.Type, pf: pf}, true
+	case *ast.TypeAssertExpr:
+		if e.Type == nil {
+			return typedExpr{}, false
+		}
+		if _, ok := canonicalTypeName(e.Type, pf); !ok {
+			return typedExpr{}, false
+		}
+		return typedExpr{expr: e.Type, pf: pf}, true
+	case *ast.IndexExpr:
+		container, ok := a.exprType(fi, pf, e.X, depth+1)
+		if !ok {
+			return typedExpr{}, false
+		}
+		if element, ok := elementType(container); ok {
+			return element, true
+		}
+		// A generic instantiation used as a value (`Box[T]{}`): the named type
+		// is what canonicalTypeName already folds an IndexExpr to.
+		if _, ok := canonicalTypeName(e, pf); !ok {
+			return typedExpr{}, false
+		}
+		return typedExpr{expr: e, pf: pf}, true
+	case *ast.SelectorExpr:
+		return a.fieldType(e.Sel.Name)
+	case *ast.CallExpr:
+		key, ok := canonicalFuncName(pf, e.Fun)
+		if !ok {
+			return typedExpr{}, false
+		}
+		return singleResult(a.mailers.funcResults[key])
+	}
+	return typedExpr{}, false
+}
+
+// elementType takes a CONTAINER type apart: the element of a slice or array, or
+// the value of a map. That is the declared type of `list[0]` and `m[k]`.
+func elementType(t typedExpr) (typedExpr, bool) {
+	switch e := t.expr.(type) {
+	case *ast.ArrayType:
+		return typedExpr{expr: e.Elt, pf: t.pf}, true
+	case *ast.MapType:
+		return typedExpr{expr: e.Value, pf: t.pf}, true
+	}
+	return typedExpr{}, false
+}
+
+// fieldType returns a struct field's declared type when EVERY field of that name
+// in the module declares the SAME type. A name declared with two different types
+// is ambiguous and resolves to nothing — the census then reports the call rather
+// than the guard guessing which struct was meant.
+func (a *analyzer) fieldType(name string) (typedExpr, bool) {
+	var (
+		first typedExpr
+		seen  string
+		n     int
+	)
+	for _, t := range a.mailers.fieldTypes[name] {
+		key, ok := t.canonical()
+		if !ok {
+			continue
+		}
+		if n == 0 {
+			first, seen = t, key
+		} else if key != seen {
+			return typedExpr{}, false
+		}
+		n++
+	}
+	if n == 0 {
+		return typedExpr{}, false
+	}
+	return first, true
 }
 
 // recordSenderSite notes WHICH send was recognised — its file and the method it
@@ -1225,9 +1547,54 @@ func (a *analyzer) moduleRelative(path string) string {
 	return filepath.ToSlash(rel)
 }
 
-// senderSendCall recognises an email send through a mailer — the four methods
-// that hand text to the branded wrapper — and returns a name for the error
-// message.
+// recvShape names the SYNTACTIC form of a send's receiver. It exists so the
+// census can say WHICH shape the matcher had no rule for: "nothing matched" is
+// not a diagnosis, and a matcher's silence is not evidence.
+type recvShape string
+
+const (
+	shapeIdent      recvShape = "Ident (a variable)"
+	shapeField      recvShape = "SelectorExpr (a field)"
+	shapePkgCall    recvShape = "CallExpr (a package-level function)"
+	shapeMethodCall recvShape = "CallExpr (a method)"
+	shapeIndex      recvShape = "IndexExpr (slice/array/map element)"
+	shapeTypeAssert recvShape = "TypeAssertExpr"
+	shapeOther      recvShape = "unsupported receiver expression"
+)
+
+// sendVerdict is what the matcher concluded about one call whose selector name
+// is a send method.
+//
+// `decided` is the load-bearing field, and it is separate from `matched` on
+// purpose. A matcher with no rule for a shape — or with a rule whose inputs the
+// module cannot name — knows NOTHING about that call, and the guard has to say
+// so rather than quietly count it as "not an email send". Conflating the two is
+// what let three mailer-carrying receiver shapes sit outside the guard while it
+// reported every site passing.
+type sendVerdict struct {
+	method  string
+	shape   recvShape
+	decided bool
+	matched bool
+	name    string // "…Receiver.Method", for a finding
+	blind   string // why a shape could not be decided
+}
+
+// unparen strips redundant parentheses, so `(o).make()` classifies like
+// `o.make()`.
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
+}
+
+// classifySend recognises an email send through a mailer — the four methods
+// that hand text to the branded wrapper — and reports WHICH receiver shape it
+// saw, whether it could decide it, and whether the receiver is a mailer.
 //
 // The receiver is recognised by its TYPE, not by the name of the field it is
 // reached through. `email.Sender` (the receipts path) and the `VerifyMailer`
@@ -1235,41 +1602,204 @@ func (a *analyzer) moduleRelative(path string) string {
 // and the fields holding them are called `Sender`, `Mailer`, `VerifyMailer` and
 // `AuthMailer` — but a matcher that keyed on those names would wave through a
 // field called `InviteSender`, or a receiver reached through a local variable
-// (which carries no field name at all), while still reporting green. So a field
-// is matched against the types the module DECLARES as mailers, an identifier is
-// matched when it holds one (a local, a parameter, or a package-level variable),
-// and a receiver that is a CALL is matched when the callee's declared result
-// type is one.
+// (which carries no field name at all), while still reporting green.
+//
+// So every shape a mailer can be reached through has a rule here, and the rule
+// is applied to the DECLARED type rather than to any name:
+//
+//   - a field (`h.Mailer`) — the field's declared type;
+//   - an identifier (`m`, `pkgMailer`, the method receiver `s`) — whether the
+//     function's scope marks it as holding a mailer;
+//   - a call (`Make().Send(…)`, `o.make().Send(…)`) — the callee's declared
+//     result type, found from the package for a FUNCTION and from the receiving
+//     type for a METHOD (`o.make` carries no package, so it can never be a key
+//     in funcResults);
+//   - an index (`list[0].Send(…)`, `m[k].Send(…)`) — the container's declared
+//     ELEMENT type;
+//   - a type assertion (`held.(Mailer).Send(…)`) — the asserted type.
 //
 // An unrelated type's Send is still not swept in: `w.handler.Send(ctx, job)`
 // fails the email signature (its first parameter is not a string), so `Handler`
 // is not a mailer type and `handler` is not a mailer field.
-func (a *analyzer) senderSendCall(fi *funcInfo, call *ast.CallExpr) (string, bool) {
+func (a *analyzer) classifySend(fi *funcInfo, call *ast.CallExpr) (sendVerdict, bool) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || !sendMethodNames[sel.Sel.Name] {
-		return "", false
+		return sendVerdict{}, false
 	}
-	switch recv := sel.X.(type) {
-	case *ast.SelectorExpr:
-		if !a.mailers.fieldNames[recv.Sel.Name] {
-			return "", false
-		}
-		return "…" + recv.Sel.Name + "." + sel.Sel.Name, true
+	v := sendVerdict{method: sel.Sel.Name}
+	pf := a.byPath[fi.file]
+	if pf == nil {
+		v.shape = shapeOther
+		v.blind = "the file is not in the index"
+		return v, true
+	}
+
+	switch recv := unparen(sel.X).(type) {
 	case *ast.Ident:
-		if !fi.mailerIdents[recv.Name] {
-			return "", false
+		if _, isPkg := pf.importNames[recv.Name]; isPkg {
+			// `pkg.Send(…)` is a package-level FUNCTION, not a method on a
+			// value: there is no receiver type holding the mailer API, so this
+			// guard's subject (a send THROUGH a mailer) does not apply. It is
+			// decided, and it is not a mailer send.
+			v.shape = shapePkgCall
+			v.decided = true
+			v.name = "…" + recv.Name + "." + sel.Sel.Name
+			return v, true
 		}
-		return "…" + recv.Name + "." + sel.Sel.Name, true
+		v.shape = shapeIdent
+		v.decided = true
+		v.matched = fi.mailerIdents[recv.Name]
+		v.name = "…" + recv.Name + "." + sel.Sel.Name
+		return v, true
+
+	case *ast.SelectorExpr:
+		v.shape = shapeField
+		v.decided = true
+		v.matched = a.mailers.fieldNames[recv.Sel.Name]
+		v.name = "…" + recv.Sel.Name + "." + sel.Sel.Name
+		return v, true
+
 	case *ast.CallExpr:
-		// `Make().Send(…)` / `email.Sender(x).Send(…)`: the same tests
-		// isMailerExpr applies to a local, so a receiver shape cannot fall out
-		// of one half of the guard while the other half still recognises it.
-		if !a.isMailerExpr(fi, a.byPath[fi.file], recv) {
-			return "", false
+		return a.classifyCallReceiver(fi, pf, recv, sel, v), true
+
+	case *ast.IndexExpr:
+		// `list[0].Send(…)` / `m[k].Send(…)`: the receiver is an ELEMENT, so
+		// the mailer type lives in the container's declared element type.
+		v.shape = shapeIndex
+		v.name = "…" + exprStringRender(recv) + "." + sel.Sel.Name
+		container, ok := a.exprType(fi, pf, recv.X, 0)
+		if !ok {
+			v.blind = "the type of " + exprStringRender(recv.X) + " is not nameable here, so the " +
+				"ELEMENT type it indexes cannot be checked"
+			return v, true
 		}
-		return "…" + callReceiverName(recv) + "." + sel.Sel.Name, true
+		element, ok := elementType(container)
+		if !ok {
+			v.blind = exprStringRender(recv.X) + " is not declared as a slice, array or map, so it " +
+				"has no element type to check"
+			return v, true
+		}
+		key, ok := element.canonical()
+		if !ok {
+			v.blind = "the element type of " + exprStringRender(recv.X) + " is not a nameable type"
+			return v, true
+		}
+		v.decided = true
+		v.matched = a.mailers.types[key]
+		return v, true
+
+	case *ast.TypeAssertExpr:
+		// `held.(Mailer).Send(…)`: the asserted type IS the receiver's type.
+		v.shape = shapeTypeAssert
+		v.name = "…" + exprStringRender(recv) + "." + sel.Sel.Name
+		if recv.Type == nil {
+			v.blind = "a type-switch guard (.(type)) has no single asserted type"
+			return v, true
+		}
+		key, ok := canonicalTypeName(recv.Type, pf)
+		if !ok {
+			v.blind = "the asserted type " + exprStringRender(recv.Type) + " is not a nameable type"
+			return v, true
+		}
+		v.decided = true
+		v.matched = a.mailers.types[key]
+		return v, true
 	}
-	return "", false
+
+	v.shape = shapeOther
+	v.blind = "no rule for a " + exprStringRender(unparen(sel.X)) + " receiver"
+	return v, true
+}
+
+// classifyCallReceiver decides a call used as a receiver: `Make().Send(…)`,
+// `o.make().Send(…)`, `email.New(x).Send(…)`.
+func (a *analyzer) classifyCallReceiver(
+	fi *funcInfo, pf *parsedFile, callee *ast.CallExpr, sel *ast.SelectorExpr, v sendVerdict,
+) sendVerdict {
+	v.name = "…" + callReceiverName(callee) + "." + sel.Sel.Name
+
+	// `F(…)` / `pkg.F(…)` — a package-level FUNCTION (the bare form is this
+	// file's own package). Its declared result type is what says whether it
+	// produces a mailer, and it is decided by the same isMailerExpr test a local
+	// assignment is, so a receiver shape cannot be recognised by one half of the
+	// guard and missed by the other.
+	switch fun := callee.Fun.(type) {
+	case *ast.Ident:
+		v.shape = shapePkgCall
+		v.decided = true
+		v.matched = a.isMailerExpr(fi, pf, callee)
+		return v
+	case *ast.SelectorExpr:
+		if id, ok := fun.X.(*ast.Ident); ok {
+			if _, isPkg := pf.importNames[id.Name]; isPkg {
+				v.shape = shapePkgCall
+				v.decided = true
+				v.matched = a.isMailerExpr(fi, pf, callee)
+				return v
+			}
+		}
+	default:
+		v.shape = shapeOther
+		v.blind = "no rule for a call whose callee is " + exprStringRender(callee.Fun)
+		return v
+	}
+	fun := callee.Fun.(*ast.SelectorExpr)
+
+	// `value.method(…)` — a METHOD call. Its callee carries no package, so the
+	// method has to be found from the RECEIVING TYPE: `o.make` is never a key
+	// in funcResults, whose keys are `<package>.<Name>`.
+	v.shape = shapeMethodCall
+	recvType, ok := a.exprType(fi, pf, fun.X, 0)
+	if !ok {
+		v.blind = "the receiving type of the method " + exprStringRender(fun) + " is not nameable here"
+		return v
+	}
+	recvKey, ok := recvType.canonical()
+	if !ok {
+		v.blind = "the receiving type of the method " + exprStringRender(fun) + " is not a nameable type"
+		return v
+	}
+	if !a.mailers.declared[recvKey] {
+		// The method belongs to an IMPORTED type. A mailer is only ever a type
+		// the module declares (that is how every mailer here is found), so this
+		// is decided — and it is not a mailer.
+		v.decided = true
+		return v
+	}
+	results, ok := a.mailers.methodResults[recvKey+"."+fun.Sel.Name]
+	if !ok {
+		// Declared in the module but no such method: a PROMOTED method through
+		// an embedded field, which this index does not follow. Undecided, so it
+		// is reported rather than assumed harmless.
+		v.blind = "the module declares no method " + recvKey + "." + fun.Sel.Name + " (a promoted method?)"
+		return v
+	}
+	v.decided = true
+	v.matched = a.resultsCarryMailer(results)
+	return v
+}
+
+// noteReceiverShape censuses one send-shaped call: it counts the receiver SHAPE
+// it met, and files the ones it could not decide. Called for EVERY send-shaped
+// call, matched or not — a site the matcher did not match must still be a site
+// it UNDERSTOOD, or the guard is certifying more than it checked.
+func (a *analyzer) noteReceiverShape(fi *funcInfo, call *ast.CallExpr, v sendVerdict) {
+	if a.receiverCensus == nil {
+		a.receiverCensus = map[recvShape]int{}
+	}
+	a.receiverCensus[v.shape]++
+	if v.decided {
+		return
+	}
+	recv := "?"
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		recv = exprStringRender(sel.X)
+	}
+	a.undecided = append(a.undecided, site{
+		pos:   a.fset.Position(call.Pos()).String(),
+		field: string(v.shape) + " receiver " + recv + "." + v.method,
+		note:  v.blind,
+	})
 }
 
 // callReceiverName renders a call used as a RECEIVER for an error message, e.g.
@@ -1298,6 +1828,10 @@ func passesLang(call *ast.CallExpr) bool {
 
 // exprStringRender is this file's expression renderer, named apart from the
 // job-type guard's exprString to keep the two scanners independent.
+//
+// A receiver a finding names has to be recognisable in the source, so the
+// shapes the matcher decides are rendered rather than elided: `list[0].Send` and
+// `held.(Mailer).Send` say which send was missed, where "?" says nothing.
 func exprStringRender(e ast.Expr) string {
 	switch x := e.(type) {
 	case *ast.BasicLit:
@@ -1309,7 +1843,27 @@ func exprStringRender(e ast.Expr) string {
 	case *ast.CallExpr:
 		return exprStringRender(x.Fun) + "(…)"
 	case *ast.BinaryExpr:
-		return exprStringRender(x.X) + " + " + exprStringRender(x.Y)
+		return exprStringRender(x.X) + " " + x.Op.String() + " " + exprStringRender(x.Y)
+	case *ast.IndexExpr:
+		return exprStringRender(x.X) + "[" + exprStringRender(x.Index) + "]"
+	case *ast.TypeAssertExpr:
+		if x.Type == nil {
+			return exprStringRender(x.X) + ".(type)"
+		}
+		return exprStringRender(x.X) + ".(" + exprStringRender(x.Type) + ")"
+	case *ast.ParenExpr:
+		return "(" + exprStringRender(x.X) + ")"
+	case *ast.StarExpr:
+		return "*" + exprStringRender(x.X)
+	case *ast.ArrayType:
+		if x.Len == nil {
+			return "[]" + exprStringRender(x.Elt)
+		}
+		return "[" + exprStringRender(x.Len) + "]" + exprStringRender(x.Elt)
+	case *ast.MapType:
+		return "map[" + exprStringRender(x.Key) + "]" + exprStringRender(x.Value)
+	case *ast.CompositeLit:
+		return exprStringRender(x.Type) + "{…}"
 	}
 	return "?"
 }
@@ -1491,12 +2045,23 @@ func TestDictionaryOwnsAllNonASCIIEmailContent(t *testing.T) {
 // The matcher's own coverage: one assertion per RECEIVER SHAPE.
 // ---------------------------------------------------------------------------
 
+// wantVerdict is one fixture call's expected classification: the receiver shape
+// the matcher must report, whether it must be able to decide it, and whether the
+// receiver must be recognised as a mailer.
+type wantVerdict struct {
+	shape   recvShape
+	decided bool
+	matched bool
+}
+
 // matcherFixture is source the matcher is pointed at directly. The module has no
-// `Make().Send(…)` and no package-level mailer today, and a hole in a matcher is
-// invisible exactly while it is unpopulated — which is how the two shapes below
-// went unnoticed while the render guard reported green on the real tree. So the
-// shapes it must understand are exercised here, on source whose only purpose is
-// to be looked at.
+// `Make().Send(…)`, no method-call, index or type-assertion receiver today, and a
+// hole in a matcher is invisible exactly while it is unpopulated — which is how
+// three of the shapes below went unnoticed while the render guard reported green
+// on the real tree. So every shape it must understand is exercised here, on
+// source whose only purpose is to be looked at, together with a receiver shape it
+// must NOT understand yet: that one is what the census turns into a loud failure
+// instead of a silently skipped site.
 //
 // The declaration ORDER is deliberate: qaProbePkgAlias is declared before the
 // variable it aliases, so a matcher that only looked one step ahead would mark
@@ -1517,6 +2082,16 @@ type qaProbeHolder struct {
 	Anything qaProbeMailer
 }
 
+type qaProbeOwner struct {
+	m qaProbeMailer
+}
+
+func (o qaProbeOwner) make() qaProbeMailer { return o.m }
+
+func (o qaProbeOwner) other() qaProbeNotMailer { return qaProbeNotMailer{} }
+
+var qaProbeOwnerVar qaProbeOwner
+
 type qaProbeNotMailer struct{}
 
 func (qaProbeNotMailer) Send(any, job int) error { return nil }
@@ -1525,7 +2100,10 @@ func qaProbeOther(ctx int) qaProbeNotMailer { return qaProbeNotMailer{} }
 
 var qaProbeRunner qaProbeNotMailer
 
-func qaProbeCalls(ctx int) {
+func qaProbeCalls(
+	ctx int, o qaProbeOwner, list []qaProbeMailer, byName map[string]qaProbeMailer,
+	plain []qaProbeNotMailer, held any,
+) {
 	_ = qaProbeMake().Send("a@example.test", "s", "b", "en")
 	_ = qaProbePkgMailer.Send("a@example.test", "s", "b", "en")
 	_ = qaProbePkgAlias.Send("a@example.test", "s", "b", "en")
@@ -1535,25 +2113,111 @@ func qaProbeCalls(ctx int) {
 	_ = k.Send("a@example.test", "s", "b", "en")
 	h := qaProbeHolder{}
 	_ = h.Anything.Send("a@example.test", "s", "b", "en")
+	_ = o.make().Send("a@example.test", "s", "b", "en")
+	_ = qaProbeOwnerVar.make().Send("a@example.test", "s", "b", "en")
+	_ = list[0].Send("a@example.test", "s", "b", "en")
+	_ = byName["k"].Send("a@example.test", "s", "b", "en")
+	_ = held.(qaProbeMailer).Send("a@example.test", "s", "b", "en")
+	_ = h.Anything.make().Send("a@example.test", "s", "b", "en")
 	_ = qaProbeRunner.Send(ctx, 1)
 	_ = qaProbeOther(ctx).Send(ctx, 1)
+	_ = o.other().Send(ctx, 1)
+	_ = plain[0].Send(ctx, 1)
+	_ = held.(qaProbeNotMailer).Send(ctx, 1)
 }
 `
 
+// TestEverySendReceiverShapeIsDecided is the CENSUS. The render matcher above
+// can only report on the shapes it has a rule for, and a shape it has no rule
+// for produces no finding at all — the site simply is not counted, and the guard
+// reports green over a mailer send it never examined. That is not hypothetical:
+// a METHOD-call receiver, a slice/map INDEX and a TYPE ASSERTION all carried the
+// mailer API and all fell through the switch, and this file certified twenty
+// sites while the twenty-first was invisible.
+//
+// So every send-shaped call the walk meets is classified, and a shape that
+// cannot be DECIDED fails here: either the matcher has no rule for it, or the
+// rule needs a type the module cannot name. The floor keeps the census itself
+// honest — a census that classified nothing would pass vacuously.
+func TestEverySendReceiverShapeIsDecided(t *testing.T) {
+	a := newAnalyzer(t)
+	a.walk()
+
+	total := 0
+	for _, n := range a.receiverCensus {
+		total += n
+	}
+	if total < minSenderSites {
+		t.Fatalf("the receiver census classified only %d send-shaped call(s) (expected at "+
+			"least %d) — the census is broken, so this guard would pass vacuously over "+
+			"every receiver shape it never classified", total, minSenderSites)
+	}
+	if len(a.undecided) > 0 {
+		t.Fatalf("%d email send(s) have a receiver shape the render matcher cannot decide. "+
+			"That is not a site it checked and cleared — it is a site it does not see, and "+
+			"this guard would certify it as passing. Teach analyzer.classifySend the shape "+
+			"(a case that answers decided=true and matched=…), or make the type it needs "+
+			"nameable via exprType:\n%s",
+			len(a.undecided), renderSites(a.undecided))
+	}
+	var shapes []string
+	for shape, n := range a.receiverCensus {
+		shapes = append(shapes, fmt.Sprintf("%s=%d", shape, n))
+	}
+	sort.Strings(shapes)
+	t.Logf("the census decided all %d send-shaped call(s): %s", total, strings.Join(shapes, ", "))
+}
+
 // TestEmailSendMatcherCoversEveryReceiverShape is the guard on the guard. Every
 // way a mailer can be reached — a field of any name, a local, a package-level
-// variable, or a call whose declared result IS a mailer — must be recognised as
-// a send, and two shapes that are NOT email sends must stay unrecognised:
+// variable, a package-function call, a METHOD call, a slice/map element, a type
+// assertion — must be recognised as a send, and each shape must stay unmatched
+// when the value it reaches is NOT an email mailer:
 //
 //   - a call whose declared result type has a `Send`, but not an EMAIL one
 //     (`qaProbeOther(ctx).Send(ctx, 1)` — the `Dispatch`/`Runner` negative
-//     control, in call-receiver form);
+//     control, in package-function form);
+//   - the same in METHOD form (`o.other().Send(ctx, 1)`), through a container
+//     (`plain[0].Send(ctx, 1)`) and through a type assertion
+//     (`held.(qaProbeNotMailer).Send(ctx, 1)`);
 //   - a package-level variable of that same non-email type.
+//
+// One shape is DELIBERATELY undecidable — `h.Anything.make()`, a method that
+// `Anything`'s declared type does not declare — because that is the state the
+// census has to turn into a loud failure rather than a silent skip. The test
+// asserts it comes back decided=false AND that the census names it, so the
+// tripwire cannot rot into a comment.
 //
 // The expectation map is keyed on the call as the scanner renders it, and it is
 // asserted in BOTH directions: a shape the matcher stops recognising fails, and
 // so does a fixture call nobody declared an expectation for.
 func TestEmailSendMatcherCoversEveryReceiverShape(t *testing.T) {
+	want := map[string]wantVerdict{
+		// Reached through a call / a field / an identifier.
+		"qaProbeMake(…).Send":   {shapePkgCall, true, true}, // a package-function call receiver
+		"qaProbePkgMailer.Send": {shapeIdent, true, true},   // a package-level variable
+		"qaProbePkgAlias.Send":  {shapeIdent, true, true},   // a package var aliasing another
+		"m.Send":                {shapeIdent, true, true},   // a local from a package var
+		"k.Send":                {shapeIdent, true, true},   // a local from a call
+		"h.Anything.Send":       {shapeField, true, true},   // a field, whatever it is called
+		// Reached through a METHOD call, an INDEX and a TYPE ASSERTION — the
+		// three shapes that were invisible before this card.
+		"o.make(…).Send":               {shapeMethodCall, true, true}, // a method on a parameter
+		"qaProbeOwnerVar.make(…).Send": {shapeMethodCall, true, true}, // a method on a package var
+		"list[0].Send":                 {shapeIndex, true, true},      // a slice element
+		`byName["k"].Send`:             {shapeIndex, true, true},      // a map value
+		"held.(qaProbeMailer).Send":    {shapeTypeAssert, true, true}, // a type assertion
+		// The undecidable shape: no method `make` on Anything's declared type.
+		"h.Anything.make(…).Send": {shapeMethodCall, false, false},
+		// Negative controls: a Send that is not an EMAIL send must not match,
+		// in every shape the matcher now decides.
+		"qaProbeRunner.Send":           {shapeIdent, true, false},
+		"qaProbeOther(…).Send":         {shapePkgCall, true, false},
+		"o.other(…).Send":              {shapeMethodCall, true, false},
+		"plain[0].Send":                {shapeIndex, true, false},
+		"held.(qaProbeNotMailer).Send": {shapeTypeAssert, true, false},
+	}
+
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "qa_matcher_fixture.go", matcherFixture, 0)
 	if err != nil {
@@ -1567,6 +2231,7 @@ func TestEmailSendMatcherCoversEveryReceiverShape(t *testing.T) {
 		resolvedParams: map[string]resolvedValue{},
 		byPath:         map[string]*parsedFile{pf.path: pf},
 		parsed:         []*parsedFile{pf},
+		receiverCensus: map[recvShape]int{},
 	}
 	a.buildMailerIndex()
 	a.markPkgMailerVars()
@@ -1583,52 +2248,59 @@ func TestEmailSendMatcherCoversEveryReceiverShape(t *testing.T) {
 			locals:      map[string]resolvedValue{},
 			emailParams: map[string]bool{},
 		}
+		a.markIdentTypes(fi)
 		a.markMailerIdents(fi)
 		infos = append(infos, fi)
 	}
 
-	// call is keyed the way exprStringRender renders a callee, and named is the
-	// receiver name the matcher reports ("none" when it must not match at all).
-	want := map[string]string{
-		"qaProbeMake(…).Send":   "…qaProbeMake().Send", // a call receiver
-		"qaProbePkgMailer.Send": "…qaProbePkgMailer.Send",
-		"qaProbePkgAlias.Send":  "…qaProbePkgAlias.Send", // a package var from a mailer expr
-		"m.Send":                "…m.Send",               // a local from a package var
-		"k.Send":                "…k.Send",               // a local from a call
-		"h.Anything.Send":       "…Anything.Send",        // a field, whatever it is called
-		"qaProbeRunner.Send":    "none",                  // a package var that is NOT an email mailer
-		"qaProbeOther(…).Send":  "none",                  // a call that is NOT an email mailer
-	}
-	got := map[string]string{}
+	// call is keyed the way exprStringRender renders a callee.
+	got := map[string]sendVerdict{}
 	for _, fi := range infos {
 		ast.Inspect(fi.decl.Body, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
+			verdict, isSend := a.classifySend(fi, call)
+			if !isSend {
+				return true
+			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || !sendMethodNames[sel.Sel.Name] {
+			if !ok {
+				t.Errorf("a send-shaped call whose callee is not a selector: %s",
+					exprStringRender(call.Fun))
 				return true
 			}
 			key := exprStringRender(sel.X) + "." + sel.Sel.Name
-			name, matched := a.senderSendCall(fi, call)
-			if !matched {
-				name = "none"
-			}
-			got[key] = name
+			got[key] = verdict
+			// The census is the tripwire for a shape the matcher cannot decide,
+			// so it is exercised on the same verdict the walk would have filed.
+			a.noteReceiverShape(fi, call, verdict)
 			return true
 		})
 	}
 
-	for key, wantName := range want {
-		gotName, ok := got[key]
+	for key, want := range want {
+		verdict, ok := got[key]
 		if !ok {
 			t.Errorf("the fixture call %s was not collected at all — the fixture and this "+
 				"test have drifted apart", key)
 			continue
 		}
-		if gotName != wantName {
-			t.Errorf("%s: the matcher reports %q, want %q", key, gotName, wantName)
+		if verdict.shape != want.shape {
+			t.Errorf("%s: the matcher classifies the receiver as %q, want %q",
+				key, verdict.shape, want.shape)
+		}
+		if verdict.decided != want.decided {
+			t.Errorf("%s: the matcher reports decided=%v, want %v (%s)",
+				key, verdict.decided, want.decided, verdict.blind)
+		}
+		if verdict.matched != want.matched {
+			t.Errorf("%s: the matcher reports matched=%v (%q), want %v",
+				key, verdict.matched, verdict.name, want.matched)
+		}
+		if want.matched && verdict.name == "" {
+			t.Errorf("%s: matched but named nothing — a finding has to say WHICH send it is", key)
 		}
 	}
 	for key := range got {
@@ -1636,6 +2308,26 @@ func TestEmailSendMatcherCoversEveryReceiverShape(t *testing.T) {
 			t.Errorf("the fixture call %s has no expectation in this test — a new receiver "+
 				"shape must be declared, not assumed covered", key)
 		}
+	}
+
+	// The census must be able to SAY what it could not decide: one undecided
+	// call, named with its receiver shape and the call site.
+	if len(a.undecided) != 1 {
+		t.Fatalf("the census filed %d undecided receiver shape(s), want exactly 1:\n%s",
+			len(a.undecided), renderSites(a.undecided))
+	}
+	msg := renderSites(a.undecided)
+	for _, sub := range []string{string(shapeMethodCall), "h.Anything.make", "promoted method"} {
+		if !strings.Contains(msg, sub) {
+			t.Errorf("the census finding does not mention %q, so it would not tell a reader "+
+				"what to teach the matcher:\n%s", sub, msg)
+		}
+	}
+	if a.receiverCensus[shapeMethodCall] != 4 {
+		t.Errorf("the census counted %d METHOD-call receivers, want 4 (o.make, "+
+			"qaProbeOwnerVar.make, h.Anything.make, o.other) — the census is what makes a "+
+			"lost shape visible, so it has to count every shape it meets",
+			a.receiverCensus[shapeMethodCall])
 	}
 }
 
