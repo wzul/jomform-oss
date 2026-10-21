@@ -152,7 +152,12 @@ func TestCustomFormRenderSanitizesAndSetsCSP(t *testing.T) {
 	if !strings.Contains(rec.Header().Get("Content-Security-Policy"), "default-src 'none'") {
 		t.Errorf("CSP not set: %q", rec.Header().Get("Content-Security-Policy"))
 	}
-	if !strings.Contains(body, `sandbox="allow-forms"`) {
+	// Card t_c5a278c0: the sandbox must be present and keep the merchant's HTML
+	// from scripting or navigating. The exact flag list is pinned by the CSP
+	// guards in custom_csp_nonce_t_c5a278c0_test.go (allow-same-origin is
+	// required there: without it frame.contentDocument is null and the submit
+	// bridge cannot read the buyer's values).
+	if !strings.Contains(body, `sandbox="allow-forms`) {
 		t.Errorf("iframe not sandboxed")
 	}
 	// The sanitized body is embedded as a JSON string literal in the page JS
