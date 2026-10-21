@@ -272,26 +272,54 @@ test("a 200 is still treated as a success — the refusal path did not swallow i
   await expect(page.locator("#ws-rename-slug")).toHaveValue("demo");
 
   await page.locator("#ws-rename-slug").fill("kedai-bunga");
+
+  // TAG THE DOCUMENT THAT ISSUES THE PATCH. doRename writes the stored address
+  // from the server's answer and THEN reloads, and the input already holds the
+  // value we typed — so `#ws-rename-slug` on its own cannot tell the pre-reload
+  // document from the reloaded one. This marker exists only in the old realm.
+  await page.evaluate(() => {
+    (window as Window & { __jfBeforeRename?: boolean }).__jfBeforeRename = true;
+  });
   await saveRename(page);
 
-  // The stored address is written from the server's answer BEFORE the reload.
+  // WAIT FOR THE RELOADED DOCUMENT, then read storage (t_9da743f6).
+  //
+  // A bare `page.evaluate()` here is what used to race: it could be issued in the
+  // instant the reload committed but before the next document was ready, and
+  // Playwright then failed this spec with "Execution context was destroyed, most
+  // likely because of a navigation" — measured at 2 failures in 60 runs on a
+  // loaded host (load average 16 on 6 cores), which reddened a whole `e2e` gate.
+  //
+  // `waitForFunction` is the primitive that survives that: when a navigation
+  // destroys the execution context, playwright-core's
+  // Frame.retryWithProgressAndTimeouts re-runs the predicate in the new context
+  // instead of handing back a handle into the dead document. The predicate also
+  // waits for the card to render in the new document, so everything read after
+  // it comes from one settled page.
   await page.waitForFunction(
-    () => window.localStorage.getItem("jf_workspace") === "kedai-bunga",
+    () => {
+      const w = window as Window & { __jfBeforeRename?: boolean };
+      // Still the document that sent the PATCH — the reload has not landed yet.
+      if (w.__jfBeforeRename) return false;
+      // The reloaded shell is up and the workspace card has rendered in it.
+      return document.querySelector("#ws-rename-slug") != null;
+    },
     null,
     { timeout: 30_000 },
   );
+
+  // The property that matters now: the reloaded page carries the server's new
+  // address, not the stale one. Both the pre-reload write and the reloaded
+  // shell's reconciliation feed this, which is exactly what the merchant gets.
+  await expect(page.locator("#ws-rename-slug")).toHaveValue("kedai-bunga", { timeout: 30_000 });
   const stored = await page.evaluate(() => window.localStorage.getItem("jf_workspace"));
   console.log(`OBSERVED stored workspace after a successful rename=${JSON.stringify(stored)}`);
-  expect(stored).toBe("kedai-bunga");
-
-  // Land on the reloaded page with the card actually rendered, so the negative
-  // assertions below are about a live card and not about an empty page.
-  await expect(page.locator("#ws-rename-slug")).toHaveValue("kedai-bunga", { timeout: 30_000 });
   console.log(
     `OBSERVED reloaded address field=${JSON.stringify(
       await page.locator("#ws-rename-slug").inputValue(),
     )}`,
   );
+  expect(stored).toBe("kedai-bunga");
 
   // No refusal sentence was rendered for a success.
   await expect(page.locator('section:has(#ws-rename-slug) [role="alert"]')).toHaveCount(0);
