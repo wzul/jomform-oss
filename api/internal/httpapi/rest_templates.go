@@ -209,7 +209,7 @@ func (h *RESTHandlers) createOwnTemplate(w http.ResponseWriter, r *http.Request,
 	// (useOwnTemplate), so an unsatisfiable custom-form contract stored here
 	// would reach a buyer's page by the back door — the same refusal the form
 	// write paths apply.
-	if err := customform.ValidateConfig(in.Config); err != nil {
+	if err := customform.ValidateAndNormalizeConfig(in.Config); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -294,7 +294,7 @@ func (h *RESTHandlers) updateOwnTemplate(w http.ResponseWriter, r *http.Request,
 	}
 	// Card t_73a5db6e: same unsatisfiable-custom-form refusal as
 	// createOwnTemplate (nil config = leave unchanged, and is skipped).
-	if err := customform.ValidateConfig(in.Config); err != nil {
+	if err := customform.ValidateAndNormalizeConfig(in.Config); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}

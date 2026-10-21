@@ -537,7 +537,7 @@ func (s *Server) upsertForm(
 	// and an agent can send config.custom_html directly (without the
 	// custom_html/custom_fields inputs), so the same refusal the REST form
 	// routes apply belongs here too.
-	if err := customform.ValidateConfig(in.Config); err != nil {
+	if err := customform.ValidateAndNormalizeConfig(in.Config); err != nil {
 		return nil, nil, err
 	}
 	if in.FormID == "" {
@@ -651,7 +651,7 @@ func (s *Server) upsertForm(
 	}
 	// Card t_73a5db6e: same unsatisfiable-custom-form refusal as the create
 	// path (the merged config that carries custom_html lands in in.Config).
-	if err := customform.ValidateConfig(in.Config); err != nil {
+	if err := customform.ValidateAndNormalizeConfig(in.Config); err != nil {
 		return nil, nil, err
 	}
 	// A slug supplied on the UPDATE path renames the form, exactly as the
@@ -816,7 +816,7 @@ func applyCustomFormConfig(cfg map[string]any, html string, fields []customform.
 	if err := customform.Validate(cc); err != nil {
 		return err
 	}
-	cfg["mode"] = "response"
+	cfg["mode"] = customform.ModeResponse
 	if strings.TrimSpace(html) == "" {
 		delete(cfg, customform.ConfigKey)
 		return nil

@@ -939,7 +939,7 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 	// control that exists in the sanitized HTML. A config whose required field
 	// has no such control is therefore unsubmittable, and storing it silently
 	// is the merchant trap this refuses (REST half).
-	if err := customform.ValidateConfig(in.Config); err != nil {
+	if err := customform.ValidateAndNormalizeConfig(in.Config); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1039,7 +1039,7 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 	// PATCH that rewrites the config is the second way an unsubmittable
 	// contract reaches storage; an omitted config (nil) leaves the stored
 	// custom_html alone and is not re-validated.
-	if err := customform.ValidateConfig(in.Config); err != nil {
+	if err := customform.ValidateAndNormalizeConfig(in.Config); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}

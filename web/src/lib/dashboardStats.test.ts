@@ -154,10 +154,19 @@ test("the Go SQL agrees with both rules (cross-language pin)", () => {
   // 2. The submissions figure still branches on the form's mode and reads the
   //    submissions table for a response form. If this CASE is deleted the
   //    response count silently returns to a sales count (issue #598/#604).
+  //
+  //    The predicate itself is now the shared `responseFormSQL` fragment so the
+  //    rollup and dbstore.FormMode cannot drift (card t_827b0a78), so this pins
+  //    the fragment AND that this CASE uses it.
   assert.match(
     analyticsGo,
-    /CASE WHEN f\.config->>'mode' = 'response'\s*\n\s*THEN \(SELECT COUNT\(\*\) FROM submissions sub WHERE sub\.form_id = f\.id\)\s*\n\s*ELSE COUNT\(s\.id\) END\s+AS submissions/,
-    "the submissions CASE is gone or no longer reads the `submissions` table for a response form — the response count regresses to 0",
+    /const responseFormSQL = `\(f\.config->>'mode' = 'response'[\s\S]*?custom_html[\s\S]*?html[\s\S]*?<> ''\)`/,
+    "responseFormSQL no longer carries both arms of dbstore.FormMode — the mode label and the entry count disagree with the Go rule the page branches on",
+  );
+  assert.match(
+    analyticsGo,
+    /CASE WHEN `\+responseFormSQL\+`\s*\n\s*THEN \(SELECT COUNT\(\*\) FROM submissions sub WHERE sub\.form_id = f\.id\)\s*\n\s*ELSE COUNT\(s\.id\) END\s+AS submissions/,
+    "the submissions CASE is gone, no longer reads the `submissions` table for a response form, or no longer uses the shared mode predicate — the response count regresses to 0",
   );
   // 3. It must be ONE branch, never a sum of both tables (double counting).
   const submissionsExpr = analyticsGo.slice(

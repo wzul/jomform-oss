@@ -55,6 +55,43 @@ type Config struct {
 // ConfigKey is the config-map key under which the custom-form config lives.
 const ConfigKey = "custom_html"
 
+// ModeResponse is the forms.config.mode value that marks a response-only form.
+//
+// It is the ONE literal for that value: dbstore's FormModeResponse (the
+// reader's name for the same constant) aliases it rather than repeating the
+// string, because dbstore imports this package and the reverse would be a
+// cycle. A custom-HTML form is response-only by construction — it collects
+// answers and never takes payment (see the package doc) — so the value lives
+// beside the section that always requires it.
+const ModeResponse = "response"
+
+// NormalizeConfig makes a raw config map self-consistent before it is stored:
+// when it carries an ENABLED custom_html section, the map also carries
+// `mode:"response"`.
+//
+// Card t_827b0a78: the section and the mode are two statements of the same
+// fact, and a raw-config write (REST form create/update, MCP upsert_form's
+// config door, the template writers) could send the section alone. The stored
+// form then described itself as a PAYMENT form while carrying a body only the
+// response renderer can paint, so the buyer got the payment/legacy layout
+// instead of the merchant's form. The documented MCP door already forces this
+// (mcpsrv's applyCustomFormConfig sets mode=response itself); this is the same
+// rule for every other write path, in the package that owns the section.
+//
+// It never touches a config WITHOUT an enabled section: clearing a body
+// (empty html) leaves the mode exactly as the caller set it, so emptying the
+// body keeps whatever the form was — a merchant moving a custom form back to a
+// payment form does that with a mode write, not by clearing the body.
+//
+// Call it beside ValidateConfig — before the config is stored, never at
+// render time (a reader must never rewrite what it read).
+func NormalizeConfig(cfg map[string]any) {
+	if !Enabled(cfg) {
+		return
+	}
+	cfg["mode"] = ModeResponse
+}
+
 // FromConfig extracts the custom-form config from a form's config map. Returns
 // nil when the form has no custom_html section.
 func FromConfig(cfg map[string]any) *Config {
@@ -122,12 +159,34 @@ func Validate(c *Config) error {
 	return nil
 }
 
+// ValidateAndNormalizeConfig is what a write path that STORES a raw config map
+// calls: ValidateConfig for the contract, then NormalizeConfig so an enabled
+// custom_html section carries `mode:"response"` in the bytes being stored (card
+// t_827b0a78).
+//
+// The two halves are kept apart because they answer different questions —
+// "may this be stored at all?" and "does the map describe itself correctly?" —
+// but a write path needs both, and doing only the first is what let a form be
+// stored with a custom body and a payment mode. Every REST/MCP writer that
+// stores a config verbatim calls this one instead of ValidateConfig.
+func ValidateAndNormalizeConfig(cfg map[string]any) error {
+	if err := ValidateConfig(cfg); err != nil {
+		return err
+	}
+	NormalizeConfig(cfg)
+	return nil
+}
+
 // ValidateConfig runs the same checks over the custom-form section of a form or
 // template config map, when it carries one. Every surface that stores a config
 // verbatim (REST form create/update, MCP upsert_form, the template writers whose
 // config is later cloned onto a real form) calls this beside its existing
 // urlguard/formfields config checks, so no write path can persist an
 // unsatisfiable custom-form contract.
+//
+// A write path calls ValidateAndNormalizeConfig, not this: storing a valid
+// section without its mode is the other half of the same trap (card
+// t_827b0a78). This function stays the pure validation half.
 //
 // A `custom_html` key the package cannot even decode is refused rather than
 // skipped: such a config is not renderable as a custom form (FromConfig returns

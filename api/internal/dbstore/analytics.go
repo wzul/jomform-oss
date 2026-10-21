@@ -61,6 +61,15 @@ type ProductStats struct {
 
 const paidSet = `('paid','confirmed')`
 
+// responseFormSQL is the SQL half of dbstore.FormMode, so a dashboard count can
+// never label a form differently from the rule the page and the submit path
+// branch on. Card t_827b0a78: an ENABLED config.custom_html section is a
+// response form even when `mode` is missing, exactly as the Go rule reports —
+// without this the rollup called such a form a payment form and counted its
+// sales table while its entries were landing in submissions.
+const responseFormSQL = `(f.config->>'mode' = 'response'
+	 OR btrim(coalesce(f.config->'custom_html'->>'html', '')) <> '')`
+
 // FormAnalytics returns per-form rollups for an account.
 func (s *SaleStore) FormAnalytics(ctx context.Context, accountID string) ([]FormStats, error) {
 	return s.FormAnalyticsAccounts(ctx, []string{accountID})
@@ -74,11 +83,14 @@ func (s *SaleStore) FormAnalyticsAccounts(ctx context.Context, accountIDs []stri
 	rows, err := s.pool.Query(ctx, `
 		SELECT f.id, f.slug, f.title,
 		       -- Issue #598: the mode rides along so a caller can label the
-		       -- figure honestly. Same rule as dbstore.FormMode: only an
-		       -- explicit JSON string "response" is a response form, so a
-		       -- legacy form with no mode key (or mode: 1) reads as payment —
-		       -- exactly what the Go rule returns.
-		       CASE WHEN f.config->>'mode' = 'response'
+		       -- figure honestly. Same rule as dbstore.FormMode (one shared
+		       -- fragment, responseFormSQL): an explicit JSON string
+		       -- "response" is a response form, and so is a config that
+		       -- carries an ENABLED custom_html section without one (card
+		       -- t_827b0a78). A legacy form with no mode key (or mode: 1)
+		       -- and no custom body reads as payment — exactly what the Go
+		       -- rule returns.
+		       CASE WHEN `+responseFormSQL+`
 		            THEN 'response' ELSE 'payment' END       AS mode,
 		       -- Issue #604: a response-mode form records NOTHING in the sales
 		       -- table — its entries live in submissions (issue #171). Counting
@@ -92,7 +104,7 @@ func (s *SaleStore) FormAnalyticsAccounts(ctx context.Context, accountIDs []stri
 		       -- payment form that once recorded sales and was later switched to
 		       -- response mode cannot have its two tables added together and
 		       -- double counted.
-		       CASE WHEN f.config->>'mode' = 'response'
+		       CASE WHEN `+responseFormSQL+`
 		            THEN (SELECT COUNT(*) FROM submissions sub WHERE sub.form_id = f.id)
 		            ELSE COUNT(s.id) END                     AS submissions,
 		       COUNT(s.id) FILTER (WHERE s.status IN `+paidSet+`) AS paid_count,

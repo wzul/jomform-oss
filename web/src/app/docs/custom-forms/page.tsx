@@ -39,6 +39,29 @@ export default function CustomFormsDocsPage() {
         the section carries html.
       </p>
 
+      <h2 className="mt-8 text-xl font-semibold text-slate-900">
+        A custom form is a response form
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The custom_html section and the form&apos;s mode are two statements of one fact, so you only
+        have to write one of them. A form that carries an enabled section is a response-only form —
+        it collects answers, it never takes payment — and the write surfaces store
+        mode: &quot;response&quot; beside the section for you. That holds for upsert_form&apos;s
+        custom_html and custom_fields arguments and for a raw config map on a REST create or update
+        alike, so a raw config whose custom_html has a body and no mode key is stored as a response
+        form rather than as a payment form: the buyer gets your markup, not the builder or payment
+        layout. Writing mode: &quot;payment&quot; next to an enabled section does not win — the
+        section is the form&apos;s body, and the payment renderer cannot paint it, so the stored mode
+        becomes response.
+      </p>
+      <p className="mt-3 text-sm leading-relaxed text-slate-600">
+        The reverse direction is unaffected: a config with no section, or with an empty html, is
+        stored exactly as you sent it, so setting mode is the only thing that makes an ordinary form
+        a response form. A form already stored with an enabled section and no mode key (written
+        before this rule, or cloned from an older template) is still treated, rendered and counted
+        as a response form — the section alone decides.
+      </p>
+
       <h2 className="mt-8 text-xl font-semibold text-slate-900">What happens to the HTML</h2>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         The markup is stored as you sent it and sanitized again on every render — the stored body is
@@ -191,7 +214,9 @@ export default function CustomFormsDocsPage() {
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         Write an empty html and the custom form is removed: with upsert_form that is an empty
         custom_html string, and through a raw config map it is a custom_html section with no body.
-        The form keeps its published URL and renders through the block builder again.
+        The form keeps its published URL and renders through the block builder again. Its mode is
+        left exactly as it was — an emptied custom form that was response-only stays response-only,
+        so set mode yourself if you want those blocks to take payment.
       </p>
 
       <h2 className="mt-8 text-xl font-semibold text-slate-900">Where to read next</h2>

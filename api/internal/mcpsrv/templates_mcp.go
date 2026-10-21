@@ -223,7 +223,7 @@ func (s *Server) createTemplateMCP(
 	}
 	// Card t_73a5db6e: and so is an unsatisfiable custom-form contract — it
 	// would reach a buyer's page through use_template.
-	if err := customform.ValidateConfig(config); err != nil {
+	if err := customform.ValidateAndNormalizeConfig(config); err != nil {
 		return nil, nil, err
 	}
 	f := &dbstore.Form{
@@ -289,7 +289,7 @@ func (s *Server) updateTemplateMCP(
 	}
 	// Card t_73a5db6e: same unsatisfiable-custom-form refusal as
 	// create_template (nil config = leave unchanged, and is skipped).
-	if err := customform.ValidateConfig(in.Config); err != nil {
+	if err := customform.ValidateAndNormalizeConfig(in.Config); err != nil {
 		return nil, nil, err
 	}
 	if err := s.deps.Forms.UpdateTemplate(ctx, acc, in.TemplateID, title, in.Config, in.Theme); err != nil {
