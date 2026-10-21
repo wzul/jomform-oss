@@ -192,6 +192,17 @@ const DESTINATION_FACTS: Record<string, string[]> = {
     "the only place in the product where you can see afterwards that one happened",
     "list_events",
   ],
+  // Issue #255's custom HTML form: the facts a merchant (or the agent acting for
+  // them) can only learn here — the two argument names, that the body is
+  // sandboxed, that validation is not enforced, and the narrow server-side check.
+  "Custom HTML forms": [
+    "custom_html",
+    "custom_fields",
+    "sandboxed iframe",
+    "validation is a hint",
+    "required-only",
+    "medan wajib tiada dalam HTML",
+  ],
 };
 
 // The floor each entry's fact list must not fall below.
@@ -240,6 +251,8 @@ const PER_ENTRY_FLOOR: Record<string, number> = {
   "Form URLs and slugs (rename a form)": 3,
   // t_4c58a09e: this branch's own entry, at the count its facts list above holds.
   "Activity log (audit trail)": 3,
+  // Issue #255's guide, at the count its facts list above holds.
+  "Custom HTML forms": 6,
 };
 
 // parseFactTables pulls `title: "…"` and the following `href: "…"` out of a JSX

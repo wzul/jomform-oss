@@ -71,6 +71,7 @@ prices, sales, refunds, analytics — without opening a dashboard.
 - [The form builder](https://jomform.com/docs/builder) — the field palette, the canvas, the three areas, and editing a block's settings on desktop and on a phone.
 - [In-app assistant](https://jomform.com/docs/chat) — what the built-in chat assistant can and cannot do: it answers questions about your own forms, sales and products, files feedback, and can prepare a small reversible change for you to confirm — it can never apply one by itself.
 - [In-app feedback](https://jomform.com/docs/feedback) — filing a bug or feature request from the dashboard, following the reply thread, what the statuses mean, and the email that tells you a reply arrived.
+- [Custom HTML forms](https://jomform.com/docs/custom-forms) — a response form whose body is agent-authored HTML: what the sanitizer keeps, the custom_fields registration contract, the field types, and what the server enforces on submit.
 - [Privacy policy](https://jomform.com/legal/privacy)
 - [Terms of service](https://jomform.com/legal/terms)
 - [Brand assets](https://jomform.com/brand)

@@ -78,6 +78,10 @@ const PAGES = [
   { name: "docs-api", path: "/docs/api" },
   { name: "docs-chat", path: "/docs/chat" },
   { name: "docs-feedback", path: "/docs/feedback" },
+  // Issue #255's custom HTML forms guide. docsA11y.test.ts walks the pages on
+  // disk and fails when one of them is missing here, so this entry ships with
+  // the page.
+  { name: "docs-custom-forms", path: "/docs/custom-forms" },
 ];
 
 for (const page of PAGES) {

@@ -189,6 +189,16 @@ const GROUPS: Group[] = [
         body: "Build order and response forms with a drag-and-drop builder — fields, products, images — and publish to your workspace URL or a custom domain.",
       },
       {
+        // Issue #255's feature had no page in the knowledge base: the only
+        // description of the field contract was the MCP tool schema. The entry
+        // (and the guide it links) are the documentation-parity fix; the title
+        // is in ORIGINAL_TITLES and the facts are at the destination, so it is
+        // guarded like every other cut entry.
+        title: "Custom HTML forms",
+        href: "/docs/custom-forms",
+        body: "Give a form your own HTML body instead of builder blocks: the markup is sanitized and rendered in a sandboxed iframe, and only the fields registered in custom_fields are stored when a buyer submits.",
+      },
+      {
         title: "Products",
         body: "Sell one-time items and subscriptions: each product has a name, price, stock, images and optional variations, and a subscription adds a billing period.",
       },

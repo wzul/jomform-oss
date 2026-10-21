@@ -54,6 +54,11 @@ const APEX_PAGES = [
   "/docs/builder",
   "/docs/chat",
   "/docs/feedback",
+  // Issue #255's fully-custom HTML response form: the guide the /docs index
+  // links (and the sidebar carries) for a feature that is only reachable from
+  // the MCP surface. sitemapCoverage.test.ts pins this list against the pages
+  // on disk, which is why the entry is added with the page.
+  "/docs/custom-forms",
 ];
 
 export const dynamic = "force-dynamic";

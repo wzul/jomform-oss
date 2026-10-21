@@ -503,6 +503,9 @@ const ORIGINAL_TITLES = [
   // after the restructure was written, so it is a summary here plus a guide
   // (/docs/activity) that carries the walk-through, like every other cut entry.
   "Activity log (audit trail)",
+  // Issue #255's feature arrived without a guide; this entry is a summary plus
+  // /docs/custom-forms, which carries the field contract and the type list.
+  "Custom HTML forms",
 ];
 
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;

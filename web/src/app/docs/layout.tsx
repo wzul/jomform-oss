@@ -49,6 +49,7 @@ const NAV_GROUPS: Group[] = [
     label: "Forms & fields",
     sections: [
       { href: "/docs/customize", label: "Design → AI agent → MCP" },
+      { href: "/docs/custom-forms", label: "Custom HTML forms" },
       { href: "/docs/variations", label: "Variation products" },
     ],
   },
