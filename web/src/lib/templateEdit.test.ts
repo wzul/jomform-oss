@@ -42,10 +42,10 @@ import {
   builderControls,
   builderHref,
   builderTarget,
+  configWithStoredKeys,
   loadPath,
   saveFormAsTemplate,
   savePlan,
-  templateConfigWithStoredKeys,
   templateEditHref,
   templateSaveBody,
 } from "./templateEdit.ts";
@@ -309,7 +309,7 @@ test("editing a template keeps stored config keys the builder has no control for
   // replace would strip the category off a template that has one.
   const stored = { mode: "response", category: "Education", keep_me: 1, blocks: [] };
   const built = { mode: "payment", blocks: [{ id: "b1", type: "text" }], products: [] };
-  const out = templateConfigWithStoredKeys(stored, built);
+  const out = configWithStoredKeys(stored, built);
   assert.equal(out.category, "Education", "the stored gallery metadata was dropped");
   assert.equal(out.keep_me, 1, "an unrecognised stored key was dropped");
   // The edit itself (what the builder rendered) wins.
@@ -319,8 +319,8 @@ test("editing a template keeps stored config keys the builder has no control for
 
 test("a template with no stored config is saved with the built config unchanged", () => {
   const built = { mode: "response", blocks: [] };
-  assert.deepEqual(templateConfigWithStoredKeys(null, built), built);
-  assert.deepEqual(templateConfigWithStoredKeys(undefined, built), built);
+  assert.deepEqual(configWithStoredKeys(null, built), built);
+  assert.deepEqual(configWithStoredKeys(undefined, built), built);
 });
 
 // ── controls ──────────────────────────────────────────────────────────────
@@ -385,7 +385,7 @@ test("the template PUT body is built by the tested helper", () => {
   assert.match(builderPage, /templateSaveBody\(/, "the template save body is hand-built again");
   assert.match(
     builderPage,
-    /templateConfigWithStoredKeys\(templateConfig\.current/,
+    /configWithStoredKeys\(storedConfig\.current/,
     "the builder replaces a template's config wholesale again — stored keys such as the gallery category would be stripped",
   );
 });

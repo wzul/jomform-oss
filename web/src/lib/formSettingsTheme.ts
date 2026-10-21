@@ -22,7 +22,7 @@
 // THE RULE. What this tab does not own, it must not touch: the payload is the
 // theme the page READ, laid over with the keys this tab owns. That is the same
 // shape the builder already uses for a template's config
-// (`templateConfigWithStoredKeys` in lib/templateEdit.ts) and for a template's
+// (`configWithStoredKeys` in lib/templateEdit.ts) and for a template's
 // theme (`templateSaveBody`), and for the same reason.
 //
 // `custom_js` is the one owned key the merchant can CLEAR: an empty field means

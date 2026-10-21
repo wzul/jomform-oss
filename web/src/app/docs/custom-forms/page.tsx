@@ -33,7 +33,10 @@ export default function CustomFormsDocsPage() {
         practical way to write one; a REST create or update can carry the same section inside a raw
         config map. There is no dashboard editor for this form type today, so the write surfaces are
         the only way in, and a form with no html in its custom_html section renders through the block
-        renderer as usual.
+        renderer as usual. The dashboard&apos;s forms list still offers Edit on a custom form and opens
+        the block editor, but that editor cannot change or remove the body: its save carries the
+        custom_html section forward untouched, and the blocks it writes back are not rendered while
+        the section carries html.
       </p>
 
       <h2 className="mt-8 text-xl font-semibold text-slate-900">What happens to the HTML</h2>

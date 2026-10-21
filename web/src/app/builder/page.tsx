@@ -11,10 +11,10 @@ import {
   builderControls,
   builderHref,
   builderTarget,
+  configWithStoredKeys,
   loadPath,
   saveFormAsTemplate,
   savePlan,
-  templateConfigWithStoredKeys,
   templateSaveBody,
   type BuilderTarget,
 } from "../../lib/templateEdit";
@@ -303,12 +303,13 @@ export default function Builder() {
   const [target, setTarget] = useState<BuilderTarget>({ kind: "new" });
   const editingTemplate = target.kind === "template";
   const controls = builderControls(target.kind);
-  // The template's stored theme and config. Forms keep their theme in Form
-  // Settings, but a template has no settings page, so the builder round-trips
-  // the theme verbatim AND preserves config keys it has no control for (e.g.
-  // `category`, which a gallery card shows) instead of replacing the blob.
+  // The record's stored theme and config, as loaded. A template has no settings
+  // page, so the builder round-trips its theme verbatim; and BOTH targets keep
+  // the stored config keys the builder has no control for (a template's
+  // `category`, a form's `custom_html` / `registered_fields`) instead of
+  // replacing the blob — see lib/templateEdit configWithStoredKeys.
   const templateTheme = useRef<Record<string, unknown> | null>(null);
-  const templateConfig = useRef<Record<string, unknown> | null>(null);
+  const storedConfig = useRef<Record<string, unknown> | null>(null);
 
   // Issue #256: AI form builder — prompt input + generation state.
   const [aiPrompt, setAiPrompt] = useState("");
@@ -470,9 +471,14 @@ export default function Builder() {
       const cfg = d.config || {};
       setMode(cfg.mode === "response" ? "response" : "payment");
       setChipMapping(cfg.chip_mapping || {});
+      // The stored blob, for BOTH targets: a save lays the builder's own config
+      // over it so a key this page has no control for survives (a template's
+      // `category`, a form's `custom_html`). Card t_59bc3055: the form path had
+      // no such carry, so Publish on a custom-HTML form replaced the config and
+      // deleted the merchant's body with no warning and no undo.
+      storedConfig.current = cfg as Record<string, unknown>;
       if (resolved.kind === "template") {
         templateTheme.current = d.theme && typeof d.theme === "object" ? (d.theme as Record<string, unknown>) : null;
-        templateConfig.current = cfg as Record<string, unknown>;
       }
       const hydrated: Block[] = [];
       (cfg.blocks || []).forEach(
@@ -754,15 +760,24 @@ export default function Builder() {
       // A template's own body: title + config (+ its unchanged theme, so the
       // PUT's COALESCE cannot clear the design). A form keeps its existing
       // PATCH body — the theme belongs to Form Settings, not the builder.
+      //
+      // BOTH carry the stored config forward (card t_59bc3055). The PATCH below
+      // replaces the form's whole jsonb config with this map, so any key this
+      // page does not render would be deleted by a single Publish — measured on
+      // prod: a custom-HTML form lost `custom_html`, body and field contract
+      // both, while the panel reported "Your form is live". A custom form's
+      // `mode`/`blocks`/`products` keys the builder writes back are harmless
+      // once `custom_html` survives: customform.Enabled() is true (html
+      // non-empty), so the public page renders the merchant's body through the
+      // sandboxed iframe and never the blocks.
+      const saveConfig = isCreate
+        ? (config as Record<string, unknown>)
+        : configWithStoredKeys(storedConfig.current, config as Record<string, unknown>);
       const body = editingTemplate
-        ? templateSaveBody(
-            title,
-            templateConfigWithStoredKeys(templateConfig.current, config as Record<string, unknown>),
-            templateTheme.current,
-          )
+        ? templateSaveBody(title, saveConfig, templateTheme.current)
         : isCreate
           ? payload
-          : { title, config };
+          : { title, config: saveConfig };
       const wr = await fetch(`${plan.recordPath(id || "")}${workspaceQuery()}`, {
         method: isCreate ? "POST" : plan.method,
         headers: { "Content-Type": "application/json" },
@@ -776,6 +791,10 @@ export default function Builder() {
         setSaving(false);
         return null;
       }
+      // What the server now holds is the config map we just sent (it stores it
+      // verbatim), so the ref stays the truth for the NEXT save in this
+      // session — a create has no stored config to have loaded.
+      storedConfig.current = saveConfig;
       if (isCreate) {
         const d = await wr.json();
         setCurrentId(d.id);

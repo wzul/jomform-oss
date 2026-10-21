@@ -117,18 +117,33 @@ export function templateSaveBody(
 }
 
 /**
- * The config a template save writes: the builder's freshly-built config laid
+ * The config a builder save writes: the builder's freshly-built config laid
  * over the stored one.
  *
  * The builder owns the keys it renders (`mode`, `blocks`, `products`,
  * `description`, `chip_mapping`), and those must win — that is the edit. But a
- * stored template config can legitimately carry a key the builder has no
- * control for, and the gallery's own metadata is exactly that:
- * `config.category` is what a gallery card shows. A wholesale replace would
- * silently strip it and the card would lose its category, so the stored keys
- * survive unless the builder explicitly owns them.
+ * stored config can legitimately carry a key the builder has NO control for,
+ * and a wholesale replace silently strips it, because the API stores the config
+ * map it is given (`dbstore.FormStore.Update` COALESCEs a nil map, which only
+ * protects a writer that omits the whole key — not one that sends a map missing
+ * an entry). Two such keys are live today:
+ *
+ *   - `config.category`, on a TEMPLATE: a gallery card shows it;
+ *   - `config.custom_html` (card t_59bc3055), on a form whose body is merchant
+ *     HTML: the builder's Publish replaced the config and DELETED the body and
+ *     its field-registration contract, while the panel said "Your form is
+ *     live". `config.registered_fields` (the submit contract an agent registers
+ *     with register_form_fields) was destroyed the same way, which changes what
+ *     /order accepts on a block form.
+ *
+ * So the stored keys survive unless the builder explicitly owns them. A
+ * builder-owned key it sets to `undefined` is dropped by JSON.stringify, which
+ * is how a cleared field clears; and a caller that means to CLEAR a section the
+ * builder does not own (a custom body, say) does it on the documented write
+ * surface — MCP `upsert_form` with an empty `custom_html`, or a REST PATCH
+ * carrying that section explicitly — not by omission from the builder.
  */
-export function templateConfigWithStoredKeys(
+export function configWithStoredKeys(
   storedConfig: Record<string, unknown> | null | undefined,
   builtConfig: Record<string, unknown>,
 ): Record<string, unknown> {
