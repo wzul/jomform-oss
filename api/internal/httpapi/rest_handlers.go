@@ -934,6 +934,15 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		writeErr(w, http.StatusBadRequest, formfields.UnsupportedBlockMessage(bt))
 		return
 	}
+	// Card t_73a5db6e: a custom-HTML form's registered `required` fields are
+	// enforced at /order, and the buyer's page can only supply a value for a
+	// control that exists in the sanitized HTML. A config whose required field
+	// has no such control is therefore unsubmittable, and storing it silently
+	// is the merchant trap this refuses (REST half).
+	if err := customform.ValidateConfig(in.Config); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// Issue #176: auto-generate a unique slug when the merchant leaves it
 	// blank. The slug is unique per workspace (#77), so a generated slug that
 	// collides gets a random suffix appended until it is free.
@@ -1024,6 +1033,14 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 	// serve (and, on an already-stored form, is how the merchant clears it).
 	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
 		writeErr(w, http.StatusBadRequest, formfields.UnsupportedBlockMessage(bt))
+		return
+	}
+	// Card t_73a5db6e: same unsatisfiable-custom-form refusal as createForm. A
+	// PATCH that rewrites the config is the second way an unsubmittable
+	// contract reaches storage; an omitted config (nil) leaves the stored
+	// custom_html alone and is not re-validated.
+	if err := customform.ValidateConfig(in.Config); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	// The slug write runs FIRST, and the order IS the point. RenameSlug

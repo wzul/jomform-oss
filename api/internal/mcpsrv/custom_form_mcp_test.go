@@ -6,6 +6,7 @@ package mcpsrv
 // exercise the config-merge helper without a database.
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wzul/jomform/api/internal/customform"
@@ -17,14 +18,14 @@ func TestApplyCustomFormConfig(t *testing.T) {
 		{ID: "name", Type: "text", Label: "Name", Required: true},
 		{ID: "email", Type: "email", Label: "Email"},
 	}
-	if err := applyCustomFormConfig(cfg, "<div>hi</div>", fields); err != nil {
+	if err := applyCustomFormConfig(cfg, `<div><input type="text" name="name"></div>`, fields); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if cfg["mode"] != "response" {
 		t.Errorf("mode = %v, want response", cfg["mode"])
 	}
 	cc := customform.FromConfig(cfg)
-	if cc == nil || cc.HTML != "<div>hi</div>" || len(cc.Fields) != 2 {
+	if cc == nil || !strings.Contains(cc.HTML, `name="name"`) || len(cc.Fields) != 2 {
 		t.Fatalf("custom config = %+v", cc)
 	}
 	// Existing keys (blocks) must be preserved.

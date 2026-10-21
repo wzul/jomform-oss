@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/microcosm-cc/bluemonday"
+	"golang.org/x/net/html"
 
 	"github.com/wzul/jomform/api/internal/formfields"
 )
@@ -73,6 +74,15 @@ func Enabled(cfg map[string]any) bool {
 
 // Validate checks the field-registration contract. Returns a human-readable
 // error message (Malay, matching the codebase) when the contract is invalid.
+//
+// Card t_73a5db6e: it also refuses an UNSATISFIABLE contract — a `required:true`
+// field whose controls do not exist in the HTML. The buyer's page can only
+// produce a value for an input it can find (the iframe bridge posts
+// `doc.querySelectorAll('[name]')`, render_custom.go), so such a form is
+// unsubmittable: every POST answers 400 `medan wajib tidak diisi: <label>` and
+// the buyer can do nothing about it. Refusing the write is the only place the
+// merchant can still act, and it is why the check runs over the SANITIZED HTML
+// (what the renderer will actually serve), not the raw body.
 func Validate(c *Config) error {
 	if c == nil {
 		return nil
@@ -90,7 +100,119 @@ func Validate(c *Config) error {
 			return errField("jenis medan tidak sah: " + f.Type)
 		}
 	}
+	if missing := MissingRequiredControls(c); len(missing) > 0 {
+		quoted := make([]string, 0, len(missing))
+		for _, id := range missing {
+			quoted = append(quoted, `name="`+id+`"`)
+		}
+		return errField("medan wajib tiada dalam HTML (" + strings.Join(quoted, ", ") + ")")
+	}
 	return nil
+}
+
+// ValidateConfig runs the same checks over the custom-form section of a form or
+// template config map, when it carries one. Every surface that stores a config
+// verbatim (REST form create/update, MCP upsert_form, the template writers whose
+// config is later cloned onto a real form) calls this beside its existing
+// urlguard/formfields config checks, so no write path can persist an
+// unsatisfiable custom-form contract.
+//
+// A `custom_html` key the package cannot even decode is refused rather than
+// skipped: such a config is not renderable as a custom form (FromConfig returns
+// nil, Enabled is false) yet it looks configured to whoever stored it.
+func ValidateConfig(cfg map[string]any) error {
+	if cfg == nil {
+		return nil
+	}
+	if _, ok := cfg[ConfigKey]; !ok {
+		return nil
+	}
+	c := FromConfig(cfg)
+	if c == nil {
+		return errField("custom_html tidak sah")
+	}
+	return Validate(c)
+}
+
+// MissingRequiredControls returns the registered `required:true` field ids that
+// no control in the SANITIZED HTML can supply — i.e. the ones that make the
+// form permanently unsubmittable. Empty (or whitespace-only) HTML returns nil:
+// that state clears the custom form and falls back to the block renderer.
+func MissingRequiredControls(c *Config) []string {
+	if c == nil || strings.TrimSpace(c.HTML) == "" {
+		return nil
+	}
+	required := make([]string, 0, len(c.Fields))
+	for _, f := range c.Fields {
+		if id := strings.TrimSpace(f.ID); f.Required && id != "" {
+			required = append(required, id)
+		}
+	}
+	if len(required) == 0 {
+		return nil
+	}
+	names := controlNames(SanitizeHTML(c.HTML))
+	missing := make([]string, 0, len(required))
+	for _, id := range required {
+		if !names[id] {
+			missing = append(missing, id)
+		}
+	}
+	return missing
+}
+
+// controlNames returns the `name` values of the controls in a sanitized custom
+// form body that the iframe bridge can read a value from. The bridge walks
+// `doc.querySelectorAll('[name]')` and takes `el.name` / `el.value`, so a name
+// attribute only helps when the element has BOTH: input, select and textarea
+// reflect it and carry a string value. A `<div name="x">` selects but yields
+// `undefined` for both, so the key the server validates against never appears —
+// counting it would let exactly the unsatisfiable contract this guard exists to
+// refuse through.
+//
+// A button reflects `name` and `value` too, but its default value is "", so it
+// only counts when it carries a non-empty value attribute.
+func controlNames(safeHTML string) map[string]bool {
+	names := map[string]bool{}
+	// srcdoc — what the renderer feeds the sandboxed iframe — is parsed as a
+	// document, so parse one here as well rather than a fragment.
+	doc, err := html.Parse(strings.NewReader(safeHTML))
+	if err != nil {
+		return names
+	}
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			name, hasName := nodeAttr(n, "name")
+			if hasName {
+				switch n.Data {
+				case "input", "select", "textarea":
+					names[name] = true
+				case "button":
+					if v, ok := nodeAttr(n, "value"); ok && strings.TrimSpace(v) != "" {
+						names[name] = true
+					}
+				}
+			}
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(doc)
+	return names
+}
+
+// nodeAttr returns an element's attribute value by name. Namespaced attributes
+// are ignored: the parser stores `xlink:name` etc. under a namespace, and no
+// form control's name is set that way.
+func nodeAttr(n *html.Node, key string) (string, bool) {
+	for _, a := range n.Attr {
+		if a.Key == key && a.Namespace == "" {
+			return a.Val, true
+		}
+	}
+	return "", false
 }
 
 func errField(msg string) error {

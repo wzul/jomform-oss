@@ -68,7 +68,11 @@ func TestSanitizeHTMLStripsFormAction(t *testing.T) {
 }
 
 func TestValidateContract(t *testing.T) {
-	valid := &Config{HTML: "<div></div>", Fields: []Field{
+	// Card t_73a5db6e: the HTML must carry a control for every `required:true`
+	// field. Before that check existed this fixture's `<div></div>` body was
+	// accepted as VALID — the contract was satisfiable in the struct and
+	// unsubmittable on the page.
+	valid := &Config{HTML: `<div><input type="text" name="name"></div>`, Fields: []Field{
 		{ID: "name", Type: "text", Label: "Name", Required: true},
 		{ID: "email", Type: "email", Label: "Email"},
 	}}

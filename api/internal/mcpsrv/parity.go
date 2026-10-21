@@ -532,6 +532,14 @@ func (s *Server) upsertForm(
 	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
 		return nil, nil, errors.New(formfields.UnsupportedBlockMessage(bt))
 	}
+	// Card t_73a5db6e: a custom-form config whose registered `required` field
+	// has no matching control in the sanitized HTML is unsubmittable at /order,
+	// and an agent can send config.custom_html directly (without the
+	// custom_html/custom_fields inputs), so the same refusal the REST form
+	// routes apply belongs here too.
+	if err := customform.ValidateConfig(in.Config); err != nil {
+		return nil, nil, err
+	}
 	if in.FormID == "" {
 		// Issue #176: auto-generate a unique slug when the merchant leaves it
 		// blank (slugified title + random suffix on collision).
@@ -640,6 +648,11 @@ func (s *Server) upsertForm(
 	// Card t_4086b8f0: same unsupported-block refusal as the create path above.
 	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
 		return nil, nil, errors.New(formfields.UnsupportedBlockMessage(bt))
+	}
+	// Card t_73a5db6e: same unsatisfiable-custom-form refusal as the create
+	// path (the merged config that carries custom_html lands in in.Config).
+	if err := customform.ValidateConfig(in.Config); err != nil {
+		return nil, nil, err
 	}
 	// A slug supplied on the UPDATE path renames the form, exactly as the
 	// dashboard's slug field does (same FormStore.RenameSlug, so the same

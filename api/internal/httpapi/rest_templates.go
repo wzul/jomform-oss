@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/urlguard"
@@ -204,6 +205,14 @@ func (h *RESTHandlers) createOwnTemplate(w http.ResponseWriter, r *http.Request,
 		writeErr(w, http.StatusBadRequest, formfields.UnsupportedBlockMessage(bt))
 		return
 	}
+	// Card t_73a5db6e: a template's config is cloned onto a real form
+	// (useOwnTemplate), so an unsatisfiable custom-form contract stored here
+	// would reach a buyer's page by the back door — the same refusal the form
+	// write paths apply.
+	if err := customform.ValidateConfig(in.Config); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	title := strings.TrimSpace(in.Title)
 	config := in.Config
@@ -281,6 +290,12 @@ func (h *RESTHandlers) updateOwnTemplate(w http.ResponseWriter, r *http.Request,
 	// Card t_4086b8f0: same unsupported-block refusal as createOwnTemplate.
 	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
 		writeErr(w, http.StatusBadRequest, formfields.UnsupportedBlockMessage(bt))
+		return
+	}
+	// Card t_73a5db6e: same unsatisfiable-custom-form refusal as
+	// createOwnTemplate (nil config = leave unchanged, and is skipped).
+	if err := customform.ValidateConfig(in.Config); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	existing, err := h.Forms.TemplateByIDForAccount(r.Context(), actx.Account.ID, r.PathValue("id"))
