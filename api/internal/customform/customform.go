@@ -393,7 +393,16 @@ func buildSanitizer() *bluemonday.Policy {
 	p.AllowURLSchemes("data", "mailto")
 
 	// Drop the content of any element that could execute or load remotely.
-	p.SkipElementsContent("script", "iframe", "object", "embed")
+	//
+	// NEVER add a VOID element to this list. SkipElementsContent drops every
+	// token until the matching end tag, and the tokenizer never emits an end
+	// tag for a void element, so the skip runs to the end of the input and
+	// every element after the tag disappears. `embed` was listed here and did
+	// exactly that (card t_f8a59664): `<embed src="x"><button name="go"
+	// value="1">Go</button>` sanitized to "". It needs no entry anyway — it is
+	// not in the element allowlist, so the start tag and all its attributes are
+	// stripped, and a void element has no content to skip.
+	p.SkipElementsContent("script", "iframe", "object")
 
 	// Keep <style> content raw (CSS) so agents can style their form. Scripts
 	// are already skipped above; AllowUnsafe only affects the style/script
