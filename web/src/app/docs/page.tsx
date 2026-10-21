@@ -196,7 +196,7 @@ const GROUPS: Group[] = [
         // guarded like every other cut entry.
         title: "Custom HTML forms",
         href: "/docs/custom-forms",
-        body: "Give a form your own HTML body instead of builder blocks: the markup is sanitized and rendered in a sandboxed iframe, and only the fields registered in custom_fields are stored when a buyer submits.",
+        body: "Give a form your own HTML body instead of builder blocks: it is sanitized and rendered in a sandboxed iframe, and the answers are filtered to the fields registered in custom_fields — the buyer's full_name, email and phone are recorded alongside.",
       },
       {
         title: "Products",

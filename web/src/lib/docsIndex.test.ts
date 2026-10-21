@@ -908,6 +908,38 @@ test("every cut entry's facts are readable at the destination (not just its anch
   );
 });
 
+// The /docs ENTRY's own sentence about storage, guarded separately from the guide's.
+//
+// t_f55ecdea: #1361 shipped the same false absolute in two places. The entry said
+// "...and ONLY the fields registered in custom_fields are stored when a buyer
+// submits"; the guide said an extra input "can never write into the response". Both
+// are contradicted by the shipped handler: customform.Collect does filter the
+// submitted names to the registered ids, and then handleResponseSubmit folds the
+// buyer identity into the SAME stored map as full_name/email/phone, read from the
+// frame's first input[type=text]/[email]/[tel] (httpapi/public.go,
+// httpapi/render_custom.go). So an unregistered text control's value IS stored, as
+// full_name — the submissions list's buyer column.
+//
+// DESTINATION_FACTS now pins the guide's three halves of the corrected contract. The
+// entry's summary is a different string on a different page and no fact table reaches
+// it, so without this test the same absolute could be restored to /docs by a
+// copy-edit and nothing would notice: the destination would still be right.
+test("the Custom HTML forms entry does not claim custom_fields is the whole record", () => {
+  const entry = entries.find((e) => e.title === "Custom HTML forms");
+  assert.ok(entry, `${DOCS_PAGE} no longer has the "Custom HTML forms" entry`);
+  // The summary must name the buyer identity that is recorded outside the filter.
+  // A revert to the fields-only sentence drops all three keys and fails here.
+  for (const key of ["full_name", "email", "phone"]) {
+    assert.ok(
+      entry.body.includes(key),
+      `the "Custom HTML forms" entry's summary does not mention ${key} — the buyer ` +
+        `identity is recorded alongside the registered fields on every submit, so a ` +
+        `summary that names only custom_fields states a contract the handler does not ` +
+        `implement (t_f55ecdea). Body: ${entry.body}`,
+    );
+  }
+});
+
 test("the agent-facing llms-full.txt index points at the same pages", () => {
   // t_d768342e: llms-full.txt is the agent's view of the same knowledge base, so
   // it is kept deliberately (not regenerated) — but a link in it that 404s is the

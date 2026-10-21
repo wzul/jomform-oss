@@ -55,8 +55,10 @@ export default function CustomFormsDocsPage() {
         </li>
         <li>
           <strong>Inline styles are kept for a safe allowlist</strong> — colour, background colour,
-          typography, spacing, borders and layout. A url() inside a style (background-image, for
-          example) is removed, so CSS cannot trigger a remote request.
+          typography, spacing, borders and layout. A url() inside a style attribute
+          (background-image, for example) is removed. A style element is a different case: it is
+          allowed through and its CSS is kept as written, so the property that blocks a remote fetch
+          is the frame&apos;s own policy (images limited to data:), not the removal of the rule.
         </li>
         <li>
           <strong>The form tag itself is stripped.</strong> The controls survive, and the page wraps
@@ -121,9 +123,14 @@ export default function CustomFormsDocsPage() {
         create_template and update_template. Optional fields need no control at all.
       </p>
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        On submit, only registered ids are recorded: a control whose name is not registered is
-        dropped before the submission is stored, so an extra input in the markup can never write into
-        the response. The anti-spam fields the page itself emits are consumed and left out too.
+        On submit the answers are filtered to the contract: a control whose name is not registered is
+        dropped before the submission is stored, so an unregistered name never becomes a field of its
+        own. The buyer&apos;s identity is written outside that filter. It is recorded in the same
+        stored response as full_name, email and phone, read from the first
+        input[type=text], input[type=email] and input[type=tel] the markup carries — registered or
+        not. So a text control that is not registered still reaches storage: its value is stored as
+        full_name, the field the responses list shows as the buyer. The anti-spam fields the page
+        itself emits are consumed and left out too.
       </p>
 
       <h2 className="mt-8 text-xl font-semibold text-slate-900">Field types</h2>

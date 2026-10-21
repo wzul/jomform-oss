@@ -195,6 +195,17 @@ const DESTINATION_FACTS: Record<string, string[]> = {
   // Issue #255's custom HTML form: the facts a merchant (or the agent acting for
   // them) can only learn here — the two argument names, that the body is
   // sandboxed, that validation is not enforced, and the narrow server-side check.
+  //
+  // t_f55ecdea: the last three pin the STORAGE contract, because the shipped page
+  // stated it wrongly. It said "only registered ids are recorded … so an extra
+  // input in the markup can never write into the response". The handler folds the
+  // buyer identity into the same stored map AFTER customform.Collect
+  // (httpapi/public.go, handleResponseSubmit) and the frame's bridge reads it from
+  // the first input[type=text]/[email]/[tel] the markup carries — so an
+  // unregistered text control's value is stored as full_name, and a well-formed
+  // form stores full_name/email/phone keys that are not registered ids. These
+  // facts are the three halves of the corrected sentence; dropping any one of them
+  // lets the absolute come back.
   "Custom HTML forms": [
     "custom_html",
     "custom_fields",
@@ -202,6 +213,9 @@ const DESTINATION_FACTS: Record<string, string[]> = {
     "validation is a hint",
     "required-only",
     "medan wajib tiada dalam HTML",
+    "an unregistered name never becomes a field of its own",
+    "full_name, email and phone",
+    "its value is stored as full_name",
   ],
 };
 
@@ -251,8 +265,10 @@ const PER_ENTRY_FLOOR: Record<string, number> = {
   "Form URLs and slugs (rename a form)": 3,
   // t_4c58a09e: this branch's own entry, at the count its facts list above holds.
   "Activity log (audit trail)": 3,
-  // Issue #255's guide, at the count its facts list above holds.
-  "Custom HTML forms": 6,
+  // Issue #255's guide, at the count its facts list above holds — including the
+  // three storage facts t_f55ecdea added (the identity keys are written outside
+  // the custom_fields filter, so "only registered ids are stored" was false).
+  "Custom HTML forms": 9,
 };
 
 // parseFactTables pulls `title: "…"` and the following `href: "…"` out of a JSX
