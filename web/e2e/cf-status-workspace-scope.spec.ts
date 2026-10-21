@@ -39,7 +39,7 @@
 //   call gets the first-owned account's answer. Every request is recorded, so
 //   "the panel is scoped" is asserted on the wire, not inferred.
 //
-// THE THREE ARMS
+// THE FOUR ARMS
 //   1. `jf_workspace = abc` (the workspace with NO credential): the panel must
 //      report that workspace — no "connected ✓", no Disconnect, the login link
 //      present — and every status read must have been scoped to `abc`. On the
@@ -56,6 +56,10 @@
 //      panel must show no link state AT ALL (carrying `wan`'s "connected ✓" across
 //      a switch is the same lie in a different tense), and once it answers the
 //      login link must name the new workspace.
+//   4. A COLD MOUNT (card t_a7e3c4d4): no `jf_workspace`, so the scope is unknown
+//      for the first ~500ms. Arms 1–3 cannot see this state — they all start with
+//      the slug already stored — and it is where the panel used to issue a BARE
+//      status read and paint a BARE OAuth href.
 //
 // The API is stubbed at the browser level (the pattern `e2e/cf-status-prefetch.spec.ts`
 // and `e2e/a11y-dialogs.spec.ts` use): no Go server, no DB — the real client
@@ -107,7 +111,23 @@ type CFStub = {
   release: () => void;
 };
 
-async function stubAPI(page: Page): Promise<CFStub> {
+type StubOpts = {
+  /** The workspace list the dashboard bundle returns. LINKED_WS first by default. */
+  workspaces?: unknown[];
+  /**
+   * The slug of the user's FIRST-OWNED account — the account an UNSCOPED
+   * `/api/cf/status` resolves to (`resolveSessionAccount`). It is NOT the first
+   * row of the workspace list in general (that list is ordered by the server,
+   * and ownership is a separate relation), so the fixture can name it
+   * independently. Defaults to LINKED_WS, which is what the existing arms
+   * describe.
+   */
+  firstOwned?: string;
+};
+
+async function stubAPI(page: Page, opts: StubOpts = {}): Promise<CFStub> {
+  const firstOwned = opts.firstOwned ?? LINKED_WS.slug;
+  const bundle = { ...BUNDLE, workspaces: opts.workspaces ?? [LINKED_WS, UNLINKED_WS] };
   const statusCalls: string[] = [];
   const disconnectCalls: string[] = [];
   const held = { slug: "" };
@@ -125,7 +145,7 @@ async function stubAPI(page: Page): Promise<CFStub> {
   // Catch-all FIRST, specific routes after it: Playwright resolves matching
   // routes in reverse registration order, so the later (specific) ones win.
   await page.route(/(.*)\/api\/.*$/, (route) => route.fulfill(json({})));
-  await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, (r) => r.fulfill(json(BUNDLE)));
+  await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, (r) => r.fulfill(json(bundle)));
   await page.route(/(.*)\/api\/auth\/me$/, (r) => r.fulfill(json(ME)));
   await page.route(/(.*)\/api\/auth\/profile$/, (r) => r.fulfill(json({ lang: "" })));
   await page.route(/(.*)\/api\/workspaces\/[^/]+\/affiliates(\?.*)?$/, (r) => r.fulfill(json([])));
@@ -139,7 +159,7 @@ async function stubAPI(page: Page): Promise<CFStub> {
     const ws = new URL(route.request().url()).searchParams.get("workspace");
     statusCalls.push(ws ?? "<none>");
     if (ws !== null && ws === held.slug) await gate;
-    await route.fulfill(json({ configured: true, linked: (ws ?? LINKED_WS.slug) === LINKED_WS.slug }));
+    await route.fulfill(json({ configured: true, linked: (ws ?? firstOwned) === LINKED_WS.slug }));
   });
 
   // Disconnect: recorded, never applied (there is no API here). The assertion is
@@ -178,6 +198,46 @@ async function freshState(page: Page, slug: string) {
       /* storage unavailable */
     }
   }, slug);
+}
+
+/**
+ * A COLD browser state: everything cleared, and — unlike `freshState` — NO
+ * `jf_workspace` written. That is what a first-time visitor, a fresh profile, or
+ * anyone after a sign-out has until the session publishes a workspace, and it is
+ * the state in which `workspaceQuery()` used to answer "" (card t_a7e3c4d4).
+ *
+ * It also installs, from document start, a recorder of every `/api/cf/start`
+ * href the DOM is EVER given. The defect is a WINDOW, not an end state: on the
+ * pre-fix tree the href is corrected the moment the scope arrives, so reading
+ * the attribute after the panel settles sees only the right value. A
+ * MutationObserver sees what was actually painted.
+ */
+async function coldState(page: Page) {
+  await page.addInitScript(() => {
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+      localStorage.setItem("jf_lang", "en");
+    } catch {
+      /* storage unavailable */
+    }
+    const seen: string[] = [];
+    (window as unknown as { __cfStartHrefs: string[] }).__cfStartHrefs = seen;
+    const scan = () => {
+      document.querySelectorAll('a[href^="/api/cf/start"]').forEach((a) => {
+        const href = a.getAttribute("href") || "";
+        if (seen[seen.length - 1] !== href) seen.push(href);
+      });
+    };
+    // `document` (not `document.documentElement`) because this script runs before
+    // the document element exists; `subtree` still reaches every later node.
+    new MutationObserver(scan).observe(document, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["href"],
+    });
+  });
 }
 
 /**
@@ -298,4 +358,56 @@ test("switching workspace re-reads the status and carries no answer across the s
   expect(workspaceOf(await login.getAttribute("href"))).toBe(UNLINKED_WS.slug);
   await expect(page.getByText(CONNECTED)).toHaveCount(0);
   expect(cf.statusCalls.at(-1)).toBe(UNLINKED_WS.slug);
+});
+
+// CARD t_a7e3c4d4 — THE COLD MOUNT.
+//
+// Arms 1–3 all start with `jf_workspace` ALREADY in localStorage, so the scope
+// is known before the first render. A cold document is the state they cannot
+// see: `workspaceQuery()` answers "" until the session publishes a workspace
+// (~500ms on prod), and on the pre-fix tree the panel fired anyway.
+//
+//   t=186ms  GET /api/cf/status                    -> 200   <-- BARE, first-owned account
+//   t=546ms  GET /api/cf/status?workspace=wan      -> 200   <-- the scoped read
+//
+// The bare answer was APPLIED (the scoped request is issued after it lands, so
+// `cfStatusSeq` had nothing newer to drop it for), so the panel described an
+// account nobody had selected for ~360ms — and the same window left a bare
+// `/api/cf/start` href in the DOM, one click from an OAuth flow whose callback
+// seals against the first-owned account.
+//
+// The fixture is ONE workspace, UNLINKED, and it is also the first-owned
+// account, so the unscoped answer is "not linked" — the state in which the
+// panel paints the OAuth link. That makes both windows observable in one run:
+// the bare read (recorded by the route) and the bare href (recorded from
+// document start by `coldState`). The settled panel is asserted too, but it is
+// NOT what this arm is for: on the pre-fix tree the settled panel is also
+// correct, which is why an end-state DOM check would pass the defect.
+test("a COLD mount issues no unscoped status read and never paints a bare login href", async ({ page }) => {
+  const cf = await stubAPI(page, { workspaces: [UNLINKED_WS], firstOwned: UNLINKED_WS.slug });
+  await coldState(page);
+
+  await page.goto("/settings?tab=domains", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: CF_TITLE })).toBeVisible();
+
+  // The panel still settles — gated, not muted: the login link appears once the
+  // session has published the workspace, and it names that workspace.
+  const login = page.locator('a[href^="/api/cf/start"]');
+  await expect(login).toBeVisible();
+  expect(workspaceOf(await login.getAttribute("href"))).toBe(UNLINKED_WS.slug);
+  await expect(page.getByText(CONNECTED)).toHaveCount(0);
+
+  // 1. THE WIRE. Every status read named a workspace; "<none>" is the unscoped
+  //    call the defect issued at t=186ms on prod. One is enough to fail: that
+  //    answer resolves to the first-owned account and is applied.
+  expect(cf.statusCalls.length).toBeGreaterThan(0);
+  expect(cf.statusCalls.filter((w) => w === "<none>")).toEqual([]);
+
+  // 2. THE DOM. No anchor ever carried an unscoped href — at ANY point in the
+  //    mount, not merely at the end.
+  const hrefs = await page.evaluate(
+    () => (window as unknown as { __cfStartHrefs: string[] }).__cfStartHrefs ?? [],
+  );
+  expect(hrefs.length).toBeGreaterThan(0);
+  expect(hrefs.filter((h) => workspaceOf(h) === null)).toEqual([]);
 });

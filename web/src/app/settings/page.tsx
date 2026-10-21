@@ -699,13 +699,52 @@ export default function Settings() {
   // it inline would be a hydration mismatch. Keyed on `workspace` (not on the
   // status fetch) so the href follows the switcher even when the section is in
   // its pending state.
-  const [cfStartHref, setCfStartHref] = useState("/api/cf/start");
+  //
+  // IT STARTS EMPTY, NOT `/api/cf/start` (card t_a7e3c4d4). A COLD mount — no
+  // `jf_workspace` in localStorage — renders with `workspace === ""` until the
+  // session publishes the scope (~500ms on prod), and the pre-fix initial value
+  // was the BARE start URL. On a first-owned account with no credential the
+  // panel answers `cfStatusLoaded && !cfLinked` inside that window and painted
+  // an unscoped "Log in with Cloudflare"; a click there started an OAuth flow
+  // whose callback seals against `Accounts.ByOwner(...)[0]` — the wrong-account
+  // write #1350 fixed, still reachable by a click. An empty href cannot be
+  // painted (the anchor is also gated on a non-empty href, and on
+  // `cfStatusLoaded`, which only a SCOPED read ever sets).
+  const [cfStartHref, setCfStartHref] = useState("");
   useEffect(() => {
-    setCfStartHref(`/api/cf/start${workspaceQuery()}`);
+    // Built from `workspace`, the session-published scope — the same value the
+    // read below is gated on, so the href can never name a scope the gate did
+    // not check (`workspaceQuery()` reads the module-level scope, which the
+    // render has not necessarily caught up with).
+    setCfStartHref(workspace ? `/api/cf/start?workspace=${encodeURIComponent(workspace)}` : "");
   }, [workspace]);
 
   const loadCfStatus = useCallback(() => {
-    const q = workspaceQuery();
+    // NO /api/cf REQUEST MAY LEAVE BEFORE THE SCOPE IS KNOWN (card t_a7e3c4d4).
+    // The panel is the one section whose every route is ACCOUNT-scoped
+    // (cf_oauth.go reads and writes `actx.Account`), and an UNSCOPED session
+    // call resolves to the user's FIRST-OWNED account. On a cold mount
+    // `workspaceQuery()` used to answer "" and this effect fired anyway:
+    // measured on prod v1.21.261, `GET /api/cf/status` with NO query at t=186ms,
+    // answered for the first-owned account, before the scoped read at t=546ms —
+    // and it was APPLIED, because the scoped request is issued after the bare
+    // answer lands, so `cfStatusSeq` had nothing newer to drop it for. The panel
+    // painted another account's link state for ~360ms.
+    //
+    // The gate is `workspace` (the session's published scope), not
+    // `workspaceQuery()`: the URL is then built from the very value that was
+    // checked, so an unscoped call is structurally impossible rather than
+    // merely unlikely.
+    if (!workspace) {
+      // …and the previous scope's answer must not survive the drop: the badge
+      // and the Disconnect button are gated on `cfLinked`, so a stale `true`
+      // here would describe an account the panel can no longer name.
+      setCfLinked(false);
+      setCfConfigured(false);
+      setCfStatusLoaded(false);
+      return Promise.resolve();
+    }
+    const q = `?workspace=${encodeURIComponent(workspace)}`;
     const asked = `${workspace}|${q}`;
     if (cfStatusAsked.current === asked) return Promise.resolve();
     cfStatusAsked.current = asked;
@@ -1775,7 +1814,7 @@ export default function Settings() {
                     t_88485157) — it is held in state rather than built inline
                     because `workspaceQuery()` reads the browser scope, which the
                     server render does not have. */}
-                {cfStatusLoaded && !cfLinked && (
+                {cfStatusLoaded && cfStartHref !== "" && !cfLinked && (
                   <a href={cfStartHref} className="jf-btn-primary inline-block">
                     {t("set.cfLogin")}
                   </a>

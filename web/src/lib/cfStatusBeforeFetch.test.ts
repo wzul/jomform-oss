@@ -101,7 +101,9 @@ test("no status-derived branch renders before the answer", () => {
     // The href is held in state (card t_88485157) rather than written inline, so
     // the anchor is named by its binding. The `eslint-disable-next-line` note this
     // used to pin was prose that moved; what must hold is the GATE, then the anchor.
-    { name: "the login link (/api/cf/start)", pattern: /\{cfStatusLoaded && !cfLinked && \(\s*<a href=\{cfStartHref\}/ },
+    // The non-empty-href half was added by card t_a7e3c4d4: the anchor must also
+    // refuse to paint before the href names a workspace.
+    { name: "the login link (/api/cf/start)", pattern: /\{cfStatusLoaded && cfStartHref !== "" && !cfLinked && \(\s*<a href=\{cfStartHref\}/ },
     { name: "the manual-token toggle", pattern: /\{cfStatusLoaded && !cfLinked && \(\s*<button\s*\n\s*onClick=\{\(\) => \{ setCfManualOpen/ },
   ];
   for (const { name, pattern } of branches) {
