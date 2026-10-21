@@ -12,10 +12,15 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+
+	"golang.org/x/net/idna"
 
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 // renderCustomForm renders a custom-HTML response-only form (issue #255). The
@@ -73,10 +78,14 @@ func (h *PublicHandlers) renderCustomForm(w http.ResponseWriter, r *http.Request
 	//     would block the page's fetch() to /<slug>/order even with the
 	//     scripts running. 'self' is the narrowest source that admits its own
 	//     route; the bridge never calls another origin.
+	//   * img-src data: <the logo's exact origin> — the merchant logo this page
+	//     paints is first-party branding and used to be blocked by the bare
+	//     `data:`, so it never appeared (card t_8ef93e64). See
+	//     customPageImgSrc; the merchant frame keeps its own `img-src data:`.
 	nonce := cspNonce()
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'unsafe-inline'; "+
-			"img-src data:; connect-src 'self'; form-action 'self'; frame-ancestors 'self'")
+			"img-src "+customPageImgSrc(f.LogoURL)+"; connect-src 'self'; form-action 'self'; frame-ancestors 'self'")
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 
 	if err := customFormTmpl.Execute(w, map[string]any{
@@ -127,6 +136,96 @@ func cspNonce() string { return rand.Text() }
 // fixes, so this is the one line that keeps the header and the markup in step.
 func noncedScript(js string, nonce string) string {
 	return strings.Replace(js, "<script>", `<script nonce="`+nonce+`">`, 1)
+}
+
+// customPageImgSrc is the page-level img-src for the custom-HTML order page
+// (card t_8ef93e64).
+//
+// The header used to send a bare `img-src data:` while this same page paints the
+// merchant's logo — `{{if .LogoURL}}<img class="logo" src="{{.LogoURL}}">{{end}}`
+// — and Form.LogoURL is https-only (internal/urlguard on every write path). Both
+// halves are correct on their own and fatal together: EVERY logo was blocked by
+// the page's own policy, so the image never loaded, the response was 200 and
+// nothing was logged. Measured in Chrome before the fix: naturalWidth 0,
+// complete true, and an img-src violation whose blockedURI was the logo.
+//
+// The logo is first-party branding on the page the buyer sees, not markup the
+// merchant's agent supplied, so it does not belong under the rule that
+// constrains the sandboxed body. It is admitted here by its EXACT origin —
+// scheme, host, port; no wildcard, no bare `https:` — while the iframe keeps its
+// own `img-src data:` meta CSP, which is what still governs merchant HTML.
+//
+// Anything that is not a parseable absolute https URL keeps the page at `data:`
+// only, and a host carrying anything but host characters is refused rather than
+// pasted into the header: a stored value must never be able to add a directive
+// (or an expression like `*`) to the policy this page sends.
+func customPageImgSrc(logoURL string) string {
+	const dataOnly = "data:"
+	if !urlguard.Valid(logoURL) {
+		return dataOnly
+	}
+	u, err := url.Parse(strings.TrimSpace(logoURL))
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Hostname() == "" {
+		return dataOnly
+	}
+	host := strings.ToLower(u.Hostname())
+	if !isASCIIHost(host) {
+		// A unicode (IDN) logo host is legitimate; a CSP host-source must be the
+		// ASCII form the browser will actually resolve, so convert it instead of
+		// quietly leaving that merchant's logo blocked.
+		ascii, idnaErr := idna.Lookup.ToASCII(host)
+		if idnaErr != nil {
+			return dataOnly
+		}
+		host = ascii
+	}
+	if !cspHostSourceOK(host) {
+		return dataOnly
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]" // IPv6 literal
+	}
+	if port := u.Port(); port != "" {
+		if n, convErr := strconv.Atoi(port); convErr != nil || n < 1 || n > 65535 {
+			return dataOnly
+		}
+		host += ":" + port
+	}
+	return dataOnly + " https://" + host
+}
+
+// isASCIIHost reports whether every rune of host is ASCII — i.e. it is already
+// the form a CSP host-source needs, with no IDN conversion.
+func isASCIIHost(host string) bool {
+	for _, r := range host {
+		if r > 127 {
+			return false
+		}
+	}
+	return true
+}
+
+// cspHostSourceOK reports whether host is safe to emit as a CSP host-source:
+// host characters only, so the value cannot terminate the directive or
+// introduce a new one. url.Parse accepts characters Go does not consider
+// invalid in a host but CSP does — `https://cdn.example.com"x/logo.png` parses
+// with the host `cdn.example.com"x` — so this is the check that keeps a stored
+// value from rewriting the policy this page sends.
+func cspHostSourceOK(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	seenAlnum := false
+	for _, r := range host {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			seenAlnum = true
+		case r == '.', r == '-', r == ':', r == '[', r == ']':
+		default:
+			return false
+		}
+	}
+	return seenAlnum
 }
 
 // customFormTmpl renders the custom-HTML response form. The sanitized body is
