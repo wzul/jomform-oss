@@ -174,7 +174,21 @@ test("a refused bulk publish leaves its sentence on screen 3s later, in English"
   // violation, and a `role=alert` match would not say which node it read.
   const alert = page.locator('div[role="alert"].jf-card');
   await expect(alert, "the bulk refusal must render a message at all").toBeVisible({ timeout: 20_000 });
-  const shown = (await alert.innerText()).trim();
+  // A LOCATOR READ MUST NOT BE ABLE TO HANG (t_ab4aa85b, MEASURED — not a
+  // tidy-up). On the PRE-FIX shape this card is a FLASH: `load()`'s `setErr("")`
+  // replaces it within a few ms of it appearing, and the `toBeVisible` above can
+  // WIN that race. A locator action then waits the WHOLE test timeout (120s) for
+  // an element that will never come back, so the pre-fix harness reported
+  //
+  //     Error: locator.innerText: Test timeout of 120000ms exceeded.
+  //
+  // — a red that names no assertion AND aborts the test before the sampling leg
+  // the bite belongs to. This settle makes the wipe deterministic and owns it
+  // under the label above (which the bite harness already accepts); the bounded
+  // read below then only ever runs against an element that is really there.
+  await page.waitForTimeout(1_000);
+  await expect(alert, "the bulk refusal must render a message at all").toBeVisible({ timeout: 5_000 });
+  const shown = ((await alert.first().textContent({ timeout: 5_000 }).catch(() => null)) ?? "").trim();
   expect(shown, "the page's own localized sentence, never the API's prose").toContain(EN_FALLBACK);
   expect(shown).not.toContain(SERVER_PROSE);
   expect(shown).not.toContain("badan permintaan");
@@ -198,7 +212,12 @@ test("a refused bulk publish leaves its sentence on screen 3s later, in English"
   ).toBe(true);
 
   // Still the page's own sentence at the END of the window, not some later text.
-  const finalText = (await alert.innerText()).trim();
+  // BOUNDED (t_155bdc39): the last unbounded locator read on this surface. Every
+  // sample above already asserted the node is on screen, but a read that cannot
+  // hang at all is the rule this family carries now — an unbounded `innerText()`
+  // against a node that disappears mid-read waits the WHOLE test timeout and reds
+  // with an Error line that names no assertion.
+  const finalText = ((await alert.textContent({ timeout: 5_000 }).catch(() => null)) ?? "").trim();
   expect(finalText).toContain(EN_FALLBACK);
   expect(finalText).not.toContain(SERVER_PROSE);
 

@@ -197,3 +197,248 @@ test("an empty bin still renders its own sentence (the guard above is not vacuou
   await expect(page.getByText(DICT["ws.trashEmpty"].en)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("button", { name: DICT["ws.trashRestore"].en, exact: true })).toHaveCount(0);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// t_ab4aa85b — the Danger zone's DELETE refusal, the same defect class as the
+// /forms trash refusals (web/e2e/forms-trash-refusal.spec.ts).
+//
+// THE DEFECT. `doDelete()` wrote the refusal into `err` and then called
+// `await load()`, and `load()` ends with `setErr("")` on a successful reload —
+// so the sentence was set and erased in the same tick. Measured on prod
+// (v1.19.0 @ 87040114, reproduced by QA before this fix, and reachable in the
+// ordinary way: the workspace is renamed out of band while the dialog is open,
+// so the slug the user typed is no longer the slug the server has — the server
+// answers 400 and the workspace is NOT trashed): `alerts: []` immediately after,
+// `alerts: []` at ~3s, `alerts: []` at the end. The merchant watched the click
+// do nothing.
+//
+// WHAT THIS GUARD PROVES, on the real built page with a stubbed API:
+//   1. the refusal renders the page's OWN localized sentence (the 400 carries
+//      only the class code `request.badRequest`, which the dashboard
+//      deliberately does not translate — see web/src/lib/apiErr.ts), and
+//   2. the server's Malay prose appears nowhere on the page, and
+//   3. the sentence is still on screen 3s later, sampled every 100ms, and
+//   4. it is NOT hidden behind the dialog (the refusal closes the dialog) and
+//      the Danger zone is still readable, and
+//   5. the deletion-check really was refetched after the refusal — the reload
+//      that used to wipe the sentence — so (3) is a claim about a completed
+//      reload and not about one that never happened.
+test("a refused workspace delete leaves its reason readable, not wiped by its own reload", async ({ page }) => {
+  test.setTimeout(120_000);
+  await openWorkspaceTab(page, []);
+
+  // The server's own refusal body: 400 + the wire prose + the class code. The
+  // prose is what the dashboard must never print; the code is unknown to this
+  // build, so the page's own sentence is the answer.
+  const REFUSAL_PROSE = "taip slug workspace (demo) untuk sahkan pemadaman";
+  await page.route(/(.*)\/api\/workspaces\/[^/]+(\?.*)?$/, (r) => {
+    if (r.request().method() !== "DELETE") return r.fallback();
+    return r.fulfill({
+      status: 400,
+      contentType: "application/json",
+      body: JSON.stringify({ error: REFUSAL_PROSE, code: "request.badRequest" }),
+    });
+  });
+
+  // Counted here, and registered after the stub's own route, so it wins: the
+  // reload `doDelete` fires on a refusal is what the message has to survive.
+  let checks = 0;
+  await page.route(/(.*)\/api\/workspaces\/[^/]+\/deletion-check(\?.*)?$/, (r) => {
+    checks += 1;
+    return r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CHECK) });
+  });
+
+  // The Danger zone's own button (the dialog's confirm carries a different
+  // label, so the two never collide).
+  await page.getByRole("button", { name: DICT["ws.deleteButton"].en, exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 20_000 });
+  await dialog.locator("#ws-confirm-slug").fill(CHECK.slug);
+  const checksBefore = checks;
+  await dialog.getByRole("button", { name: DICT["ws.confirmButton"].en, exact: true }).click();
+
+  // The refusal renders in the Danger zone; the dialog is closed with it, so the
+  // sentence is not behind an overlay.
+  const line = page.getByRole("alert").filter({ hasText: DICT["ws.deleteFail"].en.slice(0, 20) });
+  await expect(line, "the delete refusal must render a message at all").toBeVisible({ timeout: 20_000 });
+  await expect(dialog, "the refusal closes the dialog rather than hiding the reason behind it").toHaveCount(0);
+
+  // A LOCATOR READ MUST NOT BE ABLE TO HANG (t_155bdc39, MEASURED — not a
+  // tidy-up). On the PRE-FIX shape this refusal is a FLASH: `err` is set and
+  // then `await load()`'s `setErr("")` removes it within a few ms, so the
+  // `toBeVisible` above can WIN that race. The read that followed was an
+  // UNBOUNDED `innerText()` and then waited the WHOLE test timeout (120s) for a
+  // node that never comes back, so the test died with
+  //
+  //     Error: locator.innerText: Test timeout of 120000ms exceeded.
+  //
+  // — an Error line that names NO assertion AND aborts the test before the
+  // sampling leg below, which is the leg the bite belongs to. The bite harness
+  // reads the reporter's Error block for a named red
+  // (`web/scripts/biteproof_forms_trash_refusal.sh`, `run_case`), so it printed
+  // `DETECTED, but NOT at a named assertion` and `SOME CASES FAILED` — a false
+  // failure on a tree whose fix is correct. The settle makes the wipe
+  // deterministic and the repeated assertion owns it under the SAME label the
+  // case already accepts; the bounded read below then only ever runs against a
+  // node that is really there. This is the shape
+  // `web/e2e/forms-bulk-failure.spec.ts` already carries (re-anchored in this
+  // same PR for this same mechanism).
+  await page.waitForTimeout(1_000);
+  await expect(line, "the delete refusal must render a message at all").toBeVisible({ timeout: 5_000 });
+  const shown = ((await line.first().textContent({ timeout: 5_000 }).catch(() => null)) ?? "").trim();
+  expect(shown).toContain(DICT["ws.deleteFail"].en);
+  expect(shown).not.toContain(REFUSAL_PROSE);
+  await expect(page.locator("html"), "the reading is the ENGLISH default").toHaveAttribute("lang", "en");
+  await expect(
+    page.getByRole("heading", { name: DICT["ws.dangerTitle"].en }),
+    "the Danger zone stays on screen with the reason",
+  ).toBeVisible();
+
+  // THE CARD'S ACCEPTANCE (t_ab4aa85b): still there 3s later, sampled every
+  // 100ms — the defect is a set-then-WIPED message, and a single late read
+  // cannot tell "never rendered" from "rendered and replaced".
+  const samples: boolean[] = [];
+  for (let i = 0; i < 30; i += 1) {
+    await page.waitForTimeout(100);
+    samples.push((await line.count()) > 0 && (await line.first().isVisible().catch(() => false)));
+  }
+  expect(
+    samples.every(Boolean),
+    `the delete refusal must survive the whole 3s window. Samples (100ms apart): ` +
+      `${samples.map((s) => (s ? "1" : "0")).join("")}. A 0 after a 1 is the wipe this card fixes ` +
+      `(last missing at sample ${samples.lastIndexOf(false)}); all-zero means it never rendered.`,
+  ).toBe(true);
+  // Bounded for the same reason as the read above: every sample in the window
+  // has already asserted this node is on screen, so the read cannot be the leg
+  // that hangs (t_155bdc39).
+  const finalText = ((await line.first().textContent({ timeout: 5_000 }).catch(() => null)) ?? "").trim();
+  expect(finalText).toContain(DICT["ws.deleteFail"].en);
+  expect(finalText).not.toContain(REFUSAL_PROSE);
+
+  // ATTRIBUTION: the refusal DID refetch the deletion check — the reload that
+  // used to erase the sentence — so the survival above is about a completed
+  // reload. (If a future change stops refetching on a refusal, this is the leg
+  // to drop; the window assertion is the requirement.)
+  expect(checks, `a refused delete must still refetch the deletion check (before the press: ${checksBefore})`)
+    .toBeGreaterThan(checksBefore);
+
+  console.log(
+    `t_ab4aa85b evidence (workspace delete): alert="${finalText}" | window(100ms x30) present | ` +
+      `deletionChecks=${checks}(before ${checksBefore}) lang=en prose_present=false`,
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// t_fe8a5d78 — the OTHER half of the same refusal: the dialog must be USABLE
+// again, not stuck on "Working…".
+//
+// THE DEFECT. `doDelete()` opens with `setBusy(true)` and the `!res.ok` branch
+// set the refusal, closed the dialog and returned — without clearing `busy`.
+// Only the `catch` cleared it, i.e. a TRANSPORT failure, never a refusal. The
+// refusal was readable, so the guard above passed, but every control in the
+// dialog is gated on `busy`:
+//
+//   input#ws-confirm-slug   disabled={busy}
+//   Cancel                  disabled={busy}
+//   confirm button          disabled={!canDelete}, canDelete = … && !busy,
+//                           and its label is `common.saving` ("Working…") while busy
+//   the overlay             onClick={() => !busy && setConfirmOpen(false)}
+//
+// The Danger zone's own button is NOT gated on `busy`, so the merchant could
+// reopen a DEAD dialog: no retry, no Cancel, no overlay dismiss — Escape was the
+// only exit and the action needed a full page reload. Reachable exactly in the
+// stale-slug race this refusal exists for (the workspace is renamed out of band
+// while the dialog is open, so the typed slug no longer matches).
+//
+// WHAT THIS GUARD PROVES, on the real built page with a stubbed API:
+//   1. after a refused DELETE the refusal is readable (bounded reads only — see
+//      below), and
+//   2. reopening it leaves the dialog USABLE: the slug input, Cancel and — once
+//      the typed slug matches again — the confirm button are enabled, and the
+//      dialog no longer reads "Working…".
+//
+// EVERY locator read on this path is BOUNDED — settle 1s, re-assert the SAME
+// label with a 5s budget, then `textContent({ timeout: 5_000 })`. That is the
+// shape `web/e2e/forms-trash-refusal.spec.ts` carries as `settleAndReadRefusal`,
+// and the shape the refusal guard above was re-anchored to (t_155bdc39): a
+// pre-fix red must land on the NAMED assertion below, never die at a 120s
+// locator timeout that names nothing.
+test("a refused workspace delete leaves the dialog usable again, not stuck on Working…", async ({ page }) => {
+  test.setTimeout(120_000);
+  await openWorkspaceTab(page, []);
+
+  // The same server refusal the guard above stubs: 400 + the wire prose + the
+  // class code. `fallback()` keeps this route from shadowing the deletion-check
+  // and trash stubs for every non-DELETE request.
+  const REFUSAL_PROSE = "taip slug workspace (demo) untuk sahkan pemadaman";
+  await page.route(/(.*)\/api\/workspaces\/[^/]+(\?.*)?$/, (r) => {
+    if (r.request().method() !== "DELETE") return r.fallback();
+    return r.fulfill({
+      status: 400,
+      contentType: "application/json",
+      body: JSON.stringify({ error: REFUSAL_PROSE, code: "request.badRequest" }),
+    });
+  });
+
+  const danger = page.getByRole("button", { name: DICT["ws.deleteButton"].en, exact: true });
+  await danger.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 20_000 });
+  const slugInput = dialog.locator("#ws-confirm-slug");
+  await slugInput.fill(CHECK.slug);
+  await dialog.getByRole("button", { name: DICT["ws.confirmButton"].en, exact: true }).click();
+
+  // 1. THE REFUSAL IS READABLE — bounded, in the shape above.
+  const line = page.getByRole("alert").filter({ hasText: DICT["ws.deleteFail"].en.slice(0, 20) });
+  await expect(line, "the delete refusal must render a message at all").toBeVisible({ timeout: 20_000 });
+  await page.waitForTimeout(1_000);
+  await expect(line, "the delete refusal must render a message at all").toBeVisible({ timeout: 5_000 });
+  const shown = ((await line.first().textContent({ timeout: 5_000 }).catch(() => null)) ?? "").trim();
+  expect(shown).toContain(DICT["ws.deleteFail"].en);
+  expect(shown).not.toContain(REFUSAL_PROSE);
+  await expect(dialog, "the refusal closes the dialog rather than hiding the reason behind it").toHaveCount(0);
+
+  // 2. REOPEN from the Danger zone's OWN button — the control that is NOT gated
+  // on `busy`, which is how the stuck state is reachable at all.
+  await danger.click();
+  await expect(dialog, "the dialog must reopen after a refusal").toBeVisible({ timeout: 20_000 });
+
+  // THE CARD'S ACCEPTANCE (t_fe8a5d78). The input is asserted FIRST: on the
+  // pre-fix shape `busy` is still true, so it is `disabled` and this reds HERE,
+  // by name, before any `fill()` could merely time out.
+  await expect(
+    slugInput,
+    "the slug input must be enabled again — busy was not cleared on the refusal path",
+  ).toBeEnabled({ timeout: 5_000 });
+  await expect(
+    dialog.getByRole("button", { name: DICT["common.cancel"].en, exact: true }),
+    "Cancel must be enabled again — busy was not cleared on the refusal path",
+  ).toBeEnabled({ timeout: 5_000 });
+
+  // The confirm button is gated on `canDelete`, which needs the typed slug to
+  // match again, so type it: a dialog that "opened" but cannot be submitted is
+  // not usable.
+  await slugInput.fill(CHECK.slug);
+  const confirm = dialog.getByRole("button", { name: DICT["ws.confirmButton"].en, exact: true });
+  await expect(
+    confirm,
+    "the confirm button must offer the action again once the typed slug matches",
+  ).toBeEnabled({ timeout: 5_000 });
+  await expect(
+    dialog.getByRole("button", { name: DICT["common.saving"].en, exact: true }),
+    "the dialog must not still read Working… (busy stuck true)",
+  ).toHaveCount(0);
+
+  // The refusal itself survives the reopen: `deleteErr` is cleared by the user's
+  // NEXT delete press, not by looking at the dialog again.
+  const keptText = ((await line.first().textContent({ timeout: 5_000 }).catch(() => null)) ?? "").trim();
+  expect(
+    keptText,
+    "the refusal must stay readable after the dialog is reopened — it is cleared by the next action, not by this one",
+  ).toContain(DICT["ws.deleteFail"].en);
+
+  console.log(
+    `t_fe8a5d78 evidence (dialog usable after refusal): alert="${keptText}" | ` +
+      `input=enabled cancel=enabled confirm=enabled label="${DICT["ws.confirmButton"].en}" not working…`,
+  );
+});

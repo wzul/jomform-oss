@@ -82,6 +82,42 @@ export default function FormsPage() {
   const [trashed, setTrashed] = useState<TrashedRow[]>([]);
   const [trashLoaded, setTrashLoaded] = useState(false);
   const [notify, setNotify] = useState("");
+  // The TRASH view's OWN refusal channel (card t_ab4aa85b). Two reasons it is
+  // not `err`, and both are the defect this line fixes:
+  //
+  //   1. Every refusal branch used to write the sentence to `err` and then fire
+  //      `loadTrash()`, which clears `err` on a successful reload — so the
+  //      sentence was set and erased in the same tick and the merchant never
+  //      read why the action was refused. `loadTrash()` does not touch this
+  //      state, so the refetch that REPORTS the refusal can no longer wipe it.
+  //   2. `err` is this page's LOAD-failure chrome: it returns early and replaces
+  //      the whole page (with a Retry that loads the ACTIVE list), so a refused
+  //      row action also threw away the trash list the merchant was reading. A
+  //      refusal changes nothing, so the list must stay.
+  //
+  // Cleared at the START of the next user action that re-issues the action (the
+  // restore/purge handlers open with it) and by the Active/Trash tab switch.
+  // THE RULE: a refusal stays readable until the user's next action — never
+  // erased by the refetch that reports it.
+  const [trashErr, setTrashErr] = useState("");
+  // The TRASH LISTING's own failure channel (card t_d9dda884). `loadTrash()` used
+  // to report a failed listing through `err`, the page's load-failure chrome, and
+  // that chose the render branch: the whole page was replaced by "We couldn't
+  // load the trash… Retry" — which took away BOTH the rows and the refusal the
+  // merchant had just been shown. Measured on the fixed bytes of t_ab4aa85b: after
+  // a Restore refused with 409 form.slugTaken, making every later trash listing
+  // answer 500 left the refusal sentence readable at NO sample of 30 taken every
+  // 100ms for 3s — the merchant read only the load-failure card. A double failure
+  // (refusal + a failing relist) must not cost them WHY their action was refused.
+  //
+  // The decision (the card offered "keep the refusal, or accept the load failure
+  // and weaken the invariant"): KEEP THE REFUSAL. The rule above is the product's
+  // decision, already taken in t_ab4aa85b — "never erased by the refetch that
+  // reports it" — and a refetch that FAILS reports the refusal no less than one
+  // that succeeds, so the invariant is not weakened for the failure path: the
+  // listing's failure is shown BESIDE the refusal, in the trash view, instead of
+  // swapping the page for chrome whose Retry loads the ACTIVE list.
+  const [trashLoadErr, setTrashLoadErr] = useState("");
   const [confirmPurge, setConfirmPurge] = useState<TrashedRow | null>(null);
   const [purgeTyped, setPurgeTyped] = useState("");
   const [purgeBusy, setPurgeBusy] = useState(false);
@@ -141,12 +177,15 @@ export default function FormsPage() {
       { onUnauth: goToLogin, message: t("forms.loadTrashFail") },
     );
     if (!r.ok) {
-      setTrashed([]);
-      setErr(r.error);
+      // t_d9dda884: NOT `setErr` — see `trashLoadErr` above. The rows are kept
+      // rather than blanked for the reason `load()` states below: a failed load
+      // must never render as "the trash is empty" when nobody knows that.
+      setTrashLoadErr(r.error);
       return;
     }
     setTrashed(r.data);
     setTrashLoaded(true);
+    setTrashLoadErr("");
     setErr("");
   }, [t, goToLogin]);
 
@@ -166,16 +205,36 @@ export default function FormsPage() {
 
   async function restore(id: string) {
     setNotify("");
-    const res = await fetch(`/api/rest/forms/${id}/restore${workspaceQuery()}`, {
-      method: "POST",
-    });
+    // The NEXT action on this surface clears the previous refusal (the rule, in
+    // the state's own comment above). It does not clear it by reloading.
+    setTrashErr("");
+    let res: Response;
+    try {
+      res = await fetch(`/api/rest/forms/${id}/restore${workspaceQuery()}`, {
+        method: "POST",
+      });
+    } catch {
+      // A transport failure (offline, aborted, DNS) is an ACTION failure like
+      // any other, and it must leave a sentence on this surface. Without this
+      // branch the rejection escaped through the row's `void restore(f.id)`
+      // handler as an unhandled rejection and the merchant saw NOTHING at all —
+      // measured while fixing t_ab4aa85b (aborted request, live DOM: no alert
+      // within 20s), which is the same outcome as the defect this card fixes.
+      // `purge()` already had its half; this one never did.
+      setTrashErr(t("forms.restoreFail"));
+      return;
+    }
     if (!res.ok) {
       // 409 means the slug was re-claimed while the form sat in the trash — the
       // refusal's code (form.slugTaken) says which obstacle to clear, so the
       // merchant gets that sentence in their OWN language rather than the wire
       // prose (issue #6177). An unrelated failure falls back to the generic line.
+      //
+      // t_ab4aa85b: the sentence goes to `trashErr`, NOT `err`, and the relist
+      // below no longer erases it — it used to be set and then wiped by
+      // `loadTrash()`'s `setErr("")` in the same tick, so it was never readable.
       const d = await res.json().catch(() => null);
-      setErr(apiErr(d, t("forms.restoreFail"), t));
+      setTrashErr(apiErr(d, t("forms.restoreFail"), t));
       void loadTrash();
       return;
     }
@@ -189,6 +248,9 @@ export default function FormsPage() {
     if (purgeTyped.trim() !== confirmPurge.slug) return;
     setPurgeBusy(true);
     setNotify("");
+    // The next purge clears the previous refusal — at the START of the action,
+    // never as a side effect of the relist (card t_ab4aa85b).
+    setTrashErr("");
     try {
       const res = await fetch(`/api/rest/forms/${confirmPurge.id}/purge${workspaceQuery()}`, {
         method: "DELETE",
@@ -198,9 +260,10 @@ export default function FormsPage() {
       if (!res.ok) {
         // A purge of a form that was ever sold is refused with code
         // form.hasSales; any other failure uses the page's own sentence. Never
-        // the server's prose (issue #6177).
+        // the server's prose (issue #6177). It renders beside the trash rows
+        // (trashErr), so the refusal survives the relist below it.
         const d = await res.json().catch(() => null);
-        setErr(apiErr(d, t("forms.purgeFail"), t));
+        setTrashErr(apiErr(d, t("forms.purgeFail"), t));
         setConfirmPurge(null);
         setPurgeTyped("");
         void loadTrash();
@@ -211,7 +274,13 @@ export default function FormsPage() {
       setPurgeTyped("");
       void loadTrash();
     } catch {
-      setErr(t("forms.purgeFail"));
+      // A transport failure (offline, aborted) — also an ACTION failure, so it
+      // uses the same channel rather than the page's load-failure chrome. The
+      // dialog is closed with it: it used to stay open while `err` replaced the
+      // whole page, which unmounted the dialog anyway.
+      setTrashErr(t("forms.purgeFail"));
+      setConfirmPurge(null);
+      setPurgeTyped("");
     } finally {
       setPurgeBusy(false);
     }
@@ -400,6 +469,9 @@ export default function FormsPage() {
                 setView(v);
                 setErr("");
                 setNotify("");
+                // Switching views is the user's next action: the refusal about
+                // the view being left is cleared with the success notice.
+                setTrashErr("");
               }}
               className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium ${
                 view === v
@@ -424,6 +496,40 @@ export default function FormsPage() {
             aria-labelledby={tabDomId("forms", "trash")}
           >
             <p className="mt-4 max-w-2xl text-sm text-[var(--jf-muted)]">{t("forms.trashNote")}</p>
+            {/* The refusal (card t_ab4aa85b), rendered beside the rows it is
+                about. It is a state no loader writes, so the relist that
+                reports the refusal cannot erase the sentence — and unlike the
+                page's load-failure card it does not take the list away from the
+                merchant who is trying to read WHY their action was refused. */}
+            {trashErr && (
+              <p
+                role="alert"
+                className="mt-3 max-w-2xl rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700"
+              >
+                {trashErr}
+              </p>
+            )}
+            {/* …and, RIGHT HERE beside it, the listing failure (card t_d9dda884).
+                Both are readable at once: a failed relist used to report into
+                `err`, whose render branch replaces the whole page — refusal
+                included. This line is what the merchant sees INSTEAD of losing
+                the sentence, and its Retry reloads the trash, not the active
+                list (which is what the page-level chrome's Retry does, on a page
+                whose trash rows are the thing that failed to load). */}
+            {trashLoadErr && (
+              <div className="mt-3 flex max-w-2xl flex-wrap items-center gap-3 rounded-lg bg-rose-50 px-3 py-2">
+                <p role="alert" className="text-sm text-rose-700">
+                  {trashLoadErr}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void loadTrash()}
+                  className="jf-btn-ghost px-3 py-1.5 text-xs"
+                >
+                  {t("common.retry")}
+                </button>
+              </div>
+            )}
             <ul className="mt-4 space-y-2">
               {trashed.map((f) => (
                 <li
@@ -470,7 +576,7 @@ export default function FormsPage() {
                   </div>
                 </li>
               ))}
-              {trashed.length === 0 && (
+              {trashed.length === 0 && !trashLoadErr && (
                 <li className="rounded-lg text-sm text-[var(--jf-muted)]">{t("forms.trashEmpty")}</li>
               )}
             </ul>

@@ -90,6 +90,17 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // The DELETE-refusal channel (card t_ab4aa85b). `err` is this card's LOAD
+  // failure and `load()` clears it on a successful reload — and the refusal
+  // branch refetches (`await load()`) precisely so a stale `check.slug` cannot
+  // leave the merchant typing a slug the server no longer has. That refetch used
+  // to erase the refusal with the load error's `setErr("")`, so the sentence was
+  // never readable: the action silently did nothing.
+  //
+  // A state the loader never touches separates the two. THE RULE: the refusal
+  // stays readable until the user's next action, which is the next `doDelete()`
+  // press (it opens with `setDeleteErr("")`) — never the reload that reports it.
+  const [deleteErr, setDeleteErr] = useState("");
   const [trash, setTrash] = useState<TrashedWorkspace[] | null>(null);
   const [trashErr, setTrashErr] = useState("");
   const [restoring, setRestoring] = useState("");
@@ -283,6 +294,9 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
     if (!check || !canDelete) return;
     setBusy(true);
     setErr("");
+    // The user's next action, and the only thing that clears the previous
+    // refusal — not the `await load()` below it (card t_ab4aa85b).
+    setDeleteErr("");
     try {
       const res = await fetch(`/api/workspaces/${check.id}`, {
         method: "DELETE",
@@ -304,10 +318,27 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
         // workspace, so no refusal reachable here names blockers — the blocker
         // list above is informational (it explains the PURGE the API offers).
         // errcode.go keeps the constant commented out for the same reason.
+        //
+        // t_ab4aa85b: the sentence goes to `deleteErr`, a channel `load()` never
+        // writes, so the `await load()` below — which is what re-seeds
+        // `check.slug` after an out-of-band rename — cannot erase it, and the
+        // merchant reads WHY instead of watching the click do nothing.
         const d = await res.json().catch(() => null);
-        setErr(apiErr(d, t("ws.deleteFail"), t));
+        setDeleteErr(apiErr(d, t("ws.deleteFail"), t));
         setConfirmOpen(false);
         setTyped("");
+        // `busy` is the DIALOG's state, not the request's: the slug input, Cancel,
+        // the overlay's dismiss and `canDelete` are all gated on it. A refusal is
+        // not a transport failure — the catch below clears `busy`, but this branch
+        // returns normally and used to leave it true forever (card t_fe8a5d78). The
+        // dialog then closed with the reason readable, but the Danger zone's own
+        // button is NOT gated on `busy`, so reopening it rendered a dialog whose
+        // input and Cancel were disabled, whose confirm button was disabled and
+        // read "Working…", and whose overlay ignored clicks — the action could not
+        // be retried without a page reload. Clear it here; `deleteErr` keeps the
+        // refusal until the user's next press of that button, which is what
+        // `setDeleteErr("")` at the top of this function is for.
+        setBusy(false);
         await load();
         return;
       }
@@ -322,7 +353,7 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
       }
       window.location.reload();
     } catch {
-      setErr(t("ws.deleteFail"));
+      setDeleteErr(t("ws.deleteFail"));
       setBusy(false);
     }
   }
@@ -541,9 +572,13 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
           </>
         )}
 
-        {err && !confirmOpen && (
+        {/* The delete-refusal line. `err` is the load failure (which renders the
+            `!check` branch above instead) and `deleteErr` the refusal; both are
+            shown here while the dialog is closed, so whichever the last action
+            produced stays readable (card t_ab4aa85b). */}
+        {(deleteErr || err) && !confirmOpen && (
           <p role="alert" className="mt-3 text-sm text-red-600">
-            {err}
+            {deleteErr || err}
           </p>
         )}
       </section>
@@ -662,9 +697,9 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
               onChange={(e) => setTyped(e.target.value)}
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-sm"
             />
-            {err && (
+            {(deleteErr || err) && (
               <p role="alert" className="mt-2 text-sm text-red-600">
-                {err}
+                {deleteErr || err}
               </p>
             )}
             <div className="mt-4 flex flex-wrap justify-end gap-2">

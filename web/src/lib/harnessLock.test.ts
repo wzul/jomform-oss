@@ -274,6 +274,19 @@ const HARNESSES: HarnessEntry[] = [
     d3ProbeNeedle: /BITEPROOF REFUSED: next\.config\.mjs\.not-a-real-file is missing/,
   },
   {
+    // Card t_ab4aa85b. Backs the two refusal-survival guards added with the fix
+    // (`web/e2e/forms-trash-refusal.spec.ts` and the Danger-zone case in
+    // `web/e2e/workspace-trash.spec.ts`). It rewrites src/app/forms/page.tsx —
+    // the SAME file the entry above mutates — and src/components/WorkspaceTab.tsx,
+    // so it takes the family key like the rest.
+    label: "biteproof_forms_trash_refusal.sh",
+    script: join(webRoot, "scripts", "biteproof_forms_trash_refusal.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_PAGE: "src/app/forms/.no-such-page-probe.tsx" },
+    d3ProbeNeedle: /BITEPROOF REFUSED: src\/app\/forms\/\.no-such-page-probe\.tsx is missing/,
+  },
+  {
     // Card t_f6408658. Mutates src/app/forms/page.tsx in place; nothing else in
     // the family does, but it shares the family's /tmp lock DIRECTORY and the
     // same "restore from a fixed name" hazard, so it takes the same key.
