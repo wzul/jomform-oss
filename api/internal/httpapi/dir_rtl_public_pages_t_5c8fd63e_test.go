@@ -22,6 +22,12 @@ package httpapi
 //      inside an otherwise-RTL page.
 //   3. The custom page's CSP is untouched by this change: it must still admit
 //      the logo it paints (v1.21.267's exact-origin img-src, card t_8ef93e64).
+//   4. Card t_3788c2df: the footer of these pages follows the language the page
+//      declares. The restriction page shipped `<p class="f">Dikuasakan oleh
+//      JomForm</p>` as a constant, so an Arabic page carried Malay chrome; the
+//      hosted legal page declared lang="en" and carried the same Malay footer.
+//      TestPublicPagesLocaliseThePoweredByFooter pins both against the
+//      dictionary, per locale.
 //
 // BITE PROOF (run for this card, re-runnable): removing the `{{if isRTL …}}` arm
 // from any one template — or the dirAttr call from one Fprintf page — turns the
@@ -30,6 +36,7 @@ package httpapi
 
 import (
 	"bytes"
+	"html"
 	"html/template"
 	"net/http/httptest"
 	"sort"
@@ -311,6 +318,92 @@ func srcdocLine(body string) string {
 		}
 	}
 	return "<no frame.srcdoc= line — the custom-form bridge is gone>"
+}
+
+// TestPublicPagesLocaliseThePoweredByFooter (card t_3788c2df). The footer of a
+// server-rendered page must be the dictionary's PoweredBy string for the
+// language THAT PAGE declares — not a constant.
+//
+// The defect: restrictions.go wrote `<p class="f">Dikuasakan oleh JomForm</p>`
+// into the Fprintf with no argument, so the schedule/limit page carried Malay
+// chrome in all five locales (measured on prod v1.21.272: an Arabic restriction
+// page served `<html lang="ar" dir="rtl">` with Arabic body copy and the Malay
+// footer). rest_legal.go carried the same literal on a page that declares
+// lang="en".
+//
+// Driven through the REAL renderers, and asserted in BOTH directions: the
+// locale's own footer must be present, and no OTHER locale's footer may appear
+// — an "always ms" regression fails the same way a blank footer does.
+func TestPublicPagesLocaliseThePoweredByFooter(t *testing.T) {
+	restrictionBody := func(t *testing.T, lang string) string {
+		t.Helper()
+		f := &dbstore.Form{
+			ID: "11111111-1111-1111-1111-111111111111", AccountID: "a1",
+			Slug: "gated", Title: "Secret Form", Status: dbstore.FormStatusPrivate,
+			Config: map[string]any{"lang": lang},
+		}
+		h := &PublicHandlers{}
+		rec := httptest.NewRecorder()
+		h.renderRestriction(rec, httptest.NewRequest("GET", "http://demo.jomform.com/gated", nil), f, restrictionExpired)
+		return rec.Body.String()
+	}
+
+	langs := resolvedLangs()
+	if len(langs) < 5 {
+		t.Fatalf("resolvedLangs() = %v — the five shipped locales are no longer all in formLangs", langs)
+	}
+	for _, lang := range langs {
+		t.Run("restriction-page/"+lang, func(t *testing.T) {
+			body := restrictionBody(t, lang)
+			if want := `<p class="f">` + htmlEsc(formLangs[lang].PoweredBy) + `</p>`; !strings.Contains(body, want) {
+				t.Fatalf("restriction page for %q does not carry its own footer (want %q):\n%s", lang, want, head(body))
+			}
+			for _, other := range langs {
+				if other == lang {
+					continue
+				}
+				if strings.Contains(body, htmlEsc(formLangs[other].PoweredBy)) {
+					t.Errorf("restriction page for %q carries the %q footer %q — the footer must follow the page's own language",
+						lang, other, formLangs[other].PoweredBy)
+				}
+			}
+		})
+	}
+
+	// The card's two named arms, spelled out so a dictionary edit cannot quietly
+	// make the table above agree with the bug.
+	if body := restrictionBody(t, "ar"); !strings.Contains(body, "مدعوم بواسطة JomForm") {
+		t.Errorf("Arabic restriction page does not carry the Arabic footer:\n%s", head(body))
+	} else if strings.Contains(body, "Dikuasakan oleh JomForm") {
+		t.Errorf("Arabic restriction page still carries the hardcoded Malay footer:\n%s", head(body))
+	}
+	if body := restrictionBody(t, "en"); !strings.Contains(body, "Powered by JomForm") {
+		t.Errorf("English restriction page does not carry the English footer:\n%s", head(body))
+	} else if strings.Contains(body, "Dikuasakan oleh JomForm") {
+		t.Errorf("English restriction page still carries the hardcoded Malay footer:\n%s", head(body))
+	}
+	// Malay still renders as Malay (no over-correction).
+	if body := restrictionBody(t, "ms"); !strings.Contains(body, "Dikuasakan oleh JomForm") {
+		t.Errorf("Malay restriction page lost its Malay footer:\n%s", head(body))
+	}
+
+	// The hosted legal page shares the literal but not the template: it declares
+	// lang="en" and every other string on it is English, so its footer must be
+	// the English one too.
+	t.Run("legal-page/en", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		writeLegalPageHTML(rec, "Terms of Service", "demo", "These are the terms.")
+		body := rec.Body.String()
+		if tag := htmlOpenTag(t, body); !strings.Contains(tag, `lang="en"`) {
+			t.Fatalf("the legal page no longer declares lang=\"en\" (%s) — re-check whether its footer must follow a resolved language instead", tag)
+		}
+		if want := `<p class="f">` + html.EscapeString(formLangs["en"].PoweredBy) + `</p>`; !strings.Contains(body, want) {
+			t.Errorf("the legal page does not carry the English footer (want %q):\n%s", want, head(body))
+		}
+		if strings.Contains(body, "Dikuasakan oleh JomForm") {
+			t.Errorf("the legal page still carries the hardcoded Malay footer:\n%s", head(body))
+		}
+	})
 }
 
 // TestDirectionRuleToleratesPageDataWithoutALang pins the CONTRACT of the rule

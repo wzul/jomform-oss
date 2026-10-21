@@ -103,8 +103,9 @@ func (h *PublicHandlers) renderRestriction(w http.ResponseWriter, r *http.Reques
 h1{font-size:20px;margin:0 0 8px}.m{color:#6b7280;font-size:14px;line-height:1.6;margin:0}
 .f{color:#9ca3af;font-size:12px;margin-top:20px}</style></head><body><div class="c">
 <h1>%s</h1><p class="m">%s</p>
-<p class="f">Dikuasakan oleh JomForm</p></div></body></html>`,
-		htmlEsc(ls.Lang), dirAttr(ls.Lang), htmlEsc(title), htmlEsc(title), htmlEsc(msg))
+<p class="f">%s</p></div></body></html>`,
+		htmlEsc(ls.Lang), dirAttr(ls.Lang), htmlEsc(title), htmlEsc(title), htmlEsc(msg),
+		htmlEsc(ls.PoweredBy))
 }
 
 // checkRestrictionsRender returns the restriction state that should block the

@@ -189,6 +189,11 @@ func (h *PublicHandlers) handlePublicLegalPage(w http.ResponseWriter, r *http.Re
 
 // writeLegalPageHTML renders a hosted legal page. The content is merchant
 // text/HTML; it is escaped so no scripts can run (no XSS on the public page).
+//
+// The page chrome (and <html lang>) is English today, so the footer must be the
+// English dictionary's Powered-by string — it was a hardcoded Malay literal, so
+// every English legal page ended with "Dikuasakan oleh JomForm" (card
+// t_3788c2df).
 func writeLegalPageHTML(w http.ResponseWriter, title, workspaceSlug, content string) {
 	esc := html.EscapeString(content)
 	// Render simple line breaks as paragraphs so plain-text drafts read well.
@@ -210,6 +215,7 @@ p{font-size:14px;line-height:1.7;color:#374151;margin:0 0 14px}
 .f{color:#9ca3af;font-size:12px;margin-top:28px;text-align:center}</style></head><body><div class="c">
 <h1>%s</h1><p class="s">%s.jomform.com</p>
 %s
-<p class="f">Dikuasakan oleh JomForm</p></div></body></html>`,
-		title, workspaceSlug, title, workspaceSlug, body.String())
+<p class="f">%s</p></div></body></html>`,
+		title, workspaceSlug, title, workspaceSlug, body.String(),
+		html.EscapeString(langStringsForCode("en").PoweredBy))
 }
