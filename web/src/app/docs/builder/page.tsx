@@ -129,15 +129,37 @@ export default function BuilderDocsPage() {
         A website block is the browser&apos;s own URL input, so it accepts any absolute URL —{" "}
         <span className="font-mono text-xs">https://…</span>,{" "}
         <span className="font-mono text-xs">ftp://…</span>,{" "}
-        <span className="font-mono text-xs">mailto:…</span> — and refuses only what is not a URL at
-        all, such as <span className="font-mono text-xs">yourname.com</span> with no scheme.
-        JomForm applies the same rule again when the form is submitted, so a buyer is never told one
-        thing by the page and another by the server when they press send. There is one deliberate
-        exception: a script-bearing scheme (<span className="font-mono text-xs">javascript:</span>,{" "}
-        <span className="font-mono text-xs">data:</span>,{" "}
-        <span className="font-mono text-xs">vbscript:</span>) is refused even though the browser
-        accepts the string, because the answer is stored and read back later. A custom-HTML
-        response form&apos;s field registered as{" "}
+        <span className="font-mono text-xs">mailto:…</span> — and refuses what is not a URL at all,
+        such as <span className="font-mono text-xs">yourname.com</span> with no scheme. JomForm
+        applies the same rule again when the form is submitted, so the buyer is not told one thing
+        by the page and another by the server when they press send — with two narrow exceptions,
+        both in the strict direction, where the server refuses a value the page accepted:
+      </p>
+      <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
+        <li>
+          <strong>A script-bearing scheme</strong> —{" "}
+          <span className="font-mono text-xs">javascript:</span>, a{" "}
+          <span className="font-mono text-xs">data:</span> URI or{" "}
+          <span className="font-mono text-xs">vbscript:</span> — is refused even though the browser
+          accepts the string, because the answer is stored and read back later.
+        </li>
+        <li>
+          <strong>A network URL broken in shape</strong> — a missing second slash (
+          <span className="font-mono text-xs">http:/example.com</span>) or a space in the host (
+          <span className="font-mono text-xs">http://exa mple.com</span>) — is refused even though
+          the browser&apos;s lenient parser accepts the string. The server reads the first as an
+          address with no host and cannot parse the second at all, so it answers with a corrective
+          message instead of storing a link it cannot vouch for.
+        </li>
+      </ul>
+      <p className="mt-3 text-sm leading-relaxed text-slate-600">
+        Apart from those two, what the page accepts is what the server accepts —{" "}
+        <span className="font-mono text-xs">ftp://</span>,{" "}
+        <span className="font-mono text-xs">ws://</span>,{" "}
+        <span className="font-mono text-xs">tel:</span>,{" "}
+        <span className="font-mono text-xs">mailto:</span> and{" "}
+        <span className="font-mono text-xs">file:</span> values are stored exactly as typed. A
+        custom-HTML response form&apos;s field registered as{" "}
         <span className="font-mono text-xs">type:&quot;url&quot;</span> follows exactly the same
         rule.
       </p>
