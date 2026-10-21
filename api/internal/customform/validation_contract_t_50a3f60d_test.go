@@ -65,6 +65,22 @@ func TestValidationContractEnforcesRequiredAndTypes(t *testing.T) {
 	if err := formfields.ValidateFields(regs, map[string]string{"name": "Ali", "email": "a@b.test", "site": "jomform.com"}); err == nil {
 		t.Error("scheme-less value passed a type=url field")
 	}
+	// `type:"url"` is the buyer's <input type=url>, whose own constraint is
+	// "parses as an absolute URL" — so an ftp:// link the page marks valid must
+	// not be refused with 400 `URL tidak sah`. The mapping (url → website) is
+	// what carries the rule.
+	if err := formfields.ValidateFields(regs, map[string]string{
+		"name": "Ali", "email": "a@b.test", "site": "ftp://example.com/x",
+	}); err != nil {
+		t.Errorf("browser-valid ftp:// answer rejected by a type=url field: %v", err)
+	}
+	// The one deliberate divergence: a script-bearing scheme is refused even
+	// though the browser accepts the string.
+	if err := formfields.ValidateFields(regs, map[string]string{
+		"name": "Ali", "email": "a@b.test", "site": "javascript:alert(1)",
+	}); err == nil {
+		t.Error("javascript: URL passed a type=url field")
+	}
 	if err := formfields.ValidateFields(regs, map[string]string{
 		"name": "Ali", "email": "a@b.test", "qty": "2", "site": "https://jomform.com",
 	}); err != nil {

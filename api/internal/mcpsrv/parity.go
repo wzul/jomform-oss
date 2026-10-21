@@ -477,7 +477,7 @@ type upsertFormIn struct {
 	// registered custom_fields are recorded on submit. Omit to leave
 	// unchanged; pass an empty string to clear the custom form.
 	CustomHTML   string             `json:"custom_html,omitempty" jsonschema:"HTML badan borang tersuai (response-only, sandboxed iframe). Kosong = buang mod tersuai."`
-	CustomFields []customform.Field `json:"custom_fields,omitempty" jsonschema:"Kontrak pendaftaran medan: [{field_id, type, label, required, validation}]. Input HTML mesti bawa field_id sebagai name."`
+	CustomFields []customform.Field `json:"custom_fields,omitempty" jsonschema:"Kontrak pendaftaran medan: [{field_id, type, label, required, validation}]. Input HTML mesti bawa field_id sebagai name. type=url menerima mana-mana URL mutlak yang diterima input[type=url] pelayar (https://, ftp://, mailto:), bukan http(s) sahaja; skema skrip (javascript:, data:, vbscript:) ditolak."`
 }
 
 func (s *Server) upsertForm(

@@ -122,6 +122,26 @@ export default function BuilderDocsPage() {
         </li>
       </ul>
 
+      <h2 id="url-fields" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
+        What a website field accepts
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A website block is the browser&apos;s own URL input, so it accepts any absolute URL —{" "}
+        <span className="font-mono text-xs">https://…</span>,{" "}
+        <span className="font-mono text-xs">ftp://…</span>,{" "}
+        <span className="font-mono text-xs">mailto:…</span> — and refuses only what is not a URL at
+        all, such as <span className="font-mono text-xs">yourname.com</span> with no scheme.
+        JomForm applies the same rule again when the form is submitted, so a buyer is never told one
+        thing by the page and another by the server when they press send. There is one deliberate
+        exception: a script-bearing scheme (<span className="font-mono text-xs">javascript:</span>,{" "}
+        <span className="font-mono text-xs">data:</span>,{" "}
+        <span className="font-mono text-xs">vbscript:</span>) is refused even though the browser
+        accepts the string, because the answer is stored and read back later. A custom-HTML
+        response form&apos;s field registered as{" "}
+        <span className="font-mono text-xs">type:&quot;url&quot;</span> follows exactly the same
+        rule.
+      </p>
+
       <h2 className="mt-8 text-xl font-semibold text-slate-900">Reordering, duplicating, removing</h2>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         Each block card carries <strong>↑</strong> and <strong>↓</strong> to move it one position (the

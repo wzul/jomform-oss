@@ -9,6 +9,7 @@ package formfields
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -245,7 +246,7 @@ func ValidateFields(regs []Field, fields map[string]string) error {
 				return fmt.Errorf("emel tidak sah: %s", r.Label)
 			}
 		case "website":
-			if !strings.HasPrefix(val, "http://") && !strings.HasPrefix(val, "https://") {
+			if !ValidWebsiteURL(val) {
 				return fmt.Errorf("URL tidak sah: %s", r.Label)
 			}
 		case "number":
@@ -262,6 +263,79 @@ func ValidateFields(regs []Field, fields map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// ValidWebsiteURL reports whether val is an absolute URL of the kind a
+// browser's own `<input type="url">` accepts.
+//
+// THE RULE IS THE BROWSER'S, NOT "http(s) only". HTML defines the url state's
+// constraint as "while the value is neither the empty string nor a valid
+// absolute URL, the element is suffering from a type mismatch"
+// (https://html.spec.whatwg.org/multipage/input.html#url-state-(type=url)), and
+// every engine implements that as "the URL parser returned a URL" (see
+// whatwg/html#11083). Measured in Chrome 145 against the public form:
+//
+//	ftp://example.com/x   valid      example.com        invalid (no scheme)
+//	https://example.com/x valid      http://            invalid (no host)
+//	mailto:a@b            valid      ftp://             invalid (no host)
+//	ws://example.com      valid      //example.com/x    invalid (no scheme)
+//	file:///etc/passwd    valid      tel:+60123         valid
+//
+// The check used to be `strings.HasPrefix(val, "http://") ||
+// strings.HasPrefix(val, "https://")`, so a buyer could type a value the page
+// itself declared valid (`ftp://example.com/x`) and have the POST refused with
+// `URL tidak sah` — the exact divergence the server-side contract exists to
+// close.
+//
+// Three places where this is not literally "whatever the page accepted", all
+// in the strict direction and all documented here because a reader will look
+// for them:
+//
+//   - a network scheme (http, https, ftp, ws, wss) with an EMPTY host is
+//     refused — the browser refuses those too (`http://` is a type mismatch),
+//     so this is the same rule, not a deviation;
+//   - the script-bearing opaque schemes javascript:, data: and vbscript: are
+//     refused although the browser accepts them. An answer is stored and then
+//     read OUTSIDE the form (the Sales answer list, the CSV export), so the
+//     server does not record an executable URI into a merchant's data even
+//     though the string would satisfy the page's own check;
+//   - Go's parser is stricter than the WHATWG URL parser on two malformed
+//     shapes — `http:/example.com` (one slash) and a host containing a space.
+//     Both are refused here and accepted by a browser, and that is fine: this
+//     is not a second, hand-written URL parser, and a value that malformed is
+//     worth a corrective message rather than a stored broken link.
+//
+// The second and third are the only places the server is stricter than the
+// page; the test pins all three.
+func ValidWebsiteURL(val string) bool {
+	v := strings.TrimSpace(val)
+	if v == "" {
+		return false
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.Scheme == "" {
+		// No scheme at all (`jomform.com`, `//example.com/x`) is the value the
+		// browser also refuses — the mistake this check exists to catch.
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "javascript", "data", "vbscript":
+		return false
+	}
+	if u.Host == "" && networkScheme(u.Scheme) {
+		return false
+	}
+	return true
+}
+
+// networkScheme reports whether s is a scheme whose URL has an authority, so a
+// value without a host is a broken link (and the browser's parser refuses it).
+func networkScheme(s string) bool {
+	switch strings.ToLower(s) {
+	case "http", "https", "ftp", "ws", "wss":
+		return true
+	}
+	return false
 }
 
 // collectableTypes is the allowlist of builder-block types that collect a

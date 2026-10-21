@@ -22,7 +22,19 @@ import (
 // inputs must carry the field's ID as their name attribute so JomForm can map
 // submitted values back to the contract.
 type Field struct {
-	ID         string `json:"field_id"`
+	ID string `json:"field_id"`
+	// Type is the value the merchant's HTML puts in the input's `type`
+	// attribute. Supported: text, email, tel, number, date, time, url,
+	// password, textarea, select, radio, checkbox, hidden, consent.
+	//
+	// Server-side enforcement (see ValidationContract) follows the browser:
+	// `required` is refused when the value is missing or blank, `email` uses
+	// the same address grammar the browser accepts, `number` must parse, and
+	// `url` accepts any absolute URL the browser's own `input[type=url]`
+	// accepts — `https://…`, `ftp://…`, `mailto:…` — not http(s) only. The one
+	// place the server is stricter: a script-bearing scheme (javascript:,
+	// data:, vbscript:) is refused, because the answer is stored and read
+	// outside the form. See formfields.ValidWebsiteURL for the exact rule.
 	Type       string `json:"type"`
 	Label      string `json:"label"`
 	Required   bool   `json:"required"`
@@ -277,11 +289,15 @@ func Collect(c *Config, data map[string]any) map[string]any {
 // fact is expressed, and it is enforced before the submission row is created.
 //
 // Only `required` and the input types with a cheap deterministic check (email,
-// number, url) are carried: those are exactly what the renderer's HTML
-// attributes assert, and they cannot reject a value the browser accepted. The
-// contract's Validation string is deliberately NOT carried as a regex — it is
-// a merchant-facing hint, not a pattern the page applies, so enforcing it here
-// could refuse an answer the live page accepts.
+// number, url) are carried: those are the constraints the renderer's HTML
+// attributes assert, i.e. the browser's own checks. They are NOT a superset of
+// them — the server refuses strictly more in one place, and it is deliberate:
+// a `url` value whose scheme executes (javascript:, data:, vbscript:) is
+// refused although `<input type=url>` accepts it, because the answer is stored
+// and later read outside the form. formfields.ValidWebsiteURL owns that rule.
+// The contract's Validation string is deliberately NOT carried as a regex — it
+// is a merchant-facing hint, not a pattern the page applies, so enforcing it
+// here could refuse an answer the live page accepts.
 func ValidationContract(c *Config) []formfields.Field {
 	if c == nil || len(c.Fields) == 0 {
 		return nil
@@ -313,6 +329,11 @@ func ValidationContract(c *Config) []formfields.Field {
 // (validType) is the browser's `type` attribute; formfields uses the builder's
 // block names, so `tel` / `url` map onto the block names for the same check and
 // anything without a server-side check reads as plain text.
+//
+// `url` → the builder's `website` check, which is formfields.ValidWebsiteURL:
+// the browser's own absolute-URL rule (ftp://, mailto: and a custom scheme with
+// a host all pass), not http(s) only. That is the point of the mapping — a
+// buyer's `<input type=url>` and the server must agree on what a URL is.
 func validationType(t string) string {
 	switch t {
 	case "email", "number", "date", "time", "textarea", "select", "radio",
