@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/microcosm-cc/bluemonday"
+
+	"github.com/wzul/jomform/api/internal/formfields"
 )
 
 // Field is one registered input field of a custom HTML form. The agent's HTML
@@ -137,6 +139,70 @@ func Collect(c *Config, data map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+// ValidationContract converts a custom-HTML form's registered field contract
+// into the shared server-side validation contract (formfields.Field), so
+// handleResponseSubmit enforces the same rule the buyer's browser enforces.
+//
+// Card t_50a3f60d: the public submit path validated against
+// formfields.Contract(config), which reads config.registered_fields and then
+// the form's builder blocks. A custom-HTML form has no builder blocks, so the
+// derived contract was empty and ValidateFields had nothing to check: a direct
+// POST that omitted a `required:true` registered field (or sent an empty
+// `fields` map, or a non-email into a type=email field) was stored with a 201.
+// The registered fields ARE the contract of a custom form — this is where that
+// fact is expressed, and it is enforced before the submission row is created.
+//
+// Only `required` and the input types with a cheap deterministic check (email,
+// number, url) are carried: those are exactly what the renderer's HTML
+// attributes assert, and they cannot reject a value the browser accepted. The
+// contract's Validation string is deliberately NOT carried as a regex — it is
+// a merchant-facing hint, not a pattern the page applies, so enforcing it here
+// could refuse an answer the live page accepts.
+func ValidationContract(c *Config) []formfields.Field {
+	if c == nil || len(c.Fields) == 0 {
+		return nil
+	}
+	out := make([]formfields.Field, 0, len(c.Fields))
+	for _, f := range c.Fields {
+		id := strings.TrimSpace(f.ID)
+		if id == "" {
+			continue
+		}
+		label := strings.TrimSpace(f.Label)
+		if label == "" {
+			// The message must name something the buyer/merchant can find in
+			// the form; the field id is the fallback the renderer uses too.
+			label = id
+		}
+		out = append(out, formfields.Field{
+			FieldID:  id,
+			Type:     validationType(f.Type),
+			Label:    label,
+			Required: f.Required,
+		})
+	}
+	return out
+}
+
+// validationType maps a custom-form input type to the type name
+// formfields.ValidateFields understands. The custom form's own vocabulary
+// (validType) is the browser's `type` attribute; formfields uses the builder's
+// block names, so `tel` / `url` map onto the block names for the same check and
+// anything without a server-side check reads as plain text.
+func validationType(t string) string {
+	switch t {
+	case "email", "number", "date", "time", "textarea", "select", "radio",
+		"checkbox", "hidden", "consent", "text":
+		return t
+	case "tel":
+		return "phone"
+	case "url":
+		return "website"
+	}
+	// password and any unknown type: required-only, no format check.
+	return "text"
 }
 
 // sanitizer is the bluemonday policy for custom HTML form bodies. It strips

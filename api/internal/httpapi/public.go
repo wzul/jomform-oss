@@ -680,7 +680,19 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 		// spam-judge logic downstream reads). Evaluated in one pass over the
 		// submitted answers, so a field that is itself hidden contributes no
 		// answer and cannot keep a dependent block visible.
-		regs := formfields.Contract(form.Config)
+		// Card t_50a3f60d: a custom-HTML form's contract is its registered
+		// config.custom_html.fields (issue #255) — the HTML the agent wrote is
+		// not a builder-block form, so formfields.Contract derived NOTHING from
+		// it and a direct POST bypassed every `required` marker the browser
+		// enforced (201 + a stored, possibly empty, submission). Derive the
+		// contract from the registered fields instead; the block contract path
+		// stays exactly as it was for every non-custom form.
+		var regs []formfields.Field
+		if customform.Enabled(form.Config) {
+			regs = customform.ValidationContract(customform.FromConfig(form.Config))
+		} else {
+			regs = formfields.Contract(form.Config)
+		}
 		strFields, hidden := formfields.VisibleAnswers(regs, strFields)
 		for k := range in.Fields {
 			if hidden[k] {
