@@ -96,7 +96,7 @@ func (h *PublicHandlers) renderRestriction(w http.ResponseWriter, r *http.Reques
 	// unescaped title let a `</title><script>` break out and execute on the
 	// buyer's page. msg/lang come from server-side maps, but they ride through
 	// the same helper so no future edit can reintroduce a raw sink.
-	fmt.Fprintf(w, `<!doctype html><html lang="%s"><head><meta charset="utf-8">
+	fmt.Fprintf(w, `<!doctype html><html lang="%s"%s><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title>
 <style>body{background:#f7f8f8;color:#17181c;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px}
 .c{background:#ffffff;border:1px solid #e6e8ec;border-radius:16px;padding:40px;text-align:center;max-width:440px;width:100%%}
@@ -104,7 +104,7 @@ h1{font-size:20px;margin:0 0 8px}.m{color:#6b7280;font-size:14px;line-height:1.6
 .f{color:#9ca3af;font-size:12px;margin-top:20px}</style></head><body><div class="c">
 <h1>%s</h1><p class="m">%s</p>
 <p class="f">Dikuasakan oleh JomForm</p></div></body></html>`,
-		htmlEsc(ls.Lang), htmlEsc(title), htmlEsc(title), htmlEsc(msg))
+		htmlEsc(ls.Lang), dirAttr(ls.Lang), htmlEsc(title), htmlEsc(title), htmlEsc(msg))
 }
 
 // checkRestrictionsRender returns the restriction state that should block the

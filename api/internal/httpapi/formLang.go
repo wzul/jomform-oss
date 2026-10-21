@@ -464,3 +464,38 @@ func validFormLang(code string) bool {
 	}
 	return false
 }
+
+// isRTL reports whether a resolved buyer-facing language lays out
+// right-to-left. Arabic is the only RTL locale among the five the platform
+// ships (formLangs), and the dashboard already declares
+// documentElement.dir = "rtl" for it (web/src/components/i18n.tsx). A public
+// page that renders Arabic copy inside an LTR document is the same defect shape
+// as rendering the wrong language: the words are right and the page still reads
+// wrong to a buyer.
+//
+// This is the ONE place the rule lives for the public renderers. The menu page
+// applied it first (menu.go's `<html dir="rtl">`); the order pages — custom
+// HTML, blocks, response, the legacy layout, the private gate, the restriction
+// page and the thank-you page — never did, so an Arabic buyer got Arabic copy
+// laid out left-to-right on every one of them.
+//
+// The argument is `any` on purpose: this function is called from templates
+// (`{{if isRTL .Lang}}`), and a template executed with data that omits Lang
+// hands over an untyped nil. A `func(string) bool` turns that missing key into
+// `invalid value; expected string` — an execution error that blanks the whole
+// page — where the pre-existing `lang="{{.Lang}}"` merely rendered empty. A
+// language we cannot read is simply not Arabic.
+func isRTL(lang any) bool {
+	s, _ := lang.(string)
+	return s == "ar"
+}
+
+// dirAttr is the <html> direction attribute isRTL implies, for the renderers
+// that build their page with fmt.Fprintf (no template to hold the literal).
+// Empty for every LTR locale, so their markup stays byte-for-byte as it was.
+func dirAttr(lang string) string {
+	if isRTL(lang) {
+		return ` dir="rtl"`
+	}
+	return ""
+}

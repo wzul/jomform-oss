@@ -484,9 +484,11 @@ var blockTmpl = template.Must(template.New("blocks").
 		// Card t_23289ce3: the date/time format picker's reader.
 		"dateType":  dateInputType,
 		"styleAttr": styleAttr,
+		// Card t_5c8fd63e: Arabic is the RTL locale (formLang.go isRTL).
+		"isRTL": isRTL,
 	}).
 	Parse(`<!doctype html>
-<html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="{{.Lang}}"{{if isRTL .Lang}} dir="rtl"{{end}}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 {{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
 {{.OGMeta}}
@@ -1053,9 +1055,11 @@ var responseTmpl = template.Must(template.New("response").
 		// emits — the two renderers must not disagree about a block.
 		"styleAttr": styleAttr,
 		"dateType":  dateInputType,
+		// Card t_5c8fd63e: Arabic is the RTL locale (formLang.go isRTL).
+		"isRTL": isRTL,
 	}).
 	Parse(`<!doctype html>
-<html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="{{.Lang}}"{{if isRTL .Lang}} dir="rtl"{{end}}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 {{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
 {{.OGMeta}}

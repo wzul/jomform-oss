@@ -280,7 +280,9 @@ func langStringsForCode(code string) langStrings {
 // any more. The inline script below owns the cart; the localised labels the
 // script needs are shipped as data-* attributes on #menuSheet so no template
 // action has to live inside the JS.
-var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define "menuCard"}}
+var menuPageTmpl = template.Must(template.New("workspace-menu").
+	Funcs(template.FuncMap{"isRTL": isRTL}).
+	Parse(`{{define "menuCard"}}
 <div class="item">
 <button class="card" type="button" data-id="{{.ID}}" data-name="{{.Name}}" data-desc="{{.Description}}" data-price="{{.PriceSen}}" data-add="{{.AddLabel}}"{{if .Variable}} data-pick="{{.PickLabel}}"{{end}} aria-label="{{.AddLabel}}: {{.Name}}">
   {{if .CardImage}}<img class="cimg" src="{{.CardImage}}" alt="{{.Name}}" data-base="{{.ImageURL}}" loading="lazy">{{end}}
@@ -340,7 +342,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").Parse(`{{define 
     <input type="text" name="{{.ID}}" value="{{.Value}}" placeholder="{{.Placeholder}}"{{if .Required}} required{{end}}>
   </label>
   {{end}}{{end}}<!doctype html>
-<html lang="{{.Ls.Lang}}"{{if eq .Ls.Lang "ar"}} dir="rtl"{{end}}>
+<html lang="{{.Ls.Lang}}"{{if isRTL .Ls.Lang}} dir="rtl"{{end}}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

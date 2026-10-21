@@ -1007,7 +1007,9 @@ func (h *PublicHandlers) lookupProduct(ctx context.Context, accountID string, fo
 
 // formFuncs provides template helpers.
 var formFuncs = template.FuncMap{
-	"divf": func(total, div int64) float64 { return float64(total) / float64(div) },
+	// Card t_5c8fd63e: Arabic is the RTL locale (formLang.go isRTL).
+	"isRTL": isRTL,
+	"divf":  func(total, div int64) float64 { return float64(total) / float64(div) },
 	"div100": func(v any) string {
 		switch n := v.(type) {
 		case int64:
@@ -1058,7 +1060,7 @@ type legacyFormView struct {
 }
 
 var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doctype html>
-<html lang="{{.Lang}}">
+<html lang="{{.Lang}}"{{if isRTL .Lang}} dir="rtl"{{end}}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1498,7 +1500,16 @@ const iv = setInterval(async () => {
 	// Issue #537: raw fmt.Fprintf has no autoescaping. The values here are
 	// server-generated today, but they ride through the same escape helper so the
 	// sink cannot become an XSS if a caller-supplied value is ever added.
-	fmt.Fprintf(w, `<!doctype html><html lang="%s"><head><meta charset="utf-8">%s
+	writeThankYouPage(w, ls, sale, refresh, message, statusText)
+}
+
+// writeThankYouPage writes the buyer's post-payment page for a resolved
+// language. It is a named function rather than an inline fmt.Fprintf so the
+// page's own <html> tag can be rendered and asserted without a sale row in a
+// database — the direction rule (card t_5c8fd63e) had to hold here too, and a
+// page only reachable through Postgres would have shipped unaudited.
+func writeThankYouPage(w http.ResponseWriter, ls langStrings, sale *dbstore.Sale, refresh, message, statusText string) {
+	fmt.Fprintf(w, `<!doctype html><html lang="%s"%s><head><meta charset="utf-8">%s
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title>
 <meta name="jf-ref" content="%s">
 <style>body{background:#f7f8f8;color:#17181c;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
@@ -1510,7 +1521,7 @@ h1{color:#10b981;font-size:24px}
 <h1>✓ %s</h1><div class="msg">%s</div>
 <p class="ref">%s <strong>%s</strong> · %s: %s.</p>
 <p style="color:#9ca3af;font-size:12px">%s</p></div></body></html>`,
-		htmlEsc(ls.Lang), refresh, htmlEsc(ls.ThankYou), htmlEsc(sale.RefCode), htmlEsc(ls.ThankYou), message,
+		htmlEsc(ls.Lang), dirAttr(ls.Lang), refresh, htmlEsc(ls.ThankYou), htmlEsc(sale.RefCode), htmlEsc(ls.ThankYou), message,
 		htmlEsc(ls.OrderLabel), htmlEsc(sale.RefCode), htmlEsc(ls.StatusLabel), htmlEsc(statusText), htmlEsc(ls.PoweredBy))
 }
 
@@ -1876,7 +1887,7 @@ func (h *PublicHandlers) renderPrivateGate(w http.ResponseWriter, r *http.Reques
 	// escaping alone would still allow a `'` to break out of the string. (The
 	// fetch target is the page's own pathname since the embed fix, so no
 	// merchant value reaches that literal at all; the language strings still do.)
-	fmt.Fprintf(w, `<!doctype html><html lang="%s"><head><meta charset="utf-8">
+	fmt.Fprintf(w, `<!doctype html><html lang="%s"%s><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>%s · %s</title>
 <style>body{background:#f7f8f8;color:#17181c;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
 .c{background:#ffffff;border:1px solid #e6e8ec;border-radius:16px;padding:40px;text-align:center;max-width:400px;width:100%%}
@@ -1897,7 +1908,7 @@ var r=await fetch(location.pathname+'/unlock',{method:'POST',headers:{'Content-T
 if(r.ok){location.reload();}else{var d=await r.json().catch(function(){return{};});document.getElementById('err').textContent=d.error||'%s';}
 return false;}
 </script></body></html>`,
-		htmlEsc(ls.Lang), htmlEsc(f.Title), htmlEsc(ls.UnlockTitle), htmlEsc(f.Title), htmlEsc(ls.UnlockHelp),
+		htmlEsc(ls.Lang), dirAttr(ls.Lang), htmlEsc(f.Title), htmlEsc(ls.UnlockTitle), htmlEsc(f.Title), htmlEsc(ls.UnlockHelp),
 		htmlEsc(ls.UnlockAction), htmlEsc(ls.UnlockAction), htmlEsc(ls.PoweredBy),
 		jsSingleQuoted(ls.UnlockError))
 }

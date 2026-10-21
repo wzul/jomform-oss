@@ -332,13 +332,12 @@ func (a *AuthHandlers) verifyFail(w http.ResponseWriter, r *http.Request, lang s
 	writeVerifyFailPage(w, lang, a.loginURL(), class)
 }
 
-// verifyDir returns the text direction for a locale, for BOTH verify pages. Arabic is the only
-// RTL locale in the five the platform ships, and the dashboard sets
-// documentElement.dir = "rtl" for it (web/src/components/i18n.tsx); a page that
-// renders Arabic in an LTR document is the same defect shape as rendering the
-// wrong language.
+// verifyDir returns the text direction for a locale, for BOTH verify pages. The
+// rule itself is formLang.go's isRTL (Arabic is the only RTL locale in the five
+// the platform ships); this page spells it explicitly as "ltr"/"rtl" because
+// its <html> tag has always carried the attribute rather than omitting it.
 func verifyDir(lang string) string {
-	if lang == "ar" {
+	if isRTL(lang) {
 		return "rtl"
 	}
 	return "ltr"

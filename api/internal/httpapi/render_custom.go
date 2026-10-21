@@ -235,8 +235,10 @@ func cspHostSourceOK(host string) bool {
 // controls and POSTs {client, fields} to /order. The page's own three scripts
 // carry the response's CSP nonce, because this page also sends the strict CSP
 // that admits them.
-var customFormTmpl = template.Must(template.New("custom").Parse(`<!doctype html>
-<html lang="{{.Lang}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+var customFormTmpl = template.Must(template.New("custom").
+	Funcs(template.FuncMap{"isRTL": isRTL}).
+	Parse(`<!doctype html>
+<html lang="{{.Lang}}"{{if isRTL .Lang}} dir="rtl"{{end}}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 {{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
 <style>
@@ -294,7 +296,7 @@ var customFormTmpl = template.Must(template.New("custom").Parse(`<!doctype html>
   // The sanitized body is written into the iframe via srcdoc. The iframe is
   // sandboxed (forms only, never scripts) and its CSP forbids scripts, so the
   // body can never execute JS or load remote resources.
-  frame.srcdoc='<!doctype html><html><head><meta charset="utf-8">'+
+  frame.srcdoc='<!doctype html><html lang="{{.Lang}}"{{if isRTL .Lang}} dir="rtl"{{end}}><head><meta charset="utf-8">'+
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:; form-action \'self\'">'+
     '</head><body>'+{{.BodyJS}}+'</body></html>';
   // Card t_c5a278c0: this submit path needed THREE things to hold and the
