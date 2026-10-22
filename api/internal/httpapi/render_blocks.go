@@ -434,6 +434,15 @@ const blockConditionJS = `<script>(function(){
 //
 // Every other key is emitted as a plain string and therefore goes through the
 // CSS filter on the way out — which is the safe direction for a single value.
+//
+// WHERE the stylesheet lands is part of the contract, not a layout detail. Both
+// block templates serve it in a `<style>` element AFTER the template's base
+// sheet (card t_331059a8). While it sat in the token sheet at the top of the
+// head, it was served but not applied: equal-specificity CSS resolves by
+// document order, so the base sheet's `body { background:#f7f8f8 }` and
+// `.card { padding:32px }` beat the merchant's own declarations and only
+// `!important` appeared to work. Anything the templates emit after the
+// merchant's element would bring the defect back.
 func blockThemeView(f *dbstore.Form) map[string]any {
 	view := map[string]any{
 		"ThemeBg": "", "ThemeText": "", "ThemeCardBg": "", "ThemeRadius": "",
@@ -661,7 +670,6 @@ var blockTmpl = template.Must(template.New("blocks").
   {{if .ThemeLayout}}body { padding: {{if eq .ThemeLayout "full_width"}}0{{else}}24px{{end}}; }{{end}}
   {{if .ThemeLayout}}.card { max-width: {{if eq .ThemeLayout "full_width"}}100%{{else}}480px{{end}}; }{{end}}
   {{if .ThemeSpacing}}.card { padding: {{if eq .ThemeSpacing "compact"}}20px{{else if eq .ThemeSpacing "spacious"}}48px{{else}}32px{{end}}; }{{end}}
-  {{if .ThemeCSS}}{{.ThemeCSS}}{{end}}
 </style>
 <style>
   :root { color-scheme: dark; }
@@ -765,7 +773,19 @@ var blockTmpl = template.Must(template.New("blocks").
                flex-wrap:wrap; margin-top:6px; text-align:center; }
   .jf-flinks a { color:var(--jf-primary-text); text-decoration:none; }
   .jf-flinks a:hover { text-decoration:underline; }
-</style></head><body>
+</style>
+{{if .ThemeCSS}}<style>
+  /* Card t_331059a8: the merchant's own stylesheet is served in THIS element,
+     AFTER the template's base sheet above, because CSS resolves
+     equal-specificity declarations by document order. It used to be emitted in
+     the token sheet at the top of the head, so every rule of equal specificity
+     lost to the template's default (.card{padding:8px} computed 32px,
+     body{background-color:…} computed #f7f8f8) and only !important appeared
+     to work. Nothing here is escaped: the value arrives as blockThemeView's
+     template.CSS and customCSSForStyleBlock has already truncated it at the
+     first </style, so a merchant value cannot close this element. */
+  {{.ThemeCSS}}
+</style>{{end}}</head><body>
 <form class="card" id="of" data-slug="{{.Slug}}">
   <h1>{{.Title}}</h1>
 {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
@@ -1198,7 +1218,6 @@ var responseTmpl = template.Must(template.New("response").
   {{if .ThemeLayout}}body { padding: {{if eq .ThemeLayout "full_width"}}0{{else}}24px{{end}}; }{{end}}
   {{if .ThemeLayout}}.card { max-width: {{if eq .ThemeLayout "full_width"}}100%{{else}}480px{{end}}; }{{end}}
   {{if .ThemeSpacing}}.card { padding: {{if eq .ThemeSpacing "compact"}}20px{{else if eq .ThemeSpacing "spacious"}}48px{{else}}32px{{end}}; }{{end}}
-  {{if .ThemeCSS}}{{.ThemeCSS}}{{end}}
 </style>
 <style>
   :root { color-scheme: dark; }
@@ -1256,7 +1275,19 @@ var responseTmpl = template.Must(template.New("response").
   .ok p { color:#6b7280; font-size:14px; }
   .ok .msg { color:#17181c; font-size:14px; line-height:1.6; margin-top:8px; }
   .ok .msg a { color:var(--jf-primary-text); }
-</style></head><body>
+</style>
+{{if .ThemeCSS}}<style>
+  /* Card t_331059a8: the merchant's own stylesheet is served in THIS element,
+     AFTER the template's base sheet above, because CSS resolves
+     equal-specificity declarations by document order. It used to be emitted in
+     the token sheet at the top of the head, so every rule of equal specificity
+     lost to the template's default (.card{padding:8px} computed 32px,
+     body{background-color:…} computed #f7f8f8) and only !important appeared
+     to work. Nothing here is escaped: the value arrives as blockThemeView's
+     template.CSS and customCSSForStyleBlock has already truncated it at the
+     first </style, so a merchant value cannot close this element. */
+  {{.ThemeCSS}}
+</style>{{end}}</head><body>
 <form class="card" id="of" data-slug="{{.Slug}}">
   <h1>{{.Title}}</h1>
 {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
