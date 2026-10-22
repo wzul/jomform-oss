@@ -742,18 +742,22 @@ export default function Products() {
         {/* Add form */}
         {canWrite && (
         <form onSubmit={add} className="jf-card mt-6 flex flex-wrap gap-2 p-4">
-          <input value={name} onChange={(e) => setName(e.target.value)} required placeholder={t("prod.name")} className="jf-input min-w-48 flex-1" />
-          <input value={price} onChange={(e) => setPrice(e.target.value)} required type="number" step="0.01" min="0" placeholder={t("prod.price")} className="jf-input w-32" />
-          <input value={stock} onChange={(e) => setStock(e.target.value)} type="number" min="0" placeholder={t("prod.stock")} className="jf-input w-40" />
-          {/* The create row's controls are named with the SAME shape the filter
-              selects below use (`aria-label={t(...)}`), because a `<select>`
-              with only `<option>` children has no accessible name: axe-core
-              reports `select-name` (CRITICAL — "Element does not have an
-              implicit (wrapped) <label> / explicit <label> / aria-label /
-              aria-labelledby") on the live /products create row. The three
-              selects that carried only a `title` answered the label rule with a
-              lesser advisory and are labelled properly here for the same
-              reason (card t_3fbc6953). */}
+          {/* The inputs and selects in this row are named with the SAME shape —
+              `aria-label={t(...)}` — and neither half may fall back to its
+              placeholder. A `<select>` with only `<option>` children has no
+              accessible name at all, so axe reports `select-name` (CRITICAL) on
+              the live row (card t_3fbc6953); an INPUT with a placeholder is the
+              mirror-image defect axe CANNOT report, because axe accepts a
+              placeholder as an accessible name — so name / price / stock stayed
+              unnamed through every green scan until the placeholder-refusing
+              census in `e2e/controlNames.ts` named all three (card t_becb0f50).
+              The name is announced only from `aria-label`, and it survives the
+              user typing (the placeholder does not). */}
+          <input value={name} onChange={(e) => setName(e.target.value)} required placeholder={t("prod.name")} aria-label={t("prod.name")} className="jf-input min-w-48 flex-1" />
+          <input value={price} onChange={(e) => setPrice(e.target.value)} required type="number" step="0.01" min="0" placeholder={t("prod.price")} aria-label={t("prod.price")} className="jf-input w-32" />
+          <input value={stock} onChange={(e) => setStock(e.target.value)} type="number" min="0" placeholder={t("prod.stock")} aria-label={t("prod.stock")} className="jf-input w-40" />
+          {/* The row's three `<select>`s carry the same `aria-label` treatment
+              for the `select-name` reason above (card t_3fbc6953). */}
           <select value={type} onChange={(e) => setType(e.target.value)} className="jf-input w-36" aria-label={t("prod.type")}>
             <option value="one_time">{t("prod.oneTime")}</option>
             <option value="subscription">{t("prod.subscription")}</option>

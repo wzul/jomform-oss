@@ -411,6 +411,23 @@ fixed for, and every one is fixed. The same walk also refuses a control whose on
 name is its **placeholder** — the class axe cannot see, because axe accepts a
 placeholder as a name, so a clean scan does not prove the field is named.
 
+**The placeholder-refusing census is no longer scoped to one route.** It used to
+run only on that `/form-settings` walk, so the class it refuses could — and did —
+ship elsewhere while every scan was green: `/products`' create row named its
+**name / price / stock** inputs only by their placeholders (the row's three
+`<select>`s had already been given `aria-label`s for the `select-name` critical,
+and the sibling INPUTS were left to the exemption axe gives a placeholder), and
+`/builder` named its **slug input** (`placeholder="slug-url"`) and its **AI-prompt
+textarea** the same way. Five controls, no gate, no axe violation. The census now
+lives in `web/e2e/controlNames.ts` and runs on **every route that renders
+controls**: all twelve signed-in routes in `a11y-authed-pages.spec.ts`, each of
+`/form-settings`' seven tabs, and the whole of `/products` in
+`a11y-products.spec.ts` — and the five sites are named from `aria-label`
+(`bld.formSlug` and `bld.aiPromptLabel` are the two new dictionary keys, in all
+five locales) so the announced name is the translated one and it survives the user
+typing. The arms are proven to bite by removal: delete one `aria-label` and rebuild,
+and that route's arm fails naming the control.
+
 **Two redirect shells have no document of their own, and the spec says so rather
 than reporting a scan of nothing.** `/space-picker` is a permanent 307 to
 `/workspace-picker`; `/post-login` resolves the post-login target and replaces the
@@ -685,6 +702,13 @@ guard report a `<code>` 180 lines away as the ancestor of unrelated spans.
 > the choices editor's rows are named). Each spec also carries a mutation case that
 > unnams the controls and requires the SAME invariant to reject them, so a green
 > reading cannot be a vacuum.
+>
+> The builder's OWN controls are covered by the same rule from the other family:
+> the `/builder` arm of `web/e2e/a11y-authed-pages.spec.ts` runs the shared
+> census in `web/e2e/controlNames.ts` over the whole rendered page, which is how
+> the toolbar's **slug input** and the **AI-prompt textarea** were found named only
+> by their placeholders — the class axe accepts — and then given `aria-label`s
+> (`bld.formSlug`, `bld.aiPromptLabel`, card `t_becb0f50`).
 >
 > **Another canvas pair, measured by the same shape.** The same browser-level
 > stub pattern reaches one more authenticated surface: the **builder canvas**.

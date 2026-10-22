@@ -59,6 +59,12 @@ test.beforeEach(async ({ page, baseURL }) => {
 import AxeBuilder from "@axe-core/playwright";
 import type { AxeResults, Result } from "axe-core";
 import { DICT } from "../src/components/i18nDict";
+import {
+  expectEveryControlNamed,
+  plantPlaceholderOnlyInput,
+  readUnnamedControls,
+  removePlanted,
+} from "./controlNames";
 
 // Kept identical to a11y.spec.ts / a11y-dialogs.spec.ts so the three cannot drift.
 const IMPACTS = ["critical", "serious"] as const;
@@ -236,6 +242,41 @@ test.describe("a11y: the products table and create row", () => {
           `select-name (critical)`,
       ).not.toBe("");
     }
+  });
+
+  // THE CONTROL-NAME CENSUS (card t_becb0f50). The create row's name / price /
+  // stock inputs were named ONLY by their placeholders while the row's three
+  // `<select>`s had already been given `aria-label`s — and axe reported NOTHING
+  // for any of the three inputs, because axe ACCEPTS a placeholder as an
+  // accessible name. So the gate's full-page scan above passed on a row whose
+  // fields lose their name the moment a buyer types. The census that sees the
+  // class is shared with `a11y-authed-pages.spec.ts` (`e2e/controlNames.ts`) and
+  // runs here on the whole page, with the plant arm below proving it bites.
+  test("no control on /products is named only by its placeholder", async ({ page }) => {
+    await openProducts(page);
+
+    // REACHABILITY FIRST: this is the surface the class shipped on. A census of
+    // a page that rendered only its table would pass without looking at the row.
+    const createRow = page.locator("form.jf-card");
+    await expect(createRow, "the create row must render — it is where this class shipped").toBeVisible();
+    expect(
+      await createRow.locator("input, select, textarea").count(),
+      "the create row must render its own controls (name, price, stock, and its selects)",
+    ).toBeGreaterThanOrEqual(4);
+
+    await expectEveryControlNamed(page, "/products");
+
+    // THE BITE, ON THIS PAGE: the pre-fix shape is a control whose only name is
+    // its placeholder. Plant one and require THIS census to refuse it …
+    await plantPlaceholderOnlyInput(page);
+    expect(
+      (await readUnnamedControls(page)).map((u) => u.selector).join(" "),
+      "a control named only by its placeholder was NOT refused on /products — this arm would not catch the " +
+        "class it exists for (axe accepts a placeholder as a name)",
+    ).toContain("#jf-planted-input");
+    // … and require the clean reading back once the plant is removed.
+    await removePlanted(page, "jf-planted-input");
+    await expectEveryControlNamed(page, "/products (planted node removed)");
   });
 
   test("/products has no critical/serious axe violations", async ({ page }) => {

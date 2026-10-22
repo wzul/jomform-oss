@@ -1194,8 +1194,14 @@ export const DICT = {
   "prof.passkeyUnsupported": { en: "Passkey cancelled or not supported by this browser.", ms: "Passkey dibatalkan atau tidak disokong pelayar ini.", zh: "通行密钥已取消或此浏览器不支持。", ta: "கடவுச்சாவி ரத்துசெய்யப்பட்டது அல்லது இந்த உலாவி ஆதரிக்கவில்லை.", ar: "تم إلغاء مفتاح المرور أو المتصفح لا يدعمه." },
   // builder
   "bld.formTitle": { en: "Form title", ms: "Tajuk borang", zh: "表单标题", ta: "படிவத் தலைப்பு", ar: "عنوان النموذج" },
+  // The builder toolbar's slug input is announced from this (card t_becb0f50):
+  // it has no room for a visible label, and a placeholder is not one.
+  "bld.formSlug": { en: "Form URL slug", ms: "Slug URL borang", zh: "表单 URL slug", ta: "படிவ URL slug", ar: "slug رابط النموذج" },
   // issue #256: AI form builder (prompt → generated form config)
   "bld.aiTitle": { en: "AI build", ms: "Bina AI", zh: "AI 构建", ta: "AI உருவாக்கு", ar: "بناء بالذكاء الاصطناعي" },
+  // The prompt textarea's accessible name, distinct from the example placeholder
+  // below it (card t_becb0f50): the placeholder vanishes on input, this does not.
+  "bld.aiPromptLabel": { en: "Describe the form you want", ms: "Terangkan borang yang anda mahu", zh: "描述您想要的表单", ta: "நீங்கள் விரும்பும் படிவத்தை விவரிக்கவும்", ar: "صف النموذج الذي تريده" },
   "bld.aiHint": { en: "Describe the form you want and AI will draft it for you to review.", ms: "Terangkan borang yang anda mahu dan AI akan sediakan draf untuk anda semak.", zh: "描述您想要的表单，AI 将为您起草以供审阅。", ta: "நீங்கள் விரும்பும் படிவத்தை விவரிக்கவும், AI அதை மதிப்பாய்வு செய்ய வரைவு செய்யும்.", ar: "صف النموذج الذي تريده وسيقوم الذكاء الاصطناعي بإعداد مسودة لمراجعتها." },
   "bld.aiPromptPh": { en: "e.g. a booking form for a hair salon with name, phone, date, service dropdown", ms: "cth: borang tempahan salon rambut dengan nama, telefon, tarikh, dropdown perkhidmatan", zh: "例如：美发沙龙预约表单，包含姓名、电话、日期、服务下拉框", ta: "எ.கா: பெயர், தொலைபேசி, தேதி, சேவை கீழ்தோன்றல் கொண்ட ஹேர் சலூன் பதிவு படிவம்", ar: "مثال: نموذج حجز لصالون شعر مع الاسم والهاتف والتاريخ وقائمة الخدمات" },
   "bld.aiGenerate": { en: "Generate", ms: "Jana", zh: "生成", ta: "உருவாக்கு", ar: "توليد" },

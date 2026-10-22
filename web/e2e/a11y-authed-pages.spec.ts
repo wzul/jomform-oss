@@ -41,6 +41,12 @@
 //      (passes/incomplete/violations non-empty). A 0-violation reading from a
 //      scan that analysed nothing is exactly how a green gate over an unvisited
 //      route looks.
+//   6. EVERY VISIBLE CONTROL ON IT HAS A REAL NAME from a `<label>` or an aria
+//      reference — not one inherited from its placeholder. axe ACCEPTS a
+//      placeholder as an accessible name, so item 4 cannot see this class; the
+//      census that does is shared (`e2e/controlNames.ts`) with
+//      `a11y-products.spec.ts`, and this file runs it on all twelve routes plus
+//      each of /form-settings' seven tabs.
 //
 // WHY ONE ARM PER ROUTE. `fullyParallel` gives each route its own worker, so
 // the family costs route time rather than a serial walk. The stubs are one
@@ -77,6 +83,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { signIn } from "./auth";
+import {
+  expectEveryControlNamed,
+  plantPlaceholderOnlyInput,
+  readUnnamedControls,
+  removePlanted,
+  unnamedMessage,
+} from "./controlNames";
 import { SETTLE_TIMEOUT_MS, settledLine, waitForSettled } from "./settle";
 import { DICT } from "../src/components/i18nDict";
 
@@ -645,6 +658,13 @@ test.describe("a11y: every signed-in dashboard route the gate could not reach", 
         )} navLinks=${settled.navLinks} bodyText=${settled.bodyText}`,
       );
       await scanDocument(page, route.path);
+      // …and the controls on it are NAMED. axe accepts a placeholder as a name,
+      // so the scan above cannot see this class (card t_becb0f50: five controls
+      // across /products and /builder shipped this way while every scan was
+      // green). The census is shared (`e2e/controlNames.ts`) and runs on every
+      // route in this file plus each /form-settings tab, so the class cannot
+      // come back on any of them without a red arm.
+      await expectEveryControlNamed(page, route.path);
     });
   }
 });
@@ -708,36 +728,18 @@ const TAB_HEADING: Record<string, keyof typeof DICT> = {
 }
 
 /**
- * Every VISIBLE form control on the page whose only accessible name is its
- * placeholder. This is the class axe CANNOT report: axe accepts a placeholder as
- * a name (`a11y-products.spec.ts` found a `select` with none, but an input with a
- * placeholder is a pass), and the repo already refuses it in the builder panel
- * (`e2e/builder-panel-choice-names.spec.ts`) — a placeholder disappears the
- * moment the user types, so a screen-reader user loses the field's name.
+ * Every VISIBLE form control whose only accessible name is its placeholder.
+ *
+ * The census itself now lives in `e2e/controlNames.ts` (card t_becb0f50): the
+ * SAME rule has to run on every route that renders controls, and a copy per spec
+ * is how one route's copy keeps passing while another route grows the defect.
+ * This file runs it on all twelve routes it opens and on each of
+ * /form-settings' seven tabs; `e2e/a11y-products.spec.ts` runs it on the
+ * /products create row. This is the class axe CANNOT report: axe accepts a
+ * placeholder as a name (`a11y-products.spec.ts` found a `select` with none, but
+ * an input with a placeholder is a pass), and the repo already refuses it in the
+ * builder panel (`e2e/builder-panel-choice-names.spec.ts`).
  */
-const UNNAMED = `(() => {
-  const out = [];
-  for (const el of document.querySelectorAll("input, select, textarea")) {
-    const type = (el.getAttribute("type") || "").toLowerCase();
-    if (["hidden", "submit", "button", "reset"].includes(type)) continue;
-    const cs = getComputedStyle(el);
-    if (cs.display === "none" || cs.visibility === "hidden") continue;
-    const r = el.getBoundingClientRect();
-    if (r.width === 0 || r.height === 0) continue;
-    if (el.getAttribute("aria-label") || el.getAttribute("aria-labelledby")) continue;
-    const wrap = el.closest("label");
-    if (wrap && (wrap.textContent || "").trim()) continue;
-    const id = el.getAttribute("id");
-    if (id && document.querySelector('label[for="' + CSS.escape(id) + '"]')) continue;
-    out.push(
-      el.tagName.toLowerCase() +
-        (type ? '[type="' + type + '"]' : "") +
-        (el.getAttribute("id") ? "#" + el.getAttribute("id") : "") +
-        ' placeholder=' + JSON.stringify(el.getAttribute("placeholder") || ""),
-    );
-  }
-  return out;
-})()`;
 
 test.describe("a11y: /form-settings, every tab", () => {
   test("every tab renders its own panel with no critical/serious violation, and every control on it has a real name", async ({
@@ -779,13 +781,12 @@ test.describe("a11y: /form-settings, every tab", () => {
 
       await scanDocument(page, `/form-settings → ${key}`);
 
-      const unnamed = (await page.evaluate(UNNAMED)) as string[];
+      const unnamed = await readUnnamedControls(page);
       expect(
         unnamed,
-        `the "${key}" tab has ${unnamed.length} control(s) named only by a placeholder (or not named at all): ` +
-          `${JSON.stringify(unnamed)}. axe accepts a placeholder as a name, so a clean scan does NOT prove these are ` +
-          `named — and the name is gone the moment the user types. Give each one an id + <label htmlFor>, or an ` +
-          `aria-label.`,
+        unnamedMessage(`the "${key}" tab`, unnamed) +
+          ` Every tab of this page is walked, so a control named only by a placeholder on any of them is refused ` +
+          `here (axe accepts a placeholder as a name).`,
       ).toEqual([]);
     }
   });
@@ -1029,20 +1030,19 @@ test.describe("a11y: the scan on a signed-in route bites", () => {
     const route = ROUTES.find((r) => r.name === "form-settings")!;
     await openRoute(page, route, baseURL);
 
-    expect((await page.evaluate(UNNAMED)) as string[], "the shipped General tab must be clean first").toEqual([]);
+    expect(await readUnnamedControls(page), "the shipped General tab must be clean first").toEqual([]);
 
-    await page.evaluate(`(() => {
-      const host = document.querySelector("#main-content") || document.body;
-      const input = document.createElement("input");
-      input.setAttribute("id", "jf-planted-input");
-      input.setAttribute("placeholder", "something");
-      host.appendChild(input);
-    })()`);
-    const flagged = (await page.evaluate(UNNAMED)) as string[];
+    await plantPlaceholderOnlyInput(page);
+    const flagged = await readUnnamedControls(page);
     expect(
-      flagged.join(" "),
+      flagged.map((u) => u.selector).join(" "),
       "a control named ONLY by its placeholder was not refused — the census above would not catch the class it " +
-        `exists for (axe accepts a placeholder as a name). Flagged: ${JSON.stringify(flagged)}`,
+        `exists for (axe accepts a placeholder as a name). Flagged: ${JSON.stringify(flagged.map((u) => u.selector))}`,
     ).toContain("#jf-planted-input");
+    // …and the same reading goes back to clean once the plant is removed, so the
+    // clean assertion above is a reading of the SHIPPED page and not of a page
+    // this arm has already polluted.
+    await removePlanted(page, "jf-planted-input");
+    expect(await readUnnamedControls(page), "removing the plant must restore the clean reading").toEqual([]);
   });
 });

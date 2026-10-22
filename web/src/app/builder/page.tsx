@@ -1576,7 +1576,16 @@ export default function Builder() {
                 setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"));
                 setDirty(true);
               }}
+              // Named from `aria-label`, not from its placeholder (card
+              // t_becb0f50): this input sits in the builder's own toolbar with no
+              // room for a visible label, so before this it had NO accessible
+              // name at all — only `placeholder="slug-url"`, which axe accepts as
+              // a name and a screen reader loses the moment the user types. The
+              // placeholder stays as an ASCII EXAMPLE of the value (a slug is
+              // a-z/0-9/dash by construction, so there is nothing to translate in
+              // it); the announced name is the translated one below.
               placeholder="slug-url"
+              aria-label={t("bld.formSlug")}
               className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 font-mono text-xs text-[var(--jf-muted)] outline-none hover:border-[var(--jf-border)] focus:border-[#7170ff]/60 md:w-40 md:flex-none"
             />
           )}
@@ -1777,7 +1786,12 @@ export default function Builder() {
             <textarea
               value={aiPrompt}
               onChange={(e) => setAiPrompt(e.target.value)}
+              // Named from `aria-label`, not from its placeholder (card
+              // t_becb0f50): a placeholder is not a label — it disappears the
+              // moment the user types and axe accepts it as a name, so this
+              // textarea had no announced name and no gate could see it.
               placeholder={t("bld.aiPromptPh")}
+              aria-label={t("bld.aiPromptLabel")}
               rows={3}
               className="w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-xs outline-none focus:border-[#7170ff]/60"
             />
