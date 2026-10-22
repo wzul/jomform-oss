@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
@@ -247,51 +248,11 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	// are derived from the same hue so a themed button does not get an indigo
 	// hover.
 	cta := themePrimaryValues(f)
-	themeBg := ""
-	themeText, themeCardBg, themeRadius, themeFont, themeLayout, themeSpacing, themeCSS := "", "", "", "", "", "", ""
-	themeJS := ""
-	if f.Theme != nil {
-		if v, ok := f.Theme["background"].(string); ok {
-			themeBg = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["text"].(string); ok {
-			themeText = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["card_background"].(string); ok {
-			themeCardBg = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["card_border_radius"].(string); ok {
-			themeRadius = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["font_family"].(string); ok {
-			themeFont = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["layout"].(string); ok {
-			themeLayout = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["spacing"].(string); ok {
-			themeSpacing = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["custom_css"].(string); ok {
-			// HTML-escape so a </style> cannot break out of the style block.
-			themeCSS = template.HTMLEscapeString(v)
-		}
-		// Issue #388: power-user custom JS. Owner-gated at save time (only the
-		// form owner can set it) and HTML-escaped here so a </script> cannot
-		// break out of the script block. Runs on the buyer's page.
-		if v, ok := f.Theme["custom_js"].(string); ok {
-			themeJS = template.HTMLEscapeString(v)
-		}
-	}
 	ls := h.effectiveLangStrings(r.Context(), f)
-	if err := blockTmpl.Execute(w, map[string]any{
+	view := map[string]any{
 		"Slug": f.Slug, "Title": f.Title, "Blocks": blocks,
-		"TrackHead": headInjection(globalTr, formTrackingHead(f)),
-		"ThemeBg":   themeBg, "LogoURL": f.LogoURL,
-		"ThemeText": themeText, "ThemeCardBg": themeCardBg, "ThemeRadius": themeRadius,
-		"ThemeFont": themeFont, "ThemeLayout": themeLayout, "ThemeSpacing": themeSpacing,
-		"ThemeCSS":   template.HTML(themeCSS),
-		"ThemeJS":    template.HTML(themeJS),
+		"TrackHead":  headInjection(globalTr, formTrackingHead(f)),
+		"LogoURL":    f.LogoURL,
 		"CtaPrimary": cta.Primary, "CtaHover": cta.Hover, "CtaActive": cta.Active,
 		"CtaLabel": cta.Label, "CtaText": cta.Text,
 		"Lang": ls.Lang,
@@ -315,7 +276,14 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		// Card t_9e875bca: the conditional-logic script. Both renderers emit the
 		// SAME constant so a payment form and a response form cannot drift.
 		"ConditionJS": template.HTML(blockConditionJS),
-	}); err != nil {
+	}
+	// Card t_a7bf0fb2: the theme keys live in ONE function both renderers call
+	// (see blockThemeView) — a copy in each renderer is how the custom-CSS
+	// escaping bug ended up needing the same fix twice.
+	for k, v := range blockThemeView(f) {
+		view[k] = v
+	}
+	if err := blockTmpl.Execute(w, view); err != nil {
 		slog.Error("form_render_blocks", "err", err)
 	}
 	return true
@@ -426,6 +394,130 @@ const blockConditionJS = `<script>(function(){
   document.addEventListener('change',refresh);
   refresh();
 })();</script>`
+
+// blockThemeView is the theme half of both public renderers' view map: the keys
+// blockTmpl and responseTmpl interpolate into their <style> / <script> blocks.
+//
+// It is ONE function, not a copy in each renderer, because the copies are how
+// the custom-CSS defect (card t_a7bf0fb2) ended up needing the same diagnosis
+// and the same fix twice, in two places that could drift apart with nothing
+// red to show for it.
+//
+// The two context-typed values are the reason the typing is done HERE:
+//
+//   - ThemeCSS is `template.CSS`, the documented type for known-safe CSS. The
+//     value lands inside a `<style>` ELEMENT, where html/template is in CSS
+//     text state and runs cssValueFilter. That filter does not honour
+//     `template.HTML` — an HTML-context type — so the previous
+//     `template.HTML(template.HTMLEscapeString(v))` shipped the literal
+//     `ZgotmplZ` sentinel in place of any multi-declaration stylesheet, while
+//     every other theme key (background/layout/spacing/font) applied, the page
+//     returned 200, and nothing logged. customCSSForStyleBlock carries the
+//     breakout guard that raw emission makes necessary.
+//
+//   - ThemeJS is `template.HTML`, which is NOT the type for a `<script>` body:
+//     measured end-to-end on this path (theme seeded in Postgres, public GET),
+//     html/template's jsValEscaper emits it as a quoted string literal —
+//
+//     <script>
+//     "window.__jfMeasured = 1;"
+//     </script>
+//
+//     a valid no-op statement, so a merchant's `custom_js` never runs on a
+//     block-rendered page. That is a separate defect (card t_cae9c98e) with its
+//     own type (`template.JS`) and its own `</script>` breakout guard, and
+//     custom_js is an owner-gated, scanned surface, so it is carded on its own
+//     rather than folded in here.
+//
+// Every other key is emitted as a plain string and therefore goes through the
+// CSS filter on the way out — which is the safe direction for a single value.
+func blockThemeView(f *dbstore.Form) map[string]any {
+	view := map[string]any{
+		"ThemeBg": "", "ThemeText": "", "ThemeCardBg": "", "ThemeRadius": "",
+		"ThemeFont": "", "ThemeLayout": "", "ThemeSpacing": "",
+		"ThemeCSS": template.CSS(""), "ThemeJS": template.HTML(""),
+	}
+	if f == nil || f.Theme == nil {
+		return view
+	}
+	// Single-value theme keys: HTML-escaped, because the filter that follows
+	// needs a value it can accept (a stray quote/bracket must not survive into
+	// the declaration it is interpolated into).
+	str := func(key string) string {
+		if v, ok := f.Theme[key].(string); ok {
+			return template.HTMLEscapeString(v)
+		}
+		return ""
+	}
+	view["ThemeBg"] = str("background")
+	view["ThemeText"] = str("text")
+	view["ThemeCardBg"] = str("card_background")
+	view["ThemeRadius"] = str("card_border_radius")
+	view["ThemeFont"] = str("font_family")
+	view["ThemeLayout"] = str("layout")
+	view["ThemeSpacing"] = str("spacing")
+	// The merchant's whole stylesheet — the ONE value that must NOT be
+	// HTML-escaped, because it is served as CSS, not as text in HTML.
+	if v, ok := f.Theme["custom_css"].(string); ok {
+		view["ThemeCSS"] = customCSSForStyleBlock(v)
+	}
+	// Issue #388: power-user custom JS. Unchanged by card t_a7bf0fb2 — see the
+	// ThemeJS note above; it is carded separately.
+	if v, ok := f.Theme["custom_js"].(string); ok {
+		view["ThemeJS"] = template.HTML(template.HTMLEscapeString(v))
+	}
+	return view
+}
+
+// customCSSForStyleBlock types the merchant's `custom_css` for the `<style>`
+// element it is served in, and neutralises the one sequence that could leave
+// that element.
+//
+// Why a type and not an escape: inside `<style>` html/template runs
+// cssValueFilter, which rejects a multi-declaration stylesheet and substitutes
+// the `ZgotmplZ` sentinel (card t_a7bf0fb2: the page returned 200, the row held
+// the CSS, and the buyer got no styling). `template.CSS` is the documented type
+// for known-safe CSS; cssValueFilter passes it through verbatim.
+//
+// Why a guard as well: verbatim means verbatim, so the protection
+// HTMLEscapeString gave for free has to be explicit. A `<style>` is an HTML
+// *raw text* element — markup is not parsed inside it and the ONLY thing that
+// ends it is an end tag, i.e. a case-insensitive `</style`. Note that `</style`
+// ends the element even with no `>` after it (the template follows the value
+// with a newline and its own `</style>`), so the guard truncates on the bare
+// prefix rather than on a full tag. Everything from such a sequence onward is
+// dropped: a stylesheet is served up to the first attempt to close its own
+// block and never past it, so injected text after it cannot become markup.
+// Dropping (rather than emitting an escaped `<\/style`) is deliberate: CSS has
+// no portable in-value escape for `/` outside a string, and whatever follows an
+// injected end tag is attacker-chosen text rather than the merchant's rules.
+//
+// A value that does NOT try to close the block is served byte-for-byte, so
+// ordinary CSS — selectors, at-rules, strings, url(data:...) — is unaffected.
+func customCSSForStyleBlock(css string) template.CSS {
+	if css == "" {
+		return ""
+	}
+	if i := indexStyleEndTag(css); i >= 0 {
+		css = css[:i]
+	}
+	return template.CSS(css)
+}
+
+// indexStyleEndTag returns the byte offset of the first case-insensitive
+// "</style" in s, or -1. Written out instead of strings.ToLower-then-Index
+// because Unicode case folding can change the LENGTH of the string, which would
+// make the offset it reported point at the wrong byte in the original — and a
+// guard that truncates at the wrong byte does not guard anything.
+func indexStyleEndTag(s string) int {
+	const end = "</style"
+	for i := 0; i+len(end) <= len(s); i++ {
+		if s[i] == '<' && strings.EqualFold(s[i:i+len(end)], end) {
+			return i
+		}
+	}
+	return -1
+}
 
 // styleAttr renders a sanitized per-field inline style attribute (issue #388).
 // Returns template.HTMLAttr (a trusted attribute) so html/template does not run
@@ -974,51 +1066,11 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 	// CTA is painted from the merchant's brand colour with hover/active derived
 	// from the same hue.
 	cta := themePrimaryValues(f)
-	themeBg := ""
-	themeText, themeCardBg, themeRadius, themeFont, themeLayout, themeSpacing, themeCSS := "", "", "", "", "", "", ""
-	themeJS := ""
-	if f.Theme != nil {
-		if v, ok := f.Theme["background"].(string); ok {
-			themeBg = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["text"].(string); ok {
-			themeText = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["card_background"].(string); ok {
-			themeCardBg = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["card_border_radius"].(string); ok {
-			themeRadius = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["font_family"].(string); ok {
-			themeFont = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["layout"].(string); ok {
-			themeLayout = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["spacing"].(string); ok {
-			themeSpacing = template.HTMLEscapeString(v)
-		}
-		if v, ok := f.Theme["custom_css"].(string); ok {
-			// HTML-escape so a </style> cannot break out of the style block.
-			themeCSS = template.HTMLEscapeString(v)
-		}
-		// Issue #388: power-user custom JS. Owner-gated at save time (only the
-		// form owner can set it) and HTML-escaped here so a </script> cannot
-		// break out of the script block. Runs on the buyer's page.
-		if v, ok := f.Theme["custom_js"].(string); ok {
-			themeJS = template.HTMLEscapeString(v)
-		}
-	}
 	ls := h.effectiveLangStrings(r.Context(), f)
-	if err := responseTmpl.Execute(w, map[string]any{
+	view := map[string]any{
 		"Slug": f.Slug, "Title": f.Title, "Fields": fields,
-		"TrackHead": headInjection(globalTr, formTrackingHead(f)),
-		"ThemeBg":   themeBg, "LogoURL": f.LogoURL,
-		"ThemeText": themeText, "ThemeCardBg": themeCardBg, "ThemeRadius": themeRadius,
-		"ThemeFont": themeFont, "ThemeLayout": themeLayout, "ThemeSpacing": themeSpacing,
-		"ThemeCSS":   template.HTML(themeCSS),
-		"ThemeJS":    template.HTML(themeJS),
+		"TrackHead":  headInjection(globalTr, formTrackingHead(f)),
+		"LogoURL":    f.LogoURL,
 		"CtaPrimary": cta.Primary, "CtaHover": cta.Hover, "CtaActive": cta.Active,
 		"CtaLabel": cta.Label, "CtaText": cta.Text,
 		"Lang": ls.Lang,
@@ -1040,7 +1092,13 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		// Card t_9e875bca: the same conditional-logic script the payment
 		// renderer emits — a response form's block carries data-condition too.
 		"ConditionJS": template.HTML(blockConditionJS),
-	}); err != nil {
+	}
+	// Card t_a7bf0fb2: the SAME theme view the payment renderer merges — see
+	// blockThemeView, including the CSS-context typing of `custom_css`.
+	for k, v := range blockThemeView(f) {
+		view[k] = v
+	}
+	if err := responseTmpl.Execute(w, view); err != nil {
 		slog.Error("form_render_response", "err", err)
 	}
 	return true

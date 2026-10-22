@@ -74,6 +74,10 @@ var (
 	layoutCenterCSS = "body { justify-content: center; }"
 	layoutWidthCSS  = ".card { max-width: 480px; }"
 	spacingCSS      = ".card { padding: 32px; }"
+	// customCSSRule is the merchant's own stylesheet (theme key `custom_css`).
+	// Written out for the same reason as the three above, and shared with the
+	// seeded row below so the page assertion and the seed cannot drift.
+	customCSSRule = ".card { box-shadow: none; }"
 )
 
 // TestFormPatchRoundTrippedThemeKeepsUnownedKeysAndTheirCSS is the card's
@@ -94,7 +98,7 @@ func TestFormPatchRoundTrippedThemeKeepsUnownedKeysAndTheirCSS(t *testing.T) {
 		"card_background":      "#ffffff",
 		"card_border_radius":   "12px",
 		"font_family":          "Georgia, serif",
-		"custom_css":           ".card { box-shadow: none; }",
+		"custom_css":           customCSSRule,
 		"custom_js":            "window.__jfOld = true;",
 		"primary":              "#5e6ad2",
 		"product_image_size":   "small",
@@ -185,11 +189,20 @@ func TestFormPatchRoundTrippedThemeKeepsUnownedKeysAndTheirCSS(t *testing.T) {
 				"routine edit silently re-styled the buyer's page.", rule)
 		}
 	}
-	// NOTE: `custom_css` is asserted in the ROW only. On the block-rendered page
-	// it is currently swallowed by html/template's CSS-context filter (the style
-	// block serves the literal `ZgotmplZ` sentinel instead of the merchant's
-	// rules) — reproduced with the theme seeded directly, so it is independent of
-	// this save path and is carded separately.
+	// The merchant's stylesheet must reach the page too. This was the one theme
+	// key the renderer could not serve: it was typed template.HTML inside a
+	// `<style>` element, so html/template's CSS-context filter replaced it with
+	// the `ZgotmplZ` sentinel (card t_a7bf0fb2, fixed in blockThemeView). Asserted
+	// here as well as in custom_css_style_block_test.go because this path is the
+	// end-to-end one — a real row, a real public GET.
+	if !strings.Contains(page, customCSSRule) {
+		t.Errorf("the public page does not serve the stored custom_css rule %q — the merchant's stylesheet "+
+			"is stored but never applied (card t_a7bf0fb2)", customCSSRule)
+	}
+	if strings.Contains(page, "ZgotmplZ") {
+		t.Errorf("the public page serves the html/template `ZgotmplZ` sentinel — the CSS context filtered the " +
+			"merchant's custom_css instead of serving it (card t_a7bf0fb2)")
+	}
 	if !strings.Contains(page, "--jf-primary: #b45309") {
 		t.Errorf("the page does not serve the colour this save set (--jf-primary: #b45309) — the control that "+
 			"keeps the assertions above from passing on a save that wrote nothing (body %s)", page)
