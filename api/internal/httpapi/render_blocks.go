@@ -403,7 +403,7 @@ const blockConditionJS = `<script>(function(){
 // and the same fix twice, in two places that could drift apart with nothing
 // red to show for it.
 //
-// The two context-typed values are the reason the typing is done HERE:
+// The context-typed values are the reason the typing is done HERE:
 //
 //   - ThemeCSS is `template.CSS`, the documented type for known-safe CSS. The
 //     value lands inside a `<style>` ELEMENT, where html/template is in CSS
@@ -432,8 +432,27 @@ const blockConditionJS = `<script>(function(){
 //     block-rendered page (card t_cae9c98e). customJSForScriptBlock carries the
 //     breakout guard that verbatim emission makes necessary.
 //
-// Every other key is emitted as a plain string and therefore goes through the
-// CSS filter on the way out — which is the safe direction for a single value.
+// The single-value keys land INSIDE a `<style>` element as a CSS declaration's
+// value — `body { background: <value>; }` — so they are typed for that context
+// like ThemeCSS is (card t_61c7e145). They used to be HTML-escaped into plain
+// strings, which html/template then ran through cssValueFilter; that filter
+// rejects `(`, `"`, `'`, `/`, `;`, `[`, `]`, `{`, `}`, `<`, `>` and `\`
+// (GOROOT/src/html/template/css.go, cssValueFilter), so a legitimate
+//
+//	background: rgb(200,0,0)
+//
+// was replaced by the `ZgotmplZ` sentinel while the page kept returning 200 and
+// nothing logged — the merchant's colour simply never appeared (computed
+// background stayed the template default #f7f8f8). A hex value passes the same
+// filter, which is why the dashboard's colour picker never showed the defect.
+// The HTML-escape was wrong twice over: CSS is not HTML, so `&#34;` in a
+// font-family is not a quote to the browser.
+//
+// The privilege is unchanged: these keys are owner-gated on every write path
+// (REST requireWriteRole, MCP requireFormWrite) and the merchant already owns
+// `custom_css`, so verbatim emission of their own theme value is not a widening.
+// The ONE thing raw emission makes necessary is the style-element breakout
+// guard, which themeCSSValue carries.
 //
 // WHERE the stylesheet lands is part of the contract, not a layout detail. Both
 // block templates serve it in a `<style>` element AFTER the template's base
@@ -444,28 +463,38 @@ const blockConditionJS = `<script>(function(){
 // `!important` appeared to work. Anything the templates emit after the
 // merchant's element would bring the defect back.
 func blockThemeView(f *dbstore.Form) map[string]any {
+	emptyCSS := template.CSS("")
 	view := map[string]any{
-		"ThemeBg": "", "ThemeText": "", "ThemeCardBg": "", "ThemeRadius": "",
-		"ThemeFont": "", "ThemeLayout": "", "ThemeSpacing": "",
-		"ThemeCSS": template.CSS(""), "ThemeJS": template.JS(""),
+		"ThemeBg": emptyCSS, "ThemeText": emptyCSS, "ThemeCardBg": emptyCSS,
+		"ThemeRadius": emptyCSS, "ThemeFont": emptyCSS,
+		"ThemeLayout": "", "ThemeSpacing": "",
+		"ThemeCSS": emptyCSS, "ThemeJS": template.JS(""),
 	}
 	if f == nil || f.Theme == nil {
 		return view
 	}
-	// Single-value theme keys: HTML-escaped, because the filter that follows
-	// needs a value it can accept (a stray quote/bracket must not survive into
-	// the declaration it is interpolated into).
-	str := func(key string) string {
+	// Single-value theme keys that are interpolated as a CSS VALUE: typed for
+	// the CSS context, and breakout-guarded (see themeCSSValue).
+	css := func(key string) template.CSS {
 		if v, ok := f.Theme[key].(string); ok {
-			return template.HTMLEscapeString(v)
+			return themeCSSValue(v)
 		}
 		return ""
 	}
-	view["ThemeBg"] = str("background")
-	view["ThemeText"] = str("text")
-	view["ThemeCardBg"] = str("card_background")
-	view["ThemeRadius"] = str("card_border_radius")
-	view["ThemeFont"] = str("font_family")
+	view["ThemeBg"] = css("background")
+	view["ThemeText"] = css("text")
+	view["ThemeCardBg"] = css("card_background")
+	view["ThemeRadius"] = css("card_border_radius")
+	view["ThemeFont"] = css("font_family")
+	// layout / spacing are never interpolated as a value: the templates compare
+	// them (`{{if eq .ThemeSpacing "compact"}}`) and emit a fixed CSS keyword, so
+	// they stay plain strings and nothing merchant-supplied reaches the sheet.
+	str := func(key string) string {
+		if v, ok := f.Theme[key].(string); ok {
+			return v
+		}
+		return ""
+	}
 	view["ThemeLayout"] = str("layout")
 	view["ThemeSpacing"] = str("spacing")
 	// The merchant's whole stylesheet — the ONE value that must NOT be
@@ -498,6 +527,46 @@ func customJSFromTheme(f *dbstore.Form) template.JS {
 		return ""
 	}
 	return customJSForScriptBlock(v)
+}
+
+// themeCSSValue types ONE single-value theme key (`background`, `text`,
+// `card_background`, `card_border_radius`, `font_family`) for the CSS
+// declaration it is interpolated into, and neutralises the one sequence that
+// could leave that `<style>` element (card t_61c7e145).
+//
+// Why a type and not an escape: the value sits in CSS text state, where
+// html/template runs cssValueFilter over anything that is not `template.CSS`.
+// That filter rejects `(`, so `rgb(200,0,0)` — a perfectly ordinary colour —
+// was replaced by the `ZgotmplZ` sentinel: the page returned 200, the row held
+// the merchant's colour, nothing logged, and the buyer got the template's
+// default because `background: ZgotmplZ` is not a declaration. `template.CSS`
+// is the documented type for known-safe CSS and is emitted verbatim, which is
+// also what makes the value reach the browser as the merchant wrote it (the old
+// `template.HTMLEscapeString` turned a quoted font family into `&#34;`, which
+// CSS does not unescape).
+//
+// Why a guard as well: verbatim means verbatim, so the protection
+// HTMLEscapeString gave for free has to be explicit — the same reasoning as
+// customCSSForStyleBlock, and the same truncation point: a `<style>` is an HTML
+// raw-text element whose ONLY terminator is a case-insensitive `</style`, and
+// the template follows the value with its own `</style>`, so a bare `</style`
+// prefix ends the element too. Everything from that sequence onward is dropped;
+// a value that does not try to close the block is served byte-for-byte.
+//
+// Note what this deliberately does NOT do: it does not police CSS *content*
+// (a value that opens a brace or a semicolon can only reach the merchant's OWN
+// page — every write path for these keys is owner-gated, and the merchant owns
+// `custom_css` outright). The threat boundary here is HTML injection, which is
+// the end tag and nothing else.
+func themeCSSValue(v string) template.CSS {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if i := indexStyleEndTag(v); i >= 0 {
+		v = strings.TrimSpace(v[:i])
+	}
+	return template.CSS(v)
 }
 
 // customJSForScriptBlock types the merchant's `custom_js` for the `<script>`

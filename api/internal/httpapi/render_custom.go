@@ -45,10 +45,14 @@ func (h *PublicHandlers) renderCustomForm(w http.ResponseWriter, r *http.Request
 	// from the same hue (formtheme.go). The inner iframe body is merchant HTML
 	// inside a sandbox and keeps its own styling.
 	cta := themePrimaryValues(f)
-	themeBg := ""
+	// Card t_61c7e145: the same CSS-context typing the block renderers use.
+	// This renderer had its own `template.HTMLEscapeString` copy of the
+	// background value, so it served `ZgotmplZ` for `rgb(...)` too — one
+	// helper, one rule, so the two page shapes cannot drift.
+	themeBg := template.CSS("")
 	if f.Theme != nil {
 		if v, ok := f.Theme["background"].(string); ok {
-			themeBg = template.HTMLEscapeString(v)
+			themeBg = themeCSSValue(v)
 		}
 	}
 
