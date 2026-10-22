@@ -415,19 +415,22 @@ const blockConditionJS = `<script>(function(){
 //     returned 200, and nothing logged. customCSSForStyleBlock carries the
 //     breakout guard that raw emission makes necessary.
 //
-//   - ThemeJS is `template.HTML`, which is NOT the type for a `<script>` body:
-//     measured end-to-end on this path (theme seeded in Postgres, public GET),
-//     html/template's jsValEscaper emits it as a quoted string literal —
+//   - ThemeJS is `template.JS`, the documented type for known-safe JS. The
+//     value lands inside a `<script>` ELEMENT, where html/template is in JS
+//     state and runs jsValEscaper — and that escaper does not honour
+//     `template.HTML`, an HTML-context type: it JSON-marshals it. Measured
+//     end-to-end on this path (theme seeded in Postgres, public GET), the
+//     previous `template.HTML(template.HTMLEscapeString(v))` shipped —
 //
 //     <script>
 //     "window.__jfMeasured = 1;"
 //     </script>
 //
-//     a valid no-op statement, so a merchant's `custom_js` never runs on a
-//     block-rendered page. That is a separate defect (card t_cae9c98e) with its
-//     own type (`template.JS`) and its own `</script>` breakout guard, and
-//     custom_js is an owner-gated, scanned surface, so it is carded on its own
-//     rather than folded in here.
+//     a quoted string expression, i.e. a valid no-op statement. The page
+//     returned 200, nothing logged, and every other theme key applied, so the
+//     only signal was that a merchant's `custom_js` never ran on a
+//     block-rendered page (card t_cae9c98e). customJSForScriptBlock carries the
+//     breakout guard that verbatim emission makes necessary.
 //
 // Every other key is emitted as a plain string and therefore goes through the
 // CSS filter on the way out — which is the safe direction for a single value.
@@ -435,7 +438,7 @@ func blockThemeView(f *dbstore.Form) map[string]any {
 	view := map[string]any{
 		"ThemeBg": "", "ThemeText": "", "ThemeCardBg": "", "ThemeRadius": "",
 		"ThemeFont": "", "ThemeLayout": "", "ThemeSpacing": "",
-		"ThemeCSS": template.CSS(""), "ThemeJS": template.HTML(""),
+		"ThemeCSS": template.CSS(""), "ThemeJS": template.JS(""),
 	}
 	if f == nil || f.Theme == nil {
 		return view
@@ -461,12 +464,50 @@ func blockThemeView(f *dbstore.Form) map[string]any {
 	if v, ok := f.Theme["custom_css"].(string); ok {
 		view["ThemeCSS"] = customCSSForStyleBlock(v)
 	}
-	// Issue #388: power-user custom JS. Unchanged by card t_a7bf0fb2 — see the
-	// ThemeJS note above; it is carded separately.
+	// Issue #388: power-user custom JS — served as JS, not as text in HTML, so
+	// it is the ONE value that must NOT be HTML-escaped.
 	if v, ok := f.Theme["custom_js"].(string); ok {
-		view["ThemeJS"] = template.HTML(template.HTMLEscapeString(v))
+		view["ThemeJS"] = customJSForScriptBlock(v)
 	}
 	return view
+}
+
+// customJSForScriptBlock types the merchant's `custom_js` for the `<script>`
+// element it is served in, and neutralises the one sequence that could leave
+// that element.
+//
+// Why a type and not an escape: inside `<script>` html/template is in JS state
+// and runs jsValEscaper, which rejects a multi-statement script unless the value
+// is typed for that context. `template.JS` is the documented type for known-safe
+// JS and jsValEscaper emits it verbatim; `template.HTML` is an HTML-context type
+// and was JSON-marshalled into a quoted string literal — a valid no-op statement
+// — so a merchant's `custom_js` never ran while the page returned 200 and
+// nothing logged (card t_cae9c98e).
+//
+// Why a guard as well: verbatim means verbatim, so the protection
+// HTMLEscapeString gave for free has to be explicit. A `<script>` is an HTML
+// *raw text* element — markup is not parsed inside it and the ONLY thing that
+// ends it is an end tag, i.e. a case-insensitive `</script`. The template
+// follows the value with a newline and its own `</script>`, and `</script` is a
+// valid end tag with no `>` after it, so the guard truncates on the bare prefix
+// rather than on a full tag. Everything from such a sequence onward is dropped:
+// the merchant's code is served up to the first attempt to close its own block
+// and never past it, so injected text after it cannot become markup.
+//
+// Dropping (rather than emitting an escaped `<\/script`) is deliberate and
+// matches customCSSForStyleBlock: whatever follows an injected end tag is
+// attacker-chosen text rather than the merchant's code, and a script that wants
+// a literal `</script` inside a string must write `<\/script` — precisely
+// because the browser would have ended the element there too. A value that does
+// NOT try to close the block is served byte-for-byte.
+func customJSForScriptBlock(js string) template.JS {
+	if js == "" {
+		return ""
+	}
+	if i := indexScriptEndTag(js); i >= 0 {
+		js = js[:i]
+	}
+	return template.JS(js)
 }
 
 // customCSSForStyleBlock types the merchant's `custom_css` for the `<style>`
@@ -505,14 +546,24 @@ func customCSSForStyleBlock(css string) template.CSS {
 }
 
 // indexStyleEndTag returns the byte offset of the first case-insensitive
-// "</style" in s, or -1. Written out instead of strings.ToLower-then-Index
-// because Unicode case folding can change the LENGTH of the string, which would
-// make the offset it reported point at the wrong byte in the original — and a
-// guard that truncates at the wrong byte does not guard anything.
-func indexStyleEndTag(s string) int {
-	const end = "</style"
-	for i := 0; i+len(end) <= len(s); i++ {
-		if s[i] == '<' && strings.EqualFold(s[i:i+len(end)], end) {
+// "</style" in s, or -1.
+func indexStyleEndTag(s string) int { return indexEndTag(s, "</style") }
+
+// indexScriptEndTag returns the byte offset of the first case-insensitive
+// "</script" in s, or -1.
+func indexScriptEndTag(s string) int { return indexEndTag(s, "</script") }
+
+// indexEndTag returns the byte offset in s of the first case-insensitive
+// occurrence of tag, or -1. tag must start with '<' (both end tags this file
+// guards do).
+//
+// Written out instead of strings.ToLower-then-Index because Unicode case folding
+// can change the LENGTH of the string, which would make the offset it reported
+// point at the wrong byte in the original — and a guard that truncates at the
+// wrong byte does not guard anything.
+func indexEndTag(s, tag string) int {
+	for i := 0; i+len(tag) <= len(s); i++ {
+		if s[i] == tag[0] && strings.EqualFold(s[i:i+len(tag)], tag) {
 			return i
 		}
 	}

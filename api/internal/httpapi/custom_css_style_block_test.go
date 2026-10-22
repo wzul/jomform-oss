@@ -40,16 +40,17 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// customCSSRenderer is one of the two public block templates. Both must serve a
-// merchant's stylesheet identically — they are separate templates over separate
-// view shapes, so a fix in one is not a fix in the other.
-type customCSSRenderer struct {
+// themeRenderer is one of the two public block templates, rendered with a theme
+// document. Both must serve a merchant's theme values identically — they are
+// separate templates over separate view shapes, so a fix in one is not a fix in
+// the other.
+type themeRenderer struct {
 	name string
 	tmpl *template.Template
 }
 
-func customCSSRenderers() []customCSSRenderer {
-	return []customCSSRenderer{
+func themeRenderers() []themeRenderer {
+	return []themeRenderer{
 		{"payment blockTmpl", blockTmpl},
 		{"response responseTmpl", responseTmpl},
 	}
@@ -98,7 +99,7 @@ func TestCustomCSSReachesTheStyleBlock(t *testing.T) {
 	// survived" pass cannot hide a truncation.
 	const css = ".card { box-shadow: none; }\n  .prod { border: 0; }"
 
-	for _, r := range customCSSRenderers() {
+	for _, r := range themeRenderers() {
 		t.Run(r.name, func(t *testing.T) {
 			page := renderThemePage(t, r.tmpl, map[string]any{
 				"custom_css": css,
@@ -202,7 +203,7 @@ func TestCustomCSSCannotBreakOutOfTheStyleBlock(t *testing.T) {
 		{"end tag behind a string that case-folds to a different length", ".a::after{content:'İ'}</style><script>jfBreakout('x')</script>", ".a::after{content:'İ'}"},
 	}
 
-	for _, r := range customCSSRenderers() {
+	for _, r := range themeRenderers() {
 		t.Run(r.name, func(t *testing.T) {
 			baseline := renderThemePage(t, r.tmpl, nil)
 			wantClosers := strings.Count(baseline, "</style>")
@@ -276,7 +277,7 @@ func TestCustomCSSAbsentIsNotASentinel(t *testing.T) {
 		{"null custom_css", map[string]any{"custom_css": nil}},
 		{"non-string custom_css", map[string]any{"custom_css": 42}},
 	}
-	for _, r := range customCSSRenderers() {
+	for _, r := range themeRenderers() {
 		for _, tt := range themes {
 			t.Run(r.name+"/"+tt.name, func(t *testing.T) {
 				page := renderThemePage(t, r.tmpl, tt.theme)

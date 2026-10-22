@@ -125,6 +125,21 @@ func TestFormPatchRoundTrippedThemeKeepsUnownedKeysAndTheirCSS(t *testing.T) {
 				rule, before.Body.String())
 		}
 	}
+	// The seeded custom_js must already be served as RUNNABLE code, verbatim
+	// inside its own <script> — not as a JSON-marshalled quoted string literal,
+	// which is a valid no-op statement the browser evaluates and discards (card
+	// t_cae9c98e). Asserted on this path as well as DB-free in
+	// custom_js_script_block_test.go because this one is the end-to-end route: a
+	// real row, a real public GET.
+	if !strings.Contains(before.Body.String(), "<script>\nwindow.__jfOld = true;\n</script>") {
+		t.Fatalf("pre-condition: the page does not serve the stored custom_js verbatim inside a <script> "+
+			"element, so the seeded row's JS is dead on the page (card t_cae9c98e). body %s",
+			before.Body.String())
+	}
+	if strings.Contains(before.Body.String(), `"window.__jfOld = true;"`) {
+		t.Fatalf("pre-condition: the page serves custom_js as a quoted string literal — the browser " +
+			"evaluates a no-op and the merchant's code never runs (card t_cae9c98e)")
+	}
 
 	// The General tab's payload, exactly as the page builds it (see
 	// web/src/lib/formSettingsTheme.ts): the theme it READ, laid over the keys it
