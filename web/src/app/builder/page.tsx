@@ -29,6 +29,7 @@ import TemplatePicker from "../../components/TemplatePicker";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { formDescription } from "../../lib/formDescription";
 import { blockTypeLabel, isWithdrawnBlockType } from "../../lib/withdrawnBlock";
+import { hydrateBlockIds } from "../../lib/blockHydrate";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
 
@@ -480,19 +481,30 @@ export default function Builder() {
       if (resolved.kind === "template") {
         templateTheme.current = d.theme && typeof d.theme === "object" ? (d.theme as Record<string, unknown>) : null;
       }
-      const hydrated: Block[] = [];
-      (cfg.blocks || []).forEach(
-        (b: Record<string, unknown>) => {
-          hydrated.push(hydrateBlock(b));
-        },
+      // Card t_cbeafc7c: a stored block's `id` is the field name the public
+      // page emits (`name="<id>"`), the key its submit sends, AND the
+      // `field_id` a stored `config.registered_fields` contract names — and
+      // formfields.Contract prefers that contract over the blocks. Minting a
+      // new id per load therefore did not just tidy the editor: it left the
+      // carried contract pointing at ids no control carries, so every submit
+      // answered 400 "medan wajib tidak diisi". Keep the stored ids (see
+      // lib/blockHydrate for the two repairs a stored config can still need).
+      const storedBlocks = (cfg.blocks || []) as Record<string, unknown>[];
+      const blockIds = hydrateBlockIds(
+        storedBlocks.map((b) => b.id),
+        uid,
       );
+      const hydrated: Block[] = storedBlocks.map((b, i) => hydrateBlock(b, blockIds[i]));
       setBlocks(hydrated.length ? hydrated : defaultBlocks(cfg.products || []));
     })();
   }, [load, goToLogin, t]);
 
   /* Issue #173: map a stored block (snake_case) to the builder Block shape,
-     carrying the new per-field settings through. */
-  function hydrateBlock(b: Record<string, unknown>): Block {
+     carrying the new per-field settings through.
+     `id` comes from the caller (lib/blockHydrate), NOT from uid(): a stored
+     block id is the field name the public page emits and the name a stored
+     `registered_fields` contract refers to (card t_cbeafc7c). */
+  function hydrateBlock(b: Record<string, unknown>, id: string): Block {
     const choices = Array.isArray(b.choices)
       ? (b.choices as { label?: string; value?: string; price_sen?: number }[]).map((c) => ({
           label: c.label || "",
@@ -501,7 +513,7 @@ export default function Builder() {
         }))
       : undefined;
     return {
-      id: uid(),
+      id,
       type: (b.type as BlockType) || "text",
       value: (b.value as string) || "",
       src: b.src as string | undefined,
