@@ -132,6 +132,52 @@ by nothing, and the fix for that is to add the route. And axe is still the wrong
 guard for this class: this file exists because the rule cannot see it, not because
 the rule changed.
 
+### The sidebar nav links' accessible name carried the icon (card `t_950256ab`)
+
+`Shell.tsx` paints every sidebar row as a decorative glyph and a label:
+`<Link href={n.href}><span className="w-4 text-center text-xs" aria-hidden="true">{n.icon}</span>{n.label}</Link>`.
+The span used to carry **no `aria-hidden`**, and because a link's accessible name is
+computed from its whole content, every nav name in the accessibility tree was the
+glyph PLUS the label. MEASURED on a production build served locally, fresh browser
+state (storage cleared, no `jf_lang`, `html lang="en"`), the API stubbed at the
+browser level, `/` read two ways — Playwright's `ariaSnapshot()` and Chromium's own
+AX tree over CDP (`Accessibility.getPartialAXTree` on each anchor), which agreed:
+
+```
+aside nav a[href="/forms"]      name "✎ Forms"
+aside nav a[href="/spam"]       name "⚠ Spam"
+aside nav a[href="/templates"]  name "🗂 Templates"      … on all 14 rows
+```
+
+A screen reader therefore announced "pen Forms", "warning Spam" — the icon, again —
+for every destination, and the *mobile drawer* said the same thing, because both
+surfaces render the ONE `NavList`. The glyph is decoration; the label beside it is
+the name. The fix is `aria-hidden="true"` on that span: the glyph is still PAINTED
+(it is part of the sidebar's design) and only AT stops hearing it. That is the same
+rule the sortable-table ▲/▼ glyph already carries (`web/e2e/a11y-products.spec.ts`:
+"the ▲/▼ glyph must be `aria-hidden` so the button keeps its plain label").
+
+`web/e2e/a11y-nav-icon-name.spec.ts` is the guard (in the `a11y` gate by its
+filename prefix). It asserts on the accessible **NAME**, never on the attribute — a
+guard that greps `aria-hidden` can pass while AT still hears the glyph — reading it
+twice per surface (Chromium's AX tree and `ariaSnapshot`), requiring both to equal
+the row's label and to agree with each other, on the desktop `<aside>` AND through
+the real "Open menu" control in the mobile drawer. It also requires the glyph to
+still be painted (`<glyph><label>` in the row's own text), so the fix cannot be
+"delete the icons". Its control arm removes `aria-hidden` from the real spans and
+requires both readings to go RED, then restores it and requires them to read the
+labels again — the reading tracks the DOM, not the page load.
+
+**What this does NOT cover (stated, not hidden).** The axe family's own rules cannot
+see this at all — MEASURED: with the glyph back in the names, axe scoped to the nav
+reports **0 violations** and `link-name` **passes on all 14 links**, exactly as it did
+with the fix in place (a name that carries an icon is still a non-empty name; no rule
+inspects one for decoration). That is why this is measured in a spec rather than left
+to `a11y.spec.ts`. Only the two sidebar surfaces are scanned: a decorative glyph
+inside another interactive component (a button, a tab, a table control) would need
+its own arm, and `a11y-products.spec.ts` holds the one that already exists for the
+sort headers.
+
 ### The document declaration must match the prose (card `t_c9d23e2c`, WCAG 3.1.1)
 
 `web/src/components/i18n.tsx` writes the dashboard locale to

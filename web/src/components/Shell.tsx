@@ -144,7 +144,20 @@ function NavList({
                       `--jf-primary-on-tint` over `bg-indigo-50` to #766fda, 3.714:1.
                       At full strength the same two pairs are 4.834:1 and 7.068:1, so
                       the fix is to stop dimming the glyph, not to invent a token. */}
-                  <span className="w-4 text-center text-xs">{n.icon}</span>
+                  {/* The glyph is decoration: `aria-hidden` keeps it out of the
+                      link's accessible name, which is otherwise computed from the
+                      whole row's text — MEASURED before this (card t_950256ab), the
+                      name Chromium's AX tree handed AT read "✎ Forms", "⚠ Spam",
+                      "🗂 Templates" on all 14 rows, in BOTH surfaces (this is the
+                      one NavList). Same rule the sortable-table ▲/▼ glyph already
+                      carries (e2e/a11y-products.spec.ts): the label beside it is the
+                      name. The glyph is still PAINTED — it is part of the design;
+                      only AT stops hearing it. Guarded on the accessible NAME, not
+                      on this attribute: e2e/a11y-nav-icon-name.spec.ts reads it out
+                      of Chromium's AX tree and Playwright's ariaSnapshot, on the
+                      desktop sidebar AND the mobile drawer, and its control arm
+                      removes this attribute to prove the measurement bites. */}
+                  <span className="w-4 text-center text-xs" aria-hidden="true">{n.icon}</span>
                   {n.label}
                 </Link>
               </li>

@@ -433,7 +433,11 @@ test("the chrome rule bites on a nav row built through a helper (card t_7d100f49
   // The anchor is the nav row's GLYPH, not its class string: the row's own
   // classes are restyled by other cards (t_07eb69c8 changed this very span), so
   // pinning them here would fail this bite for a reason unrelated to the read.
-  const NAV_ROW = /<span className="[^"]*">\{n\.icon\}<\/span>/;
+  // It matches the ATTRIBUTES as a set (`<span …>`), not `className="…"` in a
+  // fixed position: card t_950256ab added `aria-hidden="true"` to this span (the
+  // glyph must stay out of the link's ACCESSIBLE NAME), and an anchor that pins
+  // the attribute ORDER turns a legitimate a11y fix into a red bite.
+  const NAV_ROW = /<span\b[^>]*>\{n\.icon\}<\/span>/;
   const shellSrc = read("../components/Shell.tsx");
   assert.match(
     shellSrc,
@@ -571,3 +575,35 @@ test("the tinted-surface rule is looking at real, reachable markup", () => {
   }
 });
 
+
+test("the nav row glyph is decorative, so it stays out of the accessible name (card t_950256ab)", () => {
+  // THE AUTHORITY FOR THIS IS A BROWSER MEASUREMENT, not this rule:
+  // `e2e/a11y-nav-icon-name.spec.ts` reads each nav link's accessible NAME out of
+  // Chromium's own AX tree and Playwright's `ariaSnapshot` and requires it to
+  // EQUAL the row's label — before the fix every name was "✎ Forms", "⚠ Spam",
+  // … on all 14 rows (both surfaces). This rule is a FAST-FAIL in `test:unit`
+  // (milliseconds, no build, no browser) for the one thing that made those names
+  // wrong: the span that paints the glyph was not marked decorative.
+  //
+  // It deliberately does NOT assert the name — no source scan can compute one —
+  // so do not "simplify" the browser spec away on the strength of this test.
+  const glyph = /<span\b([^>]*)>\{n\.icon\}<\/span>/.exec(shell);
+  assert.ok(
+    glyph,
+    "the nav row's glyph span moved — re-anchor this rule rather than deleting it",
+  );
+  assert.match(
+    glyph[1],
+    /aria-hidden="true"/,
+    "the nav glyph is not aria-hidden — the accessible name is computed from the row's whole text, so a" +
+      " screen reader announces the decorative glyph as part of the link (\"✎ Forms\")",
+  );
+  // The span holds the glyph and NOTHING else, and the label is a sibling node:
+  // that is what makes hiding the glyph a name fix rather than an empty name.
+  assert.match(
+    shell,
+    /\{n\.icon\}<\/span>\s*\{n\.label\}/,
+    "the nav row's label no longer sits beside the glyph span — hiding the glyph must not be able to" +
+      " empty the link's name",
+  );
+});
