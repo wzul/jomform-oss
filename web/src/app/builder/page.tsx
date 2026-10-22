@@ -1849,11 +1849,30 @@ export default function Builder() {
             )}
             {blocks.map((b, i) => (
               <div key={b.id}>
-                {/* insertion gap */}
+                {/* insertion gap — the "it will land HERE" strip.
+                    `-my-0.5` pulls it over its two neighbours by 2px each, so its
+                    box and the card below it claim the same pixels. Without
+                    `relative` the CARD wins them (it paints later in DOM order),
+                    and because the gap GROWS to 32px while the pointer is on it,
+                    those 2px flip owner mid-drag: the pointer is over the card
+                    while the gap is at rest and over the strip once it is grown,
+                    the card's `onDragOver` targets `i + 1` and the strip's `i`, so
+                    the two states keep each other alive. The browser re-targets
+                    the drag on every flip and resets the drag operation on each
+                    new target, and a release that falls inside a flip is REFUSED
+                    — `dragend` reports `dropEffect: "none"`, no `drop` fires, and
+                    the block is silently not inserted while the gap is painted
+                    (card t_82df6ead; measured on the pre-fix tree: released on
+                    that 2px seam, `drop: 0`, cards unchanged). `relative` makes
+                    the gap paint — and therefore hit-test — above the card it
+                    overlaps, so the strip that says "here" is the strip that
+                    receives the drop, and the owner can no longer flip under a
+                    still pointer. It also stops 2px of the card below being a live
+                    gap target, which is the same ambiguity from the other side. */}
                 <div
                   onDragOver={(e) => canvasDragOver(e, i)}
                   onDrop={(e) => canvasDrop(e, i)}
-                  className={`-my-0.5 rounded transition-all ${
+                  className={`relative -my-0.5 rounded transition-all ${
                     dropAt === i && dragging
                       ? "h-8 border-2 border-dashed border-[#7170ff] bg-indigo-50/60"
                       : "h-2"
