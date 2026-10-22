@@ -34,7 +34,7 @@ const STEPS: { title: string; body: string }[] = [
   },
   {
     title: "6. Customize with CSS and JS",
-    body: "For full control, set custom_css (styling/layout) and custom_js (form behaviour) on a form via set_form_theme. Custom JS is owner-gated and scanned for malicious code before it goes live, so it is safe to run on every buyer's page. JomForm keeps authority over prices and payment.",
+    body: "For full control, set custom_css (styling/layout) and custom_js (form behaviour) on a form via set_form_theme. Custom JS is owner-gated and scanned for malicious code before it goes live, so it is safe to run on every buyer's page — including a custom HTML form, where it runs on the outer page and the HTML body itself stays inert (see Custom HTML forms). JomForm keeps authority over prices and payment.",
   },
 ];
 

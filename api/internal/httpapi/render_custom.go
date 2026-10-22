@@ -99,6 +99,10 @@ func (h *PublicHandlers) renderCustomForm(w http.ResponseWriter, r *http.Request
 		// Card t_c5a278c0: the nonce this response's CSP names; every
 		// page-owned <script> must carry it or the browser drops the block.
 		"Nonce": nonce,
+		// Card t_6efd84e2: the merchant's own custom_js (issue #388). It is
+		// emitted as a fourth nonced block by customFormTmpl — see the
+		// decision documented there.
+		"ThemeJS": customJSFromTheme(f),
 		// Issue #244: hidden honeypot + render-timestamp fields ride on the
 		// fields map so the deterministic anti-spam layers still apply.
 		"AntiSpam": template.HTML(antiSpamRenderFields()),
@@ -403,5 +407,44 @@ var customFormTmpl = template.Must(template.New("custom").
   });
 })();
 </script>
+{{/* Card t_6efd84e2: the merchant's own custom_js (issue #388) — a FOURTH
+   nonced block, outside the iframe.
+
+   Why it runs outside the sandbox: the iframe exists to keep AGENT-AUTHORED
+   HTML inert (sanitized on every render, no allow-scripts, its own
+   default-src 'none' meta CSP). custom_js is a different input from a
+   different principal: the merchant writes it themselves through the theme
+   editor / set_form_theme, it is owner-gated, and it is scanned by
+   customform.ScanCustomJS at SAVE time. On a block-rendered form it already
+   runs in the top realm beside the buyer's inputs, so serving it here is
+   parity, not a new privilege. Running it inside the frame instead is not an
+   option: that would need allow-scripts, and allow-scripts together with the
+   allow-same-origin this frame requires is the combination that un-sandboxes
+   it (the frame could reach into the parent document). The boundary that
+   matters — merchant MARKUP cannot execute — is untouched: the frame still
+   carries no allow-scripts and still inherits a nonce-free default-src
+   'none', and the nonce never reaches it.
+
+   Why the nonce: this page sends a script-src that names ONLY a per-response
+   nonce, with no 'unsafe-inline' (card t_c5a278c0), so a tag without the
+   response's nonce is dropped by the browser while still sitting in the
+   document — the exact regression that card measured. The tag carries the
+   SAME nonce variable the header names, so the two cannot drift.
+
+   What the merchant's code can and cannot do here follows from that same
+   policy: it runs as an admitted inline block, but default-src 'none' +
+   connect-src 'self' means no third-party fetch/beacon/XHR, img-src is the
+   logo origin + data:, and there is no 'unsafe-eval', so eval/new Function are
+   blocked. That is narrower than a block-rendered page (which sends no CSP at
+   all) and is documented on /docs/custom-forms.
+
+   The value arrives as customJSFromTheme -> customJSForScriptBlock, i.e.
+   template.JS (jsValEscaper would otherwise JSON-marshal it into the
+   quoted-literal no-op that card t_cae9c98e fixed) truncated at the first
+   case-insensitive "</script" (the guard verbatim emission needs). */}}
+{{if .ThemeJS}}<script nonce="{{.Nonce}}">
+{{.ThemeJS}}
+</script>
+{{end}}
 {{.HeightJS}}
 </body></html>`))

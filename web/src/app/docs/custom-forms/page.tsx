@@ -100,6 +100,19 @@ export default function CustomFormsDocsPage() {
         markup is therefore inert — it cannot run script, navigate the page or address another
         origin.
       </p>
+      <p className="mt-3 text-sm leading-relaxed text-slate-600">
+        <strong>Your own custom_js still runs here.</strong> The inert part is the HTML body, not the
+        form&apos;s theme. A custom_js set on the form through set_form_theme (or the theme editor)
+        is served on the outer page, outside the sandbox, in its own script block that carries the
+        same per-response nonce as the page&apos;s policy — the same JS a block-rendered form
+        serves. The frame is unchanged: it still has no allow-scripts and its own nonce-free policy,
+        so the JS runs on the page rather than inside the body, and it cannot make the body execute.
+        It runs under that page&apos;s policy, which is stricter than a block-rendered page&apos;s:
+        third-party fetch/XHR/beacons are blocked (only same-origin requests are allowed), and
+        eval and new Function are refused — so a self-contained script works and one that loads code
+        at runtime does not. A value that tries to close its own script block is cut off at the
+        attempt; to keep a literal end tag inside a string, write it as &lt;\/script.
+      </p>
 
       <h2 className="mt-8 text-xl font-semibold text-slate-900">Register the fields</h2>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">

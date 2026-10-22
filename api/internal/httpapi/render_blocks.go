@@ -475,10 +475,29 @@ func blockThemeView(f *dbstore.Form) map[string]any {
 	}
 	// Issue #388: power-user custom JS — served as JS, not as text in HTML, so
 	// it is the ONE value that must NOT be HTML-escaped.
-	if v, ok := f.Theme["custom_js"].(string); ok {
-		view["ThemeJS"] = customJSForScriptBlock(v)
-	}
+	view["ThemeJS"] = customJSFromTheme(f)
 	return view
+}
+
+// customJSFromTheme returns the form's `custom_js` typed and guarded for a
+// `<script>` element, or an empty template.JS when the form carries none.
+//
+// It is ONE function, called by BOTH public renderers — the block templates
+// (through blockThemeView) and the custom-HTML page (render_custom.go, card
+// t_6efd84e2). The custom-HTML page needs a nonce on its tag but the same
+// typing and the same breakout guard; a second copy of the decision is how the
+// custom-CSS defect (card t_a7bf0fb2) ended up shipping in two renderers at
+// once, and how `custom_js` reached the block renderers before this page served
+// it at all.
+func customJSFromTheme(f *dbstore.Form) template.JS {
+	if f == nil || f.Theme == nil {
+		return ""
+	}
+	v, ok := f.Theme["custom_js"].(string)
+	if !ok {
+		return ""
+	}
+	return customJSForScriptBlock(v)
 }
 
 // customJSForScriptBlock types the merchant's `custom_js` for the `<script>`

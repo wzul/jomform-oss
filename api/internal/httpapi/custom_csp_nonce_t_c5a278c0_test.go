@@ -57,7 +57,14 @@ func renderCustomForCSP(t *testing.T) (csp string, body string) {
 	h := &PublicHandlers{}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "http://demo.jomform.com/checkout", nil)
-	if !h.renderCustomForm(rec, req, themedForm("checkout", "#5e6ad2", cfg)) {
+	f := themedForm("checkout", "#5e6ad2", cfg)
+	// Card t_6efd84e2: this page now also serves the merchant's own custom_js,
+	// as a fourth inline block. Carrying it in this fixture means the "EVERY
+	// inline block must be admitted" rule below weighs that block too — it is
+	// the newest block, and therefore the one a future change is most likely to
+	// emit without the response's nonce.
+	f.Theme["custom_js"] = "window.__jfCSPProbe = 1;"
+	if !h.renderCustomForm(rec, req, f) {
 		t.Fatal("renderCustomForm declined a form with enabled custom_html — this is no longer the surface under test")
 	}
 	return rec.Header().Get("Content-Security-Policy"), rec.Body.String()
