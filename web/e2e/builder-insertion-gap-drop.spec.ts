@@ -43,6 +43,21 @@
 //     that one nudge leaves churning — so the two arms are not redundant.
 //   * the mapping the rest of the canvas already had: over a card the block
 //     lands BELOW it (`i + 1`), which is what the next gap paints.
+//   arm D (clicks, NO drag) — the ACCEPTED CLICK TRADE-OFF and its EXTENT.
+//     `relative` makes the gap the thing that "here" resolves to, and the price
+//     is that the top of every card belongs to the gap above it: a click there
+//     opens nothing. That price is accepted, but its extent is a property of the
+//     box (`h-2` with `-my-0.5`, i.e. an 8px strip overlapping each neighbour by
+//     2px). Widen the overlap — `-my-1`, `h-3`, padding, a border on the strip —
+//     and the dead sliver doubles silently: arm A above still passes, because a
+//     bigger gap still owns a bigger box. So arm D measures the overlap off the
+//     card's and the gap's rects, asserts it IS 2px, and then clicks: 0.5px below
+//     the card's top edge must open NO panel (dead, by decision), 2.5px must open
+//     it (live from 2.0), and mid-card must open it (the card's own click path).
+//     Every click is counted at the window, so "no panel" cannot be satisfied by
+//     a click that never happened. Verified to bite: with `-my-1` in page.tsx
+//     the measured overlap reads 4 and the 2.5px click lands on the gap — this
+//     arm fails and nothing else in the file does.
 //
 // MEASUREMENT NOTES, because both of these decide whether a reading is a reading:
 //   * Chromium coalesces drag events, so a stepped `mouse.move` can finish
@@ -165,14 +180,19 @@ type Rect = { x: number; y: number; w: number; h: number };
  *  gap promises — `insertAt(i)` — which is what makes the painted gap readable
  *  as an expected landing index.
  *
- *  The classes are how the canvas says "this is a gap": an empty strip with the
- *  `-my-0.5` collapse (insertion) or the `-mt-1` collapse (trailing). Selecting
- *  them by that shape rather than by their PAINT is deliberate — an unpainted
- *  gap must still occupy its index, or the painted one could not be counted. */
+ *  The classes are how the canvas says "this is a gap": an empty strip with a
+ *  NEGATIVE VERTICAL MARGIN (insertion) or the `-mt-1` collapse (trailing).
+ *  Selecting them by that shape rather than by their PAINT is deliberate — an
+ *  unpainted gap must still occupy its index, or the painted one could not be
+ *  counted. The selector keeps the `-my-` PREFIX and drops the VALUE on purpose:
+ *  how far the strip overlaps its neighbours is the thing arm D pins (2px), so a
+ *  widened overlap must fail THAT arm by name, not make every arm in the file
+ *  die with "no gap on the canvas" — a selector that hard-codes `.5` cannot tell
+ *  the defect from a rename. */
 async function gaps(page: Page): Promise<Rect[]> {
   return page.evaluate(() => {
     const els = document.querySelectorAll<HTMLElement>(
-      'section div[class*="-my-0.5"], section div[class*="-mt-1"]',
+      'section div[class*="-my-"], section div[class*="-mt-1"]',
     );
     return [...els].map((el) => {
       const b = el.getBoundingClientRect();
@@ -190,7 +210,7 @@ async function gaps(page: Page): Promise<Rect[]> {
 async function paintedGap(page: Page): Promise<{ index: number; h: number } | null> {
   return page.evaluate(() => {
     const els = document.querySelectorAll<HTMLElement>(
-      'section div[class*="-my-0.5"], section div[class*="-mt-1"]',
+      'section div[class*="-my-"], section div[class*="-mt-1"]',
     );
     const painted = [...els].flatMap((el, i) => {
       const cs = getComputedStyle(el);
@@ -363,11 +383,11 @@ test("every insertion gap owns the whole box it paints, so 'land here' is what t
           if (!el) return "nothing";
           const all = [
             ...document.querySelectorAll<HTMLElement>(
-              'section div[class*="-my-0.5"], section div[class*="-mt-1"]',
+              'section div[class*="-my-"], section div[class*="-mt-1"]',
             ),
           ];
           const gapEl = el.closest?.(
-            'section div[class*="-my-0.5"], section div[class*="-mt-1"]',
+            'section div[class*="-my-"], section div[class*="-mt-1"]',
           ) as HTMLElement | null;
           if (gapEl) return `gap ${all.indexOf(gapEl)}`;
           if (el.closest?.("section div[draggable]")) return "a block card";
@@ -464,4 +484,216 @@ test("a release over a block card still lands BELOW it, and the next gap says so
     DRAGGED_LABEL,
     "Number",
   ]);
+});
+
+// ─── arm D: the accepted click trade-off, and its EXTENT ────────────────────
+
+type ClickState = { count: number; last: { x: number; y: number } | null };
+
+/** Counts the REAL clicks the page receives, so "the panel did not open" can be
+ *  told apart from "the click never happened" — the two look identical in the
+ *  DOM, and only one of them is evidence. Re-installed after every navigation. */
+async function instrumentClicks(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as { __clicks: ClickState };
+    w.__clicks = { count: 0, last: null };
+    document.addEventListener(
+      "click",
+      (e) => {
+        const m = e as MouseEvent;
+        w.__clicks.count += 1;
+        w.__clicks.last = { x: m.clientX, y: m.clientY };
+      },
+      true,
+    );
+  });
+}
+
+async function clickState(page: Page): Promise<ClickState> {
+  return page.evaluate(() => (window as unknown as { __clicks: ClickState }).__clicks);
+}
+
+/** The card at `index` and the insertion gap that sits directly ABOVE it, both
+ *  as `getBoundingClientRect()` reports them. The gap's box overlaps the card's
+ *  top by the accepted sliver, so this pair — never a constant — is what the
+ *  click extent is a property of. */
+async function cardWithGapAbove(
+  page: Page,
+  index: number,
+): Promise<{ card: Rect; gap: Rect }> {
+  const measured = await page.evaluate((i) => {
+    const rect = (el: Element): Rect => {
+      const b = el.getBoundingClientRect();
+      return { x: b.x, y: b.y, w: b.width, h: b.height };
+    };
+    const cards = [...document.querySelectorAll<HTMLElement>("section div[draggable]")];
+    const strips = [
+      ...document.querySelectorAll<HTMLElement>(
+        'section div[class*="-my-"], section div[class*="-mt-1"]',
+      ),
+    ];
+    const card = cards[i];
+    // DOM order is one insertion strip per card, then the trailing zone, so the
+    // strip at the same index is the one above this card.
+    const gap = strips[i];
+    if (!card || !gap) return null;
+    return { card: rect(card), gap: rect(gap) };
+  }, index);
+  if (!measured) throw new Error(`card ${index}, or the gap above it, is not on the canvas`);
+  return measured;
+}
+
+/** What a pointer at `(x, y)` resolves to, in the same vocabulary as arm A. */
+async function ownerAt(page: Page, x: number, y: number): Promise<string> {
+  return page.evaluate(
+    ({ px, py }) => {
+      const el = document.elementFromPoint(px, py) as HTMLElement | null;
+      if (!el) return "nothing";
+      const all = [
+        ...document.querySelectorAll<HTMLElement>(
+          'section div[class*="-my-"], section div[class*="-mt-1"]',
+        ),
+      ];
+      const gapEl = el.closest?.(
+        'section div[class*="-my-"], section div[class*="-mt-1"]',
+      ) as HTMLElement | null;
+      if (gapEl) return `gap ${all.indexOf(gapEl)}`;
+      if (el.closest?.("section div[draggable]")) return "a block card";
+      return `${el.tagName}.${String(el.className).slice(0, 30)}`;
+    },
+    { px: x, py: y },
+  );
+}
+
+/** How many of the settings panel's own controls are on screen. The panel's ids
+ *  are `jf-blk-<block>-<key>` (page.tsx `fid`) and it renders ONLY for a selected
+ *  block, so this is exactly "is a block's settings panel open" — zero at rest,
+ *  on the live DOM rather than inferred from state. */
+async function panelFieldCount(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      [...document.querySelectorAll<HTMLElement>('[id^="jf-blk-"]')].filter(
+        (el) => el.offsetParent !== null,
+      ).length,
+  );
+}
+
+/** Arm D: the ACCEPTED trade-off is 2px of dead card top, and it is exactly 2px.
+ *
+ *  WHY IT EXISTS. Arm A pins that the gap owns the box it paints. It says
+ *  nothing about how far that box reaches into the card below it, and that reach
+ *  is the price a merchant pays: the top of every card cannot be clicked. The
+ *  price is a property of `h-2` minus `-my-0.5`, so a layout edit widens it with
+ *  no warning — arm A still passes, because a bigger box is still owned. This
+ *  arm therefore measures the overlap and states the number, then proves both
+ *  sides of the boundary with real clicks:
+ *
+ *    * at `card.y + 0.5` — inside the accepted sliver — the gap owns the point
+ *      and NO panel opens. Stated explicitly: this is a decision, not an
+ *      accident, and a future reader must not "fix" it back into the refused-
+ *      drop defect this file was filed for.
+ *    * at `card.y + 2.5` — the first half-pixel below the sliver — the card owns
+ *      the point and its panel opens.
+ *    * mid-card — the card's own click path opens the panel (the prod card's
+ *      item 4, which had no guard).
+ *
+ *  The anchors (`card.y`, the card's height, the gap's box) come from the live
+ *  rects; the 0.5/2.5 offsets are not layout constants but the EXTENT itself —
+ *  half a pixel inside the accepted sliver, half a pixel below it — so an
+ *  overlap that widens fails here instead of drifting unnoticed.
+ */
+test("the accepted click trade-off is exactly 2px: card.y+0.5 is dead, card.y+2.5 opens the panel", async ({
+  page,
+  baseURL,
+}) => {
+  test.setTimeout(240_000);
+
+  for (const cardIndex of [0, 1]) {
+    const at = `card ${cardIndex}`;
+
+    // Dead click and first-live click share ONE page state on purpose: the dead
+    // click must leave no panel, so the live reading that follows is a real
+    // transition rather than a panel that was already there.
+    await openBuilder(page, baseURL!);
+    await instrumentClicks(page);
+    const { card, gap } = await cardWithGapAbove(page, cardIndex);
+
+    // THE EXTENT, measured rather than assumed. This is the assertion that fails
+    // if the overlap is widened: 4px of dead card top is a different product
+    // decision from 2px.
+    const overlap = Math.round((gap.y + gap.h - card.y) * 100) / 100;
+    expect(
+      overlap,
+      `${at}: the gap above the card reaches ${overlap}px into its top, not 2px (gap box ${gap.y}..${gap.y + gap.h}, card top ${card.y}). That reach is the part of the card a click cannot open — widening it (a bigger -my, a taller h-, padding, a border) makes the top of every card dead, and arm A cannot see it because a bigger gap still owns a bigger box.`,
+    ).toBe(2);
+
+    const cx = card.x + card.w / 2;
+
+    // (1) THE ACCEPTED TRADE-OFF. Half a pixel below the card's top edge the gap
+    // owns the point and a click there opens nothing.
+    expect(
+      await ownerAt(page, cx, card.y + 0.5),
+      `${at}: the point 0.5px below the card's top edge (card ${card.y}..${card.y + card.h}) does not resolve to the gap above it — the accepted dead sliver moved`,
+    ).toBe(`gap ${cardIndex}`);
+    expect(
+      await panelFieldCount(page),
+      `${at}: a settings panel was already open on the fresh load — the dead-click reading below would be vacuous`,
+    ).toBe(0);
+    await page.mouse.click(cx, card.y + 0.5);
+    const dead = await clickState(page);
+    expect(
+      dead.count,
+      `${at}: the dead click never reached the page (0 click events at ${cx},${card.y + 0.5}), so "no panel" would prove nothing`,
+    ).toBe(1);
+    expect(
+      await panelFieldCount(page),
+      `${at}: a click 0.5px below the card's top edge opened the block panel — the accepted 2px dead sliver has shrunk or gone, which is a change to the decision this arm pins (and the reason it is 2px is documented above)`,
+    ).toBe(0);
+
+    // (2) THE FIRST LIVE PIXEL. Half a pixel below the sliver the CARD owns the
+    // point, and the click opens its panel: dead 0.00..1.99, live from 2.0.
+    const liveY = card.y + 2.5;
+    expect(
+      await ownerAt(page, cx, liveY),
+      `${at}: the point 2.5px below the card's top edge still resolves to the gap, not the card — the dead sliver is now wider than the 2px this arm pins`,
+    ).toBe("a block card");
+    await page.mouse.click(cx, liveY);
+    const live = await clickState(page);
+    expect(
+      live.count,
+      `${at}: the live click never reached the page (expected 2 click events, saw ${live.count})`,
+    ).toBe(2);
+    const fields = await panelFieldCount(page);
+    expect(
+      fields,
+      `${at}: a click at card.y+2.5 (${cx},${liveY}) opened no settings panel, so the card's top 2.5px is dead and the accepted sliver is wider than the 2px the layout claims`,
+    ).toBeGreaterThan(0);
+    console.log(
+      `[${at}] overlap=${overlap}px dead@+0.5 fields=0 live@+2.5 fields=${fields}`,
+    );
+
+    // (3) MID-CARD, on its own page state: the card's own click path still opens
+    // the panel. A fresh load, because the panel opened in (2) would make this
+    // reading vacuous.
+    await openBuilder(page, baseURL!);
+    await instrumentClicks(page);
+    const again = await cardWithGapAbove(page, cardIndex);
+    expect(
+      await panelFieldCount(page),
+      `${at}: a settings panel was already open on the fresh load — the mid-card reading would be vacuous`,
+    ).toBe(0);
+    const midX = again.card.x + again.card.w / 2;
+    const midY = again.card.y + again.card.h / 2;
+    await page.mouse.click(midX, midY);
+    expect(
+      (await clickState(page)).count,
+      `${at}: the mid-card click never reached the page (${midX},${midY})`,
+    ).toBe(1);
+    const midFields = await panelFieldCount(page);
+    expect(
+      midFields,
+      `${at}: a click in the middle of the card (${midX},${midY}) opened no settings panel — the card's own click path is broken`,
+    ).toBeGreaterThan(0);
+    console.log(`[${at}] mid-card fields=${midFields}`);
+  }
 });
