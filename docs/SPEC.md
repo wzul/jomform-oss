@@ -19,7 +19,7 @@
 | DB | PostgreSQL | 18.x (18.6) |
 | Cache/queue | Valkey (bukan Redis) | 9.1.x (`valkey/valkey:9.1-alpine`) |
 | Storage | S3-compatible: MinIO (self-host) atau R2 | MinIO image `minio/minio` (pulled & verified Aug 2026) |
-| Dashboard + builder | Next.js | 16.3.8 (security release, Sep 2026 — patched for GHSA-vcvr-r3jv-pc5j) |
+| Dashboard + builder | Next.js | 16.4.2 (security release, Oct 2026 — patched for GHSA-2464-fhr4-w9xw, GHSA-p3m5-59mp-jv5r, GHSA-673q-mjm6-r5xr) |
 | UI kit | Tailwind CSS + shadcn/ui | latest |
 | MCP SDK | `github.com/modelcontextprotocol/go-sdk` | v1.7.x (official) |
 | Migrations | golang-migrate | latest |

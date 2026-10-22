@@ -242,10 +242,32 @@ async function stubAPI(page: Page) {
  * A FRESH browser state at the app's DEFAULT locale: storage cleared and NO
  * `jf_lang` written, so the page renders what a new visitor gets (a `jf_lang` left
  * behind by an earlier run has already produced a false reading on this board).
+ *
+ * THE STARTING LOCALE IS RECORDED HERE, BEFORE THE CLEAR, and asserted from
+ * that record — not read back out of `localStorage` after the page has loaded.
+ * The app WRITES this key itself: `I18nProvider` mirrors the profile's language
+ * into `jf_lang` the moment `/api/auth/profile` answers (`src/components/i18n.tsx`
+ * — "the PROFILE wins"), and this spec's own stub answers `{lang:"en"}` for that
+ * route, so the key turns from `null` into `"en"` a few hundred ms after the
+ * document loads. Reading it after `goto(…, "domcontentloaded")` therefore
+ * measures the APP's write, not the state this run started from: the old form of
+ * this check passed or failed on that timing (measured on this tree — the same
+ * build failed it once under the 144-test a11y suite and passed 144/144 on the
+ * re-run, and live: `jf_lang` was `null` at load and `"en"` two seconds later on
+ * the same page).
+ *
+ * What the guard MEANS is "no earlier run left a locale behind", so it is
+ * recorded at document-start (before the clear, so a leftover is actually
+ * captured) and it still bites: a seeded `jf_lang` is recorded as-is and the
+ * assertion in `openDashboard` fails.
  */
 async function freshState(page: Page) {
   await page.addInitScript(() => {
     try {
+      // Record first, THEN clear: a leftover from an earlier state has to be
+      // seen, and the clear must not hide it from the assertion.
+      (window as unknown as { __jfLangAtStart?: string | null }).__jfLangAtStart =
+        localStorage.getItem("jf_lang");
       localStorage.clear();
       sessionStorage.clear();
       localStorage.setItem("jf_workspace", "demo");
@@ -268,8 +290,19 @@ async function openDashboard(page: Page, baseURL: string | undefined) {
   // web/src/middleware.ts, and a scan of the login page would be a clean 0 over
   // the surface this file is about.
   expect(new URL(page.url()).pathname, "/ redirected — the page under test did not render").toBe("/");
+  // Read the locale this run STARTED with, captured by freshState()'s init
+  // script before the app could write one (see that helper: the app mirrors the
+  // profile language into `jf_lang`, so a post-load read is a race).
+  const startedLang = await page.evaluate(() => {
+    const w = window as unknown as { __jfLangAtStart?: string | null };
+    return { recorded: "__jfLangAtStart" in w, value: w.__jfLangAtStart ?? null };
+  });
   expect(
-    await page.evaluate(() => window.localStorage.getItem("jf_lang")),
+    startedLang.recorded,
+    "the fresh-state init script never ran, so the starting locale was never measured",
+  ).toBe(true);
+  expect(
+    startedLang.value,
     "this run must start with NO stored locale (fresh state)",
   ).toBeFalsy();
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
