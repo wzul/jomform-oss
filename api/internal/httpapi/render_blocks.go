@@ -469,6 +469,8 @@ func blockThemeView(f *dbstore.Form) map[string]any {
 		"ThemeRadius": emptyCSS, "ThemeFont": emptyCSS,
 		"ThemeLayout": "", "ThemeSpacing": "",
 		"ThemeCSS": emptyCSS, "ThemeJS": template.JS(""),
+		// Card t_5016ade2: the guard for the theme-settings <style> element.
+		"ThemeSheet": false,
 	}
 	if f == nil || f.Theme == nil {
 		return view
@@ -497,6 +499,18 @@ func blockThemeView(f *dbstore.Form) map[string]any {
 	}
 	view["ThemeLayout"] = str("layout")
 	view["ThemeSpacing"] = str("spacing")
+	// One guard for the whole theme-settings layer: the templates emit it as a
+	// single <style> element AFTER the base sheet (card t_5016ade2), so a form
+	// that sets none of these keys keeps its exact element count. Read from the
+	// theme map rather than from `view`, because the value keys above are now
+	// template.CSS (card t_61c7e145) and would not satisfy a `string` assertion.
+	for _, k := range []string{"background", "text", "card_background",
+		"card_border_radius", "font_family", "layout", "spacing"} {
+		if s, ok := f.Theme[k].(string); ok && s != "" {
+			view["ThemeSheet"] = true
+			break
+		}
+	}
 	// The merchant's whole stylesheet — the ONE value that must NOT be
 	// HTML-escaped, because it is served as CSS, not as text in HTML.
 	if v, ok := f.Theme["custom_css"].(string); ok {
@@ -749,15 +763,13 @@ var blockTmpl = template.Must(template.New("blocks").
   :root { --jf-primary: {{.CtaPrimary}}; --jf-primary-hover: {{.CtaHover}};
           --jf-primary-active: {{.CtaActive}}; --jf-primary-label: {{.CtaLabel}};
           --jf-primary-text: {{.CtaText}}; }
-  {{if .ThemeBg}}body { background: {{.ThemeBg}}; }{{end}}
-  {{if .ThemeText}}body { color: {{.ThemeText}}; }{{end}}
-  {{if .ThemeFont}}body { font-family: {{.ThemeFont}}; }{{end}}
-  {{if .ThemeCardBg}}.card { background: {{.ThemeCardBg}}; }{{end}}
-  {{if .ThemeRadius}}.card { border-radius: {{.ThemeRadius}}; }{{end}}
-  {{if .ThemeLayout}}body { justify-content: {{if eq .ThemeLayout "full_width"}}flex-start{{else}}center{{end}}; }{{end}}
-  {{if .ThemeLayout}}body { padding: {{if eq .ThemeLayout "full_width"}}0{{else}}24px{{end}}; }{{end}}
-  {{if .ThemeLayout}}.card { max-width: {{if eq .ThemeLayout "full_width"}}100%{{else}}480px{{end}}; }{{end}}
-  {{if .ThemeSpacing}}.card { padding: {{if eq .ThemeSpacing "compact"}}20px{{else if eq .ThemeSpacing "spacious"}}48px{{else}}32px{{end}}; }{{end}}
+  /* Card t_5016ade2: the theme settings (background / text / card background /
+     radius / font / layout / spacing) are NOT declared here. They used to be,
+     and this sheet is served BEFORE the template's base sheet — equal-specificity
+     CSS resolves by document order, so every one of them lost to the base
+     sheet's own "body { … background:#f7f8f8 … }" / ".card { … padding:32px }"
+     and a merchant who picked "spacious" got the default card. They are emitted
+     in their own <style> element AFTER the base sheet below. */
 </style>
 <style>
   :root { color-scheme: dark; }
@@ -862,6 +874,28 @@ var blockTmpl = template.Must(template.New("blocks").
   .jf-flinks a { color:var(--jf-primary-text); text-decoration:none; }
   .jf-flinks a:hover { text-decoration:underline; }
 </style>
+{{if .ThemeSheet}}<style>
+  /* Card t_5016ade2: the form's theme SETTINGS are served in THIS element,
+     AFTER the template's base sheet above, because CSS resolves
+     equal-specificity declarations by document order. They used to sit in the
+     token sheet at the top of the head, where the base sheet's own
+     "body { … background:#f7f8f8 … }" and ".card { … padding:32px … }" silently
+     overrode them: a merchant picked spacing="spacious" on /form-settings, the
+     48px rule was on the page, and the buyer still saw the 32px default — in
+     effect only !important worked. Guarded by the ThemeSheet flag so a
+     form that sets none of these keys keeps its exact element count. The
+     merchant's custom_css element below is emitted AFTER this one on purpose:
+     it is the escape hatch and must still beat a theme rule. */
+  {{if .ThemeBg}}body { background: {{.ThemeBg}}; }{{end}}
+  {{if .ThemeText}}body { color: {{.ThemeText}}; }{{end}}
+  {{if .ThemeFont}}body { font-family: {{.ThemeFont}}; }{{end}}
+  {{if .ThemeCardBg}}.card { background: {{.ThemeCardBg}}; }{{end}}
+  {{if .ThemeRadius}}.card { border-radius: {{.ThemeRadius}}; }{{end}}
+  {{if .ThemeLayout}}body { justify-content: {{if eq .ThemeLayout "full_width"}}flex-start{{else}}center{{end}}; }{{end}}
+  {{if .ThemeLayout}}body { padding: {{if eq .ThemeLayout "full_width"}}0{{else}}24px{{end}}; }{{end}}
+  {{if .ThemeLayout}}.card { max-width: {{if eq .ThemeLayout "full_width"}}100%{{else}}480px{{end}}; }{{end}}
+  {{if .ThemeSpacing}}.card { padding: {{if eq .ThemeSpacing "compact"}}20px{{else if eq .ThemeSpacing "spacious"}}48px{{else}}32px{{end}}; }{{end}}
+</style>{{end}}
 {{if .ThemeCSS}}<style>
   /* Card t_331059a8: the merchant's own stylesheet is served in THIS element,
      AFTER the template's base sheet above, because CSS resolves
@@ -1297,15 +1331,13 @@ var responseTmpl = template.Must(template.New("response").
   :root { --jf-primary: {{.CtaPrimary}}; --jf-primary-hover: {{.CtaHover}};
           --jf-primary-active: {{.CtaActive}}; --jf-primary-label: {{.CtaLabel}};
           --jf-primary-text: {{.CtaText}}; }
-  {{if .ThemeBg}}body { background: {{.ThemeBg}}; }{{end}}
-  {{if .ThemeText}}body { color: {{.ThemeText}}; }{{end}}
-  {{if .ThemeFont}}body { font-family: {{.ThemeFont}}; }{{end}}
-  {{if .ThemeCardBg}}.card { background: {{.ThemeCardBg}}; }{{end}}
-  {{if .ThemeRadius}}.card { border-radius: {{.ThemeRadius}}; }{{end}}
-  {{if .ThemeLayout}}body { justify-content: {{if eq .ThemeLayout "full_width"}}flex-start{{else}}center{{end}}; }{{end}}
-  {{if .ThemeLayout}}body { padding: {{if eq .ThemeLayout "full_width"}}0{{else}}24px{{end}}; }{{end}}
-  {{if .ThemeLayout}}.card { max-width: {{if eq .ThemeLayout "full_width"}}100%{{else}}480px{{end}}; }{{end}}
-  {{if .ThemeSpacing}}.card { padding: {{if eq .ThemeSpacing "compact"}}20px{{else if eq .ThemeSpacing "spacious"}}48px{{else}}32px{{end}}; }{{end}}
+  /* Card t_5016ade2: the theme settings (background / text / card background /
+     radius / font / layout / spacing) are NOT declared here. They used to be,
+     and this sheet is served BEFORE the template's base sheet — equal-specificity
+     CSS resolves by document order, so every one of them lost to the base
+     sheet's own "body { … background:#f7f8f8 … }" / ".card { … padding:32px }"
+     and a merchant who picked "spacious" got the default card. They are emitted
+     in their own <style> element AFTER the base sheet below. */
 </style>
 <style>
   :root { color-scheme: dark; }
@@ -1364,6 +1396,28 @@ var responseTmpl = template.Must(template.New("response").
   .ok .msg { color:#17181c; font-size:14px; line-height:1.6; margin-top:8px; }
   .ok .msg a { color:var(--jf-primary-text); }
 </style>
+{{if .ThemeSheet}}<style>
+  /* Card t_5016ade2: the form's theme SETTINGS are served in THIS element,
+     AFTER the template's base sheet above, because CSS resolves
+     equal-specificity declarations by document order. They used to sit in the
+     token sheet at the top of the head, where the base sheet's own
+     "body { … background:#f7f8f8 … }" and ".card { … padding:32px … }" silently
+     overrode them: a merchant picked spacing="spacious" on /form-settings, the
+     48px rule was on the page, and the buyer still saw the 32px default — in
+     effect only !important worked. Guarded by the ThemeSheet flag so a
+     form that sets none of these keys keeps its exact element count. The
+     merchant's custom_css element below is emitted AFTER this one on purpose:
+     it is the escape hatch and must still beat a theme rule. */
+  {{if .ThemeBg}}body { background: {{.ThemeBg}}; }{{end}}
+  {{if .ThemeText}}body { color: {{.ThemeText}}; }{{end}}
+  {{if .ThemeFont}}body { font-family: {{.ThemeFont}}; }{{end}}
+  {{if .ThemeCardBg}}.card { background: {{.ThemeCardBg}}; }{{end}}
+  {{if .ThemeRadius}}.card { border-radius: {{.ThemeRadius}}; }{{end}}
+  {{if .ThemeLayout}}body { justify-content: {{if eq .ThemeLayout "full_width"}}flex-start{{else}}center{{end}}; }{{end}}
+  {{if .ThemeLayout}}body { padding: {{if eq .ThemeLayout "full_width"}}0{{else}}24px{{end}}; }{{end}}
+  {{if .ThemeLayout}}.card { max-width: {{if eq .ThemeLayout "full_width"}}100%{{else}}480px{{end}}; }{{end}}
+  {{if .ThemeSpacing}}.card { padding: {{if eq .ThemeSpacing "compact"}}20px{{else if eq .ThemeSpacing "spacious"}}48px{{else}}32px{{end}}; }{{end}}
+</style>{{end}}
 {{if .ThemeCSS}}<style>
   /* Card t_331059a8: the merchant's own stylesheet is served in THIS element,
      AFTER the template's base sheet above, because CSS resolves

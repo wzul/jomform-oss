@@ -370,12 +370,32 @@ func TestUnthemedPageGainsNoExtraStyleElement(t *testing.T) {
 					"merchant's sheet must not be emitted when there is none.\nstyle blocks:%s",
 					len(unthemed), allStyles(renderThemePage(t, r.tmpl, nil)))
 			}
+			// A theme that carries ONLY the brand colour sets none of the
+			// theme SETTINGS this card moved, so it must still render the two
+			// elements it rendered before: the guard keys on a setting, not on
+			// the theme being present at all.
+			brandOnly := styleBlocks(renderThemePage(t, r.tmpl, map[string]any{"primary": "#5e6ad2"}))
+			if len(brandOnly) != 2 {
+				t.Fatalf("a form themed with ONLY a brand colour has %d <style> element(s), want 2 (theme "+
+					"tokens + base sheet) — the `{{if .ThemeSheet}}` guard must not fire without a theme "+
+					"setting.\nstyle blocks:%s",
+					len(brandOnly), allStyles(renderThemePage(t, r.tmpl, map[string]any{"primary": "#5e6ad2"})))
+			}
+			// Card t_5016ade2: a form that DOES set a theme setting now gains
+			// exactly ONE more element — the theme layer, served after the base
+			// sheet so the setting actually applies. What this arm still forbids
+			// is the MERCHANT sheet appearing for a form with no custom_css.
 			withOtherTheme := styleBlocks(renderThemePage(t, r.tmpl, map[string]any{
 				"primary": "#5e6ad2", "spacing": "compact",
 			}))
-			if len(withOtherTheme) != 2 {
-				t.Fatalf("a form themed WITHOUT custom_css has %d <style> element(s), want 2 — the `{{if .ThemeCSS}}` "+
-					"guard keys on the stylesheet, not on the theme being present at all.\nstyle blocks:%s",
+			// Card t_5016ade2: a form that DOES set a theme setting now gains
+			// exactly ONE more element — the theme layer, served after the base
+			// sheet so the setting actually applies. What this arm still forbids
+			// is the MERCHANT sheet appearing for a form with no custom_css.
+			if len(withOtherTheme) != 3 {
+				t.Fatalf("a form themed WITHOUT custom_css has %d <style> element(s), want 3 (token sheet + base "+
+					"sheet + theme layer) — the `{{if .ThemeCSS}}` guard keys on the stylesheet, not on the theme "+
+					"being present at all.\nstyle blocks:%s",
 					len(withOtherTheme), allStyles(renderThemePage(t, r.tmpl, map[string]any{
 						"primary": "#5e6ad2", "spacing": "compact"})))
 			}

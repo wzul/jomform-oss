@@ -254,7 +254,12 @@ var customFormTmpl = template.Must(template.New("custom").
   :root { --jf-primary: {{.CtaPrimary}}; --jf-primary-hover: {{.CtaHover}};
           --jf-primary-active: {{.CtaActive}}; --jf-primary-label: {{.CtaLabel}};
           --jf-primary-text: {{.CtaText}}; }
-  {{if .ThemeBg}}body { background: {{.ThemeBg}}; }{{end}}
+  /* Card t_5016ade2: the form's background theme key is NOT declared here.
+     It used to be, and this sheet is served BEFORE the base sheet below, so
+     equal-specificity CSS resolved in the base sheet's favour and the
+     merchant's background never appeared (the base sheet's own
+     "body { … background:#f7f8f8 … }" won on document order). It is emitted in
+     its own <style> element AFTER the base sheet. */
 </style>
 <style>
   :root { color-scheme: dark; }
@@ -281,7 +286,15 @@ var customFormTmpl = template.Must(template.New("custom").
   .ok p { color:#6b7280; font-size:14px; }
   .ok .msg { color:#17181c; font-size:14px; line-height:1.6; margin-top:8px; }
   .ok .msg a { color:var(--jf-primary-text); }
-</style></head><body>
+</style>
+{{if .ThemeBg}}<style>
+  /* Card t_5016ade2: the form's theme background, served AFTER the base
+     sheet above so an equal-specificity declaration resolves in the merchant's
+     favour. The value is typed template.CSS by themeCSSValue, which carries
+     the style-element breakout guard (card t_61c7e145), so it is served
+     verbatim as CSS and cannot leave this element. */
+  body { background: {{.ThemeBg}}; }
+</style>{{end}}</head><body>
 <div class="card">
   <h1>{{.Title}}</h1>
 {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}

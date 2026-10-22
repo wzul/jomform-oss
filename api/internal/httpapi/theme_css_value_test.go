@@ -80,16 +80,29 @@ func TestThemeCSSFunctionValueReachesTheDeclaration(t *testing.T) {
 					"served (card t_61c7e145).\nstyle blocks:%s", allStyles(page))
 			}
 
-			// 2. Each declaration is on the page, verbatim. The token sheet is
-			// the FIRST <style> element (the merchant's custom_css sheet, when
-			// there is one, is the last), and these keys belong in it.
+			// 2. Each declaration is on the page, verbatim, in the element that
+			// carries the theme's own layer. Card t_5016ade2 moved these
+			// declarations OUT of the token sheet (`blocks[0]`, which is where
+			// they lived when this arm was written) and into a theme layer
+			// served AFTER the base sheet so they win the cascade — so the
+			// sheet to read is the one holding them, not the first one. Locate
+			// it by a declaration rather than by index: the index is exactly
+			// the property this card changed.
 			blocks := styleBlocks(page)
 			if len(blocks) == 0 {
 				t.Fatalf("the page has no <style> block at all")
 			}
-			tokens := blocks[0]
+			layer := styleBlockIndex(blocks, func(b string) bool {
+				return strings.Contains(b, themeCSSFunctionDeclarations["background"])
+			})
+			if layer < 0 {
+				t.Fatalf("no <style> element carries theme[\"background\"]=%q — the merchant's value did "+
+					"not reach the declaration.\nstyle blocks:%s",
+					themeCSSFunctionTheme["background"], allStyles(page))
+			}
+			themeLayer := blocks[layer]
 			for key, want := range themeCSSFunctionDeclarations {
-				if !strings.Contains(tokens, want) {
+				if !strings.Contains(themeLayer, want) {
 					t.Errorf("theme[%q] is not served as %q — the merchant's value did not reach the "+
 						"declaration.\nstyle blocks:%s", key, want, allStyles(page))
 				}
@@ -97,7 +110,7 @@ func TestThemeCSSFunctionValueReachesTheDeclaration(t *testing.T) {
 
 			// 3. The enum-valued keys still map to the template's own fixed CSS:
 			// typing the colour keys must not disturb them.
-			if want := ".card { padding: 48px; }"; !strings.Contains(tokens, want) {
+			if want := ".card { padding: 48px; }"; !strings.Contains(themeLayer, want) {
 				t.Errorf("theme spacing=spacious no longer produces %q — the fix touched a key whose value "+
 					"the template never interpolates.\nstyle blocks:%s", want, allStyles(page))
 			}
@@ -194,11 +207,17 @@ func TestThemeCSSValueCannotBreakOutOfTheStyleBlock(t *testing.T) {
 	for _, r := range themeRenderers() {
 		t.Run(r.name, func(t *testing.T) {
 			baseline := renderThemePage(t, r.tmpl, nil)
-			baseClosers := strings.Count(baseline, "</style>")
-			if baseClosers == 0 {
-				t.Fatalf("the unthemed page has no closing </style> — this case could not tell an early " +
-					"close from a normal one")
+			baseOpens := strings.Count(baseline, "<style>")
+			if baseOpens == 0 || strings.Count(baseline, "</style>") != baseOpens {
+				t.Fatalf("the unthemed page is not a reference for this case: %d <style> opens, %d closers",
+					baseOpens, strings.Count(baseline, "</style>"))
 			}
+			// Every case below sets exactly ONE theme key, so the theme layer
+			// (card t_5016ade2) adds exactly ONE <style> element: the themed
+			// page must carry baseOpens+1 opens and closers. An early close
+			// pushes the closers past that; a value that swallows the element
+			// leaves too few of either.
+			wantElements := baseOpens + 1
 			for _, tc := range cases {
 				t.Run(tc.name, func(t *testing.T) {
 					page := renderThemePage(t, r.tmpl, map[string]any{tc.key: tc.val})
@@ -211,10 +230,11 @@ func TestThemeCSSValueCannotBreakOutOfTheStyleBlock(t *testing.T) {
 						t.Fatalf("theme[%q]=%q left %d <style> opens but %d closers — an unbalanced style element "+
 							"is what an early close looks like.\nstyle blocks:%s", tc.key, tc.val, opens, got, allStyles(page))
 					}
-					if got := strings.Count(page, "</style>"); got != baseClosers {
-						t.Fatalf("theme[%q]=%q changed the number of </style> on the page (%d, want %d) — the "+
-							"value closed the style element early.\nstyle blocks:%s",
-							tc.key, tc.val, got, baseClosers, allStyles(page))
+					if got := strings.Count(page, "</style>"); got != wantElements {
+						t.Fatalf("theme[%q]=%q left %d <style> element(s) on the page, want %d (the base page's "+
+							"%d plus the one theme layer) — the value closed the style element early or "+
+							"swallowed it.\nstyle blocks:%s",
+							tc.key, tc.val, got, wantElements, baseOpens, allStyles(page))
 					}
 					if tc.kept != "" {
 						if !strings.Contains(page, tc.kept) {
