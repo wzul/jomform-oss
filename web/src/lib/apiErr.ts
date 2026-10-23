@@ -143,6 +143,15 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   // different slug for THIS form, and each sentence has to give its own remedy.
   "form.slugInUse": "apiErr.formSlugInUse",
   "form.slugInvalid": "apiErr.formSlugInvalid",
+  // The custom_js scan refusal (#388) — card t_2717ba30. The server assembles
+  // this 400 around the scan's own reason ("custom_js ditolak: active code
+  // execution marker: eval("), so before this code existed it shipped as
+  // `request.badRequest` and /form-settings' Save rendered the bare word
+  // "Failed": the merchant could not tell WHICH control was refused or why
+  // (measured on prod v1.21.296). One code covers every door that writes that
+  // sentence — REST form create/update, REST template create/update/use and the
+  // MCP form/template tools — so one sentence here cannot miss a route.
+  "form.customJsRejected": "apiErr.formCustomJsRejected",
   // The product bin's refusals: a sale (history) or a live subscription.
   "product.hasSales": "apiErr.productHasSales",
   "product.hasSubscriptions": "apiErr.productHasSubscriptions",

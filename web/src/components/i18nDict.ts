@@ -853,6 +853,33 @@ export const DICT = {
     ta: "slug என்பது a-z, 0-9 அல்லது கோடுகளால் ஆன 1-40 எழுத்துகளாக இருக்க வேண்டும்.",
     ar: "يجب أن يتكون الـ slug من 1-40 حرفاً من a-z أو 0-9 أو الشرطات.",
   },
+  // The power-user custom_js scan refusal (#388) — card t_2717ba30.
+  //
+  // THE BUG THIS ANSWERS. The API's sentence for it is assembled around the
+  // scan's own reason ("custom_js ditolak: active code execution marker: eval("),
+  // so no message key could carry it, and the 400 shipped as the class code
+  // `request.badRequest` — which this dictionary deliberately does not translate.
+  // Measured on prod v1.21.296: pasting `eval('2+2');` into /form-settings'
+  // "Custom JS (power users)" field and pressing Save rendered the bare word
+  // "Failed" under the form. The refusal was right; the sentence named neither
+  // the field nor the reason.
+  //
+  // WHY THE SENTENCE NAMES THE FIELD AND THE PATTERN FAMILIES. The code is one
+  // for every door (the form write paths, the template write paths and the MCP
+  // tools all write that same sentence), so it cannot carry which of the three
+  // scan classes fired: active code execution (`eval(`, `new Function(` …),
+  // obfuscation/beacon (`atob(`, `sendBeacon(` …) or a reference to an external
+  // URL. Listing the families is the honest answer — the merchant's own script
+  // is the only thing that can tell them which one they hit — and the remedy is
+  // the same for all three: remove it from the field and save again. Naming the
+  // field is the part a generic "Failed" cannot do.
+  "apiErr.formCustomJsRejected": {
+    en: "Custom JS was rejected: it contains something we don't allow on a live form — code execution, obfuscation/beacon code, or an external URL. Remove it and save again.",
+    ms: "Custom JS ditolak: ia mengandungi corak yang tidak dibenarkan pada borang yang disiarkan — pelaksanaan kod, kod penyamaran/beacon, atau URL luaran. Buangnya dan simpan semula.",
+    zh: "Custom JS 被拒绝：其中包含我们不允许在已发布表单中使用的模式——代码执行、混淆或信标代码，或外部网址。请移除后重新保存。",
+    ta: "Custom JS நிராகரிக்கப்பட்டது: வெளியிடப்பட்ட படிவத்தில் அனுமதிக்கப்படாத ஒன்று (code execution, obfuscation/beacon code அல்லது வெளிப்புற URL) உள்ளது. அதை நீக்கி மீண்டும் சேமிக்கவும்.",
+    ar: "تم رفض Custom JS: يحتوي على شيء لا نسمح به في نموذج منشور — تنفيذ كود، أو كود تشويش/beacon، أو رابط خارجي. أزله ثم احفظ مرة أخرى.",
+  },
   "apiErr.formHasSales": {
     en: "This form has sales, so it can't be deleted for good — sales history must not be destroyed with the form. It stays in the trash.",
     ms: "Borang ini mempunyai jualan, jadi ia tidak boleh dipadam secara kekal — sejarah jualan tidak boleh dimusnahkan bersama borang. Ia kekal dalam tong sampah.",

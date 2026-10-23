@@ -179,7 +179,7 @@ func refuseBlockedCustomJS(w http.ResponseWriter, theme map[string]any) bool {
 		return false
 	}
 	if reason := customform.ScanCustomJS(js); reason != "" {
-		writeErr(w, http.StatusBadRequest, "custom_js ditolak: "+reason)
+		writeErr(w, http.StatusBadRequest, customform.RejectedMessage(reason))
 		return true
 	}
 	return false

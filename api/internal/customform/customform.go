@@ -577,3 +577,37 @@ func ScanCustomJS(js string) string {
 	}
 	return strings.Join(reasons, "; ")
 }
+
+// RejectedLeadIn is the stable lead-in of the refusal every door writes when
+// ScanCustomJS returns a reason. The full wire sentence is RejectedMessage.
+//
+// IT IS A DECLARED CONSTANT, not six copies of a sentence, because TWO
+// consumers pair on it BY VALUE and neither can see a Go identifier:
+//
+//   - httpapi's message→code table (errcode.go's errCodeByPrefix) turns this
+//     wire text into the machine code `form.customJsRejected`, which is the
+//     only thing the dashboard dictionary can key a sentence on. The sentence
+//     is ASSEMBLED around the scan's reason ("… active code execution marker:
+//     eval("), so no exact-literal key can ever match one — a prefix is the
+//     only shape that works.
+//   - the MCP form/template tools, whose results are PLAIN TEXT (MCP has no
+//     error envelope), so the shared sentence is the entire contract there.
+//
+// THE BUG THIS PREVENTS (card t_2717ba30). Before the code existed the refusal
+// shipped as the HTTP class code `request.badRequest`, which the dashboard
+// deliberately does not translate: measured on prod v1.21.296, pasting
+// `eval('2+2');` into /form-settings' "Custom JS (power users)" field and
+// pressing Save rendered the bare word "Failed", naming neither the field nor
+// the reason. The refusal itself was correct and nothing was written; only its
+// NAME on the wire was missing. Referencing this constant from the code table
+// and from every write site is what makes a re-wording a compile-time-visible
+// change instead of a silent loss of the code — the same reasoning as
+// mcpsrv.RoleManageRequiredLeadIn and objstore.SVGNotXMLMessageLeadIn.
+const RejectedLeadIn = "custom_js ditolak: "
+
+// RejectedMessage builds the refusal sentence for a ScanCustomJS reason. A
+// reason is always non-empty here (callers test `reason != ""` first), so an
+// empty result would mean the scan refused without saying why.
+func RejectedMessage(reason string) string {
+	return RejectedLeadIn + reason
+}

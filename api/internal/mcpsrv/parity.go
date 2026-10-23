@@ -553,7 +553,7 @@ func (s *Server) upsertForm(
 	if in.Theme != nil {
 		if js, ok := in.Theme["custom_js"].(string); ok {
 			if reason := customform.ScanCustomJS(js); reason != "" {
-				return nil, nil, errors.New("custom_js ditolak: " + reason)
+				return nil, nil, errors.New(customform.RejectedMessage(reason))
 			}
 		}
 	}

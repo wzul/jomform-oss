@@ -914,7 +914,7 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 	if in.Theme != nil {
 		if js, ok := in.Theme["custom_js"].(string); ok {
 			if reason := customform.ScanCustomJS(js); reason != "" {
-				writeErr(w, http.StatusBadRequest, "custom_js ditolak: "+reason)
+				writeErr(w, http.StatusBadRequest, customform.RejectedMessage(reason))
 				return
 			}
 		}
@@ -1010,7 +1010,7 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 	if in.Theme != nil {
 		if js, ok := in.Theme["custom_js"].(string); ok {
 			if reason := customform.ScanCustomJS(js); reason != "" {
-				writeErr(w, http.StatusBadRequest, "custom_js ditolak: "+reason)
+				writeErr(w, http.StatusBadRequest, customform.RejectedMessage(reason))
 				return
 			}
 		}

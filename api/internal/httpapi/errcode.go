@@ -37,6 +37,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/objstore"
 )
@@ -140,6 +141,25 @@ const (
 	// class of unusable message this file exists to prevent.
 	CodeFormSlugInUse   = "form.slugInUse"
 	CodeFormSlugInvalid = "form.slugInvalid"
+
+	// A power-user `theme.custom_js` the deterministic #388 scan refuses.
+	//
+	// WHY IT NEEDS ITS OWN CODE (card t_2717ba30). The refusal's wire prose is
+	// assembled around the scan's reason ("custom_js ditolak: active code
+	// execution marker: eval("), so no exact key can match it, and it fell
+	// through to the class code `request.badRequest` — which the dashboard
+	// deliberately does not translate. Measured on prod v1.21.296: pasting
+	// `eval('2+2');` into /form-settings' "Custom JS" field and clicking Save
+	// rendered the bare word "Failed", naming neither the field nor the reason,
+	// so the merchant could not tell which control the server had refused. The
+	// refusal itself is correct; only its NAME on the wire was missing.
+	//
+	// ONE code for every door that writes that sentence — REST form
+	// create/update, REST template create/update/use, and the MCP form/template
+	// tools (whose text is the same, and which therefore resolve to the same
+	// code wherever a message→code lookup is applied). The dashboard then needs
+	// one sentence, not one per route, and cannot miss a door.
+	CodeFormCustomJSRejected = "form.customJsRejected"
 
 	// The product bin's two refusals, the same class as the two above: a purge
 	// that would destroy sales history, and one a live subscription still needs
@@ -464,6 +484,19 @@ var errCodeByPrefix = []struct {
 	{"taip slug borang (", CodeFormConfirmSlugMismatch},
 	{"taip slug workspace (", CodeWorkspaceConfirmSlugMismatch},
 	{"taip nama produk (", CodeProductConfirmNameMismatch},
+	// The custom_js scan refusal (card t_2717ba30). A PREFIX because the
+	// sentence is assembled around the scan's own reason — "custom_js ditolak:
+	// active code execution marker: eval(", "… obfuscation/beacon marker: atob(",
+	// "… reference to external URL from custom JS" — so no exact key can ever
+	// match one. The prefix is the constant EVERY write site builds the sentence
+	// from: rest_handlers.go's createForm/updateForm and rest_templates.go's
+	// refuseBlockedCustomJS (REST form create/update, template create/update/use)
+	// and the MCP form/template tools, whose results are plain text and therefore
+	// pair on this same wording. Referencing the constant is what makes a
+	// re-wording a compile-time-visible change rather than a silent loss of the
+	// code. The reason text is NOT reproduced here: it belongs to the scan, and a
+	// second copy would drift.
+	{prefix: customform.RejectedLeadIn, code: CodeFormCustomJSRejected},
 	// The SVG well-formedness refusal (t_20af3915). A prefix because the message
 	// carries the decoder's own diagnostic after the lead-in ("…: teks sebelum
 	// elemen akar" / "…: XML syntax error on line 1: …"), which names the line

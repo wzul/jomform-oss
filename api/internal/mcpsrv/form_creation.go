@@ -118,7 +118,7 @@ func (s *Server) setFormTheme(
 	// malicious JS is never served on the buyer's page.
 	if in.CustomJS != "" {
 		if reason := customform.ScanCustomJS(in.CustomJS); reason != "" {
-			return nil, nil, errors.New("custom_js ditolak: " + reason)
+			return nil, nil, errors.New(customform.RejectedMessage(reason))
 		}
 	}
 	setThemeStr(theme, "custom_js", in.CustomJS)

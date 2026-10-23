@@ -91,7 +91,7 @@ func refuseBlockedCustomJS(theme map[string]any) error {
 		return nil
 	}
 	if reason := customform.ScanCustomJS(js); reason != "" {
-		return errors.New("custom_js ditolak: " + reason)
+		return errors.New(customform.RejectedMessage(reason))
 	}
 	return nil
 }
