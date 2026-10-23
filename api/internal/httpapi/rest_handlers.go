@@ -903,6 +903,22 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		writeErr(w, http.StatusBadRequest, "title wajib")
 		return
 	}
+	// Issue #388 (parity with updateForm, card t_62190342): power-user custom JS
+	// is scanned here too, with the same deterministic scan and the same
+	// sentence. createForm is the only write path that MINTS a form, and it was
+	// the only one that skipped the scan — a POST stored a value that the PATCH
+	// route (and both MCP doors) refuse with 400, so one rule answered two ways
+	// on the two halves of the same REST surface. Since v1.21.283 the
+	// block-rendered buyer page serves that value as live code, so an unscanned
+	// create is served code, not a quoted no-op.
+	if in.Theme != nil {
+		if js, ok := in.Theme["custom_js"].(string); ok {
+			if reason := customform.ScanCustomJS(js); reason != "" {
+				writeErr(w, http.StatusBadRequest, "custom_js ditolak: "+reason)
+				return
+			}
+		}
+	}
 	// Issue #501: a form created with a non-https theme logo_url or a
 	// non-https config URL (builder image-block src, product snapshot image)
 	// would render as #ZgotmplZ on the buyer's page. Apply the ONE shared
