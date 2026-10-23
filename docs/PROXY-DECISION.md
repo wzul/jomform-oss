@@ -23,7 +23,11 @@ Reasons:
    live pattern" on a new host would have produced different routing. It is now a
    byte-for-byte copy of what the edge loads, and `deploy/vps/drift-check.sh`
    compares the two (see `deploy/HOST-SETUP.md`).
-2. **Wildcard TLS** for `*.jomform.com` is already issued and working.
+2. **Wildcard ROUTING** for `*.jomform.com`: one `jf-wildcard@file` router sends every
+   `<space>.jomform.com` host to the api with no per-domain config. That is not the same
+   as wildcard *TLS* — we have no wildcard certificate and never did; see the TLS gotcha
+   below (corrected 2026-10-23, the old "wildcard TLS is already issued and working"
+   claim was false).
 3. **No code coupling.** The API serves plain HTTP inside the network. Swapping
    the proxy for Caddy or Go `autocert` later touches only `deploy/vps/`, never
    application code.
@@ -34,9 +38,12 @@ Reasons:
 
 - If certificate issuance per custom domain becomes painful via the file
   provider (e.g. dozens of new domains per day) → consider the Docker provider
-  with labels (requires fixing the Docker API version error seen in logs:
-  "client version 1.24 is too old…", i.e. pin `DOCKER_API_VERSION`) or a
-  custom ACME service inside the API.
+  with labels, but only after an image bump to traefik **>= v3.6.1**, the first
+  release whose Docker client auto-negotiates the API version. (traefik v3.3
+  pins a client that speaks API 1.24 and Docker Engine 29 requires >= 1.44;
+  pinning `DOCKER_API_VERSION` does not help, because the client's SDK refuses
+  the handshake before that variable is consulted.) Or a custom ACME service
+  inside the API.
 - If we ever re-introduce Dokploy, its bundled Traefik resumes that role
   naturally. (Not planned — plain-server + Traefik file provider is the
   current deployment.)
@@ -80,8 +87,34 @@ Reasons:
   `go test ./internal/urlguard/` RED (wired into the `test` gate).
 - `ssh`-based python heredocs into `/opt/traefik/dynamic/*.yml` are fragile —
   edit via local python + scp, then `docker compose restart`.
-- File provider is independent of the Docker provider; the Docker provider
-  currently errors on API version and can be ignored.
+- **The Docker provider is REMOVED** (2026-10-20): `deploy/vps/traefik-docker-compose.yml`
+  no longer passes the two docker-provider flags nor mounts the Docker socket, because
+  the provider never worked here — the Go Docker SDK pinned inside `traefik:v3.3` speaks
+  API 1.24 while Docker Engine 29.1.3 requires >= 1.44, so the daemon refused the
+  handshake and the provider retried forever (~2 ERR lines/s, ~23 MB/day of log) while
+  discovering nothing. Routing is file-provider-only (all 18 routers are `@file`) and no
+  container carries a `traefik.*` label, so removing it lost nothing. Bringing label
+  discovery back is a deliberate re-enable: traefik **>= v3.6.1** (the first release
+  whose Docker client auto-negotiates the API version — v3.5.x and older still send
+  1.24) PLUS both flags and the socket mount. The absence of those lines is not an
+  accident, and `deploy/vps/drift-check.sh` compares this file byte-for-byte with the
+  host's `/opt/traefik/docker-compose.yml`, so do not "tidy" it.
+- **There is NO wildcard certificate for `*.jomform.com` at the origin** (measured
+  2026-10-23; the doc claimed one was "already issued and working" until then).
+  `/opt/traefik/acme/acme.json` holds 5 certs — `jomform.com` (+ SAN
+  `www.jomform.com`), `mcp.jomform.com`, `docs.jomform.com`, `halo.example.com`,
+  `jftest.example.com` — none of them a wildcard. The `jf-wildcard` router does
+  ask for `domains: ['*.jomform.com', jomform.com]` from the `le` resolver, but that
+  resolver is HTTP-01, which cannot issue a wildcard, so the request is unsatisfiable
+  and Traefik falls back to its DEFAULT SELF-SIGNED cert for those hosts (SNI straight
+  to `127.0.0.1:443`: `api.jomform.com` and `test-wan.jomform.com` present
+  `CN = TRAEFIK DEFAULT CERT`; only `jomform.com` and `docs.jomform.com` present a real
+  Let's Encrypt leaf). Visitors still get a valid padlock because Cloudflare's edge
+  certificate is what the browser sees, and the edge reaches the origin over HTTP/2
+  accepting that self-signed cert — i.e. the zone is **Full, not Full (strict)**.
+  Switching to Full (strict) would 526 every `<space>.jomform.com` host until the
+  origin has a real cert, which needs a DNS-01 challenge (HTTP-01 cannot do wildcards).
+  Custom domains (`halo.`, `jftest.`) do get their own LE certs.
 - `deploy/vps/traefik-jomform.yml` is a hand-maintained copy that is NOT
   installed by any deploy step (`deploy/build-and-ship.sh` only ships the image
   tarball), and prod's live `/opt/traefik/dynamic/jomform.yml` carries routers
