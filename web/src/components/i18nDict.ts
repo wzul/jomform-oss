@@ -1577,6 +1577,14 @@ export const DICT = {
   // Issue #392: conditional-logic picker (field dropdown + context-aware value + summary).
   "fs.condIf": { en: "If", ms: "Jika", zh: "如果", ta: "என்றால்", ar: "إذا" },
   "fs.condSelectField": { en: "Select a field…", ms: "Pilih medan…", zh: "选择字段…", ta: "புலத்தைத் தேர்ந்தெடுக்கவும்…", ar: "اختر حقلاً…" },
+  // Accessible names for the three controls the condition picker renders (they
+  // carry no visible label of their own — the "If [field] [operator] [value]"
+  // line is a summary, not a label). Card t_16ef9793: unnamed `<select>`s here
+  // were 3 of the 4 critical axe `select-name` nodes reachable from
+  // /form-settings' Notifications tab.
+  "fs.condFieldName": { en: "Condition field", ms: "Medan syarat", zh: "条件字段", ta: "நிபந்தனை புலம்", ar: "حقل الشرط" },
+  "fs.condOpName": { en: "Condition operator", ms: "Operator syarat", zh: "条件运算符", ta: "நிபந்தனை ஆபரேட்டர்", ar: "مشغل الشرط" },
+  "fs.condValueName": { en: "Condition value", ms: "Nilai syarat", zh: "条件值", ta: "நிபந்தனை மதிப்பு", ar: "قيمة الشرط" },
   "fs.notificationsHint": { en: "Per-form receipt email. Leave subject and body blank to use the workspace defaults.", ms: "Emel resit per-borang. Kosongkan subjek dan badan untuk guna lalai ruang kerja.", zh: "每表单收据邮件。主题和正文留空则使用工作区默认值。", ta: "ஒவ்வொரு படிவ ரசீது மின்னஞ்சல். பணியிடத்தின் இயல்புநிலைகளைப் பயன்படுத்த தலைப்பு மற்றும் உடலை காலியாக விடவும்.", ar: "بريد إيصال لكل نموذج. اترك الموضوع والمحتوى فارغين لاستخدام افتراضيات مساحة العمل." },
   "fs.blankUsesWorkspace": { en: "(blank = use workspace default)", ms: "(kosong = guna lalai ruang kerja)", zh: "（留空 = 使用工作区默认值）", ta: "(காலியாக = பணியிடத்தின் இயல்புநிலையைப் பயன்படுத்து)", ar: "(فارغ = استخدم افتراضي مساحة العمل)" },
 

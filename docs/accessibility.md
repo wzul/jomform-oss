@@ -411,6 +411,27 @@ fixed for, and every one is fixed. The same walk also refuses a control whose on
 name is its **placeholder** — the class axe cannot see, because axe accepts a
 placeholder as a name, so a clean scan does not prove the field is named.
 
+**A tab is not the only state, so the walk does not stop at tabs (card
+t_16ef9793).** One or two clicks INSIDE the Notifications tab — "+ Add
+notification", then "+ Add condition" — renders the notification-rule editor, and
+that state still carried **four critical `select-name` nodes and a
+placeholder-only input** while every tab-level reading was green: the editor's
+EVENT `<select>` had a sibling `<label>` with no `for`/`id`, its NAME input was
+named only by `placeholder="Admin Notification"`, and the reusable
+`ConditionPicker` (rendered here, on the Confirmation tab and in the CHIP feed
+card) had an unnamed field select, an unnamed operator select and a value control
+named only by its placeholder. The controls are now named — `fs-notif-name` /
+`fs-notif-event` carry `id` + `<label htmlFor>`, and the picker's three controls
+carry `aria-label`s from three new dictionary keys (`fs.condFieldName`,
+`fs.condOpName`, `fs.condValueName`, all five locales; a numbered suffix
+distinguishes rows when the caller renders a list) — and an arm drives that
+editor state, both with and without a condition and in both shapes of the value
+control (text input and choice dropdown), running the same axe scan and the same
+placeholder census on each. A second arm proves the scan still bites by removing
+the operator's `aria-label` from the LIVE DOM and requiring `select-name` to name
+that element again. Measured on the pre-fix tree: `select-name` critical ×1 in the
+editor and ×3 with a condition, with five controls in the census.
+
 **The placeholder-refusing census is no longer scoped to one route.** It used to
 run only on that `/form-settings` walk, so the class it refuses could — and did —
 ship elsewhere while every scan was green: `/products`' create row named its

@@ -727,6 +727,81 @@ const TAB_HEADING: Record<string, keyof typeof DICT> = {
   }
 }
 
+// The notification-rule EDITOR's own controls (card t_16ef9793). Its form has
+// two fields — a free-text one and a CHOICE one — so the condition picker's
+// VALUE control can be driven in both shapes it renders: a text input (whose
+// only name used to be its placeholder) and a dropdown (a third `<select>`).
+const CONDITION_BLOCKS = [
+  { id: "b1", value: "Name", type: "text" },
+  {
+    id: "b2",
+    value: "Package",
+    type: "select",
+    choices: [
+      { label: "Basic", value: "basic" },
+      { label: "Premium", value: "premium" },
+    ],
+  },
+];
+
+// The three condition controls' accessible names, from the page's own
+// dictionary — the names `ConditionPicker` gives its field / operator / value
+// controls. Kept here (rather than typed as literals) so a rename in the
+// dictionary fails this arm as a STALE GUARD instead of passing silently.
+const COND_NAME = {
+  field: DICT["fs.condFieldName"].en,
+  op: DICT["fs.condOpName"].en,
+  value: DICT["fs.condValueName"].en,
+} as const;
+
+/**
+ * Notifications tab → rule editor (optionally with a condition), on a form
+ * whose blocks carry BOTH a free-text and a choice field.
+ *
+ * Registered AFTER the shared stubs, and Playwright resolves matching routes in
+ * REVERSE registration order, so the form override below wins for `/forms/f1`;
+ * the reload is what makes the page read it (the first load already happened).
+ */
+async function openRuleEditor(
+  page: Page,
+  baseURL: string | undefined,
+  opts: { withCondition?: boolean } = {},
+): Promise<void> {
+  const route = ROUTES.find((r) => r.name === "form-settings")!;
+  await openRoute(page, route, baseURL);
+  await page.route(/(.*)\/api\/rest\/forms\/f1(\?.*)?$/, (r) =>
+    r.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ...FORM, config: { blocks: CONDITION_BLOCKS } }),
+    }),
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
+
+  const tabs = page.locator("nav button");
+  await expect(tabs, "the page must still render its tab strip").toHaveCount(TAB_KEYS.length, { timeout: 30_000 });
+  await tabs.nth(TAB_KEYS.indexOf("notifications")).click();
+  await expect
+    .poll(async () => (await page.locator("h2").first().textContent())?.trim() ?? "", {
+      message: "the Notifications tab must paint its panel before its editor is opened",
+    })
+    .toBe(DICT[TAB_HEADING.notifications].en);
+
+  await page.getByRole("button", { name: `+ ${DICT["fs.notifAdd"].en}` }).click();
+  await expect(
+    page.locator("h3", { hasText: DICT["fs.notifAdd"].en }).first(),
+    'clicking "+ Add notification" must render the rule editor',
+  ).toBeVisible();
+
+  if (opts.withCondition) {
+    await page.getByRole("button", { name: `+ ${DICT["fs.notifCondAdd"].en}` }).click();
+    await expect(
+      page.getByRole("button", { name: DICT["fs.notifCondRemove"].en }),
+      'clicking "+ Add condition" must render the condition picker',
+    ).toBeVisible();
+  }
+}
+
 /**
  * Every VISIBLE form control whose only accessible name is its placeholder.
  *
@@ -834,6 +909,154 @@ test.describe("a11y: /form-settings, every tab", () => {
       "the page's own title must survive a malformed payload",
     ).toBe(DICT["fs.title"].en);
     await scanDocument(page, "/form-settings → notifications (non-array payload)");
+  });
+
+  // THE RULE EDITOR — one to two clicks inside the Notifications tab, and the
+  // state this page shipped FOUR critical `select-name` nodes and a
+  // placeholder-only input in (card t_16ef9793). The tab walk above never opens
+  // it, so both of its readings were green over these nodes:
+  //
+  //   * the EDITOR's EVENT select had a sibling `<label>` with no `for`/`id`
+  //     (axe: `select-name`, critical), and its NAME input was named only by
+  //     `placeholder="Admin Notification"` — which axe ACCEPTS as a name, so no
+  //     scan could see it and only the census below can;
+  //   * the reusable `ConditionPicker` it renders (ALSO rendered by the
+  //     Confirmation tab and the CHIP tab, so one fix names three call sites)
+  //     had three controls with no accessible name at all.
+  //
+  // This arm drives every one of them in the order a merchant reaches them, so
+  // the class cannot ship again from the one state this page was never scanned
+  // in.
+  test("the notification-rule editor is fully named: event select, name input, and the condition controls", async ({
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(120_000);
+    await openRuleEditor(page, baseURL);
+
+    // (1) The editor as it first renders. THE READINGS COME FIRST, then the
+    //     assertions — so a run on an unfixed tree reports the axe nodes and the
+    //     census it is failing on, not merely the first name lookup that could
+    //     not resolve.
+    const unnamedInEditor = await readUnnamedControls(page);
+    console.log(
+      `[/form-settings → notifications → rule editor] unnamed controls: ${JSON.stringify(
+        unnamedInEditor.map((u) => u.selector),
+      )}`,
+    );
+    await scanDocument(page, "/form-settings → notifications → rule editor");
+    expect(
+      unnamedInEditor,
+      unnamedMessage("/form-settings → notifications → rule editor", unnamedInEditor),
+    ).toEqual([]);
+
+    // …and the two controls at the top of it resolve by name: `Name` was
+    // reachable only through its placeholder, `Event` through nothing at all.
+    await expect(
+      page.getByLabel(DICT["fs.notifName"].en, { exact: true }),
+      "the rule editor's Name input has no id + <label htmlFor> (it is named only by its placeholder, which axe accepts)",
+    ).toHaveCount(1);
+    await expect(
+      page.getByLabel(DICT["fs.notifEvent"].en, { exact: true }),
+      "the rule editor's Event select has no id + <label htmlFor> and no aria-label",
+    ).toHaveCount(1);
+
+    // (2) One click deeper: the shared condition picker's field + operator
+    //     selects and its value control (a text input for a free-text field).
+    await page.getByRole("button", { name: `+ ${DICT["fs.notifCondAdd"].en}` }).click();
+    const unnamedWithCondition = await readUnnamedControls(page);
+    console.log(
+      `[/form-settings → notifications → rule editor + condition] unnamed controls: ${JSON.stringify(
+        unnamedWithCondition.map((u) => u.selector),
+      )}`,
+    );
+    await scanDocument(page, "/form-settings → notifications → rule editor + condition");
+    expect(
+      unnamedWithCondition,
+      unnamedMessage("/form-settings → notifications → rule editor + condition", unnamedWithCondition),
+    ).toEqual([]);
+    await expect(
+      page.getByLabel(COND_NAME.field, { exact: true }),
+      "the condition picker's FIELD select has no accessible name",
+    ).toHaveCount(1);
+    await expect(
+      page.getByLabel(COND_NAME.op, { exact: true }),
+      "the condition picker's OPERATOR select has no accessible name",
+    ).toHaveCount(1);
+    await expect(
+      page.getByLabel(COND_NAME.value, { exact: true }),
+      "the condition picker's VALUE control has no accessible name (it is named only by its placeholder, which axe accepts)",
+    ).toHaveCount(1);
+
+    // (3) The value control's OTHER shape: picking the choice field swaps the
+    //     text input for a dropdown — a third `<select>` the name has to reach,
+    //     and the shape the prod census could not reach at all.
+    const fieldSelect = page.getByLabel(COND_NAME.field, { exact: true });
+    await fieldSelect.selectOption("b2");
+    const valueControl = page.getByLabel(COND_NAME.value, { exact: true });
+    expect(
+      await valueControl.evaluate((el) => el.tagName),
+      "with a choice field selected the condition's value control must be the dropdown (that branch is a third unnamed select)",
+    ).toBe("SELECT");
+    await scanDocument(page, "/form-settings → notifications → rule editor + choice condition");
+    const unnamedChoice = await readUnnamedControls(page);
+    expect(
+      unnamedChoice,
+      unnamedMessage("/form-settings → notifications → rule editor + choice condition", unnamedChoice),
+    ).toEqual([]);
+  });
+
+  // CONTROL for the `select-name` half: the arm above is only evidence if the
+  // SAME scan can report that rule on this page. The pre-fix DOM is restored on
+  // the real control — the OPERATOR select loses the `aria-label` it now
+  // carries — and axe must name it again (and the census must flag it), then the
+  // page must read clean once it is put back.
+  test("CONTROL: the condition operator select is reported again when its accessible name is removed in the live DOM", async ({
+    page,
+    baseURL,
+  }) => {
+    test.setTimeout(120_000);
+    await openRuleEditor(page, baseURL, { withCondition: true });
+
+    // Located by the OPERATOR select's own markup (`ConditionPicker` gives it
+    // `jf-input w-32`, unique on this page state), NOT by the accessible name
+    // this control is about to remove — a control that needs the fix present in
+    // order to find its subject would pass vacuously the day the name is gone.
+    const operator = page.locator("select.jf-input.w-32");
+    await expect(operator, "the condition picker's operator select must render").toHaveCount(1);
+    const stripped = await operator.evaluate((el) => {
+      el.setAttribute("id", "jf-stripped-cond-op");
+      const had = el.getAttribute("aria-label");
+      el.removeAttribute("aria-label");
+      return had;
+    });
+    expect(
+      stripped,
+      `the operator select carries ${JSON.stringify(stripped)} as its accessible name where a user is told ` +
+        `${JSON.stringify(COND_NAME.op)} — update COND_NAME if the name deliberately changed`,
+    ).toBe(COND_NAME.op);
+
+    const after = await new AxeBuilder({ page }).analyze();
+    const rule = after.violations.find((v) => v.id === "select-name");
+    expect(
+      rule,
+      "with its accessible name removed axe no longer reports `select-name` — this guard is not measuring the defect it " +
+        "was written for",
+    ).toBeTruthy();
+    expect(rule?.impact, "axe reports `select-name` as critical").toBe("critical");
+    expect(
+      rule?.nodes.map((n) => n.target.join(" ")),
+      "axe must name the control that lost its accessible name",
+    ).toContain("#jf-stripped-cond-op");
+    expect(
+      (await readUnnamedControls(page)).map((u) => u.id),
+      "the census must refuse the same control",
+    ).toContain("jf-stripped-cond-op");
+
+    await page.evaluate((name) => {
+      document.querySelector("#jf-stripped-cond-op")?.setAttribute("aria-label", name);
+    }, COND_NAME.op);
+    await scanDocument(page, "/form-settings → notifications → rule editor (operator name restored)");
   });
 
   // THE CONTROL, and the reason the arm above can fail. `/form-settings` carried

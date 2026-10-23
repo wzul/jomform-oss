@@ -185,6 +185,7 @@ function ConditionPicker({
   onValue,
   t,
   compact,
+  index,
 }: {
   fieldId: string;
   op: string;
@@ -195,17 +196,36 @@ function ConditionPicker({
   onValue: (v: string) => void;
   t: (k: import("../../components/i18n").Key) => string;
   compact?: boolean;
+  /**
+   * The 1-based row number when the CALLER renders a list of pickers (the
+   * Confirmation and CHIP tabs render one per row). It only qualifies the
+   * accessible names — "Condition field 2" — so a screen reader listing the
+   * page's controls can tell two rows apart. Omitted for a single picker.
+   */
+  index?: number;
 }) {
   const field = fields.find((b) => b.id === fieldId);
   const isChoice = !!field && CHOICE_FIELD_TYPES.has(field.type);
   const choices = condFieldChoices(field);
   const w = compact ? "w-40" : "w-44";
+  // THE CONTROLS HAVE NO VISIBLE LABELS OF THEIR OWN (the "If [field]
+  // [operator] [value]" line under them is a SUMMARY of the rule, not a label
+  // for any one control), so each needs an `aria-label` — a naked `<select>`
+  // here is a critical axe `select-name` and, for the text input, a field named
+  // only by its placeholder (card t_16ef9793: 4 such nodes reachable from
+  // /form-settings' Notifications tab, and this component is rendered there,
+  // on the Confirmation tab and in the CHIP feed card).
+  const name = (base: string) => (index ? `${base} ${index}` : base);
+  const fieldName = name(t("fs.condFieldName"));
+  const opName = name(t("fs.condOpName"));
+  const valueName = name(t("fs.condValueName"));
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <select
           value={fieldId}
           onChange={(e) => onField(e.target.value)}
+          aria-label={fieldName}
           className={`jf-input ${w} text-xs`}
         >
           <option value="">{t("fs.condSelectField")}</option>
@@ -218,6 +238,7 @@ function ConditionPicker({
         <select
           value={op}
           onChange={(e) => onOp(e.target.value)}
+          aria-label={opName}
           className="jf-input w-32 text-xs"
         >
           {FEED_OPS.map((o) => (
@@ -231,6 +252,7 @@ function ConditionPicker({
             <select
               value={value}
               onChange={(e) => onValue(e.target.value)}
+              aria-label={valueName}
               className={`jf-input ${w} text-xs`}
             >
               <option value="">{t("fs.condSelectField")}</option>
@@ -245,6 +267,7 @@ function ConditionPicker({
               value={value}
               onChange={(e) => onValue(e.target.value)}
               placeholder={t("fs.confValue")}
+              aria-label={valueName}
               className={`jf-input ${w} text-xs`}
             />
           ))}
@@ -2290,6 +2313,7 @@ function FormSettingsInner() {
                                     onValue={(v) => updateConf(i, { condition: { ...c.condition!, value: v } })}
                                     t={t}
                                     compact
+                                    index={i + 1}
                                   />
                                 </div>
                               )}
@@ -2562,12 +2586,12 @@ function FormSettingsInner() {
                         </h3>
                         <div className="mt-3 space-y-3">
                           <div>
-                            <label className={labelCls}>{t("fs.notifName")}</label>
-                            <input value={edName} onChange={(e) => setEdName(e.target.value)} className={inputCls} placeholder="Admin Notification" />
+                            <label className={labelCls} htmlFor="fs-notif-name">{t("fs.notifName")}</label>
+                            <input id="fs-notif-name" value={edName} onChange={(e) => setEdName(e.target.value)} className={inputCls} placeholder="Admin Notification" />
                           </div>
                           <div>
-                            <label className={labelCls}>{t("fs.notifEvent")}</label>
-                            <select value={edEvent} onChange={(e) => setEdEvent(e.target.value)} className={inputCls}>
+                            <label className={labelCls} htmlFor="fs-notif-event">{t("fs.notifEvent")}</label>
+                            <select id="fs-notif-event" value={edEvent} onChange={(e) => setEdEvent(e.target.value)} className={inputCls}>
                               {NOTIF_EVENTS.map((ev) => (
                                 <option key={ev} value={ev}>
                                   {t(notifEventKey(ev))}
@@ -2833,6 +2857,7 @@ function FormSettingsInner() {
                                       onOp={(o) => updateChipFeed(f.id, { condition: { ...f.condition!, op: o } })}
                                       onValue={(v) => updateChipFeed(f.id, { condition: { ...f.condition!, value: v } })}
                                       t={t}
+                                      index={idx + 1}
                                     />
                                   </div>
                                 )}
