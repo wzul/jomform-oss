@@ -39,7 +39,10 @@
 //   while the report carries a high entry must be RED; the exception still works
 //   (GREEN) and a renamed URL still fails (RED) with npm's report rather than a
 //   Node stack; a missing/expired `expires` is still refused; a moderate-only
-//   report still PASSes (moderate is not this gate's business).
+//   report still PASSes (moderate is not this gate's business); an EMPTY
+//   exception list is accepted and still refuses an advisory, and the SHIPPED
+//   `web/npm-audit-exceptions.json` loads (card t_6cc165c6 — the list became
+//   empty when the braces advisory was withdrawn upstream).
 //
 // Run with:
 //   npm run test:unit
@@ -333,4 +336,75 @@ test("a moderate-only report PASSes — moderate is not this gate's business", (
     0,
   );
   assertVerdict(res, 0, "no unexcepted high/critical advisory — PASS", "moderate-only");
+});
+
+// ---------------------------------------------------------------------------
+// THE EMPTY EXCEPTION LIST (card t_6cc165c6)
+//
+// The shipped `web/npm-audit-exceptions.json` became EMPTY when npm stopped
+// reporting GHSA-vfj7-8cjw-p6xm (GitHub withdrew it upstream on 2026-10-23).
+// Every arm above hands the gate a one-entry fixture, so nothing here proved the
+// gate accepts `exceptions: []` — and "the allowlist is empty" is exactly the
+// shape that could fail OPEN if `loadExceptions` ever fell back to a default or
+// treated an empty array as "no file, nothing to enforce".
+//
+// Both directions are pinned: an empty list + a clean report is a PASS with
+// `0 excepted, 0 stale` (no stale noise about an entry that is not there), and
+// an empty list + a high advisory is still RED — an empty allowlist must never
+// become a blanket ignore.
+// ---------------------------------------------------------------------------
+
+const CLEAN_REPORT = report({}, { info: 0, low: 0, moderate: 0, high: 0, critical: 0, total: 0 });
+
+test("an EMPTY exception list is accepted: a clean report PASSes with 0 excepted, 0 stale", () => {
+  const res = runGate(CLEAN_REPORT, 0, []);
+  assertVerdict(res, 0, "no unexcepted high/critical advisory — PASS", "empty exception list");
+  assert.ok(
+    res.out.includes("0 excepted, 0 stale"),
+    `an empty exception list must report nothing excepted and nothing stale\n--- stdout ---\n${res.out}`,
+  );
+  assert.ok(
+    !res.out.includes("STALE"),
+    `an empty exception list cannot have a stale entry — the STALE line must be absent\n--- stdout ---\n${res.out}`,
+  );
+});
+
+test("an EMPTY exception list is never a blanket ignore: a high advisory is still RED", () => {
+  const res = runGate(
+    report({ braces: withObject("high") }, { info: 0, low: 0, moderate: 0, high: 1, critical: 0, total: 1 }),
+    1,
+    [],
+  );
+  assertVerdict(res, 1, "HIGH/CRITICAL ADVISORY NOT IN THE EXCEPTIONS", "empty list + advisory");
+  assert.ok(
+    res.err.includes(ADVISORY_URL),
+    `the failing gate must print the advisory URL itself\n--- stderr ---\n${res.err}`,
+  );
+});
+
+test("the SHIPPED web/npm-audit-exceptions.json is accepted by the gate", () => {
+  // The file itself, not a fixture: a shipped allowlist the gate cannot load
+  // (a missing `exceptions` array, an entry with no `url`, an entry with no
+  // parseable `expires`) is a gate that refuses EVERY tree, and nothing above
+  // reads the real file. Its CURRENT contents are not asserted — an entry may
+  // legitimately be added when a real advisory needs one — only that the gate
+  // accepts what is committed today.
+  const shipped = JSON.parse(readFileSync(join(WEB_DIR, "npm-audit-exceptions.json"), "utf8")) as {
+    exceptions?: unknown;
+  };
+  assert.ok(
+    Array.isArray(shipped.exceptions),
+    "the shipped npm-audit-exceptions.json must carry an `exceptions` array — the gate refuses a file without one",
+  );
+
+  const res = runGate(CLEAN_REPORT, 0, shipped.exceptions as Exception[]);
+  assertVerdict(res, 0, "no unexcepted high/critical advisory — PASS", "shipped exception file");
+  assert.ok(
+    !res.err.includes("is not readable JSON") && !res.err.includes("has no `exceptions` array"),
+    `the shipped exception file must load, not be refused\n--- stderr ---\n${res.err}`,
+  );
+  assert.ok(
+    !res.err.includes("no valid `expires`") && !res.err.includes("EXPIRED"),
+    `every committed exception must carry a valid future \`expires\`\n--- stderr ---\n${res.err}`,
+  );
 });

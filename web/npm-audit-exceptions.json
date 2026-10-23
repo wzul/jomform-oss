@@ -10,30 +10,14 @@
     "  * a URL not listed here still FAILS the gate with npm's own report;",
     "  * an entry that is no longer reported is printed as STALE so it gets removed;",
     "    (a never-again-reported entry that stays here is how an allowlist rots.)",
-    "Add an entry only with the evidence that no fixed release exists, in `reason`."
+    "Add an entry only with the evidence that no fixed release exists, in `reason`.",
+    "",
+    "AN EMPTY `exceptions` ARRAY IS THE HEALTHY STATE — it means the tree carries no",
+    "high/critical advisory this repo cannot act on. Retiring an entry the moment npm",
+    "stops reporting it is the rule, not tidying: the last one (GHSA-vfj7-8cjw-p6xm,",
+    "braces@3.0.3) was withdrawn UPSTREAM on 2026-10-23 (GitHub marks the advisory",
+    "'Withdrawn Advisory'), and braces is still 3.0.3 — no fixed release was ever",
+    "published, so there was nothing to upgrade and nothing left to except."
   ],
-  "exceptions": [
-    {
-      "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
-      "packages": ["braces@3.0.3"],
-      "severity": "high",
-      "reason": [
-        "braces <=3.0.3: stack exhaustion on a deeply nested brace pattern (CWE-674).",
-        "There is NO FIXED RELEASE: `npm view braces@3.0.4` is a 404 and the package's",
-        "own dist-tags.latest is still 3.0.3, so the advisory's 'fixed in 3.0.4' describes",
-        "a release that has not been published. npm's only suggestion is a DOWNGRADE of",
-        "eslint-config-next to 14.2.35 (`fixAvailable.isSemVerMajor`), which would remove",
-        "the Next 16 flat config this gate exists to run.",
-        "Reachability: braces is reached only through the DEV-ONLY eslint toolchain",
-        "(@next/eslint-plugin-next -> fast-glob -> micromatch -> braces). It expands the",
-        "glob patterns ESLINT is given, which are the repo's own committed paths, and it is",
-        "not in the runtime import graph that ships in the web image -- so the untrusted",
-        "pattern the advisory depends on does not exist at runtime.",
-        "REMOVE THIS ENTRY the moment braces@>3.0.3 is published: the gate's staleness",
-        "check will tell you, and the expiry below forces the re-check either way.",
-        "Card: t_0e165357."
-      ],
-      "expires": "2027-01-31"
-    }
-  ]
+  "exceptions": []
 }

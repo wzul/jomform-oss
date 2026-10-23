@@ -9,14 +9,23 @@
 //   (that is exactly what card t_176555e3 / PR 1025 had to fix for `sharp`). Its
 //   default is therefore correct and must stay: nothing may be silenced quietly.
 //
-//   But the repo now depends on `eslint-config-next`, which pulls
-//   `braces@3.0.3` — and braces has an advisory with NO FIXED RELEASE published
+//   But the repo now depends on `eslint-config-next`, which pulled
+//   `braces@3.0.3` — and braces had an advisory with NO FIXED RELEASE published
 //   (`npm view braces@3.0.4` is a 404; dist-tags.latest is still 3.0.3). The only
-//   thing npm offers is a DOWNGRADE of eslint-config-next to 14.2.35, which would
-//   remove the Next 16 flat config the `lint` gate exists to run. So the choice is
-//   not "fix it or leave it red" — it is "name it precisely and time-box it" or
-//   "do not add the linter at all". This file is the first option, and it is built
-//   so it cannot become the second kind of thing (a blanket ignore).
+//   thing npm offered was a DOWNGRADE of eslint-config-next to 14.2.35, which
+//   would remove the Next 16 flat config the `lint` gate exists to run. So the
+//   choice was not "fix it or leave it red" — it was "name it precisely and
+//   time-box it" or "do not add the linter at all". This file is the first
+//   option, and it is built so it cannot become the second kind of thing (a
+//   blanket ignore).
+//
+//   THAT EXCEPTION IS GONE, AND THE LIST IS EMPTY ON PURPOSE (card t_6cc165c6).
+//   npm no longer reports the advisory at all: GitHub WITHDREW GHSA-vfj7-8cjw-p6xm
+//   upstream on 2026-10-23 ("Withdrawn Advisory") while braces stayed at 3.0.3, so
+//   there is no fixed release to upgrade to and nothing left to except. The gate
+//   printed it as STALE until the entry was removed — which is this file's
+//   staleness rule doing its job. An empty `exceptions` array is the healthy
+//   state; do not read it as "the check is off".
 //
 // WHAT MAKES IT NOT A BLANKET IGNORE
 //   1. An exception is a SPECIFIC advisory URL. Any advisory not named here fails
@@ -47,9 +56,9 @@
 //      must EQUAL the number of high/critical entries in `vulnerabilities`, and
 //      every high/critical package must trace to a named advisory URL through
 //      its `via` chain. None of these can be satisfied by a report with the
-//      advisory objects stripped, and none of them fires on the real tree
-//      (measured on this tree: 5 high == 5 high entries, all five tracing to the
-//      one `braces` advisory).
+//      advisory objects stripped. Whatever the tree reports, the three counts
+//      agree on a real audit (measured while the braces exception was in place:
+//      5 high == 5 high entries, all five tracing to that one advisory).
 //
 // USAGE
 //   node scripts/npm-audit-gate.mjs            # from web/
