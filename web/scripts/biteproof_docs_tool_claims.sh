@@ -99,6 +99,52 @@
 # a byte test would accept it. Bytes are not the property — the property is that the two
 # readers ANSWER differently, which is the only thing a case here can measure.
 #
+# A BASE THAT HAS NOT MOVED IS REFUSED BEFORE THE CASE SET RUNS (card t_8835cf9c), because the
+# rule above reads its evidence off the CASES: on the base it is asked about most — a tree that
+# does not change this guard at all, which after a release's own merge is `origin/main` itself
+# — it spends 19 page mutations and 45 node runs (30-58s on this loaded host) to discover that
+# its two columns are one program. The `SAME READER` lines that route prints are FIVE CASE
+# LINES, not one per comparison: the other 14 of the 19 comparisons also read the same, but
+# they print as `ok … old guard GREEN — quiet in both columns` (9) / `ok … caught by BOTH
+# columns` (4) / the baseline line, because their expectation still matched and the
+# premise-unavailable branch that prints `SAME READER` is never taken; `grep -c 'SAME READER'`
+# over the whole output reads 7, because the end-of-run refusal itself names the marker twice.
+# A base whose guard is
+# BYTE-IDENTICAL to this tree's IS this reader: the same file cannot answer differently on any
+# mutation, so the answer rule is guaranteed to find 0 disagreements and the refusal below is
+# reached on EVERY such run. That identity is therefore refused up front: exit 2, no case, no
+# verdict, and the refusal READS THE BASE GUARD'S OWN DECLARATION to name what has caught up —
+# the `parenthetical/strict` entry's capture spelling, `TOOLNAME` (the strict spelling this
+# tree's case set was written against) versus `BARE_NAME` (the pre-fix one), with a spelling
+# the instrument cannot place named as such rather than assumed pre-fix. Identity is used as a
+# SUFFICIENT condition only, ALONGSIDE and never instead of the answer rule, which still
+# decides every byte-different base (both the `answer_probe` inside the derivation and the
+# end-of-run refusal, and the throwaway-commit leg measured in BITE-HARNESSES.md: a base that
+# differs in BYTES and answers identically is refused by the ANSWER rule, not by the fast path
+# here). Measured on this host (node v26.7.0, base `origin/main` `adc2534a`, stdout and stderr
+# captured separately): the default base on a tree at `origin/main` returns in a few seconds
+# (3-8s) with 28 output lines (3 stdout + 25 stderr), 6 node runs, 0 cases run and
+# `git status` clean, where the same tree with this fast path disabled printed those five CASE
+# lines (7 string occurrences) and exited 2 after 30-58s, 141 output lines, 19 page mutations
+# and 45 node runs. Timings are wall-clock on a shared host and vary with load; the LINE
+# counts above are the stable part.
+#
+# THE DECLARATION READ IS EVIDENCE FOR THE READER, NOT THE DECIDING CONDITION, and that is
+# measured rather than preferred (card t_8835cf9c). The card that filed this asked for the
+# sibling's rule — refuse when the base's `parenthetical/strict` entry already carries the
+# strict spelling — and on THIS family that rule refuses the base this instrument itself
+# recommends: the guard at `2ba8fe02`, the `BITEPROOF_BASE` the derivation below hands over and
+# re-checks, ALREADY declares `(${TOOLNAME})` there (`git show
+# 2ba8fe02:web/src/lib/docsToolClaims.test.ts`, the entry's own `re:` line), because the strict
+# spelling landed (#1114) BEFORE the class that base is pre-fix for (#1147) — so does the base
+# every determiner branch was cut from, which means that rule would also have refused
+# `t_ceef983f`'s own case set, the very branch whose fix this harness exists to prove. A
+# caught-up base is a property of the READER AS A WHOLE, not of one entry, so identity of the
+# whole guard is what decides and the declaration is what NAMES the cause. The read's three
+# outcomes are self-checked on every run against three real fixtures built from this tree's own
+# guard (the sibling's pattern), because a read that answered one spelling for everything would
+# name a cause this run did not measure.
+#
 # The `FIXED`/`QUIET` line is gated on the same evidence (card t_bfaedba2): it may print ONLY
 # when the OLD column was OBSERVED doing what it describes (verdict matched AND, where the case
 # names one, the old failure named the word). Printing it from the case's static arguments is
@@ -387,6 +433,10 @@ TMP_E=''
 # for the same reason as TMP_E: the trap below removes every per-run temp file even when a
 # case aborts before the section that creates it.
 WIDETMP=''
+# The `parenthetical/strict` spelling fixtures the declaration read is self-checked against
+# (card t_8835cf9c). Declared here for the same reason as WIDETMP; it is written beside the
+# real guard and removed by the trap, so an abort cannot leave it in the tree.
+SPTMP="$GUARD.spelling.$$.ts"
 # The temp copies of the guard also live beside the real one (the guard resolves its
 # paths from import.meta.url, and node strips types by .ts extension), but under a
 # PER-RUN name: a fixed `$GUARD.oldcheck.ts` is the same host-global channel as
@@ -401,7 +451,7 @@ cleanup() {
   cp "$PAGE_BAK" "$PAGE" 2>/dev/null
   cp "$EMBED_BAK" "$EMBED" 2>/dev/null
   rm -f "$OLD_GUARD" "$PAGE_BAK" "$EMBED_BAK" "$TMP_E"
-  rm -f "$OLDTMP" "$SKTMP" "$NOLOADTMP" "$MISSINGTMP" "$WIDETMP"
+  rm -f "$OLDTMP" "$SKTMP" "$NOLOADTMP" "$MISSINGTMP" "$WIDETMP" "$SPTMP"
   exit "$rc"
 }
 trap cleanup EXIT
@@ -788,13 +838,64 @@ answer_probe() {
   [ "$ok" = 1 ]
 }
 
-# capability_refusal — print the refusal, DERIVE the revision a re-run should use, and exit 2.
-# The revision is the parent of a commit at the base that touched the guard (a merge-base
-# would be wrong on a branch cut from current main: that IS the caught-up revision), walked
-# newest-first and RE-CHECKED with `answer_probe`, so this file never hands over a base that
-# would refuse again. It names no count for a revision this run did not execute.
+# derive_base — walk this guard's own history AT THE BASE and RE-CHECK each candidate with
+# `answer_probe`, so the revision this file hands a reader is one which the SAME RUN measured
+# to be a different reader. The candidate is the PARENT of a commit at the base that touched
+# the guard: a merge-base would be wrong on a branch cut from current main, because that IS the
+# caught-up revision. Sets DERIVED_BASE (empty when nothing was found) and DERIVE_TRIED, and is
+# shared by BOTH refusals — the identity fast path below and the end-of-run answer rule — so
+# the two cannot drift into naming different revisions.
+derive_base() {
+  local rev cand tried=0
+  DERIVED_BASE='' DERIVE_TRIED=0
+  while read -r rev; do
+    [ -n "$rev" ] || continue
+    tried=$((tried + 1))
+    [ "$tried" -gt 12 ] && break
+    cand=$(git rev-parse "${rev}^" 2>/dev/null) || continue
+    if [ -n "$cand" ] && git cat-file -e "${cand}:${GUARD_IN_REPO}" 2>/dev/null; then
+      if answer_probe "$cand"; then DERIVED_BASE="$cand"; break; fi
+    fi
+  done <<<"$(git log --format=%H "$BASE_REV" -- ":(top)${GUARD_IN_REPO}" 2>/dev/null)"
+  DERIVE_TRIED=$tried
+}
+
+# print_base_suggestion <cases-run> — the DERIVED (then re-checked) revision, printed for a
+# reader whose run produced no verdict. `cases-run` 0 means no case was reached (the identity
+# path below), and then it states NO case count rather than "0 of 0": a count this run did not
+# measure must not be printed. It names no count for a revision this run did not execute.
+print_base_suggestion() {
+  local cases_run="$1"
+  echo >&2
+  if [ -n "$DERIVED_BASE" ]; then
+    echo "Point BITEPROOF_BASE at the revision BEFORE this tree's change to the guard. It is" >&2
+    echo "DERIVED from that guard's own history at ${BASE_REF} and RE-CHECKED BY CAPABILITY by this" >&2
+    echo "run — the guard there answers DIFFERENTLY from this tree's on the determiner probe, so it" >&2
+    echo "is a real \"before\" reader:" >&2
+    echo "    BITEPROOF_BASE=${DERIVED_BASE} bash web/scripts/biteproof_docs_tool_claims.sh" >&2
+    echo "Measured by THIS run: that probe at ${DERIVED_BASE:0:12} disagreed (the tree's guard is quiet on it," >&2
+    echo "the guard there names the determinative)." >&2
+  else
+    echo "This run could NOT name a replacement base: none of the parents of the ${DERIVE_TRIED} commit(s)" >&2
+    echo "at ${BASE_REF} that touched ${GUARD_IN_REPO} answers differently from this tree's guard on" >&2
+    echo "the determiner probe. Point BITEPROOF_BASE at a revision where the guard still carried the" >&2
+    echo "behaviour this tree changes; this file will not name a base it did not measure." >&2
+  fi
+  if [ "$cases_run" != 0 ]; then
+    echo "Measured by THIS run: ${DISAGREE} of the ${cases_run} case(s) run here disagreed." >&2
+  else
+    echo "No case was reached by this run, so it asserts no case count." >&2
+  fi
+  echo "No count for any other revision is asserted here — a revision this run did not execute was" >&2
+  echo "not measured." >&2
+}
+
+# capability_refusal — the ANSWER rule's refusal (see the header): 0 of the cases run here made
+# the base reader answer differently, so the two columns were one reader and there is no
+# verdict to print. Same derivation, same wording for the reader as before the identity fast
+# path existed.
 capability_refusal() {
-  local cases_run="$1" rev cand found='' tried=0 probe_ok=0
+  local cases_run="$1"
   echo >&2
   echo "REFUSING (exit 2, NO VERDICT): not one of the ${cases_run} two-leg case(s) run here made" >&2
   echo "the guard at ${BASE_REF} (${BASE_REV:0:12}) ANSWER DIFFERENTLY from this tree's — the same" >&2
@@ -804,36 +905,115 @@ capability_refusal() {
   echo "That is what a base whose guard has CAUGHT UP to this tree looks like: ${BASE_REF} already" >&2
   echo "carries the change this tree is proving (measured: $(wc -l < "$OLD_GUARD") lines at the base," >&2
   echo "$(wc -l < "$GUARD") lines here). The lines above that read \`SAME READER\` are that artefact, not findings." >&2
-  while read -r rev; do
-    [ -n "$rev" ] || continue
-    tried=$((tried + 1))
-    [ "$tried" -gt 12 ] && break
-    cand=$(git rev-parse "${rev}^" 2>/dev/null) || continue
-    if [ -n "$cand" ] && git cat-file -e "${cand}:${GUARD_IN_REPO}" 2>/dev/null; then
-      if answer_probe "$cand"; then found="$cand" probe_ok=1; break; fi
-    fi
-  done <<<"$(git log --format=%H "$BASE_REV" -- ":(top)${GUARD_IN_REPO}" 2>/dev/null)"
-  echo >&2
-  if [ "$probe_ok" = 1 ]; then
-    echo "Point BITEPROOF_BASE at the revision BEFORE this tree's change to the guard. It is" >&2
-    echo "DERIVED from that guard's own history at ${BASE_REF} and RE-CHECKED BY CAPABILITY by this" >&2
-    echo "run — the guard there answers DIFFERENTLY from this tree's on the determiner probe, so it" >&2
-    echo "is a real \"before\" reader:" >&2
-    echo "    BITEPROOF_BASE=${found} bash web/scripts/biteproof_docs_tool_claims.sh" >&2
-    echo "Measured by THIS run: that probe at ${found:0:12} disagreed (the tree's guard is quiet on it," >&2
-    echo "the guard there names the determinative), and ${DISAGREE} of the ${cases_run} case(s) run here" >&2
-    echo "disagreed." >&2
-  else
-    echo "This run could NOT name a replacement base: none of the parents of the ${tried} commit(s)" >&2
-    echo "at ${BASE_REF} that touched ${GUARD_IN_REPO} answers differently from this tree's guard on" >&2
-    echo "the determiner probe. Point BITEPROOF_BASE at a revision where the guard still carried the" >&2
-    echo "behaviour this tree changes; this file will not name a base it did not measure. Measured by" >&2
-    echo "THIS run: ${DISAGREE} of the ${cases_run} case(s) run here disagreed." >&2
-  fi
-  echo "No count for any other revision is asserted here — a revision this run did not execute was" >&2
-  echo "not measured." >&2
+  derive_base
+  print_base_suggestion "$cases_run"
   exit 2
 }
+
+# ---- A CAUGHT-UP BASE IS REFUSED BEFORE ANY CASE (card t_8835cf9c) -----------------
+#
+# WHY this is a fast path made of a SUFFICIENT condition rather than a replacement for the
+# answer rule above is argued in the header; WHAT it is made of is the three pieces below —
+# the identity test, the declaration read that NAMES the cause, and the refusal — and each
+# piece is self-checked on every run, because a fast path that quietly answered "identical"
+# for everything would skip the whole case set and read as a capability finding.
+
+# guard_sha <file> — the byte-identity idiom the rest of this file already checks the mutated
+# pages with (sha256), so the fast path adds no tool the harness does not already need.
+guard_sha() { sha256sum "$1" | cut -d' ' -f1; }
+
+# THE IDENTITY TEST'S OWN PREMISE, asserted on every run against REAL files: the tree's guard
+# against itself must read IDENTICAL, and against a copy of it carrying one more byte must read
+# DIFFERENT. Without both legs, "the base is byte-identical to this tree's guard" would be true
+# of every base and no case here would ever run again.
+IDENTITY_PROBE=$(mktemp)
+cp "$GUARD" "$IDENTITY_PROBE"
+printf '%s\n' '// one more byte' >> "$IDENTITY_PROBE"
+if [ "$(guard_sha "$GUARD")" != "$(guard_sha "$GUARD")" ] \
+   || [ "$(guard_sha "$GUARD")" = "$(guard_sha "$IDENTITY_PROBE")" ]; then
+  echo "BITEPROOF REFUSED: the byte-identity test this file decides a caught-up base with cannot" >&2
+  echo "tell this tree's guard from a copy of it carrying one more byte, so \"the base is" >&2
+  echo "byte-identical\" would be true of every base and the whole case set would be skipped." >&2
+  rm -f "$IDENTITY_PROBE"
+  exit 2
+fi
+rm -f "$IDENTITY_PROBE"
+
+# parenthetical_spelling <guardfile> — what the guard's OWN `parenthetical/strict` entry
+# declares its capture to be, read out of the entry's `re:` line. THREE OUTCOMES, named rather
+# than collapsed (the sibling harness's rule): TOOLNAME (the strict spelling this tree's case
+# set was written against), BARE_NAME (the pre-fix one), and `unplaceable` for an entry spelled
+# as something this instrument cannot read — which is reported as such, never assumed pre-fix.
+parenthetical_spelling() {
+  local entry
+  entry=$(grep -A 2 'shape: "parenthetical/strict"' "$1" | grep -oE '\$\{(TOOLNAME|BARE_NAME)\}' | head -1)
+  case "$entry" in
+    '${TOOLNAME}') printf 'TOOLNAME' ;;
+    '${BARE_NAME}') printf 'BARE_NAME' ;;
+    *) printf 'unplaceable' ;;
+  esac
+}
+
+# THE READ IS SELF-CHECKED ON EVERY RUN against three REAL fixtures built from this tree's own
+# guard, each with ONLY that entry's capture rewritten — the pattern the sibling
+# biteproof_docs_index_render_sites.sh uses for its declaration read, and the reason the read
+# is not decoration: one that answered a single spelling for every file would name a cause this
+# run never measured. A fixture whose rewrite does not apply reads as the tree's own spelling
+# and fails its expectation here, so a no-op rewrite cannot pass by luck.
+spelling_selfcheck() {
+  local spec want expect got bad=''
+  for spec in TOOLNAME:TOOLNAME BARE_NAME:BARE_NAME MYSTERY_CAPTURE:unplaceable; do
+    want="${spec%%:*}"; expect="${spec##*:}"
+    awk -v want="$want" '
+      prev ~ /shape: "parenthetical\/strict"/ { gsub(/\$\{(TOOLNAME|BARE_NAME)\}/, "${" want "}") }
+      { print; prev = $0 }
+    ' "$GUARD" > "$SPTMP"
+    got=$(parenthetical_spelling "$SPTMP")
+    [ "$got" = "$expect" ] || bad="${want}: the fixture read as ${got}, wanted ${expect}"
+  done
+  rm -f "$SPTMP"
+  if [ -n "$bad" ]; then
+    echo "BITEPROOF REFUSED: the declaration read behind this refusal is broken — ${bad}." >&2
+    echo "It names the cause in the refusal below, so a read that answers one spelling for every" >&2
+    echo "guard would name a cause this run did not measure. Fix parenthetical_spelling()." >&2
+    exit 2
+  fi
+}
+spelling_selfcheck
+
+# caught_up_refusal — the base IS this tree's reader. No case is run for it (see the header),
+# the cause is NAMED from the base guard's own declaration, and the replacement base is DERIVED
+# and re-checked exactly as the answer rule's refusal does it.
+caught_up_refusal() {
+  local base_spelling tree_spelling
+  base_spelling=$(parenthetical_spelling "$OLD_GUARD")
+  tree_spelling=$(parenthetical_spelling "$GUARD")
+  echo >&2
+  echo "REFUSING (exit 2, NO VERDICT): the guard at ${BASE_REF} (${BASE_REV:0:12}) is BYTE-IDENTICAL to" >&2
+  echo "this tree's guard — sha256 $(guard_sha "$OLD_GUARD") at the base and" >&2
+  echo "$(guard_sha "$GUARD") here, $(wc -l < "$GUARD") lines on both sides — so both columns would run" >&2
+  echo "the SAME READER: the base has CAUGHT UP with this tree and there is no \"before\" column to" >&2
+  echo "compare against. That is what a tree which does not change this guard looks like — after a release" >&2
+  echo "merges its own fix, that is \`origin/main\` itself. No case is run and no BITEPROOF count is" >&2
+  echo "printed for it: the case set below would measure this reader against itself." >&2
+  echo >&2
+  echo "Read out of the guards' OWN declarations, so the cause is named rather than guessed: the" >&2
+  echo "\`parenthetical/strict\` entry spells its capture ${base_spelling} at ${BASE_REF} and ${tree_spelling}" >&2
+  echo "here. The strict spelling (TOOLNAME) is the one this case set was written against, and a base" >&2
+  echo "carrying it ALREADY is the reader this tree proves — unless this tree changes the guard, in which" >&2
+  echo "case the bytes differ, this refusal does not fire, and the cases decide." >&2
+  derive_base
+  print_base_suggestion 0
+  exit 2
+}
+
+# THE CALL SITE: one comparison of the two guards' bytes, before the first `mutate` in this
+# file. Everything below is the case set, and none of it can say anything about a base that IS
+# this reader — the answer rule enforces the same refusal at the END of that set; this gets
+# there without running it.
+if [ "$(guard_sha "$GUARD")" = "$(guard_sha "$OLD_GUARD")" ]; then
+  caught_up_refusal
+fi
 
 echo
 echo "== baseline (no mutation) =="
