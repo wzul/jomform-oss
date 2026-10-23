@@ -540,6 +540,23 @@ func (s *Server) upsertForm(
 	if err := customform.ValidateAndNormalizeConfig(in.Config); err != nil {
 		return nil, nil, err
 	}
+	// Issue #388: power-user custom JS in the theme is owner-gated (requireWriteRole
+	// above) and scanned with the deterministic code-asset scan (#364) so obviously
+	// malicious JS is never served on the buyer's page.
+	//
+	// Card t_8b3abbde: this arm MUST sit above the create/update split. It used to
+	// live in the update half only, so the create branch returned at its own
+	// `status: created` before ever reaching it and stored an unscanned value —
+	// the same hole v1.21.293 closed on POST /v1/rest/forms. One rule, one place,
+	// both halves of the tool; a nil/empty `custom_js` is not a string and falls
+	// through unchanged, so an omitted value still creates.
+	if in.Theme != nil {
+		if js, ok := in.Theme["custom_js"].(string); ok {
+			if reason := customform.ScanCustomJS(js); reason != "" {
+				return nil, nil, errors.New("custom_js ditolak: " + reason)
+			}
+		}
+	}
 	if in.FormID == "" {
 		// Issue #176: auto-generate a unique slug when the merchant leaves it
 		// blank (slugified title + random suffix on collision).
@@ -620,16 +637,6 @@ func (s *Server) upsertForm(
 			return nil, nil, err
 		}
 		in.Config = merged
-	}
-	// Issue #388: power-user custom JS in the theme is owner-gated (requireFormWrite
-	// above) and scanned with the deterministic code-asset scan (#364) so obviously
-	// malicious JS is never served on the buyer's page.
-	if in.Theme != nil {
-		if js, ok := in.Theme["custom_js"].(string); ok {
-			if reason := customform.ScanCustomJS(js); reason != "" {
-				return nil, nil, errors.New("custom_js ditolak: " + reason)
-			}
-		}
 	}
 	// Issue #501: re-validate the update's theme/config with the shared rule
 	// (the update path below is reached independently of the create-only
