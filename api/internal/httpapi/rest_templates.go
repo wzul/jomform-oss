@@ -156,6 +156,35 @@ func (h *RESTHandlers) getOwnTemplate(w http.ResponseWriter, r *http.Request, ac
 	})
 }
 
+// refuseBlockedCustomJS answers the same 400 (`custom_js ditolak: <reason>`) the
+// form write paths (updateForm, createForm) and both MCP form doors answer, and
+// reports whether it refused.
+//
+// Card t_5c35bfeb: every other guard on the template write paths below is
+// justified by "a template's config/theme is later cloned onto a real form"
+// (use_template / useOwnTemplate copies tpl.Theme verbatim), yet custom_js was
+// never scanned there — so a value the form write paths refuse was storable on a
+// template and then cloned onto a real form, whose block-rendered buyer page
+// serves theme.custom_js verbatim. One rule, one wording, every door.
+//
+// A nil theme means "leave unchanged" on update and "nothing supplied" on
+// create, so it is not a refusal; a non-string custom_js is not JS and is left
+// to the renderer's type handling, exactly as on the form paths.
+func refuseBlockedCustomJS(w http.ResponseWriter, theme map[string]any) bool {
+	if theme == nil {
+		return false
+	}
+	js, ok := theme["custom_js"].(string)
+	if !ok {
+		return false
+	}
+	if reason := customform.ScanCustomJS(js); reason != "" {
+		writeErr(w, http.StatusBadRequest, "custom_js ditolak: "+reason)
+		return true
+	}
+	return false
+}
+
 // createOwnTemplate: POST /v1/rest/templates
 // Two ways to create a template:
 //   - {form_id: "..."}            — save an existing form as a reusable template
@@ -174,6 +203,15 @@ func (h *RESTHandlers) createOwnTemplate(w http.ResponseWriter, r *http.Request,
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		return
+	}
+	// Card t_5c35bfeb: a template's theme is cloned onto a real form
+	// (useOwnTemplate) and the block-rendered buyer page serves theme.custom_js
+	// verbatim, so a value the form write paths refuse must not be storable here
+	// — otherwise this route is a bypass around that refusal. NOTE the {form_id}
+	// branch below replaces theme with src.Theme, which the form write paths
+	// already scanned; this covers the from-scratch `theme` input.
+	if refuseBlockedCustomJS(w, in.Theme) {
 		return
 	}
 	// Issue #501: a template's config/theme is later cloned onto a real form
@@ -268,6 +306,12 @@ func (h *RESTHandlers) updateOwnTemplate(w http.ResponseWriter, r *http.Request,
 		writeErr(w, http.StatusBadRequest, "payload tidak sah")
 		return
 	}
+	// Card t_5c35bfeb: same custom_js refusal as createOwnTemplate — an update
+	// that stores a blocked value re-arms the clone door (useOwnTemplate copies
+	// tpl.Theme onto a real form). nil theme = leave unchanged, so it is skipped.
+	if refuseBlockedCustomJS(w, in.Theme) {
+		return
+	}
 	// Issue #501: a template's config/theme is cloned onto a real form
 	// (use_template / useOwnTemplate), so a non-https image URL stored here
 	// would later reach a buyer's page as #ZgotmplZ. Reject it at write time
@@ -352,6 +396,14 @@ func (h *RESTHandlers) useOwnTemplate(w http.ResponseWriter, r *http.Request, ac
 	tpl, err := h.Forms.TemplateByIDForAccount(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
 		respondErr(w, r, err)
+		return
+	}
+	// Card t_5c35bfeb: the clone is where a template's theme becomes a real
+	// form's theme, so the refusal is enforced here too — not only on the two
+	// write paths above. That closes the door for a row that predates the scan,
+	// or that another writer stored: whatever put the value in the template, it
+	// must not reach a buyer's page as live code by being cloned.
+	if refuseBlockedCustomJS(w, tpl.Theme) {
 		return
 	}
 	title := in.Name
