@@ -17,11 +17,29 @@
 #   --env-file <path> and the installer will read the two JF_WATCH_TELEGRAM_*
 #   keys from it instead.
 #
+#   --bin <path>     install target (default /usr/local/bin/jomform-watch.sh) —
+#                    the seam deploy/monitoring/jomform-watch_test.sh drives
+#   --binary-only    do step 1 and stop (no env file, no delivery proof, no
+#                    cron). The self-test needs exactly this: the rest of the run
+#                    writes /etc, installs cron and sends a real alert, none of
+#                    which a gate may do.
+#
 # What it does:
-#   1. installs jomform-watch.sh to /usr/local/bin (root, 0755)
+#   1. installs jomform-watch.sh to /usr/local/bin (root, 0755), having kept the
+#      copy it replaces as <target>.prev (0700) — see "Rollback" below
 #   2. writes /etc/jomform-watch.env (root, 0600) if it does not exist
 #   3. sends a real test alert and FAILS if Telegram did not accept it
 #   4. installs /etc/cron.d/jomform-watch (5-minute check + daily digest)
+#
+# ROLLBACK — re-running this used to overwrite the live watchdog in place with
+# nothing kept, so a bad install could not be undone: measured on the agent host
+# (t_a05ecb58) the copy installed 2026-10-13 was gone the moment the installer
+# ran, and it did not match any committed revision either, so "reinstall it from
+# git" was not a faithful rollback. Step 1 therefore saves the outgoing bytes
+# before it overwrites them and prints the exact one-command revert. An existing
+# .prev is NEVER overwritten silently: if it holds older bytes they are archived
+# as <target>.prev.<UTC timestamp> first, and both sha256 values (outgoing and
+# incoming) are printed so the run's host state is auditable from its own output.
 #
 # It never prints the token.
 
@@ -37,6 +55,9 @@ TOKEN=""
 CHAT=""
 SOURCE_ENV=""
 DRY_RUN=0
+BINARY_ONLY=0
+PREV_WRITTEN=0
+saved_sha=""
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -45,21 +66,119 @@ while [ $# -gt 0 ]; do
     --telegram-token) TOKEN="${2:-}"; shift 2 ;;
     --telegram-chat)  CHAT="${2:-}";  shift 2 ;;
     --env-file)       SOURCE_ENV="${2:-}"; shift 2 ;;
+    --bin)            BIN="${2:-}"; shift 2 ;;
+    --binary-only)    BINARY_ONLY=1; shift ;;
     --dry-run)        DRY_RUN=1; shift ;;
-    -h|--help)        sed -n '3,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)        sed -n '3,/^set -uo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
 
 [ "$(id -u)" = 0 ] || die "must run as root (writes /etc and installs cron)"
+command -v sha256sum >/dev/null 2>&1 || die "sha256sum not found — the installer must record what it replaces"
 
-# ── 1. the watchdog itself ──────────────────────────────────────────────────
-[ -f "$HERE/jomform-watch.sh" ] || die "$HERE/jomform-watch.sh not found"
-if [ "$DRY_RUN" = 0 ]; then
-  install -m 0755 -o root -g root "$HERE/jomform-watch.sh" "$BIN"
-  echo "installed $BIN"
+# ── 1. the watchdog itself — SAVE the outgoing copy, then install ───────────
+# Order matters and is the whole point of this step: the live copy is the only
+# one that can carry host-local drift, so it is copied aside and VERIFIED before
+# anything overwrites it. If the save fails, the install does not happen — an
+# overwrite with no backup is the state this step exists to make impossible.
+SRC="$HERE/jomform-watch.sh"
+[ -f "$SRC" ] || die "$SRC not found"
+PREV="$BIN.prev"
+TS="$(date -u +%Y%m%d-%H%M%S)"
+sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
+
+incoming_sha="$(sha256_of "$SRC")"
+incoming_size="$(stat -c %s "$SRC")"
+installed_sha=""
+installed_size=""
+if [ -f "$BIN" ]; then
+  installed_sha="$(sha256_of "$BIN")"
+  installed_size="$(stat -c %s "$BIN")"
+fi
+
+if [ -z "$installed_sha" ]; then
+  drift=0
+  echo "binary: incoming  sha256=$incoming_sha size=$incoming_size  ($SRC)"
+  echo "binary: installed none — fresh install of $BIN, so there is nothing to keep"
+elif [ "$installed_sha" != "$incoming_sha" ]; then
+  drift=1
+  echo "binary: outgoing  sha256=$installed_sha size=$installed_size  ($BIN)"
+  echo "binary: incoming  sha256=$incoming_sha size=$incoming_size  ($SRC)"
+  echo "binary: drift — installed sha != incoming sha"
 else
-  echo "dry-run: would install $BIN"
+  drift=0
+  echo "binary: outgoing  sha256=$installed_sha size=$installed_size  ($BIN)"
+  echo "binary: incoming  sha256=$incoming_sha size=$incoming_size  ($SRC)"
+  echo "binary: no drift — installed sha == incoming sha"
+fi
+
+if [ "$DRY_RUN" = 1 ]; then
+  if [ "$drift" = 1 ]; then
+    echo "dry-run: would save $BIN → $PREV (0700) BEFORE overwriting it"
+    if [ -f "$PREV" ]; then
+      prev_sha="$(sha256_of "$PREV")"
+      if [ "$prev_sha" = "$installed_sha" ]; then
+        echo "dry-run: $PREV already holds the outgoing bytes (sha256=$prev_sha) — it would be kept as-is"
+      else
+        echo "dry-run: the existing $PREV (sha256=$prev_sha) would be ARCHIVED as $PREV.$TS first, never overwritten silently"
+      fi
+    fi
+  elif [ -z "$installed_sha" ]; then
+    echo "dry-run: would NOT create $PREV — nothing is installed at $BIN yet"
+  else
+    echo "dry-run: would NOT create $PREV — the installed bytes already match the incoming bytes"
+  fi
+  echo "dry-run: would install $SRC → $BIN (0755 root:root)"
+else
+  if [ "$drift" = 1 ]; then
+    # An existing .prev is the only copy of the version before it: archive it
+    # rather than write over it, so two consecutive installs leave two
+    # recoverable versions instead of one.
+    if [ -f "$PREV" ]; then
+      prev_sha="$(sha256_of "$PREV")"
+      if [ "$prev_sha" = "$installed_sha" ]; then
+        echo "kept the existing $PREV (sha256=$prev_sha) — it already holds the outgoing bytes"
+      else
+        archive="$PREV.$TS"
+        n=1
+        while [ -e "$archive" ]; do archive="$PREV.$TS-$n"; n=$((n+1)); done
+        mv -- "$PREV" "$archive" \
+          || die "could not archive the existing $PREV → $archive — refusing to overwrite a backup holding an older watchdog"
+        echo "archived the previous backup $PREV → $archive (sha256=$prev_sha, 0700)"
+      fi
+    fi
+    install -m 0700 -o root -g root "$BIN" "$PREV" \
+      || die "could not save $BIN → $PREV — refusing to overwrite the live watchdog with no backup"
+    saved_sha="$(sha256_of "$PREV")"
+    [ "$saved_sha" = "$installed_sha" ] \
+      || die "the saved $PREV hashes $saved_sha, not the outgoing $installed_sha — refusing to overwrite the live watchdog"
+    echo "saved the outgoing $BIN ($installed_size bytes) → $PREV (0700) sha256=$saved_sha"
+    echo "revert (one command): install -m 0755 -o root -g root $PREV $BIN"
+    PREV_WRITTEN=1
+  elif [ -z "$installed_sha" ]; then
+    echo "no backup written — nothing was installed at $BIN yet"
+  else
+    echo "no backup written — the installed bytes already match the incoming bytes, so nothing would be undone by a revert"
+  fi
+  install -m 0755 -o root -g root "$SRC" "$BIN" || {
+    [ "$PREV_WRITTEN" = 1 ] && echo "the previous watchdog is still at $PREV — revert with: install -m 0755 -o root -g root $PREV $BIN" >&2
+    die "install of $SRC → $BIN failed"
+  }
+  installed_after="$(sha256_of "$BIN")"
+  if [ "$installed_after" != "$incoming_sha" ]; then
+    echo "ERROR: $BIN hashes $installed_after, not the incoming $incoming_sha" >&2
+    [ "$PREV_WRITTEN" = 1 ] && echo "  the previous watchdog is still at $PREV — revert with: install -m 0755 -o root -g root $PREV $BIN" >&2
+    die "the install did not land the bytes that were verified"
+  fi
+  echo "installed $BIN (0755) sha256=$installed_after size=$(stat -c %s "$BIN")"
+fi
+
+if [ "$BINARY_ONLY" = 1 ]; then
+  echo
+  echo "binary-only: stopping after step 1 — $ENV_FILE, the delivery proof and $CRON_FILE were NOT touched"
+  [ "$PREV_WRITTEN" = 1 ] && echo "revert (one command): install -m 0755 -o root -g root $PREV $BIN"
+  exit 0
 fi
 
 # ── 2. the env file ─────────────────────────────────────────────────────────
@@ -145,3 +264,13 @@ Prove it BITES (the only real test):
 Then confirm recovery:
   docker start jomform-api-1
 EOF
+
+if [ "$PREV_WRITTEN" = 1 ]; then
+  cat <<EOF
+
+ROLLBACK — this run REPLACED the watchdog that was here before it:
+  install -m 0755 -o root -g root $PREV $BIN
+That restores sha256=$saved_sha (the bytes this run found installed).
+  sha256sum $BIN $PREV          # confirm what is running now
+EOF
+fi

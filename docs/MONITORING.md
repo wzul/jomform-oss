@@ -149,6 +149,31 @@ It installs:
 
 Run `--dry-run` to see the plan without writing anything.
 
+### Rollback
+
+A re-install **replaces** the live watchdog, so it keeps the copy it replaces:
+the outgoing `/usr/local/bin/jomform-watch.sh` is saved to
+`/usr/local/bin/jomform-watch.sh.prev` (mode `0700`) *before* the new bytes land,
+and the run prints both sha256 values (outgoing and incoming) plus the exact
+command that undoes it:
+
+```bash
+install -m 0755 -o root -g root /usr/local/bin/jomform-watch.sh.prev /usr/local/bin/jomform-watch.sh
+```
+
+A run that changes nothing writes no backup (there would be nothing to undo).
+A second install does not destroy the first backup: if `.prev` already holds an
+older version, that version is archived as
+`/usr/local/bin/jomform-watch.sh.prev.<UTC timestamp>` first, so consecutive
+installs leave consecutive recoverable versions. If the backup cannot be written
+or verified, the installer **refuses to overwrite** rather than proceed without
+one.
+
+This exists because of a measured incident: a re-install on the agent host
+overwrote a watchdog that had drifted from every committed revision, and there
+was no copy of it anywhere afterwards — so a bad install could not be undone,
+and "reinstall the old one from git" would not have been the same bytes.
+
 ## Proving it bites
 
 This is the only test that matters, and it is specified in the card that added
@@ -229,6 +254,21 @@ It asserts the properties that make a watchdog worth having —
   that URL are therefore prerequisites, and their absence is a **failure**, not a
   skip.
 
+- the **installer** is reversible, driven over a fake target through the two
+  seams in its own header (`--bin`, `--binary-only`): an install over a differing
+  target leaves `<target>.prev` holding the **outgoing** bytes at mode `0700`
+  while the target holds the incoming ones, prints both sha256 values and the
+  exact one-command revert — which the test then **runs** and requires to put the
+  old bytes back; a fresh install and an identical re-install write no backup and
+  say why; `--dry-run` over a drifting target reports
+  `installed sha != incoming sha` and changes nothing; and a second install never
+  destroys the first `.prev` — the older bytes are archived as
+  `.prev.<UTC timestamp>`, and the test requires exactly one archive holding the
+  **first** backup's content while `.prev` holds the version just replaced. The
+  group also asserts it never touched the real `/usr/local/bin/jomform-watch.sh`,
+  and needs root (`install -o root -g root`), which is stated plainly as a
+  failure, never a skip.
+
 The board's worktree pruner is the other host-only safety script in this
 directory's family; its behaviour and self-test are documented under
 [Kanban worktree pruner](#kanban-worktree-pruner--what-it-may-and-may-not-delete).
@@ -258,6 +298,17 @@ passed**, every one of them the new non-JSON case, each reading
 `board unreadable db=… err=Error: stepping, malformed JSON` — i.e. the exact
 false page and the exact lost measurement the check exists to prevent; guard
 restored → back to `115 passed / 0 failed`.
+
+The installer's save-then-install sequence was proven the same way, twice, on a
+copy (control `255 passed / 0 failed` on the shipped bytes): running the whole
+suite against the **pre-fix installer** — the bare
+`install -m 0755 -o root -g root "$HERE/jomform-watch.sh" "$BIN"` — gives
+`222 passed / 33 failed`, every red inside the installer group and every
+watchdog leg still green, so the redness is attributable to the overwrite and not
+to the harness; and deleting only the `install -m 0700 … "$PREV"` save line from
+the new installer (leaving the rest intact) gives `237 passed / 18 failed`,
+likewise all in that group — the `.prev`-holds-the-old-bytes, the `0700`, the
+revert-restores and both retention legs.
 
 ## Kanban worktree pruner — what it may and may not delete
 

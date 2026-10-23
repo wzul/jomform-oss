@@ -1379,6 +1379,164 @@ else
 fi
 
 echo
+echo "--- the installer: save-then-install, drift, and the revert path ---"
+
+# WHY THIS GROUP EXISTS (card t_e7a0ae5e). Step 1 of
+# deploy/monitoring/install-jomform-watch.sh used to be a bare
+#   install -m 0755 -o root -g root "$HERE/jomform-watch.sh" "$BIN"
+# which overwrote the live watchdog IN PLACE with nothing kept. Measured on the
+# agent host: the copy installed 2026-10-13 was gone the moment the installer
+# ran, and it matched no committed revision either, so "reinstall it from git"
+# was not a faithful rollback. A change that cannot be undone in one command is
+# not one this board should ship, so the sequence and the printed revert are
+# asserted here.
+#
+# It is driven through the installer's own --bin / --binary-only seams (both
+# documented in its header): the REAL target is /usr/local/bin, and the rest of
+# the run writes /etc, installs cron and sends a live Telegram alert — none of
+# which a gate may do, so the fake target is the only honest way to exercise it.
+INST="$HERE/install-jomform-watch.sh"
+[ -f "$INST" ] || { echo "FAIL: $INST missing" >&2; exit 1; }
+# The installer writes with `install -o root -g root`; as a non-root run every
+# leg below would fail for a reason that is not the property under test, so say
+# so plainly instead of reporting nine confusing reds.
+if [ "$(id -u)" != 0 ]; then
+  echo "FAIL: the installer group needs root (it asserts an install -o root -g root sequence)" >&2
+  echo "      (a suite that cannot run a leg must not report ok — run the gate as root)" >&2
+  exit 1
+fi
+
+IROOT="$SB/installer"; PKG1="$IROOT/pkg1"; PKG2="$IROOT/pkg2"
+mkdir -p "$IROOT/bin" "$PKG1" "$PKG2"
+cp "$INST" "$PKG1/"; cp "$INST" "$PKG2/"
+cp "$WATCH" "$PKG1/jomform-watch.sh"; cp "$WATCH" "$PKG2/jomform-watch.sh"
+# A second, DIFFERENT incoming revision, so a second install has different bytes
+# to land (one file cannot be both the outgoing and the incoming of one run).
+printf '\n# v2 revision — a different incoming byte stream\n' >>"$PKG2/jomform-watch.sh"
+IBIN="$IROOT/bin/jomform-watch.sh"
+inst_sha() { sha256sum "$1" | cut -d' ' -f1; }
+V1_SHA="$(inst_sha "$PKG1/jomform-watch.sh")"
+V2_SHA="$(inst_sha "$PKG2/jomform-watch.sh")"
+printf '#!/usr/bin/env bash\necho OLD-REVISION\n' >"$IROOT/old.sh"
+chmod 0755 "$IROOT/old.sh"
+OLD_SHA="$(inst_sha "$IROOT/old.sh")"
+check "installer fixture: the two incoming revisions really differ (or a drift leg would be a no-op)" \
+  "$([ "$V1_SHA" != "$V2_SHA" ] && echo differ || echo same)" "differ"
+check "installer fixture: the outgoing bytes differ from both incoming revisions" \
+  "$([ "$OLD_SHA" != "$V1_SHA" ] && [ "$OLD_SHA" != "$V2_SHA" ] && echo differ || echo same)" "differ"
+# The gate must never touch the HOST's watchdog: prove the fake target was used.
+HOST_BIN_SHA_BEFORE="$([ -f /usr/local/bin/jomform-watch.sh ] && inst_sha /usr/local/bin/jomform-watch.sh || echo absent)"
+inst_archives() { # count + path of the timestamped .prev.<ts> files this run made
+  ARCHIVED_COUNT=0; ARCHIVED=""
+  for f in "$IROOT"/bin/jomform-watch.sh.prev.*; do
+    [ -e "$f" ] || continue
+    ARCHIVED_COUNT=$((ARCHIVED_COUNT+1)); ARCHIVED="$f"
+  done
+}
+
+# (a) FRESH: nothing installed -> no .prev, because there is nothing to keep.
+out=$(bash "$PKG1/install-jomform-watch.sh" --bin "$IBIN" --binary-only 2>&1); rc=$?
+check "installer: a fresh install exits 0" "$rc" "0"
+check "…and lands the incoming bytes" "$(inst_sha "$IBIN")" "$V1_SHA"
+check "…at 0755" "$(stat -c %a "$IBIN")" "755"
+check "…with no .prev (a backup of nothing is not a backup)" \
+  "$([ -e "$IBIN.prev" ] && echo yes || echo no)" "no"
+contains "…says it was fresh rather than inventing a backup" "$out" "fresh install"
+contains "…and prints the incoming sha256, one line, no second command needed" "$out" "sha256=$V1_SHA"
+notcontains "…with no revert line, because nothing was replaced" "$out" "revert (one command)"
+
+# (b) IDENTICAL re-run -> still no .prev: identical bytes cannot be undone by a
+#     revert, so a "backup" here would only be noise (and would soon be a .prev
+#     that holds nothing but the version it accompanies).
+out=$(bash "$PKG1/install-jomform-watch.sh" --bin "$IBIN" --binary-only 2>&1); rc=$?
+check "installer: an identical re-install exits 0" "$rc" "0"
+contains "…reports no drift in the card's own words" "$out" "installed sha == incoming sha"
+check "…and still writes no .prev" "$([ -e "$IBIN.prev" ] && echo yes || echo no)" "no"
+contains "…saying why, rather than leaving the reader to infer it" "$out" "no backup written"
+
+# (c) DRY-RUN over drift: the report must name the drift and say whether a
+#     .prev would be created — and must change NOTHING.
+install -m 0755 "$IROOT/old.sh" "$IBIN"
+out=$(bash "$PKG1/install-jomform-watch.sh" --bin "$IBIN" --binary-only --dry-run 2>&1); rc=$?
+check "installer dry-run: exits 0 over a drifting target" "$rc" "0"
+contains "…reports the drift as the card specifies it" "$out" "installed sha != incoming sha"
+contains "…prints the outgoing sha256" "$out" "sha256=$OLD_SHA"
+contains "…prints the incoming sha256" "$out" "sha256=$V1_SHA"
+contains "…and says a .prev WOULD be created, naming the path" \
+  "$out" "would save $IBIN → $IBIN.prev (0700)"
+check "…while writing nothing: the target still holds the old bytes" "$(inst_sha "$IBIN")" "$OLD_SHA"
+check "…and no .prev appeared" "$([ -e "$IBIN.prev" ] && echo yes || echo no)" "no"
+
+# (d) THE CARD'S FIRST REQUIREMENT: .prev holds the OLD bytes, the target holds
+#     the NEW bytes, .prev is 0700, and the revert line is printed.
+out=$(bash "$PKG1/install-jomform-watch.sh" --bin "$IBIN" --binary-only 2>&1); rc=$?
+check "installer: the overwrite run exits 0" "$rc" "0"
+check "…the target now holds the NEW bytes" "$(inst_sha "$IBIN")" "$V1_SHA"
+check "…and .prev holds the OLD bytes" "$(inst_sha "$IBIN.prev")" "$OLD_SHA"
+check "…at 0700 (a rollback copy is not world-readable)" "$(stat -c %a "$IBIN.prev")" "700"
+contains "…the run prints the sha256 of the file it replaced" "$out" "sha256=$OLD_SHA"
+contains "…and the sha256 it installed" "$out" "sha256=$V1_SHA"
+REVERT="$(sed -n 's/^revert (one command): //p' <<<"$out" | sed -n '1p')"
+check "…and the exact one-command revert, complete enough to paste" \
+  "$REVERT" "install -m 0755 -o root -g root $IBIN.prev $IBIN"
+# The printed line must WORK — a revert path nobody has run is not a revert path.
+if [ "$REVERT" = "install -m 0755 -o root -g root $IBIN.prev $IBIN" ]; then
+  if eval "$REVERT" >/dev/null 2>&1 && [ "$(inst_sha "$IBIN")" = "$OLD_SHA" ]; then
+    ok "…and running that printed line puts the OLD bytes back (one command, as advertised)"
+  else
+    bad "the printed revert line did not restore the old bytes (target now $(inst_sha "$IBIN"))"
+  fi
+else
+  bad "not running a revert line that is not the expected one"
+fi
+
+# (e) A run from exactly that reverted state: .prev already holds the outgoing
+#     bytes, so it is KEPT as-is. Archiving a copy of itself would be noise;
+#     dropping it would lose the only copy of OLD.
+inst_archives; ARCHIVES_BEFORE="$ARCHIVED_COUNT"
+out=$(bash "$PKG1/install-jomform-watch.sh" --bin "$IBIN" --binary-only 2>&1); rc=$?
+check "installer: re-running over a reverted target exits 0" "$rc" "0"
+contains "…keeps .prev because it already holds the outgoing bytes" \
+  "$out" "kept the existing $IBIN.prev (sha256=$OLD_SHA)"
+inst_archives
+check "…instead of archiving a second copy of the same bytes" "$ARCHIVED_COUNT" "$ARCHIVES_BEFORE"
+check "…and .prev still holds OLD, untouched" "$(inst_sha "$IBIN.prev")" "$OLD_SHA"
+
+# (f) THE CARD'S SECOND REQUIREMENT: a second install must not destroy the first
+#     .prev's content. State is target=v1, .prev=OLD, so this run replaces v1
+#     with v2 and OLD must survive under a timestamped name.
+out=$(bash "$PKG2/install-jomform-watch.sh" --bin "$IBIN" --binary-only 2>&1); rc=$?
+check "installer: the second (different) install exits 0" "$rc" "0"
+check "…lands the new revision" "$(inst_sha "$IBIN")" "$V2_SHA"
+check "…and .prev now holds the version this run replaced" "$(inst_sha "$IBIN.prev")" "$V1_SHA"
+inst_archives
+check "…while the FIRST .prev's bytes survive as exactly one timestamped archive" "$ARCHIVED_COUNT" "1"
+check "…holding the OLD bytes, not the ones it had just seen" \
+  "$(inst_sha "$ARCHIVED")" "$OLD_SHA"
+check "…also at 0700" "$(stat -c %a "$ARCHIVED")" "700"
+contains "…and the run says where they went" \
+  "$out" "archived the previous backup $IBIN.prev → $ARCHIVED"
+# The revert printed by THIS run restores the version it replaced (v1), not OLD —
+# i.e. the command always points at the immediately previous watchdog.
+REVERT2="$(sed -n 's/^revert (one command): //p' <<<"$out" | sed -n '1p')"
+check "…and its printed revert is the same one-command form" \
+  "$REVERT2" "install -m 0755 -o root -g root $IBIN.prev $IBIN"
+if [ "$REVERT2" = "install -m 0755 -o root -g root $IBIN.prev $IBIN" ]; then
+  if eval "$REVERT2" >/dev/null 2>&1 && [ "$(inst_sha "$IBIN")" = "$V1_SHA" ]; then
+    ok "…and running it restores v1 (the immediate predecessor), not the archived OLD"
+  else
+    bad "the second run's revert did not restore v1 (target now $(inst_sha "$IBIN"))"
+  fi
+else
+  bad "not running a revert line that is not the expected one"
+fi
+
+# The gate itself must not have reached the REAL install target.
+check "the installer group never touched /usr/local/bin/jomform-watch.sh" \
+  "$([ -f /usr/local/bin/jomform-watch.sh ] && inst_sha /usr/local/bin/jomform-watch.sh || echo absent)" \
+  "$HOST_BIN_SHA_BEFORE"
+
+echo
 printf 'jomform-watch self-test: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
