@@ -58,6 +58,13 @@
 //      orange probe, and its text must not be the on-tint token. If that
 //      discriminator could not see an uncoloured pill, the assertion above would
 //      be green on the tree that rendered the defect.
+//   7. FRESHNESS, and CONTROLS for it: the run must START with no stored locale,
+//      recorded at document-start (see `freshState` — a post-load read of `jf_lang`
+//      measures the app's OWN write, because the stubbed profile answers a lang and
+//      `I18nProvider` mirrors it into that key). One control leaves a locale behind
+//      in an earlier document and requires the arm to reject the run; the other
+//      pins the rule on both sides, so the guard cannot be quietly relaxed into a
+//      check that accepts whatever the app wrote.
 //
 // HOW IT IS REACHED WITHOUT A SESSION. `/` is gated on the SERVER
 // (web/src/middleware.ts) on the `jf_session` cookie's presence, and the reads are
@@ -259,7 +266,8 @@ async function stubAPI(page: Page) {
  * What the guard MEANS is "no earlier run left a locale behind", so it is
  * recorded at document-start (before the clear, so a leftover is actually
  * captured) and it still bites: a seeded `jf_lang` is recorded as-is and the
- * assertion in `openDashboard` fails.
+ * assertion in `openDashboard` fails — the CONTROL test at the bottom of this
+ * file plants one and requires exactly that.
  */
 async function freshState(page: Page) {
   await page.addInitScript(() => {
@@ -277,6 +285,39 @@ async function freshState(page: Page) {
   });
 }
 
+/** The locale this run STARTED with, as `freshState`'s init script recorded it. */
+type StartedLocale = { recorded: boolean; value: string | null };
+
+/**
+ * Read the locale recorded at document-start, before the app could write one.
+ * `recorded: false` means the init script never ran — a broken MEASUREMENT, which
+ * {@link assertFreshStart} reports separately from "a leftover locale was found".
+ */
+async function startedLocale(page: Page): Promise<StartedLocale> {
+  return (await page.evaluate(() => {
+    const w = window as unknown as { __jfLangAtStart?: string | null };
+    return { recorded: "__jfLangAtStart" in w, value: w.__jfLangAtStart ?? null };
+  })) as StartedLocale;
+}
+
+/**
+ * The freshness arm, in ONE place so the CONTROL test at the bottom of this file
+ * exercises exactly the check the measuring tests run: this run must have STARTED
+ * with no stored locale, or the page it measures is not the page a new visitor
+ * gets. The bite is not assumed — the control plants a stale `jf_lang` and
+ * requires this to throw.
+ */
+function assertFreshStart(started: StartedLocale) {
+  expect(
+    started.recorded,
+    "the fresh-state init script never ran, so the starting locale was never measured",
+  ).toBe(true);
+  expect(
+    started.value,
+    "this run must start with NO stored locale (fresh state)",
+  ).toBeFalsy();
+}
+
 /** Open the dashboard on the fixture rows and assert it really rendered. */
 async function openDashboard(page: Page, baseURL: string | undefined) {
   await freshState(page);
@@ -290,21 +331,10 @@ async function openDashboard(page: Page, baseURL: string | undefined) {
   // web/src/middleware.ts, and a scan of the login page would be a clean 0 over
   // the surface this file is about.
   expect(new URL(page.url()).pathname, "/ redirected — the page under test did not render").toBe("/");
-  // Read the locale this run STARTED with, captured by freshState()'s init
-  // script before the app could write one (see that helper: the app mirrors the
-  // profile language into `jf_lang`, so a post-load read is a race).
-  const startedLang = await page.evaluate(() => {
-    const w = window as unknown as { __jfLangAtStart?: string | null };
-    return { recorded: "__jfLangAtStart" in w, value: w.__jfLangAtStart ?? null };
-  });
-  expect(
-    startedLang.recorded,
-    "the fresh-state init script never ran, so the starting locale was never measured",
-  ).toBe(true);
-  expect(
-    startedLang.value,
-    "this run must start with NO stored locale (fresh state)",
-  ).toBeFalsy();
+  // The locale this run STARTED with — the recorded value, never a post-load read
+  // (see `freshState`: the app mirrors the profile language into `jf_lang`, so a
+  // post-load read is a race with the app's own effect).
+  assertFreshStart(await startedLocale(page));
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
 
   const rows = page.locator("table tbody tr");
@@ -466,5 +496,67 @@ test.describe("the dashboard's Recent-sales status pill", () => {
     expect(restored.surface, "restoring the app's own classes did not restore the orange pill").toBe(
       orange.surface,
     );
+  });
+
+  /**
+   * The freshness arm's own control (item 7 in the header). A `jf_lang` left in
+   * the browser by an earlier run has already produced a false reading on this
+   * board, so the guard has to REJECT such a run rather than measure it.
+   *
+   * The leftover is written in an EARLIER DOCUMENT of this origin, which is
+   * exactly what a value left behind by an earlier run is. It is NOT planted from
+   * an init script: Playwright documents that the order in which multiple init
+   * scripts run is undefined, so "plant in one script, record in another" would
+   * be undefined behaviour dressed up as a test. `/robots.txt` is served as a
+   * STATIC document on this origin, so the app shell never hydrates there and
+   * nothing can overwrite the planted value before the next document starts.
+   */
+  test("CONTROL: a locale left behind by an earlier run reds the freshness arm", async ({
+    page,
+    baseURL,
+  }) => {
+    await page.goto("/robots.txt", { waitUntil: "domcontentloaded" });
+    const planted = await page.evaluate(() => {
+      localStorage.setItem("jf_lang", "ar");
+      return localStorage.getItem("jf_lang");
+    });
+    expect(planted, "the leftover was not committed, so this control would be vacuous").toBe("ar");
+
+    // The arm must REJECT this run. If a later edit goes back to reading `jf_lang`
+    // after the page loaded — the form that measured the app's own write — the
+    // planted value is invisible by then and this resolves instead of throwing.
+    let armError = "";
+    try {
+      await openDashboard(page, baseURL);
+    } catch (e) {
+      armError = String((e as Error)?.message ?? e);
+    }
+    expect(
+      armError,
+      "the freshness arm ACCEPTED a run that started with a stored locale — a leftover " +
+        "jf_lang would have been measured as if it were a new visitor's state",
+    ).toMatch(/must start with NO stored locale/);
+
+    // …and it rejected the PLANTED value, so it went red for the right reason and
+    // not on some unrelated assertion earlier in the helper.
+    expect((await startedLocale(page)).value, "the arm did not see the planted locale").toBe("ar");
+  });
+
+  /**
+   * The rule itself, with no page to be slow or contended: the ONLY state a
+   * measuring run may start from is "no stored locale". Anything else — `ar`, or
+   * `en`, which is what the stubbed profile makes the app write — means the run
+   * did not start where a new visitor does.
+   */
+  test("CONTROL: the freshness arm's rule — no stored locale passes, a stored one does not", () => {
+    expect(() => assertFreshStart({ recorded: true, value: "ar" })).toThrow(
+      /must start with NO stored locale/,
+    );
+    expect(() => assertFreshStart({ recorded: true, value: "en" })).toThrow(
+      /must start with NO stored locale/,
+    );
+    // A record that never ran is reported as a broken measurement, not as a pass.
+    expect(() => assertFreshStart({ recorded: false, value: null })).toThrow(/never ran/);
+    expect(() => assertFreshStart({ recorded: true, value: null })).not.toThrow();
   });
 });
