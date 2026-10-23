@@ -9,6 +9,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/textutil"
 )
 
 // profileUserID resolves the current session user ("" when anonymous).
@@ -48,6 +49,22 @@ func (a *AuthHandlers) handleProfile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// profileNameMaxChars is the display-name cap, and it is counted in CHARACTERS.
+//
+// It used to be applied as `name = name[:80]` — a BYTE slice of a value the user
+// typed. `users.name` is a Postgres `text` column, so the slice was only safe
+// while byte 80 happened to be a rune boundary: 27 CJK characters (81 bytes), or
+// 79 ASCII followed by any non-ASCII character, cut a rune in half and Postgres
+// refused the WHOLE UPDATE with SQLSTATE 22021, which this handler reported as a
+// 500 — the name was silently not saved. The same slice also silently shortened
+// names that were short in characters but long in bytes (60 accented characters
+// are 120 bytes and were stored as 40), with no error at all.
+//
+// One rule, one implementation: textutil.Truncate cuts on a rune boundary and
+// keeps the result valid UTF-8, so the UPDATE always carries a storable value and
+// the count matches what a person sees (see profile_name_cap_test.go).
+const profileNameMaxChars = 80
+
 // handleUpdateName: POST /v1/auth/profile/name
 func (a *AuthHandlers) handleUpdateName(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -62,10 +79,7 @@ func (a *AuthHandlers) handleUpdateName(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
 		return
 	}
-	name := strings.TrimSpace(req.Name)
-	if len(name) > 80 {
-		name = name[:80]
-	}
+	name := textutil.Truncate(strings.TrimSpace(req.Name), profileNameMaxChars)
 	if err := a.Users.UpdateName(r.Context(), uid, name); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
