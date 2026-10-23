@@ -9,6 +9,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n, LANGS_SHOWN, LANG_LABEL, type Lang } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
+import { PROFILE_NAME_MAX_CHARS, normalizeProfileName } from "../../lib/profileIdentity";
 import { isValidStepUpCode, stepUpRequired } from "../../lib/stepUp";
 import { apiErr } from "../../lib/apiErr";
 import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
@@ -584,9 +585,9 @@ export default function ProfilePage() {
               </div>
               <div className="mt-4 border-t border-slate-100 pt-4">
               <label className="mt-3 block text-xs text-slate-500" htmlFor="prof-name">{t("prof.displayName")}</label>
-              <input id="prof-name" value={name} onChange={(e) => setName(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder={t("prof.yourName")} />
+              <input id="prof-name" maxLength={PROFILE_NAME_MAX_CHARS} value={name} onChange={(e) => setName(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder={t("prof.yourName")} />
               <button
-                onClick={() => post("/api/auth/profile/name", { name })}
+                onClick={async () => { if (await post("/api/auth/profile/name", { name })) setName(normalizeProfileName(name)); }}
                 className="jf-btn-primary mt-3"
               >{t("prof.saveName")}</button>
               </div>
