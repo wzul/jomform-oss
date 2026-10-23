@@ -68,6 +68,34 @@ type useTemplateIn struct {
 	Name       string `json:"name,omitempty" jsonschema:"Nama borang baharu (optional; lalai = tajuk template)"`
 }
 
+// refuseBlockedCustomJS answers the same sentence (`custom_js ditolak:
+// <reason>`) the form write paths (createForm/updateForm, set_form_theme) and
+// the REST template routes answer, and reports whether it refused.
+//
+// Card t_ef3b0573: a template's theme is cloned verbatim onto a real form by
+// use_template, and since v1.21.283 the block-rendered buyer page serves
+// theme.custom_js as live code. Every sibling guard here is already justified
+// by that clone; custom_js was the one guard missing, so a value the form
+// paths refuse was storable on a template over MCP and then became live code
+// on a buyer's page. One rule, one wording, every door.
+//
+// A nil theme means "leave unchanged" on update and "nothing supplied" on
+// create, so it is not a refusal; a non-string custom_js is not JS and is left
+// to the renderer's type handling, exactly as on the form paths.
+func refuseBlockedCustomJS(theme map[string]any) error {
+	if theme == nil {
+		return nil
+	}
+	js, ok := theme["custom_js"].(string)
+	if !ok {
+		return nil
+	}
+	if reason := customform.ScanCustomJS(js); reason != "" {
+		return errors.New("custom_js ditolak: " + reason)
+	}
+	return nil
+}
+
 // useTemplateMCP clones a template config/theme into a new draft for the
 // caller (write role required), mirroring POST /v1/templates/use. Accepts
 // either a gallery slug (system library) or template_id (an own template,
@@ -93,6 +121,14 @@ func (s *Server) useTemplateMCP(
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("template tidak dijumpai")
+	}
+	// Card t_ef3b0573: the clone below copies tpl.Theme verbatim onto a new
+	// form, whose buyer page serves theme.custom_js as live code. The write
+	// paths now refuse a blocked value, but a row that predates that guard (or
+	// was written by any other door) would still become live code here, so the
+	// clone door refuses it too.
+	if err := refuseBlockedCustomJS(tpl.Theme); err != nil {
+		return nil, nil, err
 	}
 	title := in.Name
 	if title == "" {
@@ -200,6 +236,15 @@ func (s *Server) createTemplateMCP(
 	if title == "" {
 		return nil, nil, errors.New("title atau form_id wajib")
 	}
+	// Card t_ef3b0573: a template's theme is cloned onto a real form by
+	// use_template and the buyer page serves theme.custom_js verbatim, so a
+	// value the form write paths refuse ("custom_js ditolak: <reason>") must
+	// not be storable here — otherwise this tool is a bypass around that
+	// refusal. Same sentence, same rule as createForm/updateForm and the REST
+	// template routes.
+	if err := refuseBlockedCustomJS(in.Theme); err != nil {
+		return nil, nil, err
+	}
 	// Issue #501: a template's config/theme is cloned onto a real form by
 	// use_template, so a non-https image URL stored here would reach a
 	// buyer's page as #ZgotmplZ. Reject it with the ONE shared scheme rule.
@@ -269,6 +314,12 @@ func (s *Server) updateTemplateMCP(
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		title = existing.Title
+	}
+	// Card t_ef3b0573: same refusal as create_template — a template's theme is
+	// cloned onto a real form by use_template, so an update must not store a
+	// blocked custom_js (nil theme = leave unchanged, and is skipped).
+	if err := refuseBlockedCustomJS(in.Theme); err != nil {
+		return nil, nil, err
 	}
 	// Issue #501: same shared scheme rule as create_template (nil = leave
 	// unchanged, so only an explicitly supplied map is validated).
