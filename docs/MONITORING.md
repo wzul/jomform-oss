@@ -7,7 +7,7 @@ server, no Grafana, no agent. The goal is not dashboards; it is not being blind.
 
 ## What the watchdog checks
 
-`deploy/monitoring/jomform-watch.sh` runs every 5 minutes and checks five things.
+`deploy/monitoring/jomform-watch.sh` runs every 5 minutes and checks six things.
 Each one can fail on its own and each is named in the alert.
 
 | Check | What it proves | Why it is here |
@@ -16,6 +16,7 @@ Each one can fail on its own and each is named in the alert.
 | `health` | `GET https://jomform.com/healthz` returns 200 and contains `service` | Cloudflare → Traefik → api container |
 | `ready` | the api container's own `/readyz` reports `database: ok` **and** `valkey: ok`, read over ssh | `/healthz` answers 200 while the database is down; without this, login and payments could be broken and the watchdog silent |
 | `disk` | `df` on the prod host stays under the threshold | prod had no disk alarm at all |
+| `tmpkeys` | no `api_keys` row matching `qa-verify-tmp%` / `deploy-verify-tmp%` is **still live** (`revoked_at is null`) more than `JF_WATCH_TMPKEY_MAX_AGE_HOURS` (default 24 h) after it was created | a QA/deploy run that dies before cleanup leaves a standing write credential — see below |
 | `board` | the agent host's Kanban `task_runs` ends `crashed`/`gave_up`/`spawn_failed` **fewer than `JF_WATCH_KANBAN_THRESHOLD` times** in a trailing `JF_WATCH_KANBAN_WINDOW_SECONDS` window | see below — the host fault that produced 110 crashed runs and paged nobody |
 
 Three of those choices are load-bearing and worth stating, because the obvious
@@ -54,6 +55,54 @@ nobody. `import_err=` is fetched by that same SELECT and went with it.
 A marker check is part of the HTTP checks on purpose: a proxy or hosting
 provider's error/maintenance page answers **200**, so status code alone cannot
 tell "our app" from "something else wearing our hostname".
+
+### Stale temp API keys (`tmpkeys`)
+
+A QA or deploy run mints a temporary `readwrite` API key, uses it for seconds, and
+is supposed to **hard-delete its row** afterwards. A run that dies first (timeout,
+reclaim, exception) leaves the row live, and live is the only thing that matters
+here: `DELETE /v1/rest/keys/{id}` is a deliberate **soft** revoke
+(`UPDATE api_keys SET revoked_at = now()`, which keeps the audit line), and auth is
+a per-request DB lookup filtered on `revoked_at IS NULL` with no cache. So an
+abandoned row is not an untidy record — it is a working write credential.
+
+The rule "hard-delete your own row by id+name" was already written in both lanes'
+runbooks and still did not hold: three of these rows were found by accident in a
+month, each while verifying an unrelated release. Hence a detector:
+
+```sql
+select name from api_keys
+ where revoked_at is null
+   and created_at < now() - interval '24 hours'
+   and (name like 'qa-verify-tmp%' or name like 'deploy-verify-tmp%');
+```
+
+The alert names the count and every row (`name@<created_at UTC>`), so a reader can
+tell which lane abandoned it:
+
+```
+DOWN tmpkeys: tmpkeys stale=1 max_age=24h rows=qa-verify-tmp_t_8f359e66@2026-10-21 15:16:36.793264
+```
+
+Deliberately **not** alerted, because each would make the check cry wolf:
+
+- a temp key younger than the window — that is an **in-flight** run, which is
+  legitimate;
+- a **soft-revoked** row — inert by construction (auth requires
+  `revoked_at IS NULL`), so it is untidy, not a leak;
+- the long-lived agent keys — they are not temp keys and never match the prefix.
+
+Two failure modes are treated like an unreadable `df`, not like "no leak": a
+database/ssh/psql error (`unreadable psql_rc=… err=…`) and output that is not a
+row at all (`unreadable output_shape=…`, e.g. a psql NOTICE). Stdout is parsed
+from rows only — stderr is kept apart — so a warning banner can never be counted
+as a leaked key.
+
+Reading it needs one more thing over the ssh path `disk` already uses:
+`docker exec jomform-postgres-1 psql -U jomform -d jomform -v ON_ERROR_STOP=1 -tA -c …`
+(the container/user/db are overridable with `JF_WATCH_PG_CONTAINER`,
+`JF_WATCH_PG_USER`, `JF_WATCH_PG_DB`). `-v ON_ERROR_STOP=1` is load-bearing: without
+it psql exits 0 after a SQL error and the check would read "no stale rows".
 
 ## Delivery and noise
 
@@ -158,7 +207,27 @@ It asserts the properties that make a watchdog worth having —
   (`immutable=1` is the only URI mode that skips locking/change detection, and it
   is deliberately **not** used: it would blind the check to the dispatcher's
   writes while it runs.)
-- **no notifier is exit 2, never `ok`**, and an undeliverable alert is exit 3.
+- **no notifier is exit 2, never `ok`**, and an undeliverable alert is exit 3;
+- the **`tmpkeys` check in all four directions**: a 25 h old, never-revoked
+  `qa-verify-tmp_*` row pages once and the detail **names the row**, then a
+  repeat pass does not re-page, and hard-deleting the row produces one
+  `RECOVERED`; a **1 h old** live temp key (an in-flight run), a 25 h old
+  **revoked** temp row, and a 60 day old live `AI Agent Key` row are all silent;
+  two leaked rows in two lanes are counted and both named; an unreadable query
+  and a non-numeric `JF_WATCH_TMPKEY_MAX_AGE_HOURS` fail loud instead of reading
+  as "no leak"; and the **production** `docker exec … psql` command line is
+  driven through a PATH-shimmed `docker` (the SQL must arrive as **one** argv
+  word, with `-v ON_ERROR_STOP=1`), including a row that arrives over that path
+  and gets paged.
+
+  That group is the one place this suite is **not** offline in the "no
+  prerequisites" sense: it executes the SQL the watchdog composed against a real
+  `api_keys` table in a **scratch schema of the test database**
+  (`JOMFORM_TEST_DATABASE_URL`, dropped on exit — never a new database, never
+  `public`), because a stub that filtered the rows itself would re-implement the
+  predicate and could stay green while the WHERE clause was wrong. `psql` and
+  that URL are therefore prerequisites, and their absence is a **failure**, not a
+  skip.
 
 The board's worktree pruner is the other host-only safety script in this
 directory's family; its behaviour and self-test are documented under

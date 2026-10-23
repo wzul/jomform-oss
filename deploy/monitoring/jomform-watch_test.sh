@@ -40,6 +40,25 @@ command -v curl >/dev/null 2>&1 || {
   exit 1
 }
 REAL_CURL="$(command -v curl)"
+# Same rule for the stale temp-key check: its fixture does not answer from a
+# state file, it runs the SQL the watchdog COMPOSED against a real database (see
+# stub_psql.sh below), so the client and the database are prerequisites. A suite
+# that quietly skipped them would report green on the one predicate this check
+# exists to prove.
+command -v psql >/dev/null 2>&1 || {
+  echo "FAIL: psql not found — the temp-key fixture cannot execute the watchdog's SQL" >&2
+  exit 1
+}
+[ -n "${JOMFORM_TEST_DATABASE_URL:-}" ] || {
+  echo "FAIL: JOMFORM_TEST_DATABASE_URL is unset — the temp-key fixture needs a real Postgres." >&2
+  # Quoted VERBATIM from the advice scripts/preflight.sh emits: the selftest gate
+  # sweeps every tracked file that names the test env and requires this exact
+  # canonical string, so a hand-rolled variant here is drift (it was, once: the
+  # escaped form was reported as a different path). Single quotes on purpose —
+  # the operator must read the portable form, not this shell's expansion.
+  echo '      source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh} first (the API integration tests need it too)' >&2
+  exit 1
+}
 
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
@@ -91,7 +110,16 @@ notcontains() {
 
 SB="$(mktemp -d /tmp/jomform_watch_test.XXXXXX)"
 SERVER_PID=""
-cleanup() { [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null; rm -rf "$SB"; }
+cleanup() {
+  [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
+  # The temp-key fixture owns a scratch SCHEMA in the shared test database (never
+  # a new database), so it is this suite's job to drop it — and only its own.
+  if [ -n "${TMPKEY_SCHEMA:-}" ] && [ -n "${JOMFORM_TEST_DATABASE_URL:-}" ]; then
+    psql "$JOMFORM_TEST_DATABASE_URL" -qAt \
+      -c "drop schema if exists $TMPKEY_SCHEMA cascade" >/dev/null 2>&1
+  fi
+  rm -rf "$SB"
+}
 trap cleanup EXIT
 
 # ── stub HTTP server ────────────────────────────────────────────────────────
@@ -165,6 +193,68 @@ cat >"$SB/stub_notify.sh" <<'EOF'
 EOF
 chmod +x "$SB/stub_notify.sh"
 NOTIFY_CMD="cat | $SB/stub_notify.sh $NOTIFY"
+
+# ── the stale temp-API-key fixture (check 6) ────────────────────────────────
+# The check's whole value is its WHERE clause (`revoked_at is null`, the 24 h
+# window, the two lane prefixes). So this fixture does NOT answer from a state
+# file: `stub_psql.sh` runs the SQL the watchdog COMPOSED against a real
+# `api_keys` table in a SCRATCH SCHEMA of the shared test database — never a new
+# database, never `public`. That is the only construction under which a wrong
+# predicate turns this suite red; a bash stub filtering the rows itself would
+# re-implement the filter and could stay green while the SQL measured nothing.
+# The table mirrors the columns the query reads
+# (api/internal/db/migrations/000001_init.up.sql:42-51).
+TMPKEY_SCHEMA="jf_watch_tmpkey_p$$"
+SQL_LOG="$SB/tmpkey_sql.log"
+psql_q() { psql "$JOMFORM_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -qAt "$@"; }
+tmpkey_fixture_create() {
+  psql_q -c "drop schema if exists $TMPKEY_SCHEMA cascade" \
+          -c "create schema $TMPKEY_SCHEMA" \
+          -c "create table $TMPKEY_SCHEMA.api_keys (
+                name       text        not null,
+                created_at timestamptz not null default now(),
+                revoked_at timestamptz)" || {
+    echo "FAIL: the temp-key scratch schema could not be created in the test database" >&2
+    exit 1
+  }
+}
+tmpkey_clear() { psql_q -c "delete from $TMPKEY_SCHEMA.api_keys"; }
+tmpkey_add() { # name age_hours live|revoked
+  local revoked="NULL"
+  [ "${3:-live}" = revoked ] && revoked="now()"
+  psql_q -c "insert into $TMPKEY_SCHEMA.api_keys (name, created_at, revoked_at)
+             values ('$1', now() - interval '$2 hours', $revoked)"
+}
+tmpkey_fixture_create
+
+cat >"$SB/stub_psql.sh" <<'EOF'
+#!/usr/bin/env bash
+# `psql` for the temp-key legs: the REAL client, pointed at the scratch schema, so
+# the SQL the watchdog built is the SQL that filters the fixture. `search_path`
+# rides in PGOPTIONS on purpose — `-c "set search_path …; select …"` would print
+# psql's "SET" command tag on the same stdout, which the watchdog would count as
+# a leaked row.
+set -uo pipefail
+sql="${1:?stub_psql: no SQL argument}"
+printf '%s\n' "$sql" >>"$WATCHTEST_SQL_LOG"
+export PGOPTIONS="-c search_path=$WATCHTEST_SCHEMA,public"
+exec psql "$JOMFORM_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -tA -c "$sql"
+EOF
+chmod +x "$SB/stub_psql.sh"
+cat >"$SB/stub_psql_fail.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'psql: error: connection to server at "127.0.0.1" failed: Connection refused\n' >&2
+exit 2
+EOF
+chmod +x "$SB/stub_psql_fail.sh"
+PSQL_STUB="bash $SB/stub_psql.sh"
+PSQL_FAIL="bash $SB/stub_psql_fail.sh"
+# The environment every pass needs for that stub. The suite runs under `env -i`,
+# so this array is the only thing that gets it there — and a case can still
+# override it by passing a later assignment of the same name.
+PSQL_ENV=(JF_WATCH_PSQL_CMD="$PSQL_STUB"
+  JOMFORM_TEST_DATABASE_URL="$JOMFORM_TEST_DATABASE_URL"
+  WATCHTEST_SCHEMA="$TMPKEY_SCHEMA" WATCHTEST_SQL_LOG="$SQL_LOG")
 
 READY_OK='printf "%s" "{\"checks\":{\"database\":\"ok\",\"valkey\":\"ok\"},\"status\":\"ok\"}"'
 READY_DB_DOWN='printf "%s" "{\"checks\":{\"database\":\"unavailable\",\"valkey\":\"ok\"},\"status\":\"degraded\"}"'
@@ -242,6 +332,7 @@ run() {
     JF_WATCH_DF_CMD="$DF_OK" \
     JF_WATCH_KANBAN_DB="${KANBAN_DB_RUN:-auto}" \
     JF_WATCH_KANBAN_DB_CANDIDATES="${KANBAN_CANDIDATES_RUN:-/nonexistent/a.db}" \
+    "${PSQL_ENV[@]}" \
     JF_WATCH_ATTEMPT_DELAY=0 JF_WATCH_TIMEOUT=5 \
     "$@" bash "$WATCH"
 }
@@ -251,6 +342,11 @@ reset() { # fresh state + log + healthy stub + a configured notifier
   : >"$LOG"
   printf 'healthy' >"$SB/mode"
   rm -f "$SB/seq_web" "$SB/seq_health"
+  # The temp-key check runs on EVERY pass, so a row left behind by an earlier
+  # case would page a later, unrelated one. Clear the table and the recorded SQL
+  # so each case measures only what it plants.
+  tmpkey_clear
+  : >"$SQL_LOG"
   write_config dummy
   KANBAN_DB_RUN="auto"                          # board check disabled unless a case says otherwise
   KANBAN_CANDIDATES_RUN="/nonexistent/a.db /nonexistent/b.db"
@@ -479,6 +575,179 @@ reset
 out=$(run JF_WATCH_DF_CMD="$DF_UNREADABLE"); rc=$?
 check "unreadable df exits 1" "$rc" "1"
 contains "unreadable df alerts" "$(alerts)" "DOWN disk"
+
+echo "--- a stale, never-revoked temp API key on prod (a standing write credential) ---"
+
+# The fixtures below are REAL rows in a scratch schema, filtered by the SQL the
+# watchdog composed (see stub_psql.sh): every direction asserted here is a
+# verdict of that SQL, not of a bash imitation of it.
+
+# 13a. A key younger than the window is an IN-FLIGHT run: legitimate, no page.
+#      This is also where the composed SQL is pinned, because a predicate that
+#      stopped discriminating would turn 13b-13d red but a predicate that
+#      vanished entirely could still look green on an empty table.
+reset
+tmpkey_add qa-verify-tmp_t_inflight 1 live
+out=$(run); rc=$?
+check "a 1 h old live temp key (in-flight run) does not page" "$rc" "0"
+check "…and sends no alert" "$(alert_count)" "0"
+contains "…while the check still MEASURED prod" "$(cat "$LOG")" "tmpkeys stale=0"
+contains "the composed SQL requires a LIVE row (revoked_at is null)" \
+  "$(cat "$SQL_LOG")" "revoked_at is null"
+contains "the composed SQL windows on created_at, not on last use" \
+  "$(cat "$SQL_LOG")" "created_at < now() - interval '24 hours'"
+contains "the composed SQL matches the qa lane's temp keys" \
+  "$(cat "$SQL_LOG")" "name like 'qa-verify-tmp%'"
+contains "the composed SQL matches the deploy lane's temp keys" \
+  "$(cat "$SQL_LOG")" "name like 'deploy-verify-tmp%'"
+
+# 13b. A soft-revoked temp row of the SAME age is inert by construction (auth is
+#      a per-request lookup filtered on `revoked_at IS NULL`): untidy, not a
+#      leak, so it must stay silent. This is the exclusion a "just alert on old
+#      temp rows" version of this check would get wrong.
+reset
+tmpkey_add qa-verify-tmp_t_old_revoked 25 revoked
+out=$(run); rc=$?
+check "a 25 h old REVOKED temp key stays silent" "$rc" "0"
+check "…and sends no alert" "$(alert_count)" "0"
+contains "…measured, not skipped" "$(cat "$LOG")" "tmpkeys stale=0"
+
+# 13c. The long-lived legitimate keys are not temp keys: an old live `AI Agent
+#      Key` row must not page, or the check cries wolf on every pass.
+reset
+tmpkey_add 'AI Agent Key' 1440 live
+out=$(run); rc=$?
+check "a 60 day old live 'AI Agent Key' row stays silent" "$rc" "0"
+check "…and sends no alert" "$(alert_count)" "0"
+
+# 13d. THE LEAK the card exists for: 25 h old, never revoked, qa lane. Pages
+#      once, names the leaked row, and leaves the state file an operator greps.
+reset
+tmpkey_add qa-verify-tmp_t_deadrun 25 live
+out=$(run); rc=$?
+check "a 25 h old live qa temp key exits 1" "$rc" "1"
+check "…and pages exactly once" "$(alert_count)" "1"
+contains "the alert names the check" "$(alerts)" "DOWN tmpkeys"
+contains "the alert states the count" "$(alerts)" "stale=1"
+contains "the alert names the leaked row so the lane is visible" \
+  "$(alerts)" "qa-verify-tmp_t_deadrun"
+check "the check's state file is <STATE_DIR>/tmpkeys.state (the name to grep)" \
+  "$([ -f "$STATE/tmpkeys.state" ] && echo yes || echo no)" "yes"
+
+# 13e. Edge-triggered like every other check: the same leak on the next 5-minute
+#      tick is measured, logged, and NOT re-sent.
+out=$(run); rc=$?
+check "a repeat pass still exits 1" "$rc" "1"
+check "…and does not page a second time" "$(alert_count)" "1"
+contains "…the repeat is logged as suppressed" "$(cat "$LOG")" "alert_suppressed"
+
+# 13f. Recovery: the row is hard-deleted -> one RECOVERED message, then silence,
+#      and the state file is cleared (so the next leak pages immediately).
+psql_q -c "delete from $TMPKEY_SCHEMA.api_keys where name = 'qa-verify-tmp_t_deadrun'"
+out=$(run); rc=$?
+check "removing the leaked row exits 0" "$rc" "0"
+check "…and sends one recovery message" "$(alert_count)" "2"
+contains "…naming the check as RECOVERED" "$(alerts)" "RECOVERED tmpkeys"
+check "…and clears the state file" \
+  "$([ -f "$STATE/tmpkeys.state" ] && echo yes || echo no)" "no"
+out=$(run); rc=$?
+check "no further message once the leak is gone" "$(alert_count)" "2"
+
+# 13g. BOTH lanes are covered in one pass, and every row is named — the detail
+#      is what tells an operator which lane abandoned a credential.
+reset
+tmpkey_add qa-verify-tmp_t_qa_leak 25 live
+tmpkey_add deploy-verify-tmp_t_deploy_leak 30 live
+out=$(run); rc=$?
+check "two leaked rows in one pass exit 1" "$rc" "1"
+contains "the page counts both" "$(alerts)" "stale=2"
+contains "…and names the qa row" "$(alerts)" "qa-verify-tmp_t_qa_leak"
+contains "…and names the deploy row" "$(alerts)" "deploy-verify-tmp_t_deploy_leak"
+
+# 13h. A database it cannot read is a failed MEASUREMENT, never "no leak": the
+#      same rule as an unreadable df. (This is also the shape a wrong password, a
+#      stopped postgres container or a dropped ssh connection takes.)
+reset
+out=$(run JF_WATCH_PSQL_CMD="$PSQL_FAIL"); rc=$?
+check "an unreadable api_keys query exits 1" "$rc" "1"
+contains "…and says it could not measure" "$(alerts)" "unreadable"
+contains "…carrying psql's own error" "$(alerts)" "Connection refused"
+notcontains "…and never claims the leak count was zero" "$(alerts)" "stale=0"
+
+# 13i. A misconfigured window must also fail loud rather than interpolate junk
+#      into the interval and read the empty result as healthy.
+reset
+out=$(run JF_WATCH_TMPKEY_MAX_AGE_HOURS=abc); rc=$?
+check "a non-numeric max age exits 1" "$rc" "1"
+contains "…and names the bad configuration" "$(alerts)" "bad_config"
+
+# 13j. The REAL transport for this check, not the stub. Every leg above replaces
+#      the psql command line, which leaves the production shape DEAD as far as
+#      this suite is concerned — the same blind spot the Telegram group below was
+#      written to close. Here the watchdog builds its own `docker exec … psql …`
+#      string and hands it to a PATH-shimmed `docker` that records its argv, so a
+#      quoting bug (the SQL split into words on its way to psql) is visible as an
+#      argument count instead of as a permanently "unreadable" check in prod.
+mkdir -p "$SB/fakebin_docker"
+DOCKER_ARGV="$SB/docker_argv"; DOCKER_ROWS="$SB/docker_rows"; DOCKER_STDOUT="$SB/docker_stdout"
+cat >"$SB/fakebin_docker/docker" <<'EOF'
+#!/usr/bin/env bash
+# Fake `docker` for the temp-key real-transport legs: records its argv one word
+# per line and answers the psql call from $DOCKER_ROWS (absent = no rows), after
+# a banner on STDERR — the stream a leaked row must never be parsed from.
+printf '%s\n' "$@" >"$DOCKER_ARGV"
+case "$*" in
+  *psql*)
+    printf 'Warning: Permanently added the host key to the list of known hosts.\n' >&2
+    [ -f "$DOCKER_ROWS" ] && cat "$DOCKER_ROWS"
+    [ -f "$DOCKER_STDOUT" ] && cat "$DOCKER_STDOUT"
+    exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$SB/fakebin_docker/docker"
+reset; : >"$DOCKER_ARGV"; rm -f "$DOCKER_ROWS" "$DOCKER_STDOUT"
+out=$(run JF_WATCH_PSQL_CMD= JF_WATCH_SSH_TARGET=local \
+  PATH="$SB/fakebin_docker:$PATH" DOCKER_ARGV="$DOCKER_ARGV" DOCKER_ROWS="$DOCKER_ROWS" \
+  DOCKER_STDOUT="$DOCKER_STDOUT"); rc=$?
+check "the production transport (docker exec … psql) runs and reports healthy" "$rc" "0"
+contains "…says it MEASURED the table even though the transport also wrote a banner on STDERR (a warning is not a leaked row)" \
+  "$(cat "$LOG")" "tmpkeys stale=0 max_age=24h"
+check "…through exactly 12 argv words (exec, container, psql, -U user, -d db, -v ON_ERROR_STOP=1, -tA, -c, SQL)" \
+  "$(wc -l <"$DOCKER_ARGV")" "12"
+check "…naming the prod container" "$(sed -n '2p' "$DOCKER_ARGV")" "jomform-postgres-1"
+check "…the database, as its own argument" "$(sed -n '7p' "$DOCKER_ARGV")" "jomform"
+check "…and -v ON_ERROR_STOP=1, without which a SQL error would read as 'no leak'" \
+  "$(sed -n '9p' "$DOCKER_ARGV")" "ON_ERROR_STOP=1"
+contains "…with the whole SQL arriving as ONE argument (no word-splitting on the way to psql)" \
+  "$(sed -n '12p' "$DOCKER_ARGV")" "select name || '@'"
+contains "…still carrying the revoked_at predicate" \
+  "$(sed -n '12p' "$DOCKER_ARGV")" "revoked_at is null and created_at < now()"
+
+# …and a row arriving through that same real transport is parsed and paged.
+reset; : >"$DOCKER_ARGV"
+printf '%s\n' 'qa-verify-tmp_t_viadocker@2026-10-21 15:16:36.79' >"$DOCKER_ROWS"
+out=$(run JF_WATCH_PSQL_CMD= JF_WATCH_SSH_TARGET=local \
+  PATH="$SB/fakebin_docker:$PATH" DOCKER_ARGV="$DOCKER_ARGV" DOCKER_ROWS="$DOCKER_ROWS"); rc=$?
+check "a leaked row arriving over the production transport exits 1" "$rc" "1"
+contains "…and the page counts it" "$(alerts)" "stale=1"
+contains "…naming the row and its age" "$(alerts)" "qa-verify-tmp_t_viadocker@2026-10-21 15:16:36.79"
+
+# 13k. Stdout that is not a row is neither counted (a false page) nor dropped (a
+#      lost leak): the check refuses to judge and says so. A psql NOTICE, a
+#      locale warning or a truncated line is this shape, and an operator reading
+#      "stale=0" off it would be told there is no leak by a check that never
+#      parsed an answer.
+reset; : >"$DOCKER_ARGV"; rm -f "$DOCKER_ROWS"
+printf '%s\n' 'NOTICE: relation "api_keys" was not found, skipping' >"$DOCKER_STDOUT"
+out=$(run JF_WATCH_PSQL_CMD= JF_WATCH_SSH_TARGET=local \
+  PATH="$SB/fakebin_docker:$PATH" DOCKER_ARGV="$DOCKER_ARGV" DOCKER_ROWS="$DOCKER_ROWS" \
+  DOCKER_STDOUT="$DOCKER_STDOUT"); rc=$?
+check "output that is not a row exits 1" "$rc" "1"
+contains "…and refuses to judge it rather than counting it" "$(alerts)" "output_shape="
+notcontains "…never reporting it as a leaked key" "$(alerts)" "stale=1"
+notcontains "…nor as a clean measurement" "$(alerts)" "stale=0"
+rm -f "$DOCKER_STDOUT"
 
 echo "--- the Kanban board's host-fault rate (the incident this check exists for) ---"
 
@@ -739,6 +1008,7 @@ out=$(env -i PATH="$PATH" HOME="$HOME" \
   JF_WATCH_READY_CMD="$READY_OK" JF_WATCH_DF_CMD="$DF_OK" \
   JF_WATCH_KANBAN_DB=auto \
   JF_WATCH_KANBAN_DB_CANDIDATES=/nonexistent/a.db \
+  "${PSQL_ENV[@]}" \
   JF_WATCH_ATTEMPT_DELAY=0 bash "$WATCH" 2>&1); rc=$?
 check "no notifier exits 2" "$rc" "2"
 contains "no notifier explains itself" "$out" "refusing to run without an alerting path"
@@ -761,6 +1031,7 @@ out=$(env -i PATH="$PATH" HOME="$HOME" \
   JF_WATCH_NOTIFY_CMD="$NOTIFY_CMD" \
   JF_WATCH_READY_CMD="$READY_OK" JF_WATCH_DF_CMD="$DF_OK" \
   JF_WATCH_KANBAN_DB=auto JF_WATCH_KANBAN_DB_CANDIDATES=/nonexistent/a.db \
+  "${PSQL_ENV[@]}" \
   JF_WATCH_ATTEMPT_DELAY=0 bash "$WATCH"); rc=$?
 check "env-only config runs" "$rc" "0"
 
@@ -828,6 +1099,7 @@ run_real_notify() { # script [extra env assignments...]
     JF_WATCH_DF_CMD="$DF_OK" \
     JF_WATCH_KANBAN_DB=auto \
     JF_WATCH_KANBAN_DB_CANDIDATES=/nonexistent/a.db \
+    "${PSQL_ENV[@]}" \
     JF_WATCH_ATTEMPT_DELAY=0 JF_WATCH_TIMEOUT=5 \
     TG_BODY="$TG_BODY" TG_RC="$TG_RC" TG_CALLS="$TG_CALLS" REAL_CURL="$REAL_CURL" \
     "$@" bash "$script"
@@ -914,6 +1186,20 @@ leg_multi_chat() {
   contains "real transport: the second chat is logged as failed" "$(cat "$LOG")" "notify_failed chat=222"
   contains "real transport: and the refusing chat's own reply is what the log carries" \
     "$(cat "$LOG")" "chat not found"
+}
+
+# (f) The temp-key exclusion leg, driven through the real notify transport so a
+#     mutant that PAGES is observed as a POST (and a delivered page, hence exit 1)
+#     rather than as a notification the stub notifier swallowed. One 25 h old
+#     REVOKED row: silent on the shipped file, paging on the no-`revoked_at`
+#     mutant below.
+leg_tmpkey_revoked() { # script
+  reset
+  tmpkey_add qa-verify-tmp_t_old_revoked 25 revoked
+  tg_reset '{"ok":true,"result":{"message_id":4211}}' 0
+  out=$(run_real_notify "$1"); rc=$?
+  check "a 25 h old REVOKED temp key stays silent" "$rc" "0"
+  check "…and pages nobody" "$(grep -c '^' "$TG_CALLS")" "0"
 }
 
 # (e) The multi-line reply, 20 001 lines with `"ok":true` on line 1. Its size is
@@ -1016,6 +1302,37 @@ GOT="$((PASS - PASS_BEFORE))/$((FAIL - FAIL_BEFORE))"
 PASS=$PASS_BEFORE; FAIL=$FAIL_BEFORE
 check "control: …and a loop that stops at the first chat turns it red (the second chat is never POSTed)" \
   "$GOT" "1/4"
+
+# ── the bite proof for the temp-key check's exclusion predicate ─────────────
+# The group above only proves something if its verdicts are decided by the
+# WHERE clause. The cheapest REAL regression is dropping `revoked_at is null`:
+# the check would then page on the soft-revoked rows this card deliberately
+# excludes (inert by construction — the app's own DELETE is a soft revoke, a
+# decision this card must not fight) and cry wolf on every finished run. So the
+# same leg — one 25 h old REVOKED fixture row, the real SQL against the real
+# scratch table — is driven against a mutant with that predicate removed: it must
+# flip from silent to paging. Without this, a `revoked_at` clause that silently
+# stopped being applied (a "fix" that deleted it, say) would leave the suite green.
+LIVE_PRED="revoked_at is null and "
+MUT_REVOKED="$(mutant no_revoked_at "$LIVE_PRED" "")"
+check "control: the no-revoked_at mutant was built (the predicate was found exactly once)" \
+  "$([ -n "$MUT_REVOKED" ] && echo built || echo MISSING)" "built"
+contains "control: the mutant really lost the predicate" \
+  "$(cat "$MUT_REVOKED" 2>/dev/null)" "where created_at < now()"
+notcontains "…and no longer carries it" "$(cat "$MUT_REVOKED" 2>/dev/null)" "$LIVE_PRED"
+
+PASS_BEFORE=$PASS; FAIL_BEFORE=$FAIL
+leg_tmpkey_revoked "$WATCH" >/dev/null 2>&1
+GOT="$((PASS - PASS_BEFORE))/$((FAIL - FAIL_BEFORE))"
+PASS=$PASS_BEFORE; FAIL=$FAIL_BEFORE
+check "control: the shipped file is silent on a 25 h old REVOKED temp key (2/2)" "$GOT" "2/0"
+
+PASS_BEFORE=$PASS; FAIL_BEFORE=$FAIL
+leg_tmpkey_revoked "$MUT_REVOKED" >/dev/null 2>&1
+GOT="$((PASS - PASS_BEFORE))/$((FAIL - FAIL_BEFORE))"
+PASS=$PASS_BEFORE; FAIL=$FAIL_BEFORE
+check "control: …and dropping 'revoked_at is null' turns that SAME leg red (it pages on an inert row)" \
+  "$GOT" "0/2"
 
 echo "--- heartbeat digest ---"
 

@@ -43,6 +43,27 @@
 #                * never configured and no board DB on this host → disabled, and
 #                  the daily digest SAYS so (`board: NOT MEASURED here`), because
 #                  a silently-disabled check is the original blindness.
+#   6. tmpkeys prod `api_keys` rows that belong to a verify/deploy LANE
+#              (`name like 'qa-verify-tmp%'` / `'deploy-verify-tmp%'`), are still
+#              live (`revoked_at is null`) and were created more than
+#              JF_WATCH_TMPKEY_MAX_AGE_HOURS ago (default 24 h). Read over the
+#              same ssh + `docker exec … psql` path as df.
+#
+#              WHY: a QA/deploy run mints a temporary `readwrite` key, uses it for
+#              seconds and is supposed to HARD-DELETE its row. A run that dies
+#              (timeout, reclaim, exception) before that cleanup leaves the row
+#              live, i.e. a STANDING WRITE CREDENTIAL: `DELETE /v1/rest/keys/{id}`
+#              only soft-revokes (`revoked_at=now()`, keeps the audit line) and
+#              auth is a per-request DB lookup filtered on `revoked_at IS NULL`
+#              with no cache — the row itself is the only thing that makes such a
+#              key inert. Three of these were found by accident in one month,
+#              each while verifying an unrelated release, so the durable fix is a
+#              detector rather than another written rule.
+#
+#              Deliberately NOT alerted (each would make this check cry wolf):
+#                * a temp key younger than the window — that is an in-flight run;
+#                * a soft-revoked row — inert by construction, untidy not a leak;
+#                * the long-lived `AI Agent Key` / `wan` rows — legitimate keys.
 #
 # DELIVERY
 #   Telegram Bot API, called straight from this script. The alert path must not
@@ -120,6 +141,18 @@ KANBAN_WINDOW="${JF_WATCH_KANBAN_WINDOW_SECONDS:-3600}"   # trailing window
 KANBAN_THRESHOLD="${JF_WATCH_KANBAN_THRESHOLD:-3}"         # failures in the window
 # sqlite3 argv before the SQL, so the test can substitute it with a stub.
 KANBAN_SQLITE_OVERRIDE="${JF_WATCH_KANBAN_SQLITE_CMD:-}"
+
+# ── the stale temp-API-key check (check 6) ─────────────────────────────────
+# A lane's temp key (`qa-verify-tmp*` / `deploy-verify-tmp*`) that is still live
+# this many hours after it was created is a standing write credential a dead run
+# forgot. Read out of the prod database, over the same ssh path as df.
+TMPKEY_MAX_AGE_HOURS="${JF_WATCH_TMPKEY_MAX_AGE_HOURS:-24}"
+PG_CONTAINER="${JF_WATCH_PG_CONTAINER:-jomform-postgres-1}"
+PG_USER="${JF_WATCH_PG_USER:-jomform}"
+PG_DB="${JF_WATCH_PG_DB:-jomform}"
+# psql argv before the SQL, so the test can substitute it with a stub — the stub
+# receives the SQL the watchdog COMPOSED (same seam shape as KANBAN_SQLITE_CMD).
+PSQL_CMD_OVERRIDE="${JF_WATCH_PSQL_CMD:-}"
 
 # Test seams: full command lines that replace the real transport. Used by
 # jomform-watch_test.sh; unset in production.
@@ -238,6 +271,29 @@ remote_df() { # path
   fi
   # shellcheck disable=SC2029,SC2086
   ssh $SSH_OPTS "$SSH_TARGET" "df -P -k $path"
+}
+
+remote_psql() { # sql — run one query against the prod database, rows only
+  local sql="$1" cmd
+  if [ -n "$PSQL_CMD_OVERRIDE" ]; then
+    # The override receives the SQL as its single argument, so the test executes
+    # the query the watchdog actually composed instead of re-implementing the
+    # filter in the stub (a stub that answered from a state file could stay green
+    # while the WHERE clause was wrong — i.e. while this check measured nothing).
+    # shellcheck disable=SC2086
+    $PSQL_CMD_OVERRIDE "$sql"
+    return $?
+  fi
+  # `-v ON_ERROR_STOP=1` is load-bearing: without it psql exits 0 after a SQL
+  # error, prints the error on stderr and this check would read "no stale rows".
+  # `-tA` gives one unaligned row per line, which is what the caller parses.
+  cmd="docker exec $PG_CONTAINER psql -U $PG_USER -d $PG_DB -v ON_ERROR_STOP=1 -tA -c $(printf '%q' "$sql")"
+  if [ "$SSH_TARGET" = "local" ] || [ "$SSH_TARGET" = "-" ]; then
+    bash -c "$cmd < /dev/null"
+    return $?
+  fi
+  # shellcheck disable=SC2029,SC2086
+  ssh $SSH_OPTS "$SSH_TARGET" "$cmd < /dev/null"
 }
 
 # ─── notification ───────────────────────────────────────────────────────────
@@ -394,6 +450,84 @@ check_disk() { # prints one line per over-threshold path, returns 0/1
     fi
   done <<<"$out"
   return $rc
+}
+
+# ─── check 6: a lane's temp API key left LIVE past the window ───────────────
+# Rationale in the header (item 6); the predicate is the whole check, so it is
+# one statement with no interpolation beyond the validated hour count:
+#   revoked_at is null        — a soft-revoked row is inert, not a leak
+#   created_at < now() - N h  — younger means an in-flight run
+#   name like the two lanes   — the `AI Agent Key` rows are legitimate
+# One row per line, `name@<utc created_at>`, so the detail names WHO leaked it
+# and when without a second round-trip.
+tmpkey_sql() { # max_age_hours
+  printf '%s' "select name || '@' || (created_at at time zone 'UTC')::text from api_keys where revoked_at is null and created_at < now() - interval '$1 hours' and (name like 'qa-verify-tmp%' or name like 'deploy-verify-tmp%') order by created_at"
+}
+
+count_rows() { # newline-separated output -> number of non-blank lines
+  local n=0 r
+  while IFS= read -r r; do [ -z "$r" ] || n=$((n + 1)); done <<<"$1"
+  printf '%s' "$n"
+}
+
+tmpkey_rows_detail() { # newline-separated rows -> "a@t, b@t (+N more)"
+  local rows="$1" out="" n=0 more=0 r
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    n=$((n + 1))
+    if [ "$n" -le 10 ]; then out="${out:+$out, }$r"; else more=$((more + 1)); fi
+  done <<<"$rows"
+  [ "$more" -gt 0 ] && out="$out (+$more more)"
+  printf '%s' "$out"
+}
+
+check_tmpkeys() { # prints detail, returns 0 healthy / 1 failing
+  local i out rc err errf rows count bad
+  case "$TMPKEY_MAX_AGE_HOURS" in
+    ''|*[!0-9]*)
+      printf 'tmpkeys bad_config max_age_hours=%s (not a whole number of hours)' "$TMPKEY_MAX_AGE_HOURS"
+      return 1 ;;
+  esac
+  [ "$TMPKEY_MAX_AGE_HOURS" -gt 0 ] || {
+    printf 'tmpkeys bad_config max_age_hours=%s (must be positive)' "$TMPKEY_MAX_AGE_HOURS"
+    return 1
+  }
+  for i in $(seq 1 "$ATTEMPTS"); do
+    # stderr is kept APART from the rows: a psql NOTICE, an ssh "Warning: …"
+    # banner or a docker complaint on the same stream would otherwise be counted
+    # as a leaked key and page a false alarm — the one failure mode that trains
+    # an operator to ignore this check.
+    errf="$(mktemp)" || { printf 'tmpkeys unreadable mktemp_failed'; return 1; }
+    out="$(remote_psql "$(tmpkey_sql "$TMPKEY_MAX_AGE_HOURS")" 2>"$errf")"; rc=$?
+    err="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"
+    [ "$rc" = 0 ] && break
+    # An unreachable database is a failed MEASUREMENT, not "no leak": the retry
+    # is there only so a single dropped ssh connection does not page.
+    [ "$i" = "$ATTEMPTS" ] && {
+      printf 'tmpkeys unreadable psql_rc=%s err=%s' "$rc" \
+        "$(printf '%s' "$err" | tr '\n' ' ' | cut -c1-200)"
+      return 1
+    }
+    sleep "$ATTEMPT_DELAY"
+  done
+  rows="$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d')"
+  # Every row the query emits is `name@<YYYY-MM-DD…>`. Anything else is not a
+  # row, and neither counting it (a false page) nor dropping it (a lost leak) is
+  # acceptable — so refuse to judge and say so.
+  bad="$(printf '%s\n' "$rows" | grep -vE '@[0-9]{4}-[0-9]{2}-[0-9]{2}' \
+    | tr '\n' ' ' | cut -c1-200)"
+  if [ -n "${bad// /}" ]; then
+    printf 'tmpkeys unreadable output_shape=%s' "$bad"
+    return 1
+  fi
+  count=$(count_rows "$rows")
+  if [ "$count" = 0 ]; then
+    printf 'tmpkeys stale=0 max_age=%sh' "$TMPKEY_MAX_AGE_HOURS"
+    return 0
+  fi
+  printf 'tmpkeys stale=%s max_age=%sh rows=%s' \
+    "$count" "$TMPKEY_MAX_AGE_HOURS" "$(tmpkey_rows_detail "$rows")"
+  return 1
 }
 
 # ─── check 5: the Kanban board's host-fault rate ────────────────────────────
@@ -680,6 +814,16 @@ else
   results="${results}${dl} | "
   failed=1
   record_failure disk "$dl"
+fi
+
+# A lane's temp key left live past the window: a standing write credential.
+if tk=$(check_tmpkeys); then
+  results="${results}${tk} | "
+  record_recovery tmpkeys "$tk"
+else
+  results="${results}${tk} | "
+  failed=1
+  record_failure tmpkeys "$tk"
 fi
 
 # Board check. Three outcomes, deliberately distinct:
