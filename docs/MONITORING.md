@@ -145,7 +145,18 @@ It installs:
 | `/usr/local/bin/jomform-watch.sh` | the watchdog |
 | `/etc/jomform-watch.env` | config, `0600` root (see `jomform-watch.env.example`) |
 | `/etc/cron.d/jomform-watch` | check every 5 min, digest daily 09:17 |
-| `/var/log/jomform-watch.log` | one line per pass, self-rotating in place |
+| `/var/log/jomform-watch.log` | one line per pass, self-rotating in place (see below) |
+
+Every pass writes one status line, and its first token after `host=` is the
+**verdict**: `status=pass` when every check succeeded, `status=FAIL` when at least
+one failed (the same run also carries `failed=1`, pages, and exits `1`). So
+`grep -c 'status=pass'` counts clean passes and `grep -c 'status=FAIL'` counts
+failing ones — the word is derived from the run, never a constant:
+
+```
+2026-10-23T09:55:15Z level=info  host=vmi3187266 status=FAIL checks_total=6800 failed=1 web code=200 bytes=26411 | … | tmpkeys stale=1 max_age=24h rows=qa-verify-tmp_t_x@2026-10-22 08:54:07.35371
+2026-10-23T10:20:10Z level=info  host=vmi3187266 status=pass checks_total=6805 failed=0 web code=200 bytes=26411 | … | board disabled=1 reason=no_board_DB_at:_/nonexistent/a.db
+```
 
 Run `--dry-run` to see the plan without writing anything.
 

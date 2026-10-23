@@ -354,6 +354,32 @@ reset() { # fresh state + log + healthy stub + a configured notifier
 alert_count() { [ -f "$NOTIFY" ] && grep -c '^' "$NOTIFY" || echo 0; }
 alerts() { [ -f "$NOTIFY" ] && cat "$NOTIFY" || printf ''; }
 
+# pass_status_of <log> -> the `status=` token carried by the per-pass line, or
+# empty when the line carries none.
+#
+# WHY THIS EXISTS: the status word on the per-pass line used to
+# be the CONSTANT literal `pass`, emitted verbatim on a run that had already
+# paged (`pass checks_total=… failed=1`). This log is the operator's primary
+# surface, so `grep -c pass` counted failing runs as healthy and a human skimming
+# the line read "pass" before reaching `failed=` — the silent-green shape this
+# watchdog exists to remove. The token must therefore be read out of the line and
+# compared, never assumed.
+#
+# The per-pass line is the one carrying `checks_total=`: the digest line uses
+# `checks=`, and notify_sent / alert_suppressed carry neither, so a neighbouring
+# line can never be mistaken for it. The LAST match wins, so a leg that runs more
+# than one pass reads its newest line.
+#
+# The token is resolved FIELD-WISE, not as a substring: `status=` is the token the
+# watchdog writes, and matching the field means some future check detail that
+# happens to contain the text `status=` cannot be read as the line's status.
+pass_status_of() {
+  local line
+  line="$(grep 'checks_total=' "$1" 2>/dev/null | tail -n 1)" || true
+  [ -n "$line" ] || return 0
+  awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^status=/) { print $i; break } }' <<<"$line"
+}
+
 # ── the load-independent control for the matcher ─────────────────────────────
 # Every `contains`/`notcontains` below reads a payload the WATCHDOG produced, and
 # the ones that failed in the wild (the `alert_suppressed` assertion) read the
@@ -425,6 +451,10 @@ contains "healthy run logs the pass" "$(cat "$LOG")" "level=info"
 contains "healthy run records the http code" "$(cat "$LOG")" "web code=200"
 contains "healthy run confirms dependencies" "$(cat "$LOG")" "ready database=ok valkey=ok"
 contains "healthy run confirms disk headroom" "$(cat "$LOG")" "disk ok"
+# The status token is a VERDICT, so on a clean pass it must say so — and it is
+# read out of the emitted line, not out of the source. This is the healthy half of
+# the discriminating pair completed in 13d.
+check "healthy run's per-pass line carries status=pass" "$(pass_status_of "$LOG")" "status=pass"
 
 echo "--- an alert that actually fires ---"
 
@@ -600,6 +630,9 @@ contains "the composed SQL matches the qa lane's temp keys" \
   "$(cat "$SQL_LOG")" "name like 'qa-verify-tmp%'"
 contains "the composed SQL matches the deploy lane's temp keys" \
   "$(cat "$SQL_LOG")" "name like 'deploy-verify-tmp%'"
+# The CLEAN half of the status-token pair, captured here because this leg is a
+# genuinely healthy pass on the temp-key check (an in-flight row, nothing leaked).
+CLEAN_TOKEN="$(pass_status_of "$LOG")"
 
 # 13b. A soft-revoked temp row of the SAME age is inert by construction (auth is
 #      a per-request lookup filtered on `revoked_at IS NULL`): untidy, not a
@@ -633,6 +666,25 @@ contains "the alert names the leaked row so the lane is visible" \
   "$(alerts)" "qa-verify-tmp_t_deadrun"
 check "the check's state file is <STATE_DIR>/tmpkeys.state (the name to grep)" \
   "$([ -f "$STATE/tmpkeys.state" ] && echo yes || echo no)" "yes"
+
+# 13d-bis. THE LABEL: this pass FAILED
+#         (a page went out, the run exits 1), so the per-pass line's status token
+#         must say so. It used to be the constant literal `pass` on every run, so
+#         `grep -c pass` counted this line as healthy and a reader skimming it saw
+#         "pass" before reaching `failed=`. Each assertion below reads the token
+#         the watchdog actually wrote.
+FAILING_TOKEN="$(pass_status_of "$LOG")"
+check "a FAILING pass's status token is status=FAIL, not pass" "$FAILING_TOKEN" "status=FAIL"
+notcontains "a failing pass line never reads status=pass (grep -c pass cannot count it healthy)" \
+  "$(cat "$LOG")" "status=pass"
+# The pre-fix shape, asserted literally: the constant word sat between `host=` and
+# `checks_total=`, so this is the exact text a reader skimmed. It must be gone from
+# a failing line — which is why this leg is RED on the pre-fix script and green
+# after the fix, unlike the keyed assertion above.
+notcontains "a failing pass line carries no bare 'pass' word either" \
+  "$(cat "$LOG")" " pass "
+check "the clean pass and the failing pass DIFFER in their status token (the whole point)" \
+  "$CLEAN_TOKEN|$FAILING_TOKEN" "status=pass|status=FAIL"
 
 # 13e. Edge-triggered like every other check: the same leak on the next 5-minute
 #      tick is measured, logged, and NOT re-sent.

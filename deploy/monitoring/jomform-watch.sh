@@ -846,7 +846,16 @@ esac
 counter_add checks_total 1
 [ "$failed" = 1 ] && counter_add failures_total 1
 
-log info "pass checks_total=$(counter_get checks_total) failed=$failed ${results% | }"
+# THE STATUS TOKEN MUST DISCRIMINATE. This word used to be the constant literal
+# `pass`, emitted verbatim on a run that had just paged (`pass checks_total=…
+# failed=1`). This log is the operator's primary surface ("one line per pass"),
+# so `grep -c pass` counted failing runs as healthy and a reader skimming the line
+# read "pass" before reaching `failed=` — the silent-green shape this watchdog
+# exists to remove. Derive it from $failed instead, in the same key=value shape as
+# every other field on the line.
+pass_status=pass
+[ "$failed" = 1 ] && pass_status=FAIL
+log info "status=$pass_status checks_total=$(counter_get checks_total) failed=$failed ${results% | }"
 
 if [ -n "$ALERT_LINES" ]; then
   send_alerts "$failed"
