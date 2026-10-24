@@ -134,6 +134,27 @@ export default function MediaPage() {
   const [trashed, setTrashed] = useState<TrashedMedia[]>([]);
   const [trashLoaded, setTrashLoaded] = useState(false);
   const [notify, setNotify] = useState("");
+  // The TRASH view's OWN refusal channel (card t_66270a9c — the FOURTH surface of
+  // the defect t_ab4aa85b fixed on /forms and in the Settings Danger zone, after
+  // /products):
+  //
+  //   * Every refusal branch wrote its sentence into `error` and then fired
+  //     `loadTrash()`, which clears `error` on a successful reload — so the
+  //     sentence was SET and ERASED in the same tick and the merchant never read
+  //     why their action was refused. Measured on the built app in a real browser
+  //     with a 409 on the restore route: `role="alert"` sampled every 100 ms,
+  //     thirty times, carried the sentence at NO sample, while the trash listing
+  //     went from one call to two — the wipe is the same-tick relist, not a
+  //     missing string. `loadTrash()` does not touch this state, so the refetch
+  //     that REPORTS the refusal can no longer erase it.
+  //   * `error` is also this page's LOAD-failure line: it carries a Retry that
+  //     reloads the listing. A refusal changes nothing about the listing, so the
+  //     sentence belongs beside the rows it is about, without a Retry.
+  //
+  // Cleared at the START of the next action that re-issues it (both handlers open
+  // with it) and by the Active/Trash switch. THE RULE: a refusal stays readable
+  // until the user's next action — never erased by the refetch that reports it.
+  const [mediaErr, setMediaErr] = useState("");
   const [confirmPurge, setConfirmPurge] = useState<TrashedMedia | null>(null);
   const [purgeBusy, setPurgeBusy] = useState(false);
 
@@ -353,17 +374,37 @@ export default function MediaPage() {
 
   async function restore(id: string) {
     setNotify("");
-    const res = await fetch(`/api/rest/media/${id}/restore${workspaceQuery()}`, { method: "POST" });
+    // The NEXT action on this surface clears the previous refusal — at the START
+    // of the action, never as a side effect of the relist below it (card
+    // t_66270a9c).
+    setMediaErr("");
+    let res: Response;
+    try {
+      res = await fetch(`/api/rest/media/${id}/restore${workspaceQuery()}`, { method: "POST" });
+    } catch {
+      // A transport failure (offline, aborted, DNS) is an ACTION failure like any
+      // other and it must leave a sentence on this surface. Without this branch
+      // the rejection escaped through the row's `void restore(m.id)` handler as an
+      // unhandled rejection and the merchant saw NOTHING at all — the same extra
+      // card t_602c48f5 had to add to the products bin, and the same class as the
+      // missing catch card t_ab4aa85b found on /forms' restore.
+      setMediaErr(t("media.restoreFail"));
+      return;
+    }
     if (!res.ok) {
-      // 409 (code upload.objectGone) means the bytes were removed while the row
-      // sat in the bin, so there is nothing to restore. Say WHICH failure it is
-      // rather than the generic line: "we couldn't restore this" sends the
-      // merchant to retry a call that can never succeed.
-      if (res.status === 409) {
-        setError(t("media.restoreObjectGone"));
-      } else {
-        setError(t("media.restoreFail"));
-      }
+      // The sentence is rendered from the machine `code` in the merchant's OWN
+      // language rather than from the server's Malay prose (issue #6177). WHAT THE
+      // SHIPPED HANDLER REALLY ANSWERS on the bytes-gone refusal is a 409 with the
+      // prose "fail media ini sudah tiada dalam storan — …" and the HTTP-CLASS code
+      // `request.conflict`, which apiErr deliberately does not translate — so the
+      // 409 branch keeps this page's own specific sentence as the fallback and the
+      // routing fires the moment the API names a specific code (a 403
+      // `role.manageRequired` already does, and it reaches this route).
+      //
+      // It goes to `mediaErr`, NOT `error`: the relist below clears `error` on
+      // success, so the sentence used to be set and wiped in the same tick.
+      const d = await res.json().catch(() => null);
+      setMediaErr(apiErr(d, res.status === 409 ? t("media.restoreObjectGone") : t("media.restoreFail"), t));
       void loadTrash();
       return;
     }
@@ -376,12 +417,18 @@ export default function MediaPage() {
     if (!confirmPurge || purgeBusy) return;
     setPurgeBusy(true);
     setNotify("");
+    // The next purge clears the previous refusal — at the START of the action,
+    // never as a side effect of the relist (card t_66270a9c).
+    setMediaErr("");
     try {
       const res = await fetch(`/api/rest/media/${confirmPurge.id}/purge${workspaceQuery()}`, {
         method: "DELETE",
       });
       if (!res.ok) {
-        setError(t("media.purgeFail"));
+        // Through the machine `code` like the restore above, and into `mediaErr`
+        // so the refusal survives the relist below it instead of being wiped by it.
+        const d = await res.json().catch(() => null);
+        setMediaErr(apiErr(d, t("media.purgeFail"), t));
         setConfirmPurge(null);
         void loadTrash();
         return;
@@ -409,7 +456,13 @@ export default function MediaPage() {
       // has to be re-read too, not just the bin.
       load();
     } catch {
-      setError(t("media.purgeFail"));
+      // A transport failure is an ACTION failure, so it uses the same channel as
+      // the refusal above — and the dialog is closed with it, because the sentence
+      // renders BEHIND a full-screen overlay: leaving the dialog up would hide the
+      // very line that says what happened (the products bin closes it for the same
+      // reason).
+      setMediaErr(t("media.purgeFail"));
+      setConfirmPurge(null);
     } finally {
       setPurgeBusy(false);
     }
@@ -531,6 +584,10 @@ export default function MediaPage() {
                 setView(v);
                 setError("");
                 setNotify("");
+                // Switching views is the user's next action: the refusal about the
+                // view being left is cleared with the success notice (card
+                // t_66270a9c).
+                setMediaErr("");
               }}
               className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium ${
                 view === v
@@ -570,6 +627,19 @@ export default function MediaPage() {
             aria-labelledby={tabDomId("media", "trash")}
           >
             <p className="mt-4 max-w-2xl text-sm text-[var(--jf-muted)]">{t("media.trashNote")}</p>
+            {/* The refusal (card t_66270a9c), rendered beside the rows it is about.
+                It is a state no loader writes, so the relist that reports the
+                refusal cannot erase the sentence — and unlike the page's load-failure
+                line above it carries no Retry, because a refusal changes nothing
+                about the listing and reloading it is not the remedy. */}
+            {mediaErr && (
+              <p
+                role="alert"
+                className="mt-3 max-w-2xl rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700"
+              >
+                {mediaErr}
+              </p>
+            )}
             <ul className="mt-4 space-y-2">
               {trashed.map((m) => (
                 <li
