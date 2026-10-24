@@ -57,10 +57,16 @@ var fieldIDUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
 // Choice is one option of a select/radio/checkbox/image-choice/option/shipping
 // block. price_sen is only meaningful for pricing blocks (option/shipping);
 // product prices never come from the LLM.
+//
+// Card t_3d11f98d: price_sen is a POINTER because "no price was given" and "the
+// price is 0 (free)" are different answers for a pricing block — the first is a
+// config that cannot say what it charges and is refused, the second is a
+// deliberate free choice (the builder writes `price_sen: 0` on its default
+// choice). With a plain int64 both decoded to 0 and the check could not run.
 type Choice struct {
 	Label    string `json:"label"`
 	Value    string `json:"value"`
-	PriceSen int64  `json:"price_sen,omitempty"`
+	PriceSen *int64 `json:"price_sen,omitempty"`
 }
 
 // Block is one field/block in the generated form config. It mirrors the
@@ -177,6 +183,32 @@ func Parse(raw string) (*Config, error) {
 				c.Value = c.Label
 			}
 		}
+		// Card t_3d11f98d: a pricing block's price lives on the CHOICE the buyer
+		// picks — that is what the renderer prints and what /order charges
+		// (httpapi/lookupProduct). The model used to be asked for choices with
+		// no price at all, so "extra sambal RM5" came back as an add-on the page
+		// showed free and the sale recorded at 0 sen.
+		//
+		// A block-level price the model did supply is pushed down onto every
+		// choice that has none (the same money the merchant asked for, now in
+		// the place the page and the submit path read it from), and the
+		// block-level field is cleared: two levels for one price is the
+		// ambiguity formfields.UnpricedPricingBlock refuses at save time.
+		if b.Type == "option" || b.Type == "shipping" {
+			if len(b.Choices) == 0 {
+				return nil, fmt.Errorf("blok #%d (%s): beri sekurang-kurangnya satu pilihan berharga", i+1, b.Type)
+			}
+			for ci := range b.Choices {
+				if b.Choices[ci].PriceSen == nil && b.PriceSen != 0 {
+					p := b.PriceSen
+					b.Choices[ci].PriceSen = &p
+				}
+				if b.Choices[ci].PriceSen == nil {
+					return nil, fmt.Errorf("blok #%d (%s): pilihan %q tiada price_sen — letak harga dalam sen (0 untuk percuma)", i+1, b.Type, b.Choices[ci].Label)
+				}
+			}
+			b.PriceSen = 0
+		}
 	}
 	// Validate theme allowlists.
 	if cfg.Theme != nil {
@@ -260,11 +292,11 @@ func Prompt(userPrompt string) string {
 	var sb strings.Builder
 	sb.WriteString("You are a form-builder assistant for JomForm. Turn the user's request into a JSON form config.\n")
 	sb.WriteString("Reply with ONLY a JSON object (no markdown, no preamble) matching this shape:\n")
-	sb.WriteString(`{"title": "<form title>", "blocks": [{"id": "<unique a-z0-9_- id>", "type": "<block type>", "value": "<field label>", "required": true|false, "placeholder": "<optional>", "choices": [{"label": "...", "value": "..."}]}], "theme": {"primary": "#hex", "background": "#hex", "text": "#hex", "card_background": "#hex", "card_border_radius": "16px", "font_family": "system-ui, sans-serif", "layout": "centered|full_width|split", "spacing": "compact|comfortable|spacious"}}` + "\n")
+	sb.WriteString(`{"title": "<form title>", "blocks": [{"id": "<unique a-z0-9_- id>", "type": "<block type>", "value": "<field label>", "required": true|false, "placeholder": "<optional>", "choices": [{"label": "...", "value": "...", "price_sen": <integer sen, option/shipping only>}]}], "theme": {"primary": "#hex", "background": "#hex", "text": "#hex", "card_background": "#hex", "card_border_radius": "16px", "font_family": "system-ui, sans-serif", "layout": "centered|full_width|split", "spacing": "compact|comfortable|spacious"}}` + "\n")
 	sb.WriteString("Allowed block types (use only these): text, textarea, number, select, radio, checkbox, name, email, phone, date, time, website, section, html, address, consent, hidden, list, repeater, image-choice, captcha, product, quantity, option, shipping, total, image, divider.\n")
 	sb.WriteString("Rules:\n")
 	sb.WriteString("- Each block needs a unique id (a-z, 0-9, _ , -) and a human label in `value`.\n")
-	sb.WriteString("- For select/radio/checkbox/image-choice/option/shipping blocks, provide `choices` (label + value).\n")
+	sb.WriteString("- For select/radio/checkbox/image-choice/option/shipping blocks, provide `choices` (label + value). An option/shipping choice's price is MONEY THE BUYER PAYS: put `price_sen` (integer sen — RM5.00 is 500, free is 0) on EVERY choice, taken from the user's request. Never emit an option/shipping block whose choices have no price.\n")
 	sb.WriteString("- Mark name/email/phone and any obviously-required field as required: true.\n")
 	sb.WriteString("- Do NOT invent prices. For product blocks, omit price entirely (the server resolves it).\n")
 	sb.WriteString("- The theme is optional; if the user mentions a colour/theme, suggest matching hex values.\n")

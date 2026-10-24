@@ -950,6 +950,14 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		writeErr(w, http.StatusBadRequest, formfields.UnsupportedBlockMessage(bt))
 		return
 	}
+	// Card t_3d11f98d: an option/shipping block whose price the config cannot
+	// resolve would be served as a free add-on and charged 0 sen — the buyer
+	// sees no price and the sale records none. Refused at storage, like the
+	// unsupported-block rule above (see formfields.UnpricedPricingBlock).
+	if msg := formfields.UnpricedPricingBlock(in.Config); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
+	}
 	// Card t_73a5db6e: a custom-HTML form's registered `required` fields are
 	// enforced at /order, and the buyer's page can only supply a value for a
 	// control that exists in the sanitized HTML. A config whose required field
@@ -1049,6 +1057,13 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 	// serve (and, on an already-stored form, is how the merchant clears it).
 	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
 		writeErr(w, http.StatusBadRequest, formfields.UnsupportedBlockMessage(bt))
+		return
+	}
+	// Card t_3d11f98d: same unresolved-pricing refusal as createForm — an
+	// update that stores an option/shipping block with no usable price
+	// reintroduces the free-but-shown-as-priced add-on.
+	if msg := formfields.UnpricedPricingBlock(in.Config); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	// Card t_73a5db6e: same unsatisfiable-custom-form refusal as createForm. A

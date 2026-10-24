@@ -118,7 +118,10 @@ export default function BuilderDocsPage() {
           <strong>Choices</strong>, the <strong>product</strong> picker and{" "}
           <strong>conditional logic</strong> — as before: a dropdown, radio, image-choice, option or
           shipping block edits its own list of choices, a product block picks the product it sells,
-          and a rule shows or hides a field depending on an earlier answer.
+          and a rule shows or hides a field depending on an earlier answer. On an option or shipping
+          block each choice carries its own price, and that price is exactly what the buyer is
+          charged for the choice they pick — so a choice left without a price blocks the save
+          instead of quietly costing nothing (enter 0 for a free choice).
         </li>
       </ul>
 

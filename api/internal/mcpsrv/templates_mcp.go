@@ -266,6 +266,12 @@ func (s *Server) createTemplateMCP(
 	if bt := formfields.UnsupportedBlock(config); bt != "" {
 		return nil, nil, errors.New(formfields.UnsupportedBlockMessage(bt))
 	}
+	// Card t_3d11f98d: and so is an option/shipping block with no resolvable
+	// price — cloned onto a form it would be a free add-on the merchant
+	// believes is priced.
+	if msg := formfields.UnpricedPricingBlock(config); msg != "" {
+		return nil, nil, errors.New(msg)
+	}
 	// Card t_73a5db6e: and so is an unsatisfiable custom-form contract — it
 	// would reach a buyer's page through use_template.
 	if err := customform.ValidateAndNormalizeConfig(config); err != nil {
@@ -337,6 +343,10 @@ func (s *Server) updateTemplateMCP(
 	// Card t_4086b8f0: same unsupported-block refusal as create_template.
 	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
 		return nil, nil, errors.New(formfields.UnsupportedBlockMessage(bt))
+	}
+	// Card t_3d11f98d: same unresolved-pricing refusal as create_template.
+	if msg := formfields.UnpricedPricingBlock(in.Config); msg != "" {
+		return nil, nil, errors.New(msg)
 	}
 	// Card t_73a5db6e: same unsatisfiable-custom-form refusal as
 	// create_template (nil config = leave unchanged, and is skipped).

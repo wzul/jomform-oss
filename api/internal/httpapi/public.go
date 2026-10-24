@@ -955,21 +955,37 @@ func (h *PublicHandlers) isProductRow(ctx context.Context, accountID, productID 
 // their own price in the config and stay snapshot-based: they are not product
 // references and must not be re-priced from the products table.
 //
+// Card t_3d11f98d: a pricing block's price lives on the CHOICE the buyer picked
+// (`choices[].price_sen`), because that is the only price the builder writes
+// (web/src/app/builder/page.tsx never sets a block-level price_sen) and the only
+// price the page prints next to that choice. answer is the value the buyer
+// submitted for this block — the same value the renderer's <select> carried.
+// The rule, in order:
+//
+//  1. the submitted answer names a choice → charge THAT choice's price
+//     (a choice with no explicit price is free, which is exactly what the page
+//     showed: no "(+RM…)" beside it);
+//  2. the answer names no choice of this block (a stale or forged value) → the
+//     item is refused, so a buyer cannot pick the RM5 add-on and post a value
+//     that prices it at nothing;
+//  3. no answer at all (a legacy/hand-written client that submits only the
+//     block id) → the legacy block-level `price_sen`, then 0.
+//
 // accountID is passed explicitly and form may be nil (issue #491, menu
 // checkout): a formless order has no snapshot, so it resolves live only and
 // rejects an unknown product id.
-func (h *PublicHandlers) lookupProduct(ctx context.Context, accountID string, form *dbstore.Form, productID string) (string, int64) {
+func (h *PublicHandlers) lookupProduct(ctx context.Context, accountID string, form *dbstore.Form, productID, answer string) (string, int64, error) {
 	// 1. Live product row wins (active product in the account).
 	if h.Products != nil && accountID != "" {
 		if p, err := h.Products.Get(ctx, accountID, productID); err == nil && p != nil {
-			return p.Name, p.PriceSen
+			return p.Name, p.PriceSen, nil
 		}
 	}
 	// 2. Fallback: the form's saved snapshot (archived/deleted product, or a
 	// pricing block that carries its own price). No form → nothing to fall
 	// back to.
 	if form == nil {
-		return "", 0
+		return "", 0, nil
 	}
 	raw, _ := json.Marshal(form.Config)
 	var cfg struct {
@@ -985,22 +1001,46 @@ func (h *PublicHandlers) lookupProduct(ctx context.Context, accountID string, fo
 			ID       string `json:"id"`
 			Type     string `json:"type"`
 			Value    string `json:"value"`
-			PriceSen int64  `json:"price_sen"`
+			PriceSen *int64 `json:"price_sen"`
+			// Card t_3d11f98d: the per-choice price the builder writes and the
+			// renderer prints. Pointer so "absent" (a free choice, or a legacy
+			// config) is distinguishable from an explicit 0.
+			Choices []struct {
+				Value    string `json:"value"`
+				PriceSen *int64 `json:"price_sen"`
+			} `json:"choices"`
 		} `json:"blocks"`
 	}
 	if json.Unmarshal(raw, &cfg) == nil {
 		for _, p := range cfg.Products {
 			if p.ID == productID {
-				return p.Name, p.PriceSen
+				return p.Name, p.PriceSen, nil
 			}
 		}
 		for _, b := range cfg.Blocks {
-			if b.ID == productID && (b.Type == "option" || b.Type == "shipping") {
-				return b.Value, b.PriceSen
+			if b.ID != productID || (b.Type != "option" && b.Type != "shipping") {
+				continue
 			}
+			if ans := strings.TrimSpace(answer); ans != "" {
+				for _, c := range b.Choices {
+					if strings.TrimSpace(c.Value) != ans {
+						continue
+					}
+					var price int64
+					if c.PriceSen != nil {
+						price = *c.PriceSen
+					}
+					return b.Value, price, nil
+				}
+				return "", 0, fmt.Errorf("pilihan tidak sah untuk %s — muat semula halaman dan pilih sekali lagi", b.Value)
+			}
+			if b.PriceSen != nil {
+				return b.Value, *b.PriceSen, nil
+			}
+			return b.Value, 0, nil
 		}
 	}
-	return "", 0
+	return "", 0, nil
 }
 
 // ─── render + thank-you (SSR, buyer-facing) ──────────────────────────────────

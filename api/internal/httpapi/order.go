@@ -229,7 +229,14 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		// price resolve LIVE from the product row, with the form snapshot only
 		// as the fallback for an archived/deleted product or a pricing block.
 		// A formless (menu) order has no snapshot, so live is the only source.
-		name, price := h.lookupProduct(r.Context(), tgt.AccountID, tgt.Form, it.ProductID)
+		// Card t_3d11f98d: a pricing block's price comes from the CHOICE the
+		// buyer picked (choices[].price_sen) — in.Fields carries that answer
+		// under the block's own id, which is also its product_id.
+		name, price, perr := h.lookupProduct(r.Context(), tgt.AccountID, tgt.Form, it.ProductID, in.Fields[it.ProductID])
+		if perr != nil {
+			writeErr(w, http.StatusBadRequest, perr.Error())
+			return
+		}
 		if price <= 0 && name == "" {
 			writeErr(w, http.StatusBadRequest, "produk tidak sah: "+it.ProductID)
 			return

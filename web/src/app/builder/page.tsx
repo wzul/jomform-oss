@@ -747,7 +747,17 @@ export default function Builder() {
         required_message: b.requiredMessage || undefined,
         price_sen: b.priceSen,
         quantity: b.quantity === undefined ? undefined : b.quantity,
-        choices: b.choices?.map((c) => ({ label: c.label, value: c.value, price_sen: c.price_sen })),
+        // Card t_3d11f98d: an option/shipping block's price IS the choice price
+        // — that is what the buyer's page prints and what /order charges, and
+        // the server refuses a pricing block whose choices carry no price. A
+        // choice row the merchant left blank is a free choice, so write the 0
+        // down explicitly instead of dropping the key (which the server cannot
+        // tell apart from a block nobody priced).
+        choices: b.choices?.map((c) => ({
+          label: c.label,
+          value: c.value,
+          price_sen: b.type === "option" || b.type === "shipping" ? (c.price_sen ?? 0) : c.price_sen,
+        })),
       })),
       products: products.map((p) => ({ id: p.id, name: p.name, price_sen: p.price_sen, images: p.images })),
     };

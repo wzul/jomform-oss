@@ -210,7 +210,7 @@ func (s *Server) registerTools() {
 	}, s.getForm)
 	addTool(s, &mcp.Tool{
 		Name:        "upsert_form",
-		Description: "Cipta/kemaskini borang (form_id kosong = baru). Baca sedia ada dengan get_form dahulu dan hantar config penuh supaya blok sedia ada tidak hilang. Theme (pilihan) = gaya/branding tersuai. slug (pilihan) = laluan URL borang: pada cipta ia digunakan bila diisi; pada kemaskini ia MENAMAKAN SEMULA borang (a-z, 0-9, sengkang; 1-40 aksara) dan URL lama kekal berfungsi melalui ubah hala sementara (301) — kosongkan untuk kekalkan slug sedia ada, dan slug yang sudah dipakai borang lain dalam workspace ini ditolak dengan ralat.",
+		Description: "Cipta/kemaskini borang (form_id kosong = baru). Baca sedia ada dengan get_form dahulu dan hantar config penuh supaya blok sedia ada tidak hilang. Theme (pilihan) = gaya/branding tersuai. slug (pilihan) = laluan URL borang: pada cipta ia digunakan bila diisi; pada kemaskini ia MENAMAKAN SEMULA borang (a-z, 0-9, sengkang; 1-40 aksara) dan URL lama kekal berfungsi melalui ubah hala sementara (301) — kosongkan untuk kekalkan slug sedia ada, dan slug yang sudah dipakai borang lain dalam workspace ini ditolak dengan ralat. Blok option/shipping yang tiada harga pada pilihannya juga DITOLAK — set price_sen pada setiap pilihan (0 untuk percuma), kerana harga itulah yang dicaj kepada pembeli.",
 	}, s.upsertForm)
 	// Issue #254: MCP-driven form creation — styling freedom + field
 	// registration. JomForm keeps authority over field types, prices and the
@@ -227,7 +227,7 @@ func (s *Server) registerTools() {
 	// gets a validated form config (blocks + styling) drafted by the LLM.
 	addTool(s, &mcp.Tool{
 		Name:        "generate_form",
-		Description: "Jana konfigurasi borang (blok + gaya) dari prompt semula jadi (issue #256) via deepseek-v4.1-flash:1017. Output disahkan server-side terhadap jenis blok JomForm; harga produk kekal dari DB (server authority). Semak/edit dulu, kemudian simpan guna upsert_form.",
+		Description: "Jana konfigurasi borang (blok + gaya) dari prompt semula jadi (issue #256) via deepseek-v4.1-flash:1017. Output disahkan server-side terhadap jenis blok JomForm; setiap pilihan option/shipping mesti membawa price_sen (0 untuk percuma) dan hargalah yang dicaj; harga produk kekal dari DB (server authority). Semak/edit dulu, kemudian simpan guna upsert_form.",
 	}, s.generateForm)
 	addTool(s, &mcp.Tool{
 		Name:        "publish_form",

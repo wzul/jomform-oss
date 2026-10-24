@@ -532,6 +532,12 @@ func (s *Server) upsertForm(
 	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
 		return nil, nil, errors.New(formfields.UnsupportedBlockMessage(bt))
 	}
+	// Card t_3d11f98d: an option/shipping block with no resolvable price would
+	// be stored as a free add-on and charged 0 sen — refused here too, so the
+	// agent's write path cannot produce a form the merchant believes is priced.
+	if msg := formfields.UnpricedPricingBlock(in.Config); msg != "" {
+		return nil, nil, errors.New(msg)
+	}
 	// Card t_73a5db6e: a custom-form config whose registered `required` field
 	// has no matching control in the sanitized HTML is unsubmittable at /order,
 	// and an agent can send config.custom_html directly (without the
@@ -655,6 +661,10 @@ func (s *Server) upsertForm(
 	// Card t_4086b8f0: same unsupported-block refusal as the create path above.
 	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
 		return nil, nil, errors.New(formfields.UnsupportedBlockMessage(bt))
+	}
+	// Card t_3d11f98d: same unresolved-pricing refusal as the create path.
+	if msg := formfields.UnpricedPricingBlock(in.Config); msg != "" {
+		return nil, nil, errors.New(msg)
 	}
 	// Card t_73a5db6e: same unsatisfiable-custom-form refusal as the create
 	// path (the merged config that carries custom_html lands in in.Config).

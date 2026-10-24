@@ -243,6 +243,13 @@ func (h *RESTHandlers) createOwnTemplate(w http.ResponseWriter, r *http.Request,
 		writeErr(w, http.StatusBadRequest, formfields.UnsupportedBlockMessage(bt))
 		return
 	}
+	// Card t_3d11f98d: a template's config is cloned onto a real form, so an
+	// option/shipping block with no resolvable price must not be storable here
+	// either — same refusal as the form write paths.
+	if msg := formfields.UnpricedPricingBlock(in.Config); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
+	}
 	// Card t_73a5db6e: a template's config is cloned onto a real form
 	// (useOwnTemplate), so an unsatisfiable custom-form contract stored here
 	// would reach a buyer's page by the back door — the same refusal the form
@@ -334,6 +341,11 @@ func (h *RESTHandlers) updateOwnTemplate(w http.ResponseWriter, r *http.Request,
 	// Card t_4086b8f0: same unsupported-block refusal as createOwnTemplate.
 	if bt := formfields.UnsupportedBlock(in.Config); bt != "" {
 		writeErr(w, http.StatusBadRequest, formfields.UnsupportedBlockMessage(bt))
+		return
+	}
+	// Card t_3d11f98d: same unresolved-pricing refusal as createOwnTemplate.
+	if msg := formfields.UnpricedPricingBlock(in.Config); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	// Card t_73a5db6e: same unsatisfiable-custom-form refusal as
