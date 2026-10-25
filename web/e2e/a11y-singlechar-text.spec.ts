@@ -466,11 +466,63 @@ test.describe("a11y: the single-character scan bites, and axe is blind to it", (
     baseURL,
   }) => {
     const route = ROUTES.find((r) => r.name === "dashboard")!;
-    await open(page, baseURL, route);
+    const settled = await open(page, baseURL, route);
+
+    // THE ARM PROVES IT IS ON THE PAGE IT MEASURES BEFORE IT COUNTS ANYTHING
+    // (card t_d3efc352). This used to count `nav a > span` straight after
+    // `open()` and fail with ONE sentence — "the sidebar rendered no nav glyph
+    // spans" — for three different states, so a red could not be attributed
+    // without a full gate re-run (measured on t_d9cf1ddd's own gate: 1 failed /
+    // 120 passed at this line, then the SAME bytes green on a re-run). The three
+    // are separated here, in the order they can happen, and each names itself:
+    //
+    //   (1/3) BOUNCED   — the arm landed somewhere other than the route under
+    //                     test: the page's own client bounce sends an expired
+    //                     session to /login. (`/` itself is NOT in
+    //                     web/src/middleware.ts's matcher — the server gate
+    //                     cannot bounce THIS route, and a cookie-less `/` is the
+    //                     marketing landing, which is the bodyText case below.)
+    //                     Either way there is no sidebar shell, so 0 glyphs
+    //                     there is a reading over nothing — never the sidebar
+    //                     this arm is FOR.
+    //   (2/3) UNPAINTED — the signed-in Shell did not render inside the settle
+    //                     ceiling `open()` already waited: host load, hydration,
+    //                     or a page that is not the shell at all — not the
+    //                     glyphs.
+    //   (3/3) NO GLYPHS — the Shell IS rendered (N nav links, real body text)
+    //                     and its rows carry no glyph spans. That is the only
+    //                     state that may report the sidebar defect.
+    const landed = new URL(page.url()).pathname;
+    const saw =
+      `landed=${landed} expected=${route.path} waited=${settled.waitedMs}ms ` +
+      `(ceiling ${SETTLE_TIMEOUT_MS}ms) timedOut=${settled.timedOut} hydrated=${settled.hydrated} ` +
+      `navLinks=${settled.navLinks} bodyText=${settled.bodyText}`;
+    expect(
+      landed,
+      `(1/3) BOUNCED to ${landed} instead of ${route.path} — this run is not on the page under test, ` +
+        `and a page with no sidebar has no glyphs to count. This is NOT the sidebar defect [${saw}]`,
+    ).toBe(route.path);
+    expect(
+      settled.timedOut,
+      `(2/3) UNPAINTED — the Shell did not render within the ${SETTLE_TIMEOUT_MS}ms settle ceiling ` +
+        `(host load or hydration), so nothing was counted. This is NOT the sidebar defect [${saw}]`,
+    ).toBe(false);
+    expect(
+      settled.navLinks,
+      `(2/3) UNPAINTED — the settle wait ended with ${settled.navLinks} sidebar link(s) where the Shell ` +
+        `paints 10+, so there is no sidebar here to count glyphs in. A large bodyText with few nav links ` +
+        `means the page is not the signed-in shell (a cookie-less / renders the marketing landing). ` +
+        `This is NOT the sidebar defect [${saw}]`,
+    ).toBeGreaterThanOrEqual(10);
 
     const icons = page.locator("nav a > span");
     const iconCount = await icons.count();
-    expect(iconCount, "the sidebar rendered no nav glyph spans").toBeGreaterThanOrEqual(13);
+    expect(
+      iconCount,
+      `(3/3) NO GLYPHS — the Shell IS rendered (${settled.navLinks} nav links, ` +
+        `bodyText=${settled.bodyText}) but its rows carry ${iconCount} glyph span(s): the sidebar markup ` +
+        `under test is missing its glyphs [${saw}]`,
+    ).toBeGreaterThanOrEqual(13);
 
     /** The nav glyphs' own measurement, by index, from the live DOM. */
     const measureIcons = () =>

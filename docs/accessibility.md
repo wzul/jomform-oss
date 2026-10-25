@@ -121,8 +121,15 @@ the floor its own measured size and weight imply; its last arm reproduces the
 pre-fix paint on the real elements, requires the measurement to drop below the
 floor, requires live axe to report NOTHING for it, and then requires axe to name the
 same paint on a two-character node — the blindness and the liveness of the rule in
-one run. Its `ROUTES` table is the authority for what is scanned, and every element
-it measured is printed as a `[single-char]` line in the gate's own output.
+one run. That last arm proves it is on `/` BEFORE it counts anything: not bounced to
+`/login` (a page with no sidebar has no glyphs, so a 0 there is a reading over
+nothing), and painted inside the settle ceiling — a page that is not the signed-in
+shell at all (a cookie-less `/` renders the marketing landing) is named as that too,
+not as a missing glyph. The failure message says which of the two it was, so a red
+names a bounce or an unpainted shell rather than always
+reading as "the sidebar rendered no nav glyph spans". Its `ROUTES` table is the
+authority for what is scanned, and every element it measured is printed as a
+`[single-char]` line in the gate's own output.
 
 **What this does NOT cover (stated, not hidden).** Only the routes in that table are
 scanned: a single-character element on any other surface — a dynamic
