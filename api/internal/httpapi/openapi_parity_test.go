@@ -32,7 +32,9 @@
 //	     the same refusal under any other name slid back onto the silent default
 //	     (t_e37418be). A contracted handler that writes that refusal in its OWN
 //	     body is classified by the same property — the handler that IS the gate
-//	     is answered for rather than assumed to be `read` (t_b7e1b690).
+//	     is answered for rather than assumed to be `read` (t_b7e1b690) — and so
+//	     is one that HANDS THE AXIS to a third function which writes the 403,
+//	     because a readonly key is refused either way (t_52c77834).
 //
 //	  4. Every rate limit is asserted in BOTH directions, because the honest
 //	     fact about this API is that almost nothing is throttled and that is the
@@ -55,11 +57,17 @@
 //   - The request/response schemas are hand-declared components; this test
 //     proves they are syntactically valid and referenced, not that every field
 //     the handler emits is listed.
-//   - The gate discovery is not transitive on the 403 WRITE: a refusal whose 403
-//     is written by a third function the gate only CALLS is not found by the
-//     property above, so unless its name is also spelled `require*` it still
-//     reaches the silent `read` default. (A refusal written in a contracted
-//     handler's own body IS covered — see item 3.)
+//   - The 403 WRITE is followed through the AXIS, not through arbitrary data
+//     flow. A refusal is found when the function that writes the 403 either reads
+//     actx.KeyScopes itself or is HANDED it at the call site — actx.KeyScopes, a
+//     local derived from it, or the caller's own parameter that was handed it
+//     (t_52c77834). What is not followed is a scope decision that leaves that
+//     chain before the 403 is written: a boolean stored on the handler, returned
+//     by middleware, or carried in a struct field and tested by a third function
+//     would look like a refusal off the axis, and a route shaped that way would
+//     still reach the silent `read` default. Both closed shapes are pinned in the
+//     classifier fixture (inline and delegated), so dropping either check goes
+//     RED even though no live handler has that shape.
 //   - The curl examples on /docs/api are checked to RUN against a local server by
 //     a separate test (openapi_docs_examples_test.go); a shell example that
 //     happens to be wrong for a reason its assertions do not model would pass.
@@ -423,22 +431,34 @@ func classifyHandlerAccess(t *testing.T, p *restPackage, handler, body string) s
 			}
 		}
 	}
-	// A handler can BE the gate rather than call one: a body that writes a 403
-	// and reaches the API-key scope axis is applying the same refusal
-	// requireWriteScope applies, so the route carries that gate's access level.
+	// A handler can BE the gate rather than call one, or hand the request to a
+	// function that writes the 403 for it: a body that reaches a key-scope
+	// refusal — the same one the discovery finds, so the two cannot disagree
+	// about what a refusal is — carries that gate's access level.
 	// Checked third — after the gates the handler names and the gates it reaches
-	// — so a handler that also applies a stronger gate keeps that answer.
+	// by name — so a handler that also applies a stronger gate keeps that answer.
 	//
-	// (t_b7e1b690) This shape used to fall through to the `read` default. The
-	// gate discovery excludes contracted handler names from its set on purpose,
-	// because a handler is what the contract LABELS; with that exclusion and no
-	// other net, a handler that WAS the refusal was unsupported in both
-	// directions, and the published page promised "any authenticated key" for a
-	// route that answered every readonly key with 403. The property is the same
-	// one the discovery is built on, so the two cannot disagree about what a
-	// refusal is.
-	if p != nil && p.sel[handler]["http.StatusForbidden"] && p.readsScopeAxis(t)[handler] {
-		return requireWriteScopeAccess(t)
+	// (t_b7e1b690) The shape where the handler WRITES the refusal itself used to
+	// fall through to the `read` default: the discovery excludes contracted
+	// handler names from its set on purpose, because a handler is what the
+	// contract LABELS; with that exclusion and no other net, a handler that WAS
+	// the refusal was unsupported in both directions, and the published page
+	// promised "any authenticated key" for a route that answered every readonly
+	// key with 403.
+	//
+	// (t_52c77834) The DELEGATE shape used to fall through for a second reason:
+	// the refusal is written by a third function the handler only CALLS, so
+	// neither function holds both properties and a "both in the same body" test
+	// cannot see it. keyScopeRefusalSet follows the axis along the call edge, and
+	// this check reads the handler's REACHABLE set, so a handler that hands the
+	// axis to a 403 writer is classified the same way as one that writes it.
+	if p != nil {
+		reached := p.reachable(handler)
+		for name := range p.keyScopeRefusalSet(t) {
+			if reached[name] {
+				return requireWriteScopeAccess(t)
+			}
+		}
 	}
 	if refusesAPIKey(t, handler, body) {
 		// A route that acts on a PERSON refuses an API key outright: its
@@ -555,11 +575,13 @@ func TestHandlerAccessClassifierKnowsEveryNamedGate(t *testing.T) {
 	sort.Strings(unclassified)
 	sort.Strings(ambiguous)
 	if len(unclassified) > 0 {
-		t.Errorf("these contracted handlers depend on a gate classifyHandlerAccess does not "+
-			"know:\n  %s\nAn unclassified gate does not fail the parity test — the route is "+
-			"reported as `read`, and a route that refuses a readonly key would be published "+
-			"as one that does not. Add a case for each gate (with its access level) to "+
-			"classifierGates in openapi_parity_test.go.", strings.Join(unclassified, "\n  "))
+		t.Errorf("these contracted handlers depend on a refusal helper that is not among "+
+			"the classified gates:\n  %s\nA key-scope refusal is answered by PROPERTY (as "+
+			"`write`) rather than by this table, so the parity test is not blind to this "+
+			"helper — but the table is the register of the gates the contract is labelled "+
+			"against, and a refusal a contracted route reaches belongs in it. Add a case for "+
+			"each gate (with its access level) to classifierGates in openapi_parity_test.go.",
+			strings.Join(unclassified, "\n  "))
 	}
 	if len(ambiguous) > 0 {
 		t.Errorf("these handlers match more than one classified gate, so they are classified by "+
@@ -624,7 +646,82 @@ func fixtureRoleRefusalOffTheScopeAxis(w http.ResponseWriter, r *http.Request, a
 func fixtureScopeReportNoRefusal(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	writeJSON(w, http.StatusOK, map[string]any{"scopes": actx.KeyScopes})
 }
+
+// The DELEGATE shape (t_52c77834): the handler reads the axis, a THIRD function
+// writes the 403, and neither function holds both properties. This is the shape
+// that used to leave both access guards green.
+func fixtureDelegateWritesThe403(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if actx != nil && !dbstore.ScopeHasWrite(actx.KeyScopes) {
+		fixtureRefuseReadonlyKeyThirdParty(w, actx.KeyScopes)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func fixtureRefuseReadonlyKeyThirdParty(w http.ResponseWriter, scopes []string) {
+	_ = scopes
+	writeErr(w, http.StatusForbidden, "scope tidak mencukupi (perlu readwrite)")
+}
+
+// The same delegate shape one call further out: the axis is handed to a helper
+// that hands it on, so the 403 writer is two edges from the handler and reaches
+// the axis only through a PARAMETER. It has its OWN writer on purpose: sharing
+// fixtureRefuseReadonlyKeyThirdParty would let the one-hop case's axis edge
+// satisfy this one, and the parameter hop would go untested (measured — that
+// collision made the "drop the parameter taint" mutation survive).
+func fixtureHandsTheAxisOn(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	if fixtureKeyHasWriteScope(actx) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+	fixtureRefuseIfReadonlyKey(w, actx.KeyScopes)
+}
+
+func fixtureRefuseIfReadonlyKey(w http.ResponseWriter, scopes []string) {
+	fixtureRefuseIfStillReadonly(w, scopes)
+}
+
+func fixtureRefuseIfStillReadonly(w http.ResponseWriter, scopes []string) {
+	_ = scopes
+	writeErr(w, http.StatusForbidden, "scope tidak mencukupi (perlu readwrite)")
+}
+
+// The NEGATIVE control for the rule above: this body reads the axis (its
+// response reports the scopes) and reaches a 403 writer, but that writer never
+// sees the axis — a role refusal is not a key-scope refusal, so the route is
+// still documented as read and the property must not claim otherwise.
+func fixtureReadsAxisAndRefusesOffTheAxis(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	scopes := actx.KeyScopes
+	if actx.KeyID == "" {
+		fixtureRefuseNotAdmin(w, "admin sahaja")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"scopes": scopes})
+}
+
+func fixtureRefuseNotAdmin(w http.ResponseWriter, reason string) {
+	writeErr(w, http.StatusForbidden, reason)
+}
 `
+
+// classifierFixturePackage writes classifierFixtureSource into a temp package and
+// parses it with the same parser the real package goes through. Shared by the two
+// classifier fixture tests: both read the SAME source, so a shape added for one
+// cannot drift away from the other.
+func classifierFixturePackage(t *testing.T) *restPackage {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"),
+		[]byte(classifierFixtureSource), 0o644); err != nil {
+		t.Fatalf("cannot write the classifier fixture: %v", err)
+	}
+	p := parsePackageDir(t, dir)
+	if len(p.funcs) < 12 {
+		t.Fatalf("parsed only %d fixture functions — the fixture or the parse anchor moved, "+
+			"so every case below would be answered from an empty call graph", len(p.funcs))
+	}
+	return p
+}
 
 // TestClassifierSeesAKeyScopeRefusalWrittenInlineInAHandler pins the classifier's
 // answer for the refusal written where the contract looks: in the contracted
@@ -637,16 +734,7 @@ func fixtureScopeReportNoRefusal(w http.ResponseWriter, r *http.Request, actx *A
 // classifier's inline check, or the transitivity of the scope-axis property it
 // uses, turns this red immediately.
 func TestClassifierSeesAKeyScopeRefusalWrittenInlineInAHandler(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "fixture.go"),
-		[]byte(classifierFixtureSource), 0o644); err != nil {
-		t.Fatalf("cannot write the classifier fixture: %v", err)
-	}
-	p := parsePackageDir(t, dir)
-	if len(p.funcs) < 5 {
-		t.Fatalf("parsed only %d fixture functions — the fixture or the parse anchor moved, "+
-			"so every case below would be answered from an empty call graph", len(p.funcs))
-	}
+	p := classifierFixturePackage(t)
 	cases := []struct {
 		handler string
 		want    string
@@ -661,6 +749,52 @@ func TestClassifierSeesAKeyScopeRefusalWrittenInlineInAHandler(t *testing.T) {
 			"writes a 403 but never reaches the API-key scope axis"},
 		{"fixtureScopeReportNoRefusal", AccessRead,
 			"reads the scope axis but refuses nobody"},
+	}
+	for _, c := range cases {
+		body := fixtureFuncBody(t, c.handler)
+		if got := classifyHandlerAccess(t, p, c.handler, body); got != c.want {
+			t.Errorf("classifyHandlerAccess(%s) = %q, want %q: it %s. A route published as "+
+				"`read` while its handler answers a readonly key with 403 is the defect this "+
+				"classification exists to catch — see the file header, item 3.",
+				c.handler, got, c.want, c.why)
+		}
+	}
+}
+
+// TestClassifierSeesAKeyScopeRefusalWrittenByAThirdFunctionTheHandlerCalls pins
+// the DELEGATE shape of the same refusal (t_52c77834), which the file header used
+// to list as a limit: the contracted handler reads actx.KeyScopes, and a THIRD
+// function it only CALLS writes the 403.
+//
+// WHY a fixture: no live handler is shaped this way — the only reader of
+// actx.KeyScopes in the shipped package is requireWriteScope — so nothing in the
+// real source would notice the check being dropped. Measured on the deployed bytes
+// (v1.21.166, ed07307f) with this shape planted in getCurrencyRates for
+// GET /v1/rest/currency/rates (documented `read`): BOTH access guards stayed GREEN
+// while the route answered every readonly key with 403 scope.readonly. Each case
+// below removes one half of the mechanism that now catches it:
+//
+//   - dropping the axis-handed edge (fedArgs) means the third function is not a
+//     refusal, so the handler falls back to the silent `read` default;
+//   - dropping the reachability of the refusal from the handler (or going back to
+//     "both properties in the SAME body") does the same;
+//   - the off-axis case fails if the rule is widened to "reaches any 403 writer",
+//     which would relabel every role-refusing route as `write`.
+func TestClassifierSeesAKeyScopeRefusalWrittenByAThirdFunctionTheHandlerCalls(t *testing.T) {
+	p := classifierFixturePackage(t)
+	cases := []struct {
+		handler string
+		want    string
+		why     string
+	}{
+		{"fixtureDelegateWritesThe403", AccessWrite,
+			"reads the axis and hands it to a third function that writes the 403 — neither function holds both properties, so the pair has to be recognised along the call"},
+		{"fixtureHandsTheAxisOn", AccessWrite,
+			"the 403 writer is two edges away and receives the axis only through a parameter"},
+		{"fixtureRefuseReadonlyKeyThirdParty", AccessWrite,
+			"writes the 403 without reading the axis, but its caller hands the axis to it"},
+		{"fixtureReadsAxisAndRefusesOffTheAxis", AccessRead,
+			"reads the axis and reaches a 403 writer that never sees it — a role refusal is not a key-scope refusal"},
 	}
 	for _, c := range cases {
 		body := fixtureFuncBody(t, c.handler)
@@ -702,10 +836,16 @@ func fixtureFuncBody(t *testing.T, name string) string {
 //
 //	(1) writes http.StatusForbidden, and
 //	(2) reads actx.KeyScopes — the readonly/readwrite API-key scope axis —
-//	    directly, or through a function that does.
+//	    directly, or through a function that does, OR is HANDED the axis at a
+//	    call site whose callee writes the 403.
 //
 // (2) is transitive on purpose: a gate that delegates its scope test to a helper
-// still refuses a readonly key. requireResolvedWorkspaceScope is NOT one of these,
+// still refuses a readonly key. The second half of (2) closes the shape the
+// header used to list as a limit (t_52c77834): a refusal whose 403 is WRITTEN by
+// a third function the gate only CALLS. There neither function holds both
+// properties — the caller reads the axis, the callee writes the 403 — so the
+// property has to follow the axis along the call edge, not just the call.
+// requireResolvedWorkspaceScope is NOT one of these,
 // and that is correct rather than an omission: it refuses a SESSION caller whose
 // ?workspace= cannot be resolved and explicitly exempts API keys (actx.ViaAPIKey),
 // so it never refuses a readonly key and a route whose strongest gate is it is
@@ -728,10 +868,18 @@ type restPackage struct {
 	file  map[string]string          // name → the file it is declared in, for failures
 	edges map[string]map[string]bool // name → package functions it calls directly
 	sel   map[string]map[string]bool // name → the `x.Y` selectors appearing in its body
+	// fedArgs maps a function to the ARGUMENT POSITIONS callers hand the API-key
+	// scope axis at (actx.KeyScopes, a local derived from it, or the caller's own
+	// parameter that was handed it). This is the edge the 403 WRITE is followed
+	// along: a writer that never reads the axis still refuses a readonly key when
+	// its caller passes the axis to it (t_52c77834).
+	fedArgs map[string]map[int]bool
 	// scopeReaders caches readsScopeAxis. Its fixpoint is asked for once per
 	// contracted route by the classifier and once by the gate discovery, and it
 	// depends only on the parsed source, so it is computed once per restPackage.
 	scopeReaders map[string]bool
+	// refusals caches keyScopeRefusalSet, for the same reason.
+	refusals map[string]bool
 }
 
 // parseRESTPackage parses every non-test .go file of this package. Failing to
@@ -762,12 +910,12 @@ func parsePackageDir(t *testing.T, dir string) *restPackage {
 		t.Fatalf("openapi access guard: cannot list %s: %v", dir, err)
 	}
 	p := &restPackage{
-		funcs: map[string][]*ast.FuncDecl{},
-		file:  map[string]string{},
-		edges: map[string]map[string]bool{},
-		sel:   map[string]map[string]bool{},
+		funcs:   map[string][]*ast.FuncDecl{},
+		file:    map[string]string{},
+		edges:   map[string]map[string]bool{},
+		sel:     map[string]map[string]bool{},
+		fedArgs: map[string]map[int]bool{},
 	}
-	declared := map[string]bool{}
 	fset := token.NewFileSet()
 	var parsed []*ast.File
 	for _, e := range entries {
@@ -788,49 +936,188 @@ func parsePackageDir(t *testing.T, dir string) *restPackage {
 			if _, seen := p.file[fd.Name.Name]; !seen {
 				p.file[fd.Name.Name] = e.Name()
 			}
-			declared[fd.Name.Name] = true
 		}
 	}
+	var bodies []*ast.FuncDecl
 	for _, f := range parsed {
 		for _, d := range f.Decls {
 			fd, ok := d.(*ast.FuncDecl)
 			if !ok || fd.Name == nil || fd.Body == nil {
 				continue
 			}
-			self := fd.Name.Name
-			if p.edges[self] == nil {
-				p.edges[self] = map[string]bool{}
+			bodies = append(bodies, fd)
+		}
+	}
+	// The axis-handed edges are a FIXPOINT, not a single pass: a helper that is
+	// handed actx.KeyScopes is itself carrying it, so a call it makes with that
+	// parameter carries it too. Each pass re-walks every body with the parameters
+	// known to be fed so far tainted, and stops when a pass learns nothing new.
+	// The bound is belt-and-braces: every pass must add an edge or an argument
+	// position, so the loop cannot run away — but a guard that hangs the gate is
+	// worse than one that fails it.
+	for pass := 0; ; pass++ {
+		if pass > len(bodies)+1 {
+			t.Fatalf("the axis fixpoint did not settle in %d passes — the walk keeps "+
+				"finding new fed arguments, so this guard would be measuring its own "+
+				"iteration rather than the source", len(bodies)+1)
+		}
+		changed := false
+		for _, fd := range bodies {
+			if p.record(fd) {
+				changed = true
 			}
-			if p.sel[self] == nil {
-				p.sel[self] = map[string]bool{}
-			}
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				switch x := n.(type) {
-				case *ast.CallExpr:
-					switch fn := x.Fun.(type) {
-					case *ast.Ident:
-						if declared[fn.Name] {
-							p.edges[self][fn.Name] = true
-						}
-					case *ast.SelectorExpr:
-						// h.requireWriteScope(…) and the package-level helpers
-						// (scopeOr403(…)) both arrive here.
-						if declared[fn.Sel.Name] {
-							p.edges[self][fn.Sel.Name] = true
-						}
-					}
-				case *ast.SelectorExpr:
-					// Only one-level selectors are recorded, which is all the
-					// discovery needs: http.StatusForbidden / actx.KeyScopes.
-					if id, ok := x.X.(*ast.Ident); ok {
-						p.sel[self][id.Name+"."+x.Sel.Name] = true
-					}
-				}
-				return true
-			})
+		}
+		if !changed {
+			break
 		}
 	}
 	return p
+}
+
+// record walks one function body and updates the call graph: the direct calls it
+// makes, the one-level selectors in it, and — for each call — which argument
+// positions carry the API-key scope axis. It reports whether it learned anything
+// it did not already know, which is what the fixpoint in parsePackageDir
+// iterates on.
+//
+// "Carries the axis" is deliberately syntactic and local: actx.KeyScopes itself,
+// a local assigned from it (`scopes := actx.KeyScopes`), an alias of actx, or one
+// of THIS function's own parameters at a position a caller was seen handing the
+// axis to. That is enough to follow the value along the delegation chain without
+// pretending to be a points-to analysis; what it does not follow is stated in the
+// file header.
+func (p *restPackage) record(fd *ast.FuncDecl) bool {
+	self := fd.Name.Name
+	if p.edges[self] == nil {
+		p.edges[self] = map[string]bool{}
+	}
+	if p.sel[self] == nil {
+		p.sel[self] = map[string]bool{}
+	}
+	tainted := p.paramTaint(fd)
+	// Locals assigned from the axis (or from another tainted local) carry it:
+	// `scopes := actx.KeyScopes; refuse(w, scopes)`.
+	for changed := true; changed; {
+		changed = false
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			for i, rhs := range as.Rhs {
+				if !exprCarriesAxis(rhs, tainted) {
+					continue
+				}
+				lhs := as.Lhs[0]
+				if i < len(as.Lhs) {
+					lhs = as.Lhs[i]
+				}
+				if id, ok := lhs.(*ast.Ident); ok && !tainted[id.Name] {
+					tainted[id.Name] = true
+					changed = true
+				}
+			}
+			return true
+		})
+	}
+	added := false
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			callee := ""
+			switch fn := x.Fun.(type) {
+			case *ast.Ident:
+				callee = fn.Name
+			case *ast.SelectorExpr:
+				// h.requireWriteScope(…) and the package-level helpers
+				// (scopeOr403(…)) both arrive here.
+				callee = fn.Sel.Name
+			}
+			if _, ok := p.funcs[callee]; !ok || callee == "" {
+				return true
+			}
+			if !p.edges[self][callee] {
+				p.edges[self][callee] = true
+				added = true
+			}
+			for i, arg := range x.Args {
+				if !exprCarriesAxis(arg, tainted) {
+					continue
+				}
+				if p.fedArgs[callee] == nil {
+					p.fedArgs[callee] = map[int]bool{}
+				}
+				if !p.fedArgs[callee][i] {
+					p.fedArgs[callee][i] = true
+					added = true
+				}
+			}
+		case *ast.SelectorExpr:
+			// Only one-level selectors are recorded, which is all the
+			// discovery needs: http.StatusForbidden / actx.KeyScopes.
+			if id, ok := x.X.(*ast.Ident); ok {
+				p.sel[self][id.Name+"."+x.Sel.Name] = true
+			}
+		}
+		return true
+	})
+	return added
+}
+
+// paramTaint returns the parameter names of fd whose POSITION a caller was seen
+// handing the API-key scope axis to. Positional rather than "any parameter of a
+// function that touched the axis", so a helper that receives the axis and calls
+// an unrelated 403 writer with its other parameters is not mistaken for a
+// key-scope refusal.
+func (p *restPackage) paramTaint(fd *ast.FuncDecl) map[string]bool {
+	out := map[string]bool{}
+	fed := p.fedArgs[fd.Name.Name]
+	if len(fed) == 0 || fd.Type == nil || fd.Type.Params == nil {
+		return out
+	}
+	pos := 0
+	for _, field := range fd.Type.Params.List {
+		n := len(field.Names)
+		if n == 0 {
+			n = 1 // an unnamed parameter still occupies a position
+		}
+		for k := 0; k < n; k++ {
+			if !fed[pos+k] {
+				continue
+			}
+			for _, id := range field.Names {
+				out[id.Name] = true
+			}
+			break
+		}
+		pos += n
+	}
+	return out
+}
+
+// exprCarriesAxis reports whether an argument expression is the API-key scope
+// axis, or a value derived from it: actx.KeyScopes, an alias of actx, or a local
+// (or parameter) that was tainted.
+func exprCarriesAxis(e ast.Expr, tainted map[string]bool) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			if id, ok := x.X.(*ast.Ident); ok &&
+				(id.Name == "actx" || tainted[id.Name]) && x.Sel.Name == "KeyScopes" {
+				found = true
+			}
+		case *ast.Ident:
+			if tainted[x.Name] {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
 }
 
 // reachable returns every function in this package `start` can reach through its
@@ -890,22 +1177,55 @@ func (p *restPackage) readsScopeAxis(t *testing.T) map[string]bool {
 	return reads
 }
 
+// keyScopeRefusalSet returns every function in this package that answers a
+// readonly API key with 403 — the definition BOTH the gate discovery and the
+// classifier are built on, so the two cannot disagree about what a refusal is.
+//
+// A function qualifies when it WRITES the 403 and either
+//
+//	(a) reads actx.KeyScopes, directly or through a call (readsScopeAxis), or
+//	(b) is HANDED the axis at a call site (fedArgs) — the delegate shape
+//	    (t_52c77834): the caller reads the axis, a third function writes the
+//	    403, and neither function holds both properties on its own.
+//
+// (b) is what keeps the property honest along the call edge. A 403 writer that
+// never sees the axis is NOT a key-scope refusal: that is a role/validation
+// refusal, and labelling a route `write` for it would be a false claim in the
+// other direction (pinned by the classifier fixture's off-axis negative case).
+func (p *restPackage) keyScopeRefusalSet(t *testing.T) map[string]bool {
+	t.Helper()
+	if p.refusals != nil {
+		return p.refusals
+	}
+	readsScope := p.readsScopeAxis(t)
+	out := map[string]bool{}
+	for name := range p.funcs {
+		if !p.sel[name]["http.StatusForbidden"] {
+			continue
+		}
+		if readsScope[name] || len(p.fedArgs[name]) > 0 {
+			out[name] = true
+		}
+	}
+	p.refusals = out
+	return out
+}
+
 // apiKeyScopeRefusalGates returns the names of this package's refusal helpers, by
 // the body property described in the section comment above. The names are the
 // classifier's INPUT — they are never used to decide what a gate does.
 func apiKeyScopeRefusalGates(t *testing.T, p *restPackage) map[string]bool {
 	t.Helper()
-	// (2): who reads the scope axis, directly or by delegating.
+	// (2): who reads the scope axis, directly or by delegating. This is the
+	// ANCHOR below as well as a liveness check on the parse.
 	readsScope := p.readsScopeAxis(t)
 	if len(readsScope) == 0 {
 		t.Fatalf("no function in the httpapi package reads actx.KeyScopes — the discovery " +
 			"anchor moved, so this guard would find no gate at all and pass vacuously")
 	}
 	gates := map[string]bool{}
-	for name := range p.funcs {
-		if p.sel[name]["http.StatusForbidden"] && readsScope[name] {
-			gates[name] = true
-		}
+	for name := range p.keyScopeRefusalSet(t) {
+		gates[name] = true
 	}
 	// A contracted handler is what the contract labels, not a gate. Deleting it
 	// here stops a handler that delegates to a gate AND writes its own 403 from
