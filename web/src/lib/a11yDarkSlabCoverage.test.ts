@@ -87,6 +87,17 @@ const SPEC = readFileSync(
 );
 
 /**
+ * How a spec reaches axe: `new AxeBuilder(...)` directly, or `gateScan()` from
+ * `e2e/axeGate.ts` — the ONE definition of the rule set + failing impacts that
+ * `a11y.spec.ts` and the nine scoped arms share (card t_5aa6c8ac; the arms used
+ * to carry nine copies of `withTags(["wcag2aa","wcag21aa"])`, which reached 6 of
+ * axe's 105 rules). This assertion exists to prove the file we parsed IS the
+ * axe spec, so it accepts either entry point rather than pretending only one
+ * shape exists.
+ */
+const AXE_SCAN = /(?:AxeBuilder|gateScan)/;
+
+/**
  * A single class token that paints a SOLID DARK background — the shape a
  * colour-class guard has to hand to the browser, because the ratio depends on
  * the foreground composited over it. Deliberately NOT the light steps, NOT
@@ -249,7 +260,7 @@ function pinProblems(
 }
 
 test("the guard is looking at real files (it cannot pass vacuously)", () => {
-  assert.ok(SPEC.includes("AxeBuilder"), "e2e/a11y.spec.ts is not the axe spec");
+  assert.ok(AXE_SCAN.test(SPEC), "e2e/a11y.spec.ts is not the axe spec");
   assert.ok(
     scannedPaths.length >= 26,
     `only ${scannedPaths.length} scanned paths were parsed out of the spec — the a11y list shrank`,

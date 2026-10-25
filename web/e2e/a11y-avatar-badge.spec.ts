@@ -119,10 +119,9 @@
 //   npx playwright test e2e/a11y-avatar-badge.spec.ts       # this file alone
 
 import { test, expect, type Page } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
-import type { AxeResults, Result } from "axe-core";
 
 import { signIn } from "./auth";
+import { blockersOf, expectGateSeesAriaViolation, gateScan } from "./axeGate";
 
 // The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
 // without the `jf_session` cookie is redirected to /login BEFORE the page
@@ -133,14 +132,11 @@ test.beforeEach(async ({ page, baseURL }) => {
   await signIn(page, baseURL!);
 });
 
-// The gate's own rule, kept identical to e2e/a11y.spec.ts so the two cannot drift.
-const IMPACTS = ["critical", "serious"] as const;
-
-function blockersOf(results: AxeResults): Result[] {
-  return results.violations.filter((v) =>
-    IMPACTS.includes((v.impact ?? "") as (typeof IMPACTS)[number]),
-  );
-}
+// The gate's own rule — the axe rule SET and the failing IMPACTS — is defined
+// once, in `e2e/axeGate.ts`, and `e2e/a11y.spec.ts` runs the same two functions.
+// Card t_5aa6c8ac: the local copy that used to sit here declared
+// `withTags(["wcag2aa", "wcag21aa"])`, which reached 6 of axe's 105 rules and
+// hid every A-level ARIA rule. See axeGate.ts for the measurement.
 
 /** The two tokens this surface is allowed to be painted with. */
 const BASE_TOKEN = "#5e6ad2"; // --jf-primary
@@ -401,10 +397,7 @@ test.describe("avatar-initial badges on bg-indigo-100", () => {
 
     // THE GATE'S OWN RULE, scoped to the badge. `include()` makes axe THROW when
     // the subtree is absent, so this cannot pass over nothing.
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2aa", "wcag21aa"])
-      .include(SHELL_BADGE)
-      .analyze();
+    const results = await gateScan(page, SHELL_BADGE);
     const blockers = blockersOf(results);
     expect(
       blockers.map((v) => `${v.id} (${v.impact}): ${v.help} — ${v.nodes[0]?.failureSummary ?? ""}`),
@@ -427,6 +420,10 @@ test.describe("avatar-initial badges on bg-indigo-100", () => {
       `axe's color-contrast rule produced no node for the badge, so the scan above covered ` +
         `something else. Nodes: ${JSON.stringify(analysed)}`,
     ).toBe(true);
+
+    // …and the same scan can SEE an A-level ARIA defect in this badge (card
+    // t_5aa6c8ac): plant one and require it to be named.
+    await expectGateSeesAriaViolation(page, SHELL_BADGE, "the sidebar avatar badge");
   });
 
   test("the initial is WAITED FOR when the session read is slow — the t_129fdb48 flake", async ({
@@ -489,15 +486,16 @@ test.describe("avatar-initial badges on bg-indigo-100", () => {
       `the profile avatar initial is below ITS floor: ${JSON.stringify(m)}`,
     ).toBeGreaterThanOrEqual(floorFor(m));
 
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2aa", "wcag21aa"])
-      .include(PROFILE_BADGE)
-      .analyze();
+    const results = await gateScan(page, PROFILE_BADGE);
     const blockers = blockersOf(results);
     expect(
       blockers.map((v) => `${v.id} (${v.impact}): ${v.help} — ${v.nodes[0]?.failureSummary ?? ""}`),
       "axe found critical/serious violations in the profile identity badge",
     ).toEqual([]);
+
+    // The scan above is only evidence if it can SEE an A-level ARIA defect in this
+    // badge (card t_5aa6c8ac): plant one and require the same scan to name it.
+    await expectGateSeesAriaViolation(page, PROFILE_BADGE, "the profile identity badge");
   });
 
   test("CONTROL: with the PRE-FIX token the sidebar badge drops below its floor, and axe does not clear it", async ({
@@ -538,10 +536,7 @@ test.describe("avatar-initial badges on bg-indigo-100", () => {
     // does not do here. What it must not do is PASS the pre-fix paint, and arm 1
     // measured the fixed paint of this same element as a PASS, so this is the
     // difference between the two states:
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2aa", "wcag21aa"])
-      .include(SHELL_BADGE)
-      .analyze();
+    const results = await gateScan(page, SHELL_BADGE);
     const cleared = [...results.passes, ...results.violations]
       .filter((r) => r.id === "color-contrast")
       .flatMap((r) => r.nodes.map((n) => n.target.join(" ")));
@@ -561,5 +556,9 @@ test.describe("avatar-initial badges on bg-indigo-100", () => {
       "axe produced no color-contrast node for the pre-fix paint at all, so this arm proves " +
         "nothing about it",
     ).toMatch(/bg-indigo-100/);
+
+    // …and the rule set behind this control can see an A-level ARIA defect in the
+    // same badge (card t_5aa6c8ac), not only the contrast rule it is aimed at.
+    await expectGateSeesAriaViolation(page, SHELL_BADGE, "the pre-fix sidebar badge");
   });
 });

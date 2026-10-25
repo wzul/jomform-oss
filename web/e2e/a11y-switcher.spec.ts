@@ -63,18 +63,15 @@ import { signIn } from "./auth";
 test.beforeEach(async ({ page, baseURL }) => {
   await signIn(page, baseURL!);
 });
-import AxeBuilder from "@axe-core/playwright";
-import type { AxeResults, Result } from "axe-core";
 import { DICT } from "../src/components/i18nDict";
+import { blockersOf, expectGateSeesAriaViolation, gateScan } from "./axeGate";
 
-// The gate's own rule, kept identical to e2e/a11y.spec.ts so the two cannot drift.
-const IMPACTS = ["critical", "serious"] as const;
-
-function blockersOf(results: AxeResults): Result[] {
-  return results.violations.filter((v) =>
-    IMPACTS.includes((v.impact ?? "") as (typeof IMPACTS)[number]),
-  );
-}
+// The gate's own rule — the axe rule SET and the failing IMPACTS — is defined
+// once, in `e2e/axeGate.ts`, and `e2e/a11y.spec.ts` runs the same two functions.
+// Card t_5aa6c8ac: the local copy that used to sit here declared
+// `withTags(["wcag2aa", "wcag21aa"])`, which reached 6 of axe's 105 rules and
+// hid every A-level ARIA rule; the "identical to a11y.spec.ts" claim in this
+// file's header was false. See axeGate.ts for the measurement.
 
 /** The pre-fix on-tint tokens, from card t_a475d6c1's own measurement. */
 const PRE_FIX_TOKENS = ":root{--jf-primary-on-tint:#5e6ad2;--jf-muted-on-tint:#6b7280;}";
@@ -389,16 +386,18 @@ test.describe("workspace switcher's tinted active item", () => {
     ).toEqual([]);
 
     // (5) The gate's axe rule, scoped to the OPEN MENU. `include()` makes axe THROW when
-    // the subtree is absent, so this cannot pass vacuously either.
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2aa", "wcag21aa"])
-      .include(scope)
-      .analyze();
+    // the subtree is absent, so this cannot pass vacuously either — and the control at
+    // the end proves the scan can SEE an A-level ARIA defect in this menu.
+    const results = await gateScan(page, scope);
     const blockers = blockersOf(results);
     expect(
       blockers.map((v) => `${v.id} (${v.impact}): ${v.help}`),
       "axe found critical/serious violations in the open switcher menu",
     ).toEqual([]);
+
+    // (6) NON-VACUITY OF (5), the half card t_5aa6c8ac exists for: plant a
+    // prohibited ARIA state in THIS menu and require the same scan to name it.
+    await expectGateSeesAriaViolation(page, scope, "the open switcher menu");
   });
 
   test("CONTROL: with the PRE-FIX on-tint tokens the measurement drops below the floor", async ({
@@ -706,10 +705,7 @@ test.describe("workspace switcher's default-workspace row (hover state)", () => 
 
     // (4) The gate's axe rule, scoped to the open menu WITH THE ROW STILL
     // HOVERED — this is the exact run shape that reported the card's node.
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2aa", "wcag21aa"])
-      .include(scope)
-      .analyze();
+    const results = await gateScan(page, scope);
     const contrast = results.violations.filter((v) => v.id === "color-contrast");
     if (contrast.length > 0) {
       console.log(
@@ -762,6 +758,11 @@ test.describe("workspace switcher's default-workspace row (hover state)", () => 
         `/settings?tab=workspace). Re-anchor this arm to a route where axe can judge the row rather than ` +
         `accepting the 0-violation reading.`,
     ).toEqual([]);
+
+    // (5) NON-VACUITY OF (4): the same scan must SEE an A-level ARIA defect in this
+    // menu (card t_5aa6c8ac) — a clean reading from a rule set that excludes those
+    // rules would be worth nothing.
+    await expectGateSeesAriaViolation(page, scope, "the hovered switcher menu");
   });
 
   test("CONTROL: the PRE-FIX hover ink still drops below the floor and axe still names it", async ({
@@ -818,10 +819,7 @@ test.describe("workspace switcher's default-workspace row (hover state)", () => 
     // And the axe arm must NAME it: a scoped run over the same hovered row has to
     // report the color-contrast node with the pre-fix pair, or the arm above is
     // not the guard the card asks for.
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2aa", "wcag21aa"])
-      .include(scope)
-      .analyze();
+    const results = await gateScan(page, scope);
     const contrast = results.violations.filter((v) => v.id === "color-contrast");
     const summaries = contrast.flatMap((v) => v.nodes.map((n) => n.failureSummary ?? ""));
     console.log(
@@ -846,5 +844,9 @@ test.describe("workspace switcher's default-workspace row (hover state)", () => 
       `axe reported color-contrast, but none of its summaries named the pre-fix pair (foreground ${PRE_FIX_INK} ` +
         `on background ${HOVER_SURFACE}, 4.49). Summaries: ${JSON.stringify(summaries)}`,
     ).toBe(true);
+
+    // …and the rule set behind this control can see an A-level defect in the same
+    // subtree (card t_5aa6c8ac), not only the contrast rule it is aimed at.
+    await expectGateSeesAriaViolation(page, scope, "the pre-fix hover menu");
   });
 });

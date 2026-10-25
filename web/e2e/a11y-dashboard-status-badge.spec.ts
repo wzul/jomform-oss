@@ -79,19 +79,14 @@
 //   npx playwright test e2e/a11y-dashboard-status-badge.spec.ts  # this file alone
 
 import { test, expect, type Page } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
-import type { AxeResults, Result } from "axe-core";
-
 import { signIn } from "./auth";
+import { blockersOf, expectGateSeesAriaViolation, gateScan } from "./axeGate";
 
-// The gate's own rule, kept identical to e2e/a11y.spec.ts so the two cannot drift.
-const IMPACTS = ["critical", "serious"] as const;
-
-function blockersOf(results: AxeResults): Result[] {
-  return results.violations.filter((v) =>
-    IMPACTS.includes((v.impact ?? "") as (typeof IMPACTS)[number]),
-  );
-}
+// The gate's own rule — the axe rule SET and the failing IMPACTS — is defined
+// once, in `e2e/axeGate.ts`, and `e2e/a11y.spec.ts` runs the same two functions.
+// Card t_5aa6c8ac: the local copy that used to sit here declared
+// `withTags(["wcag2aa", "wcag21aa"])`, which reached 6 of axe's 105 rules and
+// hid every A-level ARIA rule. See axeGate.ts for the measurement.
 
 /** The four statuses this spec paints. `authorized` is the unnamed one. */
 const SALES = [
@@ -426,10 +421,7 @@ test.describe("the dashboard's Recent-sales status pill", () => {
     // when the subtree is absent, so this cannot pass over nothing. It is NOT the
     // detector for this card's defect (an uncoloured pill measures 17.7:1) — it is
     // here so a pill that becomes a real violation cannot ride along.
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2aa", "wcag21aa"])
-      .include("table")
-      .analyze();
+    const results = await gateScan(page, "table");
     const blockers = blockersOf(results);
     expect(
       blockers.map((v) => `${v.id} (${v.impact}): ${v.help} — ${v.nodes[0]?.failureSummary ?? ""}`),
@@ -444,6 +436,10 @@ test.describe("the dashboard's Recent-sales status pill", () => {
       judged.length,
       "axe's color-contrast rule judged no node in the table, so the scan above covered something else",
     ).toBeGreaterThan(0);
+
+    // …and the same scan can SEE an A-level ARIA defect in this table (card
+    // t_5aa6c8ac): plant one and require it to be named.
+    await expectGateSeesAriaViolation(page, "table", "the Recent-sales table");
   });
 
   test("CONTROL: the pre-fix class list lands off the orange, so the assertion above bites", async ({

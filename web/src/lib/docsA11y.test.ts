@@ -47,6 +47,17 @@ import { isEnglishOnlyProsePath, ENGLISH_ONLY_PROSE_PREFIXES } from "./proseSurf
 const pathOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 
 const SPEC = readFileSync(pathOf("../../e2e/a11y.spec.ts"), "utf8");
+
+/**
+ * How a spec reaches axe: `new AxeBuilder(...)` directly, or `gateScan()` from
+ * `e2e/axeGate.ts` — the ONE definition of the rule set + failing impacts that
+ * `a11y.spec.ts` and the nine scoped arms share (card t_5aa6c8ac; the arms used
+ * to carry nine copies of `withTags(["wcag2aa","wcag21aa"])`, which reached 6 of
+ * axe's 105 rules). This assertion exists to prove the file we parsed IS the
+ * axe spec, so it accepts either entry point rather than pretending only one
+ * shape exists.
+ */
+const AXE_SCAN = /(?:AxeBuilder|gateScan)/;
 const DOCS_DIR = pathOf("../app/docs");
 
 // Route -> source file. app/docs/layout.tsx is the shared chrome, not a route.
@@ -104,7 +115,7 @@ function hasClass(tag: string, token: string): boolean {
 }
 
 test("the guard is looking at real files (it cannot pass vacuously)", () => {
-  assert.ok(SPEC.includes("AxeBuilder"), "e2e/a11y.spec.ts is not the axe spec");
+  assert.ok(AXE_SCAN.test(SPEC), "e2e/a11y.spec.ts is not the axe spec");
   assert.ok(scannedPaths.length >= 7, `only ${scannedPaths.length} scanned paths were parsed out of the spec`);
   assert.ok(DOCS.length >= 11, `expected the docs tree, found ${DOCS.length} routes`);
   assert.ok(

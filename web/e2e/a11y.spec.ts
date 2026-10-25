@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+
+import { blockersOf, gateScan } from "./axeGate";
 
 // axe-core accessibility scan (issue #104).
 //
@@ -104,11 +105,13 @@ for (const page of PAGES) {
       );
     }
 
-    const results = await new AxeBuilder({ page: p }).analyze();
+    // The gate's rule — one definition, in e2e/axeGate.ts, shared with the nine
+    // scoped arms in the sibling a11y-*.spec.ts files (card t_5aa6c8ac). No
+    // `withTags` anywhere: axe's DEFAULT set, which is what those arms used to
+    // claim to mirror while running 6 of its 105 rules.
+    const results = await gateScan(p);
 
-    const blockers = results.violations.filter((v) =>
-      v.impact === "critical" || v.impact === "serious",
-    );
+    const blockers = blockersOf(results);
 
     // Report everything for triage, but only fail on critical/serious.
     if (blockers.length > 0) {

@@ -78,8 +78,14 @@ const pathOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 const E2E_DIR = pathOf("../../e2e");
 const CONFIG = readFileSync(pathOf("../../playwright.config.ts"), "utf8");
 
-/** The axe scanner: a spec that visits a route without it is not a scan. */
-const SCANNER = "AxeBuilder";
+/**
+ * The axe entry points: `new AxeBuilder(...)` directly, or `gateScan()` from
+ * `e2e/axeGate.ts` — the ONE definition of the rule set + failing impacts shared
+ * by `a11y.spec.ts` and the nine scoped arms (card t_5aa6c8ac). A spec that
+ * visits a route with NEITHER is not a scan.
+ */
+const SCANNERS = ["AxeBuilder", "gateScan"] as const;
+const SCANNER = SCANNERS.join(" or ");
 
 /**
  * The /settings strip's size, MEASURED out of the page's own source.
@@ -558,7 +564,7 @@ test("each signed-in route is visited by an a11y-family spec that runs axe", () 
     // shape does not do), so the public file cannot satisfy this on its own.
     const scanners = A11Y_SPECS.filter((f) => f !== "a11y.spec.ts").filter((f) => {
       const text = readFileSync(pathOf(`../../e2e/${f}`), "utf8");
-      return visits(text, route) && text.includes(SCANNER);
+      return visits(text, route) && SCANNERS.some((s) => text.includes(s));
     });
     assert.ok(
       scanners.length > 0,

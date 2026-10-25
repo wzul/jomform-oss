@@ -104,17 +104,13 @@ import { signIn } from "./auth";
 test.beforeEach(async ({ page, baseURL }) => {
   await signIn(page, baseURL!);
 });
-import AxeBuilder from "@axe-core/playwright";
-import type { AxeResults, Result } from "axe-core";
+import { blockersOf, expectGateSeesAriaViolation, gateScan } from "./axeGate";
 
-// The gate's own rule, kept identical to e2e/a11y.spec.ts so the two cannot drift.
-const IMPACTS = ["critical", "serious"] as const;
-
-function blockersOf(results: AxeResults): Result[] {
-  return results.violations.filter((v) =>
-    IMPACTS.includes((v.impact ?? "") as (typeof IMPACTS)[number]),
-  );
-}
+// The gate's own rule — the axe rule SET and the failing IMPACTS — is defined
+// once, in `e2e/axeGate.ts`, and `e2e/a11y.spec.ts` runs the same two functions.
+// Card t_5aa6c8ac: the local copy that used to sit here declared
+// `withTags(["wcag2aa", "wcag21aa"])`, which reached 6 of axe's 105 rules and
+// hid every A-level ARIA rule. See axeGate.ts for the measurement.
 
 /** The tokens this card replaced, from its own measurement. */
 const PRE_FIX_TOKENS = ":root{--jf-muted:#6b7280;--jf-muted-on-tint:#6b7280;}";
@@ -360,10 +356,7 @@ test.describe("the selected admin feedback row's sub-line", () => {
 
     // (2) THE GATE'S OWN RULE, scoped to the row. `include()` makes axe THROW when
     // the subtree is absent, so this cannot pass over nothing.
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2aa", "wcag21aa"])
-      .include(ROW_SEL)
-      .analyze();
+    const results = await gateScan(page, ROW_SEL);
     const blockers = blockersOf(results);
     expect(
       blockers.map((v) => `${v.id} (${v.impact}): ${v.help} — ${v.nodes[0]?.failureSummary ?? ""}`),
@@ -381,6 +374,10 @@ test.describe("the selected admin feedback row's sub-line", () => {
       `axe's color-contrast rule produced no node for the sub-line, so the scan above covered ` +
         `something else. Nodes: ${JSON.stringify(analysed)}`,
     ).toBe(true);
+
+    // (4) NON-VACUITY OF (2), the half card t_5aa6c8ac exists for: a prohibited
+    // ARIA state planted in THIS row must be reported by the same scan.
+    await expectGateSeesAriaViolation(page, ROW_SEL, "the selected admin feedback row");
     await expect(row).toBeVisible();
   });
 
@@ -429,10 +426,7 @@ test.describe("the selected admin feedback row's sub-line", () => {
 
     // And axe must name it on that same row — the arm is a real reproduction of
     // the card's original reading, not just a low number.
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2aa", "wcag21aa"])
-      .include(ROW_SEL)
-      .analyze();
+    const results = await gateScan(page, ROW_SEL);
     const named = results.violations
       .filter((v) => v.id === "color-contrast")
       .flatMap((v) => v.nodes.map((n) => n.failureSummary ?? ""));
@@ -441,5 +435,9 @@ test.describe("the selected admin feedback row's sub-line", () => {
       "axe did not name the control surface as a color-contrast violation, so this arm is not a " +
         "reproduction of the defect the card was filed about",
     ).toMatch(/insufficient color contrast/i);
+
+    // …and the rule set behind this control can see an A-level ARIA defect in the
+    // same row (card t_5aa6c8ac), not only the contrast rule it is aimed at.
+    await expectGateSeesAriaViolation(page, ROW_SEL, "the admin feedback row control");
   });
 });
