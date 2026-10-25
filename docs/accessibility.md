@@ -289,6 +289,16 @@ and a local build, and **no gate executes them** (the switcher's own coverage is
 now the `a11y-switcher.spec.ts` spec named above; `nav-evidence.mjs` is a plain
 evidence tool with no assertion to promote).
 
+A hand-run probe still prints a verdict someone will read, so it runs the SAME
+rule the gate runs (card `t_c912998e`). `a11y-switcher.mjs` used to declare its
+own `withTags(["wcag2aa", "wcag21aa"])` — the six-of-105 tag set — and so could
+print `critical/serious: 0` over a menu the gate fails, on the one surface
+(authenticated chrome) where no other reading exists. It now calls
+`gateScan()`/`blockersOf()` from `web/e2e/axeGate.ts`, and
+`web/src/lib/a11yGateRule.test.ts` fails the build if any script under
+`web/scripts/` narrows the rule set or if the switcher probe stops going through
+the shared gate.
+
 **The same menu's `workspace.setDefault` row ("Make this the default workspace")
 is held PER STATE** (card `t_9d8f0431`). It is the row whose two states paint on
 *different* surfaces, and only one of them used to be measured:

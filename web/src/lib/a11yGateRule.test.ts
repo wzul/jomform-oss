@@ -21,7 +21,11 @@
 // nine arms call those two functions. This test fails if
 //   (a) any a11y spec goes back to narrowing the rule set at a call site, or
 //   (b) the shared gate itself narrows it, or
-//   (c) one of the four scoped specs stops going through the shared gate.
+//   (c) one of the four scoped specs stops going through the shared gate, or
+//   (d) a HAND-RUN probe under `web/scripts/` carries a rule set of its own
+//       (card t_c912998e — `a11y-switcher.mjs` kept the six-rule tag pair for
+//       one merge after the gate was fixed, because no gate executes the probes
+//       and nothing scanned them for the shape).
 //
 // The RUNTIME half of the same card is `expectGateSeesAriaViolation` in
 // `e2e/axeGate.ts`, which all nine arms call: it plants a prohibited ARIA state
@@ -40,6 +44,10 @@ import { fileURLToPath } from "node:url";
 
 const pathOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 const E2E_DIR = pathOf("../../e2e");
+
+/** The HAND-RUN a11y probes. No gate executes them (docs/accessibility.md), so
+ *  nothing but this file stands between one of them and a rule set of its own. */
+const SCRIPTS_DIR = pathOf("../../scripts");
 
 /** The axe rule set + failing impacts, shared by the whole family. */
 const GATE = "axeGate.ts";
@@ -189,3 +197,68 @@ test("every scoped arm goes through the shared gate, not its own AxeBuilder", ()
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// Card t_c912998e — the HAND-RUN probes are measured against the same rule.
+//
+// `web/scripts/a11y-switcher.mjs` kept its own
+// `withTags(["wcag2aa", "wcag21aa"])` for one merge AFTER the gate was fixed,
+// because `npm run a11y` never runs a `scripts/` file: the card that fixed the
+// nine spec arms recorded the probe as out of scope, and the two tests above
+// read only `e2e/`. So the probe printed `critical/serious: 0` over a rule set
+// that cannot see an A-level ARIA defect — a hand-run reading that could call a
+// menu clean which the gate fails. Nothing about that was caught by a gate; this
+// file is where it is now caught, because it is the only test that reads these
+// files at all.
+//
+// The probes are NOT promoted into the gate here (they need a `SESSION` and a
+// local build — docs/accessibility.md says so and `a11y-switcher.spec.ts` owns
+// the switcher's real coverage). What is pinned is narrower and sufficient: a
+// probe may scan whatever it likes with axe's DEFAULT set, and may not narrow it
+// at a call site.
+// ---------------------------------------------------------------------------
+
+/** Every hand-run script in `web/scripts/`, by the extension the probes use. */
+const PROBES = readdirSync(SCRIPTS_DIR).filter((f) => f.endsWith(".mjs"));
+const probeSource = (f: string) => readFileSync(`${SCRIPTS_DIR}/${f}`, "utf8");
+
+test("no hand-run script narrows axe's rule set at a call site", () => {
+  assert.ok(
+    PROBES.length > 0,
+    `no .mjs script was found in ${SCRIPTS_DIR} — the rule below would be vacuous`,
+  );
+  const offenders = PROBES.filter((f) => narrowsRuleSet(probeSource(f)));
+  assert.deepEqual(
+    offenders,
+    [],
+    `these hand-run scripts narrow axe's rule set at a call site: ${JSON.stringify(offenders)}. ` +
+      `No gate executes them (docs/accessibility.md), so nothing else would ever notice: ` +
+      `a subset of the gate's rules read as a clean probe over a page the gate fails. ` +
+      `Import gateScan()/blockersOf() from ../e2e/${GATE} and run the default set.`,
+  );
+});
+
+test("the switcher probe reads the gate's rule, not a copy of it", () => {
+  const src = probeSource("a11y-switcher.mjs");
+  assert.ok(src.length > 0, "web/scripts/a11y-switcher.mjs is missing or empty");
+  assert.ok(
+    /from\s+"\.\.\/e2e\/axeGate(?:\.ts)?"/.test(src),
+    `a11y-switcher.mjs does not import the shared rule from ../e2e/${GATE}. It printed a ` +
+      `critical/serious verdict from its own six-rule tag set (card t_c912998e) — a hand-run ` +
+      `reading that can contradict the gate's.`,
+  );
+  for (const fn of ["gateScan(", "blockersOf("]) {
+    assert.ok(
+      src.includes(fn),
+      `a11y-switcher.mjs imports ../e2e/${GATE} but never calls ${fn}) — its scan is reading ` +
+        `something other than the gate's rule set and failing impacts.`,
+    );
+  }
+  assert.equal(
+    /new\s+AxeBuilder\s*\(/.test(codeOnly(src)),
+    false,
+    `a11y-switcher.mjs constructs its own AxeBuilder again — that call site is exactly where ` +
+      `the six-rule tag set lived (card t_c912998e). Call gateScan(page, scope).`,
+  );
+});
+

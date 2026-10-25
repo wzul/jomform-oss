@@ -7,12 +7,26 @@
 // left behind.
 //
 // This probe opens the switcher menu on desktop and inside the mobile drawer,
-// runs axe (wcag2aa + wcag21aa) over the OPEN menu, and prints the measured
-// computed colours of every menu row so the verdict is readable without axe's
-// own wording. With `CONTROL=1` it ALSO re-runs the scan with only the two
-// on-tint tokens overridden back to their pre-fix values, which proves the 0 is
-// not vacuous: if the scan cannot see the tinted active item at all, the control
-// stays green and this script fails.
+// runs THE GATE'S OWN axe rule over the OPEN menu (and over the page it sits
+// in), and prints the measured computed colours of every menu row so the verdict
+// is readable without axe's own wording. With `CONTROL=1` it ALSO re-runs the
+// scan with only the two on-tint tokens overridden back to their pre-fix values,
+// which proves the 0 is not vacuous: if the scan cannot see the tinted active
+// item at all, the control stays green and this script fails.
+//
+// THE RULE SET IS NOT DEFINED HERE (card t_c912998e). This probe used to carry
+//     new AxeBuilder({ page }).withTags(["wcag2aa", "wcag21aa"])
+// which reaches 6 of axe-core's 105 rules: every A-level ARIA rule (WCAG 4.1.2,
+// all 63 rules carrying the `wcag2a` tag) was excluded, so `critical/serious: 0`
+// here could describe a menu the gate's own scan fails. It now calls `gateScan()`
+// and `blockersOf()` from `../e2e/axeGate.ts` — the same two functions
+// `e2e/a11y.spec.ts` and the nine scoped arms run — so a hand-run reading and a
+// gate reading cannot disagree about which rules ran or which impacts fail.
+//
+// That import is TypeScript, so this file needs a Node that strips types
+// (>= 22.18; the repo's `npm run test:unit` already requires it). The
+// MODULE_TYPELESS_PACKAGE_JSON warning on load is expected and harmless — add
+// `--disable-warning=MODULE_TYPELESS_PACKAGE_JSON` if it bothers you.
 //
 // Usage:
 //   SESSION=<jf_session token> BASE=http://127.0.0.1:3202 \
@@ -25,7 +39,7 @@
 // must not be pointed at anything but a local build: it injects that cookie into
 // a browser.
 import { chromium } from "playwright";
-import AxeBuilder from "@axe-core/playwright";
+import { blockersOf, gateScan } from "../e2e/axeGate.ts";
 
 const BASE = process.env.BASE || "http://127.0.0.1:3202";
 const SESSION = process.env.SESSION;
@@ -60,10 +74,10 @@ function report(label, blockers) {
 }
 
 async function scanMenu(page, label, include) {
-  let b = new AxeBuilder({ page }).withTags(["wcag2aa", "wcag21aa"]);
-  if (include) b = b.include(include);
-  const res = await b.analyze();
-  const blockers = res.violations.filter((v) => v.impact === "critical" || v.impact === "serious");
+  // The gate's rule set (default set) and the gate's failing impacts. `include`
+  // throws when it matches nothing, so a scan cannot pass over an absent menu.
+  const res = await gateScan(page, include);
+  const blockers = blockersOf(res);
   report(label, blockers);
   return blockers.length;
 }
