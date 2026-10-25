@@ -10,7 +10,26 @@ import (
 
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/formfields"
 )
+
+// submitKeysFor derives the answer key of every block of a decoded config, in
+// block order, through formfields.SubmitKeys — the ONE rule the derived
+// contract and both public renderers share (card t_e854b64c).
+//
+// It exists so the two renderers cannot each decide the key for a block that
+// carries no id (the legacy shape): they were both keying it by the empty id,
+// which is also the id the contract skipped, so a required marker on such a
+// block was an HTML attribute a direct POST could ignore. Only the derivation
+// is shared; the decoded block structs stay per renderer, which is why the
+// caller passes an accessor instead of a slice.
+func submitKeysFor(blocks int, idAt func(int) string) []string {
+	ids := make([]string, blocks)
+	for i := range ids {
+		ids[i] = idAt(i)
+	}
+	return formfields.SubmitKeys(ids)
+}
 
 // variationView is the buyer-facing shape of one product variation. It is
 // PACKAGE-scoped (not local to renderBlocks) because the restaurant menu
@@ -173,10 +192,11 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	imgHidden := themeProductImageSize == ProductImageSizeHidden
 	imgTop := themeProductImageLayout == ProductImageLayoutImageTop
 
+	keys := submitKeysFor(len(cfg.Blocks), func(i int) string { return cfg.Blocks[i].ID })
 	blocks := make([]blockView, 0, len(cfg.Blocks))
-	for _, b := range cfg.Blocks {
+	for i, b := range cfg.Blocks {
 		vb := blockView{
-			ID: b.ID, Type: b.Type, Value: b.Value, Src: b.Src, ProductID: b.ProductID, Required: b.Required,
+			ID: keys[i], Type: b.Type, Value: b.Value, Src: b.Src, ProductID: b.ProductID, Required: b.Required,
 			Placeholder: b.Placeholder, Description: b.Description, CSSClass: b.CSSClass,
 			Style:     customform.SanitizeStyle(b.Style),
 			MaxLength: b.MaxLength, DefaultValue: b.DefaultValue, Min: b.Min, Max: b.Max,
@@ -1180,8 +1200,9 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 		Pattern      string
 		Choices      []choiceView
 	}
+	keys := submitKeysFor(len(cfg.Blocks), func(i int) string { return cfg.Blocks[i].ID })
 	fields := make([]fieldView, 0, len(cfg.Blocks))
-	for _, b := range cfg.Blocks {
+	for i, b := range cfg.Blocks {
 		// Card t_99c3a08b: every block the merchant placed is emitted, in the
 		// merchant's own order. A block is either an INPUT the responder fills
 		// in (collectable — the submitted value round-trips as
@@ -1196,7 +1217,10 @@ func (h *PublicHandlers) renderResponseForm(w http.ResponseWriter, r *http.Reque
 			"select", "radio", "date", "time", "website", "address",
 			"consent", "hidden", "list", "repeater", "image-choice", "captcha":
 			fv := fieldView{
-				ID: b.ID, Type: b.Type, Value: b.Value, Required: b.Required,
+				// Card t_e854b64c: keyed by the SHARED derivation, so an
+				// id-less legacy block is submitted under the same key the
+				// contract validates ("_block_<index>") instead of "".
+				ID: keys[i], Type: b.Type, Value: b.Value, Required: b.Required,
 				CondJSON:    marshalCondition(b.Condition),
 				Placeholder: b.Placeholder, Description: b.Description,
 				CSSClass: b.CSSClass, Style: customform.SanitizeStyle(b.Style),

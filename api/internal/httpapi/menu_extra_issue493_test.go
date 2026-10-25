@@ -195,12 +195,15 @@ func TestIssue493ContractFromBuilderBlocks(t *testing.T) {
 			map[string]any{"id": "spice", "type": "select", "value": "Pedas", "required": true,
 				"choices": []any{map[string]any{"label": "Biasa", "value": "biasa"}}},
 			map[string]any{"id": "addr", "type": "address", "value": "dup"}, // duplicate id dropped
-			map[string]any{"id": "", "type": "phone"},                       // blank id dropped
+			// Card t_e854b64c: a blank id is no longer dropped — the block IS
+			// painted by both renderers (keyed by data-id/name), so it enters
+			// the contract under the key those renderers submit it with.
+			map[string]any{"id": "", "type": "phone"},
 		},
 	}
 	got := formfields.Contract(cfg)
-	if len(got) != 3 {
-		t.Fatalf("Contract returned %d fields, want 3 (%+v)", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("Contract returned %d fields, want 4 (%+v)", len(got), got)
 	}
 	if got[0].FieldID != "title" || got[0].Type != "text" || got[0].Label != "Order" {
 		t.Errorf("title field = %+v", got[0])
@@ -210,6 +213,11 @@ func TestIssue493ContractFromBuilderBlocks(t *testing.T) {
 	}
 	if got[2].FieldID != "spice" || len(got[2].Choices) != 1 || got[2].Choices[0].Value != "biasa" {
 		t.Errorf("spice field = %+v", got[2])
+	}
+	// Card t_e854b64c: the id-less block is keyed by its POSITION — the same
+	// key both renderers paint it with — not by the empty string.
+	if got[3].FieldID != "_block_5" || got[3].Type != "phone" {
+		t.Errorf("id-less field = %+v, want the block keyed _block_5", got[3])
 	}
 	// An explicit registered_fields contract wins.
 	reg := formfields.Contract(map[string]any{

@@ -438,6 +438,60 @@ type block struct {
 	} `json:"choices"`
 }
 
+// SubmitKeys returns, for each block of a form's config.blocks array in block
+// order, the key that block's answer is submitted under.
+//
+// A block WITH an id keeps its trimmed id — unchanged. A block WITHOUT one gets
+// a key synthesised from its POSITION: "_block_<index>". Card t_e854b64c: the
+// contract and both public renderers used to key such a block by its id, so
+// the contract (which skips an empty id) carried nothing for it while the pages
+// still painted a control whose key was "" — a required marker on one of those
+// legacy blocks was an HTML attribute a direct POST could ignore, the #254
+// bypass class again. Measured on prod: 6 required id-less blocks on 4
+// published forms, where POSTing no field values got past the contract.
+//
+// Deriving the key HERE, in the ONE function the contract and both renderers
+// call, is what makes "the key the server validates" and "the key the page
+// submits" the same value rather than two rules that happen to pair up. The
+// stored config is not rewritten, so a legacy form needs no re-save and no data
+// migration, and a page rendered before this change and a submit handled after
+// it cannot disagree about a form whose blocks carry no id: both derive
+// "_block_<index>" from the same array.
+//
+// The key must be STABLE for a given config — it is interpolated into the
+// page's data-id/name, collected by the page's own script, re-derived on the
+// submit side and stored on the submission — so it comes from the index alone,
+// never from a random or per-request value. It must also be UNIQUE: a config
+// may carry a real block whose id is literally "_block_2", so a synthetic key
+// that would collide falls through to "_block_2_2" (and so on). Two blocks
+// sharing one real id keep sharing it; Contract's own seen-dedupe keeps the
+// first, as before.
+func SubmitKeys(ids []string) []string {
+	keys := make([]string, len(ids))
+	taken := make(map[string]bool, len(ids))
+	for i := range ids {
+		k := strings.TrimSpace(ids[i])
+		if k == "" {
+			continue
+		}
+		keys[i] = k
+		taken[k] = true
+	}
+	for i := range keys {
+		if keys[i] != "" {
+			continue
+		}
+		base := "_block_" + strconv.Itoa(i)
+		k := base
+		for n := 2; taken[k]; n++ {
+			k = base + "_" + strconv.Itoa(n)
+		}
+		taken[k] = true
+		keys[i] = k
+	}
+	return keys
+}
+
 // Contract derives the input-field contract from a form's builder blocks
 // (issue #493). The merchant configures extra menu-checkout fields in the
 // normal form builder; the checkout renders exactly those blocks and the
@@ -445,9 +499,12 @@ type block struct {
 // registered_fields contract (issue #254) wins — that contract is the
 // merchant/agent's declared shape. Returns nil when the form has neither.
 //
-// The block id is the field id, matching how the block renderer submits
-// ({fields: {block_id: value}}), so a form's own submit path and the menu
-// checkout record the same keys.
+// The block's submit key is the field id, matching how the block renderers
+// submit ({fields: {block_id: value}}), so a form's own submit path and the
+// menu checkout record the same keys. That key comes from SubmitKeys, which is
+// also what both public renderers key their controls by — including for a
+// legacy block that carries no id (card t_e854b64c), whose synthesized
+// "_block_<index>" key is therefore enforced instead of silently skipped.
 func Contract(config map[string]any) []Field {
 	if regs := FromConfig(config); len(regs) > 0 {
 		return regs
@@ -456,11 +513,16 @@ func Contract(config map[string]any) []Field {
 	if len(bs) == 0 {
 		return nil
 	}
+	rawIDs := make([]string, len(bs))
+	for i := range bs {
+		rawIDs[i] = bs[i].ID
+	}
+	keys := SubmitKeys(rawIDs)
 	var out []Field
 	seen := map[string]bool{}
-	for _, b := range bs {
-		id := strings.TrimSpace(b.ID)
-		if id == "" || !collectableTypes[b.Type] || seen[id] {
+	for i, b := range bs {
+		id := keys[i]
+		if !collectableTypes[b.Type] || seen[id] {
 			continue
 		}
 		seen[id] = true
