@@ -52,12 +52,18 @@ type ActivityListing = { items: ActivityEvent[]; page: number; limit: number; to
 
 const PER_PAGE = 20;
 
-// The event-name CLASSES the store can filter on. The server matches a trailing
-// "*" as a prefix (dbstore.eventWhere), which is the only reason a family filter
-// is one request instead of one per name. Kept as raw event-name vocabulary
-// rather than translated labels, the same choice /deliveries makes for its five
-// delivery statuses — these are the tokens the API answers in and the ones an
-// API-key or MCP user types.
+// The event-name CLASSES the filter offers. The server matches a trailing "*"
+// as a prefix (dbstore.eventWhere), which is the only reason a family filter is
+// one request instead of one per name. EVERY family the API records belongs
+// here: a family missing from this list is a row a merchant can read in the
+// unfiltered list but cannot filter to (card t_07d8f4a4 — chat.*, admin.* and
+// feedback.* were recorded and unselectable). activityPage.test.ts reads the
+// recorder call sites under api/internal and fails in BOTH directions when this
+// list and the recorded vocabulary disagree, so the list cannot silently fall
+// behind again. Kept as raw event-name vocabulary rather than translated
+// labels, the same choice /deliveries makes for its five delivery statuses —
+// these are the tokens the API answers in and the ones an API-key or MCP user
+// types.
 const EVENT_CLASSES = [
   "form.*",
   "product.*",
@@ -70,6 +76,9 @@ const EVENT_CLASSES = [
   "profile.*",
   "auth.*",
   "mcp.*",
+  "chat.*",
+  "admin.*",
+  "feedback.*",
 ] as const;
 
 /**

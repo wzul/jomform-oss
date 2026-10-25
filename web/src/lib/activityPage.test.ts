@@ -45,6 +45,11 @@
 //      still live are NOT (a sweep that took a live key with it would break the
 //      Profile → MCP tab, which renders `set.serverUrl`, `set.clientId`,
 //      `set.revoke` and `set.activeMode`).
+//   6. (card t_07d8f4a4) The event-type dropdown offers EVERY family the API
+//      actually records, and no family it does not: the families are read out of
+//      the recorder call sites under api/internal, so `chat.*` / `admin.*` /
+//      `feedback.*` cannot go missing again — those rows were readable in the
+//      unfiltered list and unselectable in the filter.
 //
 // Run with:
 //
@@ -53,7 +58,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DICT, LANGS } from "../components/i18nDict.ts";
@@ -159,6 +165,107 @@ test("the server has the route and honours the same params (the two halves canno
     /f\.Page, f\.Limit = page, limit/,
     "listEvents no longer passes the page/limit it parsed into the filter — the page would always " +
       "receive the store's default page size regardless of what it asked for",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// THE DROPDOWN vs THE RECORDED VOCABULARY (card t_07d8f4a4)
+//
+// The filter's options were a hand-written list of 11 families while the API
+// recorded 14: `chat.message` / `chat.proposal_confirmed` (rest_chat.go),
+// `admin.super_admin_action` (rest_admin.go + mcpsrv/superadmin.go) and
+// `feedback.*` (rest_feedback.go) had no option, so those rows could only be
+// read in the unfiltered list. The list was never wrong about the API's
+// capability — a trailing `*` is a prefix match, so `chat.*` already worked —
+// it had simply fallen behind what the writers emit, and nothing could notice.
+//
+// So the families are DERIVED here from the recorder call sites, and both
+// directions are asserted: a recorded family with no option fails (the defect),
+// and an option with no recorded family fails too (a filter that can only ever
+// return an empty page).
+// ---------------------------------------------------------------------------
+
+const GO_INTERNAL = fileURLToPath(new URL("../../../api/internal", import.meta.url));
+
+/** Every non-test .go file under api/internal. */
+function goSources(dir: string, acc: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) goSources(p, acc);
+    else if (name.endsWith(".go") && !name.endsWith("_test.go")) acc.push(p);
+  }
+  return acc;
+}
+
+/**
+ * The event families the API WRITES, read from the source that writes them.
+ *
+ * The call shapes are the eight recorder helpers plus the store call they all
+ * funnel into (`Events.Record(...)`); the name literals on those lines are the
+ * event names. A dynamically built name (`"form.bulk_"+in.Action`) still yields
+ * its family, which is all a prefix filter needs.
+ */
+function recordedEventFamilies(): Map<string, Set<string>> {
+  const CALL = /(?:\b(?:recordEvent|recordEventFor|recordAuthEvent|recordChatEvent|recordChatConfirmEvent|recordFeedbackEvent|recordMCPEvent|recordMCPMediaEvent)\(|Events\.Record\()/;
+  const families = new Map<string, Set<string>>();
+  for (const file of goSources(GO_INTERNAL)) {
+    for (const line of readFileSync(file, "utf8").split("\n")) {
+      if (/^func\s/.test(line) || !CALL.test(line)) continue;
+      for (const m of line.matchAll(/"([a-z][a-z_]*\.[a-z_.]*)"/g)) {
+        const [fam, ...rest] = m[1].split(".");
+        if (!families.has(fam)) families.set(fam, new Set());
+        families.get(fam)!.add([fam, ...rest].join("."));
+      }
+    }
+  }
+  return families;
+}
+
+test("the event-type filter offers every family the API records — and no dead one", () => {
+  const block = PAGE.match(/const EVENT_CLASSES = \[([\s\S]*?)\] as const;/);
+  assert.ok(block, "EVENT_CLASSES is no longer a literal array — this guard's anchor moved");
+  const offered = [...block[1].matchAll(/"([a-z_]+)\.\*"/g)].map((m) => m[1]);
+
+  const recorded = recordedEventFamilies();
+  // Non-vacuity: if the scan stops seeing the recorders (a helper renamed, a
+  // package moved) this fails instead of reporting a clean, empty comparison.
+  const FOUND_NOTHING =
+    `the recorder scan found ${recorded.size} families (${[...recorded.keys()].join(", ")}) — ` +
+    "it is no longer reading the writers, so this guard would pass on anything";
+  assert.ok(recorded.size >= 10, FOUND_NOTHING);
+  for (const anchor of ["chat", "admin", "feedback", "workspace", "form"]) {
+    assert.ok(recorded.has(anchor), `${FOUND_NOTHING} (no ${anchor}.* calls)`);
+  }
+
+  // Direction 1 — THE DEFECT: a family that is written but cannot be filtered to.
+  const missing = [...recorded.keys()].filter((f) => !offered.includes(f)).sort();
+  assert.deepEqual(
+    missing,
+    [],
+    `the API records ${missing.map((f) => `${f}.* (e.g. ${[...recorded.get(f)!][0]})`).join(", ")} ` +
+      "but the Activity page's event filter has no option for it — those rows are visible only in " +
+      "the unfiltered list (card t_07d8f4a4)",
+  );
+
+  // Direction 2 — the other way round: an option nothing ever writes is a filter
+  // that can only answer an empty page.
+  const dead = offered.filter((f) => !recorded.has(f)).sort();
+  assert.deepEqual(
+    dead,
+    [],
+    `the event filter offers ${dead.map((f) => `${f}.*`).join(", ")} but no recorder writes that ` +
+      "family — selecting it can only return an empty list",
+  );
+
+  // The documented list is the same list, so the docs cannot keep claiming 11
+  // families after the page offers 14.
+  const DOCS_PAGE = read(DOCS_PAGE_REL);
+  const undocumented = offered.filter((f) => !DOCS_PAGE.includes(`${f}.*`));
+  assert.deepEqual(
+    undocumented,
+    [],
+    `/docs/activity does not mention ${undocumented.map((f) => `${f}.*`).join(", ")} — the page ` +
+      "offers a filter the guide does not list (AGENTS.md DOCUMENTATION PARITY)",
   );
 });
 
