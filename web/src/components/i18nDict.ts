@@ -2440,6 +2440,24 @@ export const DICT = {
   "ws.lastWorkspace": { en: "This is your only workspace, and it cannot be deleted — you always need at least one. Create another one first.", ms: "Ini satu-satunya workspace anda, jadi ia tidak boleh dipadam — anda sentiasa perlukan sekurang-kurangnya satu. Cipta satu lagi dahulu.", zh: "这是您唯一的工作区，无法删除——您始终需要至少一个。请先创建另一个。", ta: "இது உங்கள் ஒரே பணியிடம், எனவே நீக்க முடியாது — எப்போதும் குறைந்தது ஒன்று தேவை. முதலில் மற்றொன்றை உருவாக்கவும்.", ar: "هذه مساحة عملك الوحيدة، ولا يمكن حذفها — تحتاج دائماً إلى واحدة على الأقل. أنشئ أخرى أولاً." },
   "ws.notEmpty": { en: "This workspace still holds the following. None of it is destroyed by moving the workspace to the Trash:", ms: "Workspace ini masih menyimpan perkara berikut. Tiada satu pun dimusnahkan dengan menghantarnya ke Tong Sampah:", zh: "此工作区仍包含以下内容。将其移入回收站不会销毁其中任何一项：", ta: "இந்தப் பணியிடத்தில் இவை இன்னும் உள்ளன. குப்பைத் தொட்டிக்கு நகர்த்துவதால் இவை எதுவும் அழிக்கப்படாது:", ar: "ما زالت مساحة العمل هذه تحتوي على ما يلي. لا يُتلف أي منه عند نقل مساحة العمل إلى سلة المهملات:" },
   "ws.notEmptyHint": { en: "Everything stays on disk, so the move is reversible. Destroying it for good is reached through the REST API or an MCP client, not the dashboard, and a workspace with sales refuses that — sales are your record of money received.", ms: "Semuanya kekal di cakera, jadi penghantaran ini boleh dibalikkan. Pemadaman kekal dicapai melalui REST API atau klien MCP, bukan papan pemuka, dan workspace yang mempunyai jualan menolaknya — jualan ialah rekod wang yang anda terima.", zh: "所有内容都保留在磁盘上，因此此操作可撤销。永久删除需通过 REST API 或 MCP 客户端进行，而非面板，而有销售记录的工作区会拒绝该操作——销售是您收到款项的记录。", ta: "அனைத்தும் வட்டில் இருக்கும், எனவே இது மீளக்கூடியது. நிரந்தர நீக்கம் REST API அல்லது MCP கிளையன் வழியாக நடக்கும், டாஷ்போர்டில் இல்லை; விற்பனை உள்ள பணியிடம் அதை மறுக்கும் — விற்பனை என்பது நீங்கள் பெற்ற பணத்தின் பதிவு.", ar: "يبقى كل شيء على القرص، لذا فإن النقل قابل للتراجع. أما الحذف النهائي فيتم عبر REST API أو عميل MCP، لا من لوحة التحكم، ومساحة العمل التي بها مبيعات ترفضه — فالمبيعات سجل الأموال التي استلمتها." },
+  // The Danger zone's census labels, keyed by the API's stable `kind` code
+  // (card t_088521a4). THE API ALSO SENDS A `label` and that is where the defect
+  // was: the label is hardcoded Malay (`blockerLabels` in
+  // api/internal/dbstore/workspace.go) and cannot follow the UI locale, so an
+  // English dashboard listed its own contents as "borang … / produk … / jualan …
+  // / domain tersuai …" under an English sentence. The key is DERIVED from the
+  // kind (`ws.blocker.<kind>`), never looked up through a second kind->key table,
+  // so there is exactly ONE list to keep — the dictionary a translator edits.
+  // `src/lib/workspaceBlockerLabel.test.ts` pins every kind the server can emit
+  // against these entries, in both directions, so a new server category cannot
+  // ship nameless and a renamed one cannot leave a dead key behind.
+  "ws.blocker.forms": { en: "forms (including those in the Trash)", ms: "borang (termasuk yang dalam tong sampah)", zh: "表单（包括回收站中的）", ta: "படிவங்கள் (குப்பைத் தொட்டியில் உள்ளவை உட்பட)", ar: "النماذج (بما في ذلك الموجودة في سلة المهملات)" },
+  "ws.blocker.products": { en: "products", ms: "produk", zh: "商品", ta: "தயாரிப்புகள்", ar: "المنتجات" },
+  "ws.blocker.sales": { en: "sales", ms: "jualan", zh: "销售", ta: "விற்பனைகள்", ar: "المبيعات" },
+  "ws.blocker.subscriptions": { en: "subscriptions (billing history)", ms: "langganan (sejarah bil)", zh: "订阅（账单历史）", ta: "சந்தாக்கள் (பில்லிங் வரலாறு)", ar: "الاشتراكات (سجل الفواتير)" },
+  "ws.blocker.domains": { en: "custom domains", ms: "domain tersuai", zh: "自定义域名", ta: "தனிப்பயன் டொமைன்கள்", ar: "النطاقات المخصصة" },
+  "ws.blocker.webhooks": { en: "webhooks", ms: "webhook", zh: "Webhook", ta: "வெப்ஹூக்குகள்", ar: "خطافات الويب" },
+  "ws.blocker.api_keys": { en: "API keys", ms: "kunci API", zh: "API 密钥", ta: "API விசைகள்", ar: "مفاتيح API" },
   "ws.deleteButton": { en: "Move this workspace to the Trash", ms: "Hantar workspace ini ke Tong Sampah", zh: "将此工作区移入回收站", ta: "இந்தப் பணியிடத்தைக் குப்பைத் தொட்டிக்கு நகர்த்து", ar: "نقل مساحة العمل هذه إلى سلة المهملات" },
   "ws.deleteHint": { en: "Nothing is destroyed — you can restore it from the Trash at any time.", ms: "Tiada apa-apa dimusnahkan — anda boleh memulihkannya dari Tong Sampah bila-bila masa.", zh: "不会销毁任何内容——您可以随时从回收站恢复。", ta: "எதுவும் அழிக்கப்படவில்லை — எப்போது வேண்டுமானாலும் குப்பைத் தொட்டியிலிருந்து மீட்டெடுக்கலாம்.", ar: "لا يُتلف أي شيء — يمكنك استعادته من سلة المهملات في أي وقت." },
   "ws.confirmTitle": { en: "Move this workspace to the Trash?", ms: "Hantar workspace ini ke Tong Sampah?", zh: "将此工作区移入回收站？", ta: "இந்தப் பணியிடத்தைக் குப்பைத் தொட்டிக்கு நகர்த்தவா?", ar: "نقل مساحة العمل هذه إلى سلة المهملات؟" },

@@ -43,7 +43,12 @@ import { useSession } from "./session";
 import { WORKSPACE_NAME_MAX_CHARS } from "../lib/workspaceIdentity";
 import { fetchJson, runLoad } from "../lib/wsfetch";
 import { enterWorkspace, dropCurrentWorkspaceScope } from "../lib/workspace";
+import { blockerLabelKey } from "../lib/workspaceBlockerLabel";
 
+// One category of content the workspace still holds. `kind` is the stable machine
+// code ("forms", "products", …); `label` is the API's OWN sentence for it, which is
+// hardcoded Malay and therefore language-blind — see ../lib/workspaceBlockerLabel.ts.
+// The census row renders the dictionary name for `kind`, NOT `label`.
 type Blocker = { kind: string; count: number; label: string };
 
 // A row of GET /v1/workspaces/trash (proxied at /api/workspaces/trash).
@@ -583,11 +588,20 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
               <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
                 <p className="text-sm text-amber-800">{t("ws.notEmpty")}</p>
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-800">
-                  {blockers.map((b) => (
-                    <li key={b.kind}>
-                      {b.label}: <strong>{b.count}</strong>
-                    </li>
-                  ))}
+                  {blockers.map((b) => {
+                    // The dictionary name for this category, so the row follows the
+                    // UI locale like the sentence above it (card t_088521a4). A kind
+                    // this build does not know falls back to the server's own label:
+                    // it is the only name we have for it, and the guard in
+                    // ../lib/workspaceBlockerLabel.test.ts keeps every SHIPPED kind
+                    // out of that branch.
+                    const labelKey = blockerLabelKey(b.kind);
+                    return (
+                      <li key={b.kind}>
+                        {labelKey ? t(labelKey) : b.label}: <strong>{b.count}</strong>
+                      </li>
+                    );
+                  })}
                 </ul>
                 <p className="mt-2 text-xs text-amber-800">{t("ws.notEmptyHint")}</p>
               </div>
