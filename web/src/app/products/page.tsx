@@ -1475,7 +1475,16 @@ export default function Products() {
         {/* Purge confirmation. A permanent delete cannot be undone and takes the
             product's variations with it, so it asks the caller to type the name
             back — the same level as the forms bin, using the product's NAME
-            because a product has no slug. */}
+            because a product has no slug.
+
+            The naming of this dialog is pinned by `e2e/a11y-dialogs.spec.ts`, the
+            way the forms bin and the workspace danger zone are: it must name
+            itself with `aria-labelledby` pointing at its own heading (an
+            `aria-label` copy of the title cannot be checked against a heading, so
+            a later edit could move the heading and leave the name behind), and its
+            field must be reachable by a real `<label for>` rather than only an
+            `aria-label`. Both were missing here (card t_eedd6522) — the same two
+            gaps the sibling dialogs had before PR #1251 covered them. */}
         {confirmPurge && (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -1484,20 +1493,27 @@ export default function Products() {
             <div
               role="dialog"
               aria-modal="true"
-              aria-label={t("prod.purgeConfirmTitle")}
+              aria-labelledby="prod-purge-title"
               className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl"
               onClick={(e) => e.stopPropagation()}
             >
-              <p className="text-sm font-semibold">{t("prod.purgeConfirmTitle")}</p>
+              <p id="prod-purge-title" className="text-sm font-semibold">{t("prod.purgeConfirmTitle")}</p>
               <p className="mt-2 text-sm text-[var(--jf-muted)]">{t("prod.purgeConfirmBody")}</p>
-              <label className="mt-3 block text-xs font-medium text-[var(--jf-muted)]">
+              <label
+                htmlFor="prod-purge-confirm-name"
+                className="mt-3 block text-xs font-medium text-[var(--jf-muted)]"
+              >
                 {t("prod.purgeConfirmFieldLabel")}
               </label>
               <input
+                id="prod-purge-confirm-name"
+                type="text"
                 value={purgeTyped}
+                autoFocus
+                autoComplete="off"
+                disabled={purgeBusy}
                 onChange={(e) => setPurgeTyped(e.target.value)}
                 className="jf-input mt-1 w-full"
-                aria-label={t("prod.purgeConfirmFieldLabel")}
               />
               <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
                 <button
@@ -1513,7 +1529,10 @@ export default function Products() {
                   disabled={purgeBusy || !matchesTypedValue(purgeTyped, confirmPurge.name)}
                   className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-40"
                 >
-                  {t("prod.purge")}
+                  {/* The in-flight copy, same key as the forms bin and the danger
+                      zone: the button must stay READABLE as "working" while the
+                      delete is out, not merely go dim (card t_eedd6522). */}
+                  {purgeBusy ? t("common.saving") : t("prod.purge")}
                 </button>
               </div>
             </div>

@@ -46,6 +46,28 @@
 // both sides — both armed the confirm on a slug the user never typed and passed
 // every assertion this file had — so the SHAPE of the comparison is typed at it.
 //
+// THE THIRD SURFACE — the /products Trash, which asks for the product's NAME
+// (card t_eedd6522). It is the same destructive shape as the form bin and one
+// rung wider, because `prod.purgeConfirmBody` says the product AND all of its
+// variations go (CASCADE). It was the last of the three typed confirms with no
+// browser coverage at all: this file drove exactly two inputs
+// (`#ws-confirm-slug`, `#purge-confirm-slug`), and the a11y gate was green for
+// the products dialog whatever its comparison did. A source guard cannot stand
+// in for it here, because every conjunct of that dialog's `disabled` is
+// REACHABLE at runtime (unlike the workspace dialog's server-side `can_delete`,
+// which is why that one is pinned in `src/lib/workspaceDeleteConfirmGate.test.ts`
+// instead). So the same harness covers it at the same six points, plus the
+// in-flight state — which is why the harness speaks of a `value`/`wrongValue`
+// and carries `what`: the word a failure message must name ("slug", "product
+// name") differs per dialog, the boundary does not.
+//
+// Extending the suite to this dialog also FIXED it: it named itself with
+// `aria-label` and its field had no `id`/`for` pair, so the two contract
+// assertions the other dialogs already satisfy (a labelled heading, and a field
+// reachable by its label) failed on it — the scan asked for exactly what the
+// card predicted. That is PR #1251's own finding repeated on the sibling: a
+// dialog can look right and still never be measured.
+//
 // The other two terms of "the confirm is armed" are measured as well, because
 // neither was: the `busy` term (the double-submit guard, held open below) and,
 // on the workspace dialog, the server's `can_delete` — the second one by the
@@ -108,6 +130,12 @@ const EN = {
   purgeConfirmFieldLabel: DICT["forms.purgeConfirmFieldLabel"].en,
   purgeButton: DICT["forms.purge"].en,
   trashTab: DICT["forms.trashTabDeleted"].en,
+  // /products — the same bin, one row type over, and its confirm asks for the
+  // product's NAME (a product has no slug).
+  prodTrashTab: DICT["prod.trashTabDeleted"].en,
+  prodPurgeButton: DICT["prod.purge"].en,
+  prodPurgeConfirmTitle: DICT["prod.purgeConfirmTitle"].en,
+  prodPurgeConfirmFieldLabel: DICT["prod.purgeConfirmFieldLabel"].en,
 };
 
 // The workspace the stubs describe. `can_delete: true` with no blockers is the
@@ -117,11 +145,17 @@ const EN = {
 const WORKSPACE_ID = "ws1";
 const FORM_SLUG = "tee-2026";
 const WS_SLUG = "demo";
-// Wrong slugs of the SAME length as the real ones — the confirm must not arm on
-// "something was typed", and a length-only comparison must be caught too. The
-// lengths are tied to the real slugs in `assertDialogContract`.
+const PRODUCT_ID = "p1";
+// The typed-NAME surface: a product's name, not a slug. It carries a space and a
+// lower-case letter, and no surrounding whitespace — the three properties the
+// harness asserts before it trusts the prefix / case / trim probes.
+const PRODUCT_NAME = "Kopi Ais";
+// Wrong slugs/names of the SAME length as the real ones — the confirm must not
+// arm on "something was typed", and a length-only comparison must be caught too.
+// The lengths are tied to the real values in `assertDialogContract`.
 const FORM_WRONG_SLUG = "xxxxxxxx";
 const WS_WRONG_SLUG = "xxxx";
+const PRODUCT_WRONG_NAME = "Kopi Aiz";
 
 const BUNDLE = {
   me: { id: "u1", email: "merchant@example.com", name: "Merchant", lang: "", is_super_admin: true },
@@ -157,6 +191,21 @@ const TRASHED_FORM = {
   title: "Tee order",
   deleted_at: "2026-09-20T00:00:00Z",
   sales_count: 0,
+  can_purge: true,
+};
+
+// A purgeable row in the /products bin. `can_purge: true` is what makes the
+// dialog OFFERED at all — the page withholds the row's button otherwise, so the
+// dialog would be unreachable and the reachability assertion below would fail
+// (deliberately: a silent skip is the hole this file exists to close).
+const TRASHED_PRODUCT = {
+  id: PRODUCT_ID,
+  name: PRODUCT_NAME,
+  price_sen: 650,
+  active: true,
+  deleted_at: "2026-09-25T10:00:00Z",
+  sales_count: 0,
+  subscription_count: 0,
   can_purge: true,
 };
 
@@ -196,6 +245,12 @@ async function stubAPI(
   await page.route(/(.*)\/api\/workspaces\/[^/]+\/affiliates(\?.*)?$/, (r) => r.fulfill(json([])));
   await page.route(/(.*)\/api\/rest\/forms\/trash(\?.*)?$/, (r) => r.fulfill(json([TRASHED_FORM])));
   await page.route(/(.*)\/api\/rest\/forms(\?.*)?$/, (r) => r.fulfill(json([])));
+  // /products: the CATALOGUE is empty on purpose (this guard is about the bin),
+  // and the bin holds the one purgeable row the dialog is reached through.
+  await page.route(/(.*)\/api\/rest\/products\/trash(\?.*)?$/, (r) =>
+    r.fulfill(json([TRASHED_PRODUCT])),
+  );
+  await page.route(/(.*)\/api\/rest\/products(\?.*)?$/, (r) => r.fulfill(json([])));
   await page.route(/(.*)\/api\/rest\/currency\/rates$/, (r) =>
     r.fulfill(json({ rates: [], cached: false })),
   );
@@ -242,8 +297,9 @@ async function scanDialog(page: Page, name: string) {
 }
 
 /**
- * The contract both dialogs share. Asserted, not assumed — every one of these is
- * something a later edit could drop while leaving the other tests green.
+ * The contract all three dialogs share. Asserted, not assumed — every one of
+ * these is something a later edit could drop while leaving the other tests
+ * green.
  */
 async function assertDialogContract(
   page: Page,
@@ -254,38 +310,45 @@ async function assertDialogContract(
     confirmName: string;
     /** The SAME button's label while a submit is in flight (`common.saving`). */
     savingName: string;
-    /** The real slug the server will be asked to confirm. */
-    slug: string;
-    /** A different slug of the SAME length — see the boundary assertion below. */
-    wrongSlug: string;
+    /**
+     * The word this dialog asks the caller to type back — "slug" on the forms bin
+     * and the danger zone, "product name" on /products. Used in the failure
+     * messages ONLY: the boundary is the same for all three, and a red that names
+     * the right thing is what makes it readable.
+     */
+    what: string;
+    /** The real value the server will be asked to confirm. */
+    value: string;
+    /** A different value of the SAME length — see the boundary assertion below. */
+    wrongValue: string;
     /** The one request this dialog's confirm sends, held open in (4). */
     submitPath: RegExp;
   },
 ) {
-  // The harness' own invariant: if `wrongSlug` were a different length, a gate
-  // that compared only `typed.length === slug.length` would arm the confirm and
+  // The harness' own invariant: if `wrongValue` were a different length, a gate
+  // that compared only `typed.length === value.length` would arm the confirm and
   // this guard would not see it. Asserting it here keeps a later edit to the
   // constants from quietly weakening the test.
   expect(
-    opts.wrongSlug.length,
-    "wrongSlug must be the same length as the real slug for the boundary assertion to bite",
-  ).toBe(opts.slug.length);
+    opts.wrongValue.length,
+    `wrongValue must be the same length as the real ${opts.what} for the boundary assertion to bite`,
+  ).toBe(opts.value.length);
   // The same shape of invariant for the probes below: each is only a probe if it
-  // differs from the real slug in the way it claims to. A slug of one character
-  // has no strict prefix, and a slug that is already upper-case (or already
-  // padded) makes its probe a copy of the exact-slug assertion.
+  // differs from the real value in the way it claims to. A value of one
+  // character has no strict prefix, and a value that is already upper-case (or
+  // already padded) makes its probe a copy of the exact-value assertion.
   expect(
-    opts.slug.length,
-    "the slug must be longer than one character for the prefix probe to bite",
+    opts.value.length,
+    `the ${opts.what} must be longer than one character for the prefix probe to bite`,
   ).toBeGreaterThan(1);
   expect(
-    opts.slug,
-    "the slug must have a lower-case letter for the case-fold probe to bite",
-  ).not.toBe(opts.slug.toUpperCase());
+    opts.value,
+    `the ${opts.what} must have a lower-case letter for the case-fold probe to bite`,
+  ).not.toBe(opts.value.toUpperCase());
   expect(
-    opts.slug.trim(),
-    "the slug must carry no surrounding whitespace for the trim probe to bite",
-  ).toBe(opts.slug);
+    opts.value.trim(),
+    `the ${opts.what} must carry no surrounding whitespace for the trim probe to bite`,
+  ).toBe(opts.value);
   const dialog = page.locator('[role="dialog"]');
   await expect(dialog, "exactly one dialog is open").toHaveCount(1);
   await expect(dialog).toBeVisible();
@@ -301,9 +364,14 @@ async function assertDialogContract(
 
   // Focus lands in the confirm field on open (it is `autoFocus`), and the field
   // is reachable by its label — an unassociated label is an unlabelled input.
+  // The lookup is SCOPED to the dialog: /products' catalogue search box carries
+  // the same accessible name ("Product name"), and an unscoped `getByLabel` was
+  // a strict-mode violation there (a red that named the harness, not the app).
+  // Scoping makes the assertion stricter, not weaker — the label has to be in
+  // the dialog subtree, which is where a confirm field's label belongs.
   const input = page.locator(`#${opts.inputId}`);
   await expect(input).toBeFocused();
-  await expect(page.getByLabel(opts.fieldLabel)).toHaveAttribute("id", opts.inputId);
+  await expect(dialog.getByLabel(opts.fieldLabel)).toHaveAttribute("id", opts.inputId);
 
   // The confirm action exists, is named, and is NOT armed on open. Scoped to
   // the dialog: the purge confirm and the row's own purge button carry the SAME
@@ -314,60 +382,64 @@ async function assertDialogContract(
 
   // (1) EMPTY — nothing typed. Kept: it is the state the dialog opens in, and a
   // confirm that was armed unconditionally fails here.
-  await expect(confirm, "confirm must be disabled until the exact slug is typed").toBeDisabled();
+  await expect(confirm, "confirm must be disabled until the exact value is typed").toBeDisabled();
 
-  // (2) A WRONG SLUG OF THE SAME LENGTH. This is the boundary that actually
-  // guards the write, and (1) never reaches it: the two implementations compare
-  // `typed.trim()` against the real slug (`WorkspaceTab.tsx` canDelete,
-  // `forms/page.tsx` purge), so a regression that arms the button for any
-  // non-empty text — the shape measured shipping green on both dialogs —
-  // passes (1) and destroys the wrong workspace / permanently purges the wrong
-  // form's CASCADE children. Same length on purpose: a length-only comparison
-  // must be caught too.
-  await input.fill(opts.wrongSlug);
+  // (2) A WRONG VALUE OF THE SAME LENGTH. This is the boundary that actually
+  // guards the write, and (1) never reaches it: every implementation compares
+  // `typed.trim()` against the real value (`WorkspaceTab.tsx` canDelete,
+  // `forms/page.tsx` purge, `products/page.tsx` purgeProduct), so a regression
+  // that arms the button for any non-empty text — the shape measured shipping
+  // green on both slugs — passes (1) and destroys the wrong workspace /
+  // permanently purges the wrong form's CASCADE children / takes a product's
+  // variations with it. Same length on purpose: a length-only comparison must be
+  // caught too.
+  await input.fill(opts.wrongValue);
   await expect(
     confirm,
-    `confirm must stay disabled for a wrong slug (typed "${opts.wrongSlug}", the real slug is "${opts.slug}")`,
+    `confirm must stay disabled for a wrong ${opts.what} (typed "${opts.wrongValue}", the real ${opts.what} is "${opts.value}")`,
   ).toBeDisabled();
 
-  // (2b) A PREFIX OF THE REAL SLUG. A comparison of the shape
-  // `slug.startsWith(typed.trim())` arms the confirm on the first character the
-  // user types — one keystroke would destroy a workspace / purge a form the user
-  // never named — and (2) cannot see it: the wrong slug above is not a prefix of
-  // the real one. Strictly shorter than the real slug, pinned above.
-  const prefix = opts.slug.slice(0, 1);
+  // (2b) A PREFIX OF THE REAL VALUE. A comparison of the shape
+  // `typed.trim().startsWith(...)` — or one where the REAL value is the prefix
+  // side — arms the confirm on the first character the user types: one keystroke
+  // would destroy a workspace / purge a form / delete a product the user never
+  // named. (2) cannot see it: the wrong value above is not a prefix of the real
+  // one. Strictly shorter than the real value, pinned above.
+  const prefix = opts.value.slice(0, 1);
   await input.fill(prefix);
   await expect(
     confirm,
-    `confirm must stay disabled for a PREFIX of the real slug (typed "${prefix}", the real slug is "${opts.slug}")`,
+    `confirm must stay disabled for a PREFIX of the real ${opts.what} (typed "${prefix}", the real ${opts.what} is "${opts.value}")`,
   ).toBeDisabled();
 
-  // (2c) THE EXACT SLUG, INVERTED CASE. A comparison that case-folds both sides
-  // (`typed.trim().toLowerCase() === slug.toLowerCase()`) arms the confirm on
-  // "TEE-2026" — the right name in the wrong case, which is not what the server
-  // accepts — and neither (2) nor (2b) sees it.
-  const inverted = opts.slug.toUpperCase();
+  // (2c) THE EXACT VALUE, INVERTED CASE. A comparison that case-folds both sides
+  // (`typed.trim().toLowerCase() === value.toLowerCase()`) arms the confirm on
+  // "TEE-2026" / "KOPI AIS" — the right name in the wrong case, which is not
+  // what the server accepts — and neither (2) nor (2b) sees it.
+  const inverted = opts.value.toUpperCase();
   await input.fill(inverted);
   await expect(
     confirm,
-    `confirm must stay disabled for the right slug in the wrong case (typed "${inverted}", the real slug is "${opts.slug}")`,
+    `confirm must stay disabled for the right ${opts.what} in the wrong case (typed "${inverted}", the real ${opts.what} is "${opts.value}")`,
   ).toBeDisabled();
 
-  // (2d) THE EXACT SLUG PADDED WITH WHITESPACE ARMS IT. Pinned deliberately: the
-  // app trims what it compares, so a pasted slug with a trailing space (or a
-  // newline) is accepted. It is a decision, not an accident — a later change to
-  // compare the raw value has to change this assertion, and say so.
-  await input.fill(` ${opts.slug} `);
+  // (2d) THE EXACT VALUE PADDED WITH WHITESPACE ARMS IT. Pinned deliberately:
+  // the app trims what it compares (`lib/typedConfirm.ts` on the products page,
+  // a one-sided `typed.trim()` on the other two), so a pasted value with a
+  // trailing space (or a newline) is accepted. It is a decision, not an
+  // accident — a later change to compare the raw value has to change this
+  // assertion, and say so.
+  await input.fill(` ${opts.value} `);
   await expect(
     confirm,
-    `confirm must be enabled for the exact slug padded with whitespace (typed " ${opts.slug} ", the real slug is "${opts.slug}")`,
+    `confirm must be enabled for the exact ${opts.what} padded with whitespace (typed " ${opts.value} ", the real ${opts.what} is "${opts.value}")`,
   ).toBeEnabled();
 
-  // (3) THE EXACT SLUG arms it. The other side of the boundary: without this a
+  // (3) THE EXACT VALUE arms it. The other side of the boundary: without this a
   // permanently-disabled confirm would satisfy (1) and (2) and the dialog would
   // be a dead end no test noticed.
-  await input.fill(opts.slug);
-  await expect(confirm, "confirm must be enabled once the exact slug is typed").toBeEnabled();
+  await input.fill(opts.value);
+  await expect(confirm, "confirm must be enabled once the exact value is typed").toBeEnabled();
 
   // (4) IN FLIGHT — the double-submit guard. The confirm's `disabled` also
   // carries the app's own busy flag, and nothing measured it: dropping it
@@ -404,7 +476,7 @@ async function assertDialogContract(
   await expect(dialog, "Escape must close the dialog").toHaveCount(0);
 }
 
-test.describe("a11y: typed-slug confirmation dialogs", () => {
+test.describe("a11y: typed-confirmation dialogs (slug / product name)", () => {
   test("workspace-delete dialog (Settings → Workspace)", async ({ page, baseURL }) => {
     await stubAPI(page);
     await freshState(page);
@@ -422,8 +494,9 @@ test.describe("a11y: typed-slug confirmation dialogs", () => {
       inputId: "ws-confirm-slug",
       confirmName: DICT["ws.confirmButton"].en,
       savingName: DICT["common.saving"].en,
-      slug: WS_SLUG,
-      wrongSlug: WS_WRONG_SLUG,
+      what: "slug",
+      value: WS_SLUG,
+      wrongValue: WS_WRONG_SLUG,
       // The dialog's DELETE — the workspace's own URL, built from the id the
       // stub describes, so it cannot drift from it.
       submitPath: new RegExp(`/api/workspaces/${WORKSPACE_ID}$`),
@@ -448,9 +521,46 @@ test.describe("a11y: typed-slug confirmation dialogs", () => {
       inputId: "purge-confirm-slug",
       confirmName: EN.purgeButton,
       savingName: DICT["common.saving"].en,
-      slug: FORM_SLUG,
-      wrongSlug: FORM_WRONG_SLUG,
+      what: "slug",
+      value: FORM_SLUG,
+      wrongValue: FORM_WRONG_SLUG,
       submitPath: new RegExp(`/api/rest/forms/${TRASHED_FORM.id}/purge`),
+    });
+  });
+
+  // THE THIRD SURFACE (card t_eedd6522): /products' bin, whose confirm asks for
+  // the product's NAME. Same ladder, same six points, same in-flight state — the
+  // dialog's `disabled` is `purgeBusy || !matchesTypedValue(purgeTyped,
+  // confirmPurge.name)`, and until this test existed nothing in `web/` drove it:
+  // a prefix compare, a case-folding compare, or dropping `purgeBusy` all shipped
+  // green (`src/lib/typedConfirm.test.ts` pins the SHAPE of the call, not the
+  // behaviour behind it, and could not: the button's enablement is runtime
+  // state). A product is the widest blast radius of the three — its variations
+  // go with it through CASCADE.
+  test("product-purge dialog (/products → Trash)", async ({ page, baseURL }) => {
+    await stubAPI(page);
+    await freshState(page);
+    await page.goto(`${baseURL}/products`, { waitUntil: "domcontentloaded" });
+
+    // The catalogue is the default view — a new visitor must never land in the
+    // bin — so the Trash tab is clicked deliberately.
+    await page.getByRole("tab", { name: EN.prodTrashTab, exact: true }).click();
+    const open = page.getByRole("button", { name: EN.prodPurgeButton });
+    await expect(open, "the purge button must be offered for a purgeable product").toBeVisible({
+      timeout: 15_000,
+    });
+    await open.click();
+
+    await assertDialogContract(page, {
+      title: EN.prodPurgeConfirmTitle,
+      fieldLabel: EN.prodPurgeConfirmFieldLabel,
+      inputId: "prod-purge-confirm-name",
+      confirmName: EN.prodPurgeButton,
+      savingName: DICT["common.saving"].en,
+      what: "product name",
+      value: PRODUCT_NAME,
+      wrongValue: PRODUCT_WRONG_NAME,
+      submitPath: new RegExp(`/api/rest/products/${TRASHED_PRODUCT.id}/purge`),
     });
   });
 
@@ -513,5 +623,19 @@ test.describe("a11y: typed-slug confirmation dialogs", () => {
     await page.getByRole("button", { name: EN.purgeButton }).click();
     await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 15_000 });
     await scanDialog(page, "form-purge dialog");
+  });
+
+  // /products' bin, scanned the same way. It named itself with `aria-label` and
+  // its field carried no `id`/`for` pair until this test existed (card
+  // t_eedd6522), which is exactly the shape `aria-dialog-name` / `label` are for:
+  // the dialog was never scanned, so nothing said so.
+  test("product-purge dialog has no critical/serious axe violations", async ({ page, baseURL }) => {
+    await stubAPI(page);
+    await freshState(page);
+    await page.goto(`${baseURL}/products`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("tab", { name: EN.prodTrashTab, exact: true }).click();
+    await page.getByRole("button", { name: EN.prodPurgeButton }).click();
+    await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 15_000 });
+    await scanDialog(page, "product-purge dialog");
   });
 });
