@@ -498,15 +498,22 @@ test.describe("workspace switcher's tinted active item", () => {
 const SET_DEFAULT_LABEL = DICT["workspace.setDefault"].en;
 
 /**
- * The route this arm drives. It is the card's own route, and the route matters:
+ * The route this arm drives. It is the card's own route (and the stubs below
+ * describe a form), but the route is no longer load-bearing for the AXE half:
+ * see `hidePageBehindRow` (card t_711cefb9). History of why it used to be:
  * on some dashboard pages the dropdown panel overlaps the page content and axe
  * then CANNOT determine the row's background at all — it returns the node in
  * `incomplete` with "Element's background color could not be determined because
  * it partially overlaps other elements" (elmPartiallyObscuring), so a
  * 0-violation reading there would be a scan that gave up, not a pass. On
- * `/form-settings` the panel overlaps nothing that defeats the analysis and axe
- * judges the row, which is what makes the axe arm below real. Measured both
- * ways on 2026-10-11 (axe-core 4.13.0) while writing this guard.
+ * `/form-settings` the page content under the panel used to leave axe able to
+ * judge the row, which is what made the axe arm below real (measured both ways
+ * on 2026-10-11, axe-core 4.13.0). "Used to" is the point: PR 1259's eighth tab
+ * moved one tab button under the second line of this row's wrapped label and
+ * the same arm went red in BOTH directions, because axe's sample must agree
+ * across every text rect. The arm now clears the page behind the row and
+ * asserts paint order directly, so a page-layout change under the panel can no
+ * longer decide whether the guard can see its own subject.
  */
 const FORM_ID = "form_hover_guard";
 
@@ -625,6 +632,162 @@ function rowAt(page: Page, scope: string, index: number) {
   return page.locator(`${scope} [role="menuitem"]`).nth(index);
 }
 
+/**
+ * Take the PAGE out of axe's background sample behind the open menu.
+ *
+ * WHY THIS STEP EXISTS (card t_711cefb9). axe's `color-contrast` calls
+ * `getBackgroundStack`, which samples EVERY text rect of the node and requires
+ * the samples to AGREE; when they do not, axe does not judge the node at all and
+ * files it under `incomplete` with `elmPartiallyObscuring` — "Element's
+ * background color could not be determined because it partially overlaps other
+ * elements". This row's label WRAPS onto two lines inside the 256px panel, so
+ * its two samples are two different points of whatever page content sits under
+ * the dropdown.
+ *
+ * MEASURED (2026-10-26, this host, axe-core as vendored here): on `origin/main`
+ * the /form-settings tab strip is under the row and BOTH samples land on the
+ * strip's `nav` — equal stacks, row judged, arm green. PR 1259 adds an 8th tab,
+ * which moves a tab `button` under the SECOND line: sample 1 is `nav`, sample 2
+ * is `button.px-3.py-2`, so the same pair went red in BOTH directions —
+ * `incomplete` in the arm and 0 violations in its own CONTROL. The arm was
+ * balanced on the page's layout, not on the ink it guards, and any future tab /
+ * heading / card that moves under the panel breaks it again.
+ *
+ * THIS IS NOT A RELAXATION, and it cannot hide a contrast defect:
+ *   * what the row's text is painted ON is the ROW ITSELF (its HOVER background
+ *     is opaque — `hovered.bg` is asserted to be HOVER_SURFACE) over the menu
+ *     panel, which is opaque too. Both are asserted here BEFORE anything is
+ *     hidden: whatever paints under an opaque stack is not part of what the user
+ *     sees, so the page cannot influence this row's contrast;
+ *   * the real concern behind `incomplete` — "something is in FRONT of the row"
+ *     — is asserted directly instead: at every sample point the row (or its own
+ *     text node) must be the TOPMOST painted element, so a page element that
+ *     really did cover the menu still fails this arm, and fails it loudly;
+ *   * nothing inside the scanned subtree is touched: only elements that are
+ *     neither the row, nor its descendant, nor part of the menu, nor an ancestor
+ *     of the row are hidden;
+ *   * `visibility: hidden`, never `display: none`, so the row cannot move — the
+ *     measurement taken after this step is asserted identical to the one before
+ *     it, and every assertion below (no color-contrast violation, no undetermined
+ *     node, the CONTROL must still name the pre-fix pair) is unchanged.
+ *
+ * Returns what it did, so the run says which page element was in the way.
+ */
+async function hidePageBehindRow(page: Page, scope: string, label: string) {
+  return page.evaluate(
+    ({ sel, want }) => {
+      const desc = (el: Element | null) =>
+        el
+          ? `${el.tagName.toLowerCase()}${el.id ? "#" + el.id : ""}.${(el.className || "")
+              .toString()
+              .split(" ")
+              .slice(0, 2)
+              .join(".")}`
+          : "nothing";
+      const opaque = (c: string) => {
+        // The tints are emitted in whatever colour space Tailwind v4 chose
+        // (`lab(...)` here), so the string can NOT be parsed as rgb(). Paint the
+        // colour over white and over black instead: an OPAQUE colour composites
+        // to the same bytes on both, a translucent one cannot.
+        const cv = document.createElement("canvas");
+        cv.width = cv.height = 1;
+        const ctx = cv.getContext("2d", { willReadFrequently: true })!;
+        const over = (base: string) => {
+          ctx.clearRect(0, 0, 1, 1);
+          ctx.fillStyle = base;
+          ctx.fillRect(0, 0, 1, 1);
+          ctx.fillStyle = c;
+          ctx.fillRect(0, 0, 1, 1);
+          const d = ctx.getImageData(0, 0, 1, 1).data;
+          return `${d[0]},${d[1]},${d[2]}`;
+        };
+        return over("#ffffff") === over("#000000");
+      };
+      const menu = document.querySelector(sel);
+      if (!menu) throw new Error(`no menu for ${sel} — the switcher moved`);
+      const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+      const row = items.find((el) => (el.textContent || "").trim() === want) as HTMLElement | undefined;
+      if (!row) throw new Error(`no menu row reading ${JSON.stringify(want)} — the row moved`);
+
+      const menuBg = getComputedStyle(menu).backgroundColor;
+      const rowBg = getComputedStyle(row).backgroundColor;
+      if (!opaque(menuBg))
+        throw new Error(
+          `the menu panel's own background is ${menuBg} — not opaque, so what paints under it CAN ` +
+            `reach the row and this step would be hiding evidence`,
+        );
+      if (!opaque(rowBg))
+        throw new Error(
+          `the hovered row's own background is ${rowBg} — not opaque, so what paints under it CAN ` +
+            `reach the row's text and this step would be hiding evidence`,
+        );
+
+      // The sample points are the row's OWN text rects — exactly what axe samples.
+      const rects: DOMRect[] = [];
+      row.childNodes.forEach((n) => {
+        if (n.nodeType !== 3) return;
+        const r = document.createRange();
+        r.selectNodeContents(n);
+        Array.from(r.getClientRects()).forEach((q) => rects.push(q));
+      });
+      const rowRect = row.getBoundingClientRect();
+      if (!rects.length) rects.push(rowRect);
+      const points = rects.map(
+        (r) => [Math.ceil(r.left + r.width / 2), Math.ceil(r.top + r.height / 2)] as [number, number],
+      );
+
+      // (a) PAINT ORDER, asserted rather than left to axe to give up on: the row
+      // must be what is painted at every one of those points.
+      const covering = points
+        .map(([x, y]) => {
+          const top = document.elementFromPoint(x, y);
+          return top && (top === row || row.contains(top)) ? null : `${desc(top)} at (${x},${y})`;
+        })
+        .filter((v): v is string => v !== null);
+      if (covering.length)
+        throw new Error(
+          `the open menu's row is painted UNDER page content at ${covering.join("; ")} — the dropdown ` +
+            `is obscured, which is a real defect (and not the axe incompleteness this step removes)`,
+        );
+
+      const overlapsRow = (el: Element) => {
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height) return false;
+        return r.left < rowRect.right && r.right > rowRect.left && r.top < rowRect.bottom && r.bottom > rowRect.top;
+      };
+      const isMenuPart = (el: Element) => el === row || row.contains(el) || menu.contains(el) || el.contains(row);
+      const painted = (el: Element) => {
+        const cs = getComputedStyle(el);
+        return cs.display !== "none" && cs.visibility !== "hidden" && Number(cs.opacity) !== 0;
+      };
+
+      const candidates: HTMLElement[] = [];
+      document.querySelectorAll<HTMLElement>("body *").forEach((el) => {
+        if (isMenuPart(el) || !painted(el) || !overlapsRow(el)) return;
+        candidates.push(el);
+      });
+      const topmost = candidates.filter((el) => !candidates.some((other) => other !== el && other.contains(el)));
+      topmost.forEach((el) => el.style.setProperty("visibility", "hidden"));
+
+      // (b) After the hide, NOTHING painted outside the menu may overlap the row.
+      const remaining: string[] = [];
+      document.querySelectorAll<HTMLElement>("body *").forEach((el) => {
+        if (isMenuPart(el) || !painted(el) || !overlapsRow(el)) return;
+        remaining.push(desc(el));
+      });
+
+      return {
+        hidden: topmost.map(desc),
+        remaining,
+        menuBg,
+        rowBg,
+        samples: points.length,
+      };
+    },
+    { sel: scope, want: label },
+  );
+}
+
 test.describe("workspace switcher's default-workspace row (hover state)", () => {
   test("the row clears AA in BOTH states, and axe sees no color-contrast while it is hovered", async ({
     page,
@@ -702,6 +865,30 @@ test.describe("workspace switcher's default-workspace row (hover state)", () => 
       `the HOVERED row measures ${hovered.ratio}:1, which is not above the pre-fix ${PRE_FIX_HOVER_RATIO}:1 — ` +
         `the base token is still in the hover state`,
     ).toBeGreaterThan(PRE_FIX_HOVER_RATIO);
+
+    // (3b) Clear the PAGE out of axe's background sample. Without this the pair
+    // below is balanced on what happens to sit under the dropdown (card
+    // t_711cefb9) — see `hidePageBehindRow` for the measurement and the reasons
+    // this cannot hide a contrast defect.
+    const behind = await hidePageBehindRow(page, scope, SET_DEFAULT_LABEL);
+    console.log(
+      `[switcher menu, hovered] cleared ${behind.hidden.length} page element(s) behind the row: ` +
+        `${JSON.stringify(behind.hidden)} over ${behind.samples} text sample(s); ` +
+        `menu bg=${behind.menuBg}, row bg=${behind.rowBg}`,
+    );
+    expect(
+      behind.remaining,
+      `page content still paints behind the hovered row after the clear (${JSON.stringify(behind.remaining)}): ` +
+        `axe's background sample would be about the page again and this arm would be back on the layout ` +
+        `knife-edge this guard exists to get off`,
+    ).toEqual([]);
+    const cleared = await measureMenuRow(page, scope, SET_DEFAULT_LABEL);
+    expect(
+      cleared,
+      `clearing the page behind the menu changed the row's OWN measurement (before ${JSON.stringify(hovered)}, ` +
+        `after ${JSON.stringify(cleared)}) — the hide moved the row, so the reading below is not the reading ` +
+        `asserted above`,
+    ).toEqual(hovered);
 
     // (4) The gate's axe rule, scoped to the open menu WITH THE ROW STILL
     // HOVERED — this is the exact run shape that reported the card's node.
@@ -815,6 +1002,29 @@ test.describe("workspace switcher's default-workspace row (hover state)", () => 
       `the control measured ${hovered.ratio}:1, not the pre-fix ${PRE_FIX_HOVER_RATIO}:1 — the card's number ` +
         `is not reproduced`,
     ).toBeLessThanOrEqual(0.005);
+
+    // …and the same clear, for the same reason (card t_711cefb9): without it this
+    // control reports 0 violations because axe never JUDGED the row, which reads
+    // identically to "the pre-fix ink is fine".
+    const behind = await hidePageBehindRow(page, scope, SET_DEFAULT_LABEL);
+    console.log(
+      `[switcher menu CONTROL, hovered] cleared ${behind.hidden.length} page element(s) behind the row: ` +
+        `${JSON.stringify(behind.hidden)} over ${behind.samples} text sample(s); ` +
+        `menu bg=${behind.menuBg}, row bg=${behind.rowBg}`,
+    );
+    expect(
+      behind.remaining,
+      `page content still paints behind the hovered row after the clear (${JSON.stringify(behind.remaining)}) — ` +
+        `axe would not judge the row and this control would read "no violation" for a reason that has nothing ` +
+        `to do with the pre-fix ink`,
+    ).toEqual([]);
+    const clearedControl = await measureMenuRow(page, scope, SET_DEFAULT_LABEL);
+    expect(
+      clearedControl,
+      `clearing the page behind the menu changed the row's OWN measurement (before ${JSON.stringify(hovered)}, ` +
+        `after ${JSON.stringify(clearedControl)}) — the forced pre-fix state being measured is not the one ` +
+        `asserted above`,
+    ).toEqual(hovered);
 
     // And the axe arm must NAME it: a scoped run over the same hovered row has to
     // report the color-contrast node with the pre-fix pair, or the arm above is

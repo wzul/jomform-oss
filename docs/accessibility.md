@@ -326,15 +326,28 @@ contrast of 4.49 (foreground color: #5e6ad2, background color: #f8fafc, font siz
   the measurement to reproduce **4.492:1** *and* axe to name the node again.
 
 Two properties of that arm to know before re-anchoring it. (1) It is driven on
-`/form-settings?form=<id>`, not `/settings`: on some dashboard pages the dropdown
-panel overlaps the page content and axe then **cannot determine the row's
-background at all** — it returns the node as `incomplete` (`elmPartiallyObscuring`,
-"Element's background color could not be determined because it partially overlaps
-other elements"), where a 0-violation reading is a scan that gave up rather than a
-pass. The arm therefore asserts the row was actually JUDGED, not merely not
-flagged. (2) The menu trigger is visible in the server-rendered HTML *before* React
-hydrates, so the open helper retries the click until the app reports
-`aria-expanded="true"`; clicking blind was measured as a flake on this file.
+`/form-settings?form=<id>`, not `/settings`, for its stubs — but the axe half no
+longer depends on WHICH page paints under the panel (card `t_711cefb9`). On some
+dashboard pages the dropdown panel overlaps the page content and axe **cannot
+determine the row's background at all** — it returns the node as `incomplete`
+(`elmPartiallyObscuring`, "Element's background color could not be determined
+because it partially overlaps other elements"), where a 0-violation reading is a
+scan that gave up rather than a pass. axe reaches that state when its background
+samples disagree **across the node's text rects**, and this row's label wraps onto
+two lines: on `origin/main` both samples fell on the same tab-strip element, and
+PR 1259's eighth tab moved a tab *button* under the second line, so the identical
+arm went red in both directions (`incomplete` in the arm, 0 violations in its own
+CONTROL). The arm therefore now calls `hidePageBehindRow` before the scan: it
+asserts the row's own hover background and the menu panel are **opaque**, asserts
+the row is the **topmost painted element** at every text sample (so a page layer
+that really covers the menu still fails loudly), and only then hides the page
+elements that overlap the row — `visibility: hidden`, so the row cannot move, and
+the measurement after the hide is asserted identical to the one before. The arm
+also still asserts the row was actually JUDGED, not merely not flagged, so a
+future `incomplete` reading fails instead of passing. (2) The menu trigger is
+visible in the server-rendered HTML *before* React hydrates, so the open helper
+retries the click until the app reports `aria-expanded="true"`; clicking blind was
+measured as a flake on this file.
 
 ### The builder canvas, and a CONTRAST measurement rather than a class check
 
