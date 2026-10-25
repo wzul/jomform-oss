@@ -24,6 +24,14 @@ import (
 // exchange rates (Ringgit per unit of foreign currency).
 const BNMExchangeRateURL = "https://api.bnm.gov.my/public/exchange-rate"
 
+// BNMRatesAccept is the Accept value BNM's Open API requires. The public API
+// serves its JSON envelope ONLY for the versioned vendor media type: a plain
+// "application/json", no Accept header at all, or an unsupported version (v2)
+// is answered 404 with an empty {"message": ""} body. Sending the wrong one
+// does not degrade — it guarantees every refresh fails, which is how the rates
+// cache stayed empty while the endpoint kept answering 200 with [].
+const BNMRatesAccept = "application/vnd.BNM.API.v1+json"
+
 // cacheKey is the Valkey key holding the cached BNM rates JSON.
 const cacheKey = "jf:currency:bnm_rates"
 
@@ -31,19 +39,39 @@ const cacheKey = "jf:currency:bnm_rates"
 // issue's "once daily" requirement).
 const cacheTTL = 24 * time.Hour
 
-// Rate is one currency's BNM rate: how many Ringgit buy one unit of the
-// foreign currency (e.g. USD 4.03 means 1 USD = 4.03 MYR).
+// Rate is one currency's BNM rate, normalised to Ringgit per ONE unit of the
+// foreign currency (e.g. USD 4.084 means 1 USD = 4.084 MYR).
+//
+// Unit is the block size BNM publishes the quote in: most currencies are quoted
+// per 1 unit, but 15 of the 27 (JPY, THB, IDR, …) are quoted per 100. It is
+// kept for provenance only — Rate is already divided by it, so consumers must
+// not divide again (Rate*Unit is the value of one published block).
 type Rate struct {
 	CurrencyCode string  `json:"currency_code"`
 	Unit         int     `json:"unit"`
 	Rate         float64 `json:"rate"`
 }
 
-// bnmResponse is the BNM API envelope.
+// bnmQuote is one entry of BNM's v1 envelope. Two shape facts the decoder has
+// to honour and no BNM document spells out: `data` is an ARRAY (not an object
+// keyed by a rate list), and the quote under `rate` is an OBJECT carrying
+// buying/selling/middle — not a number. BNM leaves buying_rate AND selling_rate
+// null for some currencies (SDR today) while middle_rate is populated for every
+// quote, so middle is the only field that yields a rate for all 27.
+type bnmQuote struct {
+	CurrencyCode string `json:"currency_code"`
+	Unit         int    `json:"unit"`
+	Rate         struct {
+		Date        string  `json:"date"`
+		BuyingRate  float64 `json:"buying_rate"`
+		SellingRate float64 `json:"selling_rate"`
+		MiddleRate  float64 `json:"middle_rate"`
+	} `json:"rate"`
+}
+
+// bnmResponse is the BNM v1 envelope: {"data":[ …quotes ]}.
 type bnmResponse struct {
-	Data struct {
-		Rates []Rate `json:"rates"`
-	} `json:"data"`
+	Data []bnmQuote `json:"data"`
 }
 
 // Store fetches + caches BNM rates in Valkey and converts minor units.
@@ -76,7 +104,7 @@ func (s *Store) FetchRates(ctx context.Context) ([]Rate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bnm request: %w", err)
 	}
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", BNMRatesAccept)
 	resp, err := s.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("bnm fetch: %w", err)
@@ -95,10 +123,38 @@ func (s *Store) FetchRates(ctx context.Context) ([]Rate, error) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("bnm decode: %w", err)
 	}
-	if len(out.Data.Rates) == 0 {
+	rates := toRates(out.Data)
+	if len(rates) == 0 {
 		return nil, fmt.Errorf("bnm: no rates in response")
 	}
-	return out.Data.Rates, nil
+	return rates, nil
+}
+
+// toRates flattens BNM's nested quotes into the per-single-unit Rate that the
+// REST endpoint, the MCP tool and the settings page all document ("Ringgit per
+// unit of foreign currency"). BNM quotes 15 of its 27 currencies per 100 units,
+// so the published figure is divided by the unit — without that, a JPY or THB
+// amount converts 100x off. A quote with no code or no middle rate is dropped
+// rather than cached as a zero rate, which would convert every amount in that
+// currency to nothing.
+func toRates(quotes []bnmQuote) []Rate {
+	out := make([]Rate, 0, len(quotes))
+	for _, q := range quotes {
+		code := strings.ToUpper(strings.TrimSpace(q.CurrencyCode))
+		if code == "" || q.Rate.MiddleRate <= 0 {
+			continue
+		}
+		unit := q.Unit
+		if unit <= 0 {
+			unit = 1
+		}
+		out = append(out, Rate{
+			CurrencyCode: code,
+			Unit:         unit,
+			Rate:         q.Rate.MiddleRate / float64(unit),
+		})
+	}
+	return out
 }
 
 // Refresh fetches fresh BNM rates and stores them in Valkey (24h TTL). It is
