@@ -181,6 +181,18 @@ Parity checklist (dashboard → MCP):
   ingested asynchronously by the pre-send-check lane, plus manual entries;
   also exposed to the admin dashboard as `GET`/`POST /v1/admin/suppressions` +
   `DELETE /v1/admin/suppressions/{email}`)
+- QA test-account purge (card t_6ae7f586; gated on #385 super-admin) →
+  `purge_test_accounts`.
+  Test accounts are marked at signup by the QA channel (a server-held token in
+  the `X-JomForm-QA-Signup` header writes `users.is_test`), NOT by an email
+  pattern and NOT by the card that created them — a card that fails
+  mid-verification still leaves an account the purge can find. The tool is
+  super-admin only and audited; it is a DRY RUN unless `confirm=true`; it
+  refuses an account that is not marked, refuses (and names) a marked account
+  that still holds sales or subscriptions, never touches a protected account,
+  and is idempotent. Its report names the accounts it removed (id + email +
+  counts). The existing unverified-account sweep is a separate tool for
+  verified=false rows and its contract is unchanged.
 - Affiliate marketing (#444) → `create_affiliate`, `list_affiliates`,
   `get_affiliate_sales`, `set_affiliate_commission`
 - Realtime notifications (#447) → `get_realtime_status`, `set_realtime_sound`

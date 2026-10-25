@@ -136,6 +136,7 @@ var expectedPurgeTools = []string{
 	"purge_form",
 	"purge_media",
 	"purge_product",
+	"purge_test_accounts",
 	"purge_unverified_accounts",
 	"purge_workspace",
 }

@@ -653,6 +653,14 @@ func (s *Server) registerTools() {
 		Description: "Laporkan bilangan akaun belum disahkan (emel) yang lebih lama daripada ambang, DIPECAH kepada berapa yang sweep akan padam dan berapa yang TERSEKAT (akaun masih memegang jualan atau langganan, jadi ia tidak akan dipadam). Admin sahaja; read-only — tidak memadam apa-apa.",
 	}, s.purgeUnverifiedAccounts)
 
+	// ── Parity: QA test-account purge (card t_6ae7f586) ─────────────────
+	// The marker is written at signup through the QA channel, so a card that
+	// fails mid-verification still leaves an account this tool can find.
+	addTool(s, &mcp.Tool{
+		Name:        "purge_test_accounts",
+		Description: "Padam akaun UJIAN bertanda is_test yang dicipta melalui saluran pendaftaran QA. Super-admin sahaja; diaudit. LALAI ialah DRY RUN (confirm=false): lapor tepat apa yang AKAN dipadam dan tidak memadam apa-apa; set confirm=true untuk benar-benar memadam. Ia MENOLAK akaun yang tidak bertanda ujian (termasuk yang emelnya nampak seperti akaun ujian), dan TERSEKAT — tidak dipadam — akaun ujian yang masih memegang jualan atau langganan. Akaun yang dilindungi tidak pernah disentuh. Jawapan MENAMAKAN setiap akaun (id + emel + kiraan): removed, removed_emails, removed_count, blocked (sebab: sales|subscriptions|fk_restricted), blocked_count, scanned. Idempotent — jalan kedua tidak memadam apa-apa dan melaporkannya. Tidak ada had umur dan tiada tapisan pencipta: akaun boleh dipadam selagi ia BERTANDA.",
+	}, s.purgeTestAccounts)
+
 	// ── Super-admin: platform-wide monitoring (issue #386) ─────────────
 	// These tools are gated on the super-admin role (#385) and are read-only
 	// by default. They let the platform owner's AI agent monitor usage across

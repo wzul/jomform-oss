@@ -15,6 +15,15 @@ import (
 // ErrEmailTaken is returned on duplicate user email.
 var ErrEmailTaken = errors.New("email already registered")
 
+// ErrProtectedAccount is returned when a caller asks this store to do something
+// to a protected account that its designation forbids — mark it as a disposable
+// test account, or purge it. See ProtectedAccountEmails.
+var ErrProtectedAccount = errors.New("akaun ini dilindungi: tidak boleh ditanda sebagai akaun ujian dan tidak boleh dipadam")
+
+// ErrNotATestAccount is returned when a purge is asked to remove a specific
+// account that does not carry the is_test marker.
+var ErrNotATestAccount = errors.New("akaun ini bukan akaun ujian (is_test = false)")
+
 // User models a row from users table.
 type User struct {
 	ID           string
@@ -59,6 +68,13 @@ type User struct {
 // UserStore wraps pgx for user operations.
 type UserStore struct {
 	pool *pgxpool.Pool
+	// protectedOverride, when non-nil, REPLACES ProtectedAccountEmails for this
+	// store. Nil (the only value NewUserStore produces) means the default list.
+	// It exists so a test can neutralise the protected-account safeguard and
+	// require the purge to delete the protected row — the bite proof that the
+	// safeguard, not an accident of the fixture, is what keeps it alive.
+	// A nil override is never "protect nothing".
+	protectedOverride *[]string
 }
 
 // NewUserStore builds a UserStore over the given pool.
@@ -68,11 +84,27 @@ func NewUserStore(pool *pgxpool.Pool) *UserStore { return &UserStore{pool: pool}
 // New accounts are created unverified (verified=false) so they must confirm
 // their address before their first password login (issue #42).
 func (s *UserStore) Create(ctx context.Context, email, passwordHash string) (*User, error) {
+	return s.CreateWithTestMarker(ctx, email, passwordHash, false)
+}
+
+// CreateWithTestMarker inserts a new user and records whether it is a QA TEST
+// account (card t_6ae7f586). `isTest` is reachable only through the QA signup
+// channel, which authenticates with a server-held token — never from a request
+// field — so an ordinary visitor cannot mark their own account as disposable.
+//
+// A protected address can never be marked: it is the ONE reused production test
+// login, not a throwaway, and a purge that swept it would delete the account the
+// lanes are told to keep. That refusal happens here, below every caller, so the
+// HTTP handler, a future admin tool and a test all get the same answer.
+func (s *UserStore) CreateWithTestMarker(ctx context.Context, email, passwordHash string, isTest bool) (*User, error) {
+	if isTest && s.isProtectedEmail(email) {
+		return nil, ErrProtectedAccount
+	}
 	u := &User{}
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash, verified) VALUES ($1, $2, false)
+		`INSERT INTO users (email, password_hash, verified, is_test) VALUES ($1, $2, false, $3)
 		 RETURNING id, email, password_hash, COALESCE(totp_secret,''), totp_enabled, COALESCE(name,''), COALESCE(avatar_url,''), COALESCE(phone,''), COALESCE(timezone,''), COALESCE(lang,''), verified, created_at, updated_at, pw_reset_at, totp_last_step`,
-		email, passwordHash,
+		email, passwordHash, isTest,
 	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.TOTPSecret, &u.TOTPEnabled, &u.Name, &u.AvatarURL, &u.Phone, &u.Timezone, &u.Lang, &u.Verified, &u.CreatedAt, &u.UpdatedAt, &u.PwResetAt, &u.TOTPLastStep)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -381,10 +413,17 @@ func (s *UserStore) ClearDefaultWorkspace(ctx context.Context, userID string) er
 // CountUnverifiedOlderThan returns how many users are still unverified
 // (verified=false) and were created before cutoff (issue #190). Used by the
 // MCP parity tool to surface the purge backlog without deleting anything.
+//
+// Protected accounts (ProtectedAccountEmails) are excluded, exactly as the
+// sweep's candidate list excludes them: a count that included a row the sweep
+// can never touch would read as "the sweep will clear this" when the truth is
+// the opposite.
 func (s *UserStore) CountUnverifiedOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	var n int64
 	err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM users WHERE verified = false AND created_at < $1`, cutoff).Scan(&n)
+		`SELECT count(*) FROM users
+		  WHERE verified = false AND created_at < $1
+		    AND lower(email::text) <> ALL($2::text[])`, cutoff, s.protectedLower()).Scan(&n)
 	return n, err
 }
 
@@ -483,7 +522,7 @@ func (s *UserStore) CountUnverifiedOlderThanClassified(ctx context.Context, cuto
 		return res, err
 	}
 	for _, id := range ids {
-		deleted, err := s.purgeUserTx(ctx, id, true)
+		deleted, err := s.purgeUserTx(ctx, id, true, purgeRuleUnverified)
 		switch {
 		case err == nil:
 			if deleted {
@@ -502,9 +541,15 @@ func (s *UserStore) CountUnverifiedOlderThanClassified(ctx context.Context, cuto
 
 // unverifiedIDsOlderThan lists the purge candidates. It runs outside the
 // per-user transactions so no snapshot is held open across the deletions.
+//
+// Protected accounts are excluded here AND re-checked inside the per-user
+// transaction: the designated production test login is unverified on purpose, so
+// without this exclusion the sweep would delete it.
 func (s *UserStore) unverifiedIDsOlderThan(ctx context.Context, cutoff time.Time) ([]string, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id FROM users WHERE verified = false AND created_at < $1`, cutoff)
+		`SELECT id FROM users
+		  WHERE verified = false AND created_at < $1
+		    AND lower(email::text) <> ALL($2::text[])`, cutoff, s.protectedLower())
 	if err != nil {
 		return nil, err
 	}
@@ -523,6 +568,24 @@ func (s *UserStore) unverifiedIDsOlderThan(ctx context.Context, cutoff time.Time
 	return ids, nil
 }
 
+// purgeRule says WHICH marker makes a user deletable by one purge run. It is one
+// enum rather than two near-copies of the same transaction, so the RESTRICT-safe
+// delete order, the locking and the FK verdict cannot drift between the
+// unverified sweep and the test-account purge (the lesson of card t_b8446b61,
+// where a second implementation of a purge rule would have been free to
+// disagree with the delete it predicts).
+type purgeRule int
+
+const (
+	// purgeRuleUnverified is the hourly sweep (issue #190): verified = false.
+	purgeRuleUnverified purgeRule = iota
+	// purgeRuleTestMarked is the QA test-account purge (card t_6ae7f586):
+	// is_test = true. It has NO age cutoff — a marked account is removable
+	// whether it is four hours or four months old, and whether the card that
+	// created it finished or died.
+	purgeRuleTestMarked
+)
+
 // purgeUser deletes one unverified user and their owned rows inside its own
 // transaction, reporting whether the user row was actually removed. Every
 // statement is in the RESTRICT-safe order (workspaces → accounts → users): the
@@ -532,7 +595,7 @@ func (s *UserStore) unverifiedIDsOlderThan(ctx context.Context, cutoff time.Time
 // NO ACTION reference exists — the whole transaction rolls back, leaving that
 // user exactly as it was, and the caller skips it.
 func (s *UserStore) purgeUser(ctx context.Context, id string) (bool, error) {
-	return s.purgeUserTx(ctx, id, false)
+	return s.purgeUserTx(ctx, id, false, purgeRuleUnverified)
 }
 
 // purgeUserTx runs the per-user deletes. `dryRun` decides whether the transaction
@@ -548,14 +611,19 @@ func (s *UserStore) purgeUser(ctx context.Context, id string) (bool, error) {
 // "deletable" fixture — i.e. a read-only MCP tool would have been a purge that
 // reports instead of deletes. There is ONE body here, so the classification
 // cannot drift from the delete it is predicting.
-func (s *UserStore) purgeUserTx(ctx context.Context, id string, dryRun bool) (bool, error) {
+//
+// `rule` decides WHICH marker makes the user deletable (unverified sweep vs
+// test-account purge). Everything else — the lock, the delete order, the
+// accounts-with-sales/subscriptions guard, the FK verdict — is shared, because
+// the two purges must never disagree about what a "blocked" candidate is.
+func (s *UserStore) purgeUserTx(ctx context.Context, id string, dryRun bool, rule purgeRule) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback(ctx)
 
-	// LOCK THE CANDIDATE, THEN RE-READ `verified` INSIDE THE TRANSACTION
+	// LOCK THE CANDIDATE, THEN RE-READ THE MARKER INSIDE THE TRANSACTION
 	// (card t_6577205b).
 	//
 	// The candidate list is read outside this transaction, and only the LAST
@@ -572,10 +640,15 @@ func (s *UserStore) purgeUserTx(ctx context.Context, id string, dryRun bool) (bo
 	// decision to delete is taken from a value read under the same lock that the
 	// deletes run under, which is the property the missing predicate was standing
 	// in for.
-	var stillUnverified bool
+	//
+	// The EMAIL is read for the same reason (card t_6ae7f586): the protected
+	// designation must be judged on the row the transaction is about to delete,
+	// not on the copy the candidate list saw.
+	var verified, isTest bool
+	var email string
 	if err := tx.QueryRow(ctx,
-		`SELECT verified = false FROM users WHERE id = $1 FOR UPDATE`, id,
-	).Scan(&stillUnverified); err != nil {
+		`SELECT verified, is_test, email FROM users WHERE id = $1 FOR UPDATE`, id,
+	).Scan(&verified, &isTest, &email); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Already gone (a concurrent sweep, say): nothing to do, and nothing
 			// was deleted here. Not an error — the candidate is simply no longer
@@ -584,11 +657,35 @@ func (s *UserStore) purgeUserTx(ctx context.Context, id string, dryRun bool) (bo
 		}
 		return false, err
 	}
-	if !stillUnverified {
-		// Verified in the meantime: leave the user EXACTLY as they were — user
-		// row, account(s) and workspace(s). Returning before any delete is what
-		// makes "in its entirety" true.
+
+	// PROTECTED ACCOUNTS SURVIVE EVERY PURGE (card t_6ae7f586).
+	//
+	// The designated production test login is verified=false, which makes it a
+	// candidate of the unverified sweep; marking it is_test would make it a
+	// candidate of the test purge. Neither may ever remove it, so the refusal is
+	// here — under the row lock, below both callers — and not only in the
+	// candidate lists. For the unverified sweep this is a silent no-op (the row
+	// is excluded from the candidate list too, so it is not a "blocked"
+	// candidate either); for the test purge it is a loud refusal.
+	if s.isProtectedEmail(email) {
+		if rule == purgeRuleTestMarked {
+			return false, ErrProtectedAccount
+		}
 		return false, nil
+	}
+
+	switch rule {
+	case purgeRuleTestMarked:
+		if !isTest {
+			return false, ErrNotATestAccount
+		}
+	default:
+		if verified {
+			// Verified in the meantime: leave the user EXACTLY as they were —
+			// user row, account(s) and workspace(s). Returning before any delete
+			// is what makes "in its entirety" true.
+			return false, nil
+		}
 	}
 
 	// Delete workspaces owned by the user that have no linked accounts, so the
@@ -610,14 +707,19 @@ func (s *UserStore) purgeUserTx(ctx context.Context, id string, dryRun bool) (bo
 		id); err != nil {
 		return false, err
 	}
-	// Delete the user. The verified=false guard is a hard safety net.
+	// Delete the user. The marker predicate is a hard safety net: the row is
+	// only removed while it still carries the marker the caller's rule requires.
 	//
 	// The verdict here (deleted vs the FK refusal below) is also what
-	// CountUnverifiedOlderThanClassified reads, via purgeUserTx(dryRun=true) — see
-	// that function. There is one body, so the backlog breakdown and the sweep
-	// cannot disagree (card t_b8446b61).
-	tag, err := tx.Exec(ctx,
-		`DELETE FROM users WHERE id = $1 AND verified = false`, id)
+	// CountUnverifiedOlderThanClassified and the test purge's dry run read, via
+	// purgeUserTx(dryRun=true) — see those functions. There is one body, so the
+	// prediction and the delete cannot disagree (card t_b8446b61).
+	var tag pgconn.CommandTag
+	if rule == purgeRuleTestMarked {
+		tag, err = tx.Exec(ctx, `DELETE FROM users WHERE id = $1 AND is_test`, id)
+	} else {
+		tag, err = tx.Exec(ctx, `DELETE FROM users WHERE id = $1 AND verified = false`, id)
+	}
 	if err != nil {
 		return false, err
 	}

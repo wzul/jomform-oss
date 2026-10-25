@@ -3,6 +3,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -20,6 +21,19 @@ import (
 )
 
 const sessionCookie = "jf_session"
+
+// qaSignupHeader is the header a QA lane sets on POST /v1/auth/register to mark
+// the account it is creating as a disposable TEST account (card t_6ae7f586).
+//
+// WHY A HEADER AND NOT A BODY FIELD. A body field is caller-controlled by
+// definition: any visitor could send `"is_test": true` and mark their own
+// account as purgable — turning the purge into a weapon. The header is only
+// honoured when it equals the server-held token in JOMFORM_QA_SIGNUP_TOKEN, so
+// the marking channel is scoped to a caller that already holds a server secret,
+// and an installation that never sets the token can never mark anything (fail
+// closed). The token is unset on production on purpose: lanes verify signup on
+// staging, never on prod.
+const qaSignupHeader = "X-JomForm-QA-Signup"
 
 // Trust cookie (issue #63): single-purpose — waives the TOTP step on a
 // trusted device for 30 days. Never a session, password still required.
@@ -71,6 +85,27 @@ type AuthHandlers struct {
 	// Issue #307: OAuth store for listing/revoking the user's connected MCP
 	// agents (user-level, in Profile). Nil in bare-mode tests.
 	OAuth *dbstore.OAuthStore
+
+	// QASignupToken, when non-empty, enables the QA test-account marking channel
+	// (card t_6ae7f586): a POST /v1/auth/register carrying this exact value in
+	// the X-JomForm-QA-Signup header creates the account with users.is_test=true,
+	// so `purge_test_accounts` can find and remove it later. Empty (the prod
+	// default) means the channel is closed and the header is ignored.
+	QASignupToken string
+}
+
+// isQATestSignup reports whether this registration carries the server-held QA
+// token. A missing/empty configured token is always false (fail closed), and the
+// comparison is constant-time so the token cannot be probed byte by byte.
+func (a *AuthHandlers) isQATestSignup(r *http.Request) bool {
+	if a.QASignupToken == "" {
+		return false
+	}
+	got := r.Header.Get(qaSignupHeader)
+	if got == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(a.QASignupToken)) == 1
 }
 
 // RegisterRoutes wires auth endpoints onto the mux.
@@ -238,6 +273,21 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "email tidak sah")
 		return
 	}
+
+	// Card t_6ae7f586: a registration that presents the server-held QA token is
+	// marked as a disposable TEST account, so the system — not a human reading an
+	// email address — can identify it later and `purge_test_accounts` can remove
+	// it however old it is and whether or not the card that created it ever
+	// finished. A caller without the token gets isTest=false: the marker is not
+	// reachable from the request body, so no visitor can mark their own account.
+	isTest := a.isQATestSignup(r)
+	if isTest && dbstore.IsProtectedAccountEmail(req.Email) {
+		// The ONE reused production test login is not a throwaway: it must never
+		// be marked disposable, or a purge would delete the account the lanes are
+		// told to reuse.
+		writeErr(w, http.StatusBadRequest, "emel ini dilindungi: ia tidak boleh ditanda sebagai akaun ujian")
+		return
+	}
 	if req.Password != "" && len(req.Password) < 10 {
 		writeErr(w, http.StatusBadRequest, "kata laluan mesti sekurang-kurangnya 10 aksara")
 		return
@@ -296,15 +346,26 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	user, err := a.Users.Create(r.Context(), req.Email, hash)
+	user, err := a.Users.CreateWithTestMarker(r.Context(), req.Email, hash, isTest)
 	if err != nil {
 		if errors.Is(err, dbstore.ErrEmailTaken) {
 			writeErr(w, http.StatusConflict, "email sudah didaftarkan")
 			return
 		}
+		if errors.Is(err, dbstore.ErrProtectedAccount) {
+			// Defence in depth: the store refuses to mark a protected address
+			// even if a future caller skips the check above.
+			writeErr(w, http.StatusBadRequest, "emel ini dilindungi: ia tidak boleh ditanda sebagai akaun ujian")
+			return
+		}
 		slog.Error("register_failed", "err", err, "email", req.Email)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+	if isTest {
+		// Visible in the log so an operator can see a test account being born
+		// (and can find it by the same marker the purge uses).
+		slog.Info("register_test_account", "email", obfuscateEmail(req.Email), "user", user.ID)
 	}
 
 	// Auto-provision the default account so new users can build immediately.

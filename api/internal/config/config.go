@@ -133,6 +133,14 @@ type Config struct {
 	// gated admin tools/pages (MCP admin tools #386, admin dashboard #387),
 	// never implicitly on normal tools. Empty = no super-admins.
 	SuperAdminEmails []string
+
+	// QASignupToken (card t_6ae7f586) is the server-held secret that turns a
+	// POST /v1/auth/register into a QA TEST-account registration: the caller
+	// presents it in the X-JomForm-QA-Signup header, the account is written with
+	// users.is_test = true, and `purge_test_accounts` can then remove it however
+	// old it is. Empty = the channel is closed and the header is ignored, which
+	// is what production runs: lanes verify signup on staging, never on prod.
+	QASignupToken string
 }
 
 // Load reads configuration from the environment and validates it.
@@ -208,6 +216,11 @@ func Load() (*Config, error) {
 		// Issue #385: site super-admin email allowlist (comma-separated).
 		// Trimmed + lowercased so matching is robust to whitespace/case.
 		SuperAdminEmails: parseEmailList(os.Getenv("SUPER_ADMIN_EMAILS")),
+
+		// Card t_6ae7f586: the QA test-account marking secret. Deliberately not
+		// in the production compose — unset there means the marking channel is
+		// closed on prod.
+		QASignupToken: os.Getenv("JOMFORM_QA_SIGNUP_TOKEN"),
 	}
 
 	if cfg.DatabaseURL == "" {

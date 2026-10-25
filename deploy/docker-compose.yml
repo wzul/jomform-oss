@@ -97,6 +97,13 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}
       PORT: "8080"
+      # QA test-account marking channel (card t_6ae7f586). A registration that
+      # presents this server-held token in X-JomForm-QA-Signup is written with
+      # users.is_test = true, so `purge_test_accounts` can find and remove it
+      # later. Empty (the default) closes the channel. Deliberately NOT wired
+      # into deploy/vps/compose.prod.yml: lanes verify signup on staging, so the
+      # prod marking channel stays shut by construction.
+      JOMFORM_QA_SIGNUP_TOKEN: ${JOMFORM_QA_SIGNUP_TOKEN:-}
       # Issue #212/#397: origin auto-TLS for DNS-only (grey-cloud) custom
       # domains. ACME_EMAIL enables the origin TLS listener (SNI-based cert
       # selection via tlsmgr); ACME_CERT_DIR is a persistent volume so issued

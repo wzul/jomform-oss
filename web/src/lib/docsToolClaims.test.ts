@@ -159,7 +159,7 @@ const MCP_SOURCES = readdirSync(MCP_DIR)
 // and a pin of 180 would mean this branch's three trash tools were — both are
 // the silently-reverted-main failure this guard exists to make loud, so the
 // number doubles as the check that the merge kept both sides.
-const EXPECTED_TOOL_COUNT = 181;
+const EXPECTED_TOOL_COUNT = 182;
 
 const REGISTRY_SRC = MCP_SOURCES.join("\n");
 

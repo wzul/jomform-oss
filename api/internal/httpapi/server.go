@@ -152,6 +152,9 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			Events: deps.Events,
 			// Issue #307: the user-level connected-agents (MCP) store.
 			OAuth: deps.OAuth,
+			// Card t_6ae7f586: server-held token that marks a QA test account at
+			// signup (empty = channel closed, the prod default).
+			QASignupToken: cfg.QASignupToken,
 		}
 		// Issue #121: OAuth 2.1 flow needs the same session + user identity for
 		// the human authorize step, plus the store. Wired alongside auth.
