@@ -610,7 +610,25 @@ export function Shell({
               The sidebar and the topbar stay mounted on purpose: the fault is
               about the page's data, and unmounting the chrome is the "reads as
               a full page reload" defect `PageLoading` exists to prevent. */}
-          {sessionError ? <SessionFault /> : children}
+          {/* THE PAGE BODY IS THE DOCUMENT'S `main` LANDMARK (card t_25a8fc88).
+              A full-document axe scan of the signed-in routes reported
+              `landmark-one-main` (the document had NO main landmark) plus
+              `region` (the page's content sat outside every landmark), because
+              the page bodies were plain `<div>`s. The landmark wraps the PAGE,
+              never the chrome: the sidebar (`<aside>`) and the topbar stay
+              outside it — the same topology `/profile` and `/settings` proved
+              clean while they carried their own `<main>` in this slot. Those
+              two page bodies are now `<div>`s; a page that keeps its own
+              `<main>` would nest two, which is invalid (axe:
+              `landmark-main-is-top-level`). The fault surface is the ONE
+              exception: `SessionFault` is a full-page `main` of its own (it
+              also renders from `/`, where no Shell exists), so it is NOT
+              wrapped again here — either way the document has exactly one. */}
+          {sessionError ? (
+            <SessionFault />
+          ) : (
+            <main className="flex flex-1 flex-col">{children}</main>
+          )}
         </div>
       </div>
     </div>

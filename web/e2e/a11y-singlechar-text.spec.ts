@@ -403,11 +403,13 @@ test.describe("a11y: single-character text is measured against its own floor", (
           navLinks,
           `${route.path} rendered no sidebar nav — the shell did not render [${waited}]`,
         ).toBeGreaterThanOrEqual(10);
-      } else {
-        // Public routes (and /builder, which paints its own chrome): a `<main>`
-        // landmark is the page's own rendered body.
-        expect(hasMain, `${route.path} rendered no <main> [${waited}]`).toBe(true);
       }
+      // EVERY route in this table renders a `<main>` landmark: the public pages
+      // and the builder paint their own, and the signed-in Shell routes get the
+      // one the Shell wraps their body in (card t_25a8fc88 — the authed shell
+      // used to render none, which axe reported as `landmark-one-main` while
+      // this arm asserted only the nav count).
+      expect(hasMain, `${route.path} rendered no <main> landmark [${waited}]`).toBe(true);
       expect(
         bodyText,
         `${route.path} rendered almost no text — the loading shell is not a scan [${waited}]`,

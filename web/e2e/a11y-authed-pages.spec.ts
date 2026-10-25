@@ -91,6 +91,7 @@ import {
   unnamedMessage,
 } from "./controlNames";
 import { SETTLE_TIMEOUT_MS, settledLine, waitForSettled } from "./settle";
+import { expectOneMainLandmark } from "./landmark";
 import { DICT } from "../src/components/i18nDict";
 
 // The dashboard paths are gated on the SERVER (web/src/middleware.ts): a request
@@ -642,6 +643,36 @@ async function scanDocument(page: Page, what: string): Promise<Result[]> {
   return blockers;
 }
 
+
+/* ─── /forms: the card's ninth route, measured for the landmark ────────────── */
+
+// `/forms` has no full-document axe spec of its own — `a11y-tabstrips.spec.ts`
+// walks its Active/Trash strip and deliberately runs no axe — so without this arm
+// the two moderate landmark rules the card names would have NO arm reading them
+// on this route. It is not an entry in `ROUTES`, which
+// `src/lib/a11yAuthedCoverage.test.ts` pins to "the twelve routes NO spec
+// scanned"; it reuses the same openRoute + shared landmark helper.
+const FORMS_ROUTE: Route = {
+  name: "forms",
+  path: "/forms",
+  titleKey: "forms.title",
+  settleSel: "h1",
+  chrome: "shell",
+  bodyFloor: 300,
+  what: "the forms list and its Active/Trash strip",
+};
+
+test("/forms renders the document's one main landmark (t_25a8fc88)", async ({ page, baseURL }) => {
+  test.setTimeout(90_000);
+  const settled = await openRoute(page, FORMS_ROUTE, baseURL);
+  console.log(
+    `[authed] /forms status=${settled.status} hydrated=${settled.hydrated} h1=${JSON.stringify(
+      settled.h1,
+    )} navLinks=${settled.navLinks} bodyText=${settled.bodyText}`,
+  );
+  await expectOneMainLandmark(page, "/forms");
+});
+
 /* ─── the twelve routes ────────────────────────────────────────────────────── */
 
 test.describe("a11y: every signed-in dashboard route the gate could not reach", () => {
@@ -658,6 +689,10 @@ test.describe("a11y: every signed-in dashboard route the gate could not reach", 
         )} navLinks=${settled.navLinks} bodyText=${settled.bodyText}`,
       );
       await scanDocument(page, route.path);
+      // The landmark itself (card t_25a8fc88): exactly one `main`, owning the
+      // page, and neither `landmark-one-main` nor `region` — the two moderate
+      // rules the critical/serious rule above cannot see.
+      await expectOneMainLandmark(page, route.path);
       // …and the controls on it are NAMED. axe accepts a placeholder as a name,
       // so the scan above cannot see this class (card t_becb0f50: five controls
       // across /products and /builder shipped this way while every scan was
@@ -1189,6 +1224,10 @@ test.describe("a11y: the redirect shells land on a route that IS scanned", () =>
         `would be measuring a placeholder document`,
     ).toBe(false);
     await scanDocument(page, `/post-login → ${landed}`);
+    // `/` is a Shell route with a page body of its own (it was one of the pages
+    // with no landmark at all before t_25a8fc88), so the landing document is
+    // measured for the landmark too.
+    await expectOneMainLandmark(page, `/post-login → ${landed}`);
   });
 });
 

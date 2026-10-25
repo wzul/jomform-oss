@@ -473,7 +473,7 @@ export default function ProfilePage() {
 
   return (
     <Shell active="profile">
-      <main className="w-full flex-1 px-6 py-8">
+      <div className="w-full flex-1 px-6 py-8">
         <h1 className="max-w-xl text-2xl font-bold">{t("prof.title")}</h1>
 
         {/* Tab bar. Card t_b589a807: the strip carries `role="tablist"`.
@@ -1128,7 +1128,7 @@ export default function ProfilePage() {
             </div>
           </div>
         )}
-      </main>
+      </div>
     </Shell>
   );
 }

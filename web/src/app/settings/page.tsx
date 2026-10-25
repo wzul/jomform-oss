@@ -1311,7 +1311,7 @@ export default function Settings() {
 
   return (
     <Shell active="settings">
-      <main className="w-full flex-1 px-6 py-8">
+      <div className="w-full flex-1 px-6 py-8">
         <h1 className="max-w-xl text-2xl font-bold">
           {t("set.title")} <span className="text-[var(--jf-primary)]">JomForm</span>
         </h1>
@@ -2903,7 +2903,7 @@ export default function Settings() {
           onDismiss={dismissMsg}
           closeTitle={t("set.tlsCertClose")}
         />
-      </main>
+      </div>
     </Shell>
   );
 }

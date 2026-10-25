@@ -121,6 +121,7 @@ import type { AxeResults, Result } from "axe-core";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DICT } from "../src/components/i18nDict";
+import { expectOneMainLandmark } from "./landmark";
 
 const IMPACTS = ["critical", "serious"] as const;
 const IMPACT_LABEL = IMPACTS as readonly string[];
@@ -824,6 +825,12 @@ test("axe: the settings pane on a first run has no critical/serious violation (e
 
   const s = await settleAndRead(page, "en");
   expectOneSelectionMatchesPanel(s, "en", "en@320 axe arm");
+
+  // The document's ONE `main` landmark (card t_25a8fc88). It used to be this
+  // page's own `<main>`; it now comes from the Shell, which wraps the page body
+  // — so the landmark has to be measured here rather than assumed from the old
+  // markup.
+  await expectOneMainLandmark(page, "/settings");
 
   const results = await new AxeBuilder({ page }).include("main").analyze();
   const blockers = blockersOf(results);

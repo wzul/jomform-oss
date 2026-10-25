@@ -140,6 +140,7 @@ import type { AxeResults, Result } from "axe-core";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DICT } from "../src/components/i18nDict";
+import { expectOneMainLandmark } from "./landmark";
 
 const IMPACTS = ["critical", "serious"] as const;
 const IMPACT_LABEL = IMPACTS as readonly string[];
@@ -655,6 +656,11 @@ for (const lang of LANGS) {
 
 test("axe: every panel of /profile is free of critical/serious violations, and the rule that caught the defect fires when the tablist is removed", async ({ page }) => {
   await openProfile(page, "en", { jf_lang: "en", jf_workspace: "demo" }, "identity");
+
+  // The document's ONE `main` landmark (card t_25a8fc88). It used to be this
+  // page's own `<main>`; it now comes from the Shell, which wraps the page body,
+  // so the landmark is measured here rather than assumed from the old markup.
+  await expectOneMainLandmark(page, "/profile");
 
   // EVERY PANEL, not just the landing one. Each panel is a different set of
   // controls, and the gate's public-route scan never saw any of them: the

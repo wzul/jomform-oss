@@ -65,6 +65,7 @@ import {
   readUnnamedControls,
   removePlanted,
 } from "./controlNames";
+import { expectOneMainLandmark } from "./landmark";
 
 // Kept identical to a11y.spec.ts / a11y-dialogs.spec.ts so the three cannot drift.
 const IMPACTS = ["critical", "serious"] as const;
@@ -303,5 +304,9 @@ test.describe("a11y: the products table and create row", () => {
       blockers.map((v) => v.id),
       "/products must have no critical/serious axe violations",
     ).toEqual([]);
+
+    // …and the document has its ONE `main` landmark, with neither of the two
+    // moderate rules the critical/serious bar above cannot see (t_25a8fc88).
+    await expectOneMainLandmark(page, "/products");
   });
 });

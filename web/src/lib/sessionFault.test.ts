@@ -220,9 +220,14 @@ test("the app chrome renders the fault surface for EVERY route it wraps", () => 
   );
   // …and it is the element that REPLACES the page's content, in the slot every
   // page is rendered into — not a decoration beside it.
+  //
+  // Since card t_25a8fc88 the content branch is wrapped in the document's `main`
+  // landmark, so the alternative to `<SessionFault />` is `<main>{children}</main>`
+  // rather than a bare `children`. The shape changed; what is asserted did not:
+  // the fault surface is the OTHER arm of the same `sessionError` ternary.
   assert.match(
     shellCode,
-    /\{sessionError\s*\?\s*<SessionFault\s*\/>\s*:\s*children\}/,
+    /\{sessionError\s*\?\s*\(\s*<SessionFault\s*\/>\s*\)\s*:\s*\(\s*<main\b[^>]*>\{children\}<\/main>\s*\)\}/,
     "Shell.tsx does not swap its content slot for the fault surface when `sessionError` is set — the page's own " +
       "loading branch would stay on screen underneath a Retry that has nothing to retry",
   );
