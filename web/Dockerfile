@@ -39,6 +39,12 @@ RUN npm ci
 COPY web/ ./
 COPY api/ /repo/api/
 COPY MCP-PARITY.md /repo/MCP-PARITY.md
+# The build-context guard (web/src/lib/buildContext.test.ts) reads the root
+# .dockerignore to check that the context it receives is the context the suite
+# needs — and its own rule is that every file a web test reads must be copied
+# here. Without this line the guard dies on ENOENT inside `npm run build` while
+# staying green on the host, which is the defect it exists to catch.
+COPY .dockerignore /repo/.dockerignore
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
