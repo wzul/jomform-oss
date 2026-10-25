@@ -442,3 +442,182 @@ test("a refused workspace delete leaves the dialog usable again, not stuck on Wo
       `input=enabled cancel=enabled confirm=enabled label="${DICT["ws.confirmButton"].en}" not working…`,
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// t_8030247d — the refusal must survive the LOAD its own action fires, when that
+// load FAILS. The second surface of the defect card t_d9dda884 fixed on /forms'
+// Trash view; filed separately because it is a different surface.
+//
+// THE DEFECT. `doDelete()` writes the refusal into `deleteErr` and then
+// `await load()`s — on purpose, so a stale `check.slug` (the workspace was renamed
+// out of band while the dialog was open) cannot leave the merchant typing a slug
+// the server no longer has. `load()`'s FAILURE branch sets `check` to null, and the
+// `!check` early return renders the load-failure card as the WHOLE PAGE. So a
+// refusal followed by a failing refetch (a transient 5xx / offline) replaced the
+// reason with "We couldn't check this workspace. Please try again." and the
+// merchant never read WHY the workspace was not deleted — the sentence the action
+// exists to deliver. The trash-RESTORE refusal lives on this same tab and is lost
+// through the same branch: any later check reload that fails takes the Trash
+// section, and `trashErr` with it, off the page. ONE SITE, TWO REFUSALS.
+//
+// WHAT THESE GUARDS PROVE, on the real built page with a stubbed API:
+//   A. the delete refusal is on screen after the refetch it fires has FAILED, the
+//      load failure is ALSO reported beside it (one does not replace the other),
+//      and the Retry affordance the failure card exists for is still offered;
+//   B. the same for the trash-RESTORE refusal, in the same failure state, with the
+//      delete refusal beside it — the attribution for "one site, two refusals".
+//
+// Both are deterministic (no race): the failing refetch is the only thing that can
+// set `check` to null after a successful render, which is why a single settled read
+// is the evidence here and not a sampled window.
+const DELETE_REFUSAL_PROSE = "taip slug workspace (demo) untuk sahkan pemadaman";
+
+/**
+ * Stubs the two failures this card needs: the action is REFUSED by the server, and
+ * the deletion-check refetch the refusal fires then FAILS.
+ *
+ * Registered AFTER `openWorkspaceTab` has rendered the tab, so the first (successful)
+ * read is behind us and every later read answers 500 — the shape a transient 5xx or
+ * an offline browser produces. Playwright matches the LAST registered route first, so
+ * these win over the ones `stubAPI` installed.
+ */
+async function refuseThenFailTheRefetch(page: Page, extraRefusal?: { method: string; path: RegExp }) {
+  const json = (status: number, body: unknown) => ({
+    status,
+    contentType: "application/json",
+    body: JSON.stringify(body),
+  });
+
+  // `/api/workspaces/{id}` — the DELETE refusal. `fallback()` keeps this from
+  // shadowing the trash listing (`/api/workspaces/trash`, which this pattern also
+  // matches) and every other verb.
+  const refused: string[] = [];
+  await page.route(/(.*)\/api\/workspaces\/[^/]+(\?.*)?$/, (r) => {
+    if (r.request().method() !== "DELETE") return r.fallback();
+    refused.push(new URL(r.request().url()).pathname);
+    return r.fulfill(json(400, { error: DELETE_REFUSAL_PROSE, code: "request.badRequest" }));
+  });
+
+  // A second refused ACTION on the same tab (the trash Restore), when a leg needs
+  // one: it must be refused BEFORE the delete, because the delete's failing refetch
+  // is what takes the page down.
+  if (extraRefusal) {
+    await page.route(extraRefusal.path, (r) => {
+      if (r.request().method() !== extraRefusal.method) return r.fallback();
+      refused.push(new URL(r.request().url()).pathname);
+      return r.fulfill(json(400, { error: "tidak dibenarkan", code: "request.badRequest" }));
+    });
+  }
+
+  // THE FAILURE UNDER TEST: every deletion-check read from here on answers 500.
+  let failedChecks = 0;
+  await page.route(/(.*)\/api\/workspaces\/[^/]+\/deletion-check(\?.*)?$/, (r) => {
+    failedChecks += 1;
+    return r.fulfill(json(500, { error: "ralat dalaman", code: "internal" }));
+  });
+
+  return { refused, failures: () => failedChecks };
+}
+
+/** Opens the confirm dialog and submits it with the matching slug. */
+async function submitDelete(page: Page) {
+  await page.getByRole("button", { name: DICT["ws.deleteButton"].en, exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 20_000 });
+  await dialog.locator("#ws-confirm-slug").fill(CHECK.slug);
+  await dialog.getByRole("button", { name: DICT["ws.confirmButton"].en, exact: true }).click();
+}
+
+test("a refused workspace delete keeps its reason when the refetch it fires FAILS", async ({ page }) => {
+  test.setTimeout(120_000);
+  await openWorkspaceTab(page, []);
+  const { failures } = await refuseThenFailTheRefetch(page);
+  await submitDelete(page);
+
+  // THE CARD'S ACCEPTANCE (t_8030247d). The refusal must be readable even though
+  // the refetch it fired has failed and taken the `check` state with it.
+  const refusal = page.getByRole("alert").filter({ hasText: DICT["ws.deleteFail"].en });
+  await expect(refusal, "the refusal must stay readable when its own refetch FAILS").toBeVisible({
+    timeout: 20_000,
+  });
+  // A settled re-read: the pre-fix shape renders NOTHING here, so this is a claim
+  // about a page that stayed, not about a flash that was caught.
+  await page.waitForTimeout(1_000);
+  await expect(refusal, "the refusal must stay readable when its own refetch FAILS").toBeVisible({
+    timeout: 5_000,
+  });
+  const shown = ((await refusal.first().textContent({ timeout: 5_000 }).catch(() => null)) ?? "").trim();
+  expect(shown).toContain(DICT["ws.deleteFail"].en);
+  expect(shown).not.toContain(DELETE_REFUSAL_PROSE);
+
+  // The failure the branch renders must NOT replace it — both are on screen.
+  await expect(
+    page.getByRole("alert").filter({ hasText: DICT["ws.loadFail"].en }),
+    "the load failure must still be reported beside the refusal",
+  ).toBeVisible({ timeout: 5_000 });
+  await expect(
+    page.getByRole("button", { name: DICT["common.retry"].en, exact: true }),
+    "the Retry affordance must still be offered",
+  ).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator("html"), "the reading is the ENGLISH default").toHaveAttribute("lang", "en");
+
+  // ATTRIBUTION: the refusal really did refetch, and that refetch really FAILED —
+  // so the survival above is about a completed FAILING reload.
+  expect(
+    failures(),
+    "a refused delete must still refetch the deletion check, and this stub must have failed it",
+  ).toBeGreaterThan(0);
+
+  console.log(
+    `t_8030247d evidence (delete refusal + failed refetch): alert="${shown}" | ` +
+      `load failure readable | retry offered | failed deletionChecks=${failures()} lang=en`,
+  );
+});
+
+test("a refused trash restore keeps its reason readable beside the load failure", async ({ page }) => {
+  test.setTimeout(120_000);
+  await openWorkspaceTab(page, BINNED);
+  const { refused } = await refuseThenFailTheRefetch(page, {
+    method: "POST",
+    path: /(.*)\/api\/workspaces\/[^/]+\/restore(\?.*)?$/,
+  });
+
+  // 1. The RESTORE is refused, so its sentence is in `trashErr` — on the Trash
+  //    section, where it is readable at this point in both the fixed and the
+  //    pre-fix code.
+  const restoreBtn = page
+    .locator("li", { hasText: "binned-shop" })
+    .first()
+    .getByRole("button", { name: DICT["ws.trashRestore"].en, exact: true });
+  await restoreBtn.click();
+  await expect.poll(() => refused.length, { timeout: 20_000 }).toBeGreaterThan(0);
+
+  // 2. A refused DELETE then fails its own refetch, which nulls `check` and takes
+  //    the whole page — Trash included — down to the load-failure card.
+  await submitDelete(page);
+  await expect(
+    page.getByRole("alert").filter({ hasText: DICT["ws.loadFail"].en }),
+    "the load failure must be reported",
+  ).toBeVisible({ timeout: 20_000 });
+
+  // THE CARD'S ACCEPTANCE (t_8030247d): the restore refusal the merchant was just
+  // shown is still readable in that failure state, beside the delete refusal.
+  const restoreRefusal = page.getByRole("alert").filter({ hasText: DICT["ws.trashRestoreFail"].en });
+  await expect(
+    restoreRefusal,
+    "the refused restore must stay readable beside the load failure",
+  ).toBeVisible({ timeout: 5_000 });
+  await expect(
+    page.getByRole("alert").filter({ hasText: DICT["ws.deleteFail"].en }),
+    "the delete refusal must stay readable too — one branch, two refusals",
+  ).toBeVisible({ timeout: 5_000 });
+  await page.waitForTimeout(1_000);
+  const kept = ((await restoreRefusal.first().textContent({ timeout: 5_000 }).catch(() => null)) ?? "").trim();
+  expect(kept).toContain(DICT["ws.trashRestoreFail"].en);
+  await expect(page.locator("html"), "the reading is the ENGLISH default").toHaveAttribute("lang", "en");
+
+  console.log(
+    `t_8030247d evidence (restore refusal + failed refetch): alert="${kept}" | ` +
+      `delete refusal readable | load failure readable | lang=en`,
+  );
+});

@@ -327,6 +327,22 @@ const HARNESSES: HarnessEntry[] = [
     d3ProbeNeedle: /BITEPROOF REFUSED: src\/app\/media\/\.no-such-page-probe\.tsx is missing/,
   },
   {
+    // Card t_8030247d. Backs the FIFTH refusal-survival guard
+    // (`web/e2e/workspace-trash.spec.ts`, the Settings → Workspace Danger zone) — the
+    // second surface of the class card t_d9dda884 fixed on /forms' Trash view, after
+    // the /products and /media bins (t_602c48f5, t_66270a9c). It rewrites
+    // src/components/WorkspaceTab.tsx and rebuilds the SAME worktree's .next, then
+    // drives the SAME webServer port as every other harness here — so it takes the
+    // family key rather than a per-script one: two of these in one worktree would
+    // rebuild over each other's app and drive one server between them.
+    label: "biteproof_workspace_danger_refusal.sh",
+    script: join(webRoot, "scripts", "biteproof_workspace_danger_refusal.sh"),
+    lockSubdir: FAMILY_LOCK_SUBDIR,
+    mutatesSharedInput: true,
+    d3ProbeEnv: { BITEPROOF_PAGE: "src/components/.no-such-page-probe.tsx" },
+    d3ProbeNeedle: /BITEPROOF REFUSED: src\/components\/\.no-such-page-probe\.tsx is missing/,
+  },
+  {
     label: "biteproof_mcp_tool_inventory.sh",
     script: join(webRoot, "scripts", "biteproof_mcp_tool_inventory.sh"),
     lockSubdir: FAMILY_LOCK_SUBDIR,

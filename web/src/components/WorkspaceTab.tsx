@@ -367,9 +367,43 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
   }
 
   if (!check) {
+    // t_8030247d — THE REFUSALS ARE READ HERE TOO.
+    //
+    // `load()`'s failure branch sets `check` to null and this early return IS the
+    // whole page, so the `await load()` that `doDelete()` fires after a refusal
+    // used to REPLACE the refusal with the load error: a merchant whose delete was
+    // refused and whose refetch then failed (a transient 5xx / offline) read why
+    // the CHECK failed and never why the DELETE did — the one sentence the action
+    // existed to deliver. The trash-RESTORE refusal lives on this same tab and is
+    // lost the same way: any later check reload that fails takes the Trash section,
+    // and with it `trashErr`, off the page.
+    //
+    // `deleteErr` and `trashErr` are channels no loader writes, which is what makes
+    // them still here to show BESIDE the failure. The rule from t_ab4aa85b is that
+    // a refusal stays readable until the user's next action, and "the refetch" is
+    // not conditional on that refetch succeeding.
+    //
+    // The load failure keeps its own line and the Retry below it: they say what
+    // THIS branch is about, and the refusal says what the user's own action was
+    // refused for. One is not a replacement for the other.
+    const refusals = [deleteErr, trashErr].filter((s) => s !== "");
     return (
       <section className="jf-card mt-6 p-6">
-        <p role="alert" className="text-sm text-red-600">
+        {refusals.map((msg, i) => (
+          <p
+            // Not keyed on `msg` alone: two refusals that ever read the same would
+            // collide on the key and React would drop one of the two sentences.
+            key={`${i}:${msg}`}
+            role="alert"
+            className={i === 0 ? "text-sm text-red-600" : "mt-2 text-sm text-red-600"}
+          >
+            {msg}
+          </p>
+        ))}
+        <p
+          role="alert"
+          className={refusals.length > 0 ? "mt-2 text-sm text-red-600" : "text-sm text-red-600"}
+        >
           {err || t("ws.loadFail")}
         </p>
         <button

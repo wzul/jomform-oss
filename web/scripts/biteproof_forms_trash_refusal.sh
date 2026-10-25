@@ -28,11 +28,11 @@
 # the red must land at a NAMED assertion — not at a crash or a failed build.
 #
 # A guard that only ever passes is a tautology, so the baseline is a real case
-# too: the unmutated tree must be GREEN (9 passed) or a red below could be the
+# too: the unmutated tree must be GREEN (11 passed) or a red below could be the
 # harness itself. The count is 5 in the forms spec (the two refusals, the two
-# transport legs, and t_d9dda884's failed-relist leg) and 4 in the workspace spec
-# (the two trash legs, the refusal-survival leg and t_fe8a5d78's
-# dialog-usable-again leg).
+# transport legs, and t_d9dda884's failed-relist leg) and 6 in the workspace spec
+# (the two trash legs, the refusal-survival leg, t_fe8a5d78's
+# dialog-usable-again leg and the two failed-refetch legs card t_8030247d added).
 #
 # Run:  bash web/scripts/biteproof_forms_trash_refusal.sh
 # Env:  A11Y_PORT (default 3413) — playwright.config.ts's webServer serves there.
@@ -190,12 +190,12 @@ run_case() {
   error_block="$(grep -E '^ +Error: |^ +expect\(|^ +Received|^ +Expected|^ +Locator:|^ +Timeout:|^ +Call log:|^ +at ' <<<"$out")"
   if [ "$want" = pass ]; then
     # An EXACT count, not "some passed": the unmutated tree has 5 tests in the
-    # forms spec (t_d9dda884 added the failed-relist leg) and 4 in the workspace
-    # spec (t_fe8a5d78 added the dialog-usable-again leg). A spec whose tests were
-    # deleted would print a smaller number, and that must not read as a green
-    # control.
-    if grep -qE "^ +9 passed" <<<"$out" && ! grep -qE "^ +[0-9]+ failed" <<<"$out"; then
-      grep -E "^ +9 passed" <<<"$out" | sort -u | head -1
+    # forms spec (t_d9dda884 added the failed-relist leg) and 6 in the workspace
+    # spec (t_fe8a5d78 added the dialog-usable-again leg, and t_8030247d the two
+    # failed-refetch legs). A spec whose tests were deleted would print a smaller
+    # number, and that must not read as a green control.
+    if grep -qE "^ +11 passed" <<<"$out" && ! grep -qE "^ +[0-9]+ failed" <<<"$out"; then
+      grep -E "^ +11 passed" <<<"$out" | sort -u | head -1
       echo "   OK (green control: the unmutated tree really passes these specs)"
     else
       echo "   BASELINE NOT GREEN — the specs are red on a tree with no defect, so no"
