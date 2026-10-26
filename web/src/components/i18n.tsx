@@ -9,6 +9,11 @@ import { usePathname } from "next/navigation";
 // in that module.
 import { isEnglishOnlyProsePath } from "../lib/proseSurfaces";
 
+// The endonyms below are written in their own language, so the element that
+// holds one must declare it (WCAG 3.1.2). The decision and its measurement live
+// in that module.
+import { endonymLangProps } from "../lib/endonymLang";
+
 // Issue #514: the dictionary data now lives in ./i18nDict.ts so the
 // locale-completeness guard in src/lib/i18n.test.ts can import it with the
 // repo's `npm run test:unit` runner — node --test executes TypeScript but
@@ -146,7 +151,11 @@ export const LANG_LABEL: Record<Lang, string> = {
   ar: "العربية",
 };
 
-const LANG_SHORT: Record<Lang, string> = {
+// The short labels the switchers render. Exported so the /mcp page and this
+// component cannot drift: /mcp used to carry a SECOND copy of these literals in
+// its own ternary chain, which is how it stayed undeclared after the shared
+// components were fixed. One list, every call site.
+export const LANG_SHORT: Record<Lang, string> = {
   en: "EN",
   ms: "BM",
   zh: "中文",
@@ -164,6 +173,9 @@ export function LangToggle() {
         <button
           key={l}
           onClick={() => setLang(l)}
+          // The endonym is written in its own language; 中文 on an English page
+          // is a language of parts, not English text (WCAG 3.1.2).
+          {...endonymLangProps(l)}
           title={LANG_LABEL[l]}
           className={`flex min-h-11 min-w-11 items-center justify-center px-2 text-xs font-medium transition-colors ${
             lang === l ? "bg-[var(--jf-primary)] text-white" : "bg-white text-[var(--jf-muted)]"
@@ -190,7 +202,9 @@ export function LangSelect() {
       className="min-h-11 max-w-[9.5rem] rounded-md border border-[var(--jf-border)] bg-white px-2 text-sm text-[var(--jf-text)]"
     >
       {LANGS_SHOWN.map((l) => (
-        <option key={l} value={l}>
+        // An <option> holds text only, so the declaration belongs on the option
+        // element itself — the same rule as the buttons above.
+        <option key={l} value={l} {...endonymLangProps(l)}>
           {LANG_SHORT[l]} · {LANG_LABEL[l]}
         </option>
       ))}

@@ -6,7 +6,8 @@
 // and troubleshooting. Reachable pre-login (no session guard).
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useI18n } from "../../components/i18n";
+import { useI18n, LANG_SHORT, LANGS_SHOWN } from "../../components/i18n";
+import { endonymLangProps } from "../../lib/endonymLang";
 
 const SERVER_URL = "https://mcp.jomform.com/mcp";
 
@@ -82,15 +83,19 @@ export default function McpPage() {
           {t("mcp.backHome")}
         </Link>
         <div className="flex overflow-hidden rounded-md border border-slate-200 text-xs">
-          {(["en", "ms", "zh", "ta", "ar"] as const).map((l) => (
+          {LANGS_SHOWN.map((l) => (
             <button
               key={l}
               onClick={() => setLang(l)}
+              // The endonym is written in its own language (中文 → zh, தமிழ் → ta,
+              // عربي → ar); without this the page's voice read it as English on
+              // /mcp (WCAG 3.1.2).
+              {...endonymLangProps(l)}
               className={`px-2 py-1 font-medium transition-colors ${
                 lang === l ? "bg-[var(--jf-primary)] text-white" : "bg-white text-slate-500"
               }`}
             >
-              {l === "en" ? "EN" : l === "ms" ? "BM" : l === "zh" ? "中文" : l === "ta" ? "தமிழ்" : "عربي"}
+              {LANG_SHORT[l]}
             </button>
           ))}
         </div>
