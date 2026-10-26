@@ -7,6 +7,7 @@ import { resolvePostLogin } from "../../lib/postLogin";
 import { browserNextTarget } from "../../lib/nextTarget";
 import { b64url, fromB64url } from "../../lib/webauthn";
 import { apiErr } from "../../lib/apiErr";
+import { rateLimitErr } from "../../lib/rateLimitErr";
 import { totpErr } from "../../lib/loginTotpErr";
 
 type Mode = "login" | "register" | "forgot" | "magic";
@@ -194,8 +195,16 @@ export default function Login() {
         // genuine failure (e.g. the 429 rate-limit, which comes back as plain
         // text, not JSON). Parse JSON when we can, otherwise surface a generic
         // error — never fall back to the success copy (issue #343).
+        //
+        // Card t_e50a9680: a 429 is answered with the window the server chose
+        // (`Retry-After`, relayed by the hop) before anything generic is tried,
+        // so "try again" comes with a when. The plain-text body is why this reads
+        // the STATUS as well as the body.
         const errBody = await r.json().catch(() => ({}));
-        setError(apiErr(errBody, t("login.genericError"), t));
+        setError(
+          rateLimitErr(r.status, r.headers.get("retry-after"), errBody, t) ||
+            apiErr(errBody, t("login.genericError"), t)
+        );
       }
       return;
     }
@@ -254,7 +263,14 @@ export default function Login() {
       setStep(2);
       return;
     }
-    setError(apiErr(d, t("login.genericError"), t));
+    // Card t_e50a9680: the login lockout answers 429 + `Retry-After: 900` with
+    // the class code `request.tooManyRequests`, which the dictionary does not map
+    // on its own — so the window is read off the response and named. Every other
+    // failure (a 401 `login.invalid` above all) is unchanged: `rateLimitErr`
+    // returns "" and this line is the pre-existing one.
+    setError(
+      rateLimitErr(r.status, r.headers.get("retry-after"), d, t) || apiErr(d, t("login.genericError"), t)
+    );
   }
 
   async function submitTotp(totpCode: string) {
@@ -292,7 +308,11 @@ export default function Login() {
     // where we know the password was already accepted: `totpErr` re-maps that one
     // code to "That code is invalid or expired. Request a new one." and leaves
     // every other code — and a non-JSON/unknown failure — on the generic sentence.
-    setError(totpErr(d, t));
+    //
+    // Card t_e50a9680: a 429 on this step is still a throttle refusal, and the
+    // window comes first — `rateLimitErr` answers "" for anything else, so the
+    // code sentence above is untouched.
+    setError(rateLimitErr(r.status, r.headers.get("retry-after"), d, t) || totpErr(d, t));
     setCode("");
     codeRef.current?.focus();
   }
@@ -319,7 +339,9 @@ export default function Login() {
       if (r.ok) {
         setEmailCodeSent(true);
       } else {
-        setError(t("login.genericError"));
+        // Card t_e50a9680: same 429 rule as the forms — the endpoint is
+        // per-IP limited, and a refusal that can name its window says so.
+        setError(rateLimitErr(r.status, r.headers.get("retry-after"), {}, t) || t("login.genericError"));
       }
     } catch {
       setError(t("login.genericError"));

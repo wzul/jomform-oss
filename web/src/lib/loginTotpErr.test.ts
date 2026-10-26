@@ -207,7 +207,12 @@ test("step 2 renders it and step 1 does NOT", () => {
   // Step 1 keeps the credential sentence: a bad PASSWORD must still read
   // "Email or password is incorrect." — the fix is about which step the user is
   // on, not about softening the credential refusal.
+  //
+  // Card t_e50a9680 put the 429 window IN FRONT of this line on step 1
+  // (`rateLimitErr(r.status, …) || apiErr(d, …)`), so the assertion is on the
+  // apiErr call itself — the sentence for everything that is not a throttle —
+  // rather than on the enclosing `setError(` statement.
   const step1 = functionBody(LOGIN_PAGE, "submit");
-  assert.match(step1, /setError\(apiErr\(d, t\("login\.genericError"\), t\)\)/, "step 1 no longer uses the shared dictionary sentence");
+  assert.match(step1, /\bapiErr\(d, t\("login\.genericError"\), t\)/, "step 1 no longer uses the shared dictionary sentence");
   assert.doesNotMatch(step1, /\btotpErr\(/, "step 1 was switched to the 2FA sentence");
 });

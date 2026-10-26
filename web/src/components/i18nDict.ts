@@ -818,6 +818,16 @@ export const DICT = {
   "apiErr.uploadSvgInvalid": { en: "That SVG is not valid XML, so it would not display. Remove any text before the <svg> tag (for example a /* */ banner) and upload it again.", ms: "SVG itu bukan XML yang sah, jadi ia tidak akan dipaparkan. Buang sebarang teks sebelum tag <svg> (contohnya banner /* */) dan muat naik semula.", zh: "该 SVG 不是有效的 XML，因此无法显示。请删除 <svg> 标签之前的任何文本（例如 /* */ 横幅）后重新上传。", ta: "அந்த SVG செல்லுபடியாகும் XML அல்ல, எனவே காட்சிப்படுத்தப்படாது. <svg> குறிச்சொல்லுக்கு முன் உள்ள உரையை (எ.கா. /* */ பேனர்) நீக்கி மீண்டும் பதிவேற்றவும்.", ar: "ملف SVG هذا ليس XML صالحًا، لذا لن يُعرض. احذف أي نص قبل وسم <svg> (مثل لافتة /* */) ثم ارفعه مرة أخرى." },
   "apiErr.certInvalid": { en: "The certificate or key is invalid — check the PEM format and that the key matches.", ms: "Sijil atau kunci tidak sah — semak format PEM dan padanan kunci.", zh: "证书或密钥无效——请检查 PEM 格式及密钥是否匹配。", ta: "சான்றிதழ் அல்லது விசை தவறானது — PEM வடிவமும் விசைப் பொருத்தமும் சரிபார்க்கவும்.", ar: "الشهادة أو المفتاح غير صالح — تحقق من تنسيق PEM ومن تطابق المفتاح." },
   "apiErr.rateLimited": { en: "Too many attempts. Please try again shortly.", ms: "Terlalu banyak percubaan. Sila cuba sebentar lagi.", zh: "尝试次数过多。请稍后再试。", ta: "அதிக முயற்சிகள். சிறிது நேரத்தில் மீண்டும் முயற்சிக்கவும்.", ar: "محاولات كثيرة جداً. يرجى المحاولة بعد قليل." },
+  // The throttle sentence WITH the window the server chose (card t_e50a9680).
+  // `apiErr.rateLimited` above stays the answer when the answer carries no
+  // usable `Retry-After` — a 429 that cannot name a wait still has to say
+  // something better than the page's generic failure line, and reusing that row
+  // rather than writing a second "too many attempts" sentence keeps one wording
+  // to maintain. These two are the same refusal with the number substituted;
+  // the unit is chosen by lib/rateLimitErr.ts (seconds under two minutes,
+  // rounded-up whole minutes above it, so "1 minute" can never render).
+  "apiErr.tooManyRequestsInMinutes": { en: "Too many attempts — try again in {minutes} minutes.", ms: "Terlalu banyak percubaan — cuba lagi dalam {minutes} minit.", zh: "尝试次数过多——请在 {minutes} 分钟后重试。", ta: "அதிக முயற்சிகள் — {minutes} நிமிடங்களில் மீண்டும் முயற்சிக்கவும்.", ar: "محاولات كثيرة جداً — حاول مرة أخرى خلال {minutes} دقيقة." },
+  "apiErr.tooManyRequestsInSeconds": { en: "Too many attempts — try again in {seconds} seconds.", ms: "Terlalu banyak percubaan — cuba lagi dalam {seconds} saat.", zh: "尝试次数过多——请在 {seconds} 秒后重试。", ta: "அதிக முயற்சிகள் — {seconds} வினாடிகளில் மீண்டும் முயற்சிக்கவும்.", ar: "محاولات كثيرة جداً — حاول مرة أخرى خلال {seconds} ثانية." },
   "apiErr.emailTaken": { en: "That email is already registered.", ms: "Emel itu sudah didaftarkan.", zh: "该邮箱已注册。", ta: "அந்த மின்னஞ்சல் ஏற்கனவே பதிவு செய்யப்பட்டுள்ளது.", ar: "هذا البريد مسجَّل بالفعل." },
   "apiErr.emailInvalid": { en: "That email address is not valid.", ms: "Alamat emel itu tidak sah.", zh: "该邮箱地址无效。", ta: "அந்த மின்னஞ்சல் முகவரி தவறானது.", ar: "عنوان البريد هذا غير صالح." },
   "apiErr.emailDomainUnreachable": { en: "That email domain does not accept mail.", ms: "Domain emel itu tidak menerima emel.", zh: "该邮箱域名不接收邮件。", ta: "அந்த மின்னஞ்சல் டொமைன் மின்னஞ்சலை ஏற்கவில்லை.", ar: "نطاق البريد هذا لا يستقبل الرسائل." },
