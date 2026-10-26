@@ -151,9 +151,15 @@
 #                         empty container list, the installer's idempotency
 #                         (two runs, one cron line) and the suite's own teardown
 #                         (no daemon, process, mount or scratch tree left). The
-#                         HOST daemon is read only to prove nothing outside the
-#                         sandbox was removed. Needs root + `dockerd` + busybox
-#                         (~25s). Its bite proof (jomform-container-prune_bite.sh)
+#                         HOST daemon is read to prove nothing outside the
+#                         sandbox was removed — ATTRIBUTED, not counted: the
+#                         daemon is shared, so a peer's rm/redeploy inside the
+#                         run's window is named FOREIGN and tolerated, while a
+#                         loss nothing accounts for fails NAMING the container.
+#                         Every run proves it by having a PEER PROCESS remove a
+#                         probe container it planted itself. Needs root +
+#                         `dockerd` + busybox
+#                         (~45s). Its bite proof (jomform-container-prune_bite.sh)
 #                         is deliberately NOT wired in — on-demand only.
 #   selftest   selfcheck  scripts/preflight_test.sh — the gate runner's OWN
 #                         safety properties: an all-skipped run is REFUSED
@@ -3075,12 +3081,28 @@ run prunesync "host pruner drift: the copy the cron RUNS must be the revision th
 # them to still exist at the end, and it requires the suite's own daemon,
 # processes, mounts and scratch tree to be gone. Needs root (a private dockerd
 # cannot run unprivileged) and the `dockerd` binary; it FAILS loudly without
-# them, it never skips. ~25s.
+# them, it never skips. ~45s.
+#
+# WHY THE HOST CHECK IS ATTRIBUTED (card `t_da7509c4`). That assertion used to be
+# a bare before/after count on a daemon SHARED with every lane and every compose
+# service, so any peer removing or re-creating a container inside the suite's own
+# ~40s window redded this gate with `FAIL no host container that existed before
+# this run is gone (want '0', got '1')` — naming nothing, on a tree with nothing
+# wrong, and because the runner stops at the first failure the rest of that run's
+# inventory was lost (measured on card `t_df1719c1`; reproduced deterministically
+# in 40s with a foreign `docker rm -f` mid-run). Each loss is now classified from
+# the host daemon's own `docker events` window plus this run's own removal log:
+# OURS (this run's audited path recorded the id — it only accepts ids it created,
+# so this is a real touch and FAILS), FOREIGN (a destroy event this run did not
+# issue — named with the container and the second, and NOT a failure of this
+# tree) or UNATTRIBUTED (neither — FAILS naming the container rather than counting
+# it). Every run exercises the live path: the suite plants two probe containers
+# on the host and a PEER PROCESS removes one mid-run.
 #
 # ITS BITE PROOF IS deploy/host/jomform-container-prune_bite.sh, ON DEMAND AND NOT
 # WIRED IN — the same convention as the `backup` gate's: it sabotages one gate of
 # the guard at a time in a throwaway copy, requires the suite to go RED on the
-# assertion naming that gate, and takes ~3 minutes (a decoy suite per case), which
+# assertion naming that gate, and takes ~12 minutes (a decoy suite per case), which
 # is how a per-merge gate gets skipped.
 prunehost_run() {
   bash "$REPO_ROOT/deploy/host/jomform-container-prune_test.sh"

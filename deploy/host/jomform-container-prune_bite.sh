@@ -100,6 +100,28 @@ sab_fail_closed()    { sub 'if [ -z "$raw" ]; then' 'if false; then'; }
 sab_netns_isolation() { sub 'exec unshare -n env \' 'exec env \'; }
 sab_installer_idem() { sub 'if [ "${have:-0}" -gt 0 ]; then' 'if false; then'; }
 
+# THE SHARED-DAEMON ATTRIBUTION (card `t_da7509c4`). The suite compares the host's
+# before/after container set and must ATTRIBUTE a loss — to this run, to another actor,
+# or to nobody it can name — instead of counting it. Both halves are sabotaged below,
+# because a classifier that never says FOREIGN reds the gate on a peer's redeploy (the
+# original false red) and one that never says OURS stops noticing a suite that really
+# did remove a host container.
+#
+# FOREIGN: the destroy-event lookup is replaced by "never found", so the probe a peer
+# removes mid-run becomes UNATTRIBUTABLE and the suite must go RED naming it. That is
+# the arm this suite runs on every invocation, so the case proves the live arm can
+# fail — the false red cannot come back without a red here first.
+sab_attribute_foreign() {
+  sub '$3=="destroy" && $4==id' '0'
+}
+
+# OURS: this run's own removal log is no longer consulted, so a container this run
+# removed would be excused as FOREIGN. Nothing in a quiet run exercises that branch,
+# so the classifier's own self-test is the instrument — and it must go RED.
+sab_attribute_ours() {
+  sub 'for c in ${HOST_OWN_REMOVED[@]+"${HOST_OWN_REMOVED[@]}"}; do' 'for c in ""; do'
+}
+
 # The guard's PRIVATE rm-output file (card `t_3d34df24`). The four-line block that
 # creates it is replaced wholesale in both cases below, because a hand-split anchor
 # across it is exactly the shape that silently matches nothing. Both anchors are one
@@ -239,6 +261,16 @@ bite "the INSTALLER's idempotency (the cron entry is added even when present)" \
      "$INSTALLER_FILE" \
      "two runs leave exactly ONE cron entry" \
      sab_installer_idem
+
+bite "the SHARED-DAEMON attribution, FOREIGN half (a peer's removal no longer attributed, so it becomes the old bare count)" \
+     "$SUITE_FILE" \
+     "removal CANNOT be attributed" \
+     sab_attribute_foreign
+
+bite "the SHARED-DAEMON attribution, OURS half (this run's own removals no longer recognised, so a real one would be excused)" \
+     "$SUITE_FILE" \
+     "self-test: an id this run's own audited path removed is OURS" \
+     sab_attribute_ours
 
 bite "the PRIVATE rm-output file (the fixed /tmp path restored, so a symlink planted there is followed)" \
      "$GUARD_FILE" \

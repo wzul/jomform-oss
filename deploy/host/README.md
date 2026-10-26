@@ -158,7 +158,7 @@ assume this guard covers them.
 ### The decoy suite — the `prunehost` gate
 
 ```bash
-bash deploy/host/jomform-container-prune_test.sh      # ~40s, 92 checks
+bash deploy/host/jomform-container-prune_test.sh      # ~45s, 104 checks
 ```
 
 It runs the guard against a **private Docker daemon of its own** — a second
@@ -183,9 +183,42 @@ through a delegating `mktemp` wrapper: a private path under the run's own `TMPDI
 regular, 0600, root-owned, and deleted before the guard exits), the installer arms,
 and — at the end — four assertions that the suite tore its own
 sandbox down (scratch tree gone, no private `dockerd`, no decoy process, no
-mount). The host daemon is read **only** to prove nothing outside the sandbox was
-removed: the host's container and image id sets are snapshotted first and
-compared last (`before ⊆ after`), and no decoy is ever visible on it.
+mount).
+
+**The host daemon is shared, so the host check is ATTRIBUTED, not counted.** The
+suite reads the host's container and image id sets before the run and compares
+them at the end — but a bare "nothing that existed is gone" comparison cannot
+survive a machine where every lane and every compose service also uses that
+daemon. Measured on card `t_df1719c1`'s full gate run: a peer re-created a
+container inside the suite's own window and the gate reported
+
+```
+FAIL no host container that existed before this run is gone (want '0', got '1')
+```
+
+— a bare count naming nothing, on a tree with nothing wrong, and the runner stops
+at the first failure so the rest of that run's inventory is lost. So each loss is
+now **attributed** from the host daemon's own `docker events` window plus this
+run's own removal log:
+
+| Verdict | Meaning |
+|---|---|
+| `OURS` | this run's audited removal path recorded the id — it only ever accepts a container this run created, so this means the suite really did touch the host, and it FAILS |
+| `FOREIGN` | a destroy/delete event this run did not issue — **named** with the container's name and the second it happened, and **not** a failure of this tree |
+| `UNATTRIBUTED` | neither — the run cannot say who did it, so it FAILS naming the container; a green there would be a measurement that did not happen |
+
+The suite reaches the host daemon through exactly one raw `docker` call site
+behind a read-only door (which refuses every destructive verb) plus three
+target-checked write helpers, and a self-check fails the run if a second raw call
+site appears — that is what makes "this run issued no other removal" a property
+of the file rather than a hope. It is exercised on **every** run: the suite plants
+two uniquely-named probe containers on the host daemon (created, never started,
+from an empty-rootfs image imported here — no pull, no network, no host image) and
+a **peer process** (`bash -c` calling the docker CLI directly, the shape of the
+redeploy that caused the red) removes one of them mid-run. That one must come back
+`FOREIGN` and named, with the control probe still present, or the suite goes red.
+Both probes and the probe image are removed in the teardown and asserted gone, so
+the host is left exactly as it was found.
 
 This is why the suite is safe to run on a busy host: the guard under test cannot
 see the host's containers at all, the one destructive pass it runs happens in
@@ -211,10 +244,10 @@ Requirements: **root** (a private `dockerd` cannot run unprivileged), the
 and no host image is borrowed), `unshare`/`nsenter` (util-linux), and a reachable
 host docker daemon. It fails loudly without them; it never skips.
 
-### The bite proof (on demand, ~5 minutes)
+### The bite proof (on demand, ~12 minutes)
 
 ```bash
-bash deploy/host/jomform-container-prune_bite.sh      # 10 sabotages, one behaviour each
+bash deploy/host/jomform-container-prune_bite.sh      # 12 sabotages, one behaviour each
 ```
 
 It copies the guard, the installer and the suite into a throwaway directory,
@@ -222,7 +255,11 @@ removes ONE gate or the installer's idempotency check in the copy, and requires
 the suite to go RED **on the assertion that names that gate** — baseline green
 first, every mutation verified to have landed and to still parse, and the three
 committed files' sha256 re-checked at the end. A red for an unrelated reason is
-not credited, and a green is printed as `DID NOT BITE`.
+not credited, and a green is printed as `DID NOT BITE`. Two of the twelve are
+aimed at the suite's own HOST-DAEMON attribution rather than at the guard: the
+destroy-event lookup disabled, so the peer's removal becomes unattributable and
+the suite must red NAMING the container, and this run's own removal ledger
+disabled, so the classifier can never say `OURS` and its own self-test reds.
 
 It is deliberately **not** a per-merge gate (each case costs a whole suite run),
 which is also why its row in `BITE-HARNESSES.md` says so; the register is checked

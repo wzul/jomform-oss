@@ -55,8 +55,10 @@
 # cannot run unprivileged — plus the `dockerd` binary, `busybox` (for a 1 MB
 # throwaway image, so no image has to be pulled or borrowed), `unshare` and
 # `nsenter` (util-linux: the namespace above, and the caller's bridge read
-# through it) and a reachable HOST docker daemon, which is read ONLY to prove
-# this run did not touch it.
+# through it) and a reachable HOST docker daemon. The host daemon is READ for the
+# before/after snapshots and the event window below, and written ONLY for this
+# run's own two probe containers and one empty-rootfs probe image, which are
+# removed again before the suite exits (see "the HOST daemon" below).
 #
 # Run:  bash deploy/host/jomform-container-prune_test.sh
 # Exit: 0 only if every assertion held; 1 = an assertion failed — including the
@@ -70,7 +72,43 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARD="${JF_PRUNE_SCRIPT:-$HERE/jomform-container-prune.sh}"
 INSTALLER="${JF_PRUNE_INSTALLER:-$HERE/install-host-container-prune.sh}"
 
-# The HOST daemon is read-only for this suite: two snapshots, compared at the end.
+# ================================================================ the HOST daemon
+# THE HOST DAEMON IS SHARED, so "this run touched nothing on it" has to be
+# ATTRIBUTED rather than counted. A bare before/after set comparison cannot say it:
+# measured 2026-10-16 on card `t_df1719c1`'s full gate run, a peer re-created a
+# container on this host inside the suite's own ~38s window and the suite printed
+#
+#     FAIL no host container that existed before this run is gone (want '0', got '1')
+#
+# — a bare count naming nothing, on a tree with nothing wrong, while the runner stops
+# at the first failure and loses the rest of that run's gate inventory. The removal
+# was reproducible in 40s with a `docker rm -f` from a different process (card
+# `t_da7509c4`).
+#
+# So the comparison has three verdicts, and only the third fails:
+#   OURS          this run's own audited removal path recorded the id -> the suite
+#                 really did touch the host (see host_own_remove).
+#   FOREIGN       the HOST daemon recorded a destroy for that id and this run
+#                 recorded no removal of it -> ANOTHER actor did it. NAMED with its
+#                 name and the second it happened, and NOT a failure of this tree.
+#   UNATTRIBUTED  neither. That is a fact about the WINDOW (daemon restarted, events
+#                 unreadable), not a green: it fails, naming the container, because a
+#                 run that cannot attribute a loss has not measured anything.
+#
+# WHAT MAKES "this run recorded no removal of it" SOUND: every call to the host
+# daemon goes through ONE docker primitive (`host_docker`). It is wrapped by a
+# read-only door (`host`, which refuses every destructive verb) and by three narrow
+# write helpers (`host_own_import`, `host_own_create`, `host_own_remove`), and
+# `host_own_remove` accepts ONLY an id this run created. A self-check counts the raw
+# call sites below and fails the run if a second one appears.
+#
+# AND THE VERDICTS ARE EXERCISED ON EVERY RUN, not merely believed: this run plants
+# two uniquely-named probe containers on the host daemon and a PEER PROCESS — a
+# separate `bash -c` calling the docker CLI directly, the exact shape of the
+# redeploy that caused the false red — removes one of them mid-run. The check below
+# must report that one FOREIGN and NAME it, find the control probe still present, and
+# find nothing unattributed, so a run whose attribution stops discriminating goes RED
+# instead of quietly passing.
 HOST_SOCK="${JF_PRUNE_BITE_HOST_SOCKET:-unix:///var/run/docker.sock}"
 
 DECOY="jf-prune-decoy"
@@ -211,7 +249,144 @@ host_d0_intact() {
 
 # ---------------------------------------------------------------- the sandbox
 priv() { docker --host "$PRIV_URL" "$@"; }
-host() { docker --host "$HOST_SOCK" "$@"; }
+
+# ------------------------------------------------- the HOST daemon: one door in
+HOST_CALLS_LOG=""       # every read-only host call + its epoch
+HOST_OWN_LOG=""         # every write this run makes to the host daemon
+HOST_OWN_CONTAINERS=()  # container ids this run created on the host
+HOST_OWN_REMOVED=()     # ids this run's own audited path removed
+HOST_OWN_IMAGE=""       # the tag this run imported
+HOST_OWN_IMAGE_ID=""
+HOST_EVENTS_LOG=""
+HOST_EVENTS_FROM=""
+
+# host_docker — THE one raw call site. Everything else in this file goes through it,
+# and the self-check in "the HOST daemon was not touched" fails the run if a second
+# one appears: the attribution below rests on "this run issued no other removal".
+host_docker() { docker --host "$HOST_SOCK" "$@"; }
+
+# host <args…> — the READ-ONLY door: logs the call, refuses every verb that could
+# change the daemon, then delegates. A refusal here is a bug in this file (a write
+# belongs in a target-checked host_own_* helper), so it is fatal, never ignored.
+host() {
+  if [ -n "$HOST_CALLS_LOG" ] && [ -d "${HOST_CALLS_LOG%/*}" ]; then
+    printf '%s|%s\n' "$(date +%s)" "$*" >>"$HOST_CALLS_LOG"
+  fi
+  case "${1:-}" in
+    rm|rmi|kill|stop|restart|pause|unpause|prune|create|run|start|import|load|\
+    tag|commit|build|push|update|exec|rename|cp|network|volume|system|compose|\
+    container|swarm|node|secret|config|plugin)
+      printf 'FATAL: the READ-ONLY host door was asked to run `docker %s`\n' "$*" >&2
+      printf '       This suite may only read the host daemon; a write belongs in a\n' >&2
+      printf '       target-checked host_own_* helper (see the file header).\n' >&2
+      exit 2 ;;
+  esac
+  host_docker "$@"
+}
+
+# host_own_import <tag> <tar-file> — an image for the probe containers. An EMPTY
+# rootfs built from a tar here, so the arm pulls nothing, needs no network and does
+# not depend on the host's own images. Sets HOST_OWN_IMAGE / HOST_OWN_IMAGE_ID.
+# (Deliberately NOT a `$( … )` call: the caller's state — the registry of what this
+# run owns, and therefore the cleanup and the OURS verdict — must live in THIS shell,
+# and a command substitution would throw it away.)
+host_own_import() {
+  local tag="$1" tar="$2" id
+  [ -n "$HOST_OWN_LOG" ] || { printf 'FATAL: host_own_import before the sandbox exists\n' >&2; exit 2; }
+  id="$(host_docker import - "$tag" <"$tar")" || return 1
+  HOST_OWN_IMAGE="$tag"
+  HOST_OWN_IMAGE_ID="$id"
+  printf '%s|import|%s|%s\n' "$(date +%s)" "$id" "$tag" >>"$HOST_OWN_LOG"
+}
+
+# host_own_create <name> <out-var> — a container this run OWNS on the host daemon
+# (created, never started: no process, no network, no disk worth naming). Sets
+# <out-var> to its id, again in THIS shell, for the same reason.
+host_own_create() {
+  local name="$1" outvar="$2" id
+  id="$(host_docker create --name "$name" "$HOST_OWN_IMAGE_ID" true)" || return 1
+  HOST_OWN_CONTAINERS+=("$id")
+  printf -v "$outvar" '%s' "$id"
+  printf '%s|create|%s|%s\n' "$(date +%s)" "$id" "$name" >>"$HOST_OWN_LOG"
+}
+
+# host_own_remove <id> — the ONLY way this run may remove a host container, and it
+# refuses anything this run did not create. That refusal is what makes OURS mean
+# "this suite did it": no other id can ever be reached through this door.
+host_own_remove() {
+  local id="$1" c owned=0
+  for c in ${HOST_OWN_CONTAINERS[@]+"${HOST_OWN_CONTAINERS[@]}"}; do
+    [ "$c" = "$id" ] && owned=1
+  done
+  if [ "$owned" != 1 ]; then
+    printf 'FATAL: host_own_remove(%s) — this run did not create that container; refusing\n' "$id" >&2
+    exit 2
+  fi
+  host_docker rm -f "$id" >/dev/null 2>&1 || return 1
+  HOST_OWN_REMOVED+=("$id")
+  printf '%s|rm|%s|\n' "$(date +%s)" "$id" >>"$HOST_OWN_LOG"
+}
+
+# host_own_cleanup — idempotent, and the only place the probes' end state is
+# decided. Called from priv_stop, i.e. also when the run dies early, so a failed run
+# cannot leave a container or an image behind on the host.
+host_own_cleanup() {
+  local id
+  for id in ${HOST_OWN_CONTAINERS[@]+"${HOST_OWN_CONTAINERS[@]}"}; do
+    host_own_remove "$id" || true
+  done
+  HOST_OWN_CONTAINERS=()
+  if [ -n "$HOST_OWN_IMAGE" ]; then
+    host_docker rmi -f "$HOST_OWN_IMAGE" >/dev/null 2>&1 || true
+    if [ -n "$HOST_OWN_LOG" ] && [ -d "${HOST_OWN_LOG%/*}" ]; then
+      printf '%s|rmi|%s|%s\n' "$(date +%s)" "$HOST_OWN_IMAGE_ID" "$HOST_OWN_IMAGE" >>"$HOST_OWN_LOG"
+    fi
+    HOST_OWN_IMAGE=""
+    HOST_OWN_IMAGE_ID=""
+  fi
+  return 0
+}
+
+# attribution_of_container <id> — OURS | FOREIGN | UNATTRIBUTED (see the header).
+attribution_of_container() {
+  local id="$1" c
+  for c in ${HOST_OWN_REMOVED[@]+"${HOST_OWN_REMOVED[@]}"}; do
+    if [ "$c" = "$id" ]; then printf 'OURS'; return 0; fi
+  done
+  if awk -F'|' -v id="$id" '$2=="container" && $3=="destroy" && $4==id {n++} END{exit !n}' \
+       "$HOST_EVENTS_LOG" 2>/dev/null; then
+    printf 'FOREIGN'
+  else
+    printf 'UNATTRIBUTED'
+  fi
+}
+
+# attribution_of_image <id> — same verdicts for an image (delete/untag).
+attribution_of_image() {
+  local id="$1"
+  if awk -F'|' -v id="$id" '$2=="image" && ($3=="delete" || $3=="untag") && $4==id {n++} END{exit !n}' \
+       "$HOST_EVENTS_LOG" 2>/dev/null; then
+    printf 'FOREIGN'
+  else
+    printf 'UNATTRIBUTED'
+  fi
+}
+
+# host_event_time <id> — the epoch of the destroy/delete event for that id, so a
+# failure (or a FOREIGN note) names WHEN it happened.
+host_event_time() {
+  awk -F'|' -v id="$1" '$4==id && ($3=="destroy" || $3=="delete" || $3=="untag") {print $1; exit}' \
+    "$HOST_EVENTS_LOG" 2>/dev/null
+}
+
+# window_state — what the attribution had to work with, for a message that tells the
+# reader whether the LOSS or the MEASUREMENT is the problem.
+window_state() {
+  local n
+  n="$(grep -c . "$HOST_EVENTS_LOG" 2>/dev/null || true)"
+  printf 'event window: %s line(s), host daemon id %s -> %s' \
+    "${n:-0}" "${HOST_ID_BEFORE:-?}" "${HOST_ID_AFTER:-?}"
+}
 
 # Drop the scratch tree, retrying briefly: the overlay mounts of a just-removed
 # container are released asynchronously, and a single `rm -rf` can catch one
@@ -259,6 +434,11 @@ release_mounts() {
 }
 
 priv_stop() {
+  # THE HOST PROBES FIRST, and unconditionally: they are the only objects this
+  # suite ever wrote to the shared daemon, so they go even when the run died before
+  # the attribution ran. Target-checked (host_own_remove refuses an id this run did
+  # not create), and idempotent.
+  host_own_cleanup
   # Remove the decoys BEFORE the daemon goes: a container left behind belongs to
   # containerd, not to the daemon object, so tearing the daemon down first can
   # leave its process running for the rest of its `sleep`.
@@ -290,11 +470,23 @@ priv_stop() {
 trap 'priv_stop' EXIT
 trap 'priv_stop; exit 130' INT TERM HUP
 
-priv_start() {
+# sandbox_init — the scratch tree and the two host logs. Split out of priv_start
+# because the HOST section runs before the private daemon is started and needs a place
+# to keep its logs (and the probe containers are created before the before-snapshot).
+sandbox_init() {
   SB="$(mktemp -d "${TMPDIR:-/tmp}/jf-prune-bite.XXXXXX")"
   PRIV="$SB/docker.sock"
   PRIV_URL="unix://$PRIV"
   mkdir -p "$SB/root" "$SB/rootfs" "$SB/tmp"
+  HOST_CALLS_LOG="$SB/host-calls.log"
+  HOST_OWN_LOG="$SB/host-own.log"
+  HOST_EVENTS_LOG="$SB/host-events.log"
+  : >"$HOST_CALLS_LOG"
+  : >"$HOST_OWN_LOG"
+}
+
+priv_start() {
+  [ -n "$SB" ] || sandbox_init
   dockerd \
     --data-root "$SB/root" \
     --exec-root "$SB/exec" \
@@ -424,11 +616,54 @@ bash -n "$INSTALLER" || fatal "$INSTALLER is not valid bash"
 command -v dockerd >/dev/null 2>&1 || fatal "dockerd not on PATH — the private daemon cannot be started"
 host info >/dev/null 2>&1 || fatal "the HOST docker daemon is unreachable ($HOST_SOCK) — 'nothing else was touched' could not be proven without it"
 
-# The host's own container and image sets, so the claim "this suite removed
-# nothing outside its sandbox" is a measurement. Peers may ADD during the run;
-# losing one of these would be the failure.
-HOST_CONTAINERS_BEFORE="$(host ps -a -q | sort)"
-HOST_IMAGES_BEFORE="$(host images -q | sort)"
+# The host's own container and image sets, so the claim "this suite removed nothing
+# outside its sandbox" is a measurement. Peers may ADD during the run; losing one of
+# these is what the attribution below has to explain. Read with --no-trunc: the CLI
+# truncates ids in its own output, and the event stream reports them in full, so a
+# truncated snapshot would never match an event.
+say ""
+say "== the HOST daemon: the before-snapshot, and the shared-daemon attribution arm =="
+sandbox_init
+HOST_ID_BEFORE="$(host info --format '{{.ID}}')"
+# 1. The event window opens BEFORE the snapshot, so nothing that happens inside the
+#    window can land before it. (The query is made at the END of the run, over this
+#    window: one process fewer to leak, and no reliance on a stream staying alive.)
+HOST_EVENTS_FROM="$(date -u -d '@'$(( $(date +%s) - 2 )) +%Y-%m-%dT%H:%M:%SZ)"
+# 2. This run's OWN probe containers on the host daemon. The image is an EMPTY rootfs
+#    imported from a tar built here — no pull, no network, no dependency on the host's
+#    own images — and the containers are created, never started: no process, no
+#    network, nothing but a name and a few bytes. They are removed in priv_stop.
+tar -cf "$SB/hostprobe.tar" --files-from /dev/null \
+  || fatal "could not build the empty-rootfs tar for the host probe image"
+PEER_PROBE="jf-prune-peerprobe-$$"
+CONTROL_PROBE="jf-prune-controlprobe-$$"
+host_own_import "jf-prune-probe:${SB##*/}" "$SB/hostprobe.tar" \
+  || fatal "could not import the probe image into the HOST daemon — the shared-daemon arm cannot run"
+host_own_create "$PEER_PROBE" PEER_ID \
+  || fatal "could not plant '$PEER_PROBE' on the HOST daemon"
+host_own_create "$CONTROL_PROBE" CONTROL_ID \
+  || fatal "could not plant '$CONTROL_PROBE' on the HOST daemon"
+# 3. The before-snapshot, ids and names, taken AFTER the probes exist: the probes are
+#    part of "existed before this run" exactly like every other container on the host.
+host ps -a -q --no-trunc | sort >"$SB/host-before-ids.txt"
+host ps -a --no-trunc --format '{{.ID}}|{{.Names}}' | sort >"$SB/host-before-names.txt"
+host images -q --no-trunc | sort >"$SB/host-images-before.txt"
+eq "$(grep -c -x -e "$PEER_ID" -e "$CONTROL_ID" "$SB/host-before-ids.txt" || true)" "2" \
+  "both probe containers are in the before-snapshot (so the arm measures the same set the assertion does)"
+# 4. THE PEER. A separate process — a plain `bash -c` calling the docker CLI directly,
+#    which is exactly the shape of the redeploy that produced the false red — removes
+#    the peer probe mid-run. It is NOT this run's audited removal path, so this run's
+#    own log cannot contain it: the attribution has to name it FOREIGN from the host
+#    daemon's own event stream.
+PEER_DELAY=6
+(
+  bash -c 'sleep "$1"; exec docker --host "$2" rm -f "$3"' _ "$PEER_DELAY" "$HOST_SOCK" "$PEER_PROBE" \
+    >/dev/null 2>&1
+  printf '%s\n' "$?" >"$SB/peer.rc"
+) &
+PEER_PID=$!
+say "peer: a separate process removes '$PEER_PROBE' in ${PEER_DELAY}s, mid-run — the shared-daemon"
+say "      interference this suite must attribute rather than blame on the tree"
 
 say ""
 say "== this run's own namespace: the decoy docker0 the private daemon will delete =="
@@ -719,11 +954,108 @@ eq "$(priv ps -a --format '{{.Names}}' | grep -cv "^$DECOY-" || true)" "0" \
 
 # ------------------------------------------------------- the host was not touched
 say ""
-say "== the HOST daemon was not touched =="
-lost_containers="$(comm -23 <(printf '%s\n' "$HOST_CONTAINERS_BEFORE") <(host ps -a -q | sort) | grep -c . || true)"
-lost_images="$(comm -23 <(printf '%s\n' "$HOST_IMAGES_BEFORE") <(host images -q | sort) | grep -c . || true)"
-eq "$lost_containers" "0" "no host container that existed before this run is gone"
-eq "$lost_images" "0" "no host image that existed before this run is gone"
+say "== the HOST daemon was not touched (ATTRIBUTED, not counted) =="
+# The peer long since fired; waiting here is what makes the arm deterministic rather
+# than a race with the rest of the suite.
+if [ -n "${PEER_PID:-}" ]; then wait "$PEER_PID" 2>/dev/null || true; fi
+peer_rc="$(cat "$SB/peer.rc" 2>/dev/null || echo missing)"
+eq "$peer_rc" "0" "the PEER process really removed its probe container on the HOST daemon (rc=$peer_rc)"
+
+host ps -a -q --no-trunc | sort >"$SB/host-after-ids.txt"
+host images -q --no-trunc | sort >"$SB/host-images-after.txt"
+HOST_ID_AFTER="$(host info --format '{{.ID}}')"
+# The event window, over the whole run. `--until` two seconds ahead so a destroy that
+# lands while this line is being composed is still inside it; the daemon's per-action
+# filters keep the answer to what is needed for attribution (a busy host emits an
+# `exec_*` event per health check, which is none of this suite's business).
+HOST_EVENTS_UNTIL="$(date -u -d '@'$(( $(date +%s) + 2 )) +%Y-%m-%dT%H:%M:%SZ)"
+host events --since "$HOST_EVENTS_FROM" --until "$HOST_EVENTS_UNTIL" \
+  --filter type=container --filter type=image \
+  --filter event=destroy --filter event=delete --filter event=untag \
+  --format '{{.Time}}|{{.Type}}|{{.Action}}|{{.Actor.ID}}|{{.Actor.Attributes.name}}' \
+  >"$HOST_EVENTS_LOG" 2>&1 || true
+say "window: $HOST_EVENTS_FROM .. $HOST_EVENTS_UNTIL; $(grep -c . "$HOST_EVENTS_LOG" || true) event line(s)"
+
+# THE SELF-CHECK the attribution rests on: one raw call site, and the read-only door
+# never issued a destructive verb (it refuses them, so this is a tripwire on the file
+# rather than a hope about the run).
+raw_host_sites="$(grep -cE '(^|[^a-zA-Z_])docker[[:space:]]+--host[[:space:]]+"\$HOST_SOCK"' "${BASH_SOURCE[0]}")"
+eq "$raw_host_sites" "1" \
+  "this suite reaches the HOST daemon through exactly ONE raw call site (host_docker), so 'this run issued no other removal' is a property of the file"
+eq "$(grep -cE '\|(rm|rmi|kill|stop|restart|prune|create|run|start|import|load|tag|commit|build|push)( |$)' "$HOST_CALLS_LOG" || true)" "0" \
+  "the READ-ONLY door issued no destructive host command during this run (every host call is logged, and the door refuses those verbs)"
+eq "$(grep -c '^[0-9]*|rm|' "$HOST_OWN_LOG" || true)" "0" \
+  "this run's own audited removal path removed NO host container before the attribution was computed (its probes are taken down after it)"
+
+# THE INSTRUMENT, before it is believed: the three verdicts against a fixture, so a
+# classifier that stops distinguishing them is caught even on a host where nothing at
+# all was lost (the live arm below only ever exercises FOREIGN).
+FIXTURE="$SB/host-attribution-fixture"
+FIX_PEER="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+FIX_OWN="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+FIX_NONE="dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+printf '1000|container|destroy|%s|fixture-peer\n' "$FIX_PEER" >"$FIXTURE.events"
+eq "$(HOST_EVENTS_LOG="$FIXTURE.events" HOST_OWN_REMOVED='' attribution_of_container "$FIX_PEER")" "FOREIGN" \
+   "classifier self-test: a destroy event with no removal by this run is FOREIGN (another actor did it)"
+eq "$(HOST_EVENTS_LOG="$FIXTURE.events" HOST_OWN_REMOVED="$FIX_OWN" attribution_of_container "$FIX_OWN")" "OURS" \
+   "classifier self-test: an id this run's own audited path removed is OURS (not FOREIGN, whatever else the window says)"
+eq "$(HOST_EVENTS_LOG="$FIXTURE.events" HOST_OWN_REMOVED='' attribution_of_container "$FIX_NONE")" "UNATTRIBUTED" \
+   "classifier self-test: a loss with neither an event nor a removal of this run's is UNATTRIBUTED — the shape that fails"
+
+# ---- containers: every loss is attributed, one check each, and the failing shape
+# NAMES the container and says what happened to it. The bare "(want '0', got '1')" this
+# replaces is what made a reader chase the prod prune guard instead of the shared
+# daemon (card `t_da7509c4`).
+comm -23 "$SB/host-before-ids.txt" "$SB/host-after-ids.txt" >"$SB/host-lost.txt"
+: >"$SB/host-attribution.txt"
+while IFS= read -r cid; do
+  [ -n "$cid" ] || continue
+  cname="$(awk -F'|' -v id="$cid" '$1==id {print $2; exit}' "$SB/host-before-names.txt")"
+  [ -n "$cname" ] || cname="(name not in the before-snapshot)"
+  cshort="${cid:0:12}"
+  cev="$(host_event_time "$cid")"
+  when="unknown"
+  if [ -n "$cev" ]; then when="$(date -u -d "@$cev" +%H:%M:%SZ 2>/dev/null || printf '%s' "$cev")"; fi
+  case "$(attribution_of_container "$cid")" in
+    OURS)
+      printf 'OURS|%s|%s\n' "$cid" "$cname" >>"$SB/host-attribution.txt"
+      bad "host container '$cname' ($cshort) existed before this run and was removed by THIS RUN's own audited removal path at $when — the suite touched the host" ;;
+    FOREIGN)
+      printf 'FOREIGN|%s|%s|%s\n' "$cid" "$cname" "$when" >>"$SB/host-attribution.txt"
+      ok "host container '$cname' ($cshort) was removed at $when by ANOTHER actor on the shared daemon — FOREIGN, not this tree's failure (this run recorded no removal of it)" ;;
+    *)
+      printf 'UNATTRIBUTED|%s|%s\n' "$cid" "$cname" >>"$SB/host-attribution.txt"
+      bad "host container '$cname' ($cshort) existed before this run and is GONE, and its removal CANNOT be attributed: this run recorded no removal of it and the HOST daemon recorded no destroy event for it — the loss is not this tree's, but the window cannot say who did it ($(window_state))" ;;
+  esac
+done <"$SB/host-lost.txt"
+# THE ARM ITSELF, asserted rather than assumed: the probe the peer removed must be
+# classified FOREIGN and NAMED, and the control probe (which no peer touched) must
+# still be there — so the diff is specific, not "everything that is missing is
+# someone else's".
+eq "$(awk -F'|' -v id="$PEER_ID" '$1=="FOREIGN" && $2==id {n++} END{print n+0}' "$SB/host-attribution.txt")" "1" \
+  "the probe container the PEER removed mid-run is attributed FOREIGN and NAMED — the shared-daemon false red is measured on every run"
+eq "$(host ps -a -q --no-trunc | grep -c -x "$CONTROL_ID" || true)" "1" \
+  "the control probe container (which no peer touched) is still on the host daemon"
+
+# ---- images: same three verdicts. A peer's `docker image prune` or a redeploy that
+# rebuilds is the same shared-daemon shape, and it used to red the same bare count.
+comm -23 "$SB/host-images-before.txt" "$SB/host-images-after.txt" >"$SB/host-images-lost.txt"
+while IFS= read -r iid; do
+  [ -n "$iid" ] || continue
+  ishort="$(printf '%s' "$iid" | sed 's/^sha256://' | cut -c1-12)"
+  iat="$(host_event_time "$iid")"
+  iwhen="unknown"
+  if [ -n "$iat" ]; then iwhen="$(date -u -d "@$iat" +%H:%M:%SZ 2>/dev/null || printf '%s' "$iat")"; fi
+  case "$(attribution_of_image "$iid")" in
+    FOREIGN)
+      ok "host image $ishort was deleted at $iwhen by ANOTHER actor on the shared daemon — FOREIGN, not this tree's failure (this run recorded no deletion of it)" ;;
+    *)
+      bad "host image $ishort existed before this run and is GONE, and its deletion CANNOT be attributed: this run recorded no deletion of it and the HOST daemon recorded no delete event for it ($(window_state))" ;;
+  esac
+done <"$SB/host-images-lost.txt"
+eq "$(host images -q --no-trunc | grep -c -x "$HOST_OWN_IMAGE_ID" || true)" "1" \
+  "the probe image this run imported is still in the host daemon (this run deleted nothing there before this check)"
+
 eq "$(host ps -a --format '{{.Names}}' | grep -c "^$DECOY-" || true)" "0" "no decoy ever existed on the host daemon"
 # The bridge, at the END of the run as well: this is the caller's view of the whole
 # suite, which is what the next lane's `docker run --network bridge` needs. (The
@@ -856,6 +1188,10 @@ SCRATCH="$SB"
 SOCKET_MARK="$PRIV"
 priv_stop
 eq "$(test -e "$SCRATCH" && echo present || echo gone)" "gone" "the private daemon's scratch tree was removed"
+eq "$(host ps -a --format '{{.Names}}' | grep -c -x -e "$PEER_PROBE" -e "$CONTROL_PROBE" || true)" "0" \
+   "neither probe container is left behind on the HOST daemon (this run put back what it planted)"
+eq "$(host images --format '{{.Repository}}:{{.Tag}}' | grep -c -x "jf-prune-probe:${SCRATCH##*/}" || true)" "0" \
+   "the probe image is gone from the HOST daemon"
 eq "$(pgrep -f "dockerd .*$SOCKET_MARK" >/dev/null 2>&1 && echo alive || echo gone)" "gone" "no private dockerd was left running"
 eq "$(pgrep -f "sleep $SLEEP_SECS" >/dev/null 2>&1 && echo alive || echo gone)" "gone" "no decoy process was left running"
 eq "$(mount | grep -c "$SCRATCH" || true)" "0" "no overlay/netns mount from this run is left behind"
