@@ -35,6 +35,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { Markdown, parseInline, parseMarkdown, __withScanProbe } from "../components/Markdown.ts";
+// The repo's shared comment/JSX-text-aware blanker: the three PAGES below are read
+// through it, because this test makes positive claims about a render site and a
+// `//` line naming `<Markdown` satisfied them (t_9b40f272 — see the proof at the
+// bottom of this file).
+import { codeOnly } from "./jsxSource.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
@@ -822,9 +827,14 @@ test("both chat bubbles get their own tone, so code stays legible on each", () =
 });
 
 test("the chat page, /feedback and the /admin triage all use this one renderer", () => {
-  const chat = read("../app/chat/page.tsx");
-  const feedback = read("../app/feedback/page.tsx");
-  const admin = read("../app/admin/page.tsx");
+  // Comments blanked (t_9b40f272): the claims below are about what the page
+  // RENDERS, and a call site moved into a `//` line or a JSX comment used to
+  // satisfy them. Measured on main 81946afc: the chat bubble's `<Markdown …/>`
+  // replaced by the raw `{m.content}` this test exists to prevent, the call site
+  // left verbatim in a JSX comment, kept this file GREEN (27 pass / 0 fail).
+  const chat = codeOnly(read("../app/chat/page.tsx"));
+  const feedback = codeOnly(read("../app/feedback/page.tsx"));
+  const admin = codeOnly(read("../app/admin/page.tsx"));
   for (const [name, src] of [
     ["chat/page.tsx", chat],
     ["feedback/page.tsx", feedback],
@@ -851,6 +861,39 @@ test("the chat page, /feedback and the /admin triage all use this one renderer",
   assert.match(admin, /<Markdown[\s\S]{0,200}?text=\{m\.body\}/, "the admin triage body does not render through Markdown");
   // Exactly one renderer in the tree: a second copy is how the two surfaces drift.
   assert.match(feedback, /components\/Markdown/, "the feedback page does not import the shared component");
+});
+
+// ── THE SAME CLAIM, AGAINST THE COMMENT HOLE (t_9b40f272) ────────────────────
+//
+// A guard satisfied by its own comment is satisfied by nothing. The proof drives the
+// IDENTICAL pattern the test above uses, over the real page with the chat bubble
+// reverted to the shape that shipped the defect: the raw `{m.content}` rendered, the
+// `<Markdown …/>` call site left verbatim in a JSX comment. Both halves are asserted
+// — the RAW source still satisfies the pattern (so this is the hole, not a deletion)
+// and the comment-blanked source does not.
+test("BITES: a commented-out <Markdown/> call cannot satisfy the shared-renderer guard", () => {
+  const RENDERS_MARKDOWN = /<Markdown[\s\S]{0,200}?text=\{m\.content\}/;
+  const shipped = read("../app/chat/page.tsx");
+  assert.ok(
+    RENDERS_MARKDOWN.test(codeOnly(shipped)),
+    "the shipped chat page does not satisfy the pattern this proof mutates — re-anchor it",
+  );
+
+  const SITE = '<Markdown text={m.content} variant={m.role === "user" ? "user" : "assistant"} />';
+  assert.ok(shipped.includes(SITE), "the chat bubble's Markdown call moved — re-anchor this proof");
+  const mutated = shipped.replace(
+    SITE,
+    '{m.content}{/* <Markdown text={m.content} variant={m.role === "user" ? "user" : "assistant"} /> */}',
+  );
+  assert.ok(
+    RENDERS_MARKDOWN.test(mutated),
+    "the mutation removed the call instead of commenting it out — it would measure a deletion",
+  );
+  assert.ok(
+    !RENDERS_MARKDOWN.test(codeOnly(mutated)),
+    "the guard is still satisfied with the bubble rendering raw text and the call site left in a " +
+      "comment — the reported defect (literal ** on screen) would ship green",
+  );
 });
 
 test("the prompt tells the model the subset the renderer supports (the renderer pins the result)", () => {

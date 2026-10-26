@@ -110,7 +110,21 @@ function walkRunLoadFiles(dir: string, base: string = dir): string[] {
   return out.sort();
 }
 
-const page = read("../app/chat/page.tsx");
+// THE CHAT PAGE IS READ THROUGH `codeOnly` (t_9b40f272), not as raw bytes.
+//
+// This const is the ONE reader of app/chat/page.tsx in this file, and a dozen
+// tests make POSITIVE claims about what the user reads off it. Read raw, a
+// `//` line or a `{/* … */}` JSX comment satisfied those claims: measured on
+// main 81946afc, `page.includes("chat.refused")` ("a refused tool call is shown,
+// not swallowed") was passing on a COMMENT alone — the rendered block calls
+// refusalHeading()/refusalText() and never names the key — so the refusal's
+// wording could stop being rendered while every unit gate stayed green (measured
+// on this tree: 998 tests, 998 pass, 0 fail). `codeOnly` is the repo's shared, JSX-text-aware blanker
+// (lib/jsxSource.ts); it keeps every byte offset, so the `slice` readers below
+// are unaffected, and it is the same reader the docs-page tests use since
+// t_629da97d.
+const CHAT_PAGE = "../app/chat/page.tsx";
+const page = codeOnly(read(CHAT_PAGE));
 const shell = read("../components/Shell.tsx");
 const docsNav = read("../app/docs/layout.tsx");
 const DOCS_PAGE = "../app/docs/chat/page.tsx";
@@ -1955,15 +1969,143 @@ test("a filed feedback is announced in the transcript with a link to /feedback",
   );
 });
 
+// ── THE REFUSAL BLOCK, READ AS THE USER READS IT (t_9b40f272) ────────────────
+//
+// WHAT WAS WRONG. The test below read the page's RAW bytes and asked
+// `page.includes("chat.refused")`. That key left the page when t_7f1694cb moved
+// the block's heading into lib/chatRefusal.ts, so on main 81946afc the string was
+// on the page ONLY inside the comment above the block: the assertion was answered
+// by a comment, and a comment proves nothing about what renders. Measured on main
+// by this card (the real page mutated in place, restored by sha256): the rendered
+// line replaced by a hard-coded English literal with the call site left in a
+// `{/* … */}` comment kept the file GREEN (47 pass / 0 fail across both refusal
+// files) and the WHOLE unit suite GREEN (998 tests, 998 pass, 0 fail). Deleting
+// the rendered call outright was GREEN too: the comment above the block names the
+// key, so the old pin could not see a deletion either.
+//
+// WHAT IT PINS INSTEAD. The block must RENDER its words: the heading and each
+// refused step's why have to reach JSX, not merely be computed. The rule is a pure
+// function over the source, so the BITES test below drives the IDENTICAL reader.
+
+/**
+ * Problems with the transcript's refusal block, as sentences.
+ *
+ * `src` is the page's raw source; the rule blanks comments itself, so a call site
+ * left behind in a `//` line or wrapped in a JSX comment cannot stand in for a
+ * rendered one.
+ */
+function refusedBlockProblems(src: string): string[] {
+  const out: string[] = [];
+  const code = codeOnly(src);
+  // The block is only reachable if the wire's refused steps are separated out.
+  if (!/"refused"/.test(code)) {
+    out.push("the page no longer separates refused steps from successful ones");
+  }
+  // The transcript's refusal block: `{msgs.map(… m.refused ? ( … ) : null)}`.
+  const at = code.indexOf("m.refused ?");
+  const end = at === -1 ? -1 : code.indexOf(") : null,", at);
+  if (at === -1 || end === -1) {
+    out.push(
+      "the transcript has no refusal block (`m.refused ? … : null`) — a refused step would be " +
+        "swallowed and the user would read it as a broken answer",
+    );
+    return out;
+  }
+  const block = code.slice(at, end);
+  out.push(
+    ...renderedCallProblems(block, "refusalHeading(", "the block's heading is never rendered"),
+    ...renderedCallProblems(block, "refusalText(", "a refused step's why is never rendered"),
+  );
+  return out;
+}
+
+/**
+ * Problems with `block`'s rendering of the call `call` (written with its paren, so
+ * `refusalText(` does not also match the import line). Rendered means the result
+ * reaches JSX: inline (`{refusalText(…)`) or through a binding that is then
+ * interpolated (`const why = refusalText(…); … ${why} …`), which is the shape the
+ * page has. A call whose result is never interpolated is COMPUTED AND DROPPED —
+ * the same defect class as the availability probe's message (t_57a77d02 above):
+ * the tool name renders and the reason does not.
+ */
+function renderedCallProblems(block: string, call: string, what: string): string[] {
+  const esc = call.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`\\{\\s*${esc}`).test(block)) return [];
+  for (const m of block.matchAll(new RegExp(`(?:const|let)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*${esc}`, "g"))) {
+    const id = m[1].replace(/\$/g, "\\$");
+    if (new RegExp(`\\$\\{\\s*${id}\\s*\\}|\\{\\s*${id}\\s*\\}`).test(block)) return [];
+  }
+  return [
+    `${what} — ${call}…) is called but its result never reaches the block's JSX, so the user ` +
+      `reads a bare tool name`,
+  ];
+}
+
 test("a refused tool call is shown, not swallowed", () => {
-  assert.match(
-    page,
-    /"refused"/,
-    "the page no longer separates refused steps from successful ones",
+  const problems = refusedBlockProblems(read(CHAT_PAGE));
+  assert.deepEqual(problems, [], `the refusal block no longer renders:\n  - ${problems.join("\n  - ")}`);
+});
+
+// ── THE BITES: what this guard refuses, run through the guard's OWN rule ────
+//
+// The three mutations are the shapes the pre-fix read could not see. Each one is
+// asserted on BOTH halves — the mutated source still carries the text (so a
+// deletion cannot pass as evidence for this hole) and nothing the reader keeps
+// carries it — and then the rule above is asked for its verdict. A regression to a
+// raw `read()` or a `page.includes(...)` pin reds this test, not just a harness.
+test("BITES: a commented-out or dropped refusal site cannot satisfy the refusal guard", () => {
+  const shipped = read(CHAT_PAGE);
+  // Vacuity: the shipped page satisfies the shipped rule, or a red below could be
+  // the reader's fault rather than this proof's mutation.
+  assert.deepEqual(refusedBlockProblems(shipped), [], "the shipped page does not satisfy the refusal rule");
+
+  const HEADING = "{refusalHeading(m.refused, t)}";
+  const WHY_RENDER = '{why ? ` — ${why}` : ""}';
+  assert.ok(
+    shipped.includes(HEADING) && shipped.includes(WHY_RENDER),
+    "the refusal block's call sites moved — re-anchor this proof (heading / why render)",
+  );
+
+  // m1 — the heading's rendered result replaced by a literal, the call site left
+  //      verbatim in a JSX comment. This is the measured 845/845-green mutation.
+  const m1 = shipped.replace(
+    HEADING,
+    '{"That action is not allowed here."}{/* refusalHeading(m.refused, t) */}',
   );
   assert.ok(
-    page.includes("chat.refused"),
-    "a refusal has no message — the user would read a silent refusal as a broken answer",
+    m1.includes("refusalHeading(m.refused, t)"),
+    "m1 deleted the call instead of commenting it out — it would measure a deletion, not this hole",
+  );
+  assert.ok(!codeOnly(m1).includes("refusalHeading("), "m1 still RENDERS the heading — nothing was moved");
+  assert.ok(
+    refusedBlockProblems(m1).length > 0,
+    "the refusal guard stays GREEN with the rendered heading replaced by a literal and the call site " +
+      "left in a comment — a user would read one fixed English sentence in all five locales",
+  );
+
+  // m2 — the why computed and then DROPPED: `refusalText` is still called, the step
+  //      renders the tool name alone. The comment hole's sibling (t_57a77d02's class).
+  const m2 = shipped.replace(WHY_RENDER, "");
+  assert.ok(
+    m2.includes("const why = refusalText(s, t);"),
+    "m2 removed the why's computation too — it would measure a deletion, not a dropped result",
+  );
+  assert.ok(!codeOnly(m2).includes("${why}"), "m2 still interpolates why");
+  assert.ok(
+    refusedBlockProblems(m2).length > 0,
+    "the refusal guard stays GREEN when it no longer interpolates the why — a refusal would render a " +
+      "bare tool name and no reason",
+  );
+
+  // m3 — the why's interpolation moved into a comment, its text left behind so a
+  //      raw read still sees `{why}`.
+  const m3 = shipped.replace(WHY_RENDER, '{""}{/* why ? ` — ${why}` : "" */}');
+  assert.ok(m3.includes("{/* why ?"), "m3 deleted the interpolation instead of commenting it out");
+  assert.ok(!codeOnly(m3).includes("${why}"), "m3 still RENDERS the why");
+  assert.ok(
+    refusedBlockProblems(m3).length > 0,
+    "the refusal guard stays GREEN with the why's interpolation moved into a comment — the raw read " +
+      "this card replaced was satisfied by exactly that",
   );
 });
 

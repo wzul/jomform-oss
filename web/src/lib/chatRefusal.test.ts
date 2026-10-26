@@ -41,10 +41,15 @@ import { fileURLToPath } from "node:url";
 
 import { DICT, LANGS } from "../components/i18nDict.ts";
 import { refusalHeading, refusalText, type RefusedStep } from "./chatRefusal.ts";
+// The repo's shared comment/JSX-text-aware blanker: the page below is read through
+// it so a call site left in a comment cannot satisfy the vacuity anchor that says
+// this guard is looking at a page that renders a refusal at all (t_9b40f272).
+import { codeOnly } from "./jsxSource.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
-const page = read("../app/chat/page.tsx");
+const pageSrc = read("../app/chat/page.tsx");
+const page = codeOnly(pageSrc);
 const goChat = read("../../../api/internal/chat/chat.go");
 const chatRefusal = read("./chatRefusal.ts");
 
@@ -66,13 +71,27 @@ function refusalKeysInGo(src: string): string[] {
   return [...new Set([...src.matchAll(/"(chat\.refused\.[A-Za-z0-9_.]+)"/g)].map((m) => m[1]))];
 }
 
+/**
+ * True when `src` — the chat page's RAW source — still renders a refusal at all:
+ * the transcript's block asks lib/chatRefusal for both its heading and its why.
+ *
+ * The anchor below is only meaningful if a COMMENT cannot satisfy it (t_9b40f272),
+ * so the two needles are looked for in `codeOnly(src)`: a call site moved into a
+ * `//` line or a JSX comment disappears from it, while the calls the page actually
+ * makes stay. Extracted so the BITES proof further down drives THIS reader.
+ */
+function pageRendersRefusal(src: string): boolean {
+  const code = codeOnly(src);
+  return code.includes("refusalText(") && code.includes("refusalHeading(");
+}
+
 test("the guard is looking at the real files (it cannot pass vacuously)", () => {
   assert.ok(
     goChat.includes("func (r *Runner) Run(") && goChat.includes("keyRefusedWriteTool"),
     "api/internal/chat/chat.go is not the file this guard means to judge",
   );
   assert.ok(
-    page.includes("refusalText(") && page.includes("refusalHeading("),
+    pageRendersRefusal(pageSrc),
     "app/chat/page.tsx is not the chat page, or it no longer renders a refusal through " +
       "lib/chatRefusal — this guard would then judge nothing",
   );
@@ -89,6 +108,50 @@ test("the guard is looking at the real files (it cannot pass vacuously)", () => 
     keys.length >= 6,
     `extracted only ${keys.length} chat.refused.* key(s) from the Go source — the extractor has ` +
       `drifted from the key literals, so the completeness check below would be judging nothing`,
+  );
+});
+
+// ── THE ANCHOR'S OWN BITE (t_9b40f272) ───────────────────────────────────────
+//
+// The anchor above is a VACUITY check: "this guard is looking at a page that
+// renders a refusal". Read as raw bytes it was satisfied by a comment — measured
+// on main 81946afc, `page.includes("refusalText(")` stayed true with the rendered
+// call replaced by a literal and its call site left in a `{/* … */}` comment, and
+// the whole unit suite (998 tests on this tree) stayed green. The proof drives the IDENTICAL
+// reader over the same two mutations, asserting both halves of each: the name is
+// still in the raw source, and nothing the page renders carries it.
+test("BITES: a commented-out refusal call cannot satisfy the vacuity anchor", () => {
+  assert.ok(pageRendersRefusal(pageSrc), "the shipped page does not satisfy the anchor this proof mutates");
+
+  const HEADING = "{refusalHeading(m.refused, t)}";
+  const WHY = "const why = refusalText(s, t);";
+  assert.ok(
+    pageSrc.includes(HEADING) && pageSrc.includes(WHY),
+    "the refusal block's call sites moved — re-anchor this proof (heading / why)",
+  );
+
+  // m1 — the heading rendered as a literal, its call site left verbatim in a comment.
+  const m1 = pageSrc.replace(
+    HEADING,
+    '{"That action is not allowed here."}{/* refusalHeading(m.refused, t) */}',
+  );
+  assert.ok(
+    m1.includes("refusalHeading(m.refused, t)"),
+    "m1 deleted the call instead of commenting it out — it would measure a deletion, not this hole",
+  );
+  assert.ok(
+    !pageRendersRefusal(m1),
+    "the anchor is still satisfied with the rendered heading replaced by a literal and its call site " +
+      "left in a comment — it would be certifying a page that renders no refusal of its own",
+  );
+
+  // m2 — the why's call moved into a comment, its text left behind.
+  const m2 = pageSrc.replace(WHY, 'const why = t("chat.refused");{/* refusalText(s, t) */}');
+  assert.ok(m2.includes("refusalText(s, t)"), "m2 deleted the call instead of commenting it out");
+  assert.ok(
+    !pageRendersRefusal(m2),
+    "the anchor is still satisfied with the why's only call site commented out — a raw read sees the " +
+      "name and the page renders a constant",
   );
 });
 
