@@ -36,6 +36,9 @@ package urlguard
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -793,20 +796,106 @@ func TestTraefikWildcardExcludesStaticallyRoutedHosts(t *testing.T) {
 // the reserved-name refusal is enforced INSIDE the shared rule, so a caller that
 // reaches the rule inherits it instead of each transport restating the list.
 //
-// Its limits, stated rather than implied: it proves the rule file NAMES
-// urlguard.ReservedSubdomain, and it reads source, so it cannot tell the call from
-// a sentence about one — the behaviour behind it (a reserved label is refused,
-// with the shared wording, before the shape leg) is asserted in
-// dbstore/workspace_slug_reserved_sentinel_test.go. Which files CALL the rule is
-// not this test's subject; see the section comment above.
+// HOW IT READS (card t_b0f76a19). It used to read the rule file as TEXT and look
+// for "urlguard.ReservedSubdomain(", so a COMMENT satisfied it — measured with
+// the leg disabled and its call text left behind in a comment: the rule built
+// clean (`go build ./...` RC=0) and this test stayed GREEN. It now PARSES the
+// rule with comments dropped (`parser.ParseFile(..., 0)`) and requires the CALL
+// inside ValidateWorkspaceSlug's own body, resolving the package from the rule
+// file's import of THIS package — so renaming the import is not read as drift
+// while some other package's ReservedSubdomain is not accepted as this one.
+//
+// Its remaining limits, stated rather than implied: it proves the call EXISTS
+// inside the rule, not that the refusal behaves correctly (a reserved label
+// refused with the shared wording, before the shape leg, is asserted in
+// dbstore/workspace_slug_reserved_sentinel_test.go); and a call reached through a
+// variable that holds this function (`f := urlguard.ReservedSubdomain`) is not a
+// qualified CallExpr and would not be seen. Which files CALL the rule is not
+// this test's subject; see the section comment above.
 func TestTheOneRuleConsumesThisList(t *testing.T) {
 	root := repoRoot(t)
 	rule := filepath.Join("api", "internal", "dbstore", "workspace_slug.go")
 	src := mustReadFile(t, filepath.Join(root, rule))
-	if !strings.Contains(src, "urlguard.ReservedSubdomain(") {
-		t.Errorf("%s does not call urlguard.ReservedSubdomain — the reserved-name "+
-			"rule has drifted into a second (or missing) implementation there", rule)
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filepath.Join(root, rule), src, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v — this guard cannot run without it", rule, err)
 	}
+
+	var names []string
+	for _, imp := range file.Imports {
+		p, perr := strconv.Unquote(imp.Path.Value)
+		if perr != nil || p != thisPackagePath {
+			continue
+		}
+		if imp.Name != nil {
+			names = append(names, imp.Name.Name)
+			continue
+		}
+		names = append(names, "urlguard")
+	}
+	if len(names) == 0 {
+		t.Fatalf("%s no longer imports %s — the reserved-name rule has left the one rule, "+
+			"and this guard would otherwise be checking nothing", rule, thisPackagePath)
+	}
+
+	body := funcBodyNamed(file, "ValidateWorkspaceSlug")
+	if body == nil {
+		t.Fatalf("no `func ValidateWorkspaceSlug` in %s — the guard's anchor moved", rule)
+	}
+	if !callsQualified(body, names, "ReservedSubdomain") {
+		t.Errorf("%s does not CALL urlguard.ReservedSubdomain inside ValidateWorkspaceSlug "+
+			"(parsed with comments dropped, so a comment naming the call does not count) — the "+
+			"reserved-name rule has drifted into a second (or missing) implementation there", rule)
+	}
+}
+
+// thisPackagePath is the import path a rule must use to reach this package's
+// list. Matching the PATH rather than the identifier "urlguard" means an aliased
+// import is a legitimate rename, not drift.
+const thisPackagePath = "github.com/wzul/jomform/api/internal/urlguard"
+
+// funcBodyNamed returns the body of the top-level func called name, or nil when
+// there is none — a nil is a failure at the call site, never a pass.
+func funcBodyNamed(file *ast.File, name string) *ast.BlockStmt {
+	for _, d := range file.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name != nil && fn.Name.Name == name {
+			return fn.Body
+		}
+	}
+	return nil
+}
+
+// callsQualified reports whether node contains a CALL to <one of pkg>.<fn>.
+// Comments are absent from a parsed tree, so text describing the call is never a
+// call.
+func callsQualified(node ast.Node, pkg []string, fn string) bool {
+	found := false
+	ast.Inspect(node, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil || sel.Sel.Name != fn {
+			return true
+		}
+		id, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		for _, name := range pkg {
+			if id.Name == name {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 // TestTheRuleAndTransportsHoldNoCopyOfTheReservedList is the tripwire for the

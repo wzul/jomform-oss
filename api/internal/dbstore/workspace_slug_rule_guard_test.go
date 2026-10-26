@@ -60,6 +60,22 @@ package dbstore
 //     `len(s) <= 2`) is still not a match on this line — a source pattern
 //     cannot bound every spelling, and the behavioural tests are what catch a
 //     rule that is wrong rather than duplicated.
+//  4. The RESERVED leg is read the same way as the caller half (card
+//     t_b0f76a19). Both of its checks used to be substring reads over the rule
+//     file, so a COMMENT satisfied them, inside a file whose own header argues
+//     that comments must not be able to satisfy a check. Measured before this
+//     change: with the leg disabled and its call text left in a comment
+//     (`// PROBE: urlguard.ReservedSubdomain(slug) used to be refused here.`
+//     followed by `if false {`) the rule built clean (`go build ./...` RC=0)
+//     and TestTheReservedLegLivesInTheOneRule,
+//     TestTheReservedLegRunsBeforeTheShapeRule and urlguard's
+//     TestTheOneRuleConsumesThisList all stayed GREEN. They now parse the rule
+//     with go/parser, comments dropped, and require a `urlguard.ReservedSubdomain`
+//     CALL inside ValidateWorkspaceSlug's own body — and, for the order check, a
+//     shape condition in the same parsed body — so a sentence can no longer
+//     stand in for either leg. The behavioural suite is still what keeps a wrong
+//     rule from shipping; this file's job is to keep a SECOND copy, or a
+//     silently-missing leg, from being reported green.
 
 import (
 	"fmt"
@@ -71,6 +87,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -221,20 +238,39 @@ func TestWorkspaceSlugRuleHasExactlyOneDefinition(t *testing.T) {
 // re-implements it — which is how a name ends up claimable on one surface and
 // refused on another. With the leg in the rule, every caller inherits it, and
 // "did we forget the reserved list on this path?" stops being a question.
+//
+// HOW IT READS (card t_b0f76a19). This used to be a substring read of the rule
+// file, so the CALL did not have to exist — a comment spelling it was enough
+// (see the header's point 4 for the measurement). It now parses the rule with
+// comments dropped and requires a real CallExpr inside ValidateWorkspaceSlug's
+// own body, which is the same reason the caller half above uses go/parser. The
+// package is resolved from the file's IMPORTS, so renaming the import is not
+// drift while some other package's ReservedSubdomain is not accepted here.
 func TestTheReservedLegLivesInTheOneRule(t *testing.T) {
-	src := readAPIFile(t, slugRuleFile)
-	if !strings.Contains(src, "urlguard.ReservedSubdomain(") {
-		t.Fatalf("%s does not consult urlguard.ReservedSubdomain — the reserved-name refusal is "+
-			"enforced somewhere else, so a caller that does not restate it accepts a name JomForm "+
-			"owns", slugRuleFile)
+	file, _ := parseAPIFile(t, slugRuleFile)
+	pkg := urlguardPkgNames(t, file, slugRuleFile)
+	rule := funcDeclByName(t, file, slugRuleFile, "ValidateWorkspaceSlug")
+
+	if sites := importedCallSites(rule.Body, pkg, "ReservedSubdomain"); len(sites) == 0 {
+		t.Fatalf("%s does not CALL urlguard.ReservedSubdomain inside ValidateWorkspaceSlug "+
+			"(parsed with comments dropped, so a comment naming the call does not count) — the "+
+			"reserved-name refusal is enforced somewhere else, so a caller that does not restate it "+
+			"accepts a name JomForm owns. Call sites found in total: %d.", slugRuleFile,
+			len(importedCallSites(file, pkg, "ReservedSubdomain")))
 	}
-	// The refusal must be the SHARED wording, not a second sentence.
-	if !strings.Contains(src, "urlguard.ReservedSubdomainMessage(") {
-		t.Errorf("%s refuses a reserved label without urlguard.ReservedSubdomainMessage — a second "+
-			"wording is a second rule, and the transports return whatever the rule says", slugRuleFile)
+	// The refusal must be the SHARED wording, not a second sentence. This half is
+	// FILE-scoped on purpose: the wording call lives in reservedSlugRefusal.Error,
+	// not in the rule's body, and the class sentinel the transports match is what
+	// the rule returns.
+	if len(importedCallSites(file, pkg, "ReservedSubdomainMessage")) == 0 {
+		t.Errorf("%s refuses a reserved label without CALLING urlguard.ReservedSubdomainMessage — "+
+			"a second wording is a second rule, and the transports return whatever the rule says",
+			slugRuleFile)
 	}
 	// The list itself must stay private: two things to keep in step is the
-	// defect, not the fix.
+	// defect, not the fix. Deliberately a RAW read that any mention fails: this is
+	// the one check where a comment mentioning the name IS the thing to catch,
+	// because a pasted copy starts as one.
 	for _, rel := range append([]string{slugRuleFile}, slugRuleCallers...) {
 		if strings.Contains(readAPIFile(t, rel), "reservedSubdomains") {
 			t.Errorf("%s refers to the package-private reserved list directly — the list must stay "+
@@ -248,29 +284,25 @@ func TestTheReservedLegLivesInTheOneRule(t *testing.T) {
 // minimum, so if the length leg ran first the caller would be told their input
 // was malformed and would retry a variation of the same sensitive name instead
 // of learning the name is JomForm's. Policy refusal beats shape refusal.
+//
+// Both sides of the comparison come from the PARSED body (card t_b0f76a19), not
+// from strings.Index over the raw file: a commented-out copy of either leg used
+// to move the comparison without moving the code — and a commented-out reserved
+// leg satisfied this test entirely.
 func TestTheReservedLegRunsBeforeTheShapeRule(t *testing.T) {
-	src := readAPIFile(t, slugRuleFile)
-	start := strings.Index(src, "func ValidateWorkspaceSlug(")
-	if start < 0 {
-		t.Fatalf("ValidateWorkspaceSlug is not in %s — the guard's anchor moved", slugRuleFile)
-	}
-	body := src[start:]
-	end := strings.Index(body, "\n}\n")
-	if end < 0 {
-		t.Fatalf("could not find the end of ValidateWorkspaceSlug in %s", slugRuleFile)
-	}
-	body = body[:end]
+	file, fset := parseAPIFile(t, slugRuleFile)
+	pkg := urlguardPkgNames(t, file, slugRuleFile)
+	rule := funcDeclByName(t, file, slugRuleFile, "ValidateWorkspaceSlug")
 
-	reservedAt := strings.Index(body, "urlguard.ReservedSubdomain(")
-	shapeLoc := slugShapeRuleRe.FindStringIndex(body)
-	shapeAt := -1
-	if shapeLoc != nil {
-		shapeAt = shapeLoc[0]
+	reserved := importedCallSites(rule.Body, pkg, "ReservedSubdomain")
+	shape := slugShapeCondSites(rule.Body)
+	if len(reserved) == 0 || len(shape) == 0 {
+		t.Fatalf("ValidateWorkspaceSlug no longer contains both legs in its parsed body "+
+			"(reserved calls: %d, shape conditions: %d) — this guard would otherwise pass on a "+
+			"function that checks neither", len(reserved), len(shape))
 	}
-	if reservedAt < 0 || shapeAt < 0 {
-		t.Fatalf("ValidateWorkspaceSlug no longer contains both legs (reserved at %d, shape at %d) "+
-			"— this guard would otherwise pass on a function that checks neither", reservedAt, shapeAt)
-	}
+	reservedAt := fset.Position(reserved[0]).Offset
+	shapeAt := fset.Position(shape[0]).Offset
 	if reservedAt > shapeAt {
 		t.Errorf("ValidateWorkspaceSlug checks the shape rule before the reserved list. A reserved " +
 			"label shorter than the minimum (\"s3\") would then be reported as malformed input, and the " +
@@ -497,6 +529,149 @@ func sortedCopy(in []string) []string {
 	out := append([]string(nil), in...)
 	sort.Strings(out)
 	return out
+}
+
+// urlguardImportPath is the package whose reserved-name leg the rule must
+// consult. It is resolved from the rule file's IMPORTS rather than matched as
+// the literal selector `urlguard.…`, so renaming the import is not reported as
+// drift while a call to some other package's ReservedSubdomain is not accepted
+// as this one.
+const urlguardImportPath = "github.com/wzul/jomform/api/internal/urlguard"
+
+// parseAPIFile parses a file by its api/-relative path with NO comments
+// (`parser.ParseFile(..., 0)`), so a sentence describing a call can neither
+// satisfy a check built on the result nor break one.
+func parseAPIFile(t *testing.T, rel string) (*ast.File, *token.FileSet) {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, rel, readAPIFile(t, rel), 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v — this guard cannot run without it", rel, err)
+	}
+	return file, fset
+}
+
+// urlguardPkgNames returns the local names file uses for urlguard — the default
+// name unless it is imported under an alias. An empty result is a FAILURE, not
+// an empty check: without the import the reserved leg cannot be in this file,
+// and a guard that then inspected nothing would pass on a file that lost it.
+func urlguardPkgNames(t *testing.T, file *ast.File, rel string) map[string]bool {
+	t.Helper()
+	names := map[string]bool{}
+	for _, imp := range file.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || path != urlguardImportPath {
+			continue
+		}
+		if imp.Name != nil {
+			names[imp.Name.Name] = true
+			continue
+		}
+		names["urlguard"] = true
+	}
+	if len(names) == 0 {
+		t.Fatalf("%s does not import %s — the reserved-name leg has left the rule, and this guard "+
+			"would otherwise be checking nothing", rel, urlguardImportPath)
+	}
+	return names
+}
+
+// funcDeclByName returns the top-level func declaration called name, failing
+// when it is absent or bodiless: a guard whose subject moved must say so,
+// never pass by looking at the rest of the file.
+func funcDeclByName(t *testing.T, file *ast.File, rel, name string) *ast.FuncDecl {
+	t.Helper()
+	for _, d := range file.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if ok && fn.Name != nil && fn.Name.Name == name && fn.Body != nil {
+			return fn
+		}
+	}
+	t.Fatalf("no `func %s` definition in %s — the guard's anchor moved, and a guard checked "+
+		"against the wrong file proves nothing. Fix the anchor if the rule deliberately moved.",
+		name, rel)
+	return nil
+}
+
+// importedCallSites returns the position of every CALL to pkg.fn inside node
+// (a whole file or a single function body). pkg holds the local names the
+// imported package is bound to, so an aliased import still counts. Comments are
+// absent from the parsed tree, so text describing a call is never a call.
+func importedCallSites(node ast.Node, pkg map[string]bool, fn string) []token.Pos {
+	var sites []token.Pos
+	ast.Inspect(node, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil || sel.Sel.Name != fn {
+			return true
+		}
+		if id, ok := sel.X.(*ast.Ident); ok && pkg[id.Name] {
+			sites = append(sites, call.Pos())
+		}
+		return true
+	})
+	return sites
+}
+
+// slugShapeCondSites returns the position of every expression inside node that
+// restates the shape rule's BOUNDS as one conjunction: `len(<ident>) < 3 ||
+// len(<ident>) > 40`. It matches the AST, so a commented or quoted copy is not
+// a match — the same limit the tree-wide slugShapeRuleRe carries applies to the
+// bounds themselves: another ARRANGEMENT (`len(s) > 40 || len(s) < 3`,
+// `len(s) <= 2`) is a different expression and is not matched here either.
+func slugShapeCondSites(node ast.Node) []token.Pos {
+	var sites []token.Pos
+	ast.Inspect(node, func(n ast.Node) bool {
+		if e, ok := n.(ast.Expr); ok && isSlugShapeCond(e) {
+			sites = append(sites, e.Pos())
+		}
+		return true
+	})
+	return sites
+}
+
+// isSlugShapeCond reports whether e is `len(<ident>) < 3 || len(<ident>) > 40`,
+// with parentheses allowed around either comparison.
+func isSlugShapeCond(e ast.Expr) bool {
+	lor, ok := stripParens(e).(*ast.BinaryExpr)
+	if !ok || lor.Op != token.LOR {
+		return false
+	}
+	return isLenBound(lor.X, token.LSS, "3") && isLenBound(lor.Y, token.GTR, "40")
+}
+
+// isLenBound reports whether e is `len(<ident>) <op> <n>`.
+func isLenBound(e ast.Expr, op token.Token, n string) bool {
+	cmp, ok := stripParens(e).(*ast.BinaryExpr)
+	if !ok || cmp.Op != op {
+		return false
+	}
+	call, ok := stripParens(cmp.X).(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return false
+	}
+	if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "len" {
+		return false
+	}
+	if _, ok := stripParens(call.Args[0]).(*ast.Ident); !ok {
+		return false
+	}
+	lit, ok := stripParens(cmp.Y).(*ast.BasicLit)
+	return ok && lit.Kind == token.INT && lit.Value == n
+}
+
+// unparen strips any number of parentheses from e.
+func stripParens(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
 }
 
 // readAPIFile reads a file by its api/-relative path, failing (never skipping)
