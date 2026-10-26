@@ -48,6 +48,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 import { DICT } from "../src/components/i18nDict";
+import { OPERATOR_KEY, operatorParts } from "../src/lib/operator";
 
 // The two English-only prose trees, as the routes a reader really lands on.
 // /docs/embed and /legal/privacy are the two the card measured; /docs (the
@@ -68,7 +69,7 @@ const PROSE_ROUTES: { path: string; english: string }[] = [
 const TRANSLATED_ROUTES = ["/landing", "/mcp"];
 
 /** A FRESH browser state, with the language this case means (or none at all). */
-async function freshState(page: Page, lang: "ar" | "en" | null) {
+async function freshState(page: Page, lang: "ar" | "zh" | "en" | null) {
   await page.addInitScript((l) => {
     try {
       localStorage.clear();
@@ -232,12 +233,13 @@ test.describe("the document declaration matches the prose (WCAG 3.1.1)", () => {
 // reader pronounces it with an English voice. Only /docs is affected: every other
 // prose route renders 0 Arabic elements, and its chrome is static English.
 //
-// SCOPE: this sweep runs on /docs only, because the /docs index is the surface
-// this card fixes (its chrome is the only translated one). It is deliberately NOT
-// pointed at /legal: a sweep over those two routes fails today for an unrelated
-// reason — the operator sentence (`components/OperatorNotice.tsx`) is rendered in
-// the visitor's locale inside a document PR 1201 pins to English — which is filed
-// and fixed separately as t_b13ee0cc, not here.
+// SCOPE: this sweep runs on /docs because the /docs index is where this card's
+// fix lives (its chrome is the only translated one). /legal is judged by the
+// sibling block BELOW — card t_b13ee0cc — which fixes the one thing on those two
+// pages that was rendered in the visitor's locale inside a document PR 1201 pins
+// to English: the operator sentence. Pointing THIS sweep at /legal without that
+// fix reds on that single component (measured: 2 elements per page, both the
+// footer sentence), which is what made the defect visible in the first place.
 //
 // WHY A DOM ASSERTION AND NOT AN axe PAGE. axe does not flag this class at all —
 // it has no rule for "text in another language inside a correctly declared
@@ -360,6 +362,188 @@ test.describe("a translated label declares its own language (WCAG 3.1.2)", () =>
         heading.map((l) => l.lang),
         "an English label must add no lang of its own — the document already declares English",
       ).toEqual(heading.map(() => null));
+    });
+  }
+});
+
+// ══ the operator sentence declares its own language (card t_b13ee0cc) ══════
+//
+// The same class as the /docs chrome labels above, on the two pages that sweep
+// deliberately left out: /legal/privacy and /legal/terms.
+//
+// THE DEFECT, measured on a local production build of main with `jf_lang=ar` and
+// filed from card t_0e2d71f4 (which found it and could not fix it there): both
+// pages read `lang="en"` / `dir="ltr"` — PR 1201 pins the legal prose to English,
+// correctly — while their footer carried the operator sentence in ARABIC,
+// swapped in by the client after mount (`components/OperatorNotice.tsx` reads the
+// visitor's locale from `useI18n()` on purpose, so all three surfaces follow it).
+// Nothing declared that sentence's language: 2 elements per page held Arabic and
+// resolved, through the nearest `lang`, to the document's "en". WCAG 3.1.2
+// (Language of Parts), and a screen reader reads "يُدار JomForm …" with an
+// English voice.
+//
+// WHY THE PAGE LOOKS CLEAN BEFORE HYDRATION: the legal pages are static server
+// components, so the server render is the English sentence and the provider
+// swaps it on mount. A reading taken before hydration sees 0 Arabic elements and
+// certifies the defect as absent — which is exactly how the premise in
+// t_0e2d71f4's body ("/legal/privacy, /legal/terms: 0 Arabic elements") was
+// formed. Every case below therefore waits for the ARABIC SENTENCE ITSELF, which
+// is also the hydration witness.
+//
+// WHAT MAKES IT BITE. The `<p>` holding the passage must carry `lang` equal to
+// the RESOLVED locale. Three arms, because each one is the only thing that
+// catches a different wrong implementation:
+//   * jf_lang=ar — the reported defect: RED before the fix (the sweep lists the
+//     <p> and the <bdi> inside it, both nearest lang="en").
+//   * jf_lang=zh — a NON-Arabic locale: an implementation that hard-codes
+//     `lang="ar"` (the tempting shortcut, since the defect was reported in
+//     Arabic) passes the ar arm and fails here.
+//   * jf_lang=en and unset — English is the document's own language, so the
+//     sentence must add NO lang at all: an unconditional `lang={lang}` passes
+//     both arms above and fails here.
+//
+// The document declaration is asserted in every arm too, so a "fix" that moved
+// the PAGE instead of the PART (PR 1201's `lang="en"` on /legal) is refused.
+const OPERATOR_SENTENCE_ROUTES = ["/legal/privacy", "/legal/terms"] as const;
+
+/** The operator sentence a surface renders for `lang`, assembled exactly as the
+ *  component does (`lead.trim()` + " " + the isolated registration clause).
+ *  Derived from the production splitter and the production dictionary, so the
+ *  expectation cannot drift from the thing under test. */
+function operatorSentence(lang: "en" | "ms" | "zh" | "ta" | "ar"): string {
+  const { lead, regClause } = operatorParts(DICT[OPERATOR_KEY][lang]);
+  return `${lead.trim()} ${regClause}`;
+}
+
+/** The `<p>` elements whose whole text IS the operator sentence, with the
+ *  language declaration that governs them — the attribute on the element itself
+ *  and the nearest declaration a screen reader would use. */
+async function operatorBlocks(page: Page, text: string) {
+  return page.evaluate((sentence) => {
+    return Array.from(document.querySelectorAll("p"))
+      .filter((p) => (p.textContent ?? "").trim() === sentence)
+      .map((p) => ({
+        lang: p.getAttribute("lang"),
+        nearest: (p.closest("[lang]")?.getAttribute("lang") ?? "").toLowerCase(),
+      }));
+  }, text);
+}
+
+test.describe("the operator sentence declares its own language (WCAG 3.1.2)", () => {
+  test("with jf_lang=ar both legal pages declare Arabic on the sentence, and stay English pages", async ({
+    page,
+  }) => {
+    await freshState(page, "ar");
+    const sentence = operatorSentence("ar");
+
+    for (const path of OPERATOR_SENTENCE_ROUTES) {
+      await page.goto(path, { waitUntil: "networkidle" });
+
+      // Reachability: the ARABIC sentence is on the page. Before hydration the
+      // server render is the English one, so this wait is also the proof that
+      // the locale was applied at all — a page that never hydrated fails here
+      // instead of passing the language assertions on an English sentence.
+      await expect
+        .poll(async () => (await operatorBlocks(page, sentence)).length, {
+          timeout: 30_000,
+          message:
+            `${path} never rendered the Arabic operator sentence card t_b13ee0cc measured — ` +
+            `the language assertions below would be judging a page that rendered nothing`,
+        })
+        .toBe(1);
+
+      const [block] = await operatorBlocks(page, sentence);
+      // The whole page, not just the footer: any Arabic element left undeclared
+      // on this English page is the same defect. Non-vacuity: at least the <p>
+      // and the <bdi> inside it carry Arabic of their own. Asserted BEFORE the
+      // single-element check so a failure names every offending element.
+      expect(
+        await arabicOwnText(page),
+        `${path} rendered no element with Arabic in its own text — the sweep below would prove nothing`,
+      ).toBeGreaterThanOrEqual(2);
+      const wrong = await mislabelledArabic(page);
+      expect(
+        wrong,
+        `${path}: Arabic inside the English-declared legal page with nothing declaring it — ` +
+          `WCAG 3.1.2 (Language of Parts):\n  ${wrong.join("\n  ")}`,
+      ).toEqual([]);
+
+      expect(
+        block.lang,
+        `${path}: the element that HOLDS the Arabic sentence must declare Arabic — inside the ` +
+          `English-declared legal page an undeclared Arabic sentence is a language change a screen ` +
+          `reader reads with an English voice (WCAG 3.1.2)`,
+      ).toBe("ar");
+      expect(block.nearest, `${path}: the nearest declaration a screen reader finds must be Arabic`).toBe("ar");
+
+      // The fix is a language of PARTS: PR 1201's document declaration must not
+      // have moved. The prose on this page is English and stays English.
+      expect(await declaration(page), `${path} live declaration`).toEqual({
+        lang: "en",
+        dir: "ltr",
+        direction: "ltr",
+      });
+    }
+  });
+
+  test("with jf_lang=zh the same sentence declares Chinese — the language is resolved, not hard-coded", async ({
+    page,
+  }) => {
+    await freshState(page, "zh");
+    const sentence = operatorSentence("zh");
+
+    await page.goto("/legal/privacy", { waitUntil: "networkidle" });
+    await expect
+      .poll(async () => (await operatorBlocks(page, sentence)).length, {
+        timeout: 30_000,
+        message: "/legal/privacy never rendered the Chinese operator sentence",
+      })
+      .toBe(1);
+
+    const [block] = await operatorBlocks(page, sentence);
+    expect(
+      block.lang,
+      "the sentence's language is the RESOLVED locale: an implementation that hard-codes lang=\"ar\" " +
+        "passes the Arabic arm above (the defect was reported in Arabic) and declares a Chinese " +
+        "sentence as Arabic here — which is worse than declaring nothing",
+    ).toBe("zh");
+    // And this page is not an Arabic page: nothing Arabic is rendered at all, so
+    // the Arabic sweep must not be the only arm this fix is judged by.
+    expect(await arabicOwnText(page), "/legal/privacy rendered Arabic with jf_lang=zh").toBe(0);
+    expect(await declaration(page)).toEqual({ lang: "en", dir: "ltr", direction: "ltr" });
+  });
+
+  for (const lang of ["en", null] as const) {
+    test(`with the locale ${lang ?? "unset (a fresh visitor)"} the sentence declares no language at all`, async ({
+      page,
+    }) => {
+      await freshState(page, lang);
+      const sentence = operatorSentence("en");
+
+      await page.goto("/legal/privacy", { waitUntil: "networkidle" });
+      // The ENGLISH sentence is the server render, so this wait is satisfied by
+      // the page as sent. The `lang` assertion below is what proves the provider
+      // ran (it writes dir on <html>, asserted next).
+      await expect
+        .poll(async () => (await operatorBlocks(page, sentence)).length, {
+          timeout: 30_000,
+          message: "/legal/privacy did not render the English operator sentence",
+        })
+        .toBe(1);
+
+      const [block] = await operatorBlocks(page, sentence);
+      expect(
+        block.lang,
+        "an English sentence must add no lang of its own — English is the document's own language " +
+          "here, and an unconditional lang={lang} would sprinkle a redundant declaration over the " +
+          "default state every crawler and every new visitor sees",
+      ).toBe(null);
+      expect(await arabicOwnText(page), `/legal/privacy rendered Arabic with jf_lang=${lang}`).toBe(0);
+      expect(await mislabelledArabic(page)).toEqual([]);
+      // Hydration witness: `dir` is written by the provider's effect ONLY (the
+      // server sends `<html lang="en">` with no dir), so a page that never
+      // hydrated fails here rather than passing the null-lang assertion for free.
+      expect(await declaration(page)).toEqual({ lang: "en", dir: "ltr", direction: "ltr" });
     });
   }
 });

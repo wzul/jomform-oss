@@ -274,21 +274,36 @@ test("the registration clause is isolated for RTL in the shared component", () =
   assert.match(component, /"use client";/, "the operator block must be a client component");
   assert.match(
     component,
-    /const \{ t \} = useI18n\(\)/,
-    "the operator block must take the visitor's locale from useI18n(), not from a prop",
+    /const \{ lang, t \} = useI18n\(\)/,
+    "the operator block must take the visitor's locale from useI18n(), not from a prop — the `lang` " +
+      "it declares on the sentence is that same resolved locale (card t_b13ee0cc)",
   );
   assert.match(component, /t\(OPERATOR_KEY\)/, "the component no longer translates the sentence");
+  // A `lang` PROP is the shape this must never be: it can only ever be the
+  // caller's compile-time default, and the two legal pages are static server
+  // components with nothing to supply one. The component declares the language
+  // of its own passage from the CONTEXT instead (card t_b13ee0cc), so the check
+  // is anchored on the props type and on the call sites — pinning the bare token
+  // `lang` would now redden on the fix itself.
   assert.doesNotMatch(
     component,
-    /lang\?:|lang =/,
+    /lang\?:\s*(Lang|string)/,
     "the component takes a lang prop again — that pins it to the server default and leaves four " +
       "locales English-only on the legal pages",
   );
   assert.doesNotMatch(
     component,
-    /\{lang\}/,
-    "a surface is still passing a lang prop to the operator block",
+    /\{\s*className\s*,\s*lang\s*\}/,
+    "the component destructures a lang prop again",
   );
+  for (const s of SURFACES) {
+    assert.doesNotMatch(
+      read(s.file),
+      /<OperatorNotice[^>]*\slang=/,
+      `${s.name} passes a lang prop to the operator block — the language of a passage is the locale ` +
+        `the shared component resolves, never the caller's default`,
+    );
+  }
   for (const s of SURFACES.slice(1)) {
     const src = read(s.file);
     assert.doesNotMatch(
@@ -322,5 +337,96 @@ test("the operator block is not the merchant's own company footer", () => {
     rest,
     IDENTITY_LITERAL,
     "the platform's operator identity was folded into the per-workspace company_reg setting",
+  );
+});
+
+// ══ the operator sentence declares its own language (card t_b13ee0cc) ══════
+//
+// THE DEFECT, measured on a local production build of main with `jf_lang=ar`
+// (and filed from card t_0e2d71f4, which found it and could not fix it there):
+// /legal/privacy and /legal/terms declare `lang="en"` — PR 1201 pins their prose
+// to English, correctly — and their footer then renders THIS component's
+// sentence in the visitor's locale. With `jf_lang=ar` that is a full Arabic
+// sentence inside an English-declared document with nothing declaring its
+// language: 2 elements per page (the <p> and the <bdi> inside it), nearest
+// `lang="en"`. WCAG 3.1.2 (Language of Parts); a screen reader reads
+// "يُدار JomForm …" with an English voice.
+//
+// WHY THIS IS INVISIBLE TO A PRE-HYDRATION READING: both legal pages are static
+// server components, so the server render is the English sentence and the
+// provider swaps it on mount. That is how the premise in t_0e2d71f4's body
+// ("/legal/privacy, /legal/terms: 0 Arabic elements — nothing to mark") was
+// formed; the DOM leg in `web/e2e/a11y-docs-lang.spec.ts` waits for the ARABIC
+// sentence instead of for the page.
+//
+// axe has no rule for this class, so the gate cannot see it. The executed proof
+// is the DOM leg; this leg pins the SOURCE so a revert fails `npm run test:unit`
+// without a browser.
+//
+// READ WITH COMMENTS STRIPPED, like the /docs chrome guard in docsA11y.test.ts:
+// the component's header names `lang` and the criterion in prose, and a rule a
+// comment can satisfy is the shape this repo's guards already refuse.
+const COMPONENT_SRC = read(COMPONENT);
+
+const stripJsComments = (src: string): string =>
+  src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+const NOTICE_AT = COMPONENT_SRC.indexOf("export default function OperatorNotice(");
+const NOTICE = NOTICE_AT === -1 ? "" : stripJsComments(COMPONENT_SRC.slice(NOTICE_AT));
+
+test("the sentence-language guard is reading the component's render (it cannot pass vacuously)", () => {
+  assert.notEqual(NOTICE_AT, -1, `${COMPONENT} no longer declares OperatorNotice — this guard would prove nothing`);
+  assert.ok(NOTICE.includes("useI18n"), `the slice is not the component: ${JSON.stringify(NOTICE.slice(0, 80))}`);
+  assert.ok(NOTICE.includes("return ("), "the slice holds no render, so the rules below could pass without reading it");
+  assert.ok(NOTICE.includes("t(OPERATOR_KEY)"), "the slice no longer looks the sentence up in the dictionary");
+  // The component must still emit the <p> that carries the passage: a fix that
+  // dropped the element would leave nothing to declare a language ON.
+  assert.match(NOTICE, /<p\b/, "the component no longer renders a <p> for the sentence");
+});
+
+test("the operator sentence declares the language it is written in (WCAG 3.1.2)", () => {
+  // The passage is carried by an element whose `lang` is BOUND to a value, not a
+  // literal: a literal would freeze one language onto all five locales. Anchored
+  // on the `<p>` and on the ATTRIBUTE (whitespace-delimited), not on the token —
+  // `data-…-lang={…}` is not a declaration.
+  assert.match(
+    NOTICE,
+    /<p\b[^>]*\slang=\{/,
+    "the operator sentence renders with no `lang` of its own — inside the English-declared /legal pages " +
+      "a sentence in the visitor's locale is a language change nothing announces (WCAG 3.1.2; measured " +
+      "with jf_lang=ar: the <p> and its <bdi> read as English, 2 elements per page)",
+  );
+  assert.doesNotMatch(
+    NOTICE,
+    /lang="(en|ms|zh|ta|ar)"/,
+    "the component hard-codes a language — the sentence's language is the RESOLVED locale, so a " +
+      "constant would declare an Arabic sentence Chinese (or the reverse) for four of the five locales",
+  );
+  // English is the document's own language on the legal pages and on the landing
+  // page (whose document declaration follows the visitor), so an English
+  // sentence must add nothing at all.
+  assert.match(
+    NOTICE,
+    /===?\s*"en"/,
+    "the component no longer treats English differently — every surface would then carry a lang " +
+      "attribute over text that is already the document's language",
+  );
+});
+
+test("the sentence-language rules cannot be satisfied by a comment", () => {
+  // Non-vacuity for the strip, and self-contained: the component's own header
+  // names the criterion, so if the strip were a no-op the rules above could be
+  // satisfied by PROSE. This fails only if that stops being true — never merely
+  // because the fix is gone, which the test above reports.
+  assert.match(
+    COMPONENT_SRC,
+    /WCAG 3\.1\.2/,
+    "the component's header no longer names the criterion the strip exists to remove — re-point this " +
+      "check at whatever comment the rules above could be satisfied by",
+  );
+  assert.doesNotMatch(
+    stripJsComments(COMPONENT_SRC),
+    /WCAG 3\.1\.2/,
+    "a comment survived the strip, so the rules above could be satisfied by prose instead of code",
   );
 });
