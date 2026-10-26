@@ -320,13 +320,52 @@ async function measure(page: Page, selector: string, what: string): Promise<Meas
 }
 
 /**
- * The ghost button carries `transition: background-color 0.15s`, so a measurement
- * taken immediately after `hover()` reads a MID-TRANSITION pixel (measured: the
- * first attempt read #fbfbfc, on its way from #ffffff to #f3f4f6). The transition
- * is waited out, so what is asserted is a settled state and not a frame of an
- * animation.
+ * HOW A POINTER STATE IS READ: OBSERVED, NOT SLEPT OUT (card t_e886b75c).
+ *
+ * The ghost button carries `transition: background-color 0.15s`, so a read taken
+ * immediately after `hover()` / `mouse.down()` can catch a mid-transition pixel
+ * (measured: the first attempt read #fbfbfc, on its way from #ffffff to #f3f4f6).
+ *
+ * This file used to answer that with a FIXED wait — `waitForTimeout(500)`, then
+ * exactly one read. On the gate that wait is a bet on the host, and the bet lost:
+ * card t_902ab8bb's a11y run (tree ce58e3eb, two other preflight gates running on
+ * the same host) read `cancel (pressed)` on #f3f4f6 — the button's own :hover
+ * paint, not #e5e7eb — and exited 1, and the SAME tree passed the same gate on the
+ * re-run. 500ms is 3.3x the transition, so what was missing was not the end of an
+ * animation but the state having been APPLIED at all, and a sleep cannot tell
+ * those apart: it produces no evidence that the state arrived.
+ *
+ * So every read below names the paint it is about to judge and waits until that
+ * exact pixel is OBSERVED, polling the same composited measurement the assertion
+ * reads. Two consequences:
+ *   * The poll stops only on the endpoint it was asked for, so a `:active` rule
+ *     that moved or went away never satisfies it — the surface pin below then
+ *     fires on the last read, exactly as before. This cannot turn a contrast
+ *     regression green.
+ *   * A state that is merely SLOW is not a finding. A state that never arrives is
+ *     reported as NEVER observed, with the reads and the elapsed time behind it —
+ *     a different sentence from "this button is painted wrong" — and it is red.
+ *
+ * The ceiling is a bound on patience, not a claim about the host: 16x the sleep it
+ * replaces, and six reads that all time out (48s) still fit the 120s test budget.
  */
-const TRANSITION_SETTLE_MS = 500;
+const PAINT_OBSERVE_MS = 8_000;
+const PAINT_POLL_MS = 50;
+
+/** A read that waited for a named surface, and the record of what that wait saw. */
+type Observed = Measure & {
+  /** The surface this read waited to observe. */
+  expected: string;
+  waitedMs: number;
+  reads: number;
+  observed: boolean;
+};
+
+/** The wait's own record, appended to every surface assertion's message. */
+const paintRecord = (m: Observed) =>
+  `paint ${m.observed ? "observed" : "NEVER observed"} after ${m.waitedMs}ms ` +
+  `(${m.reads} read(s) waiting for ${m.expected}, ceiling ${PAINT_OBSERVE_MS}ms); ` +
+  `last read bg=${m.bg}, element bg ${m.ownBg}, opacity ${m.opacity}`;
 
 test.describe("the /subscriptions action-row buttons clear AA on the surfaces they paint", () => {
   test("axe finds no critical/serious violation in the row", async ({ page }) => {
@@ -377,51 +416,71 @@ test.describe("the /subscriptions action-row buttons clear AA on the surfaces th
     const update = page.locator(UPDATE_BTN);
     const cancel = page.locator(CANCEL_BTN);
 
-    const measured: Measure[] = [];
-    const record = async (what: string, selector: string) => {
-      const m = await measure(page, selector, what);
-      measured.push(m);
+    const measured: Observed[] = [];
+    /**
+     * Measure the node ONCE ITS PAINT IS OBSERVED. `expected` is the surface the
+     * caller is about to assert; the read repeats until the composited pixel
+     * equals it (bounded by PAINT_OBSERVE_MS), so the assertion judges a state
+     * that was seen rather than whatever a fixed sleep happened to catch.
+     */
+    const record = async (
+      what: string,
+      selector: string,
+      expected: string,
+    ): Promise<Observed> => {
+      const started = Date.now();
+      let m = await measure(page, selector, what);
+      let reads = 1;
+      while (m.bg !== expected && Date.now() - started < PAINT_OBSERVE_MS) {
+        await page.waitForTimeout(PAINT_POLL_MS);
+        m = await measure(page, selector, what);
+        reads += 1;
+      }
+      const out: Observed = {
+        ...m,
+        expected,
+        waitedMs: Date.now() - started,
+        reads,
+        observed: m.bg === expected,
+      };
+      measured.push(out);
       console.log(
         `${m.what}: text=${JSON.stringify(m.text)} fg=${m.fg} on bg=${m.bg} (element bg ` +
-          `${m.ownBg}, opacity ${m.opacity}) ${m.fontSize} — ${m.ratio.toFixed(3)}:1`,
+          `${m.ownBg}, opacity ${m.opacity}) ${m.fontSize} — ${m.ratio.toFixed(3)}:1 ` +
+          `[${paintRecord(out)}]`,
       );
-      return m;
+      return out;
     };
 
     // AT REST — the state every axe scan sees, and the only state the source
     // guards that could not read `.jf-btn-ghost`'s CSS could reason about.
-    const updateRest = await record("update card (rest)", UPDATE_BTN);
-    const cancelRest = await record("cancel (rest)", CANCEL_BTN);
+    const updateRest = await record("update card (rest)", UPDATE_BTN, GHOST_REST);
+    const cancelRest = await record("cancel (rest)", CANCEL_BTN, GHOST_REST);
 
-    // HOVERED — the surface moves to the ghost button's own :hover paint.
+    // HOVERED — the surface moves to the ghost button's own :hover paint. No fixed
+    // wait: the read below waits for that paint to be observed, so a hover the
+    // browser has not processed yet reads as "not yet" instead of as white.
     await update.hover();
-    await page.waitForTimeout(TRANSITION_SETTLE_MS);
-    const updateHover = await record("update card (hover)", UPDATE_BTN);
+    const updateHover = await record("update card (hover)", UPDATE_BTN, GHOST_HOVER);
     await cancel.hover();
-    await page.waitForTimeout(TRANSITION_SETTLE_MS);
-    const cancelHover = await record("cancel (hover)", CANCEL_BTN);
+    const cancelHover = await record("cancel (hover)", CANCEL_BTN, GHOST_HOVER);
 
     // PRESSED — the ghost button darkens one more step while the mouse is down.
     // The pointer is RELEASED OFF the button (`mouse.move` before `mouse.up`), so
     // no `click` fires: a click here would open the cancel confirmation and put
     // the card-update flow in flight, changing the row under the measurement.
     await page.mouse.down();
-    await page.waitForTimeout(TRANSITION_SETTLE_MS);
-    const cancelDown = await record("cancel (pressed)", CANCEL_BTN);
+    const cancelDown = await record("cancel (pressed)", CANCEL_BTN, GHOST_PRESSED);
     await page.mouse.move(0, 0);
     await page.mouse.up();
-    await page.waitForTimeout(TRANSITION_SETTLE_MS);
 
     await update.hover();
-    await page.waitForTimeout(TRANSITION_SETTLE_MS);
     await page.mouse.down();
-    await page.waitForTimeout(TRANSITION_SETTLE_MS);
-    const updateDown = await record("update card (pressed)", UPDATE_BTN);
+    const updateDown = await record("update card (pressed)", UPDATE_BTN, GHOST_PRESSED);
     await page.mouse.move(0, 0);
     await page.mouse.up();
     // Reset the pointer so a later assertion cannot inherit a hovered state.
     await page.mouse.move(0, 0);
-    await page.waitForTimeout(TRANSITION_SETTLE_MS);
 
     // The LABELS measured are asserted, not assumed: a selector that stopped
     // matching would otherwise measure whatever moved into its place.
@@ -434,22 +493,30 @@ test.describe("the /subscriptions action-row buttons clear AA on the surfaces th
     // `.jf-btn-ghost:hover` rule is not layered, so the unlayered rule wins). If
     // this expectation moves, the cascade has moved — re-measure and re-derive
     // `src/lib/ghostButtonInk.test.ts`, which reads its surfaces from globals.css.
+    //
+    // Each message carries the wait's own record. Read "NEVER observed" as: the
+    // pointer state was never APPLIED within PAINT_OBSERVE_MS while thousands of
+    // reads watched for it — a rule that moved, or an input the browser never
+    // processed. It is not the same finding as "observed, and the pixel is wrong".
     for (const m of [updateRest, cancelRest]) {
-      expect(m.bg, `${m.what} is painted on ${m.bg}, not the ghost button's own resting white`).toBe(
-        GHOST_REST,
-      );
+      expect(
+        m.bg,
+        `${m.what} is painted on ${m.bg}, not the ghost button's own resting white [${paintRecord(m)}]`,
+      ).toBe(GHOST_REST);
     }
     for (const m of [updateHover, cancelHover]) {
       expect(
         m.bg,
         `${m.what} is painted on ${m.bg}, not the ghost button's own #f3f4f6 :hover paint — the ` +
-          `hovered pixel is where the pre-fix cancel button measured ${PRE_FIX_CANCEL_HOVER_RATIO}:1`,
+          `hovered pixel is where the pre-fix cancel button measured ${PRE_FIX_CANCEL_HOVER_RATIO}:1 ` +
+          `[${paintRecord(m)}]`,
       ).toBe(GHOST_HOVER);
     }
     for (const m of [cancelDown, updateDown]) {
       expect(
         m.bg,
-        `${m.what} is painted on ${m.bg}, not the ghost button's own ${GHOST_PRESSED} :active paint`,
+        `${m.what} is painted on ${m.bg}, not the ghost button's own ${GHOST_PRESSED} :active paint ` +
+          `[${paintRecord(m)}]`,
       ).toBe(GHOST_PRESSED);
     }
 
