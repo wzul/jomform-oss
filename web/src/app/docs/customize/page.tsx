@@ -244,6 +244,17 @@ export default function CustomizeDocsPage() {
         <span className="font-mono text-xs">acknowledge</span>), so an agent is told the same thing
         you are. A form that is already live is never asked about again.
       </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The link preview follows the same rule as the page. Every live form has its own share card
+        at <span className="font-mono text-xs">/og/your-form-slug.png</span> — its title, workspace
+        and address, drawn as a 1200×630 image — and that is what a chat app or social site shows
+        when the link is pasted. A <strong>draft</strong> is not served at all: its card answers
+        404, exactly as its page does, so an unpublished form&apos;s title never becomes public
+        through the preview URL. A <strong>private</strong> form&apos;s card is served only to a
+        browser that has already entered the password, and it is never handed to a shared cache,
+        so the password gate is not bypassed by fetching the image. An <strong>unlisted</strong>{" "}
+        form is live, so its card is served like a published one&apos;s.
+      </p>
 
       <h2 id="domains" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
         Custom domains

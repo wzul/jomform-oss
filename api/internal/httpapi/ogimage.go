@@ -494,6 +494,44 @@ func (h *PublicHandlers) handleOGImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	// STATUS GATE — the same rule the form's own page applies (serveForm),
+	// because this route publishes the form's IDENTITY: the card draws the
+	// title, the workspace name and the request host.
+	//
+	// findPublicForm is deliberately status-agnostic (issue #176): a rename's
+	// 301 fallback and the merchant's edit paths must still resolve a draft. The
+	// gate therefore belongs to the CALLER, and this caller did not have one —
+	// so an unpublished form's card was served at 200 while /{slug} answered
+	// 404, and a password-protected form's title was served without ever
+	// presenting the gate (measured on prod: /og/{draft}.png 200, 59022 bytes,
+	// subtitle naming the workspace and host; /{draft} 404).
+	//
+	//   - draft: 404 with the SAME body as the unknown-slug miss above, so the
+	//     response is not an oracle for "a form exists at this slug".
+	//   - private: served only to a caller holding THIS form's unlock cookie —
+	//     the buyer's own browser, which has already passed the password gate.
+	//     Everyone else gets the same 404: an image route has no gate page to
+	//     render, and a generic "locked" card would still confirm the slug.
+	//   - unlisted: served. An unlisted form is LIVE at its direct URL and is
+	//     only left out of the workspace listing, so its preview follows its
+	//     page (this is why the rule is not a blanket "published only").
+	//
+	// Pinned by ogimage_status_gate_test.go.
+	cacheControl := "public, max-age=86400"
+	switch f.Status {
+	case dbstore.FormStatusDraft:
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	case dbstore.FormStatusPrivate:
+		if !h.privateUnlocked(r, f) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		// A card that was gated behind a password must never reach a shared
+		// cache: with the headers below a CDN would serve those bytes to the
+		// next caller, who never unlocked the form.
+		cacheControl = "private, no-store"
+	}
 	workspace := h.workspaceNameFor(r.Context(), f)
 	themePrimary := ""
 	if f.Theme != nil {
@@ -508,7 +546,7 @@ func (h *PublicHandlers) handleOGImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", cacheControl)
 	w.Write(pngBytes)
 }
 
