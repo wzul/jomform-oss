@@ -71,6 +71,15 @@ set -uo pipefail
 BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 [ -n "$BITE_HOME" ] || { echo "cannot resolve the directory this script lives in" >&2; exit 2; }
 SELF="$BITE_HOME/$(basename "$0")"
+
+# The shared runner gate and verdict rule (web/scripts/lib/node_test_verdict.sh): every
+# verdict this harness prints comes from POSITIVE runner evidence, and a node that cannot
+# run the guard is a REFUSAL that names itself — never an answer (card t_b014807f).
+. "$BITE_HOME/lib/node_test_verdict.sh" || {
+  echo "BITEPROOF REFUSED: cannot source $BITE_HOME/lib/node_test_verdict.sh, so there is" >&2
+  echo "no verdict rule to read a guard's output with." >&2
+  exit 2
+}
 cd "$BITE_HOME/.." || exit 2                # -> web/
 CFG=next.config.mjs
 GUARD=src/lib/devHosts.test.ts
@@ -170,6 +179,12 @@ fi
 rm -f "$LOCK_PROBE"
 echo "lock:   held for this worktree (${LOCK_FILE##*/})"
 
+# CAPABILITY, not presence (card t_b014807f): `node --version` succeeding proves nothing
+# here — v18.19.1 answers it and then rejects `--disable-warning`, and every leg below
+# would read that empty capture as a verdict. The gate runs the invocation this harness
+# depends on and refuses, naming the node, when that produces no test-runner summary.
+nt_require_node
+
 for f in "$CFG" "$GUARD"; do
   [ -f "$f" ] || { echo "missing $f — is this the right worktree?" >&2; exit 2; }
 done
@@ -178,28 +193,36 @@ BEFORE=$(sha256sum "$CFG" | cut -d' ' -f1)
 # PER-RUN, so one run can never restore another run's bytes (card t_d101a943).
 BAK=$(mktemp) || { echo "cannot create a per-run backup file" >&2; exit 2; }
 cp -f "$CFG" "$BAK"
+# The guard's output channel, also per-run: nt_capture truncates it before every run, so
+# a stale capture cannot back a verdict (card t_b014807f).
+CAP=$(mktemp) || { echo "cannot create a per-run capture file" >&2; exit 2; }
 
-run_guard() { node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "$GUARD" 2>&1; }
+# run_guard -> prints GREEN, RED or REFUSED; the output lands in $CAP.
+run_guard() { nt_capture "$CAP" "$GUARD"; }
 restore()  { cp -f "$BAK" "$CFG"; }
 
 fail=0
 # ONE trap, carrying two properties the shipped version did not have: the config is
 # restored on EVERY exit (an interrupt, or an abort between a mutation and its
-# `restore`, used to leave the mutation on disk), and the per-run temp file is
+# `restore`, used to leave the mutation on disk), and the per-run temp files are
 # always removed — no run can leave either a mutation or debris behind.
 cleanup() {
   local rc=$?
   restore 2>/dev/null
-  rm -f "$BAK"
+  rm -f "$BAK" "$CAP" "$CAP.rc"
   exit "$rc"
 }
 trap cleanup EXIT
 
-expect_red() { # $1 = case name, $2 = output
+expect_red() { # $1 = case name, $2 = verdict (GREEN | RED | REFUSED)
+  # A capture with no runner output is NOT "the guard did not bite" — it is a refusal
+  # (card t_b014807f). It exits 2 and names the node, rather than printing a verdict
+  # about a guard that never ran.
+  if [ "$2" = REFUSED ]; then nt_refuse_if "$1" "$CAP"; fi
   # HERE-STRING, never `printf '%s' "$2" | grep -q`: under `set -o pipefail` a MATCH
   # can still report the pipeline as failed (SIGPIPE 141) and print a false
   # `DID NOT BITE`. See the header for the measurement.
-  if grep -qE '^ℹ fail [1-9]' <<<"$2"; then
+  if [ "$2" = RED ]; then
     echo "  ✅ BITES — $1 turned the guard RED"
   else
     echo "  ❌ DID NOT BITE — $1 left the guard GREEN (the guard is not protecting this)"
@@ -208,8 +231,9 @@ expect_red() { # $1 = case name, $2 = output
 }
 
 echo "case 0: baseline (the unsabotaged config must be GREEN)"
-out=$(run_guard); grep -E '^ℹ (pass|fail)' <<<"$out"
-if grep -qE '^ℹ fail 0' <<<"$out"; then echo "  ✅ baseline green"; else echo "  ❌ baseline not green"; fail=1; fi
+out=$(run_guard); nt_refuse_if "the baseline guard run" "$CAP"
+grep -E '^ℹ (pass|fail)' "$CAP"
+if [ "$out" = GREEN ]; then echo "  ✅ baseline green"; else echo "  ❌ baseline not green"; fail=1; fi
 
 echo "case 1: drop allowedDevOrigins entirely (the fix removed)"
 python3 - "$CFG" <<'PY'

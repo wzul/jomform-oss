@@ -34,6 +34,15 @@ set -uo pipefail
 BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 [ -n "$BITE_HOME" ] || { echo "cannot resolve the directory this script lives in" >&2; exit 2; }
 SELF="$BITE_HOME/$(basename "$0")"
+
+# The shared runner gate and verdict rule (web/scripts/lib/node_test_verdict.sh): every
+# verdict this harness prints comes from POSITIVE runner evidence, and a node that cannot
+# run the guard is a REFUSAL that names itself — never an answer (card t_b014807f).
+. "$BITE_HOME/lib/node_test_verdict.sh" || {
+  echo "BITEPROOF REFUSED: cannot source $BITE_HOME/lib/node_test_verdict.sh, so there is" >&2
+  echo "no verdict rule to read a guard's output with." >&2
+  exit 2
+}
 cd "$BITE_HOME/.." || exit 2               # -> web/
 
 # ---- THE FAMILY'S SHARED-INPUT LOCK (t_ed66094c, t_03a646e2, t_f4f4681c, t_76b3356d) --
@@ -140,6 +149,12 @@ if ! flock -n "$LOCK_PROBE" true 2>/dev/null; then
 fi
 rm -f "$LOCK_PROBE"
 echo "lock:   held for this worktree (${LOCK_FILE##*/})"
+
+# CAPABILITY, not presence (card t_b014807f): `node --version` succeeding proves nothing
+# here — v18.19.1 answers it and then rejects `--disable-warning`, and every leg below
+# would read that empty capture as a verdict. The gate runs the invocation this harness
+# depends on and refuses, naming the node, when that produces no test-runner summary.
+nt_require_node
 
 GUARD=src/lib/docsIndex.test.ts
 LAYOUT=src/app/docs/layout.tsx
@@ -340,13 +355,17 @@ echo "new guard (this tree):             $(wc -l < "$GUARD") lines"
 #     therefore written to a FILE, which survives the subshell. (An earlier cut of
 #     this script set a variable here and every `must-name` check failed for this
 #     reason while the reds were real.)
+#   * THE VERDICT IS NOT "NO FAILURE LINE MEANS GREEN" (card t_b014807f). This reader
+#     used to print GREEN whenever the capture held no `ℹ fail [1-9]` line, so a node
+#     that could not run the file at all (v18.19.1 rejects
+#     `--disable-warning=…` with a 64-byte "bad option" capture) answered GREEN on
+#     every leg: the harness printed a verdict it never measured. nt_capture truncates
+#     the capture first and reads GREEN only off `ℹ pass` + `ℹ fail 0` + a `✔ ` line,
+#     REFUSED otherwise, and the callers below turn REFUSED into exit 2.
 OUT_FILE=$(mktemp)
-trap 'rm -f "$OLD_GUARD" "$OUT_FILE"; rm -rf "$BAK"' EXIT
+trap 'rm -f "$OLD_GUARD" "$OUT_FILE" "$OUT_FILE.rc"; rm -rf "$BAK"' EXIT
 run_guard() {
-  local out
-  out=$(node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "$1" 2>&1) || true
-  printf '%s\n' "$out" > "$OUT_FILE"
-  if grep -qE '^ℹ fail [1-9]' <<<"$out"; then printf 'RED'; else printf 'GREEN'; fi
+  nt_capture "$OUT_FILE" "$1"
 }
 
 # The base guard is not in the tree; it is run as a sibling copy so the .ts
@@ -416,6 +435,7 @@ restore_all() {
 # reason that has nothing to do with this branch — and then no mutation can make
 # it "miss" anything. Fail closed with the reason and the fix.
 premise=$(run_base_guard)
+nt_refuse_if "BASELINE, the base guard on the UNMUTATED tree" "$OUT_FILE"
 if [ "$premise" != "GREEN" ]; then
   echo >&2
   echo "BITEPROOF REFUSED: the base guard (${BASE_REF} ${BASE_REV:0:12}) is ${premise} on the" >&2
@@ -435,6 +455,8 @@ fi
 check() {
   local label="$1" base_want="$2" new_want="$3" needle="${4:-}" got out
   got=$(run_base_guard); out=$(cat "$OUT_FILE")
+  # A refusal must not leave the case's mutation on disk: restore first, then refuse.
+  if [ "$got" = REFUSED ]; then restore_all; nt_refuse_if "${label}: BASE guard" "$OUT_FILE"; fi
   if [ "$got" != "$base_want" ]; then
     echo "  *** ${label}: BASE guard wanted ${base_want}, got ${got} — the case does not reproduce the hole ***"
     grep -E '^ℹ (pass|fail)' <<<"$out" | head -2; fail=1
@@ -443,6 +465,8 @@ check() {
   fi
 
   got=$(run_guard "$GUARD"); out=$(cat "$OUT_FILE")
+  # A refusal must not leave the case's mutation on disk: restore first, then refuse.
+  if [ "$got" = REFUSED ]; then restore_all; nt_refuse_if "${label}: NEW guard" "$OUT_FILE"; fi
   # The count comes from node's own summary (`ℹ fail N`), not from counting `✖`
   # lines: node prints each failure TWICE — once in the run, once under
   # "✖ failing tests:" — so a grep over `✖` reports 2 or 3 for a single failure and

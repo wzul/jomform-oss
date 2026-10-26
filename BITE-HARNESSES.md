@@ -25,6 +25,63 @@ A row whose harness labels its cases `# --- case N` counts `case 0`, the control
 its `Cases` cell — the number `grep -c '^# --- case [0-9]' <that harness>` returns —
 and its narrative line below the table repeats that number, so the two move together.
 
+**THE READER THAT TURNS A GUARD RUN INTO A VERDICT IS SHARED, AND IT REFUSES RATHER THAN
+ANSWERS (card `t_b014807f`).** Every harness below that drives a `node --test` guard now
+sources `web/scripts/lib/node_test_verdict.sh`, and the two things that file decides were
+each measured on this host, on one worktree, with the SAME harness bytes and the SAME base —
+only the invoking shell's `node` differing:
+
+  * **`nt_require_node` is a CAPABILITY gate, not a presence gate.** The harnesses used to
+    assert `node --version` succeeds, which v18.19.1 does — and it then rejects
+    `--disable-warning=MODULE_TYPELESS_PACKAGE_JSON` with a 64-byte `bad option` line and
+    rc=9, so every leg below ran on a capture carrying no test-runner output. Measured:
+    `biteproof_docs_index_floor_mirror.sh`, same bytes, same base (`bc5241ee`), node
+    v24.19.0 → `BITEPROOF REFUSED` (exit 2, a red base); `/usr/bin/node` v18.19.1 →
+    `BITEPROOF FAIL (8 failing check(s), 1 passing)`, every one of those reds a leg that
+    had to see the base RED reading it GREEN. The gate runs the invocation the harness
+    actually depends on (a throwaway `.ts` test through `node --test --disable-warning=…`)
+    and refuses, NAMING `command -v node` and `node --version`, unless that produced a test
+    summary. Measured across this host's four nodes: v18.19.1 refuses (bad option),
+    v20.20.2 refuses (cannot load a `.ts` test, `# pass 0`), v22.23.3 and v24.19.0 pass.
+  * **`nt_verdict_file` reads GREEN only off POSITIVE evidence**: rc 0 with `ℹ pass [1-9]`,
+    `ℹ fail 0` and a `✔ ` line; RED only off `ℹ fail [1-9]` AND `ℹ pass [1-9]` (a guard that
+    cannot load reports `tests 1 / pass 0 / fail 1`); anything else is `REFUSED` and the
+    caller exits 2 with the reason, never a `BITEPROOF PASS`/`FAIL` line. A capture in the
+    TAP reporter is refused too, named as such: v22.23.3 passes the capability gate and
+    then cannot be READ by a family that reads `ℹ …` / `✖`, so it refuses at the reader
+    instead of answering GREEN at every leg. `nt_capture` truncates the capture before it
+    starts the runner, so a stale capture from an earlier run cannot back a verdict.
+
+  The harnesses whose readers were that absence form and are now driven by this rule:
+  `biteproof_docs_index_word_budget.sh`, `biteproof_docs_index_floor_mirror.sh`,
+  `biteproof_docs_index_comment_anchor.sh` (each used to print `GREEN` as the `else` of
+  `grep -qE '^ℹ fail [1-9]'`), `operator-bite.sh` (a missing runner read as
+  `GREEN — THE GUARD DID NOT BITE` on every case), `biteproof_dev_hosts.sh` and
+  `biteproof_save_button.sh` (a missing runner read as `DID NOT BITE`; both also pin a
+  host-local node on PATH, so the gate is what catches a checkout without that pin).
+  The remaining nine node-driven harnesses already refused on the absence form before this
+  card — `biteproof_docs_tool_claims.sh` and `biteproof_docs_index_render_sites.sh` carry the
+  three-way `rule_of` this file generalised (card `t_420ca40c`), `biteproof_docs_a11y.sh` and
+  `biteproof_llms_full_coverage.sh` the same, `biteproof_a11y_dark_slab_dynamic.sh`,
+  `biteproof_a11y_scan_prose.sh` and `biteproof_mcp_tool_inventory.sh` a three-way variant,
+  `biteproof_docs_prose_convention.sh` a positive-evidence reader, and
+  `biteproof_next_managed_files.sh` requires a `ℹ tests` summary before it judges anything —
+  so they received the capability gate only; their readers were not rewritten.
+  `biteproof_npm_audit_gate.sh` keeps its own TAP-based reader (it asks for
+  `--test-reporter=tap` explicitly and already refuses a capture with no case results) and
+  received the gate in its `tap` form.
+
+  The rule itself is gated: `web/src/lib/nodeRunnerEvidence.test.ts` (part of
+  `npm run test:unit`) feeds the reader eight real capture shapes — empty, the runner's own
+  `bad option` line, a TAP-only capture, a cannot-load capture (`tests 1 / pass 0 / fail 1`),
+  an all-skipped capture, a passing summary with a non-zero exit status, a real green run
+  and a real red run — and asserts GREEN/RED/REFUSED per shape; the same file re-runs the
+  PRE-FIX reader over the no-runner-output shapes and asserts it answers GREEN on each, so
+  the fixtures are proved to discriminate; it refuses a `node` stub that answers `--version`
+  and then cannot run the guard, runs one real harness against that stub and asserts
+  `exit 2` with no PASS/FAIL line, and asserts that every script in `web/scripts` that
+  drives a guard sources the shared rule and calls the gate.
+
 | Harness | Proves (the guard it backs) | Cases | Wall time here |
 |---|---|---|---|
 | `api/scripts/biteproof_menu_variation.py` | the menu-variation guards in `api/internal/httpapi/menu_variation_test.go`: the checkout payload carries the variant, live variation resolution, the selector markup, the card-tap path, per-row attribution, sold-out disabling. **STALE ON MAIN, measured 2026-09-26: 3 of its 8 cases run, then it aborts with `HARNESS BUG: 'card tap adds the base price...' occurs 0 times, expected 1, exit 2`. PR 770 took that path through the shared `addIfBuyable` helper, so the anchor it searches for is gone; `biteproof_menu_variant_gaps.py` covers that behaviour (and 22 more) and is green, so the net is intact, but this instrument needs re-anchoring before it proves anything again.** | 3 of 8 run | 110s (aborts) |

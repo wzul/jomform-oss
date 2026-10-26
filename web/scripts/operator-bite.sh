@@ -52,6 +52,15 @@ set -uo pipefail
 BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 [ -n "$BITE_HOME" ] || { echo "cannot resolve the directory this script lives in" >&2; exit 2; }
 SELF="$BITE_HOME/$(basename "$0")"
+
+# The shared runner gate and verdict rule (web/scripts/lib/node_test_verdict.sh): every
+# verdict this harness prints comes from POSITIVE runner evidence, and a node that cannot
+# run the guard is a REFUSAL that names itself — never an answer (card t_b014807f).
+. "$BITE_HOME/lib/node_test_verdict.sh" || {
+  echo "BITEPROOF REFUSED: cannot source $BITE_HOME/lib/node_test_verdict.sh, so there is" >&2
+  echo "no verdict rule to read a guard's output with." >&2
+  exit 2
+}
 cd "$BITE_HOME/.." || exit 2                # -> web/
 
 # ---- PER-WORKTREE LOCK (card t_76a02798) ----------------------------------
@@ -142,6 +151,12 @@ fi
 rm -f "$LOCK_PROBE"
 echo "lock:   held for this worktree (${LOCK_FILE##*/})"
 
+# CAPABILITY, not presence (card t_b014807f): `node --version` succeeding proves nothing
+# here — v18.19.1 answers it and then rejects `--disable-warning`, and every leg below
+# would read that empty capture as a verdict. The gate runs the invocation this harness
+# depends on and refuses, naming the node, when that produces no test-runner summary.
+nt_require_node
+
 # The guard to drive. Overridable so a leg of web/src/lib/harnessLock.test.ts can
 # reach this harness's own deterministic, node-free refusal AFTER it has taken its
 # lock (point this at a path that does not exist), which is how that file proves the
@@ -151,6 +166,10 @@ GUARD="${BITEPROOF_GUARD:-src/lib/operatorNotice.test.ts}"
 
 DID_NOT_BITE=0
 RESTORE_FAILED=0
+# One capture file per run. nt_capture truncates it before each run, so a stale capture
+# can never back a verdict, and its `.rc` companion carries the runner's exit status.
+CAP=$(mktemp) || { echo "cannot create a capture file" >&2; exit 2; }
+trap 'rm -f "$CAP" "$CAP.rc"' EXIT
 
 failing_tests() {
   # Only the names under "failing tests:" — the ✖ list earlier in the output is
@@ -162,8 +181,15 @@ run_case() {
   local label="$1"
   echo "=============================================================="
   echo "SABOTAGE: $label"
-  local out
-  out=$(node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "$GUARD" 2>&1)
+  local out verdict
+  verdict=$(nt_capture "$CAP" "$GUARD")
+  out=$(cat "$CAP")
+  if [ "$verdict" = REFUSED ]; then
+    # A mutation is on disk right now: restore BEFORE refusing, so a refusal can never
+    # leave the tree carrying the sabotage it could not measure.
+    git checkout -- src/ ../api 2>/dev/null
+    nt_refuse_if "the sabotaged guard for '${label}'" "$CAP"
+  fi
   local failed
   failed=$(echo "$out" | failing_tests)
   if [ -z "$failed" ]; then
@@ -185,16 +211,13 @@ run_case() {
 }
 
 echo "### baseline — the guard must be GREEN here (this is the fix as committed)"
-BASE=$(node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "$GUARD" 2>&1)
-echo "$BASE" | grep -E '^ℹ (tests|pass|fail)'
-# Here-string, not `echo "$BASE" | grep -qE …` (card t_39b04c34). Under this file's
-# `set -uo pipefail`, `grep -q` exits at its first match while `echo` is still writing
-# BASE (a real node --test output for a failing guard is >2 KB), so echo takes SIGPIPE,
-# the pipeline reports 141 although grep MATCHED, and this baseline check aborts a
-# harness whose guard is genuinely red. Measured on this host, the real shape:
-# 1/1500 non-zero with the match on the FIRST matching line, 0/1500 with it last.
-# A here-string has no writer process, so there is nothing left to signal.
-if grep -qE '^ℹ fail [1-9]' <<<"$BASE"; then
+BASE=$(nt_capture "$CAP" "$GUARD")
+nt_refuse_if "the baseline guard run" "$CAP"
+grep -E '^ℹ (tests|pass|fail)' "$CAP"
+# The verdict, not the raw capture: `BASE` is now GREEN | RED | REFUSED, and a REFUSED
+# baseline (no runner output at all) has already exited 2 above rather than being
+# mistaken for "not red" (card t_b014807f).
+if [ "$BASE" = RED ]; then
   echo "ABORT: baseline is not green — commit the fix first (this script restores with git checkout)."
   exit 1
 fi

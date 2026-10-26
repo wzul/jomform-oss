@@ -65,6 +65,15 @@ set -uo pipefail
 BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 [ -n "$BITE_HOME" ] || { echo "cannot resolve the directory this script lives in" >&2; exit 2; }
 SELF="$BITE_HOME/$(basename "$0")"
+
+# The shared runner gate and verdict rule (web/scripts/lib/node_test_verdict.sh): every
+# verdict this harness prints comes from POSITIVE runner evidence, and a node that cannot
+# run the guard is a REFUSAL that names itself — never an answer (card t_b014807f).
+. "$BITE_HOME/lib/node_test_verdict.sh" || {
+  echo "BITEPROOF REFUSED: cannot source $BITE_HOME/lib/node_test_verdict.sh, so there is" >&2
+  echo "no verdict rule to read a guard's output with." >&2
+  exit 2
+}
 cd "$BITE_HOME/.." || exit 2                # -> web/
 export PATH="/root/.hermes/tools/node-26.7.0-linux-x64/bin:${PATH}"
 
@@ -157,6 +166,12 @@ fi
 rm -f "$LOCK_PROBE"
 echo "lock:   held for this worktree (${LOCK_FILE##*/})"
 
+# CAPABILITY, not presence (card t_b014807f): `node --version` succeeding proves nothing
+# here — v18.19.1 answers it and then rejects `--disable-warning`, and every leg below
+# would read that empty capture as a verdict. The gate runs the invocation this harness
+# depends on and refuses, naming the node, when that produces no test-runner summary.
+nt_require_node
+
 # The guard to drive. Overridable so a leg of web/src/lib/harnessLock.test.ts can
 # reach this harness's own deterministic, node-free refusal AFTER it has taken its
 # lock (point this at a path that does not exist), which is how that file proves the
@@ -178,22 +193,31 @@ for k in "${!FILES[@]}"; do
   SUM[$k]=$(sha256sum "${FILES[$k]}" | cut -d' ' -f1)
 done
 restore_all() { for k in "${!FILES[@]}"; do cp "$TMP/$k.orig" "${FILES[$k]}"; done; }
+# The guard's output channel, per-run: nt_capture truncates it before every run, so a
+# stale capture cannot back a verdict (card t_b014807f).
+CAP="$TMP/guard.capture"
 trap 'restore_all; rm -rf "$TMP"' EXIT
 
-run_guard() { node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "$GUARD" 2>&1; }
+# run_guard -> prints GREEN, RED or REFUSED; the output lands in $CAP.
+run_guard() { nt_capture "$CAP" "$GUARD"; }
 fail=0
 bites=0
-expect_red() {
+expect_red() { # $1 = case name, $2 = verdict (GREEN | RED | REFUSED)
+  # A capture with no runner output is NOT "the guard did not bite" — it is a refusal
+  # (card t_b014807f). It exits 2 and names the node, rather than printing a verdict
+  # about a guard that never ran. The trap above restores every mutated source first.
+  if [ "$2" = REFUSED ]; then nt_refuse_if "$1" "$CAP"; fi
   # HERE-STRING, never `printf '%s' "$2" | grep -q`: under `set -o pipefail` a MATCH
   # can still report the pipeline as failed (SIGPIPE 141) and print a false
   # `DID NOT BITE`. See the header for the measurement.
-  if grep -qE '^ℹ fail [1-9]' <<<"$2"; then echo "  ✅ BITES — $1"; bites=$((bites+1));
+  if [ "$2" = RED ]; then echo "  ✅ BITES — $1"; bites=$((bites+1));
   else echo "  ❌ DID NOT BITE — $1 (the guard is not protecting this)"; fail=1; fi
 }
 
 echo "case 0: baseline (unsabotaged must be GREEN)"
-out=$(run_guard); grep -E '^ℹ (pass|fail)' <<<"$out"
-if grep -qE '^ℹ fail 0' <<<"$out"; then echo "  ✅ baseline green"; bites=$((bites+1));
+out=$(run_guard); nt_refuse_if "the baseline guard run" "$CAP"
+grep -E '^ℹ (pass|fail)' "$CAP"
+if [ "$out" = GREEN ]; then echo "  ✅ baseline green"; bites=$((bites+1));
 else echo "  ❌ baseline not green"; fail=1; fi
 
 echo "case 1: the landing button is unwired (THE REPORTED SYMPTOM)"
@@ -338,7 +362,7 @@ else
   # The RED must NAME this property: a red for any other reason (a broken edit, a
   # sibling assertion) is not a bite for the assertion this case drives. HERE-STRING,
   # never a pipe — see the header for the SIGPIPE-141 measurement.
-  if ! grep -q '^✖ a THROWN/network failure on the landing save must reach the page' <<<"$out"; then
+  if ! grep -q '^✖ a THROWN/network failure on the landing save must reach the page' "$CAP"; then
     echo "  ❌ the RED did not name the thrown-failure guard — this case's bite is unattributable"
     fail=1
   fi

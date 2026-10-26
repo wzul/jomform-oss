@@ -32,11 +32,24 @@
 #
 # Run:  bash web/scripts/biteproof_npm_audit_gate.sh
 set -uo pipefail
-cd "$(dirname "$0")/.." || exit 2
+BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+[ -n "$BITE_HOME" ] || { echo "cannot resolve the directory this script lives in" >&2; exit 2; }
+
+# The shared runner gate (web/scripts/lib/node_test_verdict.sh): a node that cannot run
+# the guard is a REFUSAL that names itself, never a verdict (card t_b014807f).
+. "$BITE_HOME/lib/node_test_verdict.sh" || {
+  echo "BITEPROOF REFUSED: cannot source $BITE_HOME/lib/node_test_verdict.sh, so there is" >&2
+  echo "no capability gate to prove the runner can run this guard." >&2
+  exit 2
+}
+cd "$BITE_HOME/.." || exit 2
 
 GATE=scripts/npm-audit-gate.mjs
 TEST=src/lib/npmAuditGate.test.ts
-node --version >/dev/null 2>&1 || { echo "REFUSING: node is not on PATH"; exit 2; }
+# CAPABILITY, not presence: `node --version` succeeding proves nothing (v18.19.1 answers
+# it and then rejects `--disable-warning`). This harness asks for the TAP reporter
+# explicitly, so the probe does too.
+nt_require_node tap
 [ -f "$GATE" ] || { echo "REFUSING: $GATE not found"; exit 2; }
 [ -f "$TEST" ] || { echo "REFUSING: $TEST not found"; exit 2; }
 

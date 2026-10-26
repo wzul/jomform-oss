@@ -32,6 +32,15 @@ set -uo pipefail
 BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 [ -n "$BITE_HOME" ] || { echo "cannot resolve this script's directory" >&2; exit 2; }
 SELF="$BITE_HOME/$(basename "$0")"
+
+# The shared runner gate and verdict rule (web/scripts/lib/node_test_verdict.sh): every
+# verdict this harness prints comes from POSITIVE runner evidence, and a node that cannot
+# run the guard is a REFUSAL that names itself — never an answer (card t_b014807f).
+. "$BITE_HOME/lib/node_test_verdict.sh" || {
+  echo "BITEPROOF REFUSED: cannot source $BITE_HOME/lib/node_test_verdict.sh, so there is" >&2
+  echo "no verdict rule to read a guard's output with." >&2
+  exit 2
+}
 cd "$BITE_HOME/.." || exit 2                    # -> web/
 
 LOCK_BASE="${BITEPROOF_LOCK_DIR:-/tmp}"
@@ -89,6 +98,12 @@ if ! flock -n "$LOCK_PROBE" true 2>/dev/null; then
 fi
 rm -f "$LOCK_PROBE"
 echo "lock:   held for this worktree (${LOCK_FILE##*/})"
+
+# CAPABILITY, not presence (card t_b014807f): `node --version` succeeding proves nothing
+# here — v18.19.1 answers it and then rejects `--disable-warning`, and every leg below
+# would read that empty capture as a verdict. The gate runs the invocation this harness
+# depends on and refuses, naming the node, when that produces no test-runner summary.
+nt_require_node
 
 GUARD=src/lib/a11yDarkSlabCoverage.test.ts
 GUARD_REPO="web/$GUARD"          # the same path as git sees it, from the repo root

@@ -68,6 +68,15 @@ set -uo pipefail
 # this file re-execs under the lock needs a path that survives a changed CWD.
 BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 [ -n "$BITE_HOME" ] || { echo "cannot resolve the directory this script lives in" >&2; exit 2; }
+
+# The shared runner gate and verdict rule (web/scripts/lib/node_test_verdict.sh).
+# Every verdict this harness prints comes from POSITIVE runner evidence: a capture
+# carrying no test-runner output is a REFUSAL, never a GREEN (card t_b014807f).
+. "$BITE_HOME/lib/node_test_verdict.sh" || {
+  echo "BITEPROOF REFUSED: cannot source $BITE_HOME/lib/node_test_verdict.sh, so there is" >&2
+  echo "no verdict rule to read a guard's output with." >&2
+  exit 2
+}
 SELF="$BITE_HOME/$(basename "$0")"
 cd "$BITE_HOME/.." || exit 2               # -> web/
 
@@ -154,6 +163,11 @@ PAGE_IN_REPO="web/$PAGE"
 OLD_COPY="$GUARD.oldcheck.ts"
 
 node --version >/dev/null 2>&1 || { echo "BITEPROOF REFUSED: node is not on PATH." >&2; exit 2; }
+# CAPABILITY, not presence (card t_b014807f): v18 answers `node --version` and then
+# rejects `--disable-warning=…`, and every leg below then reads its empty capture as
+# GREEN. The gate runs the invocation this harness depends on and refuses, naming the
+# node, when that produces no test-runner summary.
+nt_require_node
 command -v perl >/dev/null 2>&1 || {
   echo "BITEPROOF REFUSED: perl is not on PATH, and the page mutations below are perl" >&2
   echo "substitutions with counted anchors (a mutation that does not land is a silent green)." >&2
@@ -244,7 +258,7 @@ fi
 
 BAK=$(mktemp -d)
 OUT_FILE=$(mktemp)
-trap 'rm -f "$OLD_GUARD" "$PIN_PROBE" "$OUT_FILE" "$OLD_COPY"; rm -rf "$BAK"' EXIT
+trap 'rm -f "$OLD_GUARD" "$PIN_PROBE" "$OUT_FILE" "$OUT_FILE.rc" "$OLD_COPY"; rm -rf "$BAK"' EXIT
 
 sha_of() { sha256sum "$1" | cut -d' ' -f1; }
 FILES=("$GUARD" "$PAGE")
@@ -262,17 +276,20 @@ restore_all() {
   fail=$((fail + (1 - ok)))
 }
 
-# run_guard <file> -> prints GREEN or RED; the full output lands in $OUT_FILE.
+# run_guard <file> -> prints GREEN, RED or REFUSED; the full output lands in $OUT_FILE
+# and the runner's exit status in $OUT_FILE.rc.
 # Two traps this shape avoids, both seen in sibling harnesses: the test runner EXITS
 # non-zero on failure, so the output is captured before it is inspected (a pipeline into
 # `grep -q` under `set -o pipefail` reads a real match as "not found"); and run_guard is
 # called as `got=$(run_guard ...)`, i.e. in a SUBSHELL, so a variable set inside it would
 # be discarded — the output therefore goes to a FILE.
+# THE THIRD TRAP IS THE VERDICT ITSELF (card t_b014807f): this used to print GREEN
+# whenever the capture held no `ℹ fail [1-9]` line, so a node that could not run the file
+# (a 64-byte "bad option" capture) answered GREEN on every leg. nt_capture truncates the
+# capture first and reads GREEN only off `ℹ pass` + `ℹ fail 0` + a `✔ ` line, and REFUSED
+# otherwise; the callers below turn REFUSED into exit 2.
 run_guard() {
-  local out
-  out=$(node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "$1" 2>&1) || true
-  printf '%s\n' "$out" > "$OUT_FILE"
-  if grep -qE '^ℹ fail [1-9]' <<<"$out"; then printf 'RED'; else printf 'GREEN'; fi
+  nt_capture "$OUT_FILE" "$1"
 }
 # The base guard runs as a sibling `.ts` copy (node strips types by extension), beside the
 # real guard because the guard resolves its paths from import.meta.url. CASE 1 adds an
@@ -313,6 +330,7 @@ page_total_words() {
   cp "$OLD_GUARD" "$OLD_COPY"
   sed -i -E "s/${CAP_DECL_RE}/\1total < 1,/" "$OLD_COPY"
   run_guard "$OLD_COPY" >/dev/null
+  nt_refuse_if "the word-total probe (the base guard with its cap lowered to 1)" "$OUT_FILE"
   rm -f "$OLD_COPY"
   sed -nE 's/.*the feature summaries total ([0-9]+) words.*/\1/p' "$OUT_FILE" | head -1
 }
@@ -352,6 +370,8 @@ check() {
   [ -n "$want_n" ] || want_n=1
 
   got=$(run_base_guard)
+  # A refusal must not leave the case's mutation on disk: restore first, then refuse.
+  if [ "$got" = REFUSED ]; then restore_all; nt_refuse_if "${label}: BASE guard" "$OUT_FILE"; fi
   if [ "$got" != "$base_want" ]; then
     echo "  *** ${label}: BASE guard wanted ${base_want}, got ${got} — the case does not reproduce the trap ***"
     grep -E '^ℹ (pass|fail)' "$OUT_FILE" | head -2; fail=$((fail + 1))
@@ -363,6 +383,8 @@ check() {
   fi
 
   got=$(run_guard "$GUARD")
+  # A refusal must not leave the case's mutation on disk: restore first, then refuse.
+  if [ "$got" = REFUSED ]; then restore_all; nt_refuse_if "${label}: NEW guard" "$OUT_FILE"; fi
   local n; n=$(nfail); : "${n:=0}"
   if [ "$got" != "$new_want" ]; then
     echo "  *** ${label}: NEW guard wanted ${new_want}, got ${got} ***"
@@ -454,6 +476,7 @@ echo "new guard (this tree):             $(wc -l < "$GUARD") lines, derived budg
 # for a reason that has nothing to do with this branch and no mutation can make it
 # "miss" anything.
 premise=$(run_base_guard)
+nt_refuse_if "BASELINE, the base guard on the UNMUTATED tree" "$OUT_FILE"
 if [ "$premise" != "GREEN" ]; then
   echo >&2
   echo "BITEPROOF REFUSED: the base guard (${BASE_REF} ${BASE_REV:0:12}) is ${premise} on the UNMUTATED" >&2
@@ -463,6 +486,7 @@ if [ "$premise" != "GREEN" ]; then
   exit 2
 fi
 newpremise=$(run_guard "$GUARD")
+nt_refuse_if "BASELINE, this tree's guard on the UNMUTATED tree" "$OUT_FILE"
 if [ "$newpremise" != "GREEN" ]; then
   echo >&2
   echo "BITEPROOF REFUSED: this tree's guard is ${newpremise} on the UNMUTATED tree, so a red below" >&2

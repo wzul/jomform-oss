@@ -47,6 +47,15 @@ set -uo pipefail
 BITE_HOME=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 [ -n "$BITE_HOME" ] || { echo "cannot resolve the directory this script lives in" >&2; exit 2; }
 SELF="$BITE_HOME/$(basename "$0")"
+
+# The shared runner gate and verdict rule (web/scripts/lib/node_test_verdict.sh): every
+# verdict this harness prints comes from POSITIVE runner evidence, and a node that cannot
+# run the guard is a REFUSAL that names itself — never an answer (card t_b014807f).
+. "$BITE_HOME/lib/node_test_verdict.sh" || {
+  echo "BITEPROOF REFUSED: cannot source $BITE_HOME/lib/node_test_verdict.sh, so there is" >&2
+  echo "no verdict rule to read a guard's output with." >&2
+  exit 2
+}
 cd "$BITE_HOME/.." || exit 2               # -> web/
 
 # ---- the /docs bite family's SHARED-INPUT lock -------------------------------
@@ -124,6 +133,12 @@ if flock -n "$LOCK_FILE" true 2>/dev/null; then
 fi
 echo "lock:   held for this worktree (${LOCK_FILE##*/})"
 
+# CAPABILITY, not presence (card t_b014807f): `node --version` succeeding proves nothing
+# here — v18.19.1 answers it and then rejects `--disable-warning`, and every leg below
+# would read that empty capture as a verdict. The gate runs the invocation this harness
+# depends on and refuses, naming the node, when that produces no test-runner summary.
+nt_require_node
+
 # ---- what this harness drives, and the premise it refuses without ------------
 GUARD=src/lib/docsIndex.test.ts
 GUARD_IN_REPO="web/$GUARD"
@@ -181,7 +196,7 @@ fi
 
 BAK=$(mktemp -d)
 OUT_FILE=$(mktemp)
-trap 'rm -f "$OLD_GUARD" "$OUT_FILE" "$OLD_COPY"; rm -rf "$BAK"' EXIT
+trap 'rm -f "$OLD_GUARD" "$OUT_FILE" "$OUT_FILE.rc" "$OLD_COPY"; rm -rf "$BAK"' EXIT
 
 sha_of() { sha256sum "$1" | cut -d' ' -f1; }
 FILES=("$GUARD" "$FACTS" "$PAGE")
@@ -201,17 +216,20 @@ restore_all() {
   fail=$((fail + (1 - ok)))
 }
 
-# run_guard <file> -> prints GREEN or RED; the full output lands in $OUT_FILE.
+# run_guard <file> -> prints GREEN, RED or REFUSED; the full output lands in $OUT_FILE
+# and the runner's exit status in $OUT_FILE.rc.
 # Two traps this shape avoids, both seen in sibling harnesses: the test runner EXITS
 # non-zero on failure, so the output is captured before it is inspected (a pipeline into
 # `grep -q` under `set -o pipefail` reads a real match as "not found"); and run_guard is
 # called as `got=$(run_guard ...)`, i.e. in a SUBSHELL, so a variable set inside it would
 # be discarded — the output therefore goes to a FILE.
+# THE THIRD TRAP IS THE VERDICT ITSELF (card t_b014807f): this used to print GREEN
+# whenever the capture held no `ℹ fail [1-9]` line, so a node that could not run the file
+# (a 64-byte "bad option" capture) answered GREEN on every leg and the harness printed a
+# verdict it never measured. nt_capture truncates the capture first and reads GREEN only
+# off `ℹ pass` + `ℹ fail 0` + a `✔ ` line; the callers turn REFUSED into exit 2.
 run_guard() {
-  local out
-  out=$(node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "$1" 2>&1) || true
-  printf '%s\n' "$out" > "$OUT_FILE"
-  if grep -qE '^ℹ fail [1-9]' <<<"$out"; then printf 'RED'; else printf 'GREEN'; fi
+  nt_capture "$OUT_FILE" "$1"
 }
 # The base guard runs as a sibling `.ts` copy (node strips types by extension), beside the
 # real guard because the guard resolves its paths from import.meta.url. Cases that rename
@@ -244,6 +262,8 @@ check() {
   [ "$new_needle" = "-" ] && new_needle=""
 
   got=$(run_base_guard)
+  # A refusal must not leave the case's mutation on disk: restore first, then refuse.
+  if [ "$got" = REFUSED ]; then restore_all; nt_refuse_if "${label}: BASE guard" "$OUT_FILE"; fi
   if [ "$got" != "$base_want" ]; then
     echo "  *** ${label}: BASE guard wanted ${base_want}, got ${got} — the case does not reproduce the hole ***"
     grep -E '^ℹ (pass|fail)' "$OUT_FILE" | head -2; fail=$((fail + 1))
@@ -255,6 +275,8 @@ check() {
   fi
 
   got=$(run_guard "$GUARD")
+  # A refusal must not leave the case's mutation on disk: restore first, then refuse.
+  if [ "$got" = REFUSED ]; then restore_all; nt_refuse_if "${label}: NEW guard" "$OUT_FILE"; fi
   local n; n=$(nfail); : "${n:=0}"
   if [ "$got" != "$new_want" ]; then
     echo "  *** ${label}: NEW guard wanted ${new_want}, got ${got} ***"
@@ -309,6 +331,7 @@ echo "new guard (this tree):             $(wc -l < "$GUARD") lines, predicate '$
 # for a reason that has nothing to do with this branch and no mutation can make it "miss"
 # anything.
 premise=$(run_base_guard)
+nt_refuse_if "BASELINE, the base guard on the UNMUTATED tree" "$OUT_FILE"
 if [ "$premise" != "GREEN" ]; then
   echo >&2
   echo "BITEPROOF REFUSED: the base guard (${BASE_REF} ${BASE_REV:0:12}) is ${premise} on the UNMUTATED" >&2
@@ -318,6 +341,7 @@ if [ "$premise" != "GREEN" ]; then
   exit 2
 fi
 newpremise=$(run_guard "$GUARD")
+nt_refuse_if "BASELINE, this tree's guard on the UNMUTATED tree" "$OUT_FILE"
 if [ "$newpremise" != "GREEN" ]; then
   echo >&2
   echo "BITEPROOF REFUSED: this tree's guard is ${newpremise} on the UNMUTATED tree, so a red below" >&2
