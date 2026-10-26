@@ -65,6 +65,51 @@ func Enqueue(ctx context.Context, q *emailqueue.Queue, job Job) error {
 	})
 }
 
+// BookkeepingFields are the field names the public renderer emits for its own
+// anti-spam layers rather than for the sender to fill in: the `website`
+// honeypot and the `jf_ts` render timestamp (httpapi's
+// antiSpamHoneypotField / antiSpamRenderField — the literals are repeated here
+// because httpapi imports this package, and a test in httpapi asserts the two
+// lists still agree).
+//
+// They are TRANSPORT BOOKKEEPING and the judge must never see them. They ride
+// the submitted `fields` map, so they land in the stored submission and, until
+// card t_28baedff, reached buildPrompt verbatim. Measured on the live judge: the
+// same genuine Malay message scored 0.3739 bare, 0.5648 with `jf_ts`, 0.5816 with
+// an EMPTY `website`, and 0.5168 with both — i.e. two lines that are not the
+// sender's answer moved it 0.15–0.21 across the 0.5 line and got a real enquiry
+// flagged (and, unreviewed, deleted by the retention sweep).
+var BookkeepingFields = []string{"website", "jf_ts"}
+
+// IsBookkeepingField reports whether a submitted field name is one of the
+// renderer's anti-spam controls rather than an answer the sender gave.
+func IsBookkeepingField(name string) bool {
+	for _, f := range BookkeepingFields {
+		if name == f {
+			return true
+		}
+	}
+	return false
+}
+
+// JudgeableData returns a copy of the submitted field map with the renderer's
+// bookkeeping controls removed, so what is queued for the judge is exactly what
+// the sender answered. The caller's map is not modified: the submission itself
+// still stores the raw fields.
+func JudgeableData(data map[string]any) map[string]any {
+	if len(data) == 0 {
+		return data
+	}
+	out := make(map[string]any, len(data))
+	for k, v := range data {
+		if IsBookkeepingField(k) {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 // buildPrompt assembles the spam-judge prompt.
 //
 // Issue #547 (round 8): every value here is attacker-controlled — a BUYER writes
@@ -74,6 +119,11 @@ func Enqueue(ctx context.Context, q *emailqueue.Queue, job Job) error {
 // and suppress the spam flag (and, via the 30-day spam retention sweep, keep a
 // junk submission out of the purge set). The submission is now fenced as
 // untrusted data with a restated directive AFTER it.
+//
+// Card t_28baedff: the state carries ONLY what the sender answered. The
+// renderer's hidden anti-spam fields are dropped here (see BookkeepingFields) —
+// they are not part of the message being judged and measurably shifted the
+// verdict.
 func buildPrompt(job Job) string {
 	var sb strings.Builder
 	sb.WriteString("Classify the form submission below as SPAM or LEGIT.\n\n")
@@ -90,12 +140,13 @@ func buildPrompt(job Job) string {
 		sb.WriteString("Submitter IP: " + neutraliseFence(job.IP, spamFence) + "\n")
 	}
 	sb.WriteString("Submitted field values:\n")
-	if len(job.Data) == 0 {
+	data := JudgeableData(job.Data)
+	if len(data) == 0 {
 		sb.WriteString("(none)\n")
 	} else {
-		for _, k := range sortedKeys(job.Data) {
+		for _, k := range sortedKeys(data) {
 			sb.WriteString("- " + neutraliseFence(k, spamFence) + ": " +
-				neutraliseFence(fmt.Sprintf("%v", job.Data[k]), spamFence) + "\n")
+				neutraliseFence(fmt.Sprintf("%v", data[k]), spamFence) + "\n")
 		}
 	}
 	sb.WriteString(spamFence + "\n\n")

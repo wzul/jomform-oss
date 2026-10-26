@@ -530,9 +530,14 @@ func (h *PublicHandlers) enqueueSpamJudge(r *http.Request, accountID string, for
 		SubmissionID: subID,
 		SaleID:       saleID,
 		AccountID:    accountID,
-		Data:         data,
-		Email:        emailAddr,
-		IP:           middleware.ClientIP(r),
+		// Card t_28baedff: the job carries the sender's ANSWERS only. The
+		// renderer's hidden anti-spam controls (`website` honeypot, `jf_ts`
+		// timestamp) ride the same fields map and are not part of the message;
+		// feeding them to the decision model moved a genuine Malay enquiry
+		// from 0.3739 to 0.5168 and got it flagged.
+		Data:  spamjudge.JudgeableData(data),
+		Email: emailAddr,
+		IP:    middleware.ClientIP(r),
 	}
 	if form != nil {
 		job.FormID = form.ID
