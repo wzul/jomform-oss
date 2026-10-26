@@ -71,7 +71,8 @@ type PublicHandlers struct {
 
 	// Issue #245: background AI spam judge. SpamQueue is the Valkey-backed
 	// background queue (#199) that spam-judge jobs are enqueued to; a worker
-	// sends each submission to Ollama Cloud gemma4 and flags it as spam in the
+	// sends each submission to the provider's decision model (SPAM_JUDGE_MODEL,
+	// default clef, on /v1/systemone) and flags it as spam in the
 	// background. Both nil in bare-mode tests → no judge runs (submissions are
 	// accepted immediately, never flagged).
 	SpamQueue *emailqueue.Queue

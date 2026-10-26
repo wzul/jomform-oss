@@ -892,7 +892,7 @@ type setWorkspaceSettingsIn struct {
 	SoundEnabled *bool `json:"sound_enabled,omitempty" jsonschema:"Mainkan bunyi beep pada dashboard bila jualan/respon baharu tiba (omit = kekal)"`
 	// Per-workspace AI spam-judge toggle. Omitted (nil) = keep
 	// current; explicit true/false sets it. Default true.
-	SpamJudgeEnabled *bool `json:"spam_judge_enabled,omitempty" jsonschema:"Hidupkan AI spam detection (judge gemma4) untuk workspace ini — true = hidup (lalai), false = MATI: tiada job AI dihantar langsung dan is_spam tidak lagi ditetapkan, jadi /spam kekal kosong (omit = kekal)"`
+	SpamJudgeEnabled *bool `json:"spam_judge_enabled,omitempty" jsonschema:"Hidupkan AI spam detection (model keputusan clef) untuk workspace ini — true = hidup (lalai), false = MATI: tiada job AI dihantar langsung dan is_spam tidak lagi ditetapkan, jadi /spam kekal kosong (omit = kekal)"`
 	// Language placement: the workspace's buyer-facing default language, used by
 	// PUBLIC forms when the form itself sets no config.lang (form-level wins).
 	// Omitted (nil) = keep current. This is the STOREFRONT language, not the

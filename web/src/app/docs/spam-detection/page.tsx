@@ -14,9 +14,9 @@ const SECTIONS: Section[] = [
     id: "how-it-works",
     title: "How AI spam detection works",
     body: [
-      "When someone submits a public form on your storefront, JomForm accepts the entry immediately and records it. In the background it then sends the submitted values, the submitter's email address, the client IP and the form's title to an AI judge. The judge answers with one word — SPAM or LEGIT — and nothing about that call ever delays the submitter: the entry is already saved before the judge is asked.",
-      "An entry the judge calls LEGIT is left exactly as it was recorded. An entry it calls SPAM is flagged on the row itself (is_spam) with the reason the AI gave, and it appears in the Spam queue in your dashboard, where you can review it and un-flag a false positive.",
-      "The judge is deliberately conservative about itself rather than about your entries: if the AI call fails, or it replies with anything other than SPAM, the entry is left unflagged. A judge that cannot decide never marks your entry as spam.",
+      "When someone submits a public form on your storefront, JomForm accepts the entry immediately and records it. In the background it then sends the submitted values, the submitter's email address, the client IP and the form's title to a dedicated AI decision model, which answers with a spam confidence — a number from 0 (certainly genuine) to 1 (certainly spam). JomForm flags the entry when that confidence is at or above the threshold (0.5 by default). Nothing about that call ever delays the submitter: the entry is already saved before the judge is asked.",
+      "An entry the judge scores below the threshold is left exactly as it was recorded. An entry it scores at or above the threshold is flagged on the row itself (is_spam) with the reason — which names the judge's model — and it appears in the Spam queue in your dashboard, where you can review it and un-flag a false positive.",
+      "The judge is deliberately conservative about itself rather than about your entries: if the AI call fails, times out, or comes back with no confidence at all, the entry is left unflagged. A judge that cannot decide never marks your entry as spam.",
       "Two things always skip the judge: a submission made by a signed-in owner or admin of the workspace (so you can test your own form without being flagged), and any workspace that has turned the judge off (see below).",
     ],
   },

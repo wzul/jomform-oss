@@ -92,10 +92,14 @@ services:
       # all, and the in-app assistant reports itself unavailable (GET
       # /v1/rest/chat → available:false) instead of offering a box whose every
       # message fails. LLM_BASE_URL / LLM_MODEL override the endpoint and model
-      # (defaults: https://ollama.com/v1, deepseek-v4.1-flash:1017).
+      # (defaults: https://ollama.com/v1, deepseek-v4.1-flash:1017). The spam
+      # judge's model and threshold are its own seam (SPAM_JUDGE_MODEL, default
+      # clef; SPAM_JUDGE_THRESHOLD, default 0.5) on the same base URL and key.
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}
+      SPAM_JUDGE_MODEL: ${SPAM_JUDGE_MODEL:-}
+      SPAM_JUDGE_THRESHOLD: ${SPAM_JUDGE_THRESHOLD:-}
       PORT: "8080"
       # QA test-account marking channel (card t_6ae7f586). A registration that
       # presents this server-held token in X-JomForm-QA-Signup is written with

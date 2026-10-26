@@ -591,12 +591,15 @@ func main() {
 				Breaker:    deps.Breaker,
 				Pay:        pay,
 				// Issue #245: the same background worker also routes
-				// spam_judge jobs to the AI judge (Ollama Cloud gemma4). The
-				// judge reads OLLAMA_API_KEY from the environment (never
-				// hardcoded). Nil-safe: when the LLM client is absent the
-				// spam_judge jobs are dropped.
+				// spam_judge jobs to the AI judge, which asks the judge's own
+				// DECISION model on /v1/systemone (SPAM_JUDGE_MODEL, default
+				// clef) rather than the shared chat model. The judge reads
+				// OLLAMA_API_KEY from the environment (never hardcoded).
+				// Nil-safe: when the LLM client is absent the spam_judge jobs
+				// are dropped.
 				SpamJudge: &spamjudge.Handler{
-					LLM:   llm.New(cfg.LLMBaseURL, cfg.LLMModel),
+					LLM: llm.New(cfg.LLMBaseURL, cfg.LLMModel).
+						SetSpamJudge(cfg.SpamJudgeModel, cfg.SpamJudgeThreshold),
 					Subs:  submissionsStore,
 					Sales: sales,
 				},

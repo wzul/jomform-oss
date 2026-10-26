@@ -1,4 +1,4 @@
--- Issue #245: AI spam detection (background gemma4 judge).
+-- Issue #245: AI spam detection (background decision-model judge).
 --
 -- submissions + sales gain is_spam (bool, default false) + spam_reason
 -- (nullable text). A submission/sale is accepted immediately, then judged

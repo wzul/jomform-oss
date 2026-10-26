@@ -3,10 +3,13 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wzul/jomform/api/internal/llm"
 )
 
 // Config holds all runtime settings for jomform-api.
@@ -108,6 +111,14 @@ type Config struct {
 	LLMBaseURL string
 	LLMModel   string
 
+	// Spam judge (issue #245): the judge asks the provider's DECISION route
+	// (/v1/systemone) with its own model, not the chat model above. The base
+	// URL and API key are SHARED with chat — only the model and the confidence
+	// threshold are per-job seam. Empty/invalid values use the defaults
+	// (clef, 0.5).
+	SpamJudgeModel     string
+	SpamJudgeThreshold float64
+
 	// DBSlowQueryMS (issue #211): queries taking longer than this many
 	// milliseconds are logged as slow and counted in
 	// jomform_db_slow_queries_total. Defaults to 200ms.
@@ -203,6 +214,11 @@ func Load() (*Config, error) {
 		// Issue #184: LLM legal-page generation (Ollama Cloud).
 		LLMBaseURL: os.Getenv("LLM_BASE_URL"),
 		LLMModel:   os.Getenv("LLM_MODEL"),
+
+		// Issue #245: the spam judge's own decision seam. Base URL and key are
+		// the chat ones; only the model and threshold are separate.
+		SpamJudgeModel:     getEnv("SPAM_JUDGE_MODEL", llm.DefaultSpamJudgeModel),
+		SpamJudgeThreshold: parseProbability(os.Getenv("SPAM_JUDGE_THRESHOLD"), llm.DefaultSpamJudgeThreshold),
 
 		// Issue #211: slow-query threshold (default 200ms).
 		DBSlowQueryMS: time.Duration(parsePositiveInt64(os.Getenv("DB_SLOW_QUERY_MS"), 200)) * time.Millisecond,
@@ -308,6 +324,18 @@ func parseRatio(s string, fallback float64) float64 {
 func parsePositiveFloat(s string, fallback float64) float64 {
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil || f <= 0 {
+		return fallback
+	}
+	return f
+}
+
+// parseProbability parses a confidence in 0..1, falling back on empty, invalid
+// or out-of-range input. Zero is ACCEPTED (a threshold of 0 flags everything,
+// which is a valid — if aggressive — policy); an out-of-range value is a typo,
+// not a policy, so it falls back rather than silently meaning "flag nothing".
+func parseProbability(s string, fallback float64) float64 {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(f) || f < 0 || f > 1 {
 		return fallback
 	}
 	return f

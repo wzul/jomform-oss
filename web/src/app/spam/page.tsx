@@ -2,9 +2,10 @@
 
 // Issue #245: AI spam review queue.
 // The merchant sees spam-flagged submissions and sales (flagged by the
-// background gemma4 judge) and can un-spam a false positive. A spam-flagged
-// sale that receives a successful payment is automatically un-spammed by the
-// payment callback. Spam entries auto-delete after 30 days.
+// background AI judge — the decision model clef, via /v1/systemone) and can
+// un-spam a false positive. A spam-flagged sale that receives a successful
+// payment is automatically un-spammed by the payment callback. Spam entries
+// auto-delete after 30 days.
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";

@@ -4,7 +4,7 @@ package httpapi
 //
 // THE BUG THIS GUARDS AGAINST (the real incident): form `event-registration` on
 // the production account had 4/4 real registrations flagged as spam by the
-// background AI judge (gemma4). A flagged entry is not merely mislabelled: the
+// background AI judge (clef, via /v1/systemone). A flagged entry is not merely mislabelled: the
 // hourly retention sweep runs `DELETE FROM submissions WHERE is_spam = true AND
 // created_at < $1` (dbstore/submission.go), so an unreviewed flag is permanent
 // data loss after 30 days. There was no way to turn the judge off.

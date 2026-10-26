@@ -1,4 +1,4 @@
--- Issue #245: AI spam detection (background gemma4 judge).
+-- Issue #245: AI spam detection (background decision-model judge).
 ALTER TABLE submissions
     DROP COLUMN IF EXISTS spam_reason,
     DROP COLUMN IF EXISTS is_spam;

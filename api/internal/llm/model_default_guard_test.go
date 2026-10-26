@@ -165,8 +165,8 @@ var modelFamilies = []string{
 
 // modelToken matches a model id as it is written in prose, a description or a Go
 // string: a FAMILY name (modelFamilies) followed by the id's tail and an
-// optional `:tag`. Case-insensitive because prose writes `Gemma4` as readily as
-// `gemma4`.
+// optional `:tag`. Case-insensitive because prose writes `Qwen3` as readily as
+// `qwen3`.
 //
 // Three properties are deliberate:
 //
@@ -176,7 +176,7 @@ var modelFamilies = []string{
 //     and must not be normalised into the untagged one;
 //   - the family must be followed by an ID SEPARATOR and nothing else will do:
 //     `-` (the shape every hyphenated id uses — `deepseek-v4.1-flash:1017`), a
-//     leading DIGIT (the `gemma4` shape), or a `:` with an id-shaped tail (the
+//     leading DIGIT (the `qwen3` shape), or a `:` with an id-shaped tail (the
 //     `id:tag` spelling — `gpt-oss:120b`, `mistral:7b` — which is the only
 //     branch that reaches a family carrying no hyphen, because the other two
 //     require the very hyphen such a family does not have). Without that the
@@ -307,59 +307,42 @@ func isProseCompound(id string) bool {
 // guard exists to catch. Every entry is checked to be REACHED (an exemption the
 // scan never matches is rot, and reads as permission it does not grant).
 //
-// Two shapes are exempt, and they are different:
+// The only shape exempt is an APPLIED MIGRATION. Its comments are the historical
+// record of what happened at the time, and editing them churns files the
+// fresh-DB guard replays. `000029` named the LLM default of its day.
 //
-//   - APPLIED MIGRATIONS. Their comments are the historical record of what
-//     happened at the time, and editing them churns files the fresh-DB guard
-//     replays. `000029` named the LLM default of its day; `000034` and `000062`
-//     named the spam judge's model.
-//   - LIVE PROSE ABOUT THE SPAM JUDGE. `gemma4` is named in eight shipped files
-//     — the judge's package doc, its stored `spam_reason` (which a merchant sees
-//     on /spam), the wiring comment in `main.go`, two doc comments, an MCP
-//     json-schema description and the /spam page's header comment. Measured while
-//     writing this: the judge does NOT run gemma4 — every spam_judge job goes
-//     through the shared `llm.New(cfg.LLMBaseURL, cfg.LLMModel)` client, so the
-//     mention is stale prose rather than a dead id, and the id it names is
-//     provider-specific in a way the other families are not. Correcting those
-//     sentences is a separate change, so they are pinned here BY NAME instead of
-//     being silently tolerated: this table is the record that they exist, and a
-//     new foreign-family mention has to be added to it on purpose.
+// WHAT USED TO BE HERE, AND WHY IT IS GONE. Cards before t_0e9dc7fc pinned the
+// spam judge's model name in eight shipped files here — the judge's package doc,
+// its stored spam_reason (which a merchant sees on /spam), the wiring comment in
+// main.go, two doc comments, an MCP json-schema description and the /spam page's
+// header comment. The table was the record that the judge did NOT run that
+// model: every spam_judge job went through the shared
+// `llm.New(cfg.LLMBaseURL, cfg.LLMModel)` client. t_0e9dc7fc moved the judge onto
+// its own DECISION model and corrected every sentence, so those entries were
+// dropped with the mentions rather than left guarding text that no longer
+// exists.
 //
-// A retired id may NEVER be parked here except for the pinned migration: the
-// assertion below refuses an exemption whose id is in the retired family, so the
-// one exemption that names it is the historical record and nothing can ride in
-// behind it.
+// THE DECISION MODEL IS A DELIBERATE EXCEPTION TO THIS GUARD'S RULE, not a hole
+// in it. The spam judge asks `clef` — an id `GET /v1/models` publishes with
+// `"api":"systemone"` — on a different route (/v1/systemone) from the chat model,
+// and the chat route answers HTTP 400 for it. Requiring every mention of it to
+// spell the CHAT default would make the tree say something false, so `clef` is
+// deliberately NOT added to modelFamilies: that list judges ids the repo must
+// spell as the chat default, and a decision family in it would red every correct
+// mention. Its value is pinned by its own guard instead —
+// TestSpamJudgeModelIsThePublishedDecisionModel, plus the opt-in
+// TestSpamJudgeModelIsPublishedByTheRouter, both in spam_judge_test.go. A
+// router-side rename therefore fails there instead of silently 400-ing every
+// submission here.
+//
+// A retired id may NEVER be parked in this table except for the pinned
+// migration: the assertion below refuses an exemption whose id is in the retired
+// family, so the one exemption that names it is the historical record and nothing
+// can ride in behind it.
 var modelMentionExempt = map[string]map[string]string{
 	// The retired family, named once, as a historical record.
 	"api/internal/db/migrations/000029_space_legal_pages.up.sql": {
 		"deepseek-v4-flash": "applied migration — the default of its day, historical record, never edited",
-	},
-	// The spam judge's model name in applied migrations.
-	"api/internal/db/migrations/000034_spam_detection.up.sql": {
-		"gemma4": "applied migration — historical record of the judge's model, never edited",
-	},
-	"api/internal/db/migrations/000034_spam_detection.down.sql": {
-		"gemma4": "applied migration — historical record of the judge's model, never edited",
-	},
-	"api/internal/db/migrations/000062_workspace_spam_judge_enabled.up.sql": {
-		"gemma4": "applied migration — historical record of the judge's model, never edited",
-	},
-	// Live prose about the spam judge, stale rather than dead: the judge runs the
-	// shared LLM client, so none of these sentences is what the code does.
-	"api/internal/spamjudge/spamjudge.go": {
-		"gemma4": "judge prose: the package doc and the stored spam_reason a merchant reads on /spam. Stale, not dead — the judge runs llm.New(cfg.LLMBaseURL, cfg.LLMModel). Fixing the sentence is its own change",
-	},
-	"api/internal/httpapi/public.go": {
-		"gemma4": "judge prose: doc comment on the submit path. Stale, not dead — see api/internal/spamjudge/spamjudge.go",
-	},
-	"api/cmd/jomform-api/main.go": {
-		"gemma4": "judge prose: the spam-judge wiring comment. Stale, not dead — the handler is built from the shared LLM client on the line below it",
-	},
-	"api/internal/mcpsrv/workspaces.go": {
-		"gemma4": "judge prose in an MCP json-schema description; the description is part of the generated openapi.json, so correcting it regenerates that file and is its own change",
-	},
-	"web/src/app/spam/page.tsx": {
-		"gemma4": "judge prose: the file-header comment on the /spam page. Stale, not dead — the page renders whatever the API flags, and the judge runs the shared LLM client",
 	},
 }
 
@@ -1097,7 +1080,7 @@ func (e *unreadableFileError) Error() string { return "not text: " + e.path }
 
 // idHasIdSeparator reports whether a family token is followed by an id SEPARATOR:
 // `-` (the shape every hyphenated id uses — `deepseek-coder`, `gemini-pro`,
-// `claude-opus`), a leading DIGIT (the `gemma4` shape), or a `:` with an
+// `claude-opus`), a leading DIGIT (the `qwen3` shape), or a `:` with an
 // id-shaped tail (the `id:tag` spelling — `gpt-oss:120b`, `mistral:7b`). A bare
 // family word in prose carries none of the three, which is the only thing this
 // test is here to reject — `phi` and `solar` are English words.

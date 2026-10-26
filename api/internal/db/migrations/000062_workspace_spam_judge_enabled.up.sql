@@ -1,6 +1,7 @@
 -- Migration 000062: per-workspace AI spam-judge toggle.
 --
--- A merchant can turn the background AI spam judge (issue #245, gemma4) OFF for
+-- A merchant can turn the background AI spam judge (issue #245; its decision
+-- model is configured by SPAM_JUDGE_MODEL, default clef) OFF for
 -- one workspace. When off, the submit path enqueues NO judge job at all — the
 -- AI work is never spent and `is_spam` is never set on a new entry, so the
 -- workspace's /spam queue stays empty.
