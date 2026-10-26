@@ -714,6 +714,15 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 		// enforced (201 + a stored, possibly empty, submission). Derive the
 		// contract from the registered fields instead; the block contract path
 		// stays exactly as it was for every non-custom form.
+		//
+		// Card t_82fe9cb7: customform.Enabled is also the render precedence —
+		// renderCustomForm runs before renderResponseForm and that page posts
+		// only the names in custom_html.fields. So a form that still DECLARES
+		// required builder blocks beside a custom body (the shape upsert_form
+		// produces by merging custom_html into an existing config) is judged by
+		// the custom contract, not the block one: applying both would demand
+		// answers for controls the buyer's page never paints, and refuse every
+		// submit. One contract, chosen by which renderer owns the page.
 		var regs []formfields.Field
 		if customform.Enabled(form.Config) {
 			regs = customform.ValidationContract(customform.FromConfig(form.Config))
