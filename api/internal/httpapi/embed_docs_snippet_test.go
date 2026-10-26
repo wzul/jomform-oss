@@ -336,7 +336,12 @@ func TestDocsEmbedSnippetIsTheFramableURL(t *testing.T) {
 // "Framing is allowed for embedded forms" directly above an iframe of the
 // plain URL. Re-adding that pairing is the regression, so it is named here.
 func TestDocsEmbedPageDoesNotClaimThePlainURLIsFramable(t *testing.T) {
-	page := readFileString(t, docsEmbedPagePath(t))
+	// Read through docsReaderText for the same reason the paragraph guard does
+	// (card t_429c6097): both presence pins below are `strings.Contains`, so a
+	// comment that merely NAMES `X-Frame-Options` or `/embed/f/` satisfied them
+	// while the rendered copy was gone — the same source-read defect, one test
+	// over in this file.
+	page := docsReaderText(readFileString(t, docsEmbedPagePath(t)))
 
 	// The blanket claim must be gone: framing is NOT allowed for the plain URL.
 	if strings.Contains(page, "Framing is allowed for embedded forms") {
@@ -361,6 +366,10 @@ func TestDocsEmbedPageDoesNotClaimThePlainURLIsFramable(t *testing.T) {
 // the HTML entities used for apostrophes/quotes are decoded. Without this a
 // guard matches one exact source LAYOUT, so a paragraph reflow (or `&apos;`
 // becoming `&#39;`) silently disarms it while the rendered claim is unchanged.
+//
+// It folds LAYOUT only — it does not know what a comment is. A guard that wants
+// the sentences a reader is actually SERVED wants docsReaderText (which blanks
+// comments first); card t_429c6097 is what happens when those two are confused.
 func normalizedDocsText(s string) string {
 	s = strings.ReplaceAll(s, `{" "}`, " ")
 	s = strings.NewReplacer("&apos;", "'", "&#39;", "'", "&quot;", `"`, "&amp;", "&").Replace(s)
@@ -419,7 +428,13 @@ func normalizedDocsText(s string) string {
 // asserts the unlock's Set-Cookie carries Partitioned. This guard is what stops
 // the COPY from drifting back into contradicting that behaviour.
 func TestDocsEmbedPageDoesNotClaimTheGateReappears(t *testing.T) {
-	page := normalizedDocsText(readFileString(t, docsEmbedPagePath(t)))
+	src := readFileString(t, docsEmbedPagePath(t))
+	// Read through docsReaderText, NOT the raw bytes (card t_429c6097): it blanks
+	// every comment first, so a sentence in the source that no reader is ever
+	// served cannot satisfy a pin. Before that, deleting the whole paragraph from
+	// the JSX and leaving the same words on ONE `//` line in the module's leading
+	// comment block left this guard GREEN — measured at `ok ... 0.302s`.
+	page := docsReaderText(src)
 
 	// (a) The inverted claim, in the shapes it can come back as.
 	for _, claim := range []string{
@@ -439,36 +454,22 @@ func TestDocsEmbedPageDoesNotClaimTheGateReappears(t *testing.T) {
 		}
 	}
 
-	// (b) The true half must be stated. Deleting the sentence is the other way
-	// to lose it, and it leaves a merchant no way to know the embed survives a
-	// cookie-blocking browser.
-	if !strings.Contains(page, "Partitioned") {
-		t.Error("the docs no longer name the Partitioned (CHIPS) cookie — that attribute is why " +
-			"the unlock survives on the embedding page, and why it is confined to the top-level " +
-			"site that page sits on instead of being shared with every other site the form is " +
-			"embedded on; the paragraph must keep saying so")
-	}
-	if !strings.Contains(page, "keeps that unlock working when a visitor's browser blocks third-party cookies") {
-		t.Error("the docs no longer state that the unlock KEEPS WORKING when a browser blocks " +
-			"third-party cookies — deleting the wrong claim is not the same as correcting it. " +
-			"State what actually happens (the cookie is stored per top-level site) and keep any " +
-			"caveat to browsers that do not support partitioned cookies yet; update this guard " +
-			"if the wording changes")
-	}
-
-	// (c) The SCOPE the paragraph names must be the scope the browser
-	// implements, in both directions. The value word is what carries the claim:
-	// the false sentence this card corrects ("scoped to the one page it was
-	// entered on") and the narrower swap of the true one ("stored per top-level
-	// site" -> "per top-level page") both kept every assertion above — and both
-	// other docs guards — GREEN, because not one of them reads the scope noun.
+	// (b)+(c) The true half must be STATED, not merely restored by deleting the
+	// false claim, and the SCOPE the paragraph names must be the scope the
+	// browser implements. The value word is what carries the claim: the false
+	// sentence this card corrects ("scoped to the one page it was entered on")
+	// and the narrower swap of the true one ("stored per top-level site" ->
+	// "per top-level page") both kept every assertion here — and both other docs
+	// guards — GREEN, because not one of them read the scope noun.
 	//
 	// THE PIN LIST — the paragraph's reader-facing sentences, pinned as the
 	// literals a READER sees, so a future edit moves all of them with the wording
 	// and none can be dropped silently. Five of them:
 	//   1. "keeps that unlock working when a visitor's browser blocks third-party
-	//      cookies" (assertion (b) above),
-	//   2. "stored per top-level site" — the mechanism,
+	//      cookies" (the true half),
+	//   2. "stored per top-level site" — the mechanism (in the source it is split
+	//      across a line break: "...stored per top-level\nsite..." — the reader
+	//      folds that),
 	//   3. "scoped to the top-level site" — the rule, not the page,
 	//   4. "does not unlock it on anybody else's" — a second merchant's site is a
 	//      different partition,
@@ -478,51 +479,18 @@ func TestDocsEmbedPageDoesNotClaimTheGateReappears(t *testing.T) {
 	//      that deleting exactly this clause left this test GREEN on tree
 	//      431573e5 (= 54e97546, PR 1200) while every assertion fired for the
 	//      other four.
-	// `Partitioned` is pinned too, as the attribute NAME rather than a sentence
-	// (assertion (b)) — it is the reason the scope is what it is.
+	// `Partitioned` is pinned too, as the attribute NAME rather than a sentence —
+	// it is the reason the scope is what it is.
 	//
-	// The mechanism sentence, pinned as the literal a READER sees (in the source
-	// it is split across a line break: "...stored per top-level\nsite...").
-	if !strings.Contains(page, "stored per top-level site") {
-		t.Error("the docs no longer say the unlock cookie is 'stored per top-level site' — CHIPS " +
-			"partitions by top-level SITE (MDN, Partitioned cookies: \"a separate cookie jar per " +
-			"top-level site ... the partition key is based on the site, including the scheme, of the " +
-			"top-level URL\"), so this sentence is the mechanism the paragraph exists to explain. " +
-			"If the wording moved, move this pin with it — do not delete the scope from the copy")
-	}
-	// And the scoping sentence itself: site-level, not page-level.
-	if !strings.Contains(page, "scoped to the top-level site") {
-		t.Error("the docs no longer scope the unlock cookie to the top-level SITE — the sentence must " +
-			"state the rule the browser actually implements. This is the assertion the false " +
-			"\"scoped to the one page it was entered on\" (card t_87697ea4) failed: a Partitioned " +
-			"cookie is keyed by top-level site, not by page, and newFormAccessCookie sets Path \"/\" " +
-			"with a token bound to the form id, so an unlock entered on one page is also sent on that " +
-			"site's other pages. Correcting the copy means pinning the corrected wording here, once")
-	}
-	// The true half must SURVIVE the correction: a different merchant's site is
-	// a different partition, so their page is not unlocked by yours.
-	if !strings.Contains(page, "does not unlock it on anybody else's") {
-		t.Error("the docs no longer say an unlock 'does not unlock it on anybody else's' — deleting " +
-			"the scoping clause is not correcting it. The paragraph must still explain why a second " +
-			"merchant's page is not unlocked: their site is a different CHIPS partition")
-	}
-	// The CONSEQUENCE of the site scope on the reader's OWN site, which is the
-	// half PR 1200 added and the reason the paragraph states the site-level rule
-	// at all: the partition key is the top-level site and Path is "/", so a
-	// second page of that same site which embeds the same form is already
-	// unlocked. Deleting it is not correcting the sentence — pin #5 of the list
-	// above, in the same style as pins 2-4. MEASURED on tree 431573e5
-	// (= 54e97546): with every other word identical, deleting exactly this clause
-	// left this test GREEN, so the copy could state the rule and silently drop
-	// the one effect it exists to explain.
-	if !strings.Contains(page, "while a second page of your own site that embeds the same form does not ask for the password again") {
-		t.Error("the docs no longer say that a second page of your OWN site which embeds the same form " +
-			"is 'not asked for the password again' — that is the site-scope consequence for the reader's " +
-			"own pages, and it is the reason the paragraph states the top-level-SITE rule instead of a " +
-			"page-level one (newFormAccessCookie: Path \"/\", unlock token bound to the form id, so an " +
-			"unlock entered on one page of the site is also sent on that site's other pages). The " +
-			"consequence must stay; if the wording moved, move this pin with it — do not delete the " +
-			"site-scope effect from the copy")
+	// The pins live in docsEmbedParagraphPins and are applied by
+	// docsEmbedParagraphPinsMissing, which reads the RAW source through
+	// docsReaderText — so a sentence that exists only in a comment satisfies
+	// nothing (card t_429c6097; before it, the whole paragraph could be deleted
+	// from the JSX and left on ONE `//` line with this guard green).
+	// TestDocsEmbedParagraphPinsReadOnlyRenderedText drives that same helper with
+	// the clause planted in each comment shape and expects every one to red.
+	for _, pin := range docsEmbedParagraphPinsMissing(src) {
+		t.Error(pin.message)
 	}
 	// The narrower scopes, by name, so a site -> page (or site -> domain) swap
 	// reds here and says which claim did it.
@@ -544,6 +512,101 @@ func TestDocsEmbedPageDoesNotClaimTheGateReappears(t *testing.T) {
 				"self-contradicting; state the site-level rule instead", claim)
 		}
 	}
+}
+
+// docsEmbedParagraphPin is one reader-facing sentence of the /docs/embed
+// "Private forms and cookies" paragraph.
+//
+// `literal` is the sentence as a READER sees it — whitespace folded, entities
+// decoded — which is why the pins are applied to docsReaderText rather than to
+// the source: the page splits most of these across a JSX line break, and several
+// carry `&apos;`.
+type docsEmbedParagraphPin struct {
+	name    string
+	literal string
+	message string
+}
+
+// docsEmbedParagraphPins is the paragraph's pin list (see the guard for the
+// narrative). Each entry must be PRESENT in the text a reader is served; the
+// absence side — the inverted claim and the narrower page-/domain-scoped shapes —
+// is asserted in the guard body, because those must red rather than be listed as
+// satisfiable.
+var docsEmbedParagraphPins = []docsEmbedParagraphPin{
+	{
+		name:    "partitioned-attribute",
+		literal: "Partitioned",
+		message: "the docs no longer name the Partitioned (CHIPS) cookie — that attribute is why " +
+			"the unlock survives on the embedding page, and why it is confined to the top-level " +
+			"site that page sits on instead of being shared with every other site the form is " +
+			"embedded on; the paragraph must keep saying so",
+	},
+	{
+		name:    "keeps-working",
+		literal: "keeps that unlock working when a visitor's browser blocks third-party cookies",
+		message: "the docs no longer state that the unlock KEEPS WORKING when a browser blocks " +
+			"third-party cookies — deleting the wrong claim is not the same as correcting it. " +
+			"State what actually happens (the cookie is stored per top-level site) and keep any " +
+			"caveat to browsers that do not support partitioned cookies yet; update this guard " +
+			"if the wording changes",
+	},
+	{
+		name:    "stored-per-top-level-site",
+		literal: "stored per top-level site",
+		message: "the docs no longer say the unlock cookie is 'stored per top-level site' — CHIPS " +
+			"partitions by top-level SITE (MDN, Partitioned cookies: \"a separate cookie jar per " +
+			"top-level site ... the partition key is based on the site, including the scheme, of the " +
+			"top-level URL\"), so this sentence is the mechanism the paragraph exists to explain. " +
+			"If the wording moved, move this pin with it — do not delete the scope from the copy",
+	},
+	{
+		name:    "scoped-to-the-top-level-site",
+		literal: "scoped to the top-level site",
+		message: "the docs no longer scope the unlock cookie to the top-level SITE — the sentence must " +
+			"state the rule the browser actually implements. This is the assertion the false " +
+			"\"scoped to the one page it was entered on\" (card t_87697ea4) failed: a Partitioned " +
+			"cookie is keyed by top-level site, not by page, and newFormAccessCookie sets Path \"/\" " +
+			"with a token bound to the form id, so an unlock entered on one page is also sent on that " +
+			"site's other pages. Correcting the copy means pinning the corrected wording here, once",
+	},
+	{
+		name:    "anybody-elses",
+		literal: "does not unlock it on anybody else's",
+		message: "the docs no longer say an unlock 'does not unlock it on anybody else's' — deleting " +
+			"the scoping clause is not correcting it. The paragraph must still explain why a second " +
+			"merchant's page is not unlocked: their site is a different CHIPS partition",
+	},
+	{
+		name:    "second-page-consequence",
+		literal: "while a second page of your own site that embeds the same form does not ask for the password again",
+		message: "the docs no longer say that a second page of your OWN site which embeds the same form " +
+			"is 'not asked for the password again' — that is the site-scope consequence for the reader's " +
+			"own pages, and it is the reason the paragraph states the top-level-SITE rule instead of a " +
+			"page-level one (newFormAccessCookie: Path \"/\", unlock token bound to the form id, so an " +
+			"unlock entered on one page of the site is also sent on that site's other pages). The " +
+			"consequence must stay; if the wording moved, move this pin with it — do not delete the " +
+			"site-scope effect from the copy",
+	},
+}
+
+// docsEmbedParagraphPinsMissing applies the presence pins to a page SOURCE and
+// returns the ones it does not satisfy.
+//
+// It takes the RAW source, not the reader's output, deliberately: the reader
+// (docsReaderText → docsJsxCodeOnly) blanks comments, and a caller holding the
+// bytes cannot forget to run it. That is the fix for card t_429c6097 — measured
+// on the tree the clause pin shipped on, the rendered paragraph could be deleted
+// from the JSX and the same words planted on ONE `//` line in the module's leading
+// comment block, and the guard reported `ok ... 0.302s`.
+func docsEmbedParagraphPinsMissing(src string) []docsEmbedParagraphPin {
+	page := docsReaderText(src)
+	var missing []docsEmbedParagraphPin
+	for _, pin := range docsEmbedParagraphPins {
+		if !strings.Contains(page, pin.literal) {
+			missing = append(missing, pin)
+		}
+	}
+	return missing
 }
 
 // docsClaimSurfaces lists the reader-facing files under web/ that can carry this
