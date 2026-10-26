@@ -72,6 +72,29 @@ PASS=0; FAIL=0
 ok()  { echo "  ok   $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL $1" >&2; FAIL=$((FAIL + 1)); }
 
+# ── assertions do not use a pipe (card t_242b43f3) ───────────────────────────
+# These read `echo "$OUT" | grep -q PAT`. Under this file's `set -euo pipefail`
+# that is a RACE, not an assertion: `grep -q` exits the moment it matches and
+# closes its end of the pipe, and if echo's write lands after that, echo dies of
+# SIGPIPE and the PIPELINE status is 141 — so `… && ok … || bad …` takes the
+# `bad` branch and the gate reds naming a substring that IS in $OUT. Measured at
+# the gate: two preflight runs red on it (three different assertions), 9 phantom
+# rcs of 141 in 5000 evaluations of the real bytes under load. It reads as a
+# flake because a plain re-run of the same tree passes.
+#   `has`      = the old `grep -q`  (needle appears anywhere in the value)
+#   `has_line` = the old `grep -qx` (needle is one COMPLETE line of a multi-line
+#                value — the derived-key sets, where a prefix must not count)
+# Both are bash pattern comparisons: no second process exists to be signalled,
+# so the status depends only on the text. Needles are literal, never regexes.
+has()      { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
+has_line() { case $'\n'"$1"$'\n' in *$'\n'"$2"$'\n'*) return 0 ;; *) return 1 ;; esac; }
+# line_of <blob> <needle> — 1-based number of the FIRST line containing the
+# needle, or empty. Replaces `echo … | grep -n … | head -1 | cut -d: -f1`: the
+# early-exit reader is the same hazard one layer WORSE, because the 141 lands on
+# an ASSIGNMENT and `set -e` then aborts the whole suite instead of failing one
+# assertion.
+line_of() { awk -v needle="$2" 'index($0, needle) { print NR; exit }' <<<"$1"; }
+
 # ── stubs ─────────────────────────────────────────────────────────────────────
 mkdir -p "$WORK/bin" "$WORK/nodock"
 cat > "$WORK/bin/docker" <<'EOF'
@@ -229,25 +252,25 @@ echo "case: DRY-RUN is the default, prints the plan, and changes NOTHING"
 mkdir -p "$WORK/opt"
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/good.env"
 [ "$RC" -eq 0 ] && ok "exit code (exit=$RC)" || bad "exit code (exit=$RC, expected 0): $OUT"
-echo "$OUT" | grep -q "mode=DRY-RUN" && ok "says it is a dry run" || bad "did not say DRY-RUN"
-echo "$OUT" | grep -q "would: install compose.prod.yml → $WORK/opt/jomform/compose.yml" && ok "plans the prod compose install" || bad "did not plan the compose install"
-echo "$OUT" | grep -q "env contract: all $KEY_COUNT keys" && ok "checks the env contract against the compose ($KEY_COUNT keys)" || bad "did not report the env contract"
-echo "$OUT" | grep -q "dokploy-network" && ok "plans the external network (the compose declares it external)" || bad "did not plan the network"
-echo "$OUT" | grep -q "compose.yml up -d" && ok "plans the stack up" || bad "did not plan the stack up"
-echo "$OUT" | grep -q "jomform-backup.sh" && ok "plans the nightly-backup cron line" || bad "did not plan the backup cron"
-echo "$OUT" | grep -q "jomform-container-prune.sh" && ok "plans the prune cron line" || bad "did not plan the prune cron"
-echo "$OUT" | grep -q "DRY-RUN — nothing was changed" && ok "states nothing changed" || bad "did not state nothing changed"
+has "$OUT" "mode=DRY-RUN" && ok "says it is a dry run" || bad "did not say DRY-RUN"
+has "$OUT" "would: install compose.prod.yml → $WORK/opt/jomform/compose.yml" && ok "plans the prod compose install" || bad "did not plan the compose install"
+has "$OUT" "env contract: all $KEY_COUNT keys" && ok "checks the env contract against the compose ($KEY_COUNT keys)" || bad "did not report the env contract"
+has "$OUT" "dokploy-network" && ok "plans the external network (the compose declares it external)" || bad "did not plan the network"
+has "$OUT" "compose.yml up -d" && ok "plans the stack up" || bad "did not plan the stack up"
+has "$OUT" "jomform-backup.sh" && ok "plans the nightly-backup cron line" || bad "did not plan the backup cron"
+has "$OUT" "jomform-container-prune.sh" && ok "plans the prune cron line" || bad "did not plan the prune cron"
+has "$OUT" "DRY-RUN — nothing was changed" && ok "states nothing changed" || bad "did not state nothing changed"
 if [ -z "$(ls -A "$WORK/opt" 2>/dev/null)" ]; then ok "the install root is still EMPTY (no write happened)"; else bad "dry-run WROTE to the install root: $(ls -A "$WORK/opt")"; fi
 
 echo "case: it says out loud what it does NOT do (data move, DNS, credentials)"
-echo "$OUT" | grep -q "MOVE THE DATA" && ok "names the data move as not-done" || bad "did not name the data move"
-echo "$OUT" | grep -q -- "--restore" && ok "prints the restore command" || bad "did not print the restore command"
-echo "$OUT" | grep -q "point DNS at this host" && ok "names DNS as not-done" || bad "did not name DNS"
+has "$OUT" "MOVE THE DATA" && ok "names the data move as not-done" || bad "did not name the data move"
+has "$OUT" "--restore" && ok "prints the restore command" || bad "did not print the restore command"
+has "$OUT" "point DNS at this host" && ok "names DNS as not-done" || bad "did not name DNS"
 
 echo "case: no --env-file is refused (there is no default to guess)"
 run "$WORK/bin" --root "$WORK/opt"
 [ "$RC" -ne 0 ] && ok "exit code (exit=$RC)" || bad "exit code (exit=$RC, expected non-zero)"
-echo "$OUT" | grep -q "REFUSED — --env-file is required" && ok "names the missing argument" || bad "did not name the missing argument"
+has "$OUT" "REFUSED — --env-file is required" && ok "names the missing argument" || bad "did not name the missing argument"
 
 echo "case: a missing or empty env file is refused"
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/nope.env"
@@ -260,13 +283,13 @@ echo "case: a WORLD-READABLE env file is refused (it holds the DB/MinIO password
 cp "$WORK/good.env" "$WORK/loose.env"; chmod 644 "$WORK/loose.env"
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/loose.env"
 [ "$RC" -ne 0 ] && ok "exit code (exit=$RC)" || bad "accepted a mode-644 credential file"
-echo "$OUT" | grep -q "mode 644" && ok "names the mode" || bad "did not name the mode"
+has "$OUT" "mode 644" && ok "names the mode" || bad "did not name the mode"
 
 echo "case: an env file MISSING a key the compose reads is refused, and the key is NAMED"
 grep -v '^SES_SMTP_PASS=' "$WORK/good.env" > "$WORK/missing.env"; chmod 600 "$WORK/missing.env"
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/missing.env"
 [ "$RC" -ne 0 ] && ok "exit code (exit=$RC)" || bad "accepted an env file with a missing credential"
-echo "$OUT" | grep -q "SES_SMTP_PASS" && ok "names the missing key" || bad "did not name the missing key"
+has "$OUT" "SES_SMTP_PASS" && ok "names the missing key" || bad "did not name the missing key"
 
 echo "case: the key list comes FROM THE COMPOSE — a key added to the compose must be named"
 # Plant an extra ${KEY} in a COPY of the compose and pass it with --compose-src.
@@ -274,7 +297,7 @@ sed 's/^      APP_ENV: prod$/      APP_ENV: prod\n      PLANTED_KEY: ${PLANTED_K
 grep -q "PLANTED_KEY" "$WORK/compose.planted.yml" && ok "the planted compose carries the new key" || bad "the mutation did not apply"
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/good.env" --compose-src "$WORK/compose.planted.yml"
 [ "$RC" -ne 0 ] && ok "exit code (exit=$RC)" || bad "a compose key no env file can supply was NOT refused"
-echo "$OUT" | grep -q "PLANTED_KEY" && ok "names the planted key (the contract is derived, not written)" || bad "did not name the planted key"
+has "$OUT" "PLANTED_KEY" && ok "names the planted key (the contract is derived, not written)" || bad "did not name the planted key"
 
 echo "case: every env key the compose passes to the api service is READ by the API source"
 # The cases above hold the compose and the template in step with each OTHER — and
@@ -300,7 +323,7 @@ LEAKED="$(printf '%s\n' "$API_KEYS" | grep -xE 'POSTGRES_PASSWORD|MINIO_ROOT_PAS
 API_ENV_RUNTIME_ONLY=""
 STALE_ALLOW=""
 for k in $API_ENV_RUNTIME_ONLY; do
-  printf '%s\n' "$API_KEYS" | grep -qx "$k" || STALE_ALLOW="${STALE_ALLOW} $k"
+  has_line "$API_KEYS" "$k" || STALE_ALLOW="${STALE_ALLOW} $k"
 done
 [ -z "$STALE_ALLOW" ] && ok "the runtime-only allowlist is ${API_ENV_RUNTIME_ONLY:-EMPTY} and names no key the compose has stopped passing" \
   || bad "the runtime-only allowlist names key(s) the compose no longer passes (a stale exemption is an unchecked skip):${STALE_ALLOW}"
@@ -314,7 +337,7 @@ grep -q 'PLANTED_UNREAD_KEY' "$WORK/compose.unread.yml" \
   && ok "the planted compose carries the new key" \
   || bad "the mutation did not apply — the assertion below would pass vacuously"
 PLANTED_UNREAD="$(comm -23 <(api_env_keys "$WORK/compose.unread.yml") <(printf '%s\n' "$READ_KEYS"))"
-printf '%s\n' "$PLANTED_UNREAD" | grep -qx 'PLANTED_UNREAD_KEY' \
+has_line "$PLANTED_UNREAD" 'PLANTED_UNREAD_KEY' \
   && ok "the check names the planted key ($(printf '%s' "$PLANTED_UNREAD" | tr '\n' ' '))" \
   || bad "an unread key planted in the api service's environment was NOT named — the check cannot see the class it exists for"
 
@@ -335,11 +358,11 @@ import "os"
 var Token = os.Getenv("LIVE_READ_KEY")
 GOFIX
 COMMENT_KEYS="$(api_read_keys "$WORK/commentsrc")"
-printf '%s\n' "$COMMENT_KEYS" | grep -qx 'LIVE_READ_KEY' \
+has_line "$COMMENT_KEYS" 'LIVE_READ_KEY' \
   && ok "still sees a live read" \
   || bad "lost the live read in the same fixture — the exclusion below would prove nothing"
 for ghost in LINE_COMMENTED_KEY BLOCK_COMMENTED_KEY; do
-  printf '%s\n' "$COMMENT_KEYS" | grep -qx "$ghost" \
+  has_line "$COMMENT_KEYS" "$ghost" \
     && bad "counted $ghost as read, though it appears only in a comment — a commented-out read is not a read" \
     || ok "does not count $ghost (it appears only in a comment)"
 done
@@ -400,10 +423,10 @@ import "example/internal/config"
 func Open(c *config.Config) { _ = c.DatabaseURL }
 GOFIX
 BITESRC="$(unconsumed_env_keys "$WORK/bitesrc")"
-printf '%s\n' "$BITESRC" | grep -qx 'SESSION_SECRET' \
+has_line "$BITESRC" 'SESSION_SECRET' \
   && ok "names SESSION_SECRET (read at startup, its value consumed by nothing)" \
   || bad "did NOT name SESSION_SECRET in the historical shape — the check cannot see the defect it was filed for"
-printf '%s\n' "$BITESRC" | grep -qx 'DATABASE_URL' \
+has_line "$BITESRC" 'DATABASE_URL' \
   && bad "also flagged DATABASE_URL, which dbstore consumes — the check is not reading consumption, so its red would not be attributable" \
   || ok "does not flag DATABASE_URL (a consumed field) — the red above is about consumption, not about being in a struct"
 
@@ -442,7 +465,7 @@ else
   run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/copied.env"
   [ "$RC" -eq 0 ] && ok "the bootstrap accepts a copy of the shipped example (exit=$RC)" \
     || bad "the bootstrap REFUSED a copy of the shipped example (exit=$RC): $OUT"
-  echo "$OUT" | grep -q "env contract: all $KEY_COUNT keys" \
+  has "$OUT" "env contract: all $KEY_COUNT keys" \
     && ok "and reports the derived key count ($KEY_COUNT)" \
     || bad "did not report the derived key count"
 fi
@@ -463,33 +486,50 @@ fi
 echo "case: a host that is not running docker is refused"
 run_exclusive "$WORK/nodock" --root "$WORK/opt" --env-file "$WORK/good.env"
 [ "$RC" -ne 0 ] && ok "exit code (exit=$RC)" || bad "accepted a host with no docker"
-echo "$OUT" | grep -q "docker is not installed" && ok "names the missing prerequisite" || bad "did not name the missing prerequisite"
+has "$OUT" "docker is not installed" && ok "names the missing prerequisite" || bad "did not name the missing prerequisite"
 
 echo "case: --apply as a non-root user is refused"
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/good.env" --apply
 [ "$RC" -ne 0 ] && ok "exit code (exit=$RC)" || bad "accepted --apply as an unprivileged user"
-echo "$OUT" | grep -q -- "--apply needs root" && ok "names the root requirement" || bad "did not name the root requirement"
+has "$OUT" "--apply needs root" && ok "names the root requirement" || bad "did not name the root requirement"
 
 echo "case: an existing DIFFERING file is not clobbered without --force"
 mkdir -p "$WORK/opt/jomform"
 echo "hand-edited on the host" > "$WORK/opt/jomform/compose.yml"
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/good.env"
 [ "$RC" -ne 0 ] && ok "exit code (exit=$RC)" || bad "clobbered a differing live file"
-echo "$OUT" | grep -q "refusing to clobber" && ok "says why it refused" || bad "did not say why"
+has "$OUT" "refusing to clobber" && ok "says why it refused" || bad "did not say why"
 grep -q "hand-edited on the host" "$WORK/opt/jomform/compose.yml" && ok "the existing file is untouched" || bad "the existing file was modified"
 
 echo "case: with --force the same host plans a BACKUP before the install"
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/good.env" --force
 [ "$RC" -eq 0 ] && ok "exit code (exit=$RC)" || bad "still refused with --force: $OUT"
-echo "$OUT" | grep -q "would: back up the differing" && ok "plans the backup" || bad "did not plan a backup"
-BK_LINE="$(echo "$OUT" | grep -n "would: back up the differing" | head -1 | cut -d: -f1)"
-IN_LINE="$(echo "$OUT" | grep -n "would: install compose.prod.yml" | head -1 | cut -d: -f1)"
+has "$OUT" "would: back up the differing" && ok "plans the backup" || bad "did not plan a backup"
+BK_LINE="$(line_of "$OUT" "would: back up the differing")"
+IN_LINE="$(line_of "$OUT" "would: install compose.prod.yml")"
 [ -n "$BK_LINE" ] && [ -n "$IN_LINE" ] && [ "$BK_LINE" -lt "$IN_LINE" ] && ok "the backup is planned BEFORE the install (order matters)" || bad "the install is planned before the backup"
 
 echo "case: an already-identical file is a no-op, not a backup churn"
 cp "$COMPOSE" "$WORK/opt/jomform/compose.yml"
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/good.env"
-echo "$OUT" | grep -q "already identical: $WORK/opt/jomform/compose.yml" && ok "says it is already identical (idempotent)" || bad "did not report the identical file"
+has "$OUT" "already identical: $WORK/opt/jomform/compose.yml" && ok "says it is already identical (idempotent)" || bad "did not report the identical file"
+
+echo "case: this suite does not assert through a pipe (the phantom red cannot return)"
+# Every case above passes even if a piped early-exit reader is back in this file,
+# because the race is rare — so the file checks ITSELF, the shape
+# scripts/preflight_test.sh uses for its own header claim. A piped `grep -q` is a
+# status decided by a race; a piped `head -n1` is the same early-exit reader and,
+# under `set -e`, its 141 aborts the suite instead of failing one assertion.
+# Only this file is asserted; comment lines are skipped because the block above
+# necessarily names the idiom it forbids.
+SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
+LIVE_PIPED="$(grep -nE '(echo|printf)[^|]*\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q|\|[[:space:]]*head[[:space:]]+-n?[[:space:]]*1' "$SELF" 2>/dev/null \
+  | grep -vE '^[0-9]+:[[:space:]]*#' | grep -v 'grep -nE' || true)"
+if [ -z "$LIVE_PIPED" ]; then
+  ok "this file has no live piped early-exit reader (no assertion status decided by a race)"
+else
+  bad "a piped early-exit reader is back in this file, so its status is a race and a MATCH can read as a miss: $LIVE_PIPED"
+fi
 
 echo
 echo "bootstrap-host_test: $PASS passed, $FAIL failed"
