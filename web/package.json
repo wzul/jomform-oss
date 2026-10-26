@@ -2,6 +2,9 @@
   "name": "jomform-web",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.18.0 <23.0.0 || >=23.6.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "npm run test:unit && next build && npm run docs:facts && npm run css:scan-scope",

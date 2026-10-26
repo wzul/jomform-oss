@@ -430,9 +430,51 @@ else
   bad "unset test Valkey must be refused, got rc=$rc"
 fi
 
+# NODE STUBS for checks 5–5d (card t_f96c7a44).
+#
+# The node-VERSION prerequisite now sits FIRST in `preflight_env`'s web branch, so
+# every check below that is really about the DEPENDENCY prerequisite would report
+# the node refusal on a host whose node is too old for the suite — the wrong
+# reason, and a RED `selftest` on bytes with nothing wrong. Checks 5/5b/5c
+# therefore pin a node AT the floor, and 5d pins versions below it on purpose.
+#
+# A stub reports <version> for -v/--version and DELEGATES every other argv to the
+# real node, so `web-deps-check.mjs` still executes for real: the VERSION is the
+# only faked fact, and it is the fact these checks are about.
+REAL_NODE_BIN="$(command -v node)"
+[ -n "$REAL_NODE_BIN" ] || { echo "FAIL: no node on PATH — the web gates cannot be exercised" >&2; exit 1; }
+mk_node_stub() {  # <dir> <version>
+  mkdir -p "$1"
+  printf '#!/bin/sh\ncase "$1" in\n  -v|--version) printf "%%s\\n" "%s" ;;\n  *) exec "%s" "$@" ;;\nesac\n' \
+    "$2" "$REAL_NODE_BIN" > "$1/node"
+  chmod +x "$1/node"
+}
+# The floor is READ from the runner under test, never typed here, so a floor bump
+# there cannot leave these checks asserting a stale boundary (and the derived
+# "one minor below" version moves with it).
+NODE_FLOOR_RAW="$(sed -nE 's/^NODE_FLOOR_TESTS="([0-9]+)\.([0-9]+)".*/\1 \2/p' "$SB/scripts/preflight.sh" | sed -n 1p)"
+NODE_STUB_DIR="$SB_STATE/nodestub"
+AT_FLOOR="v24.19.0"       # fallback if the floor cannot be read; 5d reports that
+BELOW_FLOOR="v20.20.2"
+if [ -n "$NODE_FLOOR_RAW" ]; then
+  NF_MAJ="${NODE_FLOOR_RAW% *}"; NF_MIN="${NODE_FLOOR_RAW#* }"
+  AT_FLOOR="v${NF_MAJ}.${NF_MIN}.0"
+  BELOW_FLOOR="v${NF_MAJ}.$((NF_MIN - 1)).0"
+  [ "$NF_MIN" -eq 0 ] && BELOW_FLOOR="v$((NF_MAJ - 1)).99.0"
+fi
+mk_node_stub "$NODE_STUB_DIR/good" "$AT_FLOOR"
+mk_node_stub "$NODE_STUB_DIR/below-floor" "$BELOW_FLOOR"
+# The TRAP version: playwright, next 16 and eslint 9 all accept it, and it still
+# cannot run `test:unit` (node 20.20.2 is the one measured on this host).
+mk_node_stub "$NODE_STUB_DIR/v20" "v20.20.2"
+mk_node_stub "$NODE_STUB_DIR/v18" "v18.19.1"
+
 # 5. A missing web/node_modules must fail the web gate. A worktree without it
 #    makes `npm run build` exit 0 having built nothing.
-out=$(./scripts/preflight.sh --only web 2>&1)
+#    (PATH pins a node AT the floor — see the stub block above — so this check
+#    measures the DEPENDENCY prerequisite on every host, including one whose own
+#    node is too old for the suite.)
+out=$(PATH="$NODE_STUB_DIR/good:$PATH" ./scripts/preflight.sh --only web 2>&1)
 rc=$?
 if [ $rc -ne 0 ] && grep -q 'web/node_modules/.bin/next is missing' <<<"$out"; then
   ok "missing web/node_modules -> refused (rc=$rc)"
@@ -456,7 +498,7 @@ fi
 mkdir -p "$SB/web/node_modules/.bin"
 printf '#!/bin/sh\nexit 1\n' > "$SB/web/node_modules/.bin/next"
 chmod +x "$SB/web/node_modules/.bin/next"
-out=$(./scripts/preflight.sh --only web 2>&1)
+out=$(PATH="$NODE_STUB_DIR/good:$PATH" ./scripts/preflight.sh --only web 2>&1)
 rc=$?
 if [ $rc -ne 0 ] && \
    grep -q 'PREFLIGHT FAIL: the web dependencies for this tree are not installed' <<<"$out" && \
@@ -495,7 +537,7 @@ node -e '
 ' "$SB/web"
 printf '#!/bin/sh\nexit 1\n' > "$SB/web/node_modules/.bin/next"
 chmod +x "$SB/web/node_modules/.bin/next"
-out=$(./scripts/preflight.sh --only web 2>&1)
+out=$(PATH="$NODE_STUB_DIR/good:$PATH" ./scripts/preflight.sh --only web 2>&1)
 rc=$?
 if [ $rc -ne 0 ] && \
    grep -q 'PREFLIGHT FAIL: the web dependencies for this tree are not installed' <<<"$out" && \
@@ -507,6 +549,116 @@ else
   bad "a hollow web/node_modules (directories present, no payload) must be refused by the dependency PREREQUISITE, got rc=$rc [$(grep -iE 'IS NOT INSTALLED|no payload:|missing:|PREFLIGHT FAIL|gate \[web\]' <<<"$out" | tr '\n' ' ')]"
 fi
 rm -rf "$SB/web/node_modules"
+
+# 5d. THE NODE-VERSION PREREQUISITE (card t_f96c7a44). The `web` gate is
+#     `npm run build`, whose FIRST half is `node --test … src/lib/*.test.ts` —
+#     TypeScript through node, which needs type stripping ON BY DEFAULT (node
+#     22.18.0+; 23.6.0+ on the 23 line; 22.6–22.17 only behind a flag the script
+#     does not pass). EVERY OTHER web tool's floor is LOWER: playwright refuses
+#     < 20, next 16 declares >= 20.9.0, eslint 9 accepts ^20.9.0 — so node 20 is
+#     a version a lane can land on for a legitimate reason and it still reds the
+#     SAME gate, seconds in, with `TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown
+#     file extension ".ts"` on every test file. Measured on this host 2026-10-24:
+#     v20.20.2 → 99 tests / 0 pass / 99 fail; v18.19.1 → `node: bad option:
+#     --disable-warning=MODULE_TYPELESS_PACKAGE_JSON` before a test runs. Both
+#     shapes read like a code defect, and one full 490s gate run was spent on it.
+#
+#     PINNED IN SIX LEGS, because "it refuses" alone is not the property:
+#       a. a node ONE MINOR BELOW the declared floor is refused, and the message
+#          names the node found, the floor, and that it is a version floor;
+#       b. node 20.20.2 — the TRAP that satisfies playwright/next/eslint — is
+#          refused the same way (a naive "major >= 20" check would pass this leg);
+#       c. node 18.19.1, where the suite cannot even start, is refused;
+#       d. a node AT the floor is NOT refused — the run must fall through to the
+#          DEPENDENCY prerequisite, so the check is not a blanket refusal that
+#          would pass a–c by refusing everything;
+#       e. SABOTAGE: the same below-floor node against a COPY of the runner with
+#          the node block stripped must NOT be refused as a version problem, so
+#          a–c are attributable to the block under test and not to something else
+#          in the script that happens to say "cannot run the web gate";
+#       f. an a11y-ONLY selection under the same v20 node is NOT refused: that
+#          gate never runs `test:unit`, so its floor is playwright's, and a single
+#          global floor would restore the false red one layer down.
+#     The stubs (see the block before check 5) fake only `-v/--version`.
+node_probe() {  # <stub-dir> [repo] -> PROBE_OUT / PROBE_RC
+  local dir="$1" repo="${2:-$SB}"
+  PROBE_OUT="$(cd "$repo" && PATH="$dir:$PATH" ./scripts/preflight.sh --only web 2>&1)"
+  PROBE_RC=$?
+}
+node_refusal_ok() {  # <stub-dir> -> 0 when THIS node is refused AS the version floor
+  node_probe "$1" || true
+  [ $PROBE_RC -ne 0 ] &&
+    grep -q 'cannot run the web gate' <<<"$PROBE_OUT" &&
+    grep -q 'VERSION floor, not a code defect' <<<"$PROBE_OUT" &&
+    grep -q 'Playwright' <<<"$PROBE_OUT" &&
+    ! grep -q 'gate \[web\]' <<<"$PROBE_OUT"
+}
+if [ -z "$NODE_FLOOR_RAW" ]; then
+  bad "check 5d — NODE_FLOOR_TESTS could not be read out of the runner under test, so the node-version prerequisite's boundary cannot be asserted at all"
+else
+  # (a) one minor below the floor
+  if node_refusal_ok "$NODE_STUB_DIR/below-floor" && grep -qF "$BELOW_FLOOR" <<<"$PROBE_OUT" \
+     && grep -qF "$NF_MAJ.$NF_MIN" <<<"$PROBE_OUT"; then
+    ok "check 5d — node $BELOW_FLOOR (one minor below the floor $AT_FLOOR) is refused as a PREREQUISITE naming the node found and both floors, before the gate runs (rc=$PROBE_RC)"
+  else
+    bad "check 5d — node $BELOW_FLOOR must be refused as a node-version prerequisite (rc=$PROBE_RC) [$(grep -iE 'PREFLIGHT FAIL|gate \[web\]' <<<"$PROBE_OUT" | tr '\n' ' ')]"
+  fi
+  # (b) the trap: a node every other web tool accepts
+  if node_refusal_ok "$NODE_STUB_DIR/v20" && grep -qF 'v20.20.2' <<<"$PROBE_OUT"; then
+    ok "check 5d — node v20.20.2 (playwright/next/eslint all accept it) is refused too: the floor is the TYPE-STRIPPING one, not the tool-chain major"
+  else
+    bad "check 5d — node v20.20.2 must be refused (it satisfies every other web tool and cannot run test:unit), got rc=$PROBE_RC [$(grep -iE 'PREFLIGHT FAIL|gate \[web\]' <<<"$PROBE_OUT" | tr '\n' ' ')]"
+  fi
+  # (c) a node where the suite cannot even start
+  if node_refusal_ok "$NODE_STUB_DIR/v18" && grep -qF 'v18.19.1' <<<"$PROBE_OUT"; then
+    ok "check 5d — node v18.19.1 ('node: bad option: --disable-warning=…') is refused the same way"
+  else
+    bad "check 5d — node v18.19.1 must be refused, got rc=$PROBE_RC [$(grep -iE 'PREFLIGHT FAIL|gate \[web\]' <<<"$PROBE_OUT" | tr '\n' ' ')]"
+  fi
+  # (d) AT the floor: no refusal from the node check — the dependency
+  #     prerequisite (no web/node_modules in this sandbox) is what stops it.
+  node_probe "$NODE_STUB_DIR/good" || true
+  if [ $PROBE_RC -ne 0 ] && ! grep -q 'cannot run the web gate' <<<"$PROBE_OUT" \
+     && grep -q 'web/node_modules/.bin/next is missing' <<<"$PROBE_OUT"; then
+    ok "check 5d — a node AT the floor ($AT_FLOOR) is NOT refused: the run falls through to the dependency prerequisite, so the check cannot pass by refusing everything"
+  else
+    bad "check 5d — a node at the floor ($AT_FLOOR) must NOT be refused by the version check; expected the dependency prerequisite (rc=$PROBE_RC) [$(grep -iE 'PREFLIGHT FAIL|gate \[web\]' <<<"$PROBE_OUT" | tr '\n' ' ')]"
+  fi
+  # (f) THE FLOOR IS PER SELECTION. An a11y-only run never executes `test:unit`, so
+  #     the same v20 trap node must NOT be refused there — its gate's floors are
+  #     playwright's 20 and next's 20.9. Without this leg, simplifying the check to
+  #     one global floor would reintroduce the false red one layer down.
+  PROBE_OUT="$(PATH="$NODE_STUB_DIR/v20:$PATH" ./scripts/preflight.sh --only a11y 2>&1)"
+  PROBE_RC=$?
+  if [ $PROBE_RC -ne 0 ] && ! grep -q 'cannot run the a11y/e2e gate' <<<"$PROBE_OUT" \
+     && grep -q 'web/node_modules/.bin/next is missing' <<<"$PROBE_OUT"; then
+    ok "check 5d — an a11y-ONLY run under the same v20.20.2 is NOT refused: that gate never runs test:unit, so its floor is playwright's 20 / next's 20.9 (a single global floor would red it for nothing)"
+  else
+    bad "check 5d — an a11y-only run under v20.20.2 must NOT be refused on node version (its floor is playwright's), got rc=$PROBE_RC [$(grep -iE 'PREFLIGHT FAIL' <<<"$PROBE_OUT" | tr '\n' ' ')]"
+  fi
+  # (e) sabotage: strip the block from a COPY outside $SB (a file added inside the
+  #     sandbox would move the tree sha that later checks key their records on).
+  MUT="$SB_STATE/nodefloor-mutant"
+  rm -rf "$MUT"
+  cp -a "$SB" "$MUT"
+  MUT_SCRIPT="$MUT/scripts/preflight.sh"
+  OPEN_HITS="$(grep -c '>>> node-version prerequisite' "$MUT_SCRIPT")"
+  CLOSE_HITS="$(grep -c '<<< node-version prerequisite' "$MUT_SCRIPT")"
+  sed -i '/>>> node-version prerequisite/,/<<< node-version prerequisite/d' "$MUT_SCRIPT"
+  MUT_LEFT="$(grep -c 'node-version prerequisite' "$MUT_SCRIPT")"
+  PROBE_OUT="$(cd "$MUT" && PREFLIGHT_RESULT_DIR="$SB_STATE/nodefloor-mutant-records" \
+    PATH="$NODE_STUB_DIR/below-floor:$PATH" ./scripts/preflight.sh --only web 2>&1)"
+  PROBE_RC=$?
+  if [ "$OPEN_HITS" = "1" ] && [ "$CLOSE_HITS" = "1" ] && [ "$MUT_LEFT" = "0" ] \
+     && [ $PROBE_RC -ne 0 ] && ! grep -q 'cannot run the web gate' <<<"$PROBE_OUT" \
+     && grep -q 'web/node_modules/.bin/next is missing' <<<"$PROBE_OUT"; then
+    ok "check 5d SABOTAGE — with the node block stripped from a copy, node $BELOW_FLOOR is NOT refused as a version problem (it reaches the dependency prerequisite): the refusals above are attributable to those bytes"
+  else
+    bad "check 5d SABOTAGE — the stripped-block copy must NOT refuse on node version: markers($OPEN_HITS/$CLOSE_HITS, left=$MUT_LEFT) rc=$PROBE_RC [$(grep -iE 'PREFLIGHT FAIL|gate \[web\]|node-version' <<<"$PROBE_OUT" | tr '\n' ' ')]"
+  fi
+  rm -rf "$MUT"
+  unset PROBE_OUT PROBE_RC
+fi
 
 # 6. An unknown gate name is rejected rather than quietly ignored (a typo in
 #    --only must not silently disable a real gate).

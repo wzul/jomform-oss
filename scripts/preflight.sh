@@ -194,6 +194,21 @@
 #                               and prints a green summary that proves nothing.
 #   JOMFORM_TEST_VALKEY_URL     same for the Valkey-backed tests.
 #                               `source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}` exports both.
+#   node (the floor          the web gate is `npm run build`, whose FIRST half is
+#     depends on the gate)     `node --test … src/lib/*.test.ts` — TypeScript run
+#                               through node, which needs type stripping ON BY
+#                               DEFAULT: node 22.18.0+ (the 23 line: 23.6.0+;
+#                               22.6–22.17 have it only behind
+#                               `--experimental-strip-types`, which `npm run
+#                               test:unit` does not pass). Every OTHER web tool's
+#                               floor is LOWER — playwright refuses < 20, next 16
+#                               declares >= 20.9.0, eslint 9 accepts ^20.9 — so a
+#                               node that satisfies all of them still reds this
+#                               gate with 99× ERR_UNKNOWN_FILE_EXTENSION, and node
+#                               18 does not even start the run (`node: bad option:
+#                               --disable-warning=…`). Both floors are named in the
+#                               refusal, and it REFUSES rather than skipping
+#                               (card t_f96c7a44).
 #   web/node_modules            a fresh worktree has none, and `npm run build`
 #                               then exits 0 with "sh: 1: next: not found" —
 #                               a green-looking gate that built nothing.
@@ -2021,12 +2036,129 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# THE WEB GATES' NODE FLOOR (card t_f96c7a44).
+#
+# The `web` gate is `npm run build`, and its FIRST half is
+#   node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts
+# — the node test runner over TypeScript FILES. That needs node's TYPE STRIPPING,
+# which is ON BY DEFAULT only from v22.18.0 (v23.6.0 on the 23 line); 22.6.0 is
+# where the flag appeared, and 22.6–22.17 run it only behind
+# `--experimental-strip-types`, which `npm run test:unit` does not pass.
+# Source: nodejs.org/api/typescript.html — the version table above the "Type
+# stripping" section reads "Added in: v22.6.0" for the flag and "enabled by
+# default: v23.6.0, v22.18.0".
+#
+# WHY THIS IS A VERSION CHECK AND NOT "pick a newer node": THE FLOOR IS NOT THE
+# ONE EVERY OTHER WEB TOOL ASKS FOR. playwright refuses < 20, next 16 declares
+# `>=20.9.0`, eslint 9 accepts `^20.9.0` — node 20 satisfies all of them and still
+# cannot run this gate. Measured on this host 2026-10-24 (node v20.20.2, a tree
+# with nothing wrong; build/vet/test/govuln all PASS first):
+#
+#     # tests 99 / # pass 0 / # fail 99
+#     # TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension ".ts" for
+#     #   .../web/src/lib/wsfetch.test.ts
+#     PREFLIGHT FAIL: gate 'web' (...) exited 1 after 4s
+#
+# — a VERSION floor reported in the shape of a code defect, which is the class of
+# false red this gate's own contract forbids. Node 18 is worse: the run never
+# starts (`node: bad option: --disable-warning=MODULE_TYPELESS_PACKAGE_JSON`).
+#
+# So the check REFUSES, like every other prerequisite in `preflight_env`, naming
+# BOTH floors and the node it found — the reader can tell a version problem from a
+# defect without spending a gate run on it.
+#
+# THE FLOOR IS PER SELECTION. `web` runs the TypeScript test files; an
+# `a11y`-only run does not (it needs node_modules and a build, and its own floors
+# are playwright's 20 / next's 20.9). Refusing an a11y-only run for a floor its
+# gate never touches would be the same false red one layer down.
+NODE_FLOOR_TESTS="22.18"      # type stripping on by default: 22.18.0+, 23.6.0+, 24+
+NODE_FLOOR_PLAYWRIGHT="20.9"  # playwright refuses <20; next 16 declares >=20.9.0
+
+_node_mm() {  # [$1 = node binary, default `node`] -> "<major> <minor>", else rc=1
+  local n="${1:-node}" v maj min
+  v="$("$n" --version 2>/dev/null)" || return 1
+  v="${v#v}"
+  maj="${v%%.*}"
+  case "$v" in
+    *.*) min="${v#*.}"; min="${min%%.*}" ;;
+    *)   min=0 ;;
+  esac
+  case "$maj" in ''|*[!0-9]*) return 1 ;; esac
+  case "$min" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s %s\n' "$maj" "$min"
+}
+
+_node_at_least() {  # <major> <minor> <floor-major> <floor-minor>
+  [ "$1" -gt "$3" ] && return 0
+  [ "$1" -eq "$3" ] && [ "$2" -ge "$4" ] && return 0
+  return 1
+}
+
+_node_satisfies_tests() {  # 0 when THIS node's type stripping is on by default
+  local mm maj min
+  mm="$(_node_mm "${1:-node}")" || return 1
+  maj="${mm% *}"; min="${mm#* }"
+  # NOT a plain ">= 22.18": the 23 line got it at 23.6.0, so 23.0–23.5 are
+  # NEWER than 22.18.0 and still cannot run the suite.
+  case "$maj" in
+    22) [ "$min" -ge 18 ] ;;
+    23) [ "$min" -ge 6 ] ;;
+    *)  [ "$maj" -ge 24 ] ;;
+  esac
+}
+
+_node_satisfies_playwright() {
+  local mm maj min
+  mm="$(_node_mm "${1:-node}")" || return 1
+  maj="${mm% *}"; min="${mm#* }"
+  _node_at_least "$maj" "$min" 20 9
+}
+
+# A CONCRETE PATH when this host has one: the newest nvm-installed node that meets
+# the floor. "Upgrade node" is advice; a directory to put on PATH is a fix, and on
+# this host /usr/bin/node is 18 while a node 24 sits one PATH edit away.
+_node_suggest() {  # <tests|playwright> -> " Put <dir> first on PATH and re-run (...)" or ""
+  local kind="$1" check d mm maj min v best="" bestv="" bestmaj=0 bestmin=0
+  case "$kind" in
+    tests)      check="_node_satisfies_tests" ;;
+    playwright) check="_node_satisfies_playwright" ;;
+    *)          return 0 ;;
+  esac
+  for d in "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin; do
+    [ -x "$d/node" ] || continue
+    "$check" "$d/node" || continue
+    # The NEWEST satisfied directory, compared as a VERSION — not by glob order,
+    # which is lexical (`v9.11.2` sorts after `v24.19.0`). Any suggested dir
+    # satisfies the floor either way, but "newest" is a claim this line makes,
+    # so it is computed rather than assumed.
+    mm="$(_node_mm "$d/node")" || continue
+    maj="${mm% *}"; min="${mm#* }"
+    if [ -z "$best" ] || _node_at_least "$maj" "$min" "$bestmaj" "$bestmin"; then
+      v="$("$d/node" --version 2>/dev/null)"
+      best="$d"; bestv="$v"; bestmaj="$maj"; bestmin="$min"
+    fi
+  done
+  [ -n "$best" ] || return 0
+  printf ' Put %s first on PATH and re-run (it reports %s).' "$best" "$bestv"
+}
+
+_node_refuse_web() {  # <tests|playwright>
+  local kind="$1" found where
+  found="$(node --version 2>/dev/null)"; found="${found:-unknown}"
+  where="$(command -v node 2>/dev/null)"; where="${where:-node is not on PATH}"
+  if [ "$kind" = tests ]; then
+    die "node $found ($where) cannot run the web gate — this is a VERSION floor, not a code defect: 'npm run build' starts with 'node --test … src/lib/*.test.ts', and running TypeScript through node needs type stripping ON BY DEFAULT, i.e. node $NODE_FLOOR_TESTS+ (the 23 line: 23.6+; 22.6–22.17 have it only behind --experimental-strip-types, which 'npm run test:unit' does not pass). Playwright's own floor is LOWER (node 20, next 16 declares >= 20.9), which is why this node looks fine and is not: the suite starts and then fails EVERY test file with 'TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension \".ts\"'.$(_node_suggest tests)"
+  fi
+  die "node $found ($where) cannot run the a11y/e2e gate — this is a VERSION floor, not a code defect: playwright refuses to start below node 20 and 'next start' needs node >= 20.9 (next 16 declares it). The 'web' gate's own floor is higher (node $NODE_FLOOR_TESTS) because its test:unit half is TypeScript, but this run does not select that gate.$(_node_suggest playwright)"
+}
+
+# ---------------------------------------------------------------------------
 # Environment preflight. Everything here FAILS rather than skipping: a gate
 # that turns itself off when a prerequisite is missing is how a green run
 # proves nothing.
 # ---------------------------------------------------------------------------
 preflight_env() {
-  local need_api="$1" need_web="$2" need_a11y="$3" need_docker="$4" need_lint="$5"
+  local need_api="$1" need_web="$2" need_a11y="$3" need_docker="$4" need_lint="$5" need_web_tests="${6:-0}"
 
   if [ "$need_api" = 1 ]; then
     [ -n "${JOMFORM_TEST_DATABASE_URL:-}" ] || die \
@@ -2036,6 +2168,17 @@ preflight_env() {
   fi
 
   if [ "$need_web" = 1 ]; then
+    # NODE FIRST — it is the outermost prerequisite of everything below, and the
+    # one no other check covers (card t_f96c7a44). >>> node-version prerequisite:
+    # the selftest (scripts/preflight_test.sh check 5d) STRIPS the lines between
+    # this marker and the closing one to prove the refusal is attributable to
+    # them, so keep both markers and keep the block self-contained.
+    if [ "$need_web_tests" = 1 ]; then
+      _node_satisfies_tests || _node_refuse_web tests
+    else
+      _node_satisfies_playwright || _node_refuse_web playwright
+    fi
+    # <<< node-version prerequisite
     [ -x "$REPO_ROOT/web/node_modules/.bin/next" ] || die \
       "web/node_modules/.bin/next is missing — 'npm run build' would exit 0 with 'sh: 1: next: not found' and build NOTHING (exit 0 with no route list is a FAILED gate, not a pass). Seed it with: cd web && npm ci"
     # `.bin/next` existing is NOT the same as the install being complete: an
@@ -2246,9 +2389,12 @@ selected npmaudit && g_npmaudit=1
 selected gitleaks && g_gitleaks=1
 selected prunehost && g_prunehost=1
 
-need_api=0; need_web=0; need_a11y=0; need_docker=0; need_lint=0
+need_api=0; need_web=0; need_a11y=0; need_docker=0; need_lint=0; need_web_tests=0
 if [ $g_build = 1 ] || [ $g_vet = 1 ] || [ $g_test = 1 ] || [ $g_govuln = 1 ]; then need_api=1; fi
-if [ $g_web = 1 ]; then need_web=1; fi
+# `web` is the gate whose node floor is the type-stripping one (`npm run build`
+# starts with `node --test … *.test.ts`); an a11y-only run needs only playwright's
+# lower floor. Checked in preflight_env against the node this shell resolves.
+if [ $g_web = 1 ]; then need_web=1; need_web_tests=1; fi
 if [ $g_a11y = 1 ]; then need_a11y=1; need_web=1; fi
 if [ $g_webimage = 1 ]; then need_docker=1; fi
 # `prunehost` starts a private dockerd, which needs the `dockerd` binary and
@@ -2259,7 +2405,7 @@ if [ $g_prunehost = 1 ]; then need_docker=1; fi
 # web/node_modules — it does NOT need the full `web` build. Keeping them separate
 # means a lint failure is reported as a lint failure, not as a failed build.
 if [ $g_lint = 1 ]; then need_lint=1; fi
-preflight_env "$need_api" "$need_web" "$need_a11y" "$need_docker" "$need_lint"
+preflight_env "$need_api" "$need_web" "$need_a11y" "$need_docker" "$need_lint" "$need_web_tests"
 
 # ---------------------------------------------------------------------------
 # api/build — the module still compiles.
