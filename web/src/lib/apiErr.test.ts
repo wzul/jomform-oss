@@ -196,17 +196,22 @@ const unblankingKey = (text: string): string =>
   );
 
 type ScanLine = { n: number; text: string; code: string };
-const scanLines = (p: string): ScanLine[] =>
-  readFileSync(p, "utf8")
-    .split("\n")
-    .map((text, i) => ({ n: i + 1, text, code: unblankingKey(text) }));
+/** One file's TEXT as scan lines — the shape `scanLines` reads from disk, split out so
+ *  an in-memory fixture can be walked through the SAME walk the real tree goes
+ *  through (card t_665b6539: a fixture is not the same instrument as a walk, unless
+ *  it is handed to the walk). */
+function linesOf(text: string): ScanLine[] {
+  return text.split("\n").map((t, i) => ({ n: i + 1, text: t, code: unblankingKey(t) }));
+}
+const scanLines = (p: string): ScanLine[] => linesOf(readFileSync(p, "utf8"));
 
 /**
  * One file's blanked lines as ONE code buffer, plus a lookup from a buffer offset
- * to the index of the line it sits on. The two shapes this file claims that span
- * lines — a setter call whose argument starts below it (card t_b6cd0f72) and a
- * destructured parameter broken over several lines (card t_69966a9a) — share this
- * one buffer-and-lookup, so the two walks cannot drift apart on what "the line a
+ * to the index of the line it sits on. The three shapes this file claims that span
+ * lines — a setter call whose argument starts below it (card t_b6cd0f72), a
+ * destructured parameter broken over several lines (card t_69966a9a) and a
+ * `const`/`let`/`var` pattern broken over several lines (card t_665b6539) — share
+ * this one buffer-and-lookup, so the walks cannot drift apart on what "the line a
  * match starts on" means.
  */
 function joinLines(lines: ScanLine[]): { code: string; lineAt: (i: number) => number } {
@@ -254,8 +259,15 @@ function joinLines(lines: ScanLine[]): { code: string; lineAt: (i: number) => nu
 // spelling of "what a read of this field looks like" is how the three drift apart.
 // ---------------------------------------------------------------------------
 
-/** One read of the prose field: where it ENDS, and what it was read FROM. */
+/** One read of the prose field: where it BEGINS and ENDS, and what it was read FROM. */
 type ProseRead = {
+  /**
+   * Where the read begins — the receiver/property itself for a dot or bracket read,
+   * the `const`/`let`/`var` head for a binding destructure (a pattern broken over
+   * lines starts on the line above its `{`). A whole-file pass reports on the line
+   * this offset sits on.
+   */
+  start: number;
   /**
    * The identifier the read is taken FROM when the source is a plain identifier —
    * `r.error` → "r", `r["error"]` → "r", `const { error } = r` → "r" — and null
@@ -279,7 +291,10 @@ type ProseRead = {
  *  pre-widening check's line filter saw those lines. */
 const DOT_READ = /([A-Za-z_$][\w$]*)?\s*\??\s*\.\s*error\b/g;
 const BRACKET_READ = /([A-Za-z_$][\w$]*)?\s*\??\s*(?:\.\s*)?\[\s*["']error["']\s*\]/g;
-/** A binding pattern follows: `const`/`let`/`var` then `{`. */
+/** A binding pattern follows: `const`/`let`/`var` then `{`. `\s*` spans line breaks on
+ *  purpose — a pattern whose `{` sits on the line below its `const` is the same
+ *  binding, and the shape is matched over the whole file's buffer (card
+ *  t_665b6539). */
 const BINDING_HEAD = /\b(?:const|let|var)\s*\{/g;
 
 /**
@@ -320,42 +335,83 @@ function matchingBracket(code: string, open: number): number | undefined {
  *
  *  This used to walk only the line it was handed, and the comment said a
  *  multi-line pattern was "not claimed". That was a fact about the WALK, not
- *  about the pattern: `bindingDestructuredReads` below still feeds it one line at
- *  a time (and so still does not see a `const` pattern broken over lines — a
- *  reach hole measured and filed separately). The span itself is whole-file
+ *  about the pattern: `bindingDestructuredReads` below fed it one line at a time,
+ *  so a `const` pattern broken over lines was invisible while the one-line
+ *  spelling of the same read reded. The span itself was already whole-file
  *  correct, which is what lets the parameter spelling be claimed in the shape it
- *  is actually written in. */
+ *  is written in; the binding walk now hands it the file's buffer too (card
+ *  t_665b6539), so both spellings are claimed in the wrapped shape a long pattern
+ *  is written in. */
 function braceSpan(code: string, open: number): { pattern: string; close: number } | undefined {
   const close = matchingBracket(code, open);
   return close === undefined ? undefined : { pattern: code.slice(open, close + 1), close };
 }
 
 /** Does a destructuring pattern bind the property `error`, at any depth —
- *  `{ error }`, `{ error: m }`, `{ a: { error } }`, `{ error = "" }`?
+ *  `{ error }`, `{ error: m }`, `{ a: { error } }`, `{ error = "" }`, in any of the
+ *  line shapes a wrapped pattern is written in?
  *
- *  NOT covered on purpose: a destructured FUNCTION PARAMETER
- *  (`function f({ error }: Body)`). The same text is an object LITERAL in argument
- *  position (`render({ error: msg })`, a write), and no shape match can tell the
- *  two apart — a rule that matched both would fail the build on a correct call
- *  site. `const`/`let`/`var` bindings are unambiguous, so they are the one
- *  destructure spelling this guard claims. */
+ *  This answers ONLY "does this pattern bind the field". Whether the text IS a
+ *  pattern is the caller's question, and the two callers answer it differently: a
+ *  `const`/`let`/`var` head is unambiguous, while a destructured PARAMETER is
+ *  claimed only where its context is unambiguous (`function …(` before it, or `=>`
+ *  after it) — the same text in argument position (`render({ error: msg })`) is an
+ *  object LITERAL, a write, and no shape match can tell the two apart. */
 const bindsErrorProperty = (pattern: string): boolean =>
   /(?:^|[{,\s])error\s*(?::\s*[A-Za-z_$][\w$]*\s*)?(?:=\s*[^,}]*)?(?=[,}])/.test(pattern);
 
-/** `const|let|var { … } = …` bindings in this line whose pattern binds `error`. */
-function bindingDestructuredReads(code: string): ProseRead[] {
-  const out: ProseRead[] = [];
+/** `const|let|var { … } = …` bindings in `code` whose pattern binds `error`. */
+type BindingRead = ProseRead & {
+  /** The pattern itself, braces included (`{ error }`), as blanked code — so a
+   *  multi-line pattern can be quoted in a report whose line does not contain it. */
+  pattern: string;
+};
+
+/**
+ * `const|let|var { … } = …` bindings in `code` whose pattern binds `error`.
+ *
+ * `code` MUST BE A WHOLE FILE'S BLANKED BUFFER, NEVER ONE LINE (card t_665b6539).
+ *
+ * The pattern is the shape a multi-key destructure of a response body is written
+ * in — `{ code, error }` on one line once it is short, and
+ *
+ *     const {
+ *       code,
+ *       error,
+ *     } = body;
+ *
+ * once it is not (a formatter, or a hand that wraps a long pattern). BOTH spell the
+ * same read, and only the second one was invisible.
+ * MEASURED, 2026-10-27: src/ carries 69 `const { … } = …` patterns on one line and
+ * 0 broken over lines, so this is a FUTURE hole in this tree — closed here rather
+ * than by waiting for the first wrapped pattern, exactly as the multi-line setter
+ * hole was closed in t_b6cd0f72.
+ *
+ * Handed one line at a time, the walk saw `const {` and no closing brace, so
+ * `braceSpan` returned undefined and the read was invisible to every check —
+ * exactly the reach hole the one-line spelling had already closed. Measured on the
+ * shipped guard: the wrapped pattern appended to `lib/formPublicURL.ts` left the
+ * suite 10 pass / 0 fail, while `const { error } = b;` red on the same site.
+ * The walk now supplies the same buffer the parameter pass uses, and reports on
+ * the line the `const` head sits on — it may also be the line above the `{`,
+ * which `BINDING_HEAD`'s `\s*` spans.
+ */
+function bindingDestructuredReads(code: string): { reads: BindingRead[]; sites: number } {
+  const reads: BindingRead[] = [];
+  let sites = 0;
   for (const m of code.matchAll(BINDING_HEAD)) {
-    const span = braceSpan(code, (m.index ?? 0) + m[0].length - 1);
+    const start = m.index ?? 0;
+    const span = braceSpan(code, start + m[0].length - 1);
     if (!span) continue;
+    sites++;
     if (!bindsErrorProperty(span.pattern)) continue;
     // The initializer's source identifier when it is a plain one (`= r`), skipping
     // an annotation the pattern may carry (`: Body = r`).
     const after = code.slice(span.close + 1);
     const src = /^\s*(?::[^=]*)?=\s*([A-Za-z_$][\w$]*)?/.exec(after);
-    out.push({ recv: src?.[1] ?? null, end: span.close + 1 });
+    reads.push({ start, recv: src?.[1] ?? null, end: span.close + 1, pattern: span.pattern });
   }
-  return out;
+  return { reads, sites };
 }
 
 /**
@@ -370,16 +426,29 @@ function bindingDestructuredReads(code: string): ProseRead[] {
  * An assignment to the field (`x["error"] = …`) matches too, exactly as the old
  * dot rule did — the ban is on touching the field, and a writer of it is a reader
  * of whatever it just put there.
+ *
+ * The two halves are split because they need DIFFERENT input. A dot or bracket read
+ * is written inside one line; a binding's PATTERN may be broken over several, so
+ * only a caller holding the file's whole buffer can claim it (card t_665b6539) —
+ * the ban check calls `inlineFieldReads` per line and `bindingDestructuredReads`
+ * over the buffer. This composed form is for callers that hand it text where line
+ * locality is not the question: a setter's argument, and the shape table below.
  */
 function proseFieldReads(code: string): ProseRead[] {
+  return [...inlineFieldReads(code), ...bindingDestructuredReads(code).reads].sort((a, b) => a.end - b.end);
+}
+
+/** The LINE-LOCAL spellings of one read: `x.error` and `x["error"]`, in the shapes
+ *  listed above. Both are written inside one line, so this is what a per-line walk
+ *  may be handed. */
+function inlineFieldReads(code: string): ProseRead[] {
   const out: ProseRead[] = [];
   for (const m of code.matchAll(DOT_READ)) {
-    out.push({ recv: m[1] ?? null, end: (m.index ?? 0) + m[0].length });
+    out.push({ start: m.index ?? 0, recv: m[1] ?? null, end: (m.index ?? 0) + m[0].length });
   }
   for (const m of code.matchAll(BRACKET_READ)) {
-    out.push({ recv: m[1] ?? null, end: (m.index ?? 0) + m[0].length });
+    out.push({ start: m.index ?? 0, recv: m[1] ?? null, end: (m.index ?? 0) + m[0].length });
   }
-  for (const r of bindingDestructuredReads(code)) out.push(r);
   return out.sort((a, b) => a.end - b.end);
 }
 
@@ -640,6 +709,129 @@ test("no call site falls back to the server's error prose", () => {
   );
 });
 
+// ---------------------------------------------------------------------------
+// THE PER-FILE WALK behind the ban below, factored out (card t_665b6539).
+//
+// "The walk sees this spelling" is a claim about the WALK, not about a matcher. The
+// shape table at the end of the check drives the matchers in memory, and it cannot
+// notice a walk that hands them the wrong input — which is exactly the defect this
+// card is about: `bindsErrorProperty` saw the property wherever it sat inside the
+// pattern it was GIVEN, and the walk never gave it more than one line, so a
+// multi-key pattern (the wrapped shape) was invisible while every
+// single-line spelling red. So the loop body is one function here, and both the real
+// tree and every fixture below go through it.
+// ---------------------------------------------------------------------------
+
+type FileWalk = {
+  /** `rel:line: …` for every read of the prose field in this file. */
+  offenders: string[];
+  /** Reads examined, so an empty offender list cannot mean "the walk saw nothing". */
+  examined: number;
+  /** Destructured parameters classified as parameter positions, binding the field or
+   *  not — the floor that says the whole-file parameter pass is looking at real code. */
+  paramSites: number;
+  /** `const`/`let`/`var` patterns classified as binding positions, the same way. */
+  bindingSites: number;
+};
+
+/** The ban's walk over one file: `rel` is its path under src/ (report only), `text` its
+ *  source as written. */
+function fileProseOffenders(rel: string, text: string): FileWalk {
+  // A runLoad outcome's `.error` is ALREADY localized (runLoad renders `message` or
+  // the machine code — see lib/wsfetch.ts). Which names hold one is DERIVED from the
+  // file, exactly as in the check above, so a page that renames `r` keeps its
+  // exemption and no stale name list can widen it.
+  const loadVars = new Set<string>();
+  for (const m of text.matchAll(/(?:^|[;{}(\s])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+runLoad\b/g)) {
+    loadVars.add(m[1]);
+  }
+  const lines = linesOf(text);
+  const offenders: string[] = [];
+  let examined = 0;
+
+  // (1) THE LINE-LOCAL SPELLINGS. String/template CONTENTS are blanked (the shapes
+  // take blanked input), so a sentence that merely mentions `d.error` —
+  // documentation, a comment, an error-message string — is not a read.
+  for (const { n, text: lineText, code: stripped } of lines) {
+    if (isCommentLine(lineText)) continue;
+    const reads = inlineFieldReads(stripped);
+    if (reads.length === 0) continue;
+    // The line is exempt only when EVERY read on it is a runLoad outcome, which is
+    // the property the exemption is for. It used to be ANY read: the loop returned
+    // on the first one whose name was a loadVar, so `setErr(r.error || d.error)` hid
+    // the second (raw-prose) read behind the first — the same masking this check
+    // exists to remove, and no live line mixes the two today, so the tightening
+    // changes nothing but the reach.
+    if (reads.every((r) => r.recv !== null && loadVars.has(r.recv))) continue;
+    examined++;
+    if (ALLOWED.some((a) => lineText.includes(a))) continue;
+    offenders.push(`${rel}:${n}: ${lineText.trim()}`);
+  }
+
+  const buf = joinLines(lines);
+
+  /** The RAW source from one buffer offset to another: the lines the match sits on,
+   *  as the author wrote them. An ALLOWED entry is a raw snippet (both of today's
+   *  contain a string literal, which blanking erases), so an exception has to be
+   *  looked for in the text that was written, not in the blanked buffer. */
+  const rawSpan = (from: number, to: number): string =>
+    lines
+      .slice(buf.lineAt(from), buf.lineAt(Math.max(from, to)) + 1)
+      .map((l) => l.text)
+      .join("\n");
+
+  // (2) THE PARAMETER SPELLING (card t_69966a9a), which cannot be seen line by line
+  // — the context that makes `{ error }` a binding (a `function` head, or a `=>`
+  // tail) may sit on another line. See `paramFieldBindings` for why this spelling
+  // needs a whole-file pass of its own, and `matchingBracket` for the span match
+  // both whole-file passes share.
+  const params = paramFieldBindings(buf.code);
+  for (const r of params.reads) {
+    const line = lines[buf.lineAt(r.start)];
+    if (isCommentLine(line.text)) continue;
+    examined++;
+    // The pattern is tested beside the line: a parameter list broken over several
+    // lines has no single line that spells the exception in full.
+    if (ALLOWED.some((a) => r.pattern.includes(a) || line.text.includes(a))) continue;
+    // The line as it was written, plus the whole parameter list when the line does
+    // not contain it (the multi-line spelling — the pattern is otherwise invisible
+    // in the report).
+    offenders.push(`${rel}:${line.n}: ${line.text.trim()}${line.text.includes(r.pattern) ? "" : ` ${r.span}`}`);
+  }
+
+  // (3) THE BINDING SPELLING (card t_665b6539), over the same buffer for the same
+  // reason: the pattern may be broken over lines, and then no single line holds it.
+  // Reported on the line the `const`/`let`/`var` head sits on, which is not
+  // necessarily the line the `{` is on.
+  const bindings = bindingDestructuredReads(buf.code);
+  for (const r of bindings.reads) {
+    const line = lines[buf.lineAt(r.start)];
+    if (isCommentLine(line.text)) continue;
+    // The runLoad-outcome exemption, applied to THIS read's receiver rather than to
+    // "every read on the line": a binding read is one read of one pattern. Nothing
+    // is lost by the difference — a line that mixes a loadVar read with a raw one is
+    // still caught by pass (1), which reads that line.
+    if (r.recv !== null && loadVars.has(r.recv)) continue;
+    examined++;
+    // THE EXEMPTION, FOR A MATCH THAT MAY SPAN LINES. The parameter pass answers the
+    // same question by testing the pattern AND the line, because a list broken over
+    // lines has no single line that spells an exception in full. This pass tests the
+    // line AND the raw statement the match sits on — not `r.pattern`, which is
+    // BLANKED code (`t("set.autoCnameFailed", …)` reaches it as `t("", …)`), while
+    // every ALLOWED entry is a raw snippet with a string literal in it. An exception
+    // is therefore looked for in the source as written, on whichever line it is.
+    const statement = rawSpan(r.start, r.end - 1).replace(/\s+/g, " ").trim();
+    if (ALLOWED.some((a) => line.text.includes(a) || statement.includes(a))) continue;
+    // The line as written when it holds the pattern; otherwise the whole statement,
+    // whitespace-normalised — a multi-line pattern is invisible in a report that
+    // quotes only its opening line (the same reason the parameter pass appends its
+    // span).
+    offenders.push(`${rel}:${line.n}: ${line.text.includes(r.pattern) ? line.text.trim() : statement}`);
+  }
+
+  return { offenders, examined, paramSites: params.sites, bindingSites: bindings.sites };
+}
+
 test("no source file reads the failure BODY's prose field", () => {
   // THE HOLE THIS CLOSES (t_10453dd9, reproduced in a browser). Both checks above
   // reason about the SYNTAX around a read — a `.error` feeding a `||`, or a
@@ -678,6 +870,29 @@ test("no source file reads the failure BODY's prose field", () => {
   // optional-chain, the bracket and the binding-destructure spelling of the SAME
   // read — so the claim "any new reader fails the build" is now true of every
   // spelling the field can be read with, not of one of them.
+  //
+  // AND THE SHAPES ARE ONLY AS GOOD AS WHAT THE WALK HANDS THEM (card t_665b6539).
+  // The sentence above was still not the whole truth, for a reason no in-memory
+  // shape table can show: the walk fed the shapes ONE LINE AT A TIME, so a spelling
+  // whose shape SPANS LINES was invisible however well it was matched. Measured on
+  // the guard t_69966a9a shipped, with the reader appended to
+  // `lib/formPublicURL.ts`:
+  //
+  //     const {          <- GREEN 10 pass / 0 fail (reader undetected)
+  //       error,
+  //     } = b;
+  //
+  // while `const { error } = b;` red at the same site, naming
+  // `lib/formPublicURL.ts:62`. That is the shape a MULTI-KEY destructure of a
+  // response body takes once it is wrapped instead of fitting on one line, and it
+  // was the last silent reach hole of the class t_10453dd9 opened. (src/ carries 69
+  // one-line `const { … } = …` patterns and 0 wrapped ones today, so this is a
+  // FUTURE hole in this tree — closed the way t_b6cd0f72 closed the multi-line
+  // setter.) The spellings that can span lines (a destructured parameter, a
+  // `const`/`let`/`var` pattern) are now matched over the file joined into one
+  // buffer, reported on the line the match STARTS on, and the walk itself lives in
+  // `fileProseOffenders` so a fixture is exercised by the walk and not only by the
+  // matcher.
   assert.deepEqual(
     [...PROSE_READERS_ALLOWED],
     ["lib/apiErr.ts"],
@@ -689,63 +904,24 @@ test("no source file reads the failure BODY's prose field", () => {
    *  positions, whether or not they bind the field. A floor, so "the parameter
    *  spelling is claimed" cannot be true only of the shape table in memory. */
   let paramSites = 0;
+  /** The same floor for the binding spelling (card t_665b6539): `const { … } = …` is
+   *  ordinary in src/, so a whole-file pass that classified none of them is not
+   *  looking at real code and its silence about a multi-key pattern means nothing. */
+  let bindingSites = 0;
   for (const p of sources) {
     // NOTE: this walk's `rel` carries a leading "/" (SRC resolves to the src
     // directory itself), so it is normalised here rather than compared raw.
     const rel = p.slice(SRC.length).replace(/^\/+/, "");
     if (rel.endsWith(".test.ts")) continue;
     if (PROSE_READERS_ALLOWED.has(rel)) continue;
-    // A runLoad outcome's `.error` is ALREADY localized (runLoad renders
-    // `message` or the machine code — see lib/wsfetch.ts). Which names hold one
-    // is DERIVED from the file, exactly as in the check above, so a page that
-    // renames `r` keeps its exemption and no stale name list can widen it.
-    const src = readFileSync(p, "utf8");
-    const loadVars = new Set<string>();
-    for (const m of src.matchAll(/(?:^|[;{}(\s])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+runLoad\b/g)) {
-      loadVars.add(m[1]);
-    }
-    // String/template CONTENTS are blanked (proseFieldReads takes blanked input), so
-    // a sentence that merely mentions `d.error` — documentation, a comment, an
-    // error-message string — is not a read.
-    const lines = scanLines(p);
-    lines.forEach(({ n, text, code: stripped }) => {
-      if (isCommentLine(text)) return;
-      const reads = proseFieldReads(stripped);
-      if (reads.length === 0) return;
-      // The line is exempt only when EVERY read on it is a runLoad outcome, which
-      // is the property the exemption is for. It used to be ANY read: the loop
-      // returned on the first one whose name was a loadVar, so
-      // `setErr(r.error || d.error)` hid the second (raw-prose) read behind the
-      // first — the same masking this check exists to remove, and no live line
-      // mixes the two today, so the tightening changes nothing but the reach.
-      if (reads.every((r) => r.recv !== null && loadVars.has(r.recv))) return;
-      examined++;
-      if (ALLOWED.some((a) => text.includes(a))) return;
-      offenders.push(`${rel}:${n}: ${text.trim()}`);
-    });
-
-    // THE PARAMETER SPELLING (card t_69966a9a), which cannot be seen line by line
-    // — the context that makes `{ error }` a binding (a `function` head, or a `=>`
-    // tail) may sit on another line. See `paramFieldBindings` for why this is the
-    // one shape with a whole-file pass of its own, and `matchingBracket` for the
-    // span match both shapes share.
-    const buf = joinLines(lines);
-    const params = paramFieldBindings(buf.code);
-    paramSites += params.sites;
-    for (const r of params.reads) {
-      const line = lines[buf.lineAt(r.start)];
-      if (isCommentLine(line.text)) continue;
-      examined++;
-      // The pattern is tested beside the line: a parameter list broken over
-      // several lines has no single line that spells the exception in full.
-      if (ALLOWED.some((a) => r.pattern.includes(a) || line.text.includes(a))) continue;
-      // The line as it was written, plus the whole parameter list when the line
-      // does not contain it (the multi-line spelling — the pattern is otherwise
-      // invisible in the report).
-      offenders.push(
-        `${rel}:${line.n}: ${line.text.trim()}${line.text.includes(r.pattern) ? "" : ` ${r.span}`}`,
-      );
-    }
+    // The whole walk for one file — the three passes, the two exemptions and what
+    // each of them counted — is `fileProseOffenders`, so the fixtures below are held
+    // to the same instrument the real tree is.
+    const walk = fileProseOffenders(rel, readFileSync(p, "utf8"));
+    offenders.push(...walk.offenders);
+    examined += walk.examined;
+    paramSites += walk.paramSites;
+    bindingSites += walk.bindingSites;
   }
   assert.deepEqual(
     offenders,
@@ -768,6 +944,13 @@ test("no source file reads the failure BODY's prose field", () => {
     "the whole-file pass classified no destructured parameter anywhere in src/ — it is " +
       "not looking at real code, so a parameter binding this field would go unseen",
   );
+  // And the same floor for the binding spelling this card widened to a whole-file scan.
+  assert.ok(
+    bindingSites > 20,
+    `the whole-file pass classified ${bindingSites} \`const { … } = …\` patterns in src/ — ` +
+      "a multi-key pattern binding this field would go unseen, so the pass is not looking " +
+      "at the code it claims to",
+  );
 
   // THE SHAPE TABLE ITSELF, pinned in memory (card t_d7552433). The walk above only
   // ever exercises the spellings that exist in src/ TODAY — which is precisely how a
@@ -789,6 +972,13 @@ test("no source file reads the failure BODY's prose field", () => {
     "const { error: m } = b;",
     "const { a: { error } } = b;",
     `const { error = "" } = b;`,
+    // THE PATTERN BROKEN OVER LINES (card t_665b6539) — how a multi-key pattern is
+    // written once it is wrapped instead of fitting on one line, which is the shape
+    // a multi-key body destructure takes.
+    "const {\n  error,\n} = b;",
+    "const {\n  code,\n  error,\n} = b;",
+    "const\n  {\n    error,\n  } = b;",
+    "const {\n  a: {\n    error,\n  },\n} = b;",
   ]) {
     assert.equal(
       readsIn(line).length,
@@ -801,6 +991,11 @@ test("no source file reads the failure BODY's prose field", () => {
     `const s = "x.error";`,
     "const { errorKey } = b;",
     `const s = "error";`,
+    // The multi-line negatives the whole-file binding pass needs: a pattern that does
+    // not bind the field, and an object LITERAL initializer (a WRITE), which
+    // `BINDING_HEAD` cannot reach because there is more than `{` after the `const`.
+    "const {\n  errorKey,\n} = b;",
+    "const out = {\n  error: msg,\n};",
   ]) {
     assert.equal(
       readsIn(line).length,
@@ -875,6 +1070,110 @@ test("no source file reads the failure BODY's prose field", () => {
     paramReadsIn("render({ error: msg });").sites,
     0,
     "a call site was classified as a parameter position — the rule could red a correct call",
+  );
+
+  // BOTH MULTI-LINE SHAPES, THROUGH THE WALK (card t_665b6539). Everything above drives
+  // MATCHERS in memory, and a matcher is not the same instrument as the walk: this
+  // card's whole defect was a walk that handed the matcher one line, which no
+  // in-memory fixture could have shown. So the multi-line parameter this file claimed
+  // in t_69966a9a and the multi-line `const` pattern this card claims are both driven
+  // through `fileProseOffenders` — the same function the real tree goes through above
+  // — and each one has a control that must come back empty.
+  const walked = (text: string) => fileProseOffenders("lib/__fixture.ts", text);
+
+  // The card's probe, verbatim. The report anchors on the `const` head (line 2), which
+  // is the line a reader can open, not on the pattern's closing brace, and it quotes
+  // the whole statement because the pattern is not on that line.
+  assert.deepEqual(
+    walked(
+      [
+        "export function _probeConstMulti(b: { error?: unknown }): string {",
+        "  const {",
+        "    error,",
+        "  } = b;",
+        '  return String(error ?? "");',
+        "}",
+      ].join("\n"),
+    ).offenders,
+    ["lib/__fixture.ts:2: const { error, } = b;"],
+    "a `const` pattern broken over lines was not seen BY THE WALK (t_665b6539)",
+  );
+  // The head may also sit on the line ABOVE its `{` (`BINDING_HEAD`'s `\s*` spans it);
+  // the report is still the head's line, because that is where the read begins.
+  assert.deepEqual(
+    walked(
+      [
+        "export function f(b: unknown): string {",
+        "  const",
+        "    {",
+        "      error,",
+        "    } = b;",
+        '  return String(error ?? "");',
+        "}",
+      ].join("\n"),
+    ).offenders,
+    ["lib/__fixture.ts:2: const { error, } = b;"],
+    "a `const` head on the line above its pattern was not seen by the walk (t_665b6539)",
+  );
+  // And the one-line spelling of the SAME read still fires through this instrument, so
+  // the whole-file pass did not replace the reach it used to have with a narrower one.
+  assert.deepEqual(
+    walked(
+      [
+        "export function f(b: { error?: unknown }): string {",
+        "  const { error } = b;",
+        '  return String(error ?? "");',
+        "}",
+      ].join("\n"),
+    ).offenders,
+    ["lib/__fixture.ts:2: const { error } = b;"],
+    "the one-line `const` spelling stopped firing when the walk became whole-file",
+  );
+  // The parameter reach t_69966a9a added, now asserted by the WALK rather than only by
+  // the shape table: a parameter list broken over lines, the way a component with
+  // several props is wrapped.
+  const walkedParam = walked(
+    ["export function PublishError({", "  error,", "}: Props) {", '  return String(error ?? "");', "}"].join("\n"),
+  );
+  assert.equal(
+    walkedParam.offenders.length,
+    1,
+    `a destructured parameter broken over lines was not seen BY THE WALK (t_69966a9a): ${JSON.stringify(walkedParam.offenders)}`,
+  );
+  assert.match(
+    walkedParam.offenders[0],
+    /^lib\/__fixture\.ts:1: export function PublishError\(/,
+    "the parameter report is not anchored on the line the parameter list opens on",
+  );
+  assert.ok(
+    walkedParam.offenders[0].includes("{ error,"),
+    `the parameter report does not name the pattern: ${walkedParam.offenders[0]}`,
+  );
+  // The controls, through the same walk: the SAME pattern text in argument position is
+  // a WRITE, and a destructured runLoad outcome is already localized.
+  assert.deepEqual(
+    walked(
+      ["export function f(msg: string): string {", "  return String(render({", "    error: msg,", "  }));", "}"].join(
+        "\n",
+      ),
+    ).offenders,
+    [],
+    "a call site passing an object literal was reported by the walk — the rule would red a correct call",
+  );
+  assert.deepEqual(
+    walked(
+      [
+        "export async function f(): Promise<string> {",
+        '  const r = await runLoad("/x");',
+        "  const {",
+        "    error,",
+        "  } = r;",
+        '  return String(error ?? "");',
+        "}",
+      ].join("\n"),
+    ).offenders,
+    [],
+    "a destructured runLoad outcome was reported — the derived exemption does not reach the whole-file binding pass",
   );
 
   // A read taken off a COMPOUND expression has no attributable name; it must still be
