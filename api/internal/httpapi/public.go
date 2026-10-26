@@ -379,6 +379,27 @@ func antiSpamRenderFields() string {
 </div>`
 }
 
+// dropAntiSpamBookkeeping removes the renderer's own anti-spam controls — the
+// `website` honeypot and the `jf_ts` render timestamp — from a submitted field
+// map once the anti-spam layers have read them.
+//
+// Nothing removed them, so a block-form submission stored both
+// controls as if they were answers (the custom-HTML path did not, because
+// customform.Collect keeps only registered fields — the same submission was
+// clean or dirty depending on the form type). Neither value is something the
+// sender filled in: the honeypot is a display:none input the browser leaves
+// empty and the timestamp is when the page was rendered. They leaked into the
+// stored submission, into the sale's field snapshot, into the notification
+// renderer and into every other consumer of submissions.data.
+//
+// Call this on EVERY path that persists the field map, using the httpapi
+// constants: the renderer is the source of the names, so a control renamed
+// there cannot keep being stored from a stale copy of the list.
+func dropAntiSpamBookkeeping[M ~map[string]V, V any](fields M) {
+	delete(fields, antiSpamHoneypotField)
+	delete(fields, antiSpamRenderField)
+}
+
 // antiSpamSubmitterIsOwner reports whether the request is from a logged-in
 // owner/admin of the form's workspace. When true, the per-form rate limit and
 // time-based check are skipped (owner testing the form shouldn't be
@@ -744,6 +765,11 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 			}
 		}
 	}
+	// The layers above have consumed the renderer's two hidden
+	// controls, so drop them here — before the submission row, the notification,
+	// the confirmation and the judge read this map. Until this existed, a block
+	// form stored `website` and `jf_ts` as answers.
+	dropAntiSpamBookkeeping(in.Fields)
 	// Issue #255: for a custom-HTML response form, only the registered fields
 	// are read from the submitted data. Arbitrary HTML inputs (unregistered
 	// field_ids) are dropped — the server never trusts the agent's HTML to

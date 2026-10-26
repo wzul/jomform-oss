@@ -159,6 +159,11 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
 		return
 	}
+	// The layers above consumed the renderer's hidden controls
+	// (`website` honeypot / `jf_ts` render timestamp). Drop them before this map
+	// becomes the sale's field snapshot, so the merchant's order data reports
+	// the buyer's answers and not the page's bookkeeping.
+	dropAntiSpamBookkeeping(in.Fields)
 	method := in.PaymentMethod
 	if method != "chip" && method != "bank_direct" {
 		writeErr(w, http.StatusBadRequest, "kaedah pembayaran tidak sah")
