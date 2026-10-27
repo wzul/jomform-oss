@@ -4104,6 +4104,122 @@ if [ -n "$probe_tree" ]; then
   fi
 fi
 
+# 43. THE RECORD'S PROVENANCE LABEL MUST NAME THE BYTES ITS `tree` COVERS (card
+#     t_6c9cca01). `tree` is the reuse key and it is the WORKING TREE, so a run can
+#     gate bytes no commit names — and the merge lane is the systematic case: it
+#     merges into the index and working tree with HEAD still at the PRE-MERGE base
+#     tip, so `git rev-parse --short HEAD` names the commit whose bytes were NOT
+#     gated. Measured on this host before the fix: the record for tree 08a5120f
+#     (the v1.21.197 merge, == `a5ab7eca^{tree}`) carried `commit 087f1d3e`, which is
+#     the v1.21.196 merge, tree 064fb586 — a deploy lane citing `commit` cites the
+#     wrong artefact. Reuse itself was never wrong (it keys on `tree`); the LABEL
+#     lied, and the record is the evidence a lane quotes.
+#
+#     THE SHAPE IS REPRODUCED, NOT DESCRIBED: a two-commit repo, `git worktree add
+#     --detach` at the base tip, then a NON-COMMITTING merge into that worktree —
+#     exactly what a merge lane leaves behind. The REAL writer (`gr_flush`) records
+#     it, and the record must not label the merged bytes with HEAD's commit.
+#
+#     THE CONTROL IS LOAD-BEARING: a clean worktree at that same commit must still
+#     read `commit=<sha>` (no marker) with `gated_is_head: true`. Without it,
+#     "always append +uncommitted" would satisfy every leg below while making the
+#     honest case unreadable.
+mw_root="$SB_STATE/provenance43"
+mw_repo="$mw_root/repo"
+mw_wt="$mw_root/wt-merged"
+mw_clean="$mw_root/wt-clean"
+mkdir -p "$mw_root"
+mw_err=""
+mw_base=""; mw_topic=""; mw_tree=""; mw_head_tree=""; mw_head_short=""
+mw_commit=""; mw_rec_head_tree=""; mw_rec_is_head=""; mw_rec_tree=""
+mw_ctl_tree=""; mw_ctl_head_short=""; mw_ctl_commit=""; mw_ctl_rec_head_tree=""; mw_ctl_is_head=""
+
+# mw_fixture — build the merge-lane shape with every step's failure NAMED, so a
+# fixture that did not land is a loud `bad` instead of a vacuous green.
+mw_fixture() {
+  git init -q -b base "$mw_repo" >/dev/null 2>&1 || { mw_err="git init"; return 1; }
+  git -C "$mw_repo" config user.email preflight-test@example.invalid || { mw_err="git config user.email"; return 1; }
+  git -C "$mw_repo" config user.name preflight-test || { mw_err="git config user.name"; return 1; }
+  printf 'base\n' > "$mw_repo/base.txt"
+  git -C "$mw_repo" add -A >/dev/null 2>&1 || { mw_err="git add base.txt"; return 1; }
+  git -C "$mw_repo" commit -q -m base >/dev/null 2>&1 || { mw_err="commit base"; return 1; }
+  mw_base="$(git -C "$mw_repo" rev-parse HEAD)" || { mw_err="rev-parse the base commit"; return 1; }
+  git -C "$mw_repo" checkout -q -b topic >/dev/null 2>&1 || { mw_err="checkout -b topic"; return 1; }
+  printf 'topic\n' > "$mw_repo/topic.txt"
+  git -C "$mw_repo" add -A >/dev/null 2>&1 || { mw_err="git add topic.txt"; return 1; }
+  git -C "$mw_repo" commit -q -m topic >/dev/null 2>&1 || { mw_err="commit topic"; return 1; }
+  mw_topic="$(git -C "$mw_repo" rev-parse HEAD)" || { mw_err="rev-parse the topic commit"; return 1; }
+  git -C "$mw_repo" checkout -q base >/dev/null 2>&1 || { mw_err="checkout base"; return 1; }
+  git -C "$mw_repo" worktree add -q --detach "$mw_wt" "$mw_base" >/dev/null 2>&1 \
+    || { mw_err="git worktree add --detach (the merge-lane worktree)"; return 1; }
+  git -C "$mw_wt" merge --no-ff --no-commit "$mw_topic" >/dev/null 2>&1 \
+    || { mw_err="git merge --no-commit (which is how a lane holds merged content with HEAD unmoved)"; return 1; }
+  git -C "$mw_repo" worktree add -q --detach "$mw_clean" "$mw_base" >/dev/null 2>&1 \
+    || { mw_err="git worktree add --detach (the CLEAN control worktree)"; return 1; }
+  return 0
+}
+
+# mw_flush <tree> <commit-label> <result-dir> <repo> — drive the REAL writer (never
+# a re-implementation) in a subshell so its GR_* globals cannot leak into the
+# checks below.
+mw_flush() {
+  (
+    GR_GATE_NAMES=("$probe_gate")
+    GR_STATUS[$probe_gate]=pass
+    GR_SECONDS[$probe_gate]=1
+    GR_AT[$probe_gate]="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    GR_REUSED[$probe_gate]=false
+    GR_TREE="$1"; GR_TREE_SHORT="$(gr_short_sha "$1")"; GR_REPO="$4"
+    GR_COMMIT="$2"; GR_BRANCH=HEAD; GR_PID=$$
+    GR_PASSED=1; GR_FAILED=0; GR_SKIPPED=0; GR_SELECTED=""
+    PREFLIGHT_RESULT_DIR="$3" gr_flush 1
+  )
+}
+
+if ! mw_fixture; then
+  bad "check 43 — the merge-lane fixture could not be built ($mw_err), so the provenance label was never exercised; a fixture that does not land proves nothing"
+else
+  mw_tree="$(gr_tree_sha "$mw_wt")"
+  mw_head_tree="$(git -C "$mw_wt" rev-parse 'HEAD^{tree}' 2>/dev/null)"
+  mw_head_short="$(git -C "$mw_wt" rev-parse --short HEAD 2>/dev/null)"
+  mw_ctl_tree="$(gr_tree_sha "$mw_clean")"
+  mw_ctl_head_short="$(git -C "$mw_clean" rev-parse --short HEAD 2>/dev/null)"
+  mw_flush "$mw_tree" "$mw_head_short" "$mw_root/records-merged" "$mw_wt" || true
+  mw_flush "$mw_ctl_tree" "$mw_ctl_head_short" "$mw_root/records-clean" "$mw_clean" || true
+  mw_rec="$mw_root/records-merged/${mw_tree}.json"
+  mw_ctl_rec="$mw_root/records-clean/${mw_ctl_tree}.json"
+  mw_rec_tree="$(gr_read_field "$mw_rec" tree)"
+  mw_commit="$(gr_read_field "$mw_rec" commit)"
+  mw_rec_head_tree="$(gr_read_field "$mw_rec" head_tree)"
+  mw_rec_is_head="$(gr_read_bool "$mw_rec" gated_is_head)"
+  mw_ctl_commit="$(gr_read_field "$mw_ctl_rec" commit)"
+  mw_ctl_rec_head_tree="$(gr_read_field "$mw_ctl_rec" head_tree)"
+  mw_ctl_is_head="$(gr_read_bool "$mw_ctl_rec" gated_is_head)"
+  if [ -z "$mw_tree" ] || [ -z "$mw_head_tree" ] || [ -z "$mw_ctl_tree" ]; then
+    bad "check 43 — the fixture's tree shas could not be computed (merged=[$mw_tree] head_tree=[$mw_head_tree] clean=[$mw_ctl_tree]), so nothing about the label can be asserted"
+  elif [ "$mw_tree" = "$mw_head_tree" ]; then
+    bad "check 43 — THE FIXTURE DOES NOT REPRODUCE THE DEFECT: the merged worktree's working-tree sha [$mw_tree] equals its HEAD^{tree}, so HEAD's commit WOULD name these bytes and there is nothing for the label to get wrong"
+  elif [ ! -r "$mw_rec" ] || [ ! -r "$mw_ctl_rec" ]; then
+    bad "check 43 — the real gr_flush wrote no record for the merged tree [$mw_rec] and/or the control [$mw_ctl_rec], so the label was never produced"
+  elif [ "$mw_rec_tree" != "$mw_tree" ]; then
+    bad "check 43 — the merged record names tree [$mw_rec_tree], not the tree it gated [$mw_tree]"
+  elif [ "$mw_commit" != "${mw_head_short}+uncommitted" ]; then
+    bad "check 43 — a record whose gated bytes are NOT HEAD's labels them with commit [$mw_commit]: HEAD is ${mw_head_short} (tree ${mw_head_tree:0:7}) while the gated tree is ${mw_tree:0:7}, so a reader who trusts \`commit\` cites the pre-merge base commit — the measured v1.21.197 shape (record tree 08a5120f, commit 087f1d3e)"
+  elif [ "$mw_rec_is_head" != "false" ]; then
+    bad "check 43 — the merged record says gated_is_head=[$mw_rec_is_head]; it must say false, or the record reads as if HEAD's commit described the merged bytes"
+  elif [ "$mw_rec_head_tree" != "$mw_head_tree" ]; then
+    bad "check 43 — the merged record's head_tree is [$mw_rec_head_tree], not HEAD^{tree} at the write [$mw_head_tree], so \`tree == head_tree\` is NOT decidable from the record alone"
+  elif [ "$mw_ctl_tree" != "$mw_head_tree" ]; then
+    bad "check 43 — the CONTROL worktree's tree [$mw_ctl_tree] is not the base tip's tree [$mw_head_tree], so it is not a clean checkout of the same commit and cannot control for the marker"
+  elif [ "$mw_ctl_commit" != "$mw_ctl_head_short" ]; then
+    bad "check 43 — the CONTROL broke the honest case: a clean worktree whose bytes ARE HEAD's must record commit [$mw_ctl_head_short] with no marker, got [$mw_ctl_commit] — a marker applied unconditionally makes every record unreadable"
+  elif [ "$mw_ctl_is_head" != "true" ] || [ "$mw_ctl_rec_head_tree" != "$mw_ctl_tree" ]; then
+    bad "check 43 — the CONTROL's record says gated_is_head=[$mw_ctl_is_head] head_tree=[$mw_ctl_rec_head_tree] for tree [$mw_ctl_tree]; a clean checkout must read true with head_tree == tree"
+  else
+    ok "check 43 — the record's provenance label names the bytes its \`tree\` covers: a merge-lane worktree (HEAD ${mw_head_short} unmoved at the base, working tree ${mw_tree:0:7} holding the merge, HEAD^{tree} ${mw_head_tree:0:7}) records commit [$mw_commit], head_tree [$mw_rec_head_tree] and gated_is_head [$mw_rec_is_head], while the CLEAN control at the same commit records commit [$mw_ctl_commit] with gated_is_head [$mw_ctl_is_head] — so \`tree == HEAD^{tree}\` is decidable from the record alone"
+  fi
+fi
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

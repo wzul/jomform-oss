@@ -135,6 +135,18 @@ gr_tree_sha() {
 # gr_short_sha <sha> — 7 characters, the way the lanes name a tree.
 gr_short_sha() { printf '%.7s\n' "$1"; }
 
+# gr_head_tree [repo] — the sha of HEAD's TREE COMMIT at <repo> (default: $PWD),
+# or empty when there is none (no commits yet, not a repo). Compare it with
+# gr_tree_sha: equal means the gated bytes ARE HEAD's bytes; different means the
+# run gated content no commit names (a merge-lane worktree, an uncommitted edit).
+# Output is empty on failure — the caller must record "unknown", never guess.
+gr_head_tree() {
+  local repo="${1:-$PWD}" out
+  out="$(cd "$repo" 2>/dev/null && git rev-parse --verify 'HEAD^{tree}' 2>/dev/null)" || return 1
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
 gr_sha256_file() {
   [ -r "$1" ] || { printf 'none'; return 0; }
   sha256sum "$1" 2>/dev/null | awk '{print $1}'
@@ -496,6 +508,15 @@ gr_read_int() { # <file> <field>
   [ -r "$1" ] || return 0
   sed -nE "s/^  \"$2\": ([0-9]+),?$/\1/p" "$1" | sed -n 1p
 }
+# gr_read_bool <file> <field> — true|false|null for an UNQUOTED JSON literal, empty
+# when the field is absent (a record written before the field existed). Kept
+# separate from gr_read_field because that reader is anchored on a QUOTED value:
+# reading `"gated_is_head": false` with it returns nothing, which would read as
+# "the field says no such thing" when the field says exactly that.
+gr_read_bool() { # <file> <field>
+  [ -r "$1" ] || return 0
+  sed -nE "s/^  \"$2\": (true|false|null),?$/\1/p" "$1" | sed -n 1p
+}
 gr_gate_status() { # <file> <gate>
   [ -r "$1" ] || return 0
   sed -nE "s/^    \"$2\": \{ \"status\": \"([a-z]+)\".*$/\1/p" "$1" | sed -n 1p
@@ -659,6 +680,42 @@ gr_flush() {
   tree_key="$(gr_key "${GR_REPO:-$PWD}")"
   now="$(gr_now)"
 
+  # ---- PROVENANCE: never let `commit` label bytes it does not name -------------
+  # `tree` is the reuse key and it is the WORKING TREE (see gr_tree_sha), so a run
+  # can gate content that no commit names — an uncommitted edit, or a merge-lane
+  # worktree, which merges into the index/worktree while HEAD stays at the PRE-MERGE
+  # base tip. In that second shape `git rev-parse --short HEAD` names the base, i.e.
+  # the commit whose bytes were NOT gated, and a reader who trusts the label cites
+  # the wrong artefact (measured on this host: record tree 08a5120f — the v1.21.197
+  # merge — carried commit 087f1d3e, which is v1.21.196's merge, tree 064fb586).
+  #
+  # So the record now says it out loud, three ways that a grep, a human and a
+  # machine can each use:
+  #   * `commit` keeps naming HEAD but carries `+uncommitted` when the gated bytes
+  #     are not HEAD's, so the label cannot be read as the gated artefact;
+  #   * `head_tree` is `HEAD^{tree}` at the moment of the write — with `tree` beside
+  #     it, `tree == head_tree` is decidable from the record alone;
+  #   * `gated_is_head` is that comparison as a boolean, or `null` when HEAD's tree
+  #     could not be computed at all. `null` is NOT `false`: a repo with no commits
+  #     is "unknown", and claiming "not HEAD" there would be a different invention.
+  #
+  # None of this is key material and none of it changes the key: the reuse decision
+  # stays derived from `tree` + environment, exactly as before (preflight_reuse.sh
+  # reads the record unchanged).
+  local head_tree gated_is_head commit_label
+  if head_tree="$(gr_head_tree "${GR_REPO:-$PWD}")"; then :; else head_tree=""; fi
+  if [ -z "$head_tree" ]; then
+    gated_is_head=null
+  elif [ "$head_tree" = "$GR_TREE" ]; then
+    gated_is_head=true
+  else
+    gated_is_head=false
+  fi
+  commit_label="${GR_COMMIT:-}"
+  if [ "$gated_is_head" = false ]; then
+    commit_label="${commit_label:-unknown}+uncommitted"
+  fi
+
   # Carry over a previous entry for a gate this run did not observe. A `skip` is
   # not an observation, so it must never erase a pass the lane is standing on.
   #
@@ -706,7 +763,9 @@ gr_flush() {
     printf '  "tool": "scripts/gate_result.sh",\n'
     printf '  "tree": "%s",\n' "$GR_TREE"
     printf '  "repo": "%s",\n' "$(gr_json_escape "${GR_REPO:-}")"
-    printf '  "commit": "%s",\n' "$(gr_json_escape "${GR_COMMIT:-}")"
+    printf '  "commit": "%s",\n' "$(gr_json_escape "$commit_label")"
+    printf '  "head_tree": "%s",\n' "$head_tree"
+    printf '  "gated_is_head": %s,\n' "$gated_is_head"
     printf '  "branch": "%s",\n' "$(gr_json_escape "${GR_BRANCH:-}")"
     printf '  "key": "%s",\n' "$tree_key"
     printf '  "key_parts": "%s",\n' "$(gr_json_escape "$(gr_key_parts "${GR_REPO:-$PWD}")")"

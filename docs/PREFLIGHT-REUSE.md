@@ -37,6 +37,8 @@ it is not what a merger needs when it decides to squash.
   "tree": "<tree sha of the WORKING TREE>",
   "repo": "/root/wzul-git/jomform/.worktrees/t_dbd93601",
   "commit": "3fba5ff",
+  "head_tree": "<HEAD^{tree} at the moment of the write>",
+  "gated_is_head": true,
   "branch": "jomform/t_dbd93601-...",
   "key": "<sha256 of the INVALIDATORS in key_parts>",
   "key_parts": "go=go1.27.0;webdeps=<hash>;gatescript=<hash>;resultlib=<hash>;testdb=<host/db>;extra=<hash>;node=v26.7.0",
@@ -61,6 +63,21 @@ it is not what a merger needs when it decides to squash.
   uncommitted edits, and equals `HEAD^{tree}` for a clean checkout. **Not** the
   commit sha: a merge-tree result is a different object from a branch head, and a
   record may only be reused for the bytes it actually gated.
+* **`commit` / `head_tree` / `gated_is_head`** — the **provenance label**, and it
+  must not read as if the gated bytes were HEAD's when they are not. `tree` names
+  the working tree, so a run can gate content no commit names: an uncommitted edit,
+  or — systematically — a **merge-lane worktree**, which merges into the index and
+  working tree while HEAD stays at the **pre-merge base tip**. There `commit` (which
+  names HEAD) would point at the commit whose bytes were *not* gated. So the writer
+  says it out loud three ways: `commit` carries `+uncommitted` when
+  `tree != HEAD^{tree}`; `head_tree` records `HEAD^{tree}` at the moment of the
+  write, so `tree == head_tree` is decidable from the record alone; and
+  `gated_is_head` is that comparison as a boolean, or `null` when HEAD's tree could
+  not be computed at all (`null` is not `false` — "unknown" is not "not HEAD").
+  None of it is key material: the reuse decision stays `tree` + environment, so a
+  reader that only wants the verdict can ignore all three fields. Measured before
+  the fix: the record for tree `08a5120f` (the v1.21.197 merge, `a5ab7eca^{tree}`)
+  labelled itself `commit 087f1d3e`, which is the v1.21.196 merge, tree `064fb586`.
 * **`key` / `key_parts`** — everything that makes a verdict describe an
   *environment*, not just a tree: the Go toolchain, the installed web dependency
   set (`web/node_modules/.package-lock.json`), `scripts/preflight.sh` and

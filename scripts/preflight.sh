@@ -1764,8 +1764,15 @@ if [ -r "$PREFLIGHT_RESULT_LIB" ]; then
   . "$PREFLIGHT_RESULT_LIB"
   GR_GATE_NAMES=("${GATE_NAMES[@]}")
   GR_REPO="$REPO_ROOT"
-  GR_COMMIT="$(git rev-parse --short HEAD 2>/dev/null)"
-  GR_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  # -C on BOTH: this script is invoked from the caller's cwd, which is not
+  # necessarily the repo root it is about — and with no -C the label describes
+  # whatever repo the CALLER happened to stand in. That is the label half of the
+  # provenance defect (card t_6c9cca01): `commit` must name the repo the record's
+  # `tree` came from. It is not the whole fix — the writer also marks the label
+  # when the gated bytes are not HEAD's (see gr_flush) — but the two must agree
+  # about WHICH repo they are talking about.
+  GR_COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null)"
+  GR_BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)"
   GR_PID="$$"
   GR_LOG="${PREFLIGHT_LOG:-}"
   # What this run was ASKED for — recorded so a reader can tell a run that
