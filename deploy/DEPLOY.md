@@ -265,6 +265,88 @@ email worker included) and only fail on the already-bound port — or never, if 
 were given a free one. `curl`ing the public health route is still the check for
 whether the service actually serves; the flag only tells you what binary it is.
 
+### A release that owes no image (the delta cannot move the shipped artefact)
+
+Steps 1–7 assume the release owes an image. Some releases do not, and then the
+sequence is **step 1 only** — but only when that is *proved*, never asserted. The
+screen is: every changed file is either excluded from the build context that
+produces the image, or read by no build input.
+
+**api image** (context `api/`, `api/Dockerfile`). The load-bearing rule is Go's
+own: `go build ./cmd/jomform-api` never compiles a `_test.go` file, so a delta
+that is entirely `api/**/*_test.go` cannot move the binary. Measured 2026-10-17
+(`GOTOOLCHAIN=go1.27.2`, `CGO_ENABLED=0`, `-trimpath -buildvcs=false -s -w`):
+adding a `*_test.go` to a package left the binary's sha256 **unchanged**
+(`26f5900e…` → `26f5900e…`), while adding one non-test `.go` to that same package
+**moved** it (`ffe1fd18…`) — so the check bites.
+
+What is **not** the load-bearing reason, although it looks like one: `api/.dockerignore`
+lists **both** `*_test.go` and `**/*_test.go`. A pattern with no `/` is root-anchored — a
+context holding `root_test.go` and `internal/httpapi/nested_test.go` with `.dockerignore` =
+`*_test.go` **alone** keeps the nested file and drops only the root one — but
+`**/*_test.go` matches at **any** depth, so as the file stands no `*_test.go` reaches the
+api build context (measured 2026-10-27 on Docker 29.7.1: 0 of 3 in that controlled context;
+this repo's own `api/` tree, 564 `*_test.go` on disk → 0 in the context). The reason a
+test-only delta is still safe is Go's rule above — `go build` never compiles a `_test.go`
+— which is why the proof is byte identity of the binary, not an inference from the
+exclude list.
+
+**web image** (context the repo root, `web/Dockerfile`). The runtime stage copies
+only `/repo/web/.next/standalone`, `.next/static` and `public`, so a file that no
+build input *reads* cannot reach it; `web/src/lib/buildContext.test.ts` is the list
+of reads that must be present in the context. An `api/` test-file delta owes no web
+image when grepping the changed basenames under `web/` finds no reader.
+
+**Prove it; do not assert it.** The check is byte identity of the api binary. Export
+each revision with `git archive` (no `.git`, so the build cannot pick up VCS state
+that differs between the two trees), build both with the Dockerfile's recipe and —
+the part that is easy to get wrong — the stamps the **running** container reports:
+
+```bash
+OLD=17e6d526   # the commit prod runs   (docker exec jomform-api-1 /usr/local/bin/jomform-api --version)
+NEW=a6b046db   # the commit you tagged
+V=v1.21.136    # the version prod runs  (same command)
+for rev in $OLD $NEW; do
+  mkdir -p /tmp/bi-$rev
+  git archive --format=tar "$rev" | tar -x -C /tmp/bi-$rev
+  ( cd /tmp/bi-$rev/api && GOTOOLCHAIN=go1.27.2 CGO_ENABLED=0 go build \
+      -trimpath -buildvcs=false \
+      -ldflags "-s -w -X github.com/wzul/jomform/api/internal/version.Version=$V -X github.com/wzul/jomform/api/internal/version.Commit=$OLD" \
+      -o /tmp/api-$rev ./cmd/jomform-api )
+  sha256sum /tmp/api-$rev
+done
+ssh root@$HOST 'docker exec jomform-api-1 sha256sum /usr/local/bin/jomform-api'
+```
+
+All three digests must be equal: both builds and the binary the container is
+running. Two controls keep that green from being a tautology — build the **new**
+revision with its **own** stamps (the tag you did not ship) and the digest must
+move, and change one string in production source and it must move too.
+
+The entry point is **`jomform-api`**, one `m` after `jo`: a lookup of
+`jormform-api` returns `ENOENT` for a path `ls` happily lists, which reads as a
+filesystem fault mid-proof — see the troubleshooting section above.
+
+Worked example, v1.21.136 → v1.21.137 (delta: 7 `M` files, all
+`api/internal/httpapi/*_test.go`, 0 non-test files). Both revisions, built through
+the Dockerfile with prod's stamps, produce the **same image and the same binary**:
+
+| built from | stamps | api image id | binary sha256 | size |
+|---|---|---|---|---|
+| `17e6d526` (what prod runs) | `v1.21.136` / `17e6d526` | `6a6f16bd7a1b…` | `7d955f5d912c894670c381701f3d81ac8ae5befd80a3a961a7b5bf5a836cb45a` | 57 184 416 B |
+| `a6b046db` (the new tag) | `v1.21.136` / `17e6d526` | `6a6f16bd7a1b…` | `7d955f5d912c894670c381701f3d81ac8ae5befd80a3a961a7b5bf5a836cb45a` | 57 184 416 B |
+| `a6b046db` — **control** | `v1.21.137` / `a6b046db` | `670b1a45d357…` | `546856803b8b5ba33c94f3f9fb9e485405eb4bbd143a102becc51c340a36bef9` | 57 184 416 B |
+
+… and that shared digest is the binary in the running `jomform-api-1`.
+
+**A release that ships no image leaves the label behind — deliberately.** At the time of
+this example (October 2026) prod kept reporting the previous release (`--version` and
+`/version` both said `v1.21.136 | 17e6d526`) while the newest tag was `v1.21.137`, because
+the binary running there *is* the v1.21.136 artefact, byte for byte. Nothing was deployed,
+so nothing may claim a new version. Do not read that lag as a failed deploy — check the
+tag and the byte-identity proof, not the label. The label catches up at the next release
+that does owe an image.
+
 ## Verifying a deploy: probe a form you own, never a merchant's live form
 
 A deploy acceptance that drives the real public route has to POST a real
