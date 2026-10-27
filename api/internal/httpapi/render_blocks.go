@@ -1056,7 +1056,14 @@ var blockTmpl = template.Must(template.New("blocks").
   // Issue #249: quantity is per-product. Each product block carries its own
   // <input class="pq" data-id="..."> selector; there is no global quantity.
   var opts=document.querySelectorAll('select.opt');
-  var shipEl=document.querySelector('select.ship');
+  // Card t_0176fb17: a form may carry MORE THAN ONE shipping block (e.g. a
+  // postage list plus a zone-sourced delivery choice), and the server charges
+  // EVERY block — a static block's fee arrives as its own line item and a
+  // zone-sourced block's fee is added to sales.shipping_sen. Reading one
+  // control (querySelector) under-reported the buyer's Total and dropped the
+  // other blocks' line items from the order, so the page and the charge
+  // disagreed. Every shipping control the page renders is part of the total.
+  var ships=document.querySelectorAll('select.ship');
   function effPrice(b){
     var sel=document.querySelector('select.v[data-id="'+b.dataset.id+'"]');
     if(sel&&sel.value){var o=sel.options[sel.selectedIndex];if(o&&o.dataset.price)return Number(o.dataset.price);}
@@ -1076,17 +1083,21 @@ var blockTmpl = template.Must(template.New("blocks").
   // NOT part of it: the server compares the free-shipping threshold against
   // exactly this number.
   function itemsSubtotal(){var t=0;boxes.forEach(function(b){if(b.checked)t+=effPrice(b)*pqty(b)});return t+addons();}
-  // Shipping fee. A zone-sourced option carries data-free-over: at or above that
-  // items subtotal the fee is 0, which is the rule the server applies and records
-  // on the sale (so the total the buyer sees here is the total charged).
+  // Shipping fee: EVERY shipping block the page carries, summed. A zone-sourced
+  // option carries data-free-over: at or above that items subtotal its fee is 0,
+  // which is the rule the server applies per block and records on the sale (so
+  // the total the buyer sees here is the total charged).
   function shipPrice(){
-    if(!shipEl)return 0;
-    var so=shipEl.options[shipEl.selectedIndex];
-    if(!so||!so.value)return 0;
-    var p=Number(so.dataset.price||0);
-    var fo=Number(so.dataset.freeOver||0);
-    if(fo>0&&itemsSubtotal()>=fo)return 0;
-    return p;
+    var sub=itemsSubtotal();var t=0;
+    ships.forEach(function(s){
+      var so=s.options[s.selectedIndex];
+      if(!so||!so.value)return;
+      var p=Number(so.dataset.price||0);
+      var fo=Number(so.dataset.freeOver||0);
+      if(fo>0&&sub>=fo)return;
+      t+=p;
+    });
+    return t;
   }
   function upd(){var t=itemsSubtotal()+shipPrice();
     var s='RM'+(t/100).toFixed(2);
@@ -1096,7 +1107,7 @@ var blockTmpl = template.Must(template.New("blocks").
   sels.forEach(function(s){s.addEventListener('change',upd)});
   document.querySelectorAll('input.pq').forEach(function(el){el.addEventListener('input',upd)});
   opts.forEach(function(s){s.addEventListener('change',upd)});
-  if(shipEl)shipEl.addEventListener('change',upd);
+  ships.forEach(function(s){s.addEventListener('change',upd)});
   document.getElementById('of').addEventListener('submit',function(e){
     e.preventDefault();
     var items=[];var ok=true;
@@ -1116,7 +1127,14 @@ var blockTmpl = template.Must(template.New("blocks").
       var o=s.options[s.selectedIndex];
       if(o&&o.value)items.push({product_id:s.dataset.id,quantity:1});
     });
-    if(shipEl&&shipEl.value)items.push({product_id:shipEl.dataset.id,quantity:1});
+    // Every shipping block the buyer answered becomes a line item. A static
+    // block's item IS the fee the server charges; a second block must not be
+    // dropped. (A zone-sourced block's item is dropped server-side and its fee
+    // resolved from the buyer's address instead — it never reaches the
+    // subtotal.)
+    ships.forEach(function(s){
+      if(s.value)items.push({product_id:s.dataset.id,quantity:1});
+    });
     if(!items.length){alert('{{.Ls.NoProductAlert}}');return;}
     if(!ok){alert('{{.Ls.SelectVariationAlert}}');return;}
     // Issue #186: collect every input block's value keyed by its block id so
