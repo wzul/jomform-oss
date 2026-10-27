@@ -12,8 +12,17 @@ import (
 //
 //   - Each failed login bumps ONE counter, keyed on the source ADDRESS: the
 //     lockout is per IP, and that is the only key this package reads.
-//   - From FailDelayThreshold (5) failures Status reports delayed=true so a
-//     caller can add friction; the login handler acts on locked only.
+//   - From FailDelayThreshold (5) failures Status reports delayed=true, and the
+//     login gate makes that attempt wait LoginFailDelay BEFORE the password
+//     check (it does not sleep in failLogin, so the attempt that crosses the
+//     threshold is not the one that pays). The response is unchanged — same
+//     uniform 401, no Retry-After — so the penalty is invisible in the
+//     bytes and cannot become an enumeration oracle. The 5..9 failure band
+//     belongs to this in-handler delay: the coarse per-IP token bucket in
+//     front of the route (middleware.RateLimit, 1 req/s, burst 10) only
+//     answers 429 + Retry-After 30 to a client that exceeds it, and a
+//     sequential client paced by this delay stays under that bucket, so it
+//     reaches the address lockout below instead of a contradictory backoff.
 //   - After FailLockoutThreshold (10) failures in the 15-minute window the
 //     login is refused outright with 429 + Retry-After until the window
 //     slides clear.
@@ -34,12 +43,26 @@ import (
 // addresses are bounded by the per-IP window alone; that is a stated trade, not
 // an oversight.
 const (
-	LoginFailWindow               = 15 * time.Minute
-	FailDelayThreshold            = 5
-	FailLockoutThreshold          = 10
-	LoginLockoutRetryAfter        = "900" // seconds — tells the client when the window clears
-	LoginLockoutMessage           = "Terlalu banyak percubaan. Sila cuba lagi dalam 15 minit."
-	loginfailIPKey         string = "jf:loginfail:ip:"
+	LoginFailWindow        = 15 * time.Minute
+	FailDelayThreshold     = 5
+	FailLockoutThreshold   = 10
+	LoginLockoutRetryAfter = "900" // seconds — tells the client when the window clears
+	LoginLockoutMessage    = "Terlalu banyak percubaan. Sila cuba lagi dalam 15 minit."
+
+	// LoginFailDelay is the wall-clock penalty the login gate spends before the
+	// password check on every attempt that arrives while the source address
+	// already holds FailDelayThreshold failures. It is FLAT, not a doubling
+	// ladder: the band it covers is only five attempts wide (the tenth failure
+	// locks the address out), so a ladder would multiply connection-holding
+	// time for a legitimate user who mistyped without buying a proportional
+	// bound. What the delay does buy: the 5..9 band costs ~0.5s of wall clock
+	// per attempt instead of nothing, and (see the constants comment) it paces
+	// a sequential client under the coarse 1 req/s token bucket, so the client
+	// is answered by the address lockout (429 + 900) rather than by the coarse
+	// layer's 429 + 30.
+	LoginFailDelay = 500 * time.Millisecond
+
+	loginfailIPKey string = "jf:loginfail:ip:"
 )
 
 // LoginLimiter tracks failed login attempts per source address in Valkey, which
@@ -99,6 +122,9 @@ func (l *LoginLimiter) count(ctx context.Context, key string) (int64, error) {
 // Status reports whether the caller's source address is hard-locked (>= 10
 // failures) or should be delayed (>= 5 failures). locked=true means the caller
 // must reject with 429 + Retry-After and NOT run the password check.
+// delayed=true means the caller must spend LoginFailDelay before the password
+// check and then answer exactly as it would have otherwise (the uniform 401) —
+// it is a pacing signal, not a refusal, and it carries no header of its own.
 //
 // It is keyed on the ADDRESS alone: there is no per-account counter to consult
 // (see the constants above for why). count is that address's failure count.

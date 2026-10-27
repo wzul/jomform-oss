@@ -290,6 +290,108 @@ func TestAuthLoginLockoutAfter10(t *testing.T) {
 	}
 }
 
+// TestAuthLoginDelayAppliedInTheFiveToNineBand pins the friction half of issue
+// #42 section A.2: the login gate consumes LoginLimiter.Status's `delayed` flag.
+//
+// The bite is exact, not a stopwatch: the seam records the duration the gate
+// applied and on which attempts, so an implementation that ignores the flag
+// records NOTHING here (that was the state before this test: `locked, _, _, err
+// := ... Status(...)` discarded it and every failure in the band was answered
+// at argon2 speed), and one that delays the wrong attempts (the first five, the
+// 429, or a per-account-keyed variant) fails the count. The uniform 401 body and
+// the absence of Retry-After are asserted on every attempt in the band: the
+// penalty must cost wall clock and nothing else, or it becomes the enumeration /
+// contradictory-backoff signal the per-address gate exists to avoid.
+func TestAuthLoginDelayAppliedInTheFiveToNineBand(t *testing.T) {
+	h, _, _ := authTestFixture(t)
+	mux := loginMux(h)
+	ip := uniqueTestIP()
+	email := fmt.Sprintf("delay-%s@example.test", runKey())
+	registerAndVerify(t, h, email, "password123", ip)
+
+	var mu sync.Mutex
+	var delays []time.Duration
+	h.loginDelaySleep = func(_ context.Context, d time.Duration) {
+		mu.Lock()
+		delays = append(delays, d)
+		mu.Unlock()
+	}
+	recorded := func() []time.Duration {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]time.Duration(nil), delays...)
+	}
+
+	// Ten failures: attempts 1..5 arrive with a count of 0..4 (no delay),
+	// attempts 6..10 arrive with 5..9 (delayed), and the 11th is refused.
+	var bodies []string
+	for i := 1; i <= auth.FailLockoutThreshold; i++ {
+		rec := postJSON(mux, "/v1/auth/login", map[string]any{
+			"email": email, "password": "WRONG",
+		}, ip)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d: status = %d, want 401 (body %s)", i, rec.Code, rec.Body.String())
+		}
+		if ra := rec.Header().Get("Retry-After"); ra != "" {
+			t.Errorf("failure %d carries Retry-After %q: the delay is a pacing penalty on a normal 401, not a refusal", i, ra)
+		}
+		bodies = append(bodies, rec.Body.String())
+	}
+	for i, b := range bodies {
+		if b != bodies[0] {
+			t.Errorf("failure %d body = %q, want the uniform %q — the delay must not change the response", i+1, b, bodies[0])
+		}
+	}
+
+	got := recorded()
+	wantDelayed := auth.FailLockoutThreshold - auth.FailDelayThreshold // attempts 6..10
+	if len(got) != wantDelayed {
+		t.Fatalf("gate applied the delay on %d of %d failures in the 5..9 band, want %d — attempts 1..%d arrive below auth.FailDelayThreshold and the 429 must not sleep (recorded %v)",
+			len(got), auth.FailLockoutThreshold, wantDelayed, auth.FailDelayThreshold, got)
+	}
+	for i, d := range got {
+		if d != auth.LoginFailDelay {
+			t.Errorf("delayed attempt %d waited %v, want %v", i+1, d, auth.LoginFailDelay)
+		}
+	}
+
+	// The lockout is a refusal, not a wait: the 11th attempt answers at once.
+	rec := postJSON(mux, "/v1/auth/login", map[string]any{
+		"email": email, "password": "password123",
+	}, ip)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("11th login: status = %d, want 429 (body %s)", rec.Code, rec.Body.String())
+	}
+	if ra := rec.Header().Get("Retry-After"); ra != auth.LoginLockoutRetryAfter {
+		t.Errorf("11th login Retry-After = %q, want %q", ra, auth.LoginLockoutRetryAfter)
+	}
+	if extra := len(recorded()); extra != len(got) {
+		t.Errorf("the locked-out 429 also slept (%d delays recorded, want %d): the delay paces the 5..9 band, the lockout refuses", extra, len(got))
+	}
+}
+
+// TestSleepCtxWaitsThenHonoursCancellation covers the production half of the
+// delay that the seam above deliberately does not exercise: the default sleep
+// really spends wall clock, and a client that hangs up releases the handler
+// instead of pinning a goroutine for the whole penalty.
+func TestSleepCtxWaitsThenHonoursCancellation(t *testing.T) {
+	const d = 60 * time.Millisecond
+
+	start := time.Now()
+	sleepCtx(context.Background(), d)
+	if elapsed := time.Since(start); elapsed < d {
+		t.Errorf("sleepCtx(%v) returned after %v — the real delay is shorter than the constant it stands for", d, elapsed)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start = time.Now()
+	sleepCtx(ctx, 30*time.Second)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("sleepCtx ignored cancellation and waited %v", elapsed)
+	}
+}
+
 // TestAuthLoginSuccessResetsCounter: success clears the per-IP counter, so a
 // fresh 10 failures are needed to relock.
 func TestAuthLoginSuccessResetsCounter(t *testing.T) {

@@ -63,6 +63,13 @@ type AuthHandlers struct {
 	VerifyKey    []byte
 	VerifyMailer VerifyMailer
 
+	// loginDelaySleep spends the login-failure delay (auth.LoginFailDelay).
+	// Nil means sleepCtx. It is a seam so a test can observe that the gate
+	// applied the delay — the exact duration, on exactly the attempts that
+	// should pay it — without spending the wall clock or racing argon2 noise.
+	// Nothing outside tests sets it.
+	loginDelaySleep func(ctx context.Context, d time.Duration)
+
 	// Issue #56 SES reputation hardening: Suppressions (never resend to a
 	// bounced/complained address), Breaker (pause verification on high bounce
 	// ratio), MXChecker (reject no-MX domains pre-create). All nil in
@@ -426,10 +433,14 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// The gate is address-keyed only — a failure for an existing account is
 	// counted against its source IP, never against the account, so a 429 can
 	// never tell a caller whether the email exists (see loginlimiter.go).
+	// Between FailDelayThreshold and FailLockoutThreshold the attempt is
+	// delayed instead of refused: the delay is spent HERE, before the password
+	// check, and the answer that follows is the ordinary uniform 401 — no
+	// Retry-After, no different body — so it cannot be read as a signal.
 	// When the Valkey limiter is unavailable we fail open (availability beats
 	// brute-force rate here); the per-IP RateLimit + argon2 cost remain.
 	if a.LoginLimiter != nil {
-		locked, _, _, err := a.LoginLimiter.Status(r.Context(), ip)
+		locked, delayed, _, err := a.LoginLimiter.Status(r.Context(), ip)
 		if err != nil {
 			// limiter backend down → log, don't block logins.
 			slog.Warn("loginfail_status_error", "err", err, "ip", ip)
@@ -437,6 +448,8 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Retry-After", auth.LoginLockoutRetryAfter)
 			writeErr(w, http.StatusTooManyRequests, auth.LoginLockoutMessage)
 			return
+		} else if delayed {
+			a.applyLoginDelay(r.Context(), auth.LoginFailDelay, ip)
 		}
 	}
 
@@ -565,6 +578,42 @@ func (a *AuthHandlers) firstAccountID(r *http.Request, userID string) string {
 		return ""
 	}
 	return accs[0].ID
+}
+
+// applyLoginDelay spends the login-failure delay before the password check.
+//
+// It is the consumer of LoginLimiter.Status's `delayed` flag: from
+// auth.FailDelayThreshold failures the gate makes the next attempt wait, so the
+// 5..9 band costs wall clock instead of being free (issue #42, section A.2). The
+// delay is paid before the credential check and produces no response bytes of
+// its own — the attempt afterwards is answered exactly like attempt #1 — so it
+// cannot tell a caller anything about the email, and it is keyed on the source
+// address (never the account) like the counter behind it.
+func (a *AuthHandlers) applyLoginDelay(ctx context.Context, d time.Duration, ip string) {
+	if d <= 0 {
+		return
+	}
+	slog.Info("login_delayed", "ip", ip, "delay_ms", d.Milliseconds())
+	sleep := a.loginDelaySleep
+	if sleep == nil {
+		sleep = sleepCtx
+	}
+	sleep(ctx, d)
+}
+
+// sleepCtx waits d, or until the caller disconnects, so a throttled attempt
+// cannot hold a goroutine (and its request resources) for a client that has
+// already hung up.
+func sleepCtx(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }
 
 // failLogin handles a rejected login attempt: record the failure against the
