@@ -92,19 +92,6 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
 		return
 	}
-	// Issue #491: CHIP requires a buyer name + email to create a purchase. The
-	// formless (menu) path enforces both up front; a form order keeps its
-	// historical rule (email required, name optional) so existing forms are
-	// unchanged.
-	if tgt.RequireName {
-		if strings.TrimSpace(in.Client.FullName) == "" || strings.TrimSpace(in.Client.Email) == "" {
-			writeErr(w, http.StatusBadRequest, "nama dan emel wajib")
-			return
-		}
-	} else if in.Client.Email == "" {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
-		return
-	}
 	// Issue #254: server-side re-validation of the form's field contract. Agent
 	// JS is client-side only and bypassable, so the server re-validates every
 	// field before accepting the order — against the registered contract when
@@ -118,9 +105,43 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	// rule, and VisibleAnswers applies it to this submission — a block the page
 	// hid is neither required nor stored (the builder offered the rule, the
 	// renderer now emits it, and this is the same rule the server enforces).
+	//
+	// Resolved BEFORE the buyer-identity requirement below because the identity
+	// is derived FROM these blocks (card t_5eb85ec8): the page reads
+	// client.full_name/email/phone out of the name/email/phone block's control,
+	// so a hidden block contributes no identity — and an email the form's own
+	// page cannot fill must not be required of the buyer.
+	var regs []formfields.Field
+	var hidden map[string]bool
 	if tgt.FieldsForm != nil {
-		regs := formfields.Contract(tgt.FieldsForm.Config)
-		in.Fields, _ = formfields.VisibleAnswers(regs, in.Fields)
+		regs = formfields.Contract(tgt.FieldsForm.Config)
+		in.Fields, hidden = formfields.VisibleAnswers(regs, in.Fields)
+		pruneHiddenIdentity(regs, hidden, &in.Client.FullName, &in.Client.Email, &in.Client.Phone)
+	}
+	// Issue #491: CHIP requires a buyer name + email to create a purchase. The
+	// formless (menu) path enforces both up front; a form order keeps its
+	// historical rule (email required, name optional) so existing forms are
+	// unchanged.
+	//
+	// Card t_5eb85ec8: that rule is about a form whose page ASKS for the email.
+	// A form whose email block is conditional hides it for this submission, and
+	// the page then cannot fill client.email at all (its control is disabled) —
+	// demanding it refused the order with 400 "butiran tidak lengkap" for a
+	// field the buyer was never shown, with no way to answer. Skip the
+	// requirement for exactly that case; when the block is visible (or the form
+	// has no email block) nothing changes. A CHIP purchase then has no buyer
+	// email and payments.saleClientDetails falls back to the account/override
+	// fallback email, which is the path that exists for "buyer gave none".
+	if tgt.RequireName {
+		if strings.TrimSpace(in.Client.FullName) == "" || strings.TrimSpace(in.Client.Email) == "" {
+			writeErr(w, http.StatusBadRequest, "nama dan emel wajib")
+			return
+		}
+	} else if in.Client.Email == "" && !hiddenIdentity(regs, hidden, formfields.IdentityEmail) {
+		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		return
+	}
+	if tgt.FieldsForm != nil {
 		if err := formfields.ValidateFields(regs, in.Fields); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
@@ -145,8 +166,11 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
 		return
 	}
-	// Layer 5 — email/domain validation (format + MX).
-	if h.antiSpamCheckEmail(r, in.Client.Email) {
+	// Layer 5 — email/domain validation (format + MX). Only when there is one:
+	// a form whose email block is hidden for this submission (card t_5eb85ec8)
+	// legitimately has no buyer email, and an empty string is not an invalid
+	// address. The response route guards it the same way.
+	if in.Client.Email != "" && h.antiSpamCheckEmail(r, in.Client.Email) {
 		writeErr(w, http.StatusBadRequest, "emel tidak sah")
 		return
 	}

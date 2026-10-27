@@ -367,6 +367,52 @@ type submitInput struct {
 	AffiliateCode string `json:"affiliate_code,omitempty"`
 }
 
+// pruneHiddenIdentity drops the DERIVED buyer identity that a name/email/phone
+// block contributes when this submission hides that block.
+//
+// VisibleAnswers prunes the hidden BLOCK's own key, but the public pages also
+// submit client{full_name,email,phone} read out of those same blocks, and both
+// submit routes re-add that identity to the stored answers. Without this, the
+// pruned answer comes straight back under a derived key: measured on prod
+// (card t_5eb85ec8) a hidden conditional email block stored
+// data["email"] = the address typed while the block was visible, while its own
+// block id was correctly absent. Applying the rule here keeps one contract:
+// a block whose rule is false is not required, not stored, and its answer is
+// not promoted to the identity.
+func pruneHiddenIdentity(regs []formfields.Field, hidden map[string]bool, fullName, email, phone *string) {
+	if len(hidden) == 0 {
+		return
+	}
+	for key, id := range formfields.IdentityBlocks(regs) {
+		if !hidden[id] {
+			continue
+		}
+		switch key {
+		case formfields.IdentityFullName:
+			if fullName != nil {
+				*fullName = ""
+			}
+		case formfields.IdentityEmail:
+			if email != nil {
+				*email = ""
+			}
+		case formfields.IdentityPhone:
+			if phone != nil {
+				*phone = ""
+			}
+		}
+	}
+}
+
+// hiddenIdentity reports whether the block that supplies the given derived
+// identity key is hidden for this submission. false when the form has no block
+// of that type: the value then did not come from a builder block, so no rule of
+// the merchant's applies to it.
+func hiddenIdentity(regs []formfields.Field, hidden map[string]bool, key string) bool {
+	id, ok := formfields.IdentityBlocks(regs)[key]
+	return ok && hidden[id]
+}
+
 // antiSpamRenderTime returns the current render timestamp (Unix seconds) to
 // embed in the hidden anti-spam field.
 func antiSpamRenderTime() int64 {
@@ -742,6 +788,12 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 				delete(in.Fields, k)
 			}
 		}
+		// Card t_5eb85ec8: the identity the page derived from a name/email/phone
+		// block obeys that block's rule too. The two assignments below re-add
+		// client.* to the answers after the prune above, so without this a
+		// hidden block's answer would be stored under a derived key even though
+		// its own block id was correctly dropped.
+		pruneHiddenIdentity(regs, hidden, &in.Client.FullName, &in.Client.Email, &in.Client.Phone)
 		if err := formfields.ValidateFields(regs, strFields); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return

@@ -547,6 +547,56 @@ func Contract(config map[string]any) []Field {
 	return out
 }
 
+// The DERIVED buyer-identity keys. A public page does not only submit
+// {block_id: answer}: it also submits a client{full_name,email,phone} object
+// read out of the merchant's name/email/phone BLOCKS, and the submit routes
+// re-add that identity to the stored answers under these keys (so the merchant
+// sees who responded even on a form with no name block). They are therefore
+// answers that carry a block's rule with them — see IdentityBlocks.
+const (
+	IdentityFullName = "full_name"
+	IdentityEmail    = "email"
+	IdentityPhone    = "phone"
+)
+
+// IdentityBlocks maps each derived buyer-identity key (full_name / email /
+// phone) to the id of the contract block that supplies it: the FIRST block of
+// the matching type, which is the one both public pages' own mapping reads
+// (they query the document for the first name/email/phone control, and the
+// contract is in block order). A key with no block of that type is ABSENT —
+// its value then came from somewhere else (a legacy page's hand-written input,
+// or nothing) and no builder rule of ours applies to it.
+//
+// The caller needs the pairing because VisibleAnswers works in block ids: it
+// prunes a hidden block's own key, and a route that then re-adds the identity
+// from client{} would put that same hidden answer back under a derived key —
+// the answer the merchant reads as who submitted (card t_5eb85ec8: a hidden
+// conditional email block was stored as data["email"] while its own block id
+// was correctly absent).
+func IdentityBlocks(regs []Field) map[string]string {
+	var out map[string]string
+	for i := range regs {
+		var key string
+		switch regs[i].Type {
+		case "name":
+			key = IdentityFullName
+		case "email":
+			key = IdentityEmail
+		case "phone":
+			key = IdentityPhone
+		default:
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string, 3)
+		}
+		if _, claimed := out[key]; !claimed {
+			out[key] = regs[i].FieldID
+		}
+	}
+	return out
+}
+
 // VisibleAnswers returns the answers to RECORD for a submission: the submitted
 // answers minus every field whose conditional-logic rule is false for them.
 // The second result is the set of hidden field ids, for a caller that has to

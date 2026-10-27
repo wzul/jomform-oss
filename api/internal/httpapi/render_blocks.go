@@ -1134,9 +1134,16 @@ var blockTmpl = template.Must(template.New("blocks").
       else if(el.type==='file'){/* files not sent as text */}
       else{fields[el.dataset.id]=el.value;}
     });
-    var body={client:{full_name:(e.target.full_name||{}).value||(document.querySelector('[name=full_name]')||{}).value||'',
-      email:(document.querySelector('[name=email]')||{}).value||'',
-      phone:(document.querySelector('[name=phone]')||{}).value||''},
+    // Card t_5eb85ec8: a control inside a HIDDEN conditional block is disabled
+    // by the conditional-logic script — and a disabled control still HOLDS the
+    // value typed while the block was visible. Reading it here put that stale
+    // answer into client.*, which the server records as the buyer's identity
+    // even though the block's rule is false and its own answer was dropped from
+    // fields{} by the collector above. A disabled control contributes nothing.
+    function live(sel){var el=document.querySelector(sel);return (el&&!el.disabled)?el.value:'';}
+    var body={client:{full_name:live('[name=full_name]'),
+      email:live('[name=email]'),
+      phone:live('[name=phone]')},
       fields:fields,items:items,payment_method:'chip',
       // Issue #444: affiliate marketing — echo the ?aff=CODE the buyer landed
       // with so the sale is attributed to that affiliate.
@@ -1589,8 +1596,7 @@ var responseTmpl = template.Must(template.New("response").
       else{fields[el.name]=el.value;}
     });
     var body={client:{
-      full_name:(document.querySelector('[name]')||{}).value||'',
-      email:'',phone:''
+      full_name:'',email:'',phone:''
     },fields:fields,
     // Issue #444: affiliate marketing — echo the ?aff=CODE the buyer landed
     // with so the sale is attributed to that affiliate.
@@ -1608,9 +1614,18 @@ var responseTmpl = template.Must(template.New("response").
     // submissions Buyer column and the CSV export (card t_98d67234). The
     // "|| input[type=...]" half is the OLD lookup, kept only for a form that
     // has no name/email/phone block at all, so that case maps as it always did.
-    var nm=form.querySelector('[data-jf-client=full_name]')||form.querySelector('input[type=text]'); if(nm) body.client.full_name=nm.value;
-    var em=form.querySelector('[data-jf-client=email]')||form.querySelector('input[type=email]'); if(em) body.client.email=em.value;
-    var ph=form.querySelector('[data-jf-client=phone]')||form.querySelector('input[type=tel]'); if(ph) body.client.phone=ph.value;
+    //
+    // Card t_5eb85ec8: a control inside a HIDDEN conditional block is disabled
+    // by the conditional-logic script — and a disabled control still HOLDS the
+    // value typed while the block was visible. Reading it put that stale answer
+    // into client.*, which the server re-adds to the stored answers as
+    // data["full_name"]/["email"]/["phone"] even though the block's rule is
+    // false and its own key was dropped from fields{} by the collector above
+    // (measured on prod: {"email":"<hidden block's answer>", "f_gate":"stop"}).
+    // A disabled control contributes nothing, on either lookup.
+    var nm=form.querySelector('[data-jf-client=full_name]')||form.querySelector('input[type=text]'); if(nm) body.client.full_name=nm.disabled?'':nm.value;
+    var em=form.querySelector('[data-jf-client=email]')||form.querySelector('input[type=email]'); if(em) body.client.email=em.disabled?'':em.value;
+    var ph=form.querySelector('[data-jf-client=phone]')||form.querySelector('input[type=tel]'); if(ph) body.client.phone=ph.disabled?'':ph.value;
     fetch(location.pathname+'/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json()})
       .then(function(d){
