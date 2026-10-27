@@ -72,6 +72,12 @@ type langStrings struct {
 	// Issue #173: pricing/choice field strings.
 	SelectOption   string
 	SelectShipping string
+	// Shipping by zone (managed rate source). ShipFallback is the suffix of the
+	// catch-all zone's option ("Others" / "lain-lain"); ShipFreeOver carries
+	// "{amount}" and is the note on an option whose rate makes shipping free
+	// above a threshold, so the buyer sees WHY the total drops.
+	ShipFallback string
+	ShipFreeOver string
 	// Issue #249: per-product quantity selector label.
 	Quantity string
 	// Issue #183: optional public-form footer link labels.
@@ -147,6 +153,7 @@ var formLangs = map[string]langStrings{
 		FileUnsupported:   "Attachments cannot be uploaded on this form.",
 		CouponUnsupported: "Discount codes are not applied on this form.",
 		SelectOption:      "Select an option", SelectShipping: "Select shipping",
+		ShipFallback: "Others", ShipFreeOver: "Free over {amount}",
 		Quantity:     "Quantity",
 		PrivacyLabel: "Privacy Policy", TermsLabel: "Terms of Service", RefundLabel: "Refund Policy",
 		PendingMessage: "This form is not open yet. Please check back later.",
@@ -200,6 +207,7 @@ var formLangs = map[string]langStrings{
 		FileUnsupported:   "Lampiran tidak boleh dimuat naik pada borang ini.",
 		CouponUnsupported: "Kod diskaun tidak digunakan pada borang ini.",
 		SelectOption:      "Pilih pilihan", SelectShipping: "Pilih penghantaran",
+		ShipFallback: "Lain-lain", ShipFreeOver: "Percuma melebihi {amount}",
 		Quantity:     "Kuantiti",
 		PrivacyLabel: "Polisi Privasi", TermsLabel: "Terma & Syarat", RefundLabel: "Polisi Bayaran Balik",
 		PendingMessage: "Borang ini belum dibuka lagi. Sila kembali semula kemudian.",
@@ -250,6 +258,7 @@ var formLangs = map[string]langStrings{
 		FileUnsupported:   "此表单不支持上传附件。",
 		CouponUnsupported: "此表单不适用折扣码。",
 		SelectOption:      "请选择", SelectShipping: "选择配送方式",
+		ShipFallback: "其他", ShipFreeOver: "{amount} 以上免运费",
 		Quantity:     "数量",
 		PrivacyLabel: "隐私政策", TermsLabel: "服务条款", RefundLabel: "退款政策",
 		PendingMessage: "此表单尚未开放，请稍后再来。",
@@ -300,6 +309,7 @@ var formLangs = map[string]langStrings{
 		FileUnsupported:   "இந்தப் படிவத்தில் இணைப்புகளை பதிவேற்ற முடியாது.",
 		CouponUnsupported: "இந்தப் படிவத்தில் தள்ளுபடிக் குறியீடுகள் பயன்படுத்தப்படாது.",
 		SelectOption:      "ஒரு விருப்பத்தைத் தேர்ந்தெடுக்கவும்", SelectShipping: "ஷிப்பிங்கைத் தேர்ந்தெடுக்கவும்",
+		ShipFallback: "மற்றவை", ShipFreeOver: "{amount}க்கு மேல் இலவசம்",
 		Quantity:     "அளவு",
 		PrivacyLabel: "தனியுரிமைக் கொள்கை", TermsLabel: "சேவை விதிமுறைகள்", RefundLabel: "பணத்திருப்புக் கொள்கை",
 		PendingMessage: "இந்த படிவம் இன்னும் திறக்கப்படவில்லை. பின்னர் மீண்டும் வரவும்.",
@@ -350,6 +360,7 @@ var formLangs = map[string]langStrings{
 		FileUnsupported:   "لا يمكن تحميل المرفقات في هذا النموذج.",
 		CouponUnsupported: "لا تُطبَّق رموز الخصم في هذا النموذج.",
 		SelectOption:      "اختر خيارًا", SelectShipping: "اختر الشحن",
+		ShipFallback: "أخرى", ShipFreeOver: "مجاني أكثر من {amount}",
 		Quantity:     "الكمية",
 		PrivacyLabel: "سياسة الخصوصية", TermsLabel: "شروط الخدمة", RefundLabel: "سياسة الاسترداد",
 		PendingMessage: "هذا النموذج غير مفتوح بعد. يرجى العودة لاحقاً.",

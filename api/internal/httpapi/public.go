@@ -76,6 +76,13 @@ type PublicHandlers struct {
 	// background. Both nil in bare-mode tests → no judge runs (submissions are
 	// accepted immediately, never flagged).
 	SpamQueue *emailqueue.Queue
+	// Shipping is the managed zone/rate store the `shipping` block's "zones"
+	// rate source resolves against (phase 1 of the shipping feature; phase 2's
+	// courier quoting slots in behind the same block field). Nil in bare-mode
+	// tests: a form whose block names a zone rate then REFUSES the order
+	// ("kadar penghantaran mengikut zon tidak dikonfigurasi") instead of
+	// charging 0 — a missing store must never look like free shipping.
+	Shipping *dbstore.ShippingStore
 	// Issue #361: S3/MinIO store serving the workspace/custom-domain code-asset
 	// route GET /assets/{key}. Nil when media storage isn't configured.
 	Store ObjectStoreIface

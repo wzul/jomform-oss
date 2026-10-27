@@ -35,6 +35,10 @@ const APEX_PAGES = [
   // Card t_eb09b25a: the activity log — the audit-trail surface the dashboard
   // Activity page links to.
   "/docs/activity",
+  // Shipping by zone: the guide the Form Settings → Shipping tab and the
+  // builder's shipping block both link at, and the /docs index carries an entry
+  // for it (sitemapCoverage.test.ts pins this list against the pages on disk).
+  "/docs/shipping",
   // The per-workspace AI spam-detection toggle is documented here
   // and the Settings switch deep-links into it.
   "/docs/spam-detection",

@@ -11,6 +11,7 @@ import (
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/formfields"
+	"github.com/wzul/jomform/api/internal/shipping"
 )
 
 // submitKeysFor derives the answer key of every block of a decoded config, in
@@ -106,6 +107,16 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			Pattern      string `json:"pattern"`
 			RequiredMsg  string `json:"required_message"`
 			PriceSen     int64  `json:"price_sen"`
+			// Shipping rate source (phase 1). Absent/empty = "static" (the
+			// block's own priced choices, unchanged); "zones" = the managed
+			// zone set below; "courier" = the phase-2 seam (refused at submit).
+			Source            string `json:"source"`
+			ZoneSetID         string `json:"zone_set_id"`
+			ZoneStateField    string `json:"zone_state_field"`
+			ZoneDistrictField string `json:"zone_district_field"`
+			ZonePostcodeField string `json:"zone_postcode_field"`
+			OnNoMatch         string `json:"on_no_match"`
+			WeightG           int64  `json:"weight_g"`
 			// Issue #249: per-product quantity selector flag. Pointer so we can
 			// distinguish "absent" (default on) from an explicit merchant "off".
 			Quantity *bool `json:"quantity"`
@@ -171,6 +182,11 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		Pattern      string
 		RequiredMsg  string
 		Choices      []choiceView
+		// Managed zone rates (phase 1): the options of a shipping block whose
+		// rate source is a zone set. Empty for every static shipping block and
+		// for every other block type, so the template's static branch (and its
+		// snapshot-price contract) is untouched.
+		Zones []zoneOptionView
 		// Issue #249: per-product quantity selector (Gravity-Forms-style).
 		HasQuantity bool
 	}
@@ -193,7 +209,17 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	imgTop := themeProductImageLayout == ProductImageLayoutImageTop
 
 	keys := submitKeysFor(len(cfg.Blocks), func(i int) string { return cfg.Blocks[i].ID })
+
+	// Buyer-facing system strings. Resolved HERE (rather than just before the
+	// template runs) because a zone-sourced shipping block's option labels are
+	// built in the loop below and carry dictionary text ("Others", the
+	// free-over note).
+	ls := h.effectiveLangStrings(r.Context(), f)
+
 	blocks := make([]blockView, 0, len(cfg.Blocks))
+	// Zone sets are read at most once per render, keyed by set id, and only when
+	// a shipping block actually asks for one.
+	zoneSets := map[string]shipping.ZoneSet{}
 	for i, b := range cfg.Blocks {
 		vb := blockView{
 			ID: keys[i], Type: b.Type, Value: b.Value, Src: b.Src, ProductID: b.ProductID, Required: b.Required,
@@ -250,6 +276,36 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 				vb.PriceSen = b.PriceSen
 				vb.HasPrice = true
 			}
+			// A shipping block whose rate SOURCE is the managed zone set renders
+			// that set's zones as its choices (phase 1). A block with no source
+			// (or source=static) renders its own priced list exactly as before —
+			// the two shapes share this branch so neither can be forgotten.
+			if b.Type == "shipping" {
+				spec := shippingBlockSpec{
+					ID:            b.ID,
+					ItemID:        b.ProductID,
+					Source:        firstNonEmpty(b.Source, shipping.SourceStatic),
+					ZoneSetID:     strings.TrimSpace(b.ZoneSetID),
+					StateField:    strings.TrimSpace(b.ZoneStateField),
+					DistrictField: strings.TrimSpace(b.ZoneDistrictField),
+					PostcodeField: strings.TrimSpace(b.ZonePostcodeField),
+					OnNoMatch:     strings.TrimSpace(b.OnNoMatch),
+					WeightG:       b.WeightG,
+					Required:      b.Required,
+					Label:         b.Value,
+				}
+				if spec.ItemID == "" {
+					spec.ItemID = spec.ID
+				}
+				if spec.Source == shipping.SourceZones {
+					if _, ok := zoneSets[spec.ZoneSetID]; !ok {
+						zoneSets[spec.ZoneSetID] = h.loadZoneSet(r.Context(), f.AccountID, spec.ZoneSetID)
+					}
+					if set, ok := zoneSets[spec.ZoneSetID]; ok && set.ID != "" {
+						vb.Zones = zoneOptionsFor(set, spec, ls)
+					}
+				}
+			}
 		}
 		blocks = append(blocks, vb)
 	}
@@ -268,7 +324,6 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	// are derived from the same hue so a themed button does not get an indigo
 	// hover.
 	cta := themePrimaryValues(f)
-	ls := h.effectiveLangStrings(r.Context(), f)
 	view := map[string]any{
 		"Slug": f.Slug, "Title": f.Title, "Blocks": blocks,
 		"TrackHead":  headInjection(globalTr, formTrackingHead(f)),
@@ -941,7 +996,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "product"}}  <div class="prod{{if .ImgTop}} menu-card{{end}}{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><label>{{if .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}<span class="prow">{{end}}<input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}">{{if not .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}{{end}}<span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span>{{if .ImgTop}}</span>{{end}}</label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
 {{else if eq .Type "quantity"}}  <div class="qtyrow{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><label class="lbl" style="margin:0">{{.Value}}</label><input type="number" class="qty" min="1" value="{{if .DefaultValue}}{{.DefaultValue}}{{else}}1{{end}}"></div>
 {{else if eq .Type "option"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="opt{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (+RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
-{{else if eq .Type "shipping"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="ship{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
+{{else if eq .Type "shipping"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{if .Zones}}<select class="ship{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}" required{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Zones}}<option value="{{.Value}}" data-price="{{.PriceSen}}"{{if .FreeOverSen}} data-free-over="{{.FreeOverSen}}"{{end}}>{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}{{if .Note}} — {{.Note}}{{end}}</option>{{end}}</select>{{else}}<select class="ship{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>{{end}}
 {{else if eq .Type "name"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="full_name" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
 {{else if eq .Type "email"}}  <label class="lbl"{{styleAttr .Style}}>{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="email" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}} required{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
 {{else if eq .Type "phone"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="phone" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
@@ -1015,10 +1070,25 @@ var blockTmpl = template.Must(template.New("blocks").
   function addons(){
     var t=0;
     opts.forEach(function(s){var o=s.options[s.selectedIndex];if(o&&o.dataset.price)t+=Number(o.dataset.price);});
-    if(shipEl){var so=shipEl.options[shipEl.selectedIndex];if(so&&so.dataset.price)t+=Number(so.dataset.price);}
     return t;
   }
-  function upd(){var t=0;boxes.forEach(function(b){if(b.checked)t+=effPrice(b)*pqty(b)});t+=addons();
+  // Items subtotal = checked products + option add-ons. The shipping select is
+  // NOT part of it: the server compares the free-shipping threshold against
+  // exactly this number.
+  function itemsSubtotal(){var t=0;boxes.forEach(function(b){if(b.checked)t+=effPrice(b)*pqty(b)});return t+addons();}
+  // Shipping fee. A zone-sourced option carries data-free-over: at or above that
+  // items subtotal the fee is 0, which is the rule the server applies and records
+  // on the sale (so the total the buyer sees here is the total charged).
+  function shipPrice(){
+    if(!shipEl)return 0;
+    var so=shipEl.options[shipEl.selectedIndex];
+    if(!so||!so.value)return 0;
+    var p=Number(so.dataset.price||0);
+    var fo=Number(so.dataset.freeOver||0);
+    if(fo>0&&itemsSubtotal()>=fo)return 0;
+    return p;
+  }
+  function upd(){var t=itemsSubtotal()+shipPrice();
     var s='RM'+(t/100).toFixed(2);
     var tv=document.querySelectorAll('.total-val');tv.forEach(function(el){el.textContent=s});
     var t1=document.getElementById('total');if(t1)t1.textContent=s;}

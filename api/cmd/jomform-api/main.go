@@ -251,6 +251,10 @@ func main() {
 		feedbackStore := dbstore.NewFeedbackThreadStore(pool)
 		// Issue #180: media library metadata store.
 		mediaStore := dbstore.NewMediaStore(pool)
+		// Shipping zones + rates: the managed rate source a `shipping` block can
+		// name instead of retyping its own priced choice list (phase 1; the
+		// courier source of phase 2 resolves through the same store).
+		shippingStore := dbstore.NewShippingStore(pool)
 		// Issue #161: workspace membership + invites.
 		workspaceMembersStore := dbstore.NewWorkspaceMemberStore(pool)
 		deps.WorkspaceMembers = workspaceMembersStore
@@ -404,6 +408,8 @@ func main() {
 			Notifications: notificationsStore,
 			// Issue #180: media library metadata store.
 			Media: mediaStore,
+			// Shipping zones + rates (managed rate source for shipping blocks).
+			Shipping: shippingStore,
 			// Issue #364: background asset-scan queue. Code-asset uploads
 			// enqueue an asset_scan job here; the worker classifies them
 			// (deterministic + LLM) and flips scan_status before the asset
@@ -464,6 +470,9 @@ func main() {
 			Notifications: notificationsStore,
 			// Issue #180: media library tool.
 			Media: mediaStore,
+			// Shipping zones + rates: the read/write MCP surface behind the
+			// dashboard's Shipping tab (same store, same validation).
+			Shipping: shippingStore,
 			// Issue #361/#363: object store backing media upload (upload_media
 			// tool). Shared with the dashboard REST upload; nil when S3 unset.
 			// This field is a CONCRETE *objstore.ObjectStore, so a plain nil
@@ -576,6 +585,10 @@ func main() {
 			// Issue #447: realtime notifications — publish response.submitted
 			// events to the merchant's connected dashboards.
 			Realtime: realtimeHub,
+			// Shipping zones + rates: the managed rate source a `shipping`
+			// block can name (phase 1). Nil would make a zone-rate block refuse
+			// the order, so the store is wired here with every other store.
+			Shipping: shippingStore,
 		}
 
 		// Issue #199: start the background email worker. It polls the

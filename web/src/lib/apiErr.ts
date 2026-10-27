@@ -156,6 +156,12 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   "product.hasSales": "apiErr.productHasSales",
   "product.hasSubscriptions": "apiErr.productHasSubscriptions",
   "product.outOfStock": "apiErr.productOutOfStock",
+  // A shipping-zone-set save that would DELETE a set a form still points at
+  // (the dashboard's Form Settings → Shipping tab). The API refusal names the
+  // set and the forms, but the DASHBOARD must not render that Malay prose
+  // (#6177), and its own generic sentence ("Failed to save shipping rates")
+  // hid the one actionable fact: a form has to be re-pointed first.
+  "shipping.setInUse": "apiErr.shipSetInUse",
   // The TYPED-CONFIRMATION refusals — the merchant mistyped the value the
   // destructive call has to name back (a form's slug, a workspace's slug, a
   // product's name). Each is a DIFFERENT sentence from the obstacle refusals

@@ -77,6 +77,14 @@ var selectConsts = map[string]string{
 	"submissionSelect":     "Submission",
 	"suppressionSelect":    "SuppressedEmail",
 	"variationSelect":      "ProductVariation",
+	// Shipping zones + rates (the managed rate source). Each constant is a FLAT
+	// row read — the guard aligns a constant's column count with the EXPORTED
+	// FIELD count of the struct it scans into, so the parent/child assembly (a
+	// set holding its zones, a zone holding its rates) happens in Go rather than
+	// in nested structs.
+	"zoneSetSelect": "shippingZoneSetRow",
+	"zoneSelect":    "shippingZoneRow",
+	"rateSelect":    "shippingRateRow",
 }
 
 // selectTables maps a *Select constant name to the table it selects from.
@@ -102,6 +110,11 @@ var selectTables = map[string]string{
 	"suppressionSelect":     "suppressed_emails",
 	"feedbackThreadSelect":  "feedback_threads",
 	"feedbackMessageSelect": "feedback_messages",
+	// Shipping zones + rates (registered so BOTH registries agree about every
+	// column-list constant).
+	"zoneSetSelect": "shipping_zone_sets",
+	"zoneSelect":    "shipping_zones",
+	"rateSelect":    "shipping_rates",
 }
 
 // selectScanFuncs maps a *Select constant to the receiver-qualified
@@ -132,6 +145,10 @@ var selectScanFuncs = map[string][]string{
 	"submissionSelect":     {"scanSubmission"},
 	"suppressionSelect":    {"scanSuppressedEmail"},
 	"variationSelect":      {"scanVariation"},
+	// Shipping zones + rates: three flat row scans.
+	"zoneSetSelect": {"scanShippingZoneSetRow"},
+	"zoneSelect":    {"scanShippingZoneRow"},
+	"rateSelect":    {"scanShippingRateRow"},
 }
 
 // bareColumnConsts maps a constant holding a BARE column list — no `SELECT ...

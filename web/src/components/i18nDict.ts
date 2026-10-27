@@ -915,6 +915,17 @@ export const DICT = {
     ta: "இந்தத் தயாரிப்பில் இன்னும் சந்தாக்கள் உள்ளன, எனவே நிரந்தரமாக நீக்க முடியாது — முதலில் அவற்றை ரத்து செய்யவும். இது குப்பைத் தொட்டியில் இருக்கும்.",
     ar: "لا تزال لهذا المنتج اشتراكات، لذا لا يمكن حذفه نهائياً — ألغِها أولاً. سيبقى في سلة المهملات.",
   },
+  // A shipping-zone-set save that would delete a set a form's shipping block
+  // still points at. The API prose names the set and the forms (for API-key and
+  // MCP callers); this sentence gives the DASHBOARD user the remedy, which is
+  // the only thing the generic save failure did not say.
+  "apiErr.shipSetInUse": {
+    en: "A form still uses this shipping zone set, so it can't be removed. Open that form's shipping block, point it at another set (or keep this one), then save again.",
+    ms: "Masih ada borang yang menggunakan set zon penghantaran ini, jadi ia tidak boleh dibuang. Buka blok penghantaran borang itu, tukar ke set lain (atau kekalkan set ini), kemudian simpan semula.",
+    zh: "仍有表单在使用此运费区域组，因此无法移除。请打开该表单的运费模块，改指向其他区域组（或保留这个），然后再次保存。",
+    ta: "இந்த அனுப்பும் மண்டல தொகுப்பை ஒரு படிவம் இன்னும் பயன்படுத்துகிறது, எனவே அதை நீக்க முடியாது. அந்தப் படிவத்தின் அனுப்பும் தொகுதியைத் திறந்து, வேறு தொகுப்புக்கு மாற்றவும் (அல்லது இதை வைத்திருக்கவும்), பின்னர் மீண்டும் சேமிக்கவும்.",
+    ar: "لا يزال نموذج يستخدم مجموعة مناطق الشحن هذه، لذا لا يمكن حذفها. افتح كتلة الشحن في ذلك النموذج، ووجّهها إلى مجموعة أخرى (أو أبقِ هذه)، ثم احفظ مرة أخرى.",
+  },
   // The TYPED-CONFIRMATION refusals (the destructive calls that make the caller
   // name back what it is destroying). A DIFFERENT class from the two above:
   // nothing blocks the delete — the caller has simply not confirmed it — so the
@@ -1480,6 +1491,24 @@ export const DICT = {
   "bld.choiceLabel": { en: "Label", ms: "Label", zh: "标签", ta: "லேபிள்", ar: "التسمية" },
   "bld.choicePrice": { en: "Price (RM)", ms: "Harga (RM)", zh: "价格（RM）", ta: "விலை (RM)", ar: "السعر (RM)" },
   "bld.addChoice": { en: "Add choice", ms: "Tambah pilihan", zh: "添加选项", ta: "தேர்வு சேர்", ar: "إضافة خيار" },
+  // Shipping rate source (managed zones). A shipping block either keeps its own
+  // priced list (the default, unchanged) or charges the managed zone rate the
+  // buyer's address resolves to.
+  "bld.shipSource": { en: "Shipping rate source", ms: "Sumber kadar penghantaran", zh: "运费来源", ta: "ஷிப்பிங் கட்டண மூலம்", ar: "مصدر سعر الشحن" },
+  "bld.shipSourceStatic": { en: "This form's own list", ms: "Senarai borang ini", zh: "本表单的列表", ta: "இந்தப் படிவத்தின் பட்டியல்", ar: "قائمة هذا النموذج" },
+  "bld.shipSourceZones": { en: "Managed zones (by address)", ms: "Zon terurus (ikut alamat)", zh: "托管区域（按地址）", ta: "நிர்வகிக்கப்படும் மண்டலங்கள் (முகவரி வாரியாக)", ar: "مناطق مُدارة (حسب العنوان)" },
+  "bld.shipZoneSet": { en: "Zone set", ms: "Set zon", zh: "区域组", ta: "மண்டல தொகுப்பு", ar: "مجموعة المناطق" },
+  "bld.shipZoneSetNone": { en: "Choose a zone set", ms: "Pilih set zon", zh: "选择区域组", ta: "மண்டல தொகுப்பைத் தேர்ந்தெடுக்கவும்", ar: "اختر مجموعة مناطق" },
+  "bld.shipNoZoneSets": { en: "No zone set yet — create one in Form Settings → Shipping.", ms: "Belum ada set zon — cipta satu dalam Tetapan Borang → Penghantaran.", zh: "暂无区域组——请在表单设置 → 运输中创建。", ta: "இன்னும் மண்டல தொகுப்பு இல்லை — படிவ அமைப்புகள் → ஷிப்பிங் இல் உருவாக்கவும்.", ar: "لا توجد مجموعة مناطق بعد — أنشئ واحدة في إعدادات النموذج ← الشحن." },
+  "bld.shipMapHint": { en: "Which of this form's fields carries the buyer's address:", ms: "Medan borang ini yang membawa alamat pembeli:", zh: "本表单中承载买家地址的字段：", ta: "வாங்குபவரின் முகவரியைக் கொண்டுள்ள இந்தப் படிவத்தின் புலம்:", ar: "حقل هذا النموذج الذي يحمل عنوان المشتري:" },
+  "bld.shipStateField": { en: "State field", ms: "Medan negeri", zh: "州属字段", ta: "மாநில புலம்", ar: "حقل الولاية" },
+  "bld.shipDistrictField": { en: "City / district field", ms: "Medan bandar / daerah", zh: "城市／地区字段", ta: "நகரம் / மாவட்ட புலம்", ar: "حقل المدينة / المنطقة" },
+  "bld.shipPostcodeField": { en: "Postcode field", ms: "Medan poskod", zh: "邮编字段", ta: "அஞ்சல் குறியீடு புலம்", ar: "حقل الرمز البريدي" },
+  "bld.shipNoMatch": { en: "If no zone matches", ms: "Jika tiada zon padan", zh: "若无区域匹配", ta: "எந்த மண்டலமும் பொருந்தவில்லை என்றால்", ar: "إذا لم تطابق أي منطقة" },
+  "bld.shipNoMatchReject": { en: "Refuse the order", ms: "Tolak pesanan", zh: "拒绝订单", ta: "ஆர்டரை நிராகரி", ar: "ارفض الطلب" },
+  "bld.shipNoMatchDefault": { en: "Use the fallback zone", ms: "Guna zon lalai", zh: "使用回退区域", ta: "இயல்புநிலை மண்டலத்தைப் பயன்படுத்து", ar: "استخدم المنطقة الاحتياطية" },
+  "bld.shipWeight": { en: "Parcel weight (g)", ms: "Berat bungkusan (g)", zh: "包裹重量（g）", ta: "பார்சல் எடை (g)", ar: "وزن الشحنة (غ)" },
+  "bld.shipFieldNone": { en: "Not collected on this form", ms: "Tidak dikumpul pada borang ini", zh: "本表单不收集", ta: "இந்தப் படிவத்தில் சேகரிக்கப்படவில்லை", ar: "غير مُجمَّع في هذا النموذج" },
   "bld.removeChoice": { en: "Remove choice", ms: "Buang pilihan", zh: "移除选项", ta: "தேர்வை நீக்கு", ar: "إزالة الخيار" },
   "bld.choiceOne": { en: "Option 1", ms: "Pilihan 1", zh: "选项 1", ta: "விருப்பம் 1", ar: "خيار 1" },
   "bld.choiceTwo": { en: "Option 2", ms: "Pilihan 2", zh: "选项 2", ta: "விருப்பம் 2", ar: "خيار 2" },
@@ -1690,6 +1719,36 @@ export const DICT = {
   "fs.chipFeedsSaved": { en: "CHIP feeds saved ✓", ms: "Feed CHIP disimpan ✓", zh: "CHIP 配置已保存 ✓", ta: "CHIP ஃபீட்கள் சேமிக்கப்பட்டன ✓", ar: "تم حفظ خلاصات CHIP ✓" },
   "fs.chipFeedsFail": { en: "Failed to save CHIP feeds", ms: "Gagal simpan feed CHIP", zh: "保存 CHIP 配置失败", ta: "CHIP ஃபீட்களைச் சேமிக்க முடியவில்லை", ar: "فشل حفظ خلاصات CHIP" },
   "fs.chipSecretKeep": { en: "(blank = keep existing key)", ms: "(kosong = kekal kunci sedia ada)", zh: "（留空 = 保留现有密钥）", ta: "(காலியாக = தற்போதைய விசையை வைத்திரு)", ar: "(فارغ = الاحتفاظ بالمفتاح الحالي)" },
+  // shipping by zone (the managed rate source a form's shipping block can use)
+  "fs.ship": { en: "Shipping", ms: "Penghantaran", zh: "运输", ta: "ஷிப்பிங்", ar: "الشحن" },
+  "fs.shipHint": { en: "Delivery zones and rates shared by every form in this workspace. A shipping block whose rate source is Managed zones charges the zone the buyer's address resolves to, and the fee is recorded as shipping on the sale — never as a line item.", ms: "Zon penghantaran dan kadar yang dikongsi oleh setiap borang dalam ruang kerja ini. Blok penghantaran yang sumber kadarnya Zon terurus mengenakan kadar zon yang dipadankan dengan alamat pembeli, dan bayaran itu direkodkan sebagai penghantaran pada jualan — bukan sebagai item baris.", zh: "此工作区所有表单共享的配送区域与费率。费率来源为「托管区域」的运输字段会按买家地址匹配区域收费，费用记为销售的运费——不会作为明细项。", ta: "இந்த பணியிடத்தின் அனைத்து படிவங்களும் பகிரும் விநியோக மண்டலங்களும் கட்டணங்களும். கட்டண மூலம் «நிர்வகிக்கப்படும் மண்டலங்கள்» ஆக உள்ள ஷிப்பிங் புலம், வாங்குபவரின் முகவரிக்கு பொருந்தும் மண்டலக் கட்டணத்தை வசூலிக்கும்; அது விற்பனையின் ஷிப்பிங் தொகையாகப் பதிவாகும் — வரி உருப்படியாக அல்ல.", ar: "مناطق التوصيل وأسعارها، مشتركة بين كل نماذج هذه المساحة. حقل الشحن الذي مصدره «مناطق مُدارة» يفرض سعر المنطقة التي يطابقها عنوان المشتري، ويُسجَّل الرسم كشحن على عملية البيع — لا كبند." },
+  "fs.shipUnused": { en: "No form in this workspace uses managed zones yet. Set a shipping block's rate source to Managed zones to charge these rates.", ms: "Belum ada borang dalam ruang kerja ini menggunakan zon terurus. Tetapkan sumber kadar blok penghantaran kepada Zon terurus untuk mengenakan kadar ini.", zh: "此工作区暂无表单使用托管区域。将运输字段的费率来源设为「托管区域」即可使用这些费率。", ta: "இந்த பணியிடத்தில் எந்தப் படிவும் நிர்வகிக்கப்படும் மண்டலங்களைப் பயன்படுத்தவில்லை. இந்தக் கட்டணங்களை வசூலிக்க ஷிப்பிங் புலத்தின் கட்டண மூலத்தை «நிர்வகிக்கப்படும் மண்டலங்கள்» ஆக அமைக்கவும்.", ar: "لا يوجد نموذج في هذه المساحة يستخدم المناطق المُدارة بعد. اضبط مصدر السعر في حقل الشحن إلى «مناطق مُدارة» لفرض هذه الأسعار." },
+  "fs.shipSets": { en: "Zone sets", ms: "Set zon", zh: "区域组", ta: "மண்டல தொகுப்புகள்", ar: "مجموعات المناطق" },
+  "fs.shipEmpty": { en: "No zone set yet. Add one, then add the zones and their rates.", ms: "Belum ada set zon. Tambah satu, kemudian tambah zon dan kadarnya.", zh: "暂无区域组。请先添加一个，然后添加区域及其费率。", ta: "இன்னும் மண்டல தொகுப்பு இல்லை. ஒன்றைச் சேர்த்து, பின்னர் மண்டலங்களையும் கட்டணங்களையும் சேர்க்கவும்.", ar: "لا توجد مجموعة مناطق بعد. أضف واحدة، ثم أضف المناطق وأسعارها." },
+  "fs.shipAddSet": { en: "Add zone set", ms: "Tambah set zon", zh: "添加区域组", ta: "மண்டல தொகுப்பு சேர்", ar: "إضافة مجموعة مناطق" },
+  "fs.shipSetName": { en: "Set name", ms: "Nama set", zh: "组名称", ta: "தொகுப்பு பெயர்", ar: "اسم المجموعة" },
+  "fs.shipSetDefault": { en: "Default set", ms: "Set lalai", zh: "默认组", ta: "இயல்புநிலை தொகுப்பு", ar: "المجموعة الافتراضية" },
+  "fs.shipAddZone": { en: "Add zone", ms: "Tambah zon", zh: "添加区域", ta: "மண்டலம் சேர்", ar: "إضافة منطقة" },
+  "fs.shipZoneName": { en: "Zone name", ms: "Nama zon", zh: "区域名称", ta: "மண்டல பெயர்", ar: "اسم المنطقة" },
+  "fs.shipStates": { en: "States (comma separated; peninsular or east_malaysia expand to the whole group)", ms: "Negeri (pisah dengan koma; peninsular atau east_malaysia meliputi seluruh kumpulan)", zh: "州属（逗号分隔；peninsular 或 east_malaysia 代表整组）", ta: "மாநிலங்கள் (கமாவால் பிரிக்கவும்; peninsular அல்லது east_malaysia முழு குழுவையும் குறிக்கும்)", ar: "الولايات (مفصولة بفواصل؛ peninsular أو east_malaysia تشمل المجموعة كاملة)" },
+  "fs.shipDistricts": { en: "Districts / cities (comma separated)", ms: "Daerah / bandar (pisah dengan koma)", zh: "地区／城市（逗号分隔）", ta: "மாவட்டங்கள் / நகரங்கள் (கமாவால் பிரிக்கவும்)", ar: "المناطق / المدن (مفصولة بفواصل)" },
+  "fs.shipPostcodeFrom": { en: "Postcode from", ms: "Poskod mula", zh: "起始邮编", ta: "அஞ்சல் குறியீடு முதல்", ar: "الرمز البريدي من" },
+  "fs.shipPostcodeTo": { en: "Postcode to", ms: "Poskod akhir", zh: "结束邮编", ta: "அஞ்சல் குறியீடு வரை", ar: "الرمز البريدي إلى" },
+  "fs.shipPriority": { en: "Priority (lower is tested first)", ms: "Keutamaan (kecil diuji dahulu)", zh: "优先顺序（数值小的先匹配）", ta: "முன்னுரிமை (சிறியது முதலில் சோதிக்கப்படும்)", ar: "الأولوية (الأصغر يُفحص أولاً)" },
+  "fs.shipFallback": { en: "Fallback zone (used only when nothing else matches)", ms: "Zon lalai (hanya bila tiada zon lain padan)", zh: "回退区域（仅在其他区域都不匹配时使用）", ta: "இயல்புநிலை மண்டலம் (வேறு எதுவும் பொருந்தாதபோது மட்டும்)", ar: "منطقة احتياطية (تُستخدم فقط عند عدم مطابقة أي منطقة أخرى)" },
+  "fs.shipRates": { en: "Rates", ms: "Kadar", zh: "费率", ta: "கட்டணங்கள்", ar: "الأسعار" },
+  "fs.shipRateLabel": { en: "Rate name", ms: "Nama kadar", zh: "费率名称", ta: "கட்டண பெயர்", ar: "اسم السعر" },
+  "fs.shipRatePrice": { en: "Price (RM)", ms: "Harga (RM)", zh: "价格（RM）", ta: "விலை (RM)", ar: "السعر (RM)" },
+  "fs.shipRateMinW": { en: "Min weight (g)", ms: "Berat min (g)", zh: "最小重量（g）", ta: "குறைந்த எடை (g)", ar: "أقل وزن (غ)" },
+  "fs.shipRateMaxW": { en: "Max weight (g)", ms: "Berat maks (g)", zh: "最大重量（g）", ta: "அதிக எடை (g)", ar: "أقصى وزن (غ)" },
+  "fs.shipFreeOver": { en: "Free over (RM)", ms: "Percuma melebihi (RM)", zh: "满额免运费（RM）", ta: "இதற்கு மேல் இலவசம் (RM)", ar: "مجاني بعد (RM)" },
+  "fs.shipAddRate": { en: "Add rate", ms: "Tambah kadar", zh: "添加费率", ta: "கட்டணம் சேர்", ar: "إضافة سعر" },
+  "fs.shipSave": { en: "Save shipping rates", ms: "Simpan kadar penghantaran", zh: "保存运费", ta: "ஷிப்பிங் கட்டணங்களைச் சேமி", ar: "حفظ أسعار الشحن" },
+  "fs.shipSaved": { en: "Shipping rates saved ✓", ms: "Kadar penghantaran disimpan ✓", zh: "运费已保存 ✓", ta: "ஷிப்பிங் கட்டணங்கள் சேமிக்கப்பட்டன ✓", ar: "تم حفظ أسعار الشحن ✓" },
+  "fs.shipSaveFail": { en: "Failed to save shipping rates", ms: "Gagal simpan kadar penghantaran", zh: "保存运费失败", ta: "ஷிப்பிங் கட்டணங்களைச் சேமிக்க முடியவில்லை", ar: "فشل حفظ أسعار الشحن" },
+  "fs.shipLoadFail": { en: "Could not load the shipping rates", ms: "Tidak dapat memuatkan kadar penghantaran", zh: "无法加载运费", ta: "ஷிப்பிங் கட்டணங்களை ஏற்ற முடியவில்லை", ar: "تعذّر تحميل أسعار الشحن" },
+  "fs.shipDelete": { en: "Delete", ms: "Padam", zh: "删除", ta: "நீக்கு", ar: "حذف" },
+  "fs.shipGuide": { en: "How shipping by zone works", ms: "Cara penghantaran mengikut zon berfungsi", zh: "按区域计费如何运作", ta: "மண்டல வாரியாக ஷிப்பிங் எவ்வாறு இயங்குகிறது", ar: "كيف يعمل الشحن حسب المنطقة" },
   // landing
   "land.badge": { en: "100% free · CHIP payments", ms: "100% percuma · bayaran CHIP", zh: "100% 免费 · 代理原生支付", ta: "100% இலவசம் · முகவர் சார்ந்த பணம்", ar: "مجاني 100% · مدفوعات ذكية" },
   "land.hero1": { en: "Sell online with", ms: "Jual secara online dengan", zh: "5 分钟建立订单表单", ta: "5 நிமிடங்களில் ஆர்டர் படிவம்", ar: "أنشئ نموذج طلب في 5 دقائق" },

@@ -38,6 +38,7 @@ import (
 	"strings"
 
 	"github.com/wzul/jomform/api/internal/customform"
+	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/objstore"
 )
@@ -166,6 +167,14 @@ const (
 	// (the FK is ON DELETE RESTRICT). Keyed on the exact wire message.
 	CodeProductHasSales         = "product.hasSales"
 	CodeProductHasSubscriptions = "product.hasSubscriptions"
+
+	// A shipping-zone-set save that would DELETE a set a form's shipping block
+	// still points at. The refusal is ASSEMBLED around the set name and the
+	// form titles, so the page's own generic sentence ("Failed to save shipping
+	// rates") was all a merchant saw for a refusal whose whole point is that
+	// they must re-point that form first. Keyed by PREFIX in errCodeByPrefix,
+	// on the constant the store builds its sentence from.
+	CodeShippingSetInUse = "shipping.setInUse"
 
 	// The TYPED-CONFIRMATION refusals: the four sites that make the caller name
 	// back what it is about to destroy (a form's slug, a workspace's slug, a
@@ -432,6 +441,11 @@ var errCodeByPrefix = []struct {
 }{
 	// urlguard.InvalidMessage(field) → "<field> mesti bermula dengan https:// — …"
 	{" mesti bermula dengan https://", CodeURLNotHTTPS},
+	// The shipping zone-set delete refusal (card t_e11bf975): assembled around
+	// the set name and the form titles that still reference it, so the lead-in
+	// is the only fixed part. Keyed on dbstore's own constant rather than a
+	// hand-typed copy of it, so a re-wording cannot detach the code again.
+	{prefix: dbstore.ShippingSetInUseLeadIn, code: CodeShippingSetInUse},
 	// payments.CaptureSale/ReleaseSale/Refund refusals are surfaced verbatim.
 	{"jualan bukan dalam status boleh-refund", CodeRefundNotAllowed},
 	// The workspace-ROLE refusal, keyed on the LEAD-IN rather than as one more

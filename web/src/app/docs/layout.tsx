@@ -43,6 +43,10 @@ const NAV_GROUPS: Group[] = [
     sections: [
       { href: "/docs/sales", label: "Sales, responses & analytics" },
       { href: "/docs/subscriptions", label: "Subscriptions & recurring billing" },
+      // Shipping by zone: the managed rate source a form's shipping block can
+      // use. The index carries the entry that links here, so a reader can reach
+      // it from both surfaces (docsIndex.test.ts checks both directions).
+      { href: "/docs/shipping", label: "Shipping by zone" },
     ],
   },
   {

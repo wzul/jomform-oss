@@ -42,7 +42,17 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 		Pattern      string
 		RequiredMsg  string
 		Choices      []choiceView
-		HasQuantity  bool
+		// Managed zone rates (the shipping block's "zones" source). The template
+		// reads .Zones for a shipping block; a static shipping block (this
+		// fixture) leaves it empty and renders its own priced choices.
+		Zones []struct {
+			Value       string
+			Label       string
+			PriceSen    int64
+			FreeOverSen int64
+			Note        string
+		}
+		HasQuantity bool
 	}
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{

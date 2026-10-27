@@ -122,6 +122,22 @@ type Block = {
   // Issue #249: per-product quantity selector (Gravity-Forms-style). When true,
   // the product block renders its own quantity input scoped to that product.
   quantity?: boolean;
+  // Shipping rate source (phase 1). A shipping block either keeps its own priced
+  // choices ("static", the default and what every older form has) or charges the
+  // managed rate of the zone the BUYER'S ADDRESS resolves to ("zones"), read from
+  // the workspace zone set named by zoneSetId. The field mappings say which of
+  // this form's blocks carries the state/district/postcode, and onNoMatch says
+  // what happens to an address no zone covers ("reject" or "default").
+  //
+  // A third source, "courier", is reserved for the live courier quoting of phase
+  // 2 and is deliberately NOT offered here: it would refuse every order.
+  source?: string;
+  zoneSetId?: string;
+  zoneStateField?: string;
+  zoneDistrictField?: string;
+  zonePostcodeField?: string;
+  onNoMatch?: string;
+  weightG?: number;
 };
 
 type Product = { id: string; name: string; price_sen: number; type: string; images?: string[] };
@@ -419,6 +435,29 @@ export default function Builder() {
     setProducts(r.data);
   }, [t, goToLogin]);
 
+  // Shipping by zone: the workspace's zone sets, so the shipping block's panel
+  // can offer them by name. A failure is NOT fatal (the palette of rates is a
+  // convenience); the panel then says there is no set, and the merchant can
+  // create one in Form Settings → Shipping.
+  const [zoneSets, setZoneSets] = useState<{ id: string; name: string; is_default: boolean }[]>([]);
+  const loadZoneSets = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/rest/shipping${workspaceQuery()}`);
+      if (!r.ok) {
+        setZoneSets([]);
+        return;
+      }
+      const d = (await r.json()) as { sets?: { id?: string; name?: string; is_default?: boolean }[] };
+      setZoneSets(
+        (Array.isArray(d?.sets) ? d.sets : [])
+          .filter((s) => typeof s?.id === "string" && s.id)
+          .map((s) => ({ id: s.id as string, name: s.name || s.id || "", is_default: s.is_default === true }))
+      );
+    } catch {
+      setZoneSets([]);
+    }
+  }, []);
+
   // hydrate from ?form=<id> (a form) or ?template=<id> (one of your own
   // templates — issue #457 follow-up). Both are `forms` rows, so they hydrate
   // the same way; only the route they load from and the route they save to
@@ -426,6 +465,7 @@ export default function Builder() {
   // a status/publish route).
   useEffect(() => {
     load();
+    void loadZoneSets();
     const params = new URLSearchParams(window.location.search);
     const resolved = builderTarget({
       template: params.get("template"),
@@ -533,6 +573,14 @@ export default function Builder() {
       pattern: b.pattern as string | undefined,
       requiredMessage: b.required_message as string | undefined,
       priceSen: b.price_sen as number | undefined,
+      // Shipping rate source (managed zones).
+      source: b.source as string | undefined,
+      zoneSetId: b.zone_set_id as string | undefined,
+      zoneStateField: b.zone_state_field as string | undefined,
+      zoneDistrictField: b.zone_district_field as string | undefined,
+      zonePostcodeField: b.zone_postcode_field as string | undefined,
+      onNoMatch: b.on_no_match as string | undefined,
+      weightG: b.weight_g as number | undefined,
       quantity: b.quantity as boolean | undefined,
       choices,
     };
@@ -747,6 +795,16 @@ export default function Builder() {
         required_message: b.requiredMessage || undefined,
         price_sen: b.priceSen,
         quantity: b.quantity === undefined ? undefined : b.quantity,
+        // Shipping rate source (managed zones): only written when the merchant
+        // changed it, so a static block's saved config stays byte-identical to
+        // what every pre-existing form carries.
+        source: b.source || undefined,
+        zone_set_id: b.zoneSetId || undefined,
+        zone_state_field: b.zoneStateField || undefined,
+        zone_district_field: b.zoneDistrictField || undefined,
+        zone_postcode_field: b.zonePostcodeField || undefined,
+        on_no_match: b.onNoMatch || undefined,
+        weight_g: b.weightG || undefined,
         // Card t_3d11f98d: an option/shipping block's price IS the choice price
         // — that is what the buyer's page prints and what /order charges, and
         // the server refuses a pricing block whose choices carry no price. A
@@ -1086,6 +1144,16 @@ export default function Builder() {
         requiredMessage: b.required_message as string | undefined,
         priceSen: b.price_sen as number | undefined,
         quantity: b.quantity as boolean | undefined,
+        // Shipping rate source (managed zones) — the AI path hydrates the same
+        // fields the form load does, so a generated config with a zone source is
+        // not silently flattened to a static block.
+        source: b.source as string | undefined,
+        zoneSetId: b.zone_set_id as string | undefined,
+        zoneStateField: b.zone_state_field as string | undefined,
+        zoneDistrictField: b.zone_district_field as string | undefined,
+        zonePostcodeField: b.zone_postcode_field as string | undefined,
+        onNoMatch: b.on_no_match as string | undefined,
+        weightG: b.weight_g as number | undefined,
         choices: Array.isArray(b.choices)
           ? (b.choices as { label?: string; value?: string; price_sen?: number }[]).map((c) => ({
               label: c.label || "",
@@ -1360,6 +1428,156 @@ export default function Builder() {
                 + {t("bld.addChoice")}
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Shipping rate source (managed zones). A shipping block either keeps
+            its own priced list (the default, and what every older form has) or
+            charges the managed rate of the zone the buyer's address resolves to.
+            The third source, "courier", is the phase-2 seam and is deliberately
+            NOT offered: it would refuse every order until live quoting ships. */}
+        {b.type === "shipping" && (
+          <div className="mt-3 rounded-md border border-[var(--jf-border)] p-2">
+            <div>
+              <label htmlFor={fid("shipSource")} className="text-xs text-[var(--jf-muted)]">
+                {t("bld.shipSource")}
+              </label>
+              <select
+                id={fid("shipSource")}
+                value={b.source || "static"}
+                onChange={(e) => {
+                  // Leaving the zones source clears the settings that only mean
+                  // something for it, so a block flipped back to a static list
+                  // does not carry a stale set id into the saved config.
+                  const src = e.target.value;
+                  upd(
+                    src === "zones"
+                      ? { source: "zones", onNoMatch: b.onNoMatch || "reject" }
+                      : {
+                          source: undefined,
+                          zoneSetId: undefined,
+                          zoneStateField: undefined,
+                          zoneDistrictField: undefined,
+                          zonePostcodeField: undefined,
+                          onNoMatch: undefined,
+                          weightG: undefined,
+                        }
+                  );
+                }}
+                className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+              >
+                <option value="static">{t("bld.shipSourceStatic")}</option>
+                <option value="zones">{t("bld.shipSourceZones")}</option>
+              </select>
+            </div>
+
+            {b.source === "zones" && (
+              <div className="mt-3 space-y-2">
+                {zoneSets.length === 0 ? (
+                  <p className="text-xs text-[var(--jf-muted)]">{t("bld.shipNoZoneSets")}</p>
+                ) : (
+                  <div>
+                    <label htmlFor={fid("shipZoneSet")} className="text-xs text-[var(--jf-muted)]">
+                      {t("bld.shipZoneSet")}
+                    </label>
+                    <select
+                      id={fid("shipZoneSet")}
+                      value={b.zoneSetId || ""}
+                      onChange={(e) => upd({ zoneSetId: e.target.value })}
+                      className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+                    >
+                      <option value="">{t("bld.shipZoneSetNone")}</option>
+                      {zoneSets.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                    {!b.zoneSetId && <p className="mt-1 text-xs text-[var(--jf-danger-text)]">{t("bld.shipZoneSetNone")}</p>}
+                  </div>
+                )}
+
+                {/* Which of this form's blocks carries the buyer's address. The
+                    options are the blocks that collect a value a zone rule can
+                    match (a text/select/address block for the state, and so on);
+                    "not collected" leaves that part to the client envelope. */}
+                <p className="text-xs text-[var(--jf-muted)]">{t("bld.shipMapHint")}</p>
+                {(
+                  [
+                    ["shipStateField", "bld.shipStateField", "zoneStateField", b.zoneStateField],
+                    ["shipDistrictField", "bld.shipDistrictField", "zoneDistrictField", b.zoneDistrictField],
+                    ["shipPostcodeField", "bld.shipPostcodeField", "zonePostcodeField", b.zonePostcodeField],
+                  ] as const
+                ).map(([id, labelKey, field, value]) => (
+                  <div key={id}>
+                    <label htmlFor={fid(id)} className="text-xs text-[var(--jf-muted)]">
+                      {t(labelKey)}
+                    </label>
+                    <select
+                      id={fid(id)}
+                      value={value || ""}
+                      onChange={(e) => upd({ [field]: e.target.value || undefined })}
+                      className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+                    >
+                      <option value="">{t("bld.shipFieldNone")}</option>
+                      {blocks
+                        .filter(
+                          (x) =>
+                            x.id !== b.id &&
+                            ["text", "textarea", "number", "address", "select", "radio", "hidden"].includes(x.type)
+                        )
+                        .map((x) => (
+                          <option key={x.id} value={x.id}>
+                            {x.value || x.type}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                ))}
+
+                <div>
+                  <label htmlFor={fid("shipNoMatch")} className="text-xs text-[var(--jf-muted)]">
+                    {t("bld.shipNoMatch")}
+                  </label>
+                  <select
+                    id={fid("shipNoMatch")}
+                    value={b.onNoMatch || "reject"}
+                    onChange={(e) => upd({ onNoMatch: e.target.value })}
+                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+                  >
+                    <option value="reject">{t("bld.shipNoMatchReject")}</option>
+                    <option value="default">{t("bld.shipNoMatchDefault")}</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor={fid("shipWeight")} className="text-xs text-[var(--jf-muted)]">
+                    {t("bld.shipWeight")}
+                  </label>
+                  <input
+                    id={fid("shipWeight")}
+                    type="number"
+                    min={0}
+                    value={b.weightG || ""}
+                    onChange={(e) => upd({ weightG: Number(e.target.value) > 0 ? Number(e.target.value) : undefined })}
+                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+                  />
+                </div>
+
+                {/* AGENTS.md docs-parity rule 4: the inline "?" next to the
+                    feature it explains. */}
+                <p className="text-xs">
+                  <a
+                    href="/docs/shipping"
+                    target="_blank"
+                    rel="noopener"
+                    className="text-[var(--jf-primary)] underline underline-offset-2"
+                  >
+                    {t("fs.shipGuide")}
+                  </a>
+                </p>
+              </div>
+            )}
           </div>
         )}
 

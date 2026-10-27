@@ -60,6 +60,10 @@ type Deps struct {
 	Notifications *dbstore.FormNotificationStore
 	// Issue #180: media library (list_media tool). Nil → the tool errors.
 	Media *dbstore.MediaStore
+	// Shipping zones + rates (get/set_shipping_rates). Nil → the tools error
+	// rather than reporting an empty configuration (an empty set list would
+	// read as "free shipping everywhere" to a caller).
+	Shipping *dbstore.ShippingStore
 	// Issue #361/#363: the S3/MinIO object store backing the media bucket,
 	// shared with the dashboard (internal/objstore). Wire it so upload_media
 	// can push image + code assets tenant-scoped. Nil → the tool errors.

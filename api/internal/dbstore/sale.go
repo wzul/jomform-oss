@@ -2,6 +2,7 @@ package dbstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -181,6 +182,17 @@ type Sale struct {
 	// commission on paid sales.
 	AffiliateCode string
 
+	// ShippingDetail records HOW a zone-based shipping fee was reached, so the
+	// merchant can see it instead of inferring it from a number: the matched
+	// zone, the rate row, whether the fee came from the fallback zone, whether
+	// the free-shipping threshold was crossed, and which rule matched.
+	//
+	// It is raw JSONB ("{}" for every sale that did not resolve a managed
+	// shipping rate — a static shipping block, a form with no shipping block,
+	// and every historical sale), so the shape can grow in phase 2 (a courier's
+	// quoted rate) without another migration.
+	ShippingDetail json.RawMessage
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -197,7 +209,7 @@ const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code,
 	skip_capture, authorized, captured_at, COALESCE(receipt_message_id,''),
 	is_spam, spam_reason, COALESCE(table_number,''), COALESCE(affiliate_code,''), created_at, updated_at,
 	COALESCE(subscription_product_id::text,''), COALESCE(subscription_amount_sen,0), COALESCE(subscription_period,''),
-	COALESCE(subscription_variation_id::text,'')
+	COALESCE(subscription_variation_id::text,''), COALESCE(shipping_detail,'{}'::jsonb)
 	FROM sales`
 
 func scanSale(row pgx.Row) (*Sale, error) {
@@ -208,24 +220,30 @@ func scanSale(row pgx.Row) (*Sale, error) {
 		&s.SkipCapture, &s.Authorized, &s.CapturedAt, &s.ReceiptMessageID,
 		&s.IsSpam, &s.SpamReason, &s.TableNumber, &s.AffiliateCode, &s.CreatedAt, &s.UpdatedAt,
 		&s.SubscriptionProductID, &s.SubscriptionAmountSen, &s.SubscriptionPeriod,
-		&s.SubscriptionVariationID)
+		&s.SubscriptionVariationID, &s.ShippingDetail)
 	return s, err
 }
 
 // Create inserts a sale and assigns a unique ref_code (given by caller).
 func (s *SaleStore) Create(ctx context.Context, sale *Sale) error {
+	// A sale that resolved no managed shipping rate stores "{}" — the column is
+	// never NULL, so every reader can treat it as a JSON object.
+	if len(sale.ShippingDetail) == 0 {
+		sale.ShippingDetail = json.RawMessage("{}")
+	}
 	return s.pool.QueryRow(ctx,
 		`INSERT INTO sales (account_id, form_id, ref_code, client, items, subtotal_sen, shipping_sen,
 		   discount_sen, total_sen, currency, sale_type, payment_method, status, skip_capture, table_number, affiliate_code,
-		   subscription_product_id, subscription_amount_sen, subscription_period, subscription_variation_id)
+		   subscription_product_id, subscription_amount_sen, subscription_period, subscription_variation_id, shipping_detail)
 		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULLIF($15,''), NULLIF($16,''),
-		    NULLIF($17,'')::uuid, NULLIF($18,0), NULLIF($19,''), NULLIF($20,'')::uuid)
+		    NULLIF($17,'')::uuid, NULLIF($18,0), NULLIF($19,''), NULLIF($20,'')::uuid, $21::jsonb)
 		 RETURNING id, created_at, updated_at`,
 		sale.AccountID, sale.FormID, sale.RefCode, sale.Client, sale.Items,
 		sale.SubtotalSen, sale.ShippingSen, sale.DiscountSen, sale.TotalSen,
 		orDefault(sale.Currency, "MYR"),
 		sale.SaleType, sale.PaymentMethod, sale.Status, sale.SkipCapture, sale.TableNumber, sale.AffiliateCode,
 		sale.SubscriptionProductID, sale.SubscriptionAmountSen, sale.SubscriptionPeriod, sale.SubscriptionVariationID,
+		sale.ShippingDetail,
 	).Scan(&sale.ID, &sale.CreatedAt, &sale.UpdatedAt)
 }
 

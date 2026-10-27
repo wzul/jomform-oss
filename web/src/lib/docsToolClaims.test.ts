@@ -159,7 +159,17 @@ const MCP_SOURCES = readdirSync(MCP_DIR)
 // and a pin of 180 would mean this branch's three trash tools were — both are
 // the silently-reverted-main failure this guard exists to make loud, so the
 // number doubles as the check that the merge kept both sides.
-const EXPECTED_TOOL_COUNT = 182;
+//
+// 184: re-derived on THIS tree, not copied from either side. Main's pin was 182
+// and this branch's was 183 (181 + the shipping pair, counted against its own
+// nine-day-old base). Both are wrong for the integrated tree for opposite
+// reasons: main gained a tool after this branch was cut, and the branch adds
+// exactly two — `get_shipping_rates` and `set_shipping_rates`, the MCP surface
+// behind the managed zone rates a form's shipping block can charge from. The
+// integrated registry holds 184 distinct `&mcp.Tool{` names across 46 non-test
+// files: 182 + 2. A pin of 182 would mean the shipping pair was dropped and a
+// pin of 183 would mean main's newest tool was.
+const EXPECTED_TOOL_COUNT = 184;
 
 const REGISTRY_SRC = MCP_SOURCES.join("\n");
 

@@ -506,6 +506,10 @@ const ORIGINAL_TITLES = [
   // Issue #255's feature arrived without a guide; this entry is a summary plus
   // /docs/custom-forms, which carries the field contract and the type list.
   "Custom HTML forms",
+  // The shipping feature's entry: a summary here plus /docs/shipping for the
+  // walk-through, and a live destination the builder's shipping block and the
+  // Form Settings → Shipping tab both link at.
+  "Shipping by zone",
 ];
 
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;

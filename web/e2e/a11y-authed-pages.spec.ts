@@ -326,6 +326,45 @@ async function stubAPI(page: Page): Promise<void> {
     r.fulfill(json({ confirmations: [CONFIRMATION] })),
   );
   await page.route(/(.*)\/api\/rest\/forms\/f1\/menu(\?.*)?$/, (r) => r.fulfill(json({})));
+  // The Shipping tab reads the workspace's managed zone sets. Stubbed with a
+  // real configuration so the tab's OWN controls are on the page when axe and
+  // the unnamed-control check run — an empty `{}` body would render the empty
+  // state and leave the panel's inputs unscanned.
+  await page.route(/(.*)\/api\/rest\/shipping(\?.*)?$/, (r) =>
+    r.fulfill(
+      json({
+        account_id: "a1",
+        forms_using_zones: 1,
+        sets: [
+          {
+            id: "set1",
+            name: "Malaysia",
+            is_default: true,
+            zones: [
+              {
+                id: "z1",
+                name: "West Malaysia",
+                states: ["peninsular"],
+                districts: [],
+                priority: 0,
+                is_fallback: false,
+                rates: [{ id: "r1", label: "Standard", price_sen: 800, free_over_sen: 15000 }],
+              },
+              {
+                id: "z2",
+                name: "Elsewhere",
+                states: [],
+                districts: [],
+                priority: 99,
+                is_fallback: true,
+                rates: [{ id: "r2", label: "Standard", price_sen: 5000 }],
+              },
+            ],
+          },
+        ],
+      }),
+    ),
+  );
   await page.route(/(.*)\/api\/rest\/forms\/[^/?]+(\?.*)?$/, (r) => r.fulfill(json(FORM)));
   await page.route(/(.*)\/api\/rest\/webhooks(\?.*)?$/, (r) => r.fulfill(json([])));
 
@@ -740,6 +779,8 @@ const TAB_HEADING: Record<string, keyof typeof DICT> = {
   notifications: "fs.emelTitle",
   chip: "fs.chip",
   webhooks: "fs.webhooks",
+  // Shipping by zone: the panel opens with its own heading, like every other tab.
+  shipping: "fs.ship",
 };
 
 // The derived tables have to describe the page. Fail BEFORE a browser starts,

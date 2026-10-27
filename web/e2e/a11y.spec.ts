@@ -57,6 +57,7 @@ const PAGES = [
   // pages a "?" link or a /docs entry sends a reader to. Either side alone
   // leaves a public, sitemapped page unscanned.
   { name: "docs-index", path: "/docs" },
+  { name: "docs-shipping", path: "/docs/shipping" },
   { name: "docs-builder", path: "/docs/builder" },
   { name: "docs-workspaces", path: "/docs/workspaces" },
   { name: "docs-sales", path: "/docs/sales" },

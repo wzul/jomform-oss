@@ -6619,6 +6619,123 @@
         "x-jomform-scope-only": true
       }
     },
+    "/v1/rest/shipping": {
+      "get": {
+        "description": "The managed rate source a form's shipping block uses when its source is \"zones\": zone sets, each zone's match rules (states / districts / postcode range) and its rate rows (price in integer sen, an optional weight band in grams and an optional free-shipping threshold). Scoped to the account the request resolved to (?workspace= resolves that workspace's own account).",
+        "operationId": "getShipping",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Read the workspace's shipping zone sets and rates",
+        "tags": [
+          "Shipping"
+        ],
+        "x-jomform-access": "read"
+      },
+      "put": {
+        "description": "One transaction: a set sent with its id keeps it (so every form pointing at it keeps resolving), a new set is inserted, and a set the payload OMITS is deleted — refused with 409 when a form still points at that set. Every zone needs at least one rate and every non-fallback zone needs a match rule; a configuration that could not resolve is refused with 400 rather than saved and discovered by a buyer.",
+        "operationId": "putShipping",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Replace the workspace's shipping zone sets and rates",
+        "tags": [
+          "Shipping"
+        ],
+        "x-jomform-access": "write"
+      }
+    },
     "/v1/rest/spam/sales": {
       "get": {
         "operationId": "listSpamSales",

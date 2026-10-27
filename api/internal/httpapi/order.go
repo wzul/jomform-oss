@@ -35,6 +35,7 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/payments"
+	"github.com/wzul/jomform/api/internal/shipping"
 )
 
 // orderTarget is the destination of a public order. It is either a form (the
@@ -170,6 +171,29 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		return
 	}
 
+	// Shipping (managed zone rate source). Two facts are read from the form's
+	// builder config BEFORE the cart is priced:
+	//
+	//   - a block whose source is "zones" submits a line item like any pricing
+	//     block, but its fee is NOT a line item: it is resolved from the buyer's
+	//     address after the cart's items subtotal is known (the free-shipping
+	//     threshold compares against exactly that). The item is dropped below so
+	//     the fee cannot be counted twice;
+	//   - the phase-2 "courier" source is REFUSED here, loudly, rather than
+	//     behaving like a block with no price.
+	var zoneSpecs []shippingBlockSpec
+	zoneItemIDs := map[string]bool{}
+	if tgt.Form != nil {
+		if len(courierShippingBlocks(tgt.Form.Config)) > 0 {
+			writeErr(w, http.StatusBadRequest, shipping.ErrNotSupported.Error())
+			return
+		}
+		zoneSpecs = zoneShippingBlocks(tgt.Form.Config)
+		for _, spec := range zoneSpecs {
+			zoneItemIDs[spec.ItemID] = true
+		}
+	}
+
 	// Validate totals against the account currency (MVP: MYR only).
 	if _, err := h.Accounts.ByID(r.Context(), tgt.AccountID); err != nil {
 		respondErr(w, r, err)
@@ -230,6 +254,14 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	var subVariation *dbstore.ProductVariation
 	var subItems []dbstore.SaleItem
 	for _, it := range in.Items {
+		// A zone-sourced shipping block's own item is NOT a line item: its fee
+		// is resolved from the buyer's address into sales.shipping_sen below
+		// (shipping is not a product and must not be summed into the items
+		// subtotal, which the free-shipping threshold and the merchant's own
+		// reports read).
+		if zoneItemIDs[it.ProductID] {
+			continue
+		}
 		// Issue #461: the products table is the price authority — the name and
 		// price resolve LIVE from the product row, with the form snapshot only
 		// as the fallback for an archived/deleted product or a pricing block.
@@ -356,12 +388,30 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 			sale.SubscriptionVariationID = subVariation.ID
 		}
 	}
+	// Shipping by zone: resolved AFTER the cart, because the free-shipping
+	// threshold compares against the ITEMS subtotal above, and the fee itself
+	// must never be part of it. Every failure here is a refusal with the
+	// resolver's own sentence — a zone-sourced block can never quietly charge 0.
+	if len(zoneSpecs) > 0 {
+		fee, detail, serr := h.resolveZoneShipping(r.Context(), tgt, zoneSpecs, &in, subtotal)
+		if serr != nil {
+			if _, bad := serr.(*shippingError); bad {
+				writeErr(w, http.StatusBadRequest, serr.Error())
+				return
+			}
+			respondErr(w, r, serr)
+			return
+		}
+		sale.ShippingSen = fee
+		sale.ShippingDetail = detail
+	}
 	sale.SubtotalSen = subtotal
 	// Issue #99 money invariant: total_sen = subtotal + shipping - discount.
-	// The submit path currently has no shipping/discount inputs, so total
-	// equals subtotal; the formula is centralized in payments.SumItems so the
-	// invariant is enforced and unit-tested in one place.
-	sale.TotalSen = payments.SumItems(subtotal, 0, 0)
+	// A static shipping block is still a LINE ITEM (its price is inside
+	// subtotal, unchanged); a zone-sourced block contributes shipping_sen and
+	// nothing to subtotal. The formula is centralized in payments.SumItems so
+	// the invariant is enforced and unit-tested in one place.
+	sale.TotalSen = payments.SumItems(subtotal, sale.ShippingSen, 0)
 
 	if err := h.Sales.Create(r.Context(), sale); err != nil {
 		respondErr(w, r, err)

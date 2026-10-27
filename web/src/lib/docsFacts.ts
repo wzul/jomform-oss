@@ -24,6 +24,10 @@
 // facts a reader would have to be told, not the entry's exact wording — a fact that
 // asserted the wording would fail on a copy-edit rather than on substance.
 const DESTINATION_FACTS: Record<string, string[]> = {
+  // Shipping by zone (the managed rate source). The three facts a reader has to
+  // be able to find on the guide: the two MCP tools that configure it and the
+  // "never a silent zero" rule that decides an unmatched address.
+  "Shipping by zone": ["get_shipping_rates", "set_shipping_rates", "never silently zero"],
   "Sales": [
     "reference code",
     "pending/confirmed/failed/refunded",
@@ -225,6 +229,7 @@ const DESTINATION_FACTS: Record<string, string[]> = {
 // it weaker, so the count is pinned separately from the list: the list can be
 // shortened to satisfy the assertion, and this is what notices.
 const PER_ENTRY_FLOOR: Record<string, number> = {
+  "Shipping by zone": 3,
   Sales: 5,
   "One list for sales and responses": 4,
   "Responses (response-only forms)": 3,

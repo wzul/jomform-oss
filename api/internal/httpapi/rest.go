@@ -121,6 +121,11 @@ type RESTHandlers struct {
 	// Nil in bare-mode tests; the media endpoints return empty/503.
 	Media *dbstore.MediaStore
 
+	// Shipping is the managed zone/rate store (rate source "zones"). Nil in
+	// bare-mode tests: a form whose shipping block asks for a zone rate then
+	// reports that the zone rate source is not configured rather than charging 0.
+	Shipping *dbstore.ShippingStore
+
 	// Issue #364: background asset-scan queue. Same Valkey-backed queue as
 	// email (#199) / spam judge (#245). Code-asset uploads enqueue an
 	// asset_scan job here; a nil queue (dev, no Valkey) means the asset stays
@@ -360,6 +365,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("PATCH /v1/workspaces/{id}/members/{userId}", h.authed(h.updateMemberRole))
 	mux.Handle("DELETE /v1/workspaces/{id}/members/{userId}", h.authed(h.removeMember))
 	mux.Handle("GET /v1/rest/settings/einvoice", h.authed(h.getEinvoicing))
+	// Managed shipping zones + rates (the shipping block's "zones" rate source).
+	mux.Handle("GET /v1/rest/shipping", h.authed(h.getShipping))
+	mux.Handle("PUT /v1/rest/shipping", h.authed(h.putShipping))
 	mux.Handle("GET /v1/rest/currency/rates", h.authed(h.getCurrencyRates))
 	mux.Handle("GET /v1/rest/webhooks", h.authed(h.listWebhooks))
 	mux.Handle("GET /v1/rest/settings/webhook-key", h.authed(h.getWebhookKey))

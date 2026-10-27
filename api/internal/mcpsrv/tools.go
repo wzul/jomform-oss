@@ -467,6 +467,16 @@ func (s *Server) registerTools() {
 		Description: "Set bahasa DASHBOARD pilihan pada profil anda (per-user, ikut anda ke mana-mana pelayar): en, ms, zh, ta atau ar (kosong = auto, ikut nilai terakhir pelayar itu, kemudian en). Ini bahasa DASHBOARD sahaja dan ia per-profil — bahasa borang awam ditetapkan per-borang (config.lang) atau per-workspace (default_lang melalui set_workspace_settings), bukan di sini.",
 	}, s.updateProfileLanguage)
 
+	// ── Parity: shipping zones + rates (managed rate source, phase 1) ─────────
+	addTool(s, &mcp.Tool{
+		Name:        "get_shipping_rates",
+		Description: "Baca set zon penghantaran + kadar satu akaun/workspace: setiap zon (negeri/daerah/julat poskod, keutamaan, zon lalai) dan kadarnya (harga SEN, julat berat gram, ambang penghantaran percuma).",
+	}, s.getShippingRates)
+	addTool(s, &mcp.Tool{
+		Name:        "set_shipping_rates",
+		Description: "Ganti SEMUA set zon penghantaran + kadar satu akaun/workspace. Set yang tiada dalam sets akan DIPADAM (ditolak jika ada borang masih merujuknya). Kadar mesti ada harga dalam SEN; min/max_weight_g dalam gram (0 = tiada had); free_over_sen = ambang penghantaran percuma.",
+	}, s.setShippingRates)
+
 	// ── Parity: per-workspace email templates (issue #107) ────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_email_settings",

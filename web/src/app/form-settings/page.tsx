@@ -102,7 +102,7 @@ type FormEmailSettingsResponse = {
 // Issue #196: dispatcher-supported webhook events (dispatch2.go + purchases.go).
 const WEBHOOK_EVENTS = ["sale.paid", "sale.failed", "subscription.charged"] as const;
 
-type Tab = "general" | "menu" | "confirmation" | "restrictions" | "notifications" | "chip" | "webhooks";
+type Tab = "general" | "menu" | "confirmation" | "restrictions" | "notifications" | "chip" | "webhooks" | "shipping";
 
 // Issue #208: a per-form CHIP feed (Gravity-Forms-style). A feed with no
 // condition is the default feed and always matches.
@@ -135,6 +135,132 @@ const FEED_OPS = ["equals", "not_equals", "contains", "gt", "lt", "not_empty"];
 
 function feedUid() {
   return "feed_" + Math.random().toString(36).slice(2, 9);
+}
+
+// ── Shipping by zone (the managed rate source) ────────────────────────────────
+//
+// The drafts below are the WIRE shape of GET/PUT /v1/rest/shipping, with money
+// kept as the RM STRING the input shows and converted to integer sen at the
+// boundary (senToRm / rmToSen). Nothing here holds a float amount: a saved rate
+// is `Math.round(rm * 100)` sen, the same unit the API, the store and the sale
+// use.
+type ShipRateDraft = { label: string; price: string; minWeight: string; maxWeight: string; freeOver: string };
+type ShipZoneDraft = {
+  name: string;
+  states: string; // comma-separated; peninsular / east_malaysia expand server-side
+  districts: string;
+  postcodeFrom: string;
+  postcodeTo: string;
+  priority: string;
+  fallback: boolean;
+  rates: ShipRateDraft[];
+};
+type ShipSetDraft = { id: string; name: string; isDefault: boolean; zones: ShipZoneDraft[] };
+
+type ShipRateWire = {
+  label?: string;
+  price_sen?: number;
+  min_weight_g?: number;
+  max_weight_g?: number;
+  free_over_sen?: number;
+};
+type ShipZoneWire = {
+  name?: string;
+  states?: string[];
+  districts?: string[];
+  postcode_from?: string;
+  postcode_to?: string;
+  priority?: number;
+  is_fallback?: boolean;
+  rates?: ShipRateWire[];
+};
+type ShipSetWire = { id?: string; name?: string; is_default?: boolean; zones?: ShipZoneWire[] };
+
+const senToRm = (sen: number | undefined) => ((sen || 0) / 100).toFixed(2);
+const rmToSen = (rm: string) => {
+  const n = Number(rm);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : 0;
+};
+const csvToArr = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
+
+const emptyRate = (): ShipRateDraft => ({ label: "", price: "", minWeight: "", maxWeight: "", freeOver: "" });
+const emptyZone = (): ShipZoneDraft => ({
+  name: "",
+  states: "",
+  districts: "",
+  postcodeFrom: "",
+  postcodeTo: "",
+  priority: "0",
+  fallback: false,
+  rates: [emptyRate()],
+});
+const emptySet = (): ShipSetDraft => ({ id: "", name: "", isDefault: false, zones: [emptyZone()] });
+
+// shippingSetsFromWire / shippingSetsToWire convert between the API shape and
+// the drafts. A payload that is not the expected shape (an error object, a stub,
+// a proxy's 502 body) yields NO sets rather than throwing: the tab then renders
+// its empty state, which is what keeps a bad response from taking the page down.
+function shippingSetsFromWire(raw: unknown): ShipSetDraft[] {
+  const sets = (raw as { sets?: unknown } | null)?.sets;
+  if (!Array.isArray(sets)) return [];
+  return sets.map((s) => {
+    const w = (s || {}) as ShipSetWire;
+    const zones = Array.isArray(w.zones) ? w.zones : [];
+    return {
+      id: typeof w.id === "string" ? w.id : "",
+      name: typeof w.name === "string" ? w.name : "",
+      isDefault: w.is_default === true,
+      zones: zones.map((z) => {
+        const zw = (z || {}) as ShipZoneWire;
+        const rates = Array.isArray(zw.rates) && zw.rates.length ? zw.rates : [{} as ShipRateWire];
+        return {
+          name: typeof zw.name === "string" ? zw.name : "",
+          states: Array.isArray(zw.states) ? zw.states.join(", ") : "",
+          districts: Array.isArray(zw.districts) ? zw.districts.join(", ") : "",
+          postcodeFrom: typeof zw.postcode_from === "string" ? zw.postcode_from : "",
+          postcodeTo: typeof zw.postcode_to === "string" ? zw.postcode_to : "",
+          priority: String(typeof zw.priority === "number" ? zw.priority : 0),
+          fallback: zw.is_fallback === true,
+          rates: rates.map((r) => {
+            const rw = (r || {}) as ShipRateWire;
+            return {
+              label: typeof rw.label === "string" ? rw.label : "",
+              price: rw.price_sen ? senToRm(rw.price_sen) : "",
+              minWeight: rw.min_weight_g ? String(rw.min_weight_g) : "",
+              maxWeight: rw.max_weight_g ? String(rw.max_weight_g) : "",
+              freeOver: rw.free_over_sen ? senToRm(rw.free_over_sen) : "",
+            };
+          }),
+        };
+      }),
+    };
+  });
+}
+
+function shippingSetsToWire(sets: ShipSetDraft[]) {
+  return {
+    sets: sets.map((s) => ({
+      ...(s.id ? { id: s.id } : {}),
+      name: s.name,
+      is_default: s.isDefault,
+      zones: s.zones.map((z) => ({
+        name: z.name,
+        states: csvToArr(z.states),
+        districts: csvToArr(z.districts),
+        ...(z.postcodeFrom.trim() ? { postcode_from: z.postcodeFrom.trim() } : {}),
+        ...(z.postcodeTo.trim() ? { postcode_to: z.postcodeTo.trim() } : {}),
+        priority: Number.isFinite(Number(z.priority)) ? Number(z.priority) : 0,
+        is_fallback: z.fallback,
+        rates: z.rates.map((r) => ({
+          ...(r.label.trim() ? { label: r.label.trim() } : {}),
+          price_sen: rmToSen(r.price),
+          min_weight_g: Number(r.minWeight) > 0 ? Math.round(Number(r.minWeight)) : 0,
+          max_weight_g: Number(r.maxWeight) > 0 ? Math.round(Number(r.maxWeight)) : 0,
+          free_over_sen: rmToSen(r.freeOver),
+        })),
+      })),
+    })),
+  };
 }
 
 // Issue #392: field types whose value should be picked from the field's
@@ -371,6 +497,9 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "notifications", label: "fs.notifications" },
   { key: "chip", label: "fs.chip" },
   { key: "webhooks", label: "fs.webhooks" },
+  // Shipping by zone: the workspace's managed zone sets + rates, which a form's
+  // shipping block can use as its rate source instead of its own priced list.
+  { key: "shipping", label: "fs.ship" },
 ];
 
 // Issue #453: tri-state helpers for the per-form email override toggles.
@@ -594,6 +723,15 @@ function FormSettingsInner() {
   const [feeds, setFeeds] = useState<ChipFeedDraft[]>([]);
   const [formBlocks, setFormBlocks] = useState<CondBlock[]>([]);
 
+  // Shipping by zone: the WORKSPACE's managed zone sets + rates (not a per-form
+  // setting — a form's shipping block points at a set by id). Loaded with the
+  // rest of the page's data so the tab is populated the moment it is opened.
+  const [shipSets, setShipSets] = useState<ShipSetDraft[]>([]);
+  const [shipFormsUsing, setShipFormsUsing] = useState(0);
+  const [shipLoadErr, setShipLoadErr] = useState("");
+  const [shipSaving, setShipSaving] = useState(false);
+  const [shipMsg, setShipMsg] = useState("");
+
   // Per-form email settings override (issue #177, extended by #453). The
   // booleans are tri-state: "" = inherit the workspace default, "on"/"off" =
   // explicit per-form override.
@@ -741,6 +879,25 @@ function FormSettingsInner() {
       if (wr.ok) {
         const whs = (await wr.json()) as { id: string; url: string; events: string[] }[];
         setFormWebhooks(Array.isArray(whs) ? whs : []);
+      }
+      // Shipping by zone: the workspace's managed zone sets + rates. Read with
+      // the same ?workspace= scope every other call uses, so the sets shown are
+      // the ones the form's shipping block can actually resolve against. A body
+      // that is not the expected shape yields an empty list and a message rather
+      // than throwing (the tab renders its empty state — the same guard the
+      // notifications load carries).
+      const sr = await fetch(`/api/rest/shipping${workspaceQuery()}`);
+      if (sr.ok) {
+        const sd = await sr.json();
+        setShipSets(shippingSetsFromWire(sd));
+        setShipFormsUsing(
+          typeof (sd as { forms_using_zones?: number })?.forms_using_zones === "number"
+            ? (sd as { forms_using_zones: number }).forms_using_zones
+            : 0
+        );
+        setShipLoadErr("");
+      } else {
+        setShipLoadErr(t("fs.shipLoadFail"));
       }
       // Issue #179: load per-form confirmations (default always present).
       const cr = await fetch(`/api/rest/forms/${formId}/confirmations${workspaceQuery()}`);
@@ -964,6 +1121,69 @@ function FormSettingsInner() {
       else showMsgFail(t("prof.failed"));
     } finally {
       setMenuSaving(false);
+    }
+  }
+
+  // ── Shipping by zone (the managed rate source) ─────────────────────────────
+  // The drafts are edited in place and saved as ONE document (a single PUT), so
+  // the server's guarantees apply to a complete intent: a set keeps its id, and
+  // a set the payload drops is refused while a form still points at it.
+  const updShipSet = useCallback((si: number, patch: Partial<ShipSetDraft>) => {
+    setShipSets((prev: ShipSetDraft[]) => prev.map((s: ShipSetDraft, i: number) => (i === si ? { ...s, ...patch } : s)));
+  }, []);
+  const updShipZone = useCallback((si: number, zi: number, patch: Partial<ShipZoneDraft>) => {
+    setShipSets((prev: ShipSetDraft[]) =>
+      prev.map((s: ShipSetDraft, i: number) =>
+        i === si
+          ? { ...s, zones: s.zones.map((z: ShipZoneDraft, j: number) => (j === zi ? { ...z, ...patch } : z)) }
+          : s
+      )
+    );
+  }, []);
+  const updShipRate = useCallback(
+    (si: number, zi: number, ri: number, patch: Partial<ShipRateDraft>) => {
+      setShipSets((prev: ShipSetDraft[]) =>
+        prev.map((s: ShipSetDraft, i: number) =>
+          i === si
+            ? {
+                ...s,
+                zones: s.zones.map((z: ShipZoneDraft, j: number) =>
+                  j === zi
+                    ? { ...z, rates: z.rates.map((r: ShipRateDraft, k: number) => (k === ri ? { ...r, ...patch } : r)) }
+                    : z
+                ),
+              }
+            : s
+        )
+      );
+    },
+    []
+  );
+
+  async function saveShipping() {
+    if (!canWrite) return;
+    setShipSaving(true);
+    setShipMsg("");
+    try {
+      const r = await fetch(`/api/rest/shipping${workspaceQuery()}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(shippingSetsToWire(shipSets)),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        // A coded refusal is translated (the zone-set-in-use code explains the
+        // remedy); anything else gets this page's own sentence. The server's
+        // Malay prose is deliberately NOT rendered (issue #6177).
+        showMsgFail(apiErr(d, t("fs.shipSaveFail"), t));
+        return;
+      }
+      setShipSets(shippingSetsFromWire(d));
+      showMsgOk(t("fs.shipSaved"));
+    } catch {
+      showMsgFail(t("fs.shipSaveFail"));
+    } finally {
+      setShipSaving(false);
     }
   }
 
@@ -2875,6 +3095,280 @@ function FormSettingsInner() {
                           {t("fs.save")}
                         </button>
                       </div>
+                    </div>
+                  </section>
+                )}
+
+                {/* ── Shipping by zone (workspace-managed zones + rates) ── */}
+                {tab === "shipping" && (
+                  <section className="jf-card p-6">
+                    <h2 className="text-base font-semibold">{t("fs.ship")}</h2>
+                    <p className="mt-1 text-sm text-[var(--jf-muted)]">{t("fs.shipHint")}</p>
+                    {/* AGENTS.md docs-parity rule 4: the inline "?" that sends the
+                        merchant to the guide for the feature they are editing. */}
+                    <p className="mt-1 text-xs">
+                      <Link
+                        href="/docs/shipping"
+                        className="text-[var(--jf-primary)] underline underline-offset-2"
+                      >
+                        {t("fs.shipGuide")}
+                      </Link>
+                    </p>
+                    {shipLoadErr && <p className="mt-3 text-sm text-[var(--jf-danger-text)]">{shipLoadErr}</p>}
+                    {!shipLoadErr && shipFormsUsing === 0 && (
+                      <p className="mt-3 text-sm text-[var(--jf-muted)]">{t("fs.shipUnused")}</p>
+                    )}
+
+                    <div className="mt-4 space-y-4">
+                      {shipSets.length === 0 && (
+                        <p className="text-sm text-[var(--jf-muted)]">{t("fs.shipEmpty")}</p>
+                      )}
+                      {shipSets.map((set, si) => (
+                        <div key={si} className="rounded-lg border border-[var(--jf-border)] p-4">
+                          <div className="flex flex-wrap items-end gap-3">
+                            <div className="min-w-0 flex-1 basis-56">
+                              <label htmlFor={`ship-set-name-${si}`} className="text-xs text-[var(--jf-muted)]">
+                                {t("fs.shipSetName")}
+                              </label>
+                              <input
+                                id={`ship-set-name-${si}`}
+                                value={set.name}
+                                onChange={(e) => updShipSet(si, { name: e.target.value })}
+                                className="jf-input mt-1 w-full"
+                              />
+                            </div>
+                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                              <input
+                                type="checkbox"
+                                checked={set.isDefault}
+                                onChange={(e) => updShipSet(si, { isDefault: e.target.checked })}
+                              />
+                              {t("fs.shipSetDefault")}
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setShipSets((prev: ShipSetDraft[]) => prev.filter((_, i) => i !== si))}
+                              disabled={!canWrite}
+                              className="text-xs text-slate-500 hover:text-red-700"
+                            >
+                              {t("fs.shipDelete")}
+                            </button>
+                          </div>
+
+                          <p className="mt-4 text-xs font-medium text-[var(--jf-muted)]">{t("fs.shipSets")}</p>
+                          <div className="mt-2 space-y-3">
+                            {set.zones.map((zone, zi) => (
+                              <div key={zi} className="rounded-md bg-[var(--jf-shell)] p-3">
+                                <div className="flex flex-wrap items-end gap-2">
+                                  <div className="min-w-0 flex-1 basis-40">
+                                    <label htmlFor={`ship-zone-name-${si}-${zi}`} className="text-xs text-[var(--jf-muted)]">
+                                      {t("fs.shipZoneName")}
+                                    </label>
+                                    <input
+                                      id={`ship-zone-name-${si}-${zi}`}
+                                      value={zone.name}
+                                      onChange={(e) => updShipZone(si, zi, { name: e.target.value })}
+                                      className="jf-input mt-1 w-full"
+                                    />
+                                  </div>
+                                  <div className="w-24">
+                                    <label htmlFor={`ship-zone-prio-${si}-${zi}`} className="text-xs text-[var(--jf-muted)]">
+                                      {t("fs.shipPriority")}
+                                    </label>
+                                    <input
+                                      id={`ship-zone-prio-${si}-${zi}`}
+                                      type="number"
+                                      value={zone.priority}
+                                      onChange={(e) => updShipZone(si, zi, { priority: e.target.value })}
+                                      className="jf-input mt-1 w-full"
+                                    />
+                                  </div>
+                                  <label className="flex items-center gap-2 text-xs text-slate-700">
+                                    <input
+                                      type="checkbox"
+                                      checked={zone.fallback}
+                                      onChange={(e) => updShipZone(si, zi, { fallback: e.target.checked })}
+                                    />
+                                    {t("fs.shipFallback")}
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updShipSet(si, { zones: set.zones.filter((_, j) => j !== zi) })
+                                    }
+                                    disabled={!canWrite}
+                                    className="text-xs text-slate-500 hover:text-red-700"
+                                  >
+                                    {t("fs.shipDelete")}
+                                  </button>
+                                </div>
+                                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                  <div>
+                                    <label htmlFor={`ship-zone-states-${si}-${zi}`} className="text-xs text-[var(--jf-muted)]">
+                                      {t("fs.shipStates")}
+                                    </label>
+                                    <input
+                                      id={`ship-zone-states-${si}-${zi}`}
+                                      value={zone.states}
+                                      onChange={(e) => updShipZone(si, zi, { states: e.target.value })}
+                                      className="jf-input mt-1 w-full"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label htmlFor={`ship-zone-districts-${si}-${zi}`} className="text-xs text-[var(--jf-muted)]">
+                                      {t("fs.shipDistricts")}
+                                    </label>
+                                    <input
+                                      id={`ship-zone-districts-${si}-${zi}`}
+                                      value={zone.districts}
+                                      onChange={(e) => updShipZone(si, zi, { districts: e.target.value })}
+                                      className="jf-input mt-1 w-full"
+                                    />
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <div className="min-w-0 flex-1">
+                                      <label htmlFor={`ship-zone-pcfrom-${si}-${zi}`} className="text-xs text-[var(--jf-muted)]">
+                                        {t("fs.shipPostcodeFrom")}
+                                      </label>
+                                      <input
+                                        id={`ship-zone-pcfrom-${si}-${zi}`}
+                                        value={zone.postcodeFrom}
+                                        onChange={(e) => updShipZone(si, zi, { postcodeFrom: e.target.value })}
+                                        className="jf-input mt-1 w-full"
+                                      />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <label htmlFor={`ship-zone-pcto-${si}-${zi}`} className="text-xs text-[var(--jf-muted)]">
+                                        {t("fs.shipPostcodeTo")}
+                                      </label>
+                                      <input
+                                        id={`ship-zone-pcto-${si}-${zi}`}
+                                        value={zone.postcodeTo}
+                                        onChange={(e) => updShipZone(si, zi, { postcodeTo: e.target.value })}
+                                        className="jf-input mt-1 w-full"
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <p className="mt-3 text-xs font-medium text-[var(--jf-muted)]">{t("fs.shipRates")}</p>
+                                <div className="mt-1 space-y-2">
+                                  {zone.rates.map((rate, ri) => (
+                                    <div key={ri} className="flex flex-wrap items-end gap-2">
+                                      <div className="min-w-0 flex-1 basis-32">
+                                        <label htmlFor={`ship-rate-label-${si}-${zi}-${ri}`} className="text-xs text-[var(--jf-muted)]">
+                                          {t("fs.shipRateLabel")}
+                                        </label>
+                                        <input
+                                          id={`ship-rate-label-${si}-${zi}-${ri}`}
+                                          value={rate.label}
+                                          onChange={(e) => updShipRate(si, zi, ri, { label: e.target.value })}
+                                          className="jf-input mt-1 w-full"
+                                        />
+                                      </div>
+                                      <div className="w-24">
+                                        <label htmlFor={`ship-rate-price-${si}-${zi}-${ri}`} className="text-xs text-[var(--jf-muted)]">
+                                          {t("fs.shipRatePrice")}
+                                        </label>
+                                        <input
+                                          id={`ship-rate-price-${si}-${zi}-${ri}`}
+                                          type="number"
+                                          min="0"
+                                          step="0.01"
+                                          value={rate.price}
+                                          onChange={(e) => updShipRate(si, zi, ri, { price: e.target.value })}
+                                          className="jf-input mt-1 w-full"
+                                        />
+                                      </div>
+                                      <div className="w-24">
+                                        <label htmlFor={`ship-rate-minw-${si}-${zi}-${ri}`} className="text-xs text-[var(--jf-muted)]">
+                                          {t("fs.shipRateMinW")}
+                                        </label>
+                                        <input
+                                          id={`ship-rate-minw-${si}-${zi}-${ri}`}
+                                          type="number"
+                                          min="0"
+                                          value={rate.minWeight}
+                                          onChange={(e) => updShipRate(si, zi, ri, { minWeight: e.target.value })}
+                                          className="jf-input mt-1 w-full"
+                                        />
+                                      </div>
+                                      <div className="w-24">
+                                        <label htmlFor={`ship-rate-maxw-${si}-${zi}-${ri}`} className="text-xs text-[var(--jf-muted)]">
+                                          {t("fs.shipRateMaxW")}
+                                        </label>
+                                        <input
+                                          id={`ship-rate-maxw-${si}-${zi}-${ri}`}
+                                          type="number"
+                                          min="0"
+                                          value={rate.maxWeight}
+                                          onChange={(e) => updShipRate(si, zi, ri, { maxWeight: e.target.value })}
+                                          className="jf-input mt-1 w-full"
+                                        />
+                                      </div>
+                                      <div className="w-28">
+                                        <label htmlFor={`ship-rate-free-${si}-${zi}-${ri}`} className="text-xs text-[var(--jf-muted)]">
+                                          {t("fs.shipFreeOver")}
+                                        </label>
+                                        <input
+                                          id={`ship-rate-free-${si}-${zi}-${ri}`}
+                                          type="number"
+                                          min="0"
+                                          step="0.01"
+                                          value={rate.freeOver}
+                                          onChange={(e) => updShipRate(si, zi, ri, { freeOver: e.target.value })}
+                                          className="jf-input mt-1 w-full"
+                                        />
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          updShipZone(si, zi, { rates: zone.rates.filter((_, k) => k !== ri) })
+                                        }
+                                        disabled={!canWrite}
+                                        className="text-xs text-slate-500 hover:text-red-700"
+                                      >
+                                        {t("fs.shipDelete")}
+                                      </button>
+                                    </div>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    onClick={() => updShipZone(si, zi, { rates: [...zone.rates, emptyRate()] })}
+                                    disabled={!canWrite}
+                                    className="jf-btn-ghost px-3 py-1.5 text-xs"
+                                  >
+                                    + {t("fs.shipAddRate")}
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => updShipSet(si, { zones: [...set.zones, emptyZone()] })}
+                              disabled={!canWrite}
+                              className="jf-btn-ghost px-3 py-1.5 text-xs"
+                            >
+                              + {t("fs.shipAddZone")}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setShipSets((prev: ShipSetDraft[]) => [...prev, emptySet()])}
+                        disabled={!canWrite}
+                        className="jf-btn-ghost px-3 py-1.5 text-xs"
+                      >
+                        + {t("fs.shipAddSet")}
+                      </button>
+                      <button type="button" onClick={saveShipping} disabled={!canWrite || shipSaving} className="jf-btn-primary">
+                        {t("fs.shipSave")}
+                      </button>
+                      {shipMsg && <span className="text-xs text-[var(--jf-muted)]">{shipMsg}</span>}
                     </div>
                   </section>
                 )}

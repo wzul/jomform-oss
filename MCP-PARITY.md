@@ -53,6 +53,13 @@ Parity checklist (dashboard → MCP):
   301 for the old URL)
 - Sales: list/summary/confirm → `list_sales`, `get_sales_summary`,
   `confirm_sale`
+- Shipping by zone (the Form Settings → Shipping tab: workspace zone sets, their
+  state/district/postcode rules and their rate rows with a weight band and a
+  free-shipping threshold) → `get_shipping_rates`, `set_shipping_rates`.
+  `set_shipping_rates` REPLACES the whole configuration; a set the payload omits
+  is deleted, and that delete is refused while a form's shipping block still
+  points at it. Money is integer sen, weight in grams.
+  REST: `GET /v1/rest/shipping`, `PUT /v1/rest/shipping`.
 - Skip-capture flow → `capture_sale`, `release_sale`
 - Subscriptions → `cancel_subscription` (no token revoke — Wan rule),
   `run_due_charges`, `update_subscription_card`, `retry_subscription`

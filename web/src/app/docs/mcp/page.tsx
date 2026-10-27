@@ -77,6 +77,13 @@ const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: 
     ],
   },
   {
+    group: "Shipping",
+    tools: [
+      { name: "get_shipping_rates", desc: "Baca set zon penghantaran + kadar satu akaun/workspace: setiap zon (negeri/daerah/julat poskod, keutamaan, zon lalai) dan kadarnya (harga SEN, julat berat gram, ambang penghantaran percuma)." },
+      { name: "set_shipping_rates", desc: "Ganti SEMUA set zon penghantaran + kadar satu akaun/workspace. Set yang tiada dalam sets akan DIPADAM (ditolak jika ada borang masih merujuknya). Kadar mesti ada harga dalam SEN; min/max_weight_g dalam gram (0 = tiada had); free_over_sen = ambang penghantaran percuma." },
+    ],
+  },
+  {
     group: "Skip-capture",
     tools: [
       { name: "capture_sale", desc: "Capture authorisasi skip_capture (kad buyer dicaj sekarang). amount_sen optional untuk partial." },

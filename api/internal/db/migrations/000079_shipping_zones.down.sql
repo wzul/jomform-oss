@@ -1,0 +1,10 @@
+DROP INDEX IF EXISTS idx_shipping_rates_account;
+DROP INDEX IF EXISTS idx_shipping_rates_zone;
+DROP TABLE IF EXISTS shipping_rates;
+DROP INDEX IF EXISTS idx_shipping_zones_account;
+DROP INDEX IF EXISTS idx_shipping_zones_set;
+DROP TABLE IF EXISTS shipping_zones;
+DROP INDEX IF EXISTS uq_shipping_zone_sets_account_name;
+DROP INDEX IF EXISTS idx_shipping_zone_sets_account;
+DROP TABLE IF EXISTS shipping_zone_sets;
+ALTER TABLE sales DROP COLUMN IF EXISTS shipping_detail;

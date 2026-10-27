@@ -337,6 +337,14 @@ var restRouteDocs = []restRouteDoc{
 	{Method: "GET", Path: "/v1/rest/currency/rates", Handler: "getCurrencyRates", Tag: "Settings",
 		Summary: "Read cached exchange rates (BNM)", Access: AccessRead},
 
+	// ── Shipping (managed zones + rates) ─────────────────────────────────────
+	{Method: "GET", Path: "/v1/rest/shipping", Handler: "getShipping", Tag: "Shipping",
+		Summary: "Read the workspace's shipping zone sets and rates", Access: AccessRead,
+		Desc: "The managed rate source a form's shipping block uses when its source is \"zones\": zone sets, each zone's match rules (states / districts / postcode range) and its rate rows (price in integer sen, an optional weight band in grams and an optional free-shipping threshold). Scoped to the account the request resolved to (?workspace= resolves that workspace's own account)."},
+	{Method: "PUT", Path: "/v1/rest/shipping", Handler: "putShipping", Tag: "Shipping",
+		Summary: "Replace the workspace's shipping zone sets and rates", Access: AccessWrite, Body: true,
+		Desc: "One transaction: a set sent with its id keeps it (so every form pointing at it keeps resolving), a new set is inserted, and a set the payload OMITS is deleted — refused with 409 when a form still points at that set. Every zone needs at least one rate and every non-fallback zone needs a match rule; a configuration that could not resolve is refused with 400 rather than saved and discovered by a buyer."},
+
 	// ── Webhooks ─────────────────────────────────────────────────────────────
 	{Method: "GET", Path: "/v1/rest/webhooks", Handler: "listWebhooks", Tag: "Webhooks",
 		Summary: "List outbound webhooks", Access: AccessRead, Resp: "WebhookList"},
