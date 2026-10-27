@@ -344,6 +344,15 @@ var restRouteDocs = []restRouteDoc{
 	{Method: "PUT", Path: "/v1/rest/shipping", Handler: "putShipping", Tag: "Shipping",
 		Summary: "Replace the workspace's shipping zone sets and rates", Access: AccessWrite, Body: true,
 		Desc: "One transaction: a set sent with its id keeps it (so every form pointing at it keeps resolving), a new set is inserted, and a set the payload OMITS is deleted — refused with 409 when a form still points at that set. Every zone needs at least one rate and every non-fallback zone needs a match rule; a configuration that could not resolve is refused with 400 rather than saved and discovered by a buyer."},
+	{Method: "GET", Path: "/v1/rest/shipping/couriers", Handler: "getShippingCouriers", Tag: "Shipping",
+		Summary: "Read the workspace's courier connections", Access: AccessRead,
+		Desc: "Every courier provider this deployment knows (lalamove, easyparcel) with: whether the SERVER holds usable credentials for it (never the value — only the source), whether THIS workspace has connected it, the pickup address a parcel ships from, the connection's environment (sandbox/live, so a simulated rate is visible as simulated), and what is still missing (credentials / connect / grant / origin) before a real quote can happen. A provider whose production keys do not exist yet is listed as not configured rather than hidden."},
+	{Method: "POST", Path: "/v1/rest/shipping/couriers/{provider}/connect", Handler: "postShippingCourierConnect", Tag: "Shipping",
+		Summary: "Connect a courier provider for the workspace", Access: AccessWrite, Body: true,
+		Desc: "Lalamove authenticates server to server, so connecting means naming the PICKUP point (lat/lng) it will be quoted from and it is immediately ready. EasyParcel is OAuth 2.0 and its consent belongs to the MERCHANT: this returns an authorize URL (with a single-use, 30-minute state) for the account owner to open on any device. No password is ever accepted here. A refusal names its remedy: missing server credentials, a missing pickup point, or an unregistered redirect_uri."},
+	{Method: "POST", Path: "/v1/rest/shipping/couriers/{provider}/disconnect", Handler: "postShippingCourierDisconnect", Tag: "Shipping",
+		Summary: "Disconnect a courier provider, dropping its stored grant", Access: AccessWrite,
+		Desc: "Marks the connection disconnected and deletes the sealed OAuth grant, so a revoked authorization can never be quoted with. The pickup address is KEPT: it is the merchant's configuration and reconnecting must not make them retype it."},
 
 	// ── Webhooks ─────────────────────────────────────────────────────────────
 	{Method: "GET", Path: "/v1/rest/webhooks", Handler: "listWebhooks", Tag: "Webhooks",

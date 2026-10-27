@@ -34,6 +34,7 @@ import (
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/metrics"
+	"github.com/wzul/jomform/api/internal/shipping"
 	"github.com/wzul/jomform/api/internal/spamjudge"
 	"github.com/wzul/jomform/api/internal/tlsmgr"
 	"github.com/wzul/jomform/api/internal/version"
@@ -255,6 +256,41 @@ func main() {
 		// name instead of retyping its own priced choice list (phase 1; the
 		// courier source of phase 2 resolves through the same store).
 		shippingStore := dbstore.NewShippingStore(pool)
+		// Shipping phase 2: the courier provider layer. The credentials are read
+		// from files OUTSIDE the repo at startup (a missing file is a valid
+		// "not configured yet" state — production Lalamove keys and a live
+		// EasyParcel account are the operator's to obtain, and until then a
+		// courier block falls back to the workspace's own zone rates).
+		//
+		// ONLY THE PRESENCE AND THE SOURCE of a credential is ever reported
+		// (see shipping.CourierCredentials); the values live in the adapter
+		// configs and are never logged, echoed or serialized.
+		courierCreds := shipping.LoadCourierCredentials(cfg.LalamoveEnvFile, cfg.EasyParcelEnvFile)
+		courierStore := dbstore.NewCourierStore(pool, decryptKey)
+		courierRegistry := shipping.NewRegistry(
+			shipping.NewLalamove(courierCreds.Lalamove, nil),
+			// EasyParcel's adapter needs a place to keep the MERCHANT's grant,
+			// which only exists once he has consented — so it is built with the
+			// sealing store even when no grant has arrived yet. The store both
+			// reads the connection and seals the grant, so it IS the adapter's
+			// token source.
+			shipping.NewEasyParcel(courierCreds.EasyParcel, courierStore, nil),
+		)
+		couriers := &shipping.Couriers{
+			Registry: courierRegistry,
+			Store:    courierStore,
+			Creds:    courierCreds,
+			Env:      cfg.Env,
+			// One process-wide quotation cache: it is the double-submission
+			// guard (neither provider has an idempotency key).
+			Quotes: shipping.NewQuoteCache(),
+		}
+		// Log the STATE, never a value: an operator sees which source each
+		// provider read its credential from.
+		slog.Info("shipping couriers",
+			"lalamove_env_file", courierCreds.LalamovePath, "lalamove_source", courierCreds.LalamoveSource,
+			"lalamove_environment", courierCreds.Lalamove.Environment(),
+			"easyparcel_env_file", courierCreds.EasyParcelPath, "easyparcel_source", courierCreds.EasyParcelSource)
 		// Issue #161: workspace membership + invites.
 		workspaceMembersStore := dbstore.NewWorkspaceMemberStore(pool)
 		deps.WorkspaceMembers = workspaceMembersStore
@@ -410,6 +446,9 @@ func main() {
 			Media: mediaStore,
 			// Shipping zones + rates (managed rate source for shipping blocks).
 			Shipping: shippingStore,
+			// Shipping phase 2: the courier providers (a live quotation, with
+			// the workspace's zone rates as the fallback).
+			Couriers: couriers,
 			// Issue #364: background asset-scan queue. Code-asset uploads
 			// enqueue an asset_scan job here; the worker classifies them
 			// (deterministic + LLM) and flips scan_status before the asset
@@ -473,6 +512,10 @@ func main() {
 			// Shipping zones + rates: the read/write MCP surface behind the
 			// dashboard's Shipping tab (same store, same validation).
 			Shipping: shippingStore,
+			// Shipping phase 2: the courier providers, the SAME bundle the
+			// dashboard uses, so an agent and the form settings page agree on
+			// what is connected and what is still missing.
+			Couriers: couriers,
 			// Issue #361/#363: object store backing media upload (upload_media
 			// tool). Shared with the dashboard REST upload; nil when S3 unset.
 			// This field is a CONCRETE *objstore.ObjectStore, so a plain nil
@@ -589,6 +632,10 @@ func main() {
 			// block can name (phase 1). Nil would make a zone-rate block refuse
 			// the order, so the store is wired here with every other store.
 			Shipping: shippingStore,
+			// Shipping phase 2: the courier providers. Nil (or a deployment
+			// with no credentials) is a supported state — a courier block then
+			// falls back to its zone set, which is why this is not fatal.
+			Couriers: couriers,
 		}
 
 		// Issue #199: start the background email worker. It polls the

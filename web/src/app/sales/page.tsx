@@ -51,6 +51,16 @@ type Sale = {
   buyer_phone?: string;
   subtotal_sen?: number;
   shipping_sen?: number;
+  // Shipping phase 2: WHERE the shipping fee came from, so a disputed fee is
+  // explainable without reading the raw record. `shipping_source` is the source
+  // that WON ("courier" | "zones") and `shipping_source_detail` names it (the
+  // courier provider, or the zone the address matched). When a courier was named
+  // but did not price the sale, `shipping_fallback_reason` says which KIND of
+  // failure sent it to the zone rate ("unavailable" | "error" | "timeout") — the
+  // word "failed" is not enough to argue about a fee.
+  shipping_source?: string;
+  shipping_source_detail?: string;
+  shipping_fallback_reason?: string;
   discount_sen?: number;
   items?: Item[];
   updated_at?: string;
@@ -1370,6 +1380,24 @@ function SalesPageInner() {
                     <span>{t("sales.shipping")}</span>
                     <span>{money(detail.shipping_sen)}</span>
                   </div>
+                )}
+                {/* Shipping phase 2: WHICH source priced this fee. A merchant
+                    disputing a delivery charge needs to see, on the sale itself,
+                    whether a courier quoted it or the workspace's own zone rate
+                    applied — and, when the courier was asked and did not answer,
+                    that the zone rate is what charged. Rendered only when the API
+                    reports a resolved source, so a pre-phase-1 sale shows nothing. */}
+                {typeof detail.shipping_sen === "number" && detail.shipping_sen !== 0 && detail.shipping_source && (
+                  <p className="mt-1 text-xs text-[var(--jf-muted)]">
+                    {detail.shipping_source === "courier"
+                      ? `${t("sales.shipByCourier")}${detail.shipping_source_detail ? ` (${detail.shipping_source_detail})` : ""}`
+                      : `${t("sales.shipByZone")}${detail.shipping_source_detail ? ` (${detail.shipping_source_detail})` : ""}`}
+                    {/* Asked the courier, charged the zone rate: name the CLASS
+                        of failure rather than saying "failed". */}
+                    {detail.shipping_source === "zones" && detail.shipping_fallback_reason
+                      ? ` — ${t("sales.shipCourierFellBack")} (${detail.shipping_fallback_reason})`
+                      : ""}
+                  </p>
                 )}
                 {typeof detail.discount_sen === "number" && detail.discount_sen !== 0 && (
                   <div className="mt-1 flex justify-between gap-4 text-[var(--jf-muted)]">

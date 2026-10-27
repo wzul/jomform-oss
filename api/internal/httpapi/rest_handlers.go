@@ -1687,16 +1687,27 @@ type saleRow struct {
 	EmailStatus string `json:"email_status,omitempty"`
 
 	// Issue #126: detail-drawer fields (additive for the /sales page).
-	FormID      string    `json:"form_id,omitempty"`
-	SaleType    string    `json:"sale_type,omitempty"`
-	InvoiceNo   string    `json:"invoice_no,omitempty"`
-	BuyerEmail  string    `json:"buyer_email,omitempty"`
-	BuyerPhone  string    `json:"buyer_phone,omitempty"`
-	SubtotalSen int64     `json:"subtotal_sen,omitempty"`
-	ShippingSen int64     `json:"shipping_sen,omitempty"`
-	DiscountSen int64     `json:"discount_sen,omitempty"`
-	Items       []itemRow `json:"items,omitempty"`
-	Updated     string    `json:"updated_at,omitempty"`
+	FormID      string `json:"form_id,omitempty"`
+	SaleType    string `json:"sale_type,omitempty"`
+	InvoiceNo   string `json:"invoice_no,omitempty"`
+	BuyerEmail  string `json:"buyer_email,omitempty"`
+	BuyerPhone  string `json:"buyer_phone,omitempty"`
+	SubtotalSen int64  `json:"subtotal_sen,omitempty"`
+	ShippingSen int64  `json:"shipping_sen,omitempty"`
+	// Shipping phase 2: WHICH source priced the delivery fee, so the dashboard
+	// can state the provenance of a disputed charge on the sale itself instead of
+	// leaving it in the database record alone. ShippingSource is the source that
+	// WON ("courier" | "zones") and ShippingSourceDetail names it (the courier
+	// provider, or the zone the address matched); ShippingFallbackReason is the
+	// CLASS of failure that left a courier-named block on the zone rate
+	// ("unavailable" | "error" | "timeout") and is empty on a sale no courier
+	// failed to price.
+	ShippingSource         string    `json:"shipping_source,omitempty"`
+	ShippingSourceDetail   string    `json:"shipping_source_detail,omitempty"`
+	ShippingFallbackReason string    `json:"shipping_fallback_reason,omitempty"`
+	DiscountSen            int64     `json:"discount_sen,omitempty"`
+	Items                  []itemRow `json:"items,omitempty"`
+	Updated                string    `json:"updated_at,omitempty"`
 	// Issue #438: QR ordering flow — the table number the QR stand encoded
 	// (e.g. "8"). Empty = a regular online order with no table.
 	TableNumber string `json:"table_number,omitempty"`
@@ -1773,6 +1784,12 @@ func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
 		RefundedSen:    s.RefundedSen,
 		OutstandingSen: s.OutstandingSen(),
 		RefundStatus:   s.RefundStatus(),
+	}
+	// Shipping phase 2: a sale that carries a delivery fee also carries where the
+	// fee CAME FROM. Read from the stored record, never re-derived: the record is
+	// what the submit path wrote when it priced the order.
+	if s.ShippingSen != 0 {
+		row.ShippingSource, row.ShippingSourceDetail, row.ShippingFallbackReason = shippingSourceSummary(s.ShippingDetail)
 	}
 	if s.CapturedAt != nil {
 		row.CapturedAt = s.CapturedAt.UTC().Format(time.RFC3339)

@@ -152,7 +152,31 @@ type Config struct {
 	// old it is. Empty = the channel is closed and the header is ignored, which
 	// is what production runs: lanes verify signup on staging, never on prod.
 	QASignupToken string
+
+	// Courier credential sources (shipping phase 2). Each is the path of an env
+	// file OUTSIDE the repo that the API reads at runtime:
+	//
+	//	LalamoveEnvFile:    pk_test_/sk_test_ (SANDBOX) or pk_prod_ key pair.
+	//	EasyParcelEnvFile:  the OAuth application's client_id/client_secret.
+	//
+	// The values never enter the process environment by default, are never
+	// logged and are never copied into the web bundle; only the path is
+	// configuration. A MISSING FILE IS A VALID STATE: production Lalamove keys
+	// and a live EasyParcel account are the operator's to obtain, and until then
+	// the courier source falls back to the workspace's own zone rates instead of
+	// failing. Defaults are the documented host paths so a deployment that
+	// mounts them needs no extra configuration.
+	LalamoveEnvFile   string
+	EasyParcelEnvFile string
 }
+
+// Default credential paths. They match the files the operator drops on the host
+// (/root/.config/jomform/...); a container mounts the SINGLE file, exactly like
+// the existing /etc/air.toml mount, rather than the whole config directory.
+const (
+	DefaultLalamoveEnvFile   = "/root/.config/jomform/lalamove-sandbox.env"
+	DefaultEasyParcelEnvFile = "/root/.config/jomform/easyparcel-oauth.env"
+)
 
 // Load reads configuration from the environment and validates it.
 func Load() (*Config, error) {
@@ -228,6 +252,12 @@ func Load() (*Config, error) {
 		ACMEDirectory: os.Getenv("ACME_DIRECTORY"),
 		ACMECertDir:   getEnv("ACME_CERT_DIR", "/var/lib/jomform/acme"),
 		TLSPort:       getEnv("TLS_PORT", "8443"),
+
+		// Courier credential files (shipping phase 2). Paths, never values: the
+		// API reads the files at runtime and never copies a secret into the
+		// environment, a log or the web bundle.
+		LalamoveEnvFile:   getEnv("LALAMOVE_ENV_FILE", DefaultLalamoveEnvFile),
+		EasyParcelEnvFile: getEnv("EASYPARCEL_ENV_FILE", DefaultEasyParcelEnvFile),
 
 		// Issue #385: site super-admin email allowlist (comma-separated).
 		// Trimmed + lowercased so matching is robust to whitespace/case.

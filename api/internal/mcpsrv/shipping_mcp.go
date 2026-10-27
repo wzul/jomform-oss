@@ -43,15 +43,21 @@ type shippingRateIn struct {
 // shippingZoneIn is one zone: its match rules (any ONE match is enough) and its
 // rates.
 type shippingZoneIn struct {
-	ID           string           `json:"id,omitempty" jsonschema:"ID zon (kosong = baharu; ID lama diganti pada setiap simpan)"`
-	Name         string           `json:"name" jsonschema:"Nama zon (cth: Semenanjung, Sabah & Sarawak)"`
-	States       []string         `json:"states,omitempty" jsonschema:"Negeri yang diliputi. Nama negeri Malaysia (Johor, Penang/Pulau Pinang, KL...) atau token wilayah: peninsular, east_malaysia"`
-	Districts    []string         `json:"districts,omitempty" jsonschema:"Daerah/bandar yang diliputi (padanan tepat, tidak sensitif huruf besar)"`
-	PostcodeFrom string           `json:"postcode_from,omitempty" jsonschema:"Poskod mula (inklusif). Boleh dipakai tanpa negeri"`
-	PostcodeTo   string           `json:"postcode_to,omitempty" jsonschema:"Poskod akhir (inklusif). Kosong = satu nilai sahaja"`
-	Priority     int              `json:"priority,omitempty" jsonschema:"Keutamaan penilaian (kecil dahulu); zon pengecualian di atas zon negeri"`
-	Fallback     bool             `json:"is_fallback,omitempty" jsonschema:"Zon lalai: dipakai HANYA bila tiada zon lain padan (bila on_no_match=default pada blok penghantaran)"`
-	Rates        []shippingRateIn `json:"rates" jsonschema:"Kadar untuk zon ini. Sekurang-kurangnya satu diperlukan"`
+	ID           string   `json:"id,omitempty" jsonschema:"ID zon (kosong = baharu; ID lama diganti pada setiap simpan)"`
+	Name         string   `json:"name" jsonschema:"Nama zon (cth: Semenanjung, Sabah & Sarawak)"`
+	States       []string `json:"states,omitempty" jsonschema:"Negeri yang diliputi. Nama negeri Malaysia (Johor, Penang/Pulau Pinang, KL...) atau token wilayah: peninsular, east_malaysia"`
+	Districts    []string `json:"districts,omitempty" jsonschema:"Daerah/bandar yang diliputi (padanan tepat, tidak sensitif huruf besar)"`
+	PostcodeFrom string   `json:"postcode_from,omitempty" jsonschema:"Poskod mula (inklusif). Boleh dipakai tanpa negeri"`
+	PostcodeTo   string   `json:"postcode_to,omitempty" jsonschema:"Poskod akhir (inklusif). Kosong = satu nilai sahaja"`
+	Priority     int      `json:"priority,omitempty" jsonschema:"Keutamaan penilaian (kecil dahulu); zon pengecualian di atas zon negeri"`
+	Fallback     bool     `json:"is_fallback,omitempty" jsonschema:"Zon lalai: dipakai HANYA bila tiada zon lain padan (bila on_no_match=default pada blok penghantaran)"`
+	// Lat / Lng (phase 2): the zone's own point, which is where a POINT-BASED
+	// courier (lalamove) is quoted TO. Optional — a zone without a point simply
+	// cannot be courier-quoted and its own rate applies instead. Give BOTH or
+	// neither.
+	Lat   string           `json:"lat,omitempty" jsonschema:"Latitud titik zon (perpuluhan). Untuk pembekal penghantaran berasaskan titik (lalamove). Beri bersama lng"`
+	Lng   string           `json:"lng,omitempty" jsonschema:"Longitud titik zon (perpuluhan). Beri bersama lat"`
+	Rates []shippingRateIn `json:"rates" jsonschema:"Kadar untuk zon ini. Sekurang-kurangnya satu diperlukan"`
 }
 
 // shippingSetIn is one named set of zones.
@@ -76,15 +82,19 @@ type shippingRateOut struct {
 }
 
 type shippingZoneOut struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	States       []string          `json:"states"`
-	Districts    []string          `json:"districts"`
-	PostcodeFrom string            `json:"postcode_from,omitempty"`
-	PostcodeTo   string            `json:"postcode_to,omitempty"`
-	Priority     int               `json:"priority"`
-	Fallback     bool              `json:"is_fallback"`
-	Rates        []shippingRateOut `json:"rates"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	States       []string `json:"states"`
+	Districts    []string `json:"districts"`
+	PostcodeFrom string   `json:"postcode_from,omitempty"`
+	PostcodeTo   string   `json:"postcode_to,omitempty"`
+	Priority     int      `json:"priority"`
+	Fallback     bool     `json:"is_fallback"`
+	// Lat / Lng are the zone's own point (phase 2): where a point-based courier
+	// is quoted to. Empty = not set.
+	Lat   string            `json:"lat,omitempty"`
+	Lng   string            `json:"lng,omitempty"`
+	Rates []shippingRateOut `json:"rates"`
 }
 
 type shippingSetOut struct {
@@ -172,7 +182,9 @@ func (in shippingSetIn) toZoneSet() shipping.ZoneSet {
 		zone := shipping.Zone{
 			ID: z.ID, Name: z.Name, States: z.States, Districts: z.Districts,
 			PostcodeFrom: z.PostcodeFrom, PostcodeTo: z.PostcodeTo,
-			Priority: z.Priority, Fallback: z.Fallback, Rates: []shipping.Rate{},
+			Priority: z.Priority, Fallback: z.Fallback,
+			Lat: z.Lat, Lng: z.Lng,
+			Rates: []shipping.Rate{},
 		}
 		for _, r := range z.Rates {
 			zone.Rates = append(zone.Rates, shipping.Rate{
@@ -195,7 +207,8 @@ func shippingSetsOut(sets []shipping.ZoneSet) []shippingSetOut {
 			zo := shippingZoneOut{
 				ID: z.ID, Name: z.Name, States: z.States, Districts: z.Districts,
 				PostcodeFrom: z.PostcodeFrom, PostcodeTo: z.PostcodeTo,
-				Priority: z.Priority, Fallback: z.Fallback, Rates: []shippingRateOut{},
+				Priority: z.Priority, Fallback: z.Fallback, Lat: z.Lat, Lng: z.Lng,
+				Rates: []shippingRateOut{},
 			}
 			for _, r := range z.Rates {
 				zo.Rates = append(zo.Rates, shippingRateOut{

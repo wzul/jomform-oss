@@ -116,7 +116,15 @@ type Zone struct {
 	// Fallback marks the zone used ONLY when nothing else matched, and only
 	// when the block's on_no_match is "default".
 	Fallback bool
-	Rates    []Rate
+	// Lat / Lng are the zone's own point (decimal degrees, optional). A
+	// point-based courier (Lalamove) quotes a route between two points, so this
+	// is the drop-off point for a buyer whose address matches this zone; the
+	// workspace's courier connection supplies the pickup point. EMPTY MEANS
+	// UNKNOWN: a courier block then falls back to this zone's rate rather than
+	// quoting a coordinate nobody gave (see ResolveCourier).
+	Lat   string
+	Lng   string
+	Rates []Rate
 }
 
 // ZoneSet is a named collection of zones a shipping block points at.

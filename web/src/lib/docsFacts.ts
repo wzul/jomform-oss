@@ -24,10 +24,18 @@
 // facts a reader would have to be told, not the entry's exact wording — a fact that
 // asserted the wording would fail on a copy-edit rather than on substance.
 const DESTINATION_FACTS: Record<string, string[]> = {
-  // Shipping by zone (the managed rate source). The three facts a reader has to
-  // be able to find on the guide: the two MCP tools that configure it and the
-  // "never a silent zero" rule that decides an unmatched address.
-  "Shipping by zone": ["get_shipping_rates", "set_shipping_rates", "never silently zero"],
+  // Shipping by zone (the managed rate source) and the courier providers that
+  // quote it live. The facts a reader has to be able to find on the guide: the
+  // MCP tools that configure both halves, and the "never a silent zero" rule that
+  // decides an unmatched address (and a failed courier quote).
+  "Shipping by zone": [
+    "get_shipping_rates",
+    "set_shipping_rates",
+    "get_shipping_couriers",
+    "connect_shipping_courier",
+    "disconnect_shipping_courier",
+    "never silently zero",
+  ],
   "Sales": [
     "reference code",
     "pending/confirmed/failed/refunded",
@@ -238,7 +246,10 @@ const DESTINATION_FACTS: Record<string, string[]> = {
 // it weaker, so the count is pinned separately from the list: the list can be
 // shortened to satisfy the assertion, and this is what notices.
 const PER_ENTRY_FLOOR: Record<string, number> = {
-  "Shipping by zone": 3,
+  // Raised 3 → 6 in the shipping phase-2 commit: three courier tools joined the
+  // guide and its fact list together (the floor exists to notice a list being
+  // shortened to suit itself, so it moves WITH the list, in the same change).
+  "Shipping by zone": 6,
   Sales: 5,
   "One list for sales and responses": 4,
   "Responses (response-only forms)": 3,

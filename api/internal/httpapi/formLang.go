@@ -78,6 +78,12 @@ type langStrings struct {
 	// above a threshold, so the buyer sees WHY the total drops.
 	ShipFallback string
 	ShipFreeOver string
+	// ShipQuotedAtCheckout (phase 2) labels a COURIER-sourced shipping block: the
+	// prices on it are the fallback zone rates shown as an ESTIMATE, because the
+	// real fee is quoted from the courier at checkout (a quotation expires in
+	// minutes, so it cannot be fetched at paint time). Saying so is what keeps the
+	// estimate honest — the buyer is never surprised by the final figure.
+	ShipQuotedAtCheckout string
 	// Issue #249: per-product quantity selector label.
 	Quantity string
 	// Issue #183: optional public-form footer link labels.
@@ -154,8 +160,9 @@ var formLangs = map[string]langStrings{
 		CouponUnsupported: "Discount codes are not applied on this form.",
 		SelectOption:      "Select an option", SelectShipping: "Select shipping",
 		ShipFallback: "Others", ShipFreeOver: "Free over {amount}",
-		Quantity:     "Quantity",
-		PrivacyLabel: "Privacy Policy", TermsLabel: "Terms of Service", RefundLabel: "Refund Policy",
+		ShipQuotedAtCheckout: "Estimate — final delivery fee is quoted at checkout",
+		Quantity:             "Quantity",
+		PrivacyLabel:         "Privacy Policy", TermsLabel: "Terms of Service", RefundLabel: "Refund Policy",
 		PendingMessage: "This form is not open yet. Please check back later.",
 		ExpiredMessage: "This form has closed. Thank you for your interest.",
 		LimitMessage:   "Sorry, this form has reached its entry limit and is no longer accepting responses.",
@@ -208,8 +215,9 @@ var formLangs = map[string]langStrings{
 		CouponUnsupported: "Kod diskaun tidak digunakan pada borang ini.",
 		SelectOption:      "Pilih pilihan", SelectShipping: "Pilih penghantaran",
 		ShipFallback: "Lain-lain", ShipFreeOver: "Percuma melebihi {amount}",
-		Quantity:     "Kuantiti",
-		PrivacyLabel: "Polisi Privasi", TermsLabel: "Terma & Syarat", RefundLabel: "Polisi Bayaran Balik",
+		ShipQuotedAtCheckout: "Anggaran — kadar penghantaran akhir disebut semasa bayar",
+		Quantity:             "Kuantiti",
+		PrivacyLabel:         "Polisi Privasi", TermsLabel: "Terma & Syarat", RefundLabel: "Polisi Bayaran Balik",
 		PendingMessage: "Borang ini belum dibuka lagi. Sila kembali semula kemudian.",
 		ExpiredMessage: "Borang ini telah ditutup. Terima kasih atas minat anda.",
 		LimitMessage:   "Maaf, borang ini telah mencapai had penyertaan dan tidak lagi menerima respons.",
@@ -259,8 +267,9 @@ var formLangs = map[string]langStrings{
 		CouponUnsupported: "此表单不适用折扣码。",
 		SelectOption:      "请选择", SelectShipping: "选择配送方式",
 		ShipFallback: "其他", ShipFreeOver: "{amount} 以上免运费",
-		Quantity:     "数量",
-		PrivacyLabel: "隐私政策", TermsLabel: "服务条款", RefundLabel: "退款政策",
+		ShipQuotedAtCheckout: "预估 — 最终运费在结账时报价",
+		Quantity:             "数量",
+		PrivacyLabel:         "隐私政策", TermsLabel: "服务条款", RefundLabel: "退款政策",
 		PendingMessage: "此表单尚未开放，请稍后再来。",
 		ExpiredMessage: "此表单已关闭，感谢您的关注。",
 		LimitMessage:   "抱歉，此表单已达到提交上限，不再接受提交。",
@@ -310,8 +319,9 @@ var formLangs = map[string]langStrings{
 		CouponUnsupported: "இந்தப் படிவத்தில் தள்ளுபடிக் குறியீடுகள் பயன்படுத்தப்படாது.",
 		SelectOption:      "ஒரு விருப்பத்தைத் தேர்ந்தெடுக்கவும்", SelectShipping: "ஷிப்பிங்கைத் தேர்ந்தெடுக்கவும்",
 		ShipFallback: "மற்றவை", ShipFreeOver: "{amount}க்கு மேல் இலவசம்",
-		Quantity:     "அளவு",
-		PrivacyLabel: "தனியுரிமைக் கொள்கை", TermsLabel: "சேவை விதிமுறைகள்", RefundLabel: "பணத்திருப்புக் கொள்கை",
+		ShipQuotedAtCheckout: "மதிப்பீடு — இறுதி ஷிப்பிங் கட்டணம் பணம் செலுத்தும்போது கணக்கிடப்படும்",
+		Quantity:             "அளவு",
+		PrivacyLabel:         "தனியுரிமைக் கொள்கை", TermsLabel: "சேவை விதிமுறைகள்", RefundLabel: "பணத்திருப்புக் கொள்கை",
 		PendingMessage: "இந்த படிவம் இன்னும் திறக்கப்படவில்லை. பின்னர் மீண்டும் வரவும்.",
 		ExpiredMessage: "இந்த படிவம் மூடப்பட்டது. உங்கள் ஆர்வத்திற்கு நன்றி.",
 		LimitMessage:   "மன்னிக்கவும், இந்த படிவம் அதன் பதிவு வரம்பை அடைந்துவிட்டது, இனி பதில்களை ஏற்காது.",
@@ -361,8 +371,9 @@ var formLangs = map[string]langStrings{
 		CouponUnsupported: "لا تُطبَّق رموز الخصم في هذا النموذج.",
 		SelectOption:      "اختر خيارًا", SelectShipping: "اختر الشحن",
 		ShipFallback: "أخرى", ShipFreeOver: "مجاني أكثر من {amount}",
-		Quantity:     "الكمية",
-		PrivacyLabel: "سياسة الخصوصية", TermsLabel: "شروط الخدمة", RefundLabel: "سياسة الاسترداد",
+		ShipQuotedAtCheckout: "تقدير — تُحتسب رسوم الشحن النهائية عند الدفع",
+		Quantity:             "الكمية",
+		PrivacyLabel:         "سياسة الخصوصية", TermsLabel: "شروط الخدمة", RefundLabel: "سياسة الاسترداد",
 		PendingMessage: "هذا النموذج غير مفتوح بعد. يرجى العودة لاحقاً.",
 		ExpiredMessage: "تم إغلاق هذا النموذج. شكراً لاهتمامك.",
 		LimitMessage:   "عذراً، بلغ هذا النموذج الحد الأقصى للردود ولم يعد يقبل الردود.",

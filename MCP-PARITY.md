@@ -60,6 +60,19 @@ Parity checklist (dashboard → MCP):
   is deleted, and that delete is refused while a form's shipping block still
   points at it. Money is integer sen, weight in grams.
   REST: `GET /v1/rest/shipping`, `PUT /v1/rest/shipping`.
+- Courier providers (phase 2 of the same surface: which courier a workspace has
+  connected, where the parcel ships from, and the OAuth consent for EasyParcel)
+  → `get_shipping_couriers`, `connect_shipping_courier`,
+  `disconnect_shipping_courier`. The connect rules and the readiness test are
+  SHARED with the dashboard (internal/shipping/connect.go), so an agent cannot
+  connect something the form settings page would refuse. `connect_shipping_courier`
+  returns an authorize URL for EasyParcel: that link is the ACCOUNT OWNER's to open
+  (the agent never opens it, never types and never asks for a password).
+  REST: `GET /v1/rest/shipping/couriers`,
+  `POST /v1/rest/shipping/couriers/{provider}/connect`,
+  `POST /v1/rest/shipping/couriers/{provider}/disconnect`; the PUBLIC OAuth return
+  is `GET /v1/shipping/easyparcel/callback` (registered with EasyParcel as
+  `https://<host>/api/shipping/easyparcel/callback`, the web app's proxy path).
 - Skip-capture flow → `capture_sale`, `release_sale`
 - Subscriptions → `cancel_subscription` (no token revoke — Wan rule),
   `run_due_charges`, `update_subscription_card`, `retry_subscription`

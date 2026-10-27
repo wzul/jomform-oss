@@ -35,7 +35,6 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/payments"
-	"github.com/wzul/jomform/api/internal/shipping"
 )
 
 // orderTarget is the destination of a public order. It is either a form (the
@@ -195,27 +194,23 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		return
 	}
 
-	// Shipping (managed zone rate source). Two facts are read from the form's
-	// builder config BEFORE the cart is priced:
+	// Shipping (managed rate sources). Two facts are read from the form's builder
+	// config BEFORE the cart is priced:
 	//
-	//   - a block whose source is "zones" submits a line item like any pricing
-	//     block, but its fee is NOT a line item: it is resolved from the buyer's
-	//     address after the cart's items subtotal is known (the free-shipping
-	//     threshold compares against exactly that). The item is dropped below so
-	//     the fee cannot be counted twice;
-	//   - the phase-2 "courier" source is REFUSED here, loudly, rather than
-	//     behaving like a block with no price.
-	var zoneSpecs []shippingBlockSpec
-	zoneItemIDs := map[string]bool{}
+	//   - a block whose source is "zones" or "courier" submits a line item like
+	//     any pricing block, but its fee is NOT a line item: it is resolved from
+	//     the buyer's address after the cart's items subtotal is known (the
+	//     free-shipping threshold compares against exactly that). Those items are
+	//     dropped below so a fee cannot be counted twice;
+	//   - a courier block's fee comes from a live quotation, and the block's zone
+	//     set is its FALLBACK (and the estimate the form showed). A courier that
+	//     is unavailable, fails or times out therefore still charges a real fee.
+	var zoneSpecs, courierSpecs []shippingBlockSpec
+	feeItemIDs := map[string]bool{}
 	if tgt.Form != nil {
-		if len(courierShippingBlocks(tgt.Form.Config)) > 0 {
-			writeErr(w, http.StatusBadRequest, shipping.ErrNotSupported.Error())
-			return
-		}
 		zoneSpecs = zoneShippingBlocks(tgt.Form.Config)
-		for _, spec := range zoneSpecs {
-			zoneItemIDs[spec.ItemID] = true
-		}
+		courierSpecs = courierShippingBlocks(tgt.Form.Config)
+		feeItemIDs = shippingFeeItemIDs(zoneSpecs, courierSpecs)
 	}
 
 	// Validate totals against the account currency (MVP: MYR only).
@@ -278,12 +273,12 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	var subVariation *dbstore.ProductVariation
 	var subItems []dbstore.SaleItem
 	for _, it := range in.Items {
-		// A zone-sourced shipping block's own item is NOT a line item: its fee
-		// is resolved from the buyer's address into sales.shipping_sen below
-		// (shipping is not a product and must not be summed into the items
-		// subtotal, which the free-shipping threshold and the merchant's own
-		// reports read).
-		if zoneItemIDs[it.ProductID] {
+		// A server-resolved shipping block's own item is NOT a line item (zones
+		// OR courier): its fee is resolved from the buyer's address into
+		// sales.shipping_sen below (shipping is not a product and must not be
+		// summed into the items subtotal, which the free-shipping threshold and
+		// the merchant's own reports read).
+		if feeItemIDs[it.ProductID] {
 			continue
 		}
 		// Issue #461: the products table is the price authority — the name and
@@ -412,12 +407,14 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 			sale.SubscriptionVariationID = subVariation.ID
 		}
 	}
-	// Shipping by zone: resolved AFTER the cart, because the free-shipping
-	// threshold compares against the ITEMS subtotal above, and the fee itself
-	// must never be part of it. Every failure here is a refusal with the
-	// resolver's own sentence — a zone-sourced block can never quietly charge 0.
-	if len(zoneSpecs) > 0 {
-		fee, detail, serr := h.resolveZoneShipping(r.Context(), tgt, zoneSpecs, &in, subtotal)
+	// Shipping: resolved AFTER the cart, because the free-shipping threshold
+	// compares against the ITEMS subtotal above, and the fee itself must never be
+	// part of it. Both managed sources run through one resolver so the sale
+	// records ONE shipping_detail saying where the money came from. Every failure
+	// here is a refusal with the resolver's own sentence — a shipping block can
+	// never quietly charge 0.
+	if len(zoneSpecs) > 0 || len(courierSpecs) > 0 {
+		fee, detail, serr := h.resolveShipping(r.Context(), tgt, zoneSpecs, courierSpecs, &in, subtotal)
 		if serr != nil {
 			if _, bad := serr.(*shippingError); bad {
 				writeErr(w, http.StatusBadRequest, serr.Error())

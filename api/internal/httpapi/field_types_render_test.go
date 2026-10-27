@@ -52,7 +52,15 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 			FreeOverSen int64
 			Note        string
 		}
-		HasQuantity bool
+		// Courier source (phase 2). The template reads .Courier (to mark the
+		// select with its provider), .CourierProvider and .CourierNote (the
+		// "estimate, quoted at checkout" sentence). This struct is a hand-copy of
+		// the handler's blockView — the phase-1 harness's control run caught
+		// exactly this drift once — so the fields move together with it.
+		Courier         bool
+		CourierProvider string
+		CourierNote     string
+		HasQuantity     bool
 	}
 	var buf bytes.Buffer
 	err := blockTmpl.Execute(&buf, map[string]any{

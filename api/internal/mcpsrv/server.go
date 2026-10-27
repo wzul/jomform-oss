@@ -17,6 +17,7 @@ import (
 	"github.com/wzul/jomform/api/internal/llm"
 	"github.com/wzul/jomform/api/internal/objstore"
 	"github.com/wzul/jomform/api/internal/payments"
+	"github.com/wzul/jomform/api/internal/shipping"
 )
 
 // Deps bundles the stores an MCP server acts on.
@@ -64,6 +65,11 @@ type Deps struct {
 	// rather than reporting an empty configuration (an empty set list would
 	// read as "free shipping everywhere" to a caller).
 	Shipping *dbstore.ShippingStore
+	// Couriers is the phase-2 courier wiring (the provider registry, the
+	// connection store and the runtime credentials), shared with the dashboard's
+	// REST edge as ONE bundle so both use the same connect rules and readiness
+	// test. Nil → the courier tools error.
+	Couriers *shipping.Couriers
 	// Issue #361/#363: the S3/MinIO object store backing the media bucket,
 	// shared with the dashboard (internal/objstore). Wire it so upload_media
 	// can push image + code assets tenant-scoped. Nil → the tool errors.

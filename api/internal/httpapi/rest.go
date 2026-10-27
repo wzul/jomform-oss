@@ -126,6 +126,13 @@ type RESTHandlers struct {
 	// reports that the zone rate source is not configured rather than charging 0.
 	Shipping *dbstore.ShippingStore
 
+	// Couriers is the phase-2 courier wiring (registry + connections + the
+	// EasyParcel OAuth app config). It backs the dashboard's connect/disconnect
+	// surface, and the PUBLIC callback that completes an OAuth consent. Nil in
+	// bare-mode tests: the connect surface reports "not configured" and the
+	// public callback refuses.
+	Couriers *Couriers
+
 	// Issue #364: background asset-scan queue. Same Valkey-backed queue as
 	// email (#199) / spam judge (#245). Code-asset uploads enqueue an
 	// asset_scan job here; a nil queue (dev, no Valkey) means the asset stays
@@ -368,6 +375,13 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// Managed shipping zones + rates (the shipping block's "zones" rate source).
 	mux.Handle("GET /v1/rest/shipping", h.authed(h.getShipping))
 	mux.Handle("PUT /v1/rest/shipping", h.authed(h.putShipping))
+	// Couriers (phase 2): which provider a workspace has connected, where the
+	// parcel ships from, and the connect/disconnect of each. The OAuth CALLBACK
+	// is a public route (the merchant's browser arrives from EasyParcel), so it
+	// lives on the public handler next to /v1/payments/chip/callback.
+	mux.Handle("GET /v1/rest/shipping/couriers", h.authed(h.getShippingCouriers))
+	mux.Handle("POST /v1/rest/shipping/couriers/{provider}/connect", h.authed(h.postShippingCourierConnect))
+	mux.Handle("POST /v1/rest/shipping/couriers/{provider}/disconnect", h.authed(h.postShippingCourierDisconnect))
 	mux.Handle("GET /v1/rest/currency/rates", h.authed(h.getCurrencyRates))
 	mux.Handle("GET /v1/rest/webhooks", h.authed(h.listWebhooks))
 	mux.Handle("GET /v1/rest/settings/webhook-key", h.authed(h.getWebhookKey))

@@ -160,16 +160,15 @@ const MCP_SOURCES = readdirSync(MCP_DIR)
 // the silently-reverted-main failure this guard exists to make loud, so the
 // number doubles as the check that the merge kept both sides.
 //
-// 184: re-derived on THIS tree, not copied from either side. Main's pin was 182
-// and this branch's was 183 (181 + the shipping pair, counted against its own
-// nine-day-old base). Both are wrong for the integrated tree for opposite
-// reasons: main gained a tool after this branch was cut, and the branch adds
-// exactly two — `get_shipping_rates` and `set_shipping_rates`, the MCP surface
-// behind the managed zone rates a form's shipping block can charge from. The
-// integrated registry holds 184 distinct `&mcp.Tool{` names across 46 non-test
-// files: 182 + 2. A pin of 182 would mean the shipping pair was dropped and a
-// pin of 183 would mean main's newest tool was.
-const EXPECTED_TOOL_COUNT = 184;
+// 187: re-derived on THIS tree by this test's own regex over api/internal/mcpsrv,
+// not copied from either side. main carries 184 — the shipping pair
+// (`get_shipping_rates`, `set_shipping_rates`) landed with the zone-rate layer —
+// and this branch adds the courier trio that quotes the same blocks live
+// (`get_shipping_couriers`, `connect_shipping_courier`,
+// `disconnect_shipping_courier`): 184 + 3. Neither side's number is right for
+// the integrated registry, so a pin of 184 would mean the courier surface was
+// dropped and one of the branch's old pins would mean main's newest tools were.
+const EXPECTED_TOOL_COUNT = 187;
 
 const REGISTRY_SRC = MCP_SOURCES.join("\n");
 

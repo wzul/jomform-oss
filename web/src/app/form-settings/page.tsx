@@ -196,6 +196,59 @@ const emptyZone = (): ShipZoneDraft => ({
 });
 const emptySet = (): ShipSetDraft => ({ id: "", name: "", isDefault: false, zones: [emptyZone()] });
 
+// ── Courier providers (shipping phase 2) ───────────────────────────────────────
+
+// CourierRow is one provider's row from GET /v1/rest/shipping/couriers. It holds
+// NO credential: only whether the SERVER has one for this provider, where it was
+// read from, and what the workspace still has to do.
+type CourierRow = {
+  provider: string;
+  credentials_present: boolean;
+  credentials_source?: string;
+  credentials_hint?: string;
+  needs_browser: boolean;
+  point_based: boolean;
+  doc_url?: string;
+  environment?: string;
+  connected: boolean;
+  status?: string;
+  ready: boolean;
+  missing?: string[];
+  origin_postcode?: string;
+  origin_state?: string;
+  origin_lat?: string;
+  origin_lng?: string;
+  service_type?: string;
+  account_label?: string;
+  has_grant?: boolean;
+  last_error?: string;
+};
+
+// CourierOriginDraft is the pickup point being edited for one provider.
+type CourierOriginDraft = {
+  postcode: string;
+  state: string;
+  lat: string;
+  lng: string;
+  serviceType: string;
+  environment: string;
+};
+
+const emptyOrigin = (): CourierOriginDraft => ({
+  postcode: "",
+  state: "",
+  lat: "",
+  lng: "",
+  serviceType: "",
+  environment: "sandbox",
+});
+
+function courierRowsFromWire(raw: unknown): CourierRow[] {
+  const list = (raw as { providers?: unknown } | null)?.providers;
+  if (!Array.isArray(list)) return [];
+  return list as CourierRow[];
+}
+
 // shippingSetsFromWire / shippingSetsToWire convert between the API shape and
 // the drafts. A payload that is not the expected shape (an error object, a stub,
 // a proxy's 502 body) yields NO sets rather than throwing: the tab then renders
@@ -732,6 +785,21 @@ function FormSettingsInner() {
   const [shipSaving, setShipSaving] = useState(false);
   const [shipMsg, setShipMsg] = useState("");
 
+  // Courier providers (shipping phase 2): which courier this workspace has
+  // connected and what is still missing. The read carries NO credential — only
+  // whether the SERVER holds one and where it was read from.
+  const [couriers, setCouriers] = useState<CourierRow[]>([]);
+  const [courierCallback, setCourierCallback] = useState<{ path: string; redirect: string }>({ path: "", redirect: "" });
+  const [courierErr, setCourierErr] = useState("");
+  const [courierMsg, setCourierMsg] = useState("");
+  // The authorize LINK of an EasyParcel connect: it is handed to the account
+  // owner to open on his own device (never opened or filled in here), and a fresh
+  // one is issued by connecting again.
+  const [courierLink, setCourierLink] = useState("");
+  const [courierBusy, setCourierBusy] = useState("");
+  // Per-provider pickup point being edited (the address a courier collects from).
+  const [courierOrigin, setCourierOrigin] = useState<Record<string, CourierOriginDraft>>({});
+
   // Per-form email settings override (issue #177, extended by #453). The
   // booleans are tri-state: "" = inherit the workspace default, "on"/"off" =
   // explicit per-form override.
@@ -899,6 +967,9 @@ function FormSettingsInner() {
       } else {
         setShipLoadErr(t("fs.shipLoadFail"));
       }
+      // Courier providers: the same scope, so the connections shown are the ones
+      // this workspace's forms would actually be quoted with.
+      await loadCouriers();
       // Issue #179: load per-form confirmations (default always present).
       const cr = await fetch(`/api/rest/forms/${formId}/confirmations${workspaceQuery()}`);
       if (cr.ok) {
@@ -1187,11 +1258,122 @@ function FormSettingsInner() {
     }
   }
 
+  // ── Courier providers (shipping phase 2) ─────────────────────────────────
+
+  // loadCouriers reads the workspace's courier connections. A bad body yields an
+  // empty list (the section renders its empty state), never a thrown error.
+  async function loadCouriers() {
+    try {
+      const r = await fetch(`/api/rest/shipping/couriers${workspaceQuery()}`);
+      if (!r.ok) {
+        setCourierErr(t("fs.courierConnectFailed"));
+        return;
+      }
+      const d = await r.json();
+      const rows = courierRowsFromWire(d);
+      setCouriers(rows);
+      setCourierErr("");
+      setCourierCallback({
+        path: typeof (d as { callback_path?: string })?.callback_path === "string"
+          ? (d as { callback_path: string }).callback_path : "",
+        redirect: typeof (d as { redirect_uri?: string })?.redirect_uri === "string"
+          ? (d as { redirect_uri: string }).redirect_uri : "",
+      });
+      // Seed each provider's pickup form from what is stored, so reconnecting
+      // does not make the merchant retype their own address.
+      setCourierOrigin((prev) => {
+        const next = { ...prev };
+        for (const row of rows) {
+          if (!next[row.provider]) {
+            next[row.provider] = {
+              postcode: row.origin_postcode || "",
+              state: row.origin_state || "",
+              lat: row.origin_lat || "",
+              lng: row.origin_lng || "",
+              serviceType: row.service_type || "",
+              environment: row.environment === "live" ? "live" : "sandbox",
+            };
+          }
+        }
+        return next;
+      });
+    } catch {
+      setCourierErr(t("fs.courierConnectFailed"));
+    }
+  }
+
+  function updCourierOrigin(provider: string, patch: Partial<CourierOriginDraft>) {
+    setCourierOrigin((prev) => ({ ...prev, [provider]: { ...(prev[provider] || emptyOrigin()), ...patch } }));
+  }
+
+  // connectCourier stores the pickup point and, for a provider whose connect is a
+  // browser consent (EasyParcel), keeps the returned LINK for the account owner to
+  // open himself. Nothing here opens it, and no password is ever collected.
+  async function connectCourier(provider: string) {
+    if (!canWrite) return;
+    setCourierBusy(provider);
+    setCourierMsg("");
+    setCourierLink("");
+    try {
+      const o = courierOrigin[provider] || emptyOrigin();
+      const r = await fetch(`/api/rest/shipping/couriers/${encodeURIComponent(provider)}/connect${workspaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          origin_postcode: o.postcode.trim(),
+          origin_state: o.state.trim(),
+          origin_lat: o.lat.trim(),
+          origin_lng: o.lng.trim(),
+          service_type: o.serviceType.trim(),
+          environment: o.environment,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        showMsgFail(apiErr(d, t("fs.courierConnectFailed"), t));
+        return;
+      }
+      const link = typeof (d as { authorize_url?: string })?.authorize_url === "string"
+        ? (d as { authorize_url: string }).authorize_url : "";
+      setCourierLink(link);
+      await loadCouriers();
+      showMsgOk(link ? "" : t("fs.courierConnected"));
+    } catch {
+      showMsgFail(t("fs.courierConnectFailed"));
+    } finally {
+      setCourierBusy("");
+    }
+  }
+
+  async function disconnectCourier(provider: string) {
+    if (!canWrite) return;
+    setCourierBusy(provider);
+    setCourierMsg("");
+    setCourierLink("");
+    try {
+      const r = await fetch(`/api/rest/shipping/couriers/${encodeURIComponent(provider)}/disconnect${workspaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        showMsgFail(apiErr(d, t("fs.courierConnectFailed"), t));
+        return;
+      }
+      setCouriers(courierRowsFromWire(d));
+      showMsgOk("");
+    } catch {
+      showMsgFail(t("fs.courierConnectFailed"));
+    } finally {
+      setCourierBusy("");
+    }
+  }
+
   // Issue #497: resolve a stored product ID to the product it points at.
   function menuProductByID(id: string): PickerProduct | undefined {
     return menuProducts.find((p) => p.id === id);
   }
-
   // Issue #497: the live menu preview — sections in order, with the picked
   // items. Mirrors the renderer: configured categories first (only the ones
   // that resolve to a product this form references), then an "uncategorised"
@@ -3369,6 +3551,168 @@ function FormSettingsInner() {
                         {t("fs.shipSave")}
                       </button>
                       {shipMsg && <span className="text-xs text-[var(--jf-muted)]">{shipMsg}</span>}
+                    </div>
+
+                    {/* ── Courier providers (phase 2) ──
+                        Their own card so the two halves of the shipping
+                        configuration are visibly separate: the ZONE TABLE above
+                        is the merchant's own policy (and the fallback), the
+                        couriers below are live quotes. */}
+                    <div className="mt-6 rounded-lg border border-[var(--jf-border)] p-4">
+                      <h3 className="text-sm font-semibold">{t("fs.couriers")}</h3>
+                      <p className="mt-1 text-sm text-[var(--jf-muted)]">{t("fs.couriersHint")}</p>
+                      <p className="mt-1 text-xs">
+                        <Link href="/docs/shipping" className="text-[var(--jf-primary)] underline underline-offset-2">
+                          {t("fs.shipGuide")}
+                        </Link>
+                      </p>
+                      {courierErr && <p className="mt-3 text-sm text-[var(--jf-danger-text)]">{courierErr}</p>}
+                      {courierMsg && <p className="mt-3 text-sm text-[var(--jf-muted)]">{courierMsg}</p>}
+                      {courierLink && (
+                        <div className="mt-3 rounded-md bg-[var(--jf-shell)] p-3">
+                          <p className="text-xs text-[var(--jf-muted)]">{t("fs.courierOpenLink")}</p>
+                          <a
+                            href={courierLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-1 block break-all text-sm text-[var(--jf-primary)] underline underline-offset-2"
+                          >
+                            {courierLink}
+                          </a>
+                        </div>
+                      )}
+
+                      <div className="mt-4 space-y-4">
+                        {couriers.length === 0 && !courierErr && (
+                          <p className="text-sm text-[var(--jf-muted)]">{t("fs.couriersHint")}</p>
+                        )}
+                        {couriers.map((row) => {
+                          const o = courierOrigin[row.provider] || emptyOrigin();
+                          const envLabel = row.environment === "sandbox"
+                            ? t("fs.courierEnvSandbox")
+                            : row.environment === "live"
+                              ? t("fs.courierEnvLive")
+                              : t("fs.courierEnvUnknown");
+                          return (
+                            <div key={row.provider} className="rounded-md bg-[var(--jf-shell)] p-3">
+                              <div className="flex flex-wrap items-center gap-3">
+                                <span className="text-sm font-medium">{row.provider}</span>
+                                <span className="rounded bg-[var(--jf-border)] px-2 py-0.5 text-xs">{envLabel}</span>
+                                <span className="text-xs text-[var(--jf-muted)]">
+                                  {t("fs.courierCredentials")}:{" "}
+                                  {row.credentials_present ? t("fs.courierConfigured") : t("fs.courierNotConfigured")}
+                                  {row.credentials_source ? ` (${row.credentials_source})` : ""}
+                                </span>
+                                <span className="text-xs text-[var(--jf-muted)]">
+                                  {row.connected ? t("fs.courierConnected") : t("fs.courierNotConnected")}
+                                </span>
+                              </div>
+                              {(row.missing?.length || 0) > 0 && (
+                                <p className="mt-1 text-xs text-[var(--jf-muted)]">
+                                  {t("fs.courierMissing")}: {row.missing?.join(", ")}
+                                </p>
+                              )}
+                              {row.last_error && (
+                                <p className="mt-1 text-xs text-[var(--jf-danger-text)]">{row.last_error}</p>
+                              )}
+
+                              <p className="mt-2 text-xs font-medium text-[var(--jf-muted)]">{t("fs.courierOrigin")}</p>
+                              <div className="mt-1 flex flex-wrap items-end gap-2">
+                                {row.point_based && (
+                                  <>
+                                    <div className="w-28">
+                                      <label htmlFor={`cour-lat-${row.provider}`} className="text-xs text-[var(--jf-muted)]">
+                                        {t("fs.courierLat")}
+                                      </label>
+                                      <input
+                                        id={`cour-lat-${row.provider}`}
+                                        value={o.lat}
+                                        onChange={(e) => updCourierOrigin(row.provider, { lat: e.target.value })}
+                                        className="jf-input mt-1 w-full"
+                                      />
+                                    </div>
+                                    <div className="w-28">
+                                      <label htmlFor={`cour-lng-${row.provider}`} className="text-xs text-[var(--jf-muted)]">
+                                        {t("fs.courierLng")}
+                                      </label>
+                                      <input
+                                        id={`cour-lng-${row.provider}`}
+                                        value={o.lng}
+                                        onChange={(e) => updCourierOrigin(row.provider, { lng: e.target.value })}
+                                        className="jf-input mt-1 w-full"
+                                      />
+                                    </div>
+                                  </>
+                                )}
+                                {!row.point_based && (
+                                  <>
+                                    <div className="w-28">
+                                      <label htmlFor={`cour-pc-${row.provider}`} className="text-xs text-[var(--jf-muted)]">
+                                        {t("fs.courierPostcode")}
+                                      </label>
+                                      <input
+                                        id={`cour-pc-${row.provider}`}
+                                        value={o.postcode}
+                                        onChange={(e) => updCourierOrigin(row.provider, { postcode: e.target.value })}
+                                        className="jf-input mt-1 w-full"
+                                      />
+                                    </div>
+                                    <div className="w-40">
+                                      <label htmlFor={`cour-st-${row.provider}`} className="text-xs text-[var(--jf-muted)]">
+                                        {t("fs.courierState")}
+                                      </label>
+                                      <input
+                                        id={`cour-st-${row.provider}`}
+                                        value={o.state}
+                                        onChange={(e) => updCourierOrigin(row.provider, { state: e.target.value })}
+                                        className="jf-input mt-1 w-full"
+                                      />
+                                    </div>
+                                    <div className="w-40">
+                                      <label htmlFor={`cour-env-${row.provider}`} className="text-xs text-[var(--jf-muted)]">
+                                        {t("fs.courierEnvLive")} / {t("fs.courierEnvSandbox")}
+                                      </label>
+                                      <select
+                                        id={`cour-env-${row.provider}`}
+                                        value={o.environment}
+                                        onChange={(e) => updCourierOrigin(row.provider, { environment: e.target.value })}
+                                        className="jf-input mt-1 w-full"
+                                      >
+                                        <option value="sandbox">{t("fs.courierEnvSandbox")}</option>
+                                        <option value="live">{t("fs.courierEnvLive")}</option>
+                                      </select>
+                                    </div>
+                                  </>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => connectCourier(row.provider)}
+                                  disabled={!canWrite || courierBusy === row.provider}
+                                  className="jf-btn-primary px-3 py-1.5 text-xs"
+                                >
+                                  {t("fs.courierConnect")}
+                                </button>
+                                {row.connected && (
+                                  <button
+                                    type="button"
+                                    onClick={() => disconnectCourier(row.provider)}
+                                    disabled={!canWrite || courierBusy === row.provider}
+                                    className="jf-btn-ghost px-3 py-1.5 text-xs"
+                                  >
+                                    {t("fs.courierDisconnect")}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {courierCallback.redirect && (
+                        <p className="mt-3 text-xs text-[var(--jf-muted)]">
+                          {t("fs.courierCallback")}: <span className="break-all">{courierCallback.redirect}</span>
+                        </p>
+                      )}
                     </div>
                   </section>
                 )}

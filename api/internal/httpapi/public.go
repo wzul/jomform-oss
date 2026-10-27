@@ -83,6 +83,12 @@ type PublicHandlers struct {
 	// ("kadar penghantaran mengikut zon tidak dikonfigurasi") instead of
 	// charging 0 — a missing store must never look like free shipping.
 	Shipping *dbstore.ShippingStore
+	// Couriers is the phase-2 courier wiring: the provider registry (a real
+	// quotation), the connection store (where the parcel ships from) and the
+	// quote cache that keeps a double-submitted checkout to ONE quotation. Nil in
+	// bare-mode tests, which then behaves exactly like a deployment whose
+	// credentials are missing: every courier block falls back to its zone rate.
+	Couriers *Couriers
 	// Issue #361: S3/MinIO store serving the workspace/custom-domain code-asset
 	// route GET /assets/{key}. Nil when media storage isn't configured.
 	Store ObjectStoreIface
@@ -100,6 +106,18 @@ type PublicHandlers struct {
 // RegisterRoutes wires public endpoints.
 func (h *PublicHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /f/{slug}", h.handleRender)
+	// Phase 2 (shipping couriers): the PUBLIC OAuth return of an EasyParcel
+	// connect. The registered callback URL is the WEB app's
+	// /api/shipping/easyparcel/callback (the web proxy forwards /api/* to the
+	// API's /v1/*), and on staging ONLY /api/* reaches the API — so the API
+	// implements /v1/shipping/easyparcel/callback and that is the URL registered
+	// in the EasyParcel Developer Hub. Mirrors the inbound
+	// /v1/payments/chip/callback registered by the payments handlers.
+	//
+	// It is deliberately NOT under the account/subdomain routes: the browser
+	// arrives from the provider and the only credential it can present is the
+	// single-use `state` this server issued.
+	mux.HandleFunc("GET /v1/shipping/easyparcel/callback", h.easyParcelCallback)
 	// Issue #411: GitHub-style default Open Graph image per form, served at
 	// /og/{slug}.png on the workspace subdomain / custom domain. Registered before
 	// /{slug} so it wins over a form slug. NOTE: Go's ServeMux wildcard must be

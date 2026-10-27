@@ -81,6 +81,9 @@ const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: 
     tools: [
       { name: "get_shipping_rates", desc: "Baca set zon penghantaran + kadar satu akaun/workspace: setiap zon (negeri/daerah/julat poskod, keutamaan, zon lalai) dan kadarnya (harga SEN, julat berat gram, ambang penghantaran percuma)." },
       { name: "set_shipping_rates", desc: "Ganti SEMUA set zon penghantaran + kadar satu akaun/workspace. Set yang tiada dalam sets akan DIPADAM (ditolak jika ada borang masih merujuknya). Kadar mesti ada harga dalam SEN; min/max_weight_g dalam gram (0 = tiada had); free_over_sen = ambang penghantaran percuma." },
+      { name: "get_shipping_couriers", desc: "Senarai pembekal penghantaran (lalamove, easyparcel) untuk satu akaun/workspace: sama ada kredensial pelayan ada, sama ada workspace sudah sambung, persekitaran (sandbox/live), dan APA YANG MASIH KURANG (credentials/connect/grant/origin) sebelum sebut harga sebenar boleh dibuat. Tiada nilai kredensial dipulangkan." },
+      { name: "connect_shipping_courier", desc: "Sambung satu pembekal penghantaran untuk satu akaun/workspace. Beri ALAMAT AMBIL (poskod+negeri untuk easyparcel; latitud+longitud untuk lalamove). Untuk easyparcel tool ini memulangkan authorize_url — pautan itu untuk PEMILIK AKAUN buka sendiri (mana-mana peranti) dan memberi kebenaran; jangan buka pautan itu, jangan taip atau minta kata laluan. Pautan luput: panggil semula untuk pautan baharu." },
+      { name: "disconnect_shipping_courier", desc: "Putuskan sambungan satu pembekal penghantaran untuk satu akaun/workspace dan buang kebenaran (grant) yang disimpan. Alamat ambil DIKEKALKAN supaya menyambung semula mudah." },
     ],
   },
   {

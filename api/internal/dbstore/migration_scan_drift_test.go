@@ -85,6 +85,10 @@ var selectConsts = map[string]string{
 	"zoneSetSelect": "shippingZoneSetRow",
 	"zoneSelect":    "shippingZoneRow",
 	"rateSelect":    "shippingRateRow",
+	// Courier connections (phase 2). Registered for the same reason as the zone
+	// constants: a migration that adds a column to shipping_courier_accounts
+	// cannot land without the select and its scan moving with it.
+	"courierAccountSelect": "shippingCourierRow",
 }
 
 // selectTables maps a *Select constant name to the table it selects from.
@@ -115,6 +119,8 @@ var selectTables = map[string]string{
 	"zoneSetSelect": "shipping_zone_sets",
 	"zoneSelect":    "shipping_zones",
 	"rateSelect":    "shipping_rates",
+	// Courier connections (phase 2).
+	"courierAccountSelect": "shipping_courier_accounts",
 }
 
 // selectScanFuncs maps a *Select constant to the receiver-qualified
@@ -149,6 +155,8 @@ var selectScanFuncs = map[string][]string{
 	"zoneSetSelect": {"scanShippingZoneSetRow"},
 	"zoneSelect":    {"scanShippingZoneRow"},
 	"rateSelect":    {"scanShippingRateRow"},
+	// Courier connections (phase 2).
+	"courierAccountSelect": {"scanShippingCourierRow"},
 }
 
 // bareColumnConsts maps a constant holding a BARE column list — no `SELECT ...

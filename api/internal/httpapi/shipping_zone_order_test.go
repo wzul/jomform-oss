@@ -481,8 +481,15 @@ func TestStaticShippingBlockIsUnchanged(t *testing.T) {
 	}
 }
 
-// The phase-2 seam is a refusal, not a quiet free delivery.
-func TestCourierSourceIsRefusedNotSilentlyFree(t *testing.T) {
+// A courier block with NO provider connection and NO zone set to fall back to is
+// a REFUSAL, not a quiet free delivery.
+//
+// This arm is the phase-1 seam test REWRITTEN for phase 2: it used to assert the
+// source was refused as unimplemented (shipping.ErrNotSupported). Phase 2 DOES
+// implement it, so what must hold now is the rule that replaced the refusal — a
+// courier source with nothing to charge (no connection, no fallback zone set) is
+// still a loud 400 rather than a 0 fee, and the sentence names the actual reason.
+func TestCourierSourceWithoutProviderOrFallbackIsRefusedNotSilentlyFree(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	var userID, workspaceID, workspaceSlug, accountID string
@@ -535,8 +542,8 @@ func TestCourierSourceIsRefusedNotSilentlyFree(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("courier source = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), shipping.ErrNotSupported.Error()) {
-		t.Errorf("courier refusal should say the source is not supported yet, got %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), shipping.ErrCourierNoFallback.Error()) {
+		t.Errorf("courier refusal should say a quote failed and no zone rate can fall back, got %s", rec.Body.String())
 	}
 }
 
@@ -567,5 +574,55 @@ func TestShippingZoneBlockRendersTheZoneSetFromTheDatabase(t *testing.T) {
 	// The fallback zone is NOT offered when the block rejects unmatched addresses.
 	if strings.Contains(body, "Elsewhere") {
 		t.Error("the fallback zone was offered as a buyer choice under on_no_match=reject")
+	}
+}
+
+// TestShippingZoneBlockAlwaysRequiresADeliveryChoice pins the semantics of the
+// zone-sourced shipping arm, which is the ONE arm that does not follow the
+// merchant's `required` flag. #1299 made the `option` and static `shipping` arms
+// honour it conditionally ({{if .Required}} required{{end}}); a block that
+// resolves its fee from the managed zones instead ALWAYS carries `required`,
+// because the delivery choice IS the input the fee is computed from — an
+// unpicked one is not a free order, it is an order whose fee the server would
+// have to guess. That is deliberate, so it is pinned here rather than left to
+// look like the conditional rule the other two arms use.
+//
+// The merchant's per-field message still rides on the control: a submit the
+// browser silently swallows is the same defect #1299 fixed elsewhere.
+func TestShippingZoneBlockAlwaysRequiresADeliveryChoice(t *testing.T) {
+	h, ws, _, setID, accountID, prodID := zoneShippingFixture(t, "reject")
+	ctx := context.Background()
+
+	slug := "it-ship-req-" + accountID[:8]
+	if err := h.Forms.Create(ctx, &dbstore.Form{
+		AccountID: accountID, Slug: slug, Title: "Zone required", Status: "published",
+		Config: map[string]any{
+			"blocks": []any{
+				map[string]any{"id": "b_state", "type": "text", "value": "State"},
+				map[string]any{"id": "ship1", "type": "shipping", "value": "Postage",
+					"product_id": "ship1", "source": "zones", "zone_set_id": setID,
+					"zone_state_field": "b_state", "on_no_match": "reject",
+					// Deliberately OFF: the zone arm must enforce anyway.
+					"required":         false,
+					"required_message": "Pick a delivery option"},
+			},
+			"products": []any{map[string]any{"id": prodID, "name": "Widget", "price_sen": 1000}},
+		},
+	}); err != nil {
+		t.Fatalf("create form: %v", err)
+	}
+
+	code, body := getForm(t, h, ws+".jomform.com", slug)
+	if code != http.StatusOK {
+		t.Fatalf("render = %d, want 200", code)
+	}
+	if !strings.Contains(body, `<select class="ship" data-id="ship1" required`) {
+		t.Errorf("a zone-sourced shipping block whose required flag is false rendered no enforced control; "+
+			"the delivery choice is what the fee is computed from:\n%s", body)
+	}
+	if !strings.Contains(body, `oninvalid="this.setCustomValidity('Pick a delivery option')"`) ||
+		!strings.Contains(body, `oninput="this.setCustomValidity('')"`) {
+		t.Errorf("the merchant's required message was dropped from the zone-sourced control, so the browser "+
+			"blocks the submit with nothing said:\n%s", body)
 	}
 }

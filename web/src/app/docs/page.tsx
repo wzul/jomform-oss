@@ -239,12 +239,13 @@ const GROUPS: Group[] = [
         body: "Set the form's slug in Form Settings; rename it any time and the old URL keeps resolving.",
       },
       {
-        // Shipping by zone (the managed rate source). The summary is short and
-        // the walk-through lives on the guide; the two MCP tool names are
-        // asserted on that page by docsFacts.ts.
+        // Shipping: the managed zone rate source, and the courier providers that
+        // can quote the same block live (phase 2). The summary is short and the
+        // walk-through lives on the guide; the five MCP tool names are asserted on
+        // that page by docsFacts.ts.
         title: "Shipping by zone",
         href: "/docs/shipping",
-        body: "Charge a delivery fee per zone: named zones (state, district or postcode range) with a price, a weight band and an optional free-shipping threshold, shared across your forms.",
+        body: "Charge a delivery fee by zone — state, district or postcode — with a rate per weight band and a free-shipping threshold, or a courier quotes it at checkout, falling back to these rates.",
       },
     ],
   },

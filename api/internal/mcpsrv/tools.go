@@ -477,6 +477,24 @@ func (s *Server) registerTools() {
 		Description: "Ganti SEMUA set zon penghantaran + kadar satu akaun/workspace. Set yang tiada dalam sets akan DIPADAM (ditolak jika ada borang masih merujuknya). Kadar mesti ada harga dalam SEN; min/max_weight_g dalam gram (0 = tiada had); free_over_sen = ambang penghantaran percuma.",
 	}, s.setShippingRates)
 
+	// ── Parity: courier providers (phase 2) ───────────────────────────────────
+	// The dashboard connects a courier in Form Settings -> Shipping; these three
+	// tools are the same surface over MCP. They share the connect rules and the
+	// readiness test with the dashboard (internal/shipping/connect.go), so an
+	// agent cannot connect something the dashboard would refuse.
+	addTool(s, &mcp.Tool{
+		Name:        "get_shipping_couriers",
+		Description: "Senarai pembekal penghantaran (lalamove, easyparcel) untuk satu akaun/workspace: sama ada kredensial pelayan ada, sama ada workspace sudah sambung, persekitaran (sandbox/live), dan APA YANG MASIH KURANG (credentials/connect/grant/origin) sebelum sebut harga sebenar boleh dibuat. Tiada nilai kredensial dipulangkan.",
+	}, s.getShippingCouriers)
+	addTool(s, &mcp.Tool{
+		Name:        "connect_shipping_courier",
+		Description: "Sambung satu pembekal penghantaran untuk satu akaun/workspace. Beri ALAMAT AMBIL (poskod+negeri untuk easyparcel; latitud+longitud untuk lalamove). Untuk easyparcel tool ini memulangkan authorize_url — pautan itu untuk PEMILIK AKAUN buka sendiri (mana-mana peranti) dan memberi kebenaran; jangan buka pautan itu, jangan taip atau minta kata laluan. Pautan luput: panggil semula untuk pautan baharu.",
+	}, s.connectShippingCourier)
+	addTool(s, &mcp.Tool{
+		Name:        "disconnect_shipping_courier",
+		Description: "Putuskan sambungan satu pembekal penghantaran untuk satu akaun/workspace dan buang kebenaran (grant) yang disimpan. Alamat ambil DIKEKALKAN supaya menyambung semula mudah.",
+	}, s.disconnectShippingCourier)
+
 	// ── Parity: per-workspace email templates (issue #107) ────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_email_settings",

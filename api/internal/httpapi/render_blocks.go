@@ -117,6 +117,11 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			ZonePostcodeField string `json:"zone_postcode_field"`
 			OnNoMatch         string `json:"on_no_match"`
 			WeightG           int64  `json:"weight_g"`
+			// Courier source (phase 2): which provider the block asks for, its
+			// own service code, and the declared value of the goods.
+			CourierProvider string `json:"courier_provider"`
+			CourierService  string `json:"courier_service_type"`
+			ParcelValueSen  int64  `json:"parcel_value_sen"`
 			// Issue #249: per-product quantity selector flag. Pointer so we can
 			// distinguish "absent" (default on) from an explicit merchant "off".
 			Quantity *bool `json:"quantity"`
@@ -187,6 +192,12 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		// for every other block type, so the template's static branch (and its
 		// snapshot-price contract) is untouched.
 		Zones []zoneOptionView
+		// Courier (phase 2): the block's rate source is a courier, so the prices
+		// in Zones are the fallback zone rates — the ESTIMATE the server quotes
+		// over at checkout — and the buyer is told so (CourierNote).
+		Courier         bool
+		CourierProvider string
+		CourierNote     string
 		// Issue #249: per-product quantity selector (Gravity-Forms-style).
 		HasQuantity bool
 	}
@@ -282,28 +293,43 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			// the two shapes share this branch so neither can be forgotten.
 			if b.Type == "shipping" {
 				spec := shippingBlockSpec{
-					ID:            b.ID,
-					ItemID:        b.ProductID,
-					Source:        firstNonEmpty(b.Source, shipping.SourceStatic),
-					ZoneSetID:     strings.TrimSpace(b.ZoneSetID),
-					StateField:    strings.TrimSpace(b.ZoneStateField),
-					DistrictField: strings.TrimSpace(b.ZoneDistrictField),
-					PostcodeField: strings.TrimSpace(b.ZonePostcodeField),
-					OnNoMatch:     strings.TrimSpace(b.OnNoMatch),
-					WeightG:       b.WeightG,
-					Required:      b.Required,
-					Label:         b.Value,
+					ID:             b.ID,
+					ItemID:         b.ProductID,
+					Source:         firstNonEmpty(b.Source, shipping.SourceStatic),
+					ZoneSetID:      strings.TrimSpace(b.ZoneSetID),
+					StateField:     strings.TrimSpace(b.ZoneStateField),
+					DistrictField:  strings.TrimSpace(b.ZoneDistrictField),
+					PostcodeField:  strings.TrimSpace(b.ZonePostcodeField),
+					OnNoMatch:      strings.TrimSpace(b.OnNoMatch),
+					WeightG:        b.WeightG,
+					Provider:       shipping.Normalize(b.CourierProvider),
+					ServiceType:    strings.TrimSpace(b.CourierService),
+					ParcelValueSen: b.ParcelValueSen,
+					Required:       b.Required,
+					Label:          b.Value,
 				}
 				if spec.ItemID == "" {
 					spec.ItemID = spec.ID
 				}
-				if spec.Source == shipping.SourceZones {
+				// The options are the SAME zone options for both sources: a
+				// zone-sourced block charges one, and a courier-sourced block
+				// shows one as its ESTIMATE (the real fee is quoted at checkout).
+				if spec.Source == shipping.SourceZones || spec.Source == shipping.SourceCourier {
 					if _, ok := zoneSets[spec.ZoneSetID]; !ok {
 						zoneSets[spec.ZoneSetID] = h.loadZoneSet(r.Context(), f.AccountID, spec.ZoneSetID)
 					}
 					if set, ok := zoneSets[spec.ZoneSetID]; ok && set.ID != "" {
 						vb.Zones = zoneOptionsFor(set, spec, ls)
 					}
+				}
+				if spec.Source == shipping.SourceCourier {
+					// The block says which provider prices it and that the figure
+					// below is an estimate. Both facts are rendered (the note is
+					// in the buyer's language and the provider name in the
+					// markup), so a courier-sourced fee is never a surprise.
+					vb.Courier = true
+					vb.CourierProvider = spec.Provider
+					vb.CourierNote = ls.ShipQuotedAtCheckout
 				}
 			}
 		}
@@ -996,7 +1022,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "product"}}  <div class="prod{{if .ImgTop}} menu-card{{end}}{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><label>{{if .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}<span class="prow">{{end}}<input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}">{{if not .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}{{end}}<span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span>{{if .ImgTop}}</span>{{end}}</label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
 {{else if eq .Type "quantity"}}  <div class="qtyrow{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><label class="lbl" style="margin:0">{{.Value}}</label><input type="number" class="qty" min="1" value="{{if .DefaultValue}}{{.DefaultValue}}{{else}}1{{end}}"></div>
 {{else if eq .Type "option"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="opt{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (+RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
-{{else if eq .Type "shipping"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{if .Zones}}<select class="ship{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}" required{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Zones}}<option value="{{.Value}}" data-price="{{.PriceSen}}"{{if .FreeOverSen}} data-free-over="{{.FreeOverSen}}"{{end}}>{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}{{if .Note}} — {{.Note}}{{end}}</option>{{end}}</select>{{else}}<select class="ship{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>{{end}}
+{{else if eq .Type "shipping"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{if .Zones}}<select class="ship{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}"{{if .Courier}} data-courier="{{.CourierProvider}}"{{end}} required{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Zones}}<option value="{{.Value}}" data-price="{{.PriceSen}}"{{if .FreeOverSen}} data-free-over="{{.FreeOverSen}}"{{end}}>{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}{{if .Note}} — {{.Note}}{{end}}</option>{{end}}</select>{{else}}<select class="ship{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>{{end}}{{if .CourierNote}}<div class="desc shipnote">{{.CourierNote}}</div>{{end}}
 {{else if eq .Type "name"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="text" name="full_name" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
 {{else if eq .Type "email"}}  <label class="lbl"{{styleAttr .Style}}>{{$.Ls.EmailLabel}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="email" name="email" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}} required{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>
 {{else if eq .Type "phone"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><input type="tel" name="phone" data-id="{{.ID}}"{{if .CSSClass}} class="{{.CSSClass}}"{{end}}{{if .Placeholder}} placeholder="{{.Placeholder}}"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}>

@@ -132,10 +132,14 @@ MUTATIONS = [
         "\tif true {\n\t\treturn ordered[0], nil\n\t}",
     ),
     (
-        "G: order.go keeps the zone block's item as a line item (fee counted twice)",
+        # Card t_2ba64e76 renamed this map (zoneItemIDs -> feeItemIDs) when the
+        # courier source arrived: the drop now covers BOTH server-resolved
+        # sources, so the phase-1 anchor moved with it. A harness whose anchor
+        # stops matching is a HARNESS BUG, not a bite.
+        "G: order.go keeps the shipping block's item as a line item (fee counted twice)",
         ORDER,
-        "\t\tif zoneItemIDs[it.ProductID] {\n\t\t\tcontinue\n\t\t}",
-        "\t\tif false && zoneItemIDs[it.ProductID] {\n\t\t\tcontinue\n\t\t}",
+        "\t\tif feeItemIDs[it.ProductID] {\n\t\t\tcontinue\n\t\t}",
+        "\t\tif false && feeItemIDs[it.ProductID] {\n\t\t\tcontinue\n\t\t}",
     ),
     (
         "H: order.go records no shipping_sen (the pre-feature total)",

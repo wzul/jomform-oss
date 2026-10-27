@@ -45,8 +45,9 @@ prices, sales, refunds, analytics — without opening a dashboard.
 - [Sales, responses & analytics](https://jomform.com/docs/sales) — the Sales page, the combined
   sale+response list, the per-form counter, partial refunds, and the realtime notification beep.
 - [Shipping by zone](https://jomform.com/docs/shipping) — delivery zones and rates shared by your
-  forms: states/districts/postcode ranges, weight bands, a free-shipping threshold, and how an
-  address outside every zone is handled.
+  forms: states/districts/postcode ranges, weight bands, a free-shipping threshold, how an
+  address outside every zone is handled, and the courier providers (Lalamove, EasyParcel) that
+  quote a block live at checkout with those zone rates as the fallback.
 - [Customize](https://jomform.com/docs/customize) — design → AI agent → MCP flow, the restaurant
   menu and its basket, product images, templates, the brand colour on the public form, custom
   domains, language and affiliate marketing.

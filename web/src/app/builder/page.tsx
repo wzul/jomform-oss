@@ -122,15 +122,13 @@ type Block = {
   // Issue #249: per-product quantity selector (Gravity-Forms-style). When true,
   // the product block renders its own quantity input scoped to that product.
   quantity?: boolean;
-  // Shipping rate source (phase 1). A shipping block either keeps its own priced
-  // choices ("static", the default and what every older form has) or charges the
-  // managed rate of the zone the BUYER'S ADDRESS resolves to ("zones"), read from
-  // the workspace zone set named by zoneSetId. The field mappings say which of
-  // this form's blocks carries the state/district/postcode, and onNoMatch says
-  // what happens to an address no zone covers ("reject" or "default").
-  //
-  // A third source, "courier", is reserved for the live courier quoting of phase
-  // 2 and is deliberately NOT offered here: it would refuse every order.
+  // Shipping rate source (phase 1 + 2). A shipping block either keeps its own
+  // priced choices ("static", the default and what every older form has), charges
+  // the managed rate of the zone the BUYER'S ADDRESS resolves to ("zones"), or is
+  // QUOTED BY A COURIER at checkout ("courier") with a zone set as its fallback.
+  // The field mappings say which of this form's blocks carries the
+  // state/district/postcode, and onNoMatch says what happens to an address no zone
+  // covers ("reject" or "default").
   source?: string;
   zoneSetId?: string;
   zoneStateField?: string;
@@ -138,6 +136,13 @@ type Block = {
   zonePostcodeField?: string;
   onNoMatch?: string;
   weightG?: number;
+  // The courier a "courier"-sourced block asks for ("lalamove" / "easyparcel"),
+  // the provider's own service code and the declared value of the goods. The zone
+  // set above is the FALLBACK (and the estimate the buyer sees), so a courier
+  // block wants one even though it does not charge it directly.
+  courierProvider?: string;
+  courierServiceType?: string;
+  parcelValueSen?: number;
 };
 
 type Product = { id: string; name: string; price_sen: number; type: string; images?: string[] };
@@ -573,7 +578,7 @@ export default function Builder() {
       pattern: b.pattern as string | undefined,
       requiredMessage: b.required_message as string | undefined,
       priceSen: b.price_sen as number | undefined,
-      // Shipping rate source (managed zones).
+      // Shipping rate source (managed zones; phase 2 adds the courier provider).
       source: b.source as string | undefined,
       zoneSetId: b.zone_set_id as string | undefined,
       zoneStateField: b.zone_state_field as string | undefined,
@@ -581,6 +586,9 @@ export default function Builder() {
       zonePostcodeField: b.zone_postcode_field as string | undefined,
       onNoMatch: b.on_no_match as string | undefined,
       weightG: b.weight_g as number | undefined,
+      courierProvider: b.courier_provider as string | undefined,
+      courierServiceType: b.courier_service_type as string | undefined,
+      parcelValueSen: b.parcel_value_sen as number | undefined,
       quantity: b.quantity as boolean | undefined,
       choices,
     };
@@ -835,9 +843,9 @@ export default function Builder() {
         required_message: b.requiredMessage || undefined,
         price_sen: b.priceSen,
         quantity: b.quantity === undefined ? undefined : b.quantity,
-        // Shipping rate source (managed zones): only written when the merchant
-        // changed it, so a static block's saved config stays byte-identical to
-        // what every pre-existing form carries.
+        // Shipping rate source (managed zones / courier): only written when the
+        // merchant changed it, so a static block's saved config stays
+        // byte-identical to what every pre-existing form carries.
         source: b.source || undefined,
         zone_set_id: b.zoneSetId || undefined,
         zone_state_field: b.zoneStateField || undefined,
@@ -845,6 +853,9 @@ export default function Builder() {
         zone_postcode_field: b.zonePostcodeField || undefined,
         on_no_match: b.onNoMatch || undefined,
         weight_g: b.weightG || undefined,
+        courier_provider: b.courierProvider || undefined,
+        courier_service_type: b.courierServiceType || undefined,
+        parcel_value_sen: b.parcelValueSen || undefined,
         // Card t_3d11f98d: an option/shipping block's price IS the choice price
         // — that is what the buyer's page prints and what /order charges, and
         // the server refuses a pricing block whose choices carry no price. A
@@ -1179,9 +1190,10 @@ export default function Builder() {
         requiredMessage: b.required_message as string | undefined,
         priceSen: b.price_sen as number | undefined,
         quantity: b.quantity as boolean | undefined,
-        // Shipping rate source (managed zones) — the AI path hydrates the same
-        // fields the form load does, so a generated config with a zone source is
-        // not silently flattened to a static block.
+        // Shipping rate source (managed zones; phase 2 adds the courier
+        // provider) — the AI path hydrates the same fields the form load does,
+        // so a generated config with a zone or courier source is not silently
+        // flattened to a static block.
         source: b.source as string | undefined,
         zoneSetId: b.zone_set_id as string | undefined,
         zoneStateField: b.zone_state_field as string | undefined,
@@ -1189,6 +1201,9 @@ export default function Builder() {
         zonePostcodeField: b.zone_postcode_field as string | undefined,
         onNoMatch: b.on_no_match as string | undefined,
         weightG: b.weight_g as number | undefined,
+        courierProvider: b.courier_provider as string | undefined,
+        courierServiceType: b.courier_service_type as string | undefined,
+        parcelValueSen: b.parcel_value_sen as number | undefined,
         choices: Array.isArray(b.choices)
           ? (b.choices as { label?: string; value?: string; price_sen?: number }[]).map((c) => ({
               label: c.label || "",
@@ -1466,11 +1481,10 @@ export default function Builder() {
           </div>
         )}
 
-        {/* Shipping rate source (managed zones). A shipping block either keeps
-            its own priced list (the default, and what every older form has) or
-            charges the managed rate of the zone the buyer's address resolves to.
-            The third source, "courier", is the phase-2 seam and is deliberately
-            NOT offered: it would refuse every order until live quoting ships. */}
+        {/* Shipping rate source. A shipping block either keeps its own priced
+            list (the default, and what every older form has), charges the managed
+            rate of the zone the buyer's address resolves to, or is QUOTED BY A
+            COURIER at checkout with a zone set as its fallback (phase 2). */}
         {b.type === "shipping" && (
           <div className="mt-3 rounded-md border border-[var(--jf-border)] p-2">
             <div>
@@ -1481,32 +1495,59 @@ export default function Builder() {
                 id={fid("shipSource")}
                 value={b.source || "static"}
                 onChange={(e) => {
-                  // Leaving the zones source clears the settings that only mean
-                  // something for it, so a block flipped back to a static list
-                  // does not carry a stale set id into the saved config.
+                  // Switching to a managed source seeds the settings that only
+                  // mean something for it (the same defaults the submit path
+                  // applies); switching back to a STATIC list clears them, so a
+                  // block flipped back does not carry a stale set id or provider
+                  // into the saved config.
                   const src = e.target.value;
-                  upd(
-                    src === "zones"
-                      ? { source: "zones", onNoMatch: b.onNoMatch || "reject" }
-                      : {
-                          source: undefined,
-                          zoneSetId: undefined,
-                          zoneStateField: undefined,
-                          zoneDistrictField: undefined,
-                          zonePostcodeField: undefined,
-                          onNoMatch: undefined,
-                          weightG: undefined,
-                        }
-                  );
+                  if (src === "static") {
+                    upd({
+                      source: undefined,
+                      zoneSetId: undefined,
+                      zoneStateField: undefined,
+                      zoneDistrictField: undefined,
+                      zonePostcodeField: undefined,
+                      onNoMatch: undefined,
+                      weightG: undefined,
+                      courierProvider: undefined,
+                      courierServiceType: undefined,
+                      parcelValueSen: undefined,
+                    });
+                    return;
+                  }
+                  upd({ source: src, onNoMatch: b.onNoMatch || "reject" });
                 }}
                 className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
               >
                 <option value="static">{t("bld.shipSourceStatic")}</option>
                 <option value="zones">{t("bld.shipSourceZones")}</option>
+                <option value="courier">{t("bld.shipSourceCourier")}</option>
               </select>
             </div>
 
-            {b.source === "zones" && (
+            {b.source === "courier" && (
+              <div className="mt-3 space-y-2">
+                <div>
+                  <label htmlFor={fid("shipCourierProvider")} className="text-xs text-[var(--jf-muted)]">
+                    {t("bld.shipCourierProvider")}
+                  </label>
+                  <select
+                    id={fid("shipCourierProvider")}
+                    value={b.courierProvider || ""}
+                    onChange={(e) => upd({ courierProvider: e.target.value || undefined })}
+                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+                  >
+                    <option value="">{t("bld.shipCourierNone")}</option>
+                    <option value="lalamove">Lalamove</option>
+                    <option value="easyparcel">EasyParcel</option>
+                  </select>
+                </div>
+                <p className="text-xs text-[var(--jf-muted)]">{t("bld.shipCourierHint")}</p>
+              </div>
+            )}
+
+            {(b.source === "zones" || b.source === "courier") && (
               <div className="mt-3 space-y-2">
                 {zoneSets.length === 0 ? (
                   <p className="text-xs text-[var(--jf-muted)]">{t("bld.shipNoZoneSets")}</p>

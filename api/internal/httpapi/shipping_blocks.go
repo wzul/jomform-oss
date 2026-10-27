@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/shipping"
@@ -48,6 +49,16 @@ type shippingBlockSpec struct {
 	OnNoMatch string
 	// WeightG is the parcel weight the block declares, in grams (0 = unknown).
 	WeightG int64
+	// Provider is the courier a `source = "courier"` block asks for
+	// (shipping.ProviderLalamove / ProviderEasyParcel). Empty makes the block
+	// fall back to the zone table, because there is no provider to ask.
+	Provider string
+	// ServiceType is the provider's own service code (Lalamove: MOTORCYCLE /
+	// CAR / VAN). Empty lets the adapter pick its default.
+	ServiceType string
+	// ParcelValueSen is the declared value of the goods, in sen (0 = unknown).
+	// A courier needs it for insurance/COD pricing.
+	ParcelValueSen int64
 	// Required mirrors the block's required flag.
 	Required bool
 	// Label is the block's label text (rendered as the field label).
@@ -138,17 +149,20 @@ func shippingBlocksWhere(config map[string]any, want func(source string) bool) [
 			itemID = id
 		}
 		out = append(out, shippingBlockSpec{
-			ID:            id,
-			ItemID:        itemID,
-			Source:        src,
-			ZoneSetID:     strings.TrimSpace(cfgString(b["zone_set_id"])),
-			StateField:    strings.TrimSpace(cfgString(b["zone_state_field"])),
-			DistrictField: strings.TrimSpace(cfgString(b["zone_district_field"])),
-			PostcodeField: strings.TrimSpace(cfgString(b["zone_postcode_field"])),
-			OnNoMatch:     strings.TrimSpace(cfgString(b["on_no_match"])),
-			WeightG:       cfgSen(b["weight_g"]),
-			Required:      b["required"] == true,
-			Label:         strings.TrimSpace(cfgString(b["value"])),
+			ID:             id,
+			ItemID:         itemID,
+			Source:         src,
+			ZoneSetID:      strings.TrimSpace(cfgString(b["zone_set_id"])),
+			StateField:     strings.TrimSpace(cfgString(b["zone_state_field"])),
+			DistrictField:  strings.TrimSpace(cfgString(b["zone_district_field"])),
+			PostcodeField:  strings.TrimSpace(cfgString(b["zone_postcode_field"])),
+			OnNoMatch:      strings.TrimSpace(cfgString(b["on_no_match"])),
+			WeightG:        cfgSen(b["weight_g"]),
+			Provider:       shipping.Normalize(cfgString(b["courier_provider"])),
+			ServiceType:    strings.TrimSpace(cfgString(b["courier_service_type"])),
+			ParcelValueSen: cfgSen(b["parcel_value_sen"]),
+			Required:       b["required"] == true,
+			Label:          strings.TrimSpace(cfgString(b["value"])),
 		})
 	}
 	return out
@@ -174,17 +188,65 @@ func addressFor(spec shippingBlockSpec, in *submitInput) shipping.Address {
 }
 
 // shippingDetail is what the sale records about a resolved fee, so the merchant
-// can SEE which zone and rate applied instead of inferring it from a number.
+// can SEE which zone and rate applied instead of inferring it from a number, and
+// (phase 2) WHICH SOURCE produced it — a courier quote or the workspace's own
+// zone table.
 type shippingDetail struct {
 	Blocks []shippingDetailBlock `json:"blocks"`
+	// Source is what produced the block fees as a whole: "courier" when every
+	// block's fee came from a live quotation, "zones" when the zone table did
+	// (a zone-sourced block, or a courier block whose quote fell back), and
+	// "mixed" when both happened in one order. It answers "where did
+	// sales.shipping_sen come from" without walking the blocks.
+	Source string `json:"source,omitempty"`
+	// Fallbacks counts the blocks whose courier quote fell back to the zone
+	// table, so a fee that is NOT a live rate is visible at a glance.
+	Fallbacks int `json:"fallbacks,omitempty"`
 }
 
 type shippingDetailBlock struct {
 	BlockID string `json:"block_id"`
-	// Source is always "zones" today; recorded so phase 2 can add "courier"
-	// without a shape change.
+	// Source is "zones" or "courier" for THIS block; phase 1 wrote "zones" and
+	// the shape is unchanged for it.
 	Source string `json:"source"`
+	// The zone-table answer, FLAT (the phase-1 shape): zone_id, zone_name,
+	// rate_id, rate_label, price_sen, list_price_sen, free, matched_by, ...
+	//
+	// price_sen keeps ONE meaning across both sources — the fee this block
+	// CHARGED. For a courier block the zone fields describe the zone the
+	// estimate/fallback came from while price_sen is the amount actually
+	// charged (the quoted fee when the courier won).
 	shipping.Quote
+	// Courier-only keys. They are omitted for a zones block, so phase 1's JSON
+	// is unchanged.
+	//
+	// Provider is the courier that was ASKED (recorded even when it lost, which
+	// is what makes a fallback explainable).
+	Provider string `json:"provider,omitempty"`
+	// Environment is the provider's environment as far as its credentials say
+	// ("sandbox" / "prod" / "account"), so a SIMULATED fee is never mistaken for
+	// a real one on a merchant's sale.
+	Environment string `json:"environment,omitempty"`
+	// ProviderQuoteID is the provider's own quotation id, and ExpiresAt when it
+	// stops being usable. A quotation has no idempotency key, so this is the id
+	// an operator needs to reconcile or dispute a fee.
+	ProviderQuoteID string     `json:"provider_quote_id,omitempty"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	ServiceName     string     `json:"service_name,omitempty"`
+	CourierName     string     `json:"courier_name,omitempty"`
+	// ProviderCurrency is the provider's own currency code when the block has no
+	// zone table at all (so the fee's unit is still recorded).
+	ProviderCurrency string `json:"provider_currency,omitempty"`
+	// EstimatePriceSen is the zone rate the buyer's FORM showed for this block.
+	// A courier block is quoted at checkout, so this is what the buyer saw and
+	// price_sen is what they were charged; recording both makes the difference
+	// explainable instead of surprising.
+	EstimatePriceSen int64 `json:"estimate_price_sen,omitempty"`
+	// FallbackReason is set only when a courier block's fee came from the zone
+	// table: unavailable | error | timeout (a CLASS, never a vendor payload).
+	FallbackReason string `json:"fallback_reason,omitempty"`
+	// ProviderDetail is the provider's own price breakdown (integer sen inside).
+	ProviderDetail map[string]any `json:"provider_detail,omitempty"`
 }
 
 // resolveZoneShipping resolves EVERY zone-sourced shipping block of the order
@@ -195,9 +257,20 @@ type shippingDetailBlock struct {
 // against it, so the fee itself never counts towards the threshold.
 //
 // Every failure is a refusal (a *shippingError the caller turns into a 400), and
-// never a silent 0: an unknown zone set, a courier source, an address no zone
-// covers with on_no_match=reject, a zone with no rate.
+// never a silent 0: an unknown zone set, an address no zone covers with
+// on_no_match=reject, a zone with no rate.
 func (h *PublicHandlers) resolveZoneShipping(ctx context.Context, tgt orderTarget, specs []shippingBlockSpec, in *submitInput, subtotalSen int64) (int64, json.RawMessage, error) {
+	total, blocks, err := h.resolveZoneBlocks(ctx, tgt, specs, in, subtotalSen)
+	if err != nil {
+		return 0, nil, err
+	}
+	return total, marshalShippingDetail(blocks), nil
+}
+
+// resolveZoneBlocks is the body of the zone resolution, in the form the combined
+// (zone + courier) resolver needs: the per-block records, so ONE shipping_detail
+// can carry both sources.
+func (h *PublicHandlers) resolveZoneBlocks(ctx context.Context, tgt orderTarget, specs []shippingBlockSpec, in *submitInput, subtotalSen int64) (int64, []shippingDetailBlock, error) {
 	if len(specs) == 0 {
 		return 0, nil, nil
 	}
@@ -213,7 +286,7 @@ func (h *PublicHandlers) resolveZoneShipping(ctx context.Context, tgt orderTarge
 	// same set do not read it twice.
 	cache := map[string]shipping.ZoneSet{}
 	var total int64
-	detail := shippingDetail{Blocks: []shippingDetailBlock{}}
+	blocks := []shippingDetailBlock{}
 	for _, spec := range specs {
 		setID := strings.TrimSpace(spec.ZoneSetID)
 		if setID == "" {
@@ -244,16 +317,44 @@ func (h *PublicHandlers) resolveZoneShipping(ctx context.Context, tgt orderTarge
 			return 0, nil, &shippingError{err.Error()}
 		}
 		total += quote.PriceSen
-		detail.Blocks = append(detail.Blocks, shippingDetailBlock{BlockID: spec.ID, Source: shipping.SourceZones, Quote: quote})
+		blocks = append(blocks, shippingDetailBlock{BlockID: spec.ID, Source: shipping.FeeSourceZones, Quote: quote})
 	}
-	if total == 0 && len(detail.Blocks) == 0 {
-		return 0, nil, nil
+	return total, blocks, nil
+}
+
+// marshalShippingDetail renders the per-block records (and the summary of which
+// SOURCE produced them) into the sale's shipping_detail JSON.
+func marshalShippingDetail(blocks []shippingDetailBlock) json.RawMessage {
+	if len(blocks) == 0 {
+		return nil
+	}
+	detail := shippingDetail{Blocks: blocks}
+	couriers, zones := 0, 0
+	for _, b := range blocks {
+		if b.Source == shipping.FeeSourceCourier {
+			couriers++
+		} else {
+			zones++
+		}
+		if b.FallbackReason != "" {
+			detail.Fallbacks++
+		}
+	}
+	switch {
+	case couriers > 0 && zones == 0:
+		detail.Source = shipping.FeeSourceCourier
+	case zones > 0 && couriers == 0:
+		detail.Source = shipping.FeeSourceZones
+	default:
+		// Both sources charged a block of the same order (a courier block that
+		// fell back beside a live quote, or a zone block beside a quoted one).
+		detail.Source = "mixed"
 	}
 	raw, err := json.Marshal(detail)
 	if err != nil {
-		return 0, nil, err
+		return nil
 	}
-	return total, raw, nil
+	return raw
 }
 
 // shippingError is a buyer-facing refusal on the shipping path: a 400 whose

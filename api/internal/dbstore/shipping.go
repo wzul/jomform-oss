@@ -77,7 +77,8 @@ const (
 	zoneSetSelect = `SELECT id, name, is_default FROM shipping_zone_sets`
 
 	zoneSelect = `SELECT id, set_id, name, states, districts,
-		COALESCE(postcode_from,''), COALESCE(postcode_to,''), priority, is_fallback
+		COALESCE(postcode_from,''), COALESCE(postcode_to,''), priority, is_fallback,
+		COALESCE(lat,''), COALESCE(lng,'')
 		FROM shipping_zones`
 
 	rateSelect = `SELECT id, zone_id, label, price_sen, min_weight_g, max_weight_g,
@@ -102,6 +103,11 @@ type shippingZoneRow struct {
 	PostcodeTo   string
 	Priority     int
 	IsFallback   bool
+	// Lat / Lng are the zone's own point (phase 2): what a point-based courier
+	// (Lalamove) is quoted to. Empty means unknown, which falls back to this
+	// zone's rate rather than inventing a coordinate.
+	Lat string
+	Lng string
 }
 
 // shippingRateRow is one shipping_rates row.
@@ -129,7 +135,8 @@ func scanShippingZoneSetRow(row pgx.Row) (*shippingZoneSetRow, error) {
 func scanShippingZoneRow(row pgx.Row) (*shippingZoneRow, error) {
 	r := &shippingZoneRow{}
 	if err := row.Scan(&r.ID, &r.SetID, &r.Name, &r.States, &r.Districts,
-		&r.PostcodeFrom, &r.PostcodeTo, &r.Priority, &r.IsFallback); err != nil {
+		&r.PostcodeFrom, &r.PostcodeTo, &r.Priority, &r.IsFallback,
+		&r.Lat, &r.Lng); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -229,6 +236,8 @@ func (s *ShippingStore) setsWhere(ctx context.Context, accountIDs []string, extr
 			PostcodeTo:   row.PostcodeTo,
 			Priority:     row.Priority,
 			Fallback:     row.IsFallback,
+			Lat:          row.Lat,
+			Lng:          row.Lng,
 			Rates:        []shipping.Rate{},
 		})
 		zoneIndex[row.ID] = [2]int{si, len(sets[si].Zones) - 1}
@@ -333,10 +342,11 @@ func (s *ShippingStore) Replace(ctx context.Context, accountID string, sets []sh
 		for _, z := range set.Zones {
 			var zoneID string
 			if err := tx.QueryRow(ctx,
-				`INSERT INTO shipping_zones (set_id, account_id, name, states, districts, postcode_from, postcode_to, priority, is_fallback)
-				 VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''),$8,$9) RETURNING id`,
+				`INSERT INTO shipping_zones (set_id, account_id, name, states, districts, postcode_from, postcode_to, priority, is_fallback, lat, lng)
+				 VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''),$8,$9,$10,$11) RETURNING id`,
 				id, accountID, strings.TrimSpace(z.Name), textArray(z.States), textArray(z.Districts),
-				strings.TrimSpace(z.PostcodeFrom), strings.TrimSpace(z.PostcodeTo), z.Priority, z.Fallback).Scan(&zoneID); err != nil {
+				strings.TrimSpace(z.PostcodeFrom), strings.TrimSpace(z.PostcodeTo), z.Priority, z.Fallback,
+				strings.TrimSpace(z.Lat), strings.TrimSpace(z.Lng)).Scan(&zoneID); err != nil {
 				return err
 			}
 			for _, r := range z.Rates {
@@ -490,6 +500,18 @@ func ValidateShippingSets(sets []shipping.ZoneSet) error {
 			if len(z.Rates) == 0 {
 				return fmt.Errorf("zon %q belum ada kadar", zn)
 			}
+			// A zone's own point (phase 2). Both coordinates or neither: a zone
+			// with a latitude and no longitude would be quoted to a place that
+			// does not exist, and 0/0 is a real point in the Atlantic.
+			lat, lng := strings.TrimSpace(z.Lat), strings.TrimSpace(z.Lng)
+			if (lat == "") != (lng == "") {
+				return fmt.Errorf("zon %q: latitud dan longitud mesti diberi bersama", zn)
+			}
+			if lat != "" {
+				if !validCoordinate(lat) || !validCoordinate(lng) {
+					return fmt.Errorf("zon %q: latitud/longitud mesti nombor perpuluhan", zn)
+				}
+			}
 			for _, r := range z.Rates {
 				if r.PriceSen < 0 {
 					return fmt.Errorf("zon %q: kadar tidak boleh negatif", zn)
@@ -510,6 +532,35 @@ func ValidateShippingSets(sets []shipping.ZoneSet) error {
 		}
 	}
 	return nil
+}
+
+// validCoordinate reports whether s is a usable decimal coordinate: optional
+// sign, digits, optional single fraction. No exponent, no units, no whitespace —
+// the same shape a courier API accepts. Range is not checked here (a real
+// provider validates the point it is given).
+func validCoordinate(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if s[0] == '-' || s[0] == '+' {
+		s = s[1:]
+	}
+	seenDigit, seenDot := false, false
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+			seenDigit = true
+		case r == '.':
+			if seenDot {
+				return false
+			}
+			seenDot = true
+		default:
+			return false
+		}
+	}
+	return seenDigit
 }
 
 // postcodeValue parses an all-digit postcode, or -1.

@@ -6780,6 +6780,201 @@ export const OPENAPI_SPEC: OpenApiSpec = {
         "x-jomform-access": "write"
       }
     },
+    "/v1/rest/shipping/couriers": {
+      "get": {
+        "description": "Every courier provider this deployment knows (lalamove, easyparcel) with: whether the SERVER holds usable credentials for it (never the value — only the source), whether THIS workspace has connected it, the pickup address a parcel ships from, the connection's environment (sandbox/live, so a simulated rate is visible as simulated), and what is still missing (credentials / connect / grant / origin) before a real quote can happen. A provider whose production keys do not exist yet is listed as not configured rather than hidden.",
+        "operationId": "getShippingCouriers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Read the workspace's courier connections",
+        "tags": [
+          "Shipping"
+        ],
+        "x-jomform-access": "read"
+      }
+    },
+    "/v1/rest/shipping/couriers/{provider}/connect": {
+      "post": {
+        "description": "Lalamove authenticates server to server, so connecting means naming the PICKUP point (lat/lng) it will be quoted from and it is immediately ready. EasyParcel is OAuth 2.0 and its consent belongs to the MERCHANT: this returns an authorize URL (with a single-use, 30-minute state) for the account owner to open on any device. No password is ever accepted here. A refusal names its remedy: missing server credentials, a missing pickup point, or an unregistered redirect_uri.",
+        "operationId": "postShippingCourierConnect",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Connect a courier provider for the workspace",
+        "tags": [
+          "Shipping"
+        ],
+        "x-jomform-access": "write"
+      }
+    },
+    "/v1/rest/shipping/couriers/{provider}/disconnect": {
+      "post": {
+        "description": "Marks the connection disconnected and deletes the sealed OAuth grant, so a revoked authorization can never be quoted with. The pickup address is KEPT: it is the merchant's configuration and reconnecting must not make them retype it.",
+        "operationId": "postShippingCourierDisconnect",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Disconnect a courier provider, dropping its stored grant",
+        "tags": [
+          "Shipping"
+        ],
+        "x-jomform-access": "write"
+      }
+    },
     "/v1/rest/spam/sales": {
       "get": {
         "operationId": "listSpamSales",

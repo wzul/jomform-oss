@@ -19,7 +19,9 @@ export const metadata: Metadata = {
 //     (a refusal, or a fallback zone, never a silent 0);
 //   * the weight band and the free-shipping threshold;
 //   * what lands on the sale (shipping_sen and the shipping_detail record);
-//   * the phase-2 seam: live courier quoting is NOT live yet and is refused.
+//   * the courier sources (phase 2): a block can name a real provider, the fee
+//     is QUOTED at checkout and the attached zone set becomes its fallback, with
+//     the sale recording which of the two charged.
 
 const STEPS: { title: string; body: string }[] = [
   {
@@ -67,12 +69,33 @@ const TOOLS: { name: string; purpose: string }[] = [
   {
     name: "get_shipping_rates",
     purpose:
-      "Read a workspace's zone sets: every zone's match rules (states, districts, postcode range, priority, fallback) and its rate rows (price in sen, weight band in grams, free-shipping threshold).",
+      "Read a workspace's zone sets: every zone's match rules (states, districts, postcode range, priority, fallback, and its own lat/lng for courier quoting) and its rate rows (price in sen, weight band in grams, free-shipping threshold).",
   },
   {
     name: "set_shipping_rates",
     purpose:
       "Replace the whole configuration in one call. A set sent with its id keeps it — so every form pointing at it keeps resolving — and a set the payload omits is deleted, refused while a form still uses it.",
+  },
+];
+
+// The phase-2 courier tools. They are documented here (and named in
+// docsFacts.ts) because the MCP parity guard requires every registered tool to
+// appear on a docs page.
+const COURIER_TOOLS: { name: string; purpose: string }[] = [
+  {
+    name: "get_shipping_couriers",
+    purpose:
+      "List the courier providers (lalamove, easyparcel) for a workspace: whether the server holds credentials for each (never the value), whether the workspace has connected it, the connection's environment and pickup point, and what is still needed before a real quote can be taken.",
+  },
+  {
+    name: "connect_shipping_courier",
+    purpose:
+      "Connect a provider. Give the pickup address (postcode + state for EasyParcel; latitude + longitude for Lalamove). For EasyParcel the tool returns an authorize link that the account owner must open on their own device — an agent must never open it, type a password or ask for one. The link expires; calling the tool again issues a fresh one.",
+  },
+  {
+    name: "disconnect_shipping_courier",
+    purpose:
+      "Disconnect a provider and delete the stored authorization, so a revoked account can never be quoted with. The pickup address is kept, so reconnecting is one call.",
   },
 ];
 
@@ -177,14 +200,58 @@ export default function ShippingDocsPage() {
       </p>
 
       <h2 id="couriers" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
-        Courier quotes (not live yet)
+        Courier quotes (Lalamove, EasyParcel)
       </h2>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        A block&apos;s rate source also accepts the courier setting reserved for live quotes from
-        J&amp;T, PosLaju, Shopee Express, Lalamove and other Malaysian couriers. That integration is
-        not live: a form whose block asks for it is refused at checkout with a message saying the
-        source is not supported yet, never charged a wrong amount. It needs a merchant account with
-        each courier first.
+        A block&apos;s rate source can also be <strong>Courier quote</strong>: at checkout the fee is
+        quoted from a real courier, and the zone set you attach to the block becomes its fallback.
+        Two providers are supported — <strong>Lalamove</strong>, which prices an intra-city route
+        (Kuala Lumpur, Johor Bahru, Penang and the other cities it serves), and{" "}
+        <strong>EasyParcel</strong>, which prices a nationwide parcel across its courier network.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Connect a courier in <strong>Form Settings → Shipping → Courier providers</strong>. Lalamove
+        is connected immediately once you give the pickup point it collects from; EasyParcel asks the
+        account owner to authorize the account by opening a link on their own device, because the
+        consent belongs to them and JomForm never sees or asks for a password. Each zone can also
+        carry its own latitude and longitude, which is where a route-based courier is quoted to.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A quote is a price taken while the buyer pays, so it is deliberately short-lived: if the
+        courier is not connected, cannot cover the address, fails or takes too long, the zone rate
+        you configured is charged instead and the sale records which of the two applied — a
+        &ldquo;courier quote failed&rdquo; fallback is never a silent zero, and a form whose courier
+        block has no zone set at all is refused rather than charged nothing. A courier block is
+        quoted at checkout, so the price your form shows is an estimate and the final fee is the
+        quoted one; both figures are recorded on the sale.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A sandbox connection is labelled as such in the dashboard, and the sale records the
+        environment — a simulated rate (Lalamove&apos;s test keys, or an EasyParcel demo account) is
+        never mistaken for a real one. Production keys are the operator&apos;s to obtain; until they
+        exist the provider is shown as not configured and the zone rates apply.
+      </p>
+
+      <h2 id="courier-mcp" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
+        Connecting a courier with an agent (MCP)
+      </h2>
+      <div className="mt-4 space-y-4">
+        {COURIER_TOOLS.map((t) => (
+          <section key={t.name}>
+            <h3 className="font-mono text-sm font-semibold text-slate-900">{t.name}</h3>
+            <p className="mt-1 text-sm leading-relaxed text-slate-600">{t.purpose}</p>
+          </section>
+        ))}
+      </div>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The same surface is on the REST API as{" "}
+        <span className="font-mono text-xs">GET /v1/rest/shipping/couriers</span>,{" "}
+        <span className="font-mono text-xs">POST /v1/rest/shipping/couriers/&#123;provider&#125;/connect</span>{" "}
+        and{" "}
+        <span className="font-mono text-xs">POST /v1/rest/shipping/couriers/&#123;provider&#125;/disconnect</span>.
+        The public OAuth return for EasyParcel is{" "}
+        <span className="font-mono text-xs">/api/shipping/easyparcel/callback</span>, which is the URL
+        registered in the EasyParcel Developer Hub.
       </p>
     </div>
   );
