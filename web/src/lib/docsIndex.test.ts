@@ -919,10 +919,11 @@ test("every cut entry's facts are readable at the destination (not just its anch
 // submits"; the guide said an extra input "can never write into the response". Both
 // are contradicted by the shipped handler: customform.Collect does filter the
 // submitted names to the registered ids, and then handleResponseSubmit folds the
-// buyer identity into the SAME stored map as full_name/email/phone, read from the
-// frame's first input[type=text]/[email]/[tel] (httpapi/public.go,
-// httpapi/render_custom.go). So an unregistered text control's value IS stored, as
-// full_name — the submissions list's buyer column.
+// buyer identity into the SAME stored map as full_name/email/phone, read from a
+// control the markup names (name="full_name"/"email"/"phone", card t_754ed4b4) or,
+// when it names none, the frame's first input[type=text]/[email]/[tel]
+// (httpapi/public.go, httpapi/render_custom.go). So an unregistered text control's
+// value IS stored, as full_name — the submissions list's buyer column.
 //
 // DESTINATION_FACTS now pins the guide's three halves of the corrected contract. The
 // entry's summary is a different string on a different page and no fact table reaches

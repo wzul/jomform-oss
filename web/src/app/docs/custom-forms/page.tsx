@@ -165,7 +165,10 @@ export default function CustomFormsDocsPage() {
         On submit the answers are filtered to the contract: a control whose name is not registered is
         dropped before the submission is stored, so an unregistered name never becomes a field of its
         own. The buyer&apos;s identity is written outside that filter. It is recorded in the same
-        stored response as full_name, email and phone, read from the first
+        stored response as full_name, email and phone. A control the markup NAMES — one carrying
+        name=&quot;full_name&quot;, name=&quot;email&quot; or name=&quot;phone&quot; — answers for that
+        field whatever its input type, so naming the control is how you place your name field
+        anywhere in the body. A body that declares none of them falls back to the first
         input[type=text], input[type=email] and input[type=tel] the markup carries — registered or
         not. So a text control that is not registered still reaches storage: its value is stored as
         full_name, the field the responses list shows as the buyer. The anti-spam fields the page

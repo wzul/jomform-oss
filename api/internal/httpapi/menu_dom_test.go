@@ -101,6 +101,19 @@ type menuDOM struct {
 	// stockReads counts live-stock reads, so a guard can prove the page ASKED
 	// rather than inferring it from the outcome.
 	stockReads int
+
+	// frameDocs holds the document an <iframe> carries, keyed by the iframe
+	// element's node pointer: the custom-HTML response page writes the
+	// merchant's sanitized body into `srcdoc` and then reads `contentDocument`,
+	// so a test that drives that page has to model the frame's own document
+	// rather than the page's (card t_754ed4b4).
+	frameDocs map[*html.Node]*html.Node
+	// frameSrc is the srcdoc source itself, so a test can read the body the page
+	// wrote into the frame (contentDocument only exposes the parsed tree).
+	frameSrc map[*html.Node]string
+	// pathname is what the page sees as location.pathname — the custom page
+	// posts to location.pathname+'/order'.
+	pathname string
 }
 
 // newMenuDOMPage serves a rendered menu and returns a DOM running its script.
@@ -213,6 +226,7 @@ func newMenuDOM(t *testing.T, body string) *menuDOM {
 		t: t, vm: goja.New(), doc: doc,
 		index: map[*html.Node]int{}, byID: map[string]*html.Node{},
 		storage: map[string]string{}, clock: 1700000000000,
+		frameDocs: map[*html.Node]*html.Node{}, frameSrc: map[*html.Node]string{},
 	}
 	d.buildIndex(doc)
 	d.installHost()
@@ -715,8 +729,47 @@ func (d *menuDOM) installHost() {
 		d.nodes = append(d.nodes, n)
 		return d.handle(n)
 	})
-	d.vm.Set("__append", func(h, child int) { d.node(h).AppendChild(d.node(child)) })
+	d.vm.Set("__append", func(h, child int) {
+		c := d.node(child)
+		// A browser's appendChild MOVES an already-attached node, and
+		// html.Node.AppendChild panics on one — so detach first. The custom-HTML
+		// page's bridge builds a <form> around the merchant's body by moving each
+		// body child into it (card t_754ed4b4).
+		if c.Parent != nil {
+			c.Parent.RemoveChild(c)
+		}
+		d.node(h).AppendChild(c)
+	})
 	d.vm.Set("__removeChild", func(h, child int) { d.node(h).RemoveChild(d.node(child)) })
+	// __firstElement is `firstChild` as this harness models it: element children
+	// only (text nodes carry no wrapper here). The custom page's bridge walks the
+	// frame body with `while(doc.body.firstChild){form.appendChild(...)}`, so the
+	// handle has to change as each child is moved — which is what the detaching
+	// __append above gives it.
+	d.vm.Set("__firstElement", func(h int) int {
+		for c := d.node(h).FirstChild; c != nil; c = c.NextSibling {
+			if c.Type == html.ElementNode {
+				return d.handle(c)
+			}
+		}
+		return 0
+	})
+	// __srcdocSet parses the document an <iframe>'s srcdoc was assigned, indexes
+	// it (so its nodes have handles), and returns that document's handle; 0 from
+	// __srcdocGet means the element carries no frame document.
+	d.vm.Set("__srcdocSet", func(h int, src string) int {
+		frameDoc, err := html.Parse(strings.NewReader(src))
+		if err != nil {
+			d.t.Fatalf("parse the iframe srcdoc the page wrote: %v", err)
+		}
+		d.buildIndex(frameDoc)
+		d.frameDocs[d.node(h)] = frameDoc
+		d.frameSrc[d.node(h)] = src
+		return d.handle(frameDoc)
+	})
+	d.vm.Set("__srcdocGet", func(h int) int { return d.handle(d.frameDocs[d.node(h)]) })
+	d.vm.Set("__srcdocSrc", func(h int) string { return d.frameSrc[d.node(h)] })
+	d.vm.Set("__pathname", func() string { return d.pathname })
 	d.vm.Set("__text", func(h int) string {
 		var sb strings.Builder
 		for c := d.node(h).FirstChild; c != nil; c = c.NextSibling {
@@ -766,6 +819,24 @@ const menuDOMShim = `
   function unsupported(name){ throw new Error('menu DOM shim does not implement ' + name); }
   var docHandlers = {};
   var cache = {};
+
+  // docOf wraps a DOCUMENT node (an iframe's contentDocument) with the same
+  // surface the page's own document object has, over that node's subtree. The
+  // custom-HTML response page collects the buyer's answers from the frame's
+  // document, so a harness that only knew the outer document would measure
+  // nothing on it (card t_754ed4b4).
+  function docOf(h){
+    var o = {
+      __h: h,
+      querySelector: function(sel){ return el(__query(h,sel)); },
+      querySelectorAll: function(sel){ return many(__queryAll(h,sel)); },
+      createElement: function(t){ return el(__create(String(t))); },
+      getElementById: function(id){ return el(__byId(String(id))); }
+    };
+    Object.defineProperty(o, 'body', { get: function(){ return el(__query(h,'body')); } });
+    Object.defineProperty(o, 'documentElement', { get: function(){ return el(__query(h,'html')); } });
+    return o;
+  }
 
   function classes(h){ var c = __attr(h,'class'); return c ? String(c).split(/\s+/) : []; }
   function setClasses(h, parts){
@@ -844,6 +915,18 @@ const menuDOMShim = `
     };
     Object.defineProperty(o, 'parentNode', { get: function(){ return el(__parent(h)); } });
     Object.defineProperty(o, 'previousElementSibling', { get: function(){ return el(__prevElement(h)); } });
+    Object.defineProperty(o, 'firstChild', { get: function(){ return el(__firstElement(h)); } });
+    // An iframe's srcdoc and contentDocument: assigning srcdoc replaces the
+    // frame's document, and contentDocument is how the page's bridge reaches
+    // it. Both are modelled so the custom-HTML response page can be driven the
+    // way a browser drives it (card t_754ed4b4).
+    Object.defineProperty(o, 'srcdoc', {
+      get: function(){ return String(__srcdocSrc(h)); },
+      set: function(v){ __srcdocSet(h, String(v)); }
+    });
+    Object.defineProperty(o, 'contentDocument', {
+      get: function(){ var d = __srcdocGet(h); return d ? docOf(d) : null; }
+    });
     Object.defineProperty(o, 'children', { get: function(){ return many(__children(h,'')); } });
     Object.defineProperty(o, 'options', { get: function(){ return many(__children(h,'option')); } });
     Object.defineProperty(o, 'selectedIndex', {
@@ -935,6 +1018,7 @@ const menuDOMShim = `
   g.window = g;
   g.location = {
     search: '',
+    get pathname(){ return __pathname(); },
     get href(){ return this.__href || ''; },
     set href(v){ this.__href = String(v); __navigate(String(v)); }
   };

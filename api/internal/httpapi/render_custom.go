@@ -379,11 +379,21 @@ var customFormTmpl = template.Must(template.New("custom").
       // Issue #489: QR ordering — echo the ?table=N the QR stand / menu page
       // carried into the form URL so sales.table_number is populated.
       table_number:(new URLSearchParams(location.search).get('table')||'')};
-    var nm=doc&&doc.querySelector('input[type=text]');
+    // Card t_754ed4b4: the buyer's identity is chosen by DECLARATION first and
+    // by type second. The body here is the merchant's own markup, so a
+    // positional/type guess is not an identity: a company or subject control
+    // placed before the name field used to answer for full_name, and
+    // handleResponseSubmit folds client.full_name onto the recorded answers
+    // AFTER customform.Collect — so it also OVERWROTE a merchant's correctly
+    // named name="full_name" answer. A control the body itself names
+    // (full_name / email / phone) wins; a body that names none keeps exactly
+    // the mapping it had before, the first input[type=text]/[email]/[tel].
+    // Same "declared marker first, type second" shape render_blocks.go uses.
+    var nm=doc&&(doc.querySelector('[name=full_name]')||doc.querySelector('input[type=text]'));
     if(nm)body.client.full_name=nm.value;
-    var em=doc&&doc.querySelector('input[type=email]');
+    var em=doc&&(doc.querySelector('[name=email]')||doc.querySelector('input[type=email]'));
     if(em)body.client.email=em.value;
-    var ph=doc&&doc.querySelector('input[type=tel]');
+    var ph=doc&&(doc.querySelector('[name=phone]')||doc.querySelector('input[type=tel]'));
     if(ph)body.client.phone=ph.value;
     fetch(location.pathname+'/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json()})

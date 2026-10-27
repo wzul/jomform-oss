@@ -205,11 +205,12 @@ const DESTINATION_FACTS: Record<string, string[]> = {
   // input in the markup can never write into the response". The handler folds the
   // buyer identity into the same stored map AFTER customform.Collect
   // (httpapi/public.go, handleResponseSubmit) and the frame's bridge reads it from
-  // the first input[type=text]/[email]/[tel] the markup carries — so an
-  // unregistered text control's value is stored as full_name, and a well-formed
-  // form stores full_name/email/phone keys that are not registered ids. These
-  // facts are the three halves of the corrected sentence; dropping any one of them
-  // lets the absolute come back.
+  // a control the markup NAMES (name="full_name"/"email"/"phone", card t_754ed4b4)
+  // or, when it names none, from the first input[type=text]/[email]/[tel] the
+  // markup carries — so an unregistered text control's value is stored as
+  // full_name, and a well-formed form stores full_name/email/phone keys that are
+  // not registered ids. These facts are the three halves of the corrected
+  // sentence; dropping any one of them lets the absolute come back.
   "Custom HTML forms": [
     "custom_html",
     "custom_fields",
