@@ -106,10 +106,12 @@ func ValidFormSlug(s string) bool {
 
 // ErrTemplateGalleryMetadata indicates a template is being published into the
 // gallery without the two fields every gallery card renders (issue #594): a
-// category and a text block whose value is the description line. The gallery
-// endpoint reads config.category and the FIRST text block, so a template
-// published without them shows up in the New-form picker as a bare title.
-var ErrTemplateGalleryMetadata = errors.New("template needs a category and a description text block")
+// category and a description block. The gallery endpoint reads config.category
+// and formfields.Description — the intro line from a `section`/`html` block,
+// falling back to a `text` block written under the old content model
+// (t_6a23c70d) — so a template published without them shows up in the New-form
+// picker as a bare title.
+var ErrTemplateGalleryMetadata = errors.New("template needs a category and a description block")
 
 // ErrFormHasSales refuses a permanent purge of a form that was ever sold. A
 // purged form row is gone for good, and sales.form_id is ON DELETE SET NULL, so
@@ -516,9 +518,23 @@ func formBlocksArray(expr string) string {
 }
 
 // galleryMetadataMissingSQL is the predicate that reports a template row as
-// unfit for the gallery: no config.category, or no text block carrying a value
-// (issue #594). The gallery endpoint and the picker read exactly these two
-// things, so a row failing it would render as a bare title.
+// unfit for the gallery: no config.category, or no description block (issues
+// #594, t_6a23c70d).
+//
+// A template's description is the SAME thing formfields.Description (and
+// web/src/lib/formDescription.ts) reads, so the rule is stated with the same
+// block types: a non-empty `section`/`html` block — the intro line a form opens
+// with — falling back to a non-empty `text` block for a row written while
+// `text` still meant prose. `text` is a single-line text INPUT now and its
+// value is the field's LABEL, so a `text`-only predicate demanded the old
+// content model: it refused a template whose intro was a Section (the shape the
+// builder, the seeded library and the read side all use) while accepting
+// "Nama anda" as a description.
+//
+// The `text` arm is kept as a fallback, not dropped: a row that publishes today
+// must keep publishing, and the read side still describes such a row from that
+// block. Keep the type list in step with formfields.proseBlockTypes — the
+// gate and the card must not disagree about what a description is.
 //
 // It is a var rather than a const only because it is assembled from
 // formBlocksArray(); the rule it states is fixed at init and never mutated.
@@ -526,13 +542,14 @@ var galleryMetadataMissingSQL = `
 	COALESCE(config->>'category', '') = ''
 	OR NOT EXISTS (
 	     SELECT 1 FROM jsonb_array_elements(` + formBlocksArray("config->'blocks'") + `) b
-	      WHERE b->>'type' = 'text' AND COALESCE(b->>'value', '') <> ''
+	      WHERE b->>'type' IN ('section', 'html', 'text')
+	        AND COALESCE(b->>'value', '') <> ''
 	   )`
 
 // setStatusSQL performs a status change and, in the same round trip, reports
 // whether the row exists and whether the gallery-metadata rule blocks it
 // (issue #594). Publishing a template with neither a category nor a description
-// text block is refused rather than silently producing a card with no category
+// block is refused rather than silently producing a card with no category
 // and no description — the defect this issue is about.
 //
 // The UPDATE is written with a CTE rather than a WHERE clause so the caller can
@@ -1365,7 +1382,7 @@ func (s *FormStore) SoftDeleteMany(ctx context.Context, accountID string, formID
 }
 
 // BlockedGalleryTemplates returns the ids in formIDs that a publish would skip
-// because they are templates without a category or a description text block
+// because they are templates without a category or a description block
 // (issue #594). The bulk form action uses it to tell the caller which ids were
 // left behind, so a skip is reported instead of looking like a silent no-op.
 func (s *FormStore) BlockedGalleryTemplates(ctx context.Context, accountID string, formIDs []string) ([]string, error) {

@@ -489,9 +489,13 @@ export default function CustomizeDocsPage() {
         That is because every gallery card is rendered from two fields of the template&apos;s own
         config: the <strong>category</strong> is{" "}
         <span className="font-mono text-xs">config.category</span>, and the <strong>description</strong>{" "}
-        is the value of its <strong>first Text block</strong> — which is why a gallery card always
-        reads as more than a title. A template you write yourself gets the same treatment: set a
-        category and put a short intro line in a Text block, or its card has nothing to show.
+        — the card&apos;s subtitle — is the template&apos;s <strong>intro line</strong>: the value of
+        its <strong>first Section block</strong>. A Text block also counts, because templates written
+        before Section existed kept their intro there and their cards must keep working — but a Text
+        block is a single-line <em>answer</em> field now, so its value is a field label, and a new
+        template should put its intro in a Section block. A template you write yourself gets the same
+        treatment: set a category and put a short intro line in a Section block, or its card has
+        nothing to show.
       </p>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         Publishing is therefore checked: a template missing either field is{" "}

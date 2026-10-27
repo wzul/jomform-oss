@@ -29,6 +29,15 @@ import (
 // wording cannot drift from the store's sentinel.
 const invalidSlugMessage = "form slug must be 1-40 characters of a-z, 0-9 or -"
 
+// templateNeedMetadataWire is the wire message for a template publish refused
+// for missing gallery metadata (issue #594, t_6a23c70d). It is a named literal
+// for the same reason invalidSlugMessage is: errcode.go's message→code table
+// keys on the exact text, and it must name BOTH block types the description
+// may live in — a Section (or raw-HTML) block, or a Text block written under
+// the old content model. A message that said "one text block" would tell the
+// merchant to add a field LABEL and publish a card reading "Nama anda".
+const templateNeedMetadataWire = "template perlu category dan satu blok description (Section atau text) sebelum diterbitkan ke galeri"
+
 // The workspace slug rule's wire messages, declared HERE as literals for the
 // same reason invalidSlugMessage is (above): errcode.go's message→code table
 // requires every key to appear as a string literal in a non-errcode.go file of
@@ -172,8 +181,15 @@ func respondErr(w http.ResponseWriter, r *http.Request, err error) {
 		// Issue #594: publishing a template into the gallery needs the two
 		// fields its card renders. Refused, with the reason, rather than
 		// shipping a card with no category and no description.
+		//
+		// The wording names BOTH block types the description may live in,
+		// because that is the rule the store enforces (t_6a23c70d): the intro
+		// line is a Section (or raw-HTML) block, and a Text block still counts
+		// for a template written before `text` became an input. Telling a
+		// merchant "one text block" would send them to add a field LABEL and
+		// publish a card describing their form as "Nama anda".
 		writeErr(w, http.StatusBadRequest,
-			"template perlu category dan satu blok text (description) sebelum diterbitkan ke galeri")
+			templateNeedMetadataWire)
 	case errors.Is(err, payments.ErrNotConfigured):
 		writeErr(w, http.StatusBadRequest, "chip belum dikonfigurasi akaun ini")
 	default:

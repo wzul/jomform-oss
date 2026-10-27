@@ -20,9 +20,12 @@ package dbstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/wzul/jomform/api/internal/formfields"
 )
 
 // templateWith creates a template-shaped form with the given config.
@@ -75,6 +78,17 @@ func TestPublishRefusesTemplateWithoutGalleryMetadata(t *testing.T) {
 		{"text block with an empty value", map[string]any{
 			"category": "Contact",
 			"blocks":   []any{map[string]any{"type": "text", "value": ""}},
+		}},
+		// t_6a23c70d widened the rule to the block types the read side treats
+		// as prose, so the refusal has to be pinned for those too: an empty
+		// Section (or HTML) block is still no description.
+		{"section block with an empty value", map[string]any{
+			"category": "Contact",
+			"blocks":   []any{map[string]any{"type": "section", "value": ""}},
+		}},
+		{"html block with an empty value", map[string]any{
+			"category": "Contact",
+			"blocks":   []any{map[string]any{"type": "html", "value": ""}},
 		}},
 	}
 	for i, tc := range cases {
@@ -225,5 +239,96 @@ func TestBulkPublishSkipsIncompleteTemplatesOnly(t *testing.T) {
 	}
 	if allDraft != 3 {
 		t.Errorf("%d of 3 rows are draft after a bulk draft action, want 3", allDraft)
+	}
+}
+
+// TestPublishAcceptsASectionOrHTMLDescription is the OTHER direction of the
+// #594 rule (card t_6a23c70d).
+//
+// The predicate demanded a non-empty `text` block. Since t_7fb80479 `text` is a
+// single-line text INPUT whose value is the field's LABEL, and a template's
+// description is the first non-empty `section`/`html` block — which is what
+// formfields.Description reads and what the seeded library now carries
+// (000076). So the gate refused the shape the product itself writes and
+// accepted "Nama anda" in its place, and publishing a template from the gallery
+// was impossible.
+//
+// Each case below is a shape the OLD predicate rejected. The first assertion is
+// the coupling that makes the rule one rule: the config must be one the read
+// side can describe, and the gate must accept exactly those. The three publish
+// paths are all driven because all three embed the same predicate.
+func TestPublishAcceptsASectionOrHTMLDescription(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	fs := NewFormStore(p)
+	acc := uniqueAccount(t, ctx, p)
+
+	const sentence = "Get in touch — we usually reply within a day."
+	section := func(blockType string, extra ...map[string]any) map[string]any {
+		blocks := []any{map[string]any{"id": "in1", "type": blockType, "value": sentence}}
+		for _, b := range extra {
+			blocks = append(blocks, b)
+		}
+		return map[string]any{"mode": "response", "category": "Contact", "blocks": blocks}
+	}
+
+	cases := []struct {
+		name   string
+		config map[string]any
+	}{
+		{"a Section intro (the shape the builder and the seeded library write)", section("section")},
+		{"an HTML intro", section("html")},
+		{"a Section intro above a labelled text field", section("section",
+			map[string]any{"id": "n1", "type": "text", "value": "Nama anda", "required": true})},
+	}
+
+	for i, tc := range cases {
+		// The read side is the authority: if Description cannot describe this
+		// config, the case is not testing what it claims to.
+		if got := formfields.Description(tc.config); got != sentence {
+			t.Fatalf("%s: formfields.Description = %q, want the intro sentence — this case "+
+				"does not model what the gallery card reads", tc.name, got)
+		}
+
+		slug := fmt.Sprintf("tpl-6a23-ok-%d", i)
+
+		// SetStatus — the single-form publish route.
+		single := templateWith(t, ctx, p, acc, slug, FormStatusDraft, tc.config)
+		if err := fs.SetStatus(ctx, acc, single.ID, FormStatusPublished); err != nil {
+			t.Errorf("%s: SetStatus refused a template the gallery card CAN describe: %v",
+				tc.name, err)
+		}
+		var status string
+		if err := p.QueryRow(ctx, `SELECT status FROM forms WHERE id=$1`, single.ID).Scan(&status); err != nil {
+			t.Fatalf("read status: %v", err)
+		}
+		if status != FormStatusPublished {
+			t.Errorf("%s: status = %q after a publish, want published", tc.name, status)
+		}
+
+		// SetStatusWithPassword — the status route and the MCP update path.
+		withPwd := templateWith(t, ctx, p, acc, slug+"-pwd", FormStatusDraft, tc.config)
+		if err := fs.SetStatusWithPassword(ctx, acc, withPwd.ID, FormStatusPublished, ""); err != nil {
+			t.Errorf("%s: SetStatusWithPassword refused a template the gallery card CAN "+
+				"describe: %v", tc.name, err)
+		}
+
+		// The bulk path: not reported as a skip, and the batch publishes it.
+		bulk := templateWith(t, ctx, p, acc, slug+"-bulk", FormStatusDraft, tc.config)
+		blocked, err := fs.BlockedGalleryTemplates(ctx, acc, []string{bulk.ID})
+		if err != nil {
+			t.Fatalf("%s: BlockedGalleryTemplates: %v", tc.name, err)
+		}
+		if len(blocked) != 0 {
+			t.Errorf("%s: BlockedGalleryTemplates = %v, want none — a bulk publish would "+
+				"report this template as skipped", tc.name, blocked)
+		}
+		n, err := fs.SetStatusMany(ctx, acc, []string{bulk.ID}, FormStatusPublished)
+		if err != nil {
+			t.Fatalf("%s: SetStatusMany: %v", tc.name, err)
+		}
+		if n != 1 {
+			t.Errorf("%s: SetStatusMany published %d rows, want 1", tc.name, n)
+		}
 	}
 }

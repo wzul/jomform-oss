@@ -1510,10 +1510,12 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 			status = "draft"
 		}
 		// Issue #594: a bulk publish skips templates that carry no category or
-		// no description text block (they would reach the gallery as a bare
-		// title), while still publishing the ordinary forms in the same batch.
-		// Collect the skipped ids so the caller is told, instead of the skip
-		// looking like a no-op.
+		// no description block (they would reach the gallery as a bare title),
+		// while still publishing the ordinary forms in the same batch. Collect
+		// the skipped ids so the caller is told, instead of the skip looking
+		// like a no-op. The block types that count are the store's rule
+		// (galleryMetadataMissingSQL) — a Section intro, or a legacy Text
+		// block (t_6a23c70d).
 		if status == dbstore.FormStatusPublished {
 			var err error
 			skipped, err = h.Forms.BlockedGalleryTemplates(r.Context(), actx.Account.ID, ids)
@@ -1569,8 +1571,7 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 	out := map[string]any{"updated": updated}
 	if len(skipped) > 0 {
 		out["skipped"] = skipped
-		out["skipped_reason"] = "template perlu category dan satu blok text (description) " +
-			"sebelum diterbitkan ke galeri"
+		out["skipped_reason"] = templateNeedMetadataWire
 	}
 	if len(needsProducts) > 0 {
 		out["needs_products"] = needsProducts

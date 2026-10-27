@@ -356,10 +356,10 @@ var errCodeByMessage = map[string]string{
 	"langganan telah dibatalkan":                         CodeSubscriptionCancelled,
 
 	// Form / product / template validation.
-	"status mesti draft|private|published":                                                   CodeFormStatusBad,
-	"password mesti sekurang-kurangnya 4 aksara":                                             CodeFormPasswordTooShort,
-	"produk telah habis (out of stock)":                                                      CodeProductOutOfStock,
-	"template perlu category dan satu blok text (description) sebelum diterbitkan ke galeri": CodeTemplateNeedMetadata,
+	"status mesti draft|private|published":       CodeFormStatusBad,
+	"password mesti sekurang-kurangnya 4 aksara": CodeFormPasswordTooShort,
+	"produk telah habis (out of stock)":          CodeProductOutOfStock,
+	"template perlu category dan satu blok description (Section atau text) sebelum diterbitkan ke galeri": CodeTemplateNeedMetadata,
 
 	// Trash refusals. These two are assembled around a literal, so they are keyed
 	// by the exact wire message the handler writes.

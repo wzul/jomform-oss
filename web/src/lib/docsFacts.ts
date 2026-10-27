@@ -71,10 +71,18 @@ const DESTINATION_FACTS: Record<string, string[]> = {
   // The entry QA falsified. Every fact below was absent from the tree this
   // guard was written against; the last three are the gallery-metadata half
   // that had been dropped instead of moved.
+  //
+  // t_6a23c70d: the gallery-metadata fact changed sides. The page told merchants
+  // the description was "the value of its first Text block" — the pre-t_7fb80479
+  // rule, when `text` still meant prose. It is the intro line now (a Section
+  // block), and the API's publish gate was widened in the same change to accept
+  // it, so the three facts below moved with the copy: the block the card reads,
+  // the instruction to the merchant, and the legacy Text block that still counts.
   "Templates": [
     "config.category",
-    "first text block",
-    "set a category and put a short intro line in a text block",
+    "first section block",
+    "put a short intro line in a section block",
+    "a text block also counts",
     "refused with a clear message",
     "bare title",
     "bulk publish skips such a template",
@@ -241,7 +249,7 @@ const PER_ENTRY_FLOOR: Record<string, number> = {
   "Order forms": 3,
   "Variation products": 2,
   "Product images on forms": 2,
-  Templates: 7,
+  Templates: 8,
   "Publishing a form": 5,
   "Restaurant menu (QR ordering)": 4,
   "Menu basket (multi-item ordering)": 4,
