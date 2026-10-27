@@ -4220,6 +4220,99 @@ else
   fi
 fi
 
+# 44. A NARROWED RUN MUST NOT RE-EXECUTE WHAT ITS RECORD VOUCHED FOR (card
+#     t_33570a36). `--for-diff <base> --reuse-record` is the shape the merge lane
+#     gates with: narrow to what the diff can break, then re-run only what the
+#     per-tree record cannot vouch for. When the record vouches for the WHOLE
+#     narrowed selection there is nothing left to execute — and the run must
+#     really execute nothing.
+#
+#     MEASURED BEFORE THE FIX, on a real tree whose `--for-diff origin/main`
+#     selection was 9 gates, all recorded `pass`: the runner printed
+#         ==> nothing to execute: every gate in this run's selection is a recorded pass
+#     and three lines later `==> gate [build]: cd api && go build ./...`, then all
+#     nine (790s); the summary named every one of them under BOTH `PASS` and
+#     `REUSE`, and the ledger had already recorded the saving at second 0 for work
+#     the same run then paid for. Cause: `selected()` returned out of the
+#     inherited-SEL_DIFF arm before it ever read SKIP, and the reuse fold skips a
+#     gate by writing into SKIP — so under `--for-diff` the fold was announced and
+#     ledgered but could not take effect.
+#
+#     THE SANDBOX GATES FAIL FAST, AND THAT IS FINE HERE: the property asserted is
+#     the ABSENCE of execution (`gate [` is the banner printed for every gate the
+#     runner executes), and the exit status tells the same story from the other
+#     side — before the fix this run went RED on a prerequisite of a gate it had
+#     just announced as reused, which a record read can never be.
+#
+#     THE FIXTURE MUST NARROW: a selection that covers the whole inventory takes the
+#     pre-pool whole-inventory path instead, so a full selection here would prove
+#     nothing about the per-gate fold. That is asserted before anything is concluded
+#     from the run, the same way check 43 refuses a fixture that does not reproduce
+#     its defect.
+s44_dir="$SB_STATE/s44"
+rm -rf "$s44_dir"; mkdir -p "$s44_dir"
+(
+  cd "$SB" || exit 1
+  # TWO COMMITS, and the first one is load-bearing: the sandbox may carry changes
+  # from earlier checks, and `--for-diff` diffs the WORKING TREE against the base —
+  # so basing on the init commit collected every one of them and the selection came
+  # out as the whole inventory (measured: 22 of 22), which is the pre-pool path and
+  # proves nothing here. Committing the current state first makes the base describe
+  # "everything so far", and the second commit the only thing the diff can see.
+  printf '\n<!-- probe: baseline -->\n' >> GATE-INVENTORY.md
+  git add -A >/dev/null 2>&1 || exit 1
+  git -c user.email=t@t -c user.name=t commit -q -m "probe: baseline" >/dev/null 2>&1 || exit 1
+  # The narrowing change itself: a path that selects a subset of the inventory.
+  printf '\n<!-- probe: narrows the selection -->\n' >> GATE-INVENTORY.md
+  git add -A >/dev/null 2>&1 || exit 1
+  git -c user.email=t@t -c user.name=t commit -q -m "probe: narrowing change" >/dev/null 2>&1 || exit 1
+  . ./scripts/gate_result.sh
+  tree="$(gr_tree_sha "$SB")"
+  key="$(PREFLIGHT_KEY_EXTRA=probe44 gr_key "$SB")"
+  parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe44 gr_key_parts "$SB")")"
+  # THE SELECTION IS TAKEN FROM THE RUNNER ITSELF (`--explain-diff`, the same
+  # computation `--for-diff` does), never re-derived here: the sandbox carries
+  # changes from earlier checks, so `--classify` of the one path this check touches
+  # is NOT the selection the run will use — an earlier draft vouched for 4 gates
+  # while the run selected 5 and then (correctly) wanted to execute the fifth.
+  sel="$(./scripts/preflight.sh --explain-diff=HEAD~1 2>/dev/null | sed -n 's/^  gates selected ([0-9]* of [0-9]*): //p' | sed -n '1p')"
+  printf '%s\n' "$sel" > "$s44_dir/sel"
+  [ -n "${sel//[[:space:]]/}" ] || exit 1
+  mkdir -p "$RECORD_DIR"
+  {
+    printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+      "$tree" "$key" "$parts"
+    printf '%s\n' $sel | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' | sed '$ s/,$//'
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "finished_at": "%s"\n}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$RECORD_DIR/$tree.json"
+  rm -f "$RECORD_DIR/reuse-ledger.jsonl"
+  PREFLIGHT_KEY_EXTRA=probe44 ./scripts/preflight.sh --for-diff HEAD~1 --reuse-record > "$s44_dir/out" 2>&1
+  echo $? > "$s44_dir/rc"
+) >/dev/null 2>&1
+s44_sel="$(cat "$s44_dir/sel" 2>/dev/null)"
+s44_count="$(printf '%s' "$s44_sel" | wc -w)"
+s44_rc="$(cat "$s44_dir/rc" 2>/dev/null)"
+s44_out="$(cat "$s44_dir/out" 2>/dev/null)"
+s44_secs=$(( s44_count * 42 ))
+if [ -z "$s44_sel" ] || [ "${s44_count:-0}" -eq 0 ] || [ "${s44_count:-0}" -ge "$NGATES" ]; then
+  bad "check 44 — the fixture did not narrow: the sandbox diff selected ${s44_count:-0} of $NGATES gates, so this run is not the per-gate reuse path and proves nothing about it (a whole-inventory selection is taken by the pre-pool path)"
+elif [ "$s44_rc" != 0 ]; then
+  bad "check 44 — a narrowed run whose record vouches for its whole selection ($s44_count gate(s): $(printf '%s' "$s44_sel" | tr '\n' ' ')) must execute nothing and stay green, but it exited $s44_rc — it demanded work for gates it had already announced as reused: [$(printf '%s\n' "$s44_out" | grep -E 'nothing to execute|gate \[|PREFLIGHT FAIL|REUSED' | tr '\n' ' ')]"
+elif grep -q 'gate \[' <<<"$s44_out"; then
+  bad "check 44 — the run announced a record read and then EXECUTED $(grep -c 'gate \[' <<<"$s44_out") gate(s): [$(printf '%s\n' "$s44_out" | grep 'gate \[' | tr '\n' ' ')] — the reuse fold wrote into SKIP but selected() never read it (this is the exact defect)"
+elif ! grep -q 'nothing to execute' <<<"$s44_out"; then
+  bad "check 44 — the run neither executed a gate nor announced that it had nothing to execute; a verdict with no execution and no announcement is unreadable: [$(printf '%s\n' "$s44_out" | tail -n 3 | tr '\n' ' ')]"
+elif ! grep -q '^  REUSE: ' <<<"$s44_out" || grep -q '^  PASS: ' <<<"$s44_out"; then
+  bad "check 44 — the vouched-for gates must be reported as REUSE and never as PASS (nothing was executed): [$(printf '%s\n' "$s44_out" | grep -E '^  (PASS|REUSE|SKIP):' | tr '\n' ' ')]"
+elif ! grep -q "\"remembered_seconds\":$s44_secs" "$RECORD_DIR/reuse-ledger.jsonl" 2>/dev/null; then
+  bad "check 44 — the saving this run really made (${s44_secs}s = $s44_count gates x 42s) is not on the ledger: [$(cat "$RECORD_DIR/reuse-ledger.jsonl" 2>/dev/null | tr '\n' ' ')]"
+else
+  ok "check 44 — a narrowed run whose record vouches for its whole selection ($s44_count of $NGATES gates) executes nothing, says so, counts those gates as REUSE and not PASS, and ledgers the ${s44_secs}s it really saved (rc=0)"
+fi
+# The ledger file is shared with checks 23/32; empty it so a later reader of this
+# sandbox store cannot mistake check 44's fixture line for the happy-path one.
+rm -f "$RECORD_DIR/reuse-ledger.jsonl"
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -1273,19 +1273,36 @@ pw_gate_deps() {
 
 # selected() — is this gate in the requested set?
 #
-# With --for-diff, SEL_DIFF holds the gates the diff can break (built once, above)
-# and that set is the selection; ONLY/SKIP are refused in combination with it, so
-# the two cannot disagree here.
+# ONLY/SKIP ARE CONSULTED BEFORE AN INHERITED SEL_DIFF, AND THAT ORDER IS
+# LOAD-BEARING (card t_33570a36). An explicit `--only`/`--skip` is this run's own
+# instruction — the prologue above already drops an inherited SEL_DIFF entirely
+# (that is what makes an explicit flag beat an enclosing `--for-diff`), so for the
+# command-line case the two orders agree. What the old SEL_DIFF-first order
+# actually decided was the ONE OTHER writer of SKIP: the reuse fold below the slot
+# pool, which skips vouched-for gates by appending them to SKIP.
+#
+# MEASURED: with SEL_DIFF first, `--for-diff <base> --reuse-record` on a tree whose
+# record vouched for every gate the diff selected printed
+#     ==> nothing to execute: every gate in this run's selection is a recorded pass
+# and then re-executed all of them (9 gates / 790s, each named under BOTH PASS and
+# REUSE in the summary), while the ledger had already written remembered_seconds
+# 1047 at second 0 for gates that same run went on to pay for. `selected()` never
+# read SKIP because it returned from the SEL_DIFF arm first. The saving the ledger
+# records is supposed to be a measurement, so a fold that cannot take effect is a
+# fabricated economy, not a bookkeeping nit.
+#
+# SEL_DIFF still narrows every path that does not fold a reuse, so a plain
+# `--for-diff` run is unchanged.
 selected() {
   local gate="$1"
-  if [ -n "$SEL_DIFF" ]; then
-    case "$SEL_DIFF" in *" $gate "*) return 0 ;; *) return 1 ;; esac
-  fi
   if [ -n "$ONLY" ]; then
     case ",$ONLY," in *",$gate,"*) ;; *) return 1 ;; esac
   fi
   if [ -n "$SKIP" ]; then
     case ",$SKIP," in *",$gate,"*) return 1 ;; esac
+  fi
+  if [ -n "$SEL_DIFF" ]; then
+    case "$SEL_DIFF" in *" $gate "*) return 0 ;; *) return 1 ;; esac
   fi
   return 0
 }
@@ -1937,6 +1954,13 @@ if [ "$REUSE_RECORD" = 1 ]; then
     # early for a gate that is not `selected()`, and `SKIP` is what `selected()`
     # consults, so without this line the REUSE line would be printed and every
     # vouched-for gate would then be re-executed anyway.
+    #
+    # IT ONLY WORKS BECAUSE `selected()` READS SKIP BEFORE THE INHERITED SEL_DIFF
+    # (card t_33570a36): under `--for-diff` this fold is the ONLY writer of SKIP, and
+    # with SEL_DIFF consulted first the run announced "nothing to execute", ledgered
+    # the saving and then re-executed every vouched-for gate. Reordering selected()
+    # back would restore that silently — check 44 of scripts/preflight_test.sh is the
+    # net for it.
     SKIP="${SKIP:+$SKIP,}$PREFLIGHT_REUSED"
     REUSED=("${_reuse_ok[@]}")
     echo "==> REUSED (not re-run, recorded pass on THESE bytes): $PREFLIGHT_REUSED"
