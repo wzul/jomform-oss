@@ -253,6 +253,21 @@ func ValidateFields(regs []Field, fields map[string]string) error {
 			if _, err := strconv.ParseFloat(val, 64); err != nil {
 				return fmt.Errorf("nombor tidak sah: %s", r.Label)
 			}
+		case "select", "radio", "image-choice":
+			// Card t_efd99d75: these are the types whose control can only
+			// produce one of the merchant's declared values (`<select>` options,
+			// one radio per choice). A value outside them was never offered to
+			// the buyer — it is a hand-written POST, not an answer — so it is
+			// refused. Without this the page and the server disagreed about what
+			// an answer is, and the menu checkout recorded a free-text string
+			// against a field nobody could answer that way.
+			//
+			// Only a field that DID declare choices is checked: an MCP
+			// registered_fields contract may legitimately omit them, and a
+			// contract that carries no choices has nothing to compare against.
+			if !declaredChoice(r.Choices, val) {
+				return fmt.Errorf("pilihan tidak sah: %s", r.Label)
+			}
 		}
 		// Optional per-field validation pattern (string form).
 		if pat, ok := r.Validation.(string); ok && pat != "" {
@@ -263,6 +278,28 @@ func ValidateFields(regs []Field, fields map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// declaredChoice reports whether val is one of the values the merchant declared
+// for a choice-bearing field (select / radio / image-choice).
+//
+// A contract that carries no choices answers "anything": there is nothing to
+// compare against, and registered_fields contracts (issue #254) may declare a
+// select without choices. Only a field that DID offer choices refuses an answer
+// outside them. Whitespace is trimmed on both sides for the same reason the
+// emptiness check above trims — `" k "` is the choice `k`, not a new one — while
+// the stored answer keeps whatever the buyer's browser submitted.
+func declaredChoice(choices []Choice, val string) bool {
+	if len(choices) == 0 {
+		return true
+	}
+	v := strings.TrimSpace(val)
+	for _, c := range choices {
+		if strings.TrimSpace(c.Value) == v {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidWebsiteURL reports whether val is an absolute URL of the kind a

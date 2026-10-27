@@ -314,6 +314,11 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").
   </label>
   {{else if eq .Type "radio"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}</label>
     <div class="radios">{{range .Choices}}<label class="rad"><input type="radio" name="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}</div>
+  {{else if eq .Type "image-choice"}}{{if .Choices}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}</label>
+    <div class="radios">{{range .Choices}}<label class="rad"><input type="radio" name="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}</div>
+  {{else}}{{/* Card t_efd99d75: a block that declares NO choices has nothing to draw a radio per choice for — an empty group would be a required field nobody can answer, which would block every order on this menu. Fall through to the text input so the field stays answerable (the same degenerate shape the public renderers leave blank). */}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
+    <input type="text" name="{{.ID}}" value="{{.Value}}" placeholder="{{.Placeholder}}"{{if .Required}} required{{end}}>
+  </label>{{end}}
   {{else if eq .Type "checkbox"}}<label class="chk"><input type="checkbox" name="{{.ID}}" value="1"{{if .Value}} checked{{end}}> {{.Label}}</label>
   {{else if eq .Type "consent"}}<label class="chk"><input type="checkbox" name="{{.ID}}" value="1"{{if .Required}} required{{end}}> {{.Label}}</label>
   {{else if eq .Type "textarea"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
