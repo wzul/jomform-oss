@@ -169,7 +169,7 @@ export default function MediaPicker({
             <button
               type="button"
               onClick={() => setShowUrl((v) => !v)}
-              className="jf-btn-ghost px-3 py-1.5 text-xs"
+              className="jf-btn-ghost"
             >
               {t("mediaPicker.pasteUrl")}
             </button>

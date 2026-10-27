@@ -316,7 +316,7 @@ export default function Subscriptions() {
                             onClick={() => updateCardOne(sub)}
                             disabled={busyId === sub.id}
                             title={t("sub.updateCard")}
-                            className="jf-btn-ghost px-2.5 py-1 text-xs text-sky-700 disabled:opacity-50"
+                            className="jf-btn-ghost text-sky-700"
                           >
                             {busyId === sub.id ? "…" : t("sub.updateCard")}
                           </button>
@@ -324,7 +324,7 @@ export default function Subscriptions() {
                             onClick={() => cancelOne(sub)}
                             disabled={busyId === sub.id}
                             title={t("sub.tokenRetained")}
-                            className="jf-btn-ghost px-2.5 py-1 text-xs text-rose-700 disabled:opacity-50"
+                            className="jf-btn-ghost text-rose-700"
                           >
                             {busyId === sub.id ? "…" : t("sub.cancel")}
                           </button>
@@ -356,14 +356,14 @@ export default function Subscriptions() {
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
+                className="jf-btn-ghost"
               >
                 {t("common.prev")}
               </button>
               <button
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
+                className="jf-btn-ghost"
               >
                 {t("common.next")}
               </button>

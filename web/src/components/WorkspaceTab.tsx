@@ -414,7 +414,7 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
         <button
           type="button"
           onClick={() => void load()}
-          className="jf-btn-ghost mt-3 px-3 py-1.5 text-xs"
+          className="jf-btn-ghost mt-3"
         >
           {t("common.retry")}
         </button>
@@ -696,7 +696,7 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
                   type="button"
                   onClick={() => void doRestore(w.id)}
                   disabled={restoring !== ""}
-                  className="jf-btn-ghost shrink-0 px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                  className="jf-btn-ghost"
                 >
                   {restoring === w.id
                     ? t("ws.trashRestoring")
@@ -758,7 +758,7 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
                   setTyped("");
                 }}
                 disabled={busy}
-                className="jf-btn-ghost px-4 py-2 text-sm"
+                className="jf-btn-ghost"
               >
                 {t("common.cancel")}
               </button>

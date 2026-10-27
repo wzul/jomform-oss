@@ -245,7 +245,7 @@ function SpamPageInner() {
                         <button
                           onClick={() => unspamSubmission(s.id)}
                           disabled={busy !== null}
-                          className="jf-btn-ghost px-2.5 py-1 text-xs disabled:opacity-40"
+                          className="jf-btn-ghost"
                         >
                           {busy === s.id ? "…" : t("spam.unspam")}
                         </button>
@@ -296,7 +296,7 @@ function SpamPageInner() {
                         <button
                           onClick={() => unspamSale(s.ref_code)}
                           disabled={busy !== null}
-                          className="jf-btn-ghost px-2.5 py-1 text-xs disabled:opacity-40"
+                          className="jf-btn-ghost"
                         >
                           {busy === s.ref_code ? "…" : t("spam.unspam")}
                         </button>

@@ -561,7 +561,7 @@ export default function ProfilePage() {
                   )}
                 </div>
                 <div className="flex flex-col gap-2">
-                  <label className="jf-btn-ghost cursor-pointer px-4 py-2 text-sm">
+                  <label className="jf-btn-ghost">
                     {uploadingAvatar ? t("prof.uploadingAvatar") : t("prof.uploadAvatar")}
                     <input
                       type="file"
@@ -1114,7 +1114,7 @@ export default function ProfilePage() {
                 className="jf-input mt-1 font-mono tracking-[0.4em]"
               />
               <div className="mt-4 flex justify-end gap-2">
-                <button onClick={() => setShow2FA(false)} className="jf-btn-ghost px-4 py-2 text-sm">
+                <button onClick={() => setShow2FA(false)} className="jf-btn-ghost">
                   {t("prof.twoFaClose")}
                 </button>
                 <button

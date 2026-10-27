@@ -924,7 +924,7 @@ export default function Products() {
                         <button
                           type="button"
                           onClick={() => void restoreProduct(p.id)}
-                          className="jf-btn-ghost min-h-[44px] sm:min-h-10"
+                          className="jf-btn-ghost"
                         >
                           {t("prod.restore")}
                         </button>
@@ -936,7 +936,7 @@ export default function Products() {
                               setPurgeTyped("");
                               setError("");
                             }}
-                            className="jf-btn-ghost min-h-[44px] text-rose-700 sm:min-h-10"
+                            className="jf-btn-ghost text-rose-700"
                           >
                             {t("prod.purge")}
                           </button>
@@ -967,7 +967,7 @@ export default function Products() {
               <button
                 onClick={bulkArchive}
                 disabled={busy}
-                className="jf-btn-ghost px-3 py-1.5 text-xs text-rose-700 disabled:opacity-50"
+                className="jf-btn-ghost text-rose-700"
               >
                 {t("prod.bulkArchive")}
               </button>
@@ -1107,12 +1107,12 @@ export default function Products() {
                   <td className="px-4 py-3">
                     {canWrite && (
                       <div className="flex items-center justify-end gap-1">
-                        <button onClick={() => setEditing(p)} className="jf-btn-ghost px-2.5 py-1 text-xs">
+                        <button onClick={() => setEditing(p)} className="jf-btn-ghost">
                           {t("forms.edit")}
                         </button>
                         <button
                           onClick={() => archiveOne(p)}
-                          className="jf-btn-ghost px-2.5 py-1 text-xs text-rose-700"
+                          className="jf-btn-ghost text-rose-700"
                           title={t("prod.archiveOneTitle")}
                         >
                           ✕
@@ -1143,14 +1143,14 @@ export default function Products() {
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
+                className="jf-btn-ghost"
               >
                 {t("common.prev")}
               </button>
               <button
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
+                className="jf-btn-ghost"
               >
                 {t("common.next")}
               </button>
@@ -1519,7 +1519,7 @@ export default function Products() {
                 <button
                   type="button"
                   onClick={() => setConfirmPurge(null)}
-                  className="jf-btn-ghost px-3 py-1.5 text-sm"
+                  className="jf-btn-ghost"
                 >
                   {t("prod.cancel")}
                 </button>

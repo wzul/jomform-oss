@@ -93,6 +93,15 @@
 //   resize 84 of the 106 ghost elements in `web/src` — a different change, with
 //   its own re-derivation, not a cleanup.
 //
+//   That other change has since been made the same way (card t_f45cd5b4), because
+//   the same cascade makes those utilities dead too: 91 ghost elements across 17
+//   files wrote 138 padding, 57 font-size, 36 min-height, 3 flex-shrink, 4 cursor
+//   and 26 opacity utilities that never painted (`min-h-[44px]` measured 40px;
+//   `disabled:opacity-50` measured the rule's 0.55). They are DELETED, and the arm
+//   at the bottom now covers every family the rule owns rather than `bg-*` alone.
+//   Deleting was measured as a no-op, not assumed: stripping all four utilities
+//   from the live cancel button and re-reading `getComputedStyle` moved nothing.
+//
 // Run with:
 //
 //   npm run test:unit
@@ -482,33 +491,123 @@ test("a PASSING label is left alone in every state, and a hover override is hono
   assert.match(two[0], /:hover/);
 });
 
-// ─── a `bg-*` utility on a ghost button cannot paint: it is DEAD ────────────
+// ─── a utility that re-declares a property the rule owns cannot paint ───────
 //
-// `.jf-btn-ghost` paints its own background from an UNLAYERED rule, and Tailwind
-// v4 emits every utility inside `@layer utilities`. In the cascade an unlayered
-// declaration beats every layer REGARDLESS of specificity, so a background
-// utility on a ghost button loses in every state — `hover:bg-rose-50` no more
-// than `bg-white`. Measured in Chromium on the built app: with the pointer on
-// `/subscriptions`' cancel button the painted surface was `#f3f4f6` (the CSS
-// rule's), never the `#fff1f2` the class list named; `e2e/a11y-subscriptions-row.spec.ts`
-// pins that pixel.
+// `.jf-btn-ghost` writes its border, background, radius, padding, font-size,
+// min-height, line-height, cursor, transition, white-space and flex-shrink in an
+// UNLAYERED rule in `globals.css`, and Tailwind v4 emits every utility inside
+// `@layer utilities`. In the cascade an unlayered declaration beats every layer
+// REGARDLESS of specificity, so a utility that re-declares one of those
+// properties loses in every state — `hover:bg-rose-50` no more than `bg-white`,
+// `min-h-[44px]` no more than `px-3`. The state rules own `background` (hover,
+// active), `transform` (active, disabled) and `opacity`/`cursor` (disabled), so a
+// `disabled:opacity-50` is dead too.
 //
-// Nine sites carried one and this card deleted them. The reason it is a guard and
-// not a one-off cleanup: reading the hover surface off the class list is how
-// eleven sub-AA labels reached the tree behind four green colour guards and a
-// green axe gate (card t_0fdbe189). The next author to write `hover:bg-<tint>` on
-// a ghost button is entitled to know it cannot apply BEFORE they measure a pixel
-// that will never be painted.
-const BACKGROUND_UTILITY = /^bg-/;
+// MEASURED, on the built app in Chromium, at the two sites this arm was written
+// from (cards t_ac414593 and t_f45cd5b4; the probe ran against `/subscriptions`
+// with its row rendered and the API stubbed, fresh storage, `jf_lang=en`):
+//
+//   <button className="jf-btn-ghost min-h-[44px] px-3 py-1.5 text-xs text-rose-700 sm:min-h-10">
+//     min-height 40px   padding 10px 18px   font-size 14px   height 40px
+//   the shipped cancel button, class list `px-2.5 py-1 text-xs … disabled:opacity-50`:
+//     min-height 40px   padding 10px 18px   font-size 14px
+//     disabled → opacity 0.55 (the rule's), not the 0.5 the class list named
+//
+// …and then stripping all four utilities from that live element and re-reading
+// `getComputedStyle` moved NOTHING. That is the proof that deleting them is a
+// no-op rather than a redesign, which is why the fix here is deletion and not
+// `@layer components`: moving the `.jf-*` rules into a layer would make all of
+// them land at once and resize 91 ghost elements app-wide.
+//
+// The reason it is a guard and not a one-off cleanup: reading a surface, a size
+// or a target off the class list is how eleven sub-AA labels reached the tree
+// behind four green colour guards and a green axe gate (card t_0fdbe189), and it
+// is how 138 padding / 57 font-size / 36 min-height / 3 flex-shrink / 4 cursor /
+// 26 opacity utilities came to be written on 91 ghost buttons across 17 files.
+// The next author to write one is entitled to know it cannot apply BEFORE they
+// measure a pixel that will never be painted.
+//
+// IF THE INTENT IS REAL, IT BELONGS IN THE RULE. A 44px ghost target is
+// `min-height: 44px` on `.jf-btn-ghost` (one place, every ghost button); a
+// compact row button is a `.jf-btn-ghost-sm` variant in `globals.css`. Neither is
+// expressible as a utility on the element while the rule is unlayered.
 
 /**
- * Every `bg-*` utility found on a `.jf-btn-ghost` element, as `file:line — tokens`.
+ * The utility families that re-declare a property `.jf-btn-ghost` owns.
+ *
+ * `property` is not a comment: it is checked against the declarations actually
+ * parsed out of `globals.css` below, so a rule that stops declaring one of these
+ * FAILS this guard instead of leaving it judging a property the app no longer
+ * paints. The utility vocabulary has to be a table (CSS carries no mapping back
+ * to a class name), but the premise that the utility is dead does not.
+ */
+const DEAD_FAMILIES: Array<{ family: string; property: string; re: RegExp }> = [
+  { family: "padding", property: "padding", re: /^p[rlbtsexy]?-/ },
+  {
+    family: "font-size",
+    property: "font-size",
+    re: /^text-(?:xs|sm|base|lg|xl|[2-9]xl|\[\d*\.?\d+(?:px|rem|em)\])$/,
+  },
+  { family: "min-height", property: "min-height", re: /^min-h-/ },
+  { family: "line-height", property: "line-height", re: /^leading-/ },
+  { family: "flex-shrink", property: "flex-shrink", re: /^(?:shrink|flex-shrink)(?:-|$)/ },
+  { family: "white-space", property: "white-space", re: /^whitespace-/ },
+  { family: "border-radius", property: "border-radius", re: /^rounded/ },
+  { family: "border", property: "border", re: /^border(?:-|$)/ },
+  { family: "background", property: "background", re: /^bg-/ },
+  { family: "cursor", property: "cursor", re: /^cursor-/ },
+  { family: "transition", property: "transition", re: /^transition/ },
+  { family: "opacity", property: "opacity", re: /^opacity-/ },
+  { family: "transform", property: "transform", re: /^-?translate-[xy]-/ },
+];
+
+/**
+ * Every property declared by `.jf-btn-ghost` or one of its state rules in
+ * `globals.css`, with comments stripped first so prose inside the rule cannot
+ * be read as a declaration. A stylesheet whose ghost rules cannot be found is a
+ * FAILURE, never a skip.
+ */
+function ghostDeclaredProperties(): Set<string> {
+  const css = read("../app/globals.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const properties = new Set<string>();
+  let rules = 0;
+  for (const m of css.matchAll(/\.jf-btn-ghost[^{]*\{([^}]*)\}/g)) {
+    rules += 1;
+    for (const d of m[1].matchAll(/([a-z-]+)\s*:/g)) properties.add(d[1]);
+  }
+  assert.ok(
+    rules >= 4,
+    `globals.css declares only ${rules} \`.jf-btn-ghost…\` rule(s) — this guard reads four (base, ` +
+      `:hover, :active, :disabled) and a smaller set means the cascade it documents has changed`,
+  );
+  return properties;
+}
+
+const GHOST_DECLARES = ghostDeclaredProperties();
+
+/** The dead utility tokens on one element, with the family each belongs to. */
+function deadUtilities(tag: Tag): Array<{ family: string; token: string }> {
+  const out: Array<{ family: string; token: string }> = [];
+  for (const variant of tag.variants) {
+    for (const cls of variant.split(/\s+/)) {
+      if (!cls) continue;
+      const bare = splitState(cls)[1];
+      const hit = DEAD_FAMILIES.find((f) => f.re.test(bare));
+      if (hit) out.push({ family: hit.family, token: cls });
+    }
+  }
+  return out;
+}
+
+/**
+ * Every utility found on a `.jf-btn-ghost` element that cannot paint, as
+ * `file:line — token (family)`.
  *
  * Self-closing elements (`<button … />`) arrive only as a CLOSE event from the
  * scanner, so every event is walked and deduped by `openIdx`: filtering on
  * `event.open` would silently ignore half the shapes a button is written in.
  */
-function deadBackgroundsIn(rel: string, src: string): string[] {
+function deadUtilitiesIn(rel: string, src: string): string[] {
   const code = codeOnly(src);
   const lineAt = (idx: number) => code.slice(0, idx).split("\n").length;
   const seen = new Set<number>();
@@ -520,32 +619,45 @@ function deadBackgroundsIn(rel: string, src: string): string[] {
     if (tag.classNameUnreadable) {
       out.push(
         `${rel}:${lineAt(tag.openIdx)} — this ghost button's class list could not be read, so this ` +
-          `arm cannot tell whether it carries a dead \`bg-*\` utility; inline the class list here or ` +
+          `arm cannot tell whether it carries a dead utility; inline the class list here or ` +
           `extend \`jsxSource.resolveClassExpr\` rather than letting the element go unjudged`,
       );
       continue;
     }
-    const bad = tag.variants
-      .flatMap((v) => v.split(/\s+/))
-      .filter((cls) => cls.length > 0 && BACKGROUND_UTILITY.test(splitState(cls)[1]));
-    if (bad.length > 0) out.push(`${rel}:${lineAt(tag.openIdx)} — ${bad.join(" ")}`);
+    const bad = deadUtilities(tag);
+    if (bad.length > 0) {
+      out.push(
+        `${rel}:${lineAt(tag.openIdx)} — ${bad.map((b) => `${b.token} (${b.family})`).join(", ")}`,
+      );
+    }
   }
   return out;
 }
 
-test("no `.jf-btn-ghost` element carries a `bg-*` utility — the unlayered rule paints it", () => {
-  const findings = FILES.flatMap((rel) => deadBackgroundsIn(rel, readFileSync(`${SRC}${rel}`, "utf8")));
+test("no utility on a `.jf-btn-ghost` button re-declares a property the rule paints", () => {
+  // The premise is read from the stylesheet, so it cannot rot silently.
+  for (const f of DEAD_FAMILIES) {
+    assert.ok(
+      GHOST_DECLARES.has(f.property),
+      `\`${f.family}\` utilities are judged dead because \`.jf-btn-ghost\` declares ` +
+        `\`${f.property}\`, but globals.css no longer declares it — re-derive this table ` +
+        `(the family may now paint, or may belong to a different rule) instead of deleting the family`,
+    );
+  }
+  const findings = FILES.flatMap((rel) => deadUtilitiesIn(rel, readFileSync(`${SRC}${rel}`, "utf8")));
   assert.deepEqual(
     findings,
     [],
-    `${findings.length} background utilit(ies) on a \`${GHOST_CLASS}\` button cannot ever paint:\n  ` +
+    `${findings.length} dead utilit(ies) on a \`${GHOST_CLASS}\` button can never paint:\n  ` +
       findings.join("\n  ") +
-      `\n\`${GHOST_CLASS}\` (and its :hover / :active) declare their backgrounds OUTSIDE any ` +
-      `@layer in globals.css, while Tailwind v4 emits utilities inside \`@layer utilities\`, and ` +
-      `an unlayered declaration beats every layer regardless of specificity. Delete the utility ` +
-      `(the button's own hover/pressed colour is the CSS rule's) — or, if the tint is genuinely ` +
-      `wanted, move the \`.jf-*\` rules into \`@layer components\` and re-derive every guard that ` +
-      `reads the ghost surfaces, including the pixel pinned in e2e/a11y-subscriptions-row.spec.ts.`,
+      `\n\`${GHOST_CLASS}\` (and its :hover / :active / :disabled) declare these properties OUTSIDE ` +
+      `any @layer in globals.css, while Tailwind v4 emits utilities inside \`@layer utilities\`, ` +
+      `and an unlayered declaration beats every layer regardless of specificity. DELETE the ` +
+      `utility — the button's size, radius, cursor, disabled opacity and colours are the CSS ` +
+      `rule's. If the intent is real (a 44px touch target, a compact row button), put it in ` +
+      `globals.css: raise \`min-height\` on \`.jf-btn-ghost\`, or add a size variant class there. ` +
+      `Moving the \`.jf-*\` rules into \`@layer components\` is the only way a utility could win, ` +
+      `and that activates every one of these at once — a re-derivation, not a cleanup.`,
   );
   // Coverage: the arm has to be looking at ghosts at all, or it passes vacuously.
   let ghosts = 0;
@@ -560,21 +672,29 @@ test("no `.jf-btn-ghost` element carries a `bg-*` utility — the unlayered rule
   assert.ok(ghosts >= 50, `the walk found only ${ghosts} .jf-btn-ghost elements in web/src`);
 });
 
-test("a `bg-*` utility on a ghost button is REPORTED — the defect this arm keeps out", () => {
+test("a dead sizing / state utility on a ghost button is REPORTED — the defect this arm keeps out", () => {
   const fixture =
     `export const A = () => (\n` +
-    `  <button className="jf-btn-ghost text-rose-700 hover:bg-rose-50">Cancel</button>\n` +
+    `  <button className="jf-btn-ghost min-h-[44px] px-3 py-1.5 text-xs sm:min-h-10">Cancel</button>\n` +
     `);\n` +
-    `export const B = () => <button className="jf-btn-ghost text-rose-700 bg-white" />;\n` +
-    `export const C = () => <button className="rounded bg-white hover:bg-rose-50">Not a ghost</button>;\n`;
-  const found = deadBackgroundsIn("fixture.tsx", fixture);
+    `export const B = () => <button className="jf-btn-ghost disabled:opacity-50 hover:bg-rose-50" />;\n` +
+    `export const C = () => <button className="rounded bg-white px-3 text-xs">Not a ghost</button>;\n`;
+  const found = deadUtilitiesIn("fixture.tsx", fixture);
   assert.equal(found.length, 2, `expected two findings, got ${found.length}: ${found.join(" | ")}`);
-  // The exact shape the nine deleted sites had…
+  // The exact shape the /products, /forms, /media and /templates buttons had, and
+  // the families the card counted (36 min-height, 128 padding, 52 font-size).
   assert.match(found[0], /fixture\.tsx:2/);
-  assert.match(found[0], /hover:bg-rose-50/);
-  // …and a self-closing element, which the scanner reports only as a close event.
+  assert.match(found[0], /min-h-\[44px\] \(min-height\)/);
+  assert.match(found[0], /px-3 \(padding\)/);
+  assert.match(found[0], /py-1\.5 \(padding\)/);
+  assert.match(found[0], /text-xs \(font-size\)/);
+  assert.match(found[0], /sm:min-h-10 \(min-height\)/);
+  // …and a self-closing element, which the scanner reports only as a close event,
+  // carrying state utilities: the background the nine t_ac414593 sites had, and
+  // the `disabled:` opacity that is the rule's 0.55.
   assert.match(found[1], /fixture\.tsx:4/);
-  assert.match(found[1], /bg-white/);
-  // A non-ghost element's background utility is that element's business, not this rule's.
+  assert.match(found[1], /disabled:opacity-50 \(opacity\)/);
+  assert.match(found[1], /hover:bg-rose-50 \(background\)/);
+  // A non-ghost element's utilities are that element's business, not this rule's.
   assert.doesNotMatch(found.join(" "), /Not a ghost|rounded/);
 });

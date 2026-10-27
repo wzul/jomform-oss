@@ -2614,7 +2614,7 @@ export default function Settings() {
                           <button
                             type="button"
                             onClick={() => setLpCtas((arr) => arr.filter((_, j) => j !== i))}
-                            className="jf-btn-ghost shrink-0"
+                            className="jf-btn-ghost"
                           >
                             ✕
                           </button>
@@ -2654,7 +2654,7 @@ export default function Settings() {
                           <button
                             type="button"
                             onClick={() => setLpForms((arr) => arr.filter((_, j) => j !== i))}
-                            className="jf-btn-ghost shrink-0"
+                            className="jf-btn-ghost"
                           >
                             ✕
                           </button>

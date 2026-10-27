@@ -268,7 +268,7 @@ export default function DeliveriesPage() {
                           setDetail(d);
                           void openTimeline(d.sale_ref!);
                         }}
-                        className="jf-btn-ghost px-2.5 py-1 text-xs"
+                        className="jf-btn-ghost"
                       >
                         {t("del.timeline")}
                       </button>
@@ -316,14 +316,14 @@ export default function DeliveriesPage() {
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
+                className="jf-btn-ghost"
               >
                 {t("common.prev")}
               </button>
               <button
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
+                className="jf-btn-ghost"
               >
                 {t("common.next")}
               </button>

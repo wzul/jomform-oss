@@ -293,14 +293,14 @@ export default function ActivityPage() {
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
+                className="jf-btn-ghost"
               >
                 {t("common.prev")}
               </button>
               <button
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
+                className="jf-btn-ghost"
               >
                 {t("common.next")}
               </button>

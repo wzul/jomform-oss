@@ -664,7 +664,7 @@ export default function MediaPage() {
                           type="button"
                           onClick={() => void restore(m.id)}
                           disabled={!m.object_present}
-                          className="jf-btn-ghost min-h-[44px] disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-10"
+                          className="jf-btn-ghost"
                         >
                           {t("media.restore")}
                         </button>
@@ -674,7 +674,7 @@ export default function MediaPage() {
                             setConfirmPurge(m);
                             setError("");
                           }}
-                          className="jf-btn-ghost min-h-[44px] text-rose-700 sm:min-h-10"
+                          className="jf-btn-ghost text-rose-700"
                         >
                           {t("media.purge")}
                         </button>
@@ -781,14 +781,14 @@ export default function MediaPage() {
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
+                className="jf-btn-ghost"
               >
                 {t("common.prev")}
               </button>
               <button
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
+                className="jf-btn-ghost"
               >
                 {t("common.next")}
               </button>
@@ -865,7 +865,7 @@ export default function MediaPage() {
                     href={detail.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="jf-btn-ghost px-3 py-1.5 text-sm"
+                    className="jf-btn-ghost"
                   >
                     {detail.mime === "application/pdf" ? t("media.viewPdf") : t("media.view")}
                   </a>
@@ -876,14 +876,14 @@ export default function MediaPage() {
                       href={detail.preview}
                       target="_blank"
                       rel="noreferrer"
-                      className="jf-btn-ghost px-3 py-1.5 text-sm"
+                      className="jf-btn-ghost"
                     >
                       {t("media.preview")}
                     </a>
                   )}
                   <button
                     onClick={() => copyUrl(detail.url)}
-                    className="jf-btn-ghost px-3 py-1.5 text-sm"
+                    className="jf-btn-ghost"
                   >
                     {copied ? t("media.copied") : t("media.copyUrl")}
                   </button>
@@ -928,7 +928,7 @@ export default function MediaPage() {
                 <button
                   type="button"
                   onClick={() => setConfirmPurge(null)}
-                  className="jf-btn-ghost px-3 py-1.5 text-sm"
+                  className="jf-btn-ghost"
                 >
                   {t("common.cancel")}
                 </button>

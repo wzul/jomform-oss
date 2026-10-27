@@ -800,7 +800,7 @@ export default function ChatPage() {
                             <button
                               type="button"
                               onClick={() => void decide(i, p, "cancel")}
-                              className="jf-btn-ghost disabled:opacity-50"
+                              className="jf-btn-ghost"
                             >
                               {t("chat.cancel")}
                             </button>

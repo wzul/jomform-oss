@@ -894,7 +894,7 @@ function SalesPageInner() {
             {hasFilters && (
               <button
                 onClick={clearFilters}
-                className="jf-btn-ghost px-3 py-1.5 text-xs"
+                className="jf-btn-ghost"
                 disabled={checking}
               >
                 {t("sales.clearFilters")}
@@ -1036,7 +1036,7 @@ function SalesPageInner() {
                     <td className="whitespace-nowrap px-4 py-3 text-right">
                       <button
                         onClick={() => setDetail(s)}
-                        className="jf-btn-ghost px-2.5 py-1 text-xs"
+                        className="jf-btn-ghost"
                       >
                         {t("sales.viewDetail")}
                       </button>
@@ -1068,7 +1068,7 @@ function SalesPageInner() {
                     <td className="whitespace-nowrap px-4 py-3 text-right">
                       <button
                         onClick={() => setDetail(s)}
-                        className="jf-btn-ghost px-2.5 py-1 text-xs"
+                        className="jf-btn-ghost"
                       >
                         {t("sales.viewDetail")}
                       </button>
@@ -1126,7 +1126,7 @@ function SalesPageInner() {
                     <div className="flex items-center justify-end gap-1.5">
                       <button
                         onClick={() => setDetail(s)}
-                        className="jf-btn-ghost px-2.5 py-1 text-xs"
+                        className="jf-btn-ghost"
                       >
                         {t("sales.viewDetail")}
                       </button>
@@ -1201,14 +1201,14 @@ function SalesPageInner() {
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
+                className="jf-btn-ghost"
               >
                 {t("common.prev")}
               </button>
               <button
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="jf-btn-ghost px-3 py-1.5 disabled:opacity-40"
+                className="jf-btn-ghost"
               >
                 {t("common.next")}
               </button>
@@ -1491,7 +1491,7 @@ function SalesPageInner() {
                     <button
                       onClick={() => releaseSale(detail.ref_code)}
                       disabled={busyRef !== null}
-                      className="jf-btn-ghost px-3 py-1.5 text-sm"
+                      className="jf-btn-ghost"
                     >
                       {t("bld.release")}
                     </button>
@@ -1508,7 +1508,7 @@ function SalesPageInner() {
                   <button
                     onClick={() => confirmSale(detail.ref_code)}
                     disabled={busyRef !== null || isCapturePending(detail)}
-                    className="jf-btn-ghost px-3 py-1.5 text-sm"
+                    className="jf-btn-ghost"
                   >
                     {t("sales.confirmSale")}
                   </button>
@@ -1517,7 +1517,7 @@ function SalesPageInner() {
                   <button
                     onClick={() => refundSale(detail.ref_code)}
                     disabled={busyRef !== null}
-                    className="jf-btn-ghost px-3 py-1.5 text-sm"
+                    className="jf-btn-ghost"
                   >
                     {busyRef === detail.ref_code ? "…" : t("sales.refund")}
                   </button>

@@ -254,7 +254,7 @@ export default function TemplatesPage() {
                     setMsg("");
                   }}
                   disabled={busy || forms.length === 0}
-                  className="jf-btn-ghost disabled:opacity-50"
+                  className="jf-btn-ghost"
                 >
                   {t("tplmg.saveFromForm")}
                 </button>
@@ -375,14 +375,14 @@ export default function TemplatesPage() {
                     <a
                       href={templateEditHref(tpl.id)}
                       title={t("tplmg.editHint")}
-                      className="jf-btn-ghost min-h-[44px] sm:min-h-10"
+                      className="jf-btn-ghost"
                     >
                       {t("tplmg.edit")}
                     </a>
                     <button
                       onClick={() => void applyTemplate(tpl.id)}
                       disabled={busy}
-                      className="jf-btn-ghost min-h-[44px] sm:min-h-10 disabled:opacity-50"
+                      className="jf-btn-ghost"
                     >
                       {t("tplmg.use")}
                     </button>
@@ -392,14 +392,14 @@ export default function TemplatesPage() {
                         setRenameValue(tpl.title);
                       }}
                       disabled={busy}
-                      className="jf-btn-ghost min-h-[44px] sm:min-h-10 disabled:opacity-50"
+                      className="jf-btn-ghost"
                     >
                       {t("tplmg.rename")}
                     </button>
                     <button
                       onClick={() => void remove(tpl.id)}
                       disabled={busy}
-                      className="jf-btn-ghost min-h-[44px] text-rose-700 sm:min-h-10 disabled:opacity-50"
+                      className="jf-btn-ghost text-rose-700"
                     >
                       {t("forms.delete")}
                     </button>

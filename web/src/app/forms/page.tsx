@@ -421,7 +421,7 @@ export default function FormsPage() {
         <div className="w-full flex-1 px-6 py-8">
           <div role="alert" className="jf-card flex flex-col items-start gap-3 p-6">
             <p className="text-sm text-red-600">{err}</p>
-            <button type="button" onClick={() => void load()} className="jf-btn-ghost px-3 py-1.5 text-xs">
+            <button type="button" onClick={() => void load()} className="jf-btn-ghost">
               {t("common.retry")}
             </button>
           </div>
@@ -524,7 +524,7 @@ export default function FormsPage() {
                 <button
                   type="button"
                   onClick={() => void loadTrash()}
-                  className="jf-btn-ghost px-3 py-1.5 text-xs"
+                  className="jf-btn-ghost"
                 >
                   {t("common.retry")}
                 </button>
@@ -551,7 +551,7 @@ export default function FormsPage() {
                         <button
                           type="button"
                           onClick={() => void restore(f.id)}
-                          className="jf-btn-ghost min-h-[44px] sm:min-h-10"
+                          className="jf-btn-ghost"
                         >
                           {t("forms.restore")}
                         </button>
@@ -566,7 +566,7 @@ export default function FormsPage() {
                               setPurgeTyped("");
                               setErr("");
                             }}
-                            className="jf-btn-ghost min-h-[44px] text-rose-700 sm:min-h-10"
+                            className="jf-btn-ghost text-rose-700"
                           >
                             {t("forms.purge")}
                           </button>
@@ -598,21 +598,21 @@ export default function FormsPage() {
               <button
                 onClick={() => bulk("publish")}
                 disabled={busy}
-                className="jf-btn-ghost px-3 py-1.5 text-xs disabled:opacity-50"
+                className="jf-btn-ghost"
               >
                 {t("builder.publish")}
               </button>
               <button
                 onClick={() => bulk("draft")}
                 disabled={busy}
-                className="jf-btn-ghost px-3 py-1.5 text-xs"
+                className="jf-btn-ghost"
               >
                 {t("forms.draft")}
               </button>
               <button
                 onClick={() => bulk("delete")}
                 disabled={busy}
-                className="jf-btn-ghost px-3 py-1.5 text-xs text-rose-700"
+                className="jf-btn-ghost text-rose-700"
               >
                 {t("forms.delete")}
               </button>
@@ -675,12 +675,12 @@ export default function FormsPage() {
                       {f.status === "unlisted" ? t("forms.unlisted") : t("forms.live")}
                     </span>
                     {canWrite && (
-                      <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                      <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost">
                         {t("forms.edit")}
                       </Link>
                     )}
                     {/* Issue #177: dedicated Form Settings view */}
-                    <Link href={`/form-settings?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                    <Link href={`/form-settings?form=${f.id}`} className="jf-btn-ghost">
                       {t("fs.title")}
                     </Link>
                     {/* Issue #126: per-form entries deep-link -> /sales?form=<id>.
@@ -692,12 +692,12 @@ export default function FormsPage() {
                         Gating this on the mode (as the Sales link alone was)
                         leaves a response form with no route to its entries. */}
                     {entries && (
-                      <Link href={entries.href} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                      <Link href={entries.href} className="jf-btn-ghost">
                         {t(entries.labelKey)}
                       </Link>
                     )}
                     {view.kind === "link" ? (
-                      <a href={view.href} target="_blank" rel="noreferrer" className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                      <a href={view.href} target="_blank" rel="noreferrer" className="jf-btn-ghost">
                         {t("bld.view")}
                       </a>
                     ) : (
@@ -711,7 +711,7 @@ export default function FormsPage() {
                         disabled
                         title={t("forms.viewUnavailableHint")}
                         aria-label={t("forms.viewUnavailableHint")}
-                        className="jf-btn-ghost min-h-[44px] sm:min-h-10 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="jf-btn-ghost"
                       >
                         {t("bld.view")}
                       </button>
@@ -723,12 +723,12 @@ export default function FormsPage() {
                       {f.status === "private" ? t("forms.private") : t("forms.draft")}
                     </span>
                     {canWrite && (
-                      <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                      <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost">
                         {t("forms.edit")}
                       </Link>
                     )}
                     {/* Issue #177: dedicated Form Settings view */}
-                    <Link href={`/form-settings?form=${f.id}`} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                    <Link href={`/form-settings?form=${f.id}`} className="jf-btn-ghost">
                       {t("fs.title")}
                     </Link>
                     {/* Issue #126: per-form entries deep-link (works for drafts too).
@@ -738,7 +738,7 @@ export default function FormsPage() {
                         response form, whose submissions would otherwise have no
                         route at all until it is published. */}
                     {entries && (
-                      <Link href={entries.href} className="jf-btn-ghost min-h-[44px] sm:min-h-10">
+                      <Link href={entries.href} className="jf-btn-ghost">
                         {t(entries.labelKey)}
                       </Link>
                     )}
@@ -802,7 +802,7 @@ export default function FormsPage() {
                   setPurgeTyped("");
                 }}
                 disabled={purgeBusy}
-                className="jf-btn-ghost px-4 py-2 text-sm"
+                className="jf-btn-ghost"
               >
                 {t("common.cancel")}
               </button>

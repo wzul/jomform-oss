@@ -1793,7 +1793,7 @@ function FormSettingsInner() {
           <div className="flex max-w-full flex-wrap items-center gap-2">
             {formId && (
               <>
-                <Link href={`/builder?form=${formId}`} className="jf-btn-ghost px-3 py-1.5 text-xs">
+                <Link href={`/builder?form=${formId}`} className="jf-btn-ghost">
                   {t("fs.editFields")}
                 </Link>
                 {/* Issue #126: per-form entries deep-link -> /sales?form=<id>.
@@ -1807,12 +1807,12 @@ function FormSettingsInner() {
                     the label is the form's mode and the mode is not known
                     before the payload, so the row simply waits. */}
                 {entries && (
-                  <Link href={entries.href} className="jf-btn-ghost px-3 py-1.5 text-xs">
+                  <Link href={entries.href} className="jf-btn-ghost">
                     {t(entries.labelKey)}
                   </Link>
                 )}
                 {form?.url && (
-                  <a href={form.url} target="_blank" rel="noreferrer" className="jf-btn-ghost px-3 py-1.5 text-xs">
+                  <a href={form.url} target="_blank" rel="noreferrer" className="jf-btn-ghost">
                     {t("bld.view")}
                   </a>
                 )}
@@ -2149,7 +2149,7 @@ function FormSettingsInner() {
                                   setFsLogo("");
                                   setFsLogoMedia(null);
                                 }}
-                                className="jf-btn-ghost px-3 py-1 text-[11px] text-red-700"
+                                className="jf-btn-ghost text-red-700"
                               >
                                 {t("mediaPicker.remove")}
                               </button>
@@ -2226,7 +2226,7 @@ function FormSettingsInner() {
                                 <a
                                   href={qrDataUrl}
                                   download={`qr-${slug || "form"}.png`}
-                                  className="jf-btn-ghost px-3 py-1.5 text-xs"
+                                  className="jf-btn-ghost"
                                 >
                                   {t("fs.qrDownload")}
                                 </a>
@@ -2235,7 +2235,7 @@ function FormSettingsInner() {
                                     href={`${form.url.replace(/\/[^/]*$/, "")}/qr/${slug || "form"}/stand${qrTable.trim() ? `?table=${encodeURIComponent(qrTable.trim())}` : ""}`}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="jf-btn-ghost px-3 py-1.5 text-xs"
+                                    className="jf-btn-ghost"
                                   >
                                     {t("fs.qrStand")}
                                   </a>
@@ -2324,14 +2324,14 @@ function FormSettingsInner() {
                                           setMenuPickerCatIndex(-1);
                                           setMenuPickerOpen(true);
                                         }}
-                                        className="jf-btn-ghost px-2 py-1 text-[11px]"
+                                        className="jf-btn-ghost"
                                       >
                                         {t("set.menuChangeBestSeller")}
                                       </button>
                                       <button
                                         type="button"
                                         onClick={() => setMenuBestSeller("")}
-                                        className="jf-btn-ghost px-2 py-1 text-[11px] text-red-700"
+                                        className="jf-btn-ghost text-red-700"
                                       >
                                         {t("set.menuClearBestSeller")}
                                       </button>
@@ -2375,7 +2375,7 @@ function FormSettingsInner() {
                                         <button
                                           type="button"
                                           onClick={() => setMenuCategories((arr) => arr.filter((_, j) => j !== i))}
-                                          className="jf-btn-ghost px-2 py-1 text-[11px] text-red-700"
+                                          className="jf-btn-ghost text-red-700"
                                         >
                                           {t("set.menuCatRemove")}
                                         </button>
@@ -2426,7 +2426,7 @@ function FormSettingsInner() {
                                             setMenuPickerCatIndex(i);
                                             setMenuPickerOpen(true);
                                           }}
-                                          className="jf-btn-ghost px-2.5 py-1 text-[11px]"
+                                          className="jf-btn-ghost"
                                         >
                                           + {t("set.menuPickProducts")}
                                         </button>
@@ -2481,7 +2481,7 @@ function FormSettingsInner() {
                                             {f && (
                                               <a
                                                 href={`/builder?form=${f.id}`}
-                                                className="jf-btn-ghost px-2.5 py-1 text-[11px]"
+                                                className="jf-btn-ghost"
                                               >
                                                 {t("set.menuOrderFormEdit")}
                                               </a>
@@ -2635,7 +2635,7 @@ function FormSettingsInner() {
                                 <button
                                   onClick={() => removeConfirmation(i)}
                                   disabled={!canWrite}
-                                  className="jf-btn-ghost px-2 py-1 text-xs text-red-700"
+                                  className="jf-btn-ghost text-red-700"
                                 >
                                   {t("fs.confDelete")}
                                 </button>
@@ -2724,7 +2724,7 @@ function FormSettingsInner() {
                         ))}
                       </div>
                       <div className="mt-4 flex flex-wrap items-center gap-2">
-                        <button onClick={addConfirmation} disabled={!canWrite} className="jf-btn-ghost px-3 py-1.5 text-xs">
+                        <button onClick={addConfirmation} disabled={!canWrite} className="jf-btn-ghost">
                           {t("fs.confAdd")}
                         </button>
                         <button onClick={saveConfirmations} disabled={!canWrite} className="jf-btn-primary">
@@ -2961,10 +2961,10 @@ function FormSettingsInner() {
                               )}
                             </div>
                             <div className="flex items-center gap-2">
-                              <button onClick={() => openEditNotification(n)} disabled={!canWrite} className="jf-btn-ghost px-2 py-1 text-xs">
+                              <button onClick={() => openEditNotification(n)} disabled={!canWrite} className="jf-btn-ghost">
                                 {t("fs.notifEdit")}
                               </button>
-                              <button onClick={() => deleteNotification(n)} disabled={!canWrite} className="jf-btn-ghost px-2 py-1 text-xs text-red-700">
+                              <button onClick={() => deleteNotification(n)} disabled={!canWrite} className="jf-btn-ghost text-red-700">
                                 {t("fs.notifDelete")}
                               </button>
                             </div>
@@ -3076,7 +3076,7 @@ function FormSettingsInner() {
                           <div>
                             <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--jf-muted)]">{t("fs.notifCondition")}</p>
                             {!edHasCond ? (
-                              <button onClick={() => setEdHasCond(true)} className="jf-btn-ghost mt-1 px-2 py-1 text-xs">
+                              <button onClick={() => setEdHasCond(true)} className="jf-btn-ghost mt-1">
                                 + {t("fs.notifCondAdd")}
                               </button>
                             ) : (
@@ -3092,7 +3092,7 @@ function FormSettingsInner() {
                                   t={t}
                                   compact
                                 />
-                                <button onClick={() => setEdHasCond(false)} className="jf-btn-ghost px-2 py-1 text-xs text-slate-600">
+                                <button onClick={() => setEdHasCond(false)} className="jf-btn-ghost text-slate-600">
                                   {t("fs.notifCondRemove")}
                                 </button>
                               </div>
@@ -3270,7 +3270,7 @@ function FormSettingsInner() {
                       </div>
 
                       <div className="mt-4 flex flex-wrap items-center gap-2">
-                        <button onClick={addChipFeed} disabled={!canWrite} className="jf-btn-ghost px-3 py-1.5 text-xs">
+                        <button onClick={addChipFeed} disabled={!canWrite} className="jf-btn-ghost">
                           + {t("fs.chipFeedAdd")}
                         </button>
                         <button onClick={saveChipFeeds} disabled={!canWrite} className="jf-btn-primary">
@@ -3518,7 +3518,7 @@ function FormSettingsInner() {
                                     type="button"
                                     onClick={() => updShipZone(si, zi, { rates: [...zone.rates, emptyRate()] })}
                                     disabled={!canWrite}
-                                    className="jf-btn-ghost px-3 py-1.5 text-xs"
+                                    className="jf-btn-ghost"
                                   >
                                     + {t("fs.shipAddRate")}
                                   </button>
@@ -3529,7 +3529,7 @@ function FormSettingsInner() {
                               type="button"
                               onClick={() => updShipSet(si, { zones: [...set.zones, emptyZone()] })}
                               disabled={!canWrite}
-                              className="jf-btn-ghost px-3 py-1.5 text-xs"
+                              className="jf-btn-ghost"
                             >
                               + {t("fs.shipAddZone")}
                             </button>
@@ -3543,7 +3543,7 @@ function FormSettingsInner() {
                         type="button"
                         onClick={() => setShipSets((prev: ShipSetDraft[]) => [...prev, emptySet()])}
                         disabled={!canWrite}
-                        className="jf-btn-ghost px-3 py-1.5 text-xs"
+                        className="jf-btn-ghost"
                       >
                         + {t("fs.shipAddSet")}
                       </button>
@@ -3697,7 +3697,7 @@ function FormSettingsInner() {
                                     type="button"
                                     onClick={() => disconnectCourier(row.provider)}
                                     disabled={!canWrite || courierBusy === row.provider}
-                                    className="jf-btn-ghost px-3 py-1.5 text-xs"
+                                    className="jf-btn-ghost"
                                   >
                                     {t("fs.courierDisconnect")}
                                   </button>
