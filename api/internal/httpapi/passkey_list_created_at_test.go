@@ -32,8 +32,20 @@ package httpapi
 //     the `created_at` COLUMN of that credential's row (read straight out of
 //     Postgres, to the second the response is formatted at). Against the
 //     pre-fix handler this arm fails on the empty string; a handler that
-//     invented a timestamp instead of reading the row's would fail the equality
-//     arm.
+//     invented a timestamp instead of reading the row's fails the equality arm.
+//
+//   - The fixture row is BACKDATED seven days before the request (t_ef0080c6).
+//     It used to be inserted with the column's DEFAULT now(), so a handler that
+//     formatted time.Now() at read time landed in the SAME SECOND as the row
+//     and passed this arm. Measured: replacing `CreatedAt: c.CreatedAt…` with
+//     `CreatedAt: time.Now()…` in passkeyList left this test GREEN, and only a
+//     +48h control reddened it — exactly the regression the release exists to
+//     prevent, invisible to its own guard. A row a week older than the clock
+//     cannot be confused with a clock re-read at request time, so the arm now
+//     fails for a re-now() handler AND for a zero time (0001-01-01T00:00:00Z,
+//     the "column never selected" shape), and passes only for the row's own
+//     value. The backdate is asserted below, so the fixture cannot quietly
+//     drift back into a `DEFAULT now()` row and re-vacuum the arm.
 //
 //   - The returned id SET must equal the credentials of THIS user. The list is
 //     the one endpoint that hands a caller their own rows, and the query behind
@@ -108,11 +120,29 @@ func TestPasskeyListCarriesTheStoredCreatedAt(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM passkeys WHERE id=$1`, otherAuthn.id)
 	})
 
+	// ── the timestamp under test ────────────────────────────────────────────
+	// Backdate the row seven days. The column defaults to now(), so a fixture
+	// inserted a moment ago sits in the same second as a handler that formatted
+	// the clock at read time — the arm below then passes for exactly the
+	// regression it exists to catch (t_ef0080c6: measured green with a re-now()
+	// handler, red only with a +48h control).
+	if _, err := pool.Exec(ctx, `UPDATE passkeys SET created_at = now() - interval '7 days' WHERE id=$1`, authn.id); err != nil {
+		t.Fatalf("backdate the fixture row: %v", err)
+	}
+
 	// The row's own timestamp, read from the column the response must report.
 	var storedCreatedAt time.Time
 	if err := pool.QueryRow(ctx, `SELECT created_at FROM passkeys WHERE id=$1`, authn.id).
 		Scan(&storedCreatedAt); err != nil {
 		t.Fatalf("read the fixture row's created_at: %v", err)
+	}
+	// Guard the guard: if the backdate ever stops taking effect the equality arm
+	// silently returns to "same second as the clock" and proves nothing. Fail
+	// loudly here instead, where the cause is obvious.
+	if age := time.Since(storedCreatedAt); age < 6*24*time.Hour {
+		t.Fatalf("the fixture row's created_at is %s (%.1fh old), not the backdated value — without a row the "+
+			"clock cannot reach, the equality arm below cannot tell the row's timestamp from a handler that "+
+			"re-read time.Now()", storedCreatedAt.UTC().Format(time.RFC3339), age.Hours())
 	}
 
 	// A genuine session for the fixture user, then the list through the router.
@@ -206,7 +236,9 @@ func TestPasskeyListCarriesTheStoredCreatedAt(t *testing.T) {
 		t.Fatalf("`created_at` is %q, which is not RFC 3339: %v", got, err)
 	}
 	if !parsed.Equal(storedCreatedAt.UTC().Truncate(time.Second)) {
-		t.Fatalf("`created_at` is %q, but the credential's row holds %s — the list must report the row's "+
-			"own timestamp", got, storedCreatedAt.UTC().Format(time.RFC3339))
+		t.Fatalf("`created_at` is %q, but the credential's row holds %s — the list must report the row's own "+
+			"timestamp. The row is backdated seven days, so a value near the current clock means the handler "+
+			"formatted time.Now() instead of the column, and an all-zero value means it formatted nothing",
+			got, storedCreatedAt.UTC().Format(time.RFC3339))
 	}
 }
