@@ -38,7 +38,22 @@ export default function TemplatesPage() {
   const [forms, setForms] = useState<FormRow[]>([]);
   const [checking, setChecking] = useState(true);
   const [busy, setBusy] = useState(false);
+  // TWO error channels, because they have two different remedies (card t_c2bba586).
+  //
+  //   `err`       — the LIST LOAD failed. Its remedy is to fetch the list again, so
+  //                 it renders with the Retry action Issue #503 added.
+  //   `actionErr` — a ROW/PAGE ACTION was REFUSED (use/save/rename/delete). The
+  //                 listing is fine; nothing about it changed. It renders with NO
+  //                 action, because reloading the list cannot grant a refusal.
+  //
+  // They used to be ONE state, so a refused "Use template" rendered the refusal
+  // sentence followed by a Retry that re-fetched /templates + /forms — a control
+  // whose label promised the one thing it never did. Measured on prod v1.21.307
+  // (web) as a signed-in merchant: `p[role="alert"]` text ended
+  // "…Remove it and save again.Retry", the URL stayed /templates, and the clone
+  // count did not move. The refusal was correct; only the affordance was wrong.
   const [err, setErr] = useState("");
+  const [actionErr, setActionErr] = useState("");
   const [msg, setMsg] = useState("");
   // Save-as-template: the form the merchant picked ("" = closed).
   const [saveFormId, setSaveFormId] = useState<string | null>(null);
@@ -76,6 +91,7 @@ export default function TemplatesPage() {
     if (!r.ok) {
       setTemplates([]);
       setForms([]);
+      // The LOAD channel — this is the one that keeps the Retry action below.
       setErr(r.error);
       setChecking(false);
       return;
@@ -97,7 +113,7 @@ export default function TemplatesPage() {
 
   async function createFromForm(formId: string) {
     setBusy(true);
-    setErr("");
+    setActionErr("");
     setMsg("");
     try {
       const r = await fetch(`/api/rest/templates${workspaceQuery()}`, {
@@ -107,14 +123,14 @@ export default function TemplatesPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setErr(apiErr(d, t("tplmg.saveFail"), t));
+        setActionErr(apiErr(d, t("tplmg.saveFail"), t));
         return;
       }
       setSaveFormId(null);
       setMsg(t("tplmg.saved"));
       await load();
     } catch {
-      setErr(t("tplmg.saveFail"));
+      setActionErr(t("tplmg.saveFail"));
     } finally {
       setBusy(false);
     }
@@ -122,7 +138,7 @@ export default function TemplatesPage() {
 
   async function createBlank() {
     setBusy(true);
-    setErr("");
+    setActionErr("");
     setMsg("");
     try {
       const r = await fetch(`/api/rest/templates${workspaceQuery()}`, {
@@ -132,13 +148,13 @@ export default function TemplatesPage() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        setErr(apiErr(d, t("tplmg.saveFail"), t));
+        setActionErr(apiErr(d, t("tplmg.saveFail"), t));
         return;
       }
       setMsg(t("tplmg.saved"));
       await load();
     } catch {
-      setErr(t("tplmg.saveFail"));
+      setActionErr(t("tplmg.saveFail"));
     } finally {
       setBusy(false);
     }
@@ -148,7 +164,7 @@ export default function TemplatesPage() {
     const title = renameValue.trim();
     if (!title) return;
     setBusy(true);
-    setErr("");
+    setActionErr("");
     try {
       const r = await fetch(`/api/rest/templates/${id}${workspaceQuery()}`, {
         method: "PUT",
@@ -157,13 +173,13 @@ export default function TemplatesPage() {
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        setErr(apiErr(d, t("tplmg.saveFail"), t));
+        setActionErr(apiErr(d, t("tplmg.saveFail"), t));
         return;
       }
       setRenaming(null);
       await load();
     } catch {
-      setErr(t("tplmg.saveFail"));
+      setActionErr(t("tplmg.saveFail"));
     } finally {
       setBusy(false);
     }
@@ -172,17 +188,17 @@ export default function TemplatesPage() {
   async function remove(id: string) {
     if (!window.confirm(t("tplmg.deleteConfirm"))) return;
     setBusy(true);
-    setErr("");
+    setActionErr("");
     try {
       const r = await fetch(`/api/rest/templates/${id}${workspaceQuery()}`, { method: "DELETE" });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        setErr(apiErr(d, t("tplmg.deleteFail"), t));
+        setActionErr(apiErr(d, t("tplmg.deleteFail"), t));
         return;
       }
       await load();
     } catch {
-      setErr(t("tplmg.deleteFail"));
+      setActionErr(t("tplmg.deleteFail"));
     } finally {
       setBusy(false);
     }
@@ -194,17 +210,17 @@ export default function TemplatesPage() {
   // async request handler, so the name says what it does.
   async function applyTemplate(id: string) {
     setBusy(true);
-    setErr("");
+    setActionErr("");
     try {
       const r = await fetch(`/api/rest/templates/${id}/use${workspaceQuery()}`, { method: "POST" });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.id) {
-        setErr(apiErr(d, t("tplmg.useFail"), t));
+        setActionErr(apiErr(d, t("tplmg.useFail"), t));
         return;
       }
       router.push(`/builder?form=${d.id}`);
     } catch {
-      setErr(t("tplmg.useFail"));
+      setActionErr(t("tplmg.useFail"));
     } finally {
       setBusy(false);
     }
@@ -250,7 +266,7 @@ export default function TemplatesPage() {
                 <button
                   onClick={() => {
                     setSaveFormId(saveFormId === null ? "" : null);
-                    setErr("");
+                    setActionErr("");
                     setMsg("");
                   }}
                   disabled={busy || forms.length === 0}
@@ -303,6 +319,17 @@ export default function TemplatesPage() {
         )}
 
         {msg && <p className="mt-4 text-sm text-emerald-700">{msg}</p>}
+        {/* A REFUSED ACTION: no control. The listing did not change, so there is
+            nothing to reload and no button can grant the refusal. Cleared at the
+            START of the next action (every handler's first write) and by a
+            successful relist. Card t_c2bba586. */}
+        {actionErr && (
+          <p role="alert" className="mt-4 text-sm text-red-700">
+            {actionErr}
+          </p>
+        )}
+        {/* A FAILED LOAD: keeps the Retry Issue #503 added — here the remedy really
+            is to fetch the list again. */}
         {err && (
           <p role="alert" className="mt-4 text-sm text-red-700">
             {err}
