@@ -2024,6 +2024,7 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
     lint)     printf '%s\n' 'web/eslint.config.mjs' 'web/package.json' ;;
     a11y)     printf '%s\n' 'web/e2e/a11y*.spec.ts' 'web/playwright.config.ts' ;;
     e2e)      printf '%s\n' 'web/e2e/*.spec.ts' 'web/playwright.config.ts' ;;
+    speccounts) printf '%s\n' 'scripts/spec-counts.sh' ;;
     npmaudit) printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor)  printf '%s\n' 'deploy/monitoring/*' ;;
     tmpkey)   printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
@@ -4700,6 +4701,110 @@ WS45NPM
     bad "check 45 — the host-wide suite lock OUTLIVED the gate ($ws45/linger.websuite.lock was still held after both runs exited): a suite child inherited the lock descriptor, so the NEXT gate on this host would wait up to PREFLIGHT_WEBSERVER_WAIT and fail with a wait-out — a false red caused by this lock rather than removed by it"
   fi
 fi
+# ---------------------------------------------------------------------------
+# 46. THE `speccounts` CHECKER CAN ACTUALLY GO RED, AND IT READS THE CURRENT
+#     FIGURE, NOT A HISTORICAL ONE (card t_74e52a43).
+#
+# The checker (scripts/spec-counts.sh) is the only thing in the gate set that
+# enforces the spec counts the `a11y` and `e2e` rows of GATE-INVENTORY.md quote.
+# A checker that always exits 0 would put those rows straight back where they
+# were for nine cards: green everywhere, wrong in the table. So it is driven here
+# with a STUB playwright — the sandbox has no node_modules and `selftest` is
+# offline by contract, and none of these arms needs a browser, a server or a
+# network. The stub prints what a real `--list` prints, which is the only thing
+# the checker parses.
+#
+# ARMS, each measured (not reasoned about):
+#   current   rows that match --list                       -> rc 0
+#   stale     a11y figure 147/16 where --list says 159/17 -> rc 1, names BOTH
+#   history   the STALE figure is first and a matching one
+#             follows it in the row (the shape every real row
+#             has: "**147 …**, the figure before it was …")
+#                                                         -> rc 1, names 147
+#             This is the arm that fails if the parse is greedy: a `s/.*\*\*//`
+#             reads the LAST bold span, i.e. the history, and would pass a row
+#             whose current figure is wrong — the exact rot this gate exists for.
+#   no row    the e2e row is gone                          -> rc 1
+#   no figure the figure is present but not bolded        -> rc 1
+#   --list 1  the enumeration exits non-zero              -> rc 1
+#   no total  the enumeration prints no `Total:` line     -> rc 1
+#
+# Every arm runs the SANDBOX copy (`$SB/scripts/spec-counts.sh`), i.e. the bytes
+# this commit would ship, against a throwaway root OUTSIDE the sandbox repo so the
+# git state later checks depend on is untouched.
+s45="$SB_STATE/s45"
+rm -rf "$s45"
+mkdir -p "$s45/web/node_modules/.bin"
+S45_PROBLEMS=""
+s45_stub() {  # <ok|fail|nototal> — the fake `playwright` the checker will exec
+  case "$1" in
+    ok)
+      cat > "$s45/web/node_modules/.bin/playwright" <<'S45PW'
+#!/bin/sh
+case "$*" in
+  *--project=a11y*)        echo "Total: 159 tests in 17 files" ;;
+  *--project=feature-e2e*) echo "Total: 276 tests in 55 files" ;;
+  *) exit 3 ;;
+esac
+S45PW
+      ;;
+    fail)
+      printf '%s\n' '#!/bin/sh' 'echo "Error: Cannot find module @playwright/test" >&2' 'exit 1' \
+        > "$s45/web/node_modules/.bin/playwright"
+      ;;
+    nototal)
+      printf '%s\n' '#!/bin/sh' 'echo "Listing 4 tests in 2 files"' \
+        > "$s45/web/node_modules/.bin/playwright"
+      ;;
+  esac
+  chmod 755 "$s45/web/node_modules/.bin/playwright"
+}
+s45_arm() {  # <label> <want-rc> <want-substring> [<stub-mode>]; inventory pre-written
+  local rc out mode
+  mode="${4:-ok}"
+  s45_stub "$mode"
+  out="$(bash "$SB/scripts/spec-counts.sh" "$s45" 2>&1)"
+  rc=$?
+  if [ "$rc" = "$2" ] && grep -qF -- "$3" <<<"$out"; then
+    return 0
+  fi
+  S45_PROBLEMS="${S45_PROBLEMS}${S45_PROBLEMS:+; }$1 [rc=$rc, wanted rc=$2 naming \"$3\"; got: $(printf '%s' "$out" | tail -n 2 | tr '\n' ' ')]"
+  return 1
+}
+s45_row() { printf '| `%s` | web | `x` | %s |\n' "$1" "$2"; }
+# A. current figures -> PASS (a red-only checker would pass every arm below and
+#    still be useless: this one has to be able to say yes).
+{ s45_row a11y '**159 tests in 17 files**'
+  s45_row e2e  '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+s45_arm current 0 'every spec count GATE-INVENTORY.md quotes is what this tree runs'
+# B. a stale a11y figure -> RED, naming both numbers.
+{ s45_row a11y '**147 tests in 16 files**'
+  s45_row e2e  '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+s45_arm stale 1 '`a11y`: the row says **147 tests in 16 files**; --list reads **159 tests in 17 files**'
+# C. the SAME stale figure followed by a matching historical one -> still RED.
+{ s45_row a11y '**147 tests in 16 files**, re-measured by a card that forgot; the figure before it was **159 tests in 17 files**.'
+  s45_row e2e  '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+s45_arm history 1 '`a11y`: the row says **147 tests in 16 files**; --list reads **159 tests in 17 files**'
+# D. the e2e row is gone -> RED (a guard that reads nothing must not pass).
+s45_row a11y '**159 tests in 17 files**' > "$s45/GATE-INVENTORY.md"
+s45_arm norow 1 'GATE-INVENTORY.md has no row for the `e2e` gate'
+# E. the figure is there but not in the parseable form -> RED, never a skip.
+{ s45_row a11y '159 tests in 17 files'
+  s45_row e2e  '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+s45_arm nofigure 1 'carries no `**N tests in M files**` figure'
+# F. the enumeration itself fails -> RED, and it says the count was not read.
+{ s45_row a11y '**159 tests in 17 files**'
+  s45_row e2e  '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+s45_arm listfail 1 'exited 1 on this tree' fail
+# G. the enumeration prints no Total line -> RED (a parse that finds nothing
+#    must not be mistaken for a match).
+s45_arm nototal 1 "carries no 'Total: N tests in M files' line" nototal
+if [ -n "$S45_PROBLEMS" ]; then
+  bad "check 46 — the speccounts checker must pass on a current figure and RED on each way of being unreadable; it did not: $S45_PROBLEMS"
+else
+  ok "check 46 — the speccounts checker passes on figures that match --list and REDS naming both numbers on a stale FIRST figure (including when a matching historical figure follows it, which a greedy parse would read), on a missing row, on an un-bolded figure, on a --list that exits non-zero and on one with no Total line (7 arms, stub playwright, offline)"
+fi
+rm -rf "$s45"
 
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"

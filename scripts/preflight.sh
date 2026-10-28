@@ -48,6 +48,13 @@
 #                         jomform-web tag behind on every card.
 #              a11y       cd web && npm run a11y    (axe-core family only)
 #              e2e        cd web && npm run e2e     (the feature specs under web/e2e)
+#              speccounts scripts/spec-counts.sh   (RE-READS the two spec counts the
+#                         `a11y`/`e2e` rows of GATE-INVENTORY.md quote: it runs each
+#                         project's `--list` on THIS tree and reds when a row's
+#                         current figure is not what the tree runs — ~5s, no build.
+#                         It exists because those rows carried bare typed numbers
+#                         that rotted repeatedly while every gate passed; see the
+#                         gate's own header)
 #              npmaudit   cd web && npm audit --audit-level=high
 #   lint       web        cd web && npm run lint    (eslint 9 + eslint-config-next
 #                         flat config — the compiler-diagnostic rules that have no
@@ -320,7 +327,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet gofmt test govuln web lint webimage a11y e2e npmaudit gitleaks monitor tmpkey mediaprobe backup host prunewt prunesync prunehost refguard selftest)
+GATE_NAMES=(build vet gofmt test govuln web lint webimage speccounts a11y e2e npmaudit gitleaks monitor tmpkey mediaprobe backup host prunewt prunesync prunehost refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -568,6 +575,13 @@ pw_declared() {
   case "$1" in
     build|vet|test|govuln) printf '%s\n' 'api/*' ;;
     web|a11y|e2e|lint)    printf '%s\n' 'web/*' ;;
+    # `speccounts` reads the two spec FAMILIES (it enumerates them) and the table
+    # that quotes their sizes. Both directions matter: a new spec file must select
+    # it (that is the change that rots a count), and so must an edit to
+    # GATE-INVENTORY.md (that is the change that can get the number wrong). Its OWN
+    # source is in the claim too: the checker is what enforces those figures, and a
+    # diff to it that does not run it is how a checker stops enforcing anything.
+    speccounts)            printf '%s\n' 'web/e2e/*' 'web/playwright.config.ts' 'GATE-INVENTORY.md' 'scripts/spec-counts.sh' ;;
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor|tmpkey|backup|host|prunewt|refguard) printf '%s\n' 'deploy/*' 'scripts/*' ;;
     mediaprobe)            printf '%s\n' 'scripts/*' ;;
@@ -590,6 +604,7 @@ pw_sources() {
     lint)                  printf '%s\n' 'web/eslint.config.mjs' 'web/package.json' ;;
     a11y)                  printf '%s\n' 'web/e2e/a11y*.spec.ts' 'web/playwright.config.ts' ;;
     e2e)                   printf '%s\n' 'web/e2e/*.spec.ts' 'web/playwright.config.ts' ;;
+    speccounts)            printf '%s\n' 'scripts/spec-counts.sh' ;;
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor)               printf '%s\n' 'deploy/monitoring/*' ;;
     tmpkey)                printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
@@ -2413,7 +2428,7 @@ summary() {
 }
 
 # --- which gates are selected, for the env preflight ------------------------
-g_build=0; g_vet=0; g_test=0; g_govuln=0; g_web=0; g_lint=0; g_webimage=0; g_a11y=0; g_npmaudit=0; g_gitleaks=0; g_prunehost=0
+g_build=0; g_vet=0; g_test=0; g_govuln=0; g_web=0; g_lint=0; g_webimage=0; g_speccounts=0; g_a11y=0; g_npmaudit=0; g_gitleaks=0; g_prunehost=0
 selected build    && g_build=1
 selected vet      && g_vet=1
 selected test     && g_test=1
@@ -2421,6 +2436,7 @@ selected govuln   && g_govuln=1
 selected web      && g_web=1
 selected lint     && g_lint=1
 selected webimage && g_webimage=1
+selected speccounts && g_speccounts=1
 selected a11y     && g_a11y=1
 selected npmaudit && g_npmaudit=1
 selected gitleaks && g_gitleaks=1
@@ -2433,6 +2449,11 @@ if [ $g_build = 1 ] || [ $g_vet = 1 ] || [ $g_test = 1 ] || [ $g_govuln = 1 ]; t
 # lower floor. Checked in preflight_env against the node this shell resolves.
 if [ $g_web = 1 ]; then need_web=1; need_web_tests=1; fi
 if [ $g_a11y = 1 ]; then need_a11y=1; need_web=1; fi
+# `speccounts` runs node + the playwright CLI (its `--list`, which starts no
+# server), so it needs the same prerequisites the a11y gate does — the node floor
+# and a real `web/node_modules` — and nothing more. `need_web=1` is what carries
+# the node-floor refusal; `need_a11y=1` is what carries the playwright-binary one.
+if [ $g_speccounts = 1 ]; then need_a11y=1; need_web=1; fi
 if [ $g_webimage = 1 ]; then need_docker=1; fi
 # `prunehost` starts a private dockerd, which needs the `dockerd` binary and
 # root; the suite REFUSES loudly on either being missing. What this line adds is
@@ -2885,6 +2906,36 @@ webserver_lock_release() {
   fi
   PREFLIGHT_WEBSERVER_LOCK_FD=""
 }
+# ---- web/speccounts: the a11y/e2e spec counts this table QUOTES --------------
+#
+# WHY THIS GATE EXISTS (card t_74e52a43). The `a11y` and `e2e` rows of
+# GATE-INVENTORY.md each carry a typed count of the specs their gate runs, and
+# both rows instruct the reader to re-measure it when the family grows. That
+# instruction was the only enforcement, so the number rotted — nine cards paid a
+# lane run to correct one figure each (t_9500edf3, t_df0857c6, t_07eb69c8,
+# t_44c9a306, t_769a5cb9, t_c33effe4, t_212be8da, t_3839995c, t_c5c7f37a), and it
+# had rotted AGAIN in both rows when this gate was written: on origin/main
+# 0aa385c0 the rows claimed 147 tests in 16 files and 274 in 54 while the
+# enumeration read 159 in 17 and 276 in 55 — with every gate in the set passing.
+#
+# THE GAP IT CLOSES is exactly that: `selftest` parses the table for gate NAMES
+# only, so a row can say any number at all and stay green. Nothing in the set
+# re-read the figures. This gate does, on the tree under test, using the same
+# enumeration each gate runs (`playwright test --project=… --list` — no build, no
+# server, no browser, ~5s), and it FAILS CLOSED: a missing row, a row with no
+# parseable figure, a missing playwright binary, or `--list` output without its
+# `Total:` line are all RED, never a skip.
+#
+# THE CHECK ITSELF LIVES IN scripts/spec-counts.sh so it can be run on its own
+# (`bash scripts/spec-counts.sh`) and so this runner's derivation reads ONE small
+# source for it rather than the whole 3k-line runner.
+#
+# IT RUNS BEFORE the two suites, deliberately: a stale figure is cheap to find
+# and expensive to discover after 13 minutes of `a11y` + `e2e`.
+speccounts_run() {
+  bash "$REPO_ROOT/scripts/spec-counts.sh" "$REPO_ROOT"
+}
+run speccounts "cd web && playwright test --project={a11y,feature-e2e} --list vs the counts GATE-INVENTORY.md quotes" speccounts_run
 
 # ---- web/a11y: the axe family only -----------------------------------------
 #
