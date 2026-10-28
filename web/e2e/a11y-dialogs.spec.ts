@@ -119,6 +119,14 @@ function blockersOf(results: AxeResults): Result[] {
   );
 }
 
+/**
+ * `<METHOD> <path>` for a request — what a failure message has to name, without
+ * the origin (which differs per worker: the suite's port is claimed per run).
+ */
+function callOf(req: { method(): string; url(): string }): string {
+  return `${req.method()} ${new URL(req.url()).pathname}`;
+}
+
 // The workspace-delete dialog's copy, from the app's own dictionary — so an
 // assertion below compares against the string the app is actually shipping in
 // English, never a copy typed into this file.
@@ -321,7 +329,12 @@ async function assertDialogContract(
     value: string;
     /** A different value of the SAME length — see the boundary assertion below. */
     wrongValue: string;
-    /** The one request this dialog's confirm sends, held open in (4). */
+    /**
+     * The one request this dialog's confirm sends, held open in (4). The METHOD
+     * is pinned with it: all three confirms DELETE, and a regression that turned
+     * one into a POST would otherwise still satisfy the in-flight assertion.
+     */
+    submitMethod: "DELETE" | "POST";
     submitPath: RegExp;
   },
 ) {
@@ -448,23 +461,76 @@ async function assertDialogContract(
   // a double click would send the delete twice. The submit is HELD OPEN — the
   // route never answers — and the same button is then read through its OTHER
   // label, because the app swaps the copy while busy.
-  const heldOpen: number[] = [];
-  await page.route(opts.submitPath, () => {
+  //
+  // THE REQUEST IS AWAITED, NOT SAMPLED (card t_c99a03fd). This block used to
+  // click, assert the busy label, and read `heldOpen` on the very next line. That
+  // read had no synchronisation behind it: the push happens in a handler that only
+  // runs once the request has travelled renderer → browser process → this one,
+  // while the assertion above it is satisfied by the app's own re-render alone. The
+  // ordering is a LEAD, not a guarantee: measured on this dialog's own click path
+  // (two concurrent 6-worker runs, 240 executions of a probe that drives the same
+  // dialog and the same click) the handler landed 46–408ms BEFORE the label became
+  // observable, so 46ms is the smallest margin ever seen and nothing below may
+  // depend on it. The merge gate of PR #1411 already spent that margin:
+  // `heldOpen.length === 0` on bytes with no defect behind it (151 passed / 1
+  // failed; the same arm then passed 3/3 and the whole a11y gate passed on re-run),
+  // i.e. ~25 minutes of merge-lane rework manufactured by this assertion. It is
+  // reproducible on demand now: a confirm that arms `busy` and only THEN issues its
+  // request reds the old line at 400ms and passes this one.
+  //
+  // So the submit is WAITED FOR. `page.waitForRequest` resolves when the request is
+  // ISSUED — before any route handler answers it — which is real synchronisation,
+  // and it pins the METHOD and URL the app actually sends, so "the request went
+  // somewhere else" is a sentence naming where instead of a silent 0. The
+  // handler's own record is then kept as the SECOND proof: that THIS route held
+  // the request rather than one of the stub routes `stubAPI` registered before it
+  // (Playwright resolves a page's routes in reverse registration order — "the most
+  // recently registered route takes precedence" — so the last one wins, which is
+  // asserted here rather than assumed). The `> 0` check stays: it is what proves
+  // the in-flight assertion measured something.
+  const heldOpen: string[] = [];
+  await page.route(opts.submitPath, (route) => {
     // Answering nothing: the request never lands, so the app stays busy for the
     // assertion below. (Playwright holds a request whose handler answers
     // neither fulfil nor abort; the page is torn down with it still in flight.)
-    heldOpen.push(1);
+    heldOpen.push(callOf(route.request()));
   });
+  // Every request this page issues, kept for the failure message below.
+  const issued: string[] = [];
+  page.on("request", (req) => {
+    if (req.url().includes("/api/")) issued.push(callOf(req));
+  });
+  const submitted = page
+    .waitForRequest(
+      (req) => req.method() === opts.submitMethod && opts.submitPath.test(new URL(req.url()).pathname),
+      { timeout: 15_000 },
+    )
+    .catch(() => null);
   await confirm.click();
+  const submit = await submitted;
+  if (submit === null) {
+    throw new Error(
+      `the confirm must send ${opts.submitMethod} ${opts.submitPath}, and it sent nothing matching: ` +
+        `this page issued ${issued.join(", ") || "(no /api request at all)"}. ` +
+        "Without that request the in-flight assertion below would measure nothing.",
+    );
+  }
+  // POLLED, not read: even with the request awaited, the handler's push is one
+  // event-loop turn behind it, and a bare read here would be the same
+  // unsynchronised sample this block is being fixed for.
+  await expect
+    .poll(() => heldOpen.length, {
+      timeout: 5_000,
+      message:
+        `the submit (${callOf(submit)}) must have been HELD OPEN by this route, not answered ` +
+        "by one of the stub routes registered before it",
+    })
+    .toBeGreaterThan(0);
   const inFlight = dialog.getByRole("button", { name: opts.savingName });
   await expect(
     inFlight,
     "the confirm must be off while one submit is in flight (a double click must not send it twice)",
   ).toBeDisabled();
-  expect(
-    heldOpen.length,
-    "the submit must really have been held open, or the assertion above measured nothing",
-  ).toBeGreaterThan(0);
 
   // Escape closes the dialog — the only keyboard way out of these modals. It is
   // asserted with the submit STILL in flight (the request is deliberately left
@@ -499,6 +565,7 @@ test.describe("a11y: typed-confirmation dialogs (slug / product name)", () => {
       wrongValue: WS_WRONG_SLUG,
       // The dialog's DELETE — the workspace's own URL, built from the id the
       // stub describes, so it cannot drift from it.
+      submitMethod: "DELETE",
       submitPath: new RegExp(`/api/workspaces/${WORKSPACE_ID}$`),
     });
   });
@@ -524,6 +591,7 @@ test.describe("a11y: typed-confirmation dialogs (slug / product name)", () => {
       what: "slug",
       value: FORM_SLUG,
       wrongValue: FORM_WRONG_SLUG,
+      submitMethod: "DELETE",
       submitPath: new RegExp(`/api/rest/forms/${TRASHED_FORM.id}/purge`),
     });
   });
@@ -560,6 +628,7 @@ test.describe("a11y: typed-confirmation dialogs (slug / product name)", () => {
       what: "product name",
       value: PRODUCT_NAME,
       wrongValue: PRODUCT_WRONG_NAME,
+      submitMethod: "DELETE",
       submitPath: new RegExp(`/api/rest/products/${TRASHED_PRODUCT.id}/purge`),
     });
   });
