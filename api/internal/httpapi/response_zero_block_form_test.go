@@ -25,6 +25,8 @@ package httpapi
 // form (products, no blocks) keeps its product-required guard.
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -143,5 +145,60 @@ func TestLegacyPaymentFormKeepsProductRequiredGuard(t *testing.T) {
 	}
 	if !strings.Contains(body, `class="p"`) {
 		t.Errorf("a legacy payment form with one product rendered no product control")
+	}
+}
+
+// Terminal branch (card t_844b5ed6, added by PR #1307): when the response
+// renderer cannot read the config at all, `serveForm` must STOP — it must not
+// fall through to `renderBlocks`/`renderLegacy` and paint the PAYMENT template
+// for a form that has no products and therefore no way to submit.
+//
+// The trigger is a `blocks` value the renderer cannot decode: a JSON *string*
+// where the block array belongs. `renderResponseForm` returns false on the
+// unmarshal failure, which is precisely the shape that used to reach the
+// legacy layout. Prod carries no such row (`config->'blocks'` is an array or
+// absent on every form), so no page check can cover this branch — only the
+// dispatch assertion below can.
+//
+// Both halves are pinned: the 500 + message the visitor gets, and the
+// `form_render_response_failed` line the operator gets. Without the log
+// assertion a future edit could keep a generic 500 and lose the diagnosis
+// that says WHICH renderer gave up.
+func TestUndecodableResponseConfigIsTerminal500(t *testing.T) {
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	f := &dbstore.Form{
+		ID: "f_undecodable_blocks", AccountID: "acc_undecodable_blocks",
+		Slug:  "qa-undecodable-blocks",
+		Title: "QA undecodable", Status: dbstore.FormStatusPublished,
+		Config: map[string]any{
+			"mode": "response",
+			// A string where []block is expected — json.Unmarshal fails, so
+			// renderResponseForm declines and the terminal branch must fire.
+			"blocks": "not-an-array",
+		},
+	}
+	body, rec := serveFormBody(t, f)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("undecodable response config: serveForm status = %d, want 500 (a response form must never reach the payment template); body: %s", rec.Code, body)
+	}
+	if !strings.Contains(body, "Borang tidak dapat dipaparkan") {
+		t.Errorf("500 body does not carry the operator-facing message %q; body: %q", "Borang tidak dapat dipaparkan", body)
+	}
+	for _, banned := range []string{"Proceed to Payment", "Please select at least one product"} {
+		if strings.Contains(body, banned) {
+			t.Errorf("undecodable response config fell through to the payment layout: page carries %q", banned)
+		}
+	}
+	logged := logBuf.String()
+	if !strings.Contains(logged, "form_render_response_failed") {
+		t.Errorf("terminal branch did not log form_render_response_failed; captured log: %q", logged)
+	}
+	if !strings.Contains(logged, f.ID) {
+		t.Errorf("form_render_response_failed did not name the failing form %q; captured log: %q", f.ID, logged)
 	}
 }
