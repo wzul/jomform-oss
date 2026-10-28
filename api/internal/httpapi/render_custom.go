@@ -378,7 +378,11 @@ var customFormTmpl = template.Must(template.New("custom").
     var body={client:{full_name:'',email:'',phone:''},fields:collectFields(),
       // Issue #489: QR ordering — echo the ?table=N the QR stand / menu page
       // carried into the form URL so sales.table_number is populated.
-      table_number:(new URLSearchParams(location.search).get('table')||'')};
+      table_number:(new URLSearchParams(location.search).get('table')||''),
+      // Issue #444 / card t_c8808e91: affiliate marketing — echo the ?aff=CODE
+      // the buyer landed with. Every order body echoes it; this one dropped it,
+      // so a response form sold through an affiliate link attributed nothing.
+      affiliate_code:(new URLSearchParams(location.search).get('aff')||'')};
     // Card t_754ed4b4: the buyer's identity is chosen by DECLARATION first and
     // by type second. The body here is the merchant's own markup, so a
     // positional/type guess is not an identity: a company or subject control

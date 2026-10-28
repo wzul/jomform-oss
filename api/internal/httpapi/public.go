@@ -1365,7 +1365,11 @@ document.getElementById('of').addEventListener('submit', async (e) => {
     },
     // Issue #489: QR ordering — echo the ?table=N the QR stand / menu page
     // carried into the form URL so sales.table_number is populated.
-    table_number: (new URLSearchParams(location.search).get('table') || '')
+    table_number: (new URLSearchParams(location.search).get('table') || ''),
+    // Issue #444 / card t_c8808e91: affiliate marketing — echo the ?aff=CODE
+    // the buyer landed with. Without it a sale through this LAST-RESORT layout
+    // is attributed to nobody and the promoter is never paid.
+    affiliate_code: (new URLSearchParams(location.search).get('aff') || '')
   };
   const r = await fetch(location.pathname + '/order', {
     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
