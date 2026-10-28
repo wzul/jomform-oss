@@ -67,11 +67,28 @@ export function refusalText(s: RefusedStep, t: Translate): string {
 }
 
 /**
+ * The keys whose refusal means the assistant may not dispatch this call AT ALL:
+ * a write tool (the only route to a write is a card the human confirms) and any
+ * other name this chat excludes (an invented tool, `list_api_keys`). These are the
+ * only refusals where "That action is not allowed here." is a true sentence.
+ */
+const FORBIDDEN_KEYS = ["chat.refused.notAllowed", "chat.refused.writeTool"];
+
+/**
  * The keys whose refusal means "the assistant could not put THIS change
  * together" rather than "the assistant may not do that". Both are the proposal
  * lane: one is its argument gate, the other its per-answer budget.
  */
 const PROPOSAL_LANE_KEYS = ["chat.refused.proposal", "chat.refused.proposalLimit"];
+
+/**
+ * The keys whose refusal means the call WAS allowed and did not go through: the
+ * tool ran and declined (`chat.refused.tool` — a read it will not serve, an id
+ * that does not exist), or the call failed before it reached the tool
+ * (`chat.refused.error` — a transport failure, unparseable arguments). Neither is
+ * a permission claim; both leave the assistant free to try again.
+ */
+const STEP_LANE_KEYS = ["chat.refused.tool", "chat.refused.error"];
 
 /**
  * The heading for a refusal BLOCK, in the dashboard's language.
@@ -86,13 +103,34 @@ const PROPOSAL_LANE_KEYS = ["chat.refused.proposal", "chat.refused.proposalLimit
  *
  * THE RULE. The proposal heading when EVERY refused step is the proposal lane:
  * nothing in the block is a forbidden action, so nothing in it is "not allowed".
- * The generic heading otherwise — a block that also holds a forbidden tool call
- * really does contain something the assistant may not do, and understating THAT
- * would be the same defect in the other direction. An unkeyed step is not
- * proposal-lane (it is an unknown), so it keeps the generic heading.
+ * The generic heading when the block CONTAINS a forbidden call: that really is
+ * something the assistant may not do, and understating it would be the same defect
+ * in the other direction. An unkeyed step is not a known lane (it is an unknown), so
+ * it keeps the generic heading.
+ *
+ * THE SECOND SHAPE OF THE SAME CLASS (t_66c1f8b1, measured live on v1.21.250). The
+ * else branch above caught EVERY non-proposal key, so a block whose only refusal was
+ * a TOOL-LEVEL one — `get_form` on an id that does not exist, i.e. a read the chat is
+ * allowed to make, which ran and declined — was headed "That action is not allowed
+ * here." over "The tool refused the call". The merchant was told the assistant may not
+ * read their forms when the id was simply wrong. `chat.refused.error` (the call failed
+ * before it reached the tool) is the same claim: allowed, did not go through. Both get
+ * a heading that reports the attempt failed and claims nothing about permission.
+ *
+ * A block that mixes the two non-forbidden lanes (the live shape from that card's
+ * parent: a declined `get_form` next to a refused `propose_write`) takes the same
+ * heading: the block-wide claim must not be narrowed to the change when the block
+ * also holds a step that is not a change.
  */
 export function refusalHeading(steps: RefusedStep[], t: Translate): string {
-  const allProposal =
-    steps.length > 0 && steps.every((s) => PROPOSAL_LANE_KEYS.includes(s.detail_key ?? ""));
-  return allProposal ? t("chat.refusedHeading.proposal" as Key) : t("chat.refused" as Key);
+  const keys = steps.map((s) => s.detail_key ?? "");
+  const proposalLane = (k: string) => PROPOSAL_LANE_KEYS.includes(k);
+  const stepLane = (k: string) => STEP_LANE_KEYS.includes(k);
+  if (steps.length > 0 && keys.every(proposalLane)) {
+    return t("chat.refusedHeading.proposal" as Key);
+  }
+  // Something in this block IS not allowed — say so, whatever else it holds.
+  if (keys.some((k) => FORBIDDEN_KEYS.includes(k))) return t("chat.refused" as Key);
+  const allAllowed = steps.length > 0 && keys.every((k) => proposalLane(k) || stepLane(k));
+  return allAllowed ? t("chat.refusedHeading.step" as Key) : t("chat.refused" as Key);
 }

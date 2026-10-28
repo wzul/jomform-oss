@@ -2261,6 +2261,23 @@ export const DICT = {
   // contain something not allowed). That decision is EXECUTED by
   // src/lib/chatRefusal.test.ts, and the browser half is e2e/chat-refusal-language.
   "chat.refusedHeading.proposal": { en: "That change could not be prepared.", ms: "Perubahan itu tidak dapat disediakan.", zh: "该更改未能准备。", ta: "அந்த மாற்றத்தைத் தயார் செய்ய முடியவில்லை.", ar: "لم يُتمكن من تحضير ذلك التغيير." },
+  // ── ...AND SO IS "THE TOOL ITSELF REFUSED" (t_66c1f8b1) ────────────────────
+  //
+  // The heading above was chosen for the PROPOSAL lane, and everything else fell
+  // through to `chat.refused` — including a step whose tool RAN and declined
+  // (`chat.refused.tool`: `get_form` on an id that does not exist) or whose call
+  // failed before it reached the tool (`chat.refused.error`). The read tool was
+  // ALLOWED; the id was wrong. The merchant was told the assistant may not read
+  // their forms when in fact the call was allowed and answered nothing (measured
+  // live on v1.21.250, English dashboard: "That action is not allowed here. /
+  // get_form — The tool refused the call, so nothing changed.").
+  //
+  // This is the heading for that lane, and for a block that mixes it with the
+  // proposal lane — a block-wide claim must not say "not allowed" when no step in
+  // it was forbidden, and must not be narrowed to "that change" when the block
+  // also holds a step that is not a change. It reports the attempt, and claims
+  // nothing about permission.
+  "chat.refusedHeading.step": { en: "That step could not be completed.", ms: "Langkah itu tidak dapat diselesaikan.", zh: "该步骤未能完成。", ta: "அந்தப் படிநிலையை முடிக்க முடியவில்லை.", ar: "لم يُتمكن من إكمال تلك الخطوة." },
   // ── WHY A REFUSAL HAPPENED, in the visitor's language (t_3839995c) ─────────
   //
   // Why these exist, and why the sentence is not on the wire. A refused tool call

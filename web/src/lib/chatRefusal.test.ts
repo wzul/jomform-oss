@@ -332,11 +332,104 @@ test("a block that also holds a forbidden tool keeps the generic heading", () =>
 });
 
 test("both headings exist in all five locales", () => {
-  for (const key of ["chat.refused", "chat.refusedHeading.proposal"] as const) {
+  for (const key of [
+    "chat.refused",
+    "chat.refusedHeading.proposal",
+    "chat.refusedHeading.step",
+  ] as const) {
     const entry = DICT[key] as Record<string, string> | undefined;
     assert.ok(entry, `${key} is missing from the dictionary`);
     for (const lang of LANGS) {
       assert.ok(String(entry![lang]).trim().length > 0, `${key}.${lang} is empty`);
+    }
+  }
+});
+
+// ── THE TOOL LANE (t_66c1f8b1) ────────────────────────────────────────────────
+//
+// THE DEFECT, measured live on prod v1.21.250. The heading decision above covered
+// the proposal lane and sent EVERY other refusal to "That action is not allowed
+// here." — including a step whose tool RAN and declined:
+//
+//     steps: get_form status=refused detail_key=chat.refused.tool   (id 00000000-…)
+//     rendered: "That action is not allowed here." / "get_form — The tool refused the
+//                call, so nothing changed."
+//
+// `get_form` IS allowed in chat; the id did not exist. So the merchant was told the
+// assistant may not read their forms when the call had been allowed and had simply
+// answered nothing — the same false claim t_7f1694cb removed one lane over.
+const declinedRead: RefusedStep[] = [
+  { tool: "get_form", status: "refused", detail_key: "chat.refused.tool" },
+];
+const failedCall: RefusedStep[] = [
+  { tool: "get_form", status: "refused", detail_key: "chat.refused.error" },
+];
+
+test("a block whose only refusal is a TOOL-LEVEL one is not headed 'not allowed'", () => {
+  for (const lang of LANGS) {
+    const heading = refusalHeading(declinedRead, tIn(lang));
+    assert.equal(
+      heading,
+      DICT["chat.refusedHeading.step"][lang],
+      `the declined-tool block's heading did not come from the dictionary in ${lang}`,
+    );
+    assert.notEqual(
+      heading,
+      tIn(lang)("chat.refused"),
+      `a block whose tool RAN AND DECLINED is still headed "not allowed" in ${lang} — ` +
+        `get_form IS allowed in chat; the id was wrong (t_66c1f8b1)`,
+    );
+    assert.ok(
+      !heading.includes("chat.refused"),
+      `the heading rendered as a raw key in ${lang}: ${heading}`,
+    );
+  }
+  // The English sentence must not carry the claim the defect made.
+  assert.ok(
+    !DICT["chat.refusedHeading.step"].en.toLowerCase().includes("not allowed"),
+    "the tool-lane heading still claims the action is not allowed",
+  );
+  // The pre-fix behaviour, spelled out: every non-proposal block was one constant.
+  assert.notEqual(refusalHeading(declinedRead, tIn("en")), tIn("en")("chat.refused"));
+});
+
+test("a call that failed BEFORE reaching the tool is headed the same way", () => {
+  // chat.refused.error — a transport failure or unparseable arguments. Allowed,
+  // never dispatched: the same non-permission claim.
+  for (const lang of LANGS) {
+    assert.equal(refusalHeading(failedCall, tIn(lang)), DICT["chat.refusedHeading.step"][lang]);
+  }
+});
+
+test("a block mixing a declined tool with a refused proposal claims neither", () => {
+  // The live mixed shape from the same QA session (a Malay turn): get_form refused
+  // chat.refused.tool, propose_write refused chat.refused.proposal. No step in that
+  // block was forbidden, so "not allowed" is false; and it is not all-proposal
+  // either, so the change heading would narrow a block-wide claim to the one step
+  // that happens to be a change.
+  const mixed: RefusedStep[] = [...declinedRead, ...proposalOnly];
+  for (const lang of LANGS) {
+    const heading = refusalHeading(mixed, tIn(lang));
+    assert.equal(heading, DICT["chat.refusedHeading.step"][lang]);
+    assert.notEqual(heading, DICT["chat.refused"][lang], `the mixed block is headed "not allowed" in ${lang}`);
+  }
+});
+
+test("a forbidden call keeps 'not allowed' even beside a declined one", () => {
+  // The other direction, and it is the reason the rule is not "any non-forbidden
+  // key wins": something in this block really may not be done, and the block-wide
+  // sentence must not understate it.
+  for (const forbidden of ["chat.refused.notAllowed", "chat.refused.writeTool"]) {
+    const block: RefusedStep[] = [
+      { tool: "delete_form", status: "refused", detail_key: forbidden },
+      { tool: "get_form", status: "refused", detail_key: "chat.refused.tool" },
+    ];
+    for (const lang of LANGS) {
+      assert.equal(
+        refusalHeading(block, tIn(lang)),
+        DICT["chat.refused"][lang],
+        `a block holding ${forbidden} lost the "not allowed" heading in ${lang}`,
+      );
     }
   }
 });

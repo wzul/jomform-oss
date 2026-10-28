@@ -234,6 +234,108 @@ test.describe("a refused tool call's why follows the dashboard language", () => 
   });
 });
 
+// ── A TOOL-LEVEL REFUSAL IS NOT A PERMISSION REFUSAL (t_66c1f8b1) ──────────────
+//
+// THE DEFECT, measured live on prod v1.21.250, English dashboard, real model turn.
+// The merchant asked to update a form whose id did not exist; the read tool
+// `get_form` was ALLOWED and DECLINED, and the wire carried:
+//
+//     steps: get_form refused (chat.refused.tool), list_forms called
+//
+// The rendered block was headed "That action is not allowed here." over "The tool
+// refused the call, so nothing changed." — telling the merchant the assistant may
+// not read their forms when the id was simply wrong. That is the false permission
+// claim t_7f1694cb removed for the proposal lane, one refusal class over.
+//
+// WHAT THIS ARM PINS. The block's heading comes from the STEPS, so only a real
+// browser can show which sentence a merchant reads for a given wire. Two wires:
+// a block whose only refusal is the declined read (the reported shape, all five
+// languages), and the mixed shape QA also measured (a declined read beside a refused
+// proposal) — neither contains a forbidden call, so neither may claim one.
+const DECLINED_READ_REPLY = {
+  reply: "I could not find a form with that id — here are the forms you have.",
+  steps: [
+    { tool: "get_form", status: "refused", detail_key: "chat.refused.tool" },
+    // NOT refused: the block must still filter on status.
+    { tool: "list_forms", status: "called" },
+  ],
+};
+
+const DECLINED_READ_AND_PROPOSAL_REPLY = {
+  reply: "I could not read that form, and I could not prepare the change either.",
+  steps: [
+    { tool: "get_form", status: "refused", detail_key: "chat.refused.tool" },
+    { tool: "propose_write", status: "refused", detail_key: "chat.refused.proposal" },
+  ],
+};
+
+test.describe("a tool-level refusal is not headed as a forbidden action", () => {
+  test("the declined-read block says the step failed, never 'not allowed'", async ({ page, baseURL }) => {
+    for (const lang of LANGS) {
+      await stubAPI(page, lang, DECLINED_READ_REPLY);
+      await freshState(page, lang);
+      await sendChatPrompt(page, baseURL, "rename my product", DICT["chat.send"][lang]);
+
+      const block = page.locator(BLOCK);
+      await expect(
+        block,
+        "the refusal block must render — otherwise this test proves nothing",
+      ).toHaveCount(1, { timeout: 20_000 });
+      await expect(block.locator("span.block"), "the declined step must render its own line").toHaveCount(1);
+
+      const text = (await block.innerText()).trim();
+      console.log(`declined-tool block in ${lang}: ${JSON.stringify(text)}`);
+
+      // The heading is the tool lane's, and NOT the permission claim.
+      await expect(block).toContainText(DICT["chat.refusedHeading.step"][lang]);
+      expect(
+        text.includes(DICT["chat.refused"][lang]),
+        `a declined READ is headed "not allowed" in ${lang}: ${text} — get_form IS allowed in ` +
+          `chat; the id was wrong (t_66c1f8b1)`,
+      ).toBe(false);
+      // The step's own why still renders, so the assertion above cannot be satisfied
+      // by a block that failed to render.
+      await expect(block).toContainText(DICT["chat.refused.tool"][lang]);
+      await expect(block).toContainText("get_form");
+      expect(text.includes("chat.refused"), `the block shows a raw KEY in ${lang}: ${text}`).toBe(false);
+      expect(
+        text.includes("list_forms"),
+        `the refusal block includes a step that was CALLED, not refused: ${text}`,
+      ).toBe(false);
+    }
+  });
+
+  test("a mixed block of allowed refusals claims neither permission nor a prepared change", async ({
+    page,
+    baseURL,
+  }) => {
+    // The shape QA measured on a Malay turn: the same declined read next to a refused
+    // proposal. Nothing in it was forbidden, and it is not a change-only block either.
+    await stubAPI(page, "en", DECLINED_READ_AND_PROPOSAL_REPLY);
+    await freshState(page, "en");
+    await sendChatPrompt(page, baseURL, "rename my product", DICT["chat.send"].en);
+
+    const block = page.locator(BLOCK);
+    await expect(block, "the refusal block must render").toHaveCount(1, { timeout: 20_000 });
+    await expect(block.locator("span.block")).toHaveCount(2);
+
+    const text = (await block.innerText()).trim();
+    console.log(`mixed allowed-refusal block: ${JSON.stringify(text)}`);
+
+    await expect(block).toContainText(DICT["chat.refusedHeading.step"].en);
+    for (const wrong of [DICT["chat.refused"].en, DICT["chat.refusedHeading.proposal"].en]) {
+      expect(
+        text.includes(wrong),
+        `the mixed block is headed ${JSON.stringify(wrong)}: ${text} — no step in it was ` +
+          `forbidden, and not every step is a change`,
+      ).toBe(false);
+    }
+    // Both reasons still render, so the block really is the mixed shape.
+    await expect(block).toContainText(DICT["chat.refused.tool"].en);
+    await expect(block).toContainText(DICT["chat.refused.proposal"].en);
+  });
+});
+
 // ── A REFUSED PROPOSAL THAT ENDS WITH NO MODEL PROSE (t_7f1694cb) ─────────────
 //
 // THE DEFECT, measured live on prod v1.21.149. This is the wire the merchant's
