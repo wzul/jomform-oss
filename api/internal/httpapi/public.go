@@ -1492,6 +1492,29 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
 }
 
+// legacyHasProducts reports whether the legacy payment layout would paint at
+// least one product checkbox for this form.
+//
+// It mirrors renderLegacy's row loop exactly, and that is why it exists: the
+// rows come from the config's `products` array only (the live products table
+// resolves a row's name/price/image, it never adds a row), and a snapshot
+// without an id is skipped. Card t_7d4c20c8 — a published PAYMENT form with
+// `blocks: []` and no config product (measured live on
+// membe.jomform.com/new-form) has nothing to tick, so formTmpl's submit handler
+// could only ever fire its "Please select at least one product" alert: no
+// request, no way to submit, under a "Proceed to Payment" button.
+func legacyHasProducts(f *dbstore.Form) bool {
+	if f == nil {
+		return false
+	}
+	for _, p := range configProductSnapshots(f.Config) {
+		if p.ID != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // renderLegacy renders the old product-checkbox layout.
 func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
 	var cfg struct {
@@ -1825,7 +1848,9 @@ func (h *PublicHandlers) formNoIndex(r *http.Request, f *dbstore.Form) bool {
 
 // serveForm renders a resolved form (blocks or legacy) and logs unknown
 // template errors once. Response-only forms (issue #171) render a
-// collect-only layout with no product list and no payment step.
+// collect-only layout with no product list and no payment step; a payment form
+// with no product to sell renders the "not accepting orders" message page
+// (card t_7d4c20c8) instead of the legacy layout's unreachable checkout.
 func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
 	// Draft forms are never publicly served (issue #176). Only published and
 	// private forms are reachable; private forms show a password gate.
@@ -1883,6 +1908,18 @@ func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *db
 		return
 	}
 	if h.renderBlocks(w, r, f) {
+		return
+	}
+	// Card t_7d4c20c8: the layout below IS the payment layout — one checkbox per
+	// product, and a "Proceed to Payment" button whose submit handler refuses to
+	// post unless one of them is ticked (`if (!items.length) { alert(...) }`).
+	// A published payment form with no product at all (blocks: [], products: [])
+	// therefore painted a checkout that could never start: the alert was the
+	// button's only reachable outcome and no request was ever sent. Serve the
+	// honest "not accepting orders" page instead — no form, no submit control.
+	// A form that DOES have a product keeps this layout and its guard untouched.
+	if !legacyHasProducts(f) {
+		h.renderRestriction(w, r, f, restrictionNoProducts)
 		return
 	}
 	h.renderLegacy(w, r, f)

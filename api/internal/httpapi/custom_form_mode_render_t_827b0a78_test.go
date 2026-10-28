@@ -155,7 +155,14 @@ func TestCustomFormWithoutModeSubmitsAsAResponse(t *testing.T) {
 // payment layout.
 func TestPaymentFormWithoutCustomSectionStillRendersPaymentPage(t *testing.T) {
 	h, workspaceSlug, formSlug := customFormFixture(t)
-	storeFormConfig(t, formSlug, "Borang bayaran", map[string]any{"mode": "payment", "blocks": []any{}})
+	// Card t_7d4c20c8: an "ordinary payment form" now has to carry a product —
+	// a payment form with nothing to sell is served the "not accepting orders"
+	// page instead of a checkout it can never submit. With one product this is
+	// still the plain builder payment config, which is what this control is for.
+	storeFormConfig(t, formSlug, "Borang bayaran", map[string]any{
+		"mode": "payment", "blocks": []any{},
+		"products": []any{map[string]any{"id": "p1", "name": "Item", "price_sen": 2500, "active": true}},
+	})
 
 	rec := publicServe(t, h, workspaceSlug+".jomform.com", "/"+formSlug)
 	if rec.Code != http.StatusOK {

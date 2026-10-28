@@ -230,8 +230,10 @@ export default function CustomizeDocsPage() {
         Two rules decide whether a form may go live. A <strong>response-mode</strong> form always
         may — collecting answers is its whole job, and having no products is normal for it. A{" "}
         <strong>payment form</strong> needs something to sell: publishing one with no products is
-        refused once with a clear message, because such a form can never take money, and you can
-        confirm and publish it anyway if you only meant to collect details. Products can come from a
+        refused once with a clear message, because such a form can never take money. You can confirm
+        and publish it anyway — while the catalogue is still being set up, say — but its page then
+        tells buyers it is not accepting orders, rather than showing a checkout that cannot start,
+        and it starts selling as soon as you add a product. Products can come from a
         product block, the form&apos;s product snapshot, a priced option or shipping choice, or an
         enabled restaurant menu; adding one any time removes the question.
       </p>

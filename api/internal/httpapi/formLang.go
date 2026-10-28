@@ -94,6 +94,14 @@ type langStrings struct {
 	PendingMessage string // before start_at
 	ExpiredMessage string // after end_at
 	LimitMessage   string // entry limit reached
+	// Card t_7d4c20c8: a published PAYMENT form with nothing to sell. The
+	// legacy payment layout's only submit path is its product checkboxes
+	// (`if (!items.length) { alert(NoProductAlert); return; }`), so serving it
+	// for a form with no product painted a "Proceed to Payment" button that
+	// could never post. serveForm serves this sentence instead of that dead
+	// end. It is not a merchant-authored message, so no per-form override
+	// applies.
+	NoProductsMessage string // payment form with no product configured
 	// Issue #485: restaurant-menu page strings (header, filter row, sections).
 	MenuTable             string // "Table" label, e.g. "Table 8"
 	MenuInfo              string // info (i) affordance aria/title
@@ -166,7 +174,9 @@ var formLangs = map[string]langStrings{
 		PendingMessage: "This form is not open yet. Please check back later.",
 		ExpiredMessage: "This form has closed. Thank you for your interest.",
 		LimitMessage:   "Sorry, this form has reached its entry limit and is no longer accepting responses.",
-		MenuTable:      "Table", MenuInfo: "Cafe info", MenuBack: "Back",
+		// Card t_7d4c20c8: nothing to sell on a payment form.
+		NoProductsMessage: "This form is not accepting orders right now. Please contact the merchant.",
+		MenuTable:         "Table", MenuInfo: "Cafe info", MenuBack: "Back",
 		MenuBestSeller: "Best Seller", MenuBestBadge: "Best-seller", MenuAll: "All",
 		MenuSearchPlaceholder: "Search menu…", MenuFilterLabel: "Filter by category",
 		MenuEmpty: "No menu yet.", MenuPoweredBy: "Powered by JomForm",
@@ -221,7 +231,9 @@ var formLangs = map[string]langStrings{
 		PendingMessage: "Borang ini belum dibuka lagi. Sila kembali semula kemudian.",
 		ExpiredMessage: "Borang ini telah ditutup. Terima kasih atas minat anda.",
 		LimitMessage:   "Maaf, borang ini telah mencapai had penyertaan dan tidak lagi menerima respons.",
-		MenuTable:      "Meja", MenuInfo: "Maklumat kafe", MenuBack: "Kembali",
+		// Card t_7d4c20c8: nothing to sell on a payment form.
+		NoProductsMessage: "Borang ini tidak menerima tempahan buat masa ini. Sila hubungi penjual.",
+		MenuTable:         "Meja", MenuInfo: "Maklumat kafe", MenuBack: "Kembali",
 		MenuBestSeller: "Paling Laris", MenuBestBadge: "Paling laris", MenuAll: "Semua",
 		MenuSearchPlaceholder: "Cari menu…", MenuFilterLabel: "Tapis mengikut kategori",
 		MenuEmpty: "Belum ada menu.", MenuPoweredBy: "Dikuasakan oleh JomForm",
@@ -273,7 +285,9 @@ var formLangs = map[string]langStrings{
 		PendingMessage: "此表单尚未开放，请稍后再来。",
 		ExpiredMessage: "此表单已关闭，感谢您的关注。",
 		LimitMessage:   "抱歉，此表单已达到提交上限，不再接受提交。",
-		MenuTable:      "桌号", MenuInfo: "咖啡馆信息", MenuBack: "返回",
+		// Card t_7d4c20c8: nothing to sell on a payment form.
+		NoProductsMessage: "此表单目前不接受订单，请联系商家。",
+		MenuTable:         "桌号", MenuInfo: "咖啡馆信息", MenuBack: "返回",
 		MenuBestSeller: "最畅销", MenuBestBadge: "畅销", MenuAll: "全部",
 		MenuSearchPlaceholder: "搜索菜单…", MenuFilterLabel: "按分类筛选",
 		MenuEmpty: "暂无菜单。", MenuPoweredBy: "由 JomForm 提供支持",
@@ -325,7 +339,9 @@ var formLangs = map[string]langStrings{
 		PendingMessage: "இந்த படிவம் இன்னும் திறக்கப்படவில்லை. பின்னர் மீண்டும் வரவும்.",
 		ExpiredMessage: "இந்த படிவம் மூடப்பட்டது. உங்கள் ஆர்வத்திற்கு நன்றி.",
 		LimitMessage:   "மன்னிக்கவும், இந்த படிவம் அதன் பதிவு வரம்பை அடைந்துவிட்டது, இனி பதில்களை ஏற்காது.",
-		MenuTable:      "மேசை", MenuInfo: "கஃபே தகவல்", MenuBack: "பின்",
+		// Card t_7d4c20c8: nothing to sell on a payment form.
+		NoProductsMessage: "இந்தப் படிவம் இப்போது ஆர்டர்களை ஏற்கவில்லை. விற்பனையாளரைத் தொடர்பு கொள்ளுங்கள்.",
+		MenuTable:         "மேசை", MenuInfo: "கஃபே தகவல்", MenuBack: "பின்",
 		MenuBestSeller: "அதிகம் விற்பனையாகும்", MenuBestBadge: "சிறந்த விற்பனை", MenuAll: "அனைத்தும்",
 		MenuSearchPlaceholder: "மெனுவைத் தேடு…", MenuFilterLabel: "வகைப்படி வடிகட்டு",
 		MenuEmpty: "இன்னும் மெனு இல்லை.", MenuPoweredBy: "JomForm வழங்குகிறது",
@@ -377,7 +393,9 @@ var formLangs = map[string]langStrings{
 		PendingMessage: "هذا النموذج غير مفتوح بعد. يرجى العودة لاحقاً.",
 		ExpiredMessage: "تم إغلاق هذا النموذج. شكراً لاهتمامك.",
 		LimitMessage:   "عذراً، بلغ هذا النموذج الحد الأقصى للردود ولم يعد يقبل الردود.",
-		MenuTable:      "طاولة", MenuInfo: "معلومات المقهى", MenuBack: "رجوع",
+		// Card t_7d4c20c8: nothing to sell on a payment form.
+		NoProductsMessage: "هذا النموذج لا يستقبل الطلبات حالياً. يرجى التواصل مع التاجر.",
+		MenuTable:         "طاولة", MenuInfo: "معلومات المقهى", MenuBack: "رجوع",
 		MenuBestSeller: "الأكثر مبيعاً", MenuBestBadge: "الأكثر مبيعاً", MenuAll: "الكل",
 		MenuSearchPlaceholder: "ابحث في القائمة…", MenuFilterLabel: "تصفية حسب الفئة",
 		MenuEmpty: "لا توجد قائمة بعد.", MenuPoweredBy: "مدعوم بواسطة JomForm",

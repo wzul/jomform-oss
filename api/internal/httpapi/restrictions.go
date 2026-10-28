@@ -2,6 +2,9 @@
 // Gravity-Forms-style — a form can be scheduled to open/close and capped at a
 // number of entries. The public renderer shows a pending/expired/limit message
 // instead of the form; the submit handlers reject submissions past the limit.
+// Card t_7d4c20c8 added a fourth, non-time state (a payment form with no
+// product to sell) because it needs exactly what these already render: a
+// standalone message and no submit control.
 package httpapi
 
 import (
@@ -21,6 +24,13 @@ const (
 	restrictionPending                       // before start_at
 	restrictionExpired                       // after end_at
 	restrictionLimitReached                  // entry limit reached
+	// Card t_7d4c20c8: a published PAYMENT form with no product to sell. Not a
+	// time/limit state — the form is unsubmittable until the merchant adds a
+	// product, because the legacy payment layout's only submit path is its
+	// product checkboxes. Served instead of the payment page, so the buyer is
+	// told the truth instead of being handed a button whose only outcome is
+	// "Please select at least one product".
+	restrictionNoProducts
 )
 
 // scheduleState returns pending/expired/open based on the form's schedule
@@ -80,12 +90,18 @@ func (h *PublicHandlers) restrictionMessage(r *http.Request, f *dbstore.Form, st
 			return *f.LimitMessage
 		}
 		return ls.LimitMessage
+	case restrictionNoProducts:
+		// No per-form override: the merchant never wrote this message — the
+		// form simply has nothing to sell, and the sentence says so.
+		return ls.NoProductsMessage
 	}
 	return ""
 }
 
 // renderRestriction renders a standalone message page in place of the form
-// (schedule pending/expired or entry-limit-reached).
+// (schedule pending/expired, entry-limit-reached, or — card t_7d4c20c8 — a
+// payment form with no product to sell). No submit control is painted on it,
+// which is the point: every state here means the form cannot be submitted.
 func (h *PublicHandlers) renderRestriction(w http.ResponseWriter, r *http.Request, f *dbstore.Form, st restrictionState) {
 	msg := h.restrictionMessage(r, f, st)
 	title := f.Title
