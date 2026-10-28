@@ -118,6 +118,10 @@ func TestCustomJSRefusalCodeIsNotTheClassCode(t *testing.T) {
 // its theme onto a form later.
 func TestCustomJSRefusalCodeOnEveryRestDoor(t *testing.T) {
 	fx := newRenameFixture(t, "it-cjs-code-"+randHex(4))
+	// The gallery-door arm below seeds template rows through the store; remove
+	// them with the rest of this test's forms so the package's global gallery
+	// reads (ListTemplates is not account-scoped) never see them.
+	cleanupProbeForms(t, fx)
 
 	type door struct {
 		name string
@@ -135,7 +139,22 @@ func TestCustomJSRefusalCodeOnEveryRestDoor(t *testing.T) {
 		}},
 	}
 
+	// Card t_d9b179d9: the OLDER gallery clone door is a door too — POST
+	// /v1/templates/use accepts {template_id} and copies the template's theme
+	// verbatim onto a new form, exactly like /v1/rest/templates/{id}/use. It
+	// refuses on the value carried by a resolved ROW, so each case seeds one and
+	// this closure reads the id set just before the door runs.
+	galleryTemplateID := ""
+	doors = append(doors, door{
+		"POST /v1/templates/use {template_id}",
+		func(t *testing.T, _ string) (int, json.RawMessage) {
+			return tplReq(t, fx.h, fx.key, http.MethodPost, "/v1/templates/use",
+				`{"template_id":`+jsonString(galleryTemplateID)+`}`)
+		},
+	})
+
 	for _, tc := range blockedCustomJSCases() {
+		galleryTemplateID = seedUseTemplateRow(t, fx, map[string]any{"custom_js": tc.js}, false).ID
 		theme := `{"custom_js":` + jsonString(tc.js) + `}`
 		for _, d := range doors {
 			// The create doors need a title; the PATCH ignores it. Send the same

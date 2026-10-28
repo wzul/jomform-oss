@@ -76,6 +76,15 @@ func (h *RESTHandlers) useTemplate(w http.ResponseWriter, r *http.Request, actx 
 		writeErr(w, http.StatusNotFound, "template tidak dijumpai")
 		return
 	}
+	// Card t_d9b179d9: this older door copies tpl.Theme verbatim onto a real
+	// form, so it is the same bypass useOwnTemplate closes — a template row that
+	// already carries a blocked custom_js (written before the scan existed, or by
+	// a writer that never scanned) would reach a buyer's page as live code by
+	// being cloned. Both body shapes resolve into `tpl` above, so this one arm
+	// covers the account-scoped {template_id} clone and the gallery {slug} clone.
+	if refuseBlockedCustomJS(w, tpl.Theme) {
+		return
+	}
 	title := in.Name
 	if title == "" {
 		title = tpl.Title
