@@ -34,8 +34,8 @@ func (s *Server) salesStore() (*dbstore.SaleStore, error) {
 type createAffiliateIn struct {
 	WorkspaceID   string  `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
 	Code          string  `json:"code" jsonschema:"Kod affiliate (cth: ALI, KAKAK)"`
-	Name          string  `json:"name" jsonschema:"Nama affiliate (pilihan)"`
-	Email         string  `json:"email" jsonschema:"Emel affiliate (pilihan)"`
+	Name          string  `json:"name,omitempty" jsonschema:"Nama affiliate (pilihan)"`
+	Email         string  `json:"email,omitempty" jsonschema:"Emel affiliate (pilihan)"`
 	CommissionPct float64 `json:"commission_pct" jsonschema:"Kadar komisen %% (cth: 10 = 10%%)"`
 }
 

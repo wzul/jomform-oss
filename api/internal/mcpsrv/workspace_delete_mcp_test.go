@@ -43,6 +43,7 @@ func wsMCPFixture(t *testing.T, pool *pgxpool.Pool) *httptest.Server {
 		Sales:            dbstore.NewSaleStore(pool),
 		Subs:             dbstore.NewSubscriptionStore(pool),
 		Users:            dbstore.NewUserStore(pool),
+		Affiliates:       dbstore.NewAffiliateStore(pool),
 	}, nil, nil, nil)
 	httpSrv := httptest.NewServer(srv.HTTPHandler())
 	t.Cleanup(httpSrv.Close)
