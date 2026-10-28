@@ -1791,11 +1791,90 @@ func (h *PublicHandlers) workspaceFooter(ctx context.Context, f *dbstore.Form) f
 	fi.PrivacyURL = rewriteHostedLegalURL(st.PrivacyURL, slug)
 	fi.TermsURL = rewriteHostedLegalURL(st.TermsURL, slug)
 	fi.RefundURL = rewriteHostedLegalURL(st.RefundURL, slug)
+	// Card t_49792b57: the rewrite above makes a HOSTED link resolve onto the
+	// current slug, but resolution is not presence — handlePublicLegalPage 404s
+	// when workspace_legal_pages has no row for that page type, which is the
+	// state of every workspace on prod (0 rows globally). A rewritten hosted
+	// link is therefore advertised-but-not-served whenever the merchant never
+	// saved the page, and a stale slug turns a link that used to work into a
+	// 404 the moment the workspace is renamed. Drop the hosted link when its
+	// page has no stored content; a link to any OTHER host is the merchant's own
+	// site and is never judged here (we do not serve it, so we cannot know).
+	if hostedLegalLinkCount(fi, slug) > 0 {
+		pages, perr := h.Workspaces.LegalPages(ctx, workspaceID)
+		if perr == nil {
+			fi.PrivacyURL = servableHostedLegalLink(fi.PrivacyURL, slug, pages)
+			fi.TermsURL = servableHostedLegalLink(fi.TermsURL, slug, pages)
+			fi.RefundURL = servableHostedLegalLink(fi.RefundURL, slug, pages)
+		}
+		// A failed content lookup keeps the merchant's links: the same database
+		// answers the public legal route, so that failure is an outage to fix,
+		// not evidence that the page is missing.
+	}
 	fi.FooterText = st.FooterText
 	fi.HasFooter = fi.BusinessName != "" || fi.CompanyReg != "" || fi.ContactPhone != "" ||
 		fi.ContactAddress != "" || fi.PrivacyURL != "" || fi.TermsURL != "" || fi.RefundURL != "" ||
 		fi.FooterText != ""
 	return fi
+}
+
+// hostedLegalLinkCount counts the footer's links that point at one of THIS
+// workspace's own hosted legal pages. Used to skip the content lookup entirely
+// for the common footer whose links are the merchant's own site.
+func hostedLegalLinkCount(fi footerInfo, workspaceSlug string) int {
+	n := 0
+	for _, u := range []string{fi.PrivacyURL, fi.TermsURL, fi.RefundURL} {
+		if hostedLegalPageType(u, workspaceSlug) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// hostedLegalPageType reports which hosted legal page a URL addresses on the
+// workspace's own host ("privacy"/"terms"/"refund"), or "" when the URL is
+// empty, names another host (the merchant's own site) or a path that
+// handlePublicLegalPage does not serve. `pages` is keyed by page type.
+//
+// It answers the same question the public route answers — host via
+// accountSubdomain + IDBySlug, path via the exact /privacy|/terms|/refund
+// patterns — so "servable here" cannot drift from "served there".
+func hostedLegalPageType(raw, workspaceSlug string) string {
+	if raw == "" || workspaceSlug == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	if !strings.EqualFold(u.Hostname(), workspaceSlug+".jomform.com") {
+		return ""
+	}
+	switch strings.TrimPrefix(u.Path, "/") {
+	case dbstore.LegalPagePrivacy:
+		return dbstore.LegalPagePrivacy
+	case dbstore.LegalPageTerms:
+		return dbstore.LegalPageTerms
+	case dbstore.LegalPageRefund:
+		return dbstore.LegalPageRefund
+	}
+	return ""
+}
+
+// servableHostedLegalLink returns the footer link to publish for one legal slot.
+// A link that is not ours (another host) is returned unchanged. A link to our
+// own hosted page is returned only when that page has stored content — the
+// exact condition handlePublicLegalPage requires to answer 200; otherwise the
+// footer gets no link instead of a dead one (card t_49792b57).
+func servableHostedLegalLink(raw, workspaceSlug string, pages map[string]*dbstore.LegalPage) string {
+	pageType := hostedLegalPageType(raw, workspaceSlug)
+	if pageType == "" {
+		return raw
+	}
+	if p := pages[pageType]; p != nil && strings.TrimSpace(p.Content) != "" {
+		return raw
+	}
+	return ""
 }
 
 // rewriteHostedLegalURL rewrites a stored legal-page URL that points at one of
