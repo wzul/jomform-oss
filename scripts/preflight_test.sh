@@ -1152,6 +1152,10 @@ pool_dir="$SB_STATE/pool"
 rm -rf "$pool_dir"; mkdir -p "$pool_dir"
 pool_lock="$pool_dir/gate.lock"
 s16_gofmt_label='cd api && test -z "$(gofmt -l .)"'
+# The readiness bound: a LIVENESS bound, like $s16_bound below, never a measured
+# quantity. The holder needs two `flock` takes, so this only fires for a holder
+# that never got scheduled.
+s16_ready_bound=15
 # The holder takes every slot the runner would try, in ITS OWN process, and holds
 # them while the subject run takes its turn. `-o` so the lock lives on this
 # descriptor rather than dying with an inner `true`.
@@ -1198,9 +1202,14 @@ pool_hold() {
 # rather than running the subject against a pool that may be empty and
 # mis-attributing the result — which is the second half of the defect the fixed
 # `sleep 1` caused.
-wait_pool_hold_ready() {  # $1 sentinel path, $2 holder pid
-  local sentinel="$1" holder="$2" deadline
-  deadline=$(( $(date +%s) + 15 ))
+#
+# THE BOUND IS ONE LITERAL (`$s16_ready_bound`), not a number repeated in each
+# message: a message that hardcodes "15s" can outlive the bound it describes, and
+# a wrong CAUSE named in a gate log is what sends an operator chasing host load
+# instead of the pool (card t_d0cceae1).
+wait_pool_hold_ready() {  # $1 sentinel path, $2 holder pid, $3 bound (default $s16_ready_bound)
+  local sentinel="$1" holder="$2" bound="${3:-$s16_ready_bound}" deadline
+  deadline=$(( $(date +%s) + bound ))
   while [ ! -f "$sentinel" ]; do
     kill -0 "$holder" 2>/dev/null || return 1
     [ "$(date +%s)" -lt "$deadline" ] || return 2
@@ -1242,7 +1251,7 @@ wait "$s16_holder" 2>/dev/null; s16_hold_rc=$?
 if [ "$s16_ready_rc" -eq 1 ]; then
   bad "16b: the pool HOLDER exited without filling the pool (pool_hold rc=$s16_hold_rc — its slot take or premise probe failed), so the subject run cannot be attributed to a full pool — nothing about the runner's cap is measured by this run"
 elif [ "$s16_ready_rc" -eq 2 ]; then
-  bad "16b: the pool HOLDER did not report the pool full within 15s (pool_hold rc=$s16_hold_rc) while the host is loaded — raising a fixed start budget would not fix this (that was the old bug); the host could not schedule two flock takes in 15s, so the check cannot measure the runner here"
+  bad "16b: the pool HOLDER did not report the pool full within ${s16_ready_bound}s (pool_hold rc=$s16_hold_rc) while the host is loaded — raising a fixed start budget would not fix this (that was the old bug); the host could not schedule two flock takes in ${s16_ready_bound}s, so the check cannot measure the runner here"
 elif [ "$s16_hold_rc" -ne 0 ]; then
   bad "16b: the pool HOLDER wrote its readiness sentinel but then returned rc=$s16_hold_rc (pool_hold should hold for its sleep and return 0) — the holder's own premise is not trustworthy, so the runner's rc is not a statement about the cap"
 elif [ "$s16_rc" -eq 0 ]; then
@@ -1326,20 +1335,42 @@ wait_file_line() {  # $1 file, $2 fixed string, $3 seconds
 # copy whose pool is a single lock on slot 1 (16f) — so neither verdict can come
 # from a difference in the measurement itself.
 #
+# THE PREMISE IS PROVED BEFORE THE SUBJECT IS CREATED AT ALL (card t_d0cceae1).
+# This function used to start the holder and the subject CONCURRENTLY, then wait
+# for the holder's readiness sentinel — i.e. it asked the subject to behave as if
+# the pool were full while both processes were racing for the same slots with a
+# NON-BLOCKING `flock`. Whichever reached the pool first took a slot and the LOSER
+# exited: when the subject won (a loaded host delaying the holder's fork/`flock`
+# past the subject's own startup), the holder's `flock -o -n` was refused, the
+# holder `exit 1`-ed, and the leg reported
+#     "the pool HOLDER did not fill the pool within 15s (readiness rc=1)"
+# while the subject had in fact taken the free slot, RUN its gate and exited 0 —
+# a wrong cause AND a subject read off a pool that was never full. Measured by
+# delaying only the holder's slot take by 0.3s (standing in for a loaded host):
+# 16c and 16f both red on that exact line, 3 of the 5 leg checks green. In a full
+# gate run this reds a 3464s run and reads as a defect in the tree under test
+# (card t_a940a635, tree db7130a8). So: fill and PROVE the pool first, and start
+# no subject while the premise is unproven.
+#
 # Sets, for the caller:
-#   PW_RESULT   held | held_unverified | after | never | nofull | nohold
-#   PW_RC       the subject's exit status
-#   PW_READY_RC the holder's readiness status (0 = the pool was full)
-#   PW_OUT      the file the subject's output is streamed to, read WHILE it runs
-#   PW_ELAPSED  the subject's wall clock — REPORTED in the messages and never
-#               asserted on: it is the number whose load dependence reddened a
-#               real full gate run while the wait was correct.
+#   PW_RESULT    held | held_unverified | after | never | nofull
+#                | holder_died | holder_late
+#   PW_RC        the subject's exit status — EMPTY when no subject was started
+#   PW_READY_RC  the holder's readiness status (0 = the pool was full)
+#   PW_HOLDER_RC the holder's OWN exit status (empty until it has been reaped)
+#   PW_DETAIL    one line naming WHY a premise failed (holder_died/holder_late),
+#                so the verdict a caller prints can never name the wrong cause
+#   PW_OUT       the file the subject's output is streamed to, read WHILE it runs;
+#                it does not EXIST when no subject was started
+#   PW_ELAPSED   the subject's wall clock — REPORTED in the messages and never
+#                asserted on: it is the number whose load dependence reddened a
+#                real full gate run while the wait was correct.
 pool_wake_leg() {  # $1 tag, $2 bound seconds, $3.. the subject's argv
   local tag="$1" bound="$2"; shift 2
   local ready="$SB_STATE/$tag.ready" sfree="$SB_STATE/$tag.free" srel="$SB_STATE/$tag.release"
-  local holder pid start
+  local holder pid="" start
   PW_OUT="$SB_STATE/$tag.out"
-  PW_RESULT=never; PW_RC=""; PW_ELAPSED=""; PW_READY_RC=0
+  PW_RESULT=never; PW_RC=""; PW_ELAPSED=""; PW_READY_RC=0; PW_HOLDER_RC=""; PW_DETAIL=""
   rm -f "$ready" "$sfree" "$srel" "$PW_OUT"
   # THE HOLDER: every slot, held until the subject reports the full pool (bounded),
   # then slots 2..N freed and slot 1 held until the CHECK releases it (bounded).
@@ -1377,6 +1408,33 @@ pool_wake_leg() {  # $1 tag, $2 bound seconds, $3.. the subject's argv
     echo "  $tag: slot1 released"
   ) &
   holder=$!
+  # THE PREMISE FIRST, AND NO SUBJECT UNTIL IT HOLDS (card t_d0cceae1 — see the
+  # header). 16b's rule, one handoff over: a reading taken against a pool that was
+  # not full proves nothing, so the subject process is not created at all while the
+  # premise is unproven.
+  wait_pool_hold_ready "$ready" "$holder" "$s16_ready_bound" || PW_READY_RC=$?
+  if [ "$PW_READY_RC" -ne 0 ]; then
+    # End the holder's holds BEFORE reaping it, exactly as the outcome path below
+    # does: a bound that expires leaves a LIVE holder, and parking this leg on the
+    # holder's own 120s/180s bounds would leave the sandbox pool occupied (16d's
+    # premise takes a fresh look at a held slot).
+    : >"$sfree"
+    : >"$srel"
+    wait "$holder" 2>/dev/null; PW_HOLDER_RC=$?
+    # TWO FAILURE EXITS, TWO CAUSES — named, never merged into one "15s" story.
+    #   1 = the holder process was GONE (its slot take or premise probe failed);
+    #   2 = the readiness BOUND expired under a holder that was still alive.
+    # They route an operator to different places (the pool vs the host), so the
+    # verdict must not report one as the other.
+    if [ "$PW_READY_RC" -eq 1 ]; then
+      PW_RESULT=holder_died
+      PW_DETAIL="the pool HOLDER exited before it had filled the pool (holder status ${PW_HOLDER_RC:-?}) — its own slot take or its premise probe failed, so NO subject was started and nothing about the runner is measured here"
+    else
+      PW_RESULT=holder_late
+      PW_DETAIL="the pool HOLDER was still alive but had not proved the pool full within ${s16_ready_bound}s (holder status ${PW_HOLDER_RC:-?}), so the readiness BOUND expired and NO subject was started — this is the harness waiting out its own bound, not the runner's cap"
+    fi
+    return 0
+  fi
   # `env -u` for the inheritance markers, exactly as 16b/16e do: this is the leg
   # that measures the TAKE and the WAIT, so an inherited marker must not
   # short-circuit it.
@@ -1389,10 +1447,7 @@ pool_wake_leg() {  # $1 tag, $2 bound seconds, $3.. the subject's argv
   ) >"$PW_OUT" 2>&1 &
   pid=$!
   start=$(date +%s)
-  wait_pool_hold_ready "$ready" "$holder" || PW_READY_RC=$?
-  if [ "$PW_READY_RC" -ne 0 ]; then
-    PW_RESULT=nohold
-  elif ! wait_file_line "$PW_OUT" "$s16_poolfull" "$bound"; then
+  if ! wait_file_line "$PW_OUT" "$s16_poolfull" "$bound"; then
     PW_RESULT=nofull
   else
     # The subject has reported a FULL pool, so the free that follows is the FIRST
@@ -1422,11 +1477,20 @@ pool_wake_leg() {  # $1 tag, $2 bound seconds, $3.. the subject's argv
   # sandbox pool occupied (16d's premise takes a fresh look at a held slot).
   : >"$sfree"
   : >"$srel"
-  wait "$holder" 2>/dev/null
+  # THE HOLDER'S OWN STATUS IS READ, NEVER DISCARDED (card t_458c2578's rule, which
+  # 16b and 16e already apply and this leg did not): the holder IS the pool this leg
+  # measures, so a holder that died mid-leg means the pool was not full from that
+  # point on and the subject's behaviour cannot be attributed to the wait. Reported
+  # as a premise failure naming the status — never as a verdict about the runner.
+  wait "$holder" 2>/dev/null; PW_HOLDER_RC=$?
   wait "$pid" 2>/dev/null; PW_RC=$?
   PW_ELAPSED=$(( $(date +%s) - start ))
   if [ "$PW_RESULT" = after_or_never ]; then
     if grep -qF "$s16_gofmt_banner" "$PW_OUT" 2>/dev/null; then PW_RESULT=after; else PW_RESULT=never; fi
+  fi
+  if [ "$PW_HOLDER_RC" -ne 0 ]; then
+    PW_RESULT=holder_died
+    PW_DETAIL="the pool HOLDER exited mid-leg (holder status $PW_HOLDER_RC), so the pool stopped being full while the subject ran and its rc=$PW_RC cannot be attributed to the wait this leg measures — the reading is discarded"
   fi
 }
 # 16c. THE WAIT WATCHES EVERY SLOT. The LIVE runner is the subject: with the pool
@@ -1441,8 +1505,8 @@ case "$PW_RESULT" in
   held)
     ok "16c BITES: with slot 2..$default_count freed while slot1 stayed held, the run RUNS its gate anyway and a FRESH take on slot1 was still refused at that moment — the wait watches EVERY slot, not slot 1 alone (rc=$PW_RC, ${PW_ELAPSED}s total)"
     ;;
-  nohold)
-    bad "16c: the pool HOLDER did not fill the pool within 15s (readiness rc=$PW_READY_RC), so a rc=$PW_RC subject cannot be read as 'the wait watches every slot' — the pool it was measured against was not full"
+  holder_died|holder_late)
+    bad "16c PREMISE: $PW_DETAIL"
     ;;
   nofull)
     bad "16c PREMISE: the subject never reported a full pool within ${s16_bound}s (rc=$PW_RC), so the pool was not full at the subject's own decision and this leg measured NOTHING about the wait — output: [$(printf '%s' "$s16c_out" | grep -E 'slots:|gate \[gofmt\]|preflight:' | tr '\n' ' ')]"
@@ -1596,8 +1660,8 @@ else
     held|held_unverified)
       bad "16f does not bite: a copy whose pool is a single lock on slot1 still ran its gate while slot1 was held ([$PW_RESULT]) — so 16c's PASS IS reachable by the very defect it exists to catch"
       ;;
-    nohold)
-      bad "16f: the pool HOLDER did not fill the pool within 15s (readiness rc=$PW_READY_RC), so this case measured nothing"
+    nohold|holder_died|holder_late)
+      bad "16f PREMISE: $PW_DETAIL"
       ;;
     nofull)
       bad "16f: the mutated copy never reported a full pool within ${s16_bound}s (rc=$PW_RC) — output: [$(printf '%s' "$s16f_out" | grep -E 'slots:|gate \[gofmt\]|preflight:' | tr '\n' ' ')]"
@@ -1610,6 +1674,62 @@ else
       ;;
   esac
   rm -f "$s16f_mut"
+fi
+
+# 16g. A HOLDER THAT CANNOT FILL THE POOL IS NAMED BY ITS CAUSE, AND NO SUBJECT IS
+#      READ OFF THE POOL IT FAILED TO FILL (card t_d0cceae1).
+#
+#      Two defects in one line of gate output are pinned here, and the case is
+#      DETERMINISTIC — it does not depend on host scheduling:
+#        (a) the verdict must say the HOLDER exited (with its status) and must not
+#            report a bound that was never reached; the old message said "did not
+#            fill the pool within 15s (readiness rc=1)" for an rc that means "the
+#            holder process is gone", which sends an operator chasing host load
+#            instead of the pool;
+#        (b) no subject may be started, and none may be read, while the premise is
+#            unproven — the old code started the subject BEFORE it waited for the
+#            premise, so the subject took the slot the holder could not and its rc
+#            was reported as though it measured the wait.
+#      The failure is produced with a FOREIGN holder on the last slot — this check
+#      takes it itself, from its own process, so the leg's holder's non-blocking
+#      `flock` on that slot is refused and it exits 1. That is the same end state a
+#      subject winning the start race produces (measured: 16c/16f red on the old
+#      line when the holder's slot take was delayed 0.3s), without needing a loaded
+#      host to reproduce it.
+s16g_fd=""
+if exec {s16g_fd}>>"$pool_lock.slot$default_count" && flock -o -n "$s16g_fd"; then
+  # Assert OUR OWN premise before trusting the case: a fresh take (a new open, as a
+  # descendant or a foreign process would make) must be REFUSED, or the slot is not
+  # really held and the leg's holder would succeed — the case would then measure
+  # nothing and report a false green.
+  s16g_probe=""
+  exec {s16g_probe}>>"$pool_lock.slot$default_count"
+  if flock -n "$s16g_probe" 2>/dev/null; then
+    exec {s16g_probe}>&-
+    bad "16g's premise failed: this check's own hold on slot $default_count did not exclude a fresh take, so the leg's HOLDER would succeed and the case proves nothing"
+  else
+    exec {s16g_probe}>&-
+    pool_wake_leg s16g "$s16_bound" ./scripts/preflight.sh --only gofmt
+    s16g_subject_created=0
+    [ -e "$PW_OUT" ] && s16g_subject_created=1
+    # `${PW_DETAIL:-}` so a leg that does not set a detail reports the missing detail
+    # instead of aborting this file on `set -u`.
+    s16g_detail="${PW_DETAIL:-<no detail reported by the leg>}"
+    if [ "$PW_RESULT" != holder_died ]; then
+      bad "16g does not bite: with slot $default_count held by a FOREIGN process the leg returned [$PW_RESULT] (detail: [$s16g_detail]) instead of naming the holder's death as the reason nothing was measured"
+    elif ! grep -q 'exited' <<<"$s16g_detail" || ! grep -q 'status 1' <<<"$s16g_detail"; then
+      bad "16g: the verdict must NAME the cause and the holder's own status — expected 'exited' and 'status 1' in the detail, got [$s16g_detail]"
+    elif grep -qE '(within|in) [0-9]+s' <<<"$s16g_detail"; then
+      bad "16g: a HOLDER THAT EXITED must never be reported as a bound that expired (the old defect: 'within 15s' for a holder that was already gone) — got [$s16g_detail]"
+    elif [ "$s16g_subject_created" -ne 0 ] || [ -n "$PW_RC" ]; then
+      bad "16g: a subject was STARTED (output file present: $s16g_subject_created, subject rc=[$PW_RC]) against a pool the holder never filled — its reading would be mis-attributed to the runner; the leg must not create a subject while the premise is unproven"
+    else
+      ok "16g BITES: a holder that cannot take a slot is reported as 'exited (status 1)' — not as an expired bound — and NO subject is started, so nothing is read off a pool that was never full"
+    fi
+  fi
+  exec {s16g_fd}>&-
+else
+  bad "16g could not take slot $default_count on $pool_lock to stand up the foreign-holder case"
 fi
 
 # 15. PATH-AWARE SELECTION (--for-diff / --classify) — the narrowing must BITE,
