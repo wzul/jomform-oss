@@ -334,6 +334,17 @@ cd "$SB" || exit 1
 # rather than queueing behind its own parent).
 # ---------------------------------------------------------------------------
 export PREFLIGHT_LOCK_FILE="$SB_STATE/preflight-selftest.lock"
+# THE HOST-WIDE BROWSER-SUITE LOCK IS PINNED HERE TOO, AND THIS ONE IS NOT OPTIONAL
+# (card t_d0c0981d). Its default is ONE file for the whole host — that is the point of
+# it — so a self-test that inherited the default would queue behind every live lane's
+# a11y/e2e gate AND hold the lock against them while its own checks ran. Pinned to a
+# private path it measures the same mechanism without joining the production queue, the
+# same reason the pool path above is private. Check 45 asserts this stayed private.
+export PREFLIGHT_WEBSERVER_LOCK_FILE="$SB_STATE/preflight-selftest-webserver.lock"
+# A WAIT THAT CANNOT OUTLAST THE SELF-TEST: if a check ever leaves a stub suite holding
+# the private lock, the next one must fail in seconds rather than sit for the 1800s a
+# real lane is allowed.
+export PREFLIGHT_WEBSERVER_WAIT=120
 # TWO SLOTS, the default, is what these checks measure — and it is the number a
 # real lane gets, so the shape under test is the shipped one.
 
@@ -4312,6 +4323,263 @@ fi
 # The ledger file is shared with checks 23/32; empty it so a later reader of this
 # sandbox store cannot mistake check 44's fixture line for the happy-path one.
 rm -f "$RECORD_DIR/reuse-ledger.jsonl"
+
+# 45. TWO BROWSER SUITES MUST NEVER RUN AT ONCE ON THIS HOST (card t_d0c0981d).
+#
+#     THE DEFECT. The a11y and e2e gates each start the app's own `next start` on a port
+#     claimed from 3100-3140 (see the claim block in the runner). The claim is PER PORT
+#     on purpose, so two concurrent runs take DIFFERENT ports and BOTH PROCEED — which
+#     is right for a port and wrong for a browser suite. Playwright's default worker
+#     count is cpus/2, so on this 6-core host each suite starts three browsers, and two
+#     suites at once put six browsers plus two servers on six cores. Measured
+#     2026-10-28 02:24-03:12 UTC, two runs of `scripts/preflight.sh` on this host in the
+#     same window (ports 3101 and 3100) both came back RED, each on a DIFFERENT spec:
+#
+#       port 3101: form-settings-header-actions.spec.ts:308
+#                    expect(page.locator("a.jf-btn-ghost")).toHaveCount(3) -> received 0
+#                    after the full 45s (89 polls — the page never had the anchors)
+#                  stale-workspace-slug.spec.ts:253
+#                    "/ never sent workspace=ws-gone, so this run reproduced nothing: []"
+#                    (the page issued NO request at all, so nothing had rendered)
+#       port 3100: form-settings-status-chips.spec.ts:165 "chips fit their labels in en"
+#
+#     Both trees' diffs were Go-only, so neither could reach either spec, and `--only
+#     e2e` on the same tree ALONE ran 274 passed / 2 skipped / 0 failed in 615s with
+#     both specs green. A page that renders nothing for 45s is a starved process, not a
+#     false assertion — and a false red on e2e costs a lane 13 minutes and, on the merge
+#     lane, bounces a card back to dev for a defect that does not exist.
+#
+#     WHAT THIS CHECK DRIVES. The SHIPPED ./scripts/preflight.sh, `--only e2e`, TWICE and
+#     SIMULTANEOUSLY, in a THROWAWAY sandbox of its own — NOT $SB: the fixture plants an
+#     untracked web/node_modules and its own git history, and doing that inside $SB would
+#     move the working-tree sha the record checks (27-44) plant their fixtures against.
+#     A STUB `npm` stands in for `playwright test`: it records the interval it was live
+#     in and binds no port (the port claim is a different subject, pinned by
+#     scripts/biteproof_a11y_port_claim.sh). A stub `node` answers the version floor and
+#     the dependency check, and `.bin/next` + `.bin/playwright` are planted so the gate
+#     reaches its BODY instead of dying on a prerequisite — a gate refused for a missing
+#     prerequisite is not evidence about serialisation.
+#
+#     THE PROPERTY, in both directions: (a) both runs exit 0 — the loser WAITS, it is not
+#     refused; (b) at least one of them announces the wait in the runner's own words; and
+#     (c) the two stub INTERVALS DO NOT OVERLAP, i.e. two suites were never alive at the
+#     same time. The stub also RENDEZVOUSES (each waits, boundedly, for a peer stub to
+#     start) precisely so that (c) is a statement about the lock and not about how fast
+#     this host happened to schedule two processes: a run that wants to be concurrent has
+#     tried, and the lock is what stops it.
+#
+#     THE ARM THAT MUST FAIL. The same pair is then run against a copy of the same tree
+#     with the lock take REPLACED BY `:` — the pre-fix behaviour, byte for byte, in the
+#     one line that matters. That leg must report OVERLAP. If it reports no overlap, this
+#     check cannot go red and proves nothing, and it says so instead of passing.
+if [ -z "${PREFLIGHT_WEBSERVER_LOCK_FILE:-}" ]; then
+  bad "check 45 cannot run: PREFLIGHT_WEBSERVER_LOCK_FILE is unset, so the browser-suite lock this check is about does not exist in this shell"
+elif [ "$PREFLIGHT_WEBSERVER_LOCK_FILE" = "${PREFLIGHT_WEBSERVER_LOCK_FILE_DEFAULT:-/var/lock/jomform-preflight-webserver.lock}" ]; then
+  bad "check 45: the self-test is using the PRODUCTION browser-suite lock path ($PREFLIGHT_WEBSERVER_LOCK_FILE). That is ONE file for the whole host, so this self-test would queue behind — and hold the lock against — every live lane's a11y/e2e gate. It must be pinned to a private path like the pool above"
+elif ! command -v flock >/dev/null 2>&1; then
+  bad "check 45 cannot run: flock is missing, so the browser-suite lock cannot be taken (or measured). The web-server gates refuse in that state rather than guessing"
+else
+  ws45="$SB_STATE/ws45"
+  rm -rf "$ws45"
+  mkdir -p "$ws45/base/scripts" "$ws45/base/web/scripts" "$ws45/base/web/node_modules/.bin" "$ws45/base/bin"
+  cp "$HERE"/*.sh "$ws45/base/scripts/" 2>/dev/null
+  cp "$HERE/../web/package.json" "$ws45/base/web/" 2>/dev/null
+  cp "$HERE/../web/scripts/web-deps-check.mjs" "$ws45/base/web/scripts/" 2>/dev/null
+  cp "$HERE/../AGENTS.md" "$ws45/base/AGENTS.md" 2>/dev/null
+  cp "$HERE/../GATE-INVENTORY.md" "$ws45/base/GATE-INVENTORY.md" 2>/dev/null
+  chmod +x "$ws45/base/scripts/preflight.sh"
+  # The two executables `preflight_env` refuses without; the dependency check itself runs
+  # through the stub node below and is satisfied by its exit status.
+  printf '#!/bin/sh\nexit 0\n' > "$ws45/base/web/node_modules/.bin/next"
+  printf '#!/bin/sh\nexit 0\n' > "$ws45/base/web/node_modules/.bin/playwright"
+  chmod +x "$ws45/base/web/node_modules/.bin/next" "$ws45/base/web/node_modules/.bin/playwright"
+  # A stub node: answers the version floor (`node --version`) and lets the dependency
+  # check through. Every other argv exits 0, which is what a satisfied prerequisite is.
+  cat > "$ws45/base/bin/node" <<'WS45NODE'
+#!/bin/sh
+case "$1" in
+  --version|-v) echo v24.19.0 ;;
+esac
+exit 0
+WS45NODE
+  # The stub suite. WS45_LOG is that RUN's own interval file; WS45_SHARED is the rendezvous
+  # the two stubs use to establish that they really do want to run at the same time; and
+  # WS45_RELEASE makes the HOLDER wait until the check has SEEN its peer announce the
+  # wait. That last one is what makes the ordering a fact instead of a race: on a loaded
+  # host the peer's start could otherwise land after the holder had already exited, and
+  # the check would then be reading "no wait line" from a run that never had a peer.
+  cat > "$ws45/base/bin/npm" <<'WS45NPM'
+#!/usr/bin/env bash
+set -uo pipefail
+case "$*" in
+  *"run e2e"*) ;;
+  *) echo "ws45 stub npm: unexpected invocation: $*" >&2; exit 9 ;;
+esac
+[ -n "${WS45_LOG:-}" ] || { echo "ws45 stub npm: WS45_LOG is unset" >&2; exit 9; }
+printf 'START %s %s port=%s\n' "$(date +%s.%N)" "$$" "${A11Y_PORT:-none}" >>"$WS45_LOG"
+if [ "${WS45_RENDEZVOUS:-0}" = 1 ] && [ -n "${WS45_SHARED:-}" ]; then
+  [ -f "$WS45_SHARED" ] || : >"$WS45_SHARED"
+  printf 'START %s\n' "$$" >>"$WS45_SHARED"
+  _ws45_i=0
+  while [ "$(grep -c '^START' "$WS45_SHARED")" -lt 2 ] && [ "$_ws45_i" -lt 80 ]; do
+    sleep 0.05
+    _ws45_i=$((_ws45_i+1))
+  done
+fi
+if [ -n "${WS45_RELEASE:-}" ]; then
+  _ws45_r=0
+  while [ ! -f "$WS45_RELEASE" ] && [ "$_ws45_r" -lt 1200 ]; do
+    sleep 0.05
+    _ws45_r=$((_ws45_r+1))
+  done
+fi
+sleep "${WS45_HOLD:-2}"
+if [ "${WS45_LINGER:-0}" -gt 0 ]; then
+  # A SUITE THAT LEAVES SOMETHING BEHIND, like a `next-server` outliving playwright. The
+  # child is detached from this run's stdout (its own session, both streams to /dev/null)
+  # so it cannot hold the gate's pipe: all it can possibly hold is an inherited descriptor.
+  setsid sleep "$WS45_LINGER" </dev/null >/dev/null 2>&1 &
+fi
+printf 'END %s %s\n' "$(date +%s.%N)" "$$" >>"$WS45_LOG"
+exit 0
+WS45NPM
+  chmod +x "$ws45/base/bin/node" "$ws45/base/bin/npm"
+  git -C "$ws45/base" init -q .
+  git -C "$ws45/base" add -A
+  git -C "$ws45/base" -c user.email=t@t -c user.name=t commit -q -m init
+  cp -a "$ws45/base" "$ws45/tree"
+  cp -a "$ws45/base" "$ws45/sab"
+  # THE SABOTAGE: the one line that takes the host-wide lock becomes `:`. Everything else
+  # — pool, port claim, retry, gate body — is the shipped bytes.
+  sed 's/^  webserver_lock_take "\$name" || return 1$/  :  # ws45 SABOTAGE: the host-wide suite lock take is removed here/' \
+    "$ws45/tree/scripts/preflight.sh" > "$ws45/sab/scripts/preflight.sh"
+  chmod +x "$ws45/sab/scripts/preflight.sh"
+  ws45_sab_landed=0
+  if [ "$(grep -c 'ws45 SABOTAGE' "$ws45/sab/scripts/preflight.sh")" -eq 1 ] &&
+     [ "$(grep -c 'webserver_lock_take "\$name"' "$ws45/sab/scripts/preflight.sh")" -eq 0 ]; then
+    ws45_sab_landed=1
+  fi
+  ws45_ts() {  # $1 = interval file, $2 = START|END -> the first such timestamp
+    awk -v k="$2" '$1 == k { print $2; exit }' "$1"
+  }
+  ws45_overlap() {  # $1,$2 = the two interval files -> overlap | serial | incomplete
+    awk -v a1="$(ws45_ts "$1" START)" -v a2="$(ws45_ts "$1" END)" \
+        -v b1="$(ws45_ts "$2" START)" -v b2="$(ws45_ts "$2" END)" 'BEGIN {
+      if (a1 == "" || a2 == "" || b1 == "" || b2 == "") { print "incomplete"; exit }
+      if (a1 + 0 < b2 + 0 && b1 + 0 < a2 + 0) { print "overlap" } else { print "serial" }
+    }'
+  }
+  ws45_pair() {  # $1 = label, $2 = the sandbox tree to run, $3 = release file ("" = none)
+    local label="$1" dir="$2" release="${3:-}" i deadline
+    : >"$ws45/$label.shared"
+    [ -n "$release" ] && rm -f "$release"
+    for i in 1 2; do
+      : >"$ws45/$label-$i.npm"
+      (
+        cd "$dir" || exit 1
+        env PATH="$dir/bin:$PATH" \
+          PREFLIGHT_WEBSERVER_LOCK_FILE="$ws45/$label.websuite.lock" \
+          PREFLIGHT_WEBSERVER_WAIT=120 \
+          PREFLIGHT_LOCK_FILE="$ws45/$label.pool.lock" \
+          PREFLIGHT_RESULT_DIR="$ws45/$label-records-$i" \
+          PREFLIGHT_RESULT_TTL=1 \
+          WS45_LOG="$ws45/$label-$i.npm" WS45_SHARED="$ws45/$label.shared" \
+          WS45_RELEASE="$release" WS45_HOLD=2 WS45_LINGER="${WS45_LINGER:-0}" \
+          WS45_RENDEZVOUS="${WS45_RENDEZVOUS:-0}" \
+          ./scripts/preflight.sh --only e2e >"$ws45/$label-$i.log" 2>&1
+        echo "EXIT=$?" >>"$ws45/$label-$i.log"
+      ) &
+    done
+    if [ -n "$release" ]; then
+      # The holder cannot finish until this file appears, so "the peer announced the
+      # wait" is observed BEFORE the holder exits rather than hoped for. Bounded, and the
+      # release happens either way, so a peer that never waits fails the assertion below
+      # instead of hanging this check.
+      deadline=$(( $(date +%s) + 90 ))
+      while [ "$(date +%s)" -lt "$deadline" ]; do
+        if grep -q 'another playwright suite is running on this host' "$ws45/$label-1.log" ||
+           grep -q 'another playwright suite is running on this host' "$ws45/$label-2.log"; then
+          break
+        fi
+        sleep 0.1
+      done
+      : >"$release"
+    fi
+    wait
+  }
+  ws45_pair tree "$ws45/tree" "$ws45/tree.release"
+  ws45_e1="$(grep -o 'EXIT=[0-9]*' "$ws45/tree-1.log" | tail -n 1)"
+  ws45_e2="$(grep -o 'EXIT=[0-9]*' "$ws45/tree-2.log" | tail -n 1)"
+  ws45_v="$(ws45_overlap "$ws45/tree-1.npm" "$ws45/tree-2.npm")"
+  ws45_waited=0
+  grep -q 'another playwright suite is running on this host' "$ws45/tree-1.log" && ws45_waited=1
+  grep -q 'another playwright suite is running on this host' "$ws45/tree-2.log" && ws45_waited=1
+  if [ "$ws45_e1" != "EXIT=0" ] || [ "$ws45_e2" != "EXIT=0" ]; then
+    bad "check 45 — a simultaneous e2e pair on the sandboxed runner did not both exit 0 ($ws45_e1 / $ws45_e2): the second suite must WAIT for the first, not refuse or fail. Output: [$(grep -hE 'PREFLIGHT FAIL|browser-suite|gate \[e2e\]' "$ws45/tree-1.log" "$ws45/tree-2.log" | tr '\n' ' ')]"
+  elif [ "$ws45_v" = "incomplete" ]; then
+    bad "check 45 could not measure: a stub suite never recorded both a START and an END ([$(grep -hE '^START|^END|stub npm' "$ws45/tree-1.npm" "$ws45/tree-2.npm" | tr '\n' ' ')]), so the intervals this check compares do not exist"
+  elif [ "$ws45_v" = "overlap" ]; then
+    bad "check 45 does not bite: the two sandboxed e2e runs were ALIVE AT THE SAME TIME ($ws45_v) — two playwright suites at once on one host is the defect (two runs, two ports, both proceeding) that red-ed the real gate on unrelated specs. The host-wide browser-suite lock is not serialising them"
+  elif [ "$ws45_waited" -ne 1 ]; then
+    bad "check 45 — the pair was serialised but NEITHER run printed the runner's own wait line, so the ordering cannot be attributed to the lock (it could be two runs that simply happened to be scheduled one after the other): [$ws45_v]"
+  else
+    ok "check 45 — two SIMULTANEOUS e2e runs on one host are SERIALISED: the holder could not finish until its peer had announced the wait, both exit 0, and the two stub intervals do not overlap"
+  fi
+  if [ "$ws45_sab_landed" -ne 1 ]; then
+    bad "check 45's sabotage did not land: the lock-take line in a11y_gate_run no longer matches '  webserver_lock_take \"\$name\" || return 1' exactly once, so the arm that must FAIL was never built and the green above would be untested"
+  else
+    WS45_RENDEZVOUS=1 ws45_pair sab "$ws45/sab" ""
+    ws45_sv="$(ws45_overlap "$ws45/sab-1.npm" "$ws45/sab-2.npm")"
+    ws45_se1="$(grep -o 'EXIT=[0-9]*' "$ws45/sab-1.log" | tail -n 1)"
+    ws45_se2="$(grep -o 'EXIT=[0-9]*' "$ws45/sab-2.log" | tail -n 1)"
+    if [ "$ws45_sv" = "overlap" ]; then
+      ok "check 45 BITES — with the suite-lock take removed from the same tree the SAME measurement reports OVERLAP ($ws45_se1 / $ws45_se2): the two suites ran at once, which is exactly what the lock above prevents"
+    elif [ "$ws45_sv" = "incomplete" ]; then
+      bad "check 45's sabotage leg could not measure: a stub suite recorded no interval at all ([$(grep -hE '^START|^END|stub npm' "$ws45/sab-1.npm" "$ws45/sab-2.npm" | tr '\n' ' ')]); the run output was [$ws45_se1 / $ws45_se2]"
+    else
+      bad "check 45 CANNOT GO RED: with the lock REMOVED ($ws45_se1 / $ws45_se2) the pair still reported $ws45_sv, so the property this check asserts is not what the lock does — a green above it would prove nothing"
+    fi
+  fi
+  # ---- THE LOCK'S LIFETIME IS THE GATE'S, NOT ITS CHILDREN'S ------------------------
+  # `flock` is held until the LAST descriptor on the open file description closes, so a
+  # suite child that outlives the gate — a `next-server` playwright did not reap, a worker
+  # that did not exit — keeps the HOST-WIDE lock after the gate has returned. The next gate
+  # on this host would then wait PREFLIGHT_WEBSERVER_WAIT and FAIL with a wait-out: a false
+  # red manufactured by this lock instead of one removed by it. Measured before the fix
+  # (/tmp probe): a 4s child left behind after the holder exited still held the lock.
+  # The runner therefore closes the descriptor in BOTH pipeline children; this arm measures
+  # it with a stub suite that leaves a detached child, and repeats the measurement against a
+  # copy with exactly those redirections removed, requiring the lock to still be HELD.
+  sed 's/ {PREFLIGHT_WEBSERVER_LOCK_FD}>&-//g' "$ws45/tree/scripts/preflight.sh" > "$ws45/leaksab.scripts.preflight.sh"
+  cp -a "$ws45/tree" "$ws45/leaksab"
+  cp "$ws45/leaksab.scripts.preflight.sh" "$ws45/leaksab/scripts/preflight.sh"
+  chmod +x "$ws45/leaksab/scripts/preflight.sh"
+  ws45_lifetime_sab=0
+  if [ "$(grep -c 'PREFLIGHT_WEBSERVER_LOCK_FD}>&-' "$ws45/tree/scripts/preflight.sh")" -ge 2 ] &&
+     [ "$(grep -c 'PREFLIGHT_WEBSERVER_LOCK_FD}>&-' "$ws45/leaksab/scripts/preflight.sh")" -eq 0 ]; then
+    ws45_lifetime_sab=1
+  fi
+  ws45_lock_free() { flock -n "$1" true 2>/dev/null; }   # 0 = nobody holds it
+  WS45_LINGER=25 ws45_pair linger "$ws45/tree" ""
+  ws45_lg1="$(grep -o 'EXIT=[0-9]*' "$ws45/linger-1.log" | tail -n 1)"
+  ws45_lg2="$(grep -o 'EXIT=[0-9]*' "$ws45/linger-2.log" | tail -n 1)"
+  if [ "$ws45_lg1" != "EXIT=0" ] || [ "$ws45_lg2" != "EXIT=0" ]; then
+    bad "check 45's lifetime arm did not run cleanly ($ws45_lg1 / $ws45_lg2): a suite that leaves a child behind must still gate green, otherwise this arm measures the wrong thing ([$(grep -hE 'PREFLIGHT FAIL|browser-suite' "$ws45/linger-1.log" "$ws45/linger-2.log" | tr '\n' ' ')])"
+  elif ws45_lock_free "$ws45/linger.websuite.lock"; then
+    if [ "$ws45_lifetime_sab" -ne 1 ]; then
+      bad "check 45's lifetime sabotage did not land: the runner no longer closes the suite-lock descriptor in its pipeline children (found $(grep -c 'PREFLIGHT_WEBSERVER_LOCK_FD}>&-' "$ws45/tree/scripts/preflight.sh") occurrences, need >= 2), so the arm that must FAIL was never built"
+    else
+      WS45_LINGER=25 ws45_pair lingersab "$ws45/leaksab" ""
+      if ws45_lock_free "$ws45/lingersab.websuite.lock"; then
+        bad "check 45 CANNOT GO RED on the lock's LIFETIME: with the child-close redirection REMOVED the lock was free the moment both runs exited, so the assertion above is not what keeps it free and a stranded suite child could still hold the host-wide lock"
+      else
+        ok "check 45 BITES (lifetime) — with the child-close removed, the same pair leaves a stranded child HOLDING $ws45/lingersab.websuite.lock after both gates exited; with the shipped bytes the lock was free immediately, so a suite that leaves a server behind cannot stall the next gate on this host"
+      fi
+    fi
+  else
+    bad "check 45 — the host-wide suite lock OUTLIVED the gate ($ws45/linger.websuite.lock was still held after both runs exited): a suite child inherited the lock descriptor, so the NEXT gate on this host would wait up to PREFLIGHT_WEBSERVER_WAIT and fail with a wait-out — a false red caused by this lock rather than removed by it"
+  fi
+fi
 
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"

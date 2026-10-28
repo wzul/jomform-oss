@@ -2786,6 +2786,106 @@ a11y_port_release() {
   A11Y_PORT_CLAIM_FILE=""
 }
 
+# ---- shared: ONE playwright suite at a time, HOST-WIDE ----------------------
+#
+# WHY A SECOND LOCK EXISTS AT ALL (card t_d0c0981d). The per-port claim above answers
+# a question about a PORT. It says nothing about the machine behind two DIFFERENT
+# ports, and for a browser suite the machine IS the shared resource:
+#
+#   Host: 6 cores. Playwright's default worker count is cpus/2 = 3, so each suite
+#   starts three browsers plus its own `next start`. Two suites at once therefore put
+#   six browsers and two servers on six cores. Measured 2026-10-28 02:24-03:12 UTC, two
+#   `scripts/preflight.sh` runs on this host in the same window, each claiming a
+#   DIFFERENT port (3101 / 3100) and both proceeding:
+#
+#     dev card t_2ff5f823, port 3101 -> 272 passed, 2 FAILED (13.0m)
+#       form-settings-header-actions.spec.ts:308
+#         expect(page.locator("a.jf-btn-ghost")).toHaveCount(3) -> received 0
+#         after the full 45s: 89 polls, the page never had the anchors at all
+#       stale-workspace-slug.spec.ts:253
+#         "/ never sent workspace=ws-gone, so this run reproduced nothing: []"
+#         the page had issued NO request, so nothing had rendered
+#     merge lane, port 3100 -> 273 passed, 1 FAILED (13.0m)
+#       form-settings-status-chips.spec.ts:165 "chips fit their labels in en"
+#
+#   Each of those specs is green in a run of the SAME tree alone on the quiet host:
+#   `--only e2e` -> 274 passed, 2 skipped, 0 failed in 615s, both specs included. The
+#   diffs in both runs were Go-only, so neither tree could reach either spec. A page
+#   that renders NOTHING for 45 seconds is a starved process, not a wrong assertion —
+#   `toHaveCount` polls and cannot tell "not painted yet" from "not there".
+#
+#   This is not hypothetical in the specs either: form-settings-status-chips.spec.ts
+#   already carries "Measured: with the default 5s the zh case flaked once at 3 workers
+#   and passed alone — a scheduling artefact, not a locale failure", and both specs
+#   raise their own budget to 180s for "a slow first paint under contention". Per-test
+#   budgets cannot fix this: the contention is between two whole suites, and the loser
+#   is starved for as long as the peer runs.
+#
+# WHY NOT A SINGLE FIXED e2e PORT. A fixed port makes the second gate collide on
+# EADDRINUSE instead of running — a RED with no defect behind it, which is exactly the
+# shape the per-port claim was added to remove (see the block above). The lock is taken
+# AROUND the port claim and held for the whole gate, so the second suite simply waits
+# for the first to finish and then takes the same port it would have taken alone.
+#
+# WHY NOT DERIVED FROM PREFLIGHT_LOCK_FILE. That path names the gate POOL. A caller who
+# redirects the pool (scripts/preflight_test.sh does, so the self-test never joins the
+# production queue) is still on this machine and still running two browser suites. So
+# the suite lock has its OWN default and its OWN override; a caller that redirects the
+# pool must redirect this one too to be isolated, and scripts/preflight_test.sh does.
+#
+# THE WAIT IS BOUNDED, LOUD, AND A WAIT. `flock` on a fresh descriptor blocks until the
+# holder exits (no poll loop, no sleep budget), for at most PREFLIGHT_WEBSERVER_WAIT
+# (default 1800s — the longest suite measured here is the e2e gate at 615s). A run that
+# cannot take it inside that bound FAILS and says it ran out of wait, because proceeding
+# unserialised is the defect and failing silently is how a gate stops being a gate.
+PREFLIGHT_WEBSERVER_LOCK_FILE="${PREFLIGHT_WEBSERVER_LOCK_FILE:-/var/lock/jomform-preflight-webserver.lock}"
+PREFLIGHT_WEBSERVER_WAIT="${PREFLIGHT_WEBSERVER_WAIT:-1800}"
+PREFLIGHT_WEBSERVER_LOCK_FD=""
+
+# Take the host-wide suite lock, waiting boundedly if a peer holds it. $1 is the gate's
+# name, used so the message says WHICH gate waited.
+webserver_lock_take() {
+  local name="$1" fd
+  PREFLIGHT_WEBSERVER_LOCK_FD=""
+  case "$PREFLIGHT_WEBSERVER_WAIT" in
+    ''|*[!0-9]*)
+      echo "$name: PREFLIGHT_WEBSERVER_WAIT=[$PREFLIGHT_WEBSERVER_WAIT] is not a whole number of seconds — refusing to run a browser suite whose wait for the host-wide suite lock is unbounded or unreadable." >&2
+      return 1 ;;
+  esac
+  # NO SILENT FALLBACK, same rule as the port claim below it: without flock this gate
+  # cannot know whether a peer suite is running, and "probably alone" is the assumption
+  # that produced the false reds above.
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "$name: flock is missing — the host-wide browser-suite lock cannot be taken, so this gate cannot tell whether another playwright suite is running on this host. Install util-linux (the slot pool needs it too)." >&2
+    return 1
+  fi
+  if ! exec {fd}>>"$PREFLIGHT_WEBSERVER_LOCK_FILE"; then
+    echo "$name: cannot open the host-wide browser-suite lock $PREFLIGHT_WEBSERVER_LOCK_FILE — refusing to run a suite that could then contend with a peer." >&2
+    return 1
+  fi
+  if ! flock -o -n "$fd" 2>/dev/null; then
+    echo "$name: another playwright suite is running on this host — waiting up to ${PREFLIGHT_WEBSERVER_WAIT}s for the host-wide suite lock $PREFLIGHT_WEBSERVER_LOCK_FILE. Two suites at once on $(nproc) core(s) is what red-ed this gate on unrelated specs while each was green alone (card t_d0c0981d); the peer is not being aborted, this gate is getting in line behind it."
+    if ! flock -o -w "$PREFLIGHT_WEBSERVER_WAIT" -E 75 "$fd" 2>/dev/null; then
+      exec {fd}>&-
+      echo "$name: could not take the host-wide browser-suite lock $PREFLIGHT_WEBSERVER_LOCK_FILE within ${PREFLIGHT_WEBSERVER_WAIT}s — a peer suite is still holding it. This is a WAIT-OUT, not a defect in the tree: re-run when the peer finishes, or raise PREFLIGHT_WEBSERVER_WAIT." >&2
+      return 1
+    fi
+    echo "$name: host-wide browser-suite lock acquired after the wait ($PREFLIGHT_WEBSERVER_LOCK_FILE)"
+  fi
+  PREFLIGHT_WEBSERVER_LOCK_FD="$fd"
+  echo "$name: holding the HOST-WIDE browser-suite lock $PREFLIGHT_WEBSERVER_LOCK_FILE (one playwright suite at a time on this host)"
+  return 0
+}
+
+# Release it. CLOSING THE DESCRIPTOR IS THE WHOLE RELEASE, exactly as for the port
+# claim; the file itself is left behind and costs nothing when no one holds it.
+webserver_lock_release() {
+  if [ -n "$PREFLIGHT_WEBSERVER_LOCK_FD" ]; then
+    exec {PREFLIGHT_WEBSERVER_LOCK_FD}>&-
+  fi
+  PREFLIGHT_WEBSERVER_LOCK_FD=""
+}
+
 # ---- web/a11y: the axe family only -----------------------------------------
 #
 # WHAT THIS GATE IS, AND WHAT IT USED TO BE. `npm run a11y` is `playwright test`
@@ -2808,14 +2908,45 @@ a11y_port_release() {
 # the gate's server has exited. `A11Y_PORT` is the claimed port, so playwright starts
 # the app's OWN server there and never reuses anything.
 #
+# THE HOST-WIDE SUITE LOCK IS TAKEN FIRST, AND HELD FOR THE WHOLE GATE TOO (card
+# t_d0c0981d). Two concurrent runs picked different ports and both proceeded, so two
+# playwright suites ran at once on this host and both came back RED on unrelated specs
+# (see the block above). Waiting for the peer is the correct answer: the gate runs its
+# own suite on its own port, alone, and only the CPU was ever the shared resource. The
+# port claim still comes after it, so a waiter inherits a free port rather than a peer's.
+#
 # THE RETRY IS LABELLED AND BOUNDED: it fires at most once, only when the first attempt
 # failed AND its output names EADDRINUSE, and it prints the port it abandoned and the
 # one it took. Anything else — including a second EADDRINUSE, and every failure that is
 # not a port collision — returns the real exit code untouched.
+#
+# Run the suite ONCE, with the host-wide suite lock's descriptor CLOSED IN THE CHILDREN.
+# `flock` is held until the LAST descriptor on the open file description closes, so an
+# inherited fd means the lock outlives this gate in whatever survives the suite — a
+# `next-server` playwright did not reap, a worker that did not exit. The NEXT gate on this
+# host would then wait PREFLIGHT_WEBSERVER_WAIT and FAIL with a wait-out: a false red
+# manufactured by this lock instead of one removed by it. Measured (/tmp probe,
+# 2026-10-28): a 4s child left running after the holder exited still held the lock; with
+# the descriptor closed in the child, the lock was free the instant the holder exited.
+# `tee` is closed too, or it keeps a copy for as long as any writer holds the pipe. The
+# guard is not decoration: `{VAR}>&-` with an empty VAR is a shell error, so a caller that
+# has no suite lock (the self-test's sabotage leg removes the take) still runs the suite.
+a11y_suite_once() {  # $1 = npm script, $2 = log file, $3 = port -> npm's exit status
+  local script="$1" log="$2" port="$3" rc
+  if [ -n "$PREFLIGHT_WEBSERVER_LOCK_FD" ]; then
+    A11Y_PORT="$port" npm run "$script" {PREFLIGHT_WEBSERVER_LOCK_FD}>&- 2>&1 | tee "$log" {PREFLIGHT_WEBSERVER_LOCK_FD}>&-
+  else
+    A11Y_PORT="$port" npm run "$script" 2>&1 | tee "$log"
+  fi
+  rc=${PIPESTATUS[0]}
+  return "$rc"
+}
+
 a11y_gate_run() {
   local name="$1" script="$2" attempt=0 port last="" log rc
+  webserver_lock_take "$name" || return 1
   while :; do
-    a11y_port_claim || return 1
+    a11y_port_claim || { webserver_lock_release; return 1; }
     port="$A11Y_RESERVED_PORT"
     if [ "$attempt" -eq 0 ]; then
       echo "$name: starting the app's own server on port $port (exclusive claim $A11Y_PORT_CLAIM_FILE, held until this gate's server exits; never reusing a leftover)"
@@ -2823,12 +2954,14 @@ a11y_gate_run() {
       echo "$name: RETRY $attempt/1 on a freshly claimed port $port — port $last was taken between the claim and the bind (EADDRINUSE). This is a HOST RACE, labelled and not hidden: the first attempt's output is above, and a genuine failure fails again on the fresh port."
     fi
     log="$(mktemp "${TMPDIR:-/tmp}/preflight-$name-claim.XXXXXX")"
-    A11Y_PORT="$port" npm run "$script" 2>&1 | tee "$log"
-    rc=${PIPESTATUS[0]}
+    if a11y_suite_once "$script" "$log" "$port"; then rc=0; else rc=$?; fi
+    # PORT FIRST, THEN THE SUITE LOCK: a waiter released from the lock must find the
+    # port already free, or it would skip to the next candidate for no reason.
     a11y_port_release
-    if [ "$rc" -eq 0 ]; then rm -f "$log"; return 0; fi
+    if [ "$rc" -eq 0 ]; then rm -f "$log"; webserver_lock_release; return 0; fi
     if [ "$attempt" -ge 1 ] || ! grep -q EADDRINUSE "$log"; then
       rm -f "$log"
+      webserver_lock_release
       return "$rc"
     fi
     rm -f "$log"

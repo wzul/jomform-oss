@@ -44,12 +44,25 @@
 # THE CASES (each one is a required property; a case that cannot be shown is a REFUSAL
 # with a non-zero exit at the end, never a pass):
 #   1. TREE, two SIMULTANEOUS runs of EACH web-server gate (`a11y` and `e2e`): both exit 0,
-#      the two runs claim DIFFERENT ports, and each log names the claim file it held.
-#   2. BASE (the pre-fix reserve code, extracted from BITEPROOF_BASE, default
-#      origin/main), the staggered interleaving: BOTH runs must aim at the SAME port and
-#      at least one must FAIL with EADDRINUSE. A base run that happens to pick different
-#      ports is a REFUSAL (the window was missed), never a pass.
-#   3. TREE at the SAME staggered interleaving as case 2: both exit 0, ports differ.
+#      the two SUITES were not alive at the same time (their stub intervals do not
+#      overlap), at least one run announces the host-wide suite-lock wait, and each log
+#      names the claim file it held. Added by card t_d0c0981d: before the host-wide lock
+#      both runs proceeded on DIFFERENT ports and both came back RED on unrelated specs,
+#      so "different ports" was the wrong property to assert here — a per-port claim is
+#      right about ports and says nothing about two suites competing for the same cores.
+#   2. BASE (the pre-fix reserve code, derived from the repo: BITEPROOF_BASE, else the
+#      parent of the commit that introduced `a11y_port_claim`), the staggered
+#      interleaving. THE PROPERTY THIS CARD DEPENDS ON: the pair's stub intervals must
+#      OVERLAP — two suites ran at once, which is the condition the two real reds were
+#      measured under, and it is what the host-wide lock removes. A base pair whose
+#      suites never overlapped is a REFUSAL (nothing was shown about the lock), never a
+#      pass. The same pair is ALSO checked for #1203's port-collision red (both runs on
+#      one port, one EADDRINUSE); that window is 0.3s wide and a loaded host misses it,
+#      so a miss is reported as a NOTE — it is the per-port claim working, not a failure
+#      of this card's property. (It used to be a refusal here, which made this harness
+#      refuse instead of measure whenever the host was busy.)
+#   3. TREE at the SAME staggered interleaving as case 2: both exit 0 and the pair is
+#      SERIALISED (the peer waits for the lock, then takes the port that is free again).
 #      Without this leg a red in case 2 could be blamed on the stagger.
 #   4. NEGATIVE CONTROL, a FOREIGN listener holding the first free candidate: the gate
 #      must claim a DIFFERENT port, still exit 0, and leave the foreign listener alive
@@ -57,7 +70,9 @@
 #      not start may be serving bytes this tree never built).
 #   5. RESIDUE, a holder that takes the claimed port between the claim and the bind (the
 #      stub squats on it on purpose): the gate must print its LABELLED retry, name both
-#      ports, and still exit 0.
+#      ports, and still exit 0. This is also the leg that proves the retry does NOT
+#      re-take the suite lock it already holds (a fresh `flock` open on a held lock is
+#      refused, so a re-take inside the retry loop would deadlock the gate).
 #
 # OFFLINE, no network, no web/node_modules, no build, ~60s. It mutates NOTHING in the
 # repo: everything happens in a throwaway sandbox whose `scripts/` copy is the only
@@ -67,6 +82,20 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 BASE_REF="${BITEPROOF_BASE:-origin/main}"
+# THE PRE-FIX BASE IS DERIVED, NOT REMEMBERED. `origin/main` was the pre-fix tree only
+# while the claim was unmerged; the fix landed in 76964ef8 (#1277), so `origin/main` now
+# carries `a11y_port_claim` and every run of this harness refused here (a refusal, never
+# a false pass — but a harness that can never run is not an instrument either). The fix
+# arrived in ONE commit, so the pre-fix bytes are that commit's parent, found in the repo
+# rather than typed here: a caller who names BITEPROOF_BASE explicitly is still honoured
+# exactly as given, including when it is wrong.
+base_has_prefix() { git -C "$REPO" show "$1:scripts/preflight.sh" 2>/dev/null | grep -q 'a11y_port_reserve'; }
+if [ -z "${BITEPROOF_BASE:-}" ] && ! base_has_prefix "$BASE_REF"; then
+  _intro="$(git -C "$REPO" log --format=%H --reverse -S'a11y_port_claim' -- scripts/preflight.sh | head -n 1)"
+  [ -n "$_intro" ] || { echo "REFUSING: cannot find the commit that introduced a11y_port_claim in this repo's history, so the pre-fix base cannot be derived" >&2; exit 2; }
+  BASE_REF="${_intro}^"
+  echo "== base ref derived: $BASE_REF (parent of $_intro, the commit that introduced the claim; origin/main carries the fix now)"
+fi
 STUB_DELAY="${STUB_DELAY:-3}"
 # The server must outlive the stagger, or the two stubs bind the port one after the
 # other and the collision never happens (measured while writing this: at a 1s hold and a
@@ -100,6 +129,7 @@ BITES=0
 ok()  { echo "  ok   - $1"; BITES=$((BITES+1)); }
 bad() { echo "  FAIL - $1" >&2; FAILS=$((FAILS+1)); }
 refuse() { echo "  REFUSED - $1" >&2; FAILS=$((FAILS+1)); }
+note() { echo "  note - $1"; }   # observed but NOT a proof and NOT a failure: no tally
 
 # ---------------------------------------------------------------------------
 # The sandbox: a git repo holding the runner plus the few files a11y's
@@ -142,7 +172,7 @@ console.log(`  ok   - sandbox: ${names.length} declared package(s) fabricated`);
 cat > "$WORK/bin/npm" <<'STUB'
 #!/usr/bin/env bash
 set -uo pipefail
-printf '%s\t%s\t%s\n' "$(date +%s.%N)" "$$" "$*" >> "${STUB_LOG:-/dev/null}"
+printf '%s\t%s\t%s\t%s\n' "START" "$(date +%s.%N)" "$$" "$*" >> "${STUB_LOG:-/dev/null}"
 case "$*" in
   *"run a11y"*|*"run e2e"*)
     port="${A11Y_PORT:-}"
@@ -175,6 +205,12 @@ except OSError:
 s.listen(1)
 time.sleep(hold)
 PY
+    _bind_rc=$?
+    # THE END RECORD, whatever the bind did: the interval a run's SUITE was live in is
+    # what "two suites at once" is measured from (the suite lock's own case below), and a
+    # bind that failed at 3s is still part of that interval.
+    printf 'END\t%s\t%s\n' "$(date +%s.%N)" "$$" >> "${STUB_LOG:-/dev/null}"
+    exit "$_bind_rc"
     ;;
   *)
     echo "stub npm: this harness only drives the web-server gates; got: $*" >&2
@@ -218,6 +254,8 @@ pair() {  # $1 = label, $2 = stagger seconds, $3 = gate (a11y|e2e, default a11y)
       if [ "$i" = 2 ] && python3 -c "import sys;sys.exit(0 if float(sys.argv[1])>0 else 1)" "$stagger"; then sleep "$stagger"; fi
       env PATH="$WORK/bin:$PATH" \
         PREFLIGHT_LOCK_FILE="$STATE/$label.lock" \
+        PREFLIGHT_WEBSERVER_LOCK_FILE="$STATE/$label.websuite.lock" \
+        PREFLIGHT_WEBSERVER_WAIT="${STUB_SUITE_WAIT:-120}" \
         PREFLIGHT_RESULT_DIR="$STATE/gate-results-$label-$i" \
         PREFLIGHT_RESULT_TTL=3600 \
         STUB_LOG="$STATE/$label-$i.npm" STUB_DELAY="$STUB_DELAY" STUB_HOLD="$STUB_HOLD" \
@@ -229,7 +267,25 @@ pair() {  # $1 = label, $2 = stagger seconds, $3 = gate (a11y|e2e, default a11y)
 }
 
 port_of() { grep -oE "on port [0-9]+" "$1" | head -1 | grep -oE "[0-9]+"; }
-first_stub_ts() { [ -s "$1" ] && head -1 "$1" | cut -f1 || echo ""; }
+stub_ts() {  # $1 = stub log, $2 = START|END -> that record's timestamp
+  awk -v k="$2" '$1 == k { print $2; exit }' "$1"
+}
+first_stub_ts() { stub_ts "$1" START; }
+# THE INTERVAL a run's SUITE was live in, and whether the two OVERLAP. This is the
+# measurement the suite lock is about (card t_d0c0981d): a per-port claim makes the two
+# runs take different ports, which says nothing about whether two playwright suites were
+# running at the same time on the same host. "overlap" = both were alive together.
+stub_overlap() {  # $1,$2 = the two stub logs -> overlap | serial | incomplete
+  python3 - "$(stub_ts "$1" START)" "$(stub_ts "$1" END)" \
+            "$(stub_ts "$2" START)" "$(stub_ts "$2" END)" <<'PY'
+import sys
+a1, a2, b1, b2 = sys.argv[1:5]
+if not (a1 and a2 and b1 and b2):
+    print("incomplete"); raise SystemExit
+a1, a2, b1, b2 = map(float, (a1, a2, b1, b2))
+print("overlap" if (a1 < b2 and b1 < a2) else "serial")
+PY
+}
 margin() {  # $1,$2 = the two stub logs -> the seconds between the two hand-offs
   local a b
   a="$(first_stub_ts "$1")"; b="$(first_stub_ts "$2")"
@@ -244,8 +300,8 @@ verdict() {  # $1 = label, $2 = case name
   p1="$(port_of "$STATE/$label-1.log")"; p2="$(port_of "$STATE/$label-2.log")"
   e1="$(grep -o 'EXIT=[0-9]*' "$STATE/$label-1.log" | tail -1)"
   e2="$(grep -o 'EXIT=[0-9]*' "$STATE/$label-2.log" | tail -1)"
-  echo "   $name: run1 port=${p1:-none} $e1 | run2 port=${p2:-none} $e2 | hand-off margin=$(margin "$STATE/$label-1.npm" "$STATE/$label-2.npm")s"
-  grep -hE "starting the app's own server|RETRY|EADDRINUSE" "$STATE/$label-1.log" "$STATE/$label-2.log" | sed 's/^/     /'
+  echo "   $name: run1 port=${p1:-none} $e1 | run2 port=${p2:-none} $e2 | hand-off margin=$(margin "$STATE/$label-1.npm" "$STATE/$label-2.npm")s | suite intervals=$(stub_overlap "$STATE/$label-1.npm" "$STATE/$label-2.npm")"
+  grep -hE "starting the app's own server|RETRY|EADDRINUSE|browser-suite lock" "$STATE/$label-1.log" "$STATE/$label-2.log" | sed 's/^/     /'
 }
 
 echo "== sandbox: $WORK"
@@ -265,17 +321,28 @@ for CASE1_GATE in a11y e2e; do
   verdict "$CASE1_LABEL" "CASE 1 ($CASE1_GATE)"
   t1="$(port_of "$STATE/$CASE1_LABEL-1.log")"; t2="$(port_of "$STATE/$CASE1_LABEL-2.log")"
   v1="$(grep -o 'EXIT=[0-9]*' "$STATE/$CASE1_LABEL-1.log" | tail -1)"; v2="$(grep -o 'EXIT=[0-9]*' "$STATE/$CASE1_LABEL-2.log" | tail -1)"
-  if [ "$v1" = "EXIT=0" ] && [ "$v2" = "EXIT=0" ]; then ok "CASE 1: both simultaneous $CASE1_GATE runs exited 0"
+  if [ "$v1" = "EXIT=0" ] && [ "$v2" = "EXIT=0" ]; then ok "CASE 1: both simultaneous $CASE1_GATE runs exited 0 — the peer WAITS, it is not refused"
   else bad "CASE 1: a simultaneous $CASE1_GATE run did not exit 0 ($v1 / $v2)"; fi
-  if [ -n "$t1" ] && [ -n "$t2" ] && [ "$t1" != "$t2" ]; then ok "CASE 1: the two $CASE1_GATE runs used DIFFERENT ports ($t1, $t2) — the claim excluded the peer"
-  else bad "CASE 1: the two $CASE1_GATE runs did not use different ports (${t1:-?}, ${t2:-?})"; fi
+  # THE PROPERTY THE SUITE LOCK EXISTS FOR (card t_d0c0981d). Two runs MAY hold two
+  # different ports — that is the per-port claim doing its job — but their SUITES must
+  # never be alive at the same time. Before the lock this pair ran both at once and both
+  # went red on unrelated specs (see the header); here the second must queue.
+  c1v="$(stub_overlap "$STATE/$CASE1_LABEL-1.npm" "$STATE/$CASE1_LABEL-2.npm")"
+  if [ "$c1v" = "serial" ]; then ok "CASE 1: the two $CASE1_GATE suites were SERIALISED (their intervals do not overlap) — the peer waited for the host-wide lock instead of running a second playwright suite"
+  else bad "CASE 1: the two $CASE1_GATE suites were NOT serialised ($c1v) — two playwright suites at once on one host is the defect (different ports, both proceeding)"; fi
+  if grep -q 'another playwright suite is running on this host' "$STATE/$CASE1_LABEL-1.log" ||
+     grep -q 'another playwright suite is running on this host' "$STATE/$CASE1_LABEL-2.log"; then
+    ok "CASE 1: the $CASE1_GATE peer announces the wait in the gate's own output (the ordering is not a silent one)"
+  else bad "CASE 1: neither $CASE1_GATE run announced the suite-lock wait, so the serialisation cannot be attributed to the lock"; fi
   if [ "$(grep -c 'exclusive claim' "$STATE/$CASE1_LABEL-1.log")" -ge 1 ] && [ "$(grep -c 'exclusive claim' "$STATE/$CASE1_LABEL-2.log")" -ge 1 ]; then
-    ok "CASE 1: both $CASE1_GATE runs name the claim file they held (the mechanism is visible in the gate's own output)"
+    ok "CASE 1: both $CASE1_GATE runs name the claim file they held (the port mechanism is still visible in the gate's own output; ports $t1 / $t2)"
   else bad "CASE 1: a $CASE1_GATE run did not name the claim it held"; fi
 done
 
 # ---------------------------------------------------------------------------
-# CASE 2 — the BASE at the staggered interleaving. This is the bite.
+# CASE 2 — the BASE at the staggered interleaving. Two arms on the same pair: the SUITE
+# intervals (this card's property — they must overlap, or there is nothing to prove), and
+# #1203's port collision (opportunistic: the 0.3s window is often missed on a loaded host).
 # ---------------------------------------------------------------------------
 echo "-- CASE 2: two runs on the BASE ($BASE_REF) at the pre-fix window's interleaving"
 cp "$STATE/base-preflight.sh" "$WORK/scripts/preflight.sh"
@@ -286,11 +353,24 @@ verdict base "CASE 2"
 b1="$(port_of "$STATE/base-1.log")"; b2="$(port_of "$STATE/base-2.log")"
 c1="$(grep -o 'EXIT=[0-9]*' "$STATE/base-1.log" | tail -1)"; c2="$(grep -o 'EXIT=[0-9]*' "$STATE/base-2.log" | tail -1)"
 if [ -n "$b1" ] && [ "$b1" = "$b2" ] && { [ "$c1" != "EXIT=0" ] || [ "$c2" != "EXIT=0" ]; }; then
-  ok "CASE 2: the pre-fix bytes put BOTH runs on port $b1 and one FAILED ($c1 / $c2) — the defect this card fixes, reproduced"
-elif [ "$b1" != "$b2" ]; then
-  refuse "CASE 2: the pre-fix runs picked different ports (${b1:-?}, ${b2:-?}) — the window was MISSED at margin $(margin "$STATE/base-1.npm" "$STATE/base-2.npm")s, so nothing was proved about the base. Re-run; a miss is not a pass."
+  ok "CASE 2: the pre-fix bytes put BOTH runs on port $b1 and one FAILED ($c1 / $c2) — the port-collision defect of #1203, still reproduced on the same bytes"
 else
-  refuse "CASE 2: both pre-fix runs used port ${b1:-?} but neither failed ($c1 / $c2)"
+  # NOT a refusal, and NOT a pass. The claim->bind window is 0.3s wide and a loaded host
+  # misses it: run2 then sees run1's claim and correctly moves to the next port, which is
+  # the per-port claim WORKING (that defect was fixed by t_df1719c1, and its instrument is
+  # this harness's original arm). What THIS card's lock is about is measured on the same
+  # pair below by the suite intervals, which do not depend on that window.
+  note "CASE 2: the 0.3s claim->bind window was MISSED on this run (ports ${b1:-?}/${b2:-?}, margin $(margin "$STATE/base-1.npm" "$STATE/base-2.npm")s) — the #1203 port-collision arm did not fire here. That collision is not this card's subject; the suite-interval arm below is, and it is measured on the same pair."
+fi
+# THE BITE FOR THE SUITE LOCK, on the same bytes (card t_d0c0981d): with no host-wide
+# lock the pre-fix pair runs two SUITES at once, which is the condition the two real reds
+# were measured under. Asserted here so CASE 1's "serial" above is attributable to these
+# bytes and not to the machine being quiet.
+bov="$(stub_overlap "$STATE/base-1.npm" "$STATE/base-2.npm")"
+if [ "$bov" = "overlap" ]; then
+  ok "CASE 2: the pre-fix bytes let BOTH suites run at the SAME TIME (intervals overlap) — this is the condition the two concurrent real runs were red under, and it is what the host-wide lock removes"
+else
+  refuse "CASE 2: the pre-fix pair did not overlap ($bov) — the two suites never ran together, so this case cannot show what the suite lock is for. Re-run; a miss is not a pass."
 fi
 
 # ---------------------------------------------------------------------------
@@ -306,8 +386,12 @@ s1="$(port_of "$STATE/treeS-1.log")"; s2="$(port_of "$STATE/treeS-2.log")"
 w1="$(grep -o 'EXIT=[0-9]*' "$STATE/treeS-1.log" | tail -1)"; w2="$(grep -o 'EXIT=[0-9]*' "$STATE/treeS-2.log" | tail -1)"
 if [ "$w1" = "EXIT=0" ] && [ "$w2" = "EXIT=0" ]; then ok "CASE 3: both staggered runs on this tree exited 0 (the same interleaving that reds the base)"
 else bad "CASE 3: a staggered run on this tree did not exit 0 ($w1 / $w2)"; fi
-if [ -n "$s1" ] && [ -n "$s2" ] && [ "$s1" != "$s2" ]; then ok "CASE 3: the staggered pair still used DIFFERENT ports ($s1, $s2)"
-else bad "CASE 3: the staggered pair collided on port ${s1:-?}"; fi
+# The stagger that makes the BASE lose EADDRINUSE must now be absorbed by the WAIT: the
+# peer queues behind the host-wide lock and then uses the port that was already free
+# (port ${s1:-?} / ${s2:-?}), so the stagger is the only thing that changes.
+sov="$(stub_overlap "$STATE/treeS-1.npm" "$STATE/treeS-2.npm")"
+if [ "$sov" = "serial" ]; then ok "CASE 3: the staggered pair is SERIALISED at the same interleaving (ports ${s1:-?} / ${s2:-?}) — the peer waited instead of colliding"
+else bad "CASE 3: the staggered pair was not serialised ($sov) at ports ${s1:-?} / ${s2:-?}"; fi
 
 # ---------------------------------------------------------------------------
 # CASE 4 — NEGATIVE CONTROL: a FOREIGN listener on the first free candidate.
@@ -337,6 +421,7 @@ PY
       cd "$WORK" || exit 1
       env PATH="$WORK/bin:$PATH" \
         PREFLIGHT_LOCK_FILE="$STATE/negctl.lock" PREFLIGHT_RESULT_DIR="$STATE/gate-results-negctl" \
+        PREFLIGHT_WEBSERVER_LOCK_FILE="$STATE/negctl.websuite.lock" \
         PREFLIGHT_RESULT_TTL=3600 STUB_LOG="$STATE/negctl.npm" STUB_DELAY="$STUB_DELAY" STUB_HOLD="$STUB_HOLD" \
         ./scripts/preflight.sh --only a11y >"$STATE/negctl.log" 2>&1
       echo "EXIT=$?" >>"$STATE/negctl.log"
@@ -364,6 +449,7 @@ rm -f "$STATE/squat.mark"
   cd "$WORK" || exit 1
   env PATH="$WORK/bin:$PATH" \
     PREFLIGHT_LOCK_FILE="$STATE/squat.lock" PREFLIGHT_RESULT_DIR="$STATE/gate-results-squat" \
+    PREFLIGHT_WEBSERVER_LOCK_FILE="$STATE/squat.websuite.lock" \
     PREFLIGHT_RESULT_TTL=3600 STUB_LOG="$STATE/squat.npm" STUB_DELAY="$STUB_DELAY" STUB_HOLD="$STUB_HOLD" \
     STUB_SQUAT_FIRST=1 STUB_SQUAT_MARK="$STATE/squat.mark" STUB_SQUAT_HOLD=15 \
     ./scripts/preflight.sh --only a11y >"$STATE/squat.log" 2>&1
