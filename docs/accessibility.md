@@ -412,12 +412,27 @@ now reaches every one of them — `/sales`, `/deliveries`, `/templates`, `/media
 `/builder`, `/connect` — with the session and the API stubbed at the browser
 level, and runs a **full-document** axe scan per route, failing on
 critical/serious. `src/lib/a11yAuthedCoverage.test.ts` pins each route to a page
-on disk AND to a spec that really runs axe, so one cannot quietly fall out again —
-and, because that route→spec half is a substring search any sibling naming the
-path would satisfy, a second rule in the same file reads
+on disk AND to a spec that really scans it, so one cannot quietly fall out again.
+Two readings of "really scans it" were wrong and are now closed:
+
+* the visit used to be a **substring** search over the spec's whole text, so a
+  `page.route()` stub for the route's API path (or the path in a comment) counted
+  as a visit (`t_2275886d`). A visit is now read from the **arguments of
+  `page.goto()`** and nothing else.
+* the scan used to be **presence** of `AxeBuilder`/`gateScan` anywhere in the
+  file, with no reading of its SCOPE (`t_24bd0c6c`). `/forms` counted on that
+  rule through `a11y-dialogs.spec.ts`'s `.include('[role="dialog"]')` purge-dialog
+  scan — a scan of the dialog, never of the page. A route now needs a scan of the
+  whole page or of its page body (`include("main")` / `#main-content`), under
+  the gate's own rule set; a dialog-, row- or menu-scoped scan and a
+  `withRules()`/`withTags()` subset do not count.
+
+Because that reading is per FILE, a second rule reads
 `a11y-authed-pages.spec.ts`'s own `ROUTES` table and fails BY NAME when one of the
-twelve is no longer an entry. (The substring limitation itself is the standing
-follow-up `t_2275886d`.)
+twelve is no longer an entry, and a third names the `/forms` arm and the
+`scanDocument()` helper it calls (an unscoped default-rule scan that still
+asserts it evaluated something) — the file also runs unrelated CONTROL scans, so
+the file-level rule alone could not see that arm shrink.
 
 **A reachable route is asserted, not assumed.** Each arm requires the document to
 have been served **2xx** (a 404 renders Next's "not found" page, which has no
@@ -471,7 +486,8 @@ and the sibling INPUTS were left to the exemption axe gives a placeholder), and
 `/builder` named its **slug input** (`placeholder="slug-url"`) and its **AI-prompt
 textarea** the same way. Five controls, no gate, no axe violation. The census now
 lives in `web/e2e/controlNames.ts` and runs on **every route that renders
-controls**: all twelve signed-in routes in `a11y-authed-pages.spec.ts`, each of
+controls**: all twelve signed-in routes in `a11y-authed-pages.spec.ts`, the
+`/forms` arm in the same file (card `t_24bd0c6c`), each of
 `/form-settings`' seven tabs, and the whole of `/products` in
 `a11y-products.spec.ts` — and the five sites are named from `aria-label`
 (`bld.formSlug` and `bld.aiPromptLabel` are the two new dictionary keys, in all
@@ -487,15 +503,19 @@ landed on, so the arms assert that each LANDS on a route this family scans
 (`/workspace-picker`, and the dashboard) instead of claiming coverage of the
 shell.
 
-**What is still NOT covered (stated, not hidden).** `/forms` is reached by
-`a11y-dialogs.spec.ts`, but that scan is scoped to the dialog subtree
-(`AxeBuilder().include('[role="dialog"]')`), so its DOCUMENT — the table, its
-toolbar and its filters — is still outside every axe scan; `/forms` is therefore
-the next route to add to this file, not a route to assume. `/admin`'s document is
-in the same position (its feedback ROW is measured, by
-`a11y-admin-feedback-row.spec.ts`). The dashboard's own contrast remains measured
-out-of-band and held by the source guard below, with the exceptions this file
-names.
+**What is still NOT covered (stated, not hidden).** `/forms` used to be in this
+paragraph: `a11y-dialogs.spec.ts` reached it, but that scan is scoped to the
+dialog subtree (`AxeBuilder().include('[role="dialog"]')`), so its DOCUMENT — the
+table, its toolbar and its filters — was outside every axe scan. Since card
+`t_24bd0c6c` the `/forms` arm in `a11y-authed-pages.spec.ts` runs `scanDocument()`
+(the gate's default rule set over the whole page, failing on critical/serious and
+refusing a scan that evaluated nothing), so the page body — the forms list, its
+Active/Trash strip, the pager, the empty state and the create-form controls — is
+scanned. `/admin`'s document is still in the position `/forms` was: its feedback
+ROW is measured (by `a11y-admin-feedback-row.spec.ts`, scoped with `include()`),
+and nothing scans that page as a whole. The dashboard's own contrast remains
+measured out-of-band and held by the source guard below, with the exceptions this
+file names.
 
 
 > **Do not reuse a running server.** `web/playwright.config.ts` sets
@@ -521,9 +541,9 @@ names.
 > dashboard route this file lists above — because stubbing the session-dependent
 > fetch at the browser level puts the real component in the browser without
 > needing a credential. What is still measured out-of-band is what no arm reaches:
-> a route's DOCUMENT when only a subtree of it is scanned (`/forms`, `/admin` —
-> see the section above), a dynamic `/products/[id]`-style segment, and any state
-> the browser-level stubs do not render.
+> a route's DOCUMENT when only a subtree of it is scanned (`/admin` — see the
+> section above), a dynamic `/products/[id]`-style segment, and any state the
+> browser-level stubs do not render.
 
 ### Muted text and AA (source guard)
 

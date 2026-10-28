@@ -13,7 +13,9 @@
 // still unreachable: twelve of them (`/sales`, `/deliveries`, `/templates`,
 // `/media`, `/chat`, `/spam`, `/activity`, `/feedback`, `/form-settings`,
 // `/builder`, `/connect` — and `/subscriptions`, whose DOCUMENT had no
-// full-document scan either) plus the two shells that only exist to redirect.
+// full-document scan either) plus the two shells that only exist to redirect —
+// and, since `t_24bd0c6c`, `/forms`, which had been counted as scanned through
+// a DIALOG-scoped axe arm.
 //
 // TWO KINDS OF ENTRY, and the difference is stated rather than smoothed over.
 // A route entry names a page that is LOADED and SCANNED. `/space-picker` and
@@ -41,7 +43,10 @@
 //       `playwright.config.ts` selects by FILENAME PREFIX (`testMatch:
 //       /a11y.*\.spec\.ts/`), so a signed-in axe spec is in the gate by its name
 //       alone — and a spec that stops visiting the route, or stops running axe,
-//       has silently reduced coverage. Both are asserted below, per route.
+//       has silently reduced coverage. Both are asserted below, per route —
+//       including the scan's SCOPE (t_24bd0c6c): `.include('[role="dialog"]')`
+//       is a scan of a dialog, not of the page, and `/forms` counted as covered
+//       on that shape for months.
 //   (c) THE SPEC ACTUALLY VISITS THE ROUTE (card t_2275886d): the (b) half used
 //       to be a SUBSTRING SEARCH over the spec's whole file text, so a spec that
 //       only STUBBED the API path satisfied the route — `$` sat inside the
@@ -57,9 +62,20 @@
 //       search again. A goto of a route the APP redirects (`/space-picker` 307s
 //       to `/workspace-picker`) counts for the route it lands on, because the
 //       browser really does end up there and the document really is scanned.
+//   (d) THE SCAN READS THE PAGE, NOT A SUBTREE (card t_24bd0c6c): the (b) half
+//       also used to accept the mere PRESENCE of `AxeBuilder`/`gateScan` in the
+//       file. `a11y-dialogs.spec.ts` visits `/forms` and its one scan is
+//       `.include('[role="dialog"]')`, so axe evaluated the purge dialog and
+//       nothing on the page — and `/forms` counted as scanned. `axeScans()`
+//       below reads each call's SCOPE and rule set, and `coversPage()` is the
+//       whole rule: the document or its page body (`main`/`#main-content`,
+//       which is what `<main>` wraps since t_25a8fc88), under axe's default
+//       rules — never a dialog/row/menu subtree and never a
+//       `withRules()`/`withTags()` subset.
 //
 // The assertion is deliberately about the CONTRACT (route exists, a gate spec
-// VISITS it and runs axe), never about a class name or an attribute: the
+// VISITS it and scans the page or its page body), never about a class name or an
+// attribute: the
 // attribute that fixes the defect is measured by the browser spec itself, which
 // also neutralises it in the live DOM and requires the axe rule to fire again.
 //
@@ -122,6 +138,19 @@ const AUTHED_ROUTES: { route: string; appFile: string; what: string }[] = [
     route: "/profile",
     appFile: "../app/profile/page.tsx",
     what: "the tab strip + identity/security/passkeys/social/MCP panels",
+  },
+  // Card t_24bd0c6c. `/forms` READ as scanned for months because
+  // `a11y-dialogs.spec.ts` goto()s it and runs axe — but that scan is
+  // `.include('[role="dialog"]')`, so the forms DOCUMENT (the list, its
+  // Active/Trash strip, the pager, the empty state and the create-form controls)
+  // was outside every axe run while this route counted as covered. The entry is
+  // what makes the rule below ask for a DOCUMENT scan instead: its arm lives in
+  // `a11y-authed-pages.spec.ts` (FORMS_ROUTE) and the arm itself is pinned there
+  // by name.
+  {
+    route: "/forms",
+    appFile: "../app/forms/page.tsx",
+    what: "the forms list, its Active/Trash strip, pager, empty state and create-form controls (the purge-dialog scan in a11y-dialogs is scoped to the dialog and is NOT this)",
   },
   {
     route: "/settings",
@@ -557,22 +586,162 @@ test("the /settings entry carries the tab count READ out of the page, not a type
   );
 });
 
-test("each signed-in route is visited by an a11y-family spec that runs axe", () => {
+/**
+ * One axe scan in a spec source, and what it actually MEASURED (card
+ * t_24bd0c6c).
+ *
+ *  * `document`  — no `include()`/`exclude()`: the whole page, Shell included.
+ *  * `page-body` — scoped to the document's page BODY (`include("main")` — since
+ *    t_25a8fc88 the Shell wraps exactly `{children}` in the one `<main>`, so the
+ *    sidebar and topbar fall outside it and are covered by the Shell's own
+ *    specs). The /settings pane arm reads this way.
+ *  * `subtree`   — anything narrower: the purge dialog
+ *    (`.include('[role="dialog"]')`), a table row, a menu, or a scope this rule
+ *    cannot read (a variable). NOT coverage of the page.
+ *
+ * `narrowed` — the scan runs a SUBSET of the gate's rules (`withRules` /
+ *   `withTags`), e.g. `a11y-singlechar-text.spec.ts`'s color-contrast arm.
+ *
+ * A route counts as scanned only when a spec both VISITS it and runs a scan that
+ * is the document or its page body under the gate's own rule set. That is the
+ * distinction the old rule could not see — it accepted `a11y-dialogs.spec.ts`
+ * for `/forms` because that file `goto`s the route and contains `AxeBuilder`
+ * somewhere, while its one scan is
+ * `new AxeBuilder({ page }).include('[role="dialog"]').analyze()`: axe
+ * evaluates the purge dialog and NOTHING on the /forms document.
+ */
+type ScanScope = "document" | "page-body" | "subtree";
+type AxeScan = { scope: ScanScope; narrowed: boolean; at: string };
+
+/** The selectors that ARE the page body. `#main-content` is the skip link's
+ *  target on the Shell, and `<main>` is the element it points at. */
+const PAGE_BODY_SELECTORS = new Set(["main", "#main-content"]);
+
+/** How a chained `AxeBuilder` narrows the scan. An unreadable scope (a variable)
+ *  is `subtree`: a scope this rule cannot read is not evidence of coverage. */
+function chainScope(chain: string): ScanScope {
+  const includes = [...chain.matchAll(/\.\s*include\s*\(/g)].length;
+  const excludes = [...chain.matchAll(/\.\s*exclude\s*\(/g)].length;
+  if (excludes > 0) return "subtree";
+  if (includes === 0) return "document";
+  const literals = [...chain.matchAll(/\.\s*include\s*\(\s*(["'`])([^"'`]*)\1\s*\)/g)].map((m) => m[2].trim());
+  if (literals.length !== includes) return "subtree";
+  return literals.every((s) => PAGE_BODY_SELECTORS.has(s)) ? "page-body" : "subtree";
+}
+
+/** The argument list of the call whose `(` is at `open`, or null when it never
+ *  closes. Used for `gateScan(page)` (one argument: the whole document) vs
+ *  `gateScan(page, scope)` (two: a subtree). Balanced brackets, string bodies
+ *  skipped. */
+function callArguments(src: string, open: number): string[] | null {
+  const args: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let start = open + 1;
+  for (let i = open + 1; i < src.length; i++) {
+    const c = src[i];
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      continue;
+    }
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      if (depth === 0) {
+        args.push(src.slice(start, i).trim());
+        return args;
+      }
+      depth--;
+    } else if (c === "," && depth === 0) {
+      args.push(src.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * Every axe scan a spec source contains, with its scope.
+ *
+ * A `new AxeBuilder(...)` whose chain does NOT reach `analyze()` before the next
+ * `;` (the builder was stored in a variable, so its scope cannot be read) is NOT
+ * counted: an unreadable scope is not evidence of a page scan. Write the chain
+ * inline so this rule can see it.
+ */
+function axeScans(src: string): AxeScan[] {
+  const text = withoutComments(src);
+  const scans: AxeScan[] = [];
+  for (const m of text.matchAll(/\bnew\s+AxeBuilder\s*\(/g)) {
+    const end = text.indexOf(";", m.index);
+    const chain = text.slice(m.index, end === -1 ? text.length : end);
+    if (!/\.\s*analyze\s*\(/.test(chain)) continue;
+    scans.push({
+      scope: chainScope(chain),
+      narrowed: /\.\s*(?:withRules|withTags)\s*\(/.test(chain),
+      at: chain.replace(/\s+/g, " ").slice(0, 160),
+    });
+  }
+  for (const m of text.matchAll(/\bgateScan\s*\(/g)) {
+    const args = callArguments(text, m.index + m[0].length - 1) ?? [];
+    const scope = args.length < 2 ? "document" : /^(["'`])([^"'`]*)\1$/.test(args[1]) && PAGE_BODY_SELECTORS.has(args[1].slice(1, -1).trim()) ? "page-body" : "subtree";
+    scans.push({ scope, narrowed: false, at: text.slice(m.index, m.index + 120).replace(/\s+/g, " ") });
+  }
+  return scans;
+}
+
+/** Is this scan the whole document or its page body, under the gate's rules? */
+function coversPage(src: string): boolean {
+  return axeScans(src).some((s) => !s.narrowed && s.scope !== "subtree");
+}
+
+test("the scan reader tells a page scan from a dialog/row scan, and from a narrowed rule set", () => {
+  const cases: [string, boolean, string][] = [
+    ["new AxeBuilder({ page }).analyze();", true, "the gate's default rule set over the whole page"],
+    ["new AxeBuilder({ page })\n  .analyze();", true, "the same chain across lines"],
+    ['new AxeBuilder({ page }).include("main").analyze();', true, "the page body is the whole <main>"],
+    ['new AxeBuilder({ page }).include("#main-content").analyze();', true, "the skip link's target IS the page body"],
+    ["gateScan(page);", true, "the shared gate with no scope"],
+    ['gateScan(page, "main");', true, "the shared gate scoped to the page body"],
+    // The shape that made /forms read as covered while its document was not:
+    [`new AxeBuilder({ page }).include('[role="dialog"]').analyze();`, false, "include() narrows axe to the dialog subtree"],
+    [`new AxeBuilder({ page }).include("nav").analyze();`, false, "a subtree that is not the page body is not the page"],
+    ['new AxeBuilder({ page }).include(ROW).analyze();', false, "an include() whose selector this rule cannot read is not the page"],
+    ["new AxeBuilder({ page }).exclude('#sidebar').analyze();", false, "exclude() narrows the page too"],
+    ["gateScan(page, scope);", false, "gateScan with a scope is the same subtree scan"],
+    ['new AxeBuilder({ page }).include("main").withRules(["color-contrast"]).analyze();', false, "a page body read through a subset of the rules is not the gate"],
+    ["new AxeBuilder({ page }).withRules(['color-contrast']).analyze();", false, "withRules() runs a subset of the gate's rules"],
+    ["new AxeBuilder({ page }).withTags(['wcag2aa']).analyze();", false, "withTags() is the same narrowing"],
+    ["const builder = new AxeBuilder({ page });\nawait builder.analyze();", false, "a scope this rule cannot read is not evidence of coverage"],
+    ["await page.route(/(.*)\\/api\\/rest\\/forms(\\?.*)?$/, (r) => r.fulfill(json([])));", false, "a route stub is not a scan"],
+  ];
+  for (const [src, expected, what] of cases) {
+    assert.equal(coversPage(src), expected, `${what}: coversPage(${JSON.stringify(src)}) must be ${expected}`);
+  }
+});
+
+test("each signed-in route is visited by an a11y-family spec that scans its page, not a subtree", () => {
   for (const { route, what } of AUTHED_ROUTES) {
     // `a11y.spec.ts` is the public PAGES list; the signed-in surfaces live in
     // sibling specs (the session has to be stubbed, which its `page.goto`-only
     // shape does not do), so the public file cannot satisfy this on its own.
     const scanners = A11Y_SPECS.filter((f) => f !== "a11y.spec.ts").filter((f) => {
       const text = readFileSync(pathOf(`../../e2e/${f}`), "utf8");
-      return visits(text, route) && SCANNERS.some((s) => text.includes(s));
+      return visits(text, route) && coversPage(text);
     });
     assert.ok(
       scanners.length > 0,
-      `${route} (${what}) is visited by NO a11y-family spec that runs ${SCANNER}: no spec has a ` +
-        `page.goto argument that resolves to it (a stub for its API path, a route named in a comment ` +
-        `and a route in a prose list are not visits — t_2275886d). The axe gate would be green for a ` +
-        `critical violation on it — the exact gap this contract exists for. ` +
-        `Specs found: ${A11Y_SPECS.join(", ")}`,
+      `${route} (${what}) is visited by NO a11y-family spec that runs ${SCANNER} over the WHOLE page ` +
+        `or its page body (<main>/#main-content) with the gate's own rule set: no spec has a page.goto ` +
+        `argument that resolves to it (a stub for its API path, a route named in a comment and a route ` +
+        `in a prose list are not visits — t_2275886d), or every scan in the specs that visit it is SCOPED ` +
+        `to a SUBTREE (include()/exclude() of anything but the page body, or gateScan(page, scope)) or ` +
+        `NARROWED (withRules()/withTags()). The axe gate would be green for a critical violation outside ` +
+        `that subtree — the exact gap this contract exists for (t_24bd0c6c: /forms was counted through ` +
+        `a11y-dialogs' dialog-only scan). Specs found: ${A11Y_SPECS.join(", ")}`,
     );
   }
 });
@@ -624,5 +793,104 @@ test("a11y-authed-pages still carries an arm for every route this contract exist
     `route(s) with no arm left in ${A11Y_AUTHED_PAGES}: the table holds ${JSON.stringify(listed)}. ` +
       `A route deleted from that table is a route axe no longer scans — and the substring rule above cannot ` +
       `see it, because another spec in the family names the same path`,
+  );
+});
+
+/**
+ * The `/forms` DOCUMENT scan must be an ARM, not merely a scan somewhere in the
+ * file (card t_24bd0c6c).
+ *
+ * The route rule above is a source search over each spec FILE: it accepts
+ * `a11y-authed-pages.spec.ts` for `/forms` as soon as the file both visits the
+ * route and contains one unscoped `new AxeBuilder(...).analyze()`. That file also
+ * runs several UNRELATED document scans (the CONTROL arms below), so an arm that
+ * shrank back to a dialog-scoped scan would leave the route rule green. This one
+ * pins the arm and the helper it calls:
+ *
+ *   (1) a `test(...)` arm titled for `/forms` exists in the file, and it calls
+ *       `scanDocument()`;
+ *   (2) the `scanDocument` definition is still the gate's document scan — an
+ *       unscoped chain with NO rule-set narrowing — and still carries the
+ *       non-vacuity read (`passes`), so narrowing the HELPER fails here instead
+ *       of silently shrinking every arm in the file that calls it.
+ */
+function functionBody(src: string, name: string): string | null {
+  const text = withoutComments(src);
+  const at = text.search(new RegExp(`\\bfunction\\s+${name}\\s*\\(`));
+  if (at < 0) return null;
+  const open = text.indexOf("{", at);
+  if (open < 0) return null;
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return text.slice(open, i + 1);
+    }
+  }
+  return null;
+}
+
+/** Every `test(...)` / `test.describe(...)` slice of `src`, with its title. A
+ *  slice runs to the next line starting with `test(` at any indentation, so a
+ *  nested arm is its own slice and an arm's body cannot borrow a sibling's. */
+function testArms(src: string): { title: string; body: string }[] {
+  const text = withoutComments(src);
+  const starts = [...text.matchAll(/^[ \t]*(?:test|test\.describe)\s*\(/gm)].map((m) => m.index!);
+  return starts.map((start, i) => {
+    const body = text.slice(start, starts[i + 1] ?? text.length);
+    const arrow = body.indexOf("=>");
+    return { body, title: body.slice(0, arrow < 0 ? 200 : arrow) };
+  });
+}
+
+test("the /forms document scan is an ARM in a11y-authed-pages, and its helper is the whole-document scan", () => {
+  const src = readFileSync(`${E2E_DIR}/${A11Y_AUTHED_PAGES}`, "utf8");
+  const arms = testArms(src).filter((a) => /["'`]\/forms\b/.test(a.title));
+  assert.ok(
+    arms.length > 0,
+    `no test(...) arm in ${A11Y_AUTHED_PAGES} is titled for /forms — the document scan this contract ` +
+      `exists for (t_24bd0c6c) has no arm, or its title no longer names the route. Arms found: ` +
+      JSON.stringify(testArms(src).map((a) => a.title.trim().slice(0, 60))),
+  );
+  assert.ok(
+    arms.some((a) => /\bscanDocument\s*\(/.test(a.body)),
+    `the /forms arm in ${A11Y_AUTHED_PAGES} no longer calls scanDocument() — its document is back outside ` +
+      `every axe run, which is the defect t_24bd0c6c exists for. Arm(s): ${JSON.stringify(
+        arms.map((a) => a.title.trim().slice(0, 80)),
+      )}`,
+  );
+
+  const helper = functionBody(src, "scanDocument");
+  assert.ok(
+    helper,
+    `${A11Y_AUTHED_PAGES} no longer defines scanDocument() — the /forms arm calls it, so this rule cannot ` +
+      `read the scan it runs. Re-point this reader at whatever helper the arm uses now.`,
+  );
+  const scans = axeScans(helper!);
+  assert.ok(
+    scans.some((s) => !s.narrowed && s.scope === "document"),
+    `scanDocument() in ${A11Y_AUTHED_PAGES} no longer runs the gate's DEFAULT rule set over the whole ` +
+      `document — the scans it contains now are ${JSON.stringify(scans)}. A scoped or narrowed helper ` +
+      `silently shrinks every arm that calls it, and the file-level route rule cannot see it because the ` +
+      `CONTROL arms below run their own document scans.`,
+  );
+  assert.match(
+    helper!,
+    /passes\s*\.\s*length/,
+    `scanDocument() no longer asserts NON-VACUITY (it read \`passes\` before): a 0-violation reading from a ` +
+      `scan that evaluated no rule-nodes is not a clean page, and that assertion is what makes the /forms ` +
+      `arm's green mean something`,
   );
 });

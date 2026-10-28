@@ -683,14 +683,29 @@ async function scanDocument(page: Page, what: string): Promise<Result[]> {
 }
 
 
-/* ─── /forms: the card's ninth route, measured for the landmark ────────────── */
+/* ─── /forms: the document, and the landmark it was added for ───────────────── */
 
-// `/forms` has no full-document axe spec of its own — `a11y-tabstrips.spec.ts`
-// walks its Active/Trash strip and deliberately runs no axe — so without this arm
-// the two moderate landmark rules the card names would have NO arm reading them
-// on this route. It is not an entry in `ROUTES`, which
-// `src/lib/a11yAuthedCoverage.test.ts` pins to "the twelve routes NO spec
-// scanned"; it reuses the same openRoute + shared landmark helper.
+// `/forms` had NO full-document axe scan (card t_24bd0c6c). The only axe run on
+// its document was `a11y-dialogs.spec.ts`'s purge-dialog scan, scoped with
+// `.include('[role="dialog"]')` — so the forms list, its Active/Trash strip, the
+// pager, the empty state and the create-form controls were outside every axe
+// run, while the route read as "scanned". `a11y-tabstrips.spec.ts` walks that
+// strip and deliberately runs no axe (its header says so), and the landmark arm
+// t_25a8fc88 added here ran only `landmark-one-main`/`region`.
+//
+// This arm now runs `scanDocument()` — the gate's own default rule set over the
+// WHOLE document, failing on critical/serious and refusing a scan that evaluated
+// no rule-nodes — and keeps the landmark reading it was added for. It is not an
+// entry in `ROUTES` (which `src/lib/a11yAuthedCoverage.test.ts` pins to "the
+// twelve routes NO spec scanned"); it reuses the same openRoute + scanDocument +
+// shared landmark helpers, and the coverage contract names this arm by title so
+// a deleted or narrowed scan fails there by name.
+//
+// THE STATE IT SCANS is the shared stubs' one-row list (a form, so the strip and
+// the row actions render). The EMPTY state and a multi-page pager are not
+// rendered by those stubs, so a violation that exists only in those states is
+// still outside this arm — stated here rather than implied by "the document is
+// scanned".
 const FORMS_ROUTE: Route = {
   name: "forms",
   path: "/forms",
@@ -701,15 +716,29 @@ const FORMS_ROUTE: Route = {
   what: "the forms list and its Active/Trash strip",
 };
 
-test("/forms renders the document's one main landmark (t_25a8fc88)", async ({ page, baseURL }) => {
-  test.setTimeout(90_000);
+test("/forms document: no critical/serious axe violation, and one main landmark (t_24bd0c6c)", async ({
+  page,
+  baseURL,
+}) => {
+  test.setTimeout(120_000);
   const settled = await openRoute(page, FORMS_ROUTE, baseURL);
   console.log(
     `[authed] /forms status=${settled.status} hydrated=${settled.hydrated} h1=${JSON.stringify(
       settled.h1,
     )} navLinks=${settled.navLinks} bodyText=${settled.bodyText}`,
   );
+  // THE DOCUMENT, not the dialog. Before this arm the only axe run on `/forms`
+  // was the purge-dialog scan's `.include('[role="dialog"]')`, so everything
+  // outside that subtree — the forms list, the Active/Trash strip, the pager,
+  // the empty state and the create-form controls — was scanned by nothing.
+  await scanDocument(page, "/forms");
+  // …and the landmark t_25a8fc88 added this arm for: exactly one `main`, owning
+  // the page, with neither `landmark-one-main` nor `region`.
   await expectOneMainLandmark(page, "/forms");
+  // The create-form controls the card names cannot be judged by axe alone: axe
+  // ACCEPTS a placeholder as an accessible name (t_becb0f50), so the shared
+  // census runs here too — it read clean on this page when this arm was added.
+  await expectEveryControlNamed(page, "/forms");
 });
 
 /* ─── the twelve routes ────────────────────────────────────────────────────── */
