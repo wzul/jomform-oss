@@ -30,6 +30,7 @@ import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { formDescription } from "../../lib/formDescription";
 import { blockTypeLabel, isWithdrawnBlockType } from "../../lib/withdrawnBlock";
 import { hydrateBlockIds } from "../../lib/blockHydrate";
+import { looksLikeProse, treatAsFieldLabel, treatAsIntro } from "../../lib/textBlockProse";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
 
@@ -296,6 +297,13 @@ export default function Builder() {
   const [accessPw, setAccessPw] = useState("");
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  // Card t_4823943a: the id of the block this session converted from a prose
+  // `text` block to an intro `section`. The exact inverse ("make it a field
+  // again") is offered ONLY for that id, so a `section` the merchant authored as
+  // prose can never be retyped by this path. Deliberately in-memory: a reload
+  // that lands on an already-saved section is the merchant's own stored choice,
+  // not an invitation to undo it.
+  const [introConverted, setIntroConverted] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [pubUrl, setPubUrl] = useState("");
@@ -1331,6 +1339,66 @@ export default function Builder() {
             className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[#7170ff]/60"
           />
         </div>
+
+        {/* Card t_4823943a: a legacy `text` block whose value reads like a
+            SENTENCE. `text` is a short-answer INPUT on both public renderers, so
+            its value is painted as the field's LABEL — on prod, ten merchant rows
+            still carry their intro line here and the live page reads
+            `<label class="lbl">Register for our event — cuma rsvp ja</label>` over
+            an empty input. The merchant cannot be migrated silently (a `text`
+            value may equally be a real label such as "Abc" or "Nama anda"), so
+            this warns WHERE THE BLOCK IS EDITED — before the sentence becomes a
+            label on a live form — and offers the retype as an explicit action.
+
+            A11Y (card requirement): the warning is a `role="alert"`, so a screen
+            reader announces it when it appears (the merchant has just typed a
+            sentence), and the action is a real <button> in DOM order after the
+            value textarea, so Tab reaches it with no pointer. The axe gate and
+            its keyboard arm live in web/e2e/a11y-builder-prose-warning.spec.ts;
+            the detect → convert → save flow in
+            web/e2e/builder-text-prose-intro.spec.ts. */}
+        {b.type === "text" && looksLikeProse(b.value) && (
+          <div
+            role="alert"
+            className="rounded-md border border-[var(--jf-warning-text)] bg-[#fffbeb] p-2.5"
+          >
+            <p className="text-xs leading-relaxed text-[var(--jf-warning-text)]">{t("bld.textProseWarn")}</p>
+            <button
+              type="button"
+              onClick={() => {
+                // The retype keeps the block's id (the field name a stored
+                // contract may name) and its value byte for byte; the inverse
+                // below restores the stored JSON exactly.
+                setBlocks((prev) => treatAsIntro(prev, b.id));
+                setIntroConverted(b.id);
+                setDirty(true);
+              }}
+              className="mt-2 min-h-9 rounded-md border border-[var(--jf-warning-text)] bg-white px-3 text-xs font-medium text-[var(--jf-warning-text)] hover:bg-[#fef3c7]"
+            >
+              {t("bld.textProseTreat")}
+            </button>
+          </div>
+        )}
+
+        {/* The exact inverse, on the block this session converted. `role="status"`
+            is the polite half: the conversion itself is what the merchant just
+            asked for, so it is announced without interrupting. */}
+        {b.type === "section" && introConverted === b.id && (
+          <div role="status" className="rounded-md border border-[var(--jf-border)] bg-slate-50 p-2.5">
+            <p className="text-xs leading-relaxed text-[#374151]">{t("bld.textProseConverted")}</p>
+            <button
+              type="button"
+              onClick={() => {
+                setBlocks((prev) => treatAsFieldLabel(prev, b.id));
+                setIntroConverted(null);
+                setDirty(true);
+              }}
+              className="mt-2 min-h-9 rounded-md border border-[var(--jf-border)] bg-white px-3 text-xs font-medium text-[#374151] hover:bg-slate-100"
+            >
+              {t("bld.textProseUndo")}
+            </button>
+          </div>
+        )}
 
         {/* Common: description */}
         {input("description", t("bld.description"), t("bld.descriptionPh"))}

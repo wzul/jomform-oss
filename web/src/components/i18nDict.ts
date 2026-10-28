@@ -1291,6 +1291,16 @@ export const DICT = {
   "bld.withdrawnBlock": { en: "No longer offered in the builder. Buyers see this label and a note — not a field.", ms: "Tidak lagi ditawarkan dalam pembina. Pembeli melihat label ini dan satu nota — bukan medan.", zh: "构建器中已不再提供。买家只会看到这个标签和一条说明——不是输入字段。", ta: "பில்டரில் இனி வழங்கப்படுவதில்லை. வாங்குபவர்கள் இந்த லேபிளையும் ஒரு குறிப்பையும் மட்டுமே காண்பார்கள் — புலம் அல்ல.", ar: "لم يعد متاحاً في المنشئ. يرى المشترون هذا العنوان وملاحظة — وليس حقل إدخال." },
   "bld.selectBlock": { en: "Select a block to edit.", ms: "Pilih blok untuk edit.", zh: "选择要编辑的模块。", ta: "திருத்த ஒரு பிளாக்கைத் தேர்ந்தெடுக்கவும்.", ar: "اختر عنصراً للتحرير." },
   "bld.textLabel": { en: "Text / label", ms: "Teks / label", zh: "文本 / 标签", ta: "உரை / லேபிள்", ar: "النص / التسمية" },
+  // Card t_4823943a: a `text` block is a short-answer INPUT, so its value is the
+  // field's LABEL. Forms written under the old content model stored their intro
+  // sentence there and the live page paints that sentence as the label of an
+  // empty input. These four keys are the warning shown where the block is
+  // edited, the explicit action that retypes the block to `section`, and its
+  // exact inverse — never a silent rewrite.
+  "bld.textProseWarn": { en: "This reads like an introduction, but a Text block is an answer field — on the live form this sentence becomes the field's label. If it is an introduction, treat it as an intro line.", ms: "Ini kelihatan seperti pengenalan, tetapi blok Teks ialah medan jawapan — pada borang langsung ayat ini menjadi label medan. Jika ia pengenalan, jadikannya baris pengenalan.", zh: "这段文字看起来像引言，但文本区块是作答字段——在正式表单上这句话会成为字段的标签。如果它是引言，请将其设为引言行。", ta: "இது அறிமுக உரை போலத் தெரிகிறது, ஆனால் உரை தொகுதி ஒரு பதில் புலம் — நேரடி படிவத்தில் இந்த வாக்கியம் புலத்தின் லேபலாக மாறும். இது அறிமுகமெனில், அதை அறிமுக வரியாக மாற்றுங்கள்.", ar: "يبدو هذا كمقدمة، لكن كتلة النص حقل إجابة — في النموذج المنشور تصبح هذه الجملة تسمية الحقل. إن كانت مقدمة، فحوّلها إلى سطر مقدمة." },
+  "bld.textProseTreat": { en: "Treat as intro line", ms: "Jadikan baris pengenalan", zh: "设为引言行", ta: "அறிமுக வரியாக மாற்று", ar: "تحويل إلى سطر مقدمة" },
+  "bld.textProseConverted": { en: "Converted: this block is now an intro line, so the field is gone from the live form. The text you wrote is unchanged.", ms: "Ditukar: blok ini kini baris pengenalan, jadi medan itu tiada lagi pada borang langsung. Teks anda tidak diubah.", zh: "已转换：该区块现在是引言行，字段已从正式表单中移除。你写的文字未作改动。", ta: "மாற்றப்பட்டது: இந்தத் தொகுதி இப்போது அறிமுக வரி, எனவே புலம் நேரடி படிவத்தில் இல்லை. நீங்கள் எழுதிய உரை மாறவில்லை.", ar: "تم التحويل: أصبحت هذه الكتلة سطر مقدمة، لذا اختفى الحقل من النموذج المنشور. النص الذي كتبته لم يتغير." },
+  "bld.textProseUndo": { en: "Undo — make it a field again", ms: "Buat asal — jadikan medan semula", zh: "撤销——恢复为字段", ta: "செயல்நீக்கம் — மீண்டும் புலமாக்கு", ar: "تراجع — أعده حقلاً" },
   "bld.imageUrl": { en: "Image URL", ms: "URL imej", zh: "图片链接", ta: "படம் URL", ar: "رابط الصورة" },
   "bld.product": { en: "Product", ms: "Produk", zh: "商品", ta: "பொருள்", ar: "المنتج" },
   "bld.required": { en: "Required", ms: "Wajib", zh: "必填", ta: "கட்டாயம்", ar: "مطلوب" },

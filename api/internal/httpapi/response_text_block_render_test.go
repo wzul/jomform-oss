@@ -214,3 +214,62 @@ func TestResponseFormTextBlockSubmitRoundTrips(t *testing.T) {
 		t.Errorf("stored submission data[n9mplk3] = %v, want Ali (the text block's answer)", sub.Data["n9mplk3"])
 	}
 }
+
+// Card t_4823943a — THE RENDERED HALF of the builder's "Treat as intro line".
+//
+// A `text` block is a short-answer INPUT, so its value is the field's LABEL.
+// Forms written under the old content model stored their intro SENTENCE there,
+// and the live page reads exactly what the card measured:
+//
+//	<label class="lbl">Register for our event — cuma rsvp ja</label>
+//	<input type="text" name="qoubfpj" data-id="qoubfpj">
+//
+// The builder cannot migrate those rows (the same value may be a real label such
+// as "Abc"), so it warns and offers a per-block action that retypes `text` →
+// `section`, keeping the block id and the value bytes untouched. This test pins
+// what that retype produces on the page the buyer gets: the same sentence as an
+// INTRO LINE, and no label/control pair for that id.
+//
+// Both pages are rendered through the real response handler, so the assertion is
+// about the renderer's decision, not about a config shape:
+//   - the BEFORE page must carry the defect markup (otherwise the after-reading
+//     proves nothing);
+//   - the AFTER page must carry <div class="section">…</div> with the same bytes,
+//     must not carry the label, and must render no control named qoubfpj.
+func TestConvertedIntroBlockRendersAsProseNotAnInputLabel(t *testing.T) {
+	const prose = "Register for our event — cuma rsvp ja"
+	labels := func(cfg map[string]any) map[string]any {
+		return map[string]any{"mode": "response", "blocks": []any{
+			map[string]any{"id": "qoubfpj", "type": cfg["type"], "value": prose},
+			map[string]any{"id": "nm", "type": "name", "value": "Nama anda"},
+		}}
+	}
+
+	before := renderResponsePage(t, "prose-before", labels(map[string]any{"type": "text"}))
+	after := renderResponsePage(t, "prose-after", labels(map[string]any{"type": "section"}))
+
+	// BEFORE: the defect, as measured on prod.
+	if !strings.Contains(before, `<label class="lbl">`+prose+`</label>`) {
+		t.Fatalf("the pre-conversion page does not carry the label this card is about — the AFTER reading would prove nothing\n%s", before)
+	}
+	if in := firstInputNamed(before, "qoubfpj"); in == "" {
+		t.Fatalf("the pre-conversion page renders no control named qoubfpj")
+	}
+
+	// AFTER: the sentence is prose. Its bytes are unchanged; its role is not.
+	if strings.Contains(after, `<label class="lbl">`+prose+`</label>`) {
+		t.Errorf("the converted block is still rendered as an input's label: the merchant's sentence is still nailed to an empty box")
+	}
+	if !strings.Contains(after, `<div class="section">`+prose+`</div>`) {
+		t.Errorf("the converted block is not rendered as an intro line; the page must show %q as display prose", prose)
+	}
+	if in := firstInputNamed(after, "qoubfpj"); in != "" {
+		t.Errorf("the converted block still collects an answer: %s", in)
+	}
+	// The id is kept, so a notification recipient or a stored contract that names
+	// qoubfpj does not lose its block — it simply no longer names a CONTROL. The
+	// sibling field is untouched either way.
+	if !strings.Contains(after, `name="nm"`) {
+		t.Errorf("the sibling name field disappeared from the converted page")
+	}
+}

@@ -125,6 +125,32 @@ export default function BuilderDocsPage() {
         </li>
       </ul>
 
+      <h2 className="mt-8 text-xl font-semibold text-slate-900">
+        When a text block holds a sentence
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A text block is a short-answer field, so whatever you put in its label becomes the label of
+        an empty input on the published form. Forms built under an older version of JomForm stored
+        their introduction sentence in that block, which is how a live page ended up reading
+        &quot;Register for our event — cuma rsvp ja&quot; above an empty box instead of showing it as
+        an introduction.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The builder now warns you where the block is edited: when a text block&apos;s label reads like
+        a sentence, a notice appears under the label and offers one action, Treat as intro line. It
+        turns the block into an introduction (a section, in the palette) and keeps the block&apos;s
+        id and its text exactly as you wrote them, so the sentence is displayed above the fields
+        rather than used as a label. Nothing is changed on its own — short labels such as Abc or
+        Nama anda never trigger the notice, and it is only ever your click that converts a block.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        Changed your mind? The same panel then offers Undo — make it a field again, which restores
+        the exact block you had: the same id, the same text and the same settings. The undo is
+        offered for the block you just converted, in the session you converted it; once the change
+        is saved and the page reloaded, the introduction is simply the block you chose and can be
+        edited like any other.
+      </p>
+
       <h2 id="url-fields" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
         What a website field accepts
       </h2>
