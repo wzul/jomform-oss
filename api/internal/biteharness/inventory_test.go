@@ -52,6 +52,33 @@ package biteharness
 // assertion (that residual is filed against one harness's verdict logic), and
 // does NOT prove its stated wall times are current. It is a register, not a
 // re-run.
+//
+// THE `Cases` CELL IS CHECKED FOR ONE MARKER FAMILY, AND THAT BOUND IS THE POINT
+// (card t_dc646914). This file reads column 1 only, so before that card a row could
+// publish a case count its own harness contradicted. Measured on origin/main
+// e19abcb4: the `scripts/biteproof_preflight_reuse.sh` row's Cases cell said 12 while
+// `grep -c '^# --- case [0-9]' scripts/biteproof_preflight_reuse.sh` returned 13, and
+// this package's tests were green. The cell had been one short since PR #1089 added
+// cases 10 AND 11 in one change and bumped the cell once; the change after it bumped
+// 11 -> 12 while the markers went 12 -> 13 and inherited the offset.
+// cases_cell_test.go now reads the cell, but ONLY where the count is derivable: a
+// harness whose `# --- case` markers are exactly 0..N, no gap and no duplicate (four
+// rows on this tree: scripts/biteproof_api_test_gate_timeout.sh 6/6,
+// scripts/biteproof_web_image_gate.sh 3/3, scripts/biteproof_preflight_reuse.sh 13/13,
+// web/scripts/biteproof_workspace_danger_refusal.sh 3/3) — plus every narrative line
+// that states `case count is **N**`, checked against its row's cell.
+//
+// The REST of the column is NOT derivable from one convention, measured on c36b5e22:
+// web/scripts/biteproof_npm_audit_gate.sh prints five `== case N` echo headers
+// (case 0 a control) while its cell of 4 counts the four mutations its `run_case`
+// helper drives, so a marker-counting rule would demand 5 there and red a correct
+// row; web/scripts/biteproof_next_managed_files.sh labels them in prose
+// (`# Case 0:`, and ONE `# --- case 6:` heading against a cell of 6, which is why a
+// "one marker means covered" rule would red a correct row),
+// deploy/biteproof_build_and_ship_gate.sh uses `# case A`..`# case D` plus a fifth
+// leg, and the api/scripts/*.py harnesses carry no `# --- case` marker at all. For
+// those rows the `Cases` cell remains a CLAIM, not a check, and it must not be
+// described as enforced anywhere.
 
 import (
 	"io/fs"

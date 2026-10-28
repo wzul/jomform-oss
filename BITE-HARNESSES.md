@@ -24,6 +24,13 @@ too. So the table cannot rot into a claim about instruments that were renamed aw
 A row whose harness labels its cases `# --- case N` counts `case 0`, the control, in
 its `Cases` cell — the number `grep -c '^# --- case [0-9]' <that harness>` returns —
 and its narrative line below the table repeats that number, so the two move together.
+Both of those are **checked**, not remembered: the `api test` gate
+(`api/internal/biteharness/cases_cell_test.go`) reads the `Cases` cell of every row
+whose harness numbers its cases `# --- case 0..N` with no gap, and reads every
+`case count is **N**` line against its row's cell. For a row in any other marker
+family the cell is a **claim, not a check** — the families, measured, are listed in
+that file's SCOPE LIMITS, and nothing here should be read as saying the whole column
+is enforced.
 
 **THE READER THAT TURNS A GUARD RUN INTO A VERDICT IS SHARED, AND IT REFUSES RATHER THAN
 ANSWERS (card `t_b014807f`).** Every harness below that drives a `node --test` guard now
