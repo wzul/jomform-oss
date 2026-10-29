@@ -103,6 +103,38 @@ function functionBody(src: string, name: string, next: string): string {
 
 const i18n = stripComments(read("../components/i18n.tsx"));
 const mcpClient = stripComments(read("../app/mcp/mcp-client.tsx"));
+// The two LANG_LABEL pickers (/profile and /settings). They render the FULL
+// endonym — 中文, தமிழ், العربية — rather than the switcher's short label, and
+// they are data-gated pages no unit test can render, so this source leg is the
+// only thing between a refactor and an undeclared endonym on either page; the
+// executed proof that the SERVED <option> carries the attribute is
+// `e2e/a11y-lang-picker-option.spec.ts`, run by the `a11y` gate.
+const profilePage = stripComments(read("../app/profile/page.tsx"));
+const settingsPage = stripComments(read("../app/settings/page.tsx"));
+
+/**
+ * Every `<option>` in `src` that renders `LANG_LABEL[l]`, as the text from the
+ * opening tag through the label expression.
+ *
+ * Anchored on the LABEL and scanned backwards to the nearest `<option`, not on a
+ * `<option[^>]*>` regex: `=>` inside an attribute contains the `>` such a scan
+ * stops at, and the captured "opening tag" would be truncated before the spread
+ * it was supposed to inspect. The count is asserted by the caller, so a page that
+ * stopped rendering the picker fails loudly instead of satisfying every loop over
+ * an empty list.
+ */
+function optionSitesRenderingEndonym(src: string, file: string): string[] {
+  const needle = "{LANG_LABEL[l]}";
+  const sites: string[] = [];
+  let at = src.indexOf(needle);
+  while (at !== -1) {
+    const open = src.lastIndexOf("<option", at);
+    assert.notEqual(open, -1, `${file}: {LANG_LABEL[l]} is rendered outside an <option>`);
+    sites.push(src.slice(open, at + needle.length));
+    at = src.indexOf(needle, at + needle.length);
+  }
+  return sites;
+}
 
 test("every endonym declares the language it is written in (executed)", () => {
   // Non-vacuity: every locale in the dictionary has an entry, so adding a
@@ -192,6 +224,43 @@ test("/mcp renders the SHARED endonym list and spreads the declaration", () => {
   );
 });
 
+test("/profile and /settings spread the declaration onto the option that holds the endonym", () => {
+  // The `LANG_LABEL` sites the /mcp card did not touch. Both render the FULL
+  // endonym into an <option>, so both need the declaration on the option itself
+  // — an <option>'s content model is text, and its nearest ancestor is the
+  // <select>, which declares nothing.
+  for (const [file, src] of [
+    ["app/profile/page.tsx", profilePage],
+    ["app/settings/page.tsx", settingsPage],
+  ] as const) {
+    const sites = optionSitesRenderingEndonym(src, file);
+    assert.ok(
+      sites.length >= 1,
+      `${file} no longer renders an <option> holding LANG_LABEL[l] — this pin would pass over an empty list`,
+    );
+    for (const site of sites) {
+      assert.match(
+        site,
+        /\{\s*\.\.\.endonymLangProps\(l\)\s*\}/,
+        `${file}: an <option> renders an endonym with no \`{...endonymLangProps(l)}\` — ` +
+          `on an English page 中文 / தமிழ் / العربية would be text in another language with nothing ` +
+          `declaring it (WCAG 3.1.2), exactly the defect measured on the shipped pickers. Site: ` +
+          site.replace(/\s+/g, " ").slice(0, 120),
+      );
+    }
+
+    // A private copy of the endonyms is how /mcp stayed undeclared after the
+    // shared components were fixed: the literals moved, the fix did not.
+    for (const endonym of ["中文", "தமிழ்", "العربية"]) {
+      assert.ok(
+        !src.includes(endonym),
+        `${file} carries its own copy of the endonym "${endonym}" — it must render LANG_LABEL so the ` +
+          `declaration cannot be forgotten on this surface`,
+      );
+    }
+  }
+});
+
 test("the guards read code, not comments (self-check)", () => {
   // A decoy shaped like the real call site, with the declaration only inside a
   // comment — the shape several of this repo's older guards were fooled by.
@@ -219,4 +288,23 @@ test("the guards read code, not comments (self-check)", () => {
   // comment survives.
   const real = "// {...endonymLangProps(l)}\n<button {...endonymLangProps(l)}>{LANG_SHORT[l]}</button>";
   assert.match(stripComments(real), rule, "the stripper removed a real declaration");
+
+  // The SAME self-check for the <option> pins, which read their site by slicing
+  // back from `{LANG_LABEL[l]}` — a decoy whose declaration sits in a comment
+  // inside the option must not satisfy them either.
+  const optionDecoy = [
+    "<option key={l} value={l}>",
+    "  // {...endonymLangProps(l)}",
+    "  {LANG_LABEL[l]}",
+    "</option>",
+  ].join("\n");
+  const optionRule = /\{\s*\.\.\.endonymLangProps\(l\)\s*\}/;
+  assert.match(optionDecoy, optionRule, "the option decoy is wrong: its raw text should satisfy the rule");
+  const decoySites = optionSitesRenderingEndonym(stripComments(optionDecoy), "decoy");
+  assert.equal(decoySites.length, 1, "the option site scan did not find the decoy's one site");
+  assert.doesNotMatch(
+    decoySites[0],
+    optionRule,
+    "a commented-out declaration must not satisfy the option pin",
+  );
 });

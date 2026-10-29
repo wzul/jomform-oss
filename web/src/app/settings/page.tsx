@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Shell } from "../../components/Shell";
 import { useRouter } from "next/navigation";
 import { useI18n, LANGS_SHOWN, LANG_LABEL } from "../../components/i18n";
+import { endonymLangProps } from "../../lib/endonymLang";
 import { useSession } from "../../components/session";
 import { formatDateTime } from "../../lib/formatDate";
 import { activeWorkspaceScope, workspaceQuery } from "../../lib/workspace";
@@ -2403,7 +2404,11 @@ export default function Settings() {
                   className="jf-input mt-1 max-w-xl"
                 >
                   {LANGS_SHOWN.map((l) => (
-                    <option key={l} value={l}>{LANG_LABEL[l]}</option>
+                    // The endonym is written in its own language; 中文 inside an
+                    // English (or Arabic) document is a language of parts, and an
+                    // <option> holds text only — so the declaration goes on the
+                    // option itself (WCAG 3.1.2). Same rule as LangSelect.
+                    <option key={l} value={l} {...endonymLangProps(l)}>{LANG_LABEL[l]}</option>
                   ))}
                 </select>
                 <p className="mt-1 max-w-xl text-xs text-slate-500">{t("set.sfDefaultLangHelp")}</p>
