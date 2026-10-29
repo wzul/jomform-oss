@@ -6,11 +6,21 @@
 # below is an ANCHOR THAT DOES NOT EXIST, made to look declared by text a reader
 # never sees. A test inside the guard cannot show that, because it can only
 # exercise the guard's OWN rules, not the absence of them — the "before" column
-# has to come from the guard as it stands on the branch's base.
+# has to be a reader that still holds the hole.
 #
-# Each case: mutate -> assert the mutation is really on disk -> run the BASE guard
+# THE "BEFORE" COLUMN IS RE-BASED ONTO THIS TREE (card t_b5690577). It used to be a
+# REVISION (`origin/main`, or one pointed at by BITEPROOF_BASE), and that stopped working
+# once the fix merged — main IS the fixed guard — and once the guard around this one reader
+# drifted from today's /docs pages, which made every pre-fix revision red on an UNMUTATED
+# tree. It is now this tree's guard with ONLY the helper's source line put back to the
+# spelling the base revision declares, so the two columns differ by exactly the rule this
+# case set drives (see the derivation below the base resolution, which is count-checked
+# and cannot silently collapse into one reader).
+#
+# Each case: mutate -> assert the mutation is really on disk -> run the BEFORE guard
 # (expect GREEN, i.e. the hole) -> run the guard in this working tree (expect RED,
-# naming the offender) -> restore byte-identically (re-checked with sha256).
+# naming the offender in every failing test) -> restore byte-identically (re-checked
+# with sha256).
 #
 # THE MUTATION IS THE CARD'S OWN MEASURED ONE, kept verbatim as case 1:
 #   layout.tsx gains  { href: "/docs/security#qa-fake-anchor", label: "QA probe guide" }
@@ -172,7 +182,8 @@ INDEX=src/app/docs/page.tsx
 # its hash is held in `sha_<label>`.
 BAK=$(mktemp -d)
 OLD_GUARD=$(mktemp)
-trap 'rm -f "$OLD_GUARD"; rm -rf "$BAK"' EXIT
+BASE_GUARD=$(mktemp)
+trap 'rm -f "$OLD_GUARD" "$BASE_GUARD" "$BASE_GUARD.probe"; rm -rf "$BAK"' EXIT
 
 # The sabotaged files, as label:path pairs. `layout` and `security` are mutated by
 # cases 1-3 and 5; `index` by cases 4 and 6a.
@@ -182,9 +193,9 @@ FILES=(layout src/app/docs/layout.tsx
 
 fail=0
 
-# The "before" guard: the one on the branch's base. Fail closed, with the reason,
-# when the premise does not hold — a verdict produced without a real "before" is
-# worse than no verdict, because it reads as proof.
+# The "before" guard: the reader this rule replaced, re-based onto this tree. Fail closed,
+# with the reason, when the premise does not hold — a verdict produced without a real
+# "before" is worse than no verdict, because it reads as proof.
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "not in a git worktree" >&2; exit 2; }
 GUARD_IN_REPO="${PWD#"$TOP"/}/$GUARD"
 BASE_REF="${BITEPROOF_BASE:-origin/main}"
@@ -197,139 +208,117 @@ git cat-file -e "${BASE_REV}:${GUARD_IN_REPO}" 2>/dev/null || {
   echo "carry the guard yet, so there is no \"before\" to compare against." >&2
   exit 2
 }
-git show "${BASE_REV}:${GUARD_IN_REPO}" > "$OLD_GUARD"
+git show "${BASE_REV}:${GUARD_IN_REPO}" > "$BASE_GUARD"
 
-# CAPABILITY REFUSAL (card t_50e46013). Byte-equality between the base guard and this
-# tree's is NOT the property this harness needs: it needs the base's reader to be
-# BLIND to the mutation. Once the branch's own fix lands on the base, the two readers
-# are the same one, every BASE leg reads RED, and the cases report
+# THE "BEFORE" COLUMN IS THE PRE-FIX READER, RE-BASED ONTO THIS TREE (card t_b5690577).
 #
-#   *** <case>: BASE guard wanted GREEN, got RED — the case does not reproduce the hole
+# Every case below drives ONE rule: an anchor declared only inside text a reader never
+# sees (a `//` line, a `{/* … */}` container, a module-scope block comment) must not
+# satisfy declaresId(). So the "before" column needs exactly one property — the helper's
+# source line as it stood BEFORE the strip:
 #
-# which blames the CASE for a premise that the BASE cannot satisfy. That is the wrong
-# finding, and it is exactly the shape the sibling api harness refuses by name
-# (`capability_refusal` in api/scripts/biteproof_model_default_guard.py: "REFUSING
-# (exit 2, NO VERDICT)"). Measured on origin/main: the base tree's reader is
-# byte-identical to this tree's (sha256 06d32d0d2f1dcf05 on both), so the harness
-# printed 2 `***` lines and exit 1 against a sound branch.
+#     const src = read(file);
 #
-# The reader is judged by its DECLARATION, not by its bytes — the same rule this
-# harness's sibling (`biteproof_docs_index_render_sites.sh`) already applies, with the
-# same two spellings. A base declaring the POST-fix reader cannot demonstrate the
-# blind spot, so the run stops here with the reason and the fix rather than producing a
-# verdict about nothing.
-# strip_ts_comments — drop `//` tails and `/* ... */` blocks from TypeScript source
-# before a DECLARATION is matched in it (card t_80a7fb64).
+# and nothing else about it has to be historical. Two MEASURED facts forced that shape:
 #
-# THE HOLE THE ANCHORING WAS MEANT TO CLOSE. The pattern is line-anchored because "a
-# match anywhere in the file would be satisfied by the same text quoted in a comment or
-# a string while the real reader is something else". That argument holds for a `//` line
-# comment, whose body carries a `// ` prefix between the line start and `const`. It does
-# NOT hold for a BLOCK comment: a `/* ... */` body line sits at column 0 with no marker,
-# so it is byte-identical in shape to a real declaration. `reader_class` ran on the RAW
-# body, so a post-fix guard carrying the stale reader inside a block comment was
-# classified PRE — the base is then treated as the "before" column although it already
-# declares the fix, and the run reports a silent fail=1 (the D3 residual of card
-# t_01df90af).
+#   * once the fix merged, `origin/main` IS the fixed guard, so a base carrying the hole
+#     can only come from this guard's HISTORY;
+#   * a pre-fix revision is a FOSSIL. The rest of the guard moved on (its ORIGINAL_TITLES,
+#     its parity and line-length rules), so the old file reds TODAY's pages on an
+#     UNMUTATED tree. Measured here 2026-10-29 at origin/main 662d5b69: the revision this
+#     harness used to suggest (7d0489b3) ran `ℹ pass 6 / ℹ fail 3` on the unmutated tree
+#     ("every feature entry is one short line", "no feature was lost in the
+#     reorganisation"), the premise check refused, and the harness had NO verdict at all.
 #
-# Over-stripping FAILS CLOSED: a `//` inside a string literal (a URL) removes the rest of
-# that line, which can only make a declaration UNREADABLE, and every caller already
-# refuses on UNKNOWN rather than assuming pre-fix. Under-stripping is the unsafe
-# direction, which is what this removes.
-strip_ts_comments() {
-  awk '
-    BEGIN { inblock = 0 }
-    {
-      line = $0; out = ""; i = 1; n = length(line)
-      while (i <= n) {
-        two = substr(line, i, 2)
-        if (inblock) {
-          if (two == "*/") { inblock = 0; i += 2 } else { i++ }
-        } else if (two == "/*") {
-          inblock = 1; i += 2
-        } else if (two == "//") {
-          break
-        } else {
-          out = out substr(line, i, 1); i++
-        }
-      }
-      print out
-    }'
+# So the pre-fix SPELLING is read out of the base revision's guard and substituted into
+# THIS tree's guard, in the `.oldcheck.ts` copy only. The substitution is count-checked in
+# both directions and the copy must differ from this tree's guard in exactly one line, so
+# the two columns cannot silently collapse into the same reader. What the base column then
+# proves is "the pre-fix reader accepts this phantom"; it does NOT claim that the
+# historical guard as a whole still runs today's pages, and it does not print as if it did.
+PRE_ANCHOR_RE='^[[:space:]]*const[[:space:]]+src[[:space:]]*=[[:space:]]*read\(file\);[[:space:]]*$'
+POST_ANCHOR_RE='^[[:space:]]*const[[:space:]]+src[[:space:]]*=[[:space:]]*stripUnrendered\(read\(file\)\);[[:space:]]*$'
+
+# anchor_reader_line <file> <re> -> the ONE line matching <re>; fails on zero or 2+.
+anchor_reader_line() {
+  local n
+  [ -f "$1" ] || return 1
+  n=$(grep -cE "$2" "$1" 2>/dev/null) || n=0
+  [ "$n" = 1 ] || return 1
+  grep -E "$2" "$1" | head -1
 }
-PRE_READER_RE='^[[:space:]]*(export[[:space:]]+)?(const|let|var)[[:space:]]+docsSrc[[:space:]]*=[[:space:]]*read\(DOCS_PAGE\)'
-POST_READER_RE='^[[:space:]]*(export[[:space:]]+)?(const|let|var)[[:space:]]+docsSrc[[:space:]]*=[[:space:]]*stripUnrendered\(read\(DOCS_PAGE\)\)'
-# RAW_DECLARES_ID_RE: the anchor helper still reading the UNSTRIPPED page, i.e. the base
-# is blind to the comment-carried anchor cases too (t_7b24b035 fixed those separately).
-RAW_DECLARES_ID_RE='const[[:space:]]+src[[:space:]]*=[[:space:]]*read\(file\)'
-if grep -qE "$POST_READER_RE" "$OLD_GUARD"; then
-  echo >&2
-  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): the base guard (${BASE_REF} ${BASE_REV:0:12}) declares the" >&2
-  echo "POST-fix reader — \`docsSrc = stripUnrendered(read(DOCS_PAGE))\` — so it is the SAME reader this" >&2
-  echo "tree uses and it cannot miss the comment-carried hole every case drives. Every BASE leg would" >&2
-  echo "read RED and each case would report 'does not reproduce the hole', which is a statement about the" >&2
-  echo "BASE and not about this branch." >&2
-  echo >&2
-  echo "Point BITEPROOF_BASE at a revision whose guard still reads the RAW page source:" >&2
-  # Derive one rather than guess: the newest commit in the guard's history whose
-  # `docsSrc` declaration is still the raw reader. Two traps, BOTH measured, are why
-  # this loop looks the way it does:
-  #
-  #   * `git show ... | grep -q` silently reports NO MATCH under `set -o pipefail` —
-  #     grep exits at the first hit, the writer takes SIGPIPE (141), and the pipeline
-  #     reports failure. Use a herestring, as the sibling harnesses do.
-  #   * `git log -- <pathspec>` resolves the path against the CWD, and this script has
-  #     already `cd`-ed to `web/`, so the walk found ZERO commits. `git -C "$TOP"`.
-  #
-  # AND ITS LIMIT, MEASURED RATHER THAN ASSUMED. A raw `docsSrc` is necessary but NOT
-  # sufficient: the anchor legs were fixed SEPARATELY (t_7b24b035), so a base between
-  # the two fixes is blind to the `docsSrc` cases and still catches the anchor ones.
-  # Verified on two candidates by reading the guard at each revision, not by trusting
-  # the commit message:
-  #
-  #   eea308fe (raw docsSrc, `declaresId` already reads the COMMENT-STRIPPED source)
-  #     -> blind to the 2 `docsSrc` cases, still catches the 3 anchor cases.
-  #     2089b6fb (raw docsSrc, `declaresId` reads `read(file)`)
-  #     -> blind to both, so it reproduces every case.
-  #
-  # So the search looks for BOTH properties, and the run is only as reproducible as the
-  # base it names — which the message says out loud instead of implying otherwise.
-  suggested=""
+
+# newest_pre_fix_rev — the newest revision of this guard whose declaresId() still reads
+# the raw page. Derived from the file's own history, so it cannot be a hand-typed
+# revision that has since caught up (the rule biteproof_docs_index_word_budget.sh applies
+# to the same problem).
+newest_pre_fix_rev() {
+  local rev
   while read -r rev; do
     [ -n "$rev" ] || continue
-    _body="$(git show "${rev}:${GUARD_IN_REPO}" 2>/dev/null)"
-    if grep -qE "$PRE_READER_RE" <<<"$(strip_ts_comments <<<"$_body")" && grep -qE "$RAW_DECLARES_ID_RE" <<<"$(strip_ts_comments <<<"$_body")"; then
-      suggested="$rev"; break
+    git show "${rev}:${GUARD_IN_REPO}" 2>/dev/null > "$BASE_GUARD.probe" || continue
+    if anchor_reader_line "$BASE_GUARD.probe" "$PRE_ANCHOR_RE" >/dev/null; then
+      rm -f "$BASE_GUARD.probe"
+      printf '%s' "$rev"
+      return 0
     fi
   done < <(git -C "$TOP" log --format='%H' -- "$GUARD_IN_REPO" 2>/dev/null)
-  # A raw docsSrc with the anchor helper already stripped is the better answer than
-  # nothing when no fully-blind base exists, so fall back to it and say which it is.
-  partial=0
-  if [ -z "$suggested" ]; then
-    while read -r rev; do
-      [ -n "$rev" ] || continue
-      _body="$(git show "${rev}:${GUARD_IN_REPO}" 2>/dev/null)"
-      if grep -qE "$PRE_READER_RE" <<<"$(strip_ts_comments <<<"$_body")"; then suggested="$rev"; partial=1; break; fi
-    done < <(git -C "$TOP" log --format='%H' -- "$GUARD_IN_REPO" 2>/dev/null)
-  fi
-  if [ -n "$suggested" ]; then
-    echo "    BITEPROOF_BASE=${suggested} bash ${GUARD_IN_REPO}" >&2
-    if [ "$partial" = 1 ]; then
-      echo "    (${suggested:0:12}: raw \`docsSrc\`, so the \`docsSrc\`-carried cases reproduce — but this" >&2
-      echo "     revision's anchor helper ALREADY reads the stripped source (t_7b24b035), so the ANCHOR" >&2
-      echo "     cases still report 'does not reproduce the hole'.)" >&2
-    else
-      echo "    (${suggested:0:12}: raw \`docsSrc\` AND a raw anchor helper. Measured: every case then" >&2
-      echo "     reproduces its hole, and the four ANCHOR cases fail instead on the attribution rule" >&2
-      echo "     ('expected exactly 1 failing test, saw 2') because this branch's fix makes a SECOND test" >&2
-      echo "     red alongside the one each case drives — a real, attributable red rather than a premise" >&2
-      echo "     failure, but the harness still cannot print a clean 8/8 against this tree.)" >&2
-    fi
+  rm -f "$BASE_GUARD.probe"
+  return 1
+}
+
+if PRE_LINE=$(anchor_reader_line "$BASE_GUARD" "$PRE_ANCHOR_RE"); then
+  PRE_FROM="${BASE_REF} ${BASE_REV:0:12}"
+else
+  if suggested=$(newest_pre_fix_rev); then
+    PRE_REV=$suggested
+    git show "${PRE_REV}:${GUARD_IN_REPO}" > "$BASE_GUARD"
+    PRE_LINE=$(anchor_reader_line "$BASE_GUARD" "$PRE_ANCHOR_RE") || {
+      echo "BITEPROOF REFUSED: ${PRE_REV} was selected from history as carrying the pre-fix" >&2
+      echo "anchor reader, but no single line of it matches \`const src = read(file);\`." >&2
+      exit 2
+    }
+    PRE_FROM="history ${PRE_REV:0:12} (${BASE_REF} carries the fix)"
   else
-    echo "    (no revision in this branch's history of ${GUARD_IN_REPO} declares the raw reader either," >&2
-    echo "     so no pre-fix revision can be named from here — set BITEPROOF_BASE by hand)" >&2
+    echo >&2
+    echo "BITEPROOF REFUSED (exit 2, NO VERDICT): no revision in the history of" >&2
+    echo "${GUARD_IN_REPO} declares the pre-fix anchor reader" >&2
+    echo "    const src = read(file);" >&2
+    echo "so there is no \"before\" spelling to re-base onto this tree, and every case below" >&2
+    echo "would be the current reader measured against itself. Point BITEPROOF_BASE at a" >&2
+    echo "revision that still carries the raw helper if you know one." >&2
+    rm -f "$BASE_GUARD"
+    exit 2
   fi
+fi
+
+POST_LINE=$(anchor_reader_line "$GUARD" "$POST_ANCHOR_RE") || {
+  echo >&2
+  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): this tree's guard (${GUARD}) does not declare" >&2
+  echo "the comment-stripping anchor reader" >&2
+  echo "    const src = stripUnrendered(read(file));" >&2
+  echo "exactly once, so there is no fix here to demonstrate — the case set would be the" >&2
+  echo "pre-fix reader measured against itself." >&2
+  rm -f "$BASE_GUARD"
+  exit 2
+}
+
+awk -v old="$POST_LINE" -v new="$PRE_LINE" \
+  '$0 == old && !seen { print new; seen = 1; next } { print }' "$GUARD" > "$OLD_GUARD"
+CHANGED_LINES=$(diff "$GUARD" "$OLD_GUARD" | grep -cE '^[<>]') || true
+if [ "${CHANGED_LINES:-0}" != 2 ] ||
+   ! anchor_reader_line "$OLD_GUARD" "$PRE_ANCHOR_RE" >/dev/null ||
+   anchor_reader_line "$OLD_GUARD" "$POST_ANCHOR_RE" >/dev/null; then
+  echo >&2
+  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): the re-based \"before\" guard is not this" >&2
+  echo "tree's guard with EXACTLY the one reader line changed (measured: ${CHANGED_LINES:-?}" >&2
+  echo "changed lines), so the two columns would not differ by the rule this case set drives." >&2
+  rm -f "$BASE_GUARD"
   exit 2
 fi
+echo "before: ${PRE_FROM} — this tree's guard with the anchor reader reverted to"
+echo "        \`const src = read(file);\` (one line, \`const src = stripUnrendered(read(file));\` replaced)"
+rm -f "$BASE_GUARD"
 
 for ((i = 0; i < ${#FILES[@]}; i += 2)); do
   label=${FILES[i]}; path=${FILES[i + 1]}
@@ -338,8 +327,9 @@ for ((i = 0; i < ${#FILES[@]}; i += 2)); do
 done
 sha_of() { sha256sum "$1" | cut -d' ' -f1; }
 
-echo "old guard (${BASE_REF} ${BASE_REV:0:12}): $(wc -l < "$OLD_GUARD") lines"
-echo "new guard (this tree):             $(wc -l < "$GUARD") lines"
+echo "before column: this tree's guard with the anchor reader as it stood at ${PRE_FROM}"
+echo "               ($(wc -l < "$OLD_GUARD") lines, one line changed)"
+echo "this tree:     ${GUARD} ($(wc -l < "$GUARD") lines)"
 
 # run_guard <guardfile> -> prints "GREEN" or "RED"; the full output lands in the
 # file named by OUT_FILE.
@@ -363,7 +353,7 @@ echo "new guard (this tree):             $(wc -l < "$GUARD") lines"
 #     the capture first and reads GREEN only off `ℹ pass` + `ℹ fail 0` + a `✔ ` line,
 #     REFUSED otherwise, and the callers below turn REFUSED into exit 2.
 OUT_FILE=$(mktemp)
-trap 'rm -f "$OLD_GUARD" "$OUT_FILE" "$OUT_FILE.rc"; rm -rf "$BAK"' EXIT
+trap 'rm -f "$OLD_GUARD" "$BASE_GUARD" "$BASE_GUARD.probe" "$OUT_FILE" "$OUT_FILE.rc"; rm -rf "$BAK"' EXIT
 run_guard() {
   nt_capture "$OUT_FILE" "$1"
 }
@@ -438,10 +428,9 @@ premise=$(run_base_guard)
 nt_refuse_if "BASELINE, the base guard on the UNMUTATED tree" "$OUT_FILE"
 if [ "$premise" != "GREEN" ]; then
   echo >&2
-  echo "BITEPROOF REFUSED: the base guard (${BASE_REF} ${BASE_REV:0:12}) is ${premise} on the" >&2
-  echo "UNMUTATED tree, so there is no \"before\" column and this proof would be about nothing." >&2
-  echo "That is a red base, not a finding about this branch. Land the base's fix, or point" >&2
-  echo "BITEPROOF_BASE at a base whose guard is green:" >&2
+  echo "BITEPROOF REFUSED: the re-based \"before\" guard is ${premise} on the UNMUTATED tree, so" >&2
+  echo "there is no \"before\" column and this proof would be about nothing. That is a broken" >&2
+  echo "premise, not a finding about this branch:" >&2
   grep -E '^ℹ (pass|fail)' "$OUT_FILE" | head -2 >&2
   grep -E '^✖' "$OUT_FILE" | head -2 >&2
   exit 2
@@ -449,9 +438,35 @@ fi
 
 # check <label> <base-want> <new-want> [must-name]
 #
-# `must-name` is the whole point of the new column: a RED that does not name the
-# phantom would be attributable to a sibling, and the failure COUNT is pinned to 1
-# so the red cannot be a second test that this mutation also broke.
+# `must-name` is the whole point of the new column: a RED that does not name the phantom
+# would be attributable to a sibling. The attribution rule is PER FAILING TEST, not a
+# pinned count (card t_b5690577): node's own "✖ failing tests:" section is split into test
+# blocks and EVERY block must carry the phantom's text. That is stricter than a count in
+# the direction that matters — an unrelated test that starts failing (a parity or
+# line-length rule) names something else and reds the case — while allowing the SECOND
+# test the same phantom legitimately trips. It had to allow that: `docsIndex.test.ts:1134`
+# ("the categories in the docs sidebar match the categories on the page") now reports a
+# sidebar row that sends the reader nowhere, so a phantom sidebar anchor reds BOTH it and
+# the older "a broken sidebar row is reported under the group it is really declared in"
+# pin (`:1254`, whose per-row sweep counts every broken row and so sees the phantom too).
+# Measured on this host 2026-10-29: the sidebar cases read `ℹ pass 9 / ℹ fail 2` with both
+# messages naming the phantom, while the entry-link case reads `pass 10 / fail 1`. A pinned
+# `1` therefore reported "not attributable" for four cases whose reds were fully
+# attributable — the harness could not print a clean verdict on this tree at all.
+# FAILING_BLOCKS_OF <capture> -> one line per failing test, its block flattened.
+failing_blocks() {
+  awk '
+    /^✖ failing tests:/ { section = 1; next }
+    !section { next }
+    /^test at / {
+      if (blk ~ /[^ ]/) print blk
+      blk = ""
+      next
+    }
+    { blk = blk " " $0 }
+    END { if (blk ~ /[^ ]/) print blk }
+  ' "$1"
+}
 check() {
   local label="$1" base_want="$2" new_want="$3" needle="${4:-}" got out
   got=$(run_base_guard); out=$(cat "$OUT_FILE")
@@ -473,17 +488,29 @@ check() {
   # the attribution check below would always fail.
   local nfail; nfail=$(sed -nE 's/^ℹ fail ([0-9]+)$/\1/p' <<<"$out" | head -1)
   : "${nfail:=0}"
+  local unattributed=""
+  if [ "$new_want" = "RED" ] && [ -n "$needle" ]; then
+    unattributed=$(failing_blocks "$OUT_FILE" | grep -vF "$needle")
+  fi
   if [ "$got" != "$new_want" ]; then
     echo "  *** ${label}: NEW guard wanted ${new_want}, got ${got} ***"
     grep -E '^ℹ (pass|fail)' <<<"$out" | head -2; fail=1
   elif [ -n "$needle" ] && ! grep -qF "$needle" <<<"$out"; then
     echo "  *** ${label}: NEW guard ${got} but the failure does not name ${needle} ***"
     grep -E '^✖' <<<"$out" | head -3; fail=1
-  elif [ "$new_want" = "RED" ] && [ "$nfail" != "1" ]; then
-    echo "  *** ${label}: expected exactly 1 failing test, saw ${nfail} — the red is not attributable to this mutation ***"
-    grep -E '^✖' <<<"$out" | head -4; fail=1
+  elif [ "$new_want" = "RED" ] && [ -z "$needle" ]; then
+    echo "  *** ${label}: a RED leg must name the phantom it drives; this one declares no needle ***"
+    fail=1
+  elif [ "$new_want" = "RED" ] && [ -n "$unattributed" ]; then
+    echo "  *** ${label}: NEW guard RED with ${nfail} failing test(s), and not every one names the phantom — the red is not attributable to this mutation ***"
+    printf '%s\n' "$unattributed" | head -3 | sed 's/^ */       /'; fail=1
+  elif [ "$new_want" = "RED" ] && [ "$nfail" = 0 ]; then
+    echo "  *** ${label}: NEW guard RED with no failing test in the summary — the guard could not be read ***"
+    fail=1
   else
-    echo "  BITES ${label}: new guard ${got}, ${nfail} failing test(s)${needle:+, naming: ${needle}}"
+    local suffix=""
+    [ "$new_want" = "RED" ] && suffix=", every one naming the phantom"
+    echo "  BITES ${label}: new guard ${got}, ${nfail} failing test(s)${suffix}"
   fi
 }
 
@@ -590,7 +617,8 @@ fi
 
 echo
 if [ "$fail" = "0" ]; then
-  echo "BITEPROOF PASS — every phantom was GREEN under ${BASE_REF}'s guard and RED, naming the anchor, under this one."
+  echo "BITEPROOF PASS — every phantom was GREEN under the before column (the pre-fix anchor"
+  echo "reader, re-based onto this tree) and RED, naming the anchor, under this one."
 else
   echo "BITEPROOF FAIL (fail=$fail)"
 fi
