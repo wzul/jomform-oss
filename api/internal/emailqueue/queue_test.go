@@ -52,17 +52,37 @@ func TestEnqueueDequeueRoundTrip(t *testing.T) {
 	}
 }
 
-// TestDelayedPromotion verifies a delayed job is promoted back to the ready
-// list once its due time passes.
+// TestDelayedPromotion verifies a delayed job stays out of the ready list until
+// its due time passes, and is promoted once it has.
+//
+// The clock is MOVED here, never waited on. "A job that is not due is not
+// promoted" is a property of the queue; a wall-clock margin between
+// EnqueueDelayed and PromoteDue only makes it a property of how fast the test
+// process was scheduled. The old body used a 1100ms delay and slept 1200ms, and
+// that margin is the whole of the separation between the two calls: under the
+// full -race suite (httpapi/chat/dbstore running concurrently on a shared host)
+// a stall past ~1.1s makes the job legitimately due, PromoteDue does the correct
+// thing, and the test failed with "queue len = 1, want 0 before due" — a red
+// verdict for a clean tree. (Unix() second granularity made the real margin
+// anywhere from 0 to 1100ms, depending on where the enqueue landed.)
+//
+// So: enqueue an hour out, assert the job is sitting in the delayed set and NOT
+// in the ready list, then write the score the clock would have written an hour
+// later and assert it is promoted — with no sleep in the passing path.
 func TestDelayedPromotion(t *testing.T) {
-	q, _ := testQueue(t)
+	q, rdb := testQueue(t)
 	ctx := context.Background()
 
 	job := Job{Type: "receipt", To: "x@y.z", Subject: "R", Body: "B"}
-	// Use a delay that spans a second boundary (Unix() has second granularity)
-	// so the job is genuinely not yet due immediately after enqueue.
-	if err := q.EnqueueDelayed(ctx, job, 1100*time.Millisecond); err != nil {
+	// An hour out: no plausible stall in this suite can reach it, so "not yet
+	// due" holds for the whole test instead of for the next second.
+	if err := q.EnqueueDelayed(ctx, job, time.Hour); err != nil {
 		t.Fatalf("enqueue delayed: %v", err)
+	}
+	// The job really is waiting in the delayed set — without this, the Len == 0
+	// assertion below would also pass for an enqueue that wrote nothing at all.
+	if n, err := rdb.ZCard(ctx, q.DelayedKey()).Result(); err != nil || n != 1 {
+		t.Fatalf("delayed set len = %d (err %v), want 1 after enqueue", n, err)
 	}
 	// Not yet due → nothing to promote.
 	if err := q.PromoteDue(ctx); err != nil {
@@ -71,12 +91,31 @@ func TestDelayedPromotion(t *testing.T) {
 	if n, _ := q.Len(ctx); n != 0 {
 		t.Fatalf("queue len = %d, want 0 before due", n)
 	}
-	time.Sleep(1200 * time.Millisecond)
+	// Move the due time into the past: the exact state an hour of wall clock
+	// would produce in the delayed set, written directly instead of waited for.
+	members, err := rdb.ZRange(ctx, q.DelayedKey(), 0, -1).Result()
+	if err != nil || len(members) != 1 {
+		t.Fatalf("delayed members = %d (err %v), want 1 to move", len(members), err)
+	}
+	if err := rdb.ZAdd(ctx, q.DelayedKey(), goredis.Z{
+		Score:  float64(time.Now().Add(-time.Minute).Unix()),
+		Member: members[0],
+	}).Err(); err != nil {
+		t.Fatalf("move due time: %v", err)
+	}
 	if err := q.PromoteDue(ctx); err != nil {
 		t.Fatalf("promote due: %v", err)
 	}
 	if n, _ := q.Len(ctx); n != 1 {
 		t.Fatalf("queue len = %d, want 1 after due", n)
+	}
+	// The job that was promoted is the one that was waiting, not just "something",
+	// and it left the delayed set.
+	if got, err := rdb.LIndex(ctx, q.ReadyKey(), 0).Result(); err != nil || got != members[0] {
+		t.Fatalf("ready job = %q (err %v), want the delayed member %q", got, err, members[0])
+	}
+	if n, _ := rdb.ZCard(ctx, q.DelayedKey()).Result(); n != 0 {
+		t.Fatalf("delayed set len = %d, want 0 after promotion", n)
 	}
 }
 
