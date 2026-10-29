@@ -280,9 +280,14 @@ func (s *ShippingStore) setsWhere(ctx context.Context, accountIDs []string, extr
 // new sets are inserted, and sets the payload omits are DELETED (refused with
 // ShippingSetInUseError when a form still points at them).
 //
-// The caller validates the shape (ValidateShippingSets) first: an empty set, an
-// empty zone or a zone with no rate is refused there, so a save can never leave a
-// form's block resolving to nothing.
+// The caller validates the shape (ValidateShippingSets) first: a set with no
+// zone, an unnamed zone or a zone with no rate is refused there, so a save can
+// never leave a form's block resolving to nothing.
+//
+// AN EMPTY LIST IS A VALID SAVE (card t_417fbacb). It deletes every set the
+// payload omits, which is how a merchant removes their LAST set — and the loop
+// below still refuses any of those deletes that a form's block points at, so the
+// only sets an empty save can drop are ones nothing resolves against.
 func (s *ShippingStore) Replace(ctx context.Context, accountID string, sets []shipping.ZoneSet) error {
 	if strings.TrimSpace(accountID) == "" {
 		return errors.New("shipping: account id required")
@@ -450,15 +455,40 @@ func shippingSetFormsByAccounts(ctx context.Context, q querier, accountIDs []str
 	return out, rows.Err()
 }
 
+// ShippingInvalidLeadIn prefixes every ValidateShippingSets refusal on the wire.
+// The REST edge keys the machine error CODE on this constant
+// (httpapi/errcode.go's errCodeByPrefix → shipping.invalid), so the dashboard can
+// render ITS OWN sentence in the merchant's language instead of the page's
+// generic "Failed to save shipping rates" (card t_417fbacb). It lives here,
+// beside the validation that writes it, so a re-wording cannot silently detach
+// the code from the sentence — the same pairing ShippingSetInUseLeadIn uses.
+const ShippingInvalidLeadIn = "kadar penghantaran tidak sah — "
+
 // ValidateShippingSets refuses a configuration that cannot resolve: an unnamed
 // set, a set with no zone, an unnamed zone, a zone with no rate, a negative
 // price or an inverted weight band. It is deliberately strict — a save is a
 // complete intent, and every shape it rejects would otherwise become a 400 for a
 // BUYER at checkout, or (worse) a fee nobody intended.
+//
+// AN EMPTY LIST IS NOT ONE OF THOSE SHAPES (card t_417fbacb). Zero sets means
+// the account charges no managed rates, which is the state the Shipping tab's
+// own empty view already describes ("No zone set yet…"), and it is the only way
+// a merchant can remove their LAST set: Replace deletes every set the payload
+// omits. That delete is still safe because Replace REFUSES one that a form's
+// shipping block points at (ShippingSetInUseError), so an empty save can only
+// ever drop sets nothing resolves against.
+//
+// Every refusal it returns carries ShippingInvalidLeadIn.
 func ValidateShippingSets(sets []shipping.ZoneSet) error {
-	if len(sets) == 0 {
-		return errors.New("sekurang-kurangnya satu set zon diperlukan")
+	if err := validateShippingSets(sets); err != nil {
+		return fmt.Errorf("%s%w", ShippingInvalidLeadIn, err)
 	}
+	return nil
+}
+
+// validateShippingSets is the rule set itself, without the wire lead-in, so the
+// messages stay the shape the merchant has to fix.
+func validateShippingSets(sets []shipping.ZoneSet) error {
 	names := map[string]bool{}
 	for _, set := range sets {
 		name := strings.TrimSpace(set.Name)

@@ -266,6 +266,89 @@ func TestShippingStoreDeleteIsRefusedWhileAFormUsesTheSet(t *testing.T) {
 	}
 }
 
+// An EMPTY payload removes the account's last zone set (card t_417fbacb).
+//
+// THE DEFECT. ValidateShippingSets refused a zero-length list, so the one request
+// that reaches "no managed rates" — a merchant deleting the only set in Form
+// Settings → Shipping and pressing Save — answered 400, and the dashboard showed
+// only its generic "Failed to save shipping rates" while the set came back on
+// reload. The empty view the page renders for zero sets ("No zone set yet…") is
+// the state this save has to be able to reach.
+//
+// The safety half is asserted in the same place: the empty save still cannot drop
+// a set a form's shipping block points at, so "no sets" can only ever be a state
+// nothing resolves against.
+func TestShippingStoreReplaceRemovesTheLastSet(t *testing.T) {
+	ctx := context.Background()
+	pool := bundlePool(t)
+	accountID := shippingFixture(t)
+	store := NewShippingStore(pool)
+
+	if err := store.Replace(ctx, accountID, sampleSets()); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if sets, err := store.Sets(ctx, []string{accountID}); err != nil || len(sets) != 1 {
+		t.Fatalf("seeded %d set(s) err=%v, want 1", len(sets), err)
+	}
+	sets, _ := store.Sets(ctx, []string{accountID})
+	setID := sets[0].ID
+
+	// The dashboard's "Delete the only set, then Save" payload.
+	if err := store.Replace(ctx, accountID, nil); err != nil {
+		t.Fatalf("removing the LAST set was refused: %v — the reported defect: the "+
+			"merchant has no route to a configuration with no managed rates", err)
+	}
+	if sets, err := store.Sets(ctx, []string{accountID}); err != nil || len(sets) != 0 {
+		t.Fatalf("after the empty save the account has %d set(s) (err=%v), want 0", len(sets), err)
+	}
+	// Nothing is left behind: the set's zones and rates went with it.
+	var setsLeft, zonesLeft, ratesLeft int
+	if err := pool.QueryRow(ctx,
+		`SELECT (SELECT count(*) FROM shipping_zone_sets WHERE account_id=$1),
+		        (SELECT count(*) FROM shipping_zones WHERE account_id=$1),
+		        (SELECT count(*) FROM shipping_rates WHERE account_id=$1)`,
+		accountID).Scan(&setsLeft, &zonesLeft, &ratesLeft); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if setsLeft != 0 || zonesLeft != 0 || ratesLeft != 0 {
+		t.Errorf("after the empty save: sets=%d zones=%d rates=%d, want 0/0/0",
+			setsLeft, zonesLeft, ratesLeft)
+	}
+
+	// ...and the empty state is not a dead end: the merchant can configure rates
+	// again (a NEW set id, because the old one is gone).
+	if err := store.Replace(ctx, accountID, sampleSets()); err != nil {
+		t.Fatalf("re-saving after an empty configuration: %v", err)
+	}
+	sets, _ = store.Sets(ctx, []string{accountID})
+	if len(sets) != 1 || sets[0].ID == setID {
+		t.Fatalf("re-save = %+v, want one new set", sets)
+	}
+
+	// Safety half: an empty save must NOT be able to break a live form's block.
+	if err := NewFormStore(pool).Create(ctx, &Form{
+		AccountID: accountID, Slug: "it-shipstore-last-" + accountID[:8],
+		Title: "Delivery form", Status: FormStatusPublished,
+		Config: map[string]any{"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage",
+				"product_id": "ship1", "source": "zones", "zone_set_id": sets[0].ID},
+		}},
+	}); err != nil {
+		t.Fatalf("create form: %v", err)
+	}
+	inUse, ok := store.Replace(ctx, accountID, nil).(*ShippingSetInUseError)
+	if !ok {
+		t.Fatalf("an empty save over a set a form still uses was not refused with " +
+			"*ShippingSetInUseError — a form's shipping block would resolve to nothing")
+	}
+	if len(inUse.Forms) != 1 || !strings.Contains(inUse.Error(), "Delivery form") {
+		t.Errorf("refusal = %q, want it to name the form", inUse.Error())
+	}
+	if sets, err := store.Sets(ctx, []string{accountID}); err != nil || len(sets) != 1 {
+		t.Fatalf("a refused empty save changed the configuration: %+v (err=%v)", sets, err)
+	}
+}
+
 // An unknown set id is a REFUSAL, never a silent new set: a stale dashboard must
 // not mint a second configuration while live forms keep pointing at the old id.
 func TestShippingStoreReplaceRefusesAnUnknownSetID(t *testing.T) {
@@ -326,7 +409,6 @@ func TestValidateShippingSets(t *testing.T) {
 		sets []shipping.ZoneSet
 		want string
 	}{
-		{"no sets", nil, "sekurang-kurangnya satu set"},
 		{"unnamed set", []shipping.ZoneSet{{Zones: []shipping.Zone{zone("A")}}}, "set zon perlu ada nama"},
 		{"duplicate set name", []shipping.ZoneSet{
 			{Name: "Same", Zones: []shipping.Zone{zone("A")}},
@@ -363,6 +445,26 @@ func TestValidateShippingSets(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: refusal = %q, want it to name %q", c.name, err.Error(), c.want)
+		}
+		// Every shape refusal carries the wire lead-in the REST edge keys the
+		// `shipping.invalid` code on (errcode.go's errCodeByPrefix). Without it the
+		// 400 ships with the class code and the dashboard can only say "Failed to
+		// save shipping rates" (card t_417fbacb) — so the pairing is asserted here,
+		// beside the messages it names, rather than trusted to a comment.
+		if !strings.HasPrefix(err.Error(), ShippingInvalidLeadIn) {
+			t.Errorf("%s: refusal = %q, want it to start with %q — the dashboard's "+
+				"error code is keyed on that lead-in", c.name, err.Error(), ShippingInvalidLeadIn)
+		}
+	}
+
+	// AN EMPTY LIST IS NOT A REFUSAL (card t_417fbacb). Zero sets is the state the
+	// Shipping tab's own empty view describes, and the only way a merchant can
+	// remove their LAST set. The per-set rules above still bite: an empty SET is
+	// refused ("empty set" above), so this is not "accept anything".
+	for _, empty := range [][]shipping.ZoneSet{nil, {}} {
+		if err := ValidateShippingSets(empty); err != nil {
+			t.Errorf("an empty set list was refused (%q) — a merchant cannot remove their "+
+				"last zone set, which is the reported defect", err)
 		}
 	}
 }

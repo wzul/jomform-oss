@@ -26,7 +26,7 @@ export const metadata: Metadata = {
 const STEPS: { title: string; body: string }[] = [
   {
     title: "1. Create a zone set",
-    body: "Open Form Settings → Shipping. A zone set is a named group of delivery zones; a form's shipping block points at one set, so several forms can share the same rates instead of retyping them. Give it a name and tick Default if it is the set you want offered first.",
+    body: "Open Form Settings → Shipping. A zone set is a named group of delivery zones; a form's shipping block points at one set, so several forms can share the same rates instead of retyping them. Give it a name and tick Default if it is the set you want offered first. To remove a set you no longer want, press Delete on it and save: a set a form's shipping block still points at is refused with the name of that form, so re-point the block first. Removing your LAST set is allowed — the account simply charges no managed rates until you add one again, which is the empty state the tab shows.",
   },
   {
     title: "2. Add your zones",
@@ -74,7 +74,7 @@ const TOOLS: { name: string; purpose: string }[] = [
   {
     name: "set_shipping_rates",
     purpose:
-      "Replace the whole configuration in one call. A set sent with its id keeps it — so every form pointing at it keeps resolving — and a set the payload omits is deleted, refused while a form still uses it.",
+      "Replace the whole configuration in one call. A set sent with its id keeps it — so every form pointing at it keeps resolving — and a set the payload omits is deleted, refused while a form still uses it. An empty sets list removes every set the account has (the same state Form Settings → Shipping calls \"No zone set yet\"), which is refused only for a set a form still points at.",
   },
 ];
 

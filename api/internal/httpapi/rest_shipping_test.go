@@ -158,6 +158,20 @@ func TestShippingRESTRefusals(t *testing.T) {
 	if !strings.Contains(string(raw), "West") || !strings.Contains(string(raw), "kadar") {
 		t.Errorf("refusal should name the zone and the missing rate, got %s", raw)
 	}
+	// The refusal must carry the machine code the dashboard translates (card
+	// t_417fbacb). Without it a shape refusal ships with the 400 class code, which
+	// the dashboard deliberately does not translate, and the merchant reads only
+	// "Failed to save shipping rates" — no field, no reason.
+	var shapeErr struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &shapeErr); err != nil {
+		t.Fatalf("decode 400 body: %v (%s)", err, raw)
+	}
+	if shapeErr.Code != CodeShippingInvalid {
+		t.Errorf("shape refusal code = %q, want %q — the dashboard can only render its "+
+			"generic sentence without it", shapeErr.Code, CodeShippingInvalid)
+	}
 
 	// A negative price is refused rather than stored.
 	code, raw = tplReq(t, h, keyA, http.MethodPut, "/v1/rest/shipping",
@@ -233,6 +247,120 @@ func TestShippingRESTRefusals(t *testing.T) {
 	if conflict.Code != CodeShippingSetInUse {
 		t.Errorf("409 code = %q, want %q — the dashboard cannot translate the "+
 			"refusal without it", conflict.Code, CodeShippingSetInUse)
+	}
+}
+
+// A merchant must be able to remove their LAST zone set (card t_417fbacb).
+//
+// THE DEFECT, measured on prod v1.21.345: Form Settings → Shipping offers a
+// Delete on every set including the only one, and its empty view describes zero
+// sets as a legitimate state — but PUT /v1/rest/shipping {"sets":[]} answered
+//
+//	400 {"code":"request.badRequest","error":"sekurang-kurangnya satu set zon diperlukan"}
+//
+// so the save the page offered could never succeed: the merchant read only
+// "Failed to save shipping rates", nothing was saved, and the set was back after a
+// reload. This drives the exact payload.
+//
+// The safety half is asserted here too: an empty save must still be a 409 naming
+// the form when a form's shipping block points at the set, so a merchant cannot
+// break a live checkout by clearing the configuration.
+func TestShippingRESTRemovingTheLastSet(t *testing.T) {
+	if os.Getenv("JOMFORM_TEST_DATABASE_URL") == "" {
+		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping shipping REST last-set test")
+	}
+	ctx := context.Background()
+	pool := bundleTestPool(t)
+	accA, _ := bundleFixture(t, ctx, pool)
+	keyA := bundleAPIKey(t, ctx, pool, accA)
+	h := newBundleHandlers(pool)
+
+	oneSet := `{"sets":[{"name":"Malaysia","zones":[{"name":"West","states":["peninsular"],` +
+		`"rates":[{"label":"Standard","price_sen":800}]}]}]}`
+	code, raw := tplReq(t, h, keyA, http.MethodPut, "/v1/rest/shipping", oneSet)
+	if code != http.StatusOK {
+		t.Fatalf("seed PUT = %d, want 200 (body %s)", code, raw)
+	}
+	var seeded struct {
+		Sets []struct {
+			ID string `json:"id"`
+		} `json:"sets"`
+	}
+	if err := json.Unmarshal(raw, &seeded); err != nil || len(seeded.Sets) != 1 {
+		t.Fatalf("decode seed PUT: %v (%s)", err, raw)
+	}
+
+	// What the page sends after Delete on the only set + "Save shipping rates".
+	code, raw = tplReq(t, h, keyA, http.MethodPut, "/v1/rest/shipping", `{"sets":[]}`)
+	if code != http.StatusOK {
+		t.Fatalf("removing the LAST set = %d, want 200 (body %s) — the merchant's only "+
+			"route to no managed rates is refused", code, raw)
+	}
+	var emptied struct {
+		Sets []json.RawMessage `json:"sets"`
+	}
+	if err := json.Unmarshal(raw, &emptied); err != nil {
+		t.Fatalf("decode empty PUT: %v (%s)", err, raw)
+	}
+	if len(emptied.Sets) != 0 {
+		t.Fatalf("the empty save answered %d set(s), want 0: %s", len(emptied.Sets), raw)
+	}
+
+	// The read agrees, so a reload shows the merchant's deletion (it used to revert).
+	code, raw = tplReq(t, h, keyA, http.MethodGet, "/v1/rest/shipping", "")
+	if code != http.StatusOK {
+		t.Fatalf("GET after the empty save = %d, want 200 (%s)", code, raw)
+	}
+	var after struct {
+		Sets            []json.RawMessage `json:"sets"`
+		FormsUsingZones int               `json:"forms_using_zones"`
+	}
+	if err := json.Unmarshal(raw, &after); err != nil {
+		t.Fatalf("decode GET: %v (%s)", err, raw)
+	}
+	if len(after.Sets) != 0 || after.FormsUsingZones != 0 {
+		t.Fatalf("after the empty save GET = %s, want no sets and no forms using zones", raw)
+	}
+
+	// Safety half: re-seed, point a form at the set, and require the SAME empty
+	// payload to be refused — with the code the dashboard translates.
+	code, raw = tplReq(t, h, keyA, http.MethodPut, "/v1/rest/shipping", oneSet)
+	if code != http.StatusOK {
+		t.Fatalf("re-seed PUT = %d, want 200 (%s)", code, raw)
+	}
+	if err := json.Unmarshal(raw, &seeded); err != nil || len(seeded.Sets) != 1 {
+		t.Fatalf("decode re-seed PUT: %v (%s)", err, raw)
+	}
+	if err := dbstore.NewFormStore(pool).Create(ctx, &dbstore.Form{
+		AccountID: accA, Slug: "rest-ship-last-" + accA[:8], Title: "Delivery form",
+		Status: dbstore.FormStatusPublished,
+		Config: map[string]any{"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage",
+				"product_id": "ship1", "source": "zones", "zone_set_id": seeded.Sets[0].ID},
+		}},
+	}); err != nil {
+		t.Fatalf("create form: %v", err)
+	}
+	code, raw = tplReq(t, h, keyA, http.MethodPut, "/v1/rest/shipping", `{"sets":[]}`)
+	if code != http.StatusConflict {
+		t.Fatalf("an empty save over a set a form still uses = %d, want 409 (body %s) — "+
+			"the form's shipping block would resolve to nothing", code, raw)
+	}
+	if !strings.Contains(string(raw), "Delivery form") {
+		t.Errorf("the 409 should name the form using the set, got %s", raw)
+	}
+	var conflict struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &conflict); err != nil {
+		t.Fatalf("decode 409 body: %v (%s)", err, raw)
+	}
+	if conflict.Code != CodeShippingSetInUse {
+		t.Errorf("409 code = %q, want %q", conflict.Code, CodeShippingSetInUse)
+	}
+	if code, raw := tplReq(t, h, keyA, http.MethodGet, "/v1/rest/shipping", ""); code != http.StatusOK ||
+		!strings.Contains(string(raw), seeded.Sets[0].ID) {
+		t.Fatalf("a refused empty save changed the configuration (%d: %s)", code, raw)
 	}
 }
 

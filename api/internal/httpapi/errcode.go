@@ -176,6 +176,23 @@ const (
 	// on the constant the store builds its sentence from.
 	CodeShippingSetInUse = "shipping.setInUse"
 
+	// A shipping-zone-set save whose SHAPE cannot resolve (card t_417fbacb):
+	// a set with no name, a set with no zone, an unnamed zone, a zone with no
+	// rate, a negative price, a non-numeric postcode or an inverted weight band.
+	//
+	// WHY IT NEEDS ITS OWN CODE. ValidateShippingSets assembles each refusal
+	// around the field at fault ("zon "West" belum ada kadar"), and the REST edge
+	// wrote them with only the 400 class code — which the dashboard deliberately
+	// does not translate, so the merchant read "Failed to save shipping rates"
+	// and nothing else: no field, no reason. The remedy is always the same (fix
+	// the zone or its rate and save again), so ONE code and one sentence serve
+	// every shape, and the sentence names the three things a save requires.
+	//
+	// Keyed by PREFIX in errCodeByPrefix on dbstore.ShippingInvalidLeadIn — the
+	// constant every refusal in that function is wrapped with — so a re-wording
+	// cannot detach the code.
+	CodeShippingInvalid = "shipping.invalid"
+
 	// The TYPED-CONFIRMATION refusals: the four sites that make the caller name
 	// back what it is about to destroy (a form's slug, a workspace's slug, a
 	// product's name) and refuse when the answer does not match.
@@ -446,6 +463,12 @@ var errCodeByPrefix = []struct {
 	// is the only fixed part. Keyed on dbstore's own constant rather than a
 	// hand-typed copy of it, so a re-wording cannot detach the code again.
 	{prefix: dbstore.ShippingSetInUseLeadIn, code: CodeShippingSetInUse},
+	// The shipping-zone-set SHAPE refusals (card t_417fbacb). ValidateShippingSets
+	// assembles each sentence around the set/zone at fault, and wraps every one
+	// with this lead-in, so no exact key can match. Keyed on dbstore's constant
+	// for the same reason as the row above: a re-wording is then a compile-time
+	// reference, not a silently lost code.
+	{prefix: dbstore.ShippingInvalidLeadIn, code: CodeShippingInvalid},
 	// payments.CaptureSale/ReleaseSale/Refund refusals are surfaced verbatim.
 	{"jualan bukan dalam status boleh-refund", CodeRefundNotAllowed},
 	// The workspace-ROLE refusal, keyed on the LEAD-IN rather than as one more

@@ -927,6 +927,23 @@ export const DICT = {
     ta: "இந்த அனுப்பும் மண்டல தொகுப்பை ஒரு படிவம் இன்னும் பயன்படுத்துகிறது, எனவே அதை நீக்க முடியாது. அந்தப் படிவத்தின் அனுப்பும் தொகுதியைத் திறந்து, வேறு தொகுப்புக்கு மாற்றவும் (அல்லது இதை வைத்திருக்கவும்), பின்னர் மீண்டும் சேமிக்கவும்.",
     ar: "لا يزال نموذج يستخدم مجموعة مناطق الشحن هذه، لذا لا يمكن حذفها. افتح كتلة الشحن في ذلك النموذج، ووجّهها إلى مجموعة أخرى (أو أبقِ هذه)، ثم احفظ مرة أخرى.",
   },
+  // A shipping-zone-set save the server refused because the CONFIGURATION cannot
+  // resolve (card t_417fbacb): a set with no name, a set with no zone, an unnamed
+  // zone, a zone with no rate, a negative price, an inverted weight band. The API
+  // prose names the exact set/zone (for API-key and MCP callers); this sentence
+  // gives the DASHBOARD user the three rules a save has to satisfy, because the
+  // page's own "Failed to save shipping rates" said nothing at all.
+  //
+  // Deliberately ONE sentence for every shape: the remedy is always the same —
+  // fix the zone or its rate and save again — and one sentence cannot drift out
+  // of step with twelve near-duplicates.
+  "apiErr.shipInvalid": {
+    en: "The shipping rates were not saved. Every zone set needs a name, each set needs at least one zone, and every zone needs at least one rate. Fix the zone or rate you were editing, then save again.",
+    ms: "Kadar penghantaran tidak disimpan. Setiap set zon perlu ada nama, setiap set perlu sekurang-kurangnya satu zon, dan setiap zon perlu sekurang-kurangnya satu kadar. Betulkan zon atau kadar yang anda sedang edit, kemudian simpan semula.",
+    zh: "运费未保存。每个区域组都需要名称，每个组至少需要一个区域，每个区域至少需要一条费率。请修正刚才编辑的区域或费率，然后再次保存。",
+    ta: "அனுப்பும் கட்டணங்கள் சேமிக்கப்படவில்லை. ஒவ்வொரு மண்டல தொகுப்பிற்கும் பெயர் தேவை, ஒவ்வொரு தொகுப்பிற்கும் குறைந்தது ஒரு மண்டலம் தேவை, ஒவ்வொரு மண்டலத்திற்கும் குறைந்தது ஒரு கட்டணம் தேவை. நீங்கள் திருத்திய மண்டலம் அல்லது கட்டணத்தைச் சரிசெய்து, மீண்டும் சேமிக்கவும்.",
+    ar: "لم تُحفظ أسعار الشحن. كل مجموعة مناطق تحتاج إلى اسم، وكل مجموعة تحتاج إلى منطقة واحدة على الأقل، وكل منطقة تحتاج إلى سعر واحد على الأقل. صحّح المنطقة أو السعر الذي كنت تحرره، ثم احفظ مرة أخرى.",
+  },
   // The TYPED-CONFIRMATION refusals (the destructive calls that make the caller
   // name back what it is destroying). A DIFFERENT class from the two above:
   // nothing blocks the delete — the caller has simply not confirmed it — so the

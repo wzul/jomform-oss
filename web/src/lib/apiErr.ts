@@ -162,6 +162,14 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   // (#6177), and its own generic sentence ("Failed to save shipping rates")
   // hid the one actionable fact: a form has to be re-pointed first.
   "shipping.setInUse": "apiErr.shipSetInUse",
+  // A shipping-zone-set save refused for its SHAPE (card t_417fbacb): a set with
+  // no name, a set with no zone, an unnamed zone, a zone with no rate, a negative
+  // price or an inverted weight band. ValidateShippingSets wraps every one of
+  // those sentences in dbstore.ShippingInvalidLeadIn, which the server keys this
+  // code on, and the page's own "Failed to save shipping rates" named neither the
+  // field nor the reason. One sentence covers the class because the remedy is the
+  // same for every shape.
+  "shipping.invalid": "apiErr.shipInvalid",
   // The TYPED-CONFIRMATION refusals — the merchant mistyped the value the
   // destructive call has to name back (a form's slug, a workspace's slug, a
   // product's name). Each is a DIFFERENT sentence from the obstacle refusals
