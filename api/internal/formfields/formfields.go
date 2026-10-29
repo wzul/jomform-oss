@@ -462,10 +462,15 @@ func Description(config map[string]any) string {
 
 // block is the subset of a builder block the contract derivation reads.
 type block struct {
-	ID           string     `json:"id"`
-	Type         string     `json:"type"`
-	Value        string     `json:"value"`
-	Required     bool       `json:"required"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Value    string `json:"value"`
+	Required bool   `json:"required"`
+	// ProductID is a pricing block's submit key: both renderers tag the
+	// option/shipping <select> with `data-id="{{.ProductID}}"`, and the builder
+	// sets product_id = the block's own id. Read by PricingContract only —
+	// Contract deliberately excludes these blocks.
+	ProductID    string     `json:"product_id"`
 	Condition    *Condition `json:"condition"`
 	Placeholder  string     `json:"placeholder"`
 	DefaultValue string     `json:"default_value"`

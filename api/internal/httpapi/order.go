@@ -145,6 +145,29 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		// Card t_f9e2f855: a required `option`/`shipping` block is a real
+		// requirement on THIS surface — the payment renderer paints its
+		// <select> with `required` (t_addad3bd), so the browser refuses an
+		// empty choice and the route must reach the same verdict for a
+		// direct POST. It cannot ride on `regs`: formfields.Contract
+		// deliberately excludes the pricing blocks because the menu checkout
+		// and the response surface derive from it and neither renders one.
+		// `tgt.FieldsForm != nil` is exactly "the buyer is looking at this
+		// form's own page" (submitResolvedForm — canonical and embed alike);
+		// the menu checkout passes FieldsContract with FieldsForm nil, so it
+		// keeps its previous behaviour (pinned in
+		// pricing_required_order_t_f9e2f855_test.go).
+		//
+		// Card t_d20bad94: the pricing entries carry the block's own
+		// conditional rule, exactly as contract entries do. The page wraps a
+		// pricing block in `data-condition` and disables it while the rule is
+		// false, so a hidden choice is never posted; ValidateFields applies the
+		// same rule here, which is what stops the route demanding an answer the
+		// buyer was never shown.
+		if err := formfields.ValidateFields(formfields.PricingContract(tgt.FieldsForm.Config), in.Fields); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	} else if len(tgt.FieldsContract) > 0 {
 		// A menu order validates against the contract derived from the attached
 		// extra-info form's blocks. That page does not emit data-condition yet
