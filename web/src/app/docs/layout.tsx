@@ -97,6 +97,7 @@ const NAV_SECTIONS = [
   { href: "/docs/customize#workspace-address", label: "Reserved workspace names" },
   { href: "/docs/sales#realtime-notifications", label: "Notification beep guide" },
   { href: "/docs/sales#analytics", label: "Per-form counter guide" },
+  { href: "/docs/workspaces#currency", label: "Currency & exchange rates guide" },
   { href: "/docs#workspaces", label: "Workspaces guide" },
 ];
 

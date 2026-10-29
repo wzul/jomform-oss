@@ -2758,7 +2758,24 @@ export default function Settings() {
               </div>
             </div>
             <div className="mt-6">
-              <h3 className="text-sm font-semibold text-slate-700">{t("set.currencyRates")}</h3>
+              {/* Card t_467614db: inline "?" doc link (AGENTS.md documentation-parity
+                  rule 4). The hint used to claim the table was "used for
+                  display/conversion of new amounts" while nothing in the product
+                  converted an amount; the guide now says the table is reference
+                  data and points at convert_currency for an on-demand figure. */}
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <h3 className="text-sm font-semibold text-slate-700">{t("set.currencyRates")}</h3>
+                <a
+                  href="/docs/workspaces#currency"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={t("set.currencyDocs")}
+                  aria-label={t("set.currencyDocs")}
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                >
+                  ?
+                </a>
+              </div>
               <p className="mt-1 text-xs text-[var(--jf-muted)]">
                 {t("set.currencyRatesHint")} <span className="text-slate-500">({ratesCached ? t("set.currencyCached") : t("set.currencyFresh")})</span>
               </p>

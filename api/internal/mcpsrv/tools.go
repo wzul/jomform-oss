@@ -395,8 +395,15 @@ func (s *Server) registerTools() {
 	// Issue #185: per-workspace currency + BNM rates (MCP parity).
 	addTool(s, &mcp.Tool{
 		Name:        "get_currency_rates",
-		Description: "Kadar tukaran wang BNM (Ringgit per unit mata wang asing), dicache harian. Guna untuk paparan/penukaran amaun baharu.",
+		Description: "Kadar tukaran wang BNM (Ringgit per unit mata wang asing), dicache harian. Data rujukan — JomForm tidak menukar amaun tersimpan; guna convert_currency untuk menukar satu amaun.",
 	}, s.getCurrencyRates)
+	// Card t_467614db: the rate store's conversion had no production caller at
+	// all, while three surfaces claimed conversion worked. This tool is that
+	// caller; it converts one amount on demand and writes nothing.
+	addTool(s, &mcp.Tool{
+		Name:        "convert_currency",
+		Description: "Tukar satu amaun antara mata wang guna kadar BNM yang dicache (harian). amount_minor mesti integer dalam unit terkecil (ratusan) mata wang asal: 10000 = 100.00. Pulangkan converted_minor dalam unit terkecil mata wang sasaran (cth 260 = RM 2.60). Untuk paparan/laporan sahaja — bukan untuk caj: jualan diselesaikan dalam mata wang workspace dan jualan lama tidak pernah ditukar.",
+	}, s.convertCurrency)
 	addTool(s, &mcp.Tool{
 		Name:        "set_workspace_currency",
 		Description: "Set mata wang workspace (default MYR). Perubahan terpakai pada produk/jualan baharu; jualan lama kekal mata wang asal (tidak ditukar balik).",

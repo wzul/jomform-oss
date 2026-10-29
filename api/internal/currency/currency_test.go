@@ -5,15 +5,15 @@ import (
 	"testing"
 )
 
-// TestConvertMinor exercises the BNM-rate minor-unit conversion math without a
-// network or Valkey. It uses a Store with a nil cache so Rates() fetches on
-// demand — but we stub the fetch by injecting rates via a custom http client
-// is not possible here, so we test the pure math through a helper that takes
-// rates directly.
+// TestConvertMinorMath exercises the production conversion arithmetic (the same
+// convertMinorWithRates that Store.ConvertMinor calls) without a network or
+// Valkey. Until card t_467614db this file held its OWN copy of the arithmetic, so
+// the test could stay green while the shipped function changed underneath it.
 func TestConvertMinorMath(t *testing.T) {
 	rates := []Rate{
-		{CurrencyCode: "USD", Unit: 1, Rate: 4.0}, // 1 USD = 4 MYR
-		{CurrencyCode: "SGD", Unit: 1, Rate: 3.0}, // 1 SGD = 3 MYR
+		{CurrencyCode: "USD", Unit: 1, Rate: 4.0},        // 1 USD = 4 MYR
+		{CurrencyCode: "SGD", Unit: 1, Rate: 3.0},        // 1 SGD = 3 MYR
+		{CurrencyCode: "JPY", Unit: 100, Rate: 0.026044}, // published per 100; Rate is per 1
 	}
 	cases := []struct {
 		name   string
@@ -24,9 +24,19 @@ func TestConvertMinorMath(t *testing.T) {
 		ok     bool
 	}{
 		{"same currency", "MYR", "MYR", 100, 100, true},
+		{"same currency, lower case", "usd", "USD", 100, 100, true},
 		{"MYR to USD", "MYR", "USD", 400, 100, true}, // 400 sen MYR = 100 sen USD
 		{"USD to MYR", "USD", "MYR", 100, 400, true}, // 100 sen USD = 400 sen MYR
 		{"USD to SGD", "USD", "SGD", 300, 400, true}, // 300*4/3 = 400
+		// The per-unit trap: Rate already carries the /100, so 100.00 JPY is
+		// 260 sen and NOT 26,044 sen. A second division by Unit would make this
+		// read 3.
+		{"per-100 currency", "JPY", "MYR", 10000, 260, true},
+		// Rounding is to nearest, half away from zero, and symmetric for a
+		// signed amount (a refund or a backwards quote): 2 sen MYR / 4 =
+		// 0.5 sen -> 1, and -2 -> -1. Truncating x+0.5 would have said 0 / 0.
+		{"rounds half away from zero", "MYR", "USD", 2, 1, true},
+		{"rounds a negative half away from zero", "MYR", "USD", -2, -1, true},
 		{"unknown from", "XXX", "MYR", 100, 100, false},
 		{"unknown to", "MYR", "XXX", 100, 100, false},
 	}
@@ -41,22 +51,6 @@ func TestConvertMinorMath(t *testing.T) {
 			}
 		})
 	}
-}
-
-// convertMinorWithRates is the pure form of Store.ConvertMinor, factored out
-// so the math is unit-testable without a network or Valkey.
-func convertMinorWithRates(rates []Rate, from, to string, amountMinor int64) (int64, bool) {
-	if from == "" || to == "" || from == to {
-		return amountMinor, true
-	}
-	rf, okFrom := rateFor(rates, from)
-	rt, okTo := rateFor(rates, to)
-	if !okFrom || !okTo || rf <= 0 || rt <= 0 {
-		return amountMinor, false
-	}
-	myr := float64(amountMinor) * rf
-	converted := myr / rt
-	return int64(converted + 0.5), true
 }
 
 // TestStoreNilCache ensures a Store with a nil Valkey client still returns

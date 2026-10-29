@@ -73,6 +73,16 @@ Parity checklist (dashboard → MCP):
   `POST /v1/rest/shipping/couriers/{provider}/disconnect`; the PUBLIC OAuth return
   is `GET /v1/shipping/easyparcel/callback` (registered with EasyParcel as
   `https://<host>/api/shipping/easyparcel/callback`, the web app's proxy path).
+- Currency & exchange rates (Settings → Currency: the workspace's settlement
+  currency plus the daily-cached BNM rate table) → `get_currency_rates`,
+  `convert_currency`, `set_workspace_currency`.
+  `convert_currency` is the ONLY production caller of the rate store's
+  conversion (card t_467614db: before it, the store had no consumer and the
+  "used for conversion" copy was false). It converts one amount on demand,
+  multiplying by the stored per-single-unit rate — the per-100 quotes are
+  already divided by their unit, so a consumer must never divide again — and it
+  writes nothing. Display/reporting only: a saved sale is never re-converted,
+  which is why the rates table is labelled reference data.
 - Skip-capture flow → `capture_sale`, `release_sale`
 - Subscriptions → `cancel_subscription` (no token revoke — Wan rule),
   `run_due_charges`, `update_subscription_card`, `retry_subscription`

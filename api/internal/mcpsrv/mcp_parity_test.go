@@ -146,7 +146,6 @@ var mcpParityBaselineTools = []string{
 	"list_workspace_members",
 	"remove_workspace_member",
 	"set_default_workspace",
-	"set_workspace_currency",
 	"set_workspace_settings",
 	"update_workspace_member_role",
 	// Form sub-resources and per-form settings (each dashboard tab has its own
@@ -205,9 +204,9 @@ var mcpParityBaselineTools = []string{
 	"update_product_variation",
 	"delete_product_variation",
 	"list_subscriptions",
-	// Settings surfaces (email, CHIP, currency, system).
+	// Settings surfaces (email, CHIP, system). Currency moved to the checklist
+	// when card t_467614db gave the rate store its conversion caller.
 	"clear_chip_settings",
-	"get_currency_rates",
 	"get_email_settings",
 	"set_email_settings",
 	"set_einvoice",

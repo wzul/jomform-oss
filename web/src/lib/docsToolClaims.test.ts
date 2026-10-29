@@ -168,7 +168,11 @@ const MCP_SOURCES = readdirSync(MCP_DIR)
 // `disconnect_shipping_courier`): 184 + 3. Neither side's number is right for
 // the integrated registry, so a pin of 184 would mean the courier surface was
 // dropped and one of the branch's old pins would mean main's newest tools were.
-const EXPECTED_TOOL_COUNT = 187;
+// 188: card t_467614db added `convert_currency` — the rate store's conversion had
+// no production caller at all (0 call sites since issue #185), so the "used for
+// conversion" copy on three surfaces was false. The tool is that caller; the pin
+// moves by one.
+const EXPECTED_TOOL_COUNT = 188;
 
 const REGISTRY_SRC = MCP_SOURCES.join("\n");
 

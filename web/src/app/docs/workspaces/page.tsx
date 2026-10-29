@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Workspaces — JomForm Docs",
   description:
-    "What a workspace owns, its public address, how you create one, and what moving one to the Trash (and deleting it for good) requires.",
+    "What a workspace owns, its public address, its currency and exchange rates, how you create one, and what moving one to the Trash (and deleting it for good) requires.",
   alternates: { canonical: "https://jomform.com/docs/workspaces" },
 };
 
@@ -19,8 +19,10 @@ export const metadata: Metadata = {
 // The anchor names are part of the contract: /docs links to them by `#id`, the
 // Settings → Workspace danger zone's inline "?" points at
 // `/docs#delete-workspace`, the identity card's "?" points at
-// `/docs#rename-workspace`, and the first-run workspace ask points at
-// `/docs#workspaces`. The index slugs stay on the index itself.
+// `/docs#rename-workspace`, the first-run workspace ask points at
+// `/docs#workspaces`, and Settings → Currency's inline "?" points at
+// `/docs/workspaces#currency` (card t_467614db). The index slugs stay on the
+// index itself.
 type Section = { id: string; title: string; body: string[] };
 
 const SECTIONS: Section[] = [
@@ -68,6 +70,20 @@ const SECTIONS: Section[] = [
       "Settings → Workspace shows the identity and the Danger zone; the permanent step is reached through the REST API or an MCP client acting for the owner, never by clicking a dashboard control. AI agents use delete_workspace with check_workspace_deletion as the read-only pre-flight, list_trashed_workspaces and restore_workspace for the bin, and purge_workspace for the permanent step — which the in-app assistant can never propose.",
     ],
   },
+  {
+    id: "currency",
+    title: "Workspace currency & exchange rates",
+    body: [
+      "Everything a workspace sells is priced in its own currency: Settings → Currency sets it (default MYR), and the workspace's CHIP account inherits it for purchases. Changing it applies to NEW products and sales only — a completed sale keeps the currency it was paid in, a refund must be issued in that same currency, and nothing already recorded is ever re-priced or re-converted.",
+      // Card t_467614db: the surface's old hint said the rate table was "used for
+      // display/conversion of new amounts" while nothing in the product converted
+      // an amount at all. The guide states what the table is (reference data) and
+      // what converts (one amount, on demand, through convert_currency).
+      "Settings → Currency also shows the Bank Negara Malaysia (BNM) rates JomForm caches once a day: Ringgit per ONE unit of each foreign currency. This table is reference data. JomForm never converts a saved amount, so a rate moving cannot rewrite a completed order — and because 15 of the 27 quotes BNM publishes are quoted per 100 units (JPY, THB, IDR and others), JomForm divides each by its published block size before storing it. That is why 100 JPY reads 2.6044 and not 260.44.",
+      "When you need a converted figure — a report, a quote for a customer — convert that ONE amount on demand. An AI agent or MCP client does it with the convert_currency tool (amount_minor is in the source currency's minor units, so 10000 means 100.00; the reply carries converted_minor in the target currency), reads the table with get_currency_rates, and sets the workspace currency with set_workspace_currency. The dashboard's rate table is read-only.",
+      "The conversion is for display and reporting only. It is never used to charge a card: CHIP purchases and sales settle in the workspace's own currency.",
+    ],
+  },
 ];
 
 export default function WorkspacesDocsPage() {
@@ -76,8 +92,8 @@ export default function WorkspacesDocsPage() {
       <h1 className="text-3xl font-bold tracking-tight text-slate-900">Workspaces</h1>
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
         A workspace is the tenant everything you build lives in. This page covers what it owns, its
-        public address, how you get one, and exactly what moving one to the Trash — or deleting it
-        for good — requires.
+        public address, its currency and exchange rates, how you get one, and exactly what moving
+        one to the Trash — or deleting it for good — requires.
       </p>
 
       {SECTIONS.map((s) => (

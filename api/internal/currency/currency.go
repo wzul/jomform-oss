@@ -1,8 +1,16 @@
 // Package currency: BNM (Bank Negara Malaysia) exchange-rate fetching,
 // Valkey caching, and minor-unit conversion for per-workspace currencies (issue
 // #185). Rates are fetched from https://api.bnm.gov.my/public/exchange-rate
-// once daily and cached in Valkey with a 24h TTL. Conversion is used for
-// display/new amounts; historical sales keep their original currency.
+// once daily and cached in Valkey with a 24h TTL.
+//
+// Conversion is ON DEMAND and display/reporting only: the single production
+// consumer is the MCP convert_currency tool (api/internal/mcpsrv/currency.go).
+// Nothing converts a saved amount — products and sales are stored in the
+// workspace's currency and historical sales keep theirs, so a rate moving can
+// never rewrite a completed order. The Settings page's rates table is reference
+// data and says so (card t_467614db: before that tool existed this package
+// carried a "used for display/conversion of new amounts" claim with no consumer
+// behind it at all).
 package currency
 
 import (
@@ -11,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -217,18 +226,21 @@ func rateFor(rates []Rate, code string) (float64, bool) {
 	return 0, false
 }
 
-// ConvertMinor converts an amount in minor units from one currency to another
-// using the cached BNM rates. Both amounts are integer minor units (e.g. sen).
-// from/to are ISO currency codes; MYR is the BNM base. Returns the converted
-// minor-unit amount rounded to the nearest integer. When either rate is
-// unknown, ok=false (caller should fall back to the original amount).
-func (s *Store) ConvertMinor(ctx context.Context, from, to string, amountMinor int64) (int64, bool) {
+// convertMinorWithRates is the conversion arithmetic without the cache, so the
+// same code is what ConvertMinor runs and what the tests exercise. It is one
+// function rather than a copy in the test file on purpose: a test holding its own
+// copy passes while the production path drifts (that was the shape here until
+// card t_467614db — the copy in currency_test.go was the only thing the math test
+// ever called).
+//
+// Both amounts are integer minor units (hundredths, e.g. sen). Rate is already
+// Ringgit per ONE unit (toRates divides the published per-100 quote), so this
+// multiplies by Rate and must never divide by Unit again — doing so is the 100x
+// error the per-unit decode fixed.
+func convertMinorWithRates(rates []Rate, from, to string, amountMinor int64) (int64, bool) {
+	from, to = strings.ToUpper(strings.TrimSpace(from)), strings.ToUpper(strings.TrimSpace(to))
 	if from == "" || to == "" || from == to {
 		return amountMinor, true
-	}
-	rates, _, err := s.Rates(ctx)
-	if err != nil {
-		return amountMinor, false
 	}
 	// BNM rates are Ringgit per unit of foreign currency. To convert
 	// from->to: value_in_MYR = amount_from * rate_from; then
@@ -238,8 +250,31 @@ func (s *Store) ConvertMinor(ctx context.Context, from, to string, amountMinor i
 	if !okFrom || !okTo || rf <= 0 || rt <= 0 {
 		return amountMinor, false
 	}
-	// Work in float minor units; round to nearest integer at the end.
-	myr := float64(amountMinor) * rf
-	converted := myr / rt
-	return int64(converted + 0.5), true
+	// Work in float minor units; round to the nearest integer at the end.
+	// math.Round rather than int64(x + 0.5): a signed amount (a refund, or an
+	// exchange-rate difference quoted backwards) would otherwise round toward
+	// zero — -2.6 would become -2.
+	return int64(math.Round(float64(amountMinor) * rf / rt)), true
+}
+
+// ConvertMinor converts an amount in minor units from one currency to another
+// using the cached BNM rates. Both amounts are integer minor units (e.g. sen).
+// from/to are ISO currency codes; MYR is the BNM base. Returns the converted
+// minor-unit amount rounded to the nearest integer. When either rate is
+// unknown, ok=false (caller should fall back to the original amount).
+//
+// This is display/reporting conversion only, and its one production caller is the
+// MCP convert_currency tool — no stored amount is ever re-converted.
+func (s *Store) ConvertMinor(ctx context.Context, from, to string, amountMinor int64) (int64, bool) {
+	from, to = strings.ToUpper(strings.TrimSpace(from)), strings.ToUpper(strings.TrimSpace(to))
+	if from == "" || to == "" || from == to {
+		// Same currency (or nothing to convert): no rate needed, so this must
+		// not depend on the cache being warm.
+		return amountMinor, true
+	}
+	rates, _, err := s.Rates(ctx)
+	if err != nil {
+		return amountMinor, false
+	}
+	return convertMinorWithRates(rates, from, to, amountMinor)
 }
