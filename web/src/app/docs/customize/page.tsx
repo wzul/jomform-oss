@@ -257,6 +257,13 @@ export default function CustomizeDocsPage() {
         so the password gate is not bypassed by fetching the image. An <strong>unlisted</strong>{" "}
         form is live, so its card is served like a published one&apos;s.
       </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The card is also dropped from the cache the moment a form stops being live — set back to
+        draft, switched to private, or moved to the trash — so a link that was pasted while the
+        form was live cannot keep showing the old preview afterwards. Cards are cached for five
+        minutes at a time rather than a day, so even a deployment that cannot clear that cache
+        stops showing a stale one within minutes.
+      </p>
 
       <h2 id="domains" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
         Custom domains

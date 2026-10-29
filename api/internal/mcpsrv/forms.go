@@ -254,9 +254,14 @@ func (s *Server) purgeFormMCP(
 		}
 		return nil, nil, err
 	}
-	return nil, map[string]any{
+	// The row is gone, so the origin can no longer serve this form's card at all;
+	// the edge may still hold the copy a crawler fetched while it was live. Asked
+	// for unconditionally: a prefix that matches nothing costs nothing, and this is
+	// the one call that destroys the form for good.
+	edge := s.purgeLeftPublicOGCards(ctx, acc, []string{f.Slug})
+	return nil, withEdgeFields(map[string]any{
 		"status": "purged", "form_id": in.FormID, "slug": f.Slug, "title": f.Title,
-	}, nil
+	}, edge), nil
 }
 
 // publicHostSlugFor resolves the subdomain host an account's forms are publicly

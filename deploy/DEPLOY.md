@@ -474,6 +474,37 @@ by URL prefix, which is unaffected by custom cache keys; if the zone's cache key
 includes a header (`Accept-Language`, `CF-IPCountry`, …) the purge covers the
 default key only.
 
+### The form's share card uses the same purge
+
+`/og/{slug}.png` — the generated 1200×630 preview a chat app or a social site
+shows when a form's link is pasted — is public and cacheable too, and it draws the
+form's **title, workspace name and host**. When a form stops being publicly served
+(set back to draft, switched to private, or moved to the trash) the same request
+drops the cached card, and the reply names the outcome:
+
+```json
+{"status":"draft","edge":"purged",
+ "edge_urls":["https://<workspace>.jomform.com/og/<slug>.png"]}
+```
+
+Two deployment facts matter here:
+
+- The card is served on a **per-workspace host**, so `JF_CF_PURGE_HOSTS` needs a
+  wildcard for the tenant subdomains (`*.jomform.com`) plus any verified custom
+  domains. An exact host list makes every card purge report `edge: out_of_zone`
+  and clear nothing — the form's status still changes, which is why the reply has
+  to be read rather than assumed.
+- The public card declares `Cache-Control: public, max-age=300` (not a day), so a
+  deployment that cannot purge still stops serving a stale or unpublished card
+  within five minutes. That window, not the origin's status gate, is what bounds
+  the mistake — measured on prod 2026-10-26, where a draft form's card kept
+  answering from the edge with `age: 1243` after the gate had shipped.
+
+`edge` is `purged`, `not_configured`, `out_of_zone` or `failed`; when it is not
+`purged` the reply also carries `edge_max_age_s`. The status change itself never
+fails because a purge did — the write has already happened, and the window is what
+bounds it.
+
 ### Measuring it — probe both ends, never just the origin
 
 `scripts/media-purge-probe.sh` is the check. It probes the origin with a

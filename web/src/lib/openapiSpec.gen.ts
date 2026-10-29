@@ -50,6 +50,20 @@ export const OPENAPI_SPEC: OpenApiSpec = {
           "deleted": {
             "type": "integer"
           },
+          "edge": {
+            "description": "Present when the action left a publicly served status and a cached share card had to go: what the CDN said.",
+            "enum": [
+              "purged",
+              "not_configured",
+              "out_of_zone",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "edge_max_age_s": {
+            "description": "Present with any edge value other than purged: the freshness window that now bounds how long the old cards can still be served.",
+            "type": "integer"
+          },
           "needs_products": {
             "items": {
               "type": "string"
@@ -196,6 +210,31 @@ export const OPENAPI_SPEC: OpenApiSpec = {
       },
       "FormStatus": {
         "properties": {
+          "edge": {
+            "description": "Present when this transition left a publicly served status (published or unlisted) and the form's cached share card /og/{slug}.png had to be dropped: what the CDN said. Absent when nothing was invalidated.",
+            "enum": [
+              "purged",
+              "not_configured",
+              "out_of_zone",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "edge_error": {
+            "description": "Present with edge=failed: what the CDN answered.",
+            "type": "string"
+          },
+          "edge_max_age_s": {
+            "description": "Present with any edge value other than purged: the cache freshness window that then bounds how long the old card can still be served.",
+            "type": "integer"
+          },
+          "edge_urls": {
+            "description": "The card URL prefixes the purge named, one per public host.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "status": {
             "type": "string"
           }
@@ -2421,7 +2460,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
     },
     "/v1/rest/forms/bulk": {
       "post": {
-        "description": "Up to 500 ids. A payment form with no products is skipped on publish and reported in needs_products rather than being published empty.",
+        "description": "Up to 500 ids. A payment form with no products is skipped on publish and reported in needs_products rather than being published empty. A draft or delete also drops the cached social card of every form that was serving one (see the status route's edge fields).",
         "operationId": "bulkForms",
         "requestBody": {
           "content": {
@@ -2539,6 +2578,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
     },
     "/v1/rest/forms/{id}": {
       "delete": {
+        "description": "The form goes to the trash and can be restored; its public page and its share card stop being served. A card the CDN had cached is dropped in the same request and the reply names the outcome in edge.",
         "operationId": "deleteForm",
         "parameters": [
           {
@@ -3853,7 +3893,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
     },
     "/v1/rest/forms/{id}/purge": {
       "delete": {
-        "description": "Only a form already in the trash can be destroyed. The body must repeat the form's own slug as confirm_slug; a mismatch is refused with 400. A form that has ever been sold is refused with 409 and sales_count, because sales history is never destroyed.\n\nResponse: status=purged and the form id.",
+        "description": "Only a form already in the trash can be destroyed. The body must repeat the form's own slug as confirm_slug; a mismatch is refused with 400. A form that has ever been sold is refused with 409 and sales_count, because sales history is never destroyed. The destroyed form's share card is dropped from the CDN in the same request and the reply names the outcome in edge.\n\nResponse: status=purged and the form id.",
         "operationId": "purgeForm",
         "parameters": [
           {
@@ -4144,7 +4184,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
     },
     "/v1/rest/forms/{id}/status": {
       "post": {
-        "description": "status=private also sets an access password if one is supplied (hashed, never returned).",
+        "description": "status=private also sets an access password if one is supplied (hashed, never returned). Leaving a publicly served status (published or unlisted) drops the form's cached share card at the CDN in the SAME request: the reply then carries edge (purged | not_configured | out_of_zone | failed) and, when nothing was purged, edge_max_age_s, the freshness window that then bounds how long the old card can still be served. The status change itself never fails because the purge did.",
         "operationId": "setFormStatus",
         "parameters": [
           {

@@ -1,5 +1,5 @@
 // Package cdnpurge invalidates the CDN edge's copies of objects the API has
-// deleted.
+// deleted — media objects, and the generated social card a form stops serving.
 //
 // THE DEFECT THIS EXISTS FOR. `/media/{key}` answers with a public, day-long
 // freshness lifetime, so Cloudflare holds the bytes and answers from its own
@@ -33,12 +33,32 @@
 // separate entries), https://developers.cloudflare.com/api/resources/cache/methods/purge/
 // (`prefixes`) and .../cache/how-to/purge-cache/purge_by_prefix/.
 //
+// THE SECOND CALLER: /og/{slug}.png. A form's generated social card is served
+// with a public freshness lifetime too, so a crawler that fetched it while the
+// form was live leaves a copy at the edge. The card names the form's TITLE, its
+// workspace name and its host, and the form's own page stops serving it the
+// moment the form leaves a live status (draft -> 404, private -> the password
+// gate). The origin is honest immediately, the edge is not: measured on prod
+// 2026-10-26, 9m after the release that added the status gate, a DRAFT form's
+// card still answered `cf-cache-status: HIT, age: 1243` with the pre-fix bytes
+// while the same URL with a cache-buster answered 404 — the entry survives until
+// it expires or is evicted, which for the public arm was a day. So every write
+// path that takes a form OUT of a publicly-served status asks for its card's
+// prefix in the same request (httpapi setFormStatus/deleteForm/bulkForms/
+// purgeForm, mcpsrv publish_form/unpublish_form/delete_form/bulk_forms), and the
+// public arm's lifetime is bounded (OGImageMaxAgeSeconds) so an unconfigured
+// purge cannot leave the mistake visible for a day.
+//
 // CONFIGURATION. The client is built from the environment on each purge:
 //
 //	JF_CF_PURGE_TOKEN    API token with the Cache Purge permission
 //	JF_CF_PURGE_ZONE_ID  the zone the public media URLs belong to
 //	JF_CF_PURGE_HOSTS    optional comma-separated hosts that live in that zone;
-//	                     defaults to the host of APP_BASE_URL
+//	                     defaults to the host of APP_BASE_URL. An entry may be a
+//	                     wildcard ("*.jomform.com") to cover the per-workspace
+//	                     subdomains a form's card is published on — listing each
+//	                     tenant host is not possible, and an exact-match rule
+//	                     silently dropped every card purge as out of zone
 //	JF_CF_PURGE_API_BASE optional override of the API root (tests)
 //
 // Unconfigured is a supported state, not an error: the response names
@@ -77,8 +97,9 @@ const DefaultAPIBase = "https://api.cloudflare.com/client/v4"
 // maxPrefixesPerRequest is Cloudflare's documented ceiling of 100 operations
 // per purge request ("Max operations per request"), shared by every purge
 // method. A media purge sends at most base + 3 sized variants + 1 PDF preview =
-// 5, so the cap is a guard against a future caller looping over a library, not
-// a limit this card can reach.
+// 5, so it can never reach the cap; a bulk form action can (a card is purged on
+// two hosts, up to 500 forms), which is why the package-level PurgeObjectURLs
+// splits anything larger into several requests instead of truncating.
 const maxPrefixesPerRequest = 100
 
 // MediaMaxAgeSeconds is the freshness lifetime a /media or /assets response
@@ -88,6 +109,22 @@ const maxPrefixesPerRequest = 100
 // CDN refuses one. A test pins the served header to this value so the two
 // cannot drift.
 const MediaMaxAgeSeconds = 300
+
+// OGImageMaxAgeSeconds is the freshness lifetime the PUBLIC arm of
+// /og/{slug}.png declares (httpapi's ogImageCacheControl), stated here for the
+// same reason as MediaMaxAgeSeconds: it is what bounds how long the edge can
+// keep describing a form after it stops being live when no purge is configured.
+//
+// It used to be 86400. That is the number that made a pre-fix card outlive the
+// release that fixed it (measured on prod: the draft form's card answered from
+// the edge with `age: 1243` nine minutes after the new origin code started, and
+// would have been served for up to a day). Five minutes is the same bound the
+// media routes chose: long enough that a crawler or a share costs one origin
+// render per window — the render is cached in-process by input set, so a
+// re-render is a map lookup — and short enough that a mistaken or stale card
+// cannot sit in a shared cache for a day. The private arm declares
+// `private, no-store` and is not affected.
+const OGImageMaxAgeSeconds = 300
 
 // purgeTimeout bounds the outbound call. The bytes are already deleted by the
 // time a purge is attempted, so a slow CDN API must not hold the merchant's
@@ -201,13 +238,58 @@ func normalizeHost(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
 
+// inZone reports whether a URL host belongs to the configured zone, so a purge
+// never sends Cloudflare a URL from another zone (it rejects the whole request,
+// which would silently cancel the purge of the valid URLs too).
+//
+// An entry may be a wildcard — "*.jomform.com" — which matches every subdomain
+// under it (any depth) and NOT the base host itself. That is required by the
+// card purge: a form's `/og/{slug}.png` is served on a per-workspace host
+// (`<slug>.jomform.com`), one host per workspace, so an exact-match list could
+// never name them; the alternative — a wildcard-less rule that treats a listed
+// host as covering its subdomains — would silently start sending hosts the
+// operator never listed, and a subdomain delegated to its own zone would then
+// fail the whole request. A wildcard is opt-in, so nothing changes for a
+// deployment that lists exact hosts (the media purge's shape).
 func (c *Client) inZone(host string) bool {
 	for _, h := range c.Hosts {
 		if h == host {
 			return true
 		}
+		if base, ok := strings.CutPrefix(h, "*."); ok && base != "" &&
+			strings.HasSuffix(host, "."+base) {
+			return true
+		}
 	}
 	return false
+}
+
+// OGImagePath is the path of a form's generated social card on its public host.
+// The handler serves it (httpapi handleOGImage); this is the one place the
+// purge learns it, so the URL a card is cached under and the URL a purge asks
+// for cannot drift.
+func OGImagePath(slug string) string {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return ""
+	}
+	return "/og/" + url.PathEscape(slug) + ".png"
+}
+
+// OGImageURL is the absolute public URL of a form's generated social card on
+// one of the hosts it is served from. Empty inputs yield "" so a caller can
+// skip an unresolvable host instead of purging a relative path.
+//
+// The scheme is always https: a card is only ever reachable through the public
+// (TLS) host, and the CDN's cache key includes the scheme, so a prefix built
+// with any other scheme would match nothing.
+func OGImageURL(host, slug string) string {
+	host = normalizeHost(host)
+	path := OGImagePath(slug)
+	if host == "" || path == "" {
+		return ""
+	}
+	return "https://" + host + path
 }
 
 // PurgeObjectURLs asks the CDN to drop every cached entry for the given object
@@ -218,11 +300,17 @@ func (c *Client) inZone(host string) bool {
 // bad URL would silently cancel the purge of the good ones too.
 func (c *Client) PurgeObjectURLs(ctx context.Context, urls []string) ([]string, error) {
 	prefixes := c.zonePrefixes(urls)
-	if len(prefixes) == 0 {
-		return nil, nil
-	}
 	if len(prefixes) > maxPrefixesPerRequest {
 		prefixes = prefixes[:maxPrefixesPerRequest]
+	}
+	return c.sendPrefixes(ctx, prefixes)
+}
+
+// sendPrefixes is one purge request for the prefixes given. The caller is
+// responsible for the per-request ceiling (see PurgeObjectURLs, which chunks).
+func (c *Client) sendPrefixes(ctx context.Context, prefixes []string) ([]string, error) {
+	if len(prefixes) == 0 {
+		return nil, nil
 	}
 	body, err := json.Marshal(map[string]any{"prefixes": prefixes})
 	if err != nil {
@@ -330,12 +418,27 @@ func PurgeObjectURLs(ctx context.Context, urls []string) Result {
 	if len(urls) == 0 {
 		return Result{Status: StatusNoURLs}
 	}
-	purged, err := c.PurgeObjectURLs(ctx, urls)
-	if err != nil {
-		return Result{Status: StatusFailed, URLs: purged, Err: err}
-	}
-	if len(purged) == 0 {
+	prefixes := c.zonePrefixes(urls)
+	if len(prefixes) == 0 {
 		return Result{Status: StatusOutOfZone}
+	}
+	// CHUNKED, not truncated. A bulk status change can invalidate more cards than
+	// one request may carry (a form is purged on two hosts, and a bulk action holds
+	// up to 500 forms), and a silent truncation would leave the rest cached while
+	// reporting `edge: purged`. The first refusal stops the loop and names itself:
+	// retrying the remaining batches against an API that just rejected one would
+	// only multiply the errors.
+	var purged []string
+	for start := 0; start < len(prefixes); start += maxPrefixesPerRequest {
+		end := start + maxPrefixesPerRequest
+		if end > len(prefixes) {
+			end = len(prefixes)
+		}
+		sent, err := c.sendPrefixes(ctx, prefixes[start:end])
+		purged = append(purged, sent...)
+		if err != nil {
+			return Result{Status: StatusFailed, URLs: purged, Err: err}
+		}
 	}
 	return Result{Status: StatusPurged, URLs: purged}
 }
@@ -349,6 +452,23 @@ func (r Result) Fields() map[string]any {
 	}
 	if r.Err != nil {
 		f["edge_error"] = r.Err.Error()
+	}
+	return f
+}
+
+// OGFields is Fields() for a social-card purge, plus the freshness window that
+// bounds staleness when the purge did NOT happen. A caller that purged a card
+// must report BOTH: `edge: not_configured` alone leaves an operator guessing
+// how long the old card keeps being served, and the number is the answer.
+func (r Result) OGFields() map[string]any {
+	if r.Status == "" {
+		// No purge was requested: publishing `edge: ""` would name an outcome
+		// that was never attempted.
+		return nil
+	}
+	f := r.Fields()
+	if r.Status != StatusPurged {
+		f["edge_max_age_s"] = OGImageMaxAgeSeconds
 	}
 	return f
 }

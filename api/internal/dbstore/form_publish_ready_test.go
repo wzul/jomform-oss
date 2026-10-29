@@ -202,3 +202,35 @@ func TestEmptyProductEntriesDoNotCountAsSellable(t *testing.T) {
 		t.Error("a payment form with a nil config was reported as ready")
 	}
 }
+
+// TestOGImagePubliclyCachedIsThePurgeTrigger pins WHICH statuses put a form's
+// social card in a shared cache. It is a different question from IsLiveStatus —
+// private is live but is served `private, no-store` — and it is the only thing
+// that decides whether a status change has to purge the edge. Getting it wrong in
+// either direction is a defect: too narrow and a cached card keeps naming a form
+// whose page 404s (the prod measurement this rule comes from); too wide and every
+// publish costs a CDN call for an entry that cannot exist.
+func TestOGImagePubliclyCachedIsThePurgeTrigger(t *testing.T) {
+	cases := []struct {
+		status string
+		want   bool
+		why    string
+	}{
+		{FormStatusPublished, true, "the public arm: `Cache-Control: public`"},
+		{FormStatusUnlisted, true, "still live at its direct URL, served publicly"},
+		{FormStatusDraft, false, "404 with the unknown-slug body — nothing cacheable is written"},
+		{FormStatusPrivate, false, "404 until unlocked, and `private, no-store` when it is"},
+		{"", false, "no status: nothing is served"},
+	}
+	for _, tc := range cases {
+		if got := OGImagePubliclyCached(tc.status); got != tc.want {
+			t.Errorf("OGImagePubliclyCached(%q) = %v, want %v (%s)", tc.status, got, tc.want, tc.why)
+		}
+	}
+	// The distinction that makes this a separate rule, stated as an assertion so it
+	// cannot be collapsed back into IsLiveStatus by a later "simplification".
+	if !IsLiveStatus(FormStatusPrivate) || OGImagePubliclyCached(FormStatusPrivate) {
+		t.Errorf("private must be LIVE (its page shows the password gate) but NOT publicly " +
+			"cached (an image route has no gate to show, so it 404s and declares no-store)")
+	}
+}

@@ -1186,6 +1186,12 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 	}
 	// Issue #92: audit form publish.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.published", map[string]any{"form_id": id})
+	// No edge purge here, deliberately: publishing moves the form INTO the
+	// publicly-cached set, where nothing cacheable was before — the edge holds
+	// the 404 the card answered while the form was not live, and Cloudflare
+	// expires that on its own few-minute default (measured: the 200 takes over
+	// 1m09s–3m23s after a publish). A purge would only make that flip faster at
+	// the cost of a CDN call on every publish.
 	respond(w, http.StatusOK, map[string]string{"status": "published"})
 }
 
@@ -1241,16 +1247,22 @@ func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, act
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	id := r.PathValue("id")
+	// ONE read of the CURRENT row, before the write. It decides two things: the
+	// "payment form with nothing to sell" acknowledgement is a TRANSITION rule
+	// (dbstore.PublishNeedsAck), and whether the edge holds a publicly cached
+	// social card for this form depends on the status it is LEAVING
+	// (dbstore.OGImagePubliclyCached) — reading after the write would lose that.
+	f, ferr := h.Forms.GetByID(r.Context(), actx.Account.ID, id)
+	if ferr != nil {
+		respondErr(w, r, ferr)
+		return
+	}
 	// Onboarding gap: entering a LIVE status with a payment form that has
 	// nothing to sell is the same silent mistake the publish route refuses, and
 	// the dashboard's status control reaches THIS route. Gated on the
 	// transition, so re-saving a form that is already live is never blocked.
 	if dbstore.IsLiveStatus(in.Status) {
-		f, ferr := h.Forms.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
-		if ferr != nil {
-			respondErr(w, r, ferr)
-			return
-		}
 		if dbstore.PublishNeedsAck(f, in.Status) && !in.Acknowledge && r.URL.Query().Get("acknowledge") != "1" {
 			writePublishNeedsAck(w)
 			return
@@ -1259,7 +1271,7 @@ func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, act
 	switch in.Status {
 	case dbstore.FormStatusDraft, dbstore.FormStatusPublished, dbstore.FormStatusUnlisted:
 		// Leaving private clears the stored access password.
-		if err := h.Forms.SetStatusWithPassword(r.Context(), actx.Account.ID, r.PathValue("id"), in.Status, ""); err != nil {
+		if err := h.Forms.SetStatusWithPassword(r.Context(), actx.Account.ID, id, in.Status, ""); err != nil {
 			respondErr(w, r, err)
 			return
 		}
@@ -1273,7 +1285,7 @@ func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, act
 			writeErr(w, http.StatusInternalServerError, "gagal hash password")
 			return
 		}
-		if err := h.Forms.SetStatusWithPassword(r.Context(), actx.Account.ID, r.PathValue("id"), in.Status, hash); err != nil {
+		if err := h.Forms.SetStatusWithPassword(r.Context(), actx.Account.ID, id, in.Status, hash); err != nil {
 			respondErr(w, r, err)
 			return
 		}
@@ -1281,9 +1293,26 @@ func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, act
 		writeErr(w, http.StatusBadRequest, "status mesti draft|private|published")
 		return
 	}
-	// Issue #92: audit form status change.
-	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.status_"+in.Status, map[string]any{"form_id": r.PathValue("id")})
-	respond(w, http.StatusOK, map[string]string{"status": in.Status})
+	// THE EDGE. The row is written above; a card the CDN cached while this form
+	// was published or unlisted is dropped here, in the same request. Without
+	// this the card outlives the status change by its own freshness lifetime —
+	// measured on prod as a DRAFT form's card still answering
+	// `cf-cache-status: HIT, age: 1243` while the cache-busted origin answered
+	// 404 — naming the form's title, workspace and host (og_edge_purge.go).
+	var leaving []string
+	if dbstore.OGImagePubliclyCached(f.Status) && !dbstore.OGImagePubliclyCached(in.Status) {
+		leaving = []string{f.Slug}
+	}
+	edge := h.purgeLeftPublicOGCards(r.Context(), actx.Account, leaving)
+	// Issue #92: audit form status change. A purge that did not happen is
+	// recorded too, so the activity log can tell a cleared edge from one that
+	// is still serving the old card.
+	audit := map[string]any{"form_id": id}
+	if edge.Status != "" {
+		audit["edge"] = edge.Status
+	}
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.status_"+in.Status, audit)
+	respond(w, http.StatusOK, withEdgeFields(map[string]any{"status": in.Status}, edge))
 }
 
 // deleteForm soft-deletes a single form (owner-checked via account scope).
@@ -1291,13 +1320,32 @@ func (h *RESTHandlers) deleteForm(w http.ResponseWriter, r *http.Request, actx *
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
 	}
-	if err := h.Forms.SoftDelete(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
+	id := r.PathValue("id")
+	// The status it was in decides whether the edge holds a publicly cached
+	// social card for it; a TRASHED form stops resolving entirely
+	// (findPublicForm scopes on deleted_at IS NULL), so its card 404s at the
+	// origin and must be dropped from the edge (see og_edge_purge.go).
+	f, ferr := h.Forms.GetByID(r.Context(), actx.Account.ID, id)
+	if ferr != nil {
+		respondErr(w, r, ferr)
+		return
+	}
+	if err := h.Forms.SoftDelete(r.Context(), actx.Account.ID, id); err != nil {
 		respondErr(w, r, err)
 		return
 	}
+	var leaving []string
+	if dbstore.OGImagePubliclyCached(f.Status) {
+		leaving = []string{f.Slug}
+	}
+	edge := h.purgeLeftPublicOGCards(r.Context(), actx.Account, leaving)
 	// Issue #92: audit form delete.
-	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.deleted", map[string]any{"form_id": r.PathValue("id")})
-	respond(w, http.StatusOK, map[string]string{"status": "deleted"})
+	audit := map[string]any{"form_id": id}
+	if edge.Status != "" {
+		audit["edge"] = edge.Status
+	}
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.deleted", audit)
+	respond(w, http.StatusOK, withEdgeFields(map[string]any{"status": "deleted"}, edge))
 }
 
 // ── Tong sampah (trash): restore + purge ─────────────────────────────────────
@@ -1444,7 +1492,14 @@ func (h *RESTHandlers) purgeForm(w http.ResponseWriter, r *http.Request, actx *A
 	}
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.purged",
 		map[string]any{"form_id": formID, "slug": f.Slug, "title": f.Title})
-	respond(w, http.StatusOK, map[string]string{"status": "purged", "form_id": formID, "slug": f.Slug})
+	// The row is gone, so the origin can no longer serve this form's card at all;
+	// the edge may still hold the copy a crawler fetched while it was live (a form
+	// is trashed with its status unchanged, so that card can be a public one from
+	// before the trash). Asked for unconditionally: a prefix that matches nothing
+	// costs nothing, and this is the one request that destroys the form for good.
+	edge := h.purgeLeftPublicOGCards(r.Context(), actx.Account, []string{f.Slug})
+	respond(w, http.StatusOK, withEdgeFields(
+		map[string]any{"status": "purged", "form_id": formID, "slug": f.Slug}, edge))
 }
 
 // bulkForms applies an action to many forms at once:
@@ -1503,6 +1558,23 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 	// caller acknowledged. Reported alongside `skipped` so the merchant can see
 	// which live forms still cannot take money.
 	var needsProducts []string
+	// The slugs whose publicly cached social card this action invalidates. Read
+	// BEFORE the write: the status a form is LEAVING is what decides whether the
+	// edge holds a card for it, and after the statement every row carries the new
+	// status (see og_edge_purge.go).
+	var leaving []string
+	if in.Action != "publish" {
+		cards, cerr := h.Forms.CardFormsForIDs(r.Context(), actx.Account.ID, ids)
+		if cerr != nil {
+			respondErr(w, r, cerr)
+			return
+		}
+		for _, c := range cards {
+			if dbstore.OGImagePubliclyCached(c.Status) {
+				leaving = append(leaving, c.Slug)
+			}
+		}
+	}
 	switch in.Action {
 	case "publish", "draft":
 		status := "published"
@@ -1565,9 +1637,14 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 		updated = n
 	}
 	// Issue #92: audit bulk form action.
-	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.bulk_"+in.Action, map[string]any{
+	audit := map[string]any{
 		"action": in.Action, "ids": ids, "updated": updated, "skipped": len(skipped),
-	})
+	}
+	edge := h.purgeLeftPublicOGCards(r.Context(), actx.Account, leaving)
+	if edge.Status != "" {
+		audit["edge"] = edge.Status
+	}
+	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.bulk_"+in.Action, audit)
 	out := map[string]any{"updated": updated}
 	if len(skipped) > 0 {
 		out["skipped"] = skipped
@@ -1578,7 +1655,7 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 		out["needs_products_reason"] = "borang bayaran tanpa produk — ia diterbitkan, " +
 			"tetapi tidak boleh menerima bayaran sehingga produk ditambah"
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, withEdgeFields(out, edge))
 }
 
 // ─── API keys ────────────────────────────────────────────────────────────────

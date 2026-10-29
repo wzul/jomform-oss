@@ -83,6 +83,33 @@ func IsLiveStatus(status string) bool {
 	return false
 }
 
+// OGImagePubliclyCached reports whether the form's generated social card
+// (/og/{slug}.png) is served to ANYONE for this status, and therefore may be
+// sitting in a shared CDN cache under a public freshness lifetime.
+//
+// published and unlisted are the two arms httpapi.handleOGImage serves with
+// `Cache-Control: public`; draft answers 404 with the same body as an unknown
+// slug, and private answers 404 unless the caller holds that form's unlock
+// cookie (and is served `private, no-store`), so neither can be in a shared
+// cache. This is a different question from IsLiveStatus — private IS live but
+// is never publicly cached — and it is what decides whether a status change has
+// to purge the edge: a cached card keeps naming the form's title, workspace and
+// host after its page has stopped serving it (measured on prod: a draft form's
+// card answered from Cloudflare with `age: 1243` while the cache-busted origin
+// answered 404).
+//
+// A write path that moves a form OUT of this set must purge `/og/<slug>.png` in
+// the same request (see internal/cdnpurge); one that moves it IN does not —
+// nothing publicly cacheable was there before (the 404 arm gets the CDN's
+// default few-minute TTL, which is why a publish flips within minutes).
+func OGImagePubliclyCached(status string) bool {
+	switch status {
+	case FormStatusPublished, FormStatusUnlisted:
+		return true
+	}
+	return false
+}
+
 // PublishNeedsAck reports whether moving f to `status` requires the caller to
 // acknowledge that a payment form has nothing to sell.
 //

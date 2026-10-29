@@ -48,6 +48,40 @@ const (
 	ogImageH = 630
 )
 
+// ogImageCacheControl is the freshness lifetime the PUBLIC arm of
+// /og/{slug}.png declares (published and unlisted; the private arm declares
+// `private, no-store` and draft answers 404).
+//
+// It used to be `public, max-age=86400` — a day. That is safe for the BYTES (a
+// card is a pure function of the form's title, workspace, host, theme and logo,
+// and the render cache is keyed on all of them) but it is not safe as an
+// INVITATION: the URL is public, so a crawler that fetched the card while the
+// form was live leaves a copy at the edge, and a form that then leaves a live
+// status (draft, private, trash) has its page and its origin card answer 404
+// while the edge keeps handing out the old one — the form's title, workspace
+// name and host — for as long as the entry lives. Measured on prod 2026-10-26:
+// a DRAFT form's card answered `cf-cache-status: HIT, age: 1243` with the
+// pre-fix bytes while the cache-busted origin answered 404; the same release's
+// own fix was pre-empted that way.
+//
+// Two numbers bound that window and both are needed:
+//
+//  1. every write path that takes a form out of a publicly-cached status purges
+//     `https://<form host>/og/<slug>.png` in the same request (see
+//     og_edge_purge.go → cdnpurge), which makes the window zero when the purge
+//     is configured; and
+//  2. this lifetime, which is what remains when it is not — the same 300s the
+//     media routes chose, for the same reason.
+//
+// cdnpurge.OGImageMaxAgeSeconds holds the number and a test pins this header to
+// it, so the purge contract and the served header cannot drift.
+const ogImageCacheControl = "public, max-age=300"
+
+// ogImageCacheMaxAgeSeconds is the same figure as a number, for responses that
+// report the residual edge window (derived from the header text so the header
+// stays the single source of truth).
+var ogImageCacheMaxAgeSeconds = cacheMaxAgeSeconds(ogImageCacheControl)
+
 // ogBrandColors mirror the JomForm brand (/brand): Indigo 500 #6366f1,
 // Violet 500 #8b5cf6, Indigo 600 #4f46e5, Ink 900 #17181c, Paper #f7f8f8.
 // The og:image gradient is indigo→violet (branding), not indigo→white
@@ -517,7 +551,7 @@ func (h *PublicHandlers) handleOGImage(w http.ResponseWriter, r *http.Request) {
 	//     page (this is why the rule is not a blanket "published only").
 	//
 	// Pinned by ogimage_status_gate_test.go.
-	cacheControl := "public, max-age=86400"
+	cacheControl := ogImageCacheControl
 	switch f.Status {
 	case dbstore.FormStatusDraft:
 		http.Error(w, "not found", http.StatusNotFound)

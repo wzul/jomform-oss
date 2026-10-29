@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/auth"
+	"github.com/wzul/jomform/api/internal/cdnpurge"
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/formfields"
@@ -914,7 +916,7 @@ type publishFormIn struct {
 
 func (s *Server) publishFormMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in publishFormIn,
-) (*mcp.CallToolResult, map[string]string, error) {
+) (*mcp.CallToolResult, map[string]any, error) {
 	// Issue #307: resolve + RBAC-gate the owning account across the user's workspaces.
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
@@ -924,14 +926,18 @@ func (s *Server) publishFormMCP(
 	if status == "" {
 		status = dbstore.FormStatusPublished
 	}
+	// ONE read of the CURRENT row, before the write: the acknowledgement below is
+	// a TRANSITION rule, and whether the edge holds a publicly cached card for this
+	// form depends on the status it is LEAVING (dbstore.OGImagePubliclyCached) —
+	// reading after the write would lose that.
+	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
+	if err != nil {
+		return nil, nil, errors.New("borang tidak dijumpai")
+	}
 	// Onboarding gap: a payment form with nothing to sell must not go live
 	// silently through MCP either — this is the same rule the REST publish and
 	// status routes apply (dbstore.PublishNeedsAck), not a second copy.
 	if dbstore.IsLiveStatus(status) && !in.Acknowledge {
-		f, ferr := s.deps.Forms.GetByID(ctx, acc, in.FormID)
-		if ferr != nil {
-			return nil, nil, errors.New("borang tidak dijumpai")
-		}
 		if dbstore.PublishNeedsAck(f, status) {
 			return nil, nil, errors.New(errPublishNeedsAck)
 		}
@@ -956,7 +962,15 @@ func (s *Server) publishFormMCP(
 	default:
 		return nil, nil, errors.New("status mesti published|private|draft")
 	}
-	return nil, map[string]string{"status": status, "form_id": in.FormID}, nil
+	// THE EDGE: the row is written above, so a card the CDN cached while the form
+	// was published/unlisted is dropped here, in the same call (see
+	// og_edge_purge.go). Same rule and same reported outcome as REST setFormStatus.
+	var leaving []string
+	if dbstore.OGImagePubliclyCached(f.Status) && !dbstore.OGImagePubliclyCached(status) {
+		leaving = []string{f.Slug}
+	}
+	edge := s.purgeLeftPublicOGCards(ctx, acc, leaving)
+	return nil, withEdgeFields(map[string]any{"status": status, "form_id": in.FormID}, edge), nil
 }
 
 // setFormPasswordIn is the input for set_form_password (issue #176).
@@ -993,30 +1007,51 @@ func (s *Server) setFormPassword(
 
 func (s *Server) deleteFormMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
-) (*mcp.CallToolResult, map[string]string, error) {
+) (*mcp.CallToolResult, map[string]any, error) {
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
+	// The status it is LEAVING decides whether the CDN holds a public card for it.
+	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
+	if err != nil {
+		return nil, nil, errors.New("borang tidak dijumpai")
+	}
 	if err := s.deps.Forms.SetStatus(ctx, acc, in.FormID, dbstore.FormStatusDraft); err != nil {
 		return nil, nil, err
 	}
-	return nil, map[string]string{"status": "unpublished", "form_id": in.FormID}, nil
+	var leaving []string
+	if dbstore.OGImagePubliclyCached(f.Status) {
+		leaving = []string{f.Slug}
+	}
+	edge := s.purgeLeftPublicOGCards(ctx, acc, leaving)
+	return nil, withEdgeFields(map[string]any{"status": "unpublished", "form_id": in.FormID}, edge), nil
 }
 
 // deleteFormMCPSoft soft-deletes a form (parity with REST DELETE
 // /v1/rest/forms/{id} and the dashboard trash). Registered as delete_form.
 func (s *Server) deleteFormMCPSoft(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
-) (*mcp.CallToolResult, map[string]string, error) {
+) (*mcp.CallToolResult, map[string]any, error) {
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
+	// A TRASHED form stops resolving publicly (findPublicForm scopes on
+	// deleted_at IS NULL), so its cached card has to leave the edge with it.
+	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
+	if err != nil {
+		return nil, nil, errors.New("borang tidak dijumpai")
+	}
 	if err := s.deps.Forms.SoftDelete(ctx, acc, in.FormID); err != nil {
 		return nil, nil, err
 	}
-	return nil, map[string]string{"status": "deleted", "form_id": in.FormID}, nil
+	var leaving []string
+	if dbstore.OGImagePubliclyCached(f.Status) {
+		leaving = []string{f.Slug}
+	}
+	edge := s.purgeLeftPublicOGCards(ctx, acc, leaving)
+	return nil, withEdgeFields(map[string]any{"status": "deleted", "form_id": in.FormID}, edge), nil
 }
 
 // bulkFormsMCP mirrors POST /v1/rest/forms/bulk: publish|draft|delete over
@@ -1063,6 +1098,14 @@ func (s *Server) bulkFormsMCP(
 	// to sell. They are withheld and reported (a bulk publish must not be a way
 	// around the single-publish guard).
 	var needsProducts []string
+	// Social cards this action invalidates, as absolute URLs, collected while the
+	// loop already has each form's account and row: a bulk draft/delete can span
+	// several workspaces (issue #307), so the hosts differ per id, and the purge
+	// itself is ONE call at the end (see og_edge_purge.go). A form's cached card
+	// only needs dropping when it is LEAVING a publicly-cached status, which is a
+	// property of the row BEFORE the write.
+	var cardURLs []string
+	hostCache := make(map[string][]string, len(ids))
 	for _, id := range ids {
 		acc, err := s.resolveFormAccount(ctx, id)
 		if err != nil {
@@ -1070,6 +1113,20 @@ func (s *Server) bulkFormsMCP(
 		}
 		if err := s.requireWriteRoleIn(ctx, acc); err != nil {
 			continue // read_only member here — skip
+		}
+		if in.Action != "publish" {
+			f, ferr := s.deps.Forms.GetByID(ctx, acc, id)
+			if ferr != nil {
+				continue
+			}
+			if dbstore.OGImagePubliclyCached(f.Status) {
+				hosts, ok := hostCache[acc]
+				if !ok {
+					hosts = s.ogCardHosts(ctx, acc)
+					hostCache[acc] = hosts
+				}
+				cardURLs = append(cardURLs, ogCardURLsForHosts(hosts, []string{f.Slug})...)
+			}
 		}
 		var e error
 		switch in.Action {
@@ -1097,6 +1154,15 @@ func (s *Server) bulkFormsMCP(
 		}
 	}
 	out := map[string]any{"status": "ok", "action": in.Action, "updated": updated}
+	if len(cardURLs) > 0 {
+		// The rows are written above; the edge copies go here, in ONE request for
+		// every affected card (cdnpurge chunks anything past its per-request cap).
+		edge := cdnpurge.PurgeObjectURLs(ctx, cardURLs)
+		if edge.Err != nil {
+			slog.Warn("mcp_bulk_forms_og_edge_purge", "err", edge.Err, "status", edge.Status, "urls", len(cardURLs))
+		}
+		out = withEdgeFields(out, edge)
+	}
 	if len(needsProducts) > 0 {
 		out["needs_products"] = needsProducts
 		out["needs_products_reason"] = "borang bayaran tanpa produk tidak diterbitkan — " +

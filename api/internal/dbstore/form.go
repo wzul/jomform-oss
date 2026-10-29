@@ -1406,6 +1406,48 @@ func (s *FormStore) BlockedGalleryTemplates(ctx context.Context, accountID strin
 	return out, rows.Err()
 }
 
+// FormCard is the minimum a bulk write path needs to know about a form it is
+// about to move: the slug that names its /og/{slug}.png card, and the status
+// that decides whether that card is publicly cached (see OGImagePubliclyCached).
+type FormCard struct {
+	ID     string
+	Slug   string
+	Status string
+}
+
+// CardFormsForIDs returns the id/slug/status of the account's live forms among
+// formIDs.
+//
+// It exists for the bulk write paths. A bulk "draft" or "delete" moves many forms
+// out of a publicly-served status in ONE statement, and every one of them may
+// have a cached social card that keeps naming it after the page 404s — so the
+// handler needs their slugs, and reading them AFTER the write would lose the old
+// status that decided whether anything had to be purged. Ids that the account
+// does not own, or that are already trashed, are simply absent (the same rows the
+// write itself will not touch).
+func (s *FormStore) CardFormsForIDs(ctx context.Context, accountID string, formIDs []string) ([]FormCard, error) {
+	if len(formIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, slug, status FROM forms
+		 WHERE account_id=$1 AND id = ANY($2) AND deleted_at IS NULL`,
+		accountID, formIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FormCard
+	for rows.Next() {
+		var c FormCard
+		if err := rows.Scan(&c.ID, &c.Slug, &c.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // SetStatusMany publishes/unpublishes many forms at once; returns how many
 // rows were updated (account-scoped, live forms only).
 //
