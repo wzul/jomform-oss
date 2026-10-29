@@ -21,7 +21,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -89,6 +91,24 @@ func TestPublishRefusesTemplateWithoutGalleryMetadata(t *testing.T) {
 		{"html block with an empty value", map[string]any{
 			"category": "Contact",
 			"blocks":   []any{map[string]any{"type": "html", "value": ""}},
+		}},
+		// t_cda6afd5: whitespace is not a description. formfields.Description
+		// trims a block's value before it decides the block is empty, so a
+		// spaces-only Section published a template whose gallery card had a
+		// category and NO subtitle — the #594 outcome the predicate exists to
+		// stop. The gate now trims the same way (formProseValueSQL), so these
+		// three are refused exactly like their "" siblings above.
+		{"section block with a spaces-only value", map[string]any{
+			"category": "Contact",
+			"blocks":   []any{map[string]any{"type": "section", "value": "   "}},
+		}},
+		{"html block with a tab/newline value", map[string]any{
+			"category": "Contact",
+			"blocks":   []any{map[string]any{"type": "html", "value": "\t\n  \r\n"}},
+		}},
+		{"text block with a spaces-only value", map[string]any{
+			"category": "Contact",
+			"blocks":   []any{map[string]any{"type": "text", "value": "   "}},
 		}},
 	}
 	for i, tc := range cases {
@@ -330,5 +350,121 @@ func TestPublishAcceptsASectionOrHTMLDescription(t *testing.T) {
 		if n != 1 {
 			t.Errorf("%s: SetStatusMany published %d rows, want 1", tc.name, n)
 		}
+	}
+}
+
+// TestGalleryGateTrimsExactlyWhatDescriptionTrims pins the ONE rule the
+// predicate is stated in terms of (card t_cda6afd5): a template may publish iff
+// formfields.Description can describe it.
+//
+// The divergence it closes was whitespace. The gate asked
+// for a non-empty value with no trim at all, while Description asks
+// `strings.TrimSpace(value) != ""`, so a Section whose value was "   " — or
+// "	\n", which a JSON caller can send even though a merchant's keyboard cannot
+// — counted as a description to the gate and as nothing to the card: the
+// template published, the gallery row carried `"description": null`, and the
+// merchant's card had a category and no subtitle. That is the #594 outcome the
+// gate exists to prevent, reachable through `section`/`html` because those are
+// the types the read side prefers.
+//
+// The whitespace set is DERIVED from unicode.IsSpace here, not hand-copied from
+// formProseValueSQL, so this test does not restate the implementation: it asks
+// Go what blank means, asserts the read side cannot describe such a block, and
+// only then asks the gate. A code point the SQL trim forgets reds here naming
+// the code point — the two rules stay in step by being one set.
+func TestGalleryGateTrimsExactlyWhatDescriptionTrims(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	fs := NewFormStore(p)
+	acc := uniqueAccount(t, ctx, p)
+
+	cfg := func(blocks ...map[string]any) map[string]any {
+		list := make([]any, 0, len(blocks))
+		for _, b := range blocks {
+			list = append(list, b)
+		}
+		return map[string]any{"mode": "response", "category": "Contact", "blocks": list}
+	}
+	prose := func(blockType, value string) map[string]any {
+		return map[string]any{"id": "in1", "type": blockType, "value": value}
+	}
+
+	// The whitespace Go calls whitespace. Every code point, not a sample.
+	var blanks []rune
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if unicode.IsSpace(r) {
+			blanks = append(blanks, r)
+		}
+	}
+	if len(blanks) < 20 {
+		t.Fatalf("derived only %d unicode.IsSpace code points — the derivation is broken, not the "+
+			"gate, so no verdict below would mean anything", len(blanks))
+	}
+
+	for _, r := range blanks {
+		value := string(r)
+		// PREMISE, in Go: this really is a value Go calls blank.
+		if strings.TrimSpace(value) != "" {
+			t.Fatalf("U+%04X: strings.TrimSpace(%q) is not empty — not a whitespace code point", r, value)
+		}
+		c := cfg(prose("section", value))
+		// The read side is the authority: it cannot describe this block.
+		if got := formfields.Description(c); got != "" {
+			t.Fatalf("U+%04X: formfields.Description = %q, want \"\" — the premise of this case", r, got)
+		}
+
+		f := templateWith(t, ctx, p, acc, fmt.Sprintf("tpl-6a23-ws-%04x", r), FormStatusDraft, c)
+
+		// The bulk path's skip listing is the predicate on its own.
+		blocked, err := fs.BlockedGalleryTemplates(ctx, acc, []string{f.ID})
+		if err != nil {
+			t.Fatalf("U+%04X: BlockedGalleryTemplates: %v", r, err)
+		}
+		if len(blocked) != 1 {
+			t.Errorf("U+%04X (%q): BlockedGalleryTemplates = %v, want the id — a bulk publish would "+
+				"count this template as published while its gallery card has no subtitle", r, value, blocked)
+		}
+
+		// ...and the publish paths refuse it.
+		if err := fs.SetStatus(ctx, acc, f.ID, FormStatusPublished); !errors.Is(err, ErrTemplateGalleryMetadata) {
+			t.Errorf("U+%04X (%q): SetStatus error = %v, want ErrTemplateGalleryMetadata — the gate "+
+				"accepted a value formfields.Description trims to nothing", r, value, err)
+		}
+		if err := fs.SetStatusWithPassword(ctx, acc, f.ID, FormStatusPublished, ""); !errors.Is(err, ErrTemplateGalleryMetadata) {
+			t.Errorf("U+%04X (%q): SetStatusWithPassword error = %v, want ErrTemplateGalleryMetadata",
+				r, value, err)
+		}
+		var status string
+		if err := p.QueryRow(ctx, `SELECT status FROM forms WHERE id=$1`, f.ID).Scan(&status); err != nil {
+			t.Fatalf("read status: %v", err)
+		}
+		if status != FormStatusDraft {
+			t.Errorf("U+%04X (%q): status = %q after a refused publish, want draft", r, value, status)
+		}
+	}
+
+	// THE OTHER DIRECTION — the trim must not eat a real intro. Surrounding
+	// whitespace is not content, but the sentence inside it is, and the card
+	// renders the trimmed sentence.
+	const sentence = "Get in touch — we usually reply within a day."
+	padded := cfg(prose("section", "\t  "+sentence+" \n "))
+	if got := formfields.Description(padded); got != sentence {
+		t.Fatalf("formfields.Description(padded) = %q, want %q", got, sentence)
+	}
+	ok := templateWith(t, ctx, p, acc, "tpl-6a23-ws-padded", FormStatusDraft, padded)
+	if err := fs.SetStatus(ctx, acc, ok.ID, FormStatusPublished); err != nil {
+		t.Errorf("SetStatus refused a Section whose intro is real text with whitespace around it: %v", err)
+	}
+
+	// And a blank Section next to a real one is still a description — the gate
+	// asks whether ANY prose block carries text, exactly as Description walks
+	// the blocks until it finds one.
+	mixed := cfg(prose("section", "   "), prose("section", sentence))
+	if got := formfields.Description(mixed); got != sentence {
+		t.Fatalf("formfields.Description(mixed) = %q, want %q", got, sentence)
+	}
+	mixedTpl := templateWith(t, ctx, p, acc, "tpl-6a23-ws-mixed", FormStatusDraft, mixed)
+	if err := fs.SetStatus(ctx, acc, mixedTpl.ID, FormStatusPublished); err != nil {
+		t.Errorf("SetStatus refused a template that has a blank Section AND a described one: %v", err)
 	}
 }

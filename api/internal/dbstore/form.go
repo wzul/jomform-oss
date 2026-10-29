@@ -517,6 +517,34 @@ func formBlocksArray(expr string) string {
 	return "CASE WHEN jsonb_typeof(" + expr + ") = 'array' THEN " + expr + " ELSE '[]'::jsonb END"
 }
 
+// formProseValueSQL renders the block value named by expr with the SAME leading
+// and trailing whitespace removed as Go's strings.TrimSpace — the trim
+// formfields.Description applies before it decides a block carries a
+// description (card t_cda6afd5).
+//
+// A bare `btrim(expr)` is not enough, and an untrimmed "is it non-empty" test
+// is wrong: `btrim(value)` strips SPACES only, so a value of "	\n" would still count as a description to
+// the gate while Description trims it away, and a value of "   " counted as one
+// even though the card renders no subtitle — the exact #594 outcome the gate
+// exists to prevent, reachable through `section`/`html` because the read side
+// prefers those types.
+//
+// The escape list IS unicode.IsSpace's set (what strings.TrimSpace strips):
+// space, 	 \n \v \f \r, U+0085 NEL, U+00A0 NBSP, U+1680, U+2000-U+200A,
+// U+2028 U+2029, U+202F, U+205F, U+3000. Every code point is written as a \u
+// escape on purpose: PostgreSQL reads an unknown string escape as the literal
+// character, so `E'\v'` is the letter "v", not a vertical tab (measured).
+//
+// template_gallery_metadata_issue594_test.go derives the same set from
+// unicode.IsSpace and drives the gate over every member, so the two rules can
+// only stay in step by being the same set. Keep them that way: a code point
+// missing here publishes a template whose card has no subtitle.
+func formProseValueSQL(expr string) string {
+	return `btrim(` + expr + `, E'\u0020\u0009\u000a\u000b\u000c\u000d\u0085\u00a0` +
+		`\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a` +
+		`\u2028\u2029\u202f\u205f\u3000')`
+}
+
 // galleryMetadataMissingSQL is the predicate that reports a template row as
 // unfit for the gallery: no config.category, or no description block (issues
 // #594, t_6a23c70d).
@@ -536,6 +564,13 @@ func formBlocksArray(expr string) string {
 // block. Keep the type list in step with formfields.proseBlockTypes — the
 // gate and the card must not disagree about what a description is.
 //
+// "Non-empty" means non-empty AFTER the trim the read side applies
+// (formProseValueSQL): a whitespace-only block is no description, because
+// formfields.Description skips it and the gallery card then renders a title
+// with no subtitle — the very #594 outcome this predicate is here to stop
+// (card t_cda6afd5). Refusing that row is the intended narrowing, not a
+// regression: it is a row whose card has nothing to show.
+//
 // It is a var rather than a const only because it is assembled from
 // formBlocksArray(); the rule it states is fixed at init and never mutated.
 var galleryMetadataMissingSQL = `
@@ -543,7 +578,7 @@ var galleryMetadataMissingSQL = `
 	OR NOT EXISTS (
 	     SELECT 1 FROM jsonb_array_elements(` + formBlocksArray("config->'blocks'") + `) b
 	      WHERE b->>'type' IN ('section', 'html', 'text')
-	        AND COALESCE(b->>'value', '') <> ''
+	        AND COALESCE(` + formProseValueSQL("b->>'value'") + `, '') <> ''
 	   )`
 
 // setStatusSQL performs a status change and, in the same round trip, reports

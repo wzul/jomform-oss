@@ -509,7 +509,8 @@ export default function CustomizeDocsPage() {
         nothing to show.
       </p>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Publishing is therefore checked: a template missing either field is{" "}
+        Publishing is therefore checked: a template missing either field — or carrying only spaces
+        where the field belongs, since the card trims it before rendering — is{" "}
         <strong>refused with a clear message</strong> rather than appearing in the gallery as a bare
         title. Publishing several forms at once behaves differently on purpose — a{" "}
         <strong>bulk publish skips such a template while still publishing the other forms you
