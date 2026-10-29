@@ -213,11 +213,26 @@ run_probe() {
 expect_rc() { # expect_rc <code> <label>
   if [ "$RC" -eq "$1" ]; then ok "$2"; else bad "$2 (exit ${RC}, wanted $1)"; fi
 }
+# ── assertions do not use a pipe ─────────────────────────────────────────────
+# These read `printf '%s' "$OUT" | grep -qF -- NEEDLE`. Under this file's
+# `set -uo pipefail` that is a RACE, not an assertion: `grep -q` exits the moment
+# it matches and closes its end of the pipe, and if printf's write lands after
+# that, printf dies of SIGPIPE and the PIPELINE status is 141. `expect_in` then
+# takes its `bad` branch and the gate reds naming a substring that IS in $OUT —
+# measured at 6 and 10 phantom rcs of 141 in two 4800-evaluation runs of this
+# suite's own captured output under load. It reads as a flake, because a plain
+# re-run of the same tree passes.
+#   `has` = the old `grep -qF` (needle appears anywhere in the value)
+# A bash pattern comparison has no second process to be signalled, so the status
+# depends only on the text. The needle is quoted, so it stays literal — never a
+# glob or a regex — exactly as `grep -F` was.
+has() { case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+
 expect_in() { # expect_in <text> <label>
-  if printf '%s' "$OUT" | grep -qF -- "$1"; then ok "$2"; else bad "$2 (output did not contain '$1')"; fi
+  if has "$1" "$OUT"; then ok "$2"; else bad "$2 (output did not contain '$1')"; fi
 }
 expect_not_in() { # expect_not_in <text> <label>
-  if printf '%s' "$OUT" | grep -qF -- "$1"; then bad "$2 (output contained '$1')"; else ok "$2"; fi
+  if has "$1" "$OUT"; then bad "$2 (output contained '$1')"; else ok "$2"; fi
 }
 
 say "media-purge-probe_test  probe=${PROBE}"
@@ -349,6 +364,26 @@ run_probe --origin "http://127.0.0.1:1" --edge "http://127.0.0.1:1" --path "$MED
 expect_rc 2 "K: --window 0 is exit 2"
 run_probe --origin "http://127.0.0.1:1" --edge "http://127.0.0.1:1" --path "$MEDIA" --purge 1
 expect_rc 2 "K: --purge without --token is exit 2"
+
+# ── L. this suite does not assert through a pipe ────────────────────────────
+say ""
+say "L. no assertion status in this file is decided by a pipe race"
+# Every case above passes even if a piped early-exit reader is back in this file,
+# because the race is rare (10 phantom rcs in 4800 evaluations) — so the file
+# checks ITSELF, the shape scripts/preflight_test.sh and the host-gate suites use
+# for their own header claims. A piped `grep -q` is a status decided by a race; a
+# piped `head -n1` is the same early-exit reader, and under `set -e` its 141 would
+# abort a suite instead of failing one assertion. Only this file is asserted;
+# comment lines are skipped because the block above necessarily names the idiom
+# it forbids.
+SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
+LIVE_PIPED="$(grep -nE '(echo|printf)[^|]*\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q|\|[[:space:]]*head[[:space:]]+-n?[[:space:]]*1' "$SELF" 2>/dev/null \
+  | grep -vE '^[0-9]+:[[:space:]]*#' | grep -v 'grep -nE' || true)"
+if [ -z "$LIVE_PIPED" ]; then
+  ok "L: no live piped early-exit reader (no assertion status decided by a race)"
+else
+  bad "L: a piped early-exit reader is back, so a MATCH can read as a miss: $LIVE_PIPED"
+fi
 
 say ""
 if [ "$FAILS" -eq 0 ]; then
