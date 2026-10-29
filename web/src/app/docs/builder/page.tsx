@@ -151,6 +151,32 @@ export default function BuilderDocsPage() {
         edited like any other.
       </p>
 
+      <h2 className="mt-8 text-xl font-semibold text-slate-900">
+        When a rule&apos;s field no longer exists
+      </h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A conditional rule names the field it watches by that field&apos;s internal id. Some older
+        versions of the builder gave every block a new id each time a form was opened, so a form
+        saved by one of them can still carry a rule that names an id no block has any more. The
+        rule picker used to show such a block as if it had no rule at all — the opposite of what
+        buyers got: the server still evaluated the rule, it never matched, and the block stayed
+        hidden on the live page with every answer to it silently thrown away.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The builder now shows it instead. The block&apos;s card on the canvas carries a
+        &quot;rule broken&quot; label, and its settings panel lists the unknown id as Not available with
+        a notice saying the rule never matches and that answers to the field are discarded. Nothing
+        is changed on your behalf: pick the field the rule should watch, or choose Always show to
+        remove the rule. Opening a form and publishing it does not rewrite a rule you have not
+        edited — the broken rule is saved as it was, so you can decide what it should do.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The same label appears on a rule that came from a template. A template stores its blocks and
+        their rules exactly as it was saved, so a template written by an older version can bring a
+        rule naming a field the new form does not have — the notice is there for you to point it at
+        a real field, or to clear it.
+      </p>
+
       <h2 id="url-fields" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
         What a website field accepts
       </h2>

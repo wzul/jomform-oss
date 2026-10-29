@@ -1324,6 +1324,14 @@ export const DICT = {
   "bld.required": { en: "Required", ms: "Wajib", zh: "必填", ta: "கட்டாயம்", ar: "مطلوب" },
   "bld.condLogic": { en: "Conditional logic (optional)", ms: "Logik bersyarat (pilihan)", zh: "条件逻辑（可选）", ta: "நிபந்தனை தர்க்கம் (விருப்பம்)", ar: "المنطق الشرطي (اختياري)" },
   "bld.alwaysShow": { en: "— Always show —", ms: "— Sentiasa tunjuk —", zh: "— 始终显示 —", ta: "— எப்போதும் காட்டு —", ar: "— اعرض دائماً —" },
+  // Card t_a81a9165: a stored conditional rule whose `field_id` is not an option
+  // the picker can offer. The id must reach the merchant (so they can see which
+  // reference broke), and the notice has to state the LIVE consequence, because
+  // the old behaviour was the opposite claim: the block read as "always show"
+  // while the server kept it hidden and discarded its answers.
+  "bld.condOptionUnavailable": { en: "⚠ Not available: {id}", ms: "⚠ Tidak tersedia: {id}", zh: "⚠ 不可用：{id}", ta: "⚠ கிடைக்கவில்லை: {id}", ar: "⚠ غير متاح: {id}" },
+  "bld.condWarnUnavailable": { en: "This block's rule points at a field that is not available on this form ({id}). On the live form the rule never matches, so this block stays hidden and any answer to it is discarded. Pick a field above, or choose “Always show” to remove the rule.", ms: "Peraturan blok ini menunjuk kepada medan yang tidak tersedia pada borang ini ({id}). Pada borang langsung peraturan ini tidak pernah padan, jadi blok ini kekal tersembunyi dan sebarang jawapan kepadanya dibuang. Pilih medan di atas, atau pilih “Sentiasa tunjuk” untuk membuang peraturan ini.", zh: "此区块的规则指向本表单中不可用的字段（{id}）。在正式表单上该规则永不匹配，因此该区块会一直隐藏，提交给它的答案会被丢弃。请在上方选择一个字段，或选择“始终显示”以删除该规则。", ta: "இந்தத் தொகுதியின் விதி இந்தப் படிவத்தில் கிடைக்காத புலத்தைச் சுட்டுகிறது ({id}). நேரடி படிவத்தில் இந்த விதி ஒருபோதும் பொருந்தாது, எனவே இந்தத் தொகுதி மறைந்திருக்கும், அதற்கான பதில்கள் நிராகரிக்கப்படும். மேலே ஒரு புலத்தைத் தேர்ந்தெடுக்கவும், அல்லது விதியை நீக்க “எப்போதும் காட்டு” தேர்ந்தெடுக்கவும்.", ar: "تشير قاعدة هذه الكتلة إلى حقل غير متاح في هذا النموذج ({id}). في النموذج المنشور لا تتطابق القاعدة أبداً، لذا تبقى هذه الكتلة مخفية وتُهمل أي إجابة عليها. اختر حقلاً من الأعلى، أو اختر «اعرض دائماً» لإزالة القاعدة." },
+  "bld.condBrokenBadge": { en: "rule broken", ms: "peraturan rosak", zh: "规则失效", ta: "விதி பழுது", ar: "القاعدة معطلة" },
   "bld.displaySettings": { en: "Display settings", ms: "Tetapan paparan", zh: "显示设置", ta: "காட்சி அமைப்புகள்", ar: "إعدادات العرض" },
   "bld.themeColor": { en: "Theme color (primary)", ms: "Warna tema (primer)", zh: "主题色（主色）", ta: "தீம் நிறம் (முதன்மை)", ar: "لون السمة (أساسي)" },
   "bld.logoUrl": { en: "Logo URL (https)", ms: "URL logo (https)", zh: "Logo 链接（https）", ta: "லோகோ URL (https)", ar: "رابط الشعار (https)" },

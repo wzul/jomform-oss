@@ -30,6 +30,7 @@ import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { formDescription } from "../../lib/formDescription";
 import { blockTypeLabel, isWithdrawnBlockType } from "../../lib/withdrawnBlock";
 import { hydrateBlockIds } from "../../lib/blockHydrate";
+import { conditionTargetUnavailable } from "../../lib/builderCondition";
 import { looksLikeProse, treatAsFieldLabel, treatAsIntro } from "../../lib/textBlockProse";
 
 /* ─── types ──────────────────────────────────────────────────────────────── */
@@ -1297,6 +1298,11 @@ export default function Builder() {
      controls for the selected block. */
   function renderFieldSettings(b: Block) {
     const upd = (patch: Partial<Block>) => updateBlock(b.id, patch);
+    // Card t_a81a9165: what the conditional-logic picker can OFFER, and whether
+    // the block's stored rule points somewhere the picker cannot offer. Computed
+    // once here so the panel and the canvas badge below read the same answer.
+    const condTargets = blocks.filter((x) => x.id !== b.id && fieldTypes.includes(x.type));
+    const condUnavailable = conditionTargetUnavailable(blocks, b.id, b.condition?.field_id, fieldTypes);
     // a11y (card t_524d186d): every control here needs a real accessible name.
     // The <label> used to be a SIBLING that wrapped nothing and had no htmlFor,
     // so these inputs were named only by their `placeholder` attribute — and a
@@ -1827,7 +1833,7 @@ export default function Builder() {
         )}
 
         {/* conditional logic */}
-        {fieldTypes.includes(b.type) && blocks.length > 1 && (
+        {fieldTypes.includes(b.type) && (blocks.length > 1 || condUnavailable) && (
           <div className="rounded-md border border-slate-200 p-2">
             {/* a11y (card t_524d186d): this group heading names every control in
                 the block. The rule picker had no accessible name at all (axe
@@ -1837,6 +1843,15 @@ export default function Builder() {
             <p id={`jf-cond-${b.id}`} className="text-[11px] font-medium text-slate-600">
               {t("bld.condLogic")}
             </p>
+            {/* Card t_a81a9165: the picker's value is the STORED id, so a stored
+                id no option carries used to leave the browser reporting "" —
+                the "— Always show —" option — while `b.condition` stayed
+                non-null and the save wrote the broken rule straight back. The
+                extra option below makes that value resolvable and names it, so
+                the merchant sees a rule that cannot match instead of the
+                opposite claim. `condUnavailable` also opens this whole section
+                for a one-block form, where a stored rule would otherwise have
+                no UI at all. */}
             <select
               aria-labelledby={`jf-cond-${b.id}`}
               value={b.condition?.field_id || ""}
@@ -1850,14 +1865,25 @@ export default function Builder() {
               className="mt-1 w-full rounded border border-slate-200 px-2 py-1 text-xs"
             >
               <option value="">{t("bld.alwaysShow")}</option>
-              {blocks
-                .filter((x) => x.id !== b.id && fieldTypes.includes(x.type))
-                .map((x) => (
-                  <option key={x.id} value={x.id}>
-                    {x.value || x.type} (#{blocks.indexOf(x) + 1})
-                  </option>
-                ))}
+              {condUnavailable && (
+                <option value={b.condition!.field_id}>
+                  {t("bld.condOptionUnavailable", { id: b.condition!.field_id })}
+                </option>
+              )}
+              {condTargets.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.value || x.type} (#{blocks.indexOf(x) + 1})
+                </option>
+              ))}
             </select>
+            {condUnavailable && (
+              <p
+                role="alert"
+                className="mt-1 rounded-md border border-[var(--jf-warning-text)] bg-[#fffbeb] p-2 text-[11px] leading-relaxed text-[var(--jf-warning-text)]"
+              >
+                {t("bld.condWarnUnavailable", { id: b.condition!.field_id })}
+              </p>
+            )}
             {b.condition && (
               <div className="mt-1 flex gap-1">
                 <select
@@ -2278,7 +2304,24 @@ export default function Builder() {
                   }`}
                 >
                   <div className="mb-1.5 flex items-center justify-between text-[10px] uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
-                    <span>{typeLabel(b.type)}</span>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span>{typeLabel(b.type)}</span>
+                      {/* Card t_a81a9165: a rule whose field is not available on
+                          this form never matches, so the block is hidden on the
+                          live page and its answers are discarded. Flag it on the
+                          card as well as in the panel — otherwise the defect is
+                          invisible until the merchant happens to open THIS block.
+                          Same warning tokens as the panel notice above (the pair
+                          the a11y gate already measures on this page). */}
+                      {conditionTargetUnavailable(blocks, b.id, b.condition?.field_id, fieldTypes) && (
+                        <span
+                          title={t("bld.condWarnUnavailable", { id: b.condition!.field_id })}
+                          className="shrink-0 rounded bg-[#fffbeb] px-1 py-0.5 text-[9px] normal-case tracking-normal text-[var(--jf-warning-text)]"
+                        >
+                          {t("bld.condBrokenBadge")}
+                        </span>
+                      )}
+                    </span>
                     {/* #652: four 44px buttons ate ~176px of a ~350px card.
                         Reorder (the most frequent action) keeps its own small
                         icon buttons; the rarer Duplicate/Remove move into one ⋯
