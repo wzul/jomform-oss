@@ -39,7 +39,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -180,16 +181,82 @@ exit 9
   return stub;
 }
 
+// THE LOCK DIR THIS FILE HANDS A SPAWNED HARNESS IS ITS OWN (card `t_1121a3c0`).
+//
+// Every harness of the family takes ONE host-wide, per-worktree `flock` and holds it for
+// its WHOLE run (`web/scripts/biteproof_*.sh`, key `sha256(git rev-parse
+// --absolute-git-dir)[:16]` under `/tmp/jomform-biteproof-docs-bite`; the rule and its
+// eleven legs live in `harnessLock.test.ts`). Several of them run THIS suite while they
+// hold it — `biteproof_settings_tabs.sh` and `biteproof_forms_bulk_failure.sh` through
+// `npm run build`, `biteproof_next_managed_files.sh` through `npm run test:unit` — so a
+// harness spawned from the end-to-end leg below inherited `/tmp` and asked for the lock
+// its own caller was holding. Measured on this host 2026-10-29 on an installed tree
+// (`web/node_modules` from `npm ci`, node v24.4.0): the leg sat in `flock -w 120` three
+// times, once per retry, and then read the wait-out (exit 75) as a red — 6m20s for ONE
+// case of the caller, and every harness that runs the suite went red for a reason that
+// has nothing to do with the node this file puts on PATH.
+//
+// This leg MUTATES NOTHING (the capability gate refuses before the first case), so there
+// is nothing for the family lock to serialise: it gets a private base, exactly as
+// `harnessLock.test.ts:640-652` gives its own runs, and the assertion below pins that a
+// held family lock cannot turn this leg into a wait-out.
+const harnessLocks = join(tmp, "harness-locks");
+
 function runWithStubPath(args: string[], env: Record<string, string> = {}) {
   const bin = join(tmp, "stub-bin");
   mkdirSync(bin, { recursive: true });
+  mkdirSync(harnessLocks, { recursive: true });
   nodeStub(bin);
   const res = spawnSync("bash", args, {
     cwd: webRoot,
     encoding: "utf8",
-    env: { ...process.env, PATH: `${bin}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, ...env },
+    env: {
+      ...process.env,
+      PATH: `${bin}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+      BITEPROOF_LOCK_DIR: harnessLocks,
+      ...env,
+    },
   });
   return { status: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+}
+
+// The family lock file for THIS worktree, re-derived from the rule the harnesses use
+// (`biteproof_next_managed_files.sh:59-72` and `harnessLock.test.ts:474`) rather than
+// hardcoded: a wrong key would make "the lock is held" true of a file nobody contends for
+// and the premise below would pass vacuously.
+function familyLockFile(): string | undefined {
+  const r = spawnSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: webRoot, encoding: "utf8" });
+  if (r.status !== 0) return undefined;
+  const key = createHash("sha256").update(r.stdout.trim()).digest("hex").slice(0, 16);
+  return join(process.env.BITEPROOF_LOCK_DIR || "/tmp", "jomform-biteproof-docs-bite", `${key}.lock`);
+}
+
+function lockIsFree(lock: string): boolean {
+  return spawnSync("flock", ["-n", lock, "true"], { encoding: "utf8" }).status === 0;
+}
+
+// Hold <lock> from a SEPARATE process — the shape a peer harness has. `flock <lock> -c cat`
+// blocks on this process's stdin, so it is held exactly until `release()` ends it (the same
+// helper and the same reasoning as `harnessLock.test.ts:515`; it is duplicated here so this
+// file does not depend on a test that drives eleven harnesses).
+function holdLock(lock: string) {
+  const holder = spawn("flock", [lock, "-c", "cat"], { stdio: ["pipe", "ignore", "ignore"] });
+  const ended = new Promise<void>((resolve) => holder.on("close", () => resolve()));
+  return {
+    release: async () => {
+      holder.stdin?.end();
+      await ended;
+    },
+  };
+}
+
+async function waitFor(cond: () => boolean, timeoutMs: number, what: string) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (cond()) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
 }
 
 test("the capability gate refuses a node that answers --version but cannot run the guard, and names it", (t) => {
@@ -207,22 +274,50 @@ test("the capability gate refuses a node that answers --version but cannot run t
   assert.match(stderr, /bad option/, "the gate must show what the runner actually printed");
 });
 
-test("end-to-end: a harness run with such a node REFUSES (exit 2, naming it) instead of printing a verdict", (t) => {
+test("end-to-end: a harness run with such a node REFUSES (exit 2, naming it) instead of printing a verdict", async (t) => {
   const why = bashSkipReason();
   if (why) return t.skip(why);
   // word_budget is the harness the card was filed on. The gate sits before every
   // mutation, so this leg touches nothing on disk.
   const harness = join(scriptsDir, "biteproof_docs_index_word_budget.sh");
   assert.ok(existsSync(harness), `${harness} must exist`);
-  let res: { status: number | null; stdout: string; stderr: string } = { status: 0, stdout: "", stderr: "" };
-  for (let attempt = 0; attempt < 3; attempt++) {
-    res = runWithStubPath([harness], { BITEPROOF_LOCK_WAIT: "120" });
-    if (res.status !== 75) break; // 75 = a peer holds the family lock; retry, not a finding
+
+  // THE PREMISE IS THE SHAPE THAT BROKE THIS LEG (card `t_1121a3c0`): a harness holds the
+  // family lock. Take it ourselves unless one already does — which is the case whenever
+  // this suite is itself running inside `npm run test:unit` under a harness
+  // (`biteproof_next_managed_files.sh` did exactly that) — so both the plain suite run and
+  // the nested one measure the same property instead of one of them skipping it.
+  const lock = familyLockFile();
+  if (!lock) return t.skip("cannot resolve this worktree's git dir, so there is no family lock to hold");
+  // The property needs flock twice: to hold the lock and to ask whether it is held. A host
+  // without it cannot run the family at all (every harness refuses), which
+  // `harnessLock.test.ts` asserts on its own; skipping here keeps this leg from failing for
+  // a reason that is not about the node it puts on PATH.
+  if (spawnSync("bash", ["-c", "command -v flock"], { encoding: "utf8" }).status !== 0) {
+    return t.skip("no flock on PATH, so the family lock this leg holds cannot be taken");
   }
-  assert.equal(res.status, 2, `want exit 2 (refused), got ${res.status}\n${res.stdout}${res.stderr}`);
-  assert.match(res.stderr, /BITEPROOF REFUSED/, "the refusal must be loud");
-  assert.match(res.stderr, /v18\.19\.1/, "the refusal must name the node it found");
-  assert.doesNotMatch(res.stdout, /BITEPROOF (PASS|FAIL)/, "no verdict may be printed");
+  mkdirSync(dirname(lock), { recursive: true });
+  const holding = lockIsFree(lock) ? holdLock(lock) : undefined;
+  try {
+    await waitFor(() => !lockIsFree(lock), 5000, "the family lock to be held by a peer");
+    // `BITEPROOF_LOCK_WAIT=0`: if this spawn were serialised by that held lock it would
+    // answer 75 (wait-out) at once and print the waiting line, which is what the pre-fix
+    // bytes did after 3 x 120s. Zero turns a 6-minute stall into a named read.
+    const res = runWithStubPath([harness], { BITEPROOF_LOCK_WAIT: "0" });
+    assert.doesNotMatch(
+      `${res.stdout}${res.stderr}`,
+      /holds this worktree's lock/,
+      `the harness this leg spawns must not be serialised by the family lock (${lock}); it ` +
+        `mutates nothing, so a wait here proves the spawn inherited the caller's lock dir. Got exit ${res.status}.`,
+    );
+    assert.notEqual(res.status, 75, `the spawn waited out the family lock instead of reaching the gate:\n${res.stdout}${res.stderr}`);
+    assert.equal(res.status, 2, `want exit 2 (refused), got ${res.status}\n${res.stdout}${res.stderr}`);
+    assert.match(res.stderr, /BITEPROOF REFUSED/, "the refusal must be loud");
+    assert.match(res.stderr, /v18\.19\.1/, "the refusal must name the node it found");
+    assert.doesNotMatch(res.stdout, /BITEPROOF (PASS|FAIL)/, "no verdict may be printed");
+  } finally {
+    await holding?.release();
+  }
 });
 
 test("every harness that runs a node guard sources the shared rule and calls the gate", () => {

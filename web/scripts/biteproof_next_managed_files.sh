@@ -2,8 +2,14 @@
 # Bite proof for web/src/lib/nextManagedFiles.test.ts.
 #
 # A guard that only ever passes is a tautology. This mutates each pinned fact
-# one at a time, runs the suite, and requires the guard to FAIL — then restores
-# the file byte-identically (verified with sha256).
+# one at a time, runs the guard (web/src/lib/nextManagedFiles.test.ts, the only
+# file that asserts these facts), and requires it to FAIL — then restores the
+# file byte-identically (verified with sha256).
+#
+# Each case drives that ONE file rather than the whole `npm run test:unit` suite
+# (card t_1121a3c0): the suite costs 46s a case, and it SPAWNS bite harnesses of
+# this family, which wait on the very lock this harness holds for its whole run.
+# Measured — see run_case — one case cost 6m20s and six did not finish in 11m40s.
 #
 # Cases 1-3 mutate the rule halves (config / .gitignore text / tsconfig).
 # Cases 4-5 mutate the TRACKED half, which the rules cannot see:
@@ -132,6 +138,23 @@ echo "lock:   held for this worktree (${LOCK_FILE##*/})"
 # depends on and refuses, naming the node, when that produces no test-runner summary.
 nt_require_node
 
+# A case that cannot finish in this long is a REFUSAL, not a verdict.
+#
+# The contended shape this harness used to have had NO ceiling: measured 2026-10-29 on an
+# installed tree, one case took 6m20s and six cases did not finish in 11m40s (card
+# t_1121a3c0). A bound turns that into a line a reader can act on. `timeout` is required
+# rather than optional: a harness that silently loses its bound is the shape it removes.
+CASE_TIMEOUT="${BITEPROOF_CASE_TIMEOUT:-300}"
+case "$CASE_TIMEOUT" in ''|*[!0-9]*)
+  echo "BITEPROOF REFUSED: BITEPROOF_CASE_TIMEOUT='$CASE_TIMEOUT' is not a whole number of seconds." >&2
+  exit 2 ;;
+esac
+command -v timeout >/dev/null 2>&1 || {
+  echo "BITEPROOF REFUSED: timeout(1) is not installed, so a case that hangs would stall this" >&2
+  echo "harness with no bound instead of being reported as a refusal." >&2
+  exit 2
+}
+
 cd "$(dirname "$0")/.." || exit 2
 
 CONFIG=${BITEPROOF_CONFIG:-next.config.mjs}
@@ -139,6 +162,8 @@ GITIGNORE=${BITEPROOF_GITIGNORE:-.gitignore}
 TSCONFIG=${BITEPROOF_TSCONFIG:-tsconfig.json}
 # Bare names: this script cds into web/, and a git pathspec is cwd-relative.
 MANAGED=(next-env.d.ts AGENTS.md CLAUDE.md)
+# The guard file every case drives (see run_case).
+GUARD_TESTS=(src/lib/nextManagedFiles.test.ts)
 
 # PER-RUN, and created HERE — in the child, after the lock — not on the parent path
 # before it (card t_4a599d51). On the parent path the `mktemp -d` was never
@@ -208,31 +233,51 @@ tracked_before="$(git ls-files -z -- "${MANAGED[@]}" | tr '\0' '\n')"
 present_before="no"
 [ -f next-env.d.ts ] && present_before="yes"
 
+# ONE FILE, NOT THE WHOLE SUITE (card t_1121a3c0).
+#
+# Measured on this host 2026-10-29 on an installed tree (`web/node_modules` from `npm ci`,
+# node v24.4.0) at `origin/main` 662d5b69:
+#   * `npm run test:unit` costs 46s (1047 tests), so six cases spent 4.6 minutes of suite
+#     time proving ONE guard; and worse
+#   * the suite SPAWNS bite harnesses of this family — `nodeRunnerEvidence.test.ts` runs
+#     `biteproof_docs_index_word_budget.sh`, `harnessLock.test.ts` runs eleven of them —
+#     and every one of those takes the family lock THIS harness holds for its whole run
+#     (LOCK_FILE, taken above). The spawned run waited its own `BITEPROOF_LOCK_WAIT=120`
+#     out three times and read the wait-out as a red: with `timeout 700` the harness
+#     finished ONE case (6m20s, the case-1 suite) and was still inside case 2 at 11m40s.
+#     The suite it drove was red for a reason that has nothing to do with the guard, so
+#     the instrument's output was contaminated as well as slow.
+# Driving the guard file itself makes a case cost one guard run and stops this harness
+# from depending on what the suite does internally. The file is a `src/lib/*.test.ts`, the
+# glob `test:unit` runs, so a red here is a red suite; running the suite is the `web`
+# gate's job, not this instrument's. Case 6 already ran the guard directly for the same
+# kind of reason (its probe tree sits outside the repo).
 run_case() {
   local name="$1" expect_line="$2"
   local out rc
-  out=$(env -u BITEPROOF_LOCKED -u BITEPROOF_LOCK_FILE -u BITEPROOF_LOCK_DIR npm run test:unit 2>&1); rc=$?
-  # FIRST: did the suite RUN at all? (card t_05d31dbd)
+  out=$(env -u BITEPROOF_LOCKED -u BITEPROOF_LOCK_FILE -u BITEPROOF_LOCK_DIR \
+    timeout "$CASE_TIMEOUT" node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+    "${GUARD_TESTS[@]}" 2>&1); rc=$?
+  if [ "$rc" = 124 ]; then
+    echo "REFUSED $name  *** the guard did not finish in ${CASE_TIMEOUT}s, so this case proves NOTHING ***"
+    fail=1
+    return
+  fi
+  # FIRST: did the guard RUN at all? (card t_05d31dbd)
   #
-  # `test:unit` starts with web/scripts/web-deps-check.mjs, which REFUSES in a tree
-  # that has no web/node_modules — the normal state of a fresh worktree. When it
-  # refuses there is no test result to read, so "no `✖ failing tests`" is the
-  # ABSENCE of a signal, not a green run. Reporting that as "MUTATION NOT DETECTED"
-  # tells a future worker the guard does not bite, when the truth is that nothing
-  # was proven. The exit stays non-zero either way (it fails closed already), so the
-  # defect is the DIAGNOSIS: it sends the reader to the guard instead of the install.
+  # A capture with no runner summary is not a result: a node that rejects
+  # `--disable-warning`, one that cannot strip types, or a guard file that will not load
+  # produces no test result, so "no `✖ failing tests`" is the ABSENCE of a signal, not a
+  # green run. Reporting that as "MUTATION NOT DETECTED" sends a future worker to the
+  # guard when nothing was proven. The exit stays non-zero either way (it fails closed
+  # already), so the defect is the DIAGNOSIS.
   #
-  # The marker is `ℹ tests` (node:test's own summary line), present on every real
-  # run and absent on a refusal; the deps-check's own message is looked for too, so
-  # the REFUSED line can name the missing install rather than guess at it.
+  # The marker is `ℹ tests` (node:test's own summary line), present on every real run and
+  # absent on a refusal.
   if ! grep -q "ℹ tests" <<<"$out"; then
-    echo "REFUSED $name  *** the suite could not run, so this case proves NOTHING ***"
-    if grep -qi "node_modules" <<<"$out"; then
-      echo "        the web tree is not installed — run: cd web && npm ci"
-    else
-      echo "        no 'ℹ tests' summary in the output, so no test result exists to judge (rc=$rc)"
-    fi
-    grep -iE "node_modules|missing|refus" <<<"$out" | sed -n '1,4p' | sed 's/^/        /'
+    echo "REFUSED $name  *** the guard could not run, so this case proves NOTHING ***"
+    echo "        no 'ℹ tests' summary in the output, so no guard result exists to judge (rc=$rc)"
+    sed -n '1,4p' <<<"$out" | sed 's/^/        /'
     fail=1
     return
   fi
@@ -360,8 +405,9 @@ if [ "$(cd "$PROBE/web" && git rev-parse --is-inside-work-tree 2>/dev/null)" = "
   echo "SKIPPING case 6: the probe somehow landed inside a work tree, so it does not test the skip"
   fail=1
 else
-  probe_out="$(cd "$PROBE/web" && env -u BITEPROOF_LOCKED -u BITEPROOF_LOCK_FILE -u BITEPROOF_LOCK_DIR node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
-    src/lib/nextManagedFiles.test.ts 2>&1)"
+  probe_out="$(cd "$PROBE/web" && env -u BITEPROOF_LOCKED -u BITEPROOF_LOCK_FILE -u BITEPROOF_LOCK_DIR \
+    timeout "$CASE_TIMEOUT" node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+    "${GUARD_TESTS[@]}" 2>&1)"
   probe_rc=$?
   if [ "$probe_rc" -eq 0 ]; then
     echo "GREEN  checkout without git metadata  *** THE GUARD SKIPPED THE TRACKED HALF ***"
