@@ -12,7 +12,7 @@ import { isEnglishOnlyProsePath } from "../lib/proseSurfaces";
 // The endonyms below are written in their own language, so the element that
 // holds one must declare it (WCAG 3.1.2). The decision and its measurement live
 // in that module.
-import { endonymLangProps } from "../lib/endonymLang";
+import { endonymLangProps, ENDONYM_LABEL } from "../lib/endonymLang";
 
 // Issue #514: the dictionary data now lives in ./i18nDict.ts so the
 // locale-completeness guard in src/lib/i18n.test.ts can import it with the
@@ -143,13 +143,12 @@ export function useI18n() {
 // growing them does not fit the phone topbar next to the menu button and the
 // logo. So the phone topbar uses LangSelect (one native control, 44px tall)
 // and the desktop topbar keeps this segmented control, raised to 44px.
-export const LANG_LABEL: Record<Lang, string> = {
-  en: "English",
-  ms: "Bahasa Melayu",
-  zh: "中文",
-  ta: "தமிழ்",
-  ar: "العربية",
-};
+// The labels the pickers render. The STRINGS live in `lib/endonymLang.ts`
+// next to the `lang` each one must declare, so the /docs guides — which name
+// the same languages in prose, and are SERVER components — can render them too
+// (a `"use client"` module's exports are client references on the server, not
+// strings). One copy, every call site.
+export const LANG_LABEL: Record<Lang, string> = ENDONYM_LABEL;
 
 // The short labels the switchers render. Exported so the /mcp page and this
 // component cannot drift: /mcp used to carry a SECOND copy of these literals in

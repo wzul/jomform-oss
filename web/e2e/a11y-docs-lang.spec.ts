@@ -547,3 +547,211 @@ test.describe("the operator sentence declares its own language (WCAG 3.1.2)", ()
     });
   }
 });
+
+// ══ the /docs PROSE declares the language of every endonym it names ═════════
+// (card t_23c6895c — the prose half of the class the two blocks above judge on
+// the chrome and the legal footer.)
+//
+// THE DEFECT, measured live on prod web v1.21.333 (fresh browser state; document
+// `lang="en"`, which is correct — the guides are English prose):
+//
+//   /docs/customize  <strong>English, Bahasa Melayu, 中文, தமிழ்</strong>
+//   /docs/customize  <strong>العربية</strong>
+//   /docs/chat       "It speaks the language you write in: English, Bahasa Melayu, 中文, தமிழ் or العربية."
+//
+// 3 elements per page held CJK / Tamil / Arabic in their OWN text and every one
+// resolved, through the nearest `lang`, to the document's "en". The names came
+// from LITERALS in JSX (chat/page.tsx, customize/page.tsx), which is why the
+// component fixes that declared the chrome labels (docsChrome.tsx) and the
+// switcher/picker endonyms never reached them. They now render through
+// `components/Endonym.tsx`, which puts `<span lang="zh">` etc. around the text it
+// holds; the source half of this guard is `src/lib/docsProseEndonym.test.ts`.
+//
+// WHY A DOM SWEEP AND NOT axe. axe has no rule for "text in another language
+// inside a correctly declared document" (measured on the pre-fix page: three
+// undeclared endonyms, 0 axe violations), so the only proof is reading the served
+// DOM — and only a browser shows the attribute surviving the render.
+//
+// WHAT MAKES IT BITE.
+//   * The sweep is over every element's OWN text, and the language of a part is
+//     decided by the NEAREST declaration — so an ancestor's `lang` cannot launder
+//     an undeclared endonym, and on the pre-fix build every one of the three
+//     resolves to "en".
+//   * Non-vacuity per script, per page: the guides must really NAME all three, or
+//     an empty sweep would pass for free.
+//   * The detector arm strips the declarations off the REAL elements in the live
+//     DOM and requires the sweep to report exactly those three — the same control
+//     the release's verification used (3 exceptions) — so a sweep that cannot see
+//     the defect cannot pass this file.
+//   * The `jf_lang=ar` arm proves the declaration is a property of the TEXT and not
+//     of the visitor's locale: these guides stay English pages either way.
+const ENDONYM_PROSE_ROUTES = [
+  { path: "/docs/chat", english: "It speaks the language you write in" },
+  { path: "/docs/customize", english: "The supported languages are" },
+] as const;
+
+/** The three names this card measured, and the language each must declare. */
+const PROSE_ENDONYMS = [
+  { name: "中文", lang: "zh" },
+  { name: "தமிழ்", lang: "ta" },
+  { name: "العربية", lang: "ar" },
+] as const;
+
+type EndonymSweep = {
+  counts: Record<"CJK" | "Tamil" | "Arabic", number>;
+  wrong: { tag: string; own: string; expected: string; declared: string }[];
+};
+
+/**
+ * Every element whose OWN text contains CJK, Tamil or Arabic, judged by the
+ * NEAREST `lang` a screen reader would use.
+ *
+ * `counts` is the non-vacuity reading, `wrong` the failure list. Non-rendered
+ * containers (`<script>` holds the RSC payload) are skipped: its text is not
+ * prose a reader is meant to hear.
+ */
+async function endonymSweep(page: Page): Promise<EndonymSweep> {
+  return page.evaluate(() => {
+    const SCRIPT_RANGES = [
+      { lang: "zh", script: "CJK", re: /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/ },
+      { lang: "ta", script: "Tamil", re: /[\u0b80-\u0bff]/ },
+      { lang: "ar", script: "Arabic", re: /[\u0600-\u06ff]/ },
+    ] as const;
+
+    const counts = { CJK: 0, Tamil: 0, Arabic: 0 };
+    const wrong: EndonymSweep["wrong"] = [];
+
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
+      if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(el.tagName)) continue;
+      const own = Array.from(el.childNodes)
+        .filter((n) => n.nodeType === 3)
+        .map((n) => n.textContent ?? "")
+        .join("")
+        .trim();
+      if (!own) continue;
+      for (const range of SCRIPT_RANGES) {
+        if (!range.re.test(own)) continue;
+        counts[range.script] += 1;
+        const declared = (el.closest("[lang]")?.getAttribute("lang") ?? "").toLowerCase();
+        if (declared === range.lang || declared.startsWith(`${range.lang}-`)) continue;
+        wrong.push({
+          tag: el.tagName.toLowerCase(),
+          own: own.slice(0, 40),
+          expected: range.lang,
+          declared: declared || "(none)",
+        });
+      }
+    }
+    return { counts, wrong };
+  });
+}
+
+/** Asserts this page NAMES all three languages and declares each one. */
+async function expectEndonymsDeclared(page: Page, path: string) {
+  const swept = await endonymSweep(page);
+  expect(
+    swept.counts,
+    `${path} did not render all three endonyms in its own text (${JSON.stringify(swept.counts)}) — the rule below would prove nothing about the names this card measured`,
+  ).toEqual({ CJK: 1, Tamil: 1, Arabic: 1 });
+  expect(
+    swept.wrong,
+    `${path}: these elements hold text in another language inside the English guide but nothing declares it — ` +
+      `WCAG 3.1.2 (Language of Parts), a screen reader reads them with an English voice:\n  ` +
+      swept.wrong.map((w) => `<${w.tag}> ${JSON.stringify(w.own)} — expected lang="${w.expected}", nearest lang="${w.declared}"`).join("\n  "),
+  ).toEqual([]);
+
+  // The element that HOLDS the name, read out of the live DOM: the endonym is
+  // rendered with its own `lang`, not inherited from an ancestor that happens to
+  // be right. `labelsOf` reads the innermost element whose text is exactly the name.
+  for (const { name, lang } of PROSE_ENDONYMS) {
+    const found = await labelsOf(page, name);
+    expect(found.length, `${path} did not render the endonym ${name}`).toBeGreaterThan(0);
+    expect(
+      found.map((f) => f.lang),
+      `${path}: the element holding ${name} must declare lang="${lang}" itself`,
+    ).toEqual(found.map(() => lang));
+    const nearest = await page.evaluate(
+      (n) =>
+        Array.from(document.querySelectorAll<HTMLElement>("body *"))
+          .filter((e) => e.childElementCount === 0 && (e.textContent ?? "").trim() === n)
+          .map((e) => (e.closest("[lang]")?.getAttribute("lang") ?? "").toLowerCase()),
+      name,
+    );
+    expect(nearest, `${path}: the nearest declaration a screen reader finds for ${name} must be its own language`).toEqual(
+      nearest.map(() => lang),
+    );
+  }
+
+  // The guides are English prose; the fix is a language of PARTS.
+  expect(await declaration(page), `${path} live declaration`).toEqual({ lang: "en", dir: "ltr", direction: "ltr" });
+}
+
+test.describe("the /docs prose declares each endonym's own language (WCAG 3.1.2)", () => {
+  test("a fresh visitor gets the three names declared on both guides, documents still English", async ({ page }) => {
+    await freshState(page, null);
+
+    for (const { path, english } of ENDONYM_PROSE_ROUTES) {
+      await page.goto(path, { waitUntil: "networkidle" });
+      // Reachability: the English sentence that NAMES the languages is on the page,
+      // so the sweep below judges a rendered guide and not an empty shell.
+      await expect(page.getByText(english).first()).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText("中文", { exact: true }).first()).toBeVisible();
+      await expectEndonymsDeclared(page, path);
+    }
+  });
+
+  test("with jf_lang=ar the guides stay English and the names still declare their own scripts", async ({ page }) => {
+    // The declaration belongs to the TEXT, not to the visitor's dashboard locale:
+    // an implementation that declared the document language on the parts (or moved
+    // the page) passes the fresh-state arm and fails here.
+    await freshState(page, "ar");
+
+    for (const { path, english } of ENDONYM_PROSE_ROUTES) {
+      await page.goto(path, { waitUntil: "networkidle" });
+      await expect(page.getByText(english).first()).toBeVisible({ timeout: 30_000 });
+      // `/docs` chrome labels ARE translated, but these two guides' prose is not:
+      // the names are their own endonyms whatever the locale.
+      await expectEndonymsDeclared(page, path);
+    }
+
+    // And the control that says the locale really was applied on this tree: the
+    // /docs index's heading follows it. Without this, the assertions above could
+    // pass because the app ignored `jf_lang` entirely.
+    await page.goto("/docs", { waitUntil: "networkidle" });
+    await expect(page.getByRole("heading", { name: DICT["docs.title"].ar })).toBeVisible({ timeout: 30_000 });
+  });
+
+  test("the sweep bites: stripping the declarations live reports exactly the three names", async ({ page }) => {
+    await freshState(page, null);
+    await page.goto("/docs/chat", { waitUntil: "networkidle" });
+    await expect(page.getByText("It speaks the language you write in").first()).toBeVisible({ timeout: 30_000 });
+
+    // Baseline first: with the fix in place this page is clean.
+    expect((await endonymSweep(page)).wrong).toEqual([]);
+
+    // Remove `lang` from every element that holds one of the three names — the
+    // pre-fix shape of THIS page, reproduced in the served DOM.
+    const stripped = await page.evaluate((names) => {
+      let n = 0;
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
+        if (el.childElementCount !== 0) continue;
+        if (!names.includes((el.textContent ?? "").trim())) continue;
+        el.removeAttribute("lang");
+        n += 1;
+      }
+      return n;
+    }, PROSE_ENDONYMS.map((e) => e.name as string));
+    expect(stripped, "the served /docs/chat page does not carry a lang on all three endonyms").toBe(3);
+
+    const swept = await endonymSweep(page);
+    expect(
+      swept.wrong.length,
+      `the sweep did not report the three undeclared endonyms it was given, so it cannot judge the defect: ${JSON.stringify(swept.wrong)}`,
+    ).toBe(3);
+    expect(swept.wrong.map((w) => w.expected).sort()).toEqual(["ar", "ta", "zh"]);
+    expect(
+      swept.wrong.map((w) => w.declared),
+      "each undeclared endonym must resolve to the document's own language",
+    ).toEqual(["en", "en", "en"]);
+  });
+});

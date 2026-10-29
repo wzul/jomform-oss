@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
+
+import { Endonym } from "../../../components/Endonym";
 
 // In-app assistant — the docs page the chat panel's inline "?" link points at
 // (AGENTS.md DOCUMENTATION PARITY rule 4).
@@ -23,7 +26,12 @@ export const metadata: Metadata = {
   alternates: { canonical: "https://jomform.com/docs/chat" },
 };
 
-type Section = { id: string; title: string; body: string[] };
+// A paragraph is either plain English prose or, when it NAMES one of the
+// supported languages, JSX that renders the name through `<Endonym>` — the name
+// is text in another language inside this English document, so the element that
+// holds it must declare it, and the name itself may not be a literal here (card
+// t_23c6895c; see components/Endonym.tsx). Every other entry below is a string.
+type Section = { id: string; title: string; body: ReactNode[] };
 
 const SECTIONS: Section[] = [
   {
@@ -32,7 +40,10 @@ const SECTIONS: Section[] = [
     body: [
       "The assistant is a chat panel inside the dashboard. Ask it a question about your own account in plain language — which forms are live, what a form recorded, how many sales came in, what a customer's submission said, which subscriptions are past due — and it looks the answer up in your data with the same tools an AI agent would use over MCP.",
       "It is not a general chatbot and it is not a support ticket by another name. It answers from your data, and when the answer is not in your data it says so.",
-      "It speaks the language you write in: English, Bahasa Melayu, 中文, தமிழ் or العربية.",
+      <>
+        It speaks the language you write in: <Endonym l="en" />, <Endonym l="ms" />,{" "}
+        <Endonym l="zh" />, <Endonym l="ta" /> or <Endonym l="ar" />.
+      </>,
     ],
   },
   {

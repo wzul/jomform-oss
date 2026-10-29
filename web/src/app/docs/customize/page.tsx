@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 
+import { Endonym } from "../../../components/Endonym";
+
 export const metadata: Metadata = {
   title: "Design → AI agent → MCP customization — JomForm Docs",
   description:
@@ -522,8 +524,11 @@ export default function CustomizeDocsPage() {
       <h2 id="language" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">Language: dashboard vs. your forms</h2>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         JomForm has <strong>two separate language settings</strong>, and they are deliberately not the
-        same one. The supported languages are <strong>English, Bahasa Melayu, 中文, தமிழ்</strong> and{" "}
-        <strong>العربية</strong> (Arabic also switches the dashboard to right-to-left).
+        same one. The supported languages are{" "}
+        <strong>
+          <Endonym l="en" />, <Endonym l="ms" />, <Endonym l="zh" />, <Endonym l="ta" />
+        </strong>{" "}
+        and <strong><Endonym l="ar" /></strong> (Arabic also switches the dashboard to right-to-left).
       </p>
       <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-slate-600">
         <li>

@@ -22,6 +22,30 @@
 // `lang="en"` under an Arabic document would be a second declaration of the
 // default, not a language of parts.
 //
+// THE SAME RULE, ON THE /docs PROSE (card t_23c6895c). Two guide pages NAME the
+// supported languages in an English sentence — "It speaks the language you write
+// in: English, Bahasa Melayu, 中文, தமிழ் or العربية" (/docs/chat) and "The
+// supported languages are …" (/docs/customize) — and those names are in another
+// language, inside a document that declares `en`. Measured live on prod
+// v1.21.333, fresh browser state: 3 elements per page held CJK / Tamil / Arabic
+// in their OWN text and every one resolved, through the nearest `lang`, to the
+// document's "en". The chrome labels were fixed on this surface already
+// (docsChrome.tsx); the prose bodies were not, because they carried the names as
+// LITERALS in JSX, which is how a fix at the component cannot reach them.
+//
+// So the names live here, once, and `components/Endonym.tsx` renders one:
+//
+//     <Endonym l="zh" />   →   <span lang="zh">中文</span>
+//     <Endonym l="en" />   →   English            (no declaration: same script)
+//
+// `ENDONYM_LABEL` is the map the /profile and /settings pickers render too
+// (`components/i18n.tsx` re-exports it as `LANG_LABEL`) — the guides and the
+// pickers cannot drift apart. It lives in this plain module rather than in the
+// client component because the guides are SERVER components: a value imported
+// from a `"use client"` module is a client reference on the server, not the
+// string. The guard for the prose sites is `docsProseEndonym.test.ts` and the
+// served-DOM proof is `e2e/a11y-docs-lang.spec.ts`.
+//
 // The map is keyed on `Lang`, so adding a locale to the dictionary without
 // deciding its endonym language is a type error, and `endonymLang.test.ts`
 // pins the value of every entry.
@@ -35,6 +59,24 @@ export const ENDONYM_LANG: Readonly<Record<Lang, string | null>> = {
   zh: "zh",
   ta: "ta",
   ar: "ar",
+};
+
+/**
+ * The endonym as a language names ITSELF — the full name, in its own script.
+ *
+ * Two surfaces render these strings and only these: the pickers as a label
+ * (`components/i18n.tsx` exports this same map as `LANG_LABEL`), and the /docs
+ * prose, which names the supported languages inside English sentences and must
+ * therefore declare each name's own language (see the header). The switcher's
+ * short labels (EN / BM / 中文 / தமிழ் / عربي) are a different, deliberately
+ * abbreviated list — `LANG_SHORT`, where it belongs.
+ */
+export const ENDONYM_LABEL: Readonly<Record<Lang, string>> = {
+  en: "English",
+  ms: "Bahasa Melayu",
+  zh: "中文",
+  ta: "தமிழ்",
+  ar: "العربية",
 };
 
 /**
