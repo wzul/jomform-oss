@@ -160,6 +160,58 @@ func TestDerivedContractMirrorsTheRendererInputSet(t *testing.T) {
 	}
 }
 
+// TestMenuCheckoutPaintsTheSameControlKindAsThePublicRenderers closes the
+// instance this card is about in the only way that survives: `list` and
+// `repeater` were painted as a `<textarea rows="3">` by BOTH public renderers
+// while the checkout's "menuField" table had no arm for them and fell through
+// to its `{{else}}` single-line input. The presence guard above could not see
+// that: a text input keyed by the block id IS "a control", so the field was
+// rendered, submitted and validated — just with the wrong control, and the
+// buyer's long answer was typed into one line.
+//
+// So this pins the KIND, not just the presence: for every palette type where
+// both public renderers paint a textarea, the checkout must paint a textarea
+// too. `captcha` is deliberately out of scope — it is a one-line text answer on
+// every surface, so it never enters this set.
+func TestMenuCheckoutPaintsTheSameControlKindAsThePublicRenderers(t *testing.T) {
+	cfg, idOf := parityBlocks(t)
+	payment := renderPaymentPage(t, "parity-kind-payment", cfg)
+	response := renderResponsePage(t, "parity-kind-response", responseParityConfig(cfg))
+
+	d := menu492Fixture(t)
+	d.ExtraFields = menuExtraFields(menuExtraContract(cfg), formLangs["en"])
+	menu := renderMenu492(t, d)
+
+	var textareaTypes []string
+	for typ, id := range idOf {
+		payTag := controlKeyedBy(payment, id)
+		respTag := controlKeyedBy(response, id)
+		if !strings.HasPrefix(payTag, "<textarea") || !strings.HasPrefix(respTag, "<textarea") {
+			continue
+		}
+		textareaTypes = append(textareaTypes, typ)
+		if menuTag := controlKeyedBy(menu, id); !strings.HasPrefix(menuTag, "<textarea") {
+			t.Errorf("%q is a <textarea> on both public renderers (payment=%q response=%q) but the menu "+
+				"checkout paints %q — a buyer's answer to a block that expects paragraphs is typed into "+
+				"one line", typ, payTag, respTag, menuTag)
+		}
+	}
+	sort.Strings(textareaTypes)
+
+	// Pin the set the guard is actually walking: a fixture that silently lost
+	// these types would make the loop above assert nothing.
+	have := map[string]bool{}
+	for _, typ := range textareaTypes {
+		have[typ] = true
+	}
+	for _, want := range []string{"address", "list", "repeater", "textarea"} {
+		if !have[want] {
+			t.Errorf("fixture defect: %q is not a textarea on both public renderers (measured set: %v) — "+
+				"the control-kind guard no longer covers it", want, textareaTypes)
+		}
+	}
+}
+
 // TestMenuCheckoutRendersEveryDerivedContractField is the menu end of the same
 // statement: every field the contract carries must reach the checkout page as a
 // control the checkout script submits under that field id. This is the join that

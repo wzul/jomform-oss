@@ -327,6 +327,12 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").
   {{else if eq .Type "address"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
     <textarea name="{{.ID}}" rows="2"{{if .Required}} required{{end}} placeholder="{{.Placeholder}}">{{.Value}}</textarea>
   </label>
+  {{else if eq .Type "list"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
+    <textarea name="{{.ID}}" rows="3"{{if .Required}} required{{end}} placeholder="{{.Placeholder}}">{{.Value}}</textarea>
+  </label>
+  {{else if eq .Type "repeater"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
+    <textarea name="{{.ID}}" rows="3"{{if .Required}} required{{end}} placeholder="{{.Placeholder}}">{{.Value}}</textarea>
+  </label>
   {{else if eq .Type "number"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
     <input type="number" name="{{.ID}}" value="{{.Value}}" placeholder="{{.Placeholder}}"{{if .Required}} required{{end}}>
   </label>

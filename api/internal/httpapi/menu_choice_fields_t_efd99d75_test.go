@@ -17,10 +17,10 @@ package httpapi
 //   - the order route refuses an answer outside the choices and stores a
 //     declared one.
 //
-// The neighbouring types the card left out are NOT covered here: `list` and
-// `repeater` still reach the checkout as a single-line input while both public
-// renderers paint a `<textarea rows="3">` (measured; carded separately — a
-// different symptom, not this defect).
+// The neighbouring types this card left out were fixed by t_fda24726: `list`
+// and `repeater` are painted as a <textarea rows="3"> by both public renderers,
+// so the checkout paints them the same way (menu_list_repeater_t_fda24726_test.go,
+// plus the control-kind guard in contract_renderer_parity_test.go).
 
 import (
 	"bytes"
