@@ -116,7 +116,7 @@ func (s *Server) getShippingCouriers(
 // HMAC key pair lives in the deployment's runtime env file, and an OAuth grant
 // comes from the MERCHANT's own consent.
 type connectShippingCourierIn struct {
-	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"ID workspace (dari list_workspaces). Kosong = akaun anda sendiri"`
+	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"ID workspace (dari list_workspaces). WAJIB: tool tulis ini menolak workspace_id kosong — panggil list_workspaces dahulu"`
 	Provider    string `json:"provider" jsonschema:"Pembekal: lalamove atau easyparcel"`
 	// OriginPostcode / OriginState are required by EasyParcel, which needs the
 	// ISO 3166-2 subdivision code derived from the state name.
@@ -207,7 +207,7 @@ func (s *Server) connectShippingCourier(
 
 // disconnectShippingCourierIn is the disconnect input.
 type disconnectShippingCourierIn struct {
-	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"ID workspace (dari list_workspaces). Kosong = akaun anda sendiri"`
+	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"ID workspace (dari list_workspaces). WAJIB: tool tulis ini menolak workspace_id kosong — panggil list_workspaces dahulu"`
 	Provider    string `json:"provider" jsonschema:"Pembekal: lalamove atau easyparcel"`
 }
 

@@ -6,10 +6,18 @@
 // browser. Parity is a rule in AGENTS.md (every dashboard feature needs an MCP
 // tool) and the checklist parsed by mcp_parity_test.go names both of them.
 //
-// Both tools resolve the SAME account the dashboard would for the same call: the
-// per-call `workspace_id` (or `account_id`) argument is honoured by accountAndScope
-// (issue #307), and with no argument the caller's own account is used — the same
+// THE TWO HALVES DO NOT RESOLVE THE SAME WAY, and each schema must state the half
+// it actually implements. The READ falls back to the caller's own account when
+// `workspace_id` is empty: accountAndScope does that (issue #307), the same
 // resolution the REST edge performs for ?workspace= (issue #158).
+// The WRITE does not — it gates through requireWorkspaceWriteRole, which needs an
+// EXPLICIT workspace because the manage-or-admin role it checks is a role IN a
+// workspace, so an empty id is refused ("workspace tidak dijumpai") before
+// accountAndScope is ever reached. Both input schemas used to promise "Kosong =
+// akaun anda sendiri"; that was true only of the read, so the promise now lives
+// only on the read. A write tool here must not advertise a fallback it does not
+// implement — TestNoWriteToolAdvertisesTheOwnAccountFallback
+// (shipping_workspace_id_schema_test.go) enforces the pairing.
 package mcpsrv
 
 import (
@@ -137,7 +145,7 @@ func (s *Server) getShippingRates(
 // setShippingRatesIn replaces the WHOLE configuration: a set omitted from `sets`
 // is DELETED (refused when a form still points at it).
 type setShippingRatesIn struct {
-	WorkspaceID string          `json:"workspace_id,omitempty" jsonschema:"ID workspace (dari list_workspaces). Kosong = akaun anda sendiri"`
+	WorkspaceID string          `json:"workspace_id,omitempty" jsonschema:"ID workspace (dari list_workspaces). WAJIB: tool tulis ini menolak workspace_id kosong — panggil list_workspaces dahulu"`
 	Sets        []shippingSetIn `json:"sets" jsonschema:"SEMUA set zon yang dikehendaki. Set yang tiada di sini akan DIPADAM (ditolak jika ada borang yang masih merujuknya)"`
 }
 
