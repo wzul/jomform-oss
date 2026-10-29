@@ -33,6 +33,8 @@ import (
 	"fmt"
 	"html/template"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -354,11 +356,11 @@ func TestCustomHTMLPageWithoutCustomJSRendersUnchanged(t *testing.T) {
 		{"empty custom_js", map[string]any{"primary": primary, "custom_js": ""}},
 	}
 	baselineHeader, baselinePage := renderCustomHTMLJS(t, customHTMLForm(map[string]any{"primary": primary}))
-	baseline := stripCustomHTMLNonce(baselinePage, customHTMLNonce(t, baselineHeader))
+	baseline := normaliseCustomHTMLPage(t, baselineHeader, baselinePage)
 	for _, tt := range themes {
 		t.Run(tt.name, func(t *testing.T) {
 			header, page := renderCustomHTMLJS(t, customHTMLForm(tt.theme))
-			got := stripCustomHTMLNonce(page, customHTMLNonce(t, header))
+			got := normaliseCustomHTMLPage(t, header, page)
 			if got != baseline {
 				t.Fatalf("a theme of shape %q changed the page — no custom_js must render exactly as "+
 					"the same form without it.\ngot script tail:\n%s", tt.name, customHTMLScriptTail(page))
@@ -373,6 +375,154 @@ func TestCustomHTMLPageWithoutCustomJSRendersUnchanged(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCustomHTMLPageComparisonIgnoresTheRenderStamp pins the clock
+// independence of the whole-page comparison above (card t_86722078). Every
+// rendered public form carries the anti-spam render timestamp
+// (public.go, antiSpamRenderFields -> antiSpamRenderTime, whole Unix seconds),
+// so a baseline render and a subtest render more than a second apart differ in
+// that value while the markup around it is identical — the guard then reported
+// "a theme changed the page" for a reason that has nothing to do with
+// custom_js, which is how it reddened two gate runs for unrelated web-only
+// changes.
+//
+// The stamp is moved by exactly one second here rather than by sleeping, so the
+// guard proves the same thing in microseconds and cannot itself flake.
+func TestCustomHTMLPageComparisonIgnoresTheRenderStamp(t *testing.T) {
+	const primary = "#5e6ad2"
+	header, page := renderCustomHTMLJS(t, customHTMLForm(map[string]any{"primary": primary}))
+	base := normaliseCustomHTMLPage(t, header, page)
+	if !strings.Contains(base, customHTMLRenderStampToken) {
+		t.Fatalf("the normalised page does not carry %q, so the render stamp was never substituted "+
+			"and this guard would prove nothing", customHTMLRenderStampToken)
+	}
+
+	stamp := customHTMLRenderStampTag.FindString(page)
+	if stamp == "" {
+		t.Fatalf("the page carries no anti-spam render stamp (<input ... name=%q ...>), so this "+
+			"guard cannot exercise the clock normalisation at all", antiSpamRenderField)
+	}
+
+	// One second later: the same element, a different clock reading. This is
+	// exactly the pair the flake produced.
+	ticked := strings.Replace(page, stamp, tickCustomHTMLRenderStamp(t, stamp, 1), 1)
+	if ticked == page {
+		t.Fatalf("could not move the render stamp's value, so this guard measured nothing: %s", stamp)
+	}
+	if got := normaliseCustomHTMLPage(t, header, ticked); got != base {
+		first := firstCustomHTMLDivergence(base, got)
+		t.Fatalf("two renders one second apart are not comparable — the render stamp is still "+
+			"part of the comparison (first divergence: %s)", first)
+	}
+
+	// The normalisation must not be a blanket removal: the element itself is
+	// markup like any other, so a page that stopped emitting the stamp (or
+	// emitted it under another name) must still differ from the baseline.
+	// Weighed through the strip alone — the page-comparison helper above refuses
+	// a page it cannot normalise, which is the behaviour being pinned.
+	normBase, _ := stripCustomHTMLRenderStamp(page)
+	dropped, droppedStamps := stripCustomHTMLRenderStamp(strings.Replace(page, stamp, "", 1))
+	if droppedStamps != 0 {
+		t.Fatalf("a page without the anti-spam render stamp still matched one, so the "+
+			"normalisation is not limited to that element: %s", stamp)
+	}
+	if dropped == normBase {
+		t.Fatalf("dropping the anti-spam render stamp went unnoticed — the normalisation "+
+			"blanks the element instead of substituting its clock reading: %s", stamp)
+	}
+}
+
+// tickCustomHTMLRenderStamp returns the stamp element with its value advanced by
+// delta seconds, failing if it carries no whole-second value to move.
+func tickCustomHTMLRenderStamp(t *testing.T, stamp string, delta int64) string {
+	t.Helper()
+	var seen bool
+	out := customHTMLValueDigits.ReplaceAllStringFunc(stamp, func(attr string) string {
+		seen = true
+		digits := customHTMLValueDigits.FindStringSubmatch(attr)[2]
+		n, err := strconv.ParseInt(digits, 10, 64)
+		if err != nil {
+			t.Fatalf("the render stamp's value %q is not a whole-second timestamp: %v", digits, err)
+		}
+		return strings.Replace(attr, digits, strconv.FormatInt(n+delta, 10), 1)
+	})
+	if !seen {
+		t.Fatalf("the render stamp carries no numeric value attribute: %s", stamp)
+	}
+	return out
+}
+
+// normaliseCustomHTMLPage returns one page with the two values that legitimately
+// differ between two renders of the same markup replaced by fixed tokens, so the
+// guard above can compare everything else byte for byte:
+//
+//   - the CSP nonce, fresh per response by design (card t_c5a278c0);
+//   - the anti-spam render timestamp, whole Unix seconds (card t_86722078).
+//
+// Both are substituted in place — no element is dropped and no part of the page
+// is excluded — so the comparison still weighs the whole document.
+func normaliseCustomHTMLPage(t *testing.T, header, page string) string {
+	t.Helper()
+	out, stamps := stripCustomHTMLRenderStamp(page)
+	if stamps == 0 {
+		t.Fatalf("the rendered page carries no anti-spam render stamp (<input ... name=%q ...>), "+
+			"so its clock reading cannot be normalised and this guard would redden on the clock "+
+			"rather than on custom_js — re-point customHTMLRenderStampTag at what the renderer "+
+			"actually emits (public.go, antiSpamRenderFields)", antiSpamRenderField)
+	}
+	return stripCustomHTMLNonce(out, customHTMLNonce(t, header))
+}
+
+// customHTMLRenderStampToken stands in for the render timestamp's clock reading
+// so two renders are comparable.
+const customHTMLRenderStampToken = "RENDER_TS"
+
+// customHTMLRenderStampTag matches the anti-spam render-timestamp element the
+// public renderer puts on every page. It is located by its field name and not by
+// its exact attribute order or value, so a renderer refactor cannot silently
+// switch the clock normalisation off.
+var customHTMLRenderStampTag = regexp.MustCompile(`<input[^>]*\bname="` + regexp.QuoteMeta(antiSpamRenderField) + `"[^>]*>`)
+
+// customHTMLValueDigits matches one element's value attribute, capturing the
+// digits separately from the quotes around them.
+var customHTMLValueDigits = regexp.MustCompile(`(\bvalue=")([0-9]+)(")`)
+
+// stripCustomHTMLRenderStamp replaces the render timestamp's clock reading with
+// customHTMLRenderStampToken and reports how many stamps it substituted. The
+// digits are the only part touched: the element, its name and its data-id are
+// left in place so the comparison still sees them.
+func stripCustomHTMLRenderStamp(page string) (string, int) {
+	stamps := 0
+	out := customHTMLRenderStampTag.ReplaceAllStringFunc(page, func(tag string) string {
+		substituted := customHTMLValueDigits.ReplaceAllString(tag, "${1}"+customHTMLRenderStampToken+"${3}")
+		if substituted != tag {
+			stamps++
+		}
+		return substituted
+	})
+	return out, stamps
+}
+
+// firstCustomHTMLDivergence describes the first byte where two normalised pages
+// disagree, so a red here names the byte instead of dumping two pages.
+func firstCustomHTMLDivergence(a, b string) string {
+	i := 0
+	for i < len(a) && i < len(b) && a[i] == b[i] {
+		i++
+	}
+	window := func(s string) string {
+		lo := i - 60
+		if lo < 0 {
+			lo = 0
+		}
+		hi := i + 60
+		if hi > len(s) {
+			hi = len(s)
+		}
+		return s[lo:hi]
+	}
+	return fmt.Sprintf("byte %d: %q vs %q", i, window(a), window(b))
 }
 
 // stripCustomHTMLNonce replaces the per-response nonce with a fixed token so two
