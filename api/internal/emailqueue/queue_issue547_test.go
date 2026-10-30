@@ -147,19 +147,22 @@ func TestIssue547DeadLetterOnExhaustion(t *testing.T) {
 	done := make(chan struct{})
 	go func() { w.Run(ctx); close(done) }()
 
-	deadline := time.Now().Add(5 * time.Second)
-	dead := int64(-1)
-	for time.Now().Before(deadline) {
-		// Read with a fresh context: the worker's ctx is cancelled below, and the
-		// assertion must not race that cancellation.
-		if n, derr := q.DeadLen(context.Background()); derr == nil && n > 0 {
-			dead = n
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// The ladder is driven, not waited out: the reason is the one
+	// TestWorkerRetriesThenDrops and runRetryLadder spell out. A fixed budget
+	// here was the same coin — a sub-second backoff whose promotion lands on the
+	// worker's blocking dequeue costs a full dequeueTimeout, and the verdict
+	// became a property of where the failures fell inside a second.
+	runRetryLadder(t, q, rdb, h.calls.Load, w.maxAttempts)
+
 	if calls := h.calls.Load(); calls != int32(w.maxAttempts) {
 		t.Fatalf("handler calls = %d, want %d (max attempts)", calls, w.maxAttempts)
+	}
+	// Read with a fresh context: the worker's ctx is cancelled below, and the
+	// assertion must not race that cancellation. runRetryLadder already waited
+	// for the record, so this is a read of a settled state.
+	dead, derr := q.DeadLen(context.Background())
+	if derr != nil {
+		t.Fatalf("dead-letter len: %v", derr)
 	}
 	if dead != 1 {
 		t.Fatalf("issue #547: dead-letter count = %d, want 1 — an exhausted job must be "+
