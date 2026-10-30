@@ -330,6 +330,138 @@ func TestMagicLinkHybridSignup(t *testing.T) {
 	}
 }
 
+// TestMagicLinkVerifiesExistingUnverifiedAccount (card t_39c5ddad): clicking a
+// mailed magic link is proof of ownership of the address — the same proof
+// GET /v1/auth/verify accepts — so it must verify an EXISTING account that a
+// password signup left unverified. Before this fix the click issued a session
+// and left verified=false, so that account's password login answered
+// 403 email.unverified forever, while the magic link kept working.
+//
+// The test asserts the gate is shut BEFORE the click (so it can only pass by
+// lifting it), that the click flips verified on the SAME row without creating a
+// second one or a second default account, and that the password login then
+// succeeds.
+func TestMagicLinkVerifiesExistingUnverifiedAccount(t *testing.T) {
+	ip := testIP(t)
+	h, users, mailer := authTestFixture(t)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	ctx := context.Background()
+	pool := bundleTestPool(t)
+	const password = "correct-horse-battery-staple"
+
+	count := func(q string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(ctx, q, args...).Scan(&n); err != nil {
+			t.Fatalf("count %q: %v", q, err)
+		}
+		return n
+	}
+
+	// An existing account in exactly the state a password signup leaves behind
+	// (verified=false, issue #42) — NOT a new address, which would take the
+	// brand-new-account path that already worked.
+	email := "unverified-" + randSuffix() + "@example.test"
+	rec := postJSON(mux, "/v1/auth/register", map[string]any{
+		"email": email, "password": password,
+	}, ip)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	user, err := users.ByEmail(ctx, email)
+	if err != nil || user == nil {
+		t.Fatalf("load the registered account: err=%v user=%v", err, user)
+	}
+	if user.Verified {
+		t.Fatal("fixture is wrong: a password signup must start verified=false, " +
+			"otherwise this test proves nothing about the unverified path")
+	}
+	accountsBefore := count(`SELECT count(*) FROM accounts WHERE owner_user_id=$1`, user.ID)
+
+	// The gate this card is about, asserted BEFORE the click: the credentials
+	// are correct, only the missing verification blocks the login.
+	rec = postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": password}, ip)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"code":"email.unverified"`) {
+		t.Fatalf("password login before the magic-link click = %d body=%s, want 403 email.unverified — "+
+			"without that precondition this test could pass on a tree where the unverified gate never fired",
+			rec.Code, rec.Body.String())
+	}
+
+	// Request the link. An existing UNVERIFIED account is not on the
+	// existing-verified-user branch, so the mail it gets is the sign-up variant
+	// (measured on prod, t_89743ea3) — pinned by content, not by a copied
+	// string: the body must be the signup rendering of exactly this link.
+	rec = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("magic-link request status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := mailer.lastBody()
+	mt := linkRe.FindStringSubmatch(body)
+	if len(mt) < 2 {
+		t.Fatalf("no magic link token in email body: %q", body)
+	}
+	token := mt[1]
+	link := strings.TrimRight(h.BaseURL, "/") + "/magic-link?token=" + token
+	if _, wantBody := magicLinkEmailText(link, true, ""); body != wantBody {
+		t.Fatalf("magic-link mail for an existing unverified account is not the sign-up variant.\n got: %q\nwant: %q", body, wantBody)
+	}
+
+	// Click it → a session must be issued.
+	rec = postJSON(mux, "/v1/auth/magic-link/verify", map[string]any{"token": token}, ip)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("magic-link verify status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	gotCookie := false
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "jf_session" && c.Value != "" {
+			gotCookie = true
+		}
+	}
+	if !gotCookie {
+		t.Fatal("magic-link verify did not issue a session cookie")
+	}
+
+	// (a) The click verified the account …
+	after, err := users.ByEmail(ctx, email)
+	if err != nil || after == nil {
+		t.Fatalf("re-read the account after the click: err=%v user=%v", err, after)
+	}
+	if !after.Verified {
+		t.Fatal("clicking the magic link signed the user in but left verified=false — " +
+			"the click proved ownership of the address, so the account must be verified " +
+			"(card t_39c5ddad)")
+	}
+	// … on the SAME row: no duplicate user, no re-created account.
+	if after.ID != user.ID || !after.CreatedAt.Equal(user.CreatedAt) {
+		t.Fatalf("the click replaced the account: id %s→%s, created_at %s→%s",
+			user.ID, after.ID, user.CreatedAt, after.CreatedAt)
+	}
+	if n := count(`SELECT count(*) FROM users WHERE email=$1`, email); n != 1 {
+		t.Fatalf("users rows for %s = %d, want 1 (the click must not create a duplicate)", email, n)
+	}
+	// The ErrEmailTaken branch must not auto-provision a second default account.
+	if n := count(`SELECT count(*) FROM accounts WHERE owner_user_id=$1`, user.ID); n != accountsBefore {
+		t.Fatalf("accounts for the existing user = %d, want %d (the existing-account path must not provision another)", n, accountsBefore)
+	}
+
+	// (b) The password path is now open — pre-fix this is the 403 above.
+	rec = postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": password}, ip)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("password login after the magic-link click = %d body=%s, want 200 — "+
+			"the verified flip did not lift the password-login gate", rec.Code, rec.Body.String())
+	}
+	loginCookie := false
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "jf_session" && c.Value != "" {
+			loginCookie = true
+		}
+	}
+	if !loginCookie {
+		t.Fatal("password login after the magic-link click issued no session cookie")
+	}
+}
+
 // TestMagicLinkHybridSignupHoneypot: a bot that fills the hidden honeypot
 // field on the magic-link request is silently discarded — no link is emailed
 // and no account is created (issue #278 anti-spam).

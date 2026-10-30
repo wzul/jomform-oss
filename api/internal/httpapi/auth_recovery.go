@@ -504,10 +504,11 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// createMagicLinkUser creates a verified account for a signup magic-link email
-// (issue #278). The email was confirmed by clicking the link, so the account
-// is created verified=true and may log in immediately. Auto-provisions the
-// default account (mirroring handleRegister). Returns the created user.
+// createMagicLinkUser returns the account a signup magic link points at
+// (issue #278). The email was confirmed by clicking the link, so the returned
+// account is verified and may log in immediately — whether it is a brand-new
+// row created here or one that already existed (card t_39c5ddad). On the new
+// path it auto-provisions the default account (mirroring handleRegister).
 func (a *AuthHandlers) createMagicLinkUser(ctx context.Context, email string) (*dbstore.User, error) {
 	// A race is possible if the same email is clicked twice; the unique
 	// constraint makes the second create fail, so re-fetch the existing user.
@@ -516,6 +517,23 @@ func (a *AuthHandlers) createMagicLinkUser(ctx context.Context, email string) (*
 		if errors.Is(err, dbstore.ErrEmailTaken) {
 			existing, e2 := a.Users.ByEmail(ctx, email)
 			if e2 == nil && existing != nil {
+				// Card t_39c5ddad: an EXISTING row reaches this branch whenever
+				// the address was registered but never confirmed, and also when
+				// the same link is clicked twice. The click is proof of
+				// ownership of the address — the same proof GET /v1/auth/verify
+				// accepts — so an unverified existing account is verified here.
+				// Without this the link signed the account in and left
+				// verified=false, so its password login answered
+				// 403 email.unverified forever.
+				//
+				// No row is created and the default-account provisioning below
+				// is skipped: the account already exists.
+				if !existing.Verified {
+					if err := a.Users.SetVerified(ctx, existing.ID); err != nil {
+						return nil, err
+					}
+					existing.Verified = true
+				}
 				return existing, nil
 			}
 		}
