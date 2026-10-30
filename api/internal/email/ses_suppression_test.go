@@ -239,7 +239,7 @@ func TestSendReceiptSuppressedSkipIsLogged(t *testing.T) {
 func TestObfuscateMasksLocalPart(t *testing.T) {
 	cases := map[string]string{
 		"wan@jomform.com":        "w***@jomform.com",
-		"owner00@x.test":   "own***@x.test",
+		"owner00@x.test":         "own***@x.test",
 		"ab@x.test":              "a***@x.test",
 		"a@x.test":               "***",
 		"no-at-sign":             "***",

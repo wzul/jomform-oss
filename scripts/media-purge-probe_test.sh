@@ -142,6 +142,29 @@ class Edge(Base):
                 entry = {"fill": now - float(CFG["prefill_age"])}
                 edge_cache[key] = entry
             if entry is not None:
+                # DETERMINISTIC EXPIRY (opt-in, `edge_ttl_requests`): the copy
+                # stops being served after that many requests served SINCE THE
+                # PURGE, rather than when a wall clock passes its fill time. The
+                # two are indistinguishable to a probe — same status, same
+                # `cf-cache-status: EXPIRED` — but a slow host can no longer
+                # expire the copy BEFORE the probe's first after-purge read. On
+                # a clock that is a race the suite loses: measured on a loaded
+                # gate host, the probe's first after-poll already saw
+                # `cf-cache-status: EXPIRED` on a 2s copy, took its honest
+                # "gone at both ends" branch, and never printed the observation
+                # the E2 case asserts on.
+                reqs = CFG.get("edge_ttl_requests")
+                if reqs is not None and state["purged"]:
+                    served = int(entry.get("served", 0))
+                    if served >= int(reqs):
+                        code, _ = origin_result(key)
+                        del edge_cache[key]
+                        return self.reply(code, {"CF-Cache-Status": "EXPIRED",
+                                                 "Cache-Control": "no-store"})
+                    entry["served"] = served + 1
+                    return self.reply(200, {"Cache-Control": client_cc,
+                                            "CF-Cache-Status": "HIT",
+                                            "Age": str(served)})
                 age = now - entry["fill"]
                 if age <= ttl:
                     return self.reply(200, {"Cache-Control": client_cc,
@@ -235,12 +258,28 @@ expect_not_in() { # expect_not_in <text> <label>
   if has "$1" "$OUT"; then bad "$2 (output contained '$1')"; else ok "$2"; fi
 }
 
+# count_of <needle> <text> — how many times <needle> occurs in <text>. Bash-only
+# (no pipeline, no `grep -c`), so it cannot be decided by a race either.
+count_of() {
+  local needle="$1" rest="$2" n=0
+  while [ "${rest#*"$needle"}" != "$rest" ]; do
+    rest="${rest#*"$needle"}"
+    n=$((n + 1))
+  done
+  printf '%s' "$n"
+}
+
 say "media-purge-probe_test  probe=${PROBE}"
 
 # ── A. the reported false FAIL: purge done, edge rewrites the client header ──
 say ""
-say "A. CDN rewrites cache-control to 14400 while the edge entry lives 3s (the reported false FAIL)"
-start_stub '{"origin_ttl": 3, "edge_ttl": 3, "client_cc": "public, max-age=14400"}'
+say "A. CDN rewrites cache-control to 14400 while the origin declares 3s (the reported false FAIL)"
+# The stub's OWN lifetime here is 60s, not 3s: it is not what this case asserts
+# on (the probe never reads a stub's fill time — it reads the rewritten client
+# header and the origin's declaration), and a copy that expires 3s after the
+# fill turns "is the entry still served after the purge?" into a race with the
+# host. Same defect as E2, same fix: the assertion must not depend on a clock.
+start_stub '{"origin_ttl": 3, "edge_ttl": 60, "client_cc": "public, max-age=14400"}'
 run_probe --origin "$ORIGIN" --edge "$EDGE" --path "$MEDIA" \
   --purge 11111111 --api "$ORIGIN" --token test-token --window 3
 expect_rc 0 "A: purge + fresh edge entry under a rewritten 14400 header is PASS"
@@ -296,11 +335,29 @@ stop_stub
 # ── E2. the same measurement, on an edge that really does expire ────────────
 say ""
 say "E2. --await-expiry PASSES when the entry really stops serving inside the window"
-start_stub '{"origin_ttl": 2, "edge_ttl": 2, "client_cc": "public, max-age=14400"}'
+# WHY THIS CASE CANNOT USE A CLOCK. The 200→404 transition has to happen
+# INSIDE the probe's observation, and the probe only observes a copy that is
+# still being served when it reads it after the purge. With the stub expiring
+# on `edge_ttl` seconds from fill, that is a race between the host and the test:
+# pre-poll + purge + first after-poll must all land inside the TTL. Measured on
+# a loaded gate host: a 2s copy was already `EXPIRED` on the first after-poll,
+# the probe correctly reported "gone at both ends", and this case's assertion on
+# the measurement went red while the probe was right. So the stub expires this
+# copy after `edge_ttl_requests` served requests since the purge instead — the
+# wire shape the probe reads (origin status + `cf-cache-status: EXPIRED`) is
+# identical, and the transition is now guaranteed to be observable at any speed.
+start_stub '{"origin_ttl": 2, "edge_ttl": 3600, "edge_ttl_requests": 2, "client_cc": "public, max-age=14400"}'
 run_probe --origin "$ORIGIN" --edge "$EDGE" --path "$MEDIA" \
   --purge 44444444 --api "$ORIGIN" --token test-token --window 3 --await-expiry --poll 1
 expect_rc 0 "E2: an entry that expires inside the window is a PASS"
 expect_in "measured: the entry stopped serving" "E2: the PASS is an observation, not an inference"
+# BOTH edge copies (bare and with a query appended) are separate CDN entries, so
+# both have to be measured, not just the first one the probe looks at.
+if [ "$(count_of 'measured: the entry stopped serving' "$OUT")" -eq 2 ]; then
+  ok "E2: both edge copies were measured stopping, not one"
+else
+  bad "E2: both edge copies were measured stopping, not one"
+fi
 stop_stub
 
 # ── F. a CDN purge that drops the entry: both ends 404 ──────────────────────
