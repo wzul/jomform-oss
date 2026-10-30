@@ -353,12 +353,44 @@ export default function Login() {
   async function passkeyLogin() {
     setError(""); setBusy(true);
     try {
-      const st = await fetch("/api/auth/passkeys/login/start", { method: "POST" }).then((r) => r.json());
+      // Card t_7f01f01f: read the STATUS before touching the body. Every
+      // refusal this endpoint can answer — the per-IP limiter's 429 (plain
+      // text plus `Retry-After: 30`, middleware/ratelimit.go), a 5xx, a proxy
+      // error page — used to make `r.json()` throw into the catch below, which
+      // told the visitor their BROWSER could not do passkeys while the server
+      // was the one that had refused, and dropped the window with it.
+      const startRes = await fetch("/api/auth/passkeys/login/start", { method: "POST" });
+      if (!startRes.ok) {
+        // `rateLimitErr` names the window the throttle chose (card t_e50a9680),
+        // exactly as the password form, the 2FA step and the emailed-code
+        // request do; anything else is the page's own failure line. The body is
+        // read only for a machine `code`, so a plain-text or HTML answer is
+        // expected here and must not throw again.
+        const refusal = await startRes.json().catch(() => ({}));
+        setError(
+          rateLimitErr(startRes.status, startRes.headers.get("retry-after"), refusal, t) ||
+            t("login.genericError"),
+        );
+        setBusy(false);
+        return;
+      }
+      const st = await startRes.json();
+      // A 200 that carries no challenge is a broken start, not a browser that
+      // declined: nothing was ever asked of the browser.
+      if (!st?.options) { setError(t("login.genericError")); setBusy(false); return; }
       const opts = st.options.publicKey || st.options;
       // The server's challenge and any credential descriptor id arrive
       // base64url; navigator.credentials.get() wants the raw bytes.
       opts.challenge = fromB64url(opts.challenge);
-      const cred = await navigator.credentials.get({ publicKey: opts }) as PublicKeyCredential;
+      // ONLY the ceremony itself may be reported as a browser refusal. A
+      // dismissed prompt, or no resident key on this device, is what
+      // `login.passkeyUnsupported` says — every failure above it is the server.
+      let cred: PublicKeyCredential | null = null;
+      try {
+        cred = await navigator.credentials.get({ publicKey: opts }) as PublicKeyCredential;
+      } catch {
+        setError(t("login.passkeyUnsupported")); setBusy(false); return;
+      }
       if (!cred) { setError(t("login.passkeyUnsupported")); setBusy(false); return; }
       const resp = cred.response as AuthenticatorAssertionResponse;
       // Every binary field below MUST be base64url: go-webauthn decodes them
@@ -382,7 +414,10 @@ export default function Login() {
       if (fin.ok) { window.location.href = await resolvePostLogin(next); return; }
       setError(apiErr(await fin.json().catch(() => ({})), t("login.passkeyInvalid"), t));
     } catch {
-      setError(t("login.passkeyUnsupported"));
+      // Transport failure, an unreadable body, a challenge this page cannot
+      // decode: the call to the server failed. Say that — never that the
+      // browser lacks passkeys.
+      setError(t("login.genericError"));
     }
     setBusy(false);
   }
