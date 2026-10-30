@@ -220,21 +220,32 @@ Two guards hold it, and both were driven RED on the mutation they exist for:
 
 ### Confirmation dialogs (also in the automated scan)
 
-The two **typed-slug confirmation dialogs** are scanned by the same gate, in
+The three **typed-confirmation dialogs** are scanned by the same gate, in
 `web/e2e/a11y-dialogs.spec.ts` (a second spec in the same `web/e2e/` directory,
 so `npm run a11y` runs it):
 
-- **Delete workspace** — Settings → Workspace → *Delete this workspace*.
-- **Delete a form for good** — Forms → Trash → *Delete for good*.
+- **Delete workspace** — Settings → Workspace → *Delete this workspace* (asks for the slug).
+- **Delete a form for good** — Forms → Trash → *Delete for good* (asks for the slug).
+- **Delete a product for good** — Products → Trash → *Delete for good* (asks for the product NAME).
 
-Both were added with the workspace-delete feature and live behind a session, so
-they are **not** covered by the list of unauthenticated routes above. The spec
-does not need a session cookie: it stubs the `dashboard-bundle` (and the few
-per-page `/api/*` calls) at the browser level, so the real components render in
-a real browser with no Go server, no database and no credential. Each dialog is
-asserted to be **reachable** before it is scanned, and the axe scan is scoped
-with `include('[role="dialog"]')` — axe throws rather than passing when that
-subtree is absent, so the test cannot go green by quietly matching nothing.
+All three live behind a session, so they are **not** covered by the list of
+unauthenticated routes above. The spec does not need a session cookie: it stubs
+the `dashboard-bundle` (and the few per-page `/api/*` calls) at the browser level,
+so the real components render in a real browser with no Go server, no database and
+no credential. Each dialog is asserted to be **reachable** before it is scanned,
+and the axe scan runs the gate's own rule set over `[role="dialog"]` through
+`gateScan(page, '[role="dialog"]')` from `web/e2e/axeGate.ts` — the same function
+`a11y.spec.ts` and the nine scoped arms call, so this file cannot drift from the
+gate's rules or its critical/serious bar (card `t_1d032719`; it used to keep a
+private copy of both). axe throws rather than passing when that subtree is
+absent, so the test cannot go green by quietly matching nothing.
+
+Each of the three scans also carries the same **control** the nine scoped arms
+carry: after its clean reading, `expectGateSeesAriaViolation` plants a prohibited
+ARIA state (`role="menuitem" aria-checked="true"`, an A-level defect) inside that
+same live dialog, requires THAT scan to name it, and removes it again. A rule set
+narrowed out from under these arms therefore fails in the browser, not only in
+`web/src/lib/a11yGateRule.test.ts`.
 
 Pinned per dialog: `role="dialog"` + `aria-modal="true"` + an `aria-labelledby`
 that resolves to the shipped heading, focus in the confirm field on open, the
@@ -421,7 +432,7 @@ Two readings of "really scans it" were wrong and are now closed:
   `page.goto()`** and nothing else.
 * the scan used to be **presence** of `AxeBuilder`/`gateScan` anywhere in the
   file, with no reading of its SCOPE (`t_24bd0c6c`). `/forms` counted on that
-  rule through `a11y-dialogs.spec.ts`'s `.include('[role="dialog"]')` purge-dialog
+  rule through `a11y-dialogs.spec.ts`'s `gateScan(page, '[role="dialog"]')` purge-dialog
   scan — a scan of the dialog, never of the page. A route now needs a scan of the
   whole page or of its page body (`include("main")` / `#main-content`), under
   the gate's own rule set; a dialog-, row- or menu-scoped scan and a
@@ -505,7 +516,7 @@ shell.
 
 **What is still NOT covered (stated, not hidden).** `/forms` used to be in this
 paragraph: `a11y-dialogs.spec.ts` reached it, but that scan is scoped to the
-dialog subtree (`AxeBuilder().include('[role="dialog"]')`), so its DOCUMENT — the
+dialog subtree (`gateScan(page, '[role="dialog"]')`), so its DOCUMENT — the
 table, its toolbar and its filters — was outside every axe scan. Since card
 `t_24bd0c6c` the `/forms` arm in `a11y-authed-pages.spec.ts` runs `scanDocument()`
 (the gate's default rule set over the whole page, failing on critical/serious and

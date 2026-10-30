@@ -21,16 +21,18 @@
 // nine arms call those two functions. This test fails if
 //   (a) any a11y spec goes back to narrowing the rule set at a call site, or
 //   (b) the shared gate itself narrows it, or
-//   (c) one of the four scoped specs stops going through the shared gate, or
+//   (c) one of the FIVE scoped specs stops going through the shared gate, or
 //   (d) a HAND-RUN probe under `web/scripts/` carries a rule set of its own
 //       (card t_c912998e — `a11y-switcher.mjs` kept the six-rule tag pair for
 //       one merge after the gate was fixed, because no gate executes the probes
 //       and nothing scanned them for the shape).
 //
 // The RUNTIME half of the same card is `expectGateSeesAriaViolation` in
-// `e2e/axeGate.ts`, which all nine arms call: it plants a prohibited ARIA state
-// inside the subtree the arm just read and requires that same scan to report it,
-// so a narrowed rule set fails the GATE, not only this file. That is the
+// `e2e/axeGate.ts`, which every scoped arm calls — the nine original ones, and
+// the three dialog arms card t_1d032719 moved onto this file's list: it plants a
+// prohibited ARIA state inside the subtree the arm just read and requires that
+// same scan to report it, so a narrowed rule set fails the GATE, not only this
+// file. That is the
 // assertion the card asks for — this one only keeps the shape from rotting back.
 //
 // Run with:
@@ -52,12 +54,16 @@ const SCRIPTS_DIR = pathOf("../../scripts");
 /** The axe rule set + failing impacts, shared by the whole family. */
 const GATE = "axeGate.ts";
 
-/** The four specs whose nine arms used to carry their own copy of the rule. */
+/** The five specs whose arms must read the rule from the shared gate: the four
+ *  below carried their own copy of it (card t_5aa6c8ac), and `a11y-dialogs.spec.ts`
+ *  carried a second copy of the same two declarations without narrowing the set
+ *  (card t_1d032719), which is why nothing caught it until it was migrated. */
 const SCOPED_ARMS = [
   "a11y-switcher.spec.ts",
   "a11y-admin-feedback-row.spec.ts",
   "a11y-avatar-badge.spec.ts",
   "a11y-dashboard-status-badge.spec.ts",
+  "a11y-dialogs.spec.ts",
 ];
 
 const read = (name: string) => readFileSync(`${E2E_DIR}/${name}`, "utf8");

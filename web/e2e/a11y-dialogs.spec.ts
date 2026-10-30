@@ -79,9 +79,17 @@
 // reachable: with `can_delete: false` the dialog is not offered at all.
 //
 // The isolation is deliberate:
-// `AxeBuilder().include()` scopes axe to the dialog subtree, and axe THROWS
-// ("No elements found for include in page Context") when that subtree is not
-// there, so the scan cannot pass vacuously. The structural assertions are not
+// `gateScan(page, '[role="dialog"]')` scopes axe to the dialog subtree, and axe
+// THROWS ("No elements found for include in page Context") when that subtree is
+// not there, so the scan cannot pass vacuously. The rule SET and the failing
+// IMPACTS are not this file's to define: they come from `e2e/axeGate.ts`, the one
+// definition `e2e/a11y.spec.ts` and the nine scoped arms also run (card
+// t_1d032719 — this file kept its own copy of both, which did not narrow the
+// rule set but would have drifted from the gate silently). And a clean reading is
+// only evidence if the scan can SEE a defect in the subtree it just read, so each
+// axe arm ends by planting a prohibited ARIA state inside the same live dialog
+// and requiring THAT scan to name it (`expectGateSeesAriaViolation`), exactly as
+// the nine scoped arms do. The structural assertions are not
 // redundant with axe: axe reports a dialog with no accessible name as
 // `aria-dialog-name`, but a dialog that lost `role="dialog"` altogether is simply
 // not a dialog to axe — it would be scanned as an ordinary div and pass. The
@@ -104,20 +112,21 @@ import { signIn } from "./auth";
 test.beforeEach(async ({ page, baseURL }) => {
   await signIn(page, baseURL!);
 });
-import AxeBuilder from "@axe-core/playwright";
-import type { AxeResults, Result } from "axe-core";
 import { DICT } from "../src/components/i18nDict";
+// The axe rule SET and the failing IMPACTS are defined ONCE, in `./axeGate`:
+// `gateScan()` runs exactly what `e2e/a11y.spec.ts` runs on a page, and
+// `blockersOf()` applies the same critical/serious bar. Card t_1d032719 deleted
+// this file's own `IMPACTS` / `blockersOf` / `new AxeBuilder(...)` — the copy did
+// not narrow the rule set, so its readings were sound, but a second copy is one
+// `axeGate.ts` edit away from disagreeing with the gate and nothing forced it to
+// migrate. `expectGateSeesAriaViolation` is the control that makes the migration
+// verifiable: it re-runs THIS scan over the same subtree with a planted defect.
+import { blockersOf, expectGateSeesAriaViolation, gateScan } from "./axeGate";
 
-// The gate's own rule: critical/serious fail, everything else is reported for
-// triage. Kept identical to e2e/a11y.spec.ts so the two cannot drift.
-const IMPACTS = ["critical", "serious"] as const;
-
-/** The critical/serious subset of an axe result. */
-function blockersOf(results: AxeResults): Result[] {
-  return results.violations.filter((v) =>
-    IMPACTS.includes((v.impact ?? "") as (typeof IMPACTS)[number]),
-  );
-}
+/** The subtree every scan and every planted control in this file is scoped to.
+ *  One constant, so a control cannot end up reading a different element than the
+ *  clean scan it is vouching for. */
+const DIALOG = '[role="dialog"]';
 
 /**
  * `<METHOD> <path>` for a request — what a failure message has to name, without
@@ -282,9 +291,17 @@ async function freshState(page: Page) {
   });
 }
 
-/** Scans the live dialog subtree and fails on any critical/serious violation. */
+/**
+ * Scans the live dialog subtree and fails on any critical/serious violation.
+ *
+ * The rule set and the failure bar come from `./axeGate` (card t_1d032719): this
+ * file measures the dialog with the SAME `gateScan` the page gate and the nine
+ * scoped arms run, so an edit to the rule set cannot leave this arm behind.
+ * The failure message keeps naming the offending rule ids and their first nodes,
+ * which is what makes a red here readable without opening a trace.
+ */
 async function scanDialog(page: Page, name: string) {
-  const results = await new AxeBuilder({ page }).include('[role="dialog"]').analyze();
+  const results = await gateScan(page, DIALOG);
   const blockers = blockersOf(results);
   if (blockers.length > 0) {
     console.log(
@@ -362,7 +379,7 @@ async function assertDialogContract(
     opts.value.trim(),
     `the ${opts.what} must carry no surrounding whitespace for the trim probe to bite`,
   ).toBe(opts.value);
-  const dialog = page.locator('[role="dialog"]');
+  const dialog = page.locator(DIALOG);
   await expect(dialog, "exactly one dialog is open").toHaveCount(1);
   await expect(dialog).toBeVisible();
   await expect(dialog, "a modal must be announced as such").toHaveAttribute("aria-modal", "true");
@@ -670,7 +687,7 @@ test.describe("a11y: typed-confirmation dialogs (slug / product name)", () => {
       "the danger-zone delete button must be off when the server withholds can_delete",
     ).toBeDisabled();
     // ...and off means off: nothing was opened behind it.
-    await expect(page.locator('[role="dialog"]'), "no dialog may be reachable").toHaveCount(0);
+    await expect(page.locator(DIALOG), "no dialog may be reachable").toHaveCount(0);
   });
 
   // The scan is a separate test from the contract so a failure names WHICH half
@@ -680,8 +697,16 @@ test.describe("a11y: typed-confirmation dialogs (slug / product name)", () => {
     await freshState(page);
     await page.goto(`${baseURL}/settings?tab=workspace`, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: EN.wsDeleteButton }).click();
-    await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(DIALOG)).toBeVisible({ timeout: 15_000 });
     await scanDialog(page, "workspace-delete dialog");
+    // NON-VACUITY OF THE READING ABOVE (card t_1d032719). The dialog is scanned
+    // with the gate's own rule set; plant a prohibited ARIA state INSIDE the live
+    // dialog and require the same scan to name it. A rule set narrowed out from
+    // under this arm fails HERE, in the browser, not only in
+    // `src/lib/a11yGateRule.test.ts`. Sequenced AFTER the clean reading and after
+    // any other assertion — the helper removes the planted node in its `finally`,
+    // so nothing is left in the dialog for a later step to trip over.
+    await expectGateSeesAriaViolation(page, DIALOG, "the workspace-delete dialog");
   });
 
   test("form-purge dialog has no critical/serious axe violations", async ({ page, baseURL }) => {
@@ -690,8 +715,12 @@ test.describe("a11y: typed-confirmation dialogs (slug / product name)", () => {
     await page.goto(`${baseURL}/forms`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: EN.trashTab }).click();
     await page.getByRole("button", { name: EN.purgeButton }).click();
-    await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(DIALOG)).toBeVisible({ timeout: 15_000 });
     await scanDialog(page, "form-purge dialog");
+    // …and the same control on this dialog (card t_1d032719). This arm holds no
+    // request open — the submit is held in the CONTRACT test, a different test —
+    // so the dialog here is a real, idle modal and the plant lands in it cleanly.
+    await expectGateSeesAriaViolation(page, DIALOG, "the form-purge dialog");
   });
 
   // /products' bin, scanned the same way. It named itself with `aria-label` and
@@ -704,7 +733,11 @@ test.describe("a11y: typed-confirmation dialogs (slug / product name)", () => {
     await page.goto(`${baseURL}/products`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: EN.prodTrashTab, exact: true }).click();
     await page.getByRole("button", { name: EN.prodPurgeButton }).click();
-    await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(DIALOG)).toBeVisible({ timeout: 15_000 });
     await scanDialog(page, "product-purge dialog");
+    // The control on the third dialog (card t_1d032719). This arm is a separate
+    // test from the contract, so no request is held open here either: the modal is
+    // idle and the plant is appended to (and removed from) the live dialog.
+    await expectGateSeesAriaViolation(page, DIALOG, "the product-purge dialog");
   });
 });
