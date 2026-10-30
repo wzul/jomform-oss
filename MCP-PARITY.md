@@ -68,6 +68,11 @@ Parity checklist (dashboard → MCP):
   connect something the form settings page would refuse. `connect_shipping_courier`
   returns an authorize URL for EasyParcel: that link is the ACCOUNT OWNER's to open
   (the agent never opens it, never types and never asks for a password).
+  A shipping block whose rate source is a managed zone set or a courier needs NO
+  block-level price: its fee is the zone set's rate (a courier block quotes at
+  checkout and falls back to the same set), so `upsert_form` / `POST /v1/rest/forms`
+  accept it with no block price and no priced choices. An unpriced static shipping
+  block and every unpriced option block are still refused.
   REST: `GET /v1/rest/shipping/couriers`,
   `POST /v1/rest/shipping/couriers/{provider}/connect`,
   `POST /v1/rest/shipping/couriers/{provider}/disconnect`; the PUBLIC OAuth return

@@ -31,11 +31,24 @@ package formfields
 // REST own-template create/update, MCP upsert_form create/update, MCP
 // create_template/update_template — so the builder, the REST API, MCP and the
 // AI generator cannot disagree about what a storable pricing block is.
+//
+// WHERE IT IS NOT APPLIED: a shipping block whose rate SOURCE is server-resolved
+// (`source` = "zones" or "courier"). Its fee is authored in the zone set the
+// block points at — a courier block quotes at checkout and falls back to that
+// same set — and the block's own `price_sen`/`choices` are DEAD config: the
+// renderer paints the zone set's zones (httpapi/render_blocks.go) and the submit
+// path drops the block's own line item (httpapi/shipping_blocks.go), so nothing
+// ever reads them. Refusing that shape demanded exactly the unread price this
+// rule's second arm calls untrustworthy, and it only ever hit API/MCP authors
+// (the builder seeds its shipping block with a priced choice, which satisfied
+// the rule by accident) — card t_3d5b3a38.
 
 import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/wzul/jomform/api/internal/shipping"
 )
 
 // pricingBlockTypes are the block types whose value is money. Both are priced
@@ -135,6 +148,26 @@ func PricingContract(config map[string]any) []Field {
 	return out
 }
 
+// serverPricedShippingSource reports whether a shipping block's `source` names a
+// rate source the SERVER resolves, in which case the block's own price is dead
+// config and this rule has nothing to check.
+//
+// THE READING IS THE SUBMIT PATH'S, ON PURPOSE. This must agree exactly with
+// httpapi.shippingBlocksWhere, which is what actually decides whether a block's
+// own line item is dropped and a fee resolved instead: it trims `source` and
+// compares it case-sensitively to shipping.SourceZones/SourceCourier. Anything
+// that reading would treat as STATIC must stay inside the rule here — a padded or
+// differently-cased "Courier" block is charged from its own choices at submit, so
+// exempting it would store a block priced nowhere and charge the buyer 0 sen.
+// That is why the comparison is not lowercased and not loosened.
+func serverPricedShippingSource(source string) bool {
+	switch strings.TrimSpace(source) {
+	case shipping.SourceZones, shipping.SourceCourier:
+		return true
+	}
+	return false
+}
+
 // UnpricedPricingBlock returns the merchant-facing rejection for the first
 // option/shipping block whose price the config cannot resolve, or "" when every
 // pricing block is priced. A config with no blocks key, a non-array blocks (the
@@ -157,7 +190,11 @@ func UnpricedPricingBlock(config map[string]any) string {
 		Type     string `json:"type"`
 		Value    string `json:"value"`
 		PriceSen *int64 `json:"price_sen"`
-		Choices  []struct {
+		// Source is a shipping block's rate source: absent/"static" = the
+		// block's own choices price it, "zones"/"courier" = the server
+		// resolves it (see serverPricedShippingSource).
+		Source  string `json:"source"`
+		Choices []struct {
 			Label    string `json:"label"`
 			Value    string `json:"value"`
 			PriceSen *int64 `json:"price_sen"`
@@ -169,6 +206,12 @@ func UnpricedPricingBlock(config map[string]any) string {
 	for _, b := range blocks {
 		typ := strings.TrimSpace(b.Type)
 		if !pricingBlockTypes[typ] {
+			continue
+		}
+		// A server-resolved shipping block carries no config price worth
+		// checking: its fee is the zone set's rate (or the courier quote that
+		// falls back to it), and the block's own price/choices are never read.
+		if typ == "shipping" && serverPricedShippingSource(b.Source) {
 			continue
 		}
 		priced := false

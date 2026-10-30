@@ -132,6 +132,15 @@ export default function ShippingDocsPage() {
         are. The fee is then resolved from the address they submitted.
       </p>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A managed block carries no price of its own: the fee comes from the zone set (or, for a
+        courier block, from the quote — the zone set is then both the estimate the form shows and
+        the fallback rate), so a block&apos;s own{" "}
+        <span className="font-mono text-xs">price_sen</span> and its{" "}
+        <span className="font-mono text-xs">choices</span> are never read for it. When you author
+        one over the REST API or MCP, save it with just the source, the zone set and the address
+        field names — no price is required, because no price would be charged.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
         A zone matches on any ONE of its rules — a state (including the region tokens{" "}
         <span className="font-mono text-xs">peninsular</span> and{" "}
         <span className="font-mono text-xs">east_malaysia</span>), a numeric postcode range, or a

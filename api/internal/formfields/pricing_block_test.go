@@ -97,6 +97,97 @@ func TestUnpricedPricingBlockIgnoresWhatItDoesNotOwn(t *testing.T) {
 	}
 }
 
+// TestUnpricedPricingBlockExemptsServerPricedShippingBlocks: a shipping block
+// whose rate SOURCE is resolved by the server has no config price to check. Its
+// fee is the zone set's rate (a courier block quotes at checkout and falls back
+// to that same set), the renderer paints the set's zones instead of the block's
+// choices, and the submit path drops the block's own line item — so the block's
+// `price_sen`/`choices` are dead config, and demanding one refused every
+// API/MCP author who wrote the sourced block correctly (card t_3d5b3a38).
+func TestUnpricedPricingBlockExemptsServerPricedShippingBlocks(t *testing.T) {
+	cases := map[string]map[string]any{
+		// The card's own repro: courier source, no price, no choices.
+		"courier source, no price, no choices": {"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage",
+				"product_id": "ship1", "required": true,
+				"source": "courier", "courier_provider": "lalamove",
+				"zone_set_id": "set-1", "zone_state_field": "b_state"},
+		}},
+		"zones source, no price, no choices": {"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage",
+				"source": "zones", "zone_set_id": "set-1", "zone_state_field": "b_state"},
+		}},
+		// A sourced block the builder seeded with its default priced choice:
+		// the choice is dead config too, so neither arm may fire.
+		"sourced block still carrying the builder's priced choice": {"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage",
+				"source": "courier", "zone_set_id": "set-1",
+				"choices": []any{map[string]any{"label": "Postage", "value": "1", "price_sen": 0}}},
+		}},
+		// A sourced block whose dead choices carry no price (the second arm's
+		// shape) — still nothing to charge from the config.
+		"sourced block, block price beside unpriced choices": {"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage", "price_sen": 500,
+				"source": "zones", "zone_set_id": "set-1",
+				"choices": []any{map[string]any{"label": "A", "value": "a"}}},
+		}},
+		// The submit path TRIMS `source` (httpapi.shippingBlocksWhere), so a
+		// padded value is resolved from the zone set and must be exempt too.
+		"padded source": {"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage",
+				"source": " courier ", "zone_set_id": "set-1"},
+		}},
+		// An option block is never sourced: the exemption is shipping-only.
+		"option beside a sourced shipping block": {"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage", "source": "zones"},
+			map[string]any{"id": "opt1", "type": "option", "value": "Tambahan",
+				"choices": []any{map[string]any{"label": "Kad", "value": "card", "price_sen": 500}}},
+		}},
+	}
+	for name, cfg := range cases {
+		if msg := UnpricedPricingBlock(cfg); msg != "" {
+			t.Errorf("%s: refused a server-priced shipping block: %s", name, msg)
+		}
+	}
+}
+
+// TestUnpricedPricingBlockStillRefusesAStaticShippingBlock pins the other
+// direction of the same exemption: only a source the SUBMIT path actually
+// resolves may skip the rule. Everything else is charged from the config at
+// submit, so an unpriced one is still the t_3d11f98d defect.
+func TestUnpricedPricingBlockStillRefusesAStaticShippingBlock(t *testing.T) {
+	cases := map[string]map[string]any{
+		"no source at all": {"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage"},
+		}},
+		"source static": {"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage", "source": "static"},
+		}},
+		"source static with unpriced choices": {"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage", "source": "static",
+				"choices": []any{map[string]any{"label": "Pos", "value": "pos"}}},
+		}},
+		// shippingBlocksWhere compares case-SENSITIVELY, so this block is
+		// charged from its own choices at submit — it must stay inside the rule
+		// or it is storable with no price and charged 0 sen.
+		"wrongly-cased source": {"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage", "source": "Courier"},
+		}},
+		"unknown source": {"blocks": []any{
+			map[string]any{"id": "ship1", "type": "shipping", "value": "Postage", "source": "zones2"},
+		}},
+		// The exemption is for shipping blocks only.
+		"option with a source": {"blocks": []any{
+			map[string]any{"id": "opt1", "type": "option", "value": "Tambahan", "source": "zones"},
+		}},
+	}
+	for name, cfg := range cases {
+		if msg := UnpricedPricingBlock(cfg); msg == "" {
+			t.Errorf("%s: accepted a block the submit path prices from its own config", name)
+		}
+	}
+}
+
 // TestUnpricedPricingBlockReadsAStoredConfig: the same rule is asked about a
 // config decoded from JSONB, so the answer must not depend on how it was built.
 func TestUnpricedPricingBlockReadsAStoredConfig(t *testing.T) {
