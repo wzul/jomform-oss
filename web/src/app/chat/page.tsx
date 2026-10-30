@@ -51,6 +51,19 @@
 //      translation was inert (t_57a77d02). `r.error` is errorKey's ONLY consumer;
 //      nothing else in this file reads it.
 //
+//   7. THE CONVERSATION SURVIVES A RELOAD. The transcript is kept in this
+//      browser, keyed by user AND workspace, and restored on mount — a refresh,
+//      a tab close or a trip to another page used to destroy it, and with it the
+//      answers and the proposal cards the user had just been reading. The key
+//      and the codec live in lib/chatTranscript.ts; this page only decides WHEN
+//      to load, save and clear. Nothing here is stored on the server, and only
+//      the visible turns are stored: a proposal card's token is a single-use
+//      capability with a five-minute life, so it is deliberately not kept at
+//      rest. "New conversation" clears the stored transcript, and a bounce to
+//      /login clears every transcript in this browser — a retained conversation
+//      with no way to start clean, or one handed to the next person at a shared
+//      device, is its own defect.
+//
 // The history it sends is the transcript the user can see, capped to the SERVER'S
 // own retention cap — the `max_history_turns` the availability probe reports,
 // whose value is chat.MaxTurns in api/internal/chat/chat.go. A literal here and a
@@ -91,6 +104,15 @@ import {
   type ProposalCardData,
 } from "../../lib/chatProposal";
 import { dropWorkspaceScopeIfCurrent, workspaceQuery } from "../../lib/workspace";
+import {
+  browserStorage,
+  chatTranscriptKey,
+  clearChatTranscripts,
+  clearTranscript,
+  loadTranscript,
+  maySaveTranscript,
+  saveTranscript,
+} from "../../lib/chatTranscript";
 
 type Turn = { role: "user" | "assistant"; content: string };
 
@@ -209,7 +231,7 @@ const MAX_HISTORY = 16;
 
 export default function ChatPage() {
   const { t } = useI18n();
-  const { anon, workspace } = useSession();
+  const { anon, workspace, user } = useSession();
   const router = useRouter();
 
   const [available, setAvailable] = useState<boolean | null>(null);
@@ -221,10 +243,73 @@ export default function ChatPage() {
 
   const endRef = useRef<HTMLDivElement>(null);
 
+  // The retention cap: the server's `max_history_turns` once the probe has
+  // answered, the pre-probe fallback before that. ONE derivation, read by the
+  // send path, by the restore and by the save — three places that must agree on
+  // how much conversation is kept, because a transcript longer than the window
+  // the model is given is the 32-against-16 divergence this page already shipped
+  // once (see MAX_HISTORY above).
+  //
+  // `||`, not `??`: a reported 0 would make `slice(-0)` the WHOLE transcript —
+  // the opposite of a cap. The API's own guard rules a 0 out (every field of
+  // chatLimitsOut is asserted nonzero), so this is the cheap direction to fail
+  // in, not a state the server can send.
+  const historyCap = limits?.max_history_turns || MAX_HISTORY;
+
+  // The stored transcript this page shows and writes, or "" when there is
+  // nothing to scope it to (no signed-in user id yet). Never a key shared
+  // between users or between workspaces — see lib/chatTranscript.ts.
+  const transcriptKey = chatTranscriptKey(user?.id ?? "", workspace);
+
+  // Which key's turns are IN `msgs`. State, not a ref, and set in the SAME batch
+  // as the restore: the save effect must be able to tell "these turns belong to
+  // this key" from "this render is mid-transition", and a ref updated one commit
+  // early reports the wrong thing (measured in a browser: a first-paint key change
+  // then wrote the previous key's turns under the new key, and deleted the stored
+  // conversation under the old one).
+  const [shownKey, setShownKey] = useState<string | null>(null);
+
   const goToLogin = useCallback(() => {
+    // A dead session must not hand the next person at this device the previous
+    // conversation. The sweep covers every chat transcript in this browser (the
+    // keys are per user, so they are found by prefix), and it runs BEFORE the
+    // navigation so a redirect that never completes still leaves nothing behind.
+    clearChatTranscripts(browserStorage());
     router.replace("/login");
     window.location.href = "/login";
   }, [router]);
+
+  // Restore the conversation on mount — and again on a workspace switch, because
+  // the transcript is per workspace and showing the previous workspace's turns
+  // would be exactly the leak the key prevents.
+  //
+  // THE FIRST RESTORE ONLY FILLS AN EMPTY TRANSCRIPT: a message already sent in
+  // this mount (the user typed before the session bundle answered) is newer than
+  // anything stored, and replacing it would drop what they just asked.
+  //
+  // `setShownKey` and `setMsgs` go together in one batch, so the render that
+  // carries the restored turns also carries the key they belong to.
+  useEffect(() => {
+    if (!transcriptKey) return;
+    if (shownKey === transcriptKey) return;
+    const isFirst = shownKey === null;
+    const stored = loadTranscript(browserStorage(), transcriptKey, historyCap);
+    setShownKey(transcriptKey);
+    setMsgs((prev) => (isFirst && prev.length > 0 ? prev : stored));
+  }, [transcriptKey, shownKey, historyCap]);
+
+  // Persist what is on screen. Only turns are written (the codec drops the
+  // filing/refusal/proposal cards, which are UI affordances — and a proposal card
+  // carries a single-use token that must not sit at rest).
+  //
+  // The gate is `maySaveTranscript`, not "have we restored yet": on a first paint
+  // the key can change under the page (the session bundle answers, then the shell
+  // publishes the workspace it selected), and a save that trusted a one-shot flag
+  // wrote the previous key's turns under the new key. See its own comment.
+  useEffect(() => {
+    if (!maySaveTranscript(shownKey, transcriptKey)) return;
+    saveTranscript(browserStorage(), transcriptKey, msgs, historyCap);
+  }, [msgs, transcriptKey, shownKey, historyCap]);
 
   // Availability first: with no LLM the box must not be offered at all.
   useEffect(() => {
@@ -328,12 +413,11 @@ export default function ChatPage() {
 
     // The transcript the user can see, minus the filing/refusal cards (which are
     // UI affordances, not conversation turns), capped to what the server KEEPS.
-    //
-    // `||`, not `??`: a reported 0 would make `slice(-0)` the WHOLE transcript —
-    // the opposite of a cap. The API's own guard rules a 0 out (every field of
-    // chatLimitsOut is asserted nonzero), so this is the cheap direction to fail
-    // in, not a state the server can send.
-    const historyCap = limits?.max_history_turns || MAX_HISTORY;
+    // `historyCap` is the component-level derivation (see its comment): the same
+    // number the restore and the save use, so the turns sent are the turns kept.
+    // On a page that has just restored a conversation this is what carries the
+    // restored turns to the model — the conversation continues instead of
+    // restarting mid-thread.
     const history: Turn[] = msgs
       .slice(-historyCap)
       .map((m) => ({ role: m.role, content: m.content }));
@@ -581,6 +665,19 @@ export default function ChatPage() {
     );
   }
 
+  // "New conversation" — the control that makes the retention revocable. A
+  // retained transcript with no way to start clean is its own problem, so this
+  // drops the turns on screen AND the stored copy in one action. It clears the
+  // key explicitly rather than relying on the save effect: the effect is the
+  // mirror of the store, and a user asking for a clean sheet must not depend on
+  // an effect having run (nor be left with a key whose value is "[]").
+  function newConversation() {
+    setErr("");
+    setInput("");
+    setMsgs([]);
+    clearTranscript(browserStorage(), transcriptKey);
+  }
+
   const disabled = sending || available === false;
 
   return (
@@ -596,16 +693,34 @@ export default function ChatPage() {
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-[var(--jf-muted)]">{t("chat.subtitle")}</p>
           </div>
-          {/* Inline "?" doc link (DOCUMENTATION PARITY). */}
-          <a
-            href="/docs/chat"
-            target="_blank"
-            rel="noopener noreferrer"
-            title={t("chat.docs")}
-            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
-          >
-            ?
-          </a>
+          {/* The retention is revocable: this drops the conversation on screen and
+              the copy stored in this browser. It sits beside the "?" doc link, in
+              the header rather than over the transcript, so it cannot be hit by
+              accident while reading. Disabled while the transcript is empty (there
+              is nothing to clear) and while a message is in flight (the reply
+              would repopulate it immediately, which reads as a control that did
+              nothing). */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={newConversation}
+              disabled={sending || msgs.length === 0}
+              title={t("chat.newConversationHint")}
+              className="jf-btn-ghost"
+            >
+              {t("chat.newConversation")}
+            </button>
+            {/* Inline "?" doc link (DOCUMENTATION PARITY). */}
+            <a
+              href="/docs/chat"
+              target="_blank"
+              rel="noopener noreferrer"
+              title={t("chat.docs")}
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+            >
+              ?
+            </a>
+          </div>
         </div>
 
         <div className="mt-6 flex min-h-0 flex-1 flex-col rounded-lg border border-[var(--jf-border)] bg-white">

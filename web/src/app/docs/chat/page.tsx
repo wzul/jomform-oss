@@ -130,6 +130,18 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "remembering",
+    title: "Keeping the conversation across a reload",
+    body: [
+      "The conversation you can see is kept in this browser, for the signed-in user and for the workspace that was selected when you had it. Refresh the page, close the tab and come back, or visit another dashboard page and return, and the same turns are still there in the same order. Before this, a reload started an empty conversation: the answers you had just been reading, and the questions that produced them, were gone.",
+      "It is kept by your browser, not by JomForm. Nothing of the conversation is stored on the server, so it does not follow you to another browser or another device — those start with an empty conversation, exactly as they always did. The assistant still reads your data only while it is answering a message you have sent, and only inside the signed-in request that carries the turn.",
+      "Only what is on screen is kept, and only the last 16 turns of it — the same window the assistant is given. A confirmation card is deliberately not kept: its Confirm button is a single-use permission with five minutes of life, so a card brought back after a reload would be a button that cannot work, and storing it would leave a write permission lying in the browser.",
+      "Two workspaces do not share a conversation. If you belong to more than one, each keeps its own thread: the transcript you see is always the one for the workspace you selected, and switching workspace shows that workspace's conversation rather than the previous one.",
+      "You can end it whenever you want. New conversation, at the top of the page, clears the turns on screen and the copy kept in this browser, so the next question starts a fresh thread. Signing out clears it as well, and so does a session that expires: the conversation is never handed to the next person who signs in on this device.",
+      "If the stored copy cannot be read — a browser that was cleared mid-write, an extension, a build that changed the format — the page starts with an empty conversation rather than showing half of one. Nothing is recovered, and nothing about the previous thread is displayed out of order.",
+    ],
+  },
+  {
     id: "when-stuck",
     title: "When it does not know",
     body: [

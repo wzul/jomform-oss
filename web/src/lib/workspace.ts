@@ -1,4 +1,10 @@
 import { isReservedSlugRefusal } from "./workspaceSlug.ts";
+// The chat transcript lives under per-USER keys (`jf.chat.v1:<userId>:<slug>`),
+// so it cannot be named in the fixed list below — the sweep finds it by prefix.
+// Imported rather than re-typed here for the same reason the slug token is: one
+// definition of the family, so a rename cannot leave sign-out clearing a prefix
+// nothing writes.
+import { clearChatTranscripts } from "./chatTranscript.ts";
 
 // Shared workspace-scope helper (issue #158, renamed from space per #431).
 //
@@ -265,6 +271,12 @@ export const PER_USER_STORAGE_KEYS = [
 
 // clearPerUserStorage drops every per-user cached key, so nothing about the
 // previous user survives a sign-out on this browser.
+//
+// It sweeps in TWO shapes, because the per-user cache has two: the fixed keys
+// above, and the chat transcripts, whose keys carry a user id and so cannot be
+// listed statically. Both halves run BEFORE the logout request (Shell.signOut's
+// ordering is pinned by workspaceScope.test.ts), so a logout that never completes
+// still leaves nothing of this session behind.
 export function clearPerUserStorage(): void {
   for (const k of PER_USER_STORAGE_KEYS) {
     try {
@@ -272,6 +284,13 @@ export function clearPerUserStorage(): void {
     } catch {
       // storage unavailable — nothing was cached either
     }
+  }
+  try {
+    clearChatTranscripts(localStorage);
+  } catch {
+    // A storage that throws on ACCESS is treated as one that holds nothing:
+    // clearChatTranscripts guards its own calls, but reading `localStorage`
+    // itself can throw in a locked-down browser.
   }
 }
 
