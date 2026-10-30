@@ -271,3 +271,190 @@ func TestMenuOrderRefusesAnImageChoiceTheMerchantNeverOffered(t *testing.T) {
 		t.Errorf("sale fields = %+v, want ic1 = the chosen value b", fields)
 	}
 }
+
+// Card t_7c931910 — the page's own required guard could not see an unanswered
+// radio group.
+//
+// The guard read `re.value` for every non-checkbox control. For a radio that is
+// the value of the FIRST radio in querySelectorAll order, not the checked one,
+// so a required group whose first choice carries any value always passed: the
+// order left the page and only the server's 400 stopped it (measured on prod,
+// v1.22.1). Driven through the served page — the guard must refuse locally with
+// no POST, and must submit the CHECKED choice once one is picked.
+func TestMenuCheckoutGuardRefusesAnUnansweredRadioGroup(t *testing.T) {
+	d, _ := imageChoiceMenuFixture(t)
+	dom, _ := newMenuDOMPage(t, d)
+	if dom.buttonFor("p1") == nil {
+		t.Fatal("fixture defect: the menu has no card button for p1")
+	}
+	dom.dispatch("click", dom.buttonFor("p1"))
+	if n := len(dom.cart()); n != 1 {
+		t.Fatalf("adding the dish put %d line(s) in the basket, want 1", n)
+	}
+	setMenuAttr(dom.byID["menuName"], "value", "Ali")
+	setMenuAttr(dom.byID["menuEmail"], "value", "ali@example.test")
+	form := dom.byID["menuCheckout"]
+	orderPosts := func() []string {
+		var out []string
+		for _, u := range dom.fetches {
+			if strings.HasSuffix(u, "/order") {
+				out = append(out, u)
+			}
+		}
+		return out
+	}
+
+	// (a) Nothing in the group is checked — the page must refuse before the
+	// order is sent, the way it does for a required text field.
+	dom.dispatch("submit", form)
+	dom.flushTimers()
+	if posts := orderPosts(); len(posts) != 0 {
+		t.Fatalf("an unanswered required radio group still POSTed %v — the page's own guard let it "+
+			"through and only the server refused (the buyer sees a round trip instead of the local error)", posts)
+	}
+	if body, ok := dom.storage["__posted_body"]; ok && body != "" {
+		t.Errorf("an unanswered required radio group was submitted: %s", body)
+	}
+	errEl := dom.byID["menuErr"]
+	if errEl == nil {
+		t.Fatal("the page has no #menuErr surface")
+	}
+	if menuHasAttr(errEl, "hidden") {
+		t.Error("the guard refused the order but showed the buyer no error")
+	}
+	if want := menuAttr(dom.byID["menuSheet"], "data-lbl-required"); nodeText(errEl) != want {
+		t.Errorf("#menuErr = %q, want the page's own required message %q", nodeText(errEl), want)
+	}
+
+	// (b) The group IS answered — the LAST radio, so passing cannot be the first
+	// radio's value leaking through.
+	if _, err := dom.vm.RunString(`document.querySelector('input[type=radio][name="ic1"][value="b"]').checked = true;`); err != nil {
+		t.Fatalf("select the merchant's second choice in the served page: %v", err)
+	}
+	dom.dispatch("submit", form)
+	dom.flushTimers()
+	posted, ok := dom.storage["__posted_body"]
+	if !ok || posted == "" {
+		t.Fatalf("a checked radio group posted nothing (requests: %v)", dom.fetches)
+	}
+	var order struct {
+		Fields map[string]string `json:"fields"`
+	}
+	if err := json.Unmarshal([]byte(posted), &order); err != nil {
+		t.Fatalf("decode the posted order body %q: %v", posted, err)
+	}
+	if order.Fields["ic1"] != "b" {
+		t.Errorf("posted fields[ic1] = %q, want the checked choice \"b\" (body %s)", order.Fields["ic1"], posted)
+	}
+}
+
+// The same guard must still refuse a blank required TEXT field after the group
+// passes: the radio fix sits in the loop every required control goes through, so
+// the non-radio arm is pinned next to it rather than assumed untouched.
+func TestMenuCheckoutGuardStillRefusesABlankRequiredTextField(t *testing.T) {
+	cfg := map[string]any{"mode": "response", "blocks": []any{
+		map[string]any{"id": "ic1", "type": "image-choice", "value": "Pilih saiz", "required": true,
+			"choices": []any{
+				map[string]any{"label": "Kecil", "value": "k"},
+				map[string]any{"label": "Besar", "value": "b"},
+			}},
+		map[string]any{"id": "tx1", "type": "text", "value": "Nama syarikat", "required": true},
+	}}
+	contract := menuExtraContract(cfg)
+	if len(contract) != 2 || contract[0].Type != "image-choice" || contract[1].Type != "text" {
+		t.Fatalf("fixture defect: menuExtraContract = %+v, want the image-choice then the text block", contract)
+	}
+	d := menu492Fixture(t)
+	d.ExtraFields = menuExtraFields(contract, formLangs["en"])
+	dom, _ := newMenuDOMPage(t, d)
+	dom.dispatch("click", dom.buttonFor("p1"))
+	setMenuAttr(dom.byID["menuName"], "value", "Ali")
+	setMenuAttr(dom.byID["menuEmail"], "value", "ali@example.test")
+	if _, err := dom.vm.RunString(`document.querySelector('input[type=radio][name="ic1"][value="k"]').checked = true;`); err != nil {
+		t.Fatalf("select a choice in the served page: %v", err)
+	}
+	dom.dispatch("submit", dom.byID["menuCheckout"])
+	dom.flushTimers()
+	for _, u := range dom.fetches {
+		if strings.HasSuffix(u, "/order") {
+			t.Fatalf("a blank required text field still POSTed %s — the guard's non-radio arm regressed", u)
+		}
+	}
+	if menuHasAttr(dom.byID["menuErr"], "hidden") {
+		t.Error("the guard refused the blank text field but showed the buyer no error")
+	}
+}
+
+// Card t_7c931910 — the radio group had no programmatic name.
+//
+// Both radio-drawing arms published the group heading as a SIBLING <label> with
+// no `for` and no labelable descendant, which labels nothing, so the group was
+// unnamed for assistive tech. They now wrap the group in <fieldset><legend>,
+// the native technique the W3C APG names a radio group with
+// (https://www.w3.org/WAI/ARIA/apg/practices/names-and-descriptions/). Asserted
+// through the served page's DOM, not the template source, and for BOTH arms —
+// `radio` had the defect before `image-choice` inherited it.
+func TestMenuCheckoutRadioGroupsCarryAnAccessibleName(t *testing.T) {
+	for _, tc := range []struct{ typ, id string }{
+		{"image-choice", "ic1"},
+		{"radio", "rd1"},
+	} {
+		t.Run(tc.typ, func(t *testing.T) {
+			cfg := map[string]any{"mode": "response", "blocks": []any{
+				map[string]any{"id": tc.id, "type": tc.typ, "value": "Pilih saiz", "required": true,
+					"choices": []any{
+						map[string]any{"label": "Kecil", "value": "k"},
+						map[string]any{"label": "Besar", "value": "b"},
+					}},
+			}}
+			contract := menuExtraContract(cfg)
+			if len(contract) != 1 || contract[0].Type != tc.typ || len(contract[0].Choices) != 2 {
+				t.Fatalf("fixture defect: menuExtraContract = %+v, want the %s block with both choices", contract, tc.typ)
+			}
+			d := menu492Fixture(t)
+			d.ExtraFields = menuExtraFields(contract, formLangs["en"])
+			dom, body := newMenuDOMPage(t, d)
+
+			v, err := dom.vm.RunString(`(() => {
+				var rs = document.querySelectorAll('input[type=radio][name="` + tc.id + `"]');
+				if (rs.length !== 2) return JSON.stringify({radios: rs.length});
+				var fs = rs[0].closest('fieldset');
+				var lg = fs ? fs.querySelector('legend') : null;
+				return JSON.stringify({
+					radios: rs.length,
+					grouped: !!fs,
+					bothInside: !!fs && rs[1].closest('fieldset') === fs,
+					legend: lg ? lg.textContent.trim() : null
+				});
+			})()`)
+			if err != nil {
+				t.Fatalf("read the radio group's structure from the page: %v", err)
+			}
+			var got struct {
+				Radios     int     `json:"radios"`
+				Grouped    bool    `json:"grouped"`
+				BothInside bool    `json:"bothInside"`
+				Legend     *string `json:"legend"`
+			}
+			if err := json.Unmarshal([]byte(v.String()), &got); err != nil {
+				t.Fatalf("decode the group structure %q: %v", v.String(), err)
+			}
+			if got.Radios != 2 {
+				t.Fatalf("the %s block rendered %d radios, want one per declared choice (2)\nbody:\n%s",
+					tc.typ, got.Radios, body)
+			}
+			if !got.Grouped || !got.BothInside {
+				t.Fatalf("the %s radios are not inside one fieldset group — the group heading labels "+
+					"nothing, so assistive tech has no name for the question", tc.typ)
+			}
+			if got.Legend == nil || *got.Legend != "Pilih saiz (required)" {
+				t.Errorf("the %s group's legend = %v, want the merchant label and the required marker "+
+					"\"Pilih saiz (required)\" — the visible text must be unchanged", tc.typ, got.Legend)
+			}
+			// The defect shape: a heading <label> with no `for` and no control.
+			if strings.Contains(body, `<label>Pilih saiz`) {
+				t.Errorf("the %s group still publishes its name as a bare sibling <label>", tc.typ)
+			}
+		})
+	}
+}

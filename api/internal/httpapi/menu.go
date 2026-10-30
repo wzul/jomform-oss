@@ -312,10 +312,19 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").
       {{range .Choices}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
     </select>
   </label>
-  {{else if eq .Type "radio"}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}</label>
+  {{/* Card t_7c931910: a radio group needs a programmatic name for the GROUP.
+       The group heading used to be a bare sibling <label> with neither a for
+       attribute nor a labelable descendant, which labels nothing — the buyer
+       using a screen reader heard the options with no question. fieldset+legend
+       is the native technique the W3C APG names the group with
+       (https://www.w3.org/WAI/ARIA/apg/practices/names-and-descriptions/);
+       the visible text and the required marker are unchanged. */}}
+  {{else if eq .Type "radio"}}<fieldset class="radioswrap"><legend>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}</legend>
     <div class="radios">{{range .Choices}}<label class="rad"><input type="radio" name="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}</div>
-  {{else if eq .Type "image-choice"}}{{if .Choices}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}</label>
+  </fieldset>
+  {{else if eq .Type "image-choice"}}{{if .Choices}}<fieldset class="radioswrap"><legend>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}</legend>
     <div class="radios">{{range .Choices}}<label class="rad"><input type="radio" name="{{$.ID}}" value="{{.Value}}"{{if $.Required}} required{{end}}> {{.Label}}</label>{{end}}</div>
+  </fieldset>
   {{else}}{{/* Card t_efd99d75: a block that declares NO choices has nothing to draw a radio per choice for — an empty group would be a required field nobody can answer, which would block every order on this menu. Fall through to the text input so the field stays answerable (the same degenerate shape the public renderers leave blank). */}}<label>{{.Label}}{{if .Required}} {{.RequiredMark}}{{end}}
     <input type="text" name="{{.ID}}" value="{{.Value}}" placeholder="{{.Placeholder}}"{{if .Required}} required{{end}}>
   </label>{{end}}
@@ -539,6 +548,12 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").
   .sheetfoot .chk input { width:auto; height:auto; margin:0; }
   .sheetfoot .radios { display:flex; flex-direction:column; gap:4px; margin-top:5px; }
   .sheetfoot .radios .rad { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:500; margin:0; }
+  /* Card t_7c931910: the radio group is a <fieldset> so its <legend> names the
+     group for assistive tech. Reset the user-agent box (border/padding/min-width)
+     and give the legend the label styling the group heading had, so the page
+     looks exactly as it did. */
+  .sheetfoot .radioswrap { border:0; margin:10px 0 0; padding:0; min-width:0; }
+  .sheetfoot .radioswrap legend { padding:0; font-size:13px; font-weight:600; }
   .extrahead { margin-top:12px; }
   .extrahead .extrahelp { margin:0; font-size:12px; color:#6b7280; line-height:1.5; }
   .extrahead .extralink { display:inline-block; margin-top:2px; font-size:12px; font-weight:600;
@@ -1205,6 +1220,17 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
         var re=reqs[ri], rn=re.name;
         if(rn==='full_name'||rn==='email') continue;
         var rv=re.type==='checkbox'?(re.checked?re.value:''):re.value;
+        // t_7c931910: a radio's own .value belongs to the FIRST radio in
+        // document order, not the checked one, so an unanswered required group
+        // always looked answered and only the server's 400 stopped the order.
+        // Read the GROUP: one checked radio of the same name, and its value.
+        if(re.type==='radio'){
+          rv='';
+          var group=payForm.querySelectorAll('input[type=radio]');
+          for(var gi=0;gi<group.length;gi++){
+            if(group[gi].name===rn&&group[gi].checked){ rv=group[gi].value; break; }
+          }
+        }
         if(!String(rv||'').trim()){ errEl.textContent=attr('data-lbl-required'); errEl.hidden=false; return; }
       }
     }
