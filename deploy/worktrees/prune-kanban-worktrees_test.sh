@@ -126,8 +126,41 @@ guard_real() { # <literal> -> match | nomatch, via the script's own predicate
     '. "$0"; if has_process_matching "$JF_PAT"; then echo match; else echo nomatch; fi' "$SCRIPT"
 }
 
+# wait_for_guard: the pruner's OWN predicate, ASKED REPEATEDLY for a bounded while.
+#   <literal> [<seconds>] -> match | nomatch
+#
+# WHY NOT A FIXED `sleep 0.6` BEFORE THE ASSERTION THAT READS IT (card t_eec1d8fd).
+# The stand-in is a fork+exec, so how soon its argv reaches `ps` is a property of the
+# HOST, not of the assertion — and this section asserts "the stand-in is visible" as
+# if it were instantaneous. Measured on this host under 3x CPU oversubscription (18
+# busy loops on 6 cores, load1 ~23): the first `match` arrived at 407ms at worst over
+# 20 samples, against the 600ms the fixed sleep allowed. That is a 1.5x margin on a
+# guessed constant, in the section whose subject is a red gate on a CORRECT tree (the
+# card's own symptom, for the other cause of it — see section 6b).
+#
+# IT IS NOT A WEAKER ASSERTION. A stand-in that never appears still answers `nomatch`
+# once the budget is spent: measured by pointing this at `work kanban task
+# t_00000000-not-a-worker`, which spends the budget and answers nomatch, so the check
+# still has a red in it. The budget buys time for the process to be SCHEDULED; it
+# cannot invent a process.
+wait_for_guard() { # <literal> [<seconds>] -> match | nomatch
+  local pat="$1" deadline=$(( SECONDS + ${2:-15} ))
+  while :; do
+    [ "$(guard_real "$pat")" = match ] && { echo match; return 0; }
+    [ "$SECONDS" -ge "$deadline" ] && break
+    sleep 0.1
+  done
+  echo nomatch
+}
+
 SB="$(mktemp -d /tmp/jf-prunewt-test.XXXXXX)"
-cleanup() { rm -rf "$SB"; }
+# The live-worker stand-in is killed on EVERY exit, including a suite that dies part
+# way through (card t_eec1d8fd): it used to be bounded only by its own `sleep`, so its
+# lifetime was also the leak window, and a suite that died left it running.
+cleanup() {
+  [ -n "${WORKER_PID:-}" ] && kill "$WORKER_PID" 2>/dev/null
+  rm -rf "$SB"
+}
 trap cleanup EXIT
 
 REPO="$SB/repo"
@@ -403,14 +436,20 @@ check "control: an argv that is the shipped reader's own ('grep -F -- <literal>'
   "nomatch" "$(guard_real "$WORKER_PAT")"
 kill "$SELF_READER_PID" 2>/dev/null
 wait "$SELF_READER_PID" 2>/dev/null
-# Now the stand-in that the run below must find.
-env bash -c "exec -a \"$WORKER_PAT\" sleep 40" &
+# Now the stand-in that the run below must find, and it is held until this script
+# kills it rather than for a guessed `sleep 40` (card t_eec1d8fd). The run below is
+# what is being measured, and a stand-in that expires while the pruner is still walking
+# the table produces the card's exact two reds — a removed worktree and no `KEEP` line
+# — on a CORRECT tree, with nothing in the output saying the stand-in had gone. The
+# EXIT trap kills it, so a longer lifetime is not a longer leak.
+env bash -c "exec -a \"$WORKER_PAT\" sleep 300" &
 WORKER_PID=$!
-sleep 0.6
 check "the stand-in worker process is visible to the pruner's OWN predicate" "match" \
-  "$(guard_real "$WORKER_PAT")"
+  "$(wait_for_guard "$WORKER_PAT")"
 : >"$LOG"
 run_prune --min-age-hours 24 >/dev/null 2>&1
+check "the stand-in was still alive when the run finished (so a keep here is the guard, not an expired stand-in)" \
+  "yes" "$(kill -0 "$WORKER_PID" 2>/dev/null && echo yes || echo no)"
 check "a worktree with a live worker process SURVIVES" "yes" "$(survives "$WORKER_TASK")"
 contains "the live-process refusal is logged" "$(cat "$LOG")" "KEEP  $WORKER_TASK (worker process alive)"
 kill "$WORKER_PID" 2>/dev/null
