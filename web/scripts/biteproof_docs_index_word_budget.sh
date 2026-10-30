@@ -31,19 +31,21 @@
 #     than argued.
 #   * CASE 2, the hair trigger the card measured — the SMALLEST edit that trips the fixed
 #     cap: the BASE reds at exactly the cap while the tree stays GREEN. Its SIZE is DERIVED
-#     from the cap's real headroom on this page (2 words at 798 against 800; it was 1 while
-#     the page carried 799), because a hand-typed size is the same staleness trap the base
-#     column fell into (card t_8715a2af). This is the shape that would have blocked every
-#     lane's build.
-#   * CASE 3, the direction that must NOT be lost — a page made FATTER by 28
-#     words with no new entry: RED in both columns, naming the budget. A fix that
-#     only bought headroom would be GREEN here, so this is the control that says
-#     the budget is still a budget.
-#   * CASE 4, the DERIVED ceiling itself — the constant moved 25 -> 24 words per
-#     entry, page untouched: the tree REDS naming the 792-word budget for 33
-#     entries while the BASE is GREEN (the page's total sits under the fixed cap). A
-#     discriminating pair: the red can only come from the derived budget, not from the old
-#     fixed cap.
+#     from the cap's real headroom on this page, and the cap itself is derived (page + 1, see
+#     below), so the headroom is one word by construction — a hand-typed size is the same
+#     staleness trap the base column fell into (card t_8715a2af). This is the shape that
+#     would have blocked every lane's build.
+#   * CASE 3, the direction that must NOT be lost — a page made FATTER by 30
+#     words across two summaries with no new entry: RED in both columns, naming the
+#     budget. A fix that only bought headroom would be GREEN here, so this is the
+#     control that says the budget is still a budget.
+#   * CASE 4, the DERIVED ceiling itself — the constant moved down one word per
+#     entry, page untouched: the tree REDS naming the derived budget for the entry
+#     count the page declares while the BASE is GREEN (the page's total sits under the
+#     re-based fixed cap). A discriminating pair: the red can only come from the derived
+#     budget, not from the old fixed cap. Both numbers in the needle are READ, not typed
+#     (the constant out of this tree's guard, the entry count out of the guard's own
+#     message), because a hand-typed "33 entries" was the same staleness trap.
 #   * CASE 5, NEGATIVE CONTROL — a summary TRIMMED by ~10 words: GREEN in both
 #     columns, so the check has not become "any edit reds".
 #
@@ -57,11 +59,51 @@
 # Run:  bash web/scripts/biteproof_docs_index_word_budget.sh
 #       BITEPROOF_BASE=<rev> bash web/scripts/biteproof_docs_index_word_budget.sh
 #
-# The base column defaults to `origin/main`, and once the fix is merged that guard IS
-# the guard of this tree — it cannot "miss" the trap because it does not hold it. The
-# default run then REFUSES (exit 2, NO VERDICT) and DERIVES the revision to point
-# BITEPROOF_BASE at. A refusal is not a failure: it says the base cannot hold the trap.
 # Exit 0 = PASS, exit 2 = refused/no verdict, exit 1..n = that many failing checks.
+#
+# THE BASE COLUMN IS DERIVED FROM HISTORY AND RE-BASED ONTO TODAY'S PAGE (card
+# t_9d8f1884). The "before" column has to be a guard that carries the FIXED cap, because
+# that is the trap every case drives, and two things made that column impossible to PIN
+# to one revision:
+#   * once this fix merged, `origin/main` IS the fixed guard, so the base can only come
+#     from HISTORY: the newest revision whose guard still ASSERTS `total < N,` and does
+#     not declare the derived budget;
+#   * and a pre-fix revision is a FOSSIL — its cap is a constant chosen when the page was
+#     smaller, so once the page outgrows it the base column can never be GREEN on the
+#     unmutated tree again and every case reports "the case does not reproduce the trap",
+#     which is a statement about the PAGE, not about this branch. Measured 2026-10-29: the
+#     page carried 873 words against the pinned 800 (a −73 deficit), so the harness
+#     refused on BOTH its default base and the revision it suggested, and had no verdict
+#     to print at all. `ORIGINAL_TITLES` goes stale the same way — it is part of the
+#     guard, so a revision that predates today's entries reds the PARITY test on the
+#     unmutated tree.
+# So the base column is the pre-fix RULE, re-based onto today's page, and every re-base is
+# DERIVED from the guards rather than typed:
+#   * its CAP moves to `total < PAGE_TOTAL + 1` — the trap's own measured worst shape
+#     ("main arrived at 799: ONE word of headroom") — in the `.oldcheck.ts` COPY only,
+#     never in the guard and never in a git object;
+#   * its `ORIGINAL_TITLES` receives the titles this tree's guard carries and the base's
+#     does not, so the base reds for the BUDGET and never for page parity.
+# Nothing else about the pre-fix guard is touched: its rule (ONE constant for the whole
+# page, independent of how many entries exist) and the sentence it fails with are the
+# historical ones, and that sentence is what the BASE legs assert on — derived, not typed.
+# What the base column therefore proves is "the pre-fix rule reds on this mutation". It
+# does NOT prove that the historical 800 would have red today's page, and it does not claim
+# to: the cap it runs is stated in its own first line of output.
+#
+# SO THE DEFAULT RUN WORKS. `origin/main` is the FIXED guard now, so with no
+# BITEPROOF_BASE the harness takes the newest revision from this guard's own history that
+# still carries the pre-fix shape, announces it, and re-bases it. An EXPLICIT
+# BITEPROOF_BASE that cannot hold the trap is still refused (exit 2) with the revision to
+# point at, and the run refuses if either of two conditions fails:
+#   CONDITION 1 OF 2 — no revision asserts a fixed cap without declaring the fix, so there
+#                      is no "before" column to be had from this history at all;
+#   CONDITION 2 OF 2 — the re-based base is not GREEN on the UNMUTATED tree, so a red case
+#                      below could not be attributed to its mutation.
+# Every number the cases assert on is read rather than typed: the page's total and the
+# entry count out of the base guard's own failing message, the per-entry constant out of
+# this tree's guard. That is the rule the whole harness exists for — a hand-typed 33
+# entries, 800 words or 792-word budget goes stale exactly like the base column did.
 set -uo pipefail
 
 # The script's OWN absolute path is resolved BEFORE the `cd` below, because the child
@@ -211,54 +253,92 @@ git show "${BASE_REV}:${GUARD_IN_REPO}" > "$OLD_GUARD"
 # fixed guard as the "old" column, and every BASE leg then reported a statement about
 # the base ("does not reproduce the trap") with exit 3 — the harness was born red on its
 # default path from the moment the fix merged. Anything can quote the string a pin is
-# named after, so the pin is now the ASSERTION LINE itself (indent + `total < 800,` +
-# end of line), and the fix is detected as a DECLARATION too (`^const
-# PAGE_BUDGET_PER_ENTRY =`) rather than as a mention — the fixed guard names that
-# constant in its comments as well (`see PAGE_BUDGET_PER_ENTRY above`), so the same trap
-# would swallow the opposite rule.
-PIN_RE='total < 800'                                    # what a reader calls it (echo only)
-PIN_DECL_RE='^[[:space:]]*total < 800,[[:space:]]*$'    # the pre-fix ASSERTION line
+# named after, so the pin is now the ASSERTION LINE itself, and the fix is detected as a
+# DECLARATION too (`^const PAGE_BUDGET_PER_ENTRY =`) rather than as a mention — the fixed
+# guard names that constant in its comments as well (`see PAGE_BUDGET_PER_ENTRY above`),
+# so the same trap would swallow the opposite rule.
+#
+# AND THE PIN IS THE SHAPE, NOT THE NUMBER (card t_9d8f1884). It used to be the one
+# literal `total < 800,`, which made the base column a fossil: the only revisions that
+# carry it are ones from before the page outgrew 800, so the base could never be GREEN on
+# the unmutated tree again and the harness refused on both its default and its suggested
+# base — no verdict at all. What makes a guard the PRE-FIX one is the SHAPE (one constant
+# cap for the whole page, and no derived budget), so any cap matches here and the number
+# is re-based from the page below.
+CAP_DECL_RE='^([[:space:]]*)total < ([0-9]+),[[:space:]]*$'   # the pre-fix ASSERTION, any cap
+PIN_RE='total < N'                                     # what a reader calls it (echo only)
 FIXED_RE='PAGE_BUDGET_PER_ENTRY'                        # what a reader calls it (echo only)
 FIXED_DECL_RE='^const PAGE_BUDGET_PER_ENTRY[[:space:]]*='
-# carry_pin <file> — the base can hold the trap only if it ASSERTS the fixed cap and does
+# carry_pin <file> — the base can hold the trap only if it ASSERTS a fixed cap and does
 # NOT declare the derived one. Both halves are needed: the assertion alone no longer
 # proves the guard is pre-fix (the same file could have gained the derived budget).
 carry_pin() {
-  grep -qE "$PIN_DECL_RE" "$1" || return 1
+  grep -qE "$CAP_DECL_RE" "$1" || return 1
   grep -qE "$FIXED_DECL_RE" "$1" && return 1
   return 0
 }
-if ! carry_pin "$OLD_GUARD"; then
-  echo >&2
-  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): the base guard (${BASE_REF} ${BASE_REV:0:12}) does not" >&2
-  echo "carry the pre-fix fixed cap \`${PIN_RE}\` as an ASSERTION any more, so it cannot hold the trap" >&2
-  echo "every case drives." >&2
-  grep -qE "$FIXED_DECL_RE" "$OLD_GUARD" && \
-    echo "  (it does declare the fix: ${FIXED_RE})" >&2
-  grep -qE "$PIN_DECL_RE" "$OLD_GUARD" && \
-    echo "  (it also asserts \`${PIN_RE}\` — but a guard that declares the fix is not the pre-fix one)" >&2
-  suggested=""
+# newest_pre_fix_rev — the newest revision of this guard that still carries the pre-fix
+# shape. Derived from the file's own history, so it cannot be a hand-typed revision that
+# has since caught up with the fix (the shape biteproof_docs_index_floor_mirror.sh applies
+# to the same problem).
+newest_pre_fix_rev() {
+  local rev
   while read -r rev; do
     [ -n "$rev" ] || continue
     git show "${rev}:${GUARD_IN_REPO}" > "$PIN_PROBE" 2>/dev/null || continue
-    carry_pin "$PIN_PROBE" || continue
-    suggested="$rev"; break
+    carry_pin "$PIN_PROBE" && { printf '%s' "$rev"; return 0; }
   done < <(git -C "$TOP" log --format='%H' -- "$GUARD_IN_REPO" 2>/dev/null)
-  if [ -n "$suggested" ]; then
-    echo "  Point BITEPROOF_BASE at the newest revision whose guard still ASSERTS \`${PIN_RE}\`" >&2
-    echo "  and does not declare the fix:" >&2
-    echo "    BITEPROOF_BASE=${suggested} bash web/scripts/${0##*/}" >&2
-  else
-    echo "  (no revision in ${GUARD_IN_REPO}'s history asserts \`${PIN_RE}\` without declaring the" >&2
-    echo "   fix either — set BITEPROOF_BASE by hand)" >&2
+  return 1
+}
+BASE_DESC="${BASE_REF} ${BASE_REV:0:12}"
+if ! carry_pin "$OLD_GUARD"; then
+  if [ -n "${BITEPROOF_BASE:-}" ]; then
+    echo >&2
+    echo "BITEPROOF REFUSED (exit 2, NO VERDICT): CONDITION 1 OF 2 FAILED — the base guard" >&2
+    echo "(${BASE_DESC}) does not carry the pre-fix fixed cap (\`${PIN_RE},\`) as an ASSERTION" >&2
+    echo "any more, so it cannot hold the trap every case drives." >&2
+    grep -qE "$FIXED_DECL_RE" "$OLD_GUARD" && \
+      echo "  (it does declare the fix: ${FIXED_RE})" >&2
+    grep -qE "$CAP_DECL_RE" "$OLD_GUARD" && \
+      echo "  (it also asserts a fixed cap — but a guard that declares the fix is not the pre-fix one)" >&2
+    if suggested=$(newest_pre_fix_rev); then
+      echo "  Point BITEPROOF_BASE at the newest revision whose guard still ASSERTS" >&2
+      echo "  \`${PIN_RE},\` and does not declare the fix:" >&2
+      echo "    BITEPROOF_BASE=${suggested} bash web/scripts/${0##*/}" >&2
+      echo "  (with no BITEPROOF_BASE this harness picks it itself and says so; see the header.)" >&2
+    else
+      echo "  There is no revision to point at either: NO revision in ${GUARD_IN_REPO}'s history" >&2
+      echo "  asserts \`${PIN_RE},\` without declaring the fix, so this harness cannot reach a" >&2
+      echo "  verdict from this history at all." >&2
+    fi
+    rm -f "$OLD_GUARD" "$PIN_PROBE"
+    exit 2
   fi
-  rm -f "$OLD_GUARD" "$PIN_PROBE"
-  exit 2
+  # DEFAULT BASE: origin/main carries the fix, so the "before" column can only come from
+  # history. This is announced on stdout, not silent — a reader must be able to see which
+  # revision the base column ran.
+  if suggested=$(newest_pre_fix_rev); then
+    BASE_REV=$suggested
+    git show "${BASE_REV}:${GUARD_IN_REPO}" > "$OLD_GUARD"
+    BASE_DESC="history ${BASE_REV:0:12} (the default base ${BASE_REF} carries the fix)"
+    echo "note:   the default base ${BASE_REF} is the FIXED guard, so the 'before' column is"
+    echo "        derived from history: ${BASE_REV} — the newest revision that still asserts"
+    echo "        a fixed cap and does not declare the fix. Its cap is re-based below."
+  else
+    echo >&2
+    echo "BITEPROOF REFUSED (exit 2, NO VERDICT): CONDITION 1 OF 2 FAILED — the default base" >&2
+    echo "(${BASE_DESC}) carries the fix, and NO revision in ${GUARD_IN_REPO}'s history asserts" >&2
+    echo "\`${PIN_RE},\` without declaring the fix either, so this harness cannot reach a verdict" >&2
+    echo "from this history at all." >&2
+    rm -f "$OLD_GUARD" "$PIN_PROBE"
+    exit 2
+  fi
 fi
 
 BAK=$(mktemp -d)
 OUT_FILE=$(mktemp)
-trap 'rm -f "$OLD_GUARD" "$PIN_PROBE" "$OUT_FILE" "$OUT_FILE.rc" "$OLD_COPY"; rm -rf "$BAK"' EXIT
+REBASED_GUARD=$(mktemp)
+trap 'rm -f "$OLD_GUARD" "$PIN_PROBE" "$OUT_FILE" "$OUT_FILE.rc" "$OLD_COPY" "$REBASED_GUARD"; rm -rf "$BAK"' EXIT
 
 sha_of() { sha256sum "$1" | cut -d' ' -f1; }
 FILES=("$GUARD" "$PAGE")
@@ -295,9 +375,9 @@ run_guard() {
 # real guard because the guard resolves its paths from import.meta.url. CASE 1 adds an
 # entry, so its title must also be added to ORIGINAL_TITLES in the BASE copy, or the base
 # leg would go red on page parity instead of on the trap.
-BASE_SEDS=()
+BASE_SEDS=()        # per-case edits, added and cleared by the cases
 run_base_guard() {
-  cp "$OLD_GUARD" "$OLD_COPY"
+  cp "$REBASED_GUARD" "$OLD_COPY"
   local e
   for e in "${BASE_SEDS[@]}"; do sed -i "$e" "$OLD_COPY"; done
   local got; got=$(run_guard "$OLD_COPY")
@@ -307,22 +387,33 @@ run_base_guard() {
 
 nfail() { sed -nE 's/^ℹ fail ([0-9]+)$/\1/p' "$OUT_FILE" | head -1; }
 
-# ---- CASE 2's filler size, DERIVED from the fixed cap's REAL headroom ----------
-# CASE 2 is the hair trigger: the SMALLEST edit that trips the fixed cap. That size is not a
-# constant, it is the cap's headroom, and the headroom moves with the page — the tag carried
-# 799 words (one word was enough), this tree carries 798 (it takes two). A hand-typed "one
-# word" therefore goes stale and reports "the case does not reproduce the trap" against a base
-# doing exactly what it should (card t_8715a2af). BOTH numbers come from the guards rather
-# than from a re-implementation: the cap is the base guard's own assertion line, and the
-# page's total is read out of the base guard's OWN message when its cap is lowered so it reds.
-CAP_DECL_RE='^([[:space:]]*)total < ([0-9]+),[[:space:]]*$'
-BASE_CAP=$(sed -nE "s/${CAP_DECL_RE}/\2/p" "$OLD_GUARD" | head -1)
-case "$BASE_CAP" in ''|*[!0-9]*)
+# ---- the base column's CAP, RE-BASED onto today's page -------------------------
+# CASE 2 is the hair trigger: the SMALLEST edit that trips the FIXED cap, and that size is the
+# cap's HEADROOM — not a constant. It used to be the pre-fix revision's own headroom, which
+# works only while the page is still under that fossil's cap: measured 2026-10-29 the page
+# carried 873 words against a pinned 800, so the "headroom" was −73 and the harness refused
+# (card t_9d8f1884). The cap is therefore DERIVED from the page and written into the base
+# COPY only — never the guard, never a git object — at `PAGE_TOTAL + 1`, the trap's own
+# measured worst shape ("main arrived at 799: ONE word of headroom"). That makes the base
+# column unable to go stale a second time.
+#
+# Every number below comes from a guard's own READER, never from a re-implementation: the
+# page's total and the cap line both come out of the base guard when its cap is lowered so
+# the assertion reds (a second counting rule would be one more thing to rot, t_8715a2af).
+BASE_CAP_HIST=$(sed -nE "s/${CAP_DECL_RE}/\2/p" "$OLD_GUARD" | head -1)
+CAP_LINES=$(grep -cE "$CAP_DECL_RE" "$OLD_GUARD")
+case "${BASE_CAP_HIST:-}" in ''|*[!0-9]*)
   echo >&2
-  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): cannot read the fixed cap out of the base guard's" >&2
-  echo "assertion \`${PIN_DECL_RE}\`, so CASE 2's filler size cannot be derived." >&2
+  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): cannot read a fixed cap out of the base guard's"
+  echo "assertion \`${PIN_RE},\`, so the base column cannot be re-based onto this page."
   exit 2 ;;
 esac
+if [ "$CAP_LINES" != 1 ]; then
+  echo >&2
+  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): the base guard carries ${CAP_LINES} lines matching"
+  echo "\`${PIN_RE},\`, so re-basing 'the' cap onto today's page would have to guess which one is the cap."
+  exit 2
+fi
 # page_total_words — the page's summary total, from the base guard's own READER (lower the cap
 # until the assertion reds and read the number it prints). Nothing here re-counts words: a
 # second counting rule would be one more thing to rot.
@@ -338,10 +429,99 @@ PAGE_TOTAL=$(page_total_words)
 case "$PAGE_TOTAL" in ''|*[!0-9]*)
   echo >&2
   echo "BITEPROOF REFUSED (exit 2, NO VERDICT): the base guard reported no word total for this page," >&2
-  echo "so CASE 2's filler size cannot be derived — and a hand-typed size is exactly what went" >&2
+  echo "so the base column cannot be re-based — and a hand-typed cap is exactly what went" >&2
   echo "stale in the base column (card t_8715a2af)." >&2
   exit 2 ;;
 esac
+# The entry count comes from THIS tree's guard, not the base's: the pre-fix guard's sentence
+# is only "total N words — the page is supposed to be read in ~2 minutes" (no entry count),
+# while the derived budget's sentence names it ("… against a 35-word budget (1 words x 35
+# entries)"). Reading it with the constant lowered to 1 gives BOTH numbers, and the two
+# columns' totals must agree — otherwise they are not measuring one page and no case below
+# would be attributable. Hand-typing this number is what rotted the CASE 3/4 needles (33
+# entries while the page declared more), so it is read every run.
+page_total_and_entries_this_tree() {
+  cp "$GUARD" "$OLD_COPY"
+  sed -i -E "s/^const PAGE_BUDGET_PER_ENTRY[[:space:]]*=[[:space:]]*[0-9]+;/const PAGE_BUDGET_PER_ENTRY = 1;/" "$OLD_COPY"
+  run_guard "$OLD_COPY" >/dev/null
+  nt_refuse_if "the entry-count probe (this tree's guard with its per-entry constant lowered to 1)" "$OUT_FILE"
+  rm -f "$OLD_COPY"
+}
+page_total_and_entries_this_tree
+NEW_TOTAL=$(sed -nE 's/.*the feature summaries total ([0-9]+) words against.*/\1/p' "$OUT_FILE" | head -1)
+ENTRY_COUNT=$(sed -nE 's/.*\(1 words x ([0-9]+) entries\).*/\1/p' "$OUT_FILE" | head -1)
+case "${ENTRY_COUNT:-}" in ''|*[!0-9]*)
+  echo >&2
+  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): this tree's guard did not name the number of entries" >&2
+  echo "its derived budget covers, so the CASE 3/4 needles cannot be derived from it."
+  exit 2 ;;
+esac
+if [ "${NEW_TOTAL:-}" != "$PAGE_TOTAL" ]; then
+  echo >&2
+  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): the two columns disagree about this page — the base" >&2
+  echo "guard reads ${PAGE_TOTAL} word(s), this tree's guard reads ${NEW_TOTAL:-nothing}. No case below" >&2
+  echo "could be attributed to its mutation while the two columns are not measuring one page."
+  exit 2
+fi
+# This tree's own per-entry constant, out of its DECLARATION (the line CASE 4 moves).
+PER_ENTRY=$(grep -E "^const PAGE_BUDGET_PER_ENTRY[[:space:]]*=[[:space:]]*[0-9]+;" "$GUARD" \
+              | head -1 | sed -nE 's/^const PAGE_BUDGET_PER_ENTRY[[:space:]]*=[[:space:]]*([0-9]+);$/\1/p')
+case "${PER_ENTRY:-}" in ''|*[!0-9]*)
+  echo >&2
+  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): cannot read this tree's \`const PAGE_BUDGET_PER_ENTRY\`" >&2
+  echo "declaration, so the derived budget's own message cannot be predicted."
+  exit 2 ;;
+esac
+PER_ENTRY_LOW=$((PER_ENTRY - 1))
+
+# ---- the re-based base guard: one cap line, and today's titles ---------------
+# Both edits land in a COPY under mktemp, never in the guard and never in a git object.
+BASE_CAP=$((PAGE_TOTAL + 1))       # the trap's own worst shape: ONE word of headroom
+cp "$OLD_GUARD" "$REBASED_GUARD"
+sed -i -E "s/${CAP_DECL_RE}/\1total < ${BASE_CAP},/" "$REBASED_GUARD"
+REBASED_CAP_LINES=$(grep -cE "^[[:space:]]*total < ${BASE_CAP},[[:space:]]*\$" "$REBASED_GUARD")
+if [ "$REBASED_CAP_LINES" != 1 ]; then
+  echo >&2
+  echo "BITEPROOF REFUSED (exit 2, NO VERDICT): re-basing the base cap to ${BASE_CAP} left" >&2
+  echo "${REBASED_CAP_LINES} matching line(s) instead of 1, so the base column was not re-based."
+  exit 2
+fi
+# ORIGINAL_TITLES goes stale the same way the cap does: it is PART of the pre-fix guard, so a
+# revision that predates today's entries reds the PARITY test on the unmutated tree — a
+# statement about the page, not about this branch. The base copy therefore receives the
+# titles this tree's guard carries and the base's does not (append-only: the base's own list
+# is kept, so nothing it knew is dropped).
+CUR_TITLES=$(sed -n '/^const ORIGINAL_TITLES = \[/,/^\];/p' "$GUARD")
+BASE_TITLES=$(sed -n '/^const ORIGINAL_TITLES = \[/,/^\];/p' "$OLD_GUARD")
+TITLES_ADD=""
+while IFS= read -r tline; do
+  [ -n "$tline" ] || continue
+  printf '%s\n' "$BASE_TITLES" | grep -qxF "$tline" && continue
+  TITLES_ADD="${TITLES_ADD}${tline}"$'\n'
+done < <(printf '%s\n' "$CUR_TITLES" | grep -E '^[[:space:]]*"[^"]+",[[:space:]]*$')
+if [ -n "$TITLES_ADD" ]; then
+  if ! ADD="$TITLES_ADD" perl -0777 -pi -e '
+        my $add = $ENV{ADD};
+        my $n = s{(^const ORIGINAL_TITLES = \[.*?)(^\];)}{$1 . $add . $2}mse;
+        die "ORIGINAL_TITLES block matched $n times, want 1\n" unless $n == 1;
+      ' "$REBASED_GUARD"; then
+    echo >&2
+    echo "BITEPROOF REFUSED (exit 2, NO VERDICT): could not add this tree's newer titles to the" >&2
+    echo "base guard's ORIGINAL_TITLES, so the base would red on page parity instead of on the cap."
+    exit 2
+  fi
+  while IFS= read -r tline; do
+    [ -z "$tline" ] && continue
+    grep -qxF "$tline" "$REBASED_GUARD" || {
+      echo >&2
+      echo "BITEPROOF REFUSED (exit 2, NO VERDICT): the title ${tline} is not in the re-based base" >&2
+      echo "guard after the merge, so the re-base did not land."
+      exit 2
+    }
+  done <<< "$TITLES_ADD"
+fi
+TITLES_ADDED=$(printf '%s' "$TITLES_ADD" | grep -c '[^[:space:]]' || true)
+
 CASE2_FILLER_ROOM=20   # the per-entry LIMIT is 45 and the Sales body carries 23, so 22 fit; 20 with margin
 CASE2_DEFICIT=$((BASE_CAP - PAGE_TOTAL))
 if [ "$CASE2_DEFICIT" -lt 1 ] || [ "$CASE2_DEFICIT" -gt "$CASE2_FILLER_ROOM" ]; then
@@ -463,24 +643,28 @@ m_trim_words() {
   local repl='        body: "Track every sale: reference code, buyer, amount and date. Confirm bank transfers, refund, and export CSV.",'
   perl_replace "$PAGE" "$SALES_BODY" "$repl" "the Sales summary drops seven words" || return 1
 }
-# m_lower_cap — the DERIVED ceiling itself, moved down one word per entry.
+# m_lower_cap — the DERIVED ceiling itself, moved down one word per entry. Both numbers are
+# read from the guard's own declaration, never typed: "25 -> 24" went stale the moment the
+# constant moved, and the needle below would then name a budget the guard no longer prints.
 m_lower_cap() {
-  sed -i 's|^const PAGE_BUDGET_PER_ENTRY = 25;$|const PAGE_BUDGET_PER_ENTRY = 24;|' "$GUARD"
-  assert_on_disk "$GUARD" "const PAGE_BUDGET_PER_ENTRY = 24;" "the per-entry budget is 24" || return 1
+  sed -i "s|^const PAGE_BUDGET_PER_ENTRY = ${PER_ENTRY};$|const PAGE_BUDGET_PER_ENTRY = ${PER_ENTRY_LOW};|" "$GUARD"
+  assert_on_disk "$GUARD" "const PAGE_BUDGET_PER_ENTRY = ${PER_ENTRY_LOW};" "the per-entry budget is ${PER_ENTRY_LOW}" || return 1
 }
 
-echo "old guard (${BASE_REF} ${BASE_REV:0:12}): $(wc -l < "$OLD_GUARD") lines, fixed cap '${PIN_RE}'"
+echo "old guard (${BASE_DESC}): $(wc -l < "$OLD_GUARD") lines, fixed cap '${PIN_RE}' (history: ${BASE_CAP_HIST})"
 echo "new guard (this tree):             $(wc -l < "$GUARD") lines, derived budget '${FIXED_RE}'"
+echo "re-based base column:              cap ${BASE_CAP} = page ${PAGE_TOTAL} + 1, plus ${TITLES_ADDED} newer title(s) in ORIGINAL_TITLES"
 
-# PREMISE: the base guard must be GREEN on the unmutated tree. If it is not, it is red
-# for a reason that has nothing to do with this branch and no mutation can make it
+# PREMISE: the re-based base guard must be GREEN on the unmutated tree. If it is not, it is
+# red for a reason that has nothing to do with this branch and no mutation can make it
 # "miss" anything.
 premise=$(run_base_guard)
 nt_refuse_if "BASELINE, the base guard on the UNMUTATED tree" "$OUT_FILE"
 if [ "$premise" != "GREEN" ]; then
   echo >&2
-  echo "BITEPROOF REFUSED: the base guard (${BASE_REF} ${BASE_REV:0:12}) is ${premise} on the UNMUTATED" >&2
-  echo "tree, so there is no 'before' column and this proof would be about nothing." >&2
+  echo "BITEPROOF REFUSED: CONDITION 2 OF 2 FAILED — the re-based base guard (${BASE_DESC}, cap" >&2
+  echo "${BASE_CAP}) is ${premise} on the UNMUTATED tree, so there is no 'before' column and this" >&2
+  echo "proof would be about nothing (the page, not this branch)." >&2
   grep -E '^ℹ (pass|fail)' "$OUT_FILE" | head -2 >&2
   grep -E '^✖' "$OUT_FILE" | head -2 >&2
   exit 2
@@ -517,18 +701,19 @@ restore_all
 
 echo
 echo "== CASE 3: a page made FATTER by 30 words across two summaries, no new entry =="
-echo "          (the direction that must NOT be lost; both columns RED, the tree naming the 825-word budget)"
+echo "          (the direction that must NOT be lost; both columns RED, the tree naming the derived budget)"
 echo "          (the filler is SPLIT so no body crosses the per-entry LIMIT — that assertion runs first)"
 FAT_A="Filler alpha keeps this summary under its own per-entry limit while still pushing the page past the budget."
 FAT_B="Filler beta raises the aggregate count too without becoming a paragraph here."
 m_grow_words "$FAT_A" && m_grow_api_words "$FAT_B" && \
-  check "a fatter page, no new entry" RED "words — the page is supposed to be read in ~2 minutes" RED "(25 words x 33 entries)"
+  check "a fatter page, no new entry" RED "words — the page is supposed to be read in ~2 minutes" RED "(${PER_ENTRY} words x ${ENTRY_COUNT} entries)"
 restore_all
 
 echo
-echo "== CASE 4: the DERIVED ceiling moved 25 -> 24 words per entry, the page untouched =="
-echo "          (base: GREEN — the page's ${PAGE_TOTAL} sits under the fixed cap; tree: RED naming the 792-word budget)"
-m_lower_cap && check "the per-entry budget lowered" GREEN - RED "(24 words x 33 entries)"
+echo "== CASE 4: the DERIVED ceiling moved ${PER_ENTRY} -> ${PER_ENTRY_LOW} words per entry, the page untouched =="
+echo "          (base: GREEN — the page's ${PAGE_TOTAL} sits under the re-based fixed cap ${BASE_CAP}; tree: RED"
+echo "           naming the derived budget for the ${ENTRY_COUNT} entries the page declares)"
+m_lower_cap && check "the per-entry budget lowered" GREEN - RED "(${PER_ENTRY_LOW} words x ${ENTRY_COUNT} entries)"
 restore_all
 
 echo
