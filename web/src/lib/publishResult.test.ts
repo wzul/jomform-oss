@@ -191,6 +191,61 @@ test("THE DEFECT: the refusal renders in the dashboard's language, never the API
   assert.equal(publishConfirmText(publishOutcome({ ok: false, status: 500, body: { error: "boom" } }, ""), tIn("en")), "");
 });
 
+test("the no-products refusal does not offer to collect anything, and says nothing is collected (5 locales)", () => {
+  // Card t_39906c0a. The sentence used to give a SECOND, legitimate-sounding
+  // reason to confirm — "publish it anyway if you only meant to collect
+  // details" — for a form that collects nothing at all:
+  //
+  //   * legacy layout (no blocks): the submit handler is
+  //     `if (!items.length) { alert(NoProductAlert); return; }` and there is
+  //     nothing to tick, so nothing is ever posted;
+  //   * block layout (inputs, no sellable item): the SAME gate in blockTmpl;
+  //   * a published payment form with no blocks and no products serves the
+  //     submit-less "not accepting orders" page (t_7d4c20c8).
+  //
+  // So a merchant who acknowledged the warning BECAUSE of that clause got a form
+  // that collects nobody's name or email. The copy must not promise a way to
+  // collect, and must say what a buyer gets instead.
+  //
+  // This is a COPY guard and claims nothing more: it pins the defect's own
+  // phrases per locale plus the honest statement in English. It cannot judge
+  // translation quality — the same limit src/lib/i18n.test.ts states about the
+  // dictionary — so a fluent review stays the only check on the wording itself.
+  const promiseOffered: Record<string, RegExp> = {
+    // "if you only meant to collect details" and its siblings: a reason to
+    // publish that the platform does not honour.
+    en: /\bcollect\s+(?:details|answers?|responses?|data)\b/i,
+    ms: /(?:mengumpul|kumpul)\s+maklumat/i,
+    zh: /收集(?:信息|资料|详情)/,
+    ta: /விவரங்களை/,
+    ar: /جمع البيانات/,
+  };
+  for (const lang of LANGS) {
+    const sentence = dict(lang, PUBLISH_NEEDS_ACK_KEY);
+    assert.ok(
+      !promiseOffered[lang].test(sentence),
+      `lang=${lang} still offers publishing-anyway as a way to collect: ${JSON.stringify(sentence)}`,
+    );
+  }
+  // The other half: it must actually tell the merchant that acknowledging gains
+  // them nothing until a product exists (a reword that silently drops this is
+  // the same lie in a different shape).
+  const en = dict("en", PUBLISH_NEEDS_ACK_KEY);
+  assert.match(en, /collects nothing/i, `the English refusal dropped "collects nothing": ${JSON.stringify(en)}`);
+  assert.match(en, /cannot submit/i, `the English refusal dropped what the buyer hits: ${JSON.stringify(en)}`);
+  // And this is the sentence the pages render (not a copy kept beside it).
+  assert.equal(publishConfirmText({ kind: "needs_ack" }, (k) => dict("en", k)), en);
+  // The agent/curl/MCP surface reads the GO prose, not the dictionary — it must
+  // not read as "confirm and the form is usable" either. Read from source, so a
+  // revert of the Go sentence reddens here.
+  const goProse = goNoProductsProse();
+  assert.match(
+    goProse,
+    /tidak mengumpul apa-apa/,
+    `the Go refusal does not say the form collects nothing: ${JSON.stringify(goProse)}`,
+  );
+});
+
 test("NO source file reads a message off a publish outcome", () => {
   // The structural half of the fix. #6177's rule bans `body.error || fallback`
   // and could not see this defect because the prose travelled through

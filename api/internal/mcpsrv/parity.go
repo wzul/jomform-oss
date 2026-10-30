@@ -899,8 +899,12 @@ func jsonValid(s string) bool {
 // nothing to sell cannot go live silently". The REST routes send it with a 409
 // and a `code`; MCP returns the same sentence as the tool error, so an agent is
 // told the same thing a merchant is.
-const errPublishNeedsAck = "Borang bayaran ini tiada produk — ia tidak boleh menerima bayaran. " +
-	"Tambah produk dahulu, atau hantar acknowledge=true untuk teruskan."
+//
+// It states BOTH halves (t_39906c0a): the form cannot take money AND collects
+// nothing — the legacy and block payment layouts both gate submit on a selected
+// product, so `acknowledge=true` is not a way to collect answers.
+const errPublishNeedsAck = "Borang bayaran ini tiada produk — ia tidak boleh menerima bayaran " +
+	"dan tidak mengumpul apa-apa. Tambah produk dahulu, atau hantar acknowledge=true untuk teruskan."
 
 // publishFormIn extends publish_form for the private status (issue #176):
 // status=private requires a password; status=published/draft/unlisted clears it.
@@ -1166,7 +1170,7 @@ func (s *Server) bulkFormsMCP(
 	if len(needsProducts) > 0 {
 		out["needs_products"] = needsProducts
 		out["needs_products_reason"] = "borang bayaran tanpa produk tidak diterbitkan — " +
-			"tambah produk dahulu, atau hantar acknowledge=true"
+			"ia tidak mengumpul apa-apa; tambah produk dahulu, atau hantar acknowledge=true"
 	}
 	return nil, out, nil
 }

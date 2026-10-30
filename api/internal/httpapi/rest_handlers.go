@@ -1200,10 +1200,17 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 // caller asked for a state it has to confirm first. `code` is the stable token
 // the dashboard matches on (web/src/lib/publishResult.ts holds the same value),
 // so it never has to parse the message.
+//
+// The prose says BOTH halves of the truth, because an agent/curl client reads
+// it and has no dictionary to fall back on (t_39906c0a): such a form cannot take
+// money AND collects nothing (both the legacy and the block payment layouts gate
+// submit on a selected product), so acknowledging the warning is not a way to
+// collect answers. The dashboard renders its own 5-locale sentence from
+// `bld.noProductsWarn` and never prints this prose.
 func writePublishNeedsAck(w http.ResponseWriter) {
 	writeJSON(w, http.StatusConflict, map[string]any{
-		"error": "Borang bayaran ini tiada produk — ia tidak boleh menerima bayaran. " +
-			"Tambah produk dahulu, atau sahkan untuk teruskan.",
+		"error": "Borang bayaran ini tiada produk — ia tidak boleh menerima bayaran " +
+			"dan tidak mengumpul apa-apa. Tambah produk dahulu, atau sahkan untuk teruskan.",
 		"code":         dbstore.PublishWarningNoProducts,
 		"requires_ack": true,
 	})
@@ -1609,7 +1616,8 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 				if !in.Acknowledge {
 					writeJSON(w, http.StatusConflict, map[string]any{
 						"error": "Sebahagian borang bayaran tiada produk, jadi ia tidak " +
-							"diterbitkan. Tambah produk dahulu, atau sahkan untuk teruskan.",
+							"diterbitkan. Borang itu tidak mengumpul apa-apa sehingga produk " +
+							"ditambah — tambah produk dahulu, atau sahkan untuk teruskan.",
 						"code":           dbstore.PublishWarningNoProducts,
 						"requires_ack":   true,
 						"needs_products": needsProd,
@@ -1653,7 +1661,7 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 	if len(needsProducts) > 0 {
 		out["needs_products"] = needsProducts
 		out["needs_products_reason"] = "borang bayaran tanpa produk — ia diterbitkan, " +
-			"tetapi tidak boleh menerima bayaran sehingga produk ditambah"
+			"tetapi tidak boleh menerima bayaran dan tidak mengumpul apa-apa sehingga produk ditambah"
 	}
 	writeJSON(w, http.StatusOK, withEdgeFields(out, edge))
 }
