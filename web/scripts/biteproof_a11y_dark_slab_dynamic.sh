@@ -8,14 +8,30 @@
 #
 #   * the guard as it shipped BEFORE the fix (the PINNED revision
 #     `BITEPROOF_PREFIX_REV`, default 01752e75 / v1.20.39) over a dark slab at
-#     `app/probe-dyn/[id]/page.tsx`  -> GREEN  (the hole: judged by NEITHER layer)
+#     `app/probe-dyn/[id]/page.tsx`  -> its failure set does NOT MOVE (the hole:
+#     judged by NEITHER layer)
 #   * this tree's guard over the same slab -> RED, naming the route and the token
-#   * CONTROL: the same slab at a STATIC route -> RED under BOTH guards, so the
-#     pre-fix GREEN above is about the route CLASS and not about a guard that was
-#     dead for every input
-#   * NEGATIVE CONTROL: a dynamic route with NO slab -> GREEN under both
-#   * BASELINE: the unmutated tree is GREEN, so a red below is the sabotage and
-#     not this tree being broken
+#   * CONTROL: the same slab at a STATIC route -> the pre-fix guard's failure set
+#     GROWS naming that route, and this tree's guard REDs it too, so the pre-fix
+#     blindness above is about the route CLASS and not about a guard that was dead
+#     for every input
+#   * NEGATIVE CONTROL: a dynamic route with NO slab -> neither column moves
+#   * BASELINE: this tree's guard is GREEN on the unmutated tree, so a red below is
+#     the sabotage and not this tree being broken
+#
+# WHY THE PRE-FIX COLUMN IS JUDGED BY DIFFERENCE RATHER THAN BY GREEN (card
+# t_7cad4207). It used to require the pinned guard to be GREEN on the unmutated
+# tree, and that standard rotted: the pinned bytes are FROZEN while the repo they
+# read is not. 01752e75's guard asserts `e2e/a11y.spec.ts` contains `AxeBuilder`,
+# and #1407 (336ba843) moved that spec onto the shared `gateScan()` helper — so the
+# pinned column went RED on a correct tree, with
+# `✖ the guard is looking at real files (it cannot pass vacuously)` /
+# `AssertionError: e2e/a11y.spec.ts is not the axe spec`. No re-pin fixes that:
+# every revision before the fix carries the same canary, so there is no "newest
+# pre-fix revision that is still green today". The hole is therefore measured the
+# way it is actually true — the SAME failure set with the slab planted that the
+# unmutated tree produced — and the baseline red is printed by name so a reader
+# never has to re-derive why the pin is red.
 #
 # It plants and removes files under `src/app`, so it is serialised per worktree on
 # a flock and every removal is verified. It takes its OWN lock directory: the
@@ -121,6 +137,12 @@ SPEC=src/lib/jsxSource.ts
 # A pinned revision keeps the bite reproducible after the merge — the same shape
 # `biteproof_llms_full_coverage.sh` uses for its flat-disk-arm column. Point it at
 # the parent of the fix if the guard is ever re-cut, or override it here.
+#
+# WHY IT IS STILL THE IMMEDIATE PRE-FIX PARENT (card t_7cad4207): 01752e75 IS
+# `3e27fac9^`, i.e. the newest revision that is blind to the dynamic-route slab —
+# there is no newer pre-fix one. It could not be re-pinned away from its own
+# unrelated red (see the header), so the column is judged against the failure set
+# it produces on the unmutated tree instead.
 PREFIX_REF="${BITEPROOF_PREFIX_REV:-01752e75201360596ff136f95a2608c83fc5679e}"   # v1.20.39 (pre-fix)
 PREFIX_REV=$(git rev-parse "${PREFIX_REF}^{commit}" 2>/dev/null) || {
   echo "BITEPROOF REFUSED: cannot resolve the pinned pre-fix revision ${PREFIX_REF} (set" >&2
@@ -202,50 +224,171 @@ verdict_of() {
   V=REFUSED
 }
 
+# The NAMES of the tests the runner reported as FAILING — one per line, sorted and
+# de-duplicated. `node --test` prints `✖ <name> (<ms>)` once in the test list and
+# again under "failing tests", so a raw grep double-counts; the timing suffix is
+# stripped because it changes every run. This is what lets a PINNED revision's
+# column be judged by DIFFERENCE (card t_7cad4207): the failure set must not MOVE
+# when the slab is planted, which is the same claim as "the guard is blind to it",
+# but it stays measurable when the pinned guard carries unrelated reds of its own.
+failures_of() {
+  printf '%s\n' "$OUT" \
+    | grep -E '^✖ ' \
+    | grep -vxF '✖ failing tests:' \
+    | sed -E 's/^✖ //; s/ \([0-9.]+ms\)$//' \
+    | sort -u
+}
+# Print the failing test names, so a mismatch never leaves the reader to guess which
+# assertion was red — the output this harness used to print was `ℹ pass 4 / ℹ fail 1`
+# and nothing else, which cost a whole lane run to diagnose (card t_7cad4207).
+report_failures() { # report_failures [indent]
+  local indent="${1:-      }" names n
+  names=$(failures_of)
+  if [ -z "$names" ]; then
+    echo "${indent}(the capture names no failing test)"
+    return
+  fi
+  n=$(printf '%s\n' "$names" | wc -l)
+  echo "${indent}the capture's ${n} failing test(s):"
+  printf '%s\n' "$names" | sed "s|^|${indent}  ✖ |"
+}
+
 expect() { # expect <label> <guard-file> <want> [needle]
   local label="$1" guard="$2" want="$3" needle="${4:-}"
   run_guard "$guard"
   verdict_of "$RC"
   if [ "$V" = REFUSED ]; then
     echo "  *** ${label}: the guard DID NOT RUN — no verdict is available ***"
-    grep -E '^ℹ ' <<<"$OUT" | head -4; fail=1; return
+    grep -E '^ℹ ' <<<"$OUT" | head -4; report_failures; fail=1; return
   fi
   if [ "$V" != "$want" ]; then
     echo "  *** ${label}: wanted ${want}, got ${V} ***"
-    grep -E '^ℹ (pass|fail)' <<<"$OUT" | head -2; fail=1; return
+    grep -E '^ℹ (pass|fail)' <<<"$OUT" | head -2; report_failures; fail=1; return
   fi
   if [ -n "$needle" ] && ! grep -qF "$needle" <<<"$OUT"; then
-    echo "  *** ${label}: ${V} but the failure does not name ${needle} ***"; fail=1; return
+    echo "  *** ${label}: ${V} but the failure does not name ${needle} ***"
+    report_failures; fail=1; return
   fi
   echo "  ok   ${label}: ${V}${needle:+, naming $needle}"
 }
 
+# Record what the PINNED pre-fix guard does on the UNMUTATED tree. It is recorded,
+# not required to be green: its canaries describe the repo of ITS revision, and the
+# repo has moved on (see the header). What the case columns below require is that
+# this EXACT set is unchanged by the slab — a red that moves would mean the pinned
+# guard saw the slab, which is the one thing this column must never show.
+pinned_baseline() {
+  run_guard "$OLD_GUARD"
+  verdict_of "$RC"
+  if [ "$V" = REFUSED ]; then
+    echo "  *** baseline, PRE-FIX guard: the guard DID NOT RUN — no verdict is available ***"
+    grep -E '^ℹ ' <<<"$OUT" | head -4; report_failures; fail=1
+    return 1
+  fi
+  PINNED_BASE_V=$V
+  PINNED_BASE_F=$(failures_of)
+  PINNED_BASE_N=$(printf '%s' "$PINNED_BASE_F" | grep -c '')
+  [ -z "$PINNED_BASE_F" ] && PINNED_BASE_N=0
+  if [ "$PINNED_BASE_N" = 0 ]; then
+    echo "  base baseline, PRE-FIX guard: GREEN on the unmutated tree — its failure set is empty"
+  else
+    echo "  base baseline, PRE-FIX guard: ${V} on the unmutated tree; its ${PINNED_BASE_N} failing"
+    echo "       test(s) are RECORDED and are NOT part of this harness's verdict, because the pinned"
+    echo "       revision reads a repo that has since changed. Every column below requires this exact"
+    echo "       set to be unchanged by the probe route, and the static control requires it to GROW:"
+    printf '%s\n' "$PINNED_BASE_F" | sed 's|^|         ✖ |'
+  fi
+  return 0
+}
+
+# The pinned pre-fix guard must be BLIND to the input just planted: its failure set
+# is byte-identical to the baseline's, and (when a needle is given) the capture does
+# not spell the planted route even inside a pre-existing failure's message.
+expect_pinned_blind() { # expect_pinned_blind <label> [needle-the-capture-must-not-name]
+  local label="$1" absent="${2:-}" now
+  run_guard "$OLD_GUARD"
+  verdict_of "$RC"
+  if [ "$V" = REFUSED ]; then
+    echo "  *** ${label}: the guard DID NOT RUN — no verdict is available ***"
+    grep -E '^ℹ ' <<<"$OUT" | head -4; report_failures; fail=1; return
+  fi
+  now=$(failures_of)
+  if [ "$now" != "$PINNED_BASE_F" ]; then
+    echo "  *** ${label}: the pinned pre-fix guard's failure set MOVED — it is NOT blind to this input ***"
+    if [ "$PINNED_BASE_N" = 0 ]; then
+      echo "      baseline (unmutated tree): (no failing test)"
+    else
+      echo "      baseline (unmutated tree):"
+      printf '%s\n' "$PINNED_BASE_F" | sed 's|^|        ✖ |'
+    fi
+    echo "      with the probe route planted:"
+    report_failures "        "
+    fail=1; return
+  fi
+  if [ -n "$absent" ] && grep -qF "$absent" <<<"$OUT"; then
+    echo "  *** ${label}: the failure set did not move, but the capture NAMES ${absent} — not blind ***"
+    report_failures; fail=1; return
+  fi
+  echo "  ok   ${label}: BLIND — the same ${PINNED_BASE_N} failure(s) as the unmutated tree${absent:+, and none names $absent}"
+}
+
+# ... and the same pinned guard must CATCH the static-route slab: its failure set
+# must GROW by a test the baseline did not have, and the capture must spell the
+# route. Without this, "blind to the dynamic route" would also be satisfied by a
+# guard that was dead for every input.
+expect_pinned_catches() { # expect_pinned_catches <label> <needle>
+  local label="$1" needle="$2" now grown='' n
+  run_guard "$OLD_GUARD"
+  verdict_of "$RC"
+  if [ "$V" = REFUSED ]; then
+    echo "  *** ${label}: the guard DID NOT RUN — no verdict is available ***"
+    grep -E '^ℹ ' <<<"$OUT" | head -4; report_failures; fail=1; return
+  fi
+  now=$(failures_of)
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    grep -qxF "$n" <<<"$PINNED_BASE_F" || grown="${grown}${n}"$'\n'
+  done <<<"$now"
+  if [ -z "$grown" ]; then
+    echo "  *** ${label}: the pinned pre-fix guard did NOT notice the static slab — its failure set"
+    echo "      is the same ${PINNED_BASE_N} test(s) it produced on the unmutated tree, so its slab rule is"
+    echo "      dead and the dynamic-route column proves nothing ***"
+    report_failures; fail=1; return
+  fi
+  if ! grep -qF "$needle" <<<"$OUT"; then
+    echo "  *** ${label}: the set grew, but no failure names ${needle} ***"
+    echo "      new failing test(s):"; printf '%s' "$grown" | sed 's|^|        ✖ |'
+    fail=1; return
+  fi
+  echo "  ok   ${label}: CAUGHT — its failure set grew by $(printf '%s' "$grown" | grep -c '') test(s), naming $needle"
+}
+
 echo
-echo "== BASELINE: the unmutated tree is GREEN (a red below is the sabotage) =="
+echo "== BASELINE: this tree's guard is GREEN (a red below is the sabotage) =="
 expect "baseline, this tree's guard" "$GUARD" GREEN
-expect "baseline, PRE-FIX guard" "$OLD_GUARD" GREEN
+pinned_baseline
 
 echo
 echo "== THE HOLE: a dark slab at a DYNAMIC route =="
 plant "$DYN_PAGE" bg-slate-900 || true
 echo "       planted /probe-dyn/[id] (paints bg-slate-900)"
-expect "PRE-FIX guard, dynamic slab" "$OLD_GUARD" GREEN
+expect_pinned_blind "PRE-FIX guard, dynamic slab" "/probe-dyn/[id]"
 expect "this tree's guard, dynamic slab" "$GUARD" RED "/probe-dyn/[id] (app/probe-dyn/[id]/page.tsx: paints bg-slate-900)"
 unplant "$DYN_PAGE"
 
 echo
-echo "== CONTROL: the same slab at a STATIC route REDs under BOTH (case 1's green is about the class) =="
+echo "== CONTROL: the same slab at a STATIC route is caught by BOTH (case 1 is about the class) =="
 plant "$ST_PAGE" bg-slate-900 || true
 echo "       planted /probe-static (paints bg-slate-900)"
-expect "PRE-FIX guard, static slab" "$OLD_GUARD" RED "/probe-static (app/probe-static/page.tsx: paints bg-slate-900)"
+expect_pinned_catches "PRE-FIX guard, static slab" "/probe-static (app/probe-static/page.tsx: paints bg-slate-900)"
 expect "this tree's guard, static slab" "$GUARD" RED "/probe-static (app/probe-static/page.tsx: paints bg-slate-900)"
 unplant "$ST_PAGE"
 
 echo
-echo "== NEGATIVE CONTROL: a dynamic route with NO slab stays GREEN under both =="
+echo "== NEGATIVE CONTROL: a dynamic route with NO slab moves NEITHER column =="
 plant "$DYN_PAGE" bg-slate-100 || true
 echo "       planted /probe-dyn/[id] (paints bg-slate-100 — below the slab floor)"
-expect "PRE-FIX guard, no slab" "$OLD_GUARD" GREEN
+expect_pinned_blind "PRE-FIX guard, no slab"
 expect "this tree's guard, no slab" "$GUARD" GREEN
 unplant "$DYN_PAGE"
 
@@ -294,8 +437,9 @@ fi
 
 echo
 if [ "$fail" = "0" ]; then
-  echo "BITEPROOF PASS — the pre-fix guard is blind to a dynamic-route slab, this tree's guard"
-  echo "REDs naming it, and the static control REDs under both."
+  echo "BITEPROOF PASS — a dynamic-route slab moves the pinned pre-fix guard's verdict NOT AT ALL"
+  echo "(it is blind to the class, whatever unrelated reds its frozen revision carries today), this"
+  echo "tree's guard REDs naming it, and the static control is caught by both."
 else
   echo "BITEPROOF FAIL (fail=$fail)"
 fi
