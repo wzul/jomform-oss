@@ -270,9 +270,15 @@ type saleItemOut struct {
 }
 
 type saleOut struct {
-	RefCode   string `json:"ref_code"`
-	Status    string `json:"status"`
-	TotalSen  int64  `json:"total_sen"`
+	RefCode  string `json:"ref_code"`
+	Status   string `json:"status"`
+	TotalSen int64  `json:"total_sen"`
+	// Currency is the currency the sale was RECORDED in (issue #185), so an
+	// agent reading total_sen can label it without asking which workspace
+	// setting is current — a workspace that switches currency keeps its old
+	// rows in the currency they were paid in. Always set on a sale row (MYR
+	// for rows written before the column existed).
+	Currency  string `json:"currency,omitempty"`
 	SaleType  string `json:"sale_type"`
 	Client    string `json:"client"`
 	CreatedAt string `json:"created_at"`
@@ -386,6 +392,7 @@ func submissionSaleOut(sub *dbstore.Submission) saleOut {
 func saleOutFromSale(sl *dbstore.Sale) saleOut {
 	o := saleOut{
 		RefCode: sl.RefCode, Status: sl.Status, TotalSen: sl.TotalSen,
+		Currency: sl.CurrencyOrMYR(),
 		SaleType: sl.SaleType, Client: sl.Client.FullName,
 		CreatedAt:   sl.CreatedAt.UTC().Format(time.RFC3339),
 		RefundedSen: sl.RefundedSen, OutstandingSen: sl.OutstandingSen(),

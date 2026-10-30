@@ -22,6 +22,7 @@ import { answersPreview, answerText, isResponseForm, isMixedList, responsesList,
 import { workspaceQuery, activeWorkspaceId, soundEnabledFromSettings, soundToggleBody } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
+import { formatMoney, formatTotals, normaliseCurrency } from "../../lib/money";
 
 type Item = {
   product_id: string;
@@ -37,6 +38,11 @@ type Sale = {
   ref_code: string;
   status: string;
   total_sen: number;
+  // t_71c67471: the currency this sale was RECORDED in (ISO code). Emitted by
+  // toSaleRow for every sale row and absent on a response row (no money). Every
+  // amount on the row — total, shipping, discount, refunded, outstanding and
+  // each item line — is denominated in it.
+  currency?: string;
   payment_method: string;
   buyer: string;
   created_at: string;
@@ -110,8 +116,13 @@ const isPartiallyRefunded = (s: Sale) =>
     typeof s.total_sen === "number" &&
     s.refunded_sen < s.total_sen);
 
-const money = (sen: number) =>
-  `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
+const money = (sen: number, currency?: string) => formatMoney(sen, currency);
+
+// The currency a row's amounts are denominated in (t_71c67471). Read from the
+// SALE — the API returns the currency each sale was recorded in — never from
+// the workspace's current setting, which would relabel history the moment a
+// workspace switched. MYR when the row carries none.
+const currencyOf = (s?: Sale) => normaliseCurrency(s?.currency);
 
 // Issue #447: play a short audio beep when a new order/response arrives (for
 // a kitchen/order screen). Uses the Web Audio API so no asset file is needed;
@@ -529,8 +540,12 @@ function SalesPageInner() {
   }
 
   async function captureSale(ref: string) {
+    // The amount the merchant types is in the SALE's currency (t_71c67471), so
+    // the prompt names the row's own code instead of assuming RM.
+    const target = rows.find((r) => r.ref_code === ref) || (detail?.ref_code === ref ? detail : undefined);
+    const cur = currencyOf(target);
     const raw = window.prompt(
-      `Capture amount in RM for ${ref} (empty = full authorized amount):`,
+      `Capture amount in ${cur} for ${ref} (empty = full authorized amount):`,
     );
     if (raw === null) return; // cancelled
     const rm = raw.trim();
@@ -592,10 +607,14 @@ function SalesPageInner() {
     const target = rows.find((r) => r.ref_code === ref) || (detail?.ref_code === ref ? detail : undefined);
     const outstanding = target?.outstanding_sen ?? target?.total_sen ?? 0;
     const already = target?.refunded_sen ?? 0;
+    // t_71c67471: a refund must be issued in the currency the sale was paid in
+    // (the workspace's setting may have moved on since), so every figure in the
+    // prompt — and the unit the typed amount is in — comes from the row.
+    const cur = currencyOf(target);
     const raw = window.prompt(
       already > 0
-        ? `Refund amount in RM for ${ref} — remaining balance RM${(outstanding / 100).toFixed(2)} (already refunded RM${(already / 100).toFixed(2)}). Empty = refund the remaining balance:`
-        : `Refund amount in RM for ${ref} (empty = full refund):`,
+        ? `Refund amount in ${cur} for ${ref} — remaining balance ${money(outstanding, cur)} (already refunded ${money(already, cur)}). Empty = refund the remaining balance:`
+        : `Refund amount in ${cur} for ${ref} (empty = full refund):`,
     );
     if (raw === null) return; // cancelled
     const rm = raw.trim();
@@ -638,8 +657,12 @@ function SalesPageInner() {
   async function captureAllPending() {
     const awaiting = rows.filter(isCapturePending);
     if (awaiting.length === 0) return;
-    const rm = (awaiting.reduce((s, x) => s + x.total_sen, 0) / 100).toFixed(2);
-    if (!window.confirm(`Capture ALL ${awaiting.length} pending authorization(s) — total RM${rm}?`))
+    // t_71c67471: pending authorizations can in principle span currencies (a sale
+    // keeps the currency it was recorded in). formatTotals groups per currency
+    // and joins them, so the prompt never adds US$ to RM as if they were one
+    // number — and a uniform list still reads exactly like one amount.
+    const total = formatTotals(awaiting.map((x) => ({ sen: x.total_sen, currency: x.currency })));
+    if (!window.confirm(`Capture ALL ${awaiting.length} pending authorization(s) — total ${total}?`))
       return;
     setBusyRef("__all__");
     setMsg("");
@@ -1020,7 +1043,7 @@ function SalesPageInner() {
                           : "—"}
                     </td>
                     <td className="whitespace-nowrap px-2 py-3 text-xs font-semibold">
-                      {rowKind(s) === "response" ? "—" : money(s.total_sen)}
+                      {rowKind(s) === "response" ? "—" : money(s.total_sen, s.currency)}
                     </td>
                     <td className="whitespace-nowrap px-2 py-3">
                       <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${saleBadge(s.status)}`}>
@@ -1093,7 +1116,7 @@ function SalesPageInner() {
                       ? s.items.map((i) => `${i.qty}× ${i.name}${i.variation_name ? ` (${i.variation_name})` : ""}`).join(", ")
                       : "—"}
                   </td>
-                  <td className="whitespace-nowrap px-2 py-3 text-xs font-semibold">{money(s.total_sen)}</td>
+                  <td className="whitespace-nowrap px-2 py-3 text-xs font-semibold">{money(s.total_sen, s.currency)}</td>
                   <td className="whitespace-nowrap px-2 py-3">
                     <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${saleBadge(s.status)}`}>
                       {s.status}
@@ -1101,7 +1124,7 @@ function SalesPageInner() {
                     {isPartiallyRefunded(s) && (
                       <span
                         className={`ml-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${refundBadge}`}
-                        title={`${t("sales.refundedLabel")}: ${money(s.refunded_sen || 0)} · ${t("sales.outstanding")}: ${money(s.outstanding_sen || 0)}`}
+                        title={`${t("sales.refundedLabel")}: ${money(s.refunded_sen || 0, s.currency)} · ${t("sales.outstanding")}: ${money(s.outstanding_sen || 0, s.currency)}`}
                       >
                         {t("sales.partiallyRefunded")}
                       </span>
@@ -1359,7 +1382,7 @@ function SalesPageInner() {
                             ) : null}
                           </td>
                           <td className="py-1.5 text-right text-[var(--jf-muted)]">{i.qty}</td>
-                          <td className="py-1.5 text-right font-medium">{money(i.price_sen * i.qty)}</td>
+                          <td className="py-1.5 text-right font-medium">{money(i.price_sen * i.qty, detail.currency)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1373,12 +1396,12 @@ function SalesPageInner() {
               <section className="mt-5 rounded-lg bg-slate-50 p-3 text-sm">
                 <div className="flex justify-between gap-4">
                   <span className="text-[var(--jf-muted)]">{t("dash.amount")}</span>
-                  <span>{money(detail.total_sen)}</span>
+                  <span>{money(detail.total_sen, detail.currency)}</span>
                 </div>
                 {typeof detail.shipping_sen === "number" && detail.shipping_sen !== 0 && (
                   <div className="mt-1 flex justify-between gap-4 text-[var(--jf-muted)]">
                     <span>{t("sales.shipping")}</span>
-                    <span>{money(detail.shipping_sen)}</span>
+                    <span>{money(detail.shipping_sen, detail.currency)}</span>
                   </div>
                 )}
                 {/* Shipping phase 2: WHICH source priced this fee. A merchant
@@ -1402,23 +1425,23 @@ function SalesPageInner() {
                 {typeof detail.discount_sen === "number" && detail.discount_sen !== 0 && (
                   <div className="mt-1 flex justify-between gap-4 text-[var(--jf-muted)]">
                     <span>{t("sales.discount")}</span>
-                    <span>−{money(detail.discount_sen)}</span>
+                    <span>−{money(detail.discount_sen, detail.currency)}</span>
                   </div>
                 )}
                 <div className="mt-1 flex justify-between gap-4 font-semibold">
                   <span>{t("sales.total")}</span>
-                  <span>{money(detail.total_sen)}</span>
+                  <span>{money(detail.total_sen, detail.currency)}</span>
                 </div>
                 {/* Issue #518: partial-refund accounting in the detail drawer. */}
                 {(detail.refunded_sen ?? 0) > 0 && (
                   <>
                     <div className="mt-1 flex justify-between gap-4 text-amber-700">
                       <span>{t("sales.refundBalance")}</span>
-                      <span>−{money(detail.refunded_sen || 0)}</span>
+                      <span>−{money(detail.refunded_sen || 0, detail.currency)}</span>
                     </div>
                     <div className="mt-1 flex justify-between gap-4 font-semibold">
                       <span>{t("sales.outstanding")}</span>
-                      <span>{money(detail.outstanding_sen ?? 0)}</span>
+                      <span>{money(detail.outstanding_sen ?? 0, detail.currency)}</span>
                     </div>
                   </>
                 )}

@@ -74,7 +74,7 @@ const SECTIONS: Section[] = [
     id: "currency",
     title: "Workspace currency & exchange rates",
     body: [
-      "Everything a workspace sells is priced in its own currency: Settings → Currency sets it (default MYR), and the workspace's CHIP account inherits it for purchases. Changing it applies to NEW products and sales only — a completed sale keeps the currency it was paid in, a refund must be issued in that same currency, and nothing already recorded is ever re-priced or re-converted.",
+      "Everything a workspace sells is priced in its own currency: Settings → Currency sets it (default MYR), and the workspace's CHIP account inherits it for purchases. Changing it applies to NEW products and sales only — a completed sale keeps the currency it was paid in, a refund must be issued in that same currency, and nothing already recorded is ever re-priced or re-converted. The Sales page labels each amount with the currency its sale was recorded in, so after a switch an old MYR sale still reads RM24.90 while a new USD sale reads US$24.90 (the row carries it as currency on GET /v1/rest/sales and list_sales).",
       // Card t_467614db: the surface's old hint said the rate table was "used for
       // display/conversion of new amounts" while nothing in the product converted
       // an amount at all. The guide states what the table is (reference data) and

@@ -1757,9 +1757,17 @@ func (h *RESTHandlers) summary(w http.ResponseWriter, r *http.Request, actx *Acc
 // detail drawer (issue #126); the dashboard Recent-sales table reads only the
 // subset it renders, so extras are backward-compatible.
 type saleRow struct {
-	RefCode     string `json:"ref_code"`
-	Status      string `json:"status"`
-	TotalSen    int64  `json:"total_sen"`
+	RefCode  string `json:"ref_code"`
+	Status   string `json:"status"`
+	TotalSen int64  `json:"total_sen"`
+	// Currency is the ISO code every money field on this row is denominated in
+	// (issue #185): the currency the sale was transacted in, recorded on the
+	// sale itself and never re-derived from the workspace's CURRENT setting.
+	// Emitted because the client cannot label an amount without it — the Sales
+	// page used to print a literal "RM" for every row, so a USD sale read
+	// RM24.90. Always set on a sale row (MYR for rows written before the
+	// column existed); a response row is a different struct and carries none.
+	Currency    string `json:"currency,omitempty"`
 	Method      string `json:"payment_method"`
 	Buyer       string `json:"buyer"`
 	Created     string `json:"created_at"`
@@ -1852,7 +1860,11 @@ func restSaleRows(sales []*dbstore.Sale) []saleRow {
 func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
 	row := saleRow{
 		RefCode: s.RefCode, Status: s.Status, TotalSen: s.TotalSen,
-		Method: s.PaymentMethod, Buyer: s.Client.FullName,
+		// The sale's OWN currency, so every amount on the row is labelled
+		// correctly for a non-MYR workspace (and old MYR rows stay RM after a
+		// workspace switches).
+		Currency: s.CurrencyOrMYR(),
+		Method:   s.PaymentMethod, Buyer: s.Client.FullName,
 		Created:     s.CreatedAt.UTC().Format(time.RFC3339),
 		SkipCapture: s.SkipCapture, Authorized: s.Authorized,
 		EmailStatus:    emailStatus,

@@ -21,6 +21,7 @@ const SECTIONS: Section[] = [
     title: "Sales",
     body: [
       "Track every sale: reference code, status (pending/confirmed/failed/refunded), buyer, amount, payment method and date. Confirm bank-transfer sales, capture or release skip-capture authorisations, refund paid sales (full or partial), and export sales to CSV.",
+      "Each amount is shown in the currency that sale was recorded in — US$24.90 for a USD sale, RM24.90 for an MYR one — never in the workspace's current setting, which would relabel history the moment the setting changed. The row carries it as currency on GET /v1/rest/sales and list_sales, and a refund is asked for in the same currency the sale was paid in.",
       "A form's mode decides what its entries are called, not whether you can reach them: a payment form (the default) takes payment and offers a Sales action on the Forms list, while a response-only form offers a Submission action. Both point at the same per-form list — an RSVP form is never labelled sales, and it still has a way into its responses.",
       "GET /v1/rest/forms (list, single and create) reports the mode as mode (payment or response; a form created before response mode existed reports payment).",
     ],

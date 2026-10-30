@@ -200,6 +200,20 @@ type Sale struct {
 // SaleStore wraps pgx for sales.
 type SaleStore struct{ pool *pgxpool.Pool }
 
+// CurrencyOrMYR is the sale's recorded currency, normalised, or MYR for a row
+// written before the currency column existed (issue #185). One rule for every
+// read surface that has to label an amount: a blank label is not renderable, and
+// MYR is what those historical rows were actually charged in. The value is read
+// from the SALE, never from the workspace's current setting — a workspace that
+// switches currency must not relabel its own history.
+func (s *Sale) CurrencyOrMYR() string {
+	c := strings.ToUpper(strings.TrimSpace(s.Currency))
+	if c == "" {
+		return "MYR"
+	}
+	return c
+}
+
 // NewSaleStore builds a SaleStore.
 func NewSaleStore(pool *pgxpool.Pool) *SaleStore { return &SaleStore{pool: pool} }
 
