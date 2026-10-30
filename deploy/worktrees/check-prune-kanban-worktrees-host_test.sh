@@ -94,7 +94,26 @@ contains() { # desc haystack needle
   # exits at the first match, the writer dies of SIGPIPE (141) and pipefail reports
   # the pipeline as failed — a MATCH would read as a miss.
   if grep -qF -- "$3" <<<"$2"; then ok "$1"
-  else bad "$1 (missing '$3' in: $(printf '%s' "$2" | tr '\n' '|' | cut -c1-600))"; fi
+  else bad "$1 (missing '$3' in: $(clip "$2"))"; fi
+}
+# clip: a haystack as one line for a failure message, HEAD **and TAIL**.
+#
+# WHY NOT `cut -c1-600` (card t_e89e95c7). The installer sends the failing proof's
+# `tail -20` to stderr and `run_installer` captures stdout+stderr together, so the
+# reason IS in the haystack — at the very END of it. A head-only cut printed the arm's
+# verdict (`missing 'installed copy verified:'`) and the first 600 characters of
+# preamble, i.e. everything except the one thing the red was asking for. Measured on
+# that card's red: the message stopped at `re-running the self-test against the
+# installed copy…`, exactly where the installer starts explaining itself.
+clip() { # <text> [<head chars>] [<tail chars>]
+  local flat head tail
+  flat="$(printf '%s' "$1" | tr '\n' '|')"
+  head="${2:-300}"; tail="${3:-1200}"
+  if [ "${#flat}" -le $(( head + tail )) ]; then printf '%s' "$flat"; return 0; fi
+  if [ "$tail" -le 0 ]; then printf '%s…[%d chars omitted]' "${flat:0:head}" \
+    "$(( ${#flat} - head ))"; return 0; fi
+  printf '%s…[%d chars omitted]…%s' "${flat:0:head}" \
+    "$(( ${#flat} - head - tail ))" "${flat: -tail}"
 }
 count() { # desc haystack needle expected
   local n
@@ -150,6 +169,22 @@ cp "$INSTALLER_LIVE" "$SB/installer.keep"
 
 run_check() { CHECK_OUT="$(bash "$CHECK" "$@" 2>&1)"; CHECK_RC=$?; }
 run_installer() { INST_OUT="$(bash "$INSTALLER_LIVE" "$@" 2>&1)"; INST_RC=$?; }
+# dump_installer_output: the installer's OWN last lines, for a red whose meaning is in
+# the installer's explanation rather than in its exit code (card t_e89e95c7).
+#
+# The capture is already complete — `run_installer` merges stderr into INST_OUT and the
+# installer sends the failing proof's `tail -20` there — so this is a DISPLAY function,
+# not a capture fix: without it an arm whose installed-copy proof failed printed
+# `want '0', got '1'` plus a head-only clip of the preamble, and the one place the
+# failure explained itself was past the cut. Called on every non-zero installer exit.
+# It prints and nothing else (no counters, no globals), so a caller may run it inside
+# a `$(…)` — which is how the diagnostic's own control arm reads it.
+dump_installer_output() { # [<lines>] -> installer output on stdout
+  local n="${1:-25}"
+  printf '    ---- installer output, last %s line(s) ----\n' "$n"
+  printf '%s\n' "$INST_OUT" | tail -n "$n" | sed 's/^/    | /'
+  printf '    ---- end installer output ----\n'
+}
 
 # ─── the drift fixtures, taken from the LIVE repo's history ──────────────────
 fix_from_live() { # <rev> <repo path> <dest> -> 0 when the bytes were taken
@@ -386,10 +421,44 @@ contains "...saying exactly that" "$INST_OUT" "an empty value would install THIS
 mkdir -p "$SB/repair-e"
 run_installer --from-ref main --hermes-home "$SB/repair-e"
 check "the full repair (with proofs) exits 0" "0" "$INST_RC"
+# A red here is the one verdict in this harness that costs a full 45-minute gate run to
+# re-read, so the installer's own account of it is printed BEFORE the assertions that
+# read it: a failing INSTALLED-copy proof explains itself in the last lines of the
+# installer's output, and nothing else in this file may cut them off.
+[ "$INST_RC" -eq 0 ] || dump_installer_output
 contains "...having verified the extracted revision" "$INST_OUT" "source verified:"
 contains "...and re-verified the INSTALLED copy" "$INST_OUT" "installed copy verified:"
 check "...with the installed pruner still the REF's bytes" \
   "$(sha "$FIX/pruner.ref.sh")" "$(sha "$SB/repair-e/scripts/prune-kanban-worktrees.sh")"
+
+echo "--- the diagnostic: a failing installed copy NAMES ITS CAUSE, not just its exit code ---"
+# CARD t_e89e95c7, DRIVEN. The installed-copy self-test failed once on gate inputs
+# byte-identical to origin/main, and the harness could not say why: the failing proof
+# explains itself in the installer's LAST lines, and the arm's message showed the FIRST
+# 600 characters — so the red named its verdict and nothing else. The capture was never
+# the defect (`run_installer` merges stderr, where the installer sends that `tail -20`);
+# the DISPLAY was, and that is what this arm pins. A sabotaged installer copy deletes the
+# installed suite immediately before step 3, so the installed proof fails for a NAMED
+# reason, and the dump the arm now prints must carry that reason.
+cp "$INSTALLER_LIVE" "$SB/installer.keep.diag"
+mkdir -p "$SB/repair-f"
+awk -v inject='  rm -f "$DEST_DIR/$SUITE_NAME"' '
+  { print }
+  /SKIP_PROOF.*= 0/ && !done { print inject; done = 1 }
+' "$INSTALLER_LIVE" >"$SB/installer.diag"
+cp "$SB/installer.diag" "$INSTALLER_LIVE"
+check "S4 premise: the sabotage landed (the installed suite is removed just before step 3)" \
+  "1" "$(grep -cF 'rm -f "$DEST_DIR/$SUITE_NAME"' "$INSTALLER_LIVE")"
+run_installer --from-ref main --hermes-home "$SB/repair-f"
+check "S4 the sabotaged repair FAILS, so there is a red to explain" "1" "$INST_RC"
+DIAG="$(dump_installer_output)"
+contains "...and the dump names the failing step" "$DIAG" "the INSTALLED copy failed its self-test"
+contains "...and the reason THAT proof gave" "$DIAG" "prune-kanban-worktrees_test.sh: No such file or directory"
+check "...which the old head-only cut would have dropped (so this arm measures the display, not the capture)" \
+  "0" "$(clip "$INST_OUT" 300 0 | grep -cF 'No such file or directory')"
+cp "$SB/installer.keep.diag" "$INSTALLER_LIVE"
+check "...and the installer copy is restored" "0" \
+  "$(grep -cF 'rm -f "$DEST_DIR/$SUITE_NAME"' "$INSTALLER_LIVE")"
 
 echo "--- the bite: each guard, neutered on a copy, flips its own arm ---"
 # A green arm is not evidence until the guard behind it has been seen to matter. Each

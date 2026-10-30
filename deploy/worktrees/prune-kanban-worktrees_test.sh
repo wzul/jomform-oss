@@ -156,9 +156,11 @@ wait_for_guard() { # <literal> [<seconds>] -> match | nomatch
 SB="$(mktemp -d /tmp/jf-prunewt-test.XXXXXX)"
 # The live-worker stand-in is killed on EVERY exit, including a suite that dies part
 # way through (card t_eec1d8fd): it used to be bounded only by its own `sleep`, so its
-# lifetime was also the leak window, and a suite that died left it running.
+# lifetime was also the leak window, and a suite that died left it running. The stray
+# section's stand-in is killed the same way (card t_e89e95c7), for the same reason.
 cleanup() {
   [ -n "${WORKER_PID:-}" ] && kill "$WORKER_PID" 2>/dev/null
+  [ -n "${STRAY_LIVE_PID:-}" ] && kill "$STRAY_LIVE_PID" 2>/dev/null
   rm -rf "$SB"
 }
 trap cleanup EXIT
@@ -1057,14 +1059,27 @@ check "...while the '.worktrees/<name>' literal does not (a stray is not under .
   "1" "$(guard_literal "$STRAY_LIVE_ARGV" "worktrees/jf-live ")"
 
 # The stand-in, alive in the real process table for the run below.
-env bash -c "exec -a \"$STRAY_LIVE_ARGV\" sleep 40" &
+#
+# WAITED FOR, NOT SLEPT ON (card t_e89e95c7). This is the SAME shape `#1486` removed from
+# the card loop's premise and left here: a fixed `sleep 0.6` in front of a `match`
+# assertion is a guess about how soon a fork+exec reaches `ps`, and its failure mode is a
+# red on a CORRECT tree — the red would then drop this section's three verdicts (the KEEP
+# line, the survival, and the removal that proves the guard is not a blanket refusal).
+# The predicate is asked in a bounded loop instead, exactly as section 6 does. It is not a
+# weaker assertion: a stand-in that never appears still answers `nomatch` once the budget
+# is spent (measured — `wait_for_guard "work kanban task t_00000000-not-a-worker"`).
+# It is also HELD until this suite kills it (`sleep 300`, killed by the EXIT trap): a
+# stand-in that expires while the pruner walks the table reads as "the guard refuses
+# nothing", which is indistinguishable from a broken guard in the output.
+env bash -c "exec -a \"$STRAY_LIVE_ARGV\" sleep 300" &
 STRAY_LIVE_PID=$!
-sleep 0.6
 check "premise: the stand-in is visible to the pruner's OWN predicate (real process table)" "match" \
-  "$(guard_real "$STRAY_LIVE_ARGV")"
+  "$(wait_for_guard "$STRAY_LIVE_ARGV")"
 
 : >"$LOG"
 run_prune --min-age-hours 24 >/dev/null 2>&1
+check "the stand-in was still alive when the run finished (so a keep here is the guard, not an expired stand-in)" \
+  "yes" "$(kill -0 "$STRAY_LIVE_PID" 2>/dev/null && echo yes || echo no)"
 check "a STRAY with a live process whose argv carries its path SURVIVES" "yes" "$(stray_survives jf-live)"
 contains "...and the refusal is logged as a KEEP on the process" \
   "$(cat "$LOG")" "KEEP  jf-live (process references it)"
