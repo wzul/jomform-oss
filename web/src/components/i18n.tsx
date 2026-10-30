@@ -1,7 +1,7 @@
 // Minimal i18n: en (default), ms, zh, ta, ar. Context + hook, no heavy lib.
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 
 // Which surfaces are English-only prose, and therefore which document
@@ -52,6 +52,25 @@ function persistLang(l: Lang) {
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = useState<Lang>("en");
 
+  // Has the USER chosen a language in this mount? (card t_02338e21)
+  //
+  // The profile request below is issued at mount and answered from the row as
+  // it was WHEN IT WAS SERVED. A pick made while it is in flight therefore
+  // sends a POST that commits a NEWER value than the GET will return — and
+  // applying the GET's answer then silently reverted the pick in the picker,
+  // in `localStorage` and across the whole dashboard, while the server kept the
+  // new language (so only a reload showed the truth). Measured on prod
+  // v1.22.27: 4/4 picks inside the load window reverted.
+  //
+  // A ref, not state: this must neither re-render nor re-key the effect (a
+  // dependency would re-run the request, replacing one stale read with another
+  // issued later), and the effect has to see the CURRENT value inside its own
+  // closure. Once set, the mount answer is stale by definition — the user's
+  // choice is strictly newer than a read made before it — so it is discarded,
+  // for the value AND for the migration path (the POST already writes the
+  // profile, so a profile that still reads empty is a read that predates it).
+  const chosenRef = useRef(false);
+
   // The route the visitor is ON, as the router sees it — not read once from
   // `window.location`. Both halves matter: the declaration below depends on it,
   // so a client-side navigation from /docs to a translated page must move the
@@ -80,6 +99,10 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (cancelled || !d) return;
+        // The user picked while this request was in flight: this answer is a
+        // read issued BEFORE their POST, so it is older than the choice. Applying
+        // it is the t_02338e21 revert.
+        if (chosenRef.current) return;
         if (isLang(d.lang)) {
           setLangState(d.lang);
           try { localStorage.setItem(STORAGE_KEY, d.lang); } catch { /* ignore */ }
@@ -110,6 +133,10 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   }, [lang, pathname]);
 
   const setLang = useCallback((l: Lang) => {
+    // Every explicit choice makes the mount-time profile read stale (see
+    // `chosenRef` above), BEFORE the state write so a response landing between
+    // these two lines cannot win the race.
+    chosenRef.current = true;
     setLangState(l);
     // Mirror locally for the next first paint, then persist to the PROFILE —
     // the server is the source of truth so the choice follows the user.

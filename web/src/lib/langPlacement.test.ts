@@ -39,6 +39,14 @@
 //   8. Documentation parity: the inline "?" link on the field points at a docs
 //      page and anchor that exist and are reachable from the docs nav.
 //
+//   9. A pick made while the profile read is in flight WINS. The read is issued
+//      at mount and answered from the row as it was when it was SERVED, so
+//      applying it after an explicit choice silently reverted that choice in the
+//      picker, the document and `localStorage` — while the server kept the new
+//      language (card t_02338e21). The client half is pinned here; the EXECUTED
+//      proof, which holds the read open in a real browser, is
+//      web/e2e/profile-lang-picker-race.spec.ts.
+//
 // WHAT IT DOES NOT COVER (stated honestly)
 //   This repo has no JSX/DOM test runner (see src/lib/i18n.test.ts), so this file
 //   asserts the client's wiring from source and the server's contract from the Go
@@ -377,5 +385,50 @@ test("the field's inline \"?\" link points at a docs page and anchor that exist"
     layout.includes(anchor),
     `the docs nav (${DOCS_LAYOUT}) no longer links to ${anchor} — the page would be ` +
       "reachable only by typing the URL",
+  );
+});
+
+test("a choice made while the profile read is in flight is not reverted by it", () => {
+  // Card t_02338e21. `fetch("/api/auth/profile")` is issued at mount, and its
+  // answer is the row as it was when the GET was SERVED — i.e. it predates any
+  // POST issued afterwards. Applying it after an explicit choice therefore
+  // reverted that choice in the picker, the document and the mirror while the
+  // server kept the new language: silent, because only a reload showed the
+  // truth. Measured on prod v1.22.27: 4/4 picks inside the window.
+  const profileRead = i18n.indexOf(`fetch("${PROFILE_PATH}")`);
+  assert.ok(profileRead >= 0, `components/i18n.tsx no longer reads ${PROFILE_PATH}`);
+
+  // The marker, and the fact that it is a REF: state used as an effect
+  // dependency would re-issue the request (one stale read replacing another),
+  // and `useState` would re-render on every pick for no reason.
+  assert.match(
+    i18n,
+    /const chosenRef = useRef\(false\)/,
+    "the 'the user has chosen' marker is gone (or is not a ref) — the mount read " +
+      "can overwrite an explicit choice again",
+  );
+
+  // It is set by the USER path, and set BEFORE the state write, so a response
+  // landing between the two lines cannot win.
+  const setter = i18n.indexOf("const setLang = useCallback(");
+  assert.ok(setter >= 0, "setLang is gone from components/i18n.tsx");
+  const marked = i18n.indexOf("chosenRef.current = true;", setter);
+  const stateWrite = i18n.indexOf("setLangState(l);", setter);
+  assert.ok(
+    marked > setter && stateWrite > setter && marked < stateWrite,
+    "setLang() no longer marks the choice before writing the state — a profile " +
+      "answer arriving mid-pick could still overwrite it",
+  );
+
+  // The mount effect DISCARDS its answer once that marker is set — before BOTH
+  // writers, so the revert cannot survive in `localStorage` either (that mirror
+  // is what makes it look permanent to the user).
+  const guard = i18n.indexOf("if (chosenRef.current) return;", profileRead);
+  const applied = i18n.indexOf("setLangState(d.lang)", profileRead);
+  const mirrored = i18n.indexOf("localStorage.setItem(STORAGE_KEY, d.lang)", profileRead);
+  assert.ok(guard > profileRead, "the mount read applies its answer with no guard against a newer choice");
+  assert.ok(
+    guard < applied && guard < mirrored,
+    "the guard sits AFTER a writer — the late profile answer still reverts the UI",
   );
 });
