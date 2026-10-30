@@ -1804,7 +1804,13 @@ func (h *PublicHandlers) workspaceFooter(ctx context.Context, f *dbstore.Form) f
 	// 404 the moment the workspace is renamed. Drop the hosted link when its
 	// page has no stored content; a link to any OTHER host is the merchant's own
 	// site and is never judged here (we do not serve it, so we cannot know).
-	if hostedLegalLinkCount(fi, slug) > 0 {
+	//
+	// Card t_8366310f: "hosted" here is our OWN HOST, not "a canonical hosted
+	// page". A link on our host whose path the public route does not serve
+	// (/privacy/, /Privacy, /privacy/1) is still ours to drop, so the gate below
+	// must count it — counting only canonical paths skipped the lookup and let
+	// that dead link through.
+	if ownHostedLegalLinkCount(fi, slug) > 0 {
 		pages, perr := h.Workspaces.LegalPages(ctx, workspaceID)
 		if perr == nil {
 			fi.PrivacyURL = servableHostedLegalLink(fi.PrivacyURL, slug, pages)
@@ -1822,58 +1828,86 @@ func (h *PublicHandlers) workspaceFooter(ctx context.Context, f *dbstore.Form) f
 	return fi
 }
 
-// hostedLegalLinkCount counts the footer's links that point at one of THIS
-// workspace's own hosted legal pages. Used to skip the content lookup entirely
-// for the common footer whose links are the merchant's own site.
-func hostedLegalLinkCount(fi footerInfo, workspaceSlug string) int {
+// ownHostedLegalLinkCount counts the footer's links that address THIS
+// workspace's own host. Used to skip the content lookup entirely for the common
+// footer whose links are the merchant's own site.
+//
+// It counts our OWN HOST, not "a servable hosted page": a link on our host whose
+// path the public route does not serve is still ours to drop, so counting only
+// canonical pages would skip the lookup that drops it (card t_8366310f).
+func ownHostedLegalLinkCount(fi footerInfo, workspaceSlug string) int {
 	n := 0
 	for _, u := range []string{fi.PrivacyURL, fi.TermsURL, fi.RefundURL} {
-		if hostedLegalPageType(u, workspaceSlug) != "" {
+		if _, ours := classifyHostedLegalURL(u, workspaceSlug); ours {
 			n++
 		}
 	}
 	return n
 }
 
-// hostedLegalPageType reports which hosted legal page a URL addresses on the
-// workspace's own host ("privacy"/"terms"/"refund"), or "" when the URL is
-// empty, names another host (the merchant's own site) or a path that
-// handlePublicLegalPage does not serve. `pages` is keyed by page type.
+// classifyHostedLegalURL answers, in one classification, the TWO questions the
+// footer's link rule must keep apart:
 //
-// It answers the same question the public route answers — host via
-// accountSubdomain + IDBySlug, path via the exact /privacy|/terms|/refund
-// patterns — so "servable here" cannot drift from "served there".
-func hostedLegalPageType(raw, workspaceSlug string) string {
+//	ours     — the URL addresses THIS workspace's own host
+//	           (<slug>.jomform.com, host compared case-insensitively). Only
+//	           such a link is ours to judge; any other host is the merchant's
+//	           own site and is never touched.
+//	pageType — the hosted legal page the public route serves at that path, or
+//	           "" when handlePublicLegalPage would answer 404 for it.
+//
+// The single return value this replaced collapsed "on our host but unservable"
+// into "not ours", so /privacy/, /Privacy and /privacy/1 survived the footer
+// while the api 404s them — the same defect #1450 removed for the canonical
+// paths (card t_8366310f).
+func classifyHostedLegalURL(raw, workspaceSlug string) (pageType string, ours bool) {
 	if raw == "" || workspaceSlug == "" {
-		return ""
+		return "", false
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	if !strings.EqualFold(u.Hostname(), workspaceSlug+".jomform.com") {
+		return "", false
+	}
+	return hostedLegalPathType(u.Path), true
+}
+
+// hostedLegalPathType is the public route's OWN path rule, shared with
+// handlePublicLegalPage instead of copied. The three legal pages are mounted at
+// exactly GET /privacy, GET /terms and GET /refund (RegisterRoutes), so a served
+// path is one whose whole path is a single valid type segment — no trailing
+// slash, no capitalised segment, no extra segment. Anything else is "" here and
+// 404 there: one rule, so "servable here" cannot drift from "served there".
+func hostedLegalPathType(path string) string {
+	t := strings.TrimPrefix(path, "/")
+	if !validLegalPageType(t) {
 		return ""
 	}
-	switch strings.TrimPrefix(u.Path, "/") {
-	case dbstore.LegalPagePrivacy:
-		return dbstore.LegalPagePrivacy
-	case dbstore.LegalPageTerms:
-		return dbstore.LegalPageTerms
-	case dbstore.LegalPageRefund:
-		return dbstore.LegalPageRefund
-	}
-	return ""
+	return t
+}
+
+// hostedLegalPageType reports which hosted legal page a URL addresses on the
+// workspace's own host ("privacy"/"terms"/"refund"), or "" when the URL is not
+// on this workspace's host or its path is not one the public route serves.
+func hostedLegalPageType(raw, workspaceSlug string) string {
+	t, _ := classifyHostedLegalURL(raw, workspaceSlug)
+	return t
 }
 
 // servableHostedLegalLink returns the footer link to publish for one legal slot.
 // A link that is not ours (another host) is returned unchanged. A link to our
-// own hosted page is returned only when that page has stored content — the
-// exact condition handlePublicLegalPage requires to answer 200; otherwise the
-// footer gets no link instead of a dead one (card t_49792b57).
+// own host is returned only when the public route would answer 200 for it —
+// a path it does not serve (/privacy/, /Privacy, /privacy/1) and a page with no
+// stored content are both dropped; otherwise the footer gets no link instead of
+// a dead one (cards t_49792b57, t_8366310f).
 func servableHostedLegalLink(raw, workspaceSlug string, pages map[string]*dbstore.LegalPage) string {
-	pageType := hostedLegalPageType(raw, workspaceSlug)
-	if pageType == "" {
+	pageType, ours := classifyHostedLegalURL(raw, workspaceSlug)
+	if !ours {
 		return raw
+	}
+	if pageType == "" {
+		return ""
 	}
 	if p := pages[pageType]; p != nil && strings.TrimSpace(p.Content) != "" {
 		return raw

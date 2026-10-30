@@ -223,6 +223,42 @@ func TestServableHostedLegalLink(t *testing.T) {
 			t.Errorf("servableHostedLegalLink = %q, want %q (unresolvable workspace keeps the merchant's link)", got, raw)
 		}
 	})
+
+	// Card t_8366310f: a link on OUR host whose path the public route does not
+	// serve is still OURS to drop. Measured on prod (2026-10-28): all three
+	// shapes below answer 404 — /privacy/ and /privacy/1 fall through to the mux
+	// default ("404 page not found"), /Privacy to GET /{slug} ("Borang tidak
+	// dijumpai"). They were returned unchanged because the classifier collapsed
+	// "on our host, unservable path" into "not ours". `pages` HAS privacy
+	// content here on purpose: these cases cannot pass for the content reason.
+	for _, raw := range []string{
+		"https://wan.jomform.com/privacy/",
+		"https://wan.jomform.com/Privacy",
+		"https://wan.jomform.com/privacy/1",
+	} {
+		raw := raw
+		t.Run("our host, unservable path dropped: "+raw, func(t *testing.T) {
+			if got := servableHostedLegalLink(raw, "wan", pages); got != "" {
+				t.Errorf("servableHostedLegalLink(%q) = %q, want \"\" — the public route 404s that "+
+					"path, so the footer must not link it", raw, got)
+			}
+		})
+	}
+	// Control the other way: the same non-canonical paths on a host that is NOT
+	// ours are the merchant's own site and stay untouched — we do not serve
+	// them, so we cannot know what they answer.
+	for _, raw := range []string{
+		"https://acme.example/privacy/",
+		"https://other.jomform.com/privacy/",
+	} {
+		raw := raw
+		t.Run("not our host, untouched: "+raw, func(t *testing.T) {
+			if got := servableHostedLegalLink(raw, "wan", empty); got != raw {
+				t.Errorf("servableHostedLegalLink(%q) = %q, want it kept (another host is the "+
+					"merchant's own site)", raw, got)
+			}
+		})
+	}
 }
 
 func TestHostedLegalPageType(t *testing.T) {
@@ -231,10 +267,18 @@ func TestHostedLegalPageType(t *testing.T) {
 		{"terms on our host", "https://wan.jomform.com/terms", "wan", dbstore.LegalPageTerms},
 		{"refund on our host", "https://wan.jomform.com/refund", "wan", dbstore.LegalPageRefund},
 		{"host case-insensitive", "https://WAN.jomform.com/privacy", "wan", dbstore.LegalPagePrivacy},
+		{"canonical path with query", "https://wan.jomform.com/privacy?ref=mail", "wan", dbstore.LegalPagePrivacy},
 		{"other workspace's host", "https://other.jomform.com/privacy", "wan", ""},
 		{"external host", "https://acme.example/privacy", "wan", ""},
 		{"non-legal path", "https://wan.jomform.com/contact", "wan", ""},
 		{"lookalike host suffix", "https://wan.jomform.com.evil.test/privacy", "wan", ""},
+		// Card t_8366310f — the three prod-measured non-canonical shapes. The
+		// public route serves only the exact segments, so these are "", which
+		// is why the footer must drop them instead of treating them as another
+		// host's URL.
+		{"trailing slash", "https://wan.jomform.com/privacy/", "wan", ""},
+		{"capitalised segment", "https://wan.jomform.com/Privacy", "wan", ""},
+		{"extra path segment", "https://wan.jomform.com/privacy/1", "wan", ""},
 		{"empty URL", "", "wan", ""},
 		{"no slug", "https://wan.jomform.com/privacy", "", ""},
 	}
@@ -244,5 +288,114 @@ func TestHostedLegalPageType(t *testing.T) {
 				t.Errorf("hostedLegalPageType(%q, %q) = %q, want %q", c.raw, c.slug, got, c.want)
 			}
 		})
+	}
+}
+
+// Card t_8366310f: the footer's "is this link servable here?" judgement and the
+// public route's "do I serve this path?" answer must be ONE rule. This test
+// drives the REAL mux (RegisterRoutes, so the actual GET /privacy|/terms|/refund
+// patterns) for the prod-measured path shapes and pins the two answers
+// together in both directions:
+//
+//	route answers 200  <=>  classifier names a page  <=>  footer keeps the link
+//
+// A future private copy of the path rule that disagrees with the router — in
+// either direction: keeping a dead link, or dropping a live one — reds here.
+func TestOwnHostLegalPathParityWithPublicRoute(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Open(t)
+	sp := dbstore.NewWorkspaceStore(pool)
+
+	var userID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash)
+		 VALUES ('legal-parity-' || md5(random()::text) || '@example.test', 'it')
+		 RETURNING id`).Scan(&userID); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	slug := "lp-" + userID[:8]
+	ws, err := sp.Create(ctx, userID, "Legal parity", slug)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	var accountID string
+	if err := pool.QueryRow(ctx, `SELECT id FROM accounts WHERE workspace_id=$1`, ws.ID).Scan(&accountID); err != nil {
+		t.Fatalf("read workspace account: %v", err)
+	}
+
+	// Content IS saved: the only reason a shape may be dropped is the path.
+	if err := sp.SaveLegalPage(ctx, &dbstore.LegalPage{
+		WorkspaceID: ws.ID, PageType: dbstore.LegalPagePrivacy,
+		Mode: dbstore.LegalModeManual, Content: "We keep your data safe.",
+	}); err != nil {
+		t.Fatalf("save privacy page: %v", err)
+	}
+
+	fs := dbstore.NewFormStore(pool)
+	form := &dbstore.Form{
+		AccountID: accountID, Slug: "lp-" + userID[:8], Title: "Parity form",
+		Status: dbstore.FormStatusPublished,
+		Config: map[string]any{"blocks": []any{map[string]any{"type": "text", "value": "Hello"}}},
+		Theme:  map[string]any{"primary": "#5e6ad2"},
+	}
+	if err := fs.Create(ctx, form); err != nil {
+		t.Fatalf("create form: %v", err)
+	}
+
+	h := &PublicHandlers{
+		Forms:      fs,
+		Accounts:   dbstore.NewAccountStore(pool),
+		Workspaces: sp,
+		BaseURL:    "http://localhost:8080",
+	}
+	host := slug + ".jomform.com"
+
+	st, err := sp.Settings(ctx, ws.ID)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	st.BusinessName = "Parity Sdn Bhd"
+
+	keptAny := false
+	for _, path := range []string{"/privacy", "/privacy/", "/Privacy", "/privacy/1"} {
+		path := path
+		t.Run(path, func(t *testing.T) {
+			rec := publicServe(t, h, host, path)
+			served := rec.Code == http.StatusOK
+
+			raw := "https://" + host + path
+			pageType, ours := classifyHostedLegalURL(raw, slug)
+			if !ours {
+				t.Fatalf("classifyHostedLegalURL(%q) says the host is not ours — the fixture's own "+
+					"subdomain must always be ours to judge", raw)
+			}
+			if gotServed := pageType != ""; gotServed != served {
+				t.Errorf("path rule drifted from the route: %q => pageType %q (servable=%v) but the "+
+					"real mux answered %d %s", path, pageType, gotServed, rec.Code, rec.Body.String())
+			}
+
+			// The footer must agree with the route: linked iff it answers 200.
+			st.PrivacyURL = raw
+			if err := sp.SaveSettings(ctx, st); err != nil {
+				t.Fatalf("save settings: %v", err)
+			}
+			body := publicServe(t, h, host, "/"+form.Slug).Body.String()
+			linked := strings.Contains(body, `href="`+raw+`"`)
+			if linked != served {
+				t.Errorf("footer link for %q: linked=%v but the route answered %d — the footer must "+
+					"advertise exactly the paths that serve (body %s)", path, linked, rec.Code, body)
+			}
+			if served {
+				keptAny = true
+			}
+		})
+	}
+	// Control: at least one shape really was served, so "dropped" assertions
+	// above cannot pass because the fixture serves nothing at all.
+	if !keptAny {
+		t.Fatalf("no path shape answered 200 — the fixture proves nothing about keeping a live link")
+	}
+	if rec := publicServe(t, h, host, "/privacy"); rec.Code != http.StatusOK {
+		t.Fatalf("control: GET %s/privacy = %d, want 200 with the saved content", host, rec.Code)
 	}
 }

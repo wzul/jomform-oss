@@ -155,9 +155,13 @@ func (h *PublicHandlers) handlePublicLegalPage(w http.ResponseWriter, r *http.Re
 		http.NotFound(w, r)
 		return
 	}
-	// The page type is the last path segment (/privacy, /terms, /refund).
-	pageType := strings.TrimPrefix(r.URL.Path, "/")
-	if !validLegalPageType(pageType) {
+	// The page type is the whole path (/privacy, /terms, /refund), judged by
+	// the SAME rule the footer uses to decide whether to keep the link
+	// (hostedLegalPathType, card t_8366310f): a link the footer keeps and a
+	// path this route serves cannot drift apart, because both ask this one
+	// function.
+	pageType := hostedLegalPathType(r.URL.Path)
+	if pageType == "" {
 		http.NotFound(w, r)
 		return
 	}
