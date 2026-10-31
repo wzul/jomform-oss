@@ -86,6 +86,18 @@ func parityBlocks(t *testing.T) (map[string]any, map[string]string) {
 		case "image":
 			b["src"] = "https://cdn.example/p.png"
 		}
+		// The builder writes product_id = the block's own id for a pricing block
+		// (web/src/app/builder/page.tsx makeBlock: "Pricing blocks submit with
+		// product_id = the block's own id"), so the fixture carries it too: a
+		// control keyed by the product id is what every stored builder config
+		// paints, and a fixture without it is not a block this product produces.
+		// Card t_b6e75ebb: while the renderer copied an absent product_id into
+		// data-id="", this omission was invisible; it made the control look
+		// unkeyed, which is why the pay/response comparison below never fired for
+		// a pricing block. See the parityPricingTypes exemption there.
+		if typ == "option" || typ == "shipping" {
+			b["product_id"] = id
+		}
 		blocks = append(blocks, b)
 	}
 	return map[string]any{"mode": "payment", "blocks": blocks, "products": []any{}}, idOf
@@ -132,7 +144,18 @@ func TestDerivedContractMirrorsTheRendererInputSet(t *testing.T) {
 		respTag := controlKeyedBy(response, id)
 		painted := payTag != "" && respTag != ""
 
-		if (payTag != "") != (respTag != "") {
+		// A response form serves no pricing block: responseParityConfig removes
+		// them on purpose, and renderResponseForm drops product/quantity/option/
+		// shipping/total behind an explicit case. So for those types "the payment
+		// page paints a control and the response page does not" is the design, not
+		// drift — the exception is pinned by the contract check below (no pricing
+		// type may appear in formfields.Contract) and by parityPricingTypes.
+		// Card t_b6e75ebb: this comparison keys on the BLOCK id, and the builder
+		// sets a pricing block's product_id to that same id, so a paint on one
+		// page only ever looked like agreement while the renderer emitted
+		// data-id="" for an absent product_id. Exempting the pricing types is
+		// what keeps this guard honest instead of depending on that empty id.
+		if !parityPricingTypes[typ] && (payTag != "") != (respTag != "") {
 			t.Errorf("%q is an input on one renderer and not the other: payment=%q response=%q — "+
 				"the two public pages must not disagree about the same block", typ, payTag, respTag)
 		}

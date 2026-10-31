@@ -240,6 +240,25 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			Step: b.Step, Format: b.Format, Pattern: b.Pattern, RequiredMsg: b.RequiredMsg,
 		}
 		vb.CondJSON = marshalCondition(b.Condition)
+		// Card t_b6e75ebb: a pricing block's submit key IS its product_id — the
+		// page posts {items:[{product_id:<data-id>}]} and {fields:{<data-id>:…}},
+		// and the server charges that key. The builder always writes
+		// product_id = the block id, but the write paths accept an
+		// agent-authored config that omits it, and copying it verbatim here
+		// painted data-id="" — so the page posted product_id:"" and every order
+		// from the published form answered 400 "produk tidak sah: ".
+		//
+		// The two server halves ALREADY fall back to the block's own submit key:
+		// httpapi.shippingBlocksWhere (so a sourced shipping block's item is
+		// dropped and its fee resolved) and formfields.PricingContract (so a
+		// required pricing block is enforced under the key the page submits).
+		// keys[i] is that same key — formfields.SubmitKeys, the block id or the
+		// positional "_block_<i>" of a legacy id-less block — and it is what
+		// .ID already carries for every other block type. One rule, three
+		// readers, so the renderer cannot disagree with the charge.
+		if vb.ProductID == "" && (b.Type == "option" || b.Type == "shipping") {
+			vb.ProductID = keys[i]
+		}
 		for _, c := range b.Choices {
 			vb.Choices = append(vb.Choices, choiceView{Label: c.Label, Value: c.Value, PriceSen: c.PriceSen})
 		}
