@@ -266,6 +266,14 @@ export default function CustomizeDocsPage() {
         minutes at a time rather than a day, so even a deployment that cannot clear that cache
         stops showing a stale one within minutes.
       </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The printable QR stand follows the page rule too. The stand prints the form&apos;s title and
+        a QR of its public URL, so a <strong>draft</strong>&apos;s stand answers 404 — exactly as its
+        page does — and a <strong>private</strong> form&apos;s stand is served only to a browser that
+        has already entered the password. Printing is not taken away from you:{" "}
+        <strong>Print stand</strong> in Form Settings opens your own signed-in copy of the same
+        stand, which works at every status, including a draft you have not published yet.
+      </p>
 
       <h2 id="domains" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
         Custom domains

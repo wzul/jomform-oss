@@ -37,9 +37,9 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
-// ogStatusServe drives a GET through the real public mux on host, carrying the
+// publicServeWith drives a GET through the real public mux on host, carrying the
 // cookies the caller supplies (the private-form unlock cookie, in practice).
-func ogStatusServe(t *testing.T, h *PublicHandlers, host, path string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+func publicServeWith(t *testing.T, h *PublicHandlers, host, path string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -64,9 +64,9 @@ func shortBody(s string) string {
 	return s[:max] + "…"
 }
 
-// ogSetStatus writes the status through the store and reads it back, so a test
+// fixtureSetStatus writes the status through the store and reads it back, so a test
 // never asserts against a status the database did not accept.
-func ogSetStatus(t *testing.T, fx renameFixture, status string) *dbstore.Form {
+func fixtureSetStatus(t *testing.T, fx renameFixture, status string) *dbstore.Form {
 	t.Helper()
 	fs := dbstore.NewFormStore(fx.pool)
 	if err := fs.SetStatus(fx.ctx, fx.accountID, fx.formID, status); err != nil {
@@ -98,14 +98,14 @@ func TestOGImageIs404ForADraftForm(t *testing.T) {
 		t.Fatalf("precondition: published /og/%s.png served no bytes", fx.slug)
 	}
 
-	ogSetStatus(t, fx, dbstore.FormStatusDraft)
+	fixtureSetStatus(t, fx, dbstore.FormStatusDraft)
 
 	// The page rule this route has to follow.
 	if rec := publicServe(t, fx.pub, fx.host, "/"+fx.slug); rec.Code != http.StatusNotFound {
 		t.Fatalf("draft page /%s = %d, want 404 — the page rule changed, re-derive this test", fx.slug, rec.Code)
 	}
 
-	rec := ogStatusServe(t, fx.pub, fx.host, "/og/"+fx.slug+".png")
+	rec := publicServeWith(t, fx.pub, fx.host, "/og/"+fx.slug+".png")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("GET /og/%s.png for a DRAFT form = %d (%d bytes, Content-Type %q), want 404.\n"+
 			"The page for this form 404s, so this URL published the form's title, workspace name "+
@@ -118,7 +118,7 @@ func TestOGImageIs404ForADraftForm(t *testing.T) {
 	// A draft must not be distinguishable from a slug that does not exist: the
 	// 404 body is the only thing a prober sees, and "something is here" is the
 	// disclosure this gate exists to stop.
-	unknown := ogStatusServe(t, fx.pub, fx.host, "/og/it-nope-"+randHex(6)+".png")
+	unknown := publicServeWith(t, fx.pub, fx.host, "/og/it-nope-"+randHex(6)+".png")
 	if unknown.Code != http.StatusNotFound {
 		t.Fatalf("unknown slug /og/... = %d, want 404", unknown.Code)
 	}
@@ -138,7 +138,7 @@ func TestOGImageIs404ForADraftForm(t *testing.T) {
 func TestOGImageIs404ForAPrivateFormUntilUnlocked(t *testing.T) {
 	fx := newRenameFixture(t, "it-ogpriv-"+randHex(4))
 	fx.pub.AccessKey = []byte("0123456789abcdef0123456789abcdef")
-	ogSetStatus(t, fx, dbstore.FormStatusPrivate)
+	fixtureSetStatus(t, fx, dbstore.FormStatusPrivate)
 
 	// The page is NOT a 404 for a private form: it shows the gate, and it does
 	// not render the form's content.
@@ -153,7 +153,7 @@ func TestOGImageIs404ForAPrivateFormUntilUnlocked(t *testing.T) {
 		t.Fatalf("private page /%s rendered the form's own block content before unlock", fx.slug)
 	}
 
-	rec := ogStatusServe(t, fx.pub, fx.host, "/og/"+fx.slug+".png")
+	rec := publicServeWith(t, fx.pub, fx.host, "/og/"+fx.slug+".png")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("GET /og/%s.png for a PRIVATE form without the unlock cookie = %d (%d bytes), "+
 			"want 404.\nThe page shows a password gate, but this URL served the form's title "+
@@ -167,7 +167,7 @@ func TestOGImageIs404ForAPrivateFormUntilUnlocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign a token for another form: %v", err)
 	}
-	wrong := ogStatusServe(t, fx.pub, fx.host, "/og/"+fx.slug+".png",
+	wrong := publicServeWith(t, fx.pub, fx.host, "/og/"+fx.slug+".png",
 		&http.Cookie{Name: formAccessCookie, Value: otherToken})
 	if wrong.Code != http.StatusNotFound {
 		t.Errorf("GET /og/%s.png with an unlock cookie minted for a DIFFERENT form = %d, want 404: "+
@@ -179,7 +179,7 @@ func TestOGImageIs404ForAPrivateFormUntilUnlocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign the unlock token: %v", err)
 	}
-	unlocked := ogStatusServe(t, fx.pub, fx.host, "/og/"+fx.slug+".png",
+	unlocked := publicServeWith(t, fx.pub, fx.host, "/og/"+fx.slug+".png",
 		&http.Cookie{Name: formAccessCookie, Value: token})
 	if unlocked.Code != http.StatusOK {
 		t.Fatalf("GET /og/%s.png with this form's unlock cookie = %d, want 200 (body %s)",
@@ -210,13 +210,13 @@ func TestOGImageIs404ForAPrivateFormUntilUnlocked(t *testing.T) {
 // "non-published -> 404" cannot quietly break every unlisted form's preview.
 func TestOGImageServesAnUnlistedForm(t *testing.T) {
 	fx := newRenameFixture(t, "it-ogunl-"+randHex(4))
-	ogSetStatus(t, fx, dbstore.FormStatusUnlisted)
+	fixtureSetStatus(t, fx, dbstore.FormStatusUnlisted)
 
 	if rec := publicServe(t, fx.pub, fx.host, "/"+fx.slug); rec.Code != http.StatusOK {
 		t.Fatalf("precondition: unlisted page /%s = %d, want 200 (an unlisted form is live)",
 			fx.slug, rec.Code)
 	}
-	rec := ogStatusServe(t, fx.pub, fx.host, "/og/"+fx.slug+".png")
+	rec := publicServeWith(t, fx.pub, fx.host, "/og/"+fx.slug+".png")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /og/%s.png for an UNLISTED form = %d, want 200: unlisted is live at its "+
 			"direct URL, so its preview must be served", fx.slug, rec.Code)

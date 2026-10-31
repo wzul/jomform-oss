@@ -3967,6 +3967,71 @@ export const OPENAPI_SPEC: OpenApiSpec = {
         "x-jomform-access": "write"
       }
     },
+    "/v1/rest/forms/{id}/qr-stand": {
+      "get": {
+        "description": "Served for a form the caller owns at ANY status, including a draft: this is the merchant's own print artefact, and a form is usually printed before it goes live. It is what the dashboard's \"Print stand\" action opens. The public /qr/{slug}/stand route is the buyer-facing one and follows the page's status rule instead — a draft's stand answers 404 there, because the stand prints the form's title.\n\nResponse: An HTML document: the printable QR stand — the form's title, its public URL encoded as a QR image, and the ?table=N badge when a table was given.",
+        "operationId": "getFormQRStand",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html; charset=utf-8": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Render a form's printable QR stand",
+        "tags": [
+          "Form settings"
+        ],
+        "x-jomform-access": "read"
+      }
+    },
     "/v1/rest/forms/{id}/restore": {
       "post": {
         "description": "Restoring touches no CASCADE. If another form has taken the trashed form's slug in the meantime the restore is refused with 409 — change that form's slug first, then restore.\n\nResponse: status=restored and the form id.",

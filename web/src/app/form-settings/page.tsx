@@ -2230,9 +2230,27 @@ function FormSettingsInner() {
                                 >
                                   {t("fs.qrDownload")}
                                 </a>
-                                {form?.url && (
+                                {formId && (
+                                  // The AUTHED REST route, not the public
+                                  // /qr/{slug}/stand: that public route applies
+                                  // the form page's status rule, so a DRAFT
+                                  // form's stand answers 404 there (the stand
+                                  // prints the form's title). The merchant is
+                                  // entitled to print their own stand before
+                                  // publishing, so the dashboard opens the
+                                  // route that is scoped to their session.
+                                  //
+                                  // workspaceUrl, not a bare path: without
+                                  // ?workspace=<slug> the API resolves a session
+                                  // to the user's FIRST account, so a merchant
+                                  // with several workspaces got 404
+                                  // (request.notFound) for a form that lives in
+                                  // another one — measured in the browser while
+                                  // testing this card. Card t_fde19a1d.
                                   <a
-                                    href={`${form.url.replace(/\/[^/]*$/, "")}/qr/${slug || "form"}/stand${qrTable.trim() ? `?table=${encodeURIComponent(qrTable.trim())}` : ""}`}
+                                    href={workspaceUrl(
+                                      `/api/rest/forms/${formId}/qr-stand${qrTable.trim() ? `?table=${encodeURIComponent(qrTable.trim())}` : ""}`,
+                                    )}
                                     target="_blank"
                                     rel="noreferrer"
                                     className="jf-btn-ghost"

@@ -284,6 +284,13 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// served at the form's own URL).
 	mux.Handle("GET /v1/rest/forms/{id}/menu", h.authed(h.getFormMenu))
 	mux.Handle("PUT /v1/rest/forms/{id}/menu", h.authed(h.putFormMenu))
+	// The merchant's own printable QR stand (issue #438). The PUBLIC route
+	// /qr/{slug}/stand applies the form page's status gate — a draft's stand
+	// 404s there because it prints the form's title — so the dashboard's
+	// "Print stand" action opens this authed route instead, which serves the
+	// same document for a form the caller owns, at any status. See
+	// rest_qr_stand.go.
+	mux.Handle("GET /v1/rest/forms/{id}/qr-stand", h.authed(h.getFormQRStand))
 	// Issue #177: per-form notification email settings (Gravity-Forms-style).
 	mux.Handle("GET /v1/rest/forms/{id}/email-settings", h.authed(h.getFormEmailSettings))
 	mux.Handle("PUT /v1/rest/forms/{id}/email-settings", h.authed(h.saveFormEmailSettings))

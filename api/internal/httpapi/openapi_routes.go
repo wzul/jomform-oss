@@ -95,6 +95,11 @@ type restRouteDoc struct {
 	// component name, or "" for a body this file only describes in prose.
 	Req  string
 	Resp string
+	// RespContentType is the media type of the success body when it is NOT
+	// application/json (a CSV export, a printable HTML document). Empty means
+	// application/json — the default this table assumes, so every route that
+	// does not say otherwise keeps exactly the entry it had.
+	RespContentType string
 	// RespDesc is what the 200/201 body actually is, in plain words, for the
 	// routes whose payload is too shape-shifty to pin as one component
 	// (analytics rollups, the dashboard bundle, CSV).
@@ -283,6 +288,11 @@ var restRouteDocs = []restRouteDoc{
 		Summary: "Read a form's confirmations", Access: AccessRead},
 	{Method: "PUT", Path: "/v1/rest/forms/{id}/confirmations", Handler: "saveFormConfirmations", Tag: "Form settings",
 		Summary: "Set a form's confirmations", Access: AccessWrite, Body: true},
+	{Method: "GET", Path: "/v1/rest/forms/{id}/qr-stand", Handler: "getFormQRStand", Tag: "Form settings",
+		Summary: "Render a form's printable QR stand", Access: AccessRead,
+		RespContentType: "text/html; charset=utf-8",
+		RespDesc:        "An HTML document: the printable QR stand — the form's title, its public URL encoded as a QR image, and the ?table=N badge when a table was given.",
+		Desc:            "Served for a form the caller owns at ANY status, including a draft: this is the merchant's own print artefact, and a form is usually printed before it goes live. It is what the dashboard's \"Print stand\" action opens. The public /qr/{slug}/stand route is the buyer-facing one and follows the page's status rule instead — a draft's stand answers 404 there, because the stand prints the form's title."},
 
 	// ── Per-form CHIP feeds and credentials (admin) ──────────────────────────
 	{Method: "GET", Path: "/v1/rest/forms/{id}/chip-feeds", Handler: "getFormChipFeeds", Tag: "Payments (CHIP)",
@@ -897,9 +907,13 @@ func responsesFor(d restRouteDoc) map[string]any {
 		ok = "201"
 	}
 	success := map[string]any{"description": "Success."}
+	mediaType := d.RespContentType
+	if mediaType == "" {
+		mediaType = "application/json"
+	}
 	if d.Resp != "" {
 		success["content"] = map[string]any{
-			"application/json": map[string]any{
+			mediaType: map[string]any{
 				"schema": map[string]any{"$ref": "#/components/schemas/" + d.Resp},
 			},
 		}
@@ -907,7 +921,7 @@ func responsesFor(d restRouteDoc) map[string]any {
 		// No component: either described in prose (RespDesc) or a small ack
 		// body. Either way the honest schema is "an object", not a guess.
 		success["content"] = map[string]any{
-			"application/json": map[string]any{
+			mediaType: map[string]any{
 				"schema": map[string]any{"type": "object", "additionalProperties": true},
 			},
 		}

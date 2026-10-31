@@ -205,7 +205,7 @@ func TestDraftingAFormPurgesItsCachedSocialCard(t *testing.T) {
 
 	// 3. And the origin really stopped serving it, on both hosts.
 	for _, host := range []string{fx.host, fx.customDomain} {
-		if r := ogStatusServe(t, fx.pub, host, "/og/"+fx.slug+".png"); r.Code != http.StatusNotFound {
+		if r := publicServeWith(t, fx.pub, host, "/og/"+fx.slug+".png"); r.Code != http.StatusNotFound {
 			t.Errorf("GET /og/%s.png on %s after the draft transition = %d, want 404",
 				fx.slug, host, r.Code)
 		}
@@ -237,7 +237,7 @@ func TestMakingAFormPrivatePurgesItsPublicCard(t *testing.T) {
 	}
 	// The private arm is still gated: an anonymous caller gets the same 404 as an
 	// unknown slug (t_8e3142f3's verified arms must not regress).
-	if r := ogStatusServe(t, fx.pub, fx.host, "/og/"+fx.slug+".png"); r.Code != http.StatusNotFound {
+	if r := publicServeWith(t, fx.pub, fx.host, "/og/"+fx.slug+".png"); r.Code != http.StatusNotFound {
 		t.Errorf("GET /og/%s.png without the unlock cookie = %d, want 404", fx.slug, r.Code)
 	}
 }
@@ -339,7 +339,7 @@ func TestOGImagePublicCacheControlIsBoundedNotADay(t *testing.T) {
 	// Measured on the real route, so the constant cannot be right while the
 	// handler sends something else.
 	fx := newRenameFixture(t, "it-ogcc-"+randHex(4))
-	rec := ogStatusServe(t, fx.pub, fx.host, "/og/"+fx.slug+".png")
+	rec := publicServeWith(t, fx.pub, fx.host, "/og/"+fx.slug+".png")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("published /og/%s.png = %d, want 200", fx.slug, rec.Code)
 	}

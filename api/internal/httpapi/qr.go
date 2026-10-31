@@ -22,7 +22,56 @@ import (
 	"strings"
 
 	qrcode "github.com/skip2/go-qrcode"
+
+	"github.com/wzul/jomform/api/internal/dbstore"
 )
+
+// qrPublicAccess is the status gate the two public QR routes apply, and it is
+// the SAME rule the form's own page applies (serveForm), because both routes
+// publish something about the form that its page would not:
+//
+//   - the printable stand carries the form's TITLE (its identity);
+//   - the PNG carries the form's public URL (its existence).
+//
+// findPublicForm is deliberately status-agnostic (issue #176): a rename's 301
+// fallback and the merchant's edit paths must still resolve a draft, so the gate
+// belongs to the CALLER — and these callers had none. Measured 2026-10-26 on the
+// built binary: a draft form's page answered 404 while /qr/{slug}/stand answered
+// 200 with its title on it, and /qr/{slug}.png answered 200 as well.
+//
+//   - draft: 404 with the SAME body an unknown slug gets from these handlers, so
+//     neither route is an existence oracle for a slug.
+//   - private: served only to a caller holding THIS form's unlock cookie
+//     (privateUnlocked compares the token's form id), i.e. the browser that has
+//     already passed the password gate. Everyone else gets the same 404: neither
+//     an image route nor a printable artefact has a gate page to render.
+//   - unlisted: served. An unlisted form is LIVE at its direct URL and is only
+//     left out of the workspace listing, so it is on the serving side of the
+//     gate (this is why the rule is not "published only").
+//   - published: served.
+//
+// A private arm that IS served must never be handed to a shared cache: the
+// caller reports that through the returned private flag (the stand writes
+// `private, no-store`, the PNG replaces its 24h public TTL).
+//
+// The merchant's own print flow does NOT come through here for a draft: the
+// dashboard's "Print stand" action fetches the authed REST route instead (see
+// RESTHandlers.getFormQRStand), because a draft's stand must stay printable for
+// the merchant while being unreachable for everyone else.
+func (h *PublicHandlers) qrPublicAccess(w http.ResponseWriter, r *http.Request, f *dbstore.Form) (allowed, private bool) {
+	switch f.Status {
+	case dbstore.FormStatusDraft:
+		http.Error(w, "not found", http.StatusNotFound)
+		return false, false
+	case dbstore.FormStatusPrivate:
+		if !h.privateUnlocked(r, f) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return false, false
+		}
+		return true, true
+	}
+	return true, false
+}
 
 // handleQRImage serves a PNG QR code pointing at a form's public URL.
 // Route: GET /qr/{slug}.png (registered before /{slug} so it wins over a
@@ -37,17 +86,16 @@ func (h *PublicHandlers) handleQRImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	// Build the canonical public URL for this form on the current host.
-	target := h.formPublicURL(r, f)
-	if table := strings.TrimSpace(r.URL.Query().Get("table")); table != "" {
-		u, perr := url.Parse(target)
-		if perr == nil {
-			q := u.Query()
-			q.Set("table", table)
-			u.RawQuery = q.Encode()
-			target = u.String()
-		}
+	// STATUS GATE (see qrPublicAccess): the PNG discloses whether a form exists
+	// at this slug, so a draft 404s here exactly as its page does. The merchant
+	// does not need it — the dashboard draws its QR client-side and prints the
+	// stand through the authed route.
+	allowed, private := h.qrPublicAccess(w, r, f)
+	if !allowed {
+		return
 	}
+	// Build the canonical public URL for this form on the current host.
+	target := qrStandTarget(h.formPublicURL(r, f), strings.TrimSpace(r.URL.Query().Get("table")))
 	png, err := qrcode.Encode(target, qrcode.Medium, 512)
 	if err != nil {
 		slog.Error("qr_render", "err", err, "slug", slug)
@@ -69,11 +117,18 @@ func (h *PublicHandlers) handleQRImage(w http.ResponseWriter, r *http.Request) {
 	// (handleWorkspaceRootForm). The fallback arm still renders the canonical
 	// URL — a stand reprinted, or an embedded PNG re-fetched, after a rename
 	// points at the address the form actually serves.
-	if f.Slug == slug {
-		w.Header().Set("Cache-Control", "public, max-age=86400")
-	} else {
-		w.Header().Set("Cache-Control", "no-store")
+	//
+	// A PRIVATE form's code is a third arm that must not be cached publicly
+	// either: it was released only because this caller holds the form's unlock
+	// cookie, and a CDN copy would serve it to the next caller, who never
+	// entered the password (same rule as the unlocked og:image).
+	cacheControl := "public, max-age=86400"
+	if private {
+		cacheControl = "private, no-store"
+	} else if f.Slug != slug {
+		cacheControl = "no-store"
 	}
+	w.Header().Set("Cache-Control", cacheControl)
 	w.Write(png)
 }
 
@@ -161,6 +216,51 @@ var qrStandTmpl = template.Must(template.New("qr-stand").Parse(`<!doctype html>
 </body>
 </html>`))
 
+// qrStandTarget folds an optional table number into a form's public URL, so the
+// QR encodes ?table=N with the value percent-encoded rather than spliced in.
+func qrStandTarget(target, table string) string {
+	if table == "" {
+		return target
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	q := u.Query()
+	q.Set("table", table)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// writeQRStand renders the printable stand (issue #438) for one form at the
+// given public URL, with the optional table number folded into the QR.
+//
+// It is the ONE builder behind both serving paths: the public
+// /qr/{slug}/stand route (status-gated, see qrPublicAccess) and the merchant's
+// authed /v1/rest/forms/{id}/qr-stand route (RESTHandlers.getFormQRStand), which
+// is what the dashboard's "Print stand" action opens. Two builders would drift
+// into two different printed artefacts.
+func writeQRStand(w http.ResponseWriter, title, table, target string) {
+	target = qrStandTarget(target, table)
+	png, err := qrcode.Encode(target, qrcode.Medium, 512)
+	if err != nil {
+		slog.Error("qr_stand_render", "err", err)
+		http.Error(w, "image error", http.StatusInternalServerError)
+		return
+	}
+	data := qrStandData{
+		Title:    title,
+		Table:    table,
+		QRData:   qrPNGDataURL(png),
+		Target:   target,
+		HasTable: table != "",
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := qrStandTmpl.Execute(w, data); err != nil {
+		http.Error(w, "ralat", http.StatusInternalServerError)
+	}
+}
+
 // handleQRStand renders a printable QR stand (issue #438). Route:
 // GET /qr/{slug}/stand (registered before /{slug} so it wins over a form
 // slug). The optional ?table=N query param is encoded into the QR and shown
@@ -176,32 +276,17 @@ func (h *PublicHandlers) handleQRStand(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	table := strings.TrimSpace(r.URL.Query().Get("table"))
-	target := h.formPublicURL(r, f)
-	if table != "" {
-		u, perr := url.Parse(target)
-		if perr == nil {
-			q := u.Query()
-			q.Set("table", table)
-			u.RawQuery = q.Encode()
-			target = u.String()
-		}
-	}
-	png, qerr := qrcode.Encode(target, qrcode.Medium, 512)
-	if qerr != nil {
-		slog.Error("qr_stand_render", "err", qerr, "slug", slug)
-		http.Error(w, "image error", http.StatusInternalServerError)
+	// STATUS GATE (see qrPublicAccess): the stand prints the form's TITLE, so a
+	// draft must answer 404 here just as its page does, and a private form must
+	// answer only to a caller that has already unlocked it.
+	allowed, private := h.qrPublicAccess(w, r, f)
+	if !allowed {
 		return
 	}
-	data := qrStandData{
-		Title:    f.Title,
-		Table:    table,
-		QRData:   qrPNGDataURL(png),
-		Target:   target,
-		HasTable: table != "",
+	if private {
+		// Served only to this buyer's own browser (it holds the unlock cookie):
+		// a shared cache must never hand the stand to the next caller.
+		w.Header().Set("Cache-Control", "private, no-store")
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := qrStandTmpl.Execute(w, data); err != nil {
-		http.Error(w, "ralat", http.StatusInternalServerError)
-	}
+	writeQRStand(w, f.Title, strings.TrimSpace(r.URL.Query().Get("table")), h.formPublicURL(r, f))
 }
