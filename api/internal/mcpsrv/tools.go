@@ -271,7 +271,7 @@ func (s *Server) registerTools() {
 	}, s.purgeFormMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "bulk_forms",
-		Description: "Tindakan pukal atas banyak borang sekali gus: action=publish|draft|delete dengan ids[] (maks 500). Borang bayaran tanpa produk DIKECUALIKAN dari publish dan dipulangkan dalam needs_products — hantar acknowledge=true untuk menerbitkannya juga.",
+		Description: "Tindakan pukal atas banyak borang sekali gus: action=publish|draft|delete dengan ids[] (maks 500). Borang bayaran tanpa produk DIKECUALIKAN dari publish dan dipulangkan dalam needs_products — hantar acknowledge=true untuk menerbitkannya juga. Templat tanpa category atau blok description (Section/text) DILANGKAU dari publish dan dipulangkan dalam skipped + skipped_reason — updated hanya mengira baris yang benar-benar berubah, dan acknowledge=true tidak mengatasinya.",
 	}, s.bulkFormsMCP)
 	// ── Parity: settings/webhooks ──────────────────────────────────────────
 	addTool(s, &mcp.Tool{

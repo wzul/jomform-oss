@@ -519,7 +519,9 @@ export default function CustomizeDocsPage() {
         purpose — a{" "}
         <strong>bulk publish skips such a template while still publishing the other forms you
         selected</strong>, so one unfinished template cannot block a whole batch. The skipped ids are
-        reported back, so the skip is never silent.
+        reported back — by the REST bulk endpoint and by the MCP <span className="font-mono text-xs">bulk_forms</span>{" "}
+        tool alike, which return those ids with a reason and count only the forms that really
+        changed — so the skip is never silent.
       </p>
 
       {/* Language placement (AGENTS.md documentation-parity rule): the split

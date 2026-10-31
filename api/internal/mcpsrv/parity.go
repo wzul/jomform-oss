@@ -1058,6 +1058,14 @@ func (s *Server) deleteFormMCPSoft(
 	return nil, withEdgeFields(map[string]any{"status": "deleted", "form_id": in.FormID}, edge), nil
 }
 
+// BulkGallerySkippedReason is the reply sentence for a bulk publish that skips a
+// template for missing gallery metadata. It is the SAME sentence POST
+// /v1/rest/forms/bulk sends as skipped_reason (httpapi's templateNeedMetadataWire),
+// and it is duplicated as a literal here because httpapi imports this package, so
+// mcpsrv cannot import that constant back — httpapi's
+// TestBulkSkipReasonIsOneSentenceOnBothDoors pins the two equal instead.
+const BulkGallerySkippedReason = "template perlu category dan satu blok description (Section atau text) sebelum diterbitkan ke galeri"
+
 // bulkFormsMCP mirrors POST /v1/rest/forms/bulk: publish|draft|delete over
 // many ids in one call (dedup, ≤500), returning how many actually changed.
 type bulkFormsIn struct {
@@ -1102,14 +1110,23 @@ func (s *Server) bulkFormsMCP(
 	// to sell. They are withheld and reported (a bulk publish must not be a way
 	// around the single-publish guard).
 	var needsProducts []string
-	// Social cards this action invalidates, as absolute URLs, collected while the
-	// loop already has each form's account and row: a bulk draft/delete can span
-	// several workspaces (issue #307), so the hosts differ per id, and the purge
-	// itself is ONE call at the end (see og_edge_purge.go). A form's cached card
-	// only needs dropping when it is LEAVING a publicly-cached status, which is a
-	// property of the row BEFORE the write.
-	var cardURLs []string
-	hostCache := make(map[string][]string, len(ids))
+	// Gallery-metadata skips (issue #594, card t_80ea6b64). A bulk publish
+	// REFUSES a template that carries no category or no description block, and
+	// SetStatusMany states that refusal INSIDE its UPDATE — the row matches the
+	// account/deleted filters but not the gallery predicate, so it comes back as
+	// 0 rows affected with no error. Counting "no error" as a write therefore
+	// told the caller a template had gone live while the row stayed draft
+	// (measured on prod: bulk_forms publish → {"updated":1} over a row still at
+	// draft). Ask the SAME predicate which ids the write will skip, so the reply
+	// names them exactly as POST /v1/rest/forms/bulk does.
+	var skipped []string
+	// Issue #307: a user-level agent may bulk-operate across all of their
+	// workspaces, but only up to their role in each. Resolve each id's owning
+	// account and the caller's role there ONCE, up front: the write loop needs
+	// the same answer, and a publish additionally has to ask the store what it
+	// will skip — one query per workspace rather than one per id.
+	type bulkTarget struct{ id, acc string }
+	targets := make([]bulkTarget, 0, len(ids))
 	for _, id := range ids {
 		acc, err := s.resolveFormAccount(ctx, id)
 		if err != nil {
@@ -1118,6 +1135,38 @@ func (s *Server) bulkFormsMCP(
 		if err := s.requireWriteRoleIn(ctx, acc); err != nil {
 			continue // read_only member here — skip
 		}
+		targets = append(targets, bulkTarget{id: id, acc: acc})
+	}
+	if in.Action == "publish" {
+		byAccount := make(map[string][]string, len(targets))
+		for _, t := range targets {
+			byAccount[t.acc] = append(byAccount[t.acc], t.id)
+		}
+		for acc, accIDs := range byAccount {
+			// BlockedGalleryTemplates is account-scoped, which is why the batch
+			// is grouped rather than passed whole (a bulk action may span
+			// several workspaces).
+			blocked, berr := s.deps.Forms.BlockedGalleryTemplates(ctx, acc, accIDs)
+			if berr != nil {
+				return nil, nil, berr
+			}
+			skipped = append(skipped, blocked...)
+		}
+	}
+	skippedSet := make(map[string]bool, len(skipped))
+	for _, id := range skipped {
+		skippedSet[id] = true
+	}
+	// Social cards this action invalidates, as absolute URLs, collected while the
+	// loop already has each form's account and row: a bulk draft/delete can span
+	// several workspaces (issue #307), so the hosts differ per id, and the purge
+	// itself is ONE call at the end (see og_edge_purge.go). A form's cached card
+	// only needs dropping when it is LEAVING a publicly-cached status, which is a
+	// property of the row BEFORE the write.
+	var cardURLs []string
+	hostCache := make(map[string][]string, len(ids))
+	for _, t := range targets {
+		id, acc := t.id, t.acc
 		if in.Action != "publish" {
 			f, ferr := s.deps.Forms.GetByID(ctx, acc, id)
 			if ferr != nil {
@@ -1133,11 +1182,19 @@ func (s *Server) bulkFormsMCP(
 			}
 		}
 		var e error
+		var n int64
 		switch in.Action {
 		case "publish", "draft":
 			status := "published"
 			if in.Action == "draft" {
 				status = "draft"
+			}
+			if status == dbstore.FormStatusPublished && skippedSet[id] {
+				// The gallery gate refuses this row outright, so neither the write
+				// nor acknowledge=true can move it — report it as skipped, and NOT
+				// as needs_products (whose advice is "send acknowledge=true", which
+				// would be false here).
+				continue
 			}
 			if status == dbstore.FormStatusPublished && !in.Acknowledge {
 				f, ferr := s.deps.Forms.GetByID(ctx, acc, id)
@@ -1149,15 +1206,22 @@ func (s *Server) bulkFormsMCP(
 					continue
 				}
 			}
-			_, e = s.deps.Forms.SetStatusMany(ctx, acc, []string{id}, status)
+			n, e = s.deps.Forms.SetStatusMany(ctx, acc, []string{id}, status)
 		default:
-			_, e = s.deps.Forms.SoftDeleteMany(ctx, acc, []string{id})
+			n, e = s.deps.Forms.SoftDeleteMany(ctx, acc, []string{id})
 		}
+		// Count the rows the statement actually WROTE, never the absence of an
+		// error: a predicate-refused row, or an id trashed between these checks
+		// and the write, reports 0 rows affected and must not inflate `updated`.
 		if e == nil {
-			updated++
+			updated += n
 		}
 	}
 	out := map[string]any{"status": "ok", "action": in.Action, "updated": updated}
+	if len(skipped) > 0 {
+		out["skipped"] = skipped
+		out["skipped_reason"] = BulkGallerySkippedReason
+	}
 	if len(cardURLs) > 0 {
 		// The rows are written above; the edge copies go here, in ONE request for
 		// every affected card (cdnpurge chunks anything past its per-request cap).
