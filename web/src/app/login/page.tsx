@@ -412,7 +412,37 @@ export default function Login() {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
       if (fin.ok) { window.location.href = await resolvePostLogin(next); return; }
-      setError(apiErr(await fin.json().catch(() => ({})), t("login.passkeyInvalid"), t));
+      // Card t_3c513380: the SAME limiter guards this call (rest.go,
+      // `POST /v1/auth/passkeys/login/finish`), and its 429 is `http.Error`
+      // PLAIN TEXT plus `Retry-After` (middleware/ratelimit.go). So `fin.status`
+      // is read BEFORE the body: `fin.json()` on that answer — or on a 5xx / a
+      // proxy error page — threw into `.catch(() => ({}))`, which left
+      // `apiErr({}, …)` to render `login.passkeyInvalid`. The visitor was told
+      // their passkey was WRONG while the server had only refused the call, and
+      // the throttle's window was dropped with the same throw.
+      const finStatus = fin.status;
+      // The body is read only for a machine `code`; plain text and HTML are
+      // expected here, and the server's prose is never rendered (apiErr.ts).
+      const refusal = await fin.json().catch(() => ({}));
+      if (finStatus === 429) {
+        // The throttle's window comes from the response's own header, through
+        // the shared mapping (card t_e50a9680) — never re-derived here.
+        setError(
+          rateLimitErr(finStatus, fin.headers.get("retry-after"), refusal, t) ||
+            t("login.genericError"),
+        );
+      } else if (finStatus === 400 || finStatus === 401) {
+        // The only two statuses with which the handler really rejects the
+        // ASSERTION (api/internal/httpapi/passkey.go): 400 for a key / session /
+        // response it could not use, 401 for a credential the library refused.
+        // A wrong passkey is what happened, so that sentence is honest here and
+        // a named machine `code` still wins through apiErr.
+        setError(apiErr(refusal, t("login.passkeyInvalid"), t));
+      } else {
+        // 403 (the WebAuthn origin check), 404, a 5xx, a proxy error page: the
+        // server never judged the passkey, so nothing here may call it invalid.
+        setError(t("login.genericError"));
+      }
     } catch {
       // Transport failure, an unreadable body, a challenge this page cannot
       // decode: the call to the server failed. Say that — never that the
