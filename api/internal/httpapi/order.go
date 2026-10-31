@@ -404,6 +404,21 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		}
 		subtotal += item.PriceSen * qty
 	}
+	// Card t_9a013e57: a NON-EMPTY cart can still resolve to zero line items.
+	// The page posts a sourced shipping block's own item so the fee can be
+	// resolved from the buyer's address, and that item is dropped above as a
+	// fee rather than a line item — so a form whose only pricing block is a
+	// zone/courier shipping block (which `publish?acknowledge=1` deliberately
+	// allows) submits a cart that is entirely fees. Without this guard the sale
+	// went to Create with Items nil and sales.items NOT NULL answered a 500
+	// (SQLSTATE 23502) instead of a sentence. A delivery-only form has nothing
+	// to sell: refuse it, don't charge postage on an empty cart. Refused BEFORE
+	// the subscription/shipping resolution so a doomed order never makes a live
+	// courier quotation and never records a sale.
+	if len(sale.Items) == 0 {
+		writeErr(w, http.StatusBadRequest, "tiada produk untuk dibayar")
+		return
+	}
 	// Issue #560: a subscription order is one where a PURCHASED PRODUCT is
 	// type=subscription. The recurring amount and schedule come from THAT
 	// product (its own price x quantity), not the whole order total: any

@@ -141,6 +141,14 @@ export default function ShippingDocsPage() {
         field names — no price is required, because no price would be charged.
       </p>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A managed shipping block is a delivery fee, not something you sell: a form whose{' '}
+        <strong>only</strong> pricing block is a managed shipping block cannot take payment.
+        Publishing one is allowed — you may be adding products later — but the checkout refuses the
+        order with <span className="font-mono text-xs">tiada produk untuk dibayar</span> (&ldquo;no
+        product to pay for&rdquo;) instead of charging postage on an empty cart. Add a product
+        block before you share the link.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
         A zone matches on any ONE of its rules — a state (including the region tokens{" "}
         <span className="font-mono text-xs">peninsular</span> and{" "}
         <span className="font-mono text-xs">east_malaysia</span>), a numeric postcode range, or a
