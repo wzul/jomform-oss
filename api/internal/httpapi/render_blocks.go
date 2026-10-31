@@ -409,6 +409,106 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	return true
 }
 
+// blockLayoutPaintsNoLineItemControl reports whether the BLOCK payment layout
+// would paint a checkout with NO control that can put a line item into the cart
+// the page posts — i.e. whether renderBlocks is about to serve a dead end.
+//
+// Card t_bfdcafbc. The block template's submit handler refuses to post unless
+// the cart it collected is non-empty:
+//
+//	if(!items.length){alert('Please select at least one product');return;}
+//
+// and `items` is filled ONLY from the controls the template paints: a product
+// block's checkbox (`class="p"`), an option block's select (`class="opt"`) and a
+// shipping block's select (`class="ship"`). A payment form whose blocks carry
+// none of them — the builder's DEFAULT shape (`blocks:[name,email,phone]`,
+// `products:[]`) is exactly that — paints a checkout that can only ever alert.
+// Card t_7d4c20c8 removed that dead end for the legacy layout; this is the
+// block-layout twin, asked BEFORE renderBlocks so the renderer cannot claim the
+// form first.
+//
+// Why this is NOT dbstore.PaymentFormWithoutProducts (the write-path rule): that
+// rule counts a config product snapshot with an id as something to sell, which
+// is true for the legacy layout (renderLegacy paints one row per snapshot) but
+// NOT for the block layout — renderBlocks paints controls from `blocks` only and
+// uses the snapshot just to resolve a product block's name, price and image.
+// Measured for this card: `blocks:[name,email,phone]` with `products:[{id:…}]`
+// and no product block renders "Proceed to Payment" with zero `class="p"`,
+// `class="opt"` and `class="ship"` controls. The two renderers therefore ask two
+// different questions, and TestBlockLineItemPredicateMatchesTheRenderedPage
+// keeps this one honest against the page renderBlocks actually paints.
+//
+// A zone/courier-sourced shipping block counts as a live control even when its
+// rate list would be empty here: its options come from live zone data this
+// helper deliberately does not read (the renderer already loads it once per
+// render), and that shape has its own server-side guard — card t_9a013e57
+// refuses a cart that is entirely fees. Not widened by this card.
+//
+// Returns false when the config has no blocks: renderBlocks does not claim such
+// a form, and the legacy arm in serveForm owns it.
+func blockLayoutPaintsNoLineItemControl(f *dbstore.Form) bool {
+	if f == nil || f.Config == nil || formMode(f) != dbstore.FormModePayment {
+		return false
+	}
+	raw, err := json.Marshal(f.Config)
+	if err != nil {
+		return false
+	}
+	var cfg struct {
+		Blocks []struct {
+			Type      string `json:"type"`
+			ProductID string `json:"product_id"`
+			Source    string `json:"source"`
+			Choices   []struct {
+				Value string `json:"value"`
+			} `json:"choices"`
+		} `json:"blocks"`
+	}
+	// A config renderBlocks cannot decode is not a block layout either (it
+	// unmarshals the same fields); leave it to the legacy arm rather than
+	// restricting a form this helper failed to read.
+	if json.Unmarshal(raw, &cfg) != nil || len(cfg.Blocks) == 0 {
+		return false
+	}
+	for _, b := range cfg.Blocks {
+		switch b.Type {
+		case "product":
+			// The checkbox posts data-id verbatim; an empty id cannot be
+			// charged (`produk tidak sah: `), so it is not a buyable control.
+			if b.ProductID != "" {
+				return false
+			}
+		case "option":
+			// select.opt pushes an item only for a chosen non-empty value.
+			if anySelectableChoice(b.Choices) {
+				return false
+			}
+		case "shipping":
+			// A sourced block's options are the zone set's (loaded by the
+			// renderer), so it is assumed live; a static one needs its own
+			// choice rows. See the doc comment.
+			if firstNonEmpty(b.Source, shipping.SourceStatic) != shipping.SourceStatic || anySelectableChoice(b.Choices) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// anySelectableChoice reports whether a pricing block's choice list has an entry
+// the buyer can pick: the page's submit handler skips a choice whose value is
+// empty (`if(o&&o.value)`), and the template's placeholder option IS empty.
+func anySelectableChoice(choices []struct {
+	Value string `json:"value"`
+}) bool {
+	for _, c := range choices {
+		if c.Value != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // iframeHeightJS reports the rendered page's height to the parent frame so a
 // merchant's embed snippet can auto-resize the iframe (issue #456). It is a
 // no-op on a direct visit: the whole script returns early unless the page is

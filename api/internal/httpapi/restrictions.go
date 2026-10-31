@@ -26,10 +26,12 @@ const (
 	restrictionLimitReached                  // entry limit reached
 	// Card t_7d4c20c8: a published PAYMENT form with no product to sell. Not a
 	// time/limit state — the form is unsubmittable until the merchant adds a
-	// product, because the legacy payment layout's only submit path is its
-	// product checkboxes. Served instead of the payment page, so the buyer is
-	// told the truth instead of being handed a button whose only outcome is
-	// "Please select at least one product".
+	// product, because neither payment layout has a submit path without one:
+	// the legacy one's product checkboxes, and (card t_bfdcafbc) the block
+	// layout's `if(!items.length){alert(...);return;}` gate, which is why the
+	// dispatch asks this state BEFORE the block renderer too. Served instead of
+	// the payment page, so the buyer is told the truth instead of being handed
+	// a button whose only outcome is "Please select at least one product".
 	restrictionNoProducts
 )
 

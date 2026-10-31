@@ -234,10 +234,12 @@ export default function CustomizeDocsPage() {
         <strong>payment form</strong> needs something to sell: publishing one with no products is
         refused once with a clear message, because such a form can never take money — and it
         collects nothing either, so confirming the warning is not a way to collect answers. You can
-        confirm and publish it anyway, while the catalogue is still being set up, say, but nobody
-        can complete the form until you add a product; it starts selling as soon as you do.
-        Products can come from a product block, the form&apos;s product snapshot, a priced option or
-        shipping choice, or an enabled restaurant menu; adding one any time removes the question.
+        confirm and publish it anyway — while the catalogue is still being set up, say — but its
+        page then tells buyers it is not accepting orders instead of showing a checkout that cannot
+        start, and it starts selling as soon as you add a product. Products can come from a product
+        block, a priced option or shipping choice, or an enabled restaurant menu; a form built
+        without blocks at all sells its product snapshot instead. Adding one any time removes the
+        question.
       </p>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         The same rule covers every way a form goes live — the <strong>Publish</strong> button, the

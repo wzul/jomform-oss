@@ -1967,7 +1967,9 @@ func (h *PublicHandlers) formNoIndex(r *http.Request, f *dbstore.Form) bool {
 // template errors once. Response-only forms (issue #171) render a
 // collect-only layout with no product list and no payment step; a payment form
 // with no product to sell renders the "not accepting orders" message page
-// (card t_7d4c20c8) instead of the legacy layout's unreachable checkout.
+// (card t_7d4c20c8) instead of the legacy layout's unreachable checkout — and,
+// since card t_bfdcafbc, instead of the BLOCK layout's equally unreachable
+// checkout (the builder's default name/email/phone form is exactly that shape).
 func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
 	// Draft forms are never publicly served (issue #176). Only published and
 	// private forms are reachable; private forms show a password gate.
@@ -2024,6 +2026,28 @@ func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *db
 		http.Error(w, "Borang tidak dapat dipaparkan", http.StatusInternalServerError)
 		return
 	}
+	// Card t_bfdcafbc: renderBlocks is ALSO the payment layout — the block
+	// template's submit handler refuses to post unless it collected a line item
+	// (`if(!items.length){alert(...);return;}`). It returns true for any config
+	// with a non-empty `blocks` array, so a PAYMENT form whose blocks hold
+	// nothing sellable — the builder's own default shape,
+	// `blocks:[name,email,phone]` with `products:[]` — painted a checkout that
+	// accepted the buyer's typing and discarded it: no request, no /order, no
+	// sale. The t_7d4c20c8 guard below never saw those forms because it runs
+	// AFTER this renderer, so "nothing to sell" has to be asked BEFORE it.
+	//
+	// The question is asked with the predicate the BLOCK renderer itself
+	// answers (blockLayoutPaintsNoLineItemControl), not with a second copy of
+	// "has products": renderBlocks paints controls from `blocks` only, so a
+	// config product snapshot with an id does NOT make its page sellable
+	// (measured: `blocks:[name,email]` + `products:[{id:…}]` paints "Proceed to
+	// Payment" with zero `class="p"`/`class="opt"`/`class="ship"` controls).
+	// Response forms are dispatched above and an enabled per-form menu (#497)
+	// is its own storefront, also dispatched above.
+	if blockLayoutPaintsNoLineItemControl(f) {
+		h.renderRestriction(w, r, f, restrictionNoProducts)
+		return
+	}
 	if h.renderBlocks(w, r, f) {
 		return
 	}
@@ -2035,6 +2059,13 @@ func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *db
 	// button's only reachable outcome and no request was ever sent. Serve the
 	// honest "not accepting orders" page instead — no form, no submit control.
 	// A form that DOES have a product keeps this layout and its guard untouched.
+	//
+	// Card t_bfdcafbc asks the same question before the block renderer, so a
+	// block-less empty payment form is answered there now and this branch is
+	// unreachable for it. The guard stays because it mirrors renderLegacy's own
+	// row loop (legacyHasProducts) rather than the rule above, so a future
+	// change to either cannot silently serve the empty checkout this card
+	// removed — the same fail-loud reasoning as the response fallthrough.
 	if !legacyHasProducts(f) {
 		h.renderRestriction(w, r, f, restrictionNoProducts)
 		return

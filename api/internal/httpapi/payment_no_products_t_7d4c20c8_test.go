@@ -157,9 +157,11 @@ func TestPaymentFormWithNoTickableSnapshotIsNotServedACheckout(t *testing.T) {
 	}
 }
 
-// Control 3: a payment form WITH blocks is handled by renderBlocks before this
-// guard ever runs, so it keeps its block layout. The new state must not become a
-// catch-all for payment forms.
+// Control 3: a payment form WITH a sellable block keeps its block layout. Since
+// card t_bfdcafbc the nothing-to-sell rule is asked BEFORE renderBlocks (so the
+// builder's default block shape cannot serve a dead checkout either); this form
+// passes because its product block IS a sellable item. The state must not become
+// a catch-all for payment forms.
 func TestBlockPaymentFormIsUnaffectedByTheNoProductsGuard(t *testing.T) {
 	f := emptyPaymentForm("block-paid-form", map[string]any{
 		"blocks": []any{

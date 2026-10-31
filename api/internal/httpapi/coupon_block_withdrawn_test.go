@@ -115,6 +115,11 @@ func TestResponseFormStoredCouponBlockIsNotDroppedSilently(t *testing.T) {
 //
 // The stored config is written by SQL on purpose — it is the state a form saved
 // BEFORE the withdrawal is in, and no write path can produce it any more.
+//
+// Card t_bfdcafbc: the seeded block list carries one buyable product block as
+// well, because a payment form whose blocks hold nothing a buyer can add to the
+// cart is now served the submit-less "not accepting orders" page — which is not
+// the page this test is about.
 func TestPublicFormRouteServesAStoredCouponBlockHonestly(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
@@ -126,7 +131,7 @@ func TestPublicFormRouteServesAStoredCouponBlockHonestly(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, `UPDATE forms SET config = config
 		|| '{"lang":"en"}'::jsonb
-		|| '{"blocks":[{"id":"cp1","type":"coupon","value":"Kod diskaun"},{"id":"tx1","type":"text","value":"Nama"}]}'::jsonb
+		|| '{"blocks":[{"id":"cp1","type":"coupon","value":"Kod diskaun"},{"id":"tx1","type":"text","value":"Nama"},{"id":"it_prod","type":"product","product_id":"it_prod_marker","value":"Marker item","price_sen":1000}]}'::jsonb
 		WHERE id = $1`, formID); err != nil {
 		t.Fatalf("store the legacy coupon config: %v", err)
 	}

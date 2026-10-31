@@ -71,8 +71,14 @@ func TestPublicLegalFooterDropsHostedPageThatWould404(t *testing.T) {
 	blockForm := &dbstore.Form{
 		AccountID: accountID, Slug: "block-" + userID[:8], Title: "Block form",
 		Status: dbstore.FormStatusPublished,
-		Config: map[string]any{"blocks": []any{map[string]any{"type": "text", "value": "Hello"}}},
-		Theme:  map[string]any{"primary": "#5e6ad2"},
+		// Card t_bfdcafbc: a buyable block keeps this fixture on the BLOCK page,
+		// whose footer this guard is about. A payment form with nothing to sell
+		// is served the standalone "not accepting orders" page, no footer.
+		Config: map[string]any{"blocks": []any{
+			map[string]any{"type": "text", "value": "Hello"},
+			map[string]any{"id": "it_prod", "type": "product", "product_id": "it_prod_marker", "value": "Marker item", "price_sen": 1000},
+		}},
+		Theme: map[string]any{"primary": "#5e6ad2"},
 	}
 	if err := fs.Create(ctx, blockForm); err != nil {
 		t.Fatalf("create block form: %v", err)
@@ -335,8 +341,13 @@ func TestOwnHostLegalPathParityWithPublicRoute(t *testing.T) {
 	form := &dbstore.Form{
 		AccountID: accountID, Slug: "lp-" + userID[:8], Title: "Parity form",
 		Status: dbstore.FormStatusPublished,
-		Config: map[string]any{"blocks": []any{map[string]any{"type": "text", "value": "Hello"}}},
-		Theme:  map[string]any{"primary": "#5e6ad2"},
+		// Card t_bfdcafbc: a buyable block keeps this fixture on the BLOCK page,
+		// whose footer links this guard compares with the routes that serve.
+		Config: map[string]any{"blocks": []any{
+			map[string]any{"type": "text", "value": "Hello"},
+			map[string]any{"id": "it_prod", "type": "product", "product_id": "it_prod_marker", "value": "Marker item", "price_sen": 1000},
+		}},
+		Theme: map[string]any{"primary": "#5e6ad2"},
 	}
 	if err := fs.Create(ctx, form); err != nil {
 		t.Fatalf("create form: %v", err)

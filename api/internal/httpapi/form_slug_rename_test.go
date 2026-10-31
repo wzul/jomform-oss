@@ -101,8 +101,15 @@ func newRenameFixture(t *testing.T, slug string) renameFixture {
 	fs := dbstore.NewFormStore(pool)
 	f := &dbstore.Form{
 		AccountID: accountID, Slug: slug, Title: "Western menu", Status: dbstore.FormStatusPublished,
-		Config: map[string]any{"blocks": []any{map[string]any{"type": "text", "value": "Hello"}}},
-		Theme:  map[string]any{"primary": "#5e6ad2"},
+		// Card t_bfdcafbc: a payment form whose blocks carry nothing a buyer can
+		// add to the cart is served the submit-less "not accepting orders" page,
+		// so a fixture that asserts the BLOCK page (its content, theme, footer or
+		// chrome) must carry one buyable block.
+		Config: map[string]any{"blocks": []any{
+			map[string]any{"type": "text", "value": "Hello"},
+			map[string]any{"id": "it_prod", "type": "product", "product_id": "it_prod_marker", "value": "Marker item", "price_sen": 1000},
+		}},
+		Theme: map[string]any{"primary": "#5e6ad2"},
 	}
 	if err := fs.Create(ctx, f); err != nil {
 		t.Fatalf("create form: %v", err)
@@ -626,8 +633,14 @@ func TestFormSlugRenameOldURLIsSupersededByALaterClaimant(t *testing.T) {
 	claimant := &dbstore.Form{
 		AccountID: fx.accountID, Slug: oldSlug, Title: "Claimant menu",
 		Status: dbstore.FormStatusPublished,
-		Config: map[string]any{"blocks": []any{map[string]any{"type": "text", "value": "Claimant body"}}},
-		Theme:  map[string]any{"primary": "#000000"},
+		// Card t_bfdcafbc: one buyable block keeps this fixture on the BLOCK
+		// payment page (its "Claimant body" marker) instead of the
+		// "not accepting orders" page a nothing-to-sell payment form now serves.
+		Config: map[string]any{"blocks": []any{
+			map[string]any{"type": "text", "value": "Claimant body"},
+			map[string]any{"id": "it_prod", "type": "product", "product_id": "it_prod_marker", "value": "Marker item", "price_sen": 1000},
+		}},
+		Theme: map[string]any{"primary": "#000000"},
 	}
 	if err := dbstore.NewFormStore(fx.pool).Create(fx.ctx, claimant); err != nil {
 		t.Fatalf("the freed old slug must be claimable by a later form, got: %v", err)

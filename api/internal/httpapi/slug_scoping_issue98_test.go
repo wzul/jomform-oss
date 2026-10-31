@@ -48,13 +48,20 @@ func publicFixture(t *testing.T) (*PublicHandlers, string, string) {
 		t.Fatalf("create account: %v", err)
 	}
 
-	// A published form with a block so it renders via renderBlocks.
+	// A published form with a block so it renders via renderBlocks. Card
+	// t_bfdcafbc: the block must be one a buyer can add to the cart (a product
+	// block with a product_id) — a payment form whose blocks carry nothing
+	// sellable is served the submit-less "not accepting orders" page instead of
+	// the block layout these plumbing tests assert.
 	fs := dbstore.NewFormStore(pool)
 	formSlug := "it-form-" + accountID[:8]
 	f := &dbstore.Form{
 		AccountID: accountID, Slug: formSlug, Title: "IT form", Status: "published",
-		Config: map[string]any{"blocks": []any{map[string]any{"type": "text", "value": "Hello"}}},
-		Theme:  map[string]any{"primary": "#5e6ad2"},
+		Config: map[string]any{"blocks": []any{
+			map[string]any{"type": "text", "value": "Hello"},
+			map[string]any{"id": "it_prod", "type": "product", "product_id": "it_prod_marker", "value": "Marker item", "price_sen": 1000},
+		}},
+		Theme: map[string]any{"primary": "#5e6ad2"},
 	}
 	if err := fs.Create(ctx, f); err != nil {
 		t.Fatalf("create form: %v", err)
