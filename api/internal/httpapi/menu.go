@@ -554,6 +554,14 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").
      looks exactly as it did. */
   .sheetfoot .radioswrap { border:0; margin:10px 0 0; padding:0; min-width:0; }
   .sheetfoot .radioswrap legend { padding:0; font-size:13px; font-weight:600; }
+  /* Card t_664549fc: the buyer-field rule above (width:100%; height:44px) also
+     matches the radio of a radio / image-choice option, so each option's
+     control measured 399x44 inside a flex row and pushed its label to the row
+     edge (a plain radio is 13x13). Reset the option's control to its intrinsic
+     size; .sheetfoot .radios input[type=radio] outranks .sheetfoot input on
+     specificity, so it wins whatever the source order. */
+  .sheetfoot .radios input[type=radio] { width:auto; height:auto; margin:0; padding:0;
+                     border:0; background:none; flex:0 0 auto; }
   .extrahead { margin-top:12px; }
   .extrahead .extrahelp { margin:0; font-size:12px; color:#6b7280; line-height:1.5; }
   .extrahead .extralink { display:inline-block; margin-top:2px; font-size:12px; font-weight:600;
