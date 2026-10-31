@@ -95,9 +95,26 @@
 //     entry of another name, say) is therefore not resolved — only the two
 //     spellings next actually ships (`.bin/next` and its `dist/bin/next` target)
 //     are.
-//   * The walk skips node_modules/.git/.next/out/coverage and build-output `bin/`,
-//     and does not follow symlinks, so a reference in a generated or ignored
-//     directory is not scanned.
+//   * The walk is a FILESYSTEM walk, not `git ls-files`, so an `npm run` in an
+//     UNTRACKED file of this tree is still read — a reference a reader here can
+//     act on is a reference whether or not it is committed. The probe tests at
+//     the bottom of this file pin that in both directions.
+//   * It reads THIS tree only. A nested checkout — any subdirectory carrying its
+//     own `.git` entry — and the primary checkout's lane root `.worktrees/` are
+//     skipped, because their `npm run` references belong to another branch and
+//     are not this tree's to judge. Measured on the primary checkout of this
+//     repo: 1,459 lane checkouts under `.worktrees/` holding ~1.8M files, which
+//     made this test take over 6m41s there, and made it fail with `ENOENT:
+//     scandir '<repo>/.worktrees/t_…'` when a lane removed its worktree
+//     mid-walk — a RED that said nothing about the tree under test.
+//   * A directory that vanishes between being listed and being read is SKIPPED,
+//     not failed: lanes remove worktrees and builds delete output while this
+//     runs. The `refs.size >= 4` floor in the sweep keeps that from turning into
+//     a green scan of nothing.
+//   * The walk skips node_modules/.git/.next/out/coverage, the test-output
+//     directories, build-output `bin/` and `.worktrees/`, and does not follow
+//     symlinks, so a reference in a generated or ignored directory is not
+//     scanned.
 //
 // Run with:
 //
@@ -106,7 +123,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -384,13 +402,46 @@ const SKIP_DIRS = new Set([
   "playwright-report",
   "blob-report",
   "bin", // api/bin and friends: build output, never a doc
+  // The PRIMARY checkout's lane root (`git worktree add .worktrees/<task>`):
+  // every child is another lane's whole checkout, on another branch, and its
+  // `npm run` references are not this tree's. Skipped by NAME as well as by the
+  // nested-checkout rule below, because a lane that is being removed can leave a
+  // child without its `.git` file, and a half-removed sibling must not be read.
+  ".worktrees",
 ]);
 
+/**
+ * A directory carrying its own `.git` entry is a DIFFERENT checkout — a lane's
+ * linked worktree (`.git` is a FILE there, naming the primary's gitdir), a clone
+ * dropped inside this tree, a vendored repo. Its files are another branch's
+ * files: judging its `npm run` references against THIS tree's manifest is how
+ * the guard goes red for a reason that has nothing to do with the tree under
+ * test. So the walk stops at its boundary. */
+function isNestedCheckout(dir: string): boolean {
+  return existsSync(join(dir, ".git"));
+}
+
 function walkFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    // A directory can be gone between its parent being listed and this read:
+    // lanes remove worktrees and builds delete output while the suite runs. That
+    // race is not a finding about the tree under test, so the directory is
+    // skipped. Anything else (a permission, an I/O error) still throws — the
+    // `refs.size` floor below is what stops a swallow from becoming "scanned
+    // nothing, passed".
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return out;
+    throw err;
+  }
+  for (const entry of entries) {
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
-      walkFiles(join(dir, entry.name), out);
+      const child = join(dir, entry.name);
+      if (isNestedCheckout(child)) continue;
+      walkFiles(child, out);
     } else if (entry.isFile()) {
       out.push(join(dir, entry.name));
     }
@@ -429,9 +480,19 @@ function stripCommentLines(src: string, file: string): string {
     .join("\n");
 }
 
-test("every `npm run <name>` in the repo names a script web/package.json defines", () => {
-  const refs = new Map<string, Set<string>>(); // name -> files that mention it
-  for (const file of walkFiles(REPO_ROOT)) {
+/**
+ * The `npm run <name>` references in this tree: script name -> the files of
+ * `root` that mention it.
+ *
+ * Split out of the guard so its own probes can drive the SAME sweep: a second
+ * walker written for the probes could agree with itself while disagreeing with
+ * the guard, and the probes below are what keep the skip honest in both
+ * directions (it must still see this tree's untracked files, and must not read
+ * another checkout's).
+ */
+function referencedScripts(root: string = REPO_ROOT): Map<string, Set<string>> {
+  const refs = new Map<string, Set<string>>();
+  for (const file of walkFiles(root)) {
     let text: string;
     try {
       text = readFileSync(file, "utf8");
@@ -442,16 +503,14 @@ test("every `npm run <name>` in the repo names a script web/package.json defines
     for (const m of stripCommentLines(text, file).matchAll(NPM_RUN)) {
       const name = m[1];
       if (!refs.has(name)) refs.set(name, new Set());
-      refs.get(name)!.add(relative(REPO_ROOT, file));
+      refs.get(name)!.add(relative(root, file));
     }
   }
-  // The sweep must have found the references that exist, or it is scanning
-  // nothing and would pass over a missing script.
-  assert.ok(
-    refs.size >= 4,
-    `derived only ${refs.size} referenced npm script name(s) — the sweep is broken, and an empty ` +
-      `set would make this test pass vacuously.`,
-  );
+  return refs;
+}
+
+/** Every referenced name `web/package.json` does not define, one line each. */
+function scriptsMissingFromManifest(refs: Map<string, Set<string>>): string[] {
   const offenders: string[] = [];
   for (const [name, files] of [...refs].sort()) {
     if (scripts[name] !== undefined) continue;
@@ -460,11 +519,120 @@ test("every `npm run <name>` in the repo names a script web/package.json defines
         `defines no \`${name}\` script (defined: ${Object.keys(scripts).sort().join(", ")})`,
     );
   }
+  return offenders;
+}
+
+test("every `npm run <name>` in the repo names a script web/package.json defines", () => {
+  const refs = referencedScripts();
+  // The sweep must have found the references that exist, or it is scanning
+  // nothing and would pass over a missing script.
+  assert.ok(
+    refs.size >= 4,
+    `derived only ${refs.size} referenced npm script name(s) — the sweep is broken, and an empty ` +
+      `set would make this test pass vacuously.`,
+  );
+  const offenders = scriptsMissingFromManifest(refs);
   assert.deepEqual(
     offenders,
     [],
     "the repo tells a reader to run an npm script that web/package.json does not define — the " +
-      "reader gets `npm error Missing script: \"<name>\"`:\n" +
+      `reader gets \`npm error Missing script: "<name>"\`:\n` +
       offenders.join("\n"),
   );
+});
+
+/** A probe path that cannot collide with a real one, even across lanes. */
+function probePath(tag: string): string {
+  return `zz-webscripts-${tag}-probe-${process.pid}`;
+}
+
+// The two directions the walk's boundary has to hold, on the REAL root. Without
+// them a fix for the host cost above could be "skip everything the walk did not
+// need", and the guard would still be green while reading nothing.
+test("the sweep still reads an `npm run` in an UNTRACKED file of this tree", () => {
+  const file = join(REPO_ROOT, `${probePath("untracked")}.md`);
+  const name = "zz-probe-untracked-script";
+  writeFileSync(file, `Deploy with \`npm run ${name}\`.\n`, "utf8");
+  try {
+    const refs = referencedScripts();
+    assert.deepEqual(
+      [...(refs.get(name) ?? [])],
+      [relative(REPO_ROOT, file)],
+      "the sweep did not read an untracked file of this tree, so it is no longer a walk of the " +
+        "tree — a doc added here before it is committed would be unwatched",
+    );
+    // ... and the reference must be JUDGED, not just collected: a name the
+    // manifest does not define is exactly what the guard exists to report.
+    assert.equal(
+      scriptsMissingFromManifest(refs).some((o) => o.includes(name)),
+      true,
+      `a reference to an undefined script (${name}) was read but not reported, so the sweep ` +
+        "collects it and the guard never judges it",
+    );
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
+test("the sweep does not read a NESTED checkout's files", () => {
+  const dir = join(REPO_ROOT, probePath("nested"));
+  // The name is interpolated rather than written literally: this file is inside
+  // the tree the sweep reads, and its INLINE `npm run <name>` references are
+  // deliberately NOT stripped (see stripCommentLines), so a literal here would be
+  // collected as a real reference and red the guard against its own probe.
+  const name = "zz-probe-nested-script";
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, ".git"), "gitdir: /nonexistent/another-checkout/.git\n", "utf8");
+  writeFileSync(join(dir, "notes.md"), `Run \`npm run ${name}\`.\n`, "utf8");
+  try {
+    assert.equal(
+      referencedScripts().has(name),
+      false,
+      "the sweep walked into a nested checkout (a directory with its own `.git`), so another " +
+        "branch's `npm run` references are being judged against this tree's manifest",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a directory that vanished under the walk is skipped, not failed", () => {
+  // Never created: to the walk this is exactly what a lane removing its worktree
+  // between the parent's listing and the read looks like, and what made this test
+  // fail with `ENOENT: scandir '<repo>/.worktrees/t_…'` — a RED that named a
+  // sibling lane and nothing about the tree under test. Anything else (EACCES, an
+  // I/O error) must still throw; this is a race, not a licence to ignore failures.
+  const gone = join(REPO_ROOT, probePath("vanished"));
+  assert.deepEqual(
+    [...referencedScripts(gone)],
+    [],
+    "reading a directory that is not there threw instead of being skipped, so a lane removing a " +
+      "worktree mid-walk still reds this guard",
+  );
+});
+
+test("the sweep does not read the primary checkout's lane worktrees", () => {
+  const laneRoot = join(REPO_ROOT, ".worktrees");
+  const laneRootPreexisting = existsSync(laneRoot);
+  const dir = join(laneRoot, probePath("lane"));
+  const name = "zz-probe-lane-script"; // interpolated, not literal — see the probe above
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "notes.md"), `Run \`npm run ${name}\`.\n`, "utf8");
+  try {
+    assert.equal(
+      referencedScripts().has(name),
+      false,
+      "the sweep read a sibling lane's checkout under .worktrees/ — that is the shape that made " +
+        "this test walk ~1.8M files in the primary checkout",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    if (!laneRootPreexisting) {
+      try {
+        rmdirSync(laneRoot); // only if the probe created it, and only when empty
+      } catch {
+        // a lane appeared in it meanwhile — leave it
+      }
+    }
+  }
 });
