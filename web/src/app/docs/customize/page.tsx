@@ -510,9 +510,13 @@ export default function CustomizeDocsPage() {
       </p>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         Publishing is therefore checked: a template missing either field — or carrying only spaces
-        where the field belongs, since the card trims it before rendering — is{" "}
+        where either field belongs, since the gallery trims both the category and the intro line
+        before rendering them — is{" "}
         <strong>refused with a clear message</strong> rather than appearing in the gallery as a bare
-        title. Publishing several forms at once behaves differently on purpose — a{" "}
+        title. The category is trimmed on the way out too, so a template published before that check
+        existed shows its category without the surrounding spaces, or no category chip at all rather
+        than a chip holding only spaces. Publishing several forms at once behaves differently on
+        purpose — a{" "}
         <strong>bulk publish skips such a template while still publishing the other forms you
         selected</strong>, so one unfinished template cannot block a whole batch. The skipped ids are
         reported back, so the skip is never silent.

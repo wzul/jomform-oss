@@ -32,9 +32,13 @@ func (h *RESTHandlers) listTemplates(w http.ResponseWriter, r *http.Request) {
 	out := make([]row, 0, len(forms))
 	for _, f := range forms {
 		desc, cat, mode := "", "", ""
-		if c, ok := f.Config["category"].(string); ok {
-			cat = c
-		}
+		// Category is TRIMMED, the same way the publish gate compares it: the
+		// picker paints it as the card's category chip and keys its icon off
+		// the exact string, so surrounding whitespace is not content. A row
+		// whose category is blank after the trim (published before the gate
+		// trimmed, or inserted by hand) comes back as "" and the card draws no
+		// chip at all rather than a chip holding only spaces (t_b58fd4fc).
+		cat = formfields.Category(f.Config)
 		if m, ok := f.Config["mode"].(string); ok {
 			mode = m
 		}

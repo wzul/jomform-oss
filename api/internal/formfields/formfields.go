@@ -460,6 +460,27 @@ func Description(config map[string]any) string {
 	return legacy
 }
 
+// Category returns a template config's gallery category — config.category —
+// trimmed the way strings.TrimSpace trims, because that is what the gallery
+// card does with it before rendering.
+//
+// Card t_b58fd4fc: the card paints this value as its category chip and keys its
+// icon off the exact string (CATEGORY_ICON in TemplatePicker.tsx), so
+// surrounding whitespace is not content: "   " is TRUTHY in JS, which made a
+// card paint a chip holding only spaces and a generic icon, and
+// "  Contact  " missed the icon map. The publish gate refuses a category that
+// is blank after this trim (galleryMetadataMissingSQL), and both read paths —
+// the REST gallery (rest_templates.go) and MCP list_templates — return the
+// trimmed value, so a row published before that rule (or inserted by hand)
+// can no longer render a blank chip.
+func Category(config map[string]any) string {
+	raw, ok := config["category"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(raw)
+}
+
 // block is the subset of a builder block the contract derivation reads.
 type block struct {
 	ID       string `json:"id"`

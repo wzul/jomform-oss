@@ -517,10 +517,11 @@ func formBlocksArray(expr string) string {
 	return "CASE WHEN jsonb_typeof(" + expr + ") = 'array' THEN " + expr + " ELSE '[]'::jsonb END"
 }
 
-// formProseValueSQL renders the block value named by expr with the SAME leading
-// and trailing whitespace removed as Go's strings.TrimSpace — the trim
-// formfields.Description applies before it decides a block carries a
-// description (card t_cda6afd5).
+// formProseValueSQL renders a card-rendered text value — a description block's
+// value, or config.category — with the SAME leading and trailing whitespace
+// removed as Go's strings.TrimSpace, which is what the read side
+// (formfields.Description / formfields.Category) applies before it decides the
+// value carries anything (cards t_cda6afd5, t_b58fd4fc).
 //
 // A bare `btrim(expr)` is not enough, and an untrimmed "is it non-empty" test
 // is wrong: `btrim(value)` strips SPACES only, so a value of "	\n" would still count as a description to
@@ -549,6 +550,19 @@ func formProseValueSQL(expr string) string {
 // unfit for the gallery: no config.category, or no description block (issues
 // #594, t_6a23c70d).
 //
+// BOTH arms are trimmed by formProseValueSQL, because both are TRIMMED by the
+// card before they are rendered: formfields.Category for the category chip and
+// formfields.Description for the subtitle. An untrimmed category arm accepted
+// `"category": "   "`, the card rendered a chip holding only spaces (a
+// non-empty JS string) plus a generic icon, and the gallery carried a template
+// whose only label was blank — the same bare-card outcome #594 is about, one
+// field over from the description arm (card t_b58fd4fc).
+//
+// The category must also BE a JSON string: formfields.Category ignores any
+// other type (a number, an object), so a template whose category is not a
+// string is one the card cannot label — the `jsonb_typeof … IS DISTINCT FROM
+// 'string'` arm states that, so the gate and the card cannot disagree.
+//
 // A template's description is the SAME thing formfields.Description (and
 // web/src/lib/formDescription.ts) reads, so the rule is stated with the same
 // block types: a non-empty `section`/`html` block — the intro line a form opens
@@ -574,7 +588,8 @@ func formProseValueSQL(expr string) string {
 // It is a var rather than a const only because it is assembled from
 // formBlocksArray(); the rule it states is fixed at init and never mutated.
 var galleryMetadataMissingSQL = `
-	COALESCE(config->>'category', '') = ''
+	COALESCE(` + formProseValueSQL("config->>'category'") + `, '') = ''
+	OR jsonb_typeof(config->'category') IS DISTINCT FROM 'string'
 	OR NOT EXISTS (
 	     SELECT 1 FROM jsonb_array_elements(` + formBlocksArray("config->'blocks'") + `) b
 	      WHERE b->>'type' IN ('section', 'html', 'text')

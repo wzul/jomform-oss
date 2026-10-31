@@ -110,6 +110,28 @@ func TestPublishRefusesTemplateWithoutGalleryMetadata(t *testing.T) {
 			"category": "Contact",
 			"blocks":   []any{map[string]any{"type": "text", "value": "   "}},
 		}},
+		// t_b58fd4fc: the same rule, one field over. The category arm of the
+		// predicate had no trim at all, so a whitespace-only category
+		// published and the picker painted a chip holding only spaces ("   "
+		// is truthy in JS) with a generic icon — a gallery card whose only
+		// label is blank. A real intro is present in each case below, so the
+		// ONLY thing wrong with the template is the category.
+		{"spaces-only category", map[string]any{
+			"category": "   ",
+			"blocks":   []any{map[string]any{"type": "section", "value": "Get in touch."}},
+		}},
+		{"category of tabs and newlines", map[string]any{
+			"category": "	\n  \r\n",
+			"blocks":   []any{map[string]any{"type": "section", "value": "Get in touch."}},
+		}},
+		{"category of a non-breaking space", map[string]any{
+			"category": "\u00a0",
+			"blocks":   []any{map[string]any{"type": "section", "value": "Get in touch."}},
+		}},
+		{"category that is not a string", map[string]any{
+			"category": 5,
+			"blocks":   []any{map[string]any{"type": "section", "value": "Get in touch."}},
+		}},
 	}
 	for i, tc := range cases {
 		tc := tc
@@ -466,5 +488,113 @@ func TestGalleryGateTrimsExactlyWhatDescriptionTrims(t *testing.T) {
 	mixedTpl := templateWith(t, ctx, p, acc, "tpl-6a23-ws-mixed", FormStatusDraft, mixed)
 	if err := fs.SetStatus(ctx, acc, mixedTpl.ID, FormStatusPublished); err != nil {
 		t.Errorf("SetStatus refused a template that has a blank Section AND a described one: %v", err)
+	}
+}
+
+// TestGalleryGateTrimsTemplateCategoryExactlyAsTheCardDoes pins the CATEGORY
+// half of the same one rule (card t_b58fd4fc): a template may enter the gallery
+// iff the card can render a category for it.
+//
+// The category arm of galleryMetadataMissingSQL used to compare the raw JSON
+// value against the empty string, with no trim, while the description arm next
+// to it trimmed. So
+// `"category": "   "` published, and TemplatePicker paints
+// `CATEGORY_ICON[tpl.category] || "📄"` plus `{tpl.category && <span>…}` — a
+// non-empty JS string — which is a chip holding only spaces and a generic icon:
+// the same bare-card outcome #594 is about, one field over from the one card
+// t_cda6afd5 fixed.
+//
+// The whitespace set is DERIVED from unicode.IsSpace, not copied from
+// formProseValueSQL, so this test does not restate the implementation: it asks
+// Go what blank means, asserts the read side (formfields.Category) reports
+// nothing for it, and only then asks the gate — on all three publish paths
+// (single, status+password, bulk skip listing).
+func TestGalleryGateTrimsTemplateCategoryExactlyAsTheCardDoes(t *testing.T) {
+	ctx := context.Background()
+	p := testPool(t)
+	fs := NewFormStore(p)
+	acc := uniqueAccount(t, ctx, p)
+
+	const sentence = "Get in touch — we usually reply within a day."
+	cfg := func(category string) map[string]any {
+		return map[string]any{"mode": "response", "category": category,
+			"blocks": []any{map[string]any{"id": "in1", "type": "section", "value": sentence}}}
+	}
+
+	// The whitespace Go calls whitespace. Every code point, not a sample.
+	var blanks []rune
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if unicode.IsSpace(r) {
+			blanks = append(blanks, r)
+		}
+	}
+	if len(blanks) < 20 {
+		t.Fatalf("derived only %d unicode.IsSpace code points — the derivation is broken, not the "+
+			"gate, so no verdict below would mean anything", len(blanks))
+	}
+
+	for _, r := range blanks {
+		value := string(r)
+		c := cfg(value)
+		// PREMISE, in Go: this really is a category Go calls blank.
+		if got := formfields.Category(c); got != "" {
+			t.Fatalf("U+%04X: formfields.Category(%q) = %q, want \"\" — not a whitespace code point",
+				r, value, got)
+		}
+		// ...and the case models a card that would otherwise have something to
+		// show, so the category is the only reason it may not publish.
+		if got := formfields.Description(c); got != sentence {
+			t.Fatalf("U+%04X: formfields.Description = %q, want the intro — the category is supposed "+
+				"to be the only defect in this case", r, got)
+		}
+
+		f := templateWith(t, ctx, p, acc, fmt.Sprintf("tpl-b58f-cat-%04x", r), FormStatusDraft, c)
+
+		// The bulk path's skip listing is the predicate on its own.
+		blocked, err := fs.BlockedGalleryTemplates(ctx, acc, []string{f.ID})
+		if err != nil {
+			t.Fatalf("U+%04X: BlockedGalleryTemplates: %v", r, err)
+		}
+		if len(blocked) != 1 {
+			t.Errorf("U+%04X (%q): BlockedGalleryTemplates = %v, want the id — a bulk publish would "+
+				"leave this row published with a category chip holding only whitespace", r, value, blocked)
+		}
+
+		// ...and the publish paths refuse it.
+		if err := fs.SetStatus(ctx, acc, f.ID, FormStatusPublished); !errors.Is(err, ErrTemplateGalleryMetadata) {
+			t.Errorf("U+%04X (%q): SetStatus error = %v, want ErrTemplateGalleryMetadata — the gate "+
+				"accepted a category formfields.Category trims to nothing", r, value, err)
+		}
+		if err := fs.SetStatusWithPassword(ctx, acc, f.ID, FormStatusPublished, ""); !errors.Is(err, ErrTemplateGalleryMetadata) {
+			t.Errorf("U+%04X (%q): SetStatusWithPassword error = %v, want ErrTemplateGalleryMetadata",
+				r, value, err)
+		}
+		var status string
+		if err := p.QueryRow(ctx, `SELECT status FROM forms WHERE id=$1`, f.ID).Scan(&status); err != nil {
+			t.Fatalf("read status: %v", err)
+		}
+		if status != FormStatusDraft {
+			t.Errorf("U+%04X (%q): status = %q after a refused publish, want draft", r, value, status)
+		}
+	}
+
+	// THE OTHER DIRECTION — a real category with whitespace around it still
+	// publishes, and the read side reports the trimmed name the picker's icon
+	// map is keyed by.
+	padded := cfg("	  Contact \n ")
+	if got := formfields.Category(padded); got != "Contact" {
+		t.Fatalf("formfields.Category(padded) = %q, want \"Contact\"", got)
+	}
+	ok := templateWith(t, ctx, p, acc, "tpl-b58f-cat-padded", FormStatusDraft, padded)
+	if err := fs.SetStatus(ctx, acc, ok.ID, FormStatusPublished); err != nil {
+		t.Errorf("SetStatus refused a template whose category is a real name with whitespace around "+
+			"it: %v", err)
+	}
+	blocked, err := fs.BlockedGalleryTemplates(ctx, acc, []string{ok.ID})
+	if err != nil {
+		t.Fatalf("BlockedGalleryTemplates: %v", err)
+	}
+	if len(blocked) != 0 {
+		t.Errorf("BlockedGalleryTemplates = %v for a padded real category, want none", blocked)
 	}
 }

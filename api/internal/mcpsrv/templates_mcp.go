@@ -42,10 +42,12 @@ func (s *Server) listTemplatesMCP(
 	}
 	out := make([]templateOut, 0, len(forms))
 	for _, f := range forms {
-		desc, cat, mode := "", "", ""
-		if c, ok := f.Config["category"].(string); ok {
-			cat = c
-		}
+		desc, mode := "", ""
+		// Category is TRIMMED, the same way the publish gate compares it and
+		// the REST gallery returns it, so an agent and the dashboard see one
+		// value: the picker paints it as the card's category chip and keys its
+		// icon off the exact string (t_b58fd4fc).
+		cat := formfields.Category(f.Config)
 		if m, ok := f.Config["mode"].(string); ok {
 			mode = m
 		}
