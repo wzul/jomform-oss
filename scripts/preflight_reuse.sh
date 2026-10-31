@@ -324,6 +324,15 @@ pr_show() {
   fi
   echo "record: $file"
   cat "$file"
+  # A RECORD IS ONLY A VERDICT WHEN ITS RUN FINISHED (card t_d49a99f1). The file is
+  # rewritten after every gate, so a record read mid-run (or left by a killed run)
+  # carries a verdict computed from whatever it had reached. Say so before the
+  # verdict line, so a human reading `--show` cannot take that number for the run's
+  # answer; the machine-readable half already refuses it (`reusable: NO`, INCOMPLETE).
+  local complete; complete="$(gr_read_bool "$file" complete)"
+  if [ "$complete" != "true" ]; then
+    echo "--- this record's run did NOT FINISH (complete=[${complete:-absent}]): the verdict below describes what the file had reached, NOT a verdict about this tree"
+  fi
   echo "--- verdict against the CURRENT gate inventory and environment: $(gr_verdict "$file" "${PREFLIGHT_GATE_NAMES[@]}")"
   local reason
   if reason="$(gr_reusable "$tree" "${PREFLIGHT_GATE_NAMES[@]}" 2>&1)"; then

@@ -2647,6 +2647,25 @@ else
   else
     bad "no record keyed on the tree sha after a completed run — expected $rec naming [$probe_tree], got tree=[$(gr_read_field "$rec" tree)]"
   fi
+  # 18b. THE RUN FINISHED, SO ITS RECORD MUST SAY SO (card t_d49a99f1).
+  #      Without this arm the reuse lane could die with EVERY OTHER CHECK GREEN:
+  #      if the runner stopped reaching gr_record_final, every record a real run
+  #      left would say `complete: false`, `preflight_reuse.sh` would refuse each
+  #      one as INCOMPLETE, every lane would re-gate — and nothing would red,
+  #      because refusing an unfinished record is the correct behaviour. The
+  #      assertion is taken from the record the REAL runner above just wrote, not
+  #      from a fixture: a fixture cannot see this wiring.
+  rec_complete="$(gr_read_bool "$rec" complete)"
+  if [ "$rec_complete" = "true" ]; then
+    ok "a finished run marks its record complete (complete=true), so the record is a verdict and not a mid-run snapshot"
+  else
+    bad "the record a finished run left says complete=[$rec_complete] — every lane's --reuse-record would be refused as INCOMPLETE and the reuse feature would be dead while every other check stayed green (the runner is not reaching gr_record_final on its normal end path)"
+  fi
+  if PREFLIGHT_KEY_EXTRA=probe15 gr_record_usable "$probe_tree" >/dev/null 2>&1; then
+    ok "the finished run's record is USABLE — gr_record_usable accepts it (key, freshness and completeness all hold)"
+  else
+    bad "the finished run's record is not usable: [$(PREFLIGHT_KEY_EXTRA=probe15 gr_record_usable "$probe_tree" 2>&1)] — a record its own runner refuses cannot be the evidence a lane reuses"
+  fi
 fi
 
 # 19. The record is INVALIDATED when the ENVIRONMENT changes, not just the tree.
@@ -2669,7 +2688,7 @@ if [ -n "$probe_tree" ]; then
   rec="$(gr_file "$probe_tree")"
   key="$(gr_read_field "$rec" key)"
   parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
-  printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n    "%s": { "status": "pass", "seconds": 5, "at": "2026-01-01T00:00:00Z", "reused": false }\n  },\n  "runs": 1,\n  "verdict": "green",\n  "finished_at": "%s"\n}\n' \
+  printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n    "%s": { "status": "pass", "seconds": 5, "at": "2026-01-01T00:00:00Z", "reused": false }\n  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "finished_at": "%s"\n}\n' \
     "$probe_tree" "$key" "$parts" "$probe_gate" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$rec"
   before="$(PREFLIGHT_KEY_EXTRA=probe15 gr_key "$SB")"
   after="$(PREFLIGHT_KEY_EXTRA=probe16-bumped gr_key "$SB")"
@@ -2713,7 +2732,7 @@ if [ -n "$probe_tree" ]; then
   PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" >/dev/null 2>&1
   key="$(gr_read_field "$rec" key)"
   parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
-  printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n    "%s": { "status": "fail", "seconds": 3, "at": "2026-01-01T00:00:00Z", "reused": false }\n  },\n  "runs": 1,\n  "verdict": "red",\n  "finished_at": "%s"\n}\n' \
+  printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n    "%s": { "status": "fail", "seconds": 3, "at": "2026-01-01T00:00:00Z", "reused": false }\n  },\n  "runs": 1,\n  "verdict": "red",\n  "complete": true,\n  "finished_at": "%s"\n}\n' \
     "$probe_tree" "$key" "$parts" "$probe_gate" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$rec"
   out=$(PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" --reuse-record 2>&1)
   rc=$?
@@ -2781,7 +2800,7 @@ if [ -n "$probe_tree" ]; then
   key="$(gr_read_field "$rec" key)"
   parts="$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe15 gr_key_parts "$SB")")"
   aged="$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
-  printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n    "%s": { "status": "pass", "seconds": 3, "at": "%s", "reused": false }\n  },\n  "runs": 1,\n  "verdict": "green",\n  "finished_at": "%s"\n}\n' \
+  printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n    "%s": { "status": "pass", "seconds": 3, "at": "%s", "reused": false }\n  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "finished_at": "%s"\n}\n' \
     "$probe_tree" "$key" "$parts" "$probe_gate" "$aged" "$aged" > "$rec"
   # The fixture IS the check: assert the observed pass landed before reading, or a
   # lost entry would make both legs agree for no reason (the same guard check 23
@@ -2832,7 +2851,7 @@ if [ -n "$probe_tree" ]; then
     # shellcheck disable=SC2086  # deliberate word splitting on the newline-separated inventory
     printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
       | sed '$ s/,$//'
-    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$rec"
   # The hand-written gates block is the fixture for the whole check, so assert it
@@ -3010,7 +3029,7 @@ if [ -n "$probe_tree" ]; then
       if [ "$g" = "$probe_gate" ]; then st=fail; else st=pass; fi
       printf '    "%s": { "status": "%s", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },\n' "$g" "$st"
     done | sed '$ s/,$//'
-    printf '  },\n  "runs": 1,\n  "verdict": "red",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+    printf '  },\n  "runs": 1,\n  "verdict": "red",\n  "complete": true,\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$rec"
   # The fixture must really be partial, or this check silently tests the full path.
@@ -3067,7 +3086,7 @@ if [ -n "$probe_tree" ]; then
     # shellcheck disable=SC2086
     printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
       | sed '$ s/,$//'
-    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$rec"
   # Hold EVERY slot for the whole check, on descriptors this shell keeps: the pool
@@ -3117,7 +3136,7 @@ if [ -n "$probe_tree" ]; then
     # shellcheck disable=SC2086
     printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 77, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
       | sed '$ s/,$//'
-    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$rec"
   r3=$(PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_LOCK_WAIT=0 ./scripts/preflight.sh --only "$probe_gate" --reuse-record 2>&1)
@@ -3279,7 +3298,7 @@ if [ -n "$probe_tree" ]; then
       if [ "$g" = "$probe_gate" ]; then st=fail; else st=pass; fi
       printf '    "%s": { "status": "%s", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },\n' "$g" "$st"
     done | sed '$ s/,$//'
-    printf '  },\n  "runs": 1,\n  "verdict": "red",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+    printf '  },\n  "runs": 1,\n  "verdict": "red",\n  "complete": true,\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$rec"
   # fixture sanity, same rule as check 27: a fixture that lost its entries would
@@ -3342,7 +3361,7 @@ if [ -n "$probe_tree" ]; then
     # shellcheck disable=SC2086
     printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
       | sed '$ s/,$//'
-    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$rec"
   fx32_green=0
@@ -3394,7 +3413,7 @@ if [ -n "$probe_tree" ]; then
   key="$(gr_read_field "$rec" key)"
   sed_parts="$(printf '%s' "$parts_now" \
     | sed -E "s/(^|;)node=[^;]*/\\1node=v0.0.0-probe/")"
-  printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n    "%s": { "status": "pass", "seconds": 5, "at": "2026-01-01T00:00:00Z", "reused": false }\n  },\n  "runs": 1,\n  "verdict": "green",\n  "finished_at": "%s"\n}\n' \
+  printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n    "%s": { "status": "pass", "seconds": 5, "at": "2026-01-01T00:00:00Z", "reused": false }\n  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "finished_at": "%s"\n}\n' \
     "$probe_tree" "$key" "$(gr_json_escape "$sed_parts")" "$probe_gate" \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$rec"
   r33=$(PREFLIGHT_KEY_EXTRA=probe15 PREFLIGHT_LOCK_WAIT=0 \
@@ -3521,7 +3540,7 @@ if [ -n "$probe_tree" ]; then
     # shellcheck disable=SC2086
     printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
       | sed '$ s/,$//'
-    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "log": "/tmp/probe.log",\n  "finished_at": "%s"\n}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$rec"
   fx34_green=0
@@ -3701,6 +3720,8 @@ if [ -n "$probe_tree" ]; then
     GR_GATE_NAMES=("$probe_gate")
     GR_STATUS["$probe_gate"]=pass GR_SECONDS["$probe_gate"]=1 GR_AT["$probe_gate"]="$(gr_now)"
     GR_PASSED=1 GR_FAILED=0 GR_SKIPPED=0
+    # A FINISHED run: the record is only reusable when it says so (card t_d49a99f1).
+    GR_COMPLETE=1
     gr_flush 1 2>&1
   )" || kv_flush_rc=$?
   kv_rec="$(gr_file "$probe_tree")"
@@ -3817,6 +3838,8 @@ if [ -n "$probe_tree" ]; then
     GR_GATE_NAMES=("$probe_gate")
     GR_STATUS["$probe_gate"]=pass GR_SECONDS["$probe_gate"]=1 GR_AT["$probe_gate"]="$(gr_now)"
     GR_PASSED=1 GR_FAILED=0 GR_SKIPPED=0
+    # A FINISHED run: the record is only reusable when it says so (card t_d49a99f1).
+    GR_COMPLETE=1
     gr_flush 1 2>&1
   )" || at_flush_rc=$?
   at_rec="$(gr_file "$probe_tree")"
@@ -4026,7 +4049,7 @@ if [ -n "$probe_tree" ]; then
     # shellcheck disable=SC2086  # deliberate word splitting on the newline-separated inventory
     printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
       | sed '$ s/,$//'
-    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe40.log",\n  "finished_at": "%s"\n}\n' \
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "log": "/tmp/probe40.log",\n  "finished_at": "%s"\n}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$rec40"
   # The hand-written gates block is the whole fixture, so assert it landed as
@@ -4100,7 +4123,7 @@ if [ -n "$probe_tree" ]; then
     # shellcheck disable=SC2086  # deliberate word splitting on the newline-separated inventory
     printf '%s\n' $GATES | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
       | sed '$ s/,$//'
-    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe41.log",\n  "finished_at": "%s"\n}\n' \
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "log": "/tmp/probe41.log",\n  "finished_at": "%s"\n}\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$rec41"
   # The hand-written gates block is the whole fixture: assert that it LANDED (every
@@ -4304,6 +4327,11 @@ mw_flush() {
     GR_TREE="$1"; GR_TREE_SHORT="$(gr_short_sha "$1")"; GR_REPO="$4"
     GR_COMMIT="$2"; GR_BRANCH=HEAD; GR_PID=$$
     GR_PASSED=1; GR_FAILED=0; GR_SKIPPED=0; GR_SELECTED=""
+    # This fixture models a run that finished, which is the only kind that is
+    # reusable (card t_d49a99f1) — the legs below read the record's LABELS, but a
+    # record that claimed otherwise would be a different fixture than the one the
+    # comment describes.
+    GR_COMPLETE=1
     PREFLIGHT_RESULT_DIR="$3" gr_flush 1
   )
 }
@@ -4415,7 +4443,7 @@ rm -rf "$s44_dir"; mkdir -p "$s44_dir"
     printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
       "$tree" "$key" "$parts"
     printf '%s\n' $sel | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' | sed '$ s/,$//'
-    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "finished_at": "%s"\n}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "finished_at": "%s"\n}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$RECORD_DIR/$tree.json"
   rm -f "$RECORD_DIR/reuse-ledger.jsonl"
   PREFLIGHT_KEY_EXTRA=probe44 ./scripts/preflight.sh --for-diff HEAD~1 --reuse-record > "$s44_dir/out" 2>&1
@@ -4805,6 +4833,178 @@ else
   ok "check 46 — the speccounts checker passes on figures that match --list and REDS naming both numbers on a stale FIRST figure (including when a matching historical figure follows it, which a greedy parse would read), on a missing row, on an un-bolded figure, on a --list that exits non-zero and on one with no Total line (7 arms, stub playwright, offline)"
 fi
 rm -rf "$s45"
+
+# 47. A GATE RECORD MAY CARRY ONLY WHAT WAS OBSERVED UNDER ITS OWN KEY, AND ONLY
+#     A FINISHED RUN IS A VERDICT (card t_d49a99f1).
+#
+#     THE MEASURED DEFECT. Gating the merge of PR #1477, the record for tree
+#     45432d4e was read while a run was in progress:
+#       * the previous record (another lane, key 25042aea) held 23/23 `pass`;
+#       * a new run started under a DIFFERENT key (f2be5fdd — `web/node_modules`
+#         re-installed, so the webdeps hash moved);
+#       * after five gates, the file read `key=f2be5fdd, verdict=green, passed=5`,
+#         with EIGHTEEN gates still carrying `at` from the other lane's run and
+#         never run under f2be5fdd at all;
+#       * the carried entries printed `reused: false`, the one label that would
+#         have said they were remembered rather than run.
+#     Two independent cause, both in gr_flush:
+#       (i) the carry-over loop never looked at the existing record's `key`, so a
+#           key change carried the PREVIOUS environment's passes into the new one —
+#           the exact reuse hole `gr_record_usable` exists to close, opened by the
+#           writer one function away from the reader;
+#       (ii) it wrote carried values into GR_STATUS (the map that means "this run
+#           observed it"), and because the file is rewritten after EVERY gate, the
+#           next flush took the OBSERVED branch and relabelled them `reused: false`
+#           while keeping the older `at`.
+#     And `finished_at` was rewritten on every flush, so a run killed mid-flight
+#     left a record indistinguishable from a finished one.
+#
+#     WHAT THIS CHECK ASSERTS, each with the control that stops it being satisfiable
+#     by a blunt "never carry anything" (which would break the documented
+#     `--only <PREFLIGHT_RERUN> --reuse-record` lane):
+#       (a) the fixture: a FINISHED full-inventory run under key A is green,
+#           `complete: true`, and IS reusable — if this leg fails the rest proves
+#           nothing about key B;
+#       (c) SAME KEY: two flushes of a partial run under key A carry the other
+#           gates with `reused: true` and their ORIGINAL `at`, while the gates this
+#           run observed read `reused: false` with a fresh `at` (pre-fix, the second
+#           flush flips the carried ones to `reused: false`);
+#       (b) KEY CHANGE: a mid-run flush under key B records exactly ONE pass — the
+#           gate that run observed — and carries nothing, its verdict is not
+#           `green`, and the consumer refuses it (pre-fix: 23 passes, green);
+#       (d) COMPLETE: that mid-run record is refused naming INCOMPLETE, and the same
+#           file becomes reusable once a run under key B finishes its inventory.
+#
+#     THE SANDBOX STORE IS USED, so this check writes no host state (see RECORD_DIR),
+#     and the REAL writer is driven (never a re-implementation), in a subshell so no
+#     GR_* map leaks into the checks around it.
+r47_dir="$SB_STATE/record47"
+mkdir -p "$r47_dir"
+r47_rec="$r47_dir/$probe_tree.json"
+r47_all="$GATES"
+r47_one="$(printf '%s\n' "$GATES" | sed -n '1p')"
+r47_two="$(printf '%s\n' "$GATES" | sed -n '1,2p')"
+r47_third="$(printf '%s\n' "$GATES" | sed -n '3p')"
+r47_untouched="$(printf '%s\n' "$GATES" | sed -n '3,$p')"
+# r47_run <key-extra> <finish 0|1> <observed gates, newline separated>
+# Drives the REAL gr_flush once per observed gate (exactly like run() in
+# preflight.sh does), then — when <finish> is 1 — the final flush of a run that
+# reached the end of its inventory, which is the only one that says complete: true.
+r47_run() {
+  (
+    export PREFLIGHT_RESULT_DIR="$r47_dir" PREFLIGHT_KEY_EXTRA="$1"
+    # shellcheck source=scripts/gate_result.sh
+    . "$SB/scripts/gate_result.sh"
+    GR_REPO="$SB"
+    GR_TREE="$probe_tree"
+    GR_GATE_NAMES=()
+    while IFS= read -r r47g; do
+      if [ -n "$r47g" ]; then GR_GATE_NAMES+=("$r47g"); fi
+    done <<<"$GATES"
+    r47n=0
+    while IFS= read -r r47g; do
+      if [ -z "$r47g" ]; then continue; fi
+      r47n=$((r47n+1))
+      GR_STATUS["$r47g"]=pass; GR_SECONDS["$r47g"]=42; GR_AT["$r47g"]="$(gr_now)"
+      GR_PASSED=$r47n; GR_FAILED=0; GR_SKIPPED=0
+      gr_flush 1 || exit 1
+    done <<<"$3"
+    if [ "$2" = 1 ]; then
+      GR_COMPLETE=1
+      gr_flush 1 || exit 1
+    fi
+  )
+}
+r47_status() {  # <gate> — the record's status for <gate>, read the way a lane does
+  gr_gate_status "$r47_rec" "$1"
+}
+r47_reused() { gr_gate_entry_field "$r47_rec" "$1" reused; }
+r47_at()     { gr_gate_entry_field "$r47_rec" "$1" at; }
+r47_count_pass() {
+  local c=0 g
+  # shellcheck disable=SC2086
+  for g in $GATES; do [ "$(r47_status "$g")" = "pass" ] && c=$((c+1)); done
+  printf '%s' "$c"
+}
+
+r47_a_rc=0; r47_a_out="$(r47_run runA 1 "$r47_all" 2>&1)" || r47_a_rc=$?
+r47_a_pass="$(r47_count_pass)"
+r47_a_complete="$(gr_read_bool "$r47_rec" complete)"
+r47_a_reuse_rc=0; r47_a_reuse="$(PREFLIGHT_RESULT_DIR="$r47_dir" PREFLIGHT_KEY_EXTRA=runA gr_reusable "$probe_tree" $GATES 2>&1)" || r47_a_reuse_rc=$?
+if [ "${r47_a_rc:-1}" != 0 ] || [ "$r47_a_pass" != "$NGATES" ] || [ "$r47_a_complete" != true ] || [ "${r47_a_reuse_rc:-1}" != 0 ]; then
+  bad "check 47 cannot run: the key-A fixture (a FINISHED full-inventory run) did not land as a reusable green record — flush rc=$r47_a_rc, pass=$r47_a_pass/$NGATES, complete=[$r47_a_complete], reusable rc=$r47_a_reuse_rc [$(printf '%s' "$r47_a_reuse" | tail -n 1)] [$(printf '%s' "$r47_a_out" | tail -n 1)]. A key-B leg below would then prove nothing about carrying."
+else
+  # ---- (c) SAME KEY: a carry is labelled, and keeps the AT of the run that observed it.
+  declare -A r47_at_before=()
+  # shellcheck disable=SC2086
+  for r47g in $r47_untouched; do r47_at_before[$r47g]="$(r47_at "$r47g")"; done
+  r47_at_third_before="${r47_at_before[$r47_third]}"
+  r47_c_rc=0; r47_c_out="$(r47_run runA 0 "$r47_two" 2>&1)" || r47_c_rc=$?
+  r47_c_bad=""
+  r47_c_reused_ok=0; r47_c_reused_bad=0; r47_c_fresh_ok=0
+  # shellcheck disable=SC2086
+  for r47g in $r47_untouched; do
+    if [ "$(r47_status "$r47g")" = "pass" ] && [ "$(r47_reused "$r47g")" = "true" ] && [ "$(r47_at "$r47g")" = "${r47_at_before[$r47g]}" ]; then
+      r47_c_reused_ok=$((r47_c_reused_ok+1))
+    else
+      r47_c_reused_bad=$((r47_c_reused_bad+1))
+      r47_c_bad="$r47_c_bad $r47g(status=$(r47_status "$r47g") reused=$(r47_reused "$r47g") at=$(r47_at "$r47g") was=${r47_at_before[$r47g]})"
+    fi
+  done
+  r47_c_observed_ok=0
+  r47_ntouched="$(printf '%s\n' "$r47_untouched" | grep -c '[^[:space:]]')"
+  # shellcheck disable=SC2086
+  for r47g in $r47_two; do
+    if [ "$(r47_reused "$r47g")" = "false" ]; then r47_c_observed_ok=$((r47_c_observed_ok+1)); fi
+  done
+
+  # ---- (b) KEY CHANGE: nothing observed under key A may be written under key B.
+  r47_keyA="$(PREFLIGHT_RESULT_DIR="$r47_dir" PREFLIGHT_KEY_EXTRA=runA gr_key "$SB")"
+  r47_keyB="$(PREFLIGHT_RESULT_DIR="$r47_dir" PREFLIGHT_KEY_EXTRA=runB gr_key "$SB")"
+  r47_b_rc=0; r47_b_out="$(r47_run runB 0 "$r47_one" 2>&1)" || r47_b_rc=$?
+  r47_b_key="$(gr_read_field "$r47_rec" key)"
+  r47_b_pass="$(r47_count_pass)"
+  r47_b_verdict="$(gr_read_field "$r47_rec" verdict)"
+  r47_b_complete="$(gr_read_bool "$r47_rec" complete)"
+  r47_b_obs="$(r47_status "$r47_one")"
+  r47_b_reuse_rc=0; r47_b_reuse="$(PREFLIGHT_RESULT_DIR="$r47_dir" PREFLIGHT_KEY_EXTRA=runB gr_reusable "$probe_tree" $GATES 2>&1)" || r47_b_reuse_rc=$?
+
+  # ---- (d) COMPLETE: a run that did not finish is not a verdict, and finishing fixes it.
+  r47_d_rc=0; r47_d_msg="$(PREFLIGHT_RESULT_DIR="$r47_dir" PREFLIGHT_KEY_EXTRA=runB gr_record_usable "$probe_tree" 2>&1)" || r47_d_rc=$?
+  r47_e_rc=0; r47_e_out="$(r47_run runB 1 "$r47_all" 2>&1)" || r47_e_rc=$?
+  r47_e_reuse_rc=0; r47_e_reuse="$(PREFLIGHT_RESULT_DIR="$r47_dir" PREFLIGHT_KEY_EXTRA=runB gr_reusable "$probe_tree" $GATES 2>&1)" || r47_e_reuse_rc=$?
+
+  if [ "${r47_c_rc:-1}" != 0 ]; then
+    bad "check 47 (c) — the same-key partial run could not be flushed (rc=$r47_c_rc) [$(printf '%s' "$r47_c_out" | tail -n 1)], so the reuse labelling was never exercised"
+  elif [ "$r47_c_reused_ok" != "$r47_ntouched" ] || [ "$r47_c_observed_ok" != 2 ] || [ -z "$r47_at_third_before" ]; then
+    bad "check 47 (c) — a gate carried from an earlier run under the SAME key must stay labelled 'reused: true' with the 'at' of the run that OBSERVED it, and a gate this run did run must read 'reused: false': $r47_c_reused_ok/$r47_ntouched carried entries are labelled (third gate's recorded at=[$r47_at_third_before]), $r47_c_observed_ok/2 observed entries read 'reused: false'. Mislabelled:$r47_c_bad (the pre-fix writer relabelled carried entries 'reused: false' one flush later, because it wrote them into the observed-run map)"
+  elif [ "${r47_b_rc:-1}" != 0 ]; then
+    bad "check 47 (b) — the key-B mid-run flush failed (rc=$r47_b_rc) [$(printf '%s' "$r47_b_out" | tail -n 1)]"
+  elif [ -z "$r47_keyA" ] || [ "$r47_keyA" = "$r47_keyB" ]; then
+    bad "check 47 cannot discriminate a key change: key A=[$r47_keyA] key B=[$r47_keyB] — PREFLIGHT_KEY_EXTRA no longer separates two fingerprints, so this check would prove nothing either way"
+  elif [ "$r47_b_key" != "$r47_keyB" ]; then
+    bad "check 47 (b) — after the key-B run the record's key is [$r47_b_key], not key B [$r47_keyB]: the file never moved to the new key, so the carry leg was never exercised"
+  elif [ "$r47_b_obs" != "pass" ]; then
+    bad "check 47 (b) — the ONE gate the key-B run really observed ($r47_one) must be recorded 'pass', got [$r47_b_obs]: a record that drops the run's own observation is not conservative, it is broken"
+  elif [ "$r47_b_pass" != 1 ]; then
+    bad "check 47 (b) — the key-B run observed ONE gate, but its record holds $r47_b_pass pass entries under key $(printf '%.12s' "$r47_b_key"): $((r47_b_pass-1)) gate(s) were carried from the key-A record, i.e. another environment's passes were written under THIS key — exactly what gr_record_usable promises a reader never happens"
+  elif [ "$r47_b_verdict" = "green" ]; then
+    bad "check 47 (b) — the key-B record's verdict is [$r47_b_verdict] with $r47_b_pass of $NGATES gates observed under key B (this is the measured defect: 'verdict: green, passed: 5' over a key its unrun gates were never gated under)"
+  elif [ "${r47_b_reuse_rc:-0}" = 0 ]; then
+    bad "check 47 (b) — a record holding ONE observed gate under the current key must not be reusable for the whole inventory; gr_reusable said [$(printf '%s' "$r47_b_reuse" | tail -n 1)]"
+  elif [ "${r47_d_rc:-0}" = 0 ]; then
+    bad "check 47 (d) — a record written by a run that did not finish (complete=[$r47_b_complete]) must be REFUSED by gr_record_usable, but it accepted it: a killed run's file would be handed to a lane as a verdict"
+  elif ! grep -qF 'INCOMPLETE' <<<"$r47_d_msg"; then
+    bad "check 47 (d) — the refusal of an unfinished record must NAME what it refused (complete), got [$(printf '%s' "$r47_d_msg" | tail -n 1)]"
+  elif [ "$r47_b_complete" = "true" ]; then
+    bad "check 47 (d) — the mid-run record says complete=[$r47_b_complete]; a run that has observed $r47_b_pass of $NGATES gates has NOT finished, and finished_at is rewritten on every flush so it cannot be the tell"
+  elif [ "${r47_e_rc:-1}" != 0 ] || [ "${r47_e_reuse_rc:-1}" != 0 ]; then
+    bad "check 47 (d) — once a run under key B finishes its whole inventory the record must become reusable, but flush rc=$r47_e_rc and reusable rc=$r47_e_reuse_rc [$(printf '%s' "$r47_e_reuse" | tail -n 1)] [$(printf '%s' "$r47_e_out" | tail -n 1)]"
+  else
+    ok "check 47 — a gate record carries only what was observed under ITS OWN key, labels every carried entry 'reused: true' on every flush, and is a verdict only when the run finished — measured with the REAL writer: key A finished full run = $r47_a_pass/$NGATES green, complete, reusable; a same-key partial run keeps $r47_c_reused_ok/$r47_ntouched carried entries labelled (original 'at') and both observed gates fresh; a mid-run flush under key B records exactly $r47_b_pass pass (the gate it ran), verdict [$r47_b_verdict], complete [$r47_b_complete], and the consumer refuses it — as INCOMPLETE before the run finishes and reusable only after it does"
+  fi
+fi
+rm -rf "$r47_dir"
 
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"

@@ -215,6 +215,10 @@ else
   GR_GATE_NAMES=()
   while IFS= read -r g; do [ -n "$g" ] && GR_GATE_NAMES+=("$g"); done < <(bash "$REPO_ROOT/scripts/preflight.sh" --list)
   GR_PASSED="${#GR_GATE_NAMES[@]}"; GR_FAILED=0; GR_SKIPPED=0
+  # A FINISHED run: since card t_d49a99f1 the reader refuses a record whose run did
+  # not reach the end of its inventory (`complete: false`), and this fixture models
+  # exactly that — a full-inventory run that finished.
+  GR_COMPLETE=1
   _now="$(gr_now)"
   for g in "${GR_GATE_NAMES[@]}"; do
     GR_STATUS[$g]="pass"; GR_SECONDS[$g]=45; GR_AT[$g]="$_now"; GR_REUSED[$g]=false

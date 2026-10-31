@@ -52,6 +52,7 @@ it is not what a merger needs when it decides to squash.
   "seconds": 1338,
   "verdict": "red",
   "log": "/root/.hermes/profiles/qa/cache/scratch/preflight.log",
+  "complete": true,
   "finished_at": "2026-09-27T07:35:02Z"
 }
 ```
@@ -144,10 +145,32 @@ it is not what a merger needs when it decides to squash.
 * **`gates`** — per-gate verdict with the seconds it took and a `reused` flag.
   `reused: true` means a **later** run carried this entry over rather than
   re-running the gate; the `at` timestamp still names the run that **observed** it.
+  A carry is legal only for an entry the *existing file* recorded **under the same
+  `key`**: when this run's fingerprint differs, nothing is carried and the
+  untouched gates read `skip`, so the aggregate cannot reach `green` until every
+  gate really has an observation under this key (card `t_d49a99f1` — measured while
+  gating PR #1477: a record moved from key `25042aea` to `f2be5fdd` and reported
+  `verdict: green, passed: 5` with eighteen gates carried from the other lane's
+  run). The label is also stable across flushes: the file is rewritten after every
+  gate, and a carried entry keeps `reused: true` with its original `at` on every
+  rewrite, so a remembered pass can never read as one this run observed.
+* **`complete`** — `true` only when the run reached the END of its inventory (green
+  **or** red: a finished red run is a finished observation, which is what the
+  red-tree lane reads). Every intermediate flush writes `false`, because the file
+  is written after every gate and `finished_at` therefore cannot tell a finished
+  run from a killed one. `scripts/preflight_reuse.sh` refuses a record that does
+  not say `complete: true`, so a mid-run or killed record can never be handed to a
+  lane as a verdict. A record written before this field existed carries no
+  `complete` and is refused once, which is the same one-off cost as any other change
+  to the key material (rule 3).
 * **`finished_at`** — records older than `PREFLIGHT_RESULT_TTL` (default 86400s)
-  are treated as absent, so a cached pass cannot outlive its usefulness.
+  are treated as absent, so a cached pass cannot outlive its usefulness. It is the
+  time of the file's LAST write — after every gate — so it is the age of the
+  evidence, not a statement that the run finished; `complete` is.
 * **`verdict`** — `green` only when **every** gate in the inventory holds an
   observed `pass`; **`red`** if any gate holds a `fail`; otherwise `partial`.
+  `in_progress` while the run that wrote the file has not finished — the field a
+  human reads, while `complete: false` is the machine-readable half.
 
 ## Using it
 
@@ -176,8 +199,9 @@ it is not what a merger needs when it decides to squash.
 #             inventory and environment: its last line says `reusable: YES`
 #   exit 1 -> there is nothing reusable to show: no record for the tree, a tree
 #             that could not be identified, or a record that is not reusable
-#             (stale, environment changed, a gate holding `fail`, or a gate no run
-#             ever observed — a PARTIAL record reads `reusable: NO` here). The
+#             (stale, environment changed, a gate holding `fail`, a gate no run
+#             ever observed — a PARTIAL record reads `reusable: NO` here — or a
+#             run that did not finish, `complete: false`). The
 #             status repeats the printed verdict, so a machine reading only the
 #             exit code is never told "yes" while the output says otherwise.
 ./scripts/preflight_reuse.sh --report 24       # the MEASURED saving, last 24h
@@ -267,6 +291,20 @@ reads the evidence and not just the verdict.
    gate set) is already in the ledger inside
    `PREFLIGHT_LEDGER_DEDUPE_WINDOW` (default 120s). The identity deliberately
    excludes the `by`/`pid` fields, which describe *who* wrote the line.
+9. **A pass is carried only under the key that OBSERVED it, and only a finished
+   run is a verdict.** The writer merges instead of overwriting, so a gate this
+   run did not reach keeps the previous entry — but only when the previous record's
+   `key` is the current one. A key change (a re-installed `web/node_modules`, a
+   bumped toolchain, an edited gate script, another test database) therefore
+   carries NOTHING: those gates read `skip` and the record cannot read `green`
+   until they have been observed under the current key. The runner also writes
+   `complete: false` on every per-gate flush and `complete: true` only when it
+   reaches the end of its inventory, and the reader refuses anything less — so a
+   record read mid-run, or left behind by a killed run, is never a verdict about
+   the tree. Measured defect (card `t_d49a99f1`): the record for tree `45432d4e`
+   was read mid-run carrying another environment's eighteen passes under the new
+   key and reporting `verdict: green, passed: 5`, with every carried entry
+   relabelled `reused: false` one flush later.
 
 ## Layout
 

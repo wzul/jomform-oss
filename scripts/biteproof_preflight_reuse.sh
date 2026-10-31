@@ -719,7 +719,7 @@ else
         "$other9" "$(gr_key "$REPO_ROOT")" "$(gr_json_escape "$(gr_key_parts "$REPO_ROOT")")"
       printf '%s\n' "${gates9[@]}" | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
         | sed '$ s/,$//'
-      printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/probe9.log",\n  "finished_at": "%s"\n}\n' \
+      printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "log": "/tmp/probe9.log",\n  "finished_at": "%s"\n}\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     } > "$rec"
   )
@@ -795,7 +795,7 @@ fixture_record() { # <tree> <dir> <key-extra> — a by-hand full-green record
         "$tree" "$(gr_key "$REPO_ROOT")" "$(gr_json_escape "$(gr_key_parts "$REPO_ROOT")")"
       printf '%s\n' "${BP_GATES[@]}" | sed 's/.*/    "&": { "status": "pass", "seconds": 42, "at": "2026-01-01T00:00:00Z", "reused": false },/' \
         | sed '$ s/,$//'
-      printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "log": "/tmp/biteproof-fixture.log",\n  "finished_at": "%s"\n}\n' \
+      printf '  },\n  "runs": 1,\n  "verdict": "green",\n  "complete": true,\n  "log": "/tmp/biteproof-fixture.log",\n  "finished_at": "%s"\n}\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     } > "$rec"
   )

@@ -1837,6 +1837,26 @@ gr_record_now() {
   return 0
 }
 
+# gr_record_final — THE LAST record write of a run, and the only one that says
+# `complete: true`. Every intermediate flush (gr_record_now, after each gate) says
+# `complete: false`, which is what stops a mid-run or killed record from being read
+# as a verdict about this tree: the file is rewritten after every gate, so without
+# this field a killed run's record is indistinguishable from a finished one.
+# See scripts/gate_result.sh, A RUN THAT DID NOT FINISH IS NOT A VERDICT.
+#
+# Called on BOTH end paths, green AND red. A red run that reached the end of its
+# inventory IS a finished observation — the gates it did pass are exactly what the
+# documented `--only <PREFLIGHT_RERUN> --reuse-record` lane re-runs around — so
+# finalising only the green path would delete that lane's evidence.
+#
+# Deliberately not fatal, for the same reason gr_record_now is not: the record is
+# evidence, and a host-state problem must not turn a gate verdict into a red.
+gr_record_final() {
+  [ -n "${GR_TREE:-}" ] || return 0
+  GR_COMPLETE=1
+  gr_record_now
+}
+
 # ---- REUSE: --reuse-record may only skip a gate this tree is KNOWN to pass ---
 # scripts/preflight_reuse.sh (the consumer a lane runs BEFORE queueing) reads the
 # record and hands back the gates it can vouch for. This is where that claim is
@@ -2377,6 +2397,9 @@ run() {
     _budget="$(_budget_secs "${API_TEST_TIMEOUT:-}")"
     _kind="$(gate_failure_kind "$log" "$_secs" "$_budget")"
     rm -f "$log"
+    # This run ENDED — red — so its record is a finished observation of these bytes
+    # under this key and may be finalised (see gr_record_final).
+    gr_record_final
     case "$_kind" in
       timeout)
         echo "PREFLIGHT FAIL: gate '$gate' ($label) ran out of its TIME BUDGET after ${_secs}s" >&2
@@ -3450,6 +3473,11 @@ selftest_run() {
   bash "$REPO_ROOT/scripts/preflight_test.sh"
 }
 run selftest "gate-runner self-test (empty run refused, missing prereq fails, no gate inventory drift)" selftest_run
+
+# The run reached the END of its inventory: this is the one write that says so.
+# Every earlier flush said `complete: false`, which is why a mid-run or killed
+# record can never be read as a verdict (see gr_record_final).
+gr_record_final
 
 summary
 

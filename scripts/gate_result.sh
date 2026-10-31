@@ -70,6 +70,7 @@
 #     "passed": 14, "failed": 0, "skipped": 0,   <- the tally of the LAST run
 #     "selected": "build,vet,...",               <- what that run actually ran
 #     "runs": 3, "seconds": 1338, "verdict": "green",
+#     "complete": true,                          <- did the run that wrote it finish?
 #     "log": "<log path, optional>", "finished_at": "<iso>"
 #   }
 #
@@ -86,6 +87,45 @@
 #                                   true) and keeps the `at` that observed it;
 #     * never observed anywhere   -> absent (and the verdict cannot be `green`).
 #
+#   AND A CARRY IS ONLY LEGAL UNDER THE KEY THAT OBSERVED IT (card t_d49a99f1).
+#   The entries in the existing file were observed under the key THAT FILE names.
+#   When this run's key differs — a re-installed web/node_modules, a new Go
+#   toolchain, an edited gate script, a different test database, a new
+#   PREFLIGHT_KEY_EXTRA — those entries are not evidence about this environment,
+#   and carrying them would write them UNDER THE NEW KEY. Measured on this host
+#   while gating the merge of PR #1477: a complete record from another lane (23/23
+#   pass under key 25042aea) was followed by a run under key f2be5fdd; after five
+#   gates that run's record read `verdict: green, passed: 5` under f2be5fdd, with
+#   eighteen gates still carrying `at` from the other lane's run and never run
+#   under f2be5fdd at all. `gr_record_usable` validates the FILE's key, which by
+#   then was the new one — so a consumer would have called those bytes gated. The
+#   carry-over loop therefore reads the existing record's `key` first and carries
+#   NOTHING when it differs: the gates become `skip` (unobserved) and the verdict
+#   can only be `green` once every gate really has an observation under this key.
+#
+#   A CARRIED ENTRY IS NEVER RELABELLED AS OBSERVED (same card, one flush later).
+#   Because the file is rewritten after EVERY gate, a run re-reads its own output
+#   on the next flush. The pre-fix loop wrote carried values into GR_STATUS — the
+#   map that means "this run observed it" — so from the second flush onward those
+#   gates took the OBSERVED branch, which sets `reused: false` while keeping the
+#   older `at`. Measured on the run above: at 18:07:53Z the record read `passed=5`
+#   with eighteen entries carrying `at` from 17:20-17:48Z and `reused: false` —
+#   the one label that could have told a reader those gates did not run was gone.
+#   Carried values now live in their own maps (GR_CARRY_*), so GR_STATUS keeps its
+#   only meaning: a gate THIS RUN observed. `reused` in the file is exactly "this
+#   entry was remembered, not re-run", every time the file is written.
+#
+#   A RUN THAT DID NOT FINISH IS NOT A VERDICT (same card). `finished_at` says when
+#   the file was last written, which is after every gate, so a killed run leaves a
+#   record that looks exactly like a finished one. `complete` separates them: the
+#   runner flushes `complete: false` after every gate and a final `complete: true`
+#   only when it reaches the end of its inventory (green OR red — a red run that
+#   finished is still a finished observation, which is what the documented
+#   `--only <PREFLIGHT_RERUN> --reuse-record` lane reads). `gr_record_usable`
+#   refuses anything that does not say `complete: true`, so a mid-run or killed
+#   record can never be handed to a lane as a verdict. `verdict` is written as
+#   `in_progress` while incomplete, for the human reading the raw file.
+#
 # The record directory is host state, deliberately outside the repo (a record is
 # evidence about a machine, not a versioned artefact) and outside /tmp (which is
 # wiped between sessions, so a record there would be useless the next morning).
@@ -96,6 +136,14 @@ declare -A GR_STATUS=()
 declare -A GR_SECONDS=()
 declare -A GR_AT=()
 declare -A GR_REUSED=()
+# What this run did NOT observe but the record already holds under THIS key. Kept
+# OUT of GR_STATUS/GR_SECONDS/GR_AT on purpose: those three mean "this run observed
+# this gate", and the writer is re-entered after every gate, so mixing the two in
+# one map relabelled carried entries `reused: false` one flush later (see A CARRIED
+# ENTRY IS NEVER RELABELLED AS OBSERVED in the header).
+declare -A GR_CARRY_ST=()
+declare -A GR_CARRY_SECONDS=()
+declare -A GR_CARRY_AT=()
 GR_TREE=""
 GR_TREE_SHORT=""
 GR_REPO=""
@@ -107,6 +155,11 @@ GR_SKIPPED=0
 GR_LOG=""
 GR_PID=""
 GR_FORMAT=1
+# 1 only when the runner has reached the END of its inventory; every intermediate
+# flush writes `complete: false` (see A RUN THAT DID NOT FINISH IS NOT A VERDICT).
+GR_COMPLETE=0
+# Announce a key-change carry refusal once per process, not once per flush.
+GR_KEYNOTE=""
 
 gr_dir() { printf '%s\n' "${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}"; }
 gr_ttl() { printf '%s\n' "${PREFLIGHT_RESULT_TTL:-86400}"; }
@@ -636,6 +689,21 @@ gr_record_usable() {
   if [ "$((now_s - fin_s))" -ge "$ttl" ]; then
     echo "record $file finished ${fin} — older than the ${ttl}s horizon (PREFLIGHT_RESULT_TTL)" >&2; return 3
   fi
+  # A RECORD FROM A RUN THAT DID NOT FINISH IS NOT A VERDICT (card t_d49a99f1).
+  # The file is flushed after EVERY gate, so `finished_at` and a green `verdict`
+  # describe the file's last write, not a completed run: a run killed mid-flight
+  # (or one still going, read by the lane that is waiting on it) leaves a record
+  # that is indistinguishable from a finished one by key + TTL alone. `complete`
+  # is the runner's own statement that it reached the end of its inventory, and
+  # only that statement may be reused. A record written before this field existed
+  # carries no `complete` and is refused here — the safe direction, because every
+  # such record was written by a different `scripts/gate_result.sh` and its key
+  # cannot match this one anyway (the lib is key material).
+  local rec_complete; rec_complete="$(gr_read_bool "$file" complete)"
+  if [ "$rec_complete" != "true" ]; then
+    echo "record $file is INCOMPLETE (complete=[${rec_complete:-absent}]) — the run that wrote it did not finish, so this file is not a verdict about tree $tree; gate it" >&2
+    return 3
+  fi
   # NOTE: the node ADVISORY is NOT printed from here. This function is called inside
   # command substitutions by both readers (`x="$(gr_record_usable ...)"`), where its
   # stderr is captured and — on the success path — thrown away, so a note written
@@ -724,16 +792,39 @@ gr_flush() {
   # from an earlier run" when no run ever observed it — the record would then
   # claim a memory it does not have, which is exactly the kind of reading this
   # card exists to remove. A previous skip stays a skip, with `reused: false`.
-  local g st sec at reused
+  #
+  # AND ONLY UNDER THE KEY THAT OBSERVED IT (card t_d49a99f1). The existing file's
+  # entries were observed under the key THAT FILE names. When this run's key
+  # differs — a re-installed `web/node_modules`, a bumped toolchain, an edited gate
+  # script, another test database — carrying them would write another environment's
+  # passes under THIS key, which is precisely what `gr_record_usable` promises a
+  # reader never happens. So the previous key is read first, and a mismatch carries
+  # NOTHING: those gates stay `skip` (unobserved) and the verdict cannot be `green`
+  # until every gate really has an observation under this key.
+  #
+  # The comparison is against `$tree_key` — the key this write is ABOUT — not
+  # against `gr_key` re-computed per gate, so the one value the file's `key` field
+  # will carry is the same value the carry decision used.
+  local prev_key="" prev_ok=0
+  if [ -r "$file" ]; then
+    prev_key="$(gr_read_field "$file" key)"
+    [ -n "$prev_key" ] && [ "$prev_key" = "$tree_key" ] && prev_ok=1
+  fi
+  if [ -r "$file" ] && [ "$prev_ok" = 0 ] && [ -z "$GR_KEYNOTE" ]; then
+    GR_KEYNOTE=1
+    echo "gate-result: note — the record for tree $(gr_short_sha "$GR_TREE") was written under a DIFFERENT environment (key $(printf '%.12s' "${prev_key:-none}") vs current $(printf '%.12s' "$tree_key")), so its per-gate entries are NOT carried: every gate must be observed under the current key before the record can read green." >&2
+  fi
+  local g st sec at
   for g in "${GR_GATE_NAMES[@]}"; do
     st="${GR_STATUS[$g]:-}"
     if [ "$st" = "pass" ] || [ "$st" = "fail" ]; then
       GR_REUSED[$g]=false
+      GR_CARRY_ST[$g]=""; GR_CARRY_SECONDS[$g]=""; GR_CARRY_AT[$g]=""
       [ -n "${GR_AT[$g]:-}" ] || GR_AT[$g]="$now"
       [ -n "${GR_SECONDS[$g]:-}" ] || GR_SECONDS[$g]=0
       continue
     fi
-    if [ -r "$file" ]; then
+    if [ "$prev_ok" = 1 ]; then
       st="$(gr_gate_status "$file" "$g")"
       sec="$(gr_gate_entry_field "$file" "$g" seconds)"
       at="$(gr_gate_entry_field "$file" "$g" at)"
@@ -741,13 +832,22 @@ gr_flush() {
       sec=""; at=""; st=""
     fi
     if [ "$st" = "pass" ] || [ "$st" = "fail" ]; then
-      GR_STATUS[$g]="$st"; GR_SECONDS[$g]="${sec:-0}"; GR_AT[$g]="${at:-$now}"; GR_REUSED[$g]=true
+      GR_CARRY_ST[$g]="$st"; GR_CARRY_SECONDS[$g]="${sec:-0}"; GR_CARRY_AT[$g]="${at:-$now}"; GR_REUSED[$g]=true
     else
-      GR_STATUS[$g]="skip"; GR_SECONDS[$g]=0; GR_AT[$g]="$now"; GR_REUSED[$g]=false
+      GR_CARRY_ST[$g]=""; GR_CARRY_SECONDS[$g]=""; GR_CARRY_AT[$g]=""
+      GR_REUSED[$g]=false
     fi
   done
 
-  verdict="$(gr_verdict_of_current)" || verdict="partial"
+  # A record from a run that has not finished is NOT a verdict: `verdict` says so
+  # in words a human reads, and `complete: false` is what the reader refuses.
+  local complete_json=false
+  if [ "${GR_COMPLETE:-0}" = 1 ]; then
+    complete_json=true
+    verdict="$(gr_verdict_of_current)" || verdict="partial"
+  else
+    verdict="in_progress"
+  fi
 
   # runs / log carry over when the record already exists.
   local runs=1 log="${GR_LOG:-}"
@@ -773,8 +873,12 @@ gr_flush() {
     local n=${#GR_GATE_NAMES[@]} i=0
     for g in "${GR_GATE_NAMES[@]}"; do
       i=$((i+1))
+      # The effective values: this run's observation if it has one, else the entry
+      # carried under the SAME key, else `skip`. `reused` is the carried flag, so a
+      # remembered entry can never be printed as one this run observed.
+      gr_effective "$g" "$now"
       printf '    "%s": { "status": "%s", "seconds": %s, "at": "%s", "reused": %s }%s\n' \
-        "$g" "${GR_STATUS[$g]:-skip}" "${GR_SECONDS[$g]:-0}" "${GR_AT[$g]:-}" "${GR_REUSED[$g]:-false}" \
+        "$g" "$EFF_STATUS" "$EFF_SECONDS" "$EFF_AT" "$EFF_REUSED" \
         "$([ "$i" -lt "$n" ] && printf ',' || printf '')"
     done
     printf '  },\n'
@@ -785,6 +889,7 @@ gr_flush() {
     printf '  "runs": %s,\n' "$runs"
     printf '  "seconds": %s,\n' "$elapsed"
     printf '  "verdict": "%s",\n' "$verdict"
+    printf '  "complete": %s,\n' "$complete_json"
     printf '  "log": "%s",\n' "$(gr_json_escape "$log")"
     printf '  "finished_at": "%s"\n' "$now"
     printf '}\n'
@@ -793,13 +898,41 @@ gr_flush() {
   return 0
 }
 
-# gr_verdict_of_current — the verdict of the in-memory map for the current gate
+# gr_effective <gate> <now> — set EFF_STATUS / EFF_SECONDS / EFF_AT / EFF_REUSED
+# for <gate>, from the in-memory maps. ONE reading, used by BOTH the writer and
+# gr_verdict_of_current, so the file's `verdict` can never be computed from a
+# different set of statuses than the file prints:
+#   * observed by THIS run (GR_STATUS)          -> its own values, reused: false;
+#   * carried under the SAME key (GR_CARRY_*)   -> the observed run's values, reused: true;
+#   * neither                                   -> `skip` as of this write.
+gr_effective() {
+  local g="$1" now="${2:-}"
+  case "${GR_STATUS[$g]:-}" in
+    pass|fail)
+      EFF_STATUS="${GR_STATUS[$g]}"; EFF_SECONDS="${GR_SECONDS[$g]:-0}"
+      EFF_AT="${GR_AT[$g]:-$now}"; EFF_REUSED=false; return 0 ;;
+  esac
+  case "${GR_CARRY_ST[$g]:-}" in
+    pass|fail)
+      EFF_STATUS="${GR_CARRY_ST[$g]}"; EFF_SECONDS="${GR_CARRY_SECONDS[$g]:-0}"
+      EFF_AT="${GR_CARRY_AT[$g]:-$now}"; EFF_REUSED=true; return 0 ;;
+  esac
+  EFF_STATUS="skip"; EFF_SECONDS=0; EFF_AT="$now"; EFF_REUSED=false
+  return 0
+}
+
+# gr_verdict_of_current — the verdict of the in-memory maps for the current gate
 # inventory. Same rule as gr_verdict: a fail is red, an unobserved gate is partial.
+# It reads through gr_effective, so "observed this run" and "carried under this
+# key" are the only two things that can hold a `pass` — a carried entry from
+# ANOTHER key is never in the maps at all (see the carry-over loop in gr_flush).
 gr_verdict_of_current() {
-  local g missing=0 n=0
+  local g missing=0 n=0 now
+  now="$(gr_now)"
   for g in "${GR_GATE_NAMES[@]}"; do
     n=$((n+1))
-    case "${GR_STATUS[$g]:-}" in
+    gr_effective "$g" "$now"
+    case "$EFF_STATUS" in
       fail) printf 'red\n'; return 0 ;;
       pass) ;;
       *)    missing=$((missing+1)) ;;
