@@ -33,6 +33,17 @@
 # unmutated tree produced — and the baseline red is printed by name so a reader
 # never has to re-derive why the pin is red.
 #
+# WHEN THE PINNED GUARD CANNOT RUN AT ALL (card t_08be3356). The pinned baseline is
+# RECORDED, not required, so a host where the pinned copy cannot load — a tree whose
+# `web/node_modules` is absent, a node that cannot strip its types — has no baseline to
+# compare against. That path used to take the harness down: the baseline printed its
+# named refusal, and then the first pinned column read an unassigned variable and bash
+# aborted with `line 316: PINNED_BASE_F: unbound variable`, so the remaining columns and
+# the harness's own verdict were never printed. Every pinned column now refuses BY NAME
+# ("NOT JUDGED — the PRE-FIX guard's BASELINE above produced no verdict"), the run
+# finishes its report and exits non-zero. The DIRECTION was always safe (non-zero either
+# way); this is the diagnosis, and `biteproof_a11y_dark_slab_refusal.sh` drives it.
+#
 # It plants and removes files under `src/app`, so it is serialised per worktree on
 # a flock and every removal is verified. It takes its OWN lock directory: the
 # /docs family key `jomform-biteproof-docs-bite` exists for harnesses that mutate
@@ -174,6 +185,19 @@ ST_DIR=src/app/probe-static
 ST_PAGE="$ST_DIR/page.tsx"
 
 fail=0
+# The pinned columns are judged AGAINST what `pinned_baseline` recorded, and it records
+# these only when the pinned guard produced a verdict. They are DECLARED here, with
+# `PINNED_BASE_OK=0` meaning "no baseline", because reading an unset one under `set -u`
+# killed the run instead of reporting the refusal (card t_08be3356): measured with a
+# `node` that could not load the pinned copy on its FIRST invocation and could after it,
+# the harness printed the baseline's refusal and then died
+#   `… biteproof_a11y_dark_slab_dynamic.sh: line 316: PINNED_BASE_F: unbound variable`
+# so no remaining column was printed and no harness verdict was reached — a bash crash
+# where the operator needed the named refusal this harness exists to print.
+PINNED_BASE_OK=0
+PINNED_BASE_V=''
+PINNED_BASE_F=''
+PINNED_BASE_N=0
 # The removal is a NAMED function so the stray check below can run AFTER it (card
 # t_ea652b97). The check used to run BEFORE the trap's cleanup, so a path that the
 # trap was about to remove read as a survivor — and, in the other direction, the
@@ -281,10 +305,12 @@ pinned_baseline() {
   run_guard "$OLD_GUARD"
   verdict_of "$RC"
   if [ "$V" = REFUSED ]; then
+    PINNED_BASE_OK=0
     echo "  *** baseline, PRE-FIX guard: the guard DID NOT RUN — no verdict is available ***"
     grep -E '^ℹ ' <<<"$OUT" | head -4; report_failures; fail=1
     return 1
   fi
+  PINNED_BASE_OK=1
   PINNED_BASE_V=$V
   PINNED_BASE_F=$(failures_of)
   PINNED_BASE_N=$(printf '%s' "$PINNED_BASE_F" | grep -c '')
@@ -301,6 +327,23 @@ pinned_baseline() {
   return 0
 }
 
+# The pinned columns below are judged by DIFFERENCE against the baseline
+# `pinned_baseline` recorded, so a baseline with NO verdict leaves them nothing to be
+# measured against. They refuse BY NAME rather than comparing against the empty default
+# (card t_08be3356): the variables are initialised now, so the `unbound variable` crash is
+# gone, but `[ "$now" != "" ]` would be true for any verdict and print
+# `the failure set MOVED — it is NOT blind to this input` — a false RED, and the very
+# verdict this column must never produce — so the column abstains instead, names the
+# baseline refusal as the finding, and still lets the rest of the report print.
+pinned_base_present() { # pinned_base_present <label> <the-claim-that-needs-a-baseline>
+  [ "${PINNED_BASE_OK:-0}" = 1 ] && return 0
+  echo "  *** ${1}: NOT JUDGED — the PRE-FIX guard's BASELINE above produced no verdict, so"
+  echo "      ${2} has nothing to be measured against. That baseline refusal is the finding;"
+  echo "      this column adds no verdict of its own. ***"
+  fail=1
+  return 1
+}
+
 # The pinned pre-fix guard must be BLIND to the input just planted: its failure set
 # is byte-identical to the baseline's, and (when a needle is given) the capture does
 # not spell the planted route even inside a pre-existing failure's message.
@@ -312,6 +355,7 @@ expect_pinned_blind() { # expect_pinned_blind <label> [needle-the-capture-must-n
     echo "  *** ${label}: the guard DID NOT RUN — no verdict is available ***"
     grep -E '^ℹ ' <<<"$OUT" | head -4; report_failures; fail=1; return
   fi
+  pinned_base_present "$label" '"the failure set did not move"' || return
   now=$(failures_of)
   if [ "$now" != "$PINNED_BASE_F" ]; then
     echo "  *** ${label}: the pinned pre-fix guard's failure set MOVED — it is NOT blind to this input ***"
@@ -344,6 +388,7 @@ expect_pinned_catches() { # expect_pinned_catches <label> <needle>
     echo "  *** ${label}: the guard DID NOT RUN — no verdict is available ***"
     grep -E '^ℹ ' <<<"$OUT" | head -4; report_failures; fail=1; return
   fi
+  pinned_base_present "$label" '"the failure set grew by a test it did not have before"' || return
   now=$(failures_of)
   while IFS= read -r n; do
     [ -n "$n" ] || continue
