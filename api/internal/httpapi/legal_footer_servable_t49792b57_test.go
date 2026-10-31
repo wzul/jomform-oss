@@ -253,9 +253,12 @@ func TestServableHostedLegalLink(t *testing.T) {
 	// Control the other way: the same non-canonical paths on a host that is NOT
 	// ours are the merchant's own site and stay untouched — we do not serve
 	// them, so we cannot know what they answer.
+	//
+	// Card t_022ea9cf widened the platform half of that rule: another tenant's
+	// subdomain is a host WE serve, so its unservable path is known-dead too and
+	// is now dropped (asserted separately below). External hosts are unchanged.
 	for _, raw := range []string{
 		"https://acme.example/privacy/",
-		"https://other.jomform.com/privacy/",
 	} {
 		raw := raw
 		t.Run("not our host, untouched: "+raw, func(t *testing.T) {
@@ -265,6 +268,30 @@ func TestServableHostedLegalLink(t *testing.T) {
 			}
 		})
 	}
+	// Card t_022ea9cf: an unservable path is dead on ANY host we serve, so a
+	// link on another tenant's subdomain is ours to drop too. Its CANONICAL page
+	// link stays kept (that page may exist; it is not ours to judge) — pinned in
+	// the same loop so the widening cannot become "drop every platform link".
+	for _, raw := range []string{
+		"https://other.jomform.com/privacy/",
+		"https://other.jomform.com/Privacy",
+		"https://other.jomform.com/privacy/1",
+	} {
+		raw := raw
+		t.Run("platform subdomain, unservable path dropped: "+raw, func(t *testing.T) {
+			if got := servableHostedLegalLink(raw, "wan", pages); got != "" {
+				t.Errorf("servableHostedLegalLink(%q) = %q, want \"\" — the public route serves "+
+					"only /privacy|/terms|/refund on any host, so this path 404s", raw, got)
+			}
+		})
+	}
+	t.Run("another tenant's canonical page still kept", func(t *testing.T) {
+		raw := "https://other.jomform.com/privacy"
+		if got := servableHostedLegalLink(raw, "wan", empty); got != raw {
+			t.Errorf("servableHostedLegalLink(%q) = %q, want it kept — a canonical page on "+
+				"another tenant's host is not ours to judge", raw, got)
+		}
+	})
 }
 
 func TestHostedLegalPageType(t *testing.T) {
