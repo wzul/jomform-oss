@@ -645,7 +645,7 @@ export default function ProfilePage() {
                     target="_blank"
                     rel="noopener noreferrer"
                     title={t("prof.languageDocs")}
-                    className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                    className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
                   >
                     ?
                   </a>
@@ -737,7 +737,7 @@ export default function ProfilePage() {
                   target="_blank"
                   rel="noopener noreferrer"
                   title={t("prof.twoFaDocs")}
-                  className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                  className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
                 >
                   ?
                 </a>
@@ -794,7 +794,7 @@ export default function ProfilePage() {
                       const r = await fetch("/api/auth/trust/forget", { method: "POST" });
                       if (r.ok) { setTrustedUntil(""); loadTrust(); }
                     }}
-                    className="text-[13px] text-red-700 hover:underline"
+                    className="text-jf-sm text-red-700 hover:underline"
                   >{t("prof.forgetDevice")}</button>
                 </div>
               )}
@@ -821,12 +821,12 @@ export default function ProfilePage() {
                             <p className="font-medium text-slate-800">
                               {d.label || t("prof.deviceUnknown")}
                               {d.current && (
-                                <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700">
+                                <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-jf-2xs font-medium text-emerald-700">
                                   {t("prof.deviceThis")}
                                 </span>
                               )}
                             </p>
-                            <p className="mt-0.5 text-[12px] text-slate-500">
+                            <p className="mt-0.5 text-jf-xs text-slate-500">
                               {d.ip && <span>{t("prof.deviceIP")}: {d.ip} · </span>}
                               {d.first_seen && (
                                 <span>{t("prof.deviceFirstSeen")}: {formatDate(d.first_seen, sessionUser?.timezone)} · </span>
@@ -843,7 +843,7 @@ export default function ProfilePage() {
                               if (r.ok) { setMsg(t("prof.revoked")); loadTrust(); }
                               else { setErr(t("prof.failed")); }
                             }}
-                            className="text-[13px] text-red-700 hover:underline"
+                            className="text-jf-sm text-red-700 hover:underline"
                           >{t("prof.revoke")}</button>
                         </li>
                       ))}
@@ -883,7 +883,7 @@ export default function ProfilePage() {
                 target="_blank"
                 rel="noopener noreferrer"
                 title={t("prof.passkeysDocs")}
-                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
               >
                 ?
               </a>
@@ -935,7 +935,7 @@ export default function ProfilePage() {
                 <li key={l.provider} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
                   <div>
                     <p className="text-sm capitalize">{l.provider} — {l.email}</p>
-                    <p className="text-[11px] text-[var(--jf-muted)]">{t("prof.linked")} {l.linked_at ? formatDate(l.linked_at, sessionUser?.timezone) : ""}</p>
+                    <p className="text-jf-2xs text-[var(--jf-muted)]">{t("prof.linked")} {l.linked_at ? formatDate(l.linked_at, sessionUser?.timezone) : ""}</p>
                   </div>
                   <button onClick={async () => { await fetch(`/api/auth/social/${l.provider}`, { method: "DELETE" }); load(); }}
                     className="text-xs text-slate-500 hover:text-red-700">{t("prof.unlink")}</button>
@@ -976,7 +976,7 @@ export default function ProfilePage() {
                 target="_blank"
                 rel="noopener noreferrer"
                 title={t("prof.mcpDocs")}
-                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
               >
                 ?
               </a>
@@ -994,7 +994,7 @@ export default function ProfilePage() {
                       setTimeout(() => setCopied(false), 1500);
                     });
                   }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md bg-[var(--jf-primary)] px-2.5 py-1 text-[11px] font-medium text-white hover:opacity-90"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md bg-[var(--jf-primary)] px-2.5 py-1 text-jf-2xs font-medium text-white hover:opacity-90"
                 >
                   {copied ? t("mcp.copied") : t("mcp.copy")}
                 </button>
@@ -1028,7 +1028,7 @@ export default function ProfilePage() {
                 <li key={a.client_id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
                   <div>
                     <p className="text-sm">{a.name || a.client_id}</p>
-                    <p className="text-[11px] text-[var(--jf-muted)]">{t("set.clientId")} {a.client_id}</p>
+                    <p className="text-jf-2xs text-[var(--jf-muted)]">{t("set.clientId")} {a.client_id}</p>
                   </div>
                   <button
                     onClick={async () => {

@@ -225,7 +225,7 @@ function SpamPageInner() {
           {tab === "submissions" ? (
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                <tr className="border-b border-[var(--jf-border)] text-left text-jf-3xs uppercase tracking-wide text-[var(--jf-muted)]">
                   <th className="px-4 py-3 font-medium">ID</th>
                   <th className="px-2 py-3 font-medium">{t("spam.reason")}</th>
                   <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("prod.date")}</th>
@@ -235,9 +235,9 @@ function SpamPageInner() {
               <tbody>
                 {subs.map((s) => (
                   <tr key={s.id} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px]">{s.id.slice(0, 8)}</td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-jf-2xs">{s.id.slice(0, 8)}</td>
                     <td className="max-w-64 truncate px-2 py-3 text-xs text-[var(--jf-muted)]">{reason(s.spam_reason)}</td>
-                    <td className="hidden whitespace-nowrap px-2 py-3 text-[11px] text-[var(--jf-muted)] sm:table-cell">
+                    <td className="hidden whitespace-nowrap px-2 py-3 text-jf-2xs text-[var(--jf-muted)] sm:table-cell">
                       {formatDate(s.created_at, user?.timezone)}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-right">
@@ -265,7 +265,7 @@ function SpamPageInner() {
           ) : (
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                <tr className="border-b border-[var(--jf-border)] text-left text-jf-3xs uppercase tracking-wide text-[var(--jf-muted)]">
                   <th className="px-4 py-3 font-medium">{t("dash.ref")}</th>
                   <th className="px-2 py-3 font-medium">{t("dash.buyer")}</th>
                   <th className="px-2 py-3 font-medium">{t("dash.amount")}</th>
@@ -278,17 +278,17 @@ function SpamPageInner() {
               <tbody>
                 {sales.map((s) => (
                   <tr key={s.ref_code} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px]">{s.ref_code}</td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-jf-2xs">{s.ref_code}</td>
                     <td className="max-w-32 truncate px-2 py-3 text-xs">
                       {s.buyer || "—"}
                       {s.buyer_email && (
-                        <span className="block truncate text-[10px] text-[var(--jf-muted)]">{s.buyer_email}</span>
+                        <span className="block truncate text-jf-3xs text-[var(--jf-muted)]">{s.buyer_email}</span>
                       )}
                     </td>
                     <td className="whitespace-nowrap px-2 py-3 text-xs font-semibold">{money(s.total_sen)}</td>
                     <td className="whitespace-nowrap px-2 py-3 text-xs">{s.status}</td>
                     <td className="hidden max-w-48 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">{reason(s.spam_reason)}</td>
-                    <td className="hidden whitespace-nowrap px-2 py-3 text-[11px] text-[var(--jf-muted)] sm:table-cell">
+                    <td className="hidden whitespace-nowrap px-2 py-3 text-jf-2xs text-[var(--jf-muted)] sm:table-cell">
                       {formatDate(s.created_at, user?.timezone)}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-right">

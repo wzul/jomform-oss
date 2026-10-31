@@ -193,7 +193,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
             {busy ? "…" : t("mem.invite")}
           </button>
         </div>
-        <p className="mt-1 text-[11px] text-[var(--jf-muted)]">{t(`role.hint.${role}` as Key)}</p>
+        <p className="mt-1 text-jf-2xs text-[var(--jf-muted)]">{t(`role.hint.${role}` as Key)}</p>
       </form>
 
       {/* Members list */}
@@ -213,7 +213,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
                   {m.name && <span className="ml-1 text-[var(--jf-muted)]">({m.email})</span>}
                 </p>
                 <span
-                  className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                  className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-jf-3xs font-semibold ${
                     m.role === "admin" || m.role === "owner"
                       ? "border border-indigo-200 bg-indigo-50 text-[var(--jf-primary-on-tint)]"
                       : m.role === "manage"
@@ -264,7 +264,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
             >
               <div className="min-w-0">
                 <p className="truncate text-sm">{inv.email}</p>
-                <span className="mt-0.5 inline-block rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                <span className="mt-0.5 inline-block rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-jf-3xs font-semibold text-amber-700">
                   {roleLabel(t, inv.role)}
                 </span>
               </div>

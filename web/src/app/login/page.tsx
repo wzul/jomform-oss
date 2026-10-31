@@ -43,17 +43,17 @@ function ProviderLogo({ id }: { id: string }) {
     case "google":
       return (
         <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" className="h-4 w-4 shrink-0" data-testid="logo-google">
-          <path fill="#EA4335" d="M12 5.04c1.62 0 3.06.56 4.2 1.65l3.14-3.14C17.45 1.8 14.97.75 12 .75 7.7.75 3.99 3.29 2.18 6.9l3.66 2.84C6.75 7.12 9.18 5.04 12 5.04z" />
-          <path fill="#4285F4" d="M23.25 12.27c0-.89-.08-1.75-.23-2.58H12v4.88h6.3a5.8 5.8 0 0 1-2.52 3.81l3.57 2.77c2.1-1.94 3.9-4.8 3.9-8.88z" />
-          <path fill="#FBBC05" d="M5.84 14.26a6.95 6.95 0 0 1 0-4.52L2.18 6.9a11.16 11.16 0 0 0 0 10.2l3.66-2.84z" />
-          <path fill="#34A853" d="M12 23.25c3.02 0 5.55-1 7.4-2.69l-3.57-2.77c-1 .66-2.27 1.05-3.83 1.05-2.82 0-5.25-2.08-5.83-4.85L2.18 17.1C3.99 20.71 7.7 23.25 12 23.25z" />
+          <path className="jf-logo-google-red" d="M12 5.04c1.62 0 3.06.56 4.2 1.65l3.14-3.14C17.45 1.8 14.97.75 12 .75 7.7.75 3.99 3.29 2.18 6.9l3.66 2.84C6.75 7.12 9.18 5.04 12 5.04z" />
+          <path className="jf-logo-google-blue" d="M23.25 12.27c0-.89-.08-1.75-.23-2.58H12v4.88h6.3a5.8 5.8 0 0 1-2.52 3.81l3.57 2.77c2.1-1.94 3.9-4.8 3.9-8.88z" />
+          <path className="jf-logo-google-yellow" d="M5.84 14.26a6.95 6.95 0 0 1 0-4.52L2.18 6.9a11.16 11.16 0 0 0 0 10.2l3.66-2.84z" />
+          <path className="jf-logo-google-green" d="M12 23.25c3.02 0 5.55-1 7.4-2.69l-3.57-2.77c-1 .66-2.27 1.05-3.83 1.05-2.82 0-5.25-2.08-5.83-4.85L2.18 17.1C3.99 20.71 7.7 23.25 12 23.25z" />
         </svg>
       );
     case "cloudflare":
       return (
         <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" className="h-4 w-4 shrink-0" data-testid="logo-cloudflare">
-          <path fill="#F48120" d="M13.6 6.1a6.7 6.7 0 0 0-.5 0l.2-.5C14.3 3.5 13.4 2 11.7 2c-1.9 0-3.4 1.5-3.4 3.4 0 .2 0 .3.1.5C7 6 5.5 7.6 5.5 9.7c0 .2 0 .4.1.6H4c-.2 0-.4.2-.4.4s.2.4.4.4h9.5a.5.5 0 0 0 0-1H8.2c-.4 0-.8-.4-.7-.9 0-.4.4-.8.9-.8h10.5c1.4 0 2.5-1.1 2.5-2.5s-1.1-2.5-2.5-2.5c-.3 0-.6 0-.8.1-.6-.9-1.6-1.4-2.6-1.4z" />
-          <path fill="#FAAA3F" d="M5.4 20.2c-.1 0-.2-.2-.1-.3 0-.2.2-.4.4-.4h10.1c.7 0 1.3-.6 1.3-1.3v-.1h3.4c.7 0 1.3-.5 1.3-1.2 0-.1 0-.2 0-.3-1.2.3-2.5.3-3.8 0 0 .6-.5 1-1 1H9.5c-1.4 0-2.6-1.1-2.6-2.5 0-.1 0-.2 0-.3.3-1.5 1.4-2.4 2.9-2.4.1 0 .2 0 .3.1l1.1-.6c-.5-.3-1-.5-1.5-.5-1.7-.1-3.4.5-4.3 2.2-.6.4-1.4.7-2.3.7-1.2.1-2.3.9-2.5 2.1-.3 1.3.6 2.4 1.8 2.4h.3z" />
+          <path className="jf-logo-cloudflare-orange" d="M13.6 6.1a6.7 6.7 0 0 0-.5 0l.2-.5C14.3 3.5 13.4 2 11.7 2c-1.9 0-3.4 1.5-3.4 3.4 0 .2 0 .3.1.5C7 6 5.5 7.6 5.5 9.7c0 .2 0 .4.1.6H4c-.2 0-.4.2-.4.4s.2.4.4.4h9.5a.5.5 0 0 0 0-1H8.2c-.4 0-.8-.4-.7-.9 0-.4.4-.8.9-.8h10.5c1.4 0 2.5-1.1 2.5-2.5s-1.1-2.5-2.5-2.5c-.3 0-.6 0-.8.1-.6-.9-1.6-1.4-2.6-1.4z" />
+          <path className="jf-logo-cloudflare-amber" d="M5.4 20.2c-.1 0-.2-.2-.1-.3 0-.2.2-.4.4-.4h10.1c.7 0 1.3-.6 1.3-1.3v-.1h3.4c.7 0 1.3-.5 1.3-1.2 0-.1 0-.2 0-.3-1.2.3-2.5.3-3.8 0 0 .6-.5 1-1 1H9.5c-1.4 0-2.6-1.1-2.6-2.5 0-.1 0-.2 0-.3.3-1.5 1.4-2.4 2.9-2.4.1 0 .2 0 .3.1l1.1-.6c-.5-.3-1-.5-1.5-.5-1.7-.1-3.4.5-4.3 2.2-.6.4-1.4.7-2.3.7-1.2.1-2.3.9-2.5 2.1-.3 1.3.6 2.4 1.8 2.4h.3z" />
         </svg>
       );
     // GitHub (octocat mark) and Microsoft/Azure AD share a simple, neutral
@@ -470,7 +470,7 @@ export default function Login() {
           <Link
             href="/"
             aria-label={t("login.backToHome")}
-            className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#5e6ad2] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)] transition-opacity hover:opacity-90"
+            className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--jf-primary)] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)] transition-opacity hover:opacity-90"
           >
             JF
           </Link>
@@ -515,9 +515,9 @@ export default function Login() {
                     setError("");
                     setStep(1);
                   }}
-                  className={`rounded-md py-1.5 text-[13px] font-medium transition-colors ${
+                  className={`rounded-md py-1.5 text-jf-sm font-medium transition-colors ${
                     mode === m
-                      ? "bg-[#5e6ad2]/20 text-[#4338ca] shadow-[inset_0_0_0_1px_rgba(113,112,255,0.35)]"
+                      ? "bg-[var(--jf-primary)]/20 text-[var(--jf-primary-on-tint)] shadow-[inset_0_0_0_1px_rgba(113,112,255,0.35)]"
                       : "text-slate-600 hover:text-slate-800"
                   }`}
                 >
@@ -530,14 +530,14 @@ export default function Login() {
           {/* Error banner — only ever a genuine failure (wrong code, wrong
               credentials). NOT used as an instruction banner. */}
           {error && (
-            <p role="alert" className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[13px] text-red-700">
+            <p role="alert" className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-jf-sm text-red-700">
               {error}
             </p>
           )}
 
           {done ? (
             <div className="space-y-3">
-              <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-3 text-[13px] text-green-700">
+              <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-3 text-jf-sm text-green-700">
                 {mode === "register"
                   ? t("login.registerDone")
                   : mode === "forgot"
@@ -553,7 +553,7 @@ export default function Login() {
                     setMode("login");
                     setDone(false);
                   }}
-                  className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
+                  className="mt-1 w-full rounded-md bg-[var(--jf-primary)] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
                 >
                   {mode === "forgot" || mode === "magic" ? t(mode === "magic" ? "login.passwordlessBack" : "login.forgotBack") : t("login.backToLogin")}
                 </button>
@@ -582,18 +582,18 @@ export default function Login() {
                   disabled={busy}
                   placeholder="000000"
                   aria-label={t("login.totpTitle")}
-                  className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-3 text-center font-mono text-2xl tracking-[0.5em] text-[var(--jf-text)] outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
+                  className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-3 text-center font-mono text-2xl tracking-[0.5em] text-[var(--jf-text)] outline-none transition-colors focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50"
                 />
               </div>
               {/* Issue #63: trusted-device opt-in, default checked — server
                   mints jf_trust on a successful code only. */}
-              <label className="flex cursor-pointer items-start gap-2 text-[13px] text-[var(--jf-muted)]">
+              <label className="flex cursor-pointer items-start gap-2 text-jf-sm text-[var(--jf-muted)]">
                 <input
                   type="checkbox"
                   checked={totpRemember}
                   disabled={busy}
                   onChange={(e) => setTotpRemember(e.target.checked)}
-                  className="mt-0.5 accent-[#5e6ad2]"
+                  className="mt-0.5 accent-[var(--jf-primary)]"
                 />
                 <span>{t("login.totpRemember")}</span>
               </label>
@@ -602,13 +602,13 @@ export default function Login() {
                   captured in `cred` on Step 1. */}
               <div className="pt-1">
                 {emailCodeSent ? (
-                  <p className="text-[12px] text-[var(--jf-muted)]">{t("login.emailCodeSent")}</p>
+                  <p className="text-jf-xs text-[var(--jf-muted)]">{t("login.emailCodeSent")}</p>
                 ) : (
                   <button
                     type="button"
                     disabled={busy || !cred.email}
                     onClick={requestEmailCode}
-                    className="text-[12px] text-[var(--jf-muted)] hover:text-[#7170ff] hover:underline disabled:opacity-50"
+                    className="text-jf-xs text-[var(--jf-muted)] hover:text-[var(--jf-accent)] hover:underline disabled:opacity-50"
                   >
                     {t("login.emailCodeLink")}
                   </button>
@@ -616,7 +616,7 @@ export default function Login() {
               </div>
               <button
                 disabled={busy || code.length !== 6}
-                className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-60"
+                className="mt-1 w-full rounded-md bg-[var(--jf-primary)] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-60"
               >
                 {busy ? "…" : t("login.totpSubmit")}
               </button>
@@ -624,7 +624,7 @@ export default function Login() {
                 type="button"
                 onClick={backToCredentials}
                 disabled={busy}
-                className="mt-1 w-full text-[13px] font-medium text-[#5e6ad2] hover:underline"
+                className="mt-1 w-full text-jf-sm font-medium text-[var(--jf-primary)] hover:underline"
               >
                 {t("login.totpBack")}
               </button>
@@ -660,7 +660,7 @@ export default function Login() {
                   defaultValue={cred.email}
                   autoComplete="email"
                   placeholder="anda@kedai.my"
-                  className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
+                  className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50"
                 />
               </div>
               {mode !== "forgot" && mode !== "magic" && (
@@ -678,10 +678,10 @@ export default function Login() {
                     defaultValue={cred.password}
                     minLength={mode === "register" ? 0 : 1}
                     placeholder={mode === "register" ? t("login.pwRegisterPh") : "••••••••••"}
-                    className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[#7170ff]/60 focus:bg-indigo-50"
+                    className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50"
                   />
                   {mode === "register" && (
-                    <p className="mt-1 text-[11px] text-[var(--jf-muted)]">{t("login.pwOptional")}</p>
+                    <p className="mt-1 text-jf-2xs text-[var(--jf-muted)]">{t("login.pwOptional")}</p>
                   )}
                 </div>
               )}
@@ -690,12 +690,12 @@ export default function Login() {
                 <div className="flex items-center justify-between">
                   {/* Issue #62: remember me — unchecked (default) = browser
                       session cookie + 24h server TTL; checked = 14 days. */}
-                  <label className="flex cursor-pointer items-center gap-2 text-[13px] text-[var(--jf-muted)]">
+                  <label className="flex cursor-pointer items-center gap-2 text-jf-sm text-[var(--jf-muted)]">
                     <input
                       type="checkbox"
                       checked={remember}
                       onChange={(e) => setRemember(e.target.checked)}
-                      className="accent-[#5e6ad2]"
+                      className="accent-[var(--jf-primary)]"
                     />
                     <span>{t("login.remember")}</span>
                   </label>
@@ -703,7 +703,7 @@ export default function Login() {
                   <button
                     type="button"
                     onClick={() => { setMode("forgot"); setError(""); setDone(false); }}
-                    className="text-[13px] font-medium text-[#5e6ad2] hover:underline"
+                    className="text-jf-sm font-medium text-[var(--jf-primary)] hover:underline"
                   >
                     {t("login.forgot")}
                   </button>
@@ -713,7 +713,7 @@ export default function Login() {
                 <button
                   type="button"
                   onClick={() => { setMode("login"); setError(""); setDone(false); }}
-                  className="text-[13px] font-medium text-[#5e6ad2] hover:underline"
+                  className="text-jf-sm font-medium text-[var(--jf-primary)] hover:underline"
                 >
                   {t("login.forgotBack")}
                 </button>
@@ -724,7 +724,7 @@ export default function Login() {
                       login and signup (hybrid magic-link, #278). The hint below
                       is a quiet reassurance for new users — no separate
                       signup tab needed. */}
-                  <p className="text-[12px] leading-snug text-[var(--jf-muted)]">
+                  <p className="text-jf-xs leading-snug text-[var(--jf-muted)]">
                     {t("login.newToJomform")}
                   </p>
                   {/* Password is the secondary option — a small link that opens
@@ -734,7 +734,7 @@ export default function Login() {
                     type="button"
                     onClick={() => { setMode("login"); setError(""); setDone(false); }}
                     disabled={busy}
-                    className="text-[13px] font-medium text-[#5e6ad2] hover:underline"
+                    className="text-jf-sm font-medium text-[var(--jf-primary)] hover:underline"
                   >
                     {t("login.loginWithPassword")} {t("login.orSignupWithPassword")}
                   </button>
@@ -743,7 +743,7 @@ export default function Login() {
 
               <button
                 disabled={busy}
-                className="mt-1 w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-60"
+                className="mt-1 w-full rounded-md bg-[var(--jf-primary)] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-60"
               >
                 {busy ? "…" : mode === "login" ? t("login.submitLogin") : mode === "register" ? t("login.submitRegister") : mode === "magic" ? t("login.continue") : t("login.forgotSubmit")}
               </button>
@@ -756,7 +756,7 @@ export default function Login() {
             <button
               type="button"
               onClick={() => { setMode("magic"); setError(""); setDone(false); }}
-              className="mt-3 w-full text-center text-[13px] font-medium text-[#5e6ad2] hover:underline"
+              className="mt-3 w-full text-center text-jf-sm font-medium text-[var(--jf-primary)] hover:underline"
             >
               {t("login.passwordless")}
             </button>
@@ -777,7 +777,7 @@ export default function Login() {
                 onClick={passkeyLogin}
                 disabled={busy}
                 data-testid="passkey-login"
-                className="flex w-full items-center justify-center gap-2 rounded-md border border-[var(--jf-border)] bg-white py-2 text-[13px] font-medium text-[var(--jf-text)] transition-colors hover:border-[#7170ff]/60 hover:bg-indigo-50 disabled:opacity-60"
+                className="flex w-full items-center justify-center gap-2 rounded-md border border-[var(--jf-border)] bg-white py-2 text-jf-sm font-medium text-[var(--jf-text)] transition-colors hover:border-[var(--jf-accent)]/60 hover:bg-indigo-50 disabled:opacity-60"
               >
                 <span aria-hidden="true" className="text-base leading-none">🔑</span>
                 {t("login.passkey")}
@@ -797,7 +797,7 @@ export default function Login() {
                   <a
                     key={p.id}
                     href={`/api/auth/oauth/${p.id}`}
-                    className="flex w-full items-center justify-center gap-2 rounded-md border border-[var(--jf-border)] bg-white py-2 text-[13px] font-medium text-[var(--jf-text)] transition-colors hover:border-[#7170ff]/60 hover:bg-indigo-50"
+                    className="flex w-full items-center justify-center gap-2 rounded-md border border-[var(--jf-border)] bg-white py-2 text-jf-sm font-medium text-[var(--jf-text)] transition-colors hover:border-[var(--jf-accent)]/60 hover:bg-indigo-50"
                   >
                     {/* Issue #292: provider logo (decorative) rendered left of the text */}
                     <ProviderLogo id={p.id} />
@@ -809,7 +809,7 @@ export default function Login() {
           )}
         </div>
 
-        <p className="mt-6 text-center text-xs text-[#62666d]">
+        <p className="mt-6 text-center text-xs text-[var(--jf-text-tertiary)]">
           {t("login.termsNote")}
         </p>
 
@@ -817,7 +817,7 @@ export default function Login() {
         <p className="mt-4 text-center">
           <Link
             href="/"
-            className="text-xs font-medium text-[#62666d] transition-colors hover:text-[#5e6ad2]"
+            className="text-xs font-medium text-[var(--jf-text-tertiary)] transition-colors hover:text-[var(--jf-primary)]"
           >
             {t("login.backToHome")}
           </Link>

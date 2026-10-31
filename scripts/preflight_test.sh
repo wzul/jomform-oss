@@ -2029,6 +2029,7 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
     monitor)  printf '%s\n' 'deploy/monitoring/*' ;;
     tmpkey)   printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
     mediaprobe) printf '%s\n' 'scripts/media-purge-probe.sh' 'scripts/media-purge-probe_test.sh' ;;
+    design)   printf '%s\n' 'scripts/design-guard.py' 'scripts/design-guard_test.sh' ;;
     backup)   printf '%s\n' 'deploy/backup/*' ;;
     host)     printf '%s\n' 'deploy/host/*' 'deploy/vps/*' ;;
     prunewt)  printf '%s\n' 'deploy/worktrees/*' ;;

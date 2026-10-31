@@ -801,7 +801,7 @@ function SalesPageInner() {
               switch is the stored per-workspace beep setting. */}
           <div className="flex items-center gap-2">
             <span
-              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-jf-2xs font-medium ${
                 live
                   ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                   : "border-slate-200 bg-slate-50 text-slate-500"
@@ -838,7 +838,7 @@ function SalesPageInner() {
                 summary, not the guide the switch is meant to open. */}
             <a
               href="/docs/sales#realtime-notifications"
-              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-[var(--jf-muted)] hover:bg-slate-50"
+              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-jf-3xs font-semibold text-[var(--jf-muted)] hover:bg-slate-50"
               aria-label={t("sales.soundDocs")}
               title={t("sales.soundDocs")}
             >
@@ -848,7 +848,7 @@ function SalesPageInner() {
                 say the setting could not be read instead of showing a state the
                 workspace may not hold. */}
             {soundReadFailed && (
-              <span role="status" className="text-[11px] text-amber-700">
+              <span role="status" className="text-jf-2xs text-amber-700">
                 {t("sales.soundReadFail")}
               </span>
             )}
@@ -927,7 +927,7 @@ function SalesPageInner() {
               <button
                 onClick={captureAllPending}
                 disabled={busyRef !== null}
-                className="rounded-md bg-[#5e6ad2] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+                className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {busyRef === "__all__" ? "…" : `${t("sales.captureAll")} (${rows.filter(isCapturePending).length})`}
               </button>
@@ -971,7 +971,7 @@ function SalesPageInner() {
                 /* Issue #604: a response form's entries have no money and no
                    payment status, so the sale columns would all read "—"/RM0.00.
                    Show the recorded answers instead. */
-                <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                <tr className="border-b border-[var(--jf-border)] text-left text-jf-3xs uppercase tracking-wide text-[var(--jf-muted)]">
                   <th className="px-4 py-3 font-medium">{t("bld.responseReceived")}</th>
                   <th className="px-2 py-3 font-medium">{t("dash.buyer")}</th>
                   <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("bld.responseAnswers")}</th>
@@ -985,7 +985,7 @@ function SalesPageInner() {
                    actions — and every row below emits exactly these 8 cells.
                    Without this branch the responses rendered through the 9-column
                    sales layout with an empty ref and RM0.00. */
-                <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                <tr className="border-b border-[var(--jf-border)] text-left text-jf-3xs uppercase tracking-wide text-[var(--jf-muted)]">
                   <th className="px-4 py-3 font-medium">{t("sales.type")}</th>
                   <th className="px-2 py-3 font-medium">{t("dash.buyer")}</th>
                   <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("sales.itemsOrAnswers")}</th>
@@ -996,7 +996,7 @@ function SalesPageInner() {
                   <th className="px-4 py-3 text-right font-medium">{t("sales.actions")}</th>
                 </tr>
               ) : (
-                <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                <tr className="border-b border-[var(--jf-border)] text-left text-jf-3xs uppercase tracking-wide text-[var(--jf-muted)]">
                   <th className="px-4 py-3 font-medium">{t("dash.ref")}</th>
                   <th className="px-2 py-3 font-medium">{t("dash.buyer")}</th>
                   <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("sales.items")}</th>
@@ -1020,9 +1020,9 @@ function SalesPageInner() {
               {rows.map((s) =>
                 mixedView ? (
                   <tr key={rowKey(s)} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px]">
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-jf-2xs">
                       {rowKind(s) === "response" ? (
-                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary-on-tint)]">
+                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-primary-on-tint)]">
                           {t("bld.responses")}
                         </span>
                       ) : (
@@ -1032,7 +1032,7 @@ function SalesPageInner() {
                     <td className="max-w-32 truncate px-2 py-3 text-xs">
                       {s.buyer || "—"}
                       {s.buyer_email && (
-                        <span className="block truncate text-[10px] text-[var(--jf-muted)]">{s.buyer_email}</span>
+                        <span className="block truncate text-jf-3xs text-[var(--jf-muted)]">{s.buyer_email}</span>
                       )}
                     </td>
                     <td className="hidden max-w-48 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
@@ -1046,14 +1046,14 @@ function SalesPageInner() {
                       {rowKind(s) === "response" ? "—" : money(s.total_sen, s.currency)}
                     </td>
                     <td className="whitespace-nowrap px-2 py-3">
-                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${saleBadge(s.status)}`}>
+                      <span className={`rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${saleBadge(s.status)}`}>
                         {s.status}
                       </span>
                     </td>
                     <td className="hidden max-w-32 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
                       {s.form_id ? formName.get(s.form_id) || "—" : "—"}
                     </td>
-                    <td className="hidden whitespace-nowrap px-2 py-3 text-[11px] text-[var(--jf-muted)] sm:table-cell">
+                    <td className="hidden whitespace-nowrap px-2 py-3 text-jf-2xs text-[var(--jf-muted)] sm:table-cell">
                       {formatDate(s.created_at, user?.timezone)}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-right">
@@ -1070,16 +1070,16 @@ function SalesPageInner() {
                     key={rowKey(s)}
                     className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60"
                   >
-                    <td className="whitespace-nowrap px-4 py-3 text-[11px] text-[var(--jf-muted)]">
+                    <td className="whitespace-nowrap px-4 py-3 text-jf-2xs text-[var(--jf-muted)]">
                       {formatDateTime(s.created_at, user?.timezone)}
                     </td>
                     <td className="max-w-32 truncate px-2 py-3 text-xs">
                       {s.buyer || "—"}
                       {s.buyer_email && (
-                        <span className="block truncate text-[10px] text-[var(--jf-muted)]">{s.buyer_email}</span>
+                        <span className="block truncate text-jf-3xs text-[var(--jf-muted)]">{s.buyer_email}</span>
                       )}
                       {s.buyer_phone && (
-                        <span className="block truncate text-[10px] text-[var(--jf-muted)]">{s.buyer_phone}</span>
+                        <span className="block truncate text-jf-3xs text-[var(--jf-muted)]">{s.buyer_phone}</span>
                       )}
                     </td>
                     <td className="hidden max-w-64 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
@@ -1099,14 +1099,14 @@ function SalesPageInner() {
                   </tr>
                 ) : (
                   <tr key={rowKey(s)} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
-                  <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px]">{s.ref_code}</td>
+                  <td className="whitespace-nowrap px-4 py-3 font-mono text-jf-2xs">{s.ref_code}</td>
                   <td className="max-w-32 truncate px-2 py-3 text-xs">
                     {s.buyer || "—"}
                     {s.buyer_email && (
-                      <span className="block truncate text-[10px] text-[var(--jf-muted)]">{s.buyer_email}</span>
+                      <span className="block truncate text-jf-3xs text-[var(--jf-muted)]">{s.buyer_email}</span>
                     )}
                     {s.table_number && (
-                      <span className="mt-0.5 inline-block rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-[var(--jf-primary-on-tint)]">
+                      <span className="mt-0.5 inline-block rounded-full bg-indigo-50 px-1.5 py-0.5 text-jf-3xs font-semibold text-[var(--jf-primary-on-tint)]">
                         {t("sales.table")} {s.table_number}
                       </span>
                     )}
@@ -1118,12 +1118,12 @@ function SalesPageInner() {
                   </td>
                   <td className="whitespace-nowrap px-2 py-3 text-xs font-semibold">{money(s.total_sen, s.currency)}</td>
                   <td className="whitespace-nowrap px-2 py-3">
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${saleBadge(s.status)}`}>
+                    <span className={`rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${saleBadge(s.status)}`}>
                       {s.status}
                     </span>
                     {isPartiallyRefunded(s) && (
                       <span
-                        className={`ml-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${refundBadge}`}
+                        className={`ml-1 inline-block rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${refundBadge}`}
                         title={`${t("sales.refundedLabel")}: ${money(s.refunded_sen || 0, s.currency)} · ${t("sales.outstanding")}: ${money(s.outstanding_sen || 0, s.currency)}`}
                       >
                         {t("sales.partiallyRefunded")}
@@ -1132,17 +1132,17 @@ function SalesPageInner() {
                   </td>
                   <td className="hidden whitespace-nowrap px-2 py-3 sm:table-cell">
                     {s.email_status ? (
-                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${emailStatusBadge(s.email_status)}`}>
+                      <span className={`rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${emailStatusBadge(s.email_status)}`}>
                         {emailStatusLabel(s.email_status, t)}
                       </span>
                     ) : (
-                      <span className="text-[10px] text-[var(--jf-muted)]">{t("dash.emailNotSent")}</span>
+                      <span className="text-jf-3xs text-[var(--jf-muted)]">{t("dash.emailNotSent")}</span>
                     )}
                   </td>
                   <td className="hidden max-w-32 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
                     {s.form_id ? formName.get(s.form_id) || "—" : "—"}
                   </td>
-                  <td className="hidden whitespace-nowrap px-2 py-3 text-[11px] text-[var(--jf-muted)] sm:table-cell">
+                  <td className="hidden whitespace-nowrap px-2 py-3 text-jf-2xs text-[var(--jf-muted)] sm:table-cell">
                     {formatDate(s.created_at, user?.timezone)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3">
@@ -1158,14 +1158,14 @@ function SalesPageInner() {
                           <button
                             onClick={() => captureSale(s.ref_code)}
                             disabled={busyRef !== null}
-                            className="rounded-md bg-[#5e6ad2] px-2 py-1 text-[10px] font-medium text-white hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+                            className="rounded-md bg-[var(--jf-primary)] px-2 py-1 text-jf-3xs font-medium text-white hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             {busyRef === s.ref_code ? "…" : t("bld.capture")}
                           </button>
                           <button
                             onClick={() => releaseSale(s.ref_code)}
                             disabled={busyRef !== null}
-                            className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                            className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-jf-3xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             {t("bld.release")}
                           </button>
@@ -1174,12 +1174,12 @@ function SalesPageInner() {
                         <button
                           onClick={() => refundSale(s.ref_code)}
                           disabled={busyRef !== null}
-                          className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-jf-3xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           {busyRef === s.ref_code ? "…" : t("sales.refund")}
                         </button>
                       ) : (
-                        <span className="text-[10px] text-[var(--jf-muted)]">—</span>
+                        <span className="text-jf-3xs text-[var(--jf-muted)]">—</span>
                       )}
                     </div>
                   </td>
@@ -1366,7 +1366,7 @@ function SalesPageInner() {
                 {Array.isArray(detail.items) && detail.items.length ? (
                   <table className="mt-2 w-full text-sm">
                     <thead>
-                      <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                      <tr className="border-b border-[var(--jf-border)] text-left text-jf-3xs uppercase tracking-wide text-[var(--jf-muted)]">
                         <th className="py-1 font-medium">Item</th>
                         <th className="py-1 text-right font-medium">{t("sales.qty")}</th>
                         <th className="py-1 text-right font-medium">{t("dash.amount")}</th>
@@ -1490,7 +1490,7 @@ function SalesPageInner() {
                     <div className="flex justify-between gap-4">
                       <dt className="text-[var(--jf-muted)]">{t("dash.email")}</dt>
                       <dd>
-                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${emailStatusBadge(detail.email_status)}`}>
+                        <span className={`rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${emailStatusBadge(detail.email_status)}`}>
                           {emailStatusLabel(detail.email_status, t)}
                         </span>
                       </dd>

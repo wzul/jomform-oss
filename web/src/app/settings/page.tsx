@@ -153,6 +153,14 @@ const CURRENCIES = [
 // An explicit "*" option subscribes to all events.
 const WEBHOOK_EVENTS = ["sale.paid", "sale.failed", "subscription.charged"] as const;
 
+// The landing page's two colour fields round-trip a CONCRETE colour string:
+// `<input type="color">` accepts only a colour value and the value is persisted
+// as-is, so `var(--jf-…)` is not valid in this position. These are DATA
+// defaults, not styling. (Card t_e2f3a553; before it, each literal appeared
+// three times in this file.)
+const DEFAULT_LP_PRIMARY = "#7c3aed"; // design-tokens-exempt: a persisted colour-field default, not a style
+const DEFAULT_LP_BACKGROUND = "#ffffff"; // design-tokens-exempt: a persisted colour-field default, not a style
+
 export default function Settings() {
   const { t } = useI18n();
   const router = useRouter();
@@ -310,8 +318,8 @@ export default function Settings() {
   const [lpSubtitle, setLpSubtitle] = useState("");
   const [lpBody, setLpBody] = useState("");
   const [lpImageUrl, setLpImageUrl] = useState("");
-  const [lpPrimaryColor, setLpPrimaryColor] = useState("#7c3aed");
-  const [lpBackgroundColor, setLpBackgroundColor] = useState("#ffffff");
+  const [lpPrimaryColor, setLpPrimaryColor] = useState(DEFAULT_LP_PRIMARY);
+  const [lpBackgroundColor, setLpBackgroundColor] = useState(DEFAULT_LP_BACKGROUND);
   const [lpLogoUrl, setLpLogoUrl] = useState("");
   // Issue #501: inline error for a rejected (non-https) landing image/logo,
   // shown at the field rather than only as a page-level banner.
@@ -559,8 +567,8 @@ export default function Settings() {
         setLpSubtitle(lp.subtitle || "");
         setLpBody(lp.body || "");
         setLpImageUrl(lp.image_url || "");
-        setLpPrimaryColor(lp.primary_color || "#7c3aed");
-        setLpBackgroundColor(lp.background_color || "#ffffff");
+        setLpPrimaryColor(lp.primary_color || DEFAULT_LP_PRIMARY);
+        setLpBackgroundColor(lp.background_color || DEFAULT_LP_BACKGROUND);
         setLpLogoUrl(lp.logo_url || "");
         setLpCtas(Array.isArray(lp.ctas) ? lp.ctas : []);
         setLpForms(Array.isArray(lp.forms) ? lp.forms : []);
@@ -1453,7 +1461,7 @@ export default function Settings() {
                 <label className="flex items-center gap-2 text-xs text-slate-500">
                   Brand ID
                   {verified && (
-                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-jf-3xs font-semibold text-emerald-700">
                       {t("set.apiVerified")}
                     </span>
                   )}
@@ -1470,7 +1478,7 @@ export default function Settings() {
                 <label className="flex items-center gap-2 text-xs text-slate-500">
                   {t("set.secretKey")}
                   {verified && (
-                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-jf-3xs font-semibold text-emerald-700">
                       {t("set.apiVerified")}
                     </span>
                   )}
@@ -1588,9 +1596,9 @@ export default function Settings() {
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{d.domain}</p>
                         {d.verified ? (
-                          <p className="text-[11px] text-emerald-700">{t("set.verified")}</p>
+                          <p className="text-jf-2xs text-emerald-700">{t("set.verified")}</p>
                         ) : (
-                          <p className="flex items-center gap-1.5 text-[11px] text-amber-600">
+                          <p className="flex items-center gap-1.5 text-jf-2xs text-amber-600">
                             {polling[d.id] && (
                               <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
                             )}
@@ -1599,26 +1607,26 @@ export default function Settings() {
                         )}
                         {/* Issue #322: per-domain auto-CNAME status. */}
                         {d.auto_cname === "created" && (
-                          <p className="text-[11px] text-emerald-700">{t("set.autoCnameStatusCreated")}</p>
+                          <p className="text-jf-2xs text-emerald-700">{t("set.autoCnameStatusCreated")}</p>
                         )}
                         {d.auto_cname === "failed" && (
-                          <p className="text-[11px] text-red-600">{t("set.autoCnameStatusFailed")}</p>
+                          <p className="text-jf-2xs text-red-600">{t("set.autoCnameStatusFailed")}</p>
                         )}
                         {/* Issue #397: per-domain TLS status. */}
                         {d.verified && d.tls_status === "active" && (
-                          <p className="text-[11px] text-emerald-700">{t("set.tlsStatusActive")}</p>
+                          <p className="text-jf-2xs text-emerald-700">{t("set.tlsStatusActive")}</p>
                         )}
                         {d.verified && d.tls_status === "pending" && (
-                          <p className="text-[11px] text-amber-600">{t("set.tlsStatusPending")}</p>
+                          <p className="text-jf-2xs text-amber-600">{t("set.tlsStatusPending")}</p>
                         )}
                         {d.verified && d.tls_status === "error" && (
-                          <p className="text-[11px] text-red-600">
+                          <p className="text-jf-2xs text-red-600">
                             {t("set.tlsStatusError")}
                             {d.tls_error ? ` — ${d.tls_error}` : ""}
                           </p>
                         )}
                         {d.verified && d.tls_status === "custom" && (
-                          <p className="text-[11px] text-indigo-600">{t("set.tlsStatusCustom")}</p>
+                          <p className="text-jf-2xs text-indigo-600">{t("set.tlsStatusCustom")}</p>
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
@@ -1657,7 +1665,7 @@ export default function Settings() {
                     </div>
                     {!d.verified && (
                       <div className="mt-2 rounded-md bg-slate-50 px-3 py-2">
-                        <p className="text-[11px] font-medium text-slate-500">{t("set.cnameRow")}</p>
+                        <p className="text-jf-2xs font-medium text-slate-500">{t("set.cnameRow")}</p>
                         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-xs text-slate-700">
                           <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">CNAME</span>
                           <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">{d.domain}</span>
@@ -1669,13 +1677,13 @@ export default function Settings() {
                               navigator.clipboard?.writeText(`CNAME ${d.domain} → ${CNAME_TARGET}`);
                               setDomainMsg(t("set.copy"));
                             }}
-                            className="ml-1 text-[11px] text-[#5e6ad2] hover:underline"
+                            className="ml-1 text-jf-2xs text-[var(--jf-primary)] hover:underline"
                           >
                             {t("set.copy")}
                           </button>
                         </div>
                         {polling[d.id] && (
-                          <p className="mt-1.5 text-[11px] text-[var(--jf-muted-on-tint)]">{t("set.pollingHint")}</p>
+                          <p className="mt-1.5 text-jf-2xs text-[var(--jf-muted-on-tint)]">{t("set.pollingHint")}</p>
                         )}
                       </div>
                     )}
@@ -1695,12 +1703,12 @@ export default function Settings() {
                     {d.verified && (
                       <div className="mt-3 rounded-md bg-slate-50 px-3 py-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[11px] font-medium text-slate-500">{t("set.tlsModeLabel")}</span>
+                          <span className="text-jf-2xs font-medium text-slate-500">{t("set.tlsModeLabel")}</span>
                           <button
                             type="button"
                             onClick={() => setDomainTlsMode(d, "auto")}
                             disabled={!!tlsBusy[d.id] || d.tls_mode === "auto"}
-                            className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed ${
+                            className={`rounded-md px-2.5 py-1 text-jf-2xs font-semibold transition-colors disabled:cursor-not-allowed ${
                               d.tls_mode === "auto"
                                 ? "bg-[var(--jf-primary)] text-white"
                                 : "border border-[var(--jf-primary)] text-[var(--jf-primary)] hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]"
@@ -1712,7 +1720,7 @@ export default function Settings() {
                             type="button"
                             onClick={() => setDomainTlsMode(d, "custom")}
                             disabled={!!tlsBusy[d.id] || d.tls_mode === "custom"}
-                            className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed ${
+                            className={`rounded-md px-2.5 py-1 text-jf-2xs font-semibold transition-colors disabled:cursor-not-allowed ${
                               d.tls_mode === "custom"
                                 ? "bg-[var(--jf-primary)] text-white"
                                 : "border border-[var(--jf-primary)] text-[var(--jf-primary)] hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]"
@@ -1724,7 +1732,7 @@ export default function Settings() {
                             <button
                               type="button"
                               onClick={() => setCertOpen((prev) => ({ ...prev, [d.id]: !prev[d.id] }))}
-                              className="text-[11px] font-semibold text-[#5e6ad2] hover:underline"
+                              className="text-jf-2xs font-semibold text-[var(--jf-primary)] hover:underline"
                             >
                               {certOpen[d.id] ? t("set.tlsCertClose") : t("set.tlsCertUpload")}
                             </button>
@@ -1732,18 +1740,18 @@ export default function Settings() {
                         </div>
                         {/* Issue #398: per-domain ACME contact email (defaults to the account email). */}
                         <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <label className="text-[11px] font-medium text-slate-500">{t("set.tlsEmailLabel")}</label>
+                          <label className="text-jf-2xs font-medium text-slate-500">{t("set.tlsEmailLabel")}</label>
                           <input
                             value={tlsEmailInput[d.id] ?? d.tls_email ?? ""}
                             onChange={(e) => setTlsEmailInput((prev) => ({ ...prev, [d.id]: e.target.value }))}
                             placeholder={t("set.tlsEmailPlaceholder")}
-                            className="jf-input w-64 font-mono text-[11px]"
+                            className="jf-input w-64 font-mono text-jf-2xs"
                           />
                           <button
                             type="button"
                             onClick={() => setDomainTlsEmail(d)}
                             disabled={!!tlsBusy[d.id]}
-                            className="rounded-md border border-[var(--jf-primary)] px-2.5 py-1 text-[11px] font-semibold text-[var(--jf-primary)] transition-colors hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)] disabled:cursor-not-allowed disabled:opacity-60"
+                            className="rounded-md border border-[var(--jf-primary)] px-2.5 py-1 text-jf-2xs font-semibold text-[var(--jf-primary)] transition-colors hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)] disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {tlsBusy[d.id] ? t("set.tlsEmailSaving") : t("set.tlsEmailSave")}
                           </button>
@@ -1757,7 +1765,7 @@ export default function Settings() {
                               }
                               placeholder={t("set.tlsCertPlaceholder")}
                               rows={4}
-                              className="jf-input w-full font-mono text-[11px]"
+                              className="jf-input w-full font-mono text-jf-2xs"
                             />
                             <textarea
                               value={certInput[d.id]?.key ?? ""}
@@ -1766,7 +1774,7 @@ export default function Settings() {
                               }
                               placeholder={t("set.tlsKeyPlaceholder")}
                               rows={4}
-                              className="jf-input w-full font-mono text-[11px]"
+                              className="jf-input w-full font-mono text-jf-2xs"
                             />
                             <button
                               type="button"
@@ -2061,12 +2069,12 @@ export default function Settings() {
                       <div className="flex items-center justify-between gap-3 px-4 py-2.5">
                         <div className="min-w-0">
                           <p className="truncate font-mono text-xs">{wh.url}</p>
-                          <p className="mt-0.5 text-[11px] text-[var(--jf-muted)]">{(wh.events || []).join(", ")}</p>
+                          <p className="mt-0.5 text-jf-2xs text-[var(--jf-muted)]">{(wh.events || []).join(", ")}</p>
                         </div>
                         <div className="flex shrink-0 items-center gap-3">
                           {/* Issue #130: last-delivery status indicator. */}
                           {last && (
-                            <span className="flex items-center gap-1.5 text-[11px] font-medium"
+                            <span className="flex items-center gap-1.5 text-jf-2xs font-medium"
                               title={t("wh.lastAttempt") + ": " + formatDateTime(last.created_at || "", user?.timezone)}>
                               <span className={`inline-block h-2 w-2 rounded-full ${
                                 status === "success" ? "bg-emerald-500"
@@ -2138,7 +2146,7 @@ export default function Settings() {
                               </table>
                             </div>
                           )}
-                          <p className="mt-2 text-[11px] text-[var(--jf-muted)]">{t("wh.retryNote")}</p>
+                          <p className="mt-2 text-jf-2xs text-[var(--jf-muted)]">{t("wh.retryNote")}</p>
                         </div>
                       )}
                     </li>
@@ -2452,7 +2460,7 @@ export default function Settings() {
                       target="_blank"
                       rel="noopener noreferrer"
                       title={t("set.sfSpamDocs")}
-                      className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                      className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
                     >
                       ?
                     </a>
@@ -2566,7 +2574,7 @@ export default function Settings() {
                       <div className="mt-1 flex items-center gap-2">
                         <input
                           type="color"
-                          value={/^#[0-9a-fA-F]{6}$/.test(lpPrimaryColor) ? lpPrimaryColor : "#7c3aed"}
+                          value={/^#[0-9a-fA-F]{6}$/.test(lpPrimaryColor) ? lpPrimaryColor : DEFAULT_LP_PRIMARY}
                           onChange={(e) => setLpPrimaryColor(e.target.value)}
                           className="h-9 w-12 rounded border border-[var(--jf-border)] bg-transparent"
                         />
@@ -2582,7 +2590,7 @@ export default function Settings() {
                       <div className="mt-1 flex items-center gap-2">
                         <input
                           type="color"
-                          value={/^#[0-9a-fA-F]{6}$/.test(lpBackgroundColor) ? lpBackgroundColor : "#ffffff"}
+                          value={/^#[0-9a-fA-F]{6}$/.test(lpBackgroundColor) ? lpBackgroundColor : DEFAULT_LP_BACKGROUND}
                           onChange={(e) => setLpBackgroundColor(e.target.value)}
                           className="h-9 w-12 rounded border border-[var(--jf-border)] bg-transparent"
                         />
@@ -2776,7 +2784,7 @@ export default function Settings() {
                   rel="noopener noreferrer"
                   title={t("set.currencyDocs")}
                   aria-label={t("set.currencyDocs")}
-                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
                 >
                   ?
                 </a>
@@ -2820,7 +2828,7 @@ export default function Settings() {
                 rel="noopener noreferrer"
                 title={t("set.affiliatesDocs")}
                 aria-label={t("set.affiliatesDocs")}
-                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
               >
                 ?
               </a>

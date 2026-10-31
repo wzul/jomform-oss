@@ -95,7 +95,7 @@ function MagicLinkForm() {
   return (
     <div className="relative w-full max-w-sm">
       <div className="mb-8 text-center">
-        <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#5e6ad2] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)]">
+        <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--jf-primary)] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)]">
           JF
         </div>
         <h1 className="text-xl font-semibold text-[var(--jf-text)]">{t("magic.title")}</h1>
@@ -104,12 +104,12 @@ function MagicLinkForm() {
       <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
         {error ? (
           <div className="space-y-3">
-            <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-3 text-[13px] text-red-700">
+            <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-3 text-jf-sm text-red-700">
               {error}
             </p>
             <Link
               href="/login"
-              className="block w-full rounded-md bg-[#5e6ad2] py-2 text-center text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
+              className="block w-full rounded-md bg-[var(--jf-primary)] py-2 text-center text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
             >
               {t("magic.goLogin")}
             </Link>

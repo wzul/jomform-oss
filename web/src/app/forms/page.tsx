@@ -538,9 +538,9 @@ export default function FormsPage() {
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{f.title}</p>
-                    <p className="font-mono text-[11px] text-[var(--jf-muted)] break-all">{f.slug}</p>
+                    <p className="font-mono text-jf-2xs text-[var(--jf-muted)] break-all">{f.slug}</p>
                     {!f.can_purge && (
-                      <p className="mt-1 text-[11px] text-amber-700">
+                      <p className="mt-1 text-jf-2xs text-amber-700">
                         {t("forms.canPurgeFalse")} ({f.sales_count})
                       </p>
                     )}
@@ -663,7 +663,7 @@ export default function FormsPage() {
                 )}
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{f.title}</p>
-                  <p className="font-mono text-[11px] text-[var(--jf-muted)]">
+                  <p className="font-mono text-jf-2xs text-[var(--jf-muted)]">
                     {view.kind === "link" ? view.href : t("forms.urlUnavailable")}
                   </p>
                 </div>
@@ -671,7 +671,7 @@ export default function FormsPage() {
               <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                 {f.status === "published" || f.status === "unlisted" ? (
                   <>
-                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700">
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-jf-2xs font-medium text-emerald-700">
                       {f.status === "unlisted" ? t("forms.unlisted") : t("forms.live")}
                     </span>
                     {canWrite && (
@@ -719,7 +719,7 @@ export default function FormsPage() {
                   </>
                 ) : (
                   <>
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-medium text-slate-500">
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-jf-2xs font-medium text-slate-500">
                       {f.status === "private" ? t("forms.private") : t("forms.draft")}
                     </span>
                     {canWrite && (

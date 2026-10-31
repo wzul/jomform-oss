@@ -118,7 +118,7 @@ function ConnectForm() {
   return (
     <div className="relative w-full max-w-sm">
       <div className="mb-8 text-center">
-        <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#5e6ad2] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)]">
+        <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--jf-primary)] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)]">
           JF
         </div>
         <h1 className="text-xl font-semibold text-[var(--jf-text)]">{t("connect.title")}</h1>
@@ -126,14 +126,14 @@ function ConnectForm() {
 
       <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
         {done ? (
-          <p className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-3 text-[13px] text-emerald-700">
+          <p className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-3 text-jf-sm text-emerald-700">
             {t("connect.success")}
           </p>
         ) : token ? (
           <div className="space-y-4">
             <p className="text-sm text-[var(--jf-muted)]">{t("connect.verifying")}</p>
             {error && (
-              <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-3 text-[13px] text-red-700">
+              <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-3 text-jf-sm text-red-700">
                 {error}
               </p>
             )}
@@ -147,7 +147,7 @@ function ConnectForm() {
               {email ? t("connect.explain") : t("connect.explainShort")}
             </p>
             {error && (
-              <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-3 text-[13px] text-red-700">
+              <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-3 text-jf-sm text-red-700">
                 {error}
               </p>
             )}
@@ -155,7 +155,7 @@ function ConnectForm() {
               <button
                 onClick={resend}
                 disabled={busy}
-                className="w-full rounded-md bg-[#5e6ad2] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-50"
+                className="w-full rounded-md bg-[var(--jf-primary)] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-50"
               >
                 {t("connect.resend")}
               </button>

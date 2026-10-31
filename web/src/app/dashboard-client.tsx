@@ -254,20 +254,20 @@ export default function Dashboard() {
               <AreaChart data={series} margin={{ left: -18, right: 8, top: 8 }}>
                 <defs>
                   <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#5e6ad2" stopOpacity={0.25} />
-                    <stop offset="100%" stopColor="#5e6ad2" stopOpacity={0} />
+                    <stop offset="0%" stopColor="var(--jf-primary)" stopOpacity={0.25} />
+                    <stop offset="100%" stopColor="var(--jf-primary)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#eceef2" vertical={false} />
-                <XAxis dataKey="dayLabel" tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={48}
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--jf-chart-grid)" vertical={false} />
+                <XAxis dataKey="dayLabel" tick={{ fontSize: 11, fill: "var(--jf-chart-axis)" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: "var(--jf-chart-axis)" }} axisLine={false} tickLine={false} width={48}
                        tickFormatter={(v) => `RM${v}`} />
                 <Tooltip
                   formatter={(v) => [money(Number(v)), t("dash.revenue")]}
                   labelFormatter={(l) => String(l)}
-                  contentStyle={{ borderRadius: 8, borderColor: "#e6e8ec", fontSize: 12 }}
+                  contentStyle={{ borderRadius: 8, borderColor: "var(--jf-border)", fontSize: 12 }}
                 />
-                <Area type="monotone" dataKey="value" stroke="#5e6ad2" strokeWidth={2} fill="url(#rev)" />
+                <Area type="monotone" dataKey="value" stroke="var(--jf-primary)" strokeWidth={2} fill="url(#rev)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -285,7 +285,7 @@ export default function Dashboard() {
               target="_blank"
               rel="noopener noreferrer"
               title={t("dash.formAnalyticsDocs")}
-              className="ml-1.5 align-middle font-mono text-[11px] text-[var(--jf-primary)] hover:underline"
+              className="ml-1.5 align-middle font-mono text-jf-2xs text-[var(--jf-primary)] hover:underline"
             >
               ?
             </a>
@@ -294,8 +294,8 @@ export default function Dashboard() {
             {formStats.map((f) => (
               <div key={f.slug} className="rounded-lg border border-[var(--jf-border)] p-3">
                 <p className="truncate text-sm font-medium" title={f.title}>{f.title}</p>
-                <p className="font-mono text-[11px] text-[var(--jf-muted)]">{activeWorkspaceScope() || "app"}.jomform.com/{f.slug}</p>
-                <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px] text-[var(--jf-muted)]">
+                <p className="font-mono text-jf-2xs text-[var(--jf-muted)]">{activeWorkspaceScope() || "app"}.jomform.com/{f.slug}</p>
+                <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-0.5 text-jf-2xs text-[var(--jf-muted)]">
                   {/* Issue #598: the figure is "entries recorded for this form"
                       — submissions for a response form, sales rows for a
                       payment form — so the label follows the mode. */}
@@ -322,13 +322,13 @@ export default function Dashboard() {
               <li key={pr.product_id} className="flex items-center justify-between gap-3 py-2.5">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{pr.name}</p>
-                  <p className="text-[11px] text-[var(--jf-muted)]">
+                  <p className="text-jf-2xs text-[var(--jf-muted)]">
                     {pr.units_sold} {t("dash.sold")} · {pr.paid_units} {t("dash.paid")}
                   </p>
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-semibold">{money(pr.paid_revenue_sen)}</p>
-                  <p className="text-[10px] text-[var(--jf-muted)]">{t("dash.gross")} {money(pr.revenue_sen)}</p>
+                  <p className="text-jf-3xs text-[var(--jf-muted)]">{t("dash.gross")} {money(pr.revenue_sen)}</p>
                 </div>
               </li>
             ))}
@@ -355,7 +355,7 @@ export default function Dashboard() {
             </div>
           </div>
           {/* issue #106: honest privacy note about the open-tracking pixel. */}
-          <p className="border-b border-[var(--jf-border)] px-5 py-2 text-[11px] text-[var(--jf-muted)]">
+          <p className="border-b border-[var(--jf-border)] px-5 py-2 text-jf-2xs text-[var(--jf-muted)]">
             {t("dash.emailStatusNote")}
           </p>
           {/* mobile: stacked cards (no table scroll needed) */}
@@ -368,13 +368,13 @@ export default function Dashboard() {
                   </p>
                   <p className="mt-0.5 truncate text-sm font-medium">{s.buyer || "—"}</p>
                   {rowKind(s) === "response" && answersPreview(s) && (
-                    <p className="truncate text-[10px] text-[var(--jf-muted)]">{answersPreview(s)}</p>
+                    <p className="truncate text-jf-3xs text-[var(--jf-muted)]">{answersPreview(s)}</p>
                   )}
-                  <span className={`mt-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${badge(s.status)}`}>
+                  <span className={`mt-1 inline-block rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${badge(s.status)}`}>
                     {s.status}
                   </span>
                   {rowKind(s) !== "response" && (
-                    <span className={`ml-1 inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium ${emailBadge(s.email_status)}`}>
+                    <span className={`ml-1 inline-block rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${emailBadge(s.email_status)}`}>
                       {emailLabel(s.email_status)}
                     </span>
                   )}
@@ -414,7 +414,7 @@ export default function Dashboard() {
                   <tr key={rowKey(s)} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
                     <td className="whitespace-nowrap px-5 py-3 font-mono text-xs">
                       {rowKind(s) === "response" ? (
-                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary-on-tint)]">
+                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-primary-on-tint)]">
                           {t("bld.responses")}
                         </span>
                       ) : (
@@ -426,17 +426,17 @@ export default function Dashboard() {
                       {rowKind(s) === "response" ? "—" : money(s.total_sen)}
                     </td>
                     <td className="px-5 py-3">
-                      <span className={`whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${badge(s.status)}`}>
+                      <span className={`whitespace-nowrap rounded-full border px-2.5 py-0.5 text-jf-2xs font-medium ${badge(s.status)}`}>
                         {s.status}
                       </span>
                     </td>
                     <td className="px-5 py-3">
                       {rowKind(s) === "response" ? (
-                        <span className="text-[11px] text-[var(--jf-muted)]">
+                        <span className="text-jf-2xs text-[var(--jf-muted)]">
                           {answersPreview(s) || "—"}
                         </span>
                       ) : (
-                        <span className={`whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${emailBadge(s.email_status)}`}>
+                        <span className={`whitespace-nowrap rounded-full border px-2.5 py-0.5 text-jf-2xs font-medium ${emailBadge(s.email_status)}`}>
                           {emailLabel(s.email_status)}
                         </span>
                       )}

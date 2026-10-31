@@ -257,7 +257,7 @@ export default function TemplatesPage() {
               target="_blank"
               rel="noopener noreferrer"
               title={t("tplmg.docs")}
-              className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+              className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
             >
               ?
             </a>
@@ -353,7 +353,7 @@ export default function TemplatesPage() {
               <div className="flex min-w-0 items-center gap-3">
                 <span
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-lg"
-                  style={{ backgroundColor: (tpl.theme?.primary || "#5e6ad2") + "22" }}
+                  style={{ backgroundColor: tpl.theme?.primary ? tpl.theme.primary + "22" : "var(--jf-primary-tint)" }}
                 >
                   📄
                 </span>
@@ -382,7 +382,7 @@ export default function TemplatesPage() {
                   ) : (
                     <p className="truncate text-sm font-medium">{tpl.title}</p>
                   )}
-                  <p className="font-mono text-[11px] text-[var(--jf-muted)]">{tpl.slug}</p>
+                  <p className="font-mono text-jf-2xs text-[var(--jf-muted)]">{tpl.slug}</p>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 sm:justify-end">

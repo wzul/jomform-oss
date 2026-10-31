@@ -188,7 +188,7 @@ export default function MediaPicker({
               same rules apply here: opaque images become JPEG, an image with a
               transparent background stays PNG, an animated GIF keeps one frame. */}
           <p className="mt-2 text-xs text-[var(--jf-muted)]">{t("media.imageStorage")}</p>
-          {uploadMsg && <p className="mt-2 text-xs text-[#4f46e5]">{uploadMsg}</p>}
+          {uploadMsg && <p className="mt-2 text-xs text-[var(--jf-primary-strong)]">{uploadMsg}</p>}
 
           {showUrl && (
             <div className="mt-3">
@@ -235,8 +235,8 @@ export default function MediaPicker({
                     onClick={() => onSelect(m.url, { mime: m.mime, preview: m.preview })}
                     className={`group overflow-hidden rounded-lg border text-left ${
                       current === m.url
-                        ? "border-[#7170ff] ring-2 ring-[#7170ff]/40"
-                        : "border-[var(--jf-border)] hover:border-[#7170ff]"
+                        ? "border-[var(--jf-accent)] ring-2 ring-[var(--jf-accent)]/40"
+                        : "border-[var(--jf-border)] hover:border-[var(--jf-accent)]"
                     }`}
                   >
                     <div className="flex h-20 items-center justify-center overflow-hidden bg-slate-100">
@@ -256,12 +256,12 @@ export default function MediaPicker({
                           loading="lazy"
                         />
                       ) : (
-                        <div className="flex h-12 w-12 items-center justify-center rounded-lg border bg-white text-center text-[11px] font-bold text-[#4f46e5]">
+                        <div className="flex h-12 w-12 items-center justify-center rounded-lg border bg-white text-center text-jf-2xs font-bold text-[var(--jf-primary-strong)]">
                           {extBadge(m.mime)}
                         </div>
                       )}
                     </div>
-                    <p className="truncate px-2 py-1 text-[11px] text-[var(--jf-muted)]">
+                    <p className="truncate px-2 py-1 text-jf-2xs text-[var(--jf-muted)]">
                       {nameFromKey(m.key)}
                     </p>
                   </button>

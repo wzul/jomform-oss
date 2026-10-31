@@ -153,12 +153,12 @@ export default function ProductPicker({
                         aria-pressed={on}
                         className={`flex w-full items-center gap-3 rounded-lg border p-2 text-left transition-colors ${
                           on
-                            ? "border-[#7170ff] bg-[#7170ff]/5 ring-1 ring-[#7170ff]/40"
-                            : "border-[var(--jf-border)] hover:border-[#7170ff]"
+                            ? "border-[var(--jf-accent)] bg-[var(--jf-accent)]/5 ring-1 ring-[var(--jf-accent)]/40"
+                            : "border-[var(--jf-border)] hover:border-[var(--jf-accent)]"
                         }`}
                       >
                         <span
-                          className={`flex h-4 w-4 shrink-0 items-center justify-center border text-[10px] ${
+                          className={`flex h-4 w-4 shrink-0 items-center justify-center border text-jf-3xs ${
                             multi ? "rounded" : "rounded-full"
                           } ${
                             on
@@ -179,7 +179,7 @@ export default function ProductPicker({
                               loading="lazy"
                             />
                           ) : (
-                            <span className="text-[10px] text-[var(--jf-muted-on-tint)]">—</span>
+                            <span className="text-jf-3xs text-[var(--jf-muted-on-tint)]">—</span>
                           )}
                         </span>
                         <span className="min-w-0 flex-1">

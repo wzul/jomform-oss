@@ -231,7 +231,7 @@ export default function DeliveriesPage() {
         <div className="jf-card mt-4 overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+              <tr className="border-b border-[var(--jf-border)] text-left text-jf-3xs uppercase tracking-wide text-[var(--jf-muted)]">
                 <th className="px-4 py-3 font-medium">{t("del.colEmail")}</th>
                 <th className="hidden px-2 py-3 font-medium sm:table-cell">{t("del.colEvent")}</th>
                 <th className="px-2 py-3 font-medium">{t("del.colSale")}</th>
@@ -248,17 +248,17 @@ export default function DeliveriesPage() {
                 >
                   <td className="max-w-48 truncate px-4 py-3 text-xs">{d.email}</td>
                   <td className="hidden whitespace-nowrap px-2 py-3 sm:table-cell">
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${eventBadge(d.event_type)}`}>
+                    <span className={`rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${eventBadge(d.event_type)}`}>
                       {d.event_type}
                     </span>
                   </td>
-                  <td className="whitespace-nowrap px-2 py-3 font-mono text-[11px]">
+                  <td className="whitespace-nowrap px-2 py-3 font-mono text-jf-2xs">
                     {d.sale_ref || "—"}
                   </td>
                   <td className="hidden max-w-32 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">
                     {d.form_id ? formName.get(d.form_id) || "—" : "—"}
                   </td>
-                  <td className="hidden whitespace-nowrap px-2 py-3 text-[11px] text-[var(--jf-muted)] sm:table-cell">
+                  <td className="hidden whitespace-nowrap px-2 py-3 text-jf-2xs text-[var(--jf-muted)] sm:table-cell">
                     {fmtDateTime(d.created_at)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-right">
@@ -273,7 +273,7 @@ export default function DeliveriesPage() {
                         {t("del.timeline")}
                       </button>
                     ) : (
-                      <span className="text-[10px] text-[var(--jf-muted)]">—</span>
+                      <span className="text-jf-3xs text-[var(--jf-muted)]">—</span>
                     )}
                   </td>
                 </tr>
@@ -361,7 +361,7 @@ export default function DeliveriesPage() {
                 <div className="mt-1 flex justify-between gap-4">
                   <dt className="text-[var(--jf-muted)]">{t("del.colEvent")}</dt>
                   <dd>
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${eventBadge(detail.event_type)}`}>
+                    <span className={`rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${eventBadge(detail.event_type)}`}>
                       {detail.event_type}
                     </span>
                   </dd>
@@ -392,7 +392,7 @@ export default function DeliveriesPage() {
                     {timeline.map((ev) => (
                       <li key={ev.id} className="flex items-start gap-3">
                         <span
-                          className={`mt-0.5 rounded-full border px-2 py-0.5 text-[10px] font-medium ${eventBadge(ev.event_type)}`}
+                          className={`mt-0.5 rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${eventBadge(ev.event_type)}`}
                         >
                           {ev.event_type}
                         </span>

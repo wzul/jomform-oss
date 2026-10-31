@@ -73,7 +73,119 @@
   --jf-switch-off: #64748b;
   --jf-primary-active: #454ea8;
   --jf-focus-ring: #5e6ad2;
+  /* ── the drift closure (card t_e2f3a553) ──────────────────────────────────
+     Three different indigos were standing in for one brand, and 153 raw hex
+     literals across 23 `.tsx` files bypassed this block entirely. Every token
+     below WAS a literal at a call site; the pixel value is unchanged on
+     purpose (this is a rename, not a redesign), and the intent is recorded with
+     the number of sites it was measured at so the next reader can tell a role
+     from an accident.
+
+       --jf-accent          #7170ff  44 sites / 9 files. The INTERACTIVE accent,
+                            not the brand fill: the focus/selected BORDER
+                            (`focus:border-…`, `border-…`), the selection RING
+                            (`ring-…/40`), the drag target, `accent-color` on a
+                            checkbox, and the media library's active tab fill.
+                            It is deliberately LIGHTER than --jf-primary because
+                            it never carries a label. It is NOT --jf-focus-ring:
+                            that one is the 2px outline the global
+                            `:focus-visible` rule paints.
+       --jf-primary-strong  #4f46e5  10 sites / 5 files. The DARKER indigo step:
+                            indigo TEXT on a light surface (upload confirmation,
+                            the product/media placeholder initials, the brand
+                            colour chips) and the builder's AI submit fill on
+                            hover, which has to read darker than its #5e6ad2
+                            rest state. NOT --jf-primary-hover (#616dd5): that
+                            is the shared CTA's measured hover, and folding this
+                            fill into it would change the rendered colour.
+       --jf-text-secondary  #374151  31 sites / 3 files. Body and button-label
+                            text on a white card — the step between --jf-text
+                            (#17181c) and --jf-muted (#6b7280). A named step
+                            rather than a fold into --jf-muted, which would
+                            LIGHTEN 31 labels.
+       --jf-text-tertiary   #62666d   2 sites, the login page's footer only. The
+                            third neutral text step; kept separate so the pixel
+                            value does not move (collapsing three greys into one
+                            is a redesign, and this card is a rename).
+       --jf-bg-soft         #f8f8f8   1 site, which was ALSO a dead reference:
+                            the class read `var(--jf-bg-soft, #f8f8f8)` and
+                            `--jf-bg-soft` existed nowhere, so the fallback was
+                            doing all the work. Declaring it makes the fallback
+                            what it claimed to be.
+       --jf-warning-bg      #fffbeb   3 sites: the "text became rich blocks"
+                            callout on a white card.
+       --jf-warning-bg-hover #fef3c7  1 site: the hover of the button INSIDE
+                            that callout, which has to stay darker than the
+                            callout behind it.
+       --jf-chart-grid      #eceef2   1 site: recharts `CartesianGrid` stroke.
+       --jf-chart-axis      #9ca3af   2 sites: recharts XAxis/YAxis tick labels.
+                            A chart's axis is its own surface — lighter than any
+                            body-text token, on purpose.
+       --jf-primary-tint    #5e6ad222 1 site x2 (the templates page and the
+                            template picker): the 13.3% brand indigo behind a
+                            template swatch. Eight digits because that call site
+                            appends the `22` alpha to whatever primary the
+                            merchant's theme carries, and the fallback has to
+                            composite to the same pixel.
+
+     The chart tokens exist because a chart's ink is drawn by recharts into SVG
+     PRESENTATION ATTRIBUTES, which take a CSS value (an attribute is parsed as
+     a declaration of that property, so `var()` resolves — SVG 2 attribute
+     syntax; the WG answer is w3c/svgwg#987), and because the axis grey has no
+     body-text role to reuse: it is 2.63:1 on white, which is a legitimate axis
+     colour and an illegitimate label colour. */
+  --jf-accent: #7170ff;
+  --jf-primary-strong: #4f46e5;
+  --jf-text-secondary: #374151;
+  --jf-text-tertiary: #62666d;
+  --jf-bg-soft: #f8f8f8;
+  --jf-warning-bg: #fffbeb;
+  --jf-warning-bg-hover: #fef3c7;
+  --jf-chart-grid: #eceef2;
+  --jf-chart-axis: #9ca3af;
+  --jf-primary-tint: #5e6ad222;
+  /* The toast's check / bang glyph (card t_e2f3a553). White ink painted on a
+     COLOURED fill (emerald-600 or red-600) — deliberately NOT --jf-surface: the
+     two share a value today, but --jf-surface answers "what a card is painted
+     with" and would move with a dark theme, which would erase this glyph. */
+  --jf-on-color: #ffffff;
 }
+
+/* ── the type scale (card t_e2f3a553) ────────────────────────────────────────
+   Typography was written as raw px in 250 places, in six ad-hoc sizes. These
+   are the SAME six pixel values under a name, so the rendered page does not
+   move: `text-jf-2xs` is `text-[11px]`, not a new size.
+
+   WHY NOT Tailwind's own `text-xs` / `text-sm`: a theme step generates a
+   font-size utility, and Tailwind's built-in steps carry a PAIRED line-height
+   (`text-xs` = 12px/16px). `text-[12px]` never did, so folding 12px into
+   `text-xs` would silently change every line box. A `--text-*` entry with no
+   `--text-*--line-height` emits the size alone, which is what a rename needs.
+
+   The names are ordered by size (4xs smallest) so the scale reads as a ladder
+   and a new step has an obvious place to go — add it here, never as a
+   `text-[Npx]` at a call site (the design gate fails on that). */
+@theme {
+  --text-jf-4xs: 9px;
+  --text-jf-3xs: 10px;
+  --text-jf-2xs: 11px;
+  --text-jf-xs: 12px;
+  --text-jf-sm: 13px;
+  --text-jf-md: 15px;
+}
+
+/* Third-party provider brand marks on the login page (card t_e2f3a553).
+   These are the PROVIDERS' identities — Google's four colours and
+   Cloudflare's two — not JomForm's palette: no semantic token can describe
+   them and they must not be re-themed. They live here, where literals are
+   allowed, instead of inline in the page's SVG, so a `.tsx` file can carry
+   zero raw hex literals without carving an exemption out of the design gate. */
+.jf-logo-google-red { fill: #ea4335; }
+.jf-logo-google-blue { fill: #4285f4; }
+.jf-logo-google-yellow { fill: #fbbc05; }
+.jf-logo-google-green { fill: #34a853; }
+.jf-logo-cloudflare-orange { fill: #f48120; }
+.jf-logo-cloudflare-amber { fill: #faaa3f; }
 
 html,
 body {

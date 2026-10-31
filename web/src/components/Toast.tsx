@@ -100,7 +100,7 @@ export function Toast({
             <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5">
               <path
                 d="M4.5 10.5l3.5 3.5 7.5-8"
-                stroke="#fff"
+                stroke="var(--jf-on-color)"
                 strokeWidth="2.2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -111,8 +111,8 @@ export function Toast({
                mark the emerald chrome makes, and reusing it here would say the
                save succeeded on a screen where it did not. */
             <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5">
-              <path d="M10 4.5v6.5" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
-              <circle cx="10" cy="14.7" r="1.25" fill="#fff" />
+              <path d="M10 4.5v6.5" stroke="var(--jf-on-color)" strokeWidth="2.2" strokeLinecap="round" />
+              <circle cx="10" cy="14.7" r="1.25" fill="var(--jf-on-color)" />
             </svg>
           )}
         </span>

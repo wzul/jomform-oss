@@ -687,7 +687,7 @@ export default function ChatPage() {
           <div>
             <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
               {t("chat.title")}
-              <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+              <span className="rounded-full bg-slate-200 px-2 py-0.5 text-jf-3xs font-semibold uppercase tracking-wide text-slate-600">
                 {t("chat.readOnlyBadge")}
               </span>
             </h1>
@@ -716,7 +716,7 @@ export default function ChatPage() {
               target="_blank"
               rel="noopener noreferrer"
               title={t("chat.docs")}
-              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
             >
               ?
             </a>
@@ -839,7 +839,7 @@ export default function ChatPage() {
                               the "done"/cancelled pill is bg-slate-500, which
                               already clears the floor at 4.76:1.) */}
                           <span
-                            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white ${
+                            className={`rounded-full px-2 py-0.5 text-jf-3xs font-semibold uppercase tracking-wide text-white ${
                               open ? "bg-sky-700" : state === "failed" ? "bg-red-600" : "bg-slate-500"
                             }`}
                           >
@@ -901,7 +901,7 @@ export default function ChatPage() {
                             gets the card's strongest muted weight: opacity-80 =
                             5.32:1 on the tint. At opacity-60 it measured 3.24:1,
                             the worst node of the five axe reported (t_f5f269a8). */}
-                        <p className="mt-2 font-mono text-[10px] opacity-80">{p.tool}</p>
+                        <p className="mt-2 font-mono text-jf-3xs opacity-80">{p.tool}</p>
 
                         {open && (
                           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -1013,7 +1013,7 @@ export default function ChatPage() {
         </div>
 
         {limits && (
-          <p className="mt-2 text-[11px] text-[var(--jf-muted)]">
+          <p className="mt-2 text-jf-2xs text-[var(--jf-muted)]">
             {t("chat.limitNote", { n: limits.messages_per_hour })}
           </p>
         )}

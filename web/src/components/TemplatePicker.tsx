@@ -174,12 +174,12 @@ export default function TemplatePicker({
               onClose();
               router.push("/builder?new=1");
             }}
-            className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--jf-border)] p-6 text-center transition-colors hover:border-[#7170ff]/50 hover:bg-indigo-50/40"
+            className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--jf-border)] p-6 text-center transition-colors hover:border-[var(--jf-accent)]/50 hover:bg-indigo-50/40"
           >
             <span className="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-2xl text-[var(--jf-primary-on-tint)]">
               +
             </span>
-            <span className="text-sm font-semibold text-[#374151]">{t("tpl.blank")}</span>
+            <span className="text-sm font-semibold text-[var(--jf-text-secondary)]">{t("tpl.blank")}</span>
             <span className="text-xs text-[var(--jf-muted)]">{t("tpl.blankHint")}</span>
           </button>
 
@@ -187,7 +187,7 @@ export default function TemplatePicker({
               only own-ONLY rows here — a row the gallery also serves is rendered
               by the gallery loop below, so it is never carded twice. */}
           {ownCards.length > 0 && (
-            <p className="col-span-full -mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--jf-muted)]">
+            <p className="col-span-full -mb-1 text-jf-2xs font-medium uppercase tracking-wider text-[var(--jf-muted)]">
               {t("tplmg.title")}
             </p>
           )}
@@ -199,12 +199,12 @@ export default function TemplatePicker({
               <div className="mb-2 flex items-center gap-2">
                 <span
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-lg"
-                  style={{ backgroundColor: (tpl.theme?.primary || "#5e6ad2") + "22" }}
+                  style={{ backgroundColor: tpl.theme?.primary ? tpl.theme.primary + "22" : "var(--jf-primary-tint)" }}
                 >
                   🗂
                 </span>
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-[#374151]">{tpl.title}</p>
+                  <p className="truncate text-sm font-semibold text-[var(--jf-text-secondary)]">{tpl.title}</p>
                 </div>
               </div>
               <div className="mb-3 flex-1" />
@@ -226,14 +226,14 @@ export default function TemplatePicker({
               <div className="mb-2 flex items-center gap-2">
                 <span
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-lg"
-                  style={{ backgroundColor: (tpl.theme?.primary || "#5e6ad2") + "22" }}
+                  style={{ backgroundColor: tpl.theme?.primary ? tpl.theme.primary + "22" : "var(--jf-primary-tint)" }}
                 >
                   {CATEGORY_ICON[tpl.category || ""] || "📄"}
                 </span>
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-[#374151]">{tpl.title}</p>
+                  <p className="truncate text-sm font-semibold text-[var(--jf-text-secondary)]">{tpl.title}</p>
                   {tpl.category && (
-                    <p className="text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+                    <p className="text-jf-3xs uppercase tracking-wide text-[var(--jf-muted)]">
                       {tpl.category}
                     </p>
                   )}

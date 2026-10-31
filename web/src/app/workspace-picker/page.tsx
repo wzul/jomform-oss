@@ -160,7 +160,7 @@ export default function WorkspacePickerPage() {
       />
       <div className="relative w-full max-w-md">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#5e6ad2] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)]">
+          <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--jf-primary)] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)]">
             JF
           </div>
           <h1 className="text-xl font-semibold text-[var(--jf-text)]" style={{ letterSpacing: "-0.02em" }}>
@@ -184,7 +184,7 @@ export default function WorkspacePickerPage() {
             </p>
           ) : error ? (
             <div role="alert" className="flex flex-col items-center gap-3 py-4 text-center">
-              <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[13px] text-red-700">
+              <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-jf-sm text-red-700">
                 {error}
               </p>
               <button
@@ -208,7 +208,7 @@ export default function WorkspacePickerPage() {
               <p className="text-sm font-medium text-[var(--jf-text)]">
                 {t("workspace.askTitle")}
               </p>
-              <p className="text-[13px] leading-relaxed text-[var(--jf-muted)]">
+              <p className="text-jf-sm leading-relaxed text-[var(--jf-muted)]">
                 {t("workspace.askBody")}
               </p>
               <div>
@@ -222,7 +222,7 @@ export default function WorkspacePickerPage() {
                   required
                   autoFocus
                   disabled={busy}
-                  className="min-h-11 w-full rounded-md border border-[var(--jf-border)] bg-white px-3 text-sm text-[var(--jf-text)] outline-none focus:border-[#7170ff]/60 focus:bg-indigo-50 disabled:opacity-50"
+                  className="min-h-11 w-full rounded-md border border-[var(--jf-border)] bg-white px-3 text-sm text-[var(--jf-text)] outline-none focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50 disabled:opacity-50"
                 />
               </div>
               <div>
@@ -235,23 +235,23 @@ export default function WorkspacePickerPage() {
                   onChange={(e) => setNewSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
                   required
                   disabled={busy}
-                  className="min-h-11 w-full rounded-md border border-[var(--jf-border)] bg-white px-3 text-sm text-[var(--jf-text)] outline-none focus:border-[#7170ff]/60 focus:bg-indigo-50 disabled:opacity-50"
+                  className="min-h-11 w-full rounded-md border border-[var(--jf-border)] bg-white px-3 text-sm text-[var(--jf-text)] outline-none focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50 disabled:opacity-50"
                 />
                 {newSlug && (
-                  <p className="mt-1 text-[11px] text-[var(--jf-muted)]">
+                  <p className="mt-1 text-jf-2xs text-[var(--jf-muted)]">
                     {t("workspace.askHost", { slug: newSlug })}
                   </p>
                 )}
               </div>
               {error && (
-                <p role="alert" className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[13px] text-red-700">
+                <p role="alert" className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-jf-sm text-red-700">
                   {error}
                 </p>
               )}
               <button
                 type="submit"
                 disabled={busy}
-                className="min-h-11 w-full rounded-md bg-[#5e6ad2] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-50"
+                className="min-h-11 w-full rounded-md bg-[var(--jf-primary)] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-50"
               >
                 {busy ? "…" : t("workspace.create")}
               </button>
@@ -269,24 +269,24 @@ export default function WorkspacePickerPage() {
                       <p className="text-sm font-medium text-[var(--jf-text)]">
                         {s.name}
                         {isDefault && (
-                          <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-primary-on-tint)]">
+                          <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-primary-on-tint)]">
                             {t("workspace.defaultLabel")}
                           </span>
                         )}
                         {s.role && (
-                          <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-[var(--jf-muted-on-tint)]">
+                          <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-muted-on-tint)]">
                             {roleLabel(s.role)}
                           </span>
                         )}
                       </p>
-                      <p className="truncate text-[11px] text-[var(--jf-muted)]">{s.slug}.jomform.com</p>
+                      <p className="truncate text-jf-2xs text-[var(--jf-muted)]">{s.slug}.jomform.com</p>
                       {!isDefault && (
                         <button
                           type="button"
                           disabled={busy}
                           onClick={() => setDefault(s.id)}
                           title={t("workspace.setDefault")}
-                          className="mt-1.5 text-[11px] text-[var(--jf-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)] disabled:opacity-50"
+                          className="mt-1.5 text-jf-2xs text-[var(--jf-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)] disabled:opacity-50"
                         >
                           {t("workspace.setDefault")}
                         </button>
@@ -296,7 +296,7 @@ export default function WorkspacePickerPage() {
                       <button
                         type="button"
                         onClick={() => enter(s.slug)}
-                        className="rounded-md bg-[#5e6ad2] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
+                        className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
                       >
                         {t("workspace.enter")}
                       </button>

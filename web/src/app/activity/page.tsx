@@ -192,7 +192,7 @@ export default function ActivityPage() {
             target="_blank"
             rel="noopener noreferrer"
             title={t("act.docs")}
-            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
           >
             ?
           </a>
@@ -239,7 +239,7 @@ export default function ActivityPage() {
         <div className="jf-card mt-4 overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[var(--jf-border)] text-left text-[10px] uppercase tracking-wide text-[var(--jf-muted)]">
+              <tr className="border-b border-[var(--jf-border)] text-left text-jf-3xs uppercase tracking-wide text-[var(--jf-muted)]">
                 <th className="whitespace-nowrap px-4 py-3 font-medium">{t("act.colEvent")}</th>
                 <th className="hidden px-2 py-3 font-medium md:table-cell">{t("act.colProperties")}</th>
                 <th className="px-2 py-3 font-medium">{t("act.colTime")}</th>
@@ -249,10 +249,10 @@ export default function ActivityPage() {
               {rows.map((e) => (
                 <tr key={e.id} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
                   <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold">{e.event_name}</td>
-                  <td className="hidden max-w-lg break-all px-2 py-3 font-mono text-[11px] text-[var(--jf-muted)] md:table-cell">
+                  <td className="hidden max-w-lg break-all px-2 py-3 font-mono text-jf-2xs text-[var(--jf-muted)] md:table-cell">
                     {e.properties && Object.keys(e.properties).length > 0 ? JSON.stringify(e.properties) : "—"}
                   </td>
-                  <td className="whitespace-nowrap px-2 py-3 text-[11px] text-[var(--jf-muted)]">
+                  <td className="whitespace-nowrap px-2 py-3 text-jf-2xs text-[var(--jf-muted)]">
                     {formatDateTime(e.created_at, user?.timezone)}
                   </td>
                 </tr>

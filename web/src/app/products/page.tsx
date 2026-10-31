@@ -92,7 +92,7 @@ function SortHeader({
         className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] hover:text-[var(--jf-primary)]"
       >
         {label}
-        <span className="text-[10px]" aria-hidden="true">{active ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}</span>
+        <span className="text-jf-3xs" aria-hidden="true">{active ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}</span>
       </button>
     </th>
   );
@@ -902,7 +902,7 @@ export default function Products() {
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{p.name}</p>
-                    <p className="text-[11px] text-[var(--jf-muted)]">
+                    <p className="text-jf-2xs text-[var(--jf-muted)]">
                       {money(p.price_sen)} · {t("prod.trashDeletedAt")}{" "}
                       {formatDate(p.deleted_at, user?.timezone)}
                     </p>
@@ -910,7 +910,7 @@ export default function Products() {
                         refuses on a sale or a live subscription, and the count
                         says which obstacle to clear. */}
                     {!p.can_purge && (
-                      <p className="mt-1 text-[11px] text-amber-700">
+                      <p className="mt-1 text-jf-2xs text-amber-700">
                         {t("prod.canPurgeFalse")}{" "}
                         {p.sales_count > 0
                           ? `${t("prod.salesCount")}: ${p.sales_count}`
@@ -1079,7 +1079,7 @@ export default function Products() {
                       <button
                         onClick={() => toggleStatus(p)}
                         className={[
-                          "rounded-full px-2.5 py-0.5 text-[11px] font-medium",
+                          "rounded-full px-2.5 py-0.5 text-jf-2xs font-medium",
                           p.active
                             ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
                             : "border border-slate-200 bg-slate-50 text-slate-500",
@@ -1091,7 +1091,7 @@ export default function Products() {
                     ) : (
                       <span
                         className={[
-                          "inline-block rounded-full px-2.5 py-0.5 text-[11px] font-medium",
+                          "inline-block rounded-full px-2.5 py-0.5 text-jf-2xs font-medium",
                           p.active
                             ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
                             : "border border-slate-200 bg-slate-50 text-slate-500",
@@ -1407,7 +1407,7 @@ export default function Products() {
                                   images: f.images.filter((_, k) => k !== i),
                                 }))
                               }
-                              className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/60 px-2 py-0.5 text-[10px] text-white opacity-0 transition group-hover:opacity-100"
+                              className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/60 px-2 py-0.5 text-jf-3xs text-white opacity-0 transition group-hover:opacity-100"
                             >
                               {t("prod.removeImage")}
                             </button>

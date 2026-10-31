@@ -34,7 +34,7 @@ export default function Landing() {
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--jf-primary)] text-sm font-bold text-white">
             JF
           </div>
-          <span className="text-[15px] font-semibold">
+          <span className="text-jf-md font-semibold">
             Jom<span className="text-[var(--jf-primary)]">Form</span>
           </span>
         </div>
@@ -51,7 +51,7 @@ export default function Landing() {
 
       {/* hero */}
       <section className="mx-auto max-w-3xl px-6 pb-16 pt-20 text-center">
-        <p className="mb-3 inline-block rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-medium text-[#4338ca]">
+        <p className="mb-3 inline-block rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-medium text-[var(--jf-primary-on-tint)]">
           {t("land.badge")}
         </p>
         <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
@@ -91,7 +91,7 @@ export default function Landing() {
           <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-slate-600">
             {t("land.mcpbody")}
           </p>
-          <p className="mt-4 break-all rounded-xl bg-slate-900 p-4 font-mono text-[12px] text-emerald-300">
+          <p className="mt-4 break-all rounded-xl bg-slate-900 p-4 font-mono text-jf-xs text-emerald-300">
             {t("land.mcpsnippet")}
           </p>
           <a

@@ -388,7 +388,7 @@ export function Shell({
       {/* Issue #104: skip-to-content link for keyboard / screen-reader users. */}
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-[#5e6ad2] focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-[var(--jf-primary)] focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
       >
         Skip to content
       </a>
@@ -398,7 +398,7 @@ export function Shell({
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--jf-primary)] text-sm font-bold text-white">
             JF
           </div>
-          <span className="text-[15px] font-semibold">
+          <span className="text-jf-md font-semibold">
             Jom<span className="text-[var(--jf-primary)]">Form</span>
           </span>
         </div>

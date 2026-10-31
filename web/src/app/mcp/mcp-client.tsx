@@ -50,11 +50,11 @@ function CopyBlock({ code, copyLabel, copiedLabel }: { code: string; copyLabel: 
             setTimeout(() => setDone(false), 1500);
           });
         }}
-        className="absolute right-2 top-2 rounded-md bg-white/10 px-2 py-1 text-[11px] font-medium text-white hover:bg-white/20"
+        className="absolute right-2 top-2 rounded-md bg-white/10 px-2 py-1 text-jf-2xs font-medium text-white hover:bg-white/20"
       >
         {done ? copiedLabel : copyLabel}
       </button>
-      <pre className="overflow-x-auto rounded-lg bg-slate-900 p-4 text-[11px] leading-relaxed text-slate-100">
+      <pre className="overflow-x-auto rounded-lg bg-slate-900 p-4 text-jf-2xs leading-relaxed text-slate-100">
         {code}
       </pre>
     </div>
@@ -110,7 +110,7 @@ export default function McpPage() {
         <section className="jf-card mt-8 p-6">
           <p className="text-sm font-medium text-slate-700">{t("mcp.urlLabel")}</p>
           <div className="mt-3 flex items-center gap-3">
-            <code className="min-w-0 flex-1 break-all rounded-lg bg-slate-900 px-4 py-3 font-mono text-[13px] text-emerald-300">
+            <code className="min-w-0 flex-1 break-all rounded-lg bg-slate-900 px-4 py-3 font-mono text-jf-sm text-emerald-300">
               {SERVER_URL}
             </code>
             <CopyBtn value={SERVER_URL} label={t("mcp.copy")} copiedLabel={t("mcp.copied")} />
@@ -158,7 +158,7 @@ export default function McpPage() {
             <p className="mt-1 text-xs text-slate-500">{t("mcp.genericIntro")}</p>
             <p className="mt-3 text-sm">
               <span className="text-slate-500">{t("mcp.urlLabel")} </span>
-              <code className="break-all rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[12px] text-slate-800">
+              <code className="break-all rounded bg-slate-100 px-1.5 py-0.5 font-mono text-jf-xs text-slate-800">
                 {SERVER_URL}
               </code>
             </p>
@@ -175,14 +175,14 @@ export default function McpPage() {
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="rounded-xl border border-slate-200 p-4">
               <p className="text-sm font-semibold text-slate-900">
-                <code className="rounded bg-slate-100 px-1 font-mono text-[12px]">read</code>{" "}
+                <code className="rounded bg-slate-100 px-1 font-mono text-jf-xs">read</code>{" "}
                 {t("mcp.scopeRead")}
               </p>
               <p className="mt-1 text-xs leading-relaxed text-slate-500">{t("mcp.scopeReadBody")}</p>
             </div>
             <div className="rounded-xl border border-slate-200 p-4">
               <p className="text-sm font-semibold text-slate-900">
-                <code className="rounded bg-slate-100 px-1 font-mono text-[12px]">readwrite</code>{" "}
+                <code className="rounded bg-slate-100 px-1 font-mono text-jf-xs">readwrite</code>{" "}
                 {t("mcp.scopeReadWrite")}
               </p>
               <p className="mt-1 text-xs leading-relaxed text-slate-500">

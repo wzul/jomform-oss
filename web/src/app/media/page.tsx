@@ -512,7 +512,7 @@ export default function MediaPage() {
                     ? "bg-red-500"
                     : (usage.used ?? 0) / usage.limit > 0.8
                       ? "bg-amber-500"
-                      : "bg-[#7170ff]"
+                      : "bg-[var(--jf-accent)]"
                 }`}
                 style={{
                   width: `${Math.min(100, ((usage.used ?? 0) / usage.limit) * 100)}%`,
@@ -536,7 +536,7 @@ export default function MediaPage() {
               onFiles(e.dataTransfer.files);
             }}
             className={`mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 py-6 text-center transition ${
-              dragOver ? "border-[#7170ff] bg-[#7170ff]/5" : "border-[var(--jf-border)]"
+              dragOver ? "border-[var(--jf-accent)] bg-[var(--jf-accent)]/5" : "border-[var(--jf-border)]"
             }`}
             onClick={() => fileInputRef.current?.click()}
           >
@@ -549,7 +549,7 @@ export default function MediaPage() {
                 background opaque. An animated GIF loses its animation. Said
                 here, where they upload, instead of afterwards. */}
             <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("media.imageStorage")}</p>
-            {uploadMsg && <p className="mt-2 text-sm text-[#4f46e5]">{uploadMsg}</p>}
+            {uploadMsg && <p className="mt-2 text-sm text-[var(--jf-primary-strong)]">{uploadMsg}</p>}
             <input
               ref={fileInputRef}
               type="file"
@@ -648,13 +648,13 @@ export default function MediaPage() {
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{nameFromKey(m.key)}</p>
-                    <p className="text-[11px] text-[var(--jf-muted)]">
+                    <p className="text-jf-2xs text-[var(--jf-muted)]">
                       {t("media.trashDeletedAt")} {formatDate(m.deleted_at, user?.timezone)} · {fmtSize(m.size)}
                     </p>
                     {/* The bytes are gone, so a restore can never work. Say so
                         here rather than offering a button that fails. */}
                     {!m.object_present && (
-                      <p className="mt-1 text-[11px] text-amber-700">{t("media.restoreObjectGone")}</p>
+                      <p className="mt-1 text-jf-2xs text-amber-700">{t("media.restoreObjectGone")}</p>
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 sm:justify-end">
@@ -750,7 +750,7 @@ export default function MediaPage() {
                       loading="lazy"
                     />
                   ) : (
-                    <div className="flex h-16 w-16 items-center justify-center rounded-xl border bg-white text-center text-xs font-bold text-[#4f46e5]">
+                    <div className="flex h-16 w-16 items-center justify-center rounded-xl border bg-white text-center text-xs font-bold text-[var(--jf-primary-strong)]">
                       {extBadge(m.mime)}
                     </div>
                   )}
@@ -762,7 +762,7 @@ export default function MediaPage() {
                   <p className="mt-0.5 text-xs text-[var(--jf-muted)]">
                     {formatDate(m.created_at, user?.timezone)} · {fmtSize(m.size)}
                   </p>
-                  <p className="mt-0.5 text-[11px] text-[var(--jf-muted)]">
+                  <p className="mt-0.5 text-jf-2xs text-[var(--jf-muted)]">
                     {m.source === "customer" ? t("media.sourceCustomer") : t("media.sourceMerchant")}
                   </p>
                 </div>
@@ -815,7 +815,7 @@ export default function MediaPage() {
                     className="h-full w-full object-contain"
                   />
                 ) : (
-                  <div className="flex h-24 w-24 items-center justify-center rounded-2xl border bg-white text-sm font-bold text-[#4f46e5]">
+                  <div className="flex h-24 w-24 items-center justify-center rounded-2xl border bg-white text-sm font-bold text-[var(--jf-primary-strong)]">
                     {extBadge(detail.mime)}
                   </div>
                 )}
@@ -851,7 +851,7 @@ export default function MediaPage() {
                             href={url}
                             target="_blank"
                             rel="noreferrer"
-                            className="rounded-lg border border-[var(--jf-border)] px-3 py-1.5 text-xs text-[#4f46e5] hover:bg-slate-50"
+                            className="rounded-lg border border-[var(--jf-border)] px-3 py-1.5 text-xs text-[var(--jf-primary-strong)] hover:bg-slate-50"
                           >
                             {label}
                           </a>
@@ -921,7 +921,7 @@ export default function MediaPage() {
             >
               <p className="text-sm font-semibold">{t("media.purgeConfirmTitle")}</p>
               <p className="mt-2 text-sm text-[var(--jf-muted)]">{t("media.purgeConfirmBody")}</p>
-              <p className="mt-2 truncate font-mono text-[11px] text-[var(--jf-muted)]">
+              <p className="mt-2 truncate font-mono text-jf-2xs text-[var(--jf-muted)]">
                 {nameFromKey(confirmPurge.key)}
               </p>
               <div className="mt-4 flex flex-wrap items-center justify-end gap-2">

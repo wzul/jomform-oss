@@ -15,6 +15,9 @@ const ASSETS = [
   { file: "banner-1200x360.png", label: "Banner 1200×360", note: "Open Graph / social preview" },
 ];
 
+// design-tokens-exempt: this page IS the design-system reference — the hex
+// strings below are rendered content (the swatch fill AND the code printed
+// beside it), so they are data, not a class a token could stand in for.
 const COLORS = [
   { name: "Indigo 500", hex: "#6366f1" },
   { name: "Violet 500", hex: "#8b5cf6" },
@@ -22,6 +25,7 @@ const COLORS = [
   { name: "Ink 900", hex: "#17181c" },
   { name: "Paper", hex: "#f7f8f8" },
 ];
+// design-tokens-exempt-end
 
 function CopyBtn({ text, label }: { text: string; label: string }) {
   const [done, setDone] = useState(false);
@@ -67,7 +71,7 @@ export default function BrandPage() {
           <li key={a.file} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-2.5">
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{a.label}</p>
-              <p className="text-[11px] text-slate-600">{a.note}</p>
+              <p className="text-jf-2xs text-slate-600">{a.note}</p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <CopyBtn text={`${BASE}/brand/${a.file}`} label="Copy URL" />
@@ -83,7 +87,7 @@ export default function BrandPage() {
           <div key={c.hex} className="rounded-lg border border-[var(--jf-border)] p-3">
             <div className="h-12 w-full rounded-md" style={{ background: c.hex }} />
             <p className="mt-2 text-xs font-medium">{c.name}</p>
-            <p className="font-mono text-[11px] text-slate-600">{c.hex}</p>
+            <p className="font-mono text-jf-2xs text-slate-600">{c.hex}</p>
           </div>
         ))}
       </div>
@@ -95,7 +99,9 @@ export default function BrandPage() {
       <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-slate-600">
         <li>Minimum mark size: 32×32 px.</li>
         <li>Clear space around the mark = 12% of its width.</li>
+        {/* design-tokens-exempt: the usage sentence NAMES the brand colour, so the hex is content here */}
         <li>On dark backgrounds use the white wordmark; on light backgrounds use indigo #4f46e5.</li>
+        {/* design-tokens-exempt-end */}
         <li>Don&apos;t rotate, recolor, add effects, or rearrange the monogram.</li>
       </ul>
 

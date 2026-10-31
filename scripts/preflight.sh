@@ -327,7 +327,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet gofmt test govuln web lint webimage speccounts a11y e2e npmaudit gitleaks monitor tmpkey mediaprobe backup host prunewt prunesync prunehost refguard selftest)
+GATE_NAMES=(build vet gofmt test govuln web lint design webimage speccounts a11y e2e npmaudit gitleaks monitor tmpkey mediaprobe backup host prunewt prunesync prunehost refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -585,6 +585,11 @@ pw_declared() {
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor|tmpkey|backup|host|prunewt|refguard) printf '%s\n' 'deploy/*' 'scripts/*' ;;
     mediaprobe)            printf '%s\n' 'scripts/*' ;;
+    # `design` scans `web/src/**/*.tsx` and the token file, and its own sources.
+    # All four matter: an edit to a component is the change that can introduce a
+    # literal, an edit to globals.css is where a token is declared, and a diff to
+    # the guard or its suite that does not run it is how a scanner stops scanning.
+    design)                printf '%s\n' 'web/src/*' 'scripts/design-guard.py' 'scripts/design-guard_test.sh' ;;
     prunesync)             printf '%s\n' 'deploy/worktrees/*' ;;
     prunehost)             printf '%s\n' 'deploy/host/*' ;;
     selftest)              printf '%s\n' 'scripts/*' 'GATE-INVENTORY.md' ;;
@@ -609,6 +614,7 @@ pw_sources() {
     monitor)               printf '%s\n' 'deploy/monitoring/*' ;;
     tmpkey)                printf '%s\n' 'deploy/tmp-apikey.sh' 'deploy/tmp-apikey_test.sh' ;;
     mediaprobe)            printf '%s\n' 'scripts/media-purge-probe.sh' 'scripts/media-purge-probe_test.sh' ;;
+    design)                printf '%s\n' 'scripts/design-guard.py' 'scripts/design-guard_test.sh' ;;
     backup)                printf '%s\n' 'deploy/backup/*' ;;
     host)                  printf '%s\n' 'deploy/host/*' 'deploy/vps/*' ;;
     prunewt)               printf '%s\n' 'deploy/worktrees/*' ;;
@@ -2646,6 +2652,44 @@ run web "cd web && npm run build (runs test:unit, then next build)" \
 # ---------------------------------------------------------------------------
 run lint "cd web && npm run lint (eslint ., repo-wide; fails on errors)" \
   bash -c "cd '$REPO_ROOT/web' && npm run lint"
+
+# ---------------------------------------------------------------------------
+# design — the design-system drift gate (card t_e2f3a553).
+#
+# WHY IT EXISTS. `web/src/app/globals.css` has carried a `--jf-*` token layer for
+# a long time and it WORKS — 1,098 uses across 48 files the day this gate was
+# written. What it never had was governance: measured on the tree at that time,
+# 153 raw `#rrggbb` literals sat in 23 `.tsx` files (three of them different
+# indigos standing in for one brand: `#5e6ad2`, `#7170ff` and `#4f46e5`) and
+# typography was written as raw px in 250 places across six ad-hoc sizes. A token
+# layer nobody is required to use is a suggestion, and `lint` cannot see it: a
+# hex inside a Tailwind arbitrary value is legal CSS and a `text-[11px]` is a
+# valid utility, so eslint is green on both.
+#
+# WHAT IT REFUSES: a raw hex in `web/src/**/*.tsx` (6-digit always; 3-digit only
+# when it carries a letter, because `#503` is an issue reference and
+# `x#y` is a URL fragment), and a `text-[Npx]` arbitrary font size. `globals.css`
+# is deliberately NOT scanned — it is where literals are ALLOWED, which is what
+# makes the token layer declarable. Comments are not scanned either: this repo's
+# rationale comments quote measured hex values on purpose, and a guard that
+# reds a correct tree is worse than no guard.
+#
+# The escape hatch is per-line and has to be justified (`design-tokens-exempt:
+# <reason>`, 8+ chars, printed on every pass); a reasonless or unterminated
+# directive is itself a FAILURE, so the hatch cannot quietly widen. It is used 9
+# times on the tree this gate landed on — the brand page (whose hex strings are
+# rendered content), two colour-picker defaults that are persisted data, and one
+# usage sentence that names the brand colour.
+#
+# BITE PROOF is per-run, not on demand: scripts/design-guard_test.sh plants a hex
+# and a font size in a sandbox tree, checks the comment/URL-fragment/all-digit
+# CONTROLS stay green, checks a broken exemption fails, and finally copies the
+# live `web/src`, proves it green, plants one hex in a REAL component and proves
+# that same copy red. 22 checks, ~5s, offline.
+design_run() {
+  bash "$REPO_ROOT/scripts/design-guard_test.sh"
+}
+run design "design-system drift: no raw hex and no text-[Npx] in web/src/**/*.tsx, with a per-run planted-control proof" design_run
 
 # ---------------------------------------------------------------------------
 # web/webimage — the web IMAGE build: the only command that produces the web

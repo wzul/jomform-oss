@@ -371,11 +371,11 @@ export default function ApiDocsPage() {
               {group.endpoints.map((e) => (
                 <div key={`${e.method} ${e.path}`}>
                   <div className="flex flex-wrap items-baseline gap-2">
-                    <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
+                    <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-jf-2xs font-semibold text-slate-700">
                       {e.method}
                     </span>
                     <code className="break-all font-mono text-xs text-slate-900">{e.path}</code>
-                    <span className="text-[11px] uppercase tracking-wide text-slate-500">
+                    <span className="text-jf-2xs uppercase tracking-wide text-slate-500">
                       {e.access}
                       {e.scopeOnly ? (
                         <span className="normal-case">
@@ -385,7 +385,7 @@ export default function ApiDocsPage() {
                       ) : null}
                     </span>
                     {e.rateLimit ? (
-                      <span className="text-[11px] text-slate-500">rate limited: {e.rateLimit}</span>
+                      <span className="text-jf-2xs text-slate-500">rate limited: {e.rateLimit}</span>
                     ) : null}
                   </div>
                   <p className="mt-1 text-sm leading-relaxed text-slate-600">{e.summary}</p>

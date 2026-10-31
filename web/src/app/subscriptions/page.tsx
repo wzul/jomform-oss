@@ -285,14 +285,14 @@ export default function Subscriptions() {
                   </td>
                   <td className="px-2 py-3">
                     <span
-                      className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-medium ${statusBadge(sub.status)}`}
+                      className={`inline-flex rounded-full px-2.5 py-0.5 text-jf-2xs font-medium ${statusBadge(sub.status)}`}
                     >
                       {statusLabel(sub.status)}
                     </span>
                     {sub.card_update_pending && (
                       <div className="mt-1">
                         <span
-                          className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-[11px] font-medium text-rose-700"
+                          className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-jf-2xs font-medium text-rose-700"
                           title={t("sub.cardUpdatePaused")}
                         >
                           {t("sub.cardNeedsUpdate")}

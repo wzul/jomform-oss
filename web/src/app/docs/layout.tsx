@@ -147,7 +147,7 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
           <nav aria-label="Docs sections" className="sticky top-10 space-y-1">
             {NAV_GROUPS.map((g) => (
               <div key={g.label} className="pt-3 first:pt-0">
-                <p className="px-3 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                <p className="px-3 text-jf-2xs font-semibold uppercase tracking-wide text-slate-600">
                   {g.label}
                 </p>
                 {g.sections.map((n) => (
@@ -167,7 +167,7 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
                   page at 11px, against a 4.5:1 AA minimum. slate-600 is
                   7.58:1 and still reads as a quieter heading than the links
                   it introduces. */}
-              <p className="px-3 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+              <p className="px-3 text-jf-2xs font-semibold uppercase tracking-wide text-slate-600">
                 Guides
               </p>
               {NAV_SECTIONS.map((n) => (

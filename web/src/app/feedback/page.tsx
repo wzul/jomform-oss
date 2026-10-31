@@ -241,7 +241,7 @@ export default function FeedbackPage() {
             target="_blank"
             rel="noopener noreferrer"
             title={t("fb.docs")}
-            className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+            className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
           >
             ?
           </a>
@@ -287,7 +287,7 @@ export default function FeedbackPage() {
                   placeholder={t("fb.bodyPh")}
                   className="jf-input mt-1"
                 />
-                <p className="mt-1 text-[11px] text-[var(--jf-muted)]">{t("fb.navHint")}</p>
+                <p className="mt-1 text-jf-2xs text-[var(--jf-muted)]">{t("fb.navHint")}</p>
               </div>
               {formErr && (
                 <p role="alert" className="text-xs text-red-700">{formErr}</p>
@@ -341,11 +341,11 @@ export default function FeedbackPage() {
                         <span className="block truncate text-sm font-medium">
                           {th.subject || t("fb.noSubject")}
                         </span>
-                        <span className="mt-0.5 block text-[11px] text-[var(--jf-muted)]">
+                        <span className="mt-0.5 block text-jf-2xs text-[var(--jf-muted)]">
                           {formatDateTime(th.last_activity_at)} · {t("fb.messages", { n: th.message_count })}
                         </span>
                       </span>
-                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${statusBadge(th.status)}`}>
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-jf-3xs font-medium ${statusBadge(th.status)}`}>
                         {t(statusKey(th.status))}
                       </span>
                     </button>
@@ -365,7 +365,7 @@ export default function FeedbackPage() {
                   <h3 className="text-sm font-semibold">
                     {thread.subject || t("fb.noSubject")}
                   </h3>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusBadge(thread.status)}`}>
+                  <span className={`rounded-full px-2 py-0.5 text-jf-3xs font-medium ${statusBadge(thread.status)}`}>
                     {t(statusKey(thread.status))}
                   </span>
                 </div>
@@ -382,7 +382,7 @@ export default function FeedbackPage() {
                             : "border-[var(--jf-border)] bg-white"
                         }`}
                       >
-                        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--jf-muted)]">
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-jf-2xs text-[var(--jf-muted)]">
                           <span className="font-medium text-[var(--jf-text)]">
                             {isAdmin ? t("fb.whoTeam") : t("fb.whoUser")}
                           </span>
@@ -437,7 +437,7 @@ export default function FeedbackPage() {
           {STATUSES.map((s) => (
             <span
               key={s}
-              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusBadge(s)}`}
+              className={`rounded-full px-2 py-0.5 text-jf-3xs font-medium ${statusBadge(s)}`}
             >
               {t(statusKey(s))}
             </span>

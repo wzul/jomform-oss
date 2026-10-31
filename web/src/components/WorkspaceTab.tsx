@@ -437,7 +437,7 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
             rel="noopener noreferrer"
             title={t("ws.renameDocs")}
             aria-label={t("ws.renameDocs")}
-            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
           >
             ?
           </a>
@@ -561,7 +561,7 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
             rel="noopener noreferrer"
             title={t("ws.docs")}
             aria-label={t("ws.docs")}
-            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
           >
             ?
           </a>
@@ -647,7 +647,7 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
             rel="noopener noreferrer"
             title={t("ws.docs")}
             aria-label={t("ws.docs")}
-            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
           >
             ?
           </a>

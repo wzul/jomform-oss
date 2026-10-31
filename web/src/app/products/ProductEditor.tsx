@@ -432,7 +432,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
             <button
               type="button"
               onClick={() => removeImage(variationIdx, i)}
-              className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/60 px-2 py-0.5 text-[10px] text-white opacity-0 transition group-hover:opacity-100"
+              className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/60 px-2 py-0.5 text-jf-3xs text-white opacity-0 transition group-hover:opacity-100"
             >
               {t("prod.removeImage")}
             </button>
@@ -523,7 +523,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                       target="_blank"
                       rel="noopener noreferrer"
                       title={t("prod.subscriptionDocs")}
-                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
                     >
                       ?
                     </a>
@@ -557,7 +557,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                       target="_blank"
                       rel="noopener noreferrer"
                       title={t("prod.subscriptionDocs")}
-                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
                     >
                       ?
                     </a>
@@ -602,7 +602,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                       target="_blank"
                       rel="noopener noreferrer"
                       title={t("prod.subscriptionDocs")}
-                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
                     >
                       ?
                     </a>
@@ -696,7 +696,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                       rel="noopener noreferrer"
                       title={t("prod.variationDocs")}
                       aria-label={t("prod.variationDocs")}
-                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
                     >
                       ?
                     </a>
