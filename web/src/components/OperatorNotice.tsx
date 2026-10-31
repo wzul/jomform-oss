@@ -1,7 +1,7 @@
 "use client";
 
 import { useI18n } from "./i18n";
-import { OPERATOR_KEY, operatorParts } from "../lib/operator";
+import { OPERATOR_KEY, operatorDirProps, operatorParts } from "../lib/operator";
 
 // The operator block: "JomForm is operated by WANZUL HOSTING ENTERPRISE —
 // Registration No. 201403298654 (formerly PC0012291-H)."
@@ -42,16 +42,24 @@ import { OPERATOR_KEY, operatorParts } from "../lib/operator";
 //   carry. The landing case is marked the same way as the legal pages
 //   deliberately: one rule, one source, nothing to keep in step.
 //
-//   `dir` is NOT emitted here: this is a language declaration, not a direction
-//   override — direction is handled where it actually breaks, in the RTL note
-//   below.
+//   `dir` is emitted for an RTL LOCALE ONLY (card t_d2f2e21f), from the same
+//   resolved locale: the language declaration says how the passage is
+//   PRONOUNCED, the direction says how its runs are LAID OUT, and the two legal
+//   pages are the case where the two disagree with the document. They keep
+//   `dir="ltr"` (their prose is English, PR 1201), so without this the Arabic
+//   sentence inherited an LTR paragraph base and its runs came out in logical
+//   order left-to-right — an Arabic reader scanning right-to-left met it back to
+//   front (measured: leftmost run "يُدار", the first word; rightmost the
+//   registration clause, the last). Every LTR locale emits nothing: the document
+//   already declares LTR and a repeat of it is noise.
 //
 // RTL (see ../lib/operator.ts for the measured detail)
 //   The registration clause is wrapped in <bdi dir="ltr">. The provider sets
 //   `dir="rtl"` on <html> for Arabic, and under it the raw sentence renders the
 //   parenthesis pair INVERTED — visually `.(PC0012291-H` — with the
 //   sentence-final period stranded at the start of the visual line. Measured in
-//   Chromium against this app's own served pages, not assumed.
+//   Chromium against this app's own served pages, not assumed. That isolation is
+//   needed in BOTH bases, so it stays whatever the paragraph direction is.
 //
 // WHY .trim() ON `lead`
 //   `t()` falls back to the English string for a locale that is missing or
@@ -66,8 +74,9 @@ export default function OperatorNotice({ className }: { className?: string }) {
     // `lang` on the element that HOLDS the passage, bound to the RESOLVED
     // locale — never a literal (which would freeze one language onto all five)
     // and never `lang={lang}` unconditionally (which would declare English over
-    // text that is already the document's own language).
-    <p className={className} lang={lang === "en" ? undefined : lang}>
+    // text that is already the document's own language). `operatorDirProps`
+    // adds the base direction for an RTL locale, and nothing for the rest.
+    <p className={className} lang={lang === "en" ? undefined : lang} {...operatorDirProps(lang)}>
       {lead.trim()}
       {regClause ? <> <bdi dir="ltr">{regClause}</bdi></> : null}
     </p>

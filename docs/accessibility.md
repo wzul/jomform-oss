@@ -218,6 +218,41 @@ Two guards hold it, and both were driven RED on the mutation they exist for:
   `dir`), so it doubles as the hydration witness: a page that never hydrated
   fails there instead of passing on the server-rendered value.
 
+### A language of PARTS also declares its own DIRECTION (cards `t_b13ee0cc`, `t_d2f2e21f`)
+
+The operator sentence in the footer ("JomForm is operated by WANZUL HOSTING
+ENTERPRISE — Registration No. …") follows the visitor's locale, so on the two
+legal pages — English prose that correctly keeps `lang="en"` and LTR — it is a
+language CHANGE inside an LTR document: with `jf_lang=ar` a full Arabic sentence
+sat in an LTR paragraph base. `lang` on the passage (card `t_b13ee0cc`) fixed how
+it is **pronounced**; it does not fix how it is **laid out**, and those are
+separate facts. Under an LTR base the bidi algorithm places the RTL runs in
+LOGICAL order left-to-right, so on v1.21.332 (`a3661d1e`, `jf_lang=ar`,
+1440×900, per-word client rects on `/legal/privacy` and `/legal/terms`) the
+LEFTMOST run was "يُدار" — the sentence's FIRST word — and the RIGHTMOST was the
+registration clause, its last: an Arabic reader scanning right-to-left met it
+back to front. `/landing` read correctly only because its document is already
+`dir="rtl"`.
+
+The passage now renders `dir="rtl"` for an RTL locale and NOTHING for every LTR
+one, from one table (`LOCALE_BASE_DIR` in `web/src/lib/operator.ts`, keyed on
+`Lang` so a locale added without a direction decision is a type error) through
+`operatorDirProps(lang)`, spread at the single call site. `dir="auto"` is
+deliberately NOT used: it resolves from the first strong character, so it would
+silently stay LTR for the first locale whose sentence opens with the product
+name. The `<bdi dir="ltr">` registration clause is unchanged, so the number still
+reads left-to-right inside an RTL passage.
+
+Two guards, both driving the mutation they exist for: `src/lib/operatorNotice.test.ts`
+pins the table (the RTL set is `["ar"]` and must follow the dictionary) and
+requires the spread on the passage — a literal `dir` on either side fails; and
+`e2e/a11y-docs-lang.spec.ts` measures the SERVED page in the `ar`, `zh` and
+`en`/unset arms — the `dir` attribute plus the computed `direction`, the clause's
+glyph order ('2' before '0'), and that the sentence's first character hugs the
+paragraph's RIGHT edge (a Range over that one character, so the reading is
+wrap-independent) while `<html>` stays `en`/`ltr`. The `zh` and `en`/unset arms
+refuse an implementation that emits `dir="rtl"` unconditionally.
+
 ### Confirmation dialogs (also in the automated scan)
 
 The three **typed-confirmation dialogs** are scanned by the same gate, in

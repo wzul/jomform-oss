@@ -54,11 +54,13 @@ import { fileURLToPath } from "node:url";
 
 import { DICT } from "../components/i18nDict.ts";
 import {
+  LOCALE_BASE_DIR,
   OPERATOR_FORMER_REG_NO,
   OPERATOR_KEY,
   OPERATOR_LEGAL_NAME,
   OPERATOR_LOCALES,
   OPERATOR_REG_NO,
+  operatorDirProps,
   operatorParts,
 } from "./operator.ts";
 import { SITE_NAME } from "./siteName.ts";
@@ -430,3 +432,78 @@ test("the sentence-language rules cannot be satisfied by a comment", () => {
     "a comment survived the strip, so the rules above could be satisfied by prose instead of code",
   );
 });
+
+// ══ the sentence is LAID OUT in its own direction (card t_d2f2e21f) ═════════
+//
+// THE DEFECT, measured on prod v1.21.332 (revision a3661d1e) with `jf_lang=ar`
+// at 1440x900, per-word client rects on /legal/privacy: the <p> declared
+// `lang="ar"` but carried no `dir`, and the legal pages keep `dir="ltr"` on
+// <html> (their prose is English, PR 1201 — correctly). So the Arabic sentence's
+// runs were laid out in LOGICAL order, left to right: the leftmost run was
+// "يُدار", the sentence's FIRST word, and the rightmost was the registration
+// clause, its LAST. An Arabic reader scanning right-to-left met the sentence back
+// to front. Same on /legal/terms; /landing read correctly only because its
+// document is already `dir="rtl"`.
+//
+// The language declaration the block above pins says how the passage is
+// PRONOUNCED. It says nothing about how its runs are LAID OUT, which is the
+// separate fact this block pins — and the two are exactly the pair that
+// disagreed on the legal pages.
+test("operatorDirProps declares a direction for an RTL locale and nothing for an LTR one", () => {
+  // Arabic is the dictionary's only RTL language, so this is the whole decision
+  // table: an implementation that emits `dir="rtl"` unconditionally mirrors the
+  // English sentence into an RTL paragraph on every page, and one that emits
+  // nothing leaves the reported defect in place.
+  assert.deepEqual(operatorDirProps("ar"), { dir: "rtl" }, "an Arabic sentence must carry dir=\"rtl\"");
+  for (const lang of OPERATOR_LOCALES.filter((l) => l !== "ar")) {
+    assert.deepEqual(
+      operatorDirProps(lang),
+      {},
+      `${lang}: an LTR locale must emit NO dir — the document already declares LTR, and repeating it ` +
+        `is a declaration the passage does not need (the same rule as its lang)`,
+    );
+  }
+  // Non-vacuity, and the shape a locale addition must not slip through: every
+  // locale in the dictionary has a decision, and Arabic is the only RTL one.
+  assert.deepEqual(
+    Object.keys(LOCALE_BASE_DIR).sort(),
+    [...OPERATOR_LOCALES].sort(),
+    "LOCALE_BASE_DIR covers a different set of locales than the dictionary — a locale added without a " +
+      "direction decision would render its sentence in whatever base the page happens to have",
+  );
+  assert.deepEqual(
+    Object.entries(LOCALE_BASE_DIR).filter(([, d]) => d === "rtl").map(([l]) => l),
+    ["ar"],
+    "Arabic is this dictionary's only right-to-left language; if that changed, the direction rule above " +
+      "has to follow it",
+  );
+});
+
+test("the passage spreads that direction from the resolved locale in the shared component", () => {
+  // Anchored on the <p> that HOLDS the passage: the <bdi dir="ltr"> inside it is a
+  // different, deliberate declaration, so the rule is scoped to the opening tag.
+  const pTag = NOTICE.match(/<p\b[^>]*>/)?.[0] ?? "";
+  assert.ok(pTag, `the component renders no <p> opening tag for the sentence — this rule would prove nothing`);
+
+  assert.match(
+    pTag,
+    /\{\.\.\.operatorDirProps\(lang\)\}/,
+    "the operator sentence renders with no base direction of its own — on the two legal pages, whose " +
+      "document is dir=\"ltr\", an Arabic sentence then lays its runs out left-to-right and reads back " +
+      "to front (card t_d2f2e21f; measured per-word rects, v1.21.332)",
+  );
+  assert.doesNotMatch(
+    pTag,
+    /dir="(ltr|rtl)"/,
+    "the passage hard-codes a base direction — a literal dir=\"rtl\" mirrors the English sentence into " +
+      "an RTL paragraph for the four LTR locales, and a literal dir=\"ltr\" is the reported defect",
+  );
+  // The same locale drives both declarations, so the language and its direction
+  // cannot be resolved independently and drift.
+  assert.equal(
+    (NOTICE.match(/operatorDirProps\(lang\)/g) ?? []).length,
+    1,
+    "the passage must take its direction from the resolved locale exactly once",
+  );
+});
+

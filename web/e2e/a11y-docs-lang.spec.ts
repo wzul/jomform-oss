@@ -755,3 +755,192 @@ test.describe("the /docs prose declares each endonym's own language (WCAG 3.1.2)
     ).toEqual(["en", "en", "en"]);
   });
 });
+
+// ══ the operator sentence is LAID OUT in its own direction (card t_d2f2e21f) ══
+//
+// The block above pins how the sentence is PRONOUNCED (its `lang`). This one pins
+// how its runs are LAID OUT, which is a separate fact and the one a reader
+// actually sees.
+//
+// THE DEFECT, measured on prod v1.21.332 (revision a3661d1e) with `jf_lang=ar` at
+// 1440x900, per-word client rects on /legal/privacy: the <p> declared `lang="ar"`
+// and computed `direction: ltr`, because the legal pages keep `dir="ltr"` on
+// <html> (their prose is English, PR 1201 — correctly). Under an LTR paragraph
+// base the bidi algorithm places the RTL runs in LOGICAL order, left to right, so
+// the leftmost run was "يُدار" — the sentence's FIRST word — and the rightmost was
+// the registration clause, its LAST: an Arabic reader scanning right-to-left met
+// the sentence back to front. Same on /legal/terms. /landing read correctly only
+// because its document is already `dir="rtl"`.
+//
+// WHAT MAKES IT BITE. The direction assertions are one half; the other half is
+// geometry read from the live DOM, because `direction: rtl` is exactly what a
+// `dir` attribute is FOR and the two cannot be judged apart:
+//   * the sentence's FIRST character must sit at the paragraph's RIGHT edge —
+//     `firstCharRightGap` near 0, `firstCharLeftGap` past the middle. Pre-fix the
+//     same two numbers are the mirror image (left gap 0), which is the defect.
+//     Measured with a Range over that one character, so it is wrap-independent: an
+//     RTL paragraph starts at the right edge on EVERY line.
+//   * inside the isolated clause, the glyphs '2' and '0' of the registration
+//     number must still read left-to-right (the `<bdi dir="ltr">` the language
+//     block above pins), so the fix cannot be "flip everything".
+//   * the four LTR arms refuse the mirror: an implementation that emits
+//     `dir="rtl"` unconditionally passes the Arabic arm and fails there.
+// A page that rendered nothing passes none of this: every case first waits for the
+// sentence ITSELF to be in the DOM.
+type OperatorLayout = {
+  /** The declaration on the passage itself. */
+  lang: string | null;
+  dir: string | null;
+  /** …and what the browser resolved for it. */
+  direction: string;
+  /** The registration clause's own direction — must stay ltr in every locale. */
+  bdiDir: string | null;
+  bdiDirection: string | null;
+  /** Client x of the clause's first two glyphs ('2' then '0'): ltr order = ascending. */
+  clauseFirstLeft: number | null;
+  clauseSecondLeft: number | null;
+  /** The sentence's first character, measured against the paragraph's own box. */
+  firstCharLeftGap: number | null;
+  firstCharRightGap: number | null;
+  paragraphWidth: number;
+};
+
+/** The passage's own layout, read out of the live DOM by geometry, not by CSS text. */
+async function operatorLayout(page: Page, sentence: string): Promise<OperatorLayout | null> {
+  return page.evaluate((s): OperatorLayout | null => {
+    const p = Array.from(document.querySelectorAll("p")).find((e) => (e.textContent ?? "").trim() === s);
+    if (!p) return null;
+    const bdi = p.querySelector("bdi");
+    const box = p.getBoundingClientRect();
+    const glyph = (node: Text, at: number) => {
+      const r = document.createRange();
+      r.setStart(node, at);
+      r.setEnd(node, at + 1);
+      return r.getBoundingClientRect();
+    };
+    const textOf = (n: Node | null): Text | null =>
+      n && n.nodeType === Node.TEXT_NODE ? (n as Text) : null;
+    const lead = textOf(p.firstChild);
+    // `.trim()` is what the component renders, so the first character of the text
+    // node is the first character of the sentence.
+    const first = lead ? glyph(lead, lead.data.length - lead.data.trimStart().length) : null;
+    const clause = bdi ? textOf(bdi.firstChild) : null;
+    const c0 = clause && clause.data.length > 1 ? glyph(clause, 0) : null;
+    const c1 = clause && clause.data.length > 1 ? glyph(clause, 1) : null;
+    return {
+      lang: p.getAttribute("lang"),
+      dir: p.getAttribute("dir"),
+      direction: getComputedStyle(p).direction,
+      bdiDir: bdi?.getAttribute("dir") ?? null,
+      bdiDirection: bdi ? getComputedStyle(bdi).direction : null,
+      clauseFirstLeft: c0 ? Math.round(c0.left) : null,
+      clauseSecondLeft: c1 ? Math.round(c1.left) : null,
+      firstCharLeftGap: first ? Math.round(first.left - box.left) : null,
+      firstCharRightGap: first ? Math.round(box.right - first.right) : null,
+      paragraphWidth: Math.round(box.width),
+    };
+  }, sentence);
+}
+
+/** Waits until `path` holds `sentence`, then returns the passage's layout. */
+async function laidOutSentence(page: Page, path: string, sentence: string): Promise<OperatorLayout> {
+  await page.goto(path, { waitUntil: "networkidle" });
+  await expect
+    .poll(async () => (await operatorLayout(page, sentence)) !== null, {
+      timeout: 30_000,
+      message:
+        `${path} never rendered the operator sentence for this locale — the layout assertions would be ` +
+        `judging a page that rendered nothing`,
+    })
+    .toBe(true);
+  const layout = await operatorLayout(page, sentence);
+  expect(layout, `${path}: the sentence vanished between the wait and the read`).not.toBeNull();
+  return layout as OperatorLayout;
+}
+
+test.describe("the operator sentence is laid out in its own direction", () => {
+  test("with jf_lang=ar the sentence reads right-to-left inside the LTR legal page", async ({ page }) => {
+    await freshState(page, "ar");
+    const sentence = operatorSentence("ar");
+
+    for (const path of OPERATOR_SENTENCE_ROUTES) {
+      const l = await laidOutSentence(page, path, sentence);
+
+      // 1. The passage declares the direction itself, and the browser resolved it.
+      expect(
+        l.dir,
+        `${path}: the Arabic passage carries no dir — it inherits the page's dir="ltr", the runs come out in ` +
+          `logical order and the sentence reads back to front for an Arabic reader (the reported defect)`,
+      ).toBe("rtl");
+      expect(l.direction, `${path}: computed direction of the Arabic passage`).toBe("rtl");
+      // …and its language declaration, which the block above owns, is untouched.
+      expect(l.lang, `${path}: the passage must still declare Arabic`).toBe("ar");
+
+      // 2. The registration clause keeps its own LTR isolation: '2' then '0' read
+      //    left-to-right inside it. A fix that flipped the whole paragraph would
+      //    pass 1 and fail here.
+      expect(l.bdiDir, `${path}: the <bdi> clause must keep dir="ltr"`).toBe("ltr");
+      expect(l.bdiDirection, `${path}: computed direction of the clause`).toBe("ltr");
+      expect(
+        l.clauseSecondLeft,
+        `${path}: the registration number must read left-to-right inside the isolated clause`,
+      ).toBeGreaterThan(l.clauseFirstLeft as number);
+
+      // 3. The reading order, measured: the sentence's FIRST character sits at the
+      //    paragraph's RIGHT edge, i.e. where an RTL line starts. Pre-fix it sits at
+      //    the left edge (leftGap 0) and this pair is the mirror image.
+      expect(
+        l.firstCharLeftGap,
+        `${path}: the sentence's first character is ${l.firstCharLeftGap}px from the paragraph's LEFT edge ` +
+          `and ${l.firstCharRightGap}px from its right edge (${l.paragraphWidth}px wide) — an RTL paragraph ` +
+          `starts at the right, so an Arabic reader must meet "يُدار" there, not the registration clause`,
+      ).toBeGreaterThan(l.paragraphWidth / 2);
+      expect(l.firstCharRightGap, `${path}: the sentence's first character must hug the right edge`).toBeLessThan(
+        12,
+      );
+
+      // 4. The fix is a direction of PARTS: PR 1201's document declaration, and the
+      //    English prose it describes, must not have moved.
+      expect(await declaration(page), `${path} live declaration`).toEqual({
+        lang: "en",
+        dir: "ltr",
+        direction: "ltr",
+      });
+    }
+  });
+
+  test("with jf_lang=en or unset the sentence adds no dir and still reads left-to-right", async ({ page }) => {
+    for (const lang of ["en", null] as const) {
+      await freshState(page, lang);
+      // The sentence is the ENGLISH one, so this arm also proves the fix did not
+      // key on being on the legal pages rather than on the locale.
+      const sentence = operatorSentence("en");
+      const l = await laidOutSentence(page, "/legal/privacy", sentence);
+
+      expect(
+        l.dir,
+        `jf_lang=${lang}: the English sentence must carry NO dir — the document already declares LTR and a ` +
+          `declaration that repeats it is noise in the state every crawler and every new visitor sees`,
+      ).toBe(null);
+      expect(l.direction, `jf_lang=${lang}: computed direction of the English passage`).toBe("ltr");
+      expect(l.lang, `jf_lang=${lang}: an English sentence declares no lang`).toBe(null);
+      expect(
+        l.firstCharLeftGap,
+        `jf_lang=${lang}: an LTR paragraph starts at the LEFT edge — this is the control that says the ` +
+          `measurement above is not symmetric noise`,
+      ).toBeLessThan(12);
+    }
+  });
+
+  test("with jf_lang=zh a non-Arabic locale adds no dir either", async ({ page }) => {
+    await freshState(page, "zh");
+    // The mirror of the `lang` block's zh arm: an implementation that hard-codes
+    // dir="rtl" (the tempting shortcut, since the defect was reported in Arabic)
+    // passes the Arabic arm and mirrors the Chinese sentence here.
+    const l = await laidOutSentence(page, "/legal/privacy", operatorSentence("zh"));
+    expect(l.dir, "a Chinese sentence must not be declared RTL").toBe(null);
+    expect(l.direction).toBe("ltr");
+    expect(l.lang, "…and it still declares Chinese, not Arabic").toBe("zh");
+    expect(l.firstCharLeftGap, "a Chinese sentence starts at the LEFT edge").toBeLessThan(12);
+  });
+});

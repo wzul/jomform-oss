@@ -1855,10 +1855,12 @@ export const DICT = {
   // in every locale, and only the sentence around them is translated. Do not
   // translate, reorder or reformat them.
   //
-  // RTL: the Arabic string is read under dir="rtl", and the clause from the
-  // number onwards is wrapped in <bdi dir="ltr"> by OperatorNotice. The
-  // parenthesis pair and the sentence-final period would otherwise render
-  // inverted — see the measured note in src/lib/operator.ts before editing this.
+  // RTL: the Arabic string is laid out under dir="rtl" — the passage declares it
+  // itself (operatorDirProps) because the legal pages keep an LTR document base
+  // — and the clause from the number onwards is wrapped in <bdi dir="ltr"> by
+  // OperatorNotice. The parenthesis pair and the sentence-final period would
+  // otherwise render inverted — see the measured note in src/lib/operator.ts
+  // before editing this.
   "land.operator": {
     en: "JomForm is operated by WANZUL HOSTING ENTERPRISE — Registration No. 201403298654 (formerly PC0012291-H).",
     ms: "JomForm dikendalikan oleh WANZUL HOSTING ENTERPRISE — No. Pendaftaran 201403298654 (dahulunya PC0012291-H).",
