@@ -563,13 +563,39 @@ export default function McpReferencePage() {
         <section key={g.group} className="mt-8">
           <h2 className="text-lg font-semibold text-slate-900">{g.group}</h2>
           {g.note && (
-            <p className="mt-2 text-sm leading-relaxed text-slate-600">{g.note}</p>
+            /* A group note is prose we write, but it sits in the same data
+               array as the tool rows, so it gets the same break guard as the
+               descriptions below — one rule for every string this page renders
+               out of TOOL_GROUPS. */
+            <p className="mt-2 text-sm leading-relaxed text-slate-600 [overflow-wrap:anywhere]">{g.note}</p>
           )}
           <div className="mt-3 space-y-3">
             {g.tools.map((t) => (
               <div key={t.name} className="rounded-lg border border-slate-200 p-4">
-                <code className="font-mono text-sm font-semibold text-[var(--jf-primary)]">{t.name}</code>
-                <p className="mt-1 text-sm leading-relaxed text-slate-600">{t.desc}</p>
+                {/* The tool name is a fixed identifier with no break opportunity
+                    of its own: `admin_requeue_dead_letter_event` measures ~260px
+                    at font-mono text-sm, which paints past the card's border
+                    once the content column drops below that (320px viewport).
+                    `break-all` only breaks when it has to, so the name still
+                    renders on one line wherever it fits. */}
+                <code className="font-mono text-sm font-semibold text-[var(--jf-primary)] break-all">{t.name}</code>
+                {/* A description is DATA, not prose we control. Several carry a
+                    long unbreakable run: register_form_fields publishes its
+                    whole type alternation as one 138-character token
+                    (`name|email|…|captcha`), and others carry
+                    `sale.paid|sale.failed|subscription.charged|*` or
+                    `(privacy|terms|refund)`. Ordinary word wrapping has no
+                    break opportunity inside such a run, so this paragraph
+                    measured 898px wide in a 308px card at a 390px viewport and
+                    the whole page panned sideways 549px — /docs/mcp was the
+                    only /docs page that did.
+
+                    `[overflow-wrap:anywhere]` breaks the run at the column
+                    edge and, unlike `break-word`, also drops the paragraph's
+                    min-content to one character so the card can shrink. It
+                    does not shorten anything: the alternation still reads in
+                    full, wrapped across lines. */}
+                <p className="mt-1 text-sm leading-relaxed text-slate-600 [overflow-wrap:anywhere]">{t.desc}</p>
               </div>
             ))}
           </div>
