@@ -1,6 +1,6 @@
 # JomForm
 
-**Order-form builder for Malaysian social sellers — free hosted service.**
+**Order-form builder for Malaysian social sellers — free and open source (MIT).**
 
 Bina borang tempahan yang cantik dan pantas, terima bayaran melalui [CHIP](https://chip-in.asia) (FPX, kad, e-wallet, DuitNow QR), urus jualan — semua tanpa website. Control everything from your own AI agent via the built-in MCP server, or use the web dashboard.
 
@@ -41,8 +41,17 @@ jomform/
 
 ## License
 
-JomForm is a proprietary, hosted service. All rights reserved. No open-source
-licence is granted at this time; revisit if/when the repo is made public.
+JomForm is open source under the [MIT License](LICENSE). You may use, copy,
+modify, merge, publish, distribute, sublicense and sell copies of this software,
+provided the copyright notice and this permission notice are included in all
+copies or substantial portions of it. The software is provided "as is", without
+warranty of any kind.
+
+The hosted service at `jomform.com` is a separate offering governed by the
+[Terms of Service](https://jomform.com/legal/terms) — the MIT licence covers the
+code in this repository, not the hosted instance.
+
+Copyright (c) 2026 Wan Zulkarnain.
 
 ## Community
 

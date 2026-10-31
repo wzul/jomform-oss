@@ -11,12 +11,12 @@ import { SESSION_COOKIE } from "../lib/sessionCookie";
 export const metadata: Metadata = {
   title: "JomForm — Order forms, agent payments & sales for everyone",
   description:
-    "Build beautiful order forms, accept CHIP payments, manage sales. Free forever.",
+    "Build beautiful order forms, accept CHIP payments, manage sales. Open source (MIT) & free forever.",
   alternates: { canonical: "https://jomform.com/" },
   openGraph: {
     title: "JomForm — Order forms, agent payments & sales for everyone",
     description:
-      "Build beautiful order forms, accept CHIP payments, manage sales. Free forever.",
+      "Build beautiful order forms, accept CHIP payments, manage sales. Open source (MIT) & free forever.",
     url: "https://jomform.com/",
     siteName: SITE_NAME,
     type: "website",
@@ -27,7 +27,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "JomForm — Order forms, agent payments & sales for everyone",
     description:
-      "Build beautiful order forms, accept CHIP payments, manage sales. Free forever.",
+      "Build beautiful order forms, accept CHIP payments, manage sales. Open source (MIT) & free forever.",
     images: ["https://jomform.com/og-default.png"],
   },
 };

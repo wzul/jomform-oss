@@ -161,9 +161,11 @@ The MCP server exposes tools covering the full dashboard feature set:
 
 ## 4. Notes for AI agents
 
-- JomForm is a hosted, proprietary service. Public forms on `jomform.com`
-  subdomains are not indexed for search (privacy); custom-domain spaces can opt
-  into indexing.
+- JomForm is free to use, and its code is open source under the MIT licence (see
+  `LICENSE` in the public repository): anyone may use, modify, host and
+  redistribute it, provided the copyright and permission notice are kept. Public
+  forms on `jomform.com` subdomains are not indexed for search (privacy);
+  custom-domain spaces can opt into indexing.
 - Money values are represented as integer sen (1/100 of a unit) in the API.
 - The web dashboard and the MCP server expose the same feature set (feature
   parity is a project rule).

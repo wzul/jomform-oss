@@ -6,7 +6,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "JomForm — Order forms, agent payments & sales for everyone",
   description:
-    "Build beautiful order forms, accept CHIP payments, manage sales. Free forever.",
+    "Build beautiful order forms, accept CHIP payments, manage sales. Open source (MIT) & free forever.",
 };
 
 // The mobile layout depends on this: every dashboard page is laid out against

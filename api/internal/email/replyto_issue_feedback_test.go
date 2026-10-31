@@ -291,10 +291,11 @@ func TestShippedSendPathsCarryTheReadersLanguageToTheShell(t *testing.T) {
 			}
 		}
 		// ANTI-VACUITY: the English footer must be absent, or "contains Malay"
-		// would also pass on a shell carrying both.
-		if strings.Contains(html, "All rights reserved") {
-			t.Errorf("%s path: the English footer is still present alongside the Malay one:\n%s",
-				path, firstLines(html, 3))
+		// would also pass on a shell carrying both. The English string is read
+		// from the same dictionary, so this cannot agree with a private copy.
+		if en := emailtext.Phrase(emailtext.En, emailtext.PhraseCopyright); strings.Contains(html, en) {
+			t.Errorf("%s path: the English footer %q is still present alongside the Malay one:\n%s",
+				path, en, firstLines(html, 3))
 		}
 	}
 

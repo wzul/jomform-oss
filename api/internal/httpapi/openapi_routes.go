@@ -987,7 +987,7 @@ func OpenAPISpec() map[string]any {
 			"title":       restSpecTitle,
 			"version":     restSpecVersion,
 			"description": restSpecDesc,
-			"license":     map[string]any{"name": "Proprietary"},
+			"license":     map[string]any{"name": "MIT"},
 		},
 		"servers": servers["servers"],
 		"tags":    tagObjects(),

@@ -1822,7 +1822,7 @@ export const DICT = {
   "fs.courierCallback": { en: "Callback URL to register", ms: "URL panggil balik untuk didaftarkan", zh: "需登记的授权回调地址", ta: "பதிவு செய்ய வேண்டிய அழைப்பு URL", ar: "رابط الاستدعاء المطلوب تسجيله" },
   "fs.courierConnectFailed": { en: "Could not connect this courier", ms: "Gagal menyambung pembekal ini", zh: "无法连接该快递", ta: "இந்தக் கூரியரை இணைக்க முடியவில்லை", ar: "تعذّر ربط مزود الشحن" },
   // landing
-  "land.badge": { en: "100% free · CHIP payments", ms: "100% percuma · bayaran CHIP", zh: "100% 免费 · 代理原生支付", ta: "100% இலவசம் · முகவர் சார்ந்த பணம்", ar: "مجاني 100% · مدفوعات ذكية" },
+  "land.badge": { en: "100% free · open source (MIT) · CHIP payments", ms: "100% percuma · sumber terbuka (MIT) · bayaran CHIP", zh: "100% 免费 · 开源 (MIT) · 代理原生支付", ta: "100% இலவசம் · திறந்த மூல (MIT) · முகவர் சார்ந்த பணம்", ar: "مجاني 100% · مفتوح المصدر (MIT) · مدفوعات ذكية" },
   "land.hero1": { en: "Sell online with", ms: "Jual secara online dengan", zh: "5 分钟建立订单表单", ta: "5 நிமிடங்களில் ஆர்டர் படிவம்", ar: "أنشئ نموذج طلب في 5 دقائق" },
   "land.hero2": { en: "beautiful order forms.", ms: "borang tempahan cantik.", zh: "通过 CHIP 收款", ta: "CHIP மூலம் பணம் வசூலிக்கவும்", ar: "اقبل المدفوعات عبر CHIP" },
   "land.hero3": { en: "Let an AI agent manage your store", ms: "Biarkan agent AI mengurus kedai anda", zh: "让 AI 代理管理您的商店", ta: "AI முகவர் உங்கள் கடையை நிர்வகிக்கட்டும்", ar: "دع الوكيل الذكي يدير متجرك" },
@@ -1844,7 +1844,7 @@ export const DICT = {
   "land.mcptitle": { en: "Control your store with plain language", ms: "Kawal kedai guna bahasa biasa", zh: "您的代理，您的商店", ta: "உங்கள் முகவர், உங்கள் கடை", ar: "وكيلك، متجرك" },
   "land.mcpbody": { en: 'JomForm speaks MCP (Model Context Protocol). Connect your AI agent once, then: \"add product RM25\", \"how many sales today?\", \"refund order JF-xxxx\" — all without opening a dashboard.', ms: 'JomForm cakap MCP (Model Context Protocol). Sambung agent AI sekali, lepas tu: \"tambah produk RM20\", \"berapa sales hari ni?\", \"refund order JF-xxxx\" — semua tanpa buka dashboard.', zh: 'JomForm 支持 MCP。连接一次 AI 代理：添加商品、查销售、退款——无需仪表板。', ta: 'JomForm MCP பேசுகிறது — டாஷ்போர்டு இல்லாமல் கடை நிர்வகி.', ar: 'JomForm يتحدث MCP — أدر متجرك دون لوحة تحكم.' },
   "land.mcpsnippet": { en: "Connect at https://mcp.jomform.com/mcp → OAuth 2.1 (one-click) → your agent, your store.", ms: "Sambung di https://mcp.jomform.com/mcp → OAuth 2.1 (satu klik) → agent kau, kedai kau.", zh: "在 https://mcp.jomform.com/mcp 连接 → OAuth 2.1（一键）→ 您的代理，您的商店。", ta: "https://mcp.jomform.com/mcp இல் இணைக்கவும் → OAuth 2.1 (ஒரே கிளிக்) → உங்கள் முகவர், உங்கள் கடை.", ar: "اتصل عبر https://mcp.jomform.com/mcp → OAuth 2.1 (بنقرة واحدة) → وكيلك، متجرك." },
-  "land.footer": { en: "JomForm — Made in Malaysia.", ms: "JomForm — Buatan Malaysia.", zh: "JomForm — 马来西亚制造", ta: "JomForm — மலேசியாவில் தயாரிக்கப்பட்டது", ar: "JomForm — صُنع في ماليزيا" },
+  "land.footer": { en: "JomForm — open source (MIT). Made in Malaysia.", ms: "JomForm — sumber terbuka (MIT). Buatan Malaysia.", zh: "JomForm — 开源 (MIT)。马来西亚制造", ta: "JomForm — திறந்த மூல (MIT). மலேசியாவில் தயாரிக்கப்பட்டது", ar: "JomForm — مفتوح المصدر (MIT). صُنع في ماليزيا" },
   // Operator identity (WANZUL HOSTING ENTERPRISE) — the ONE sentence naming who
   // runs JomForm. Rendered by components/OperatorNotice.tsx on the landing/home
   // footer AND both legal pages, so all three read from this entry; the

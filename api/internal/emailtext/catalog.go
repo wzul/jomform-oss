@@ -479,12 +479,13 @@ var phrases = map[PhraseKey]map[string]string{
 		Ta: "JomForm — மலேசியாவில் உருவாக்கப்பட்டது.",
 		Ar: "JomForm — صُنع في ماليزيا.",
 	},
-	// Branded wrapper footer: copyright.
+	// Branded wrapper footer: copyright. JomForm's code is MIT-licensed, so the
+	// footer states the licence rather than a blanket reservation of rights.
 	PhraseCopyright: {
-		En: "© JomForm. All rights reserved.",
-		Ms: "© JomForm. Hak cipta terpelihara.",
-		Zh: "© JomForm。版权所有。",
-		Ta: "© JomForm. அனைத்து உரிமைகளும் பாதுகாக்கப்பட்டவை.",
-		Ar: "© JomForm. جميع الحقوق محفوظة.",
+		En: "© JomForm — open source under the MIT licence.",
+		Ms: "© JomForm — sumber terbuka di bawah lesen MIT.",
+		Zh: "© JomForm — 开源，MIT 许可。",
+		Ta: "© JomForm — MIT உரிமத்தின் கீழ் திறந்த மூல.",
+		Ar: "© JomForm — مفتوح المصدر بموجب رخصة MIT.",
 	},
 }

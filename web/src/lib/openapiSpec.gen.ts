@@ -710,7 +710,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
   "info": {
     "description": "The JomForm REST API. Every route is under `/v1/rest/` and is authenticated with `Authorization: Bearer \u003capi key\u003e`; the same key also authenticates the JomForm MCP server. Keys are created in Settings → API keys, or with `POST /v1/rest/keys`.\n\n**Server to server only.** The API sends no `Access-Control-Allow-*` headers, so a browser page on another origin cannot read a response. This is deliberate, not an omission: the API is built for server-side calls.\n\n**Rate limits are the exception, not the rule.** Within this API only the routes marked `x-jomform-rate-limit` are throttled; every other route has no rate limit at all. Do not build a client that assumes a uniform quota.",
     "license": {
-      "name": "Proprietary"
+      "name": "MIT"
     },
     "title": "JomForm REST API",
     "version": "1.0.0"

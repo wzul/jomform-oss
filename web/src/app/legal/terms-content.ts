@@ -1,4 +1,4 @@
-export const TERMS_LAST_UPDATED = "2026-09-01";
+export const TERMS_LAST_UPDATED = "2026-10-31";
 
 // Standard Terms of Service for JomForm.
 export const TERMS_SECTIONS: { title: string; body: string[] }[] = [
@@ -54,8 +54,9 @@ export const TERMS_SECTIONS: { title: string; body: string[] }[] = [
   {
     title: "7. Intellectual property",
     body: [
-      "The Service (including code, design, and branding) is owned by JomForm. You keep ownership of your forms, content, and sales data.",
-      "You grant us a limited licence to host and display your content solely to operate the Service.",
+      "JomForm's source code is open source under the MIT License — see the LICENSE file in the public repository for the exact terms. The MIT licence lets anyone use, copy, modify, merge, publish, distribute, sublicense and sell copies of that code, provided the copyright notice and the permission notice are kept in all copies or substantial portions of it.",
+      "Your forms, content, and sales data remain yours. You grant us a limited licence to host and display your content solely to operate the Service.",
+      "The JomForm name and logo identify the hosted service and are not granted by the MIT licence — see the Brand page for how they may be used. Do not use them to imply that the project endorses your own instance.",
     ],
   },
   {
