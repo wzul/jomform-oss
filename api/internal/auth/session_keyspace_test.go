@@ -73,7 +73,7 @@ func cleanupToken(t *testing.T, s *Sessions, token string) {
 	t.Helper()
 	t.Cleanup(func() {
 		ctx := context.Background()
-		if err := s.rdb.Del(ctx, sessionKey(token), legacySessionKey(token)).Err(); err != nil {
+		if err := s.rdb.Del(ctx, s.sessionKey(token), s.legacySessionKey(token)).Err(); err != nil {
 			t.Errorf("cleanup session keys for %q: %v", token, err)
 		}
 	})
@@ -105,7 +105,7 @@ func TestSessionTokenIsNeverAKeyName(t *testing.T) {
 	}
 
 	// The hash IS the key, and it resolves, so the session is not merely gone.
-	hashed := sessionKey(token)
+	hashed := s.sessionKey(token)
 	if hashed == sessionKeyPrefix+token {
 		t.Fatalf("sessionKey(%q) is the raw token", token)
 	}
@@ -124,29 +124,42 @@ func TestSessionTokenIsNeverAKeyName(t *testing.T) {
 // TestSessionKeyIsHashNotToken is the pure unit half: the derivation itself.
 // It pins that the key suffix is the hex SHA-256 (64 chars), not the token, so
 // a token carrying characters that mean something to the keyspace (globs, a
-// newline) can never alias another session's key.
+// newline) can never alias another session's key. The namespace half of the
+// layout (WithKeyNamespace) is pinned the same way: it is INSERTED after the
+// root, so the hashed suffix is still the whole identity of the session.
 func TestSessionKeyIsHashNotToken(t *testing.T) {
-	for _, token := range []string{
-		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-		"*",
-		"a\r\nDEL jf:session:x",
-		"jf:session:other",
-	} {
-		key := sessionKey(token)
-		if key == sessionKeyPrefix+token {
-			t.Errorf("sessionKey(%q) returns the raw token", token)
+	for _, ns := range []string{"", "jftest:p48213", "run.2026-10-30_x"} {
+		s := &Sessions{namespace: ns}
+		prefix := sessionKeyPrefix
+		if ns != "" {
+			prefix += ns + ":"
+		}
+		if got := s.keyPrefix(); got != prefix {
+			t.Errorf("keyPrefix(namespace %q) = %q, want %q", ns, got, prefix)
 			continue
 		}
-		if want := sessionKeyPrefix + hashOf(token); key != want {
-			t.Errorf("sessionKey(%q) = %q, want the SHA-256 layout %q", token, key, want)
-			continue
-		}
-		suffix := strings.TrimPrefix(key, sessionKeyPrefix)
-		if len(suffix) != 64 {
-			t.Errorf("sessionKey(%q) suffix %q is not a hex SHA-256 (len %d)", token, suffix, len(suffix))
-		}
-		if raw, err := hex.DecodeString(suffix); err != nil || len(raw) != 32 {
-			t.Errorf("sessionKey(%q) suffix %q is not hex-encoded 32 bytes (err=%v)", token, suffix, err)
+		for _, token := range []string{
+			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			"*",
+			"a\r\nDEL jf:session:x",
+			"jf:session:other",
+		} {
+			key := s.sessionKey(token)
+			if key == prefix+token {
+				t.Errorf("sessionKey(%q, namespace %q) returns the raw token", token, ns)
+				continue
+			}
+			if want := prefix + hashOf(token); key != want {
+				t.Errorf("sessionKey(%q, namespace %q) = %q, want the SHA-256 layout %q", token, ns, key, want)
+				continue
+			}
+			suffix := strings.TrimPrefix(key, prefix)
+			if len(suffix) != 64 {
+				t.Errorf("sessionKey(%q) suffix %q is not a hex SHA-256 (len %d)", token, suffix, len(suffix))
+			}
+			if raw, err := hex.DecodeString(suffix); err != nil || len(raw) != 32 {
+				t.Errorf("sessionKey(%q) suffix %q is not hex-encoded 32 bytes (err=%v)", token, suffix, err)
+			}
 		}
 	}
 }
@@ -181,7 +194,7 @@ func TestLegacyRawTokenSessionResolvesAndIsRekeyed(t *testing.T) {
 	if n, err := s.rdb.Exists(ctx, sessionKeyPrefix+token).Result(); err != nil || n != 0 {
 		t.Errorf("legacy raw-token key survived the migration (exists=%d err=%v) — it must be deleted once hashed", n, err)
 	}
-	ttl, err := s.rdb.PTTL(ctx, sessionKey(token)).Result()
+	ttl, err := s.rdb.PTTL(ctx, s.sessionKey(token)).Result()
 	if err != nil {
 		t.Fatalf("read migrated TTL: %v", err)
 	}
@@ -229,7 +242,7 @@ func TestLegacyKeyWithoutExpiryIsServedButNotRekeyed(t *testing.T) {
 	if err != nil || uid != "user-nottl" {
 		t.Fatalf("Get(legacy token, no expiry) = (%q, %v), want (user-nottl, nil)", uid, err)
 	}
-	if n, err := s.rdb.Exists(ctx, sessionKey(token)).Result(); err != nil || n != 0 {
+	if n, err := s.rdb.Exists(ctx, s.sessionKey(token)).Result(); err != nil || n != 0 {
 		t.Errorf("a legacy key with no expiry was re-keyed (exists=%d err=%v) — the copy would never expire either", n, err)
 	}
 }
@@ -256,7 +269,7 @@ func TestLogoutEndsALegacySession(t *testing.T) {
 	if _, err := s.Get(ctx, token); !isRedisNil(err) {
 		t.Errorf("Get after logout = %v, want redis.Nil — the legacy key must be destroyed too", err)
 	}
-	for _, k := range []string{sessionKey(token), sessionKeyPrefix + token} {
+	for _, k := range []string{s.sessionKey(token), sessionKeyPrefix + token} {
 		if n, err := s.rdb.Exists(ctx, k).Result(); err != nil || n != 0 {
 			t.Errorf("key %q survived logout (exists=%d err=%v)", k, n, err)
 		}
@@ -273,7 +286,7 @@ func TestGetOnMissingAndEmptyTokenDoesNotTouchTheKeyspace(t *testing.T) {
 	if _, err := s.Get(ctx, ""); !isRedisNil(err) {
 		t.Errorf(`Get("") = %v, want redis.Nil`, err)
 	}
-	if n, err := s.rdb.Exists(ctx, sessionKey("")).Result(); err != nil || n != 0 {
+	if n, err := s.rdb.Exists(ctx, s.sessionKey("")).Result(); err != nil || n != 0 {
 		t.Errorf("a key exists for the empty token (exists=%d err=%v)", n, err)
 	}
 
@@ -284,7 +297,7 @@ func TestGetOnMissingAndEmptyTokenDoesNotTouchTheKeyspace(t *testing.T) {
 	if _, err := s.Get(ctx, missing); !isRedisNil(err) {
 		t.Errorf("Get(unknown token) = %v, want redis.Nil", err)
 	}
-	if n, err := s.rdb.Exists(ctx, sessionKey(missing), sessionKeyPrefix+missing).Result(); err != nil || n != 0 {
+	if n, err := s.rdb.Exists(ctx, s.sessionKey(missing), sessionKeyPrefix+missing).Result(); err != nil || n != 0 {
 		t.Errorf("reading an unknown token created a key (exists=%d err=%v)", n, err)
 	}
 }
@@ -325,7 +338,7 @@ func TestLogoutDuringMigrationDoesNotResurrect(t *testing.T) {
 	if !hook.fired {
 		t.Fatal("the logout never interleaved with the migration — the assertion above is vacuous")
 	}
-	if n, err := s.rdb.Exists(ctx, sessionKey(token)).Result(); err != nil || n != 0 {
+	if n, err := s.rdb.Exists(ctx, s.sessionKey(token)).Result(); err != nil || n != 0 {
 		t.Errorf("the migration resurrected a logged-out session under the hashed key (exists=%d err=%v)", n, err)
 	}
 	if n, err := s.rdb.Exists(ctx, sessionKeyPrefix+token).Result(); err != nil || n != 0 {

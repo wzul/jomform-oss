@@ -69,7 +69,7 @@ func newIssue509Env(t *testing.T) *issue509Env {
 	if valkeyURL == "" {
 		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping end-to-end OAuth walk")
 	}
-	sessions, err := auth.NewSessions(valkeyURL)
+	sessions, err := auth.NewSessions(valkeyURL, testSessionOptions()...)
 	if err != nil {
 		t.Fatalf("valkey: %v", err)
 	}

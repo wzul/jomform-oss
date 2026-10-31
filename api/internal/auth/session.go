@@ -28,6 +28,19 @@ type Sessions struct {
 	// sharing this client never touch it; the Email2FA store fails closed when
 	// it is absent rather than storing an invertible digest.
 	emailCodeKey []byte
+
+	// namespace scopes this store's SESSION keys under `jf:session:<ns>:`. It is
+	// empty in production, where the layout is the bare `jf:session:<hash>`, and
+	// is set by test harnesses so a test process writes (and can therefore
+	// delete) only its own keys on a Valkey DB it shares with every other
+	// checkout. See WithKeyNamespace.
+	namespace string
+
+	// defaultTTL is what Create (the no-argument-TTL constructor) uses. Zero
+	// means SessionTTL — production never sets it; a test harness sets minutes
+	// so that even a run KILLED before its namespace sweep leaves keys that
+	// expire, not week-long ones. See WithDefaultTTL.
+	defaultTTL time.Duration
 }
 
 // SessionOption configures a store that rides on the session Valkey client.
@@ -39,6 +52,55 @@ type SessionOption func(*Sessions)
 // no business being stored under a bare hash.
 func WithEmailCodeKey(key []byte) SessionOption {
 	return func(s *Sessions) { s.emailCodeKey = key }
+}
+
+// WithKeyNamespace scopes the SESSION keys this store mints to
+// `jf:session:<ns>:<hash>` instead of `jf:session:<hash>`, so a process can name,
+// find and delete exactly the keys it wrote. Production leaves it empty: the
+// layout stays the bare hashed key, which is what a running binary's sessions
+// have always been.
+//
+// It exists for the shared TEST Valkey (card t_e4c8ea65). Every test binary that
+// mints a session used to write a PRODUCTION key name on a DB shared by every
+// checkout, and nothing removed it: the key carried SessionTTL (14d) and the
+// process that minted it exited long before then, so the `jf:session:` namespace
+// grew without bound (measured at ~98k keys, 95% of that DB) and no run could
+// even enumerate its own leftovers to clean them. A namespace turns that into
+// "write under your own name, delete under your own name": DeleteNamespaceKeys,
+// called from the package's TestMain, removes every key the run left, and no key
+// another process wrote is in reach of it.
+//
+// ns is validated (letters, digits, ':', '-', '_' and '.'; no glob characters, no
+// whitespace) because DeleteNamespaceKeys builds a SCAN pattern from it: a `*` in
+// the namespace would widen the sweep beyond the keys the caller owns.
+func WithKeyNamespace(ns string) SessionOption {
+	return func(s *Sessions) { s.namespace = ns }
+}
+
+// WithDefaultTTL overrides the TTL Create (and CreateWithTTL's callers that pass
+// SessionTTL explicitly do not) applies to a new session. Zero — the production
+// setting — keeps SessionTTL.
+func WithDefaultTTL(ttl time.Duration) SessionOption {
+	return func(s *Sessions) { s.defaultTTL = ttl }
+}
+
+// validKeyNamespace reports whether ns can be used as one component of a session
+// key: a non-empty run of [A-Za-z0-9:._-]. It is deliberately narrower than what
+// Valkey allows, because DeleteNamespaceKeys appends `*` to it and SCANs; a glob
+// character or a space in the namespace would escape the caller's own keyspace.
+func validKeyNamespace(ns string) bool {
+	if ns == "" {
+		return false
+	}
+	for _, r := range ns {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == ':', r == '.', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // NewSessions wires a Valkey client. go-redis only accepts redis:// /
@@ -55,6 +117,10 @@ func NewSessions(valkeyURL string, opts ...SessionOption) (*Sessions, error) {
 	for _, opt := range opts {
 		opt(s)
 	}
+	if s.namespace != "" && !validKeyNamespace(s.namespace) {
+		_ = s.rdb.Close()
+		return nil, fmt.Errorf("session key namespace %q is not a plain key component (letters, digits, ':._-' only)", s.namespace)
+	}
 	return s, nil
 }
 
@@ -69,17 +135,78 @@ func NewSessions(valkeyURL string, opts ...SessionOption) (*Sessions, error) {
 // token is 256 bits of `crypto/rand`, so a plain SHA-256 is enough: there is
 // nothing to brute-force and no secret to rotate (which is why this needs no
 // SESSION_SECRET-style key).
+//
+// sessionKeyPrefix is the root of the session keyspace in EVERY deployment. A
+// test store may insert a namespace after it (WithKeyNamespace) to own its keys
+// on a shared DB; production's layout is the bare `jf:session:<hash>`.
 const sessionKeyPrefix = "jf:session:"
 
+// keyPrefix is this store's session key root, e.g. "jf:session:" in production
+// or "jf:session:jftest:p48213:" for a namespaced test store.
+func (s *Sessions) keyPrefix() string {
+	if s.namespace == "" {
+		return sessionKeyPrefix
+	}
+	return sessionKeyPrefix + s.namespace + ":"
+}
+
+// KeyNamespace reports the namespace this store writes its session keys under,
+// or "" for the production layout. A test harness uses it to say which slice of
+// a shared DB it owns (and to quote it in a failure message) without repeating
+// the key layout.
+func (s *Sessions) KeyNamespace() string { return s.namespace }
+
+// DeleteNamespaceKeys deletes every session key in this store's namespace and
+// returns how many it removed. It is the exit sweep a test harness calls from
+// TestMain, and it is only safe because the namespace is this process's own:
+// the SCAN pattern is built from it, so the keys of a concurrent checkout (a
+// different namespace) and every production-layout key are out of reach.
+//
+// It REFUSES to run on an unscoped store — namespace "" would make the pattern
+// `jf:session:*`, i.e. a sweep of the whole session keyspace including live
+// sessions of anything else sharing the DB. That refusal is the property that
+// keeps this from becoming the FlushDB the test suite spent several cards
+// removing.
+//
+// SCAN, not KEYS: the shared test DB is being served while this runs.
+func (s *Sessions) DeleteNamespaceKeys(ctx context.Context) (int, error) {
+	if s.namespace == "" {
+		return 0, errors.New("auth: DeleteNamespaceKeys needs a key namespace; an unscoped store would sweep the whole session keyspace")
+	}
+	pattern := s.keyPrefix() + "*"
+	if !strings.HasPrefix(pattern, sessionKeyPrefix+s.namespace+":") {
+		return 0, fmt.Errorf("auth: refusing to sweep %q: not scoped to namespace %q", pattern, s.namespace)
+	}
+	deleted := 0
+	var cursor uint64
+	for {
+		keys, next, err := s.rdb.Scan(ctx, cursor, pattern, 500).Result()
+		if err != nil {
+			return deleted, fmt.Errorf("scan %q: %w", pattern, err)
+		}
+		if len(keys) > 0 {
+			n, err := s.rdb.Del(ctx, keys...).Result()
+			deleted += int(n)
+			if err != nil {
+				return deleted, fmt.Errorf("delete %d key(s) under %q: %w", len(keys), pattern, err)
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			return deleted, nil
+		}
+	}
+}
+
 // sessionKey namespaces a session by the SHA-256 of its token.
-func sessionKey(token string) string { return sessionKeyPrefix + hashOf(token) }
+func (s *Sessions) sessionKey(token string) string { return s.keyPrefix() + hashOf(token) }
 
 // legacySessionKey is the pre-hash layout: the raw token AS the key name. It is
 // only ever READ, to migrate a session minted before the re-keying (see
 // getSessionValue) so a deploy does not log everyone out. Every legacy key
 // carries at most SessionTTL, so this path drains by itself one TTL after the
 // deploy — at that point it can be deleted outright.
-func legacySessionKey(token string) string { return sessionKeyPrefix + token }
+func (s *Sessions) legacySessionKey(token string) string { return s.keyPrefix() + token }
 
 // getSessionValue returns the stored session value for a RAW token (the value
 // the cookie carries).
@@ -96,7 +223,7 @@ func (s *Sessions) getSessionValue(ctx context.Context, token string) (string, e
 	if token == "" {
 		return "", goredis.Nil
 	}
-	v, err := s.rdb.Get(ctx, sessionKey(token)).Result()
+	v, err := s.rdb.Get(ctx, s.sessionKey(token)).Result()
 	if err == nil || !errors.Is(err, goredis.Nil) {
 		return v, err
 	}
@@ -107,7 +234,7 @@ func (s *Sessions) getSessionValue(ctx context.Context, token string) (string, e
 // by the token's hash with its remaining TTL, deletes the raw key and returns
 // the value. redis.Nil means there is no session under either layout.
 func (s *Sessions) migrateLegacySession(ctx context.Context, token string) (string, error) {
-	legacy := legacySessionKey(token)
+	legacy := s.legacySessionKey(token)
 	var value string
 	err := s.rdb.Watch(ctx, func(tx *goredis.Tx) error {
 		v, gerr := tx.Get(ctx, legacy).Result()
@@ -127,7 +254,7 @@ func (s *Sessions) migrateLegacySession(ctx context.Context, token string) (stri
 		}
 		value = v
 		_, perr := tx.TxPipelined(ctx, func(pipe goredis.Pipeliner) error {
-			pipe.Set(ctx, sessionKey(token), v, ttl)
+			pipe.Set(ctx, s.sessionKey(token), v, ttl)
 			pipe.Del(ctx, legacy)
 			return nil
 		})
@@ -137,7 +264,7 @@ func (s *Sessions) migrateLegacySession(ctx context.Context, token string) (stri
 		// The legacy key moved under us: another request migrated it (the
 		// hashed key now holds the session) or a logout deleted it. Only the
 		// hashed key may answer.
-		return s.rdb.Get(ctx, sessionKey(token)).Result()
+		return s.rdb.Get(ctx, s.sessionKey(token)).Result()
 	}
 	if err != nil {
 		return "", err
@@ -202,10 +329,19 @@ func parseValue(v string) (userID string, issued time.Time, remember, magic bool
 	return userID, issued, remember, magic
 }
 
-// Create stores userID under a fresh opaque token with the default SessionTTL
-// (14d) and returns it.
+// createTTL is the TTL a created session gets: the store's WithDefaultTTL when
+// it was set, SessionTTL otherwise.
+func (s *Sessions) createTTL() time.Duration {
+	if s.defaultTTL > 0 {
+		return s.defaultTTL
+	}
+	return SessionTTL
+}
+
+// Create stores userID under a fresh opaque token with the store's default TTL —
+// SessionTTL (14d) unless WithDefaultTTL set a shorter one — and returns it.
 func (s *Sessions) Create(ctx context.Context, userID string) (string, error) {
-	return s.CreateWithTTL(ctx, userID, SessionTTL)
+	return s.CreateWithTTL(ctx, userID, s.createTTL())
 }
 
 // CreateWithTTL stores userID under a fresh opaque token with the given TTL
@@ -239,7 +375,7 @@ func (s *Sessions) CreateSession(ctx context.Context, userID string, ttl time.Du
 		return "", err
 	}
 	token := hex.EncodeToString(b)
-	if err := s.rdb.Set(ctx, sessionKey(token), encodeValue(userID, time.Now().UTC(), remember, magic), ttl).Err(); err != nil {
+	if err := s.rdb.Set(ctx, s.sessionKey(token), encodeValue(userID, time.Now().UTC(), remember, magic), ttl).Err(); err != nil {
 		return "", fmt.Errorf("session create: %w", err)
 	}
 	return token, nil
@@ -323,7 +459,7 @@ func (s *Sessions) Destroy(ctx context.Context, token string) error {
 	if token == "" {
 		return nil
 	}
-	return s.rdb.Del(ctx, sessionKey(token), legacySessionKey(token)).Err()
+	return s.rdb.Del(ctx, s.sessionKey(token), s.legacySessionKey(token)).Err()
 }
 
 // TTL reports the remaining lifetime of a session token, following the redis
@@ -335,7 +471,7 @@ func (s *Sessions) TTL(ctx context.Context, token string) (time.Duration, error)
 	if token == "" {
 		return -2, nil
 	}
-	return s.rdb.PTTL(ctx, sessionKey(token)).Result()
+	return s.rdb.PTTL(ctx, s.sessionKey(token)).Result()
 }
 
 // Ping verifies the Valkey connection for readiness probes.

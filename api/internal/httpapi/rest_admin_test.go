@@ -25,7 +25,7 @@ func adminOverviewFixture(t *testing.T, pool *pgxpool.Pool, userID string, allow
 	if valkeyURL == "" {
 		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping admin overview integration test")
 	}
-	sess, err := auth.NewSessions(valkeyURL)
+	sess, err := auth.NewSessions(valkeyURL, testSessionOptions()...)
 	if err != nil {
 		t.Fatalf("valkey sessions: %v", err)
 	}

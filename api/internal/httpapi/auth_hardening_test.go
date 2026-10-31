@@ -53,7 +53,7 @@ func authTestValkey(t *testing.T) *auth.Sessions {
 	if valkeyURL == "" {
 		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping auth hardening integration test")
 	}
-	sess, err := auth.NewSessions(valkeyURL, auth.WithEmailCodeKey(testEmailCodeKey(t)))
+	sess, err := auth.NewSessions(valkeyURL, testSessionOptions(auth.WithEmailCodeKey(testEmailCodeKey(t)))...)
 	if err != nil {
 		t.Fatalf("valkey sessions: %v", err)
 	}

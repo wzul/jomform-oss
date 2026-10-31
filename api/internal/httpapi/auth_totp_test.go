@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wzul/jomform/api/internal/auth"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
 // totpTestEnv returns a live Valkey + Postgres-backed AuthHandlers, skipping
@@ -31,7 +32,19 @@ func totpTestEnv(t *testing.T) (*AuthHandlers, *pgxpool.Pool, string) {
 		t.Skip("JOMFORM_TEST_DATABASE_URL not set; skipping TOTP integration test")
 	}
 	pool := bundleTestPool(t)
-	sessions, err := auth.NewSessions("valkey://localhost:6379/0")
+	// The session store this fixture hands the handlers is the package's test
+	// store, not a hardcoded URL: totpRegister drives register → verify → login,
+	// so these tests really mint sessions, and a store built without the
+	// per-process namespace writes the PRODUCTION `jf:session:<hash>` key onto
+	// whichever Valkey index the URL names — the leak that outlives the run and
+	// that TestMain's sweep cannot see (t_e4c8ea65, rework t_05dd8cbd). It used to
+	// be `valkey://localhost:6379/0`: not even the test index, and db 0 is
+	// config.go's production default.
+	valkeyURL := strings.TrimSpace(os.Getenv(testdb.ValkeyEnv))
+	if valkeyURL == "" {
+		t.Skip(testdb.ValkeyEnv + " not set; skipping TOTP integration test")
+	}
+	sessions, err := auth.NewSessions(valkeyURL, testSessionOptions()...)
 	if err != nil {
 		t.Skipf("valkey not available for TOTP test: %v", err)
 	}
