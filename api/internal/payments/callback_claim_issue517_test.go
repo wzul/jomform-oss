@@ -21,6 +21,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
 // TestClaimTxRejectsLiveClaimAllowsStaleClaim pins the claim gate: a live
@@ -177,13 +178,11 @@ func TestProcessCallbackClaimedStaleClaimIsReplayedOnce(t *testing.T) {
 	es := dbstore.NewWebhookEventStore(pool)
 	saleID, purchaseID := seedLockSale(t, ctx, pool)
 
-	var webhooks int64
+	webhooks := testdb.NewWebhookCounter()
 	svc := &Service{
 		Sales:    dbstore.NewSaleStore(pool),
 		Accounts: dbstore.NewAccountStore(pool),
-		OnPaid: func(_ context.Context, _, _ string, _ map[string]any) {
-			atomic.AddInt64(&webhooks, 1)
-		},
+		OnPaid:   webhooks.OnPaid,
 	}
 
 	// Attempt 1 claims the event, then dies before processing (the crash /
@@ -223,17 +222,13 @@ func TestProcessCallbackClaimedStaleClaimIsReplayedOnce(t *testing.T) {
 	if got.Status != dbstore.SalePaid {
 		t.Fatalf("sale status after sweep = %q, want %q — a stranded callback must be recovered (#517)", got.Status, dbstore.SalePaid)
 	}
-	if n := atomic.LoadInt64(&webhooks); n != 1 {
-		t.Fatalf("webhooks after sweep = %d, want exactly 1", n)
-	}
+	webhooks.WaitExact(t, 1, testdb.WebhookSettle, "webhooks after sweep")
 	assertState(t, ctx, es, dedupKey, dbstore.WebhookEventProcessed, true)
 
 	// A second sweep pass must be a no-op: the event is completed, so it is
 	// not replayable and cannot double-fire.
 	sweepInboundCallbacks(ctx, svc, es)
-	if n := atomic.LoadInt64(&webhooks); n != 1 {
-		t.Fatalf("webhooks after second sweep = %d, want exactly 1 (no double-fire)", n)
-	}
+	webhooks.WaitExact(t, 1, testdb.WebhookSettle, "webhooks after second sweep")
 }
 
 // TestProcessCallbackClaimedConcurrentIdenticalDeliveriesSettleOnce verifies
@@ -246,13 +241,11 @@ func TestProcessCallbackClaimedConcurrentIdenticalDeliveriesSettleOnce(t *testin
 	es := dbstore.NewWebhookEventStore(pool)
 	saleID, purchaseID := seedLockSale(t, ctx, pool)
 
-	var webhooks int64
+	webhooks := testdb.NewWebhookCounter()
 	svc := &Service{
 		Sales:    dbstore.NewSaleStore(pool),
 		Accounts: dbstore.NewAccountStore(pool),
-		OnPaid: func(_ context.Context, _, _ string, _ map[string]any) {
-			atomic.AddInt64(&webhooks, 1)
-		},
+		OnPaid:   webhooks.OnPaid,
 	}
 	dedupKey := purchaseID + ":purchase.paid:paid"
 	raw := []byte(`{"id":"` + purchaseID + `","event_type":"purchase.paid","status":"paid","total":1000}`)
@@ -280,9 +273,7 @@ func TestProcessCallbackClaimedConcurrentIdenticalDeliveriesSettleOnce(t *testin
 	if got := atomic.LoadInt64(&processed); got != 1 {
 		t.Fatalf("attempts that processed = %d, want exactly 1", got)
 	}
-	if n := atomic.LoadInt64(&webhooks); n != 1 {
-		t.Fatalf("webhooks = %d, want exactly 1", n)
-	}
+	webhooks.WaitExact(t, 1, testdb.WebhookSettle, "webhooks")
 	got, err := dbstore.NewSaleStore(pool).ByID(ctx, saleID)
 	if err != nil {
 		t.Fatalf("reload sale: %v", err)

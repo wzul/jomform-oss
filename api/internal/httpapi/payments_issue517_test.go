@@ -26,7 +26,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,7 +56,10 @@ type claimHarness struct {
 	key        *rsa.PrivateKey
 	saleID     string
 	purchaseID string
-	webhooks   *int64
+	// webhooks is the OnPaid fan-out recorder — read it with WaitExact, never
+	// with a single Count(): the hook runs on its own goroutine (see
+	// newClaimHarness).
+	webhooks *testdb.WebhookCounter
 }
 
 func newClaimHarness(t *testing.T, ctx context.Context) *claimHarness {
@@ -98,13 +100,16 @@ func newClaimHarness(t *testing.T, ctx context.Context) *claimHarness {
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-	webhooks := new(int64)
+	// The fan-out is ASYNC (payments spawns OnPaid in a goroutine), so the
+	// counter is read through testdb.WebhookCounter.WaitExact, never once:
+	// "the handler returned 200 and the sale reads paid" does not mean the
+	// goroutine has run yet, and on a loaded host reading at that instant
+	// reported 0 webhooks for a webhook that did fire (card t_76e7d45d).
+	webhooks := testdb.NewWebhookCounter()
 	svc := &payments.Service{
 		Sales:    sales,
 		Accounts: dbstore.NewAccountStore(pool),
-		OnPaid: func(_ context.Context, _, _ string, _ map[string]any) {
-			atomic.AddInt64(webhooks, 1)
-		},
+		OnPaid:   webhooks.OnPaid,
 	}
 	return &claimHarness{
 		pool: pool, key: key, saleID: sale.ID, purchaseID: purchaseID, webhooks: webhooks,
@@ -137,9 +142,6 @@ func (c *claimHarness) saleStatus(t *testing.T, ctx context.Context) string {
 	}
 	return got.Status
 }
-
-// webhookCount reads the number of sale.paid webhooks fired so far.
-func (c *claimHarness) webhookCount() int64 { return atomic.LoadInt64(c.webhooks) }
 
 // TestChipCallbackFailedAttemptIsReprocessedOnRedelivery is the #517
 // regression: a delivery whose business logic fails (500) must NOT consume the
@@ -178,9 +180,7 @@ func TestChipCallbackFailedAttemptIsReprocessedOnRedelivery(t *testing.T) {
 	if got := c.saleStatus(t, ctx); got != dbstore.SalePending {
 		t.Fatalf("sale status after failed delivery = %q, want %q (nothing may settle)", got, dbstore.SalePending)
 	}
-	if n := c.webhookCount(); n != 0 {
-		t.Fatalf("failed delivery fired %d webhooks, want 0", n)
-	}
+	c.webhooks.WaitExact(t, 0, testdb.WebhookSettle, "webhooks after the failed delivery")
 
 	// CHIP redelivers after the failure.
 	if err := blocker.Rollback(ctx); err != nil {
@@ -196,9 +196,7 @@ func TestChipCallbackFailedAttemptIsReprocessedOnRedelivery(t *testing.T) {
 	if got := c.saleStatus(t, ctx); got != dbstore.SalePaid {
 		t.Fatalf("sale status after redelivery = %q, want %q — a failed callback was swallowed as a duplicate (#517)", got, dbstore.SalePaid)
 	}
-	if n := c.webhookCount(); n != 1 {
-		t.Fatalf("webhooks after redelivery = %d, want exactly 1", n)
-	}
+	c.webhooks.WaitExact(t, 1, testdb.WebhookSettle, "webhooks after redelivery")
 
 	// A further redelivery must be a no-op duplicate: no second settlement,
 	// no second webhook.
@@ -209,9 +207,7 @@ func TestChipCallbackFailedAttemptIsReprocessedOnRedelivery(t *testing.T) {
 	if got := c.saleStatus(t, ctx); got != dbstore.SalePaid {
 		t.Fatalf("sale status after third delivery = %q, want %q", got, dbstore.SalePaid)
 	}
-	if n := c.webhookCount(); n != 1 {
-		t.Fatalf("webhooks after third delivery = %d, want exactly 1 (no double-fire)", n)
-	}
+	c.webhooks.WaitExact(t, 1, testdb.WebhookSettle, "webhooks after third delivery")
 }
 
 // TestChipCallbackSuccessThenRedeliveryIsNoop pins the invariant that a
@@ -228,9 +224,7 @@ func TestChipCallbackSuccessThenRedeliveryIsNoop(t *testing.T) {
 	if got := c.saleStatus(t, ctx); got != dbstore.SalePaid {
 		t.Fatalf("sale status = %q, want %q", got, dbstore.SalePaid)
 	}
-	if n := c.webhookCount(); n != 1 {
-		t.Fatalf("webhooks = %d, want 1", n)
-	}
+	c.webhooks.WaitExact(t, 1, testdb.WebhookSettle, "webhooks")
 
 	var processedAt *time.Time
 	if err := c.pool.QueryRow(ctx,
@@ -252,9 +246,7 @@ func TestChipCallbackSuccessThenRedeliveryIsNoop(t *testing.T) {
 	if got := c.saleStatus(t, ctx); got != dbstore.SalePaid {
 		t.Fatalf("sale status after redelivery = %q, want %q", got, dbstore.SalePaid)
 	}
-	if n := c.webhookCount(); n != 1 {
-		t.Fatalf("webhooks after redelivery = %d, want exactly 1 (no double-fire)", n)
-	}
+	c.webhooks.WaitExact(t, 1, testdb.WebhookSettle, "webhooks after redelivery")
 }
 
 // TestChipCallbackConcurrentIdenticalDeliveriesSettleOnce verifies two
@@ -286,7 +278,5 @@ func TestChipCallbackConcurrentIdenticalDeliveriesSettleOnce(t *testing.T) {
 	if got := c.saleStatus(t, ctx); got != dbstore.SalePaid {
 		t.Fatalf("sale status = %q, want %q", got, dbstore.SalePaid)
 	}
-	if n := c.webhookCount(); n != 1 {
-		t.Fatalf("webhooks = %d, want exactly 1 for concurrent identical deliveries", n)
-	}
+	c.webhooks.WaitExact(t, 1, testdb.WebhookSettle, "webhooks for concurrent identical deliveries")
 }

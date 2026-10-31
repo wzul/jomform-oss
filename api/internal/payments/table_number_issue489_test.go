@@ -8,11 +8,11 @@ package payments
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/testdb"
 )
 
 // TestIssue489NotificationRendersTableNumberPlaceholder asserts the
@@ -58,26 +58,18 @@ func TestIssue489PaidWebhookCarriesTableNumber(t *testing.T) {
 		t.Fatalf("set table_number: %v", err)
 	}
 
-	var mu sync.Mutex
-	var got map[string]any
+	webhooks := testdb.NewWebhookCounter()
 	svc := &Service{
 		Sales:    dbstore.NewSaleStore(pool),
 		Accounts: dbstore.NewAccountStore(pool),
-		OnPaid: func(_ context.Context, _, _ string, payload map[string]any) {
-			mu.Lock()
-			defer mu.Unlock()
-			got = payload
-		},
+		OnPaid:   webhooks.OnPaid,
 	}
 	if err := svc.ProcessCallback(ctx, &chip.Purchase{ID: purchaseID, Status: chip.StatusPaid}); err != nil {
 		t.Fatalf("paid callback: %v", err)
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	if got == nil {
-		t.Fatal("OnPaid was not called for the paid event")
-	}
+	webhooks.WaitExact(t, 1, testdb.WebhookSettle, "OnPaid calls for the paid event")
+	got := webhooks.Calls()[0].Payload
 	if tn, _ := got["table_number"].(string); tn != "8" {
 		t.Fatalf("sale.paid payload table_number = %v, want \"8\"", got["table_number"])
 	}

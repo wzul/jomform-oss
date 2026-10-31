@@ -11,7 +11,6 @@ package payments
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,13 +70,11 @@ func TestProcessCallbackSerializedPerSale(t *testing.T) {
 	pool := lockTestPool(t)
 	saleID, purchaseID := seedLockSale(t, ctx, pool)
 
-	var webhooks int64
+	webhooks := testdb.NewWebhookCounter()
 	svc := &Service{
 		Sales:    dbstore.NewSaleStore(pool),
 		Accounts: dbstore.NewAccountStore(pool),
-		OnPaid: func(_ context.Context, _, _ string, _ map[string]any) {
-			atomic.AddInt64(&webhooks, 1)
-		},
+		OnPaid:   webhooks.OnPaid,
 	}
 
 	// First paid event settles the sale.
@@ -104,9 +101,7 @@ func TestProcessCallbackSerializedPerSale(t *testing.T) {
 	if got.Status != dbstore.SalePaid {
 		t.Fatalf("final status = %q, want %q (late failure must not flip paid → failed)", got.Status, dbstore.SalePaid)
 	}
-	if n := atomic.LoadInt64(&webhooks); n != 1 {
-		t.Fatalf("webhooks fired = %d, want exactly 1 (idempotent under lock)", n)
-	}
+	webhooks.WaitExact(t, 1, testdb.WebhookSettle, "webhooks fired (idempotent under lock)")
 }
 
 // TestProcessCallbackPaidIdempotent races two identical paid events for the
@@ -116,13 +111,11 @@ func TestProcessCallbackPaidIdempotent(t *testing.T) {
 	pool := lockTestPool(t)
 	_, purchaseID := seedLockSale(t, ctx, pool)
 
-	var webhooks int64
+	webhooks := testdb.NewWebhookCounter()
 	svc := &Service{
 		Sales:    dbstore.NewSaleStore(pool),
 		Accounts: dbstore.NewAccountStore(pool),
-		OnPaid: func(_ context.Context, _, _ string, _ map[string]any) {
-			atomic.AddInt64(&webhooks, 1)
-		},
+		OnPaid:   webhooks.OnPaid,
 	}
 
 	paid := &chip.Purchase{ID: purchaseID, Status: chip.StatusPaid}
@@ -133,9 +126,7 @@ func TestProcessCallbackPaidIdempotent(t *testing.T) {
 	go func() { defer wg.Done(); _ = svc.ProcessCallback(ctx, paid) }()
 	wg.Wait()
 
-	if n := atomic.LoadInt64(&webhooks); n != 1 {
-		t.Fatalf("webhooks fired = %d, want exactly 1 (duplicate paid event must be idempotent)", n)
-	}
+	webhooks.WaitExact(t, 1, testdb.WebhookSettle, "webhooks fired (duplicate paid event must be idempotent)")
 }
 
 // TestProcessCallbackLateFailureRejected verifies a payment_failure arriving
