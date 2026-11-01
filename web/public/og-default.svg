@@ -1,18 +1,121 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="JomForm">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-labelledby="t d">
+  <title id="t">JomForm — order forms, payments, done</title>
+  <desc id="d">JomForm wordmark and headline "Order forms, payments, done." beside an order card for a Nasi Lemak Set showing a received FPX payment of RM 128.00.</desc>
+
+  <!-- Brand tokens: jf-bg #f7f8f8  jf-surface #ffffff  jf-border #e6e8ec
+       jf-text #17181c  jf-muted #6b7280  jf-primary #5e6ad2.
+       Geometry is the measured layout of the OG design source, so this file and the shipped
+       PNG cannot drift. Regenerate the PNG by rendering this file in headless Chrome at
+       window size 1200x630 with hide-scrollbars, then overwrite web/public/og-default.png.
+       Inter must be installed (variable 100 to 900) or the text falls back to a system face. -->
+
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#6366f1"/>
-      <stop offset="1" stop-color="#8b5cf6"/>
-    </linearGradient>
+    <radialGradient id="glowA" cx="0.96" cy="0" r="0.62">
+      <stop offset="0" stop-color="#5e6ad2" stop-opacity="0.20"/>
+      <stop offset="0.60" stop-color="#5e6ad2" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0.62" cy="1.04" r="0.46">
+      <stop offset="0" stop-color="#5e6ad2" stop-opacity="0.10"/>
+      <stop offset="0.62" stop-color="#5e6ad2" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#17181c" opacity="0.055"/>
+    </pattern>
+    <radialGradient id="dotsMask" cx="0.88" cy="0.46" r="0.52">
+      <stop offset="0" stop-color="#fff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="fadeDots">
+      <rect width="1200" height="630" fill="url(#dotsMask)"/>
+    </mask>
+
+    <filter id="shadowMark" x="-60%" y="-60%" width="220%" height="260%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#5e6ad2" flood-opacity="0.55"/>
+    </filter>
+    <filter id="shadowCard" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="30" stdDeviation="18" flood-color="#17181c" flood-opacity="0.16"/>
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#17181c" flood-opacity="0.06"/>
+    </filter>
   </defs>
-  <rect width="1200" height="630" fill="url(#bg)"/>
-  <!-- mark -->
-  <rect x="72" y="72" width="216" height="216" rx="56" fill="#ffffff" opacity="0.14"/>
-  <text x="180" y="238" font-family="'Inter','Segoe UI',system-ui,-apple-system,sans-serif" font-size="120" font-weight="800" fill="#ffffff" text-anchor="middle" letter-spacing="-4">JF</text>
+
+  <!-- ground -->
+  <rect width="1200" height="630" fill="#f7f8f8"/>
+  <rect width="1200" height="630" fill="url(#glowA)"/>
+  <rect width="1200" height="630" fill="url(#glowB)"/>
+  <rect width="1200" height="630" fill="url(#dots)" mask="url(#fadeDots)"/>
+
+  <!-- brand lockup -->
+  <rect x="72" y="60" width="44" height="44" rx="12" fill="#5e6ad2" filter="url(#shadowMark)"/>
+  <g fill="none" stroke="#ffffff" stroke-width="2.10826000" stroke-linecap="round">
+    <path d="M87.29150000 75.77065000h13.41620000"/><path d="M87.29150000 81.99960000h8.62470000"/><path d="M87.29150000 88.22855000h5.74980000"/>
+  </g>
+  <text x="129" y="82" dominant-baseline="central" font-family="Inter, system-ui, sans-serif"
+        font-size="30" font-weight="800" letter-spacing="-1.2" fill="#17181c">JomForm</text>
+  <rect x="281.6" y="63" width="171.5" height="38" rx="19" fill="#5e6ad2" fill-opacity="0.10"
+        stroke="#5e6ad2" stroke-opacity="0.20"/>
+  <text x="367.35" y="82" text-anchor="middle" dominant-baseline="central"
+        font-family="Inter, system-ui, sans-serif" font-size="16" font-weight="650"
+        letter-spacing="-0.15" fill="#454fae">Open source · MIT</text>
+
   <!-- headline -->
-  <text x="600" y="360" font-family="'Inter','Segoe UI',system-ui,-apple-system,sans-serif" font-size="72" font-weight="800" fill="#ffffff" text-anchor="middle" letter-spacing="-2">Order forms, agent payments</text>
-  <text x="600" y="440" font-family="'Inter','Segoe UI',system-ui,-apple-system,sans-serif" font-size="72" font-weight="800" fill="#ffffff" text-anchor="middle" letter-spacing="-2">&amp; sales for everyone</text>
-  <!-- wordmark -->
-  <text x="600" y="560" font-family="'Inter','Segoe UI',system-ui,-apple-system,sans-serif" font-size="56" font-weight="800" fill="#ffffff" text-anchor="middle" letter-spacing="-2">JomForm</text>
-  <text x="600" y="600" font-family="'Inter','Segoe UI',system-ui,-apple-system,sans-serif" font-size="26" font-weight="500" fill="#e0e7ff" text-anchor="middle">Free forever</text>
+  <g font-family="Inter, system-ui, sans-serif" font-size="79" font-weight="800" letter-spacing="-3.7">
+    <text x="72" y="191.9" dominant-baseline="central" fill="#17181c">Order forms,</text>
+    <text x="72" y="272.1" dominant-baseline="central" fill="#5e6ad2">payments,</text>
+    <text x="72" y="352.3" dominant-baseline="central" fill="#17181c">done.</text>
+  </g>
+
+  <g font-family="Inter, system-ui, sans-serif" font-size="25" font-weight="450" letter-spacing="-0.35" fill="#5f6673">
+    <text x="72" y="433.9" dominant-baseline="central">Build an order form, take FPX and card</text>
+    <text x="72" y="469.5" dominant-baseline="central">payments, and track every sale.</text>
+  </g>
+
+  <!-- footer -->
+  <text x="72" y="552.5" dominant-baseline="central" font-family="Inter, system-ui, sans-serif"
+        font-size="22" font-weight="750" letter-spacing="-0.5" fill="#17181c">jomform.com</text>
+  <rect x="230.2" y="542.5" width="1" height="20" fill="#dcdfe6"/>
+  <g font-family="Inter, system-ui, sans-serif" font-size="15" font-weight="650" fill="#4f5665">
+    <rect x="249.2" y="535" width="55" height="35" rx="17.5" fill="#ffffff" stroke="#e2e5eb"/>
+    <text x="276.7" y="552.5" text-anchor="middle" dominant-baseline="central">FPX</text>
+    <rect x="313.2" y="535" width="68.4" height="35" rx="17.5" fill="#ffffff" stroke="#e2e5eb"/>
+    <text x="347.4" y="552.5" text-anchor="middle" dominant-baseline="central">Cards</text>
+    <rect x="390.6" y="535" width="92.6" height="35" rx="17.5" fill="#ffffff" stroke="#e2e5eb"/>
+    <text x="436.9" y="552.5" text-anchor="middle" dominant-baseline="central">E-wallets</text>
+  </g>
+
+  <!-- product: one card, one state -->
+  <rect x="724" y="132" width="404" height="366" rx="26" fill="#ffffff" stroke="#dfe3ea" filter="url(#shadowCard)"/>
+
+  <text x="749" y="172.5" dominant-baseline="central" font-family="Inter, system-ui, sans-serif"
+        font-size="20" font-weight="760" letter-spacing="-0.6" fill="#17181c">Nasi Lemak Set</text>
+  <rect x="1061.7" y="159" width="41.3" height="27" rx="8" fill="#5e6ad2" fill-opacity="0.10"/>
+  <text x="1082.35" y="172.5" text-anchor="middle" dominant-baseline="central"
+        font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700"
+        letter-spacing="-0.1" fill="#454fae">× 2</text>
+
+  <g font-family="Inter, system-ui, sans-serif">
+    <rect x="749" y="204" width="354" height="48" rx="14" fill="#fafbfc" stroke="#e9ecf1"/>
+    <text x="764" y="228" dominant-baseline="central" font-size="13" font-weight="650" letter-spacing="0.4" fill="#6b7280">NAME</text>
+    <text x="1088" y="228" text-anchor="end" dominant-baseline="central" font-size="16" font-weight="680" letter-spacing="-0.25" fill="#17181c">Aisyah Rahman</text>
+
+    <rect x="749" y="262" width="354" height="48" rx="14" fill="#fafbfc" stroke="#e9ecf1"/>
+    <text x="764" y="286" dominant-baseline="central" font-size="13" font-weight="650" letter-spacing="0.4" fill="#6b7280">DELIVERY</text>
+    <text x="1088" y="286" text-anchor="end" dominant-baseline="central" font-size="16" font-weight="680" letter-spacing="-0.25" fill="#17181c">Petaling Jaya</text>
+  </g>
+
+  <line x1="751" y1="326" x2="1101" y2="326" stroke="#e4e8ee" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="751" y="360" dominant-baseline="central" font-family="Inter, system-ui, sans-serif"
+        font-size="14.5" font-weight="650" fill="#6b7280">Total</text>
+  <text x="1101" y="357" text-anchor="end" dominant-baseline="central" font-family="Inter, system-ui, sans-serif"
+        font-size="27" font-weight="800" letter-spacing="-1.1" fill="#17181c">RM 128.00</text>
+
+  <rect x="749" y="388" width="354" height="58" rx="15" fill="#eaf7ee" stroke="#cfe9d8"/>
+  <circle cx="845.5" cy="417" r="12" fill="#15803d"/>
+  <g fill="none" stroke="#ffffff" stroke-width="1.98322000" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M850.16600000 413.49980000L843.74970000 419.91610000l-2.91650000 -2.91650000"/>
+  </g>
+  <text x="868.5" y="417" dominant-baseline="central" font-family="Inter, system-ui, sans-serif"
+        font-size="17.5" font-weight="750" letter-spacing="-0.3" fill="#146c37">Payment received</text>
+
+  <text x="926" y="467" text-anchor="middle" dominant-baseline="central" font-family="Inter, system-ui, sans-serif"
+        font-size="13.5" font-weight="600" letter-spacing="-0.05" fill="#77808f">Paid with FPX · receipt emailed</text>
 </svg>
