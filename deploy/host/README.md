@@ -158,7 +158,7 @@ assume this guard covers them.
 ### The decoy suite — the `prunehost` gate
 
 ```bash
-bash deploy/host/jomform-container-prune_test.sh      # ~45s, 104 checks
+bash deploy/host/jomform-container-prune_test.sh      # ~60-90s, 112 checks
 ```
 
 It runs the guard against a **private Docker daemon of its own** — a second
@@ -173,6 +173,7 @@ torn down by the suite — and plants decoy containers in it:
 | `jf-prune-decoy-keepfile` | the KEEP gate: stopped, named in the keep file → `keep (name)` |
 | `jf-prune-decoy-running` | the STATE gate: never listed, and it survives a real floor-0 run |
 | `jf-prune-decoy-nomkt` | the refusal arm: a stopped container created **after** the real run, which a floor-0 pass that cannot create its private rm-output file must NOT remove |
+| `jf-prune-decoy-leak` | the teardown check BITING: running, created **after** the real run and left running on purpose, so the liveness predicate below must report it — and must report it gone once its container is |
 
 plus the arms that are not about a decoy: the fail-closed one (an empty container
 list must exit non-zero), the **private rm-output file** pair (a `mktemp` that
@@ -181,9 +182,29 @@ symlink planted at the guard's old fixed `/tmp` path must leave its target
 byte-identical after the real pass — with the file the guard DID open measured
 through a delegating `mktemp` wrapper: a private path under the run's own `TMPDIR`,
 regular, 0600, root-owned, and deleted before the guard exits), the installer arms,
-and — at the end — four assertions that the suite tore its own
+and — at the end — the assertions that the suite tore its own
 sandbox down (scratch tree gone, no private `dockerd`, no decoy process, no
-mount).
+mount), plus the two arms below that keep the decoy-process one honest.
+
+**"No decoy process was left running" is keyed on THIS RUN'S CONTAINERS, never on a
+host-wide `pgrep -f "sleep N"`** (card `t_d088f152`). The decoy lifetime is a number
+drawn from 120..239, and a host-wide `pgrep -f` for it also matches every other
+lane's `sleep`, cron poll loop and certbot on this shared machine: measured
+2026-10-31, `FAIL no decoy process was left running (want 'gone', got 'alive')` —
+1 of 104 checks — on the merge tree for PR #1502, with the **identical bytes**
+`104/104` green on a re-run. A check that reads the whole host cannot tell "my
+decoy leaked" from "somebody else is sleeping", so on a busy host it was a coin
+flip that also stopped the runner (costing the gates after it). The predicate now
+reads `/proc/<pid>/cgroup` and matches **this run's container ids**
+(`…/docker-<id>.scope`): measured on the agent host, that marker survives the leak
+the suite is about — a `kill -9` of the private `dockerd` leaves the decoy's
+`sleep` running and still inside that cgroup — and it cannot see any process the
+suite did not create. It also removes the teardown RACE: the suite waits (bounded)
+for the process it recorded instead of sampling once and calling a healthy
+teardown a leak. Two arms keep it honest on **every** run: a decoy left running on
+purpose (`jf-prune-decoy-leak`) must be reported and **named**, and an unrelated
+`sleep` for the *same* number of seconds must leave the check green — with the
+pre-fix `pgrep -f` kept as the control that reds on it.
 
 **The host daemon is shared, so the host check is ATTRIBUTED, not counted.** The
 suite reads the host's container and image id sets before the run and compares

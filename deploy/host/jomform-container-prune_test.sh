@@ -37,6 +37,12 @@
 #                                                 arm: the candidate a floor-0 pass
 #                                                 that cannot create its private
 #                                                 rm-output file must NOT remove
+#   jf-prune-decoy-leak      RUNNING            -> the teardown check's BITES arm:
+#                                                 created AFTER everything else and
+#                                                 left running on purpose, so the
+#                                                 run-scoped liveness predicate must
+#                                                 report it (and report it gone when
+#                                                 its container is)
 #
 # Plus the halves of the guard that are not about a decoy: it FAILS CLOSED on an
 # empty container list, it FAILS CLOSED when it cannot create its own private
@@ -118,10 +124,13 @@ D_COMPOSE="$DECOY-compose"
 D_KEEPFILE="$DECOY-keepfile"
 D_RUNNING="$DECOY-running"
 D_NOMKT="$DECOY-nomkt"                    # the refusal arm's OWN candidate (created after the real run)
+D_LEAK="$DECOY-leak"                      # the liveness arm's decoy: left running ON PURPOSE
 IMG=""                                    # the per-run image the decoys are made from
-# The running decoy's lifetime, unique per run: if this process is ever found
-# after the run, the leak can be traced to THIS run, and a second suite running
-# concurrently (the gate pool allows it) cannot be mistaken for a leak of mine.
+# The running decoys' lifetime. It is NOT their identity: `$$ % 120` has 120
+# values, so this number also matches plenty of other processes on this host —
+# exactly the flake this suite paid for (card t_d088f152). The teardown check keys
+# on the CONTAINER (see decoy_procs), never on this number; the value is here only
+# so a decoy is still asleep when the arms that need it running look at it.
 SLEEP_SECS=$(( 120 + ($$ % 120) ))
 
 SB=""        # scratch dir (private daemon data-root, sockets, logs)
@@ -131,6 +140,7 @@ DPID=""
 KEEPFILE=""
 NOMKT_BIN="" # PATH prefix holding an always-failing `mktemp` (the fail-closed arm)
 PLANTED=""   # the symlink this run plants at the guard's historical FIXED rm path
+DECOY_IDS=() # container ids of THIS run's decoys, captured before the daemon goes
 CHECKS=0
 FAILS=0
 
@@ -433,6 +443,81 @@ release_mounts() {
   return 0
 }
 
+# ---------------- a decoy process, identified by RUN, never by a host-wide argv
+# WHAT THIS REPLACES, AND WHY (card t_d088f152). The teardown assertion used to read
+#
+#     pgrep -f "sleep $SLEEP_SECS"
+#
+# — HOST-WIDE. Every lane's tool call, cron poll loop and certbot runs under this
+# one pid namespace, so ANY process whose command line carries `sleep <n>` with n
+# in the 120..239 window the suite draws its decoy lifetime from was read as a
+# leaked decoy. Measured 2026-10-31 gating the merge tree for PR #1502:
+#   FAIL no decoy process was left running (want 'gone', got 'alive')   (1 of 104)
+# and a re-run of the IDENTICAL bytes (same tree 699dea68, same env key) passed
+# 104/104. Nothing about the tree changed between them. A check that reads the
+# whole host cannot tell "my decoy leaked" from "somebody else is sleeping", so on
+# a shared host it is a coin flip dressed as a measurement — and a red one stops
+# the runner, so it costs the gates after it (refguard, selftest) as well.
+#
+# SO THE PREDICATE IS KEYED ON THE CONTAINER THIS RUN CREATED. Docker puts every
+# process of a container in that container's own cgroup; measured on this host,
+#   /proc/<pid>/cgroup -> 0::/system.slice/docker-<full container id>.scope
+# and the id belongs to this run alone (its daemon is private). Measured
+# 2026-11-01 that the marker survives the leak this suite is about: `kill -9` of
+# the private dockerd leaves the decoy's `sleep` RUNNING and still in that cgroup,
+# so the predicate does see it. Reading the cgroup rather than the argv also makes
+# it indifferent to the command's shape (`/busybox sleep N`, or `sh -c 'sleep N'`
+# on the JF_PRUNE_BITE_IMAGE path) and to any sh→child nesting.
+#
+# decoy_procs <container id…> — one line per process still alive inside a
+# container this run created: "<pid> <cmdline>". An unrelated `sleep N` anywhere
+# on the host cannot appear here. If a host's cgroup layout ever stopped naming
+# the container, this returns nothing and the BITES arm below reds — the safe
+# direction (a liveness check that cannot see its own decoy must never be green).
+#
+# ONE PASS OVER /proc, AND NO FORK PER ENTRY. The first draft forked a `grep` for
+# every (/proc entry × container id) — 2400 forks for a 4-id run — and the teardown
+# crawl that produced (5s per call, 50s in the wait loop) is itself a way to hang
+# this gate. Reading /proc/<pid>/cgroup with a shell `read` redirect costs no
+# process, and only a MATCH forks (for its cmdline).
+decoy_procs() {
+  local d pid id line cg
+  [ "$#" -gt 0 ] || return 0
+  for d in /proc/[0-9]*; do
+    pid="${d#/proc/}"
+    [ "$pid" = "$$" ] && continue          # this scanner is never a decoy
+    cg=""
+    while IFS= read -r line; do cg="$cg$line;"; done 2>/dev/null <"$d/cgroup"
+    [ -n "$cg" ] || continue
+    for id in "$@"; do
+      [ -n "$id" ] || continue
+      case "$cg" in
+        *"$id"*)
+          printf '%s %s\n' "$pid" "$(tr '\0' ' ' <"$d/cmdline" 2>/dev/null)"
+          break
+          ;;
+      esac
+    done
+  done
+  return 0
+}
+
+# decoy_wait_gone <tries> <container id…> — wait in 0.5s steps (bounded) until no
+# process of those containers is alive; 0 when none is. This is the RACE fix too:
+# a decoy's `sleep` can outlive the private dockerd's SIGKILL by a few ms, so the
+# teardown waits for the process it itself recorded instead of sampling once and
+# calling a healthy teardown a leak.
+decoy_wait_gone() {
+  local tries="$1" i=0
+  shift
+  while [ "$i" -lt "$tries" ]; do
+    [ -z "$(decoy_procs "$@")" ] && return 0
+    sleep 0.5
+    i=$((i + 1))
+  done
+  [ -z "$(decoy_procs "$@")" ]
+}
+
 priv_stop() {
   # THE HOST PROBES FIRST, and unconditionally: they are the only objects this
   # suite ever wrote to the shared daemon, so they go even when the run died before
@@ -445,9 +530,11 @@ priv_stop() {
   if [ -n "$PRIV_URL" ] && priv info >/dev/null 2>&1; then
     priv rm -f "$(priv ps -a -q)" >/dev/null 2>&1 || true
     # Let the removed containers' processes exit before the daemon is killed, so
-    # the shim usually releases its mount itself.
-    local j=0
-    while [ "$j" -lt 10 ] && pgrep -f "sleep $SLEEP_SECS" >/dev/null 2>&1; do sleep 0.5; j=$((j + 1)); done
+    # the shim usually releases its mount itself. Keyed on THIS RUN's containers
+    # (decoy_procs): the host-wide `pgrep -f "sleep N"` that used to be here
+    # waited on any unrelated sleep in the 120..239 window on this shared host,
+    # and the teardown assertion below then FAILED on it (card t_d088f152).
+    decoy_wait_gone 10 "${DECOY_IDS[@]}"
   fi
   if [ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null; then
     kill "$DPID" 2>/dev/null || true
@@ -1181,6 +1268,32 @@ else
   eq "$(test -f /var/log/jomform-container-prune.log && echo yes || echo no)" "no" "the dry run did not create the installed log file"
 fi
 
+# ------------------------------- the teardown check is run-scoped, and it BITES
+say ""
+say "== the teardown check reads THIS RUN's decoys (and still bites) =="
+# The container ids are captured BEFORE the daemon goes: after priv_stop there is
+# nothing left to ask, and these ids are what the teardown assertion keys on.
+DECOY_IDS=($(priv ps -a -q))
+eq "$([ "${#DECOY_IDS[@]}" -gt 0 ] && echo yes || echo no)" "yes" \
+   "the teardown check has this run's own container ids to key on (${#DECOY_IDS[@]} containers)"
+# IT STILL BITES: a decoy left running on purpose must be reported, and NAMED —
+# an arm that cannot see a leak it created would let the teardown assertion below
+# pass for the wrong reason (a predicate that reads nothing is always green).
+req "create the liveness arm's decoy" priv run -d --network none --name "$D_LEAK" "$IMG" $SLEEP_CMD
+LEAK_ID="$(priv inspect --format '{{.Id}}' "$D_LEAK")"
+leak_hits="$(decoy_procs "$LEAK_ID" | tr '\n' ' ' | sed 's/ *$//')"
+case "$leak_hits" in
+  *"sleep $SLEEP_SECS"*) ok "the check BITES: a decoy left running is reported ALIVE and NAMED ($leak_hits)";;
+  *) bad "the check did NOT report a decoy this arm left running (want a live 'sleep $SLEEP_SECS' in $LEAK_ID, got '$leak_hits')";;
+esac
+# ...and the pre-fix predicate agrees on a TRUE leak: the fix narrows WHAT is read
+# (this run's containers), not WHETHER the check fires.
+eq "$(pgrep -f "sleep $SLEEP_SECS" >/dev/null 2>&1 && echo alive || echo gone)" "alive" \
+   "context: the pre-fix host-wide predicate also sees that real leak (both agree on a true positive)"
+priv rm -f "$D_LEAK" >/dev/null 2>&1 || true
+eq "$(decoy_wait_gone 20 "$LEAK_ID" && echo gone || echo alive)" "gone" \
+   "the check reports that decoy gone once its container really is gone (it reads the process, it does not believe the id)"
+
 # ---------------------------------------------------------------------- teardown
 say ""
 say "== the sandbox tears itself down (asserted, not trusted) =="
@@ -1193,8 +1306,34 @@ eq "$(host ps -a --format '{{.Names}}' | grep -c -x -e "$PEER_PROBE" -e "$CONTRO
 eq "$(host images --format '{{.Repository}}:{{.Tag}}' | grep -c -x "jf-prune-probe:${SCRATCH##*/}" || true)" "0" \
    "the probe image is gone from the HOST daemon"
 eq "$(pgrep -f "dockerd .*$SOCKET_MARK" >/dev/null 2>&1 && echo alive || echo gone)" "gone" "no private dockerd was left running"
-eq "$(pgrep -f "sleep $SLEEP_SECS" >/dev/null 2>&1 && echo alive || echo gone)" "gone" "no decoy process was left running"
+eq "$(decoy_procs "${DECOY_IDS[@]}" | wc -l | tr -d ' ')" "0" \
+   "no decoy process was left running (this run's containers only — see the next arm for why that distinction is the point)"
 eq "$(mount | grep -c "$SCRATCH" || true)" "0" "no overlay/netns mount from this run is left behind"
+
+# ---------------------------- an unrelated `sleep N` on this host is NOT a leak
+say ""
+say "== somebody else's \`sleep N\` cannot red this teardown =="
+# The stand-in sleeps for the SAME number of seconds this run's decoys slept for:
+# the worst case for the old predicate, and the exact shape that red this gate on
+# 2026-10-31 (`FAIL no decoy process was left running`, 1 of 104 checks, with the
+# identical bytes green on a re-run).
+bash -c "exec sleep $SLEEP_SECS" &
+STRAY=$!
+i=0
+while [ "$i" -lt 20 ] && [ "$(tr '\0' ' ' <"/proc/$STRAY/cmdline" 2>/dev/null | sed 's/ *$//')" != "sleep $SLEEP_SECS" ]; do
+  sleep 0.1
+  i=$((i + 1))
+done
+eq "$(tr '\0' ' ' <"/proc/$STRAY/cmdline" 2>/dev/null | sed 's/ *$//')" "sleep $SLEEP_SECS" \
+   "the stand-in really is a host-wide 'sleep $SLEEP_SECS' (the arm measures what it claims)"
+eq "$(pgrep -f "sleep $SLEEP_SECS" >/dev/null 2>&1 && echo alive || echo gone)" "alive" \
+   "control: the PRE-FIX check reads that unrelated sleep as a live decoy — that is the false red this card exists for"
+eq "$(decoy_procs "${DECOY_IDS[@]}" | wc -l | tr -d ' ')" "0" \
+   "the run-scoped check reads NO decoy of this run while that sleep is alive (green on the same bytes)"
+kill "$STRAY" 2>/dev/null || true
+wait "$STRAY" 2>/dev/null || true
+eq "$([ -e "/proc/$STRAY" ] && echo present || echo gone)" "gone" \
+   "the stand-in exited (this arm leaves no process of its own behind)"
 
 # ---------------------------------------------------------------------- result
 say ""
