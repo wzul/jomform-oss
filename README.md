@@ -4,6 +4,9 @@
 
 Bina borang tempahan yang cantik dan pantas, terima bayaran melalui [CHIP](https://chip-in.asia) (FPX, kad, e-wallet, DuitNow QR), urus jualan — semua tanpa website. Control everything from your own AI agent via the built-in MCP server, or use the web dashboard.
 
+**Run it yourself:** [docs/SELF-HOST.md](docs/SELF-HOST.md) is the step-by-step
+self-hosting guide — clean install to a published form, one screenshot per screen.
+
 - 💳 Payments: **CHIP Collect** — one-time **and** subscription/recurring via CHIP card tokenization
 - 🤖 **MCP server built-in** — merchants connect their own AI agent (Claude, dsb.) and run the whole store through tools
 - ⚡ Modern stack: Go 1.26 · PostgreSQL 18 · Valkey 9 · Next.js 16 (LTS) · S3-compatible storage
