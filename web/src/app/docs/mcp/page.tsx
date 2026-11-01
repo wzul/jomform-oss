@@ -403,7 +403,7 @@ export default function McpReferencePage() {
     <div className="max-w-3xl">
       <h1 className="text-3xl font-bold tracking-tight text-slate-900">MCP tool reference</h1>
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        Every tool JomForm exposes to connected AI agents via the Model Context Protocol. Connect any MCP client to <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code> and agents discover these tools automatically. This page lists the whole registry — the <code className="rounded bg-slate-100 px-1">api/internal/mcpsrv</code> package at this release — and a guard fails the build if the two drift apart in either direction.
+        Every tool JomForm exposes to connected AI agents via the Model Context Protocol. Connect any MCP client to <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">https://mcp.jomform.com/mcp</code> and agents discover these tools automatically. This page lists the whole registry — the <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">api/internal/mcpsrv</code> package at this release — and a guard fails the build if the two drift apart in either direction.
       </p>
       <p className="mt-2 text-sm text-[var(--jf-muted)]">
         {TOOL_GROUPS.reduce((n, g) => n + g.tools.length, 0)} tools across {TOOL_GROUPS.filter((g) => g.tools.length > 0).length} categories.
@@ -421,28 +421,28 @@ export default function McpReferencePage() {
         </p>
         <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
           <li>
-            An unauthenticated request to <code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code>{" "}
-            is refused with <code className="rounded bg-slate-100 px-1">401</code> and a{" "}
-            <code className="rounded bg-slate-100 px-1">WWW-Authenticate: Bearer resource_metadata=&quot;…&quot;</code>{" "}
+            An unauthenticated request to <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">https://mcp.jomform.com/mcp</code>{" "}
+            is refused with <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">401</code> and a{" "}
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">WWW-Authenticate: Bearer resource_metadata=&quot;…&quot;</code>{" "}
             header naming the protected-resource metadata URL.
           </li>
           <li>
-            The client fetches <code className="rounded bg-slate-100 px-1">/.well-known/oauth-protected-resource</code>{" "}
-            (RFC 9728). It names the protected resource (<code className="rounded bg-slate-100 px-1">https://mcp.jomform.com/mcp</code>),
-            the authorization server (<code className="rounded bg-slate-100 px-1">https://mcp.jomform.com</code>), the scopes{" "}
-            (<code className="rounded bg-slate-100 px-1">read</code> and{" "}
-            <code className="rounded bg-slate-100 px-1">readwrite</code>) and that the bearer token is presented in the{" "}
-            <code className="rounded bg-slate-100 px-1">Authorization</code> header.
+            The client fetches <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">/.well-known/oauth-protected-resource</code>{" "}
+            (RFC 9728). It names the protected resource (<code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">https://mcp.jomform.com/mcp</code>),
+            the authorization server (<code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">https://mcp.jomform.com</code>), the scopes{" "}
+            (<code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">read</code> and{" "}
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code>) and that the bearer token is presented in the{" "}
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">Authorization</code> header.
           </li>
           <li>
             It then fetches the authorization-server metadata at{" "}
-            <code className="rounded bg-slate-100 px-1">/.well-known/oauth-authorization-server</code> (RFC 8414) for the
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">/.well-known/oauth-authorization-server</code> (RFC 8414) for the
             authorize, token, revoke and registration endpoints.
           </li>
           <li>
             It registers itself dynamically, opens the authorize URL in the browser (you log in and grant access), and
             exchanges the code for an access token — sending the{" "}
-            <code className="rounded bg-slate-100 px-1">resource</code> parameter on both the authorize and token
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">resource</code> parameter on both the authorize and token
             requests. JomForm validates it: a value that is not this MCP endpoint is rejected and no token is issued.
           </li>
           <li>Every later call to /mcp carries the access token as a Bearer credential.</li>
@@ -457,23 +457,23 @@ export default function McpReferencePage() {
         <h2 className="text-lg font-semibold text-slate-900">Structured output</h2>
         <p className="mt-2 text-sm leading-relaxed text-slate-600">
           Tool results are returned as structured content, and every tool declares the shape of that
-          result in its <code className="rounded bg-slate-100 px-1">outputSchema</code>. All tools
+          result in its <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">outputSchema</code>. All tools
           declare an <em>object</em> schema, which is what makes the server usable with a client that
-          validates <code className="rounded bg-slate-100 px-1">tools/list</code> strictly.
+          validates <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">tools/list</code> strictly.
         </p>
         <p className="mt-2 text-sm leading-relaxed text-slate-600">
           Every listing tool therefore wraps its array in an object: the records are under{" "}
-          <code className="rounded bg-slate-100 px-1">items</code>, and paginated listings also carry{" "}
-          <code className="rounded bg-slate-100 px-1">page</code>,{" "}
-          <code className="rounded bg-slate-100 px-1">limit</code> and{" "}
-          <code className="rounded bg-slate-100 px-1">total</code>. So{" "}
-          <code className="rounded bg-slate-100 px-1">list_products</code> returns{" "}
-          <code className="rounded bg-slate-100 px-1">{`{"items": [...]}`}</code>, not a bare array.
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">items</code>, and paginated listings also carry{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">page</code>,{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">limit</code> and{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">total</code>. So{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">list_products</code> returns{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">{`{"items": [...]}`}</code>, not a bare array.
         </p>
         <p className="mt-2 text-sm leading-relaxed text-slate-600">
           Batch tools report their summary next to the per-item outcomes:{" "}
-          <code className="rounded bg-slate-100 px-1">capture_all_pending_sales</code> returns{" "}
-          <code className="rounded bg-slate-100 px-1">
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">capture_all_pending_sales</code> returns{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">
             {`{"requested", "captured", "failed", "results": [...]}`}
           </code>
           . Single-record tools return their fields at the top level of the object.
@@ -488,23 +488,23 @@ export default function McpReferencePage() {
         <p className="mt-2 text-sm leading-relaxed text-slate-600">
           A connector authenticates with OAuth 2.1, and the grant it receives carries one of two
           scopes. The MCP client asks for the scope it wants on the authorize request (
-          <code className="rounded bg-slate-100 px-1">?scope=…</code>, space-delimited); JomForm
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">?scope=…</code>, space-delimited); JomForm
           grants exactly what was asked for and records it on the token it issues. Both are
           advertised in the protected-resource and authorization-server metadata, alongside the
           other fields a client needs.
         </p>
         <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
           <li>
-            <code className="rounded bg-slate-100 px-1">read</code> — read-only. The agent can
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">read</code> — read-only. The agent can
             call every listing and getter; every tool that creates, updates, deletes, archives,
             cancels, refunds or generates a stored key is refused with a scope error. A read
-            grant also cannot upgrade itself: <code className="rounded bg-slate-100 px-1">create_api_key</code>{" "}
+            grant also cannot upgrade itself: <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">create_api_key</code>{" "}
             is a write, so a read-only connector can never mint a wider credential.
           </li>
           <li>
-            <code className="rounded bg-slate-100 px-1">readwrite</code> — read and write. This is
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code> — read and write. This is
             the grant for a client that does not ask for a scope: the request omitting{" "}
-            <code className="rounded bg-slate-100 px-1">scope</code> defaults to readwrite, so an
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">scope</code> defaults to readwrite, so an
             already-connected client is never silently downgraded.
           </li>
         </ul>
@@ -512,7 +512,7 @@ export default function McpReferencePage() {
           The scope is fixed for the life of the connection: refreshing an access token returns the
           same grant as the token it replaces, so a read grant never widens. A request naming a
           scope this server does not advertise is refused with{" "}
-          <code className="rounded bg-slate-100 px-1">invalid_scope</code> — it is never silently
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">invalid_scope</code> — it is never silently
           widened to readwrite or narrowed to read. The token response echoes the issued grant, not
           the advertised list, so a client can read back what it actually holds.
         </p>
@@ -526,35 +526,35 @@ export default function McpReferencePage() {
         </p>
         <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
           <li>
-            <code className="rounded bg-slate-100 px-1">readonly</code> — read tools only. Every
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readonly</code> — read tools only. Every
             read works; every tool that creates, updates, deletes, archives, cancels, revokes or
             generates a stored key is refused with a scope error. A readonly key cannot mint another
             key, so it cannot escalate itself to readwrite.
           </li>
           <li>
-            <code className="rounded bg-slate-100 px-1">readwrite</code> — read and write. This is
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code> — read and write. This is
             the default grant for an OAuth connector, unless it asks for{" "}
-            <code className="rounded bg-slate-100 px-1">read</code>.
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">read</code>.
           </li>
           <li>
-            <code className="rounded bg-slate-100 px-1">admin</code> — kept for existing keys; it
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">admin</code> — kept for existing keys; it
             satisfies every scope, so it behaves as readwrite.
           </li>
         </ul>
         <p className="mt-2 text-sm leading-relaxed text-slate-600">
           Scope is a separate axis from your <em>workspace role</em> (
-          <code className="rounded bg-slate-100 px-1">read_only</code>,{" "}
-          <code className="rounded bg-slate-100 px-1">manage</code>,{" "}
-          <code className="rounded bg-slate-100 px-1">admin</code>). A write has to satisfy both: a{" "}
-          <code className="rounded bg-slate-100 px-1">readwrite</code> key held by a{" "}
-          <code className="rounded bg-slate-100 px-1">read_only</code> member is still refused, and
-          so is a <code className="rounded bg-slate-100 px-1">readonly</code> key held by the owner.
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">read_only</code>,{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">manage</code>,{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">admin</code>). A write has to satisfy both: a{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code> key held by a{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">read_only</code> member is still refused, and
+          so is a <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readonly</code> key held by the owner.
           Reading never requires the write scope.
         </p>
         <p className="mt-2 text-sm leading-relaxed text-slate-600">
           A few tools are worth calling out because their name suggests otherwise:{" "}
-          <code className="rounded bg-slate-100 px-1">get_webhook_signing_key</code> needs{" "}
-          <code className="rounded bg-slate-100 px-1">readwrite</code> only when it has to{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">get_webhook_signing_key</code> needs{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code> only when it has to{" "}
           <em>create</em> the account&apos;s keypair on first use — reading an existing key does not.
         </p>
       </section>

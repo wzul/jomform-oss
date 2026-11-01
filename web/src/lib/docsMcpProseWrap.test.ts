@@ -1,6 +1,6 @@
 // Regression guard for "/docs/mcp pans sideways on a phone".
 //
-// THE BUG (measured, production build, Chromium 390x844 dsf2):
+// THE FIRST BUG (measured, production build, Chromium 390x844 dsf2):
 //   document.documentElement.scrollWidth 939 vs clientWidth 390 — the page
 //   panned 549px sideways and the rest of /docs did not. It was one paragraph
 //   class: the tool-description <p> inside each card. A description is DATA,
@@ -22,9 +22,31 @@
 //   that overflowed at 390/360px — so this is a page-local defect, not a
 //   shared-layout one, and no other page is given this treatment.
 //
-// THE FIX: `[overflow-wrap:anywhere]` on the two paragraphs this page renders
-//   out of TOOL_GROUPS (each tool's `desc` and a group's `note`).
-//   `anywhere` — not `break-word` — because it also drops the paragraph's
+// THE SECOND BUG (measured, production build 44da6fa4, same viewport but with
+//   the browser's default font size raised to 24px — Chrome "Very large", the
+//   text-scaling a user turns on: documentElement.scrollWidth 441 vs 390.
+//   The overflowing elements were NOT the tool rows (they wrap: 17 lines,
+//   clientWidth == scrollWidth == 268) but three PROSE inline <code> tokens,
+//   each 352px wide inside a 268px column:
+//
+//     <code>https://mcp.jomform.com/mcp</code>      (intro paragraph)
+//     <code>https://mcp.jomform.com/mcp</code>      (OAuth discovery, item 1)
+//     <code>https://mcp.jomform.com/mcp</code>      (OAuth discovery, item 2)
+//
+//   A URL is one whitespace-free run, so at 100% text size it fits and the page
+//   is clean at 320/360/390px; raise the root font size and it is wider than
+//   the column. The first version of this file could not see that class of
+//   site: its extractor only collected <p>/<code> whose BODY contains
+//   {t.field}/{g.field}, and a <p> match consumes its own body, so a <code>
+//   nested inside a paragraph (and every prose <code> generally) was invisible.
+//
+// THE FIX: `[overflow-wrap:anywhere]` on
+//   - the two paragraphs this page renders out of TOOL_GROUPS (each tool's
+//     `desc` and a group's `note`), and
+//   - EVERY inline <code> token on the page (URLs, header names, scope names,
+//     `.well-known` paths) — they are all literals we do not control and any of
+//     them can be longer than the column at a raised font size.
+//   `anywhere` — not `break-word` — because it also drops the element's
 //   min-content width to one character, so the card is free to shrink inside
 //   the flex column instead of being floored by its widest token. It does not
 //   truncate: the text still reads in full, wrapped.
@@ -58,7 +80,26 @@ function dataElements(src: string) {
   return out;
 }
 
+/**
+ * Every inline `<code>` token in the page, wherever it sits.
+ *
+ * Scanned separately because a `<p>` match consumes its own body: a `<code>`
+ * nested inside a paragraph never reaches dataElements(), and that blind spot
+ * is exactly what let the three `https://mcp.jomform.com/mcp` tokens overflow
+ * at a raised browser font size without a peep from this file.
+ */
+function codeElements(src: string) {
+  return [...src.matchAll(/<code\b([^>]*)>([\s\S]*?)<\/code>/g)].map((m) => ({
+    attrs: m[1],
+    body: m[2],
+  }));
+}
+
 const SITES = dataElements(page);
+const CODES = codeElements(page);
+
+/** The exact token that overflowed at root font-size 24px. */
+const OVERFLOWING_URL = "https://mcp.jomform.com/mcp";
 
 test("the guard is looking at real render sites (it cannot pass vacuously)", () => {
   // 189 strings sit in TOOL_GROUPS; exactly three places render them as prose or
@@ -77,19 +118,55 @@ test("the guard is looking at real render sites (it cannot pass vacuously)", () 
         "text now lives on an element without a break guard",
     );
   }
+
+  // The inline-code scan is the second half of the guard: at a raised default
+  // font size a prose <code> is the thing that overflows, and it is invisible to
+  // the data-field extractor above. A page that stops rendering <code> tokens
+  // (or a refactor that renames the tag) must fail here rather than pass the
+  // loop below over an empty list.
+  assert.ok(
+    CODES.length >= 30,
+    `found only ${CODES.length} inline <code> token(s) in ${PAGE} — the page renders ~42 and ` +
+      "the scan has drifted; the break-guard assertion below would be passing over almost nothing",
+  );
+  const urls = CODES.filter((c) => c.body.trim() === OVERFLOWING_URL);
+  assert.ok(
+    urls.length >= 3,
+    `found ${urls.length} <code>${OVERFLOWING_URL}</code> token(s) — the page carries it in the ` +
+      "intro paragraph and both OAuth-discovery list items, and those are the runs that " +
+      "measured 352px inside a 268px column at root 24px; if they moved, aim the guard at the " +
+      "new site",
+  );
 });
 
-test("every data-driven prose element lets an unbreakable run break", () => {
+test("every inline <code> token and every data-driven prose element lets an unbreakable run break", () => {
+  const unguarded: string[] = [];
   for (const { tag, attrs, body } of SITES) {
     const cls = attrs.match(/className="([^"]*)"/)?.[1] ?? "";
-    const field = body.match(/\{(?:t|g)\.[A-Za-z_]+\}/)?.[0] ?? body.slice(0, 40);
-    assert.match(
-      cls,
-      BREAK_GUARD,
+    if (BREAK_GUARD.test(cls)) continue;
+    const field = body.match(/\{(?:t|g)\.[A-Za-z_]+/)?.[0] ?? body.trim().slice(0, 40);
+    unguarded.push(
       `the <${tag}> rendering ${field} has className "${cls}" with no break guard and measured ` +
         "898px wide in a 308px card at 390px",
     );
   }
+  for (const { attrs, body } of CODES) {
+    const cls = attrs.match(/className="([^"]*)"/)?.[1] ?? "";
+    if (BREAK_GUARD.test(cls)) continue;
+    const token = body.trim().replace(/\s+/g, " ").slice(0, 60);
+    unguarded.push(
+      `the inline <code> rendering "${token}" has className "${cls}" with no break guard — at a ` +
+        "raised default font size a token width is measured in the page's font, not in a fixed " +
+        "number of pixels, so a URL that fits at 100% text size overflows the column at 150% " +
+        `(measured: 352px in a 268px column, root 24px, ${OVERFLOWING_URL})`,
+    );
+  }
+  assert.deepEqual(
+    unguarded,
+    [],
+    `${unguarded.length} render site(s) on ${PAGE} carry an unbreakable run with no break guard:\n` +
+      unguarded.map((u) => `  - ${u}`).join("\n"),
+  );
 });
 
 test("the contract text still contains a run that needs the guard", () => {
