@@ -348,6 +348,27 @@ func (a *AuthHandlers) sendMagicLinkEmail(ctx context.Context, email, token stri
 	if mailerUnavailable(a.VerifyMailer) {
 		return errors.New("magic link mailer not configured")
 	}
+	// Card t_641d62d5: refuse a recipient whose domain can never receive mail
+	// BEFORE the mailer (or the email queue) is touched. example.com publishes a
+	// null MX (RFC 7505) and the RFC 2606/6761 names are unroutable by design,
+	// so a send to one of them is a guaranteed HARD BOUNCE — the bounce lands in
+	// the owner's mailbox and is charged against the one sending identity every
+	// receipt and login link on the platform depends on. The returned value is
+	// nil, exactly like the suppression skip below: the request is a handled
+	// no-op, never an error and never a retry.
+	//
+	// This check sits AFTER the mailer-unavailable gate on purpose: an
+	// unconfigured deployment must still report "mailer not configured" for
+	// every address, so the wiring failure stays visible.
+	//
+	// The log line carries the reason only — not the address, not the domain.
+	// The count lives in jomform_ses_unroutable_total{reason}; a refusal log
+	// that kept the recipient would be a PII record created at QA speed.
+	if reason, unroutable := emailpkg.UnroutableDomain(email); unroutable {
+		slog.Warn("magiclink_unroutable_domain_skipped", "reason", reason)
+		recordSESUnroutable(reason)
+		return nil
+	}
 	if a.Suppressions != nil {
 		if sup, err := emailpkg.ShouldSuppress(ctx, a.Suppressions, email); err != nil {
 			// Fail open (see (*email.Sender).suppressed): the pre-send choke

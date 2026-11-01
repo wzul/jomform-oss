@@ -111,6 +111,41 @@ dead-letters where an operator can see and replay it), and
 enqueued `Type:` literal has no matching case. When adding a new queued job type,
 add its case in the same change.
 
+### 1.2 Unroutable recipients are refused before the mailer
+
+Some recipient domains can never accept delivery, so a message sent there is a
+guaranteed **hard bounce** — the most reputation-damaging kind, and the one a QA
+sweep can produce by the hundred. `email.UnroutableDomain` refuses them **before
+the mailer is called** (and before a queued job is created), so the message is
+never handed to SES at all:
+
+| family | names | why |
+|---|---|---|
+| RFC 2606 reserved | `example.com`, `example.net`, `example.org` (and every subdomain) | never delegated; `example.com` publishes a null MX (RFC 7505, `MX 0 .`) meaning "accepts no mail" |
+| RFC 6761 special-use TLDs | `.test`, `.invalid`, `.localhost`, `.example` | reserved for exactly this purpose; nothing under them routes |
+| known disposable / QA providers | `example.com`, `1secmail.net`, `simulator.amazonses.com` | throwaway mailboxes that resolve to real MX hosts, so only a static list can refuse them; their addresses are already on the suppression list |
+
+The rule is **static and network-free on purpose**. A null-MX lookup can only
+confirm what the reserved names already imply, while adding a resolver
+dependency that fails open on a timeout — exactly backwards for a reputation
+guard. Reserved names cannot be delegated, so the list is the guarantee; the MX
+pre-check (§3, registration only) is a separate, weaker layer.
+
+Where it applies today: the **magic-link request** path
+(`sendMagicLinkEmail`, which both the sign-in and the hybrid sign-up branch go
+through). The refusal is a handled no-op — the caller still returns the generic
+`200` anti-enumeration response, identical bytes whether the address exists,
+does not exist, or is refused, so the guard is not an oracle. It is logged as
+one `magiclink_unroutable_domain_skipped` line carrying **only the reason**
+(`reserved` / `disposable`) — no address, no domain — and counted in
+`jomform_ses_unroutable_total{reason}` on `/metrics`. The counter is the
+operational signal: a refused send and a silently dropped one look identical to
+the caller.
+
+Registration already refuses most of these through the MX pre-check (§3);
+`example.com` is the exception that matters: it *has* an MX record (the null
+one), so the null-MX apex passes the MX check and only this list refuses it.
+
 ### Inspect / un-suppress a false positive (ops)
 
 ```sql

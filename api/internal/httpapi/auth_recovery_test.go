@@ -202,7 +202,7 @@ func TestMagicLinkEndToEndSingleUse(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := "magic-" + randSuffix() + "@example.test"
+	email := "magic-" + randSuffix() + "@" + testMailDomain
 	rec := postJSON(mux, "/v1/auth/register", map[string]any{
 		"email": email, "password": "correct-horse-battery-staple",
 	}, "")
@@ -283,7 +283,7 @@ func TestMagicLinkHybridSignup(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := "hybrid-" + randSuffix() + "@example.test"
+	email := "hybrid-" + randSuffix() + "@" + testMailDomain
 	// The email must not exist yet.
 	if u, _ := users.ByEmail(context.Background(), email); u != nil {
 		t.Fatalf("email %s already exists", email)
@@ -362,7 +362,7 @@ func TestMagicLinkVerifiesExistingUnverifiedAccount(t *testing.T) {
 	// An existing account in exactly the state a password signup leaves behind
 	// (verified=false, issue #42) — NOT a new address, which would take the
 	// brand-new-account path that already worked.
-	email := "unverified-" + randSuffix() + "@example.test"
+	email := "unverified-" + randSuffix() + "@" + testMailDomain
 	rec := postJSON(mux, "/v1/auth/register", map[string]any{
 		"email": email, "password": password,
 	}, ip)
@@ -471,7 +471,7 @@ func TestMagicLinkHybridSignupHoneypot(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := "honey-" + randSuffix() + "@example.test"
+	email := "honey-" + randSuffix() + "@" + testMailDomain
 	rec := postJSON(mux, "/v1/auth/magic-link/request", map[string]any{
 		"email": email, "website": "https://spam.example",
 	}, ip)

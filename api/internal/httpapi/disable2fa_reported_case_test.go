@@ -59,7 +59,7 @@ func TestDisable2FAWithCurrentCodeOnMagicSession(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := fmt.Sprintf("disable2fa-magic-%d@example.test", time.Now().UnixNano())
+	email := fmt.Sprintf("disable2fa-magic-%d@%s", time.Now().UnixNano(), testMailDomain)
 	registerAndVerify(t, h, email, "password123", ip)
 
 	// Establish a non-magic session and enable 2FA on it.
@@ -135,7 +135,7 @@ func TestDisable2FAStillNeedsASecondFactorOnMagicSession(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := fmt.Sprintf("disable2fa-guard-%d@example.test", time.Now().UnixNano())
+	email := fmt.Sprintf("disable2fa-guard-%d@%s", time.Now().UnixNano(), testMailDomain)
 	registerAndVerify(t, h, email, "password123", ip)
 
 	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)

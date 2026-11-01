@@ -18,6 +18,17 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
+// testMailDomain is the recipient domain for any test whose flow must actually
+// reach the mailer (magic-link sign-in, 2FA, invites).
+//
+// It is deliberately NOT one of the RFC 2606/6761 names. A magic link to a
+// reserved name is refused before the mailer by the unroutable-recipient guard
+// (card t_641d62d5), so a test that aimed one at example.test/example.com would
+// now be asserting against that guard instead of the behaviour it names —
+// silently, because "no mail was sent" is also what a broken flow produces.
+// No mail leaves the process: every test wires a recording mailer.
+const testMailDomain = "qa.jomform.com"
+
 var testIPCounter atomic.Uint32
 
 // uniqueTestIP returns a fresh IP for one test. The auth handlers key their

@@ -75,7 +75,7 @@ func TestMagicSessionFlaggedAndPasswordSessionNot(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := fmt.Sprintf("magic-flag-%d@example.test", time.Now().UnixNano())
+	email := fmt.Sprintf("magic-flag-%d@%s", time.Now().UnixNano(), testMailDomain)
 	registerAndVerify(t, h, email, "password123", ip)
 
 	// Password login → not a magic session.
@@ -139,7 +139,7 @@ func TestMagicSessionAuditFlagged(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := fmt.Sprintf("magic-audit-%d@example.test", time.Now().UnixNano())
+	email := fmt.Sprintf("magic-audit-%d@%s", time.Now().UnixNano(), testMailDomain)
 	registerAndVerify(t, h, email, "password123", ip)
 	uid := requireUserIDByEmail(t, users, email)
 
@@ -228,7 +228,7 @@ func TestStepUpMagicAnd2FARequiresTOTP(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := fmt.Sprintf("stepup-cp-%d@example.test", time.Now().UnixNano())
+	email := fmt.Sprintf("stepup-cp-%d@%s", time.Now().UnixNano(), testMailDomain)
 	registerAndVerify(t, h, email, "password123", ip)
 
 	// Establish a normal session and enable 2FA.
@@ -294,7 +294,7 @@ func TestStepUpNotRequiredNonMagic2FA(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := fmt.Sprintf("stepup-nomagic-%d@example.test", time.Now().UnixNano())
+	email := fmt.Sprintf("stepup-nomagic-%d@%s", time.Now().UnixNano(), testMailDomain)
 	registerAndVerify(t, h, email, "password123", ip)
 
 	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
@@ -324,7 +324,7 @@ func TestStepUpNotRequiredMagicWithout2FA(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := fmt.Sprintf("stepup-no2fa-%d@example.test", time.Now().UnixNano())
+	email := fmt.Sprintf("stepup-no2fa-%d@%s", time.Now().UnixNano(), testMailDomain)
 	registerAndVerify(t, h, email, "password123", ip)
 
 	_ = postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": email}, ip)
@@ -355,7 +355,7 @@ func TestStepUpDisable2FA(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := fmt.Sprintf("stepup-disable-%d@example.test", time.Now().UnixNano())
+	email := fmt.Sprintf("stepup-disable-%d@%s", time.Now().UnixNano(), testMailDomain)
 	registerAndVerify(t, h, email, "password123", ip)
 
 	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
@@ -410,7 +410,7 @@ func TestStepUpPasskeyRegisterGate(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := fmt.Sprintf("stepup-passkey-%d@example.test", time.Now().UnixNano())
+	email := fmt.Sprintf("stepup-passkey-%d@%s", time.Now().UnixNano(), testMailDomain)
 	registerAndVerify(t, h, email, "password123", ip)
 	pw := postJSON(mux, "/v1/auth/login", map[string]any{"email": email, "password": "password123"}, ip)
 	baseSession := sessionTokenValue(pw)
@@ -546,7 +546,7 @@ func TestMagicFlagSurvives2FAEnableRotation(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := fmt.Sprintf("magic-rotate-%d@example.test", time.Now().UnixNano())
+	email := fmt.Sprintf("magic-rotate-%d@%s", time.Now().UnixNano(), testMailDomain)
 	registerAndVerify(t, h, email, "password123", ip)
 
 	// Magic session (no 2FA yet).

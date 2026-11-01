@@ -38,6 +38,9 @@ type Metrics struct {
 	// SES send + suppression counts.
 	sesSendsTotal        *prometheus.CounterVec
 	sesSuppressionsTotal *prometheus.CounterVec
+	// Sends refused before the mailer because the recipient's domain can never
+	// receive mail (card t_641d62d5), labelled by reason.
+	sesUnroutableTotal *prometheus.CounterVec
 
 	// DB query timing (issue #211): per-query duration histogram + slow-query
 	// counter, labelled by query class (normalised SQL operation).
@@ -91,6 +94,11 @@ func New() *Metrics {
 		Help: "SES sends skipped due to suppression by reason.",
 	}, []string{"reason"})
 
+	m.sesUnroutableTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "jomform_ses_unroutable_total",
+		Help: "SES sends refused before the mailer because the recipient domain cannot receive mail, by reason.",
+	}, []string{"reason"})
+
 	// Issue #211: DB query timing. The histogram uses a wider bucket set than
 	// the HTTP latency default so slow queries (100ms–10s) are well resolved.
 	m.dbQueryDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -107,7 +115,7 @@ func New() *Metrics {
 	reg.MustRegister(
 		m.httpRequestsTotal, m.httpDuration, m.errorsTotal,
 		m.authFailuresTotal, m.paymentFailuresTotal, m.uploadFailuresTotal,
-		m.sesSendsTotal, m.sesSuppressionsTotal,
+		m.sesSendsTotal, m.sesSuppressionsTotal, m.sesUnroutableTotal,
 		m.dbQueryDuration, m.dbSlowQueriesTotal,
 	)
 	return m
@@ -194,6 +202,15 @@ func (m *Metrics) IncSESSuppression(reason string) {
 		return
 	}
 	m.sesSuppressionsTotal.WithLabelValues(reason).Inc()
+}
+
+// IncSESUnroutable records a send refused before the mailer because the
+// recipient's domain can never receive mail, by reason.
+func (m *Metrics) IncSESUnroutable(reason string) {
+	if m == nil || m.sesUnroutableTotal == nil {
+		return
+	}
+	m.sesUnroutableTotal.WithLabelValues(reason).Inc()
 }
 
 // ObserveDBQuery records a completed database query's duration by query class.

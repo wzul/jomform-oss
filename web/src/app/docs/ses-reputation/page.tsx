@@ -59,6 +59,15 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "never-delivered",
+    title: "Addresses that can never receive mail",
+    body: [
+      "Some recipient domains cannot accept delivery at all, so a message sent to one is a guaranteed hard bounce — the kind the provider counts most heavily against the sending identity. JomForm refuses these before the mail is handed to the provider, so nothing is sent and no bounce is generated.",
+      "Three families are refused: the reserved example domains (example.com, example.net, example.org and anything under them — example.com even publishes an MX record that says \"this domain accepts no mail\"); the reserved test names (.test, .invalid, .localhost and .example); and a short list of disposable/temp-mail providers that QA was aiming at, whose domains do resolve but whose addresses are throwaway.",
+      "A refused request is indistinguishable from an accepted one: the same confirmation is shown whether the address exists, does not exist, or was refused, so the check cannot be used to find out who has an account. The refusal is counted on the monitoring endpoint and logged without the address, so the platform owner can see how often it happens without any address being kept.",
+    ],
+  },
+  {
     id: "related",
     title: "Related protections",
     body: [

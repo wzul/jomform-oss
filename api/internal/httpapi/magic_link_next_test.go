@@ -86,7 +86,7 @@ func TestMagicLinkLoginEmailCarriesTheReturnTarget(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := "next-login-" + randSuffix() + "@example.test"
+	email := "next-login-" + randSuffix() + "@" + testMailDomain
 	registerAndVerify(t, h, email, "correct-horse-battery-staple", "")
 
 	target := "https://jomform.com/products/42/edit?tab=images"
@@ -128,7 +128,7 @@ func TestMagicLinkSignupEmailCarriesTheReturnTarget(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	email := "next-signup-" + randSuffix() + "@example.test"
+	email := "next-signup-" + randSuffix() + "@" + testMailDomain
 	target := "https://jomform.com/profile"
 
 	rec := postJSON(mux, "/v1/auth/magic-link/request", map[string]any{
@@ -173,7 +173,7 @@ func TestMagicLinkEmailDropsAnUnusableReturnTarget(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	for _, raw := range []string{"javascript:alert(1)", "//evil.example/profile"} {
-		email := "next-drop-" + randSuffix() + "@example.test"
+		email := "next-drop-" + randSuffix() + "@" + testMailDomain
 		rec := postJSON(mux, "/v1/auth/magic-link/request", map[string]any{
 			"email": email, "next": raw,
 		}, ip)

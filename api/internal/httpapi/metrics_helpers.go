@@ -46,3 +46,13 @@ func recordSESSuppression(reason string) {
 		globalMetrics.IncSESSuppression(reason)
 	}
 }
+
+// recordSESUnroutable counts a send refused before the mailer because the
+// recipient's domain can never receive mail (card t_641d62d5). It is a counter
+// rather than a log line about the address: the board can see how often this
+// happens without an address being kept anywhere.
+func recordSESUnroutable(reason string) {
+	if globalMetrics != nil {
+		globalMetrics.IncSESUnroutable(reason)
+	}
+}

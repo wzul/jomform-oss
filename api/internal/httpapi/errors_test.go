@@ -32,6 +32,7 @@ func TestMetricsEndpoint(t *testing.T) {
 	recordUploadFailure("store")
 	recordSESSend("verify")
 	recordSESSuppression("verify")
+	recordSESUnroutable("reserved")
 	recordError("internal")
 	req = httptest.NewRequest("GET", "/metrics", nil)
 	rec = httptest.NewRecorder()
@@ -50,6 +51,7 @@ func TestMetricsEndpoint(t *testing.T) {
 		"jomform_upload_failures_total",
 		"jomform_ses_sends_total",
 		"jomform_ses_suppressions_total",
+		"jomform_ses_unroutable_total",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("metrics body missing %q", want)
