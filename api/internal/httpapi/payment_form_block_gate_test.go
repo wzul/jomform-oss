@@ -76,7 +76,10 @@ var paymentArms = map[string]paymentArm{
 	"textarea": {control: `<textarea name="notes" data-id="b1"[^>]*>`, mode: modeHonours},
 	"number":   {control: `<input type="number" name="notes" data-id="b1"[^>]*>`, mode: modeHonours},
 	"select":   {control: `<select name="notes" data-id="b1"[^>]*>`, mode: modeHonours},
-	"radio":    {control: `<input type="radio" name="notes" data-id="b1"[^>]*>`, mode: modeHonours},
+	// Card t_5d625806: the two radio-drawing arms name their radios after the
+	// BLOCK id, not a shared literal — `name` is what makes a radio button
+	// group, so one shared name would merge two questions into one group.
+	"radio":    {control: `<input type="radio" name="b1" data-id="b1"[^>]*>`, mode: modeHonours},
 	"checkbox": {control: `<input type="checkbox" class="extra[^"]*" data-id="b1"[^>]*>`, mode: modeHonours},
 	"name":     {control: `<input type="text" name="full_name" data-id="b1"[^>]*>`, mode: modeHonours},
 	// The email arm emits `required` unconditionally: an order that cannot reach
@@ -97,7 +100,7 @@ var paymentArms = map[string]paymentArm{
 	"hidden":       {control: `<input type="hidden" name="notes" data-id="b1"[^>]*>`, mode: modeNone, why: "hidden inputs are barred from constraint validation and the buyer never sees it"},
 	"list":         {control: `<textarea name="notes" data-id="b1"[^>]*>`, mode: modeHonours},
 	"repeater":     {control: `<textarea name="notes" data-id="b1"[^>]*>`, mode: modeHonours},
-	"image-choice": {control: `<input type="radio" name="notes" data-id="b1"[^>]*>`, mode: modeHonours},
+	"image-choice": {control: `<input type="radio" name="b1" data-id="b1"[^>]*>`, mode: modeHonours},
 	"captcha":      {control: `<input type="text" name="notes" data-id="b1"[^>]*>`, mode: modeHonours},
 
 	// Pricing. `option` and `shipping` DO honour the flag (this card's fix):
