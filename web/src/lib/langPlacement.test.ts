@@ -47,6 +47,14 @@
 //      proof, which holds the read open in a real browser, is
 //      web/e2e/profile-lang-picker-race.spec.ts.
 //
+//  10. Two rapid picks reach the profile IN ORDER, so the LAST choice is the one
+//      it holds (card t_04b728a9). The writes used to be fired unordered: a slow
+//      first POST let the server commit the OLDER language last, and the page
+//      showed the newer one until a reload read the profile back. The queue is
+//      EXECUTED here (below), and the provider is pinned to it from source; the
+//      browser half, which holds the first POST open against the real picker, is
+//      web/e2e/profile-lang-write-order.spec.ts.
+//
 // WHAT IT DOES NOT COVER (stated honestly)
 //   This repo has no JSX/DOM test runner (see src/lib/i18n.test.ts), so this file
 //   asserts the client's wiring from source and the server's contract from the Go
@@ -66,6 +74,9 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { LANGS } from "../components/i18nDict.ts";
+// The write-order contract's executable half (card t_04b728a9): the queue the
+// provider writes through is exercised below, not just pattern-matched.
+import { orderedWriter } from "./langWriteQueue.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
@@ -430,5 +441,114 @@ test("a choice made while the profile read is in flight is not reverted by it", 
   assert.ok(
     guard < applied && guard < mirrored,
     "the guard sits AFTER a writer — the late profile answer still reverts the UI",
+  );
+});
+
+test("two rapid picks are written to the profile IN ORDER — the last one is what it holds", async () => {
+  // Card t_04b728a9, the executable half.
+  //
+  // THE DEFECT: `setLang()` fired POST /api/auth/profile/lang on every pick with
+  // nothing ordering them, so two quick picks were two requests in flight at
+  // once. A held-first-request probe is the standard way to show that a
+  // concurrent pair has no arrival order: the FIRST POST is held open, the
+  // SECOND lands immediately, and the held one settles LAST — so the server
+  // commits the OLDER choice last and the profile holds a language the user has
+  // already replaced. Measured in the real app: "server ended on ms; the page
+  // shows zh; after reload the picker shows ms".
+  //
+  // THE RULE: POST n+1 is not issued until POST n has SETTLED, so the order the
+  // picks were made in is the order the server commits them in.
+  const inFlight: string[] = [];
+  const committed: string[] = [];
+  let maxInFlight = 0;
+  let server = "";
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let firstSent!: () => void;
+  const firstArrived = new Promise<void>((resolve) => {
+    firstSent = resolve;
+  });
+
+  // The "server": records what it holds, in the order the requests COMMIT.
+  const post = async (lang: string) => {
+    inFlight.push(lang);
+    maxInFlight = Math.max(maxInFlight, inFlight.length);
+    if (inFlight.length === 1) {
+      firstSent();
+      await held; // the slow FIRST request
+    }
+    inFlight.splice(inFlight.indexOf(lang), 1);
+    server = lang;
+    committed.push(lang);
+  };
+
+  const write = orderedWriter(post);
+  const first = write("ms");
+  await firstArrived; // the first pick's POST is in flight and held
+  const second = write("zh"); // the user changes their mind inside that window
+
+  // The queue's whole point: the second write cannot be SENT yet. On an
+  // unordered writer both are in flight right now.
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(
+    maxInFlight,
+    1,
+    `two language POSTs were in flight at once (${JSON.stringify(inFlight)}) — the ` +
+      "arrival order at the server is then anyone's and the profile can keep the OLDER choice",
+  );
+
+  release();
+  await Promise.all([first, second]);
+
+  assert.deepEqual(
+    committed,
+    ["ms", "zh"],
+    "the profile received the two picks out of order — the older choice settled last",
+  );
+  assert.equal(server, "zh", "the profile settled on an older choice than the one the user made last");
+});
+
+test("a rejected write neither stalls the queue nor swallows the next choice", async () => {
+  // Persistence is best-effort: a signed-out/offline POST fails, and the user
+  // may well pick again before reconnecting. The next choice must still be
+  // written — a queue that swallowed it would leave the profile stale forever —
+  // and it must not be held behind a rejected predecessor.
+  const committed: string[] = [];
+  let calls = 0;
+  const write = orderedWriter(async (lang: string) => {
+    calls += 1;
+    if (calls === 1) throw new Error("offline");
+    committed.push(lang);
+  });
+
+  await write("ms"); // rejects internally; the caller does not see it (by design)
+  await write("zh");
+
+  assert.deepEqual(committed, ["zh"], "the choice made after a failed write never reached the profile");
+});
+
+test("the provider's profile write really goes through that ordered queue", () => {
+  // The arms above prove the QUEUE orders writes. This one ties the queue to the
+  // code that actually writes the profile, so a future edit cannot go back to a
+  // bare `fetch` per pick while the queue keeps passing its own test.
+  const writer = i18n.indexOf("const persistLang = orderedWriter");
+  assert.ok(
+    writer >= 0,
+    "components/i18n.tsx no longer wraps the profile write in orderedWriter() — two rapid " +
+      "picks can reach the server out of order again and the profile keeps the older one",
+  );
+  const post = i18n.indexOf(`fetch("${PROFILE_LANG_PATH}"`, writer);
+  assert.ok(
+    post > writer,
+    "the profile POST is not inside the ordered writer — it is fired on every pick with " +
+      "nothing ordering it",
+  );
+  // …and the picker still reaches it: ordered or not, the choice must be written.
+  const setter = i18n.indexOf("const setLang = useCallback(");
+  assert.ok(
+    i18n.indexOf("persistLang(l)", setter) > setter,
+    "setLang() no longer persists the choice to the profile",
   );
 });

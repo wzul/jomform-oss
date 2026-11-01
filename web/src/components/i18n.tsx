@@ -14,6 +14,11 @@ import { isEnglishOnlyProsePath } from "../lib/proseSurfaces";
 // in that module.
 import { endonymLangProps, ENDONYM_LABEL } from "../lib/endonymLang";
 
+// The dashboard language is written to the PROFILE in pick order (card
+// t_04b728a9): two rapid picks must not reach the server out of order, or the
+// profile keeps the OLDER one and the next load silently reverts the user.
+import { orderedWriter } from "../lib/langWriteQueue";
+
 // Issue #514: the dictionary data now lives in ./i18nDict.ts so the
 // locale-completeness guard in src/lib/i18n.test.ts can import it with the
 // repo's `npm run test:unit` runner — node --test executes TypeScript but
@@ -39,15 +44,25 @@ const isLang = (v: unknown): v is Lang => ["en", "ms", "zh", "ta", "ar"].include
 // follows them into any browser. Best-effort: the local mirror above already
 // keeps the UI responsive, and a signed-out/offline user simply keeps the
 // browser value.
-function persistLang(l: Lang) {
+//
+// ORDERED (card t_04b728a9): two picks made in quick succession used to produce
+// two CONCURRENT POSTs, and a slow first one let the server commit the OLDER
+// language last — the profile then held a choice the user had already replaced,
+// which only showed up on the next load. The write is now queued through
+// `orderedWriter`, so POST n+1 is not issued until POST n has settled and the
+// LAST explicit choice is the one the profile keeps. The rule and its
+// measurement live in `../lib/langWriteQueue.ts` (unit-pinned in
+// `src/lib/langPlacement.test.ts`, executed in a browser by
+// `web/e2e/profile-lang-write-order.spec.ts`).
+const persistLang = orderedWriter<Lang>((l) =>
   fetch("/api/auth/profile/lang", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ lang: l }),
   }).catch(() => {
     // not signed in / offline — the local value still applies
-  });
-}
+  }),
+);
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = useState<Lang>("en");
