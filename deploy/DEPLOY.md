@@ -474,7 +474,7 @@ by URL prefix, which is unaffected by custom cache keys; if the zone's cache key
 includes a header (`Accept-Language`, `CF-IPCountry`, …) the purge covers the
 default key only.
 
-### The form's share card uses the same purge
+### The form's share card and QR PNG use the same purge
 
 `/og/{slug}.png` — the generated 1200×630 preview a chat app or a social site
 shows when a form's link is pasted — is public and cacheable too, and it draws the
@@ -484,21 +484,31 @@ drops the cached card, and the reply names the outcome:
 
 ```json
 {"status":"draft","edge":"purged",
- "edge_urls":["https://<workspace>.jomform.com/og/<slug>.png"]}
+ "edge_urls":["https://<workspace>.jomform.com/og/<slug>.png",
+              "https://<workspace>.jomform.com/qr/<slug>.png"]}
 ```
+
+`/qr/{slug}.png` — the QR image a merchant prints on a table stand — is the second
+artefact in that same request. It carries no merchant text, but it encodes the
+form's public URL, so a 200 there confirms the form exists at that slug: the same
+disclosure the status gate exists to stop, and the same 24-hour edge entry the
+card had before this. One purge names both prefixes; a `/qr/{slug}.png?table=N`
+variant is a separate CDN entry under the default key and the prefix covers it.
 
 Two deployment facts matter here:
 
-- The card is served on a **per-workspace host**, so `JF_CF_PURGE_HOSTS` needs a
-  wildcard for the tenant subdomains (`*.jomform.com`) plus any verified custom
-  domains. An exact host list makes every card purge report `edge: out_of_zone`
+- Both artefacts are served on a **per-workspace host**, so `JF_CF_PURGE_HOSTS`
+  needs a wildcard for the tenant subdomains (`*.jomform.com`) plus any verified
+  custom domains. An exact host list makes every purge report `edge: out_of_zone`
   and clear nothing — the form's status still changes, which is why the reply has
   to be read rather than assumed.
-- The public card declares `Cache-Control: public, max-age=300` (not a day), so a
-  deployment that cannot purge still stops serving a stale or unpublished card
-  within five minutes. That window, not the origin's status gate, is what bounds
+- The public arms declare `Cache-Control: public, max-age=300` (not a day), so a
+  deployment that cannot purge still stops serving a stale or unpublished card or
+  QR within five minutes. That window, not the origin's status gate, is what bounds
   the mistake — measured on prod 2026-10-26, where a draft form's card kept
-  answering from the edge with `age: 1243` after the gate had shipped.
+  answering from the edge with `age: 1243` after the gate had shipped, and again on
+  2026-10-31, where a draft form's QR PNG answered `cf-cache-status: HIT,
+  age: 1566` while every cache-busted fetch got the origin's 404.
 
 `edge` is `purged`, `not_configured`, `out_of_zone` or `failed`; when it is not
 `purged` the reply also carries `edge_max_age_s`. The status change itself never

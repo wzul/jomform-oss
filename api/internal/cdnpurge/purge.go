@@ -33,7 +33,12 @@
 // separate entries), https://developers.cloudflare.com/api/resources/cache/methods/purge/
 // (`prefixes`) and .../cache/how-to/purge-cache/purge_by_prefix/.
 //
-// THE SECOND CALLER: /og/{slug}.png. A form's generated social card is served
+// THE PUBLIC ARTEFACTS OF A FORM: /og/{slug}.png and /qr/{slug}.png. Both are
+// generated per form, both are served with a public freshness lifetime, and both
+// keep naming the form after it stops being live, so both are dropped by the
+// same purge. The card is the caller this package was extended for first.
+//
+// /og/{slug}.png. A form's generated social card is served
 // with a public freshness lifetime too, so a crawler that fetched it while the
 // form was live leaves a copy at the edge. The card names the form's TITLE, its
 // workspace name and its host, and the form's own page stops serving it the
@@ -48,6 +53,18 @@
 // purgeForm, mcpsrv publish_form/unpublish_form/delete_form/bulk_forms), and the
 // public arm's lifetime is bounded (OGImageMaxAgeSeconds) so an unconfigured
 // purge cannot leave the mistake visible for a day.
+//
+// /qr/{slug}.png. The same defect, measured on prod on 2026-10-31 (the release
+// that gated the QR routes): a DRAFT form's PNG answered `200,
+// cf-cache-status: HIT, age: 1566, cache-control: public, max-age=86400` while
+// the same URL with a cache-buster answered `404, 10 bytes "not found\n"` from
+// the origin. The PNG discloses the form's EXISTENCE at that slug — the one thing
+// the status gate exists to stop — so it is invalidated on exactly the same
+// transitions as the card, in the same request, and its public lifetime is
+// bounded to the same window (QRImageMaxAgeSeconds). One purge covers both
+// artefacts on purpose: they are cached on the same hosts under the same
+// predicate, and splitting them into two calls would let one half be forgotten
+// again — which is how the QR PNG came to be missing from this file.
 //
 // CONFIGURATION. The client is built from the environment on each purge:
 //
@@ -125,6 +142,22 @@ const MediaMaxAgeSeconds = 300
 // cannot sit in a shared cache for a day. The private arm declares
 // `private, no-store` and is not affected.
 const OGImageMaxAgeSeconds = 300
+
+// QRImageMaxAgeSeconds is the freshness lifetime the PUBLIC arm of
+// /qr/{slug}.png declares (httpapi handleQRImage), stated here for the same
+// reason as the two above: it is what bounds how long the edge can keep
+// confirming a form's existence after it stops being live when no purge is
+// configured.
+//
+// It is the SAME window as the card's, deliberately. One purge invalidates both
+// artefacts and the reply names ONE residual window (`edge_max_age_s`), so a
+// longer QR lifetime would make that number understate how long a stale QR PNG
+// is still served. It used to be 86400 — the day-long lifetime is exactly what
+// let a draft form's PNG stay at the edge (measured on prod 2026-10-31:
+// `cf-cache-status: HIT, age: 1566`) after the origin started answering 404. A
+// httpapi test pins the served header to this constant, and to the card's window,
+// so the two cannot drift apart.
+const QRImageMaxAgeSeconds = OGImageMaxAgeSeconds
 
 // purgeTimeout bounds the outbound call. The bytes are already deleted by the
 // time a purge is attempted, so a slow CDN API must not hold the merchant's
@@ -292,6 +325,50 @@ func OGImageURL(host, slug string) string {
 	return "https://" + host + path
 }
 
+// QRImagePath is the path of a form's generated QR PNG on its public host, the
+// sibling of OGImagePath. The handler serves it (httpapi handleQRImage); this is
+// the one place the purge learns it, so the URL a QR is cached under and the URL
+// a purge asks for cannot drift.
+//
+// The query string is not part of it: /qr/{slug}.png?table=N is a DIFFERENT cache
+// entry under Cloudflare's default key, and a prefix matches the bare URL and
+// every query variant of it, which is why the purge is by prefix (see the
+// package comment) and why the per-table codes need no enumeration.
+func QRImagePath(slug string) string {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return ""
+	}
+	return "/qr/" + url.PathEscape(slug) + ".png"
+}
+
+// QRImageURL is the absolute public URL of a form's generated QR PNG on one of
+// the hosts it is served from. The scheme is always https, for the same reason as
+// OGImageURL: the CDN's cache key includes it.
+func QRImageURL(host, slug string) string {
+	host = normalizeHost(host)
+	path := QRImagePath(slug)
+	if host == "" || path == "" {
+		return ""
+	}
+	return "https://" + host + path
+}
+
+// ArtefactURLs is every publicly cached URL generated for one form slug on one
+// host: the share card and the QR PNG. Callers loop hosts × slugs, so this is the
+// one place that knows the set of artefacts a form leaves behind — a new generated
+// artefact belongs here and nowhere else, and every write path that purges
+// inherits it.
+func ArtefactURLs(host, slug string) []string {
+	out := make([]string, 0, 2)
+	for _, u := range []string{OGImageURL(host, slug), QRImageURL(host, slug)} {
+		if u != "" {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
 // PurgeObjectURLs asks the CDN to drop every cached entry for the given object
 // URLs (as prefixes) and returns the URLs it asked about.
 //
@@ -456,11 +533,12 @@ func (r Result) Fields() map[string]any {
 	return f
 }
 
-// OGFields is Fields() for a social-card purge, plus the freshness window that
-// bounds staleness when the purge did NOT happen. A caller that purged a card
-// must report BOTH: `edge: not_configured` alone leaves an operator guessing
-// how long the old card keeps being served, and the number is the answer.
-func (r Result) OGFields() map[string]any {
+// ArtefactFields is Fields() for a public-artefact purge (the share card and the
+// QR PNG, which one purge covers), plus the freshness window that bounds
+// staleness when the purge did NOT happen. A caller that purged an artefact must
+// report BOTH: `edge: not_configured` alone leaves an operator guessing how long
+// the old copy keeps being served, and the number is the answer.
+func (r Result) ArtefactFields() map[string]any {
 	if r.Status == "" {
 		// No purge was requested: publishing `edge: ""` would name an outcome
 		// that was never attempted.

@@ -276,6 +276,15 @@ export default function CustomizeDocsPage() {
         <strong>Print stand</strong> in Form Settings opens your own signed-in copy of the same
         stand, which works at every status, including a draft you have not published yet.
       </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The QR image behind the stand (<span className="font-mono text-xs">/qr/your-form-slug.png</span>)
+        follows the same rule, and carries the same cache promise as the preview card. It encodes
+        your form&apos;s address, which by itself tells anyone who fetches it that a form exists at
+        that slug — so a form that is not live answers 404 there, a private form&apos;s image is
+        served only to a browser that has entered the password, and the image is dropped from the
+        cache the moment a form stops being live. It is cached five minutes at a time rather than a
+        day, so a deployment that cannot clear that cache stops serving a stale one within minutes.
+      </p>
 
       <h2 id="domains" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
         Custom domains

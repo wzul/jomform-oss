@@ -258,7 +258,7 @@ func (s *Server) purgeFormMCP(
 	// the edge may still hold the copy a crawler fetched while it was live. Asked
 	// for unconditionally: a prefix that matches nothing costs nothing, and this is
 	// the one call that destroys the form for good.
-	edge := s.purgeLeftPublicOGCards(ctx, acc, []string{f.Slug})
+	edge := s.purgeLeftPublicArtefacts(ctx, acc, []string{f.Slug})
 	return nil, withEdgeFields(map[string]any{
 		"status": "purged", "form_id": in.FormID, "slug": f.Slug, "title": f.Title,
 	}, edge), nil

@@ -98,10 +98,14 @@ func IsLiveStatus(status string) bool {
 // card answered from Cloudflare with `age: 1243` while the cache-busted origin
 // answered 404).
 //
-// A write path that moves a form OUT of this set must purge `/og/<slug>.png` in
-// the same request (see internal/cdnpurge); one that moves it IN does not —
-// nothing publicly cacheable was there before (the 404 arm gets the CDN's
-// default few-minute TTL, which is why a publish flips within minutes).
+// A write path that moves a form OUT of this set must purge `/og/<slug>.png` AND
+// `/qr/<slug>.png` in the same request (see internal/cdnpurge — the QR PNG is
+// served on exactly these two arms by httpapi.handleQRImage, so it shares this
+// predicate); one that moves it IN does not — nothing publicly cacheable was
+// there before (the 404 arm gets the CDN's default few-minute TTL, which is why a
+// publish flips within minutes). The name is the card's because that was the
+// first artefact this rule guarded; the set is "forms whose generated artefacts
+// are publicly cacheable", not "forms that have a card".
 func OGImagePubliclyCached(status string) bool {
 	switch status {
 	case FormStatusPublished, FormStatusUnlisted:

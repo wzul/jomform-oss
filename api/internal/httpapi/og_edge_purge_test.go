@@ -15,14 +15,15 @@ package httpapi
 // title, the workspace and the host.
 //
 // What these tests measure, end to end over the real REST route and a real
-// Postgres fixture:
+// Postgres fixture. Since card t_b870d44b every transition below pins BOTH
+// artefacts — the share card /og/{slug}.png and the QR PNG /qr/{slug}.png — on
+// both public hosts, because the QR PNG discloses the form's existence at the
+// slug and is cached for the same window:
 //
 //	TestDraftingAFormPurgesItsCachedSocialCard
-//	    — POST /status {"status":"draft"} on a published form sends the card's
-//	      PREFIX to the CDN in the same request, names the outcome (`edge:
-//	      purged`), and the origin then 404s. Both public hosts are named: a form
-//	      resolves on its workspace subdomain AND on a verified custom domain, so
-//	      there are two edge entries.
+//	    — POST /status {"status":"draft"} on a published form sends the card's and
+//	      the QR PNG's PREFIXes to the CDN in the same request, names the outcome
+//	      (`edge: purged`), and the origin then 404s both.
 //	TestMakingAFormPrivatePurgesItsPublicCard
 //	    — the same for a form going private: it is still LIVE (its page shows the
 //	      password gate) but its card is no longer publicly served, so the public
@@ -46,6 +47,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/wzul/jomform/api/internal/cdnpurge"
@@ -100,13 +102,18 @@ func newCardPurgeFixture(t *testing.T) cardPurgeFixture {
 	return cardPurgeFixture{renameFixture: fx, customDomain: fx.customDomain}
 }
 
-// wantCardPrefixes is the set of edge prefixes a purge of this form's card must
-// name: the card path on BOTH public hosts.
-func (fx cardPurgeFixture) wantCardPrefixes() []string {
-	return []string{
-		"https://" + fx.customDomain + "/og/" + fx.slug + ".png",
-		"https://" + fx.host + "/og/" + fx.slug + ".png",
+// wantArtefactPrefixes is the set of edge prefixes a purge of this form must name:
+// the share card AND the QR PNG, on BOTH public hosts. Two artefacts × two hosts,
+// because the card is an entry per host and the QR encodes the request host too.
+func (fx cardPurgeFixture) wantArtefactPrefixes() []string {
+	var out []string
+	for _, host := range []string{fx.customDomain, fx.host} {
+		out = append(out,
+			"https://"+host+"/og/"+fx.slug+".png",
+			"https://"+host+"/qr/"+fx.slug+".png",
+		)
 	}
+	return out
 }
 
 // setStatus drives the real REST status route.
@@ -132,7 +139,7 @@ func (fx cardPurgeFixture) storedStatus(t *testing.T) string {
 }
 
 // assertPrefixes compares the prefixes the CDN was asked about with the ones the
-// form's card can be cached under, as a SET (order is the handler's business).
+// form's artefacts can be cached under, as a SET (order is the handler's business).
 func assertPrefixes(t *testing.T, got, want []string) {
 	t.Helper()
 	seen := make(map[string]int, len(got))
@@ -146,7 +153,7 @@ func assertPrefixes(t *testing.T, got, want []string) {
 		delete(seen, w)
 	}
 	if len(seen) > 0 {
-		t.Errorf("the purge named prefixes beyond the card's own URL: %v (wanted %v)", seen, want)
+		t.Errorf("the purge named prefixes beyond the form's own artefact URLs: %v (wanted %v)", seen, want)
 	}
 }
 
@@ -158,12 +165,16 @@ func TestDraftingAFormPurgesItsCachedSocialCard(t *testing.T) {
 	defer cdn.Close()
 	pointTheCardPurgeAt(t, cdn, fx.customDomain)
 
-	// Precondition: while published BOTH hosts serve the card, which is what a
-	// crawler caches. Without this the 404 after the transition could be a broken
-	// fixture passing for the wrong reason.
+	// Precondition: while published BOTH hosts serve the card — and the QR PNG —
+	// which is what a crawler caches. Without this the 404 after the transition
+	// could be a broken fixture passing for the wrong reason.
 	for _, host := range []string{fx.host, fx.customDomain} {
 		if body := ogServed(t, fx.pub, host, fx.slug); len(body) == 0 {
 			t.Fatalf("precondition: published /og/%s.png served no bytes on %s", fx.slug, host)
+		}
+		if r := publicServeWith(t, fx.pub, host, "/qr/"+fx.slug+".png"); r.Code != http.StatusOK {
+			t.Fatalf("precondition: published /qr/%s.png on %s = %d, want 200 — the QR PNG is the "+
+				"second artefact this transition has to invalidate", fx.slug, host, r.Code)
 		}
 	}
 
@@ -192,7 +203,7 @@ func TestDraftingAFormPurgesItsCachedSocialCard(t *testing.T) {
 	if bodyErr != "" {
 		t.Errorf("purge request body: %s", bodyErr)
 	}
-	assertPrefixes(t, prefixes, fx.wantCardPrefixes())
+	assertPrefixes(t, prefixes, fx.wantArtefactPrefixes())
 
 	// 2. The reply NAMES the outcome instead of swallowing it, and does not name a
 	//    residual window that does not exist.
@@ -203,11 +214,15 @@ func TestDraftingAFormPurgesItsCachedSocialCard(t *testing.T) {
 		t.Errorf("a successful purge must not report a residual window (body %v)", out)
 	}
 
-	// 3. And the origin really stopped serving it, on both hosts.
+	// 3. And the origin really stopped serving BOTH artefacts, on both hosts.
 	for _, host := range []string{fx.host, fx.customDomain} {
 		if r := publicServeWith(t, fx.pub, host, "/og/"+fx.slug+".png"); r.Code != http.StatusNotFound {
 			t.Errorf("GET /og/%s.png on %s after the draft transition = %d, want 404",
 				fx.slug, host, r.Code)
+		}
+		if r := publicServeWith(t, fx.pub, host, "/qr/"+fx.slug+".png"); r.Code != http.StatusNotFound {
+			t.Errorf("GET /qr/%s.png on %s after the draft transition = %d, want 404 — the origin "+
+				"must stop confirming the form exists at this slug", fx.slug, host, r.Code)
 		}
 	}
 }
@@ -231,7 +246,7 @@ func TestMakingAFormPrivatePurgesItsPublicCard(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("a published->private transition did not ask the edge to drop the public card (%d calls)", calls)
 	}
-	assertPrefixes(t, prefixes, fx.wantCardPrefixes())
+	assertPrefixes(t, prefixes, fx.wantArtefactPrefixes())
 	if out["edge"] != cdnpurge.StatusPurged {
 		t.Errorf("reply edge = %v, want %q (body %v)", out["edge"], cdnpurge.StatusPurged, out)
 	}
@@ -264,7 +279,7 @@ func TestTrashingAPublishedFormPurgesItsCachedCard(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("trashing a PUBLISHED form did not ask the edge to drop its card (%d calls)", calls)
 	}
-	assertPrefixes(t, prefixes, fx.wantCardPrefixes())
+	assertPrefixes(t, prefixes, fx.wantArtefactPrefixes())
 	if out["edge"] != cdnpurge.StatusPurged {
 		t.Errorf("reply edge = %v, want %q (body %s)", out["edge"], cdnpurge.StatusPurged, raw)
 	}
@@ -346,6 +361,51 @@ func TestOGImagePublicCacheControlIsBoundedNotADay(t *testing.T) {
 	cc := rec.Header().Get("Cache-Control")
 	if got := cacheMaxAgeSeconds(cc); got != cdnpurge.OGImageMaxAgeSeconds {
 		t.Fatalf("served Cache-Control = %q (max-age %d), want max-age %d",
+			cc, got, cdnpurge.OGImageMaxAgeSeconds)
+	}
+}
+
+// TestQRImagePublicCacheControlIsBoundedNotADay is the QR PNG's side of the same
+// rule (card t_b870d44b). The PNG is the artefact that kept answering
+// `cf-cache-status: HIT, age: 1566, cache-control: public, max-age=86400` for a
+// DRAFT form on prod on 2026-10-31, 26 minutes after the origin started 404ing.
+//
+// Two things are pinned together here:
+//
+//  1. the served public arm's lifetime is cdnpurge.QRImageMaxAgeSeconds and is not
+//     a day — the self-healing floor for a deployment that cannot purge (prod's
+//     state today: JF_CF_PURGE_TOKEN / JF_CF_PURGE_ZONE_ID empty); and
+//  2. that window is the SAME number the purge report calls `edge_max_age_s`
+//     (cdnpurge.OGImageMaxAgeSeconds, one constant), because ONE purge covers both
+//     artefacts and the reply names ONE residual window. A QR lifetime longer than
+//     the reported one would make the report understate the exposure.
+func TestQRImagePublicCacheControlIsBoundedNotADay(t *testing.T) {
+	if cdnpurge.QRImageMaxAgeSeconds != cdnpurge.OGImageMaxAgeSeconds {
+		t.Fatalf("cdnpurge.QRImageMaxAgeSeconds = %d, cdnpurge.OGImageMaxAgeSeconds = %d — one purge "+
+			"invalidates both artefacts and the reply reports ONE edge_max_age_s, so the two windows "+
+			"must be the same number", cdnpurge.QRImageMaxAgeSeconds, cdnpurge.OGImageMaxAgeSeconds)
+	}
+	if cdnpurge.QRImageMaxAgeSeconds >= 86400 {
+		t.Fatalf("cdnpurge.QRImageMaxAgeSeconds = %d — a day-long edge lifetime for a PNG that "+
+			"confirms an unpublished form exists is the defect this card fixes",
+			cdnpurge.QRImageMaxAgeSeconds)
+	}
+
+	// Measured on the real route, so the constant cannot be right while the
+	// handler sends something else.
+	fx := newRenameFixture(t, "it-qrcc-"+randHex(4))
+	rec := publicServeWith(t, fx.pub, fx.host, "/qr/"+fx.slug+".png")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("published /qr/%s.png = %d, want 200 (body %s)", fx.slug, rec.Code, shortBody(rec.Body.String()))
+	}
+	cc := rec.Header().Get("Cache-Control")
+	want := "public, max-age=" + strconv.Itoa(cdnpurge.QRImageMaxAgeSeconds)
+	if cc != want {
+		t.Fatalf("served /qr/%s.png Cache-Control = %q, want %q — the window the purge report names",
+			fx.slug, cc, want)
+	}
+	if got := cacheMaxAgeSeconds(cc); got != cdnpurge.OGImageMaxAgeSeconds {
+		t.Fatalf("served Cache-Control = %q (max-age %d), want the reported residual window %d",
 			cc, got, cdnpurge.OGImageMaxAgeSeconds)
 	}
 }

@@ -1257,9 +1257,10 @@ func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, act
 	id := r.PathValue("id")
 	// ONE read of the CURRENT row, before the write. It decides two things: the
 	// "payment form with nothing to sell" acknowledgement is a TRANSITION rule
-	// (dbstore.PublishNeedsAck), and whether the edge holds a publicly cached
-	// social card for this form depends on the status it is LEAVING
-	// (dbstore.OGImagePubliclyCached) — reading after the write would lose that.
+	// (dbstore.PublishNeedsAck), and whether the edge holds publicly cached
+	// artefacts (share card, QR PNG) for this form depends on the status it is
+	// LEAVING (dbstore.OGImagePubliclyCached) — reading after the write would lose
+	// that.
 	f, ferr := h.Forms.GetByID(r.Context(), actx.Account.ID, id)
 	if ferr != nil {
 		respondErr(w, r, ferr)
@@ -1300,17 +1301,19 @@ func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, act
 		writeErr(w, http.StatusBadRequest, "status mesti draft|private|published")
 		return
 	}
-	// THE EDGE. The row is written above; a card the CDN cached while this form
-	// was published or unlisted is dropped here, in the same request. Without
-	// this the card outlives the status change by its own freshness lifetime —
-	// measured on prod as a DRAFT form's card still answering
-	// `cf-cache-status: HIT, age: 1243` while the cache-busted origin answered
-	// 404 — naming the form's title, workspace and host (og_edge_purge.go).
+	// THE EDGE. The row is written above; the artefacts the CDN cached while this
+	// form was published or unlisted — its share card and its QR PNG — are
+	// dropped here, in the same request. Without this they outlive the status
+	// change by their own freshness lifetime: measured on prod as a DRAFT form's
+	// card still answering `cf-cache-status: HIT, age: 1243` while the
+	// cache-busted origin answered 404 (naming the form's title, workspace and
+	// host), and its QR PNG answering `HIT, age: 1566` while the origin answered
+	// 404 (confirming the form exists at that slug). See og_edge_purge.go.
 	var leaving []string
 	if dbstore.OGImagePubliclyCached(f.Status) && !dbstore.OGImagePubliclyCached(in.Status) {
 		leaving = []string{f.Slug}
 	}
-	edge := h.purgeLeftPublicOGCards(r.Context(), actx.Account, leaving)
+	edge := h.purgeLeftPublicArtefacts(r.Context(), actx.Account, leaving)
 	// Issue #92: audit form status change. A purge that did not happen is
 	// recorded too, so the activity log can tell a cleared edge from one that
 	// is still serving the old card.
@@ -1345,7 +1348,7 @@ func (h *RESTHandlers) deleteForm(w http.ResponseWriter, r *http.Request, actx *
 	if dbstore.OGImagePubliclyCached(f.Status) {
 		leaving = []string{f.Slug}
 	}
-	edge := h.purgeLeftPublicOGCards(r.Context(), actx.Account, leaving)
+	edge := h.purgeLeftPublicArtefacts(r.Context(), actx.Account, leaving)
 	// Issue #92: audit form delete.
 	audit := map[string]any{"form_id": id}
 	if edge.Status != "" {
@@ -1504,7 +1507,7 @@ func (h *RESTHandlers) purgeForm(w http.ResponseWriter, r *http.Request, actx *A
 	// is trashed with its status unchanged, so that card can be a public one from
 	// before the trash). Asked for unconditionally: a prefix that matches nothing
 	// costs nothing, and this is the one request that destroys the form for good.
-	edge := h.purgeLeftPublicOGCards(r.Context(), actx.Account, []string{f.Slug})
+	edge := h.purgeLeftPublicArtefacts(r.Context(), actx.Account, []string{f.Slug})
 	respond(w, http.StatusOK, withEdgeFields(
 		map[string]any{"status": "purged", "form_id": formID, "slug": f.Slug}, edge))
 }
@@ -1648,7 +1651,7 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 	audit := map[string]any{
 		"action": in.Action, "ids": ids, "updated": updated, "skipped": len(skipped),
 	}
-	edge := h.purgeLeftPublicOGCards(r.Context(), actx.Account, leaving)
+	edge := h.purgeLeftPublicArtefacts(r.Context(), actx.Account, leaving)
 	if edge.Status != "" {
 		audit["edge"] = edge.Status
 	}

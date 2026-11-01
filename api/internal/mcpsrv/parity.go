@@ -973,7 +973,7 @@ func (s *Server) publishFormMCP(
 	if dbstore.OGImagePubliclyCached(f.Status) && !dbstore.OGImagePubliclyCached(status) {
 		leaving = []string{f.Slug}
 	}
-	edge := s.purgeLeftPublicOGCards(ctx, acc, leaving)
+	edge := s.purgeLeftPublicArtefacts(ctx, acc, leaving)
 	return nil, withEdgeFields(map[string]any{"status": status, "form_id": in.FormID}, edge), nil
 }
 
@@ -1028,7 +1028,7 @@ func (s *Server) deleteFormMCP(
 	if dbstore.OGImagePubliclyCached(f.Status) {
 		leaving = []string{f.Slug}
 	}
-	edge := s.purgeLeftPublicOGCards(ctx, acc, leaving)
+	edge := s.purgeLeftPublicArtefacts(ctx, acc, leaving)
 	return nil, withEdgeFields(map[string]any{"status": "unpublished", "form_id": in.FormID}, edge), nil
 }
 
@@ -1054,7 +1054,7 @@ func (s *Server) deleteFormMCPSoft(
 	if dbstore.OGImagePubliclyCached(f.Status) {
 		leaving = []string{f.Slug}
 	}
-	edge := s.purgeLeftPublicOGCards(ctx, acc, leaving)
+	edge := s.purgeLeftPublicArtefacts(ctx, acc, leaving)
 	return nil, withEdgeFields(map[string]any{"status": "deleted", "form_id": in.FormID}, edge), nil
 }
 
@@ -1157,12 +1157,12 @@ func (s *Server) bulkFormsMCP(
 	for _, id := range skipped {
 		skippedSet[id] = true
 	}
-	// Social cards this action invalidates, as absolute URLs, collected while the
-	// loop already has each form's account and row: a bulk draft/delete can span
-	// several workspaces (issue #307), so the hosts differ per id, and the purge
-	// itself is ONE call at the end (see og_edge_purge.go). A form's cached card
-	// only needs dropping when it is LEAVING a publicly-cached status, which is a
-	// property of the row BEFORE the write.
+	// Public artefacts this action invalidates, as absolute URLs, collected while
+	// the loop already has each form's account and row: a bulk draft/delete can
+	// span several workspaces (issue #307), so the hosts differ per id, and the
+	// purge itself is ONE call at the end (see og_edge_purge.go). A form's cached
+	// card and QR PNG only need dropping when it is LEAVING a publicly-cached
+	// status, which is a property of the row BEFORE the write.
 	var cardURLs []string
 	hostCache := make(map[string][]string, len(ids))
 	for _, t := range targets {
@@ -1175,10 +1175,10 @@ func (s *Server) bulkFormsMCP(
 			if dbstore.OGImagePubliclyCached(f.Status) {
 				hosts, ok := hostCache[acc]
 				if !ok {
-					hosts = s.ogCardHosts(ctx, acc)
+					hosts = s.publicArtefactHosts(ctx, acc)
 					hostCache[acc] = hosts
 				}
-				cardURLs = append(cardURLs, ogCardURLsForHosts(hosts, []string{f.Slug})...)
+				cardURLs = append(cardURLs, artefactURLsForHosts(hosts, []string{f.Slug})...)
 			}
 		}
 		var e error
@@ -1224,10 +1224,10 @@ func (s *Server) bulkFormsMCP(
 	}
 	if len(cardURLs) > 0 {
 		// The rows are written above; the edge copies go here, in ONE request for
-		// every affected card (cdnpurge chunks anything past its per-request cap).
+		// every affected artefact (cdnpurge chunks anything past its per-request cap).
 		edge := cdnpurge.PurgeObjectURLs(ctx, cardURLs)
 		if edge.Err != nil {
-			slog.Warn("mcp_bulk_forms_og_edge_purge", "err", edge.Err, "status", edge.Status, "urls", len(cardURLs))
+			slog.Warn("mcp_bulk_forms_edge_purge", "err", edge.Err, "status", edge.Status, "urls", len(cardURLs))
 		}
 		out = withEdgeFields(out, edge)
 	}

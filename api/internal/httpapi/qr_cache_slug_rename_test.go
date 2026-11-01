@@ -1,7 +1,7 @@
 package httpapi
 
 // A public response may only be cached when its bytes are a function of its
-// cache key. /qr/{slug}.png declared `public, max-age=86400` on BOTH resolution
+// cache key. /qr/{slug}.png declared a day-long public TTL on BOTH resolution
 // arms, but the bytes it serves encode the form's CURRENT slug (formPublicURL
 // reads f.Slug): through the rename fallback (findPublicForm) the requested path
 // and the encoded URL name DIFFERENT slugs, so a CDN entry created under the old
@@ -34,6 +34,7 @@ package httpapi
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -41,8 +42,20 @@ import (
 
 	qrcode "github.com/skip2/go-qrcode"
 
+	"github.com/wzul/jomform/api/internal/cdnpurge"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
+
+// qrPublicCacheControl is the EXACT public directive the live-slug arm must
+// declare. It is built from the window cdnpurge states beside the purge, which is
+// also the `edge_max_age_s` a purge that could NOT run reports: one number, so the
+// header a CDN obeys can never outlive the staleness the reply admits to. The old
+// 86400 was a day — long enough for a draft form's PNG to stay published at the
+// edge (measured on prod 2026-10-31: `cf-cache-status: HIT, age: 1566`) after the
+// origin answered 404.
+func qrPublicCacheControl() string {
+	return fmt.Sprintf("public, max-age=%d", cdnpurge.OGImageMaxAgeSeconds)
+}
 
 // qrPublicURL is the canonical public URL a form serving slug has on host, built
 // exactly as formPublicURL builds it. The scheme comes from the package-global
@@ -108,13 +121,15 @@ func TestQRPngCacheFollowsTheFormsLiveSlug(t *testing.T) {
 			liveTarget := qrPublicURL(host, newSlug, query)
 
 			// 1. The form's OWN slug: the bytes are a function of the cache key,
-			//    so the 24h public cache stays — a per-table QR is fetched on
-			//    every table stand render and must not hit the origin each time.
+			//    so the public cache stays — a table stand render must not hit the
+			//    origin every time, and the window is the same bounded one the
+			//    purge report names (5 minutes), not a day.
 			live := qrGet(t, fx.pub, host, "/qr/"+newSlug+".png?"+query)
 			assertQRPngEncodes(t, live.Body.Bytes(), liveTarget)
-			if cc := live.Header().Get("Cache-Control"); !strings.Contains(cc, "public") || !strings.Contains(cc, "max-age=86400") {
-				t.Errorf("GET /qr/%s.png Cache-Control = %q, want the 24h public cache kept for the live slug "+
-					"(its bytes ARE a function of its own key)", newSlug, cc)
+			if cc := live.Header().Get("Cache-Control"); cc != qrPublicCacheControl() {
+				t.Errorf("GET /qr/%s.png Cache-Control = %q, want %q — the live slug keeps the public "+
+					"cache (its bytes ARE a function of its own key), bounded to the window the edge "+
+					"purge reports so a stale copy cannot outlive the origin's 404", newSlug, cc, qrPublicCacheControl())
 			}
 
 			// 2. The rename fallback arm — the carded defect. Its bytes encode the
@@ -176,12 +191,13 @@ func TestQRPngCacheAfterTwoRenamesFollowsTheCurrentSlug(t *testing.T) {
 		}
 	}
 
-	// The live slug itself keeps the long cache, so the fix does not turn the
+	// The live slug itself keeps the public cache, so the fix does not turn the
 	// endpoint into an uncacheable one.
 	rec := qrGet(t, fx.pub, fx.host, "/qr/"+c+".png?"+query)
 	assertQRPngEncodes(t, rec.Body.Bytes(), liveTarget)
-	if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "max-age=86400") {
-		t.Errorf("GET /qr/%s.png (the live slug) Cache-Control = %q, want the 24h public cache", c, cc)
+	if cc := rec.Header().Get("Cache-Control"); cc != qrPublicCacheControl() {
+		t.Errorf("GET /qr/%s.png (the live slug) Cache-Control = %q, want %q — the public cache kept, "+
+			"bounded to the window the purge reports", c, cc, qrPublicCacheControl())
 	}
 
 	// A second table is a separate cache key with the same rule: the fallback arm
@@ -222,8 +238,8 @@ func TestQRPngCacheOnAClaimedSlugIsTheClaimantsOwnKey(t *testing.T) {
 	// Live-first resolution: the claimant is the form this URL belongs to now, so
 	// the code encodes the requested slug itself — its own key — and is cacheable.
 	assertQRPngEncodes(t, rec.Body.Bytes(), qrPublicURL(fx.host, oldSlug, query))
-	if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "max-age=86400") {
-		t.Errorf("GET /qr/%s.png after a later form claimed it Cache-Control = %q, want the public cache: "+
-			"the requested slug IS a live slug again, so the bytes are a function of this key", oldSlug, cc)
+	if cc := rec.Header().Get("Cache-Control"); cc != qrPublicCacheControl() {
+		t.Errorf("GET /qr/%s.png after a later form claimed it Cache-Control = %q, want %q — the requested "+
+			"slug IS a live slug again, so the bytes are a function of this key", oldSlug, cc, qrPublicCacheControl())
 	}
 }

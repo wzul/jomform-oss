@@ -15,6 +15,7 @@ package httpapi
 
 import (
 	"encoding/base64"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 
 	qrcode "github.com/skip2/go-qrcode"
 
+	"github.com/wzul/jomform/api/internal/cdnpurge"
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
@@ -122,7 +124,18 @@ func (h *PublicHandlers) handleQRImage(w http.ResponseWriter, r *http.Request) {
 	// either: it was released only because this caller holds the form's unlock
 	// cookie, and a CDN copy would serve it to the next caller, who never
 	// entered the password (same rule as the unlocked og:image).
-	cacheControl := "public, max-age=86400"
+	//
+	// THE PUBLIC ARM'S LIFETIME is bounded, not a day (issue measured on prod
+	// 2026-10-31: a draft form's PNG kept answering `cf-cache-status: HIT` for
+	// 26 minutes after the origin started 404ing, and would have for a day
+	// under the old 86400). It is the freshness window cdnpurge names beside the
+	// purge — the same one the share card declares — because one purge drops
+	// both artefacts and the reply reports ONE residual window
+	// (`edge_max_age_s`); a longer value here would make that report a lie. What
+	// closes the window outright is the purge on the status change
+	// (httpapi purgeLeftPublicArtefacts); this bound is what remains when no CDN
+	// credential is configured, which is prod's state today.
+	cacheControl := fmt.Sprintf("public, max-age=%d", cdnpurge.QRImageMaxAgeSeconds)
 	if private {
 		cacheControl = "private, no-store"
 	} else if f.Slug != slug {

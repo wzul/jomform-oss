@@ -127,13 +127,12 @@ test("the copies the hop has always made still happen", () => {
 });
 
 test("nothing else the API sends is relayed (this is a decision, not a pass-through)", () => {
-  // X-Request-ID (middleware/middleware.go), and the CSP / frame / cache headers
-  // the API puts on the HTML it renders ITSELF, are for the API's own edge. A
-  // wholesale copy would hand the browser promises this hop never meant to make.
+  // X-Request-ID (middleware/middleware.go), and the CSP / frame headers the API
+  // puts on the HTML it renders ITSELF, are for the API's own edge. A wholesale
+  // copy would hand the browser promises this hop never meant to make.
   const out = relay(
     new Headers({
       "x-request-id": "0f1e2d3c",
-      "cache-control": "public, max-age=86400",
       "content-security-policy": "frame-ancestors 'none'",
       "x-frame-options": "DENY",
       "cross-origin-resource-policy": "same-origin",
@@ -147,10 +146,35 @@ test("nothing else the API sends is relayed (this is a decision, not a pass-thro
   });
 });
 
-test("the relayed set is exactly these four, named", () => {
+test("the merchant stand's `private, no-store` survives the dashboard hop", () => {
+  // The API's authed stand route says `private, no-store` because the document
+  // names an UNPUBLISHED form (api/internal/httpapi/rest_qr_stand.go), and the
+  // dashboard's "Print stand" anchor points at /api/rest/forms/{id}/qr-stand —
+  // THIS hop. Measured on prod before this entry existed: the API host sent
+  // `private, no-store` and the dashboard path sent no cache-control at all.
+  const out = relay(
+    new Headers({
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "private, no-store",
+    }),
+  );
+
+  assert.equal(out.get("cache-control"), "private, no-store");
+  assert.equal(out.get("content-type"), "text/html; charset=utf-8");
+});
+
+test("a response the API marked cacheable keeps exactly its own directive", () => {
+  // Relayed VERBATIM: this hop does not re-derive a lifetime, and it does not
+  // upgrade a private copy to a shared one.
+  const out = relay(new Headers({ "cache-control": "public, max-age=300" }));
+  assert.equal(out.get("cache-control"), "public, max-age=300");
+});
+
+test("the relayed set is exactly these five, named", () => {
   // Named, not counted: dropping one (the defect) or adding one (a promise nobody
   // decided on) is a change to what every dashboard caller is told.
   assert.deepEqual([...RELAYED_RESPONSE_HEADERS].sort(), [
+    "cache-control",
     "content-type",
     "location",
     "retry-after",

@@ -23,10 +23,11 @@
 // wholesale would be a larger promise than this hop makes, and a different one.
 // The API also writes headers for its own edge — X-Request-ID
 // (middleware/middleware.go), the CSP / X-Frame-Options it puts on the HTML it
-// renders itself, Cache-Control on its own media — and those are not this proxy's
-// to speak for. So what the browser is told is DECLARED here, once, and the hop
-// copies exactly this list. Widening the list is a decision to take here, with
-// the reason written at the entry.
+// renders itself — and those are not this proxy's to speak for. So what the
+// browser is told is DECLARED here, once, and the hop copies exactly this list.
+// Widening the list is a decision to take here, with the reason written at the
+// entry — `cache-control` was added that way for the merchant's printable stand,
+// which the dashboard opens through this hop (card t_b870d44b).
 //
 // The names are lower-case because Headers is case-insensitive and one spelling
 // removes the "which case did the other half use" question; the cross-language pin
@@ -52,6 +53,23 @@ export const RELAYED_RESPONSE_HEADERS = [
   // re-deriving either here would be a second clock deciding what the API has
   // already decided.
   "retry-after",
+  // WHETHER THIS RESPONSE MAY BE STORED — widened deliberately (card t_b870d44b).
+  // The API marks the merchant's own printable stand
+  // (`GET /v1/rest/forms/{id}/qr-stand`, api/internal/httpapi/rest_qr_stand.go)
+  // `private, no-store`, because that document names and diagrams a form the
+  // merchant has not published yet. The dashboard's "Print stand" action opens
+  // exactly that route THROUGH this hop, so dropping the header made the browser
+  // path promise less than the API does: measured on prod, the same session on
+  // the same draft form got `cache-control: private, no-store` from the API host
+  // and no cache-control at all from https://jomform.com/api/rest/forms/{id}/qr-stand
+  // — the URL the dashboard's anchor carries. Relayed verbatim, and still never
+  // invented: a response the API left without one stays without one. Every
+  // Cache-Control the API sets on a route behind this hop is a RESTRICTION it
+  // already chose (`private, no-store` on the stand, `no-store` on the menu,
+  // `no-cache` on the realtime stream), so copying it can only tighten this hop;
+  // the public artefacts the API caches for five minutes (`/og`, `/qr`, `/media`,
+  // its own HTML) are served on their own hosts and do not cross it.
+  "cache-control",
 ] as const;
 
 /**

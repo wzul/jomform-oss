@@ -198,9 +198,22 @@ func TestMCPUnpublishPurgesTheCachedSocialCard(t *testing.T) {
 	if auth != "Bearer test-token" {
 		t.Errorf("purge Authorization = %q, want the configured token", auth)
 	}
-	want := "https://" + fx.wsHost + "/og/" + fx.slug + ".png"
-	if len(prefixes) != 1 || prefixes[0] != want {
-		t.Fatalf("purged prefixes = %v, want exactly [%q]", prefixes, want)
+	want := []string{
+		"https://" + fx.wsHost + "/og/" + fx.slug + ".png",
+		"https://" + fx.wsHost + "/qr/" + fx.slug + ".png",
+	}
+	if len(prefixes) != len(want) {
+		t.Fatalf("purged prefixes = %v, want exactly %v (the card AND the QR PNG)", prefixes, want)
+	}
+	seen := make(map[string]bool, len(prefixes))
+	for _, p := range prefixes {
+		seen[p] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			t.Errorf("the purge never named %q (prefixes %v) — unpublishing must withdraw the QR "+
+				"PNG too, not just the share card: the PNG confirms the form exists at this slug", w, prefixes)
+		}
 	}
 	if out["edge"] != cdnpurge.StatusPurged {
 		t.Errorf("tool result edge = %v, want %q (result %v)", out["edge"], cdnpurge.StatusPurged, out)

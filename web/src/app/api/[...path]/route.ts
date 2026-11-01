@@ -58,10 +58,12 @@ async function proxy(req: NextRequest) {
   const r = await fetch(path, { ...init, redirect: "manual" });
   // Relay the response headers the browser needs, from ONE declared list
   // (lib/proxyResponseHeaders.ts): the body's Content-Type, the redirect's
-  // Location, every Set-Cookie, and the API's Retry-After — the header the login
+  // Location, every Set-Cookie, the API's Retry-After — the header the login
   // lockout (429 + `Retry-After: 900`, auth.go) and the per-IP throttle
   // (middleware/ratelimit.go) state their backoff in, which this hop used to
-  // drop, so a locked-out dashboard could not tell when its window clears.
+  // drop, so a locked-out dashboard could not tell when its window clears — and
+  // the API's Cache-Control, which the merchant's printable stand sets to
+  // `private, no-store` and this hop used to drop the same way.
   // Built, not the upstream set passed through: see the module for why.
   const respHeaders = new Headers();
   relayResponseHeaders(r.headers, respHeaders);

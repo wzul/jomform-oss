@@ -54,6 +54,53 @@ func TestCardURLIsTheServedPathAsAPrefix(t *testing.T) {
 	}
 }
 
+// TestQRImageURLIsTheServedPathAsAPrefix pins the QR PNG's URL the same way the
+// card's is pinned, and pins ArtefactURLs as "the card AND the QR": the purge
+// learns the URL space from this package only, so a path that drifts from the
+// handler (httpapi /qr/{slug}.png) would ask the CDN to drop an entry nobody holds
+// while the real one keeps serving the form's existence.
+func TestQRImageURLIsTheServedPathAsAPrefix(t *testing.T) {
+	if got, want := QRImagePath("tuition-class-registration"), "/qr/tuition-class-registration.png"; got != want {
+		t.Fatalf("QRImagePath = %q, want %q", got, want)
+	}
+	if got, want := QRImageURL("wan.jomform.com", "tuition-class-registration"),
+		"https://wan.jomform.com/qr/tuition-class-registration.png"; got != want {
+		t.Fatalf("QRImageURL = %q, want %q", got, want)
+	}
+	if got := QRImageURL("", "x"); got != "" {
+		t.Errorf("QRImageURL(\"\", x) = %q, want \"\"", got)
+	}
+	if got := QRImageURL("abc.jomform.com", " "); got != "" {
+		t.Errorf("QRImageURL(host, blank slug) = %q, want \"\"", got)
+	}
+
+	// The per-table codes are query variants of the same path: a prefix matches
+	// them all, so the purge never has to enumerate table numbers.
+	if got, want := QRImagePath("menu"), "/qr/menu.png"; got != want {
+		t.Errorf("QRImagePath(menu) = %q, want %q (no query string: the prefix covers ?table=N)", got, want)
+	}
+
+	got := ArtefactURLs("wan.jomform.com", "menu")
+	want := []string{
+		"https://wan.jomform.com/og/menu.png",
+		"https://wan.jomform.com/qr/menu.png",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ArtefactURLs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ArtefactURLs[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if got := ArtefactURLs("", "menu"); len(got) != 0 {
+		t.Errorf("ArtefactURLs(\"\", menu) = %v, want nothing (an unresolvable host is not a purge)", got)
+	}
+	if got := ArtefactURLs("wan.jomform.com", ""); len(got) != 0 {
+		t.Errorf("ArtefactURLs(host, \"\") = %v, want nothing", got)
+	}
+}
+
 // TestWildcardPurgeHostCoversTenantCards: a card lives on a per-workspace host, so
 // the purge zone cannot list them one by one. An exact host list dropped every card
 // purge as out of zone (silently — the form's status still changed), which is the
@@ -133,12 +180,20 @@ func TestPurgeChunksPastThePerRequestCap(t *testing.T) {
 	}
 }
 
-// TestOGFieldsNamesTheWindowWhenNoPurgeHappened: `edge: not_configured` alone
-// leaves an operator guessing how long the old card keeps being served, and the
-// number IS the answer. A successful purge must not claim a residual window, and
-// a zero Result (nothing was invalidated) must claim nothing at all.
-func TestOGFieldsNamesTheWindowWhenNoPurgeHappened(t *testing.T) {
-	purged := Result{Status: StatusPurged, URLs: []string{"https://a/og/x.png"}}.OGFields()
+// TestArtefactFieldsNamesTheWindowWhenNoPurgeHappened: `edge: not_configured`
+// alone leaves an operator guessing how long the old artefacts keep being served,
+// and the number IS the answer. A successful purge must not claim a residual
+// window, and a zero Result (nothing was invalidated) must claim nothing at all.
+//
+// The window is the one BOTH artefacts declare (the card's and the QR PNG's are
+// the same constant), because one purge drops both and the reply carries one
+// number.
+func TestArtefactFieldsNamesTheWindowWhenNoPurgeHappened(t *testing.T) {
+	if QRImageMaxAgeSeconds != OGImageMaxAgeSeconds {
+		t.Fatalf("QRImageMaxAgeSeconds = %d, OGImageMaxAgeSeconds = %d — one purge, one reported window",
+			QRImageMaxAgeSeconds, OGImageMaxAgeSeconds)
+	}
+	purged := Result{Status: StatusPurged, URLs: []string{"https://a/og/x.png"}}.ArtefactFields()
 	if purged["edge"] != StatusPurged {
 		t.Errorf("purged edge = %v, want %q", purged["edge"], StatusPurged)
 	}
@@ -146,13 +201,13 @@ func TestOGFieldsNamesTheWindowWhenNoPurgeHappened(t *testing.T) {
 		t.Errorf("a successful purge reported a residual window: %v", purged)
 	}
 	for _, status := range []string{StatusNotConfigured, StatusOutOfZone, StatusFailed} {
-		f := Result{Status: status}.OGFields()
+		f := Result{Status: status}.ArtefactFields()
 		got, ok := f["edge_max_age_s"].(int)
 		if !ok || got != OGImageMaxAgeSeconds {
 			t.Errorf("%s: edge_max_age_s = %v, want %d", status, f["edge_max_age_s"], OGImageMaxAgeSeconds)
 		}
 	}
-	if f := (Result{}).OGFields(); f != nil {
+	if f := (Result{}).ArtefactFields(); f != nil {
 		t.Errorf("a zero Result rendered %v, want nil — nothing was invalidated, so the reply "+
 			"must not claim an edge action", f)
 	}

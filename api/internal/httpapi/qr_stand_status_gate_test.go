@@ -59,6 +59,14 @@ import (
 // loudly instead of passing on an empty match.
 const qrFixtureTitle = "Western menu"
 
+// privateNoStore is the EXACT Cache-Control every gated arm of these artefacts
+// must advertise: the stand of a private form once unlocked, the PNG of a private
+// form once unlocked, and the merchant's authed stand. It is written as a literal
+// here on purpose — reading the production constant would let a change to that
+// constant pass this guard, and the whole point is to notice the value being
+// lost or replaced (an absent header used to satisfy the old "not public" check).
+const privateNoStore = "private, no-store"
+
 // qrStandPath is the public printable stand for slug, with the optional table
 // folded into the encoded URL exactly as the dashboard passes it.
 func qrStandPath(slug, table string) string {
@@ -225,10 +233,15 @@ func TestQRStandIs404ForAPrivateFormUntilUnlocked(t *testing.T) {
 	}
 	// A stand that was gated behind a password must never be handed to a shared
 	// cache: with a public TTL an edge would serve those bytes to the next caller,
-	// who never unlocked the form.
-	if cc := unlocked.Header().Get("Cache-Control"); strings.Contains(cc, "public") {
-		t.Errorf("the unlocked stand of a PRIVATE form is marked publicly cacheable (Cache-Control %q): "+
-			"a CDN would then serve it to callers who never entered the password", cc)
+	// who never unlocked the form. The EXACT value is asserted, not "not public":
+	// an absent or empty Cache-Control satisfies `!strings.Contains(cc, "public")`
+	// while promising nothing, which is precisely how the header was lost on the
+	// browser hop (card t_b870d44b, web/src/lib/proxyResponseHeaders.ts).
+	if cc := unlocked.Header().Get("Cache-Control"); cc != privateNoStore {
+		t.Errorf("the unlocked stand of a PRIVATE form advertises Cache-Control %q, want %q — the "+
+			"route must SAY it is unshareable, not merely fail to call it public (an absent header "+
+			"would pass a `not public` check and hand the unlocked stand to any cache that defaults "+
+			"to storing)", cc, privateNoStore)
 	}
 
 	// The PNG follows the same rule, for the same reason (existence) plus the
@@ -242,8 +255,9 @@ func TestQRStandIs404ForAPrivateFormUntilUnlocked(t *testing.T) {
 	if pngUnlocked.Code != http.StatusOK {
 		t.Fatalf("GET /qr/%s.png with this form's unlock cookie = %d, want 200", fx.slug, pngUnlocked.Code)
 	}
-	if cc := pngUnlocked.Header().Get("Cache-Control"); strings.Contains(cc, "public") {
-		t.Errorf("the unlocked PNG of a PRIVATE form is marked publicly cacheable (Cache-Control %q)", cc)
+	if cc := pngUnlocked.Header().Get("Cache-Control"); cc != privateNoStore {
+		t.Errorf("the unlocked PNG of a PRIVATE form advertises Cache-Control %q, want %q — a CDN copy "+
+			"would hand the code to callers who never entered the password", cc, privateNoStore)
 	}
 }
 
@@ -333,7 +347,10 @@ func TestQRStandAuthedRouteServesWhatThePublicRouteRefuses(t *testing.T) {
 	assertStandQREncodes(t, body, formURL+"?table=8")
 
 	// An authed document names an unpublished form: never handed to a shared cache.
-	if cc := rec.Header().Get("Cache-Control"); strings.Contains(cc, "public") {
-		t.Errorf("the authed stand is marked publicly cacheable (Cache-Control %q)", cc)
+	// The exact value, for the same reason as the unlocked arms above — and it is
+	// the header the dashboard's own hop must relay (web/src/lib/proxyResponseHeaders.ts).
+	if cc := rec.Header().Get("Cache-Control"); cc != privateNoStore {
+		t.Errorf("the authed stand advertises Cache-Control %q, want %q — the document names an "+
+			"unpublished form, so the route must SAY it is unshareable", cc, privateNoStore)
 	}
 }

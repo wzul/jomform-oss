@@ -33,13 +33,18 @@
 //     AGREEMENT between the two languages, which neither of those can see.
 //
 //  2. Requires the hop to relay it — dropping `retry-after` from the declared
-//     list is RED here, which is exactly the shipped defect.
+//     list is RED here, which is exactly the shipped defect. The same arm covers
+//     `cache-control`: the API marks the merchant's authed stand `private,
+//     no-store` (internal/httpapi/rest_qr_stand.go) and the dashboard opens that
+//     route through this hop, so dropping it there made the browser path promise
+//     less than the API does (card t_b870d44b). That writer is DERIVED from the
+//     API's own source too, so the guarded set cannot quietly outlive it.
 //
 //  3. Requires the declared set to be EXACTLY what this proxy owes the browser:
 //     the three transport headers it has always relayed (content-type, location,
 //     set-cookie — the reasons are recorded at each entry of the web list and
-//     restated in transportResponseHeaders below) plus the derived backoff
-//     header. An entry the API does not owe a browser fails too: a response
+//     restated in transportResponseHeaders below) plus the two derived headers.
+//     An entry the API does not owe a browser fails too: a response
 //     header relayed on nobody's decision is how a second, weaker promise about
 //     this hop appears (the same "a trust input nobody decided on" arm the
 //     client-address pin carries).
@@ -61,6 +66,10 @@ import (
 // retryAfterWrite matches a Retry-After the API sets on its own response:
 // w.Header().Set("Retry-After", auth.LoginLockoutRetryAfter).
 var retryAfterWrite = regexp.MustCompile(`Header\(\)\.Set\(\s*"Retry-After"`)
+
+// cacheControlWrite matches a Cache-Control the API sets on its own response:
+// w.Header().Set("Cache-Control", "private, no-store").
+var cacheControlWrite = regexp.MustCompile(`Header\(\)\.Set\(\s*"Cache-Control"`)
 
 // The one declaration the hop's relayed response-header set is read from
 // (web/src/lib/proxyResponseHeaders.ts). Requiring the exact shape is
@@ -100,8 +109,21 @@ func TestDashboardProxyRelaysTheAPIsRetryAfterHeader(t *testing.T) {
 		}
 	}
 
-	// 2. What the hop owes a browser: those three, plus the derived backoff header.
-	owed := map[string]string{"retry-after": "the API's own backoff for a 429 — the login lockout and the per-IP throttle both state it, and a dashboard client can only obey the value the server chose if it receives the header"}
+	// 2. What the hop owes a browser: those three, plus the two headers derived
+	//    from the API's own source.
+	cacheWriters := apiHeaderWriters(t, cacheControlWrite)
+	t.Logf("the API sets Cache-Control in: %v", cacheWriters)
+	if !contains(cacheWriters, "internal/httpapi/rest_qr_stand.go") {
+		t.Fatalf("derived %v as the files that set Cache-Control — expected internal/httpapi/rest_qr_stand.go "+
+			"among them: that route marks the merchant's authed printable stand `private, no-store` "+
+			"because it names an unpublished form, and it is the response this hop carries to the "+
+			"browser. Either the writer moved (re-point this guard) or the header is gone, and the "+
+			"relayed set below would then be promising something no route states", cacheWriters)
+	}
+	owed := map[string]string{
+		"retry-after":   "the API's own backoff for a 429 — the login lockout and the per-IP throttle both state it, and a dashboard client can only obey the value the server chose if it receives the header",
+		"cache-control": "the API's own storage directive for the response — the merchant's authed stand (internal/httpapi/rest_qr_stand.go) is `private, no-store` because it names an unpublished form, and the dashboard's \"Print stand\" anchor opens that route THROUGH this hop; dropping it made the browser path promise less than the API does (measured on prod: `private, no-store` from the API host, no cache-control at all from https://jomform.com/api/rest/forms/{id}/qr-stand)",
+	}
 	for header, reason := range transportResponseHeaders {
 		owed[header] = reason
 	}
@@ -195,10 +217,17 @@ func webRelayedResponseHeaders(t *testing.T) []string {
 }
 
 // apiRetryAfterWriters lists the non-test .go files under internal/httpapi that
-// set a Retry-After on a response, as paths relative to the api module root. The
+// set a Retry-After on a response, as paths relative to the api module root.
+func apiRetryAfterWriters(t *testing.T) []string {
+	t.Helper()
+	return apiHeaderWriters(t, retryAfterWrite)
+}
+
+// apiHeaderWriters lists the non-test .go files under internal/httpapi that set a
+// response header matching `write`, as paths relative to the api module root. The
 // file list comes from git (apiSourceFiles), so a generated artefact is never
 // judged and a new writer cannot be missed.
-func apiRetryAfterWriters(t *testing.T) []string {
+func apiHeaderWriters(t *testing.T, write *regexp.Regexp) []string {
 	t.Helper()
 	root := apiSourceRoot(t)
 
@@ -216,7 +245,7 @@ func apiRetryAfterWriters(t *testing.T) []string {
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
-		if retryAfterWrite.Match(src) {
+		if write.Match(src) {
 			out = append(out, rel)
 		}
 	}
