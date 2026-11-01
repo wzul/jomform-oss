@@ -1084,9 +1084,14 @@ func (s *Server) exportSalesCSV(ctx context.Context, _ *mcp.CallToolRequest, in 
 	}
 	// Issue #518: mirror the REST export's refund columns so an agent gets the
 	// same partial-refund picture from the MCP CSV.
+	//
+	// Issue #185: the money columns are in the SALE's own currency, so the
+	// `_rm` suffix was a wrong label for a USD sale and the file carried nothing
+	// that named the money at all. Same columns as the REST export: `currency`
+	// beside renamed `total` / `refunded` / `outstanding`.
 	header := []string{"ref_code", "status", "payment_method", "buyer_name", "buyer_email",
-		"total_rm", "created_at", "purchase_id", "table_number",
-		"refunded_rm", "outstanding_rm", "refund_status"}
+		"currency", "total", "created_at", "purchase_id", "table_number",
+		"refunded", "outstanding", "refund_status"}
 	keys, haveSubs := recordAnswerKeys(records)
 	if haveSubs {
 		header = append([]string{"record_type", "submission_id"}, header...)
@@ -1099,6 +1104,7 @@ func (s *Server) exportSalesCSV(ctx context.Context, _ *mcp.CallToolRequest, in 
 			row := []string{
 				sl.RefCode, sl.Status, sl.PaymentMethod,
 				csvguard.Cell(sl.Client.FullName), csvguard.Cell(sl.Client.Email),
+				sl.CurrencyOrMYR(),
 				fmt.Sprintf("%.2f", float64(sl.TotalSen)/100),
 				sl.CreatedAt.UTC().Format("2006-01-02 15:04:05"), sl.ChipPurchaseID,
 				csvguard.Cell(sl.TableNumber),
@@ -1122,6 +1128,7 @@ func (s *Server) exportSalesCSV(ctx context.Context, _ *mcp.CallToolRequest, in 
 		row := []string{
 			sub.ID, "response", "",
 			csvguard.Cell(subStrField(sub, "full_name")), csvguard.Cell(subStrField(sub, "email")),
+			"", // a response has no money and therefore no currency
 			"0.00",
 			sub.CreatedAt.UTC().Format("2006-01-02 15:04:05"), "", "",
 			"0.00", "0.00", dbstore.RefundNone,

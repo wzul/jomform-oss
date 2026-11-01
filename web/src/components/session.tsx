@@ -63,7 +63,15 @@ export type WorkspaceRow = { id: string; name: string; slug: string; role?: stri
 // Landing-data sections of the bundle, consumed by the dashboard page.
 export type BundleLanding = {
   products?: unknown[];
-  summary?: { counts: Record<string, number>; revenue_sen: number } | null;
+  // Issue #185: revenue_by_currency is the NET revenue split by the currency
+  // each sale was recorded in; `currency` is the scope's own currency, used to
+  // label a figure that has no money behind it yet. Both are additive.
+  summary?: {
+    counts: Record<string, number>;
+    revenue_sen: number;
+    revenue_by_currency?: Record<string, number>;
+    currency?: string;
+  } | null;
   sales?: { items: unknown[]; page: number; limit: number; total: number } | null;
   form_analytics?: unknown[];
   product_analytics?: unknown[];

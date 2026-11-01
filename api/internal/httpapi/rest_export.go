@@ -106,11 +106,20 @@ func writeRecordsCSV(w http.ResponseWriter, records []*dbstore.Record, accountSl
 	// exports the same columns.
 	sort.Strings(keys)
 
-	// Issue #518: refunded_rm / outstanding_rm / refund_status make a partial
-	// refund visible in the export instead of the sale reading as fully paid.
+	// Issue #518: refunded / outstanding / refund_status make a partial refund
+	// visible in the export instead of the sale reading as fully paid.
+	//
+	// Issue #185: the money columns are in the SALE's own currency, so the
+	// old `total_rm` / `refunded_rm` / `outstanding_rm` names labelled a USD sale
+	// as RM, and a workspace whose history spans currencies gave a reader no way
+	// to tell two 24.90 values apart. The columns are now `total`, `refunded`,
+	// `outstanding` (still decimal major units), with an explicit `currency`
+	// column beside them. The rename is deliberate: keeping the `_rm` suffix
+	// would keep stating the wrong money, and this export is produced by the
+	// merchant's own download button, not a versioned API contract.
 	header := []string{"ref_code", "status", "payment_method", "buyer_name", "buyer_email",
-		"total_rm", "created_at", "purchase_id", "table_number",
-		"refunded_rm", "outstanding_rm", "refund_status"}
+		"currency", "total", "created_at", "purchase_id", "table_number",
+		"refunded", "outstanding", "refund_status"}
 	if haveSubs {
 		// record_type + submission_id only when the set is actually mixed: a
 		// pure sales export keeps the columns its consumers already parse.
@@ -131,6 +140,7 @@ func writeRecordsCSV(w http.ResponseWriter, records []*dbstore.Record, accountSl
 			row = []string{
 				s.RefCode, s.Status, s.PaymentMethod,
 				csvguard.Cell(s.Client.FullName), csvguard.Cell(s.Client.Email),
+				s.CurrencyOrMYR(),
 				strconv.FormatFloat(float64(s.TotalSen)/100, 'f', 2, 64),
 				s.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 				s.ChipPurchaseID, csvguard.Cell(s.TableNumber),
@@ -150,6 +160,7 @@ func writeRecordsCSV(w http.ResponseWriter, records []*dbstore.Record, accountSl
 			row = []string{
 				sub.ID, "response", "",
 				csvguard.Cell(buyer), csvguard.Cell(email),
+				"", // a response has no money and therefore no currency
 				"0.00",
 				sub.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 				"", "",

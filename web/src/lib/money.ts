@@ -1,4 +1,9 @@
-// Money on the /sales page.
+// Money formatting: one rule for every surface that labels an amount.
+//
+// Used by the /sales page and the dashboard. Both printed a literal "RM" and
+// ignored the currency each sale was recorded in (issue #185), so a USD sale
+// read "RM24.90" on the revenue stat, the 14-day chart, the per-form and
+// per-product panels and the recent-sales rows.
 //
 // THE DEFECT THIS EXISTS FOR (t_71c67471)
 //   The Sales page formatted every amount with a hardcoded `RM${…}`, and
@@ -86,6 +91,33 @@ export function formatMoney(sen: number, currency?: string | null): string {
 }
 
 export type SaleAmount = { sen: number; currency?: string | null };
+
+// formatCurrencyTotals renders a per-currency total map — the shape the API's
+// `revenue_by_currency` / `paid_revenue_by_currency` fields carry — the same way
+// formatTotals renders a list of rows: ONE LABEL PER CURRENCY, never a sum
+// across currencies.
+//
+//   formatCurrencyTotals({ MYR: 2490 })                  === "RM24.90"
+//   formatCurrencyTotals({ MYR: 2490, USD: 100 })        === "RM24.90 + US$1.00"
+//   formatCurrencyTotals({}, "USD")                      === "US$0.00"
+//
+// The fallback is the workspace's own currency, used only when the map has no
+// entry at all (a form with no sales yet): a zero must still be labelled in the
+// money the workspace actually charges, not in a hardcoded RM.
+export function formatCurrencyTotals(
+  totals?: Record<string, number> | null,
+  fallbackCurrency?: string | null,
+): string {
+  const entries = Object.entries(totals ?? {}).filter(([, sen]) => Number.isFinite(sen));
+  if (entries.length === 0) return formatMoney(0, fallbackCurrency);
+  // Zero-only maps keep their entry (so "US$0.00" names the right money); a map
+  // with real money drops the zeros it does not need to show. Biggest first,
+  // then code, so the string does not depend on the JSON object's key order.
+  const nonZero = entries.filter(([, sen]) => sen !== 0);
+  const shown = nonZero.length > 0 ? nonZero : entries;
+  shown.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]) || a[0].localeCompare(b[0]));
+  return shown.map(([code, sen]) => formatMoney(sen, code)).join(" + ");
+}
 
 // formatTotals adds up amounts that may not share a currency. It never adds
 // across currencies (that would be the conversion this product refuses to do

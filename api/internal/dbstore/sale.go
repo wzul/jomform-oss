@@ -200,6 +200,19 @@ type Sale struct {
 // SaleStore wraps pgx for sales.
 type SaleStore struct{ pool *pgxpool.Pool }
 
+// NormaliseCurrency is the package's single rule for reading a stored currency
+// code: trim, upper-case, MYR when empty (a row written before the currency
+// column existed was charged in MYR). Every surface that labels an amount —
+// the sale row, the CSV, the per-currency analytics maps — goes through this,
+// so a padded or lower-case code can never split one currency into two labels.
+func NormaliseCurrency(code string) string {
+	c := strings.ToUpper(strings.TrimSpace(code))
+	if c == "" {
+		return "MYR"
+	}
+	return c
+}
+
 // CurrencyOrMYR is the sale's recorded currency, normalised, or MYR for a row
 // written before the currency column existed (issue #185). One rule for every
 // read surface that has to label an amount: a blank label is not renderable, and
@@ -207,11 +220,7 @@ type SaleStore struct{ pool *pgxpool.Pool }
 // from the SALE, never from the workspace's current setting — a workspace that
 // switches currency must not relabel its own history.
 func (s *Sale) CurrencyOrMYR() string {
-	c := strings.ToUpper(strings.TrimSpace(s.Currency))
-	if c == "" {
-		return "MYR"
-	}
-	return c
+	return NormaliseCurrency(s.Currency)
 }
 
 // NewSaleStore builds a SaleStore.

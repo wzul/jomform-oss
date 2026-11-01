@@ -9,6 +9,7 @@ import { useSession } from "../components/session";
 import { activeWorkspaceScope, workspaceQuery } from "../lib/workspace";
 import { formEntriesCountLabel, paidConfirmedCount } from "../lib/dashboardStats";
 import { answersPreview, rowKey, rowKind } from "../lib/salesRows";
+import { currencySymbol, formatCurrencyTotals, formatMoney, normaliseCurrency } from "../lib/money";
 import Landing from "./landing/page";
 import {
   Area,
@@ -25,6 +26,11 @@ type SaleRow = {
   ref_code: string;
   status: string;
   total_sen: number;
+  // The currency the sale was RECORDED in (the API emits it from the sale row
+  // itself, never from the workspace's current setting). Optional because a
+  // response row has no money; formatMoney then falls back to MYR, which is
+  // what the pre-currency rows were charged in.
+  currency?: string;
   payment_method: string;
   buyer: string;
   created_at: string;
@@ -49,6 +55,10 @@ type FormStats = {
   failed_count: number;
   pending_count: number;
   revenue_sen: number;
+  // Issue #185: the same NET revenue split by the currency each sale was
+  // recorded in, so the panel can label US$ for a USD workspace instead of
+  // printing a literal RM over the sum.
+  revenue_by_currency?: Record<string, number>;
 };
 type ProductStats = {
   product_id: string;
@@ -57,14 +67,26 @@ type ProductStats = {
   paid_units: number;
   revenue_sen: number;
   paid_revenue_sen: number;
+  // Issue #185: per-currency splits of the two figures above.
+  revenue_by_currency?: Record<string, number>;
+  paid_revenue_by_currency?: Record<string, number>;
 };
 
-type Summary = { counts: Record<string, number>; revenue_sen: number };
-
-const money = (sen: number) =>
-  `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
+type Summary = {
+  counts: Record<string, number>;
+  revenue_sen: number;
+  // Issue #185: the NET revenue grouped by the currency each sale was recorded
+  // in, plus the scope's own currency for a figure with no money behind it yet.
+  revenue_by_currency?: Record<string, number>;
+  currency?: string;
+};
 
 const PAGE_SIZE = 10;
+
+// One colour per currency band in the 14-day chart. Design-system tokens only
+// (the raw-hex gate forbids literals); a fourth currency wraps around, which is
+// an acceptable rarity — the tooltip names the currency either way.
+const SERIES_COLORS = ["var(--jf-primary)", "var(--jf-accent)", "var(--jf-chart-axis)"];
 
 export default function Dashboard() {
   const { t } = useI18n();
@@ -132,23 +154,39 @@ export default function Dashboard() {
     await loadSales(next);
   }
 
-  // 14-day revenue series
-  const series = (() => {
-    if (!sales.length) return [];
-    const days: { day: string; dayLabel: string; value: number }[] = [];
-    const byDay = new Map<string, number>();
-    for (const s of sales) {
-      if (s.status !== "paid" && s.status !== "confirmed") continue;
+  // 14-day revenue series, one band per currency.
+  //
+  // Issue #185: this used to sum every row into one `value` and let the
+  // Y axis print "RM${v}", so a workspace that had recorded sales in more than
+  // one currency charted an invented total under the wrong symbol. Each band
+  // keeps the currency of the sale it came from; the product never adds across
+  // currencies (that is the conversion it refuses to do silently).
+  const { series, bands } = (() => {
+    const paid = sales.filter((s) => s.status === "paid" || s.status === "confirmed");
+    if (!paid.length) return { series: [] as Record<string, number | string>[], bands: [] as string[] };
+    const bands: string[] = [];
+    const byDay = new Map<string, Map<string, number>>();
+    for (const s of paid) {
+      const cur = normaliseCurrency(s.currency);
+      if (!bands.includes(cur)) bands.push(cur);
       const day = s.created_at.slice(0, 10);
-      byDay.set(day, (byDay.get(day) || 0) + s.total_sen);
+      const dayMap = byDay.get(day) ?? new Map<string, number>();
+      dayMap.set(cur, (dayMap.get(cur) ?? 0) + s.total_sen);
+      byDay.set(day, dayMap);
     }
+    const days: Record<string, number | string>[] = [];
     for (let i = 13; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
       const key = d.toISOString().slice(0, 10);
-      days.push({ day: key, dayLabel: key.slice(5), value: Math.round(((byDay.get(key) || 0) / 100) * 100) / 100 });
+      const row: Record<string, number | string> = { day: key, dayLabel: key.slice(5) };
+      for (const cur of bands) {
+        // Recharts plots numbers, so the band is major units with 2 decimals.
+        row[`v_${cur}`] = Math.round(((byDay.get(key)?.get(cur) ?? 0) / 100) * 100) / 100;
+      }
+      days.push(row);
     }
-    return days;
+    return { series: days, bands };
   })();
 
   async function confirmSale(ref: string) {
@@ -237,7 +275,7 @@ export default function Dashboard() {
 
         {summary && (
           <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat label={t("dash.revenue")} value={money(summary.revenue_sen)} accent />
+            <Stat label={t("dash.revenue")} value={formatCurrencyTotals(summary.revenue_by_currency, summary.currency)} accent />
             <Stat label={t("dash.pending")} value={String(summary.counts.pending ?? 0)} />
             <Stat label={t("dash.confirmed")} value={String(summary.counts.confirmed ?? 0)} />
             <Stat label={t("dash.activeProducts")} value={String(products.length)} />
@@ -253,21 +291,41 @@ export default function Dashboard() {
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={series} margin={{ left: -18, right: 8, top: 8 }}>
                 <defs>
-                  <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--jf-primary)" stopOpacity={0.25} />
-                    <stop offset="100%" stopColor="var(--jf-primary)" stopOpacity={0} />
-                  </linearGradient>
+                  {bands.map((cur, i) => (
+                    <linearGradient key={cur} id={`rev-${i}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={SERIES_COLORS[i % SERIES_COLORS.length]} stopOpacity={0.25} />
+                      <stop offset="100%" stopColor={SERIES_COLORS[i % SERIES_COLORS.length]} stopOpacity={0} />
+                    </linearGradient>
+                  ))}
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--jf-chart-grid)" vertical={false} />
                 <XAxis dataKey="dayLabel" tick={{ fontSize: 11, fill: "var(--jf-chart-axis)" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: "var(--jf-chart-axis)" }} axisLine={false} tickLine={false} width={48}
-                       tickFormatter={(v) => `RM${v}`} />
+                       tickFormatter={(v) => (bands.length === 1 ? `${currencySymbol(bands[0])}${v}` : String(v))} />
                 <Tooltip
-                  formatter={(v) => [money(Number(v)), t("dash.revenue")]}
+                  formatter={(v, name) => [
+                    // Chart values are major units; formatMoney takes minor units.
+                    formatMoney(Math.round(Number(v) * 100), String(name)),
+                    bands.length > 1 ? String(name) : t("dash.revenue"),
+                  ]}
                   labelFormatter={(l) => String(l)}
                   contentStyle={{ borderRadius: 8, borderColor: "var(--jf-border)", fontSize: 12 }}
                 />
-                <Area type="monotone" dataKey="value" stroke="var(--jf-primary)" strokeWidth={2} fill="url(#rev)" />
+                {bands.map((cur, i) => (
+                  <Area
+                    key={cur}
+                    type="monotone"
+                    dataKey={`v_${cur}`}
+                    name={cur}
+                    // NOT stacked: a stack's height is the SUM of its bands, and
+                    // bands here are different currencies — the top of such a
+                    // stack would be a number nobody can spend. Each band's
+                    // height is its own currency's revenue for that day.
+                    stroke={SERIES_COLORS[i % SERIES_COLORS.length]}
+                    strokeWidth={2}
+                    fill={`url(#rev-${i})`}
+                  />
+                ))}
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -307,7 +365,7 @@ export default function Dashboard() {
                   <span>{t("dash.pendingLabel")} <b>{f.pending_count}</b></span>
                   <span>{t("dash.failedLabel")} <b>{f.failed_count}</b></span>
                 </div>
-                <p className="mt-1.5 text-sm font-semibold text-[var(--jf-primary)]">{money(f.revenue_sen)}</p>
+                <p className="mt-1.5 text-sm font-semibold text-[var(--jf-primary)]">{formatCurrencyTotals(f.revenue_by_currency, summary?.currency)}</p>
               </div>
             ))}
             {formStats.length === 0 && <p className="text-xs text-[var(--jf-muted)]">{t("dash.noForms")}</p>}
@@ -327,8 +385,8 @@ export default function Dashboard() {
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-semibold">{money(pr.paid_revenue_sen)}</p>
-                  <p className="text-jf-3xs text-[var(--jf-muted)]">{t("dash.gross")} {money(pr.revenue_sen)}</p>
+                  <p className="text-sm font-semibold">{formatCurrencyTotals(pr.paid_revenue_by_currency, summary?.currency)}</p>
+                  <p className="text-jf-3xs text-[var(--jf-muted)]">{t("dash.gross")} {formatCurrencyTotals(pr.revenue_by_currency, summary?.currency)}</p>
                 </div>
               </li>
             ))}
@@ -381,7 +439,7 @@ export default function Dashboard() {
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1.5">
                   <span className="text-sm font-semibold">
-                    {rowKind(s) === "response" ? "—" : money(s.total_sen)}
+                    {rowKind(s) === "response" ? "—" : formatMoney(s.total_sen, s.currency)}
                   </span>
                   {s.status === "paid" && rowKind(s) !== "response" && canWrite && (
                     <button onClick={() => confirmSale(s.ref_code)} className="text-xs font-medium text-[var(--jf-primary)] hover:underline">
@@ -423,7 +481,7 @@ export default function Dashboard() {
                     </td>
                     <td className="max-w-40 truncate px-3 py-3">{s.buyer || "—"}</td>
                     <td className="whitespace-nowrap px-5 py-3 font-medium">
-                      {rowKind(s) === "response" ? "—" : money(s.total_sen)}
+                      {rowKind(s) === "response" ? "—" : formatMoney(s.total_sen, s.currency)}
                     </td>
                     <td className="px-5 py-3">
                       <span className={`whitespace-nowrap rounded-full border px-2.5 py-0.5 text-jf-2xs font-medium ${badge(s.status)}`}>

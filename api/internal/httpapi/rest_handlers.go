@@ -1741,7 +1741,7 @@ func (h *RESTHandlers) summary(w http.ResponseWriter, r *http.Request, actx *Acc
 	if !ok {
 		return
 	}
-	sum, err := h.summaryData(r.Context(), scope.Accounts)
+	sum, err := h.summaryFor(r.Context(), scope.Accounts, actx.Account.ID)
 	if err != nil {
 		respondErr(w, r, err)
 		return

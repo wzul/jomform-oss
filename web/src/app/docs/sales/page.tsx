@@ -33,7 +33,7 @@ const SECTIONS: Section[] = [
       "Without a form filter the Sales page is the whole record set: every sale AND every response your response-mode forms recorded, merged newest first with one combined record count.",
       "That is deliberate — an account whose response entries were invisible on the unfiltered page had two surfaces reporting two different things (the per-form counter counted the responses, the list did not show them).",
       "Filtering by a form narrows the page to that form's own entries: a payment form shows its sales, a response-only form shows its responses and the table switches to the answers columns. The status filter is a payment question, so choosing a status hides the responses rather than reporting nothing.",
-      "Export CSV produces the same rows as the list, with the same filters applied: a combined export carries a record_type column (sale or submission) plus the recorded answer columns, and a single-form export uses that form's own columns. Search and the date range apply to both halves.",
+      "Export CSV produces the same rows as the list, with the same filters applied: a combined export carries a record_type column (sale or submission) plus the recorded answer columns, and a single-form export uses that form's own columns. Search and the date range apply to both halves. Money columns are total, refunded and outstanding — decimal major units in the sale's own currency, named by the currency column beside them, so a USD row reads USD + 24.90 rather than an RM label it was never charged in.",
       "The same decision drives the dashboard's recent list and the MCP tools list_sales and export_sales_csv, so the page, the CSV and your agent always agree.",
     ],
   },
@@ -63,7 +63,7 @@ const SECTIONS: Section[] = [
     title: "Partial refunds",
     body: [
       "Refund a paid or confirmed sale in full or in part. JomForm records how much has actually been returned on the sale (refunded_sen), so a partial refund is never mistaken for a full one: the sale keeps its paid/confirmed status with a “Partially refunded” marker and the remaining balance (outstanding_sen) stays refundable until it reaches zero — only then does the sale become refunded.",
-      "Every read surface reports the same picture: the Sales page (status chip, plus a refunded/balance breakdown in the sale detail), get_sales_summary, analytics (revenue is net of refunds), the CSV export (refunded_rm, outstanding_rm, refund_status) and the MCP tools (list_sales, refund_sale, export_sales_csv).",
+      "Every read surface reports the same picture: the Sales page (status chip, plus a refunded/balance breakdown in the sale detail), get_sales_summary, analytics (revenue is net of refunds), the CSV export (refunded, outstanding, refund_status beside the sale's currency) and the MCP tools (list_sales, refund_sale, export_sales_csv).",
       "An amount that would push the refunded total past the sale total (refunded_sen + amount_sen > total_sen) or a non-positive amount is rejected before the gateway is ever called, and the guard is applied under a per-sale lock so two refunds racing each other cannot over-refund.",
     ],
   },

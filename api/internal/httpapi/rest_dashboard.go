@@ -50,6 +50,25 @@ func (h *RESTHandlers) chipStatusData(ctx context.Context, accountID string) (ma
 	return resp, nil
 }
 
+// summaryFor adds the scope's DEFAULT currency to the rollup — a label fallback
+// for a figure that has no money behind it yet (a new form, a zero revenue
+// stat), so the client never has to assume MYR (issue #185). The money
+// itself is read per sale; this field names the currency only. Both readers of
+// the rollup go through here, so GET /v1/rest/summary and the dashboard
+// bundle's summary cannot drift (rest_dashboard_test asserts they match).
+func (h *RESTHandlers) summaryFor(ctx context.Context, accountIDs []string, accountID string) (map[string]any, error) {
+	sum, err := h.summaryData(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	if h.Workspaces != nil {
+		if cur, cerr := h.Workspaces.WorkspaceCurrencyByAccount(ctx, accountID); cerr == nil {
+			sum["currency"] = dbstore.NormaliseCurrency(cur)
+		}
+	}
+	return sum, nil
+}
+
 // summaryData computes the sales rollup over a set of accounts. Shared by
 // GET /v1/rest/summary and the dashboard bundle (issue #29) so both stay
 // identical.
@@ -72,14 +91,24 @@ func (h *RESTHandlers) summaryData(ctx context.Context, accountIDs []string) (ma
 	// total is surfaced separately so a partial refund reduces revenue on every
 	// surface instead of the sale silently reading as fully paid.
 	var refunded int64
+	// Issue #185: the same NET revenue, split by the currency each sale was
+	// recorded in. revenue_sen is a sum across currencies, which is a number no
+	// symbol can label; the dashboard reads this map so a USD workspace shows
+	// US$ instead of the RM the page used to hardcode.
+	revenueByCurrency := map[string]int64{}
 	for _, s := range sales {
 		sum[s.Status]++
 		if s.Status == dbstore.SalePaid || s.Status == dbstore.SaleConfirmed {
-			revenue += s.TotalSen - s.RefundedSen
+			net := s.TotalSen - s.RefundedSen
+			revenue += net
+			revenueByCurrency[s.CurrencyOrMYR()] += net
 		}
 		refunded += s.RefundedSen
 	}
-	return map[string]any{"counts": sum, "revenue_sen": revenue, "refunded_sen": refunded}, nil
+	return map[string]any{
+		"counts": sum, "revenue_sen": revenue, "refunded_sen": refunded,
+		"revenue_by_currency": revenueByCurrency,
+	}, nil
 }
 
 // dashboardBundle: GET /v1/rest/dashboard-bundle — one authed round-trip
@@ -231,7 +260,7 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 				}
 			}
 			if h.Sales != nil {
-				if sum, err := h.summaryData(ctx, scope.Accounts); err == nil {
+				if sum, err := h.summaryFor(ctx, scope.Accounts, actx.Account.ID); err == nil {
 					bundle.Summary = sum
 				}
 				if sc, serr := h.recordScope(ctx, scope, ""); serr == nil {
