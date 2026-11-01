@@ -1539,7 +1539,16 @@ func (s *FormStore) CardFormsForIDs(ctx context.Context, accountID string, formI
 }
 
 // SetStatusMany publishes/unpublishes many forms at once; returns how many
-// rows were updated (account-scoped, live forms only).
+// rows were updated (account-scoped, live forms only, and only rows whose
+// status actually changed — see the `status <> $3` guard below).
+//
+// The `status <> $3` guard IS the count contract, not an optimisation. The
+// bulk_forms MCP tool tells every client "updated hanya mengira baris yang
+// benar-benar berubah", and /docs/customize says the same, so an idempotent
+// re-send (draft over forms already draft, publish over forms already
+// published) has to answer updated:0. Without the guard the row still matched,
+// only updated_at moved, and RowsAffected() counted it — measured on prod at
+// v1.22.53: draft over two already-draft forms answered 2.
 //
 // Publishing skips any template missing its gallery metadata rather than
 // failing the whole batch (issue #594): the other ids in a bulk action are
@@ -1555,6 +1564,7 @@ func (s *FormStore) SetStatusMany(ctx context.Context, accountID string, formIDs
 		tag, err := s.pool.Exec(ctx,
 			`UPDATE forms SET status=$3, updated_at=now()
 			 WHERE account_id=$1 AND deleted_at IS NULL AND id = ANY($2)
+			   AND status <> $3
 			   AND NOT (is_template AND (`+galleryMetadataMissingSQL+`))`,
 			accountID, formIDs, status)
 		if err != nil {
@@ -1564,7 +1574,8 @@ func (s *FormStore) SetStatusMany(ctx context.Context, accountID string, formIDs
 	}
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE forms SET status=$3, updated_at=now()
-		 WHERE account_id=$1 AND deleted_at IS NULL AND id = ANY($2)`,
+		 WHERE account_id=$1 AND deleted_at IS NULL AND id = ANY($2)
+		   AND status <> $3`,
 		accountID, formIDs, status)
 	if err != nil {
 		return 0, err

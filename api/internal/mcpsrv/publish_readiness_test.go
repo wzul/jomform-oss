@@ -185,14 +185,19 @@ func TestMCPBulkFormsWithholdsProductFreePaymentForms(t *testing.T) {
 		t.Errorf("withheld form status = %q, want draft", got.Status)
 	}
 
-	// Acknowledged, both publish.
+	// Acknowledged, both end up published — but only the withheld one CHANGES in
+	// this call: the pass above already published `selling`, so re-sending it is
+	// a no-op and is not counted. `updated` is the number of rows the call
+	// changed (bulk_forms description: "updated hanya mengira baris yang
+	// benar-benar berubah"), not the number of ids.
 	_, out, err = srv.bulkFormsMCP(callCtx, nil,
 		bulkFormsIn{Action: "publish", IDs: ids, Acknowledge: true})
 	if err != nil {
 		t.Fatalf("acknowledged bulkFormsMCP: %v", err)
 	}
-	if out["updated"] != int64(2) {
-		t.Errorf("updated after ack = %v, want 2", out["updated"])
+	if out["updated"] != int64(1) {
+		t.Errorf("updated after ack = %v, want 1 (only the product-free form changed; %s was already published)",
+			out["updated"], selling.Slug)
 	}
 	got, err = forms.GetByID(ctx, accountID, empty.ID)
 	if err != nil {

@@ -21,6 +21,7 @@ import (
 	"os"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/testdb"
@@ -238,5 +239,83 @@ func TestMCPBulkFormsCountsOnlyRowsItWrote(t *testing.T) {
 	}
 	if foreignTrashed {
 		t.Error("a bulk delete crossed into another workspace's form")
+	}
+
+	// ── A no-op re-send is not a write either ─────────────────────────────
+	//
+	// The arms above never reach the rows-affected branch with a 0: the binned
+	// id answers ErrFormNotFound before the write, and the foreign id is dropped
+	// by resolveFormAccount. So every id that DOES reach SetStatusMany yields
+	// n == 1, and replacing `updated += n` with a per-id counter
+	// (`updated += n*0 + 1`) still passes this test — it did, measured at
+	// v1.22.53. The arms below are live, owned, non-template ids that reach the
+	// write and really come back with 0 rows, because they are already in the
+	// requested status; one of them is in a mixed batch so the count is shown to
+	// be per-row-changed rather than all-or-nothing.
+	//
+	// What a client is promised, verbatim from the bulk_forms description
+	// (tools.go) and /docs/customize: "updated hanya mengira baris yang
+	// benar-benar berubah" / "count only the forms that really changed".
+	alreadyDraft := mkForm(accountID, "mcp-count-noop-draft-"+accountID[:8])
+	alreadyPublished := mkForm(accountID, "mcp-count-noop-pub-"+accountID[:8])
+	if n, err := forms.SetStatusMany(ctx, accountID, []string{alreadyPublished.ID}, dbstore.FormStatusPublished); err != nil || n != 1 {
+		t.Fatalf("publish the no-op fixture: n=%d err=%v", n, err)
+	}
+	changing := mkForm(accountID, "mcp-count-changing-"+accountID[:8])
+
+	updatedAt := func(id string) time.Time {
+		t.Helper()
+		var ts time.Time
+		if err := pool.QueryRow(ctx, `SELECT updated_at FROM forms WHERE id=$1`, id).Scan(&ts); err != nil {
+			t.Fatalf("read updated_at %s: %v", id, err)
+		}
+		return ts
+	}
+	draftStamp, pubStamp := updatedAt(alreadyDraft.ID), updatedAt(alreadyPublished.ID)
+
+	for _, tc := range []struct {
+		name   string
+		in     bulkFormsIn
+		rows   int64
+		stamps map[string]time.Time
+	}{
+		{
+			name: "draft over a form already draft",
+			in:   bulkFormsIn{Action: "draft", IDs: []string{alreadyDraft.ID}},
+			rows: 0, stamps: map[string]time.Time{alreadyDraft.ID: draftStamp},
+		},
+		{
+			name: "publish over a form already published",
+			in:   bulkFormsIn{Action: "publish", IDs: []string{alreadyPublished.ID}},
+			rows: 0, stamps: map[string]time.Time{alreadyPublished.ID: pubStamp},
+		},
+		{
+			name: "publish over a mix of already-published and draft",
+			in:   bulkFormsIn{Action: "publish", IDs: []string{alreadyPublished.ID, changing.ID}},
+			rows: 1, stamps: map[string]time.Time{alreadyPublished.ID: pubStamp},
+		},
+	} {
+		_, out, err := srv.bulkFormsMCP(callCtx, nil, tc.in)
+		if err != nil {
+			t.Fatalf("%s: bulkFormsMCP: %v", tc.name, err)
+		}
+		if got := out["updated"]; got != tc.rows {
+			t.Errorf("%s: updated = %v, want %d (rows the call actually changed, not ids it re-sent)",
+				tc.name, got, tc.rows)
+		}
+		// A row that did not change must not even be re-stamped: the complaint
+		// on prod was that a no-op re-send "only rewrote updated_at".
+		for id, want := range tc.stamps {
+			if got := updatedAt(id); !got.Equal(want) {
+				t.Errorf("%s: %s updated_at moved from %s to %s — a no-op must not write the row at all",
+					tc.name, id, want, got)
+			}
+		}
+	}
+	if got, err := forms.GetByID(ctx, accountID, changing.ID); err != nil {
+		t.Fatalf("re-read the changing form: %v", err)
+	} else if got.Status != dbstore.FormStatusPublished {
+		t.Errorf("the draft form in the mixed batch is %q, want published (the no-op id must not swallow it)",
+			got.Status)
 	}
 }
