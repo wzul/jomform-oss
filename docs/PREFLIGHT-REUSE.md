@@ -154,6 +154,17 @@ it is not what a merger needs when it decides to squash.
   run). The label is also stable across flushes: the file is rewritten after every
   gate, and a carried entry keeps `reused: true` with its original `at` on every
   rewrite, so a remembered pass can never read as one this run observed.
+* **`runs`** — how many gate **runs** this record stands on: one per run, not one per
+  write. The file is rewritten after every gate, and counting those writes made a
+  single fresh 23-gate run read `runs: 24` while a record reused by five lanes read
+  25 — a number that answered "how many flushes" under a name that promises the
+  count of runs a merger asks about. It is incremented **once per running process**,
+  and it **restarts at 1** when the record's `key` changes, because a key change
+  carries no gate entry (`gates` above): the verdict then stands on that run alone,
+  and counting the earlier ones would claim support the record does not have. It is
+  **not** a count of reuses either — a lane that only *reads* a record never
+  re-stamps it, so `runs` stays what the last run wrote; reuse is counted by the
+  ledger (`scripts/preflight_reuse.sh --report`).
 * **`complete`** — `true` only when the run reached the END of its inventory (green
   **or** red: a finished red run is a finished observation, which is what the
   red-tree lane reads). Every intermediate flush writes `false`, because the file

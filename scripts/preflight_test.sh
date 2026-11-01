@@ -5008,6 +5008,90 @@ else
 fi
 rm -rf "$r47_dir"
 
+# 48. `runs` COUNTS GATE RUNS, NOT FLUSHES (card t_68fa3c5c).
+#
+#     THE MEASURED DEFECT. The record is rewritten after EVERY gate — that is how it
+#     stays current — and the writer incremented `runs` on every one of those writes.
+#     One COMPLETE 23-gate run therefore left `runs: 24` in the record, a following
+#     two-gate run on the same tree took it to 27, the host record for tree 45432d4e
+#     read 46 for two runs, and the single green run for tree 4c9a5d01 read 24.
+#     `runs` is the field a merger reads to ask "how many gate runs is this verdict
+#     standing on", and it was answering "how many times the file was written" —
+#     so one fresh run looked like 24 runs and a record reused by five lanes looked
+#     like 25.
+#
+#     WHY NO EXISTING CHECK SAW IT: each fixture in this file either drives gr_flush
+#     ONCE per run or reads only the per-gate entries, so the count was never the
+#     subject. The property needs TWO runs AND an observation after EVERY flush of
+#     one run:
+#       (a) ONE run that flushes after each of three gates, then finishes, must read
+#           `runs: 1` at EVERY write — an intermediate flush must not add one;
+#       (b) a SECOND run on the same tree and the same key must read 2 at every
+#           write: a whole run adds exactly one, whatever it flushed;
+#       (c) a THIRD run under a DIFFERENT key must read 1 again — a key change
+#           carries no gate entry, so the record's verdict stands on that run alone
+#           and a count that kept climbing would claim support the record does not
+#           have.
+#     (b) and (c) are the control on "just stop incrementing": a writer that never
+#     increments would satisfy (a) alone and report 1 forever.
+#
+#     Each r48_run is a SUBSHELL, i.e. its own process, i.e. one gate run — exactly
+#     the boundary the count is defined on. The REAL writer is driven (never a
+#     re-implementation) and the sandbox store is used, so this check writes no host
+#     state.
+r48_dir="$SB_STATE/record48"
+mkdir -p "$r48_dir"
+r48_rec="$r48_dir/$probe_tree.json"
+r48_g1="$(printf '%s\n' "$GATES" | sed -n '1p')"
+r48_g2="$(printf '%s\n' "$GATES" | sed -n '2p')"
+r48_g3="$(printf '%s\n' "$GATES" | sed -n '3p')"
+# r48_run <key-extra> <gate>... — one process: flush after each named gate (like
+# run() in preflight.sh), then the final flush of a run that reached the end of its
+# inventory. Prints `runs` as the file carries it after EVERY write, space separated,
+# so the sequence itself shows whether an individual flush added one.
+r48_run() {
+  (
+    export PREFLIGHT_RESULT_DIR="$r48_dir" PREFLIGHT_KEY_EXTRA="$1"
+    # shellcheck source=scripts/gate_result.sh
+    . "$SB/scripts/gate_result.sh"
+    GR_REPO="$SB"
+    GR_TREE="$probe_tree"
+    GR_GATE_NAMES=("$r48_g1" "$r48_g2" "$r48_g3")
+    shift
+    r48n=0
+    for r48g in "$@"; do
+      r48n=$((r48n+1))
+      GR_STATUS["$r48g"]=pass; GR_SECONDS["$r48g"]=5; GR_AT["$r48g"]="$(gr_now)"
+      GR_PASSED=$r48n; GR_FAILED=0; GR_SKIPPED=0
+      gr_flush 1 || exit 1
+      printf '%s ' "$(gr_read_int "$r48_rec" runs)"
+    done
+    GR_COMPLETE=1
+    gr_flush 1 || exit 1
+    printf '%s' "$(gr_read_int "$r48_rec" runs)"
+  )
+}
+r48_a_rc=0; r48_a="$(r48_run runA "$r48_g1" "$r48_g2" "$r48_g3" 2>"$SB_STATE/r48-a.err")" || r48_a_rc=$?
+r48_b_rc=0; r48_b="$(r48_run runA "$r48_g1" "$r48_g2" 2>"$SB_STATE/r48-b.err")" || r48_b_rc=$?
+# Run C changes the key, so the writer prints its one-per-process key-change note on
+# stderr. It is captured to a FILE, never merged into stdout: the sequences compared
+# below are the `runs` values the record holds, and a diagnostic line inside them
+# would fail this check for a reason that has nothing to do with the count.
+r48_c_rc=0; r48_c="$(r48_run runB "$r48_g1" 2>"$SB_STATE/r48-c.err")" || r48_c_rc=$?
+
+if [ "${r48_a_rc:-1}" != 0 ] || [ "${r48_b_rc:-1}" != 0 ] || [ "${r48_c_rc:-1}" != 0 ]; then
+  bad "check 48 cannot run: a fixture flush failed (rc=$r48_a_rc/$r48_b_rc/$r48_c_rc) [$(tail -n 1 "$SB_STATE/r48-a.err" 2>/dev/null) | $(tail -n 1 "$SB_STATE/r48-c.err" 2>/dev/null)], so the \`runs\` sequences below would be about a record this check never wrote"
+elif [ "$r48_a" != "1 1 1 1" ]; then
+  bad "check 48 (a) — ONE gate run that flushed after each of three gates and then finished must read 'runs: 1' after every one of its FOUR writes, got [$r48_a]: an intermediate flush added to the count, so a single fresh 23-gate run reports 24 runs and the field cannot answer how many runs a verdict stands on"
+elif [ "$r48_b" != "2 2 2" ]; then
+  bad "check 48 (b) — a SECOND run on the same tree and the same key must read 'runs: 2' after every write, got [$r48_b]: either a whole run did not add exactly one, or its intermediate flushes added more (the measured defect took a second two-gate run from 24 to 27)"
+elif [ "$r48_c" != "1 1" ]; then
+  bad "check 48 (c) — a THIRD run under a DIFFERENT key must read 'runs: 1' after every write, got [$r48_c]: a key change carries no gate entry, so the record's verdict stands on this run alone and the count must restart rather than claim the earlier runs' support"
+else
+  ok "check 48 — \`runs\` counts gate RUNS, not flushes: one run writing four times reads [$r48_a], a second run on the same tree/key reads [$r48_b], and a run under a changed key restarts at [$r48_c]"
+fi
+rm -rf "$r48_dir"
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

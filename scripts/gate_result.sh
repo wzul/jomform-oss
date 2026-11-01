@@ -69,7 +69,9 @@
 #     "gates": { "build": { "status": "pass", "seconds": 12, "at": "...", "reused": false }, ... },
 #     "passed": 14, "failed": 0, "skipped": 0,   <- the tally of the LAST run
 #     "selected": "build,vet,...",               <- what that run actually ran
-#     "runs": 3, "seconds": 1338, "verdict": "green",
+#     "runs": 3,                                 <- gate RUNS this record stands on
+#                                                   (not flushes, not reuses)
+#     "seconds": 1338, "verdict": "green",
 #     "complete": true,                          <- did the run that wrote it finish?
 #     "log": "<log path, optional>", "finished_at": "<iso>"
 #   }
@@ -126,6 +128,19 @@
 #   record can never be handed to a lane as a verdict. `verdict` is written as
 #   `in_progress` while incomplete, for the human reading the raw file.
 #
+#   `runs` COUNTS RUNS, NOT WRITES (card t_68fa3c5c). gr_flush is re-entered after
+#   EVERY gate — that is how the file stays current — so a per-write increment made
+#   one COMPLETE 23-gate run read `runs: 24`, and a following two-gate run on the
+#   same tree take it to 27. The field answers "how many flushes" while its name
+#   promises "how many gate runs this record stands on", which is exactly what a
+#   merger asks of a reused verdict. It is now incremented ONCE PER RUNNING PROCESS
+#   (GR_RUN_COUNTED, the same shape as GR_COMPLETE), and it RESTARTS AT 1 when the
+#   record's key changes: a key change carries no gate entry, so the file's verdict
+#   then stands on THIS run alone and counting the earlier runs would claim support
+#   the record does not have. Renaming the field to `flushes` was the alternative
+#   and was rejected: it reports the machinery instead of the evidence, and every
+#   consumer would still have to derive "how many runs" from something else.
+#
 # The record directory is host state, deliberately outside the repo (a record is
 # evidence about a machine, not a versioned artefact) and outside /tmp (which is
 # wiped between sessions, so a record there would be useless the next morning).
@@ -158,6 +173,10 @@ GR_FORMAT=1
 # 1 only when the runner has reached the END of its inventory; every intermediate
 # flush writes `complete: false` (see A RUN THAT DID NOT FINISH IS NOT A VERDICT).
 GR_COMPLETE=0
+# 1 once THIS PROCESS has counted itself into `runs` — i.e. once its first flush has
+# landed. The writer is re-entered after every gate, so without this one 23-gate run
+# would report 24 runs (see `runs` COUNTS RUNS, NOT WRITES).
+GR_RUN_COUNTED=0
 # Announce a key-change carry refusal once per process, not once per flush.
 GR_KEYNOTE=""
 
@@ -849,10 +868,20 @@ gr_flush() {
     verdict="in_progress"
   fi
 
-  # runs / log carry over when the record already exists.
+  # `runs` / log carry over when the record already exists. `runs` counts RUNS, not
+  # writes (see `runs` COUNTS RUNS, NOT WRITES): the increment happens on the FIRST
+  # flush of each process and every later flush of that process keeps the number it
+  # wrote, so a 23-gate run reports 1 run and a second run on the same tree reports 2.
+  # Under a DIFFERENT key the count restarts at 1, for the same reason the gate
+  # entries are not carried: the file's verdict then stands on this run alone.
   local runs=1 log="${GR_LOG:-}"
   if [ -r "$file" ]; then
-    runs=$(( $(gr_read_int "$file" runs) + 1 ))
+    if [ "${prev_ok:-0}" = 1 ]; then
+      runs="$(gr_read_int "$file" runs)"
+      case "$runs" in ''|*[!0-9]*) runs=0 ;; esac
+      [ "${GR_RUN_COUNTED:-0}" = 1 ] || runs=$((runs + 1))
+      [ "$runs" -ge 1 ] || runs=1
+    fi
     [ -n "$log" ] || log="$(gr_read_field "$file" log)"
   fi
 
@@ -895,6 +924,10 @@ gr_flush() {
     printf '}\n'
   } > "$tmp" 2>/dev/null || { rm -f "$tmp"; echo "gate-result: cannot write $tmp" >&2; return 1; }
   mv -f "$tmp" "$file" 2>/dev/null || { rm -f "$tmp"; echo "gate-result: cannot replace $file" >&2; return 1; }
+  # This process is now counted in `runs` (see the runs block above): later flushes
+  # of the SAME run must not add another. Set only after the write landed, so a
+  # failed flush does not consume the increment.
+  GR_RUN_COUNTED=1
   return 0
 }
 
