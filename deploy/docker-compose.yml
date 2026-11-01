@@ -1,21 +1,225 @@
-# JomForm dev/prod compose (PG18 + Valkey + MinIO + api)
-# Pin image digests before production deploy.
+# JomForm — the complete stack, in one `docker compose` project.
+#
+#   caddy       the ONLY published service: TLS + the path split web/api
+#   web         Next.js dashboard + form builder       (web/Dockerfile, repo root context)
+#   api         Go API: REST, MCP, public form pages, media
+#   postgres    data
+#   valkey      sessions, rate limits, queue
+#   s3          S3-compatible object storage (SeaweedFS), for uploaded media
+#
+# WHY SEAWEEDFS AND NOT MINIO. MinIO's community images are no longer published:
+# MinIO went source-only in October 2025 and deleted `minio/minio` and `minio/mc`
+# from Docker Hub in September 2026; `quay.io/minio/minio` answers anonymous
+# pulls with 401. `docker compose up` on a compose naming them now fails at PULL,
+# before anything can start, which is a broken one-command install for everyone.
+# SeaweedFS is Apache-2.0, actively maintained, publishes a public image, and
+# speaks the S3 API this stack needs (bucket create + bucket policy + object
+# PUT/GET — verified against api/internal/objstore's own client). It is the same
+# substitution other projects made for the same reason.
+#
+# THE BUCKET IS NOT PROVISIONED HERE. The API creates it at startup
+# (objstore.EnsureBucket: HeadBucket → CreateBucket → PutBucketPolicy, issue #79),
+# so a one-shot `mc`/init container is a moving part with nothing to do — and it
+# would need an image that no longer exists.
+#
+# ── EVERY SECRET IS REQUIRED ────────────────────────────────────────────────
+# None of them has a working default: `${VAR:?message}` refuses to interpolate an
+# unset variable, so a stack started without a generated .env does not come up at
+# all — instead of coming up on a key that is published in this file, which is
+# what this compose used to do with
+# `ENCRYPTION_KEY:-dev_only_32byte_key_change_me_pls`.
+#
+# Generate the .env and start the stack with ONE command:
+#
+#     bash deploy/selfhost/bootstrap.sh --base-url https://forms.example.com
+#
+# It copies deploy/.env.example, mints every secret with `openssl rand -hex 32`,
+# refuses placeholder values, waits for health and prints the URL.
+
+name: jomform
 
 services:
+  # ── front door ────────────────────────────────────────────────────────────
+  # Caddy terminates TLS (automatic Let's Encrypt for a real hostname; plain HTTP
+  # for an http:// APP_BASE_URL) and reproduces the product's path split: public
+  # form pages, the REST/MCP surfaces and media belong to the API, everything
+  # else — including /api/*, the dashboard's same-origin proxy — to the web app.
+  # The split lives in deploy/selfhost/Caddyfile and is asserted by
+  # deploy/selfhost/bootstrap_test.sh.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      # e.g. https://forms.example.com — derived from APP_BASE_URL by the
+      # bootstrap, WITHOUT the port: Caddy listens on 80/443 inside the
+      # container and the published ports below are what the world sees.
+      SITE_ADDRESS: ${SITE_ADDRESS:-http://localhost}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./selfhost/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - web
+      - api
+    healthcheck:
+      # `caddy validate` proves the CONFIG this container was given is one the
+      # binary accepts. Without it a broken Caddyfile is a container that
+      # restarts forever with the reason buried in its log.
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ── web ───────────────────────────────────────────────────────────────────
+  # Built from the REPO ROOT (`context: ..`), not from web/: `npm run build` runs
+  # the web unit tests first and one of them reads a file under api/. See the
+  # header of web/Dockerfile and the root .dockerignore.
+  web:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    environment:
+      # Same-origin proxy target for the dashboard's /api/* → API /v1/*
+      # (web/src/app/api/[...path]/route.ts). It MUST stay the internal name:
+      # the browser reaches the dashboard through Caddy, and session cookies stay
+      # first-party because this hop is server-side.
+      JOMFORM_API_URL: http://api:8080
+      # Next's standalone server (node server.js) binds to $HOSTNAME, and Docker
+      # sets that to the CONTAINER ID. Without this the app listens on the
+      # container's own eth0 address only (measured: a container-network address,
+      # nothing on loopback), so any health probe using loopback fails forever —
+      # the container reports "unhealthy" while serving traffic perfectly, and
+      # `--wait` aborts the start on a stack that is actually up.
+      HOSTNAME: "0.0.0.0"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/login"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ── api ───────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ../api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-jomform}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required — run deploy/selfhost/bootstrap.sh}@postgres:5432/${POSTGRES_DB:-jomform}?sslmode=disable
+      VALKEY_URL: valkey://valkey:6379/0
+      S3_ENDPOINT: http://s3:8333
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required — run deploy/selfhost/bootstrap.sh}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — run deploy/selfhost/bootstrap.sh}
+      S3_BUCKET: ${S3_BUCKET:-jomform-media}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      # Browser-reachable base for uploaded media. Defaults to
+      # {APP_BASE_URL}/media — the API's own media route — so the bucket never
+      # has to be public.
+      S3_PUBLIC_BASE: ${S3_PUBLIC_BASE:-${APP_BASE_URL:?APP_BASE_URL is required — pass --base-url to the bootstrap}/media}
+      # 32 bytes, hex (64 chars). Encrypts per-account payment credentials at
+      # rest and signs the email-verification links. Losing it makes those
+      # unreadable, so back .env up together with the database.
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required — run deploy/selfhost/bootstrap.sh}
+      # The public origin of THIS deployment. It is also the passkey (WebAuthn)
+      # relying party: its HOST becomes the RP ID every ceremony is bound to, so
+      # it must be the host users actually load. See deploy/.env.example.
+      APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL is required — pass --base-url to the bootstrap}
+      # dev | prod. prod turns on Secure (https-only) session cookies; the
+      # bootstrap sets dev for an http:// base URL, because a Secure cookie is
+      # never returned over plain HTTP and every login would then silently fail.
+      APP_ENV: ${APP_ENV:-prod}
+      PORT: "8080"
+      # Self-hosted installs have no email sender (the sender is the AWS SES API,
+      # not a plain SMTP relay). With this on, a deployment WITHOUT an email
+      # sender writes the account-verification link to its own log instead of
+      # mailing it — otherwise the first signup creates an account nobody can
+      # ever confirm. Inert when SES_* is configured. See docs/SELF-HOST.md.
+      JOMFORM_LOG_VERIFY_LINK: ${JOMFORM_LOG_VERIFY_LINK:-0}
+      # THIS stack is the self-hosted install: one origin for everybody, no
+      # tenant subdomains. It is what lets the API serve a published form from
+      # APP_BASE_URL's host (deploy/.env.example sets 1, the bootstrap writes it).
+      # The default here stays 0 because the API's own default is 0 and this must
+      # be an explicit declaration: on the HOSTED product APP_BASE_URL is the
+      # product apex, which serves no form at all (issue #77). See docs/SELF-HOST.md.
+      JOMFORM_SELF_HOSTED: ${JOMFORM_SELF_HOSTED:-0}
+      # Transactional email (optional). Empty host = email features report
+      # themselves unavailable rather than half-working.
+      SES_SMTP_HOST: ${SES_SMTP_HOST:-}
+      SES_SMTP_PORT: ${SES_SMTP_PORT:-587}
+      SES_SMTP_USER: ${SES_SMTP_USER:-}
+      SES_SMTP_PASS: ${SES_SMTP_PASS:-}
+      SES_FROM: ${SES_FROM:-}
+      SES_REGION: ${SES_REGION:-ap-southeast-1}
+      # The monitored mailbox a recipient's Reply must reach (empty = no Reply-To
+      # header). Passed through so a deployment built from this file can set it:
+      # without it the app reads the variable but it never reaches the container,
+      # and every reply keeps going to SES_FROM where nothing reads them.
+      SES_REPLY_TO: ${SES_REPLY_TO:-}
+      # AI surface credential (in-app assistant, AI form builder, legal drafts,
+      # spam judge). The client reads OLLAMA_API_KEY itself, so it has to be
+      # passed through here: without it the assistant answers available:false
+      # instead of offering a box whose every message fails. LLM_BASE_URL /
+      # LLM_MODEL override the endpoint and model; the spam judge has its own
+      # model/threshold on the same base URL and key.
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      SPAM_JUDGE_MODEL: ${SPAM_JUDGE_MODEL:-}
+      SPAM_JUDGE_THRESHOLD: ${SPAM_JUDGE_THRESHOLD:-}
+      # Site super-admin allowlist (comma separated). Empty = no super admin.
+      SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
+      # Origin auto-TLS for DNS-only custom domains (issue #212/#397). Caddy at
+      # the front already terminates TLS for THIS install's own hostname; these
+      # only matter if you point per-tenant custom domains straight at the API.
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      ACME_CERT_DIR: /var/lib/jomform/acme
+      TLS_PORT: "8443"
+    volumes:
+      - acmedata:/var/lib/jomform/acme
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      # The API provisions the bucket itself, but it needs the S3 endpoint to be
+      # SERVING when it does: a failed EnsureBucket disables the media store for
+      # the life of the process (uploads answer 503), so the API must not start
+      # while the store is still coming up.
+      s3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  # ── data ──────────────────────────────────────────────────────────────────
   postgres:
     image: postgres:18-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-jomform}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jomform_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required — run deploy/selfhost/bootstrap.sh}
       POSTGRES_DB: ${POSTGRES_DB:-jomform}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18 keeps its cluster under /var/lib/postgresql, NOT under
+      # .../data where the 17-and-earlier images put it. Mounting the old path
+      # gives a stack that comes up healthy on an EMPTY database.
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jomform} -d ${POSTGRES_DB:-jomform}"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 12
 
   valkey:
     image: valkey/valkey:9.1-alpine
@@ -27,113 +231,41 @@ services:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 12
 
-  minio:
-    image: minio/minio:latest # TODO: pin digest at deploy (image archived on Docker Hub but still pullable)
+  # ── object storage ────────────────────────────────────────────────────────
+  # One process: master + volume + filer + the S3 gateway on 8333. The bucket is
+  # created by the API at startup (see the header), so there is no init service.
+  s3:
+    image: chrislusf/seaweedfs:4.50
     restart: unless-stopped
-    command: ["server", "/data", "--console-address", ":9001"]
+    # -ip.bind=0.0.0.0 so the compose network can reach it; without it the
+    # services advertise 127.0.0.1 and the api's requests land on its own
+    # loopback.
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-ip.bind=0.0.0.0"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-jomform}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-jomform_dev_change_me}
+      # The S3 identity the API authenticates as. Both sides read the same two
+      # values, so they cannot drift into "the bucket exists but nobody may
+      # write to it".
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required — run deploy/selfhost/bootstrap.sh}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — run deploy/selfhost/bootstrap.sh}
     volumes:
-      - miniodata:/data
+      - s3data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      # An UNSIGNED GET / answered with the S3 error document proves the S3
+      # handler is serving, not merely that a socket is open: a port check would
+      # pass while the filer is still starting, and the API would then fail its
+      # one-shot bucket provisioning and disable uploads for good.
+      test: ["CMD-SHELL", "curl -s http://127.0.0.1:8333/ | grep -q AccessDenied"]
       interval: 5s
       timeout: 5s
-      retries: 10
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-jomform} $${MINIO_ROOT_PASSWORD:-jomform_dev_change_me} &&
-      mc mb --ignore-existing local/jomform-media &&
-      mc version enable local/jomform-media &&
-      mc anonymous set download local/jomform-media &&
-      echo 'buckets ready'"
-
-  api:
-    build:
-      context: ../api
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-jomform}:${POSTGRES_PASSWORD:-jomform_dev}@postgres:5432/${POSTGRES_DB:-jomform}?sslmode=disable
-      VALKEY_URL: valkey://valkey:6379/0
-      S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-jomform}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-jomform_dev_change_me}
-      S3_BUCKET: jomform-media
-      S3_REGION: us-east-1
-      S3_PUBLIC_BASE: ${S3_PUBLIC_BASE:-${APP_BASE_URL:-http://localhost:8080}/media}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-dev_only_32byte_key_change_me_pls}
-      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
-      # SES SMTP passthrough (transactional email; empty host disables email)
-      SES_SMTP_HOST: ${SES_SMTP_HOST:-}
-      SES_SMTP_PORT: ${SES_SMTP_PORT:-587}
-      SES_SMTP_USER: ${SES_SMTP_USER:-}
-      SES_SMTP_PASS: ${SES_SMTP_PASS:-}
-      SES_FROM: ${SES_FROM:-}
-      # The monitored mailbox a recipient's Reply must reach. Passed through so a
-      # deployment built from this file can actually set it: without it the
-      # variable is read by the app but never reaches the container, and every
-      # message keeps sending replies to SES_FROM (noreply@…) where nothing reads
-      # them. Empty = no Reply-To header.
-      SES_REPLY_TO: ${SES_REPLY_TO:-}
-      # Ollama Cloud credential for every AI surface (legal-page draft, AI form
-      # builder, spam judge, code-asset scan, and the in-app assistant). The
-      # client reads OLLAMA_API_KEY itself, so it must be passed through here —
-      # without it a deployment built from this file has no model credential at
-      # all, and the in-app assistant reports itself unavailable (GET
-      # /v1/rest/chat → available:false) instead of offering a box whose every
-      # message fails. LLM_BASE_URL / LLM_MODEL override the endpoint and model
-      # (defaults: https://ollama.com/v1, deepseek-v4.1-flash:1017). The spam
-      # judge's model and threshold are its own seam (SPAM_JUDGE_MODEL, default
-      # clef; SPAM_JUDGE_THRESHOLD, default 0.5) on the same base URL and key.
-      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
-      LLM_BASE_URL: ${LLM_BASE_URL:-}
-      LLM_MODEL: ${LLM_MODEL:-}
-      SPAM_JUDGE_MODEL: ${SPAM_JUDGE_MODEL:-}
-      SPAM_JUDGE_THRESHOLD: ${SPAM_JUDGE_THRESHOLD:-}
-      PORT: "8080"
-      # QA test-account marking channel (card t_6ae7f586). A registration that
-      # presents this server-held token in X-JomForm-QA-Signup is written with
-      # users.is_test = true, so `purge_test_accounts` can find and remove it
-      # later. Empty (the default) closes the channel. Deliberately NOT wired
-      # into deploy/vps/compose.prod.yml: lanes verify signup on staging, so the
-      # prod marking channel stays shut by construction.
-      JOMFORM_QA_SIGNUP_TOKEN: ${JOMFORM_QA_SIGNUP_TOKEN:-}
-      # Issue #212/#397: origin auto-TLS for DNS-only (grey-cloud) custom
-      # domains. ACME_EMAIL enables the origin TLS listener (SNI-based cert
-      # selection via tlsmgr); ACME_CERT_DIR is a persistent volume so issued
-      # certs + account keys survive restarts (no re-request on boot).
-      ACME_EMAIL: ${ACME_EMAIL:-}
-      ACME_CERT_DIR: /var/lib/jomform/acme
-      TLS_PORT: "8443"
-    volumes:
-      - acmedata:/var/lib/jomform/acme
-    depends_on:
-      postgres:
-        condition: service_healthy
-      valkey:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    ports:
-      - "8080:8080"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 15s
 
 volumes:
   pgdata:
   valkeydata:
-  miniodata:
+  s3data:
   acmedata:
+  caddydata:
+  caddyconfig:

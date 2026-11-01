@@ -184,7 +184,20 @@ func NewObjectStore(endpoint, accessKey, secretKey, bucket, region, publicBase s
 		return nil, fmt.Errorf("s3 config: %w", err)
 	}
 	cli := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		if endpoint != "" && (strings.Contains(endpoint, "localhost") || strings.Contains(endpoint, "minio") || strings.Contains(endpoint, ":9000")) {
+		// PATH-STYLE FOR EVERY CUSTOM ENDPOINT, not just the two hostnames this
+		// used to sniff for (`localhost`, `minio`, `:9000`).
+		//
+		// A custom endpoint means "not AWS S3": it is a self-hosted or
+		// third-party S3-compatible server (MinIO, SeaweedFS, Garage, Ceph RGW,
+		// R2, Spaces …). Virtual-host addressing asks the resolver for
+		// `<bucket>.<endpoint>`, which only exists if that service publishes a
+		// wildcard DNS record — compose-network service names never do. The
+		// old sniff made the S3 path work ONLY for a service named `minio` on
+		// :9000, so every other self-host fell through to virtual-host style
+		// and died on DNS during startup bucket provisioning. With no endpoint
+		// set we are on real AWS S3, where virtual-host style is correct and
+		// path-style is being retired — so the rule is "endpoint set ⇒ path".
+		if endpoint != "" {
 			o.UsePathStyle = true
 		}
 	})

@@ -26,6 +26,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
@@ -131,5 +132,42 @@ func TestAccountSlugHostNoLongerServesAWorkspace(t *testing.T) {
 			t.Errorf("%s/%s status = %d, want 404 — reserved and apex hosts never serve a workspace form",
 				host, formSlug, rec.Code)
 		}
+	}
+
+	// ── THE PRODUCTION SHAPE: the apex IS APP_BASE_URL's host ───────────────
+	// THIS IS THE ASSERTION THAT WAS MISSING. The handler above carries
+	// BaseURL http://localhost:8080, so an apex request never matches "this
+	// install's own origin" and every assertion above is vacuous for the shape
+	// the hosted product actually runs: deploy/vps/compose.prod.yml sets
+	// APP_BASE_URL to the product's own apex. Measured (card t_4ddab217): with
+	// BASE_URL = https://jomform.com, /f/<formSlug> answered 200 and rendered
+	// the merchant's form — a slug exactly ONE workspace holds resolved across
+	// the install. Serving from the install's own origin is therefore an
+	// EXPLICIT, default-OFF switch (JOMFORM_SELF_HOSTED), never an inference
+	// from host equality: on the hosted product the apex is that origin.
+	prod := &PublicHandlers{
+		Forms:      dbstore.NewFormStore(pool),
+		Accounts:   dbstore.NewAccountStore(pool),
+		Workspaces: dbstore.NewWorkspaceStore(pool),
+		BaseURL:    "https://jomform.com",
+	}
+	for _, path := range []string{"/f/" + formSlug, "/" + formSlug} {
+		for _, host := range []string{"jomform.com", "jomform.com:443", "www.jomform.com"} {
+			rec := publicServe(t, prod, host, path)
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("%s%s (APP_BASE_URL=https://jomform.com) status = %d, want 404 — on the "+
+					"hosted product the apex IS the install's own origin, and it serves no form "+
+					"(issue #77). Serving it needs the explicit self-host switch, not host equality "+
+					"(body %.120s)", host, path, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	// The submit path agrees: a page that renders while its POST 404s is worse
+	// than one that never rendered, so the resolver is asserted directly.
+	probe := httptest.NewRequest(http.MethodPost, "/f/"+formSlug+"/order", nil)
+	probe.Host = "jomform.com"
+	if f := prod.findPublicForm(ctx, probe, formSlug); f != nil {
+		t.Errorf("findPublicForm resolved %q from the hosted apex (id %s) — the submit path must "+
+			"refuse it exactly like the page does", formSlug, f.ID)
 	}
 }

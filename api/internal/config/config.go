@@ -47,6 +47,26 @@ type Config struct {
 	SESSMTPPass string
 	SESFrom     string
 	SESRegion   string
+	// LogVerifyLink (JOMFORM_LOG_VERIFY_LINK=1) makes a deployment that has NO
+	// email sender write the account-verification link to the API log instead
+	// of mailing it. It exists for SELF-HOSTED installs, where email is an
+	// external dependency (the sender is AWS SES, not plain SMTP): without it,
+	// registration creates an unverified account that can NEVER log in, because
+	// the only copy of the confirmation link is the message that was never
+	// sent. Off by default and consulted ONLY when the sender is unconfigured,
+	// so a deployment with working email never puts a link in its logs.
+	LogVerifyLink bool
+	// SelfHosted (JOMFORM_SELF_HOSTED=1) declares that this deployment IS a
+	// self-hosted install: one public origin for everybody, no wildcard tenant
+	// subdomains, no custom domains. It is the ONLY switch that lets a public
+	// form be served from the install's own hostname
+	// (httpapi.PublicHandlers.ownOriginForm). Off by default, and deliberately
+	// NOT inferred from "the request host equals APP_BASE_URL's host": the
+	// hosted product sets exactly that (APP_BASE_URL is its own apex), so the
+	// inference served merchant forms on the apex — the #77 regression this
+	// flag closes. The self-host bootstrap writes it; the hosted deploy never
+	// does.
+	SelfHosted bool
 	// SESReplyTo (SES_REPLY_TO, comma-separated) is the monitored mailbox a
 	// recipient's Reply button must reach. It exists because every message is
 	// From noreply@jomform.com — an address with no reader, so a reply sent
@@ -201,6 +221,11 @@ func Load() (*Config, error) {
 		SESSMTPPass: os.Getenv("SES_SMTP_PASS"),
 		SESFrom:     os.Getenv("SES_FROM"),
 		SESRegion:   getEnv("SES_REGION", "ap-southeast-1"),
+		// Self-host escape hatch for the verification link: see the field doc.
+		LogVerifyLink: isTruthy(os.Getenv("JOMFORM_LOG_VERIFY_LINK")),
+		// Self-host mode: enables serving this install's own forms from its own
+		// origin. Off unless the operator (or the bootstrap) asked for it.
+		SelfHosted: isTruthy(os.Getenv("JOMFORM_SELF_HOSTED")),
 		// The monitored mailbox a recipient's Reply reaches. Deliberately NOT
 		// defaulted to SES_FROM: every message JomForm sends is From
 		// noreply@jomform.com, which nothing reads, so a default here would
@@ -321,6 +346,16 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// isTruthy reads an opt-in switch written by a human in an env file: "1" or
+// "true" (any case) turns it on; anything else — including the empty string a
+// compose file's `${VAR:-}` hands over when nobody set it — leaves it off.
+// Deliberately NOT strconv.ParseBool: that returns an ERROR for "yes"/"on",
+// which every caller would then have to handle for a switch whose whole job is
+// "did the operator ask for this".
+func isTruthy(v string) bool {
+	return strings.EqualFold(strings.TrimSpace(v), "1") || strings.EqualFold(strings.TrimSpace(v), "true")
 }
 
 // parsePositiveInt64 parses a positive integer, falling back on empty/invalid.

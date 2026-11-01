@@ -139,7 +139,10 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			CookieDomain: SharedCookieDomain(cfg.AppBaseURL),
 			VerifyKey:    deps.VerifyKey,
 			VerifyMailer: deps.VerifyMailer,
-			LoginLimiter: auth.NewLoginLimiter(deps.Sessions.Client()),
+			// Self-hosted installs have no email sender; this is how their
+			// first account can be confirmed. Off unless the operator set it.
+			LogVerifyLink: cfg.LogVerifyLink,
+			LoginLimiter:  auth.NewLoginLimiter(deps.Sessions.Client()),
 			// Issue #56: SES reputation hardening.
 			Suppressions: deps.Suppressions,
 			Breaker:      deps.Breaker,

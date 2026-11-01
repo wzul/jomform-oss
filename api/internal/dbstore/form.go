@@ -1136,6 +1136,46 @@ func (s *FormStore) ByWorkspaceSlug(ctx context.Context, workspaceSlug, formSlug
 	return f2, nil
 }
 
+// BySlugAnyWorkspace returns every non-deleted form carrying this slug, across
+// ALL workspaces. Callers must treat len != 1 as "no answer": form slugs are
+// unique per workspace, not globally (migration 000019), so two workspaces on
+// one origin can both hold "booking".
+//
+// It exists for the SELF-HOSTED origin, where there is no workspace subdomain to
+// scope a lookup by: the install has one hostname for everybody. See
+// PublicHandlers.ownOriginForm.
+func (s *FormStore) BySlugAnyWorkspace(ctx context.Context, formSlug string) ([]*Form, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT f.id, f.account_id, f.slug, f.title, f.config, f.theme, f.status, f.is_main,
+		        f.redirect_success, f.redirect_failure, f.allow_embed, f.logo_url, f.is_template, f.failure_message,
+		        f.start_at, f.end_at, f.entry_limit, f.pending_message, f.expired_message, f.limit_message,
+		        f.created_at, f.updated_at, f.deleted_at
+		 FROM forms f
+		 JOIN accounts a ON a.id = f.account_id
+		 JOIN workspaces sp ON sp.id = a.workspace_id AND sp.deleted_at IS NULL
+		 WHERE f.slug = $1 AND f.deleted_at IS NULL
+		 ORDER BY f.created_at
+		 LIMIT 2`, formSlug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Form
+	for rows.Next() {
+		f := &Form{}
+		if err := rows.Scan(
+			&f.ID, &f.AccountID, &f.Slug, &f.Title, &f.Config, &f.Theme,
+			&f.Status, &f.IsMain, &f.RedirectSuccess, &f.RedirectFailure,
+			&f.AllowEmbed, &f.LogoURL, &f.IsTemplate, &f.FailureMessage, &f.StartAt, &f.EndAt,
+			&f.EntryLimit, &f.PendingMessage, &f.ExpiredMessage, &f.LimitMessage,
+			&f.CreatedAt, &f.UpdatedAt, &f.DeletedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 // ByAccountSlug resolves a live (non-deleted) form by account slug + form slug
 // regardless of status (issue #176). See PublishedByAccountSlug — this is the
 // custom-domain resolver, not a subdomain one.

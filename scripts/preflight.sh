@@ -327,7 +327,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet gofmt test govuln web lint design webimage speccounts a11y e2e npmaudit gitleaks monitor tmpkey mediaprobe backup host prunewt prunesync prunehost refguard selftest)
+GATE_NAMES=(build vet gofmt test govuln web lint design webimage speccounts a11y e2e npmaudit gitleaks monitor tmpkey mediaprobe backup host selfhost prunewt prunesync prunehost refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -584,6 +584,10 @@ pw_declared() {
     speccounts)            printf '%s\n' 'web/e2e/*' 'web/playwright.config.ts' 'GATE-INVENTORY.md' 'scripts/spec-counts.sh' ;;
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor|tmpkey|backup|host|prunewt|refguard) printf '%s\n' 'deploy/*' 'scripts/*' ;;
+    # The self-host path is what a stranger runs, so its own artifacts AND the
+    # docs that explain them are the gate's area: a change to any of these can
+    # turn "one command" into a stack nobody can stand up.
+    selfhost)              printf '%s\n' 'deploy/selfhost/*' 'deploy/docker-compose.yml' 'deploy/.env.example' 'docs/SELF-HOST.md' 'README.md' ;;
     mediaprobe)            printf '%s\n' 'scripts/*' ;;
     # `design` scans `web/src/**/*.tsx` and the token file, and its own sources.
     # All four matter: an edit to a component is the change that can introduce a
@@ -621,6 +625,7 @@ pw_sources() {
     prunesync)             printf '%s\n' 'deploy/worktrees/check-prune-kanban-worktrees-host*.sh' 'deploy/worktrees/install-prune-kanban-worktrees.sh' ;;
     prunehost)             printf '%s\n' 'deploy/host/*' ;;
     refguard)              printf '%s\n' 'scripts/refguard.sh' 'scripts/refguard_test.sh' ;;
+    selfhost)              printf '%s\n' 'deploy/selfhost/*' 'deploy/docker-compose.yml' 'deploy/.env.example' 'docs/SELF-HOST.md' 'README.md' ;;
     selftest)              printf '%s\n' 'scripts/preflight.sh' 'scripts/preflight_test.sh' ;;
     gitleaks)              printf '%s\n' '.gitleaks.toml' ;;
   esac
@@ -3260,6 +3265,44 @@ host_run() {
   bash "$REPO_ROOT/deploy/vps/drift-check_test.sh"
 }
 run host "fresh-host bootstrap + repo/host drift self-tests (dry-run changes nothing; the env contract is derived from the compose; a missing live file is never a pass)" host_run
+
+# selfhost — the ONE-COMMAND self-host path a stranger runs from a fresh clone.
+# Same shape of gate as `host`/`backup`: what is testable in the repo is the
+# artifact's own harness, and the harness stubs `docker` so nothing starts.
+#
+# WHY IT IS A GATE. The failure this guards is SILENT IN BOTH DIRECTIONS: a
+# compose that defaults a secret (`ENCRYPTION_KEY:-dev_only_…`, which this file
+# shipped until now) comes up HEALTHY with a key everybody knows, and a bootstrap
+# that refuses nothing hands such a file to `docker compose up` with a helpful
+# message. Nothing in the product reports either: the stack is green, the pages
+# render, and the only symptom is that the data is readable by anyone who has
+# seen the repository. The gate also pins that a stack which CAN be completed
+# still starts — a guard that refuses everything is an outage, not a guard.
+#
+# What it asserts, in `deploy/selfhost/bootstrap_test.sh` (95 checks, ~6s,
+# offline): a placeholder secret / placeholder APP_BASE_URL / 63-char or non-hex
+# ENCRYPTION_KEY is REFUSED, named, and leaves the operator's file byte-identical
+# (a refusal that half-writes a file is how the next run adopts it); a clean run
+# generates all three secrets with `openssl rand -hex 32`, chmod 600, and derives
+# SITE_ADDRESS/APP_ENV/ports from the origin (https→prod, http→dev); a second run
+# adopts the file without rotating a key that encrypts stored credentials; the
+# generated .env carries `JOMFORM_SELF_HOSTED=1` (and a pre-flag .env adopted by
+# the bootstrap is given it, while an operator's explicit 0 survives) and the
+# compose passes it to the api container with a default of 0 — drop either hop
+# and the install comes up healthy serving no form at all, while the hosted
+# production compose must never carry it (its apex IS APP_BASE_URL); the
+# compose contains `web`, publishes nothing but the front door's two ports, has a
+# healthcheck and `restart: unless-stopped` per long-running service, and passes
+# `docker compose config` with no warning and no null env value; the Caddyfile
+# routes each API surface to api:8080 and leaves /api/ (the dashboard's
+# same-origin proxy) with web:3000; and the whole install path carries none of
+# our hosts. BITE-PROVED: re-introducing the compose default, neutering the
+# fail-closed check, dropping /f/ from the front door, or removing the
+# JOMFORM_SELF_HOSTED write/pass-through each reds this gate.
+selfhost_run() {
+  bash "$REPO_ROOT/deploy/selfhost/bootstrap_test.sh"
+}
+run selfhost "one-command self-host path: bootstrap refuses placeholder secrets and starts a complete stack (web+api+pg+valkey+s3 behind Caddy) when it can" selfhost_run
 
 # prunewt — the worktree pruner's self-test. Same shape of gate as
 # `monitor`/`tmpkey` and for the same reason: `prune-kanban-worktrees.sh` only

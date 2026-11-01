@@ -62,6 +62,12 @@ type AuthHandlers struct {
 	LoginLimiter *auth.LoginLimiter
 	VerifyKey    []byte
 	VerifyMailer VerifyMailer
+	// LogVerifyLink writes the verification link to the API log when no email
+	// sender is configured (JOMFORM_LOG_VERIFY_LINK, config.Config.LogVerifyLink).
+	// It is the self-hosted delivery path — see logVerifyLinkWhenNoMailer in
+	// verify.go for why an unverified account with no mailer is a dead end.
+	// Never consulted when a mailer IS configured.
+	LogVerifyLink bool
 
 	// loginDelaySleep spends the login-failure delay (auth.LoginFailDelay).
 	// Nil means sleepCtx. It is a seam so a test can observe that the gate

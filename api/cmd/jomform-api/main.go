@@ -598,6 +598,10 @@ func main() {
 			Domains:  dbstore.NewDomainStore(pool),
 			Products: products, ProductVariations: dbstore.NewProductVariationStore(pool),
 			Pay: pay, BaseURL: cfg.AppBaseURL,
+			// Serving this install's own forms from its own origin is an
+			// explicit, default-OFF mode: the hosted product's APP_BASE_URL is
+			// its apex, which serves no form (issue #77).
+			SelfHosted:     cfg.SelfHosted,
 			SystemSettings: dbstore.NewSystemSettingStore(pool),
 			Workspaces:     workspacesStore,
 			// Issue #171: response-only form submissions.

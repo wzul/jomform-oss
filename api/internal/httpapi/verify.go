@@ -34,7 +34,7 @@ import (
 // When the queue is nil (bare-mode tests) the send happens synchronously.
 func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email, lang string) error {
 	if mailerUnavailable(a.VerifyMailer) {
-		return fmt.Errorf("verify mailer not configured")
+		return a.logVerifyLinkWhenNoMailer(userID, email, lang)
 	}
 	if len(a.VerifyKey) != 32 {
 		return fmt.Errorf("verify key not configured")
@@ -52,17 +52,10 @@ func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email, lang 
 			return nil // suppressed: don't resend, don't surface as a hard error
 		}
 	}
-	token, err := auth.SignVerifyToken(a.VerifyKey, email)
+	link, l, err := a.verifyLink(email, lang)
 	if err != nil {
 		return err
 	}
-	link := strings.TrimRight(a.BaseURL, "/") + "/v1/auth/verify?token=" + token
-	// Issue #206: the lang rides on the link as ?lang= so the confirmation page
-	// (writeVerifyPage) renders in the language the EMAIL was written in. It is
-	// the resolved code, not the raw argument, so the page and the message can
-	// never disagree about which language the user was addressed in.
-	l := emailtext.NormalizeLang(lang)
-	link += "&lang=" + url.QueryEscape(l)
 	msg := emailtext.Text(l, emailtext.VerifyEmail, map[string]string{"link": link})
 	// Issue #199: background path — enqueue and return immediately.
 	if a.EmailQueue != nil {
@@ -84,6 +77,60 @@ func (a *AuthHandlers) sendVerifyEmail(ctx context.Context, userID, email, lang 
 			slog.Warn("breaker_record_send", "err", err)
 		}
 	}
+	return nil
+}
+
+// verifyLink mints the confirmation URL for an address, and returns the locale
+// the message is (or would be) written in.
+//
+// ONE builder for both delivery paths — the mailed link and the one a
+// self-hosted deployment logs (logVerifyLinkWhenNoMailer) — so the two can
+// never drift apart in the token, the base URL or the ?lang= param.
+//
+// Issue #206: the lang rides on the link as ?lang= so the confirmation page
+// (writeVerifyPage) renders in the language the EMAIL was written in. It is the
+// resolved code, not the raw argument, so the page and the message can never
+// disagree about which language the user was addressed in.
+func (a *AuthHandlers) verifyLink(email, lang string) (string, string, error) {
+	if len(a.VerifyKey) != 32 {
+		return "", "", fmt.Errorf("verify key not configured")
+	}
+	token, err := auth.SignVerifyToken(a.VerifyKey, email)
+	if err != nil {
+		return "", "", err
+	}
+	l := emailtext.NormalizeLang(lang)
+	link := strings.TrimRight(a.BaseURL, "/") + "/v1/auth/verify?token=" + token +
+		"&lang=" + url.QueryEscape(l)
+	return link, l, nil
+}
+
+// logVerifyLinkWhenNoMailer is the SELF-HOSTED delivery path: the deployment has
+// no email sender at all (the sender is AWS SES — SES_SMTP_HOST/SES_FROM — so a
+// box without AWS credentials cannot mail anything), and an account that is
+// created unverified can never log in, because the only copy of the
+// confirmation link is a message that was never sent.
+//
+// With JOMFORM_LOG_VERIFY_LINK=1 the link is written to the API log instead, so
+// `docker compose logs api` is enough to finish the first signup. Deliberately
+// opt-in: a link in the logs is an account-activation token readable by anyone
+// who can read them, which is why it is only reachable when no mailer exists
+// (a deployment with working email never takes this branch) and why a
+// deployment without the switch keeps the old behaviour — a recorded failure,
+// never a silent no-op.
+func (a *AuthHandlers) logVerifyLinkWhenNoMailer(userID, email, lang string) error {
+	if !a.LogVerifyLink {
+		return fmt.Errorf("verify mailer not configured")
+	}
+	link, _, err := a.verifyLink(email, lang)
+	if err != nil {
+		return err
+	}
+	slog.Warn("verify_link_logged_instead_of_emailed",
+		"user", userID,
+		"to", obfuscateEmail(email),
+		"link", link,
+		"why", "no email sender is configured and JOMFORM_LOG_VERIFY_LINK is on: this link is the only copy, open it to confirm the account")
 	return nil
 }
 

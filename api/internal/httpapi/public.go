@@ -51,6 +51,12 @@ type PublicHandlers struct {
 	// Issue #171: response-only form submissions.
 	Submissions *dbstore.SubmissionStore
 	BaseURL     string
+	// SelfHosted enables serving a public form from the INSTALL'S OWN origin
+	// (the host of BaseURL) — a deployment whose only hostname is the one in
+	// APP_BASE_URL. OFF by default and never inferred from host equality: on
+	// the hosted product that origin IS the apex, which serves no form (issue
+	// #77). Wired from config.Config.SelfHosted (JOMFORM_SELF_HOSTED).
+	SelfHosted bool
 	// AccessKey (ENCRYPTION_KEY bytes) signs the private-form unlock cookie
 	// (issue #176). Nil disables private-form access (gate always shown).
 	AccessKey []byte
@@ -1493,6 +1499,18 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Bare apex (jomform.com): no workspace subdomain, no custom domain — 404.
+	// The one exception is an install that DECLARES itself self-hosted
+	// (PublicHandlers.SelfHosted), whose own hostname is the only host there
+	// is; see ownOriginForm for why that case must serve — and why the
+	// declaration cannot be inferred from host equality.
+	if f := h.ownOriginForm(r.Context(), r, slug); f != nil {
+		if f.Slug != slug {
+			redirectToRenamedForm(w, r, "/f/"+f.Slug)
+			return
+		}
+		h.serveForm(w, r, f)
+		return
+	}
 	http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
 }
 
@@ -2396,6 +2414,89 @@ func customDomainOwner(ctx context.Context, s *dbstore.AccountStore, d *dbstore.
 	return slug
 }
 
+// ownOriginForm resolves a public form served from the INSTALL'S OWN origin —
+// a self-hosted deployment, where there is no workspace subdomain and no
+// verified custom domain because the install has ONE hostname for everybody.
+//
+// WHY THIS EXISTS. Public form addressing is host-scoped by design (issue
+// #77/#297): a hosted tenant is served on <workspace>.jomform.com, and the apex
+// serves no form at all. A self-hosted install has no such domain to be a
+// subdomain OF, so before this every published form was unreachable on the only
+// origin the operator had. Measured on a clean one-command install (card
+// t_28a06494): register → verify → workspace → form → publish all succeed, the
+// dashboard prints the form as live, and GET /f/<slug> answers 404 "Borang tidak
+// dijumpai" — the product cannot serve a single buyer.
+//
+// SCOPED SO THE HOSTED PRODUCT IS UNCHANGED: this path runs ONLY when the
+// deployment declares itself self-hosted (SelfHosted, from
+// JOMFORM_SELF_HOSTED). Host equality alone is NOT that declaration and must
+// never be: the hosted product sets APP_BASE_URL to its own apex, so "the
+// request host equals this install's origin" is TRUE on jomform.com — inferring
+// from it served a merchant's published form on the product apex and broke
+// issue #77 (measured, card t_4ddab217: jomform.com/f/<slug> answered 200 for a
+// slug exactly one workspace held). The self-host bootstrap writes
+// JOMFORM_SELF_HOSTED=1; the hosted deploy never sets it.
+//
+// The flag still keeps the host check and the single-match rule below: a
+// self-hosted install reached on a host that is NOT its own origin serves
+// nothing, and ambiguity is still a miss.
+//
+// AMBIGUITY IS A MISS, NOT A GUESS. Form slugs are unique PER WORKSPACE
+// (migration 000019), so two tenants on one install can both hold "booking".
+// Serving either one would put one merchant's form in front of another's buyer;
+// more than one match is therefore a 404, exactly like no match.
+func (h *PublicHandlers) ownOriginForm(ctx context.Context, r *http.Request, slug string) *dbstore.Form {
+	// EXPLICIT MODE FIRST. Serving from "my own origin" is only safe where the
+	// operator said this install IS the origin the buyer loads — one host, no
+	// tenant subdomains. On the hosted product the same test is TRUE for the
+	// apex, which is precisely the origin that must serve nothing (issue #77).
+	// A guard that skipped this check would serve every single-workspace slug
+	// on jomform.com.
+	if !h.SelfHosted {
+		return nil
+	}
+	if h.Forms == nil || h.BaseURL == "" {
+		return nil
+	}
+	base, err := url.Parse(h.BaseURL)
+	if err != nil || base.Host == "" {
+		return nil
+	}
+	if !sameHost(r.Host, base.Host) {
+		return nil
+	}
+	forms, err := h.Forms.BySlugAnyWorkspace(ctx, slug)
+	if err != nil || len(forms) != 1 {
+		return nil
+	}
+	return forms[0]
+}
+
+// sameHost compares two host[:port] values case-insensitively, on the NAME only:
+// the published port is not part of the tenant's identity, so a deployment
+// reached as https://forms.example.com and the same one reached with an explicit
+// :443 are the same origin. An empty host never matches anything.
+func sameHost(a, b string) bool {
+	return hostOnly(a) == hostOnly(b) && hostOnly(a) != ""
+}
+
+func hostOnly(h string) string {
+	h = strings.ToLower(strings.TrimSpace(h))
+	if strings.HasPrefix(h, "[") {
+		// IPv6 literal: the address is bracketed, so the port (if any) is the
+		// colon AFTER the closing bracket — the inner colons are part of the
+		// address.
+		if end := strings.Index(h, "]"); end > 0 {
+			return h[:end+1]
+		}
+		return h
+	}
+	if i := strings.Index(h, ":"); i >= 0 {
+		h = h[:i]
+	}
+	return h
+}
+
 // handleWorkspaceRootForm serves a form by slug on a WORKSPACE subdomain
 // (e.g. wanzulhosting.jomform.com/form-baru) or a verified custom domain
 // (issue #297). On jomform.com it 404s so dashboard routes are unaffected.
@@ -2465,10 +2566,11 @@ func (h *PublicHandlers) findPublicForm(ctx context.Context, r *http.Request, sl
 		customDomain = cd
 	}
 	if sub == "" && customDomain == "" {
-		// Bare apex: no workspace subdomain, no custom domain. A public
-		// payment link is not served here (issue #77), and neither is a
-		// rename's redirect — there is no workspace to scope it to.
-		return nil
+		// Bare apex: no workspace subdomain, no custom domain. This is either
+		// the hosted product's apex (jomform.com, issue #77 — never a public
+		// form), or a SELF-HOSTED install, where the install's own hostname is
+		// the only host there is.
+		return h.ownOriginForm(ctx, r, slug)
 	}
 
 	// 1. The live form, by the same scoping the serving path has always used.

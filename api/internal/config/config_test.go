@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -249,4 +250,60 @@ func TestLoadSuperAdminEmails(t *testing.T) {
 	if cfg.IsSuperAdmin("") {
 		t.Error("IsSuperAdmin should be false for an empty email")
 	}
+}
+
+// TestLoadSelfHosted pins JOMFORM_SELF_HOSTED's contract, in both directions.
+//
+// The flag is what permits a deployment to serve its own published forms from
+// its own origin. It MUST default off: the hosted product's APP_BASE_URL is its
+// own apex, so a path keyed on "the request host is this install's origin"
+// serves merchant forms on the apex (issue #77; regression measured on PR #1516
+// with BaseURL=https://jomform.com and Host: jomform.com -> 200).
+//
+// And it must actually turn ON from the value the self-host bootstrap writes
+// ("1"), or the one-command install comes up serving nothing — a guard that is
+// an outage. isTruthy is shared with JOMFORM_LOG_VERIFY_LINK, so this also
+// keeps "0" from reading as true.
+func TestLoadSelfHosted(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"", false},      // compose's `${VAR:-}` when nobody set it
+		{"0", false},     // explicitly off
+		{"no", false},    // not a truthy spelling
+		{"1", true},      // what deploy/selfhost/bootstrap.sh writes
+		{"true", true},   // the other accepted spelling
+		{" TRUE ", true}, // whitespace/case tolerated, like its sibling switch
+	} {
+		t.Run("value="+tc.value, func(t *testing.T) {
+			t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
+			t.Setenv("APP_ENV", "dev")
+			t.Setenv("JOMFORM_SELF_HOSTED", tc.value)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.SelfHosted != tc.want {
+				t.Errorf("SelfHosted = %v for JOMFORM_SELF_HOSTED=%q, want %v", cfg.SelfHosted, tc.value, tc.want)
+			}
+		})
+	}
+
+	// Unset is the hosted product's shape. os.Unsetenv rather than "", because
+	// "" is what a compose `${VAR:-}` hands over — and the default has to hold
+	// for a deployment that never heard of the variable at all.
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", "postgres://localhost/jomform_test")
+		t.Setenv("APP_ENV", "dev")
+		os.Unsetenv("JOMFORM_SELF_HOSTED")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.SelfHosted {
+			t.Error("SelfHosted is TRUE with JOMFORM_SELF_HOSTED unset — serving from the install's " +
+				"own origin must be opt-in, or the hosted apex serves merchant forms (#77)")
+		}
+	})
 }

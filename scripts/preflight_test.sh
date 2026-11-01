@@ -2036,6 +2036,7 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
     prunesync) printf '%s\n' 'deploy/worktrees/check-prune-kanban-worktrees-host*.sh' 'deploy/worktrees/install-prune-kanban-worktrees.sh' ;;
     prunehost) printf '%s\n' 'deploy/host/*' ;;
     refguard) printf '%s\n' 'scripts/refguard.sh' 'scripts/refguard_test.sh' ;;
+    selfhost) printf '%s\n' 'deploy/selfhost/*' 'deploy/docker-compose.yml' 'deploy/.env.example' 'docs/SELF-HOST.md' 'README.md' ;;
     selftest) printf '%s\n' 'scripts/preflight.sh' 'scripts/preflight_test.sh' ;;
     gitleaks) printf '%s\n' '.gitleaks.toml' ;;
   esac

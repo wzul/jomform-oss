@@ -1,0 +1,52 @@
+# JomForm's front door.
+#
+# SITE_ADDRESS comes from the bootstrap, derived from APP_BASE_URL without its
+# port:
+#
+#   APP_BASE_URL=https://forms.example.com   ->  SITE_ADDRESS=https://forms.example.com
+#   APP_BASE_URL=http://localhost:8080       ->  SITE_ADDRESS=http://localhost
+#
+# An `https://` address makes Caddy obtain and renew a certificate for that
+# hostname by itself (Let's Encrypt, HTTP-01 on port 80 — so DNS must point here
+# and port 80 must be reachable). An explicit `http://` address turns automatic
+# HTTPS off, which is what a local trial wants.
+#
+# WHY A FRONT DOOR AT ALL: JomForm serves the dashboard from `web` and everything
+# public from `api`. The browser must see ONE origin, because the dashboard's
+# session cookie is first-party: the Next app proxies /api/* to the API under the
+# same host (web/src/app/api/[...path]/route.ts), and a passkey ceremony is bound
+# to the host in APP_BASE_URL. Two ports, two origins, no working login.
+
+{$SITE_ADDRESS:http://localhost} {
+	encode zstd gzip
+
+	# ── the API's public surfaces ───────────────────────────────────────────
+	#   /f/<slug>     the published form a buyer fills in
+	#   /t/<ref>      the thank-you page after an order
+	#   /v1/*         REST (and the dashboard's /api/* proxy, via `web`)
+	#   /media/*      uploaded files, streamed from object storage
+	#   /embed/*      forms framed on a merchant's own site
+	#   /oauth/*      OAuth 2.1 for MCP clients
+	#   /.well-known/oauth-*  MCP + OAuth discovery documents
+	#   /healthz      liveness (also used by the compose healthcheck)
+	#
+	# /mcp itself is NOT here: the MCP endpoint is served by the web app, the
+	# same split the hosted product's edge uses.
+	@api path /f/* /t/* /v1/* /media/* /embed/* /oauth/* /.well-known/oauth-* /healthz
+	handle @api {
+		reverse_proxy api:8080
+	}
+
+	# ── everything else is the dashboard ────────────────────────────────────
+	# Including /api/*, which the Next app proxies to the API server-side.
+	handle {
+		reverse_proxy web:3000
+	}
+
+	# Caddy's request log goes to stdout, so `docker compose logs caddy` shows
+	# what the front door actually received.
+	log {
+		output stdout
+		format console
+	}
+}

@@ -6,7 +6,7 @@ Bina borang tempahan yang cantik dan pantas, terima bayaran melalui [CHIP](https
 
 - 💳 Payments: **CHIP Collect** — one-time **and** subscription/recurring via CHIP card tokenization
 - 🤖 **MCP server built-in** — merchants connect their own AI agent (Claude, dsb.) and run the whole store through tools
-- ⚡ Modern stack: Go 1.26 · PostgreSQL 18 · Valkey 9 · Next.js 16 (LTS) · MinIO/S3
+- ⚡ Modern stack: Go 1.26 · PostgreSQL 18 · Valkey 9 · Next.js 16 (LTS) · S3-compatible storage
 - 🇲🇾 BM-first UI, e-Invoice-ready data model
 
 > Status: planning → MVP development. See `docs/SPEC.md`.
@@ -17,6 +17,24 @@ endpoint), `docs/SITE-NAME-SEARCH.md` (what the home page's `WebSite` structured
 data does — and does not — do for the name Search prints) and
 `docs/PROXY-DECISION.md`.
 
+## Self-host it
+
+JomForm runs on your own server, with one command and one env file:
+
+```bash
+git clone https://github.com/wzul/jomform.git
+cd jomform
+bash deploy/selfhost/bootstrap.sh --base-url https://forms.example.com
+```
+
+That generates every secret, builds the stack (dashboard + API + PostgreSQL +
+Valkey + S3 behind Caddy, which obtains the TLS certificate) and prints the
+URL when it is healthy. Docker with the Compose v2 plugin, a hostname pointing at
+the server, and ports 80/443 open are the only prerequisites.
+
+Full instructions — first account, backups, upgrades, troubleshooting — are in
+**[docs/SELF-HOST.md](docs/SELF-HOST.md)**.
+
 ## Repo layout (planned monorepo)
 
 ```
@@ -24,7 +42,7 @@ jomform/
 ├── api/            # Go backend (REST + MCP server + worker)
 ├── web/            # Next.js dashboard + form builder
 ├── render/         # Public order-form renderer (SSR, buyer-facing)
-├── deploy/         # docker-compose + Traefik templates (incl. MinIO)
+├── deploy/         # docker-compose + Traefik templates (incl. an S3 server)
 └── docs/
 ```
 
@@ -36,7 +54,7 @@ jomform/
 | MCP server | Official `modelcontextprotocol/go-sdk` (1.7+) — HTTP transport + OAuth, per-account API key scope |
 | DB | PostgreSQL 18.x |
 | Cache/queue | Valkey 9.1.x (`valkey/valkey:9.1-alpine`) |
-| Object storage | Any S3-compatible. Self-host: MinIO. Cloud: Cloudflare R2 |
+| Object storage | Any S3-compatible. Self-host: the bundled SeaweedFS. Cloud: Cloudflare R2, AWS S3 |
 | Dashboard/builder | Next.js 16 (Active LTS), Tailwind, shadcn/ui |
 
 ## License
