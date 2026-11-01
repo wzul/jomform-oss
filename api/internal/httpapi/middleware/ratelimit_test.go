@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -234,5 +235,174 @@ func TestRateLimiterKeepsLiveBucketsAndStillEvictsRefilledOnes(t *testing.T) {
 	}
 	if _, ok := l.buckets["B"]; !ok {
 		t.Error("B (the key that just made a request) is missing from the map")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Retry-After tells the truth about the bucket that refused (card t_5bed7cab)
+//
+// The header used to be the constant "30" for every RateLimitWith caller, while
+// the buckets behind it refill at 1/s (RateLimit), 1/hour (magic-link) and
+// 3/hour (the emailed 2FA code): true for none of them. A value that is too
+// SHORT sends the client straight back into a refusal, and a value that is too
+// LONG throttles it for nothing — and the number is user-facing, because /login
+// renders it verbatim as "Too many attempts — try again in N seconds"
+// (web/src/lib/rateLimitErr.ts). These tests read the header off a real 429 and
+// then SPEND the window it claims.
+// ---------------------------------------------------------------------------
+
+// post serves one request through lim and returns the recorder.
+func post(lim http.Handler, req *http.Request) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	lim.ServeHTTP(rec, req)
+	return rec
+}
+
+// retryAfterSeconds reads a 429's Retry-After as whole seconds, failing on a
+// missing or unparseable header (the shape a client cannot obey).
+func retryAfterSeconds(t *testing.T, rec *httptest.ResponseRecorder) int {
+	t.Helper()
+	raw := rec.Header().Get("Retry-After")
+	if raw == "" {
+		t.Fatalf("429 carries no Retry-After (body %q)", rec.Body.String())
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		t.Fatalf("Retry-After = %q, want a whole number of seconds >= 1", raw)
+	}
+	return n
+}
+
+// postUntilRefusal posts until the bucket refuses and returns that answer's
+// Retry-After in seconds.
+func postUntilRefusal(t *testing.T, lim http.Handler, req *http.Request) int {
+	t.Helper()
+	for i := 0; i < 500; i++ {
+		if rec := post(lim, req); rec.Code == http.StatusTooManyRequests {
+			return retryAfterSeconds(t, rec)
+		}
+	}
+	t.Fatalf("the bucket never refused after 500 requests")
+	return 0
+}
+
+// TestRateLimitRetryAfterIsTheRealWaitOnTheLoginBucket is the measured prod
+// shape from the card: the real /login limiter (RateLimit, burst 10, 1/s),
+// drained, and the number a visitor would be shown then spent in wall-clock
+// time. Before the fix the header said 30 while the bucket was empty for about
+// one second, and /login's passkey button printed "try again in 30 seconds".
+func TestRateLimitRetryAfterIsTheRealWaitOnTheLoginBucket(t *testing.T) {
+	lim := RateLimit(okHandler())
+	req := httptest.NewRequest("POST", "/v1/auth/login", nil)
+	req.RemoteAddr = "203.0.113.44:41234"
+
+	secs := postUntilRefusal(t, lim, req)
+	if secs > 2 {
+		t.Fatalf("Retry-After = %ds on a bucket that refills %g token(s)/s: the bucket is empty for about %gs, so the header overstates the wait (this was the constant 30)",
+			secs, float64(RateLimitRate), 1/float64(RateLimitRate))
+	}
+	// n-1 seconds: n is 1 for this bucket, so n-1 is "right now" — the retry must
+	// still be REFUSED, i.e. the header is not overstated.
+	if rec := post(lim, req); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("retry %ds before the promised window: status = %d, want 429 (the header must not be overstated)", secs-1, rec.Code)
+	}
+	// The promise, spent. time.Sleep never wakes early, so the bucket holds at
+	// least the one token the request costs at this instant.
+	time.Sleep(time.Duration(secs) * time.Second)
+	if rec := post(lim, req); rec.Code != http.StatusOK {
+		t.Fatalf("retry after exactly the %ds the header promised: status = %d, want 200 — the header promised a window the limiter does not honour", secs, rec.Code)
+	}
+}
+
+// TestRetryAfterIsReadFromTheBucketNotFixedAtThirtySeconds pins the derivation
+// on a bucket where n-1 and n are a whole second apart, and where the answer
+// must SHRINK as the window is spent (a constant cannot do that).
+func TestRetryAfterIsReadFromTheBucketNotFixedAtThirtySeconds(t *testing.T) {
+	clk := newFakeClock(t, time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC))
+	// burst 2, one token per 30 s: the "30 seconds" window the constant was
+	// presumably chosen for, applied to a bucket that really is that slow.
+	lim := RateLimitWith(1.0/30.0, 2)(okHandler())
+	req := httptest.NewRequest("POST", "/v1/rest/uploads/image", nil)
+	req.RemoteAddr = "198.51.100.77:5000"
+
+	for i := 0; i < 2; i++ {
+		if rec := post(lim, req); rec.Code != http.StatusOK {
+			t.Fatalf("burst request %d: status = %d, want 200", i+1, rec.Code)
+		}
+	}
+	rec := post(lim, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("request with the burst spent: status = %d, want 429", rec.Code)
+	}
+	if secs := retryAfterSeconds(t, rec); secs != 30 {
+		t.Fatalf("Retry-After = %ds, want 30 (the bucket needs (1-0)/(1/30) = 30 s to hold one token)", secs)
+	}
+
+	// n-1: one second before the promise is spent the bucket holds 29/30 of a
+	// token, so the retry must be refused.
+	clk.advance(29 * time.Second)
+	rec = post(lim, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("retry %ds before the promised window: status = %d, want 429 — a header that lets the client back in early is understated", 30-1, rec.Code)
+	}
+	// ...and this answer names the one second that is actually left, which is the
+	// proof the number comes from the deficit rather than from a constant.
+	if secs := retryAfterSeconds(t, rec); secs != 1 {
+		t.Errorf("Retry-After at 29 s into a 30 s window = %ds, want 1 — the header must shrink with the deficit", secs)
+	}
+
+	// n seconds after the refusal: admitted.
+	clk.advance(1 * time.Second)
+	if rec := post(lim, req); rec.Code != http.StatusOK {
+		t.Fatalf("retry after exactly the 30 s the header promised: status = %d, want 200", rec.Code)
+	}
+}
+
+// TestRetryAfterOnAnHourlyBucketNamesTheHour is the other half of the same
+// defect: RegistrationLimit refills one token per hour (burst 5), so the
+// constant's "30" UNDERSTATED the wait ~120x and walked the caller back into a
+// refusal. The header now names the bucket's own hour — no route keeps a number
+// that was chosen for a different route.
+func TestRetryAfterOnAnHourlyBucketNamesTheHour(t *testing.T) {
+	newFakeClock(t, time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC))
+	lim := RegistrationLimit(okHandler())
+	req := httptest.NewRequest("POST", "/v1/auth/register", nil)
+	req.RemoteAddr = "198.51.100.9:51234"
+
+	for i := 0; i < 5; i++ {
+		if rec := post(lim, req); rec.Code != http.StatusOK {
+			t.Fatalf("burst request %d: status = %d, want 200", i+1, rec.Code)
+		}
+	}
+	rec := post(lim, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("6th request with the burst spent: status = %d, want 429", rec.Code)
+	}
+	if secs := retryAfterSeconds(t, rec); secs != 3600 {
+		t.Errorf("Retry-After = %ds on a 1/hour bucket, want 3600", secs)
+	}
+}
+
+// TestWaitForTokenRoundsUpAndFloors pins the arithmetic under the header: round
+// UP (never understate the wait), floor at one second (a header of 0 tells a
+// client to retry immediately, into the same refusal), and answer a parseable
+// window for a bucket that can never refill.
+func TestWaitForTokenRoundsUpAndFloors(t *testing.T) {
+	cases := []struct {
+		tokens, rate float64
+		want         time.Duration
+	}{
+		{0, 1, time.Second},                       // the drained /login bucket: one second, not thirty
+		{0.4, 1, time.Second},                     // ceil(0.6)
+		{0, 1.0 / 30.0, 30 * time.Second},         // a 30 s window
+		{0, 1.0 / 3600.0, 3600 * time.Second},     // the hourly buckets
+		{0.9999999999, 1.0 / 3600.0, time.Second}, // floored, never 0
+		{0, 0, retryAfterNever},                   // a bucket that never refills
+	}
+	for _, tc := range cases {
+		l := &RateLimiter{rate: tc.rate}
+		if got := l.waitForToken(tc.tokens); got != tc.want {
+			t.Errorf("waitForToken(tokens=%g, rate=%g) = %v, want %v", tc.tokens, tc.rate, got, tc.want)
+		}
 	}
 }

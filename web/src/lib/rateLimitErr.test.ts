@@ -32,6 +32,9 @@
 //      lockout of 75s is not rounded to a minute it does not have) and whole
 //      minutes rounded UP above it (a sentence that rounds DOWN sends the visitor
 //      back into the lockout). "1 minutes" can therefore never render — pinned.
+//      A window of exactly one second is reachable since card t_5bed7cab made
+//      the header follow the bucket (the coarse per-IP guard refills at 1/s), so
+//      it renders the generic `apiErr.rateLimited` row rather than "1 seconds".
 //   4. A 429 WITHOUT a usable window still says "too many attempts" — the
 //      dictionary's existing `apiErr.rateLimited` row, not a second near-duplicate
 //      sentence and not the page's generic failure line.
@@ -163,6 +166,25 @@ test("the unit stays honest: seconds below two minutes, whole minutes rounded UP
   for (const secs of ["60", "61", "90", "119", "120", "121"]) {
     assert.doesNotMatch(rateLimitErr(429, secs, body, t), /\b1 minutes\b/, `Retry-After: ${secs} rendered a singular/plural fault`);
   }
+});
+
+test("a one-second window says it in words, never as \"1 seconds\"", () => {
+  // The coarse per-IP guard's header now comes from its bucket (card t_5bed7cab):
+  // rate 1 token/s, burst 10, so a drained client is really answered "1". That is
+  // the measured /login case — before the fix the header was the constant 30.
+  const body = { code: TOO_MANY_REQUESTS_CODE };
+  for (const lang of LANGS) {
+    const t = tIn(lang);
+    assert.equal(
+      rateLimitErr(429, "1", body, t),
+      t("apiErr.rateLimited"),
+      `lang=${lang}: a one-second window must not render the seconds row — "try again in 1 seconds" is not a sentence`,
+    );
+  }
+  assert.doesNotMatch(rateLimitErr(429, "1", body, tIn("en")), /\b1 seconds?\b/, "a one-second window rendered its number as a plural");
+  // The control: the next second up IS phrased with its number, so the fallback
+  // above is the one-second case and not a blanket loss of the window.
+  assert.equal(rateLimitErr(429, "2", body, tIn("en")), "Too many attempts — try again in 2 seconds.");
 });
 
 test("a 429 that names no window still says too many attempts (the existing row, not a new sentence)", () => {

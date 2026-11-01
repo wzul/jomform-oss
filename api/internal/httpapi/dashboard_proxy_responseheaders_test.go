@@ -8,7 +8,8 @@
 //
 //   - the login lockout answers 429 + `Retry-After: 900`
 //     (internal/httpapi/auth.go, auth.LoginLockoutRetryAfter — internal/auth/loginlimiter.go)
-//   - the coarse per-IP throttle answers 429 + `Retry-After: 30`
+//   - the coarse per-IP throttle answers 429 + a `Retry-After` derived from the
+//     refusing client's bucket
 //     (internal/httpapi/middleware/ratelimit.go)
 //
 // Measured from outside on prod v1.21.129 (card t_5fd36e64), the SAME locked
@@ -99,7 +100,7 @@ func TestDashboardProxyRelaysTheAPIsRetryAfterHeader(t *testing.T) {
 	t.Logf("the API writes Retry-After in: %v", writers)
 	for _, want := range []string{
 		"internal/httpapi/auth.go",                 // the login lockout (Retry-After: 900)
-		"internal/httpapi/middleware/ratelimit.go", // the coarse per-IP throttle (Retry-After: 30)
+		"internal/httpapi/middleware/ratelimit.go", // the coarse per-IP throttle (a derived Retry-After)
 	} {
 		if !contains(writers, want) {
 			t.Fatalf("derived %v as the files that set Retry-After — expected %q among them. Either that "+

@@ -9,7 +9,7 @@
 //   inside a try whose catch sets `login.passkeyUnsupported` ("Passkey cancelled
 //   or not supported by this browser."). The STATUS was never checked, so every
 //   refusal that is not a JSON body — the per-IP limiter's 429, which is
-//   `http.Error` PLAIN TEXT plus `Retry-After: 30` (api/internal/httpapi/
+//   `http.Error` PLAIN TEXT plus a `Retry-After` header (api/internal/httpapi/
 //   middleware/ratelimit.go), a 5xx, a proxy error page — made `r.json()` throw
 //   and landed in that same catch. The visitor was told their BROWSER cannot do
 //   passkeys while the browser was fine and the server had refused the call, and

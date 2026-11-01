@@ -83,8 +83,9 @@ test("a refusal is routed through rateLimitErr with the server's own Retry-After
   // 1. The status is checked at all. Without this every arm below is unreachable.
   assert.match(fnText, /if\s*\(\s*!\s*startRes\.ok\s*\)/, "passkeyLogin does not test the start response's status");
   // 2. The throttle's window comes from the response HEADER (the per-IP limiter
-  //    writes `Retry-After: 30`, middleware/ratelimit.go), through the shared
-  //    mapping — not a second hand-rolled sentence.
+  //    writes a `Retry-After` derived from the client's bucket,
+  //    middleware/ratelimit.go), through the shared mapping — not a second
+  //    hand-rolled sentence or a constant.
   assert.match(
     fnText,
     /rateLimitErr\(\s*startRes\.status\s*,\s*startRes\.headers\.get\(\s*"retry-after"\s*\)/,

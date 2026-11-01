@@ -131,7 +131,14 @@ export function rateLimitErr(
 ): string {
   if (status !== 429 && apiErrorCode(body) !== TOO_MANY_REQUESTS_CODE) return "";
   const seconds = retryAfterSeconds(retryAfter);
-  if (seconds === null || seconds <= 0) return t("apiErr.rateLimited");
+  // `null`/0 = no usable window. 1 = a real window that cannot be phrased: the
+  // coarse per-IP limiter derives Retry-After from its bucket (rate 1/s, burst
+  // 10 — api/internal/httpapi/middleware/ratelimit.go, card t_5bed7cab), so a
+  // drained client is really answered "1", and "try again in 1 seconds" is not a
+  // sentence. A one-second wait is precisely what the existing generic row says
+  // ("Please try again shortly"), which is why this reuses it instead of adding a
+  // singular row per locale.
+  if (seconds === null || seconds <= 1) return t("apiErr.rateLimited");
   if (seconds < SECONDS_CEILING) return t("apiErr.tooManyRequestsInSeconds", { seconds });
   return t("apiErr.tooManyRequestsInMinutes", { minutes: Math.ceil(seconds / 60) });
 }

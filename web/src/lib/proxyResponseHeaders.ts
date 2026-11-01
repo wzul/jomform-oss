@@ -8,7 +8,8 @@
 // the backoff on a refusal: the login lockout answers 429 + `Retry-After: 900`
 // (api/internal/httpapi/auth.go; auth.LoginLockoutRetryAfter is the 15-minute
 // window) beside a prose message, and the coarse per-IP throttle answers 429 +
-// `Retry-After: 30` (api/internal/httpapi/middleware/ratelimit.go). Through the
+// a `Retry-After` derived from the refusing client's bucket
+// (api/internal/httpapi/middleware/ratelimit.go). Through the
 // dashboard the browser received the status and the message and NEITHER header,
 // so a locked-out visitor could not tell when the window clears.
 //

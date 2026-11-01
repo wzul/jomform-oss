@@ -6,8 +6,8 @@
 // (Content-Type, Location, Set-Cookie). Everything else the API set was dropped.
 // The loudest one is the backoff: the API answers a lockout with 429 +
 // `Retry-After: 900` (api/internal/httpapi/auth.go; LoginLockoutRetryAfter is the
-// 15-minute window) and a throttled request with 429 + `Retry-After: 30`
-// (middleware/ratelimit.go).
+// 15-minute window) and a throttled request with 429 + a `Retry-After` the
+// middleware derives from that client's bucket (middleware/ratelimit.go).
 //
 //   measured from outside on prod v1.21.129 (card t_5fd36e64), the same locked
 //   visitor and the same body: `Retry-After: 900` direct to api.jomform.com, and
@@ -74,8 +74,10 @@ test("the login lockout's Retry-After reaches the browser verbatim", () => {
 
 test("the coarse throttle's Retry-After is relayed too", () => {
   // api/internal/httpapi/middleware/ratelimit.go answers a throttled request with
-  // 429 + `Retry-After: 30`; that path is a different writer of the same contract,
-  // and it was dropped by the same omission.
+  // 429 + a `Retry-After` derived from the refusing client's bucket; that path is
+  // a different writer of the same contract, and it was dropped by the same
+  // omission. (30 is this test's own sample value, not a number the middleware
+  // picks.)
   assert.equal(relay(new Headers({ "retry-after": "30" })).get("retry-after"), "30");
 });
 

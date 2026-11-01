@@ -20,7 +20,8 @@ import (
 //     bytes and cannot become an enumeration oracle. The 5..9 failure band
 //     belongs to this in-handler delay: the coarse per-IP token bucket in
 //     front of the route (middleware.RateLimit, 1 req/s, burst 10) only
-//     answers 429 + Retry-After 30 to a client that exceeds it, and a
+//     answers 429 + a Retry-After derived from that bucket to a client that
+//     exceeds it, and a
 //     sequential client paced by this delay stays under that bucket, so it
 //     reaches the address lockout below instead of a contradictory backoff.
 //   - After FailLockoutThreshold (10) failures in the 15-minute window the

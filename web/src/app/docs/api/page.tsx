@@ -295,8 +295,10 @@ export default function ApiDocsPage() {
         <p className="mt-3 text-sm leading-6 text-slate-600">
           The upload and AI routes are limited per client IP. The in-app assistant is limited per
           user, counted inside the handler, and it is session-only. A throttled response is{" "}
-          <strong>429</strong>; the per-IP limiter also sends{" "}
-          <code className="rounded bg-slate-100 px-1">Retry-After: 30</code>. Every other route —
+          <strong>429</strong>; every throttled answer also carries{" "}
+          <code className="rounded bg-slate-100 px-1">Retry-After</code>, the number of seconds
+          that client must wait before it is admitted again — read from the limiter&apos;s own bucket,
+          so it is the real window for that route rather than one fixed number. Every other route —
           including the ones that write — is currently unmetered, so apply your own backoff and treat
           a 5xx as retryable rather than assuming the server will protect you from a runaway loop.
         </p>

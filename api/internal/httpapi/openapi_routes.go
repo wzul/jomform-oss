@@ -940,7 +940,7 @@ func responsesFor(d restRouteDoc) map[string]any {
 		out["503"] = errorResponse("The backing service for this route is not configured on this deployment.")
 	}
 	if d.Rate != "" {
-		out["429"] = errorResponse("Rate limited. Throttled middleware responses carry `Retry-After: 30`.")
+		out["429"] = errorResponse("Rate limited. The refusals of the throttled middleware carry `Retry-After`: the number of seconds THIS client must wait before it is admitted again, read from the bucket that refused it (so it differs per route — about a second on the coarse per-IP guard that refills at 1/s, up to an hour on the hourly guards).")
 	}
 	return out
 }

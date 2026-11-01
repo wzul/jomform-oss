@@ -929,7 +929,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Rate limited. Throttled middleware responses carry `Retry-After: 30`."
+            "description": "Rate limited. The refusals of the throttled middleware carry `Retry-After`: the number of seconds THIS client must wait before it is admitted again, read from the bucket that refused it (so it differs per route — about a second on the coarse per-IP guard that refills at 1/s, up to an hour on the hourly guards)."
           },
           "503": {
             "content": {
@@ -1008,7 +1008,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Rate limited. Throttled middleware responses carry `Retry-After: 30`."
+            "description": "Rate limited. The refusals of the throttled middleware carry `Retry-After`: the number of seconds THIS client must wait before it is admitted again, read from the bucket that refused it (so it differs per route — about a second on the coarse per-IP guard that refills at 1/s, up to an hour on the hourly guards)."
           },
           "503": {
             "content": {
@@ -1087,7 +1087,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Rate limited. Throttled middleware responses carry `Retry-After: 30`."
+            "description": "Rate limited. The refusals of the throttled middleware carry `Retry-After`: the number of seconds THIS client must wait before it is admitted again, read from the bucket that refused it (so it differs per route — about a second on the coarse per-IP guard that refills at 1/s, up to an hour on the hourly guards)."
           },
           "503": {
             "content": {
@@ -2444,7 +2444,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Rate limited. Throttled middleware responses carry `Retry-After: 30`."
+            "description": "Rate limited. The refusals of the throttled middleware carry `Retry-After`: the number of seconds THIS client must wait before it is admitted again, read from the bucket that refused it (so it differs per route — about a second on the coarse per-IP guard that refills at 1/s, up to an hour on the hourly guards)."
           }
         },
         "summary": "Draft a form config from a prompt (AI)",
@@ -8050,7 +8050,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Rate limited. Throttled middleware responses carry `Retry-After: 30`."
+            "description": "Rate limited. The refusals of the throttled middleware carry `Retry-After`: the number of seconds THIS client must wait before it is admitted again, read from the bucket that refused it (so it differs per route — about a second on the coarse per-IP guard that refills at 1/s, up to an hour on the hourly guards)."
           }
         },
         "summary": "Upload a code asset (multipart: css/js/html/svg/woff2)",
@@ -8118,7 +8118,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Rate limited. Throttled middleware responses carry `Retry-After: 30`."
+            "description": "Rate limited. The refusals of the throttled middleware carry `Retry-After`: the number of seconds THIS client must wait before it is admitted again, read from the bucket that refused it (so it differs per route — about a second on the coarse per-IP guard that refills at 1/s, up to an hour on the hourly guards)."
           }
         },
         "summary": "Upload a profile avatar (multipart)",
@@ -8186,7 +8186,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Rate limited. Throttled middleware responses carry `Retry-After: 30`."
+            "description": "Rate limited. The refusals of the throttled middleware carry `Retry-After`: the number of seconds THIS client must wait before it is admitted again, read from the bucket that refused it (so it differs per route — about a second on the coarse per-IP guard that refills at 1/s, up to an hour on the hourly guards)."
           }
         },
         "summary": "Upload an image (multipart)",

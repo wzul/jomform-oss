@@ -355,7 +355,7 @@ export default function Login() {
     try {
       // Card t_7f01f01f: read the STATUS before touching the body. Every
       // refusal this endpoint can answer — the per-IP limiter's 429 (plain
-      // text plus `Retry-After: 30`, middleware/ratelimit.go), a 5xx, a proxy
+      // text plus a `Retry-After`, middleware/ratelimit.go), a 5xx, a proxy
       // error page — used to make `r.json()` throw into the catch below, which
       // told the visitor their BROWSER could not do passkeys while the server
       // was the one that had refused, and dropped the window with it.
