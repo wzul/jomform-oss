@@ -115,10 +115,7 @@ func PricingContract(config map[string]any) []Field {
 		if !pricingBlockTypes[b.Type] {
 			continue
 		}
-		id := strings.TrimSpace(b.ProductID)
-		if id == "" {
-			id = keys[i]
-		}
+		id := PricingKey(b.ProductID, keys[i])
 		if id == "" || seen[id] {
 			continue
 		}
@@ -146,6 +143,27 @@ func PricingContract(config map[string]any) []Field {
 		})
 	}
 	return out
+}
+
+// PricingKey returns the key a pricing block's answer and line item are keyed
+// by: the block's own `product_id` when it carries one (trimmed), else its
+// submit key from SubmitKeys — the block id, or the positional "_block_<i>" of
+// a legacy block that carries no id.
+//
+// ONE RULE, FOUR READERS. It is not a convenience: the payment renderer paints
+// it as the control's `data-id`, the page's submit handler posts it as
+// `items[].product_id` and as the answer's key in `fields`, PricingContract
+// validates the merchant's `required` under it, shippingBlocksWhere drops a
+// server-priced block's item under it, and httpapi.lookupProduct charges it. A
+// config that omits `product_id` (or the whole `id`) is keyed POSITIONALLY, so
+// every reader has to derive the same value or the published page posts a key
+// the submit path cannot price — the shape that answered 400 "produk tidak
+// sah: _block_0" for a storable form (card t_65a88197).
+func PricingKey(productID, submitKey string) string {
+	if k := strings.TrimSpace(productID); k != "" {
+		return k
+	}
+	return submitKey
 }
 
 // serverPricedShippingSource reports whether a shipping block's `source` names a

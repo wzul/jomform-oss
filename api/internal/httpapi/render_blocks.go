@@ -256,8 +256,15 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		// positional "_block_<i>" of a legacy id-less block — and it is what
 		// .ID already carries for every other block type. One rule, three
 		// readers, so the renderer cannot disagree with the charge.
-		if vb.ProductID == "" && (b.Type == "option" || b.Type == "shipping") {
-			vb.ProductID = keys[i]
+		//
+		// Card t_65a88197: that rule is now formfields.PricingKey, shared with
+		// the CHARGE side (httpapi.lookupProduct) and the fee side
+		// (shippingBlocksWhere). Deriving it here rather than only falling back
+		// on an empty product_id is what keeps the three in step for a block
+		// that carries NO id at all: its key is positional, and a renderer that
+		// painted "" or a padded product_id would post a key nothing charges.
+		if b.Type == "option" || b.Type == "shipping" {
+			vb.ProductID = formfields.PricingKey(b.ProductID, keys[i])
 		}
 		for _, c := range b.Choices {
 			vb.Choices = append(vb.Choices, choiceView{Label: c.Label, Value: c.Value, PriceSen: c.PriceSen})
@@ -311,9 +318,14 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 			// (or source=static) renders its own priced list exactly as before —
 			// the two shapes share this branch so neither can be forgotten.
 			if b.Type == "shipping" {
+				// Card t_65a88197: the block's own identity is the same
+				// formfields.PricingKey the control is painted with (keys[i] for
+				// an id-less legacy block), so a zone/courier block that carries
+				// no id still names the item the submit path will drop and
+				// re-price from its address.
 				spec := shippingBlockSpec{
-					ID:             b.ID,
-					ItemID:         b.ProductID,
+					ID:             keys[i],
+					ItemID:         formfields.PricingKey(b.ProductID, keys[i]),
 					Source:         firstNonEmpty(b.Source, shipping.SourceStatic),
 					ZoneSetID:      strings.TrimSpace(b.ZoneSetID),
 					StateField:     strings.TrimSpace(b.ZoneStateField),
@@ -326,9 +338,6 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 					ParcelValueSen: b.ParcelValueSen,
 					Required:       b.Required,
 					Label:          b.Value,
-				}
-				if spec.ItemID == "" {
-					spec.ItemID = spec.ID
 				}
 				// The options are the SAME zone options for both sources: a
 				// zone-sourced block charges one, and a courier-sourced block

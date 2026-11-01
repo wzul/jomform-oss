@@ -1121,11 +1121,19 @@ func (h *PublicHandlers) lookupProduct(ctx context.Context, accountID string, fo
 		// Issue #173: pricing blocks (option/shipping) carry their own price
 		// and submit with product_id = the block's own id. Resolve those here
 		// so the server stays the price authority for add-ons/shipping.
+		//
+		// Card t_65a88197: a block may carry NO id at all (the write paths
+		// accept it and legacy configs have it), in which case the key the page
+		// posts is the block's POSITIONAL submit key — that is what the
+		// renderer paints, what PricingContract validates and what
+		// shippingBlocksWhere drops. formfields.PricingKey is that one
+		// derivation, so this arm cannot key the block differently from them.
 		Blocks []struct {
-			ID       string `json:"id"`
-			Type     string `json:"type"`
-			Value    string `json:"value"`
-			PriceSen *int64 `json:"price_sen"`
+			ID        string `json:"id"`
+			ProductID string `json:"product_id"`
+			Type      string `json:"type"`
+			Value     string `json:"value"`
+			PriceSen  *int64 `json:"price_sen"`
 			// Card t_3d11f98d: the per-choice price the builder writes and the
 			// renderer prints. Pointer so "absent" (a free choice, or a legacy
 			// config) is distinguishable from an explicit 0.
@@ -1141,8 +1149,16 @@ func (h *PublicHandlers) lookupProduct(ctx context.Context, accountID string, fo
 				return p.Name, p.PriceSen, nil
 			}
 		}
-		for _, b := range cfg.Blocks {
-			if b.ID != productID || (b.Type != "option" && b.Type != "shipping") {
+		blockIDs := make([]string, len(cfg.Blocks))
+		for i := range cfg.Blocks {
+			blockIDs[i] = cfg.Blocks[i].ID
+		}
+		keys := formfields.SubmitKeys(blockIDs)
+		for i, b := range cfg.Blocks {
+			if b.Type != "option" && b.Type != "shipping" {
+				continue
+			}
+			if formfields.PricingKey(b.ProductID, keys[i]) != productID {
 				continue
 			}
 			if ans := strings.TrimSpace(answer); ans != "" {

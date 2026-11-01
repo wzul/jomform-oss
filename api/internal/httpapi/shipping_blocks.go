@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/shipping"
 )
 
@@ -121,17 +122,26 @@ func shippingBlocksWhere(config map[string]any, want func(source string) bool) [
 		return nil
 	}
 	blocks, _ := config["blocks"].([]any)
+	// Card t_65a88197: a block's submitted key is formfields.SubmitKeys over
+	// EVERY block — its own id, or the positional "_block_<i>" of a legacy block
+	// that carries no id — which is the key both public renderers paint and the
+	// order route charges. The derivation is over the whole array because the
+	// positional key depends on the block's index, so this walk cannot skip the
+	// non-shipping blocks.
+	ids := make([]string, len(blocks))
+	for i, raw := range blocks {
+		if b, ok := raw.(map[string]any); ok {
+			ids[i] = cfgString(b["id"])
+		}
+	}
+	keys := formfields.SubmitKeys(ids)
 	var out []shippingBlockSpec
-	for _, raw := range blocks {
+	for i, raw := range blocks {
 		b, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
 		if strings.TrimSpace(cfgString(b["type"])) != "shipping" {
-			continue
-		}
-		id := strings.TrimSpace(cfgString(b["id"]))
-		if id == "" {
 			continue
 		}
 		src := shipping.SourceStatic
@@ -141,13 +151,15 @@ func shippingBlocksWhere(config map[string]any, want func(source string) bool) [
 		if !want(src) {
 			continue
 		}
-		itemID := strings.TrimSpace(cfgString(b["product_id"]))
-		if itemID == "" {
-			// The builder always sets product_id = the block id for a pricing
-			// block; an agent-authored config may omit it. Either way the
-			// submitted item's product_id is what must be dropped.
-			itemID = id
-		}
+		// ID is the key the block's submitted value lands under. An id-less
+		// block used to be skipped outright (`id == ""` → continue), which left
+		// a zone/courier-sourced block with no identity at all: the page posted
+		// its positional key as an item, nothing dropped it, and the order
+		// answered 400 "produk tidak sah: _block_<i>" instead of resolving the
+		// fee. keys[i] gives it the identity the renderer and the order route
+		// already agree on.
+		id := keys[i]
+		itemID := formfields.PricingKey(cfgString(b["product_id"]), id)
 		out = append(out, shippingBlockSpec{
 			ID:             id,
 			ItemID:         itemID,
