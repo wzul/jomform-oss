@@ -1343,7 +1343,7 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(withMot
     <button type="submit">{{.Ls.Submit}}</button>
   </form>
   {{if .Footer.HasFooter}}<footer class="jf-footer">
-    {{if .Footer.BusinessName}}<div class="jf-fbiz">{{.Footer.BusinessName}}{{if .Footer.CompanyReg}} · {{.Footer.CompanyReg}}{{end}}</div>{{end}}
+    {{if .Footer.BusinessName}}<div class="jf-fbiz">{{.Footer.BusinessName}}{{if .Footer.CompanyReg}} · {{.Footer.CompanyReg}}{{end}}</div>{{else if .Footer.CompanyReg}}<div class="jf-frow">{{.Footer.CompanyReg}}</div>{{end}}
     {{if .Footer.ContactPhone}}<div class="jf-frow">{{.Footer.ContactPhone}}</div>{{end}}
     {{if .Footer.ContactAddress}}<div class="jf-frow">{{.Footer.ContactAddress}}</div>{{end}}
     {{if .Footer.FooterText}}<div class="jf-ftext">{{.Footer.FooterText}}</div>{{end}}
@@ -1865,10 +1865,19 @@ func (h *PublicHandlers) workspaceFooter(ctx context.Context, f *dbstore.Form) f
 		// not evidence that the page is missing.
 	}
 	fi.FooterText = st.FooterText
-	fi.HasFooter = fi.BusinessName != "" || fi.CompanyReg != "" || fi.ContactPhone != "" ||
-		fi.ContactAddress != "" || fi.PrivacyURL != "" || fi.TermsURL != "" || fi.RefundURL != "" ||
-		fi.FooterText != ""
+	fi.HasFooter = fi.anySet()
 	return fi
+}
+
+// anySet reports whether the merchant stored at least one footer field. It is
+// the single decision "emit a footer at all" (issue #80 keeps the default
+// clean), and it must count every field the templates print — card t_3c39c465:
+// CompanyReg is counted here, so the reg-only footer that used to render an
+// empty element now has a row of its own to fill.
+func (fi footerInfo) anySet() bool {
+	return fi.BusinessName != "" || fi.CompanyReg != "" || fi.ContactPhone != "" ||
+		fi.ContactAddress != "" || fi.PrivacyURL != "" || fi.TermsURL != "" ||
+		fi.RefundURL != "" || fi.FooterText != ""
 }
 
 // judgedLegalLinkCount counts the footer's links that need the content lookup:

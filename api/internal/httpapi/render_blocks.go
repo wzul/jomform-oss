@@ -1305,7 +1305,7 @@ var blockTmpl = template.Must(template.New("blocks").
   <button type="submit" form="of">{{$.Ls.Submit}}</button>
 </form>
 {{if .Footer.HasFooter}}<footer class="jf-footer">
-  {{if .Footer.BusinessName}}<div class="jf-fbiz">{{.Footer.BusinessName}}{{if .Footer.CompanyReg}} · {{.Footer.CompanyReg}}{{end}}</div>{{end}}
+  {{if .Footer.BusinessName}}<div class="jf-fbiz">{{.Footer.BusinessName}}{{if .Footer.CompanyReg}} · {{.Footer.CompanyReg}}{{end}}</div>{{else if .Footer.CompanyReg}}<div class="jf-frow">{{.Footer.CompanyReg}}</div>{{end}}
   {{if .Footer.ContactPhone}}<div class="jf-frow">{{.Footer.ContactPhone}}</div>{{end}}
   {{if .Footer.ContactAddress}}<div class="jf-frow">{{.Footer.ContactAddress}}</div>{{end}}
   {{if .Footer.FooterText}}<div class="jf-ftext">{{.Footer.FooterText}}</div>{{end}}
@@ -1879,7 +1879,7 @@ var responseTmpl = template.Must(template.New("response").
   <button type="submit">{{$.Ls.SubmitResponse}}</button>
 </form>
 {{if .Footer.HasFooter}}<footer class="jf-footer">
-  {{if .Footer.BusinessName}}<div class="jf-fbiz">{{.Footer.BusinessName}}{{if .Footer.CompanyReg}} · {{.Footer.CompanyReg}}{{end}}</div>{{end}}
+  {{if .Footer.BusinessName}}<div class="jf-fbiz">{{.Footer.BusinessName}}{{if .Footer.CompanyReg}} · {{.Footer.CompanyReg}}{{end}}</div>{{else if .Footer.CompanyReg}}<div class="jf-frow">{{.Footer.CompanyReg}}</div>{{end}}
   {{if .Footer.ContactPhone}}<div class="jf-frow">{{.Footer.ContactPhone}}</div>{{end}}
   {{if .Footer.ContactAddress}}<div class="jf-frow">{{.Footer.ContactAddress}}</div>{{end}}
   {{if .Footer.FooterText}}<div class="jf-ftext">{{.Footer.FooterText}}</div>{{end}}
