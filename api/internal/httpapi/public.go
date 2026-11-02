@@ -1849,6 +1849,10 @@ func (h *PublicHandlers) workspaceFooter(ctx context.Context, f *dbstore.Form) f
 	// such a path (a stale slug, e.g. wanzulhosting.jomform.com/privacy/): the
 	// path rule is not workspace-specific, so the gate counts that shape too,
 	// or the lookup that drops it never runs.
+	//
+	// Card t_806c3ea2: "such a path" means a legal-SHAPED one. The same host
+	// also serves / and /{slug}, so a link to a live form / menu / workspace
+	// root is not dropped just for not being one of the three legal paths.
 	if judgedLegalLinkCount(fi, slug) > 0 {
 		pages, perr := h.Workspaces.LegalPages(ctx, workspaceID)
 		if perr == nil {
@@ -1869,16 +1873,18 @@ func (h *PublicHandlers) workspaceFooter(ctx context.Context, f *dbstore.Form) f
 
 // judgedLegalLinkCount counts the footer's links that need the content lookup:
 // the ones addressing THIS workspace's own host, plus the ones addressing any
-// other platform subdomain at a path the public route does not serve. Used to
-// skip the content lookup entirely for the common footer whose links are the
-// merchant's own site.
+// other platform subdomain at a legal-shaped path the public route does not
+// serve. Used to skip the content lookup entirely for the common footer whose
+// links are the merchant's own site.
 //
 // It counts our OWN HOST, not "a servable hosted page": a link on our host whose
 // path the public route does not serve is still ours to drop, so counting only
 // canonical pages would skip the lookup that drops it (card t_8366310f). For the
-// same reason it counts a stale-slug host at an unservable path (card
-// t_022ea9cf): that link is dead on any host we serve, and the rule that drops
-// it lives behind this gate.
+// same reason it counts a stale-slug host at a legal-shaped unservable path
+// (card t_022ea9cf): that link is dead on any host we serve, and the rule that
+// drops it lives behind this gate. A non-legal path (a form slug, the workspace
+// root) is NOT counted — card t_806c3ea2 established that the storefront serves
+// those, so nothing behind the gate can drop them.
 func judgedLegalLinkCount(fi footerInfo, workspaceSlug string) int {
 	n := 0
 	for _, u := range []string{fi.PrivacyURL, fi.TermsURL, fi.RefundURL} {
@@ -1945,12 +1951,12 @@ func hostedLegalPageType(raw, workspaceSlug string) string {
 
 // servableHostedLegalLink returns the footer link to publish for one legal slot.
 // A link that is not ours (another host) is returned unchanged — unless it is a
-// tenant storefront host at a path the public route serves nowhere (see
-// unservableStorefrontLegalLink). A link to our own host is returned only when
-// the public route would answer 200 for it — a path it does not serve (/privacy/,
-// /Privacy, /privacy/1) and a page with no stored content are both dropped;
-// otherwise the footer gets no link instead of a dead one (cards t_49792b57,
-// t_8366310f, t_022ea9cf).
+// tenant storefront host at a legal-shaped path the public route serves nowhere
+// (see unservableStorefrontLegalLink). A link to our own host is returned only
+// when the public route would answer 200 for it — a legal-shaped path it does
+// not serve (/privacy/, /Privacy, /privacy/1) and a page with no stored content
+// are both dropped; otherwise the footer gets no link instead of a dead one
+// (cards t_49792b57, t_8366310f, t_022ea9cf, t_806c3ea2).
 func servableHostedLegalLink(raw, workspaceSlug string, pages map[string]*dbstore.LegalPage) string {
 	pageType, ours := classifyHostedLegalURL(raw, workspaceSlug)
 	if !ours {
@@ -1960,7 +1966,17 @@ func servableHostedLegalLink(raw, workspaceSlug string, pages map[string]*dbstor
 		return raw
 	}
 	if pageType == "" {
-		return ""
+		// Not one of the three hosted pages. Card t_806c3ea2: a storefront host
+		// also serves GET /{$} (the workspace landing) and GET /{slug} (a
+		// published form, the menu), so a non-legal path here can be perfectly
+		// live — prod: wan.jomform.com/test and wan.jomform.com/ both answer
+		// 200 text/html. Drop only the legal-shaped near-miss the route is known
+		// to 404 (/privacy/, /Privacy, /privacy/1); a path that does not look
+		// like a legal page is the merchant's own storefront URL and is kept.
+		if u, err := url.Parse(raw); err == nil && hostedLegalPathNearMiss(u.Path) {
+			return ""
+		}
+		return raw
 	}
 	if p := pages[pageType]; p != nil && strings.TrimSpace(p.Content) != "" {
 		return raw
@@ -1968,9 +1984,35 @@ func servableHostedLegalLink(raw, workspaceSlug string, pages map[string]*dbstor
 	return ""
 }
 
+// hostedLegalPathNearMiss reports whether path names one of the hosted legal
+// pages in a shape the public route does not serve: a first segment that IS one
+// of the three page names — case-insensitively, and ignoring extra segments —
+// but not the exact canonical path. That is /privacy/, /Privacy, /privacy/1,
+// /terms/2, /REFUND/ … all of which 404 on every host we serve, because
+// RegisterRoutes mounts GET /privacy, /terms and /refund as exact patterns.
+//
+// It is deliberately NOT "any path that is not canonical" (card t_806c3ea2). A
+// storefront host also serves GET /{$} (the workspace landing) and GET /{slug}
+// (a published form, and the menu page), so a non-legal path there can be
+// perfectly live — prod: https://wan.jomform.com/test and
+// https://wan.jomform.com/ both answer 200 text/html. Only a legal-looking
+// near-miss is known dead everywhere; any other path is either a form slug that
+// may exist or a 404 we cannot predict without asking the tenant's data, so it
+// stays the merchant's link.
+func hostedLegalPathNearMiss(path string) bool {
+	if hostedLegalPathType(path) != "" {
+		return false
+	}
+	seg := strings.TrimPrefix(path, "/")
+	if i := strings.IndexByte(seg, '/'); i >= 0 {
+		seg = seg[:i]
+	}
+	return validLegalPageType(strings.ToLower(seg))
+}
+
 // unservableStorefrontLegalLink reports whether raw addresses a legal page on a
-// host this deployment serves as a tenant storefront, at a path the public route
-// does not serve.
+// host this deployment serves as a tenant storefront, at a LEGAL-SHAPED path the
+// public route does not serve.
 //
 // Card t_022ea9cf: classifyHostedLegalURL judges a link only on THIS workspace's
 // host, and rewriteHostedLegalURL corrects the host only for the three canonical
@@ -1983,6 +2025,13 @@ func servableHostedLegalLink(raw, workspaceSlug string, pages map[string]*dbstor
 // "404 page not found", /Privacy → 404 "Borang tidak dijumpai"). That makes the
 // link ours to drop even when its host is not the current slug.
 //
+// Card t_806c3ea2: the drop is confined to legal-SHAPED paths
+// (hostedLegalPathNearMiss). "Not one of the three legal paths" is not the same
+// as "answers 404" — the same storefront host serves / and /{slug}, so
+// https://wan.jomform.com/test and https://other.jomform.com/ answer 200 and a
+// merchant who points "Refund policy" at their own refund-request form
+// (/refund-request) or at a terms form must keep that link.
+//
 // "A storefront host" is accountSubdomain's answer — the SAME predicate
 // handlePublicLegalPage uses to decide a request is on a workspace host. So the
 // apex, the serving-reserved labels (www/app/api/mail/s3, JomForm's own
@@ -1990,7 +2039,7 @@ func servableHostedLegalLink(raw, workspaceSlug string, pages map[string]*dbstor
 // cannot know what those answer. Another tenant's CANONICAL page link is left
 // alone too, as before.
 //
-// An unresolvable workspace ("" slug) disables the judgement, the same way it
+// An unresolvable workspace ("") slug disables the judgement, the same way it
 // already disables the own-host rule: that is a lookup outage to fix, not
 // evidence about the merchant's link.
 func unservableStorefrontLegalLink(raw, workspaceSlug string) bool {
@@ -2004,7 +2053,7 @@ func unservableStorefrontLegalLink(raw, workspaceSlug string) bool {
 	if accountSubdomain(u.Host) == "" {
 		return false
 	}
-	return hostedLegalPathType(u.Path) == ""
+	return hostedLegalPathNearMiss(u.Path)
 }
 
 // rewriteHostedLegalURL rewrites a stored legal-page URL that points at one of
