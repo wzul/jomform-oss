@@ -37,9 +37,9 @@ export function PageLoading({
           gets; the skeleton bars below are decorative and read as nothing. */}
       <div role="status" aria-busy="true" className="w-full flex-1 px-6 py-8">
         <span className="sr-only">{t("common.loading")}</span>
-        <div aria-hidden="true" className="h-6 w-40 animate-pulse rounded bg-slate-200" />
-        <div aria-hidden="true" className="mt-2 h-4 w-64 max-w-full animate-pulse rounded bg-slate-100" />
-        <div aria-hidden="true" className="mt-6 h-56 w-full animate-pulse rounded-lg bg-slate-100" />
+        <div aria-hidden="true" className="h-6 w-40 jf-skeleton rounded bg-slate-200" />
+        <div aria-hidden="true" className="mt-2 h-4 w-64 max-w-full jf-skeleton rounded bg-slate-100" />
+        <div aria-hidden="true" className="mt-6 h-56 w-full jf-skeleton rounded-lg bg-slate-100" />
       </div>
     </Shell>
   );

@@ -14,6 +14,7 @@ import {
   cssSelectorLiterals,
   occursAsClass,
   deadUtilities,
+  missingKeyframes,
 } from "./cssScanScope.ts";
 // The build-time driver, imported for its `sourceCorpus` and `webRoot`. The
 // corpus it assembles was the uncovered half of this guard (cards t_bc75e313,
@@ -323,3 +324,47 @@ test("a git-ignored file is in neither corpus when git can answer, and never sil
   assert.ok(ignored.has(ignoredPath), `git did not report ${ignoredPath} as ignored`);
   assert.equal(nonShipped.has(ignoredPath), false, `${ignoredPath} is git-ignored and must not be blamed`);
 });
+
+// ── the emitted bundle's animation names (card t_d5336ec6) ───────────────────
+//
+// The defect this pins is invisible in source: `.jf-enter { animation: jf-enter
+// … }` sat directly above `@keyframes jf-enter { … }`, and the production CSS
+// pipeline still dropped the keyframes (name collides with a class), so the
+// emitted chunk kept a reference to an animation that did not exist. It ran
+// nowhere and nothing errored — measured in Chromium: opacity 1 on the first
+// frame, `document.getAnimations()` empty.
+
+test("a referenced animation with no @keyframes is reported by name", () => {
+  const css = ".jf-enter{animation:jf-enter var(--jf-dur-base) both}";
+  assert.deepEqual(missingKeyframes(css), ["jf-enter"]);
+});
+
+test("the same bundle with its @keyframes is clean (the control)", () => {
+  const css =
+    "@keyframes jf-rise-in{from{opacity:0}to{opacity:1}}" +
+    ".jf-enter{animation:jf-rise-in var(--jf-dur-base) both}" +
+    ".jf-row{animation:jf-rise-in .18s ease both;animation-delay:min(calc(var(--i) * 30ms),100ms)}";
+  assert.deepEqual(missingKeyframes(css), []);
+});
+
+test("the CSS-wide keywords and var() are not animation names", () => {
+  const css =
+    ".a{animation:none!important}.b{animation:inherit}.c{animation:var(--anim)}" +
+    ".d{-webkit-animation:not-a-name 1s}.e{animation-timing-function:linear}";
+  assert.deepEqual(missingKeyframes(css), []);
+});
+
+test("a shorthand list is read entry by entry, and only the missing name is named", () => {
+  const css =
+    "@keyframes spin{to{transform:rotate(1turn)}}" +
+    ".a{animation:spin 1s linear infinite,ghost 2s ease}";
+  assert.deepEqual(missingKeyframes(css), ["ghost"]);
+});
+
+// NOTE: the bundle half of this rule is the BUILD-TIME driver
+// (`scripts/cssScanScope.mjs`, run by `npm run build` AFTER `next build`), not a
+// unit test. `npm run build` runs `test:unit` FIRST, so a unit test that read
+// `.next` would assert on the PREVIOUS build's bytes — measured: it reported the
+// stale `['jf-enter']` from the build before the keyframes rename and red a run
+// that was correct. The four tests above prove the DECISION; the driver proves
+// the emitted bundle.

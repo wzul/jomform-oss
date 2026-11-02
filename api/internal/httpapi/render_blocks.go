@@ -940,6 +940,110 @@ func dateInputType(blockType, format string) string {
 	return "date"
 }
 
+// publicMotionCSS is the motion layer EVERY Go-rendered public form page shares
+// (card t_d5336ec6): the block/payment renderer, the response renderer, the
+// legacy product-checkbox layout and the custom-HTML form. It is one constant
+// and not four copies because the four templates are one buyer-facing surface —
+// /f/* — and a buyer must not get a different movement vocabulary depending on
+// which renderer happened to draw the page.
+//
+// The rules, and why each one is here rather than in a component:
+//   - only `transform` and `opacity` are animated — no width/height/top/left, so
+//     nothing here can move a line box or contribute CLS;
+//   - the longest value is `--jf-dur-slow` (280ms); the submit swap is fast out
+//     (120ms) + fast in (120ms) = 240ms;
+//   - there is no auto-playing loop and nothing delays first paint;
+//   - the reduced-motion block ships in the SAME string as the motion. It
+//     collapses every duration/delay to ~0 and zeroes the two transform step
+//     tokens, so an animation that still runs paints a fade and no movement.
+//   - the JS-driven half (the submit crossfade) reads matchMedia itself — see
+//     jfSwapSuccess in responseTmpl / customFormTmpl — because a CSS media
+//     query cannot stop a setTimeout.
+//
+// The tokens hang off `html`, NOT `:root`, on purpose: the merchant-theme token
+// block is the page's ONE `:root { … }` and the CTA contrast guards read it by
+// matching that selector (cta_contrast_guard_test.go's rootBlockRe, first match).
+// A second `:root` here comes first in the document, so those guards read the
+// motion tokens and report that the page declares no `--jf-primary` at all — a
+// green contrast guard that scans the wrong block is worse than no token layer.
+// `html` carries custom properties exactly like `:root` does and inherits to
+// every element, so the tokens still reach every consumer.
+const publicMotionCSS = `
+  /* Card t_d5336ec6: the public form's motion layer. */
+  html { --jf-dur-fast: 120ms; --jf-dur-base: 180ms; --jf-dur-slow: 280ms;
+          --jf-ease-out: cubic-bezier(.22,1,.36,1);
+          --jf-rise: 4px; --jf-check-scale: .9; }
+  @keyframes jf-rise-in {
+    from { opacity:0; transform: translateY(var(--jf-rise)); }
+    to   { opacity:1; transform: none; }
+  }
+  @keyframes jf-check-in {
+    from { opacity:0; transform: scale(var(--jf-check-scale)); }
+    to   { opacity:1; transform: none; }
+  }
+  /* Page enter: fade + 4px rise, 180ms. A bare .card selector would only be
+     beaten by the merchant's theme rule on equal specificity — the doubled
+     selector keeps this animation the page's, not the theme's. */
+  .card.jf-enter { animation: jf-rise-in var(--jf-dur-base) var(--jf-ease-out) both; }
+  /* Submit -> success: the current content fades out, the ok block fades in and
+     its check scales 0.9 -> 1. All three read --jf-dur-fast: 240ms total. */
+  .jf-swap-out { opacity:0; transition: opacity var(--jf-dur-fast) var(--jf-ease-out); }
+  .jf-ok-in { animation: jf-rise-in var(--jf-dur-fast) var(--jf-ease-out) both; }
+  .jf-check { display:inline-block; animation: jf-check-in var(--jf-dur-fast) var(--jf-ease-out) both; }
+  @media (prefers-reduced-motion: reduce) {
+    html { --jf-rise: 0px; --jf-check-scale: 1; }
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-delay: 0ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      transition-delay: 0ms !important;
+      scroll-behavior: auto !important;
+    }
+    /* Switched OFF, not merely shortened: a 0.01ms animation can still paint
+       its progress-0 frame, which for the entrance is opacity 0. The page's
+       base style is the reduced-motion end state (visible, unmoved). */
+    .card.jf-enter, .jf-ok-in, .jf-check { animation: none !important; }
+  }
+`
+
+// withMotionCSS injects the shared motion layer into a public page template.
+//
+// A function, rather than concatenating `+ publicMotionCSS +` inside the raw
+// literal, because the CTA contrast guards read these templates from SOURCE:
+// `formTemplateLiterals` (cta_contrast_guard_test.go) splits each .go file on
+// backticks and keeps the literals that carry `<!doctype html`. A concatenation
+// splits the page into three literals, so those guards scanned a page truncated
+// at `<style>` and reported that their marker "matched 0 page literals" —
+// measured on this card's first run. Injecting at init keeps every page ONE raw
+// literal and keeps ONE definition of the motion layer.
+func withMotionCSS(page string) string {
+	return strings.Replace(page, "<style>", "<style>"+publicMotionCSS, 1)
+}
+
+// publicMotionJS is the JS half of the submit → success crossfade, shared by the
+// response renderer and the custom-HTML renderer (card t_d5336ec6). It exists
+// because a CSS media query cannot stop a setTimeout: the reduced-motion
+// equivalent for JS-driven motion has to be read here, in the same code that
+// starts the timer. The duration is read back from `--jf-dur-fast`, so there is
+// exactly one millisecond value in the page (the token) and no second copy in
+// JS. A missing token, a reduced-motion preference, or no matchMedia support
+// all fall through to an instant swap.
+const publicMotionJS = `
+  function jfSwapSuccess(el,html){
+    if(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches){el.innerHTML=html;return;}
+    // Degrade to an instant swap when the token cannot be read: no
+    // getComputedStyle (a JS harness that evaluates this page without a real
+    // layout engine — the identity/page guards do exactly that, and throwing
+    // here lost the submission), or a token the page does not declare.
+    var d=0;
+    if(typeof getComputedStyle==='function'){d=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--jf-dur-fast'))||0;}
+    if(!d){el.innerHTML=html;return;}
+    el.classList.add('jf-swap-out');
+    setTimeout(function(){el.classList.remove('jf-swap-out');el.innerHTML=html;},d);
+  }
+`
+
 // blockTmpl renders each builder block. Prices ride on data-price for the
 // client total; the server remains the price authority on submit.
 //
@@ -980,7 +1084,7 @@ var blockTmpl = template.Must(template.New("blocks").
 		// Card t_5c8fd63e: Arabic is the RTL locale (formLang.go isRTL).
 		"isRTL": isRTL,
 	}).
-	Parse(`<!doctype html>
+	Parse(withMotionCSS(`<!doctype html>
 <html lang="{{.Lang}}"{{if isRTL .Lang}} dir="rtl"{{end}}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 {{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
@@ -1160,7 +1264,7 @@ var blockTmpl = template.Must(template.New("blocks").
      first </style, so a merchant value cannot close this element. */
   {{.ThemeCSS}}
 </style>{{end}}</head><body>
-<form class="card" id="of" data-slug="{{.Slug}}">
+<form class="card jf-enter" id="of" data-slug="{{.Slug}}">
   <h1>{{.Title}}</h1>
 {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
 {{range $b := .Blocks}}{{if .CondJSON}}<div class="jf-block" data-condition="{{.CondJSON}}">{{end}}
@@ -1377,7 +1481,7 @@ var blockTmpl = template.Must(template.New("blocks").
 </script>
 {{end}}
 {{.HeightJS}}
-</body></html>`))
+</body></html>`)))
 
 // formTrackingHead extracts per-form tracking_head from config JSON.
 func formTrackingHead(f *dbstore.Form) string {
@@ -1605,7 +1709,7 @@ var responseTmpl = template.Must(template.New("response").
 		// Card t_5c8fd63e: Arabic is the RTL locale (formLang.go isRTL).
 		"isRTL": isRTL,
 	}).
-	Parse(`<!doctype html>
+	Parse(withMotionCSS(`<!doctype html>
 <html lang="{{.Lang}}"{{if isRTL .Lang}} dir="rtl"{{end}}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 {{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
@@ -1739,7 +1843,7 @@ var responseTmpl = template.Must(template.New("response").
      first </style, so a merchant value cannot close this element. */
   {{.ThemeCSS}}
 </style>{{end}}</head><body>
-<form class="card" id="of" data-slug="{{.Slug}}">
+<form class="card jf-enter" id="of" data-slug="{{.Slug}}">
   <h1>{{.Title}}</h1>
 {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
 {{range $f := .Fields}}{{if .CondJSON}}<div class="jf-block" data-condition="{{.CondJSON}}">{{end}}
@@ -1789,6 +1893,7 @@ var responseTmpl = template.Must(template.New("response").
 <script>
 (function(){
   var form=document.getElementById('of');
+` + publicMotionJS + `
   form.addEventListener('submit',function(e){
     e.preventDefault();
     var fields={};
@@ -1847,7 +1952,13 @@ var responseTmpl = template.Must(template.New("response").
             return;
           }
           var msg=d.message||'{{$.Ls.ResponseReceived}}';
-          form.innerHTML='<div class="ok"><h1>✓ {{$.Ls.ThankYou}}</h1><div class="msg">'+msg+'</div></div>';
+          // Card t_d5336ec6: submit -> success is a CROSSFADE, not a jump — the
+          // form's current content fades out over --jf-dur-fast, then this block
+          // fades in and its check scales 0.9 -> 1 (.jf-ok-in / .jf-check,
+          // 240ms total). jfSwapSuccess is the reduced-motion-aware swap: it
+          // replaces the content in the same frame when the OS asks for reduced
+          // motion, which is the JS equivalent of the CSS block.
+          jfSwapSuccess(form,'<div class="ok jf-ok-in"><h1><span class="jf-check">✓</span> {{$.Ls.ThankYou}}</h1><div class="msg">'+msg+'</div></div>');
         } else if(d&&d.status==='payment_error'){
           // Card t_e2024698: the payment could not be started — say so in-app,
           // with the reference, instead of an alert the buyer can dismiss.
@@ -1868,4 +1979,4 @@ var responseTmpl = template.Must(template.New("response").
 </script>
 {{end}}
 {{.HeightJS}}
-</body></html>`))
+</body></html>`)))

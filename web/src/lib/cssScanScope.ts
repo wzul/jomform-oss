@@ -101,6 +101,56 @@ export interface DeadUtility {
 }
 
 /**
+ * Animation names the EMITTED bundle references but ships no `@keyframes` for.
+ *
+ * WHY THIS EXISTS (card t_d5336ec6). A stylesheet can declare
+ * `.jf-enter { animation: jf-enter … }` right above `@keyframes jf-enter { … }`
+ * and still ship a bundle where the keyframes is GONE: the production CSS
+ * pipeline (Lightning CSS, behind `next build`) dropped `@keyframes jf-enter`
+ * because the name was also a class in the same file, and the emitted chunk kept
+ * the rule. Nothing errors — `animation-name` simply resolves to nothing and the
+ * entrance never runs. Measured on this card's first build: 7 `@keyframes` in the
+ * bundle, `jf-enter` not among them, and the rows it was meant to animate painted
+ * at opacity 1 in the first frame with `document.getAnimations()` empty.
+ *
+ * A source-only guard cannot see that (the source is correct); only the bytes
+ * `next build` wrote can. So this reads them and returns every referenced name
+ * with no definition.
+ *
+ * Deliberately conservative: a value that starts with `var(` cannot be resolved
+ * without a cascade, and the CSS-wide keywords / `none` are not names, so all of
+ * those are skipped rather than guessed at. `-webkit-animation` and the other
+ * `animation-*` longhands do not match (`animation` must be followed by `:` or
+ * `-name:`), so a prefixed alias is neither read nor blamed.
+ */
+export function missingKeyframes(cssText: string): string[] {
+  const defined = new Set<string>();
+  for (const m of cssText.matchAll(/@keyframes\s+([A-Za-z_][\w-]*)/g)) defined.add(m[1]);
+
+  const NOT_A_NAME = new Set([
+    "none",
+    "initial",
+    "inherit",
+    "unset",
+    "revert",
+    "revert-layer",
+  ]);
+  const missing = new Map<string, number>();
+  for (const decl of cssText.matchAll(/(?:^|[;{])\s*animation(?:-name)?\s*:\s*([^;}]+)/g)) {
+    // An `animation` shorthand takes a comma-separated list; the name is the
+    // first token of each entry.
+    for (const part of decl[1].split(",")) {
+      const first = part.trim().split(/\s+/)[0];
+      if (!first || first.startsWith("var(") || NOT_A_NAME.has(first)) continue;
+      if (!/^[A-Za-z_][\w-]*$/.test(first)) continue;
+      if (defined.has(first)) continue;
+      missing.set(first, (missing.get(first) ?? 0) + 1);
+    }
+  }
+  return [...missing.keys()].sort();
+}
+
+/**
  * Class literals in `cssText` whose only source is a non-shipped file.
  *
  * @param cssText        the emitted bundle

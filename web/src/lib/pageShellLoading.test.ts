@@ -287,8 +287,12 @@ test("the shared loader keeps the shell mounted", () => {
   // Decorative bars must stay hidden from assistive tech.
   assert.match(loaderCode, /aria-hidden="true"/, "PageLoading's skeleton bars are exposed to assistive tech");
   // The requirement is "a skeleton, not a blank screen" — the loading state has
-  // to actually paint something.
-  assert.match(loaderCode, /animate-pulse/, "PageLoading paints no skeleton at all — an empty content area is the blank frame this card complains about");
+  // to actually paint something. Card t_d5336ec6 kept that requirement and
+  // changed the class that satisfies it: the bare `animate-pulse` was infinite
+  // and immediate, so a fast response showed half a flash before the content
+  // arrived. `.jf-skeleton` is the same painted skeleton with a finite, delayed
+  // pulse (globals.css).
+  assert.match(loaderCode, /jf-skeleton/, "PageLoading paints no skeleton at all — an empty content area is the blank frame this card complains about");
 });
 
 test("the loader's status text exists in all five locales", () => {

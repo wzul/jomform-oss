@@ -60,10 +60,16 @@ case_out() {
 }
 
 # mk_tree <dir> — a minimal sandbox root: one .tsx and the token stylesheet.
+# The stylesheet carries the reduced-motion baseline because the gate requires
+# one in every tree it scans; a case that wants to prove the requirement bites
+# removes it explicitly (case 17).
 mk_tree() {
   mkdir -p "$1/web/src/app" "$1/web/src/components"
   cat > "$1/web/src/app/globals.css" <<'CSS'
 :root { --jf-primary: #5e6ad2; }
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
 CSS
   cat > "$1/web/src/app/page.tsx" <<'TSX'
 export default function Page() {
@@ -190,6 +196,62 @@ case_out "a missing web/src fails loudly" "$SB/nosrc" 2 "does not exist"
 mkdir -p "$SB/empty/web/src"
 case_out "a web/src with no .tsx fails loudly (an empty scan proves nothing)" "$SB/empty" 2 "0 .tsx files found"
 
+# ─── 15. transition-all is a motion defect (card t_d5336ec6) ───────────────
+mk_tree "$SB/allprop"
+printf 'export const T = () => <div className="transition-all duration-[var(--jf-dur-base)]" />;\n' >> "$SB/allprop/web/src/app/page.tsx"
+case_out "a planted transition-all is refused" "$SB/allprop" 1 "transition-all"
+run_guard "$SB/allprop"
+case "$OUT" in
+  *"transitions EVERY property"*) ok "the transition-all finding says why it is refused" ;;
+  *) bad "the transition-all finding has no rationale; output: $OUT" ;;
+esac
+
+# ─── 16. a raw duration is the animation's raw hex ─────────────────────────
+mk_tree "$SB/durms"
+printf 'export const D = () => <div className="transition-colors duration-150ms" />;\n' >> "$SB/durms/web/src/app/page.tsx"
+case_out "a planted duration-150ms is refused" "$SB/durms" 1 "duration-150ms"
+mk_tree "$SB/durbracket"
+printf 'export const E = () => <div className="transition-colors duration-[300ms]" />;\n' >> "$SB/durbracket/web/src/app/page.tsx"
+case_out "a planted duration-[300ms] is refused" "$SB/durbracket" 1 "duration-[300ms]"
+# CONTROL: the token form and a colour transition are NOT findings. Without
+# this, "red on a planted duration" could just mean any duration-shaped string
+# is red, which would red the correct tree.
+mk_tree "$SB/durtoken"
+printf 'export const F = () => <div className="transition-colors duration-[var(--jf-dur-base)]" />;\n' >> "$SB/durtoken/web/src/app/page.tsx"
+case_out "the token form duration-[var(--jf-dur-base)] is GREEN" "$SB/durtoken" 0 "0 raw durations"
+
+# ─── 17. the reduced-motion baseline is required, and must collapse ────────
+mk_tree "$SB/noreduce"
+cat > "$SB/noreduce/web/src/app/globals.css" <<'CSS'
+:root { --jf-primary: #5e6ad2; }
+CSS
+case_out "a globals.css with no reduced-motion block is refused" "$SB/noreduce" 1 "prefers-reduced-motion"
+mk_tree "$SB/emptydurations"
+cat > "$SB/emptydurations/web/src/app/globals.css" <<'CSS'
+:root { --jf-primary: #5e6ad2; }
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; }
+}
+CSS
+case_out "a reduced-motion block that never collapses transition-duration is refused" "$SB/emptydurations" 1 "transition-duration"
+# CONTROL: the baseline the real stylesheet carries passes (mk_tree above).
+
+# ─── 18. the REAL baseline is checked, not just the rule text ──────────────
+# A copy of the real tree with the baseline removed must be RED for that reason
+# — proving the gate reads the stylesheet the app ships.
+mkdir -p "$SB/realcss/web"
+cp -a "$ROOT/web/src" "$SB/realcss/web/src"
+python3 - "$SB/realcss/web/src/app/globals.css" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+s = s.replace("@media (prefers-reduced-motion: reduce)", "@media (prefers-reduced-motion: no-preference)", 1)
+open(p, "w", encoding="utf-8").write(s)
+PY
+case_out "the REAL tree with its motion baseline removed is RED" "$SB/realcss" 1 "prefers-reduced-motion"
+cp -a "$ROOT/web/src/app/globals.css" "$SB/realcss/web/src/app/globals.css"
+case_out "the same copy with the real baseline restored is GREEN" "$SB/realcss" 0 "reduced-motion baseline present"
+
 # ─── 14. the REAL tree is green, and a COPY of it with one plant is red ────
 run_guard "$ROOT"
 if [ "$RC" = 0 ]; then
@@ -218,6 +280,17 @@ esac
 rm "$SB/real/$PLANT"
 cp -a "$ROOT/$PLANT" "$SB/real/$PLANT"
 case_out "the same copy WITHOUT the plant is green (the plant is what bit)" "$SB/real" 0 "0 raw hex literals"
+
+# The two motion rules, planted in the SAME real component, each red by value
+# and each followed by the unplanted control.
+printf '\nexport const MOTION_GUARD_PLANT_A = () => <div className="transition-all" />;\n' >> "$SB/real/$PLANT"
+case_out "a copy of the REAL tree with a planted transition-all is RED" "$SB/real" 1 "app/builder/page.tsx:"
+cp -a "$ROOT/$PLANT" "$SB/real/$PLANT"
+case_out "…and green again once the transition-all plant is removed" "$SB/real" 0 "0 transition-all"
+printf '\nexport const MOTION_GUARD_PLANT_B = () => <div className="duration-250ms" />;\n' >> "$SB/real/$PLANT"
+case_out "a copy of the REAL tree with a planted duration-250ms is RED" "$SB/real" 1 "duration-250ms"
+cp -a "$ROOT/$PLANT" "$SB/real/$PLANT"
+case_out "…and green again once the duration plant is removed" "$SB/real" 0 "0 raw durations"
 
 # ─── verdict ───────────────────────────────────────────────────────────────
 echo

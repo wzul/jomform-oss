@@ -1239,7 +1239,7 @@ type legacyFormView struct {
 	CtaPrimary, CtaHover, CtaActive, CtaLabel, CtaText string
 }
 
-var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doctype html>
+var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(withMotionCSS(`<!doctype html>
 <html lang="{{.Lang}}"{{if isRTL .Lang}} dir="rtl"{{end}}>
 <head>
 <meta charset="utf-8">
@@ -1324,7 +1324,7 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(`<!doct
 </style>
 </head>
 <body>
-  <form class="card" id="of" data-slug="{{.Slug}}">
+  <form class="card jf-enter" id="of" data-slug="{{.Slug}}">
     <h1>{{.Title}}</h1>
     <p class="sub">{{.Description}}</p>
     {{range .Products}}
@@ -1416,7 +1416,7 @@ document.getElementById('of').addEventListener('submit', async (e) => {
 });
 </script>
 {{.HeightJS}}
-</body></html>`))
+</body></html>`)))
 
 type tmplProduct struct {
 	ID       string

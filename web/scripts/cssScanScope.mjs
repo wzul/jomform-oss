@@ -80,7 +80,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { classLiterals, cssSelectorLiterals, deadUtilities } from "../src/lib/cssScanScope.ts";
+import { classLiterals, cssSelectorLiterals, deadUtilities, missingKeyframes } from "../src/lib/cssScanScope.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(here, "..");
@@ -280,9 +280,29 @@ function main() {
   }
 
   const classes = [...classLiterals(bundle)].length;
+
+  // A bundle that references an animation name it does not define is a silently
+  // dead animation (card t_d5336ec6): `animation-name` resolves to nothing, the
+  // element paints at its base style, and no error appears anywhere. Only the
+  // emitted bytes can show it, which is why it is checked here and not in a
+  // source guard.
+  const absent = missingKeyframes(bundle);
+  if (absent.length > 0) {
+    console.error(
+      `css-scan-scope: the BUILT CSS references ${absent.length} animation name(s) it does not ` +
+        `define with @keyframes. Such an animation silently does nothing — the production CSS ` +
+        `pipeline can drop a @keyframes whose name collides with a class in the same file (measured: ` +
+        `\`.jf-enter\` + \`@keyframes jf-enter\`), so rename the keyframes (e.g. jf-rise-in) rather ` +
+        `than trusting the source:\n` +
+        absent.map((n) => `  @keyframes ${n} — missing`).join("\n"),
+    );
+    process.exit(1);
+  }
+
   console.log(
     `css-scan-scope: ok — ${classes} class(es) in ${css.length} built CSS file(s); none sourced ` +
-      `only from a file outside web/src/** (${nonShipped.size} non-shipped, ${shipped.size} shipped)`,
+      `only from a file outside web/src/** (${nonShipped.size} non-shipped, ${shipped.size} shipped); ` +
+      `every referenced animation name has its @keyframes`,
   );
 }
 

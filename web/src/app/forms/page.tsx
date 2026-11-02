@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageLoading } from "../../components/PageLoading";
@@ -633,7 +634,7 @@ export default function FormsPage() {
               <span className="text-xs text-[var(--jf-muted)]">{t("forms.selectAll")}</span>
             </li>
           )}
-          {forms.map((f) => {
+          {forms.map((f, rowIndex) => {
             // Issue #126 / #602: the row's way into this form's entries.
             // A payment form's entries are Sales; a response form's entries
             // are Submissions — the SAME destination, because /sales?form=<id>
@@ -648,9 +649,21 @@ export default function FormsPage() {
             // an unresolved URL rendered `<a href="">` — which the browser
             // resolves to the CURRENT document, opening /forms again in a new
             // tab. That is the reported symptom; see src/lib/formPublicURL.ts.
+            // Card t_d5336ec6: the first EIGHT rows fade + 4px rise in on a
+            // 30ms step, and the delay is capped so the last of them finishes
+            // by 280ms (`.jf-stagger-row` in globals.css does the arithmetic).
+            // `--jf-i` carries the index; row 9+ gets neither the class nor a
+            // delay, so a longer list renders static — the card's bounds forbid
+            // motion on a table longer than eight rows.
             const view = formViewAction(f, workspaceHost);
             return (
-            <li key={f.id} className="jf-card flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <li
+              key={f.id}
+              className={`jf-card flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between${
+                rowIndex < 8 ? " jf-stagger-row" : ""
+              }`}
+              style={rowIndex < 8 ? ({ "--jf-i": rowIndex } as CSSProperties) : undefined}
+            >
               <div className="flex min-w-0 items-center gap-3">
                 {canWrite && (
                   <input

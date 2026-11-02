@@ -245,7 +245,7 @@ func cspHostSourceOK(host string) bool {
 // that admits them.
 var customFormTmpl = template.Must(template.New("custom").
 	Funcs(template.FuncMap{"isRTL": isRTL}).
-	Parse(`<!doctype html>
+	Parse(withMotionCSS(`<!doctype html>
 <html lang="{{.Lang}}"{{if isRTL .Lang}} dir="rtl"{{end}}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 {{if .NoIndex}}<meta name="robots" content="noindex, nofollow">{{end}}
 <title>{{.Title}}</title>
@@ -295,7 +295,7 @@ var customFormTmpl = template.Must(template.New("custom").
      verbatim as CSS and cannot leave this element. */
   body { background: {{.ThemeBg}}; }
 </style>{{end}}</head><body>
-<div class="card">
+<div class="card jf-enter">
   <h1>{{.Title}}</h1>
 {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="">{{end}}
   {{/* Card t_c5a278c0: allow-same-origin, NOT allow-scripts. The bridge reads
@@ -314,6 +314,7 @@ var customFormTmpl = template.Must(template.New("custom").
 (function(){
   var frame=document.getElementById('jf-custom');
   var form=document.getElementById('jf-submit');
+` + publicMotionJS + `
   // The sanitized body is written into the iframe via srcdoc. The iframe is
   // sandboxed (forms only, never scripts) and its CSP forbids scripts, so the
   // body can never execute JS or load remote resources.
@@ -413,7 +414,10 @@ var customFormTmpl = template.Must(template.New("custom").
           }
           var msg=d.message||'{{$.Ls.ResponseReceived}}';
           var card=document.querySelector('.card');
-          card.innerHTML='<div class="ok"><h1>✓ {{$.Ls.ThankYou}}</h1><div class="msg">'+msg+'</div></div>';
+          // Card t_d5336ec6: same submit -> success crossfade as the response
+          // renderer (.jf-ok-in / .jf-check), and the same reduced-motion
+          // fallback inside jfSwapSuccess.
+          jfSwapSuccess(card,'<div class="ok jf-ok-in"><h1><span class="jf-check">✓</span> {{$.Ls.ThankYou}}</h1><div class="msg">'+msg+'</div></div>');
         } else {
           alert('{{$.Ls.ErrorAlert}}'+(d.error?': '+d.error:''));
         }
@@ -478,4 +482,4 @@ var customFormTmpl = template.Must(template.New("custom").
 </script>
 {{end}}
 {{.HeightJS}}
-</body></html>`))
+</body></html>`)))

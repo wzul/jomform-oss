@@ -974,3 +974,46 @@ must be confirmed on the target device).
 - **Landmarks:** added a skip-to-content link and `aria-current="page"` on
   the active nav item.
 - **Screen reader:** added `role="alert"` to the login error banner.
+
+## Motion
+
+Motion in JomForm is additive: every animated surface is laid out and painted
+immediately, and the animation only moves *within* the space it already owns.
+Nothing on this list delays first paint, blocks an interaction, or is required
+to reach a control.
+
+**The rules the motion layer keeps** (`web/src/app/globals.css`, section "the
+motion layer"; the buyer-facing `/f/*` pages carry the same rules in
+`publicMotionCSS` in `api/internal/httpapi/render_blocks.go`):
+
+| Rule | Why |
+|------|-----|
+| Only `transform` and `opacity` animate — never `width`/`height`/`top`/`left` | A layout-property animation reflows every frame and moves content under the reader, which is also Cumulative Layout Shift. |
+| Nothing runs longer than 300ms | The three steps are `--jf-dur-fast` 120ms, `--jf-dur-base` 180ms, `--jf-dur-slow` 280ms. The submit composite is 120ms out + 120ms in = 240ms. |
+| No auto-playing loops, no parallax, no scroll-jacking | The loading skeleton pulses three times and then holds, so a fast response never flashes and a slow one is not a strobe. |
+| A table/list longer than eight rows does not animate | The list stagger applies to the first eight rows only. |
+| Entrance motion is capped: fade + 4px rise, or fade + scale 0.98 → 1 | Enough to read as "this appeared", small enough not to be a transition between two pages. |
+
+**Reduced motion is a baseline, not an afterthought.** The
+`@media (prefers-reduced-motion: reduce)` block ships in the same stylesheet as
+the motion and comes after every pattern it must win over. When the OS asks for
+reduced motion it:
+
+1. collapses every `animation-duration` / `transition-duration` to ~0
+   (0.01ms, not 0s, so end-of-animation events still fire);
+2. collapses delays and iteration counts, so the stagger cannot step a list in
+   and the skeleton cannot pulse;
+3. zeroes the transform step tokens (`--jf-rise` → `0px`, the scale tokens →
+   `1`), so an animation that still runs paints a fade and no movement. Opacity
+   is allowed to remain; movement is not.
+
+JS-driven motion has an equivalent: the public form's submit → success
+crossfade reads `matchMedia('(prefers-reduced-motion: reduce)')` and replaces the
+form's content in the same frame instead of running the fade.
+
+**How to verify.** In Chrome DevTools → Rendering → *Emulate CSS media feature
+prefers-reduced-motion: reduce*, then reload `/f/<slug>` and submit a response
+form: the page appears with no rise, and the success state replaces the form in
+one frame. The design gate (`scripts/preflight.sh` → `design`) fails a
+`transition-all`, a raw `duration-<n>ms` in `web/src/**/*.tsx`, and a stylesheet
+with no reduced-motion block.

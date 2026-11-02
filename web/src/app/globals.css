@@ -149,6 +149,38 @@
      two share a value today, but --jf-surface answers "what a card is painted
      with" and would move with a dark theme, which would erase this glyph. */
   --jf-on-color: #ffffff;
+
+  /* ── MOTION (card t_d5336ec6) ──────────────────────────────────────────────
+     Declared HERE, in the one `:root`, because a second top-level `:root` block
+     did not survive the production CSS pipeline. Measured on the built chunk
+     (.next/static/chunks/*.css): the theme `:root` is emitted, the later `:root`
+     with the same selector was not, and every `animation: … var(--jf-dur-base)
+     …` therefore computed to `animation-name: none` — invalid at computed-value
+     time, with no error anywhere. Nothing animated and nothing complained.
+     One declaration site is also the honest shape for a token layer. */
+  /* Duration steps. `fast` is the acknowledgement step (a swap, a check),
+     `base` is the entrance step, `slow` is the ceiling and is used only by the
+     skeleton's single pulse cycle. */
+  --jf-dur-fast: 120ms;
+  --jf-dur-base: 180ms;
+  --jf-dur-slow: 280ms;
+  /* Easing. `out` decelerates into rest — the right curve for something that
+     ENTERS. `in-out` is for a state that stays put (the skeleton). */
+  --jf-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --jf-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  /* Distance steps. `--jf-rise` is the 4px entrance lift; the toast uses twice
+     it (8px) as `calc(var(--jf-rise) * 2)`, so there is ONE distance to zero
+     under reduced motion rather than two. */
+  --jf-rise: 4px;
+  /* Scale steps. `--jf-scale-from` is the dialog/drawer 0.98 start,
+     `--jf-check-scale` the submit check's 0.9. Both are 1 under reduced motion,
+     which is how the transform is dropped rather than merely sped up. */
+  --jf-scale-from: 0.98;
+  --jf-check-scale: 0.9;
+  /* List stagger: 30ms per row, capped so a row's animation ENDS by 280ms —
+     with the 180ms base duration the last allowed delay is 100ms. */
+  --jf-stagger-step: 30ms;
+  --jf-stagger-cap: 100ms;
 }
 
 /* ── the type scale (card t_e2f3a553) ────────────────────────────────────────
@@ -493,4 +525,189 @@ body {
    does not clip. */
 .jf-tabstrip [role="tab"]:focus-visible {
   outline-offset: -2px;
+}
+
+/* ── the motion layer (card t_d5336ec6) ─────────────────────────────────────
+   Measured on origin/main before this: 0 `@keyframes`, 0 `animation:` rules,
+   63 transitions that all ran at Tailwind's default 150ms, and 0 occurrences of
+   `prefers-reduced-motion` anywhere in the app. Nothing entered, nothing
+   acknowledged a submit, and the one animation that existed (`animate-pulse`)
+   ignored the OS accessibility setting.
+
+   THE RULES THIS LAYER KEEPS:
+     * only `transform` and `opacity` are animated — never width/height/top/left,
+       so no animation here can move a line box or contribute CLS;
+     * nothing is longer than `--jf-dur-slow` (280ms), and the one composite
+       (submit: fast out + fast in) totals 240ms;
+     * there is no auto-playing loop. The skeleton pulse is finite on purpose
+       (see `.jf-skeleton`);
+     * motion is additive, never a gate: every pattern animates FROM a visible
+       layout to the same layout, so the page paints and lays out immediately.
+
+   A raw millisecond value at a call site is a bug: the design gate fails
+   `duration-<n>ms` / `duration-[<n>ms]` in the app's `.tsx` files
+   (scripts/design-guard.py) and every pattern below consumes a token.
+
+   DO NOT write a path glob like web/src/<star><star>/<star>.tsx inside a CSS
+   comment: the `*` `/` pair in it TERMINATES the comment, the rest of the
+   prose is parsed as CSS, and the garbage rule swallows the next rule — which
+   here was the entrance's `@keyframes`, so the animation silently never ran
+   (measured: the built chunk kept `animation: jf-rise-in` and had no
+   `@keyframes jf-rise-in` at all; `scripts/cssScanScope.mjs` now fails that
+   build). */
+
+/* The motion TOKENS are declared in the theme `:root` at the top of this file —
+   a second top-level `:root` block did not survive the production CSS pipeline
+   (see the note there). Everything below consumes them and never a raw
+   millisecond value. */
+
+/* Entrance: fade + 4px rise. The one pattern every "this appeared" surface
+   uses (public form card, an admin row, a panel). `both` fill so the element
+   is at its start state before the animation begins and never flashes at full
+   opacity for a frame first.
+
+   The keyframes are named `jf-rise-in`, NOT `jf-enter`, and the difference was
+   MEASURED on the built bundle: a `@keyframes` whose name is also a class in
+   this file (`.jf-enter`) is dropped by the production CSS pipeline — the
+   emitted chunk kept `.jf-enter { animation: jf-enter … }` and had no
+   `@keyframes jf-enter` at all, so `animation-name` resolved to nothing and the
+   entrance silently did not run. `scripts/cssScanScope.mjs` now fails a build
+   whose bundle references an animation with no keyframes. */
+@keyframes jf-rise-in {
+  from { opacity: 0; transform: translateY(var(--jf-rise)); }
+  to   { opacity: 1; transform: none; }
+}
+.jf-enter {
+  animation: jf-rise-in var(--jf-dur-base) var(--jf-ease-out) both;
+}
+
+/* Panel / drawer: fade + scale 0.98 → 1. Used by the builder's mobile panel
+   switch, where a different panel takes the same slot. */
+@keyframes jf-panel-in {
+  from { opacity: 0; transform: scale(var(--jf-scale-from)); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Toast: 8px rise + fade (twice --jf-rise). Defined as part of the pattern set;
+   this card applies it on no surface (a toast is not one of the four), so it is
+   here for the next surface that shows one rather than being re-invented. */
+@keyframes jf-toast-in {
+  from { opacity: 0; transform: translateY(calc(var(--jf-rise) * 2)); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Submit → success: the success block fades in on the same card the form was
+   on, and the check glyph scales up. Both read `--jf-dur-fast`, so the whole
+   swap (fast out + fast in) is 240ms. */
+@keyframes jf-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.jf-ok-in {
+  animation: jf-fade-in var(--jf-dur-fast) var(--jf-ease-out) both;
+}
+@keyframes jf-check-in {
+  from { opacity: 0; transform: scale(var(--jf-check-scale)); }
+  to   { opacity: 1; transform: none; }
+}
+.jf-check {
+  display: inline-block;
+  animation: jf-check-in var(--jf-dur-fast) var(--jf-ease-out) both;
+}
+
+/* The outgoing half of the submit crossfade. Applied by JS immediately before
+   the form's content is replaced; the JS reads `--jf-dur-fast` from the
+   document so the delay and the transition are the same number. */
+.jf-swap-out {
+  opacity: 0;
+  transition: opacity var(--jf-dur-fast) var(--jf-ease-out);
+}
+
+/* Skeleton: the pulse the app shipped was a bare `animate-pulse` — infinite and
+   immediate, so a fast response showed one half-cycle of a flash before the
+   content arrived (the defect this replaces). This is a FINITE pulse (three
+   cycles, the card's no-auto-playing-loop bound) that starts one `fast` step
+   late, so a response faster than that shows a still skeleton and no flash. */
+@keyframes jf-skeleton-pulse {
+  from { opacity: 1; }
+  to   { opacity: 0.55; }
+}
+.jf-skeleton {
+  animation: jf-skeleton-pulse var(--jf-dur-slow) var(--jf-ease-in-out)
+    var(--jf-dur-fast) 3 alternate both;
+}
+
+/* List stagger. `.jf-stagger-row` carries the row's index in `--jf-i` (set by
+   the component from the map index) and this computes the delay: 30ms per row,
+   capped at 100ms so the LAST row still finishes by 280ms
+   (100 + 180). The component applies the class to the first eight rows only, so
+   a longer list renders rows 9+ static — nothing animates past the eighth. */
+.jf-stagger-row {
+  animation: jf-rise-in var(--jf-dur-base) var(--jf-ease-out) both;
+  animation-delay: min(
+    calc(var(--jf-i, 0) * var(--jf-stagger-step)),
+    var(--jf-stagger-cap)
+  );
+}
+
+/* Builder's mobile panel switch. The three columns are always laid out on
+   desktop (`md:`); below `md` they are one slot that a tab swaps, and the
+   display toggle is what replays this animation. Scoped to the phone layout so
+   the desktop page (which is static today) does not gain an entrance it never
+   had. */
+@media (max-width: 767.98px) {
+  .jf-panel-in {
+    animation: jf-panel-in var(--jf-dur-base) var(--jf-ease-out) both;
+  }
+}
+
+/* ── reduced motion — the baseline, not an afterthought ─────────────────────
+   This ships in the same change as the first animation, and it is the LAST
+   block in the file on purpose: it has to win over every pattern above.
+
+   Three things happen when the OS asks for reduced motion:
+     1. every duration collapses to ~0 (0.01ms is not 0 because a 0s duration
+        can suppress the `animationend`/`transitionend` event JS may wait on);
+     2. delays and iteration counts collapse too, so the stagger cannot still
+        step the list in and the skeleton cannot still pulse;
+     3. the transform STEP tokens go to their identity, so an animation that
+        somehow still runs paints a fade and no movement — opacity is allowed to
+        remain, movement is not.
+   JS-driven motion has an equivalent: the public form's submit swap reads
+   `matchMedia('(prefers-reduced-motion: reduce)')` and replaces the form
+   instantly instead of applying `.jf-swap-out` (see publicMotionCSS in
+   api/internal/httpapi/render_blocks.go). */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --jf-rise: 0px;
+    --jf-scale-from: 1;
+    --jf-check-scale: 1;
+    --jf-stagger-cap: 0ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* The collapse above is the generic rule; the patterns are switched OFF
+     outright. A 0.01ms animation still sits at progress 0 on its first
+     composited frame, i.e. the entrance's `from { opacity: 0 }` can paint one
+     invisible frame before the end state lands. `animation: none` removes that
+     frame entirely: the element renders at its own base style (opacity 1, no
+     transform), which is the deterministic reading a reduced-motion user
+     should get — measured in Chromium, the card's computed opacity went
+     0 -> 1 with `animation-duration: 0.01ms` and stays 1 with this rule. */
+  .jf-enter,
+  .jf-panel-in,
+  .jf-ok-in,
+  .jf-check,
+  .jf-stagger-row,
+  .jf-skeleton {
+    animation: none !important;
+  }
 }

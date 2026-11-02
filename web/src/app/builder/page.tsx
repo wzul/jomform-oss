@@ -2169,7 +2169,7 @@ export default function Builder() {
       <div className="grid w-full grid-cols-1 md:grid-cols-[240px_1fr_260px]">
         {/* ── left: categorized palette (drag sources) − mobile: only on the
              Add tab, desktop: always visible. Tap = add (already exists). */}
-        <aside className={`border-r border-[var(--jf-border)] p-4 ${mobileTab === "add" ? "block" : "hidden"} md:block`}>
+        <aside className={`border-r border-[var(--jf-border)] p-4 ${mobileTab === "add" ? "block" : "hidden"} md:block jf-panel-in`}>
           {/* Issue #256: AI form builder — prompt input. The backend calls
               deepseek-v4.1-flash:1017 to draft a validated form config. Kept in
               template mode (controls.aiGenerate): it only drafts blocks into
@@ -2244,7 +2244,7 @@ export default function Builder() {
              #652: on mobile the canvas and the edit panel are the same slot —
              selecting a block swaps the canvas for the panel below, so a tap on
              a field goes straight to its settings. */}
-        <section className={`p-4 md:p-6 ${mobileTab === "canvas" && !panelVisible ? "block" : "hidden"} md:block`}>
+        <section className={`p-4 md:p-6 ${mobileTab === "canvas" && !panelVisible ? "block" : "hidden"} md:block jf-panel-in`}>
           <div className="mx-auto max-w-full md:max-w-lg">
             {blocks.length === 0 && (
               <div
@@ -2281,10 +2281,17 @@ export default function Builder() {
                     receives the drop, and the owner can no longer flip under a
                     still pointer. It also stops 2px of the card below being a live
                     gap target, which is the same ambiguity from the other side. */}
+                {/* The insertion gap changes HEIGHT (h-2 -> h-8) while a drag is
+                    live. `transition-all` animated that height, i.e. it forced a
+                    layout on every frame of every drag for a 24px strip — the
+                    one motion the card's bounds forbid. `transition-colors`
+                    keeps the part that reads (the dashed accent + tint) and
+                    lets the box resize instantly, so the gap is never a layout
+                    thrash and never a `transition-all` (design gate). */}
                 <div
                   onDragOver={(e) => canvasDragOver(e, i)}
                   onDrop={(e) => canvasDrop(e, i)}
-                  className={`relative -my-0.5 rounded transition-all ${
+                  className={`relative -my-0.5 rounded transition-colors ${
                     dropAt === i && dragging
                       ? "h-8 border-2 border-dashed border-[var(--jf-accent)] bg-indigo-50/60"
                       : "h-2"
@@ -2405,7 +2412,7 @@ export default function Builder() {
               <div
                 onDragOver={(e) => canvasDragOver(e, blocks.length)}
                 onDrop={(e) => canvasDrop(e, blocks.length)}
-                className={`-mt-1 rounded transition-all ${
+                className={`-mt-1 rounded transition-colors ${
                   dropAt === blocks.length && dragging
                     ? "h-10 border-2 border-dashed border-[var(--jf-accent)] bg-indigo-50/60"
                     : "h-4"
@@ -2423,7 +2430,7 @@ export default function Builder() {
              when the Canvas tab is active AND the panel is open, so tapping a
              block card on a phone opens this panel in place of the canvas, and
              the panel's own header row is the way back out. */}
-        <aside className={`border-l border-[var(--jf-border)] p-4 ${mobileTab === "canvas" && panelVisible ? "block" : "hidden"} md:block`}>
+        <aside className={`border-l border-[var(--jf-border)] p-4 ${mobileTab === "canvas" && panelVisible ? "block" : "hidden"} md:block jf-panel-in`}>
           {/* #652: the exit. The old Settings tab had no back button either, so
               without this row the change would trade one trap (a tab at the
               top) for a worse one (no way out at all). Mobile only — `md:` and

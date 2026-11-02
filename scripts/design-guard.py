@@ -23,6 +23,18 @@ WHAT FAILS
     type-scale     `text-[<n>px]`. Use the named step from the `@theme` type
                    scale (`text-jf-4xs` … `text-jf-md`), which preserves the
                    pixel value — a rename, not a redesign.
+    transition-all `transition-all`. It transitions EVERY property, including
+                   width/height/top/left, so it turns a resize into a per-frame
+                   layout. Name the properties (`transition-colors`).
+    raw-duration   `duration-<n>ms` or `duration-[<n>ms]`. Tailwind's default is
+                   150ms and the app's steps are design tokens
+                   (`--jf-dur-fast|base|slow`); a number typed at a call site is
+                   the same defect a raw hex is.
+    motion-baseline (not a .tsx rule) `web/src/app/globals.css` MUST carry an
+                   `@media (prefers-reduced-motion: reduce)` block that collapses
+                   `animation-duration` and `transition-duration`. Motion that
+                   ignores the OS accessibility setting is a defect, and a card
+                   that ships animation without this block fails here.
 
   A 3-digit ALL-DIGIT literal (`#503`) is NOT flagged: it is indistinguishable
   from an issue reference, and this guard must never red a correct tree. Use a
@@ -74,6 +86,16 @@ HEX6 = re.compile(r"#([0-9a-fA-F]{6})(?![0-9a-fA-F])")
 # docs pages was the whole of the 3-digit false-positive class.
 HEX3 = re.compile(r"(?<![&\w])#([0-9a-fA-F]{3})(?![0-9a-zA-Z_-])")
 TEXTPX = re.compile(r"text-\[(\d+)px\]")
+# `transition-all` transitions EVERY property — the layout properties included.
+# Word-boundary guarded so `transition-colors` / `transition-opacity` pass.
+TRANSITION_ALL = re.compile(r"\btransition-all\b")
+# A duration typed at a call site, in either shape Tailwind accepts:
+# `duration-150ms` and `duration-[150ms]`. The app's steps are tokens
+# (--jf-dur-fast|base|slow); a number here is the animation's version of a raw
+# hex literal.
+DURATION_MS = re.compile(r"\bduration-(?:\[\d+ms\]|\d+ms)(?![0-9a-zA-Z])")
+# The reduced-motion baseline the stylesheet must carry.
+REDUCE_MEDIA = "@media (prefers-reduced-motion: reduce)"
 # The block form's terminator is matched first, so `design-tokens-exempt-end` is
 # never read as an opener with the reason "-end".
 END = re.compile(r"design-tokens-exempt-end\b")
@@ -234,8 +256,54 @@ def exemptions(raw: list[str]) -> tuple[dict[int, str], list[str]]:
     return out, errors
 
 
-def scan(root: str) -> tuple[list[str], list[str], list[tuple[str, int, str, str]], int, list[str]]:
-    """Return (hex_findings, px_findings, honoured_exemptions, files_scanned, errors)."""
+def motion_baseline(web_src: str) -> list[str]:
+    """Findings for the stylesheet's reduced-motion baseline.
+
+    `globals.css` is not scanned for literals (it is the declaration site), but
+    it IS where the app's only stylesheet-level motion baseline can live, so it
+    is checked for exactly one property: the `prefers-reduced-motion: reduce`
+    block, with the two duration collapses the block exists to perform.
+
+    A missing file is an ERROR (exit 2) rather than a finding, because a scan
+    that cannot see the stylesheet proves nothing — the same reason a missing
+    `web/src` is exit 2. A file that exists but has no block (or has one that
+    does not collapse durations) is a FINDING (exit 1): it is a defect in code
+    the author wrote, not a broken run.
+    """
+    css_path = os.path.join(web_src, "app", "globals.css")
+    if not os.path.isfile(css_path):
+        print(
+            f"design-guard: FAIL — {css_path} does not exist. This gate checks the "
+            f"app's motion baseline there; a missing stylesheet is a broken run, "
+            f"never a pass.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    text = open(css_path, encoding="utf-8").read()
+    at = text.find(REDUCE_MEDIA)
+    if at < 0:
+        return [
+            "app/globals.css has no `@media (prefers-reduced-motion: reduce)` "
+            "block — motion that ignores the OS accessibility setting is a defect"
+        ]
+    tail = text[at:]
+    out = []
+    for prop, why in (
+        ("animation-duration", "keyframe animations would still run at full speed"),
+        ("transition-duration", "the 60+ transitions would still run at full speed"),
+    ):
+        if prop not in tail:
+            out.append(
+                f"app/globals.css's reduced-motion block never collapses `{prop}` — {why}"
+            )
+    return out
+
+
+def scan(root: str) -> tuple[
+    list[str], list[str], list[str], list[str], list[str],
+    list[tuple[str, int, str, str]], int, list[str],
+]:
+    """Return (hex, px, transition_all, duration, baseline, exemptions, files, errors)."""
     web_src = os.path.join(root, "web", "src")
     if not os.path.isdir(web_src):
         print(
@@ -263,6 +331,8 @@ def scan(root: str) -> tuple[list[str], list[str], list[tuple[str, int, str, str
 
     hex_findings: list[str] = []
     px_findings: list[str] = []
+    all_findings: list[str] = []
+    dur_findings: list[str] = []
     exempted: list[tuple[str, int, str, str]] = []
     errors: list[str] = []
     for path in paths:
@@ -288,7 +358,15 @@ def scan(root: str) -> tuple[list[str], list[str], list[tuple[str, int, str, str
                     hex_findings.append(f"{rel}:{ln}  {' '.join(hits)}  ({line.strip()[:90]})")
             for m in TEXTPX.finditer(line):
                 px_findings.append(f"{rel}:{ln}  text-[{m.group(1)}px]")
-    return hex_findings, px_findings, exempted, len(paths), errors
+            if TRANSITION_ALL.search(line):
+                all_findings.append(f"{rel}:{ln}  transition-all  ({line.strip()[:90]})")
+            for m in DURATION_MS.finditer(line):
+                dur_findings.append(f"{rel}:{ln}  {m.group(0)}  (use var(--jf-dur-…))")
+    baseline = motion_baseline(web_src)
+    return (
+        hex_findings, px_findings, all_findings, dur_findings, baseline,
+        exempted, len(paths), errors,
+    )
 
 
 def main() -> int:
@@ -297,13 +375,14 @@ def main() -> int:
     args = ap.parse_args()
     root = os.path.abspath(args.root)
 
-    hex_findings, px_findings, exempted, scanned, errors = scan(root)
+    (hex_findings, px_findings, all_findings, dur_findings, baseline,
+     exempted, scanned, errors) = scan(root)
     if errors:
         print("design-guard: FAIL — the exemption directives themselves are broken")
         for e in errors:
             print("  " + e)
         return 2
-    if hex_findings or px_findings:
+    if hex_findings or px_findings or all_findings or dur_findings or baseline:
         print("design-guard: FAIL")
         if hex_findings:
             print(
@@ -324,11 +403,38 @@ def main() -> int:
             )
             for f in px_findings:
                 print("  " + f)
+        if all_findings:
+            print(
+                f"\n{len(all_findings)} `transition-all` in web/src/**/*.tsx. It "
+                "transitions EVERY property, layout ones included, so it turns a "
+                "resize into a per-frame layout. Name the properties "
+                "(transition-colors / transition-opacity / transition-shadow)."
+            )
+            for f in all_findings:
+                print("  " + f)
+        if dur_findings:
+            print(
+                f"\n{len(dur_findings)} raw duration(s) in web/src/**/*.tsx. The "
+                "app's steps are tokens — var(--jf-dur-fast) 120ms, "
+                "var(--jf-dur-base) 180ms, var(--jf-dur-slow) 280ms — and a "
+                "number typed at a call site is the animation's raw hex."
+            )
+            for f in dur_findings:
+                print("  " + f)
+        if baseline:
+            print(
+                f"\n{len(baseline)} motion-baseline finding(s) in "
+                "web/src/app/globals.css. Every animation this app ships has to "
+                "ship with the reduced-motion block that collapses it."
+            )
+            for f in baseline:
+                print("  " + f)
         return 1
 
     print(
         f"design-guard: PASS — {scanned} .tsx file(s) scanned, 0 raw hex literals, "
-        f"0 arbitrary font sizes, {len(exempted)} documented exemption(s)"
+        f"0 arbitrary font sizes, 0 transition-all, 0 raw durations, "
+        f"reduced-motion baseline present, {len(exempted)} documented exemption(s)"
     )
     for rel, ln, lit, reason in exempted:
         print(f"  exempt {rel}:{ln}  {lit}  — {reason}")
