@@ -183,6 +183,24 @@ it is not what a merger needs when it decides to squash.
   `in_progress` while the run that wrote the file has not finished — the field a
   human reads, while `complete: false` is the machine-readable half.
 
+## The harness cache — two gates that do not read the tree
+
+`selftest` (the gate-runner's own suite) and `monitor` (the watchdog's) read a FIXED
+SET of files and never the product tree. Paying them on every card re-learns an
+answer that cannot have changed: measured over 46 full runs, `selftest` alone is
+18% of a run (median 560s) and `monitor` another 2%.
+
+`preflight.sh`'s `hcached` keys their pass on a sha256 of exactly the inputs plus the
+bash version, and stores it under `$PREFLIGHT_RESULT_DIR/harness/<gate>.json`. A hit
+prints the observation it stands on, names that file, and records the gate with
+`seconds: 0` and the OBSERVING run's `at`. Change one of those bytes and the key
+stops matching, so the gate re-runs — invalidation is by content, not by a clock.
+`PREFLIGHT_HARNESS_CACHE=0` restores the old behaviour.
+
+Note what `reused` does NOT mean here: in the per-tree record it means "carried over
+between flushes", and a cache hit is still a gate this run invoked, so it stays
+`false`. The evidence of a hit is `seconds: 0` plus the HIT line.
+
 ## Using it
 
 ```bash

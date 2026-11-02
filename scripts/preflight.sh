@@ -2371,13 +2371,107 @@ gate_failure_kind() {
   echo failure
 }
 
+# ---- harness cache: gates whose inputs are a fixed FILE SET, not the diff --------
+#
+# `selftest` re-runs the harness's own suite and `monitor` re-runs the watchdog's.
+# Neither reads the product tree: their inputs are the scripts under test. Paying
+# them again on every card re-learns an answer that cannot have changed — measured
+# as 18% + 2% of a real 4,819s run, every card, all day.
+#
+# The key is a sha256 over the INPUT GLOBS and the bash version, and nothing else,
+# so a changed harness INVALIDATES the entry by construction. There is no race in
+# which a stale pass can be served for changed bytes; the TTL below only stops a
+# cache directory that has stopped being maintained from serving forever.
+#
+# A hit is recorded the way this harness already records every remembered
+# observation: `reused: true`, carrying the timestamp of the run that OBSERVED it
+# (gate_result.sh), never as a fresh pass.
+#
+# Kill switch: PREFLIGHT_HARNESS_CACHE=0 runs the gate exactly as before.
+HARNESS_CACHE_TTL="${PREFLIGHT_HARNESS_CACHE_TTL:-604800}"   # 7 days
+
+hcached() {   # hcached <gate> <glob>... -- <cmd...>
+  local gate="$1"; shift
+  local globs=() _g _p _f=0 key="" hit_key hit_at hit_secs dir file tmp t0 t1 rc
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do globs+=("$1"); shift; done
+  if [ "${1:-}" = "--" ]; then shift; fi
+
+  # No inputs declared, or the cache is switched off: run it, untouched.
+  if [ "${#globs[@]}" -eq 0 ] || [ "${PREFLIGHT_HARNESS_CACHE:-1}" = "0" ]; then
+    "$@"; return $?
+  fi
+
+  dir="${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/harness"
+  file="$dir/$gate.json"
+
+  key=$(
+    {
+      for _g in "${globs[@]}"; do
+        for _p in "$REPO_ROOT"/$_g; do
+          if [ -f "$_p" ]; then sha256sum "$_p"; _f=$((_f+1)); fi
+        done
+      done
+      # A glob that matched nothing must never look like a match that found nothing
+      # to hash: the count is part of the key.
+      printf 'inputs=%s\n' "$_f"
+      bash --version | head -1
+    } 2>/dev/null | sha256sum | cut -c1-32
+  )
+
+  if [ -r "$file" ]; then
+    hit_key=$(sed -nE 's/^key=(.*)$/\1/p' "$file" | head -1)
+    hit_at=$(sed -nE 's/^at=(.*)$/\1/p' "$file" | head -1)
+    hit_secs=$(sed -nE 's/^seconds=(.*)$/\1/p' "$file" | head -1)
+    if [ "$hit_key" = "$key" ] && [ -n "$hit_at" ]; then
+      # The TTL is read here, not from a file-level variable: this function must be
+      # self-contained, because the self-test extracts it and calls it on its own.
+      if [ $(( $(date +%s) - hit_at )) -lt "${HARNESS_CACHE_TTL:-${PREFLIGHT_HARNESS_CACHE_TTL:-604800}}" ]; then
+        echo "harness cache HIT: [$gate] the scripts under test are byte-identical (key $key)."
+        echo "  observed pass ${hit_secs:-0}s on $(date -u -d "@$hit_at" '+%Y-%m-%dT%H:%M:%SZ'); nothing re-run for this tree."
+        echo "  standing on: $file (key $key, inputs: ${globs[*]})"
+        # run() invokes the gate on the left of `| tee`, i.e. in a subshell, so a
+        # variable set here cannot reach the recorder. The observation time is left in
+        # a file keyed by the run pid (`$$` is the shell that started the pipeline),
+        # in the same ISO-8601 shape every other `at` in a record uses.
+        printf '%s\n' "$(date -u -d "@$hit_at" '+%Y-%m-%dT%H:%M:%SZ')" > "$dir/.hit.$gate.$$" 2>/dev/null
+        return 0
+      fi
+    fi
+  fi
+
+  t0=$(date +%s)
+  "$@"; rc=$?
+  t1=$(date +%s)
+  if [ "$rc" -eq 0 ]; then
+    tmp="$file.tmp.$$"
+    if mkdir -p "$dir" 2>/dev/null; then
+      {
+        echo "format=1"
+        echo "gate=$gate"
+        echo "key=$key"
+        echo "at=$t1"
+        echo "seconds=$((t1-t0))"
+        echo "globs=${globs[*]}"
+        echo "bash=$(bash --version | head -1)"
+      } > "$tmp" 2>/dev/null
+      if [ -s "$tmp" ]; then mv -f "$tmp" "$file" 2>/dev/null; fi
+    fi
+  fi
+  return "$rc"
+}
+
 run() {
   local gate="$1" label="$2"; shift 2
   if ! selected "$gate"; then return 0; fi
   info "gate [$gate]: $label"
-  local t0 t1 rc log
+  local t0 t1 rc log _hitf
   t0=$(date +%s)
   log="$(mktemp "${TMPDIR:-/tmp}/preflight-gate-$gate.XXXXXX")"
+  # The gate itself runs on the left of a pipeline (`| tee`), i.e. in a subshell, so a
+  # variable it sets is gone by the time the verdict is recorded. A harness-cache hit
+  # therefore leaves its observation time in this file, keyed by the run's pid.
+  _hitf="${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/harness/.hit.$gate.$$"
+  rm -f "$_hitf" 2>/dev/null
   # NOTE: no `|| true`, no `continue-on-error`. A gate either passes or stops
   # the run; that is the whole point of moving it off GitHub. The `tee` is only
   # so a FAILED gate's output can be read back and CLASSIFIED (see
@@ -2390,7 +2484,21 @@ run() {
     # `pass` is recorded with the seconds it took, because that per-gate number
     # is what a later lane's saving is measured from.
     if declare -F gr_flush >/dev/null 2>&1 && [ -n "${GR_TREE:-}" ]; then
-      GR_STATUS["$gate"]="pass"; GR_SECONDS["$gate"]="$((t1-t0))"; GR_AT["$gate"]="$(gr_now)"
+      GR_STATUS["$gate"]="pass"; GR_SECONDS["$gate"]="$((t1-t0))"
+      # A harness-cache hit was OBSERVED earlier, so the entry must carry that
+      # observation's time rather than this run's. `reused` is NOT set: in this format
+      # it means "carried over between flushes", and this run did invoke the gate and
+      # read a pass from it. The cache hit is visible as `seconds: 0` plus the HIT line
+      # naming the harness record that stands behind it. The marker is a file because
+      # the gate ran in the `tee` subshell (see above).
+      local _hitts=""
+      if [ -r "$_hitf" ]; then _hitts=$(cat "$_hitf" 2>/dev/null); fi
+      if [ -n "$_hitts" ]; then
+        rm -f "$_hitf"
+        GR_AT["$gate"]="$_hitts"
+      else
+        GR_AT["$gate"]="$(gr_now)"
+      fi
       GR_PASSED="${#PASSED[@]}"; GR_FAILED="${#FAILED[@]}"; GR_SKIPPED="${#SKIPPED[@]}"
       gr_record_now
     fi
@@ -3178,7 +3286,8 @@ run gitleaks "gitleaks detect (full git history, no leaks)" gitleaks_run
 monitor_run() {
   bash "$REPO_ROOT/deploy/monitoring/jomform-watch_test.sh"
 }
-run monitor "watchdog self-test (alert fires, quiet when healthy, never blind)" monitor_run
+run monitor "watchdog self-test (alert fires, quiet when healthy, never blind)" \
+  hcached monitor "deploy/monitoring/*" -- monitor_run
 
 # tmpkey — the temp-API-key helper's self-test. Same shape of gate as `monitor` and
 # for the same reason: `deploy/tmp-apikey.sh` is only ever run against a live host,
@@ -3559,7 +3668,9 @@ run refguard "hand-made refs/remotes mirror guard (idiom refused incl. worktrees
 selftest_run() {
   bash "$REPO_ROOT/scripts/preflight_test.sh"
 }
-run selftest "gate-runner self-test (empty run refused, missing prereq fails, no gate inventory drift)" selftest_run
+run selftest "gate-runner self-test (empty run refused, missing prereq fails, no gate inventory drift)" \
+  hcached selftest "scripts/*.sh" "scripts/*.md" "GATE-INVENTORY.md" "deploy/monitoring/*" "docs/PREFLIGHT-REUSE.md" "AGENTS.md" \
+  -- selftest_run
 
 # The run reached the END of its inventory: this is the one write that says so.
 # Every earlier flush said `complete: false`, which is why a mid-run or killed

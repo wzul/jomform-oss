@@ -5092,6 +5092,64 @@ else
 fi
 rm -rf "$r48_dir"
 
+  # ---------------------------------------------------------------- 49
+  # The harness cache. `selftest` re-runs the gate-runner's own suite and `monitor`
+  # re-runs the watchdog's; neither reads the product tree, so paying them on every
+  # card re-learns an answer that cannot have changed (measured 18% + 2% of a real
+  # 4,819s run, every card). This check pins what makes the cache safe: a hit only
+  # while the scripts under test are byte-identical, a hit that SAYS it is a hit and
+  # leaves the observing run's time where the recorder can read it, a changed byte
+  # forcing a re-run, and a kill switch that restores the old behaviour.
+  r49_dir="$(mktemp -d "${TMPDIR:-/tmp}/jf-hcache.XXXXXX")"
+  mkdir -p "$r49_dir/repo/scripts" "$r49_dir/results"
+  printf '#!/bin/sh\nexit 0\n' > "$r49_dir/repo/scripts/a.sh"
+  sed -n '/^hcached() {/,/^}$/p' "$PREFLIGHT" > "$r49_dir/hcached.sh"
+  if ! grep -q '^hcached() {' "$r49_dir/hcached.sh"; then
+    bad "check 49 cannot run: hcached() is not extractable from preflight.sh, so the harness cache is untested"
+  else
+    r49="$(REPO_ROOT="$r49_dir/repo" PREFLIGHT_RESULT_DIR="$r49_dir/results" bash -c '
+      . "$1/hcached.sh"
+      d="$1"; c="$d/count"; : > "$c"
+      _bump() { echo x >> "$c"; }
+      hcached probe "scripts/*.sh" -- _bump > "$d/o1" 2>&1
+      n1=$(wc -l < "$c")
+      hcached probe "scripts/*.sh" -- _bump > "$d/o2" 2>&1
+      n2=$(wc -l < "$c")
+      mark=""
+      for _hf in "$d"/results/harness/.hit.probe.*; do
+        if [ -r "$_hf" ]; then mark=$(cat "$_hf"); break; fi
+      done
+      printf "\n# one more byte\n" >> "$d/repo/scripts/a.sh"
+      hcached probe "scripts/*.sh" -- _bump > "$d/o3" 2>&1
+      n3=$(wc -l < "$c")
+      PREFLIGHT_HARNESS_CACHE=0 hcached probe "scripts/*.sh" -- _bump > "$d/o4" 2>&1
+      n4=$(wc -l < "$c")
+      hit2=no; grep -q "harness cache HIT" "$d/o2" && hit2=yes
+      hit3=no; grep -q "harness cache HIT" "$d/o3" && hit3=yes
+      markok=no; case "$mark" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*Z) markok=yes;; esac
+      printf "%s:%s:%s:%s|%s|%s|%s\n" "$n1" "$n2" "$n3" "$n4" "$hit2" "$hit3" "$markok" | tail -1
+    ' _ "$r49_dir")"
+    r49_n="${r49%%|*}"; r49_rest="${r49#*|}"
+    r49_hit2="${r49_rest%%|*}"; r49_rest="${r49_rest#*|}"
+    r49_hit3="${r49_rest%%|*}"; r49_mark="${r49_rest#*|}"
+    r49_c1="${r49_n%%:*}"; r49_t="${r49_n#*:}"; r49_c2="${r49_t%%:*}"; r49_t="${r49_t#*:}"
+    r49_c3="${r49_t%%:*}"; r49_c4="${r49_t#*:}"
+    if [ "$r49_c1" != "1" ] || [ "$r49_c2" != "1" ]; then
+      bad "check 49 (a) — an unchanged harness must run ONCE and then hit the cache: it ran $r49_c1 then $r49_c2 times (a hit must not re-run the suite, and a miss must not be silently skipped)"
+    elif [ "$r49_hit2" != "yes" ]; then
+      bad "check 49 (b) — the second call served a hit but did not SAY so: a cached gate that cannot be told from a fresh one is a gate nobody can audit"
+    elif [ "$r49_mark" != "yes" ]; then
+      bad "check 49 (c) — a hit must leave the OBSERVING run's time where run() can read it (an ISO-8601 marker file), or the record dates a remembered observation to the run that did not execute it; got [$r49_mark]"
+    elif [ "$r49_c3" != "2" ] || [ "$r49_hit3" != "no" ]; then
+      bad "check 49 (d) — one changed byte in a file under test must invalidate the cache and re-run (it ran $r49_c3 times, hit=$r49_hit3); an invalidation that does not fire serves a stale pass for changed bytes"
+    elif [ "$r49_c4" != "3" ]; then
+      bad "check 49 (e) — PREFLIGHT_HARNESS_CACHE=0 must run the gate as before, got $r49_c4 runs (expected 3)"
+    else
+      ok "check 49 — harness cache: runs once ($r49_c1) then hits without re-running ($r49_c2), says HIT and leaves the observation time, re-runs when a byte under test changes (run $r49_c3), and obeys the kill switch (run $r49_c4)"
+    fi
+  fi
+  rm -rf "$r49_dir"
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
