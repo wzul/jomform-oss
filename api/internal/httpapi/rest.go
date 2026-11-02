@@ -74,8 +74,18 @@ type RESTHandlers struct {
 	EmailQueue *emailqueue.Queue
 	// BaseURL is the app origin used to build invite signup links.
 	BaseURL string
-	Users   *dbstore.UserStore
-	Domains *dbstore.DomainStore
+	// SelfHosted declares that this deployment IS the origin its buyers load
+	// (JOMFORM_SELF_HOSTED): ONE hostname for every workspace, no tenant
+	// subdomain. It decides the shape of the public form URL this API reports
+	// (card t_6c0badbe): on a self-hosted install {BaseURL}/f/{slug} is the only
+	// address that serves the form, and `<workspace>.jomform.com/{slug}` — the
+	// hosted product's shape — is a 404. Wired here from config.Config.SelfHosted
+	// by main.go; the same flag PublicHandlers uses to SERVE the form from its
+	// own origin (issue #77 / PublicHandlers.ownOriginForm), so the URL the
+	// dashboard prints and the host that answers cannot disagree.
+	SelfHosted bool
+	Users      *dbstore.UserStore
+	Domains    *dbstore.DomainStore
 	// Issue #212: auto-TLS at origin. Nil when ACME is not configured.
 	// Verified custom domains are registered here so the origin provisions
 	// + renews their Let's Encrypt certs (SNI-based cert selection).

@@ -60,6 +60,13 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   // ADDRESS was invalid for a refusal that is about the NAME. The code is the
   // authority on why, so the sentence is the name's own.
   "workspace.nameTooLong": "apiErr.workspaceNameTooLong",
+  // A form create refused because the ACCOUNT has no workspace at all (card
+  // t_6c0badbe). Distinct from workspace.scopeRequired below: that one means the
+  // request did not NAME a workspace, and its remedy is a ?workspace= parameter.
+  // This one means there is no workspace to name yet — the merchant must create
+  // one — and the stored row it used to produce could be published and was then
+  // 404 at every address.
+  "workspace.required": "apiErr.workspaceRequired",
   // The reserved-SUBDOMAIN refusal (t_586ff0c3). It is NOT a `Code*` constant in
   // api/internal/httpapi/errcode.go — the token lives in urlguard
   // (ReservedSubdomainCode, mirrored by lib/workspaceSlug.ts) and both write

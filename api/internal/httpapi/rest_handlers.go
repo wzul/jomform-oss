@@ -754,7 +754,18 @@ func formURL(workspaceSlug, slug string) string {
 // formURLForAccount builds the canonical public URL for a form, preferring a
 // verified custom domain over the workspace subdomain (issue #83). Returns ""
 // when neither is resolvable.
+//
+// On a SELF-HOSTED install neither applies: there are no tenant subdomains, and
+// the install serves its own forms at {APP_BASE_URL}/f/{slug} (card t_6c0badbe —
+// this is the URL the builder's "Your form is live" dialog prints and "Copy
+// link" copies, and the old hosted shape was a dead host there).
 func (h *RESTHandlers) formURLForAccount(ctx context.Context, acc *dbstore.Account, slug string) string {
+	// Self-hosted first and terminal (card t_6c0badbe): there is no tenant
+	// subdomain to fall back to on this install, so an unusable origin yields
+	// "" rather than the hosted shape — see PublicHandlers.formURLForAccount.
+	if h.SelfHosted {
+		return installFormURL(h.BaseURL, slug)
+	}
 	if acc == nil {
 		return ""
 	}
@@ -889,9 +900,50 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 	})
 }
 
+// workspaceRequiredMessage is the wire refusal for a form CREATE from an account
+// with no live workspace (card t_6c0badbe). Declared as a constant so the
+// error-code table in errcode.go resolves it by the same literal the handler
+// writes — a re-wording cannot silently detach the code.
+const workspaceRequiredMessage = "akaun ini belum ada workspace — buat workspace dahulu sebelum mencipta borang"
+
 func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
+	}
+	// Card t_6c0badbe: an account with NO live workspace cannot mint a form.
+	//
+	// `accounts.workspace_id` is nullable — a signup creates an account and no
+	// workspace (#718, ask-first onboarding) — and the forms_sync_workspace_id
+	// trigger (migration 000045) copies that NULL onto the row. The handler used
+	// to accept the POST anyway: the form was created, it could be PUBLISHED,
+	// and it was then unreachable forever, because every public serving path
+	// resolves a form through its workspace (host, or the workspace behind the
+	// slug on a self-hosted install). Measured on a clean self-host run: two
+	// forms (`clean-test`, `clean-test-2`) left `published` with
+	// `workspace_id IS NULL`, both 404 at /f/<slug>.
+	//
+	// REFUSE rather than silently pick a workspace: choosing one for the caller
+	// would put a merchant's form in a workspace they never named, and the
+	// dashboard's own flow always creates the workspace first. 409 (not 400) —
+	// the request is well formed; the ACCOUNT's state is what cannot carry it
+	// out, and the client can retry unchanged once a workspace exists.
+	//
+	// A nil store (only the package's bare-mode handlers omit it) is not
+	// resolvable here; the production literal always sets it, and
+	// TestWorkspacesReachesRESTHandlersInMainGo pins that hop, the same way
+	// selfhost_flag_wiring_test.go pins PublicHandlers.SelfHosted.
+	if h.Workspaces != nil {
+		has, werr := h.Workspaces.HasLiveWorkspace(r.Context(), actx.Account.ID)
+		if werr != nil {
+			// A failing lookup is not "no workspace": refuse loudly instead of
+			// telling the merchant to create one they may already have.
+			writeErr(w, http.StatusInternalServerError, "gagal menyemak workspace")
+			return
+		}
+		if !has {
+			writeErr(w, http.StatusConflict, workspaceRequiredMessage)
+			return
+		}
 	}
 	var in struct {
 		Slug   string         `json:"slug"`

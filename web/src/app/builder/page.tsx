@@ -1042,8 +1042,10 @@ export default function Builder() {
         (wsSlug ? `https://${wsSlug}.jomform.com/${slugValue}` : "");
       setPubUrl(url);
       // The missing moment: tell the merchant the form is live and hand over the
-      // link (the panel renders no anchor unless the URL is a real https one —
-      // see liveLink; an empty href would reload the current page).
+      // link (the panel renders no anchor unless the URL is an absolute
+      // http(s) URL with a host — see liveLink; an empty href would reload the
+      // current page). On a self-hosted install that URL is
+      // {APP_BASE_URL}/f/{slug}, which the API resolves.
       setCopied(false);
       setPublishNotice({ kind: "live", url });
       await load();

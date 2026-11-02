@@ -23,7 +23,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"testing"
 )
 
@@ -32,12 +31,34 @@ import (
 const mainGoForWiring = "../../cmd/jomform-api/main.go"
 
 func TestSelfHostedReachesPublicHandlersInMainGo(t *testing.T) {
-	src, err := os.ReadFile(mainGoForWiring)
-	if err != nil {
-		t.Fatalf("read %s: %v", mainGoForWiring, err)
-	}
+	assertMainWiresField(t, "PublicHandlers", "SelfHosted")
+}
+
+// TestSelfHostedReachesRESTHandlersInMainGo is the same hop for the OTHER handler
+// that builds a public form URL (card t_6c0badbe). The dashboard's builder reads
+// the URL off the REST payload; if THIS literal keeps the default `false`, a
+// self-hosted install's "Your form is live" dialog prints the hosted tenant shape
+// again (a dead host) while the PublicHandlers literal — wired correctly — serves
+// the form at its own origin. The two must be the same flag.
+func TestSelfHostedReachesRESTHandlersInMainGo(t *testing.T) {
+	assertMainWiresField(t, "RESTHandlers", "SelfHosted")
+}
+
+// TestWorkspacesReachesRESTHandlersInMainGo pins the OTHER hop createForm depends
+// on (card t_6c0badbe): the form-create guard refuses an account with no live
+// workspace, and it can only answer that question through this store. The field is
+// optional, so the literal compiles just as happily without it — and then a
+// workspace-free account would create an unreachable form again, silently.
+func TestWorkspacesReachesRESTHandlersInMainGo(t *testing.T) {
+	assertMainWiresField(t, "RESTHandlers", "Workspaces")
+}
+
+// assertMainWiresField requires every composite literal of typeName in main.go to
+// set `field:` to some value (a selector, e.g. cfg.SelfHosted / workspacesStore).
+func assertMainWiresField(t *testing.T, typeName, field string) {
+	t.Helper()
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, mainGoForWiring, src, 0)
+	file, err := parser.ParseFile(fset, mainGoForWiring, nil, 0)
 	if err != nil {
 		t.Fatalf("parse %s: %v", mainGoForWiring, err)
 	}
@@ -49,7 +70,7 @@ func TestSelfHostedReachesPublicHandlersInMainGo(t *testing.T) {
 			return true
 		}
 		sel, ok := lit.Type.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil || sel.Sel.Name != "PublicHandlers" {
+		if !ok || sel.Sel == nil || sel.Sel.Name != typeName {
 			return true
 		}
 		literals++
@@ -59,10 +80,15 @@ func TestSelfHostedReachesPublicHandlersInMainGo(t *testing.T) {
 				continue
 			}
 			key, ok := kv.Key.(*ast.Ident)
-			if !ok || key.Name != "SelfHosted" {
+			if !ok || key.Name != field {
 				continue
 			}
-			if val, ok := kv.Value.(*ast.SelectorExpr); ok && val.Sel != nil && val.Sel.Name == "SelfHosted" {
+			if _, ok := kv.Value.(*ast.SelectorExpr); ok {
+				wired = true
+			}
+			// A local variable (e.g. `Workspaces: workspacesStore`) is equally a
+			// wired value; only the zero value / an omitted field is not.
+			if _, ok := kv.Value.(*ast.Ident); ok {
 				wired = true
 			}
 		}
@@ -70,13 +96,12 @@ func TestSelfHostedReachesPublicHandlersInMainGo(t *testing.T) {
 	})
 
 	if literals == 0 {
-		t.Fatal("no PublicHandlers composite literal found in main.go — this guard is looking at code " +
-			"that no longer exists and would pass vacuously; fix the guard, not the test")
+		t.Fatalf("no %s composite literal found in main.go — this guard is looking at code "+
+			"that no longer exists and would pass vacuously; fix the guard, not the test", typeName)
 	}
 	if !wired {
-		t.Fatalf("the PublicHandlers literal(s) in %s never set SelfHosted: cfg.SelfHosted — "+
-			"JOMFORM_SELF_HOSTED cannot reach the serving path, so a self-hosted install serves no "+
-			"form at its own origin (%d literal(s) inspected). Wire the hop; do not delete this test",
-			mainGoForWiring, literals)
+		t.Fatalf("the %s literal(s) in %s never set %s from a config/store value — the deployment "+
+			"cannot reach the code path that depends on it (%d literal(s) inspected). Wire the hop; "+
+			"do not delete this test", typeName, mainGoForWiring, field, literals)
 	}
 }

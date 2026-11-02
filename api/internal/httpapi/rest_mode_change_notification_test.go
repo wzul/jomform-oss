@@ -36,6 +36,9 @@ func TestRESTModeChangeRePointsTheDefaultNotification(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	acc, _ := bundleFixture(t, ctx, pool)
+	// A live workspace: the create route refuses a workspace-free account
+	// (card t_6c0badbe).
+	bundleLinkWorkspace(t, ctx, pool, acc)
 	key := bundleAPIKey(t, ctx, pool, acc)
 
 	store := dbstore.NewFormNotificationStore(pool)
@@ -138,6 +141,9 @@ func TestRESTConfigSaveThatKeepsTheModeLeavesTheDefaultAlone(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	acc, _ := bundleFixture(t, ctx, pool)
+	// A live workspace: the create route refuses a workspace-free account
+	// (card t_6c0badbe).
+	bundleLinkWorkspace(t, ctx, pool, acc)
 	key := bundleAPIKey(t, ctx, pool, acc)
 
 	store := dbstore.NewFormNotificationStore(pool)

@@ -41,6 +41,8 @@ func issue501Fixture(t *testing.T) (*RESTHandlers, string, string, *pgxpool.Pool
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	accountID, _ := bundleFixture(t, ctx, pool)
+	// Form-creating cases need a live workspace (card t_6c0badbe).
+	bundleLinkWorkspace(t, ctx, pool, accountID)
 	return newBundleHandlers(pool), bundleAPIKey(t, ctx, pool, accountID), accountID, pool
 }
 

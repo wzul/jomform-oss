@@ -86,6 +86,7 @@ import {
   workspaceScope,
 } from "./workspace.ts";
 import { DICT, LANGS } from "../components/i18nDict.ts";
+import { pickerCopyKeys } from "./workspacePickerState.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
@@ -701,7 +702,7 @@ test("the first-run ask carries a WORKING create action and enters the new works
   );
   assert.match(
     picker,
-    /if \(!r\.ok\) \{[\s\S]{0,300}?setError\(t\(r\.errorKey\)\)/,
+    /if \(!r\.ok\) \{[\s\S]{0,700}?setCreateError\(t\(r\.errorKey\)\)/,
     "the ask renders something other than the dictionary key — a server-side Malay " +
       "string would be shown to an English user",
   );
@@ -860,9 +861,20 @@ test("the ask's strings exist in all five locales and are actually rendered", ()
       );
     }
   }
-  for (const key of ["workspace.askTitle", "workspace.askBody", "workspace.askPageTitle"] as const) {
+  for (const key of ["workspace.askTitle", "workspace.askBody"] as const) {
     assert.ok(picker.includes(`t("${key}")`), `app/workspace-picker/page.tsx does not render t("${key}")`);
   }
+  // The heading/subtitle keys are no longer literal at the call site (card
+  // t_6c0badbe): the page renders `t(copy.title)` / `t(copy.subtitle)` from
+  // pickerCopyKeys, so the copy is selected from the SAME mode as the body. What
+  // must still hold is that the ask-first mode resolves to these two keys and the
+  // page renders them.
+  assert.deepEqual(pickerCopyKeys("ask"), {
+    title: "workspace.askPageTitle",
+    subtitle: "workspace.askPageSubtitle",
+  });
+  assert.ok(picker.includes("t(copy.title as Key)"), "the ask heading is not rendered from pickerCopyKeys(mode)");
+  assert.ok(picker.includes("t(copy.subtitle as Key)"), "the ask subtitle is not rendered from pickerCopyKeys(mode)");
   // The host hint carries the slug placeholder in every locale, not just en.
   const host = DICT["workspace.askHost"] as Record<string, string>;
   for (const lang of LANGS) {

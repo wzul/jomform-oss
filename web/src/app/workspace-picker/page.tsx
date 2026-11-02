@@ -25,6 +25,7 @@ import type { WorkspaceRow } from "../../components/session";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { createWorkspace, enterWorkspace } from "../../lib/workspace";
 import { translateApiErr } from "../../lib/apiErr";
+import { pickerCopyKeys, pickerMode } from "../../lib/workspacePickerState";
 
 // The subset of /api/auth/me this page needs.
 type Me = { default_workspace_id?: string };
@@ -35,7 +36,15 @@ export default function WorkspacePickerPage() {
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
   const [defaultId, setDefaultId] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  // TWO failures, TWO states (card t_6c0badbe). `loadError` decides the page
+  // mode — it means "the workspace LIST could not be read". `createError` is
+  // the create form's own refusal, rendered inside the form: a slug the API
+  // refused is not a reason to stop showing the fields that fix it. They used
+  // to share one state, so a 409 on create switched the page to the list-error
+  // panel AND the picker heading ("You have multiple workspaces…") for an
+  // account with zero workspaces.
+  const [loadError, setLoadError] = useState("");
+  const [createError, setCreateError] = useState("");
   // Issue #503: a REAL loading flag. Never infer "loading" from an empty list —
   // that is what made empty, failed and loading indistinguishable.
   const [checking, setChecking] = useState(true);
@@ -63,7 +72,8 @@ export default function WorkspacePickerPage() {
 
   const load = useCallback(async () => {
     setChecking(true);
-    setError("");
+    setLoadError("");
+    setCreateError("");
     // The workspaces list is the one that decides the page state. `me` only
     // supplies the default-workspace badge, so a failure there must never hide
     // a perfectly good list.
@@ -78,7 +88,7 @@ export default function WorkspacePickerPage() {
       // A failure is NEVER silent: the message is rendered, and the list is
       // cleared so a failed load can never look like an empty one.
       setWorkspaces([]);
-      setError(ws.error);
+      setLoadError(ws.error);
       setChecking(false);
       return;
     }
@@ -112,13 +122,17 @@ export default function WorkspacePickerPage() {
     e.preventDefault();
     if (busy) return;
     setBusy(true);
-    setError("");
+    setCreateError("");
     const r = await createWorkspace({ name: newName, slug: newSlug });
     if (!r.ok) {
       // The create-failed copy is a rendered i18n string from the shared
       // dictionary — never the server's own text (the API answers in Malay
       // prose, which is the separate i18n defect).
-      setError(t(r.errorKey));
+      //
+      // WRITTEN TO createError, NEVER loadError (card t_6c0badbe): this refusal
+      // is about the values in the form, so the form (and its fields) must stay
+      // on screen with the sentence beside them.
+      setCreateError(t(r.errorKey));
       setBusy(false);
       return;
     }
@@ -130,7 +144,7 @@ export default function WorkspacePickerPage() {
 
   async function setDefault(workspaceId: string) {
     setBusy(true);
-    setError("");
+    setLoadError("");
     const r = await runLoad(
       () => fetchJson<unknown>("/api/auth/profile/default-workspace", {
         method: "PUT",
@@ -140,13 +154,19 @@ export default function WorkspacePickerPage() {
       { onUnauth: goToLogin, message: t("workspace.setDefaultFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
-      setError(r.error);
+      setLoadError(r.error);
       setBusy(false);
       return;
     }
     setDefaultId(workspaceId);
     setBusy(false);
   }
+
+  // The mode is decided by the LOAD's outcome only (card t_6c0badbe) — see
+  // lib/workspacePickerState.ts. `createError` is deliberately not an input:
+  // a refused slug cannot take the merchant's fields away from them.
+  const mode = pickerMode({ checking, loadError, workspaceCount: workspaces.length });
+  const copy = pickerCopyKeys(mode);
 
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[var(--jf-bg)] px-6">
@@ -164,28 +184,24 @@ export default function WorkspacePickerPage() {
             JF
           </div>
           <h1 className="text-xl font-semibold text-[var(--jf-text)]" style={{ letterSpacing: "-0.02em" }}>
-            {!checking && !error && workspaces.length === 0
-              ? t("workspace.askPageTitle")
-              : t("workspace.pickerTitle")}
+            {t(copy.title as Key)}
           </h1>
           <p className="mt-1.5 text-sm text-[var(--jf-muted)]">
-            {!checking && !error && workspaces.length === 0
-              ? t("workspace.askPageSubtitle")
-              : t("workspace.pickerSubtitle")}
+            {t(copy.subtitle as Key)}
           </p>
         </div>
 
         <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
           {/* Issue #503: the four states are now distinct and explicit —
               loading / error (+ retry) / empty / list. */}
-          {checking ? (
+          {mode === "loading" ? (
             <p role="status" aria-live="polite" className="py-6 text-center text-sm text-[var(--jf-muted)]">
               {t("workspace.loading")}
             </p>
-          ) : error ? (
+          ) : mode === "loadError" ? (
             <div role="alert" className="flex flex-col items-center gap-3 py-4 text-center">
               <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-jf-sm text-red-700">
-                {error}
+                {loadError}
               </p>
               <button
                 type="button"
@@ -195,7 +211,7 @@ export default function WorkspacePickerPage() {
                 {t("common.retry")}
               </button>
             </div>
-          ) : workspaces.length === 0 ? (
+          ) : mode === "ask" ? (
             /* Ask-first onboarding (Wan's decision, 2026-09-20): a user with no
                workspace at all is ASKED to create one, and this is the prompt.
                It replaces a dead end that rendered
@@ -243,9 +259,9 @@ export default function WorkspacePickerPage() {
                   </p>
                 )}
               </div>
-              {error && (
+              {createError && (
                 <p role="alert" className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-jf-sm text-red-700">
-                  {error}
+                  {createError}
                 </p>
               )}
               <button
@@ -311,7 +327,7 @@ export default function WorkspacePickerPage() {
         {/* Issue #503: a genuinely empty list is still a dead end without an
             action — offer a re-check, plus the inline "?" docs link AGENTS.md
             documentation parity asks for next to the feature. */}
-        {!checking && !error && workspaces.length === 0 && (
+        {mode === "ask" && (
           <div className="mt-4 text-center">
             <button
               type="button"

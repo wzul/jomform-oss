@@ -30,11 +30,13 @@
 //      and fails if they drift, so a rename cannot silently turn the warning into
 //      a generic error the merchant cannot act on.
 //   2. A URL is only ever turned into a link when it is a non-empty absolute
-//      https:// address — `liveLink` returns null otherwise. An `<a href="">`
-//      navigates to the CURRENT url (the reported "View form reloads /forms"
-//      defect, t_457c4d87), so the confirmation panel must be incapable of
-//      producing one. This is defence in depth for THIS surface; the resolution
-//      itself is not fixed here.
+//      http(s):// address with a host — `liveLink` returns null otherwise. An
+//      `<a href="">` navigates to the CURRENT url (the reported "View form
+//      reloads /forms" defect, t_457c4d87), so the confirmation panel must be
+//      incapable of producing one. http is allowed because a self-hosted
+//      install's own origin may be http (see liveLink); everything that is not
+//      an absolute address with a host is still refused. This is defence in
+//      depth for THIS surface; the resolution itself is not fixed here.
 //   3. THE REFUSAL'S TEXT COMES FROM THE DICTIONARY, NEVER FROM THE RESPONSE.
 //      The `needs_ack` outcome carries NO message at all, and the sentence the
 //      merchant reads comes from `publishConfirmText`. The API's prose for this
@@ -137,16 +139,30 @@ export function publishOutcome(res: PublishResponse, url: string): PublishOutcom
  * liveLink returns the URL to put in an href, or null when there is nothing
  * navigable.
  *
- * Only an absolute https:// address qualifies. A relative path or a bare slug
- * would resolve against the dashboard's own origin and land the merchant back
- * inside the app; an empty string would navigate to the current page. Both are
- * the dead-link shape this repo already has a card for, so neither is allowed to
- * reach an anchor from here.
+ * An absolute http:// or https:// address with a host qualifies. Anything else
+ * (relative path, bare slug, protocol-relative //host, javascript:, empty) does
+ * not: a relative path would resolve against the dashboard's own origin and land
+ * the merchant back inside the app, and an empty string would navigate to the
+ * current page. Both are the dead-link shape this repo already has a card for.
+ *
+ * WHY http IS ACCEPTED (card t_6c0badbe). This used to require https, and on a
+ * SELF-HOSTED install that hid the only address that works. There the published
+ * form lives on the operator's own origin — `{APP_BASE_URL}/f/{slug}` — and
+ * APP_BASE_URL is legitimately `http://` for a local trial (docs/SELF-HOST.md
+ * documents `bash deploy/selfhost/bootstrap.sh --base-url http://localhost:8080`).
+ * Measured on a clean self-hosted stack: the API answered
+ * `http://localhost:18099/f/browser-pub`, the builder printed "The form is live,
+ * but its public URL is not available yet", and neither Open form nor Copy link
+ * was rendered — a dead end on a working install. https-only never protected
+ * against an injected host (an https URL from the server is just as injectable);
+ * what it protects is the SCHEME, and http(s) with a real host is a real link.
  */
 export function liveLink(url: string | null | undefined): string | null {
   const u = (url || "").trim();
   if (!u) return null;
-  if (!/^https:\/\/[^\s"'<>]+$/i.test(u)) return null;
+  // The scheme and a host are both required: `http://` alone and `http:///path`
+  // (empty authority) are not navigable addresses.
+  if (!/^https?:\/\/[^\s"'<>\/][^\s"'<>]*$/i.test(u)) return null;
   return u;
 }
 

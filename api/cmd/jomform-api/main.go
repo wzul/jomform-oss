@@ -421,6 +421,13 @@ func main() {
 			// Issue #199: invite emails go through the background queue.
 			EmailQueue: deps.EmailQueue,
 			BaseURL:    cfg.AppBaseURL,
+			// The deployment declares itself self-hosted (JOMFORM_SELF_HOSTED):
+			// ONE origin for every workspace, so the public form URL this API
+			// reports is {APP_BASE_URL}/f/{slug}, not the hosted tenant
+			// subdomain shape (card t_6c0badbe). The SAME flag decides serving
+			// in the PublicHandlers literal below, so the printed URL and the
+			// host that answers cannot disagree.
+			SelfHosted: cfg.SelfHosted,
 			Users:      usersStore,
 			// Nil interface when S3 is unconfigured — see makeStore. Never a
 			// nil *ObjectStore inside the interface: that shape skipped every

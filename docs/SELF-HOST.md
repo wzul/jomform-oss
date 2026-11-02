@@ -209,16 +209,17 @@ an Email block, and the form mode is **Response form** — no products, no payme
 
 ![The form is live](assets/selfhost/06-03-published.png)
 
-> **Known limitation — read this before you share a link.** The dialog's
-> **Copy link** button still prints the hosted product's address shape
-> (`<workspace>.<product-domain>/<slug>`), which a self-hosted install does not
-> serve. On your install the working public address is:
+> **The link is your install's own origin.** The dialog's **Copy link** button
+> prints (and the "Open form" target is) your own public address:
 >
 > ```
 > https://forms.example.com/f/<slug>
 > ```
 >
-> i.e. `{APP_BASE_URL}/f/{slug}` — the same stack serves it through Caddy.
+> i.e. `{APP_BASE_URL}/f/{slug}` — the same stack serves it through Caddy. On a
+> self-hosted install there are no `<workspace>.<domain>` subdomains; one
+> hostname serves every workspace, and a form whose slug two workspaces both
+> hold answers 404 rather than guessing.
 
 For a payment form, do § 7 first and add at least one product; a payment form
 with nothing sellable has no checkout to show.

@@ -2082,6 +2082,41 @@ func (s *WorkspaceStore) WorkspaceIDByAccount(ctx context.Context, accountID str
 	return id, nil
 }
 
+// HasLiveWorkspace reports whether the account is linked to a workspace that has
+// not been binned.
+//
+// WHY IT EXISTS (card t_6c0badbe). `accounts.workspace_id` is nullable: a signup
+// creates an account and NO workspace (issue #718 — the user is asked to create
+// one first), and `forms_sync_workspace_id` (migration 000045) copies that NULL
+// onto every form the account creates. A form with `workspace_id IS NULL` can
+// still be PUBLISHED, and then it is unreachable forever: the public serving
+// path resolves a form by workspace host (and, on a self-hosted install, by the
+// workspace behind the slug — ownOriginForm), so nothing ever serves it. The
+// merchant sees a form marked published that answers 404 at every address.
+//
+// `deleted_at IS NULL` is part of the question, not an extra filter: the public
+// host resolver excludes binned workspaces, so a form in a binned workspace is
+// exactly as unreachable as a form with none.
+//
+// WorkspaceIDByAccount is NOT usable here: it scans a nullable column into a
+// string, so the very case this asks about is indistinguishable from a database
+// error.
+func (s *WorkspaceStore) HasLiveWorkspace(ctx context.Context, accountID string) (bool, error) {
+	if accountID == "" {
+		return false, nil
+	}
+	var ok bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (
+		   SELECT 1 FROM accounts a
+		     JOIN workspaces w ON w.id = a.workspace_id AND w.deleted_at IS NULL
+		    WHERE a.id = $1)`, accountID).Scan(&ok)
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
 // RoleByAccount returns the role a user holds in the workspace that owns the given
 // account ("" when the account has no workspace or the user is not a member).
 // The account owner is always treated as an admin (issue #162).

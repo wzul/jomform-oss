@@ -28,8 +28,16 @@ func bundleTestPool(t *testing.T) *pgxpool.Pool {
 	return testdb.Open(t)
 }
 
-// bundleFixture seeds one user + account (+ workspace) and returns the account
-// and user ids. Every call creates fresh rows so tests never collide.
+// bundleFixture seeds one user + account and returns the account and user ids.
+// Every call creates fresh rows so tests never collide.
+//
+// The account has NO workspace on purpose: that is the state a fresh signup is
+// in (#718 — the user is asked to create one first), and tests that need it (the
+// no-workspace refusals) are the only ones that should see it. A test that
+// CREATES A FORM through the API must call bundleLinkWorkspace first: since card
+// t_6c0badbe, POST /v1/rest/forms refuses an account with no live workspace,
+// because such a form is stored with `workspace_id IS NULL` and is unreachable
+// at every address once published.
 func bundleFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (accountID, userID string) {
 	t.Helper()
 	if err := pool.QueryRow(ctx,
@@ -44,6 +52,28 @@ func bundleFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (accou
 		t.Fatalf("create account: %v", err)
 	}
 	return accountID, userID
+}
+
+// bundleLinkWorkspace gives an existing account a live workspace and returns its
+// id — the state the dashboard's ask-first create produces.
+//
+// Needed by every test that creates a form through POST /v1/rest/forms: since
+// card t_6c0badbe that route refuses an account with no live workspace (the
+// stored row would carry `workspace_id IS NULL` and be unreachable once
+// published).
+func bundleLinkWorkspace(t *testing.T, ctx context.Context, pool *pgxpool.Pool, accountID string) string {
+	t.Helper()
+	var wsID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO workspaces (owner_user_id, name, slug)
+		 SELECT owner_user_id, 'it-ws', 'it-ws-' || md5(random()::text) FROM accounts WHERE id=$1
+		 RETURNING id`, accountID).Scan(&wsID); err != nil {
+		t.Fatalf("create workspace for account %s: %v", accountID, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE accounts SET workspace_id=$2 WHERE id=$1`, accountID, wsID); err != nil {
+		t.Fatalf("link account %s to workspace: %v", accountID, err)
+	}
+	return wsID
 }
 
 // newBundleHandlers wires a RESTHandlers over the test pool with a real

@@ -958,9 +958,29 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 // Substituting one, as the notification path used to with
 // `h.BaseURL + "/f/" + form.Slug`, guaranteed the merchant a dead link, and it
 // did so precisely in the case where nothing could serve it.
+//
+// THE ONE EXCEPTION IS A SELF-HOSTED INSTALL (card t_6c0badbe). There the apex
+// IS the origin every form is served from — `/f/{slug}` is exactly what
+// ownOriginForm answers when the request host equals APP_BASE_URL's host — so
+// `{APP_BASE_URL}/f/{slug}` is the reachable address, not a substitution. The
+// flag decides it; host equality alone never does (issue #77).
 func (h *PublicHandlers) formURLForAccount(ctx context.Context, accountID, slug string) string {
 	if accountID == "" || slug == "" {
 		return ""
+	}
+	// Self-hosted first (card t_6c0badbe): this install has no tenant
+	// subdomains and no verified custom domains of its own, and the address it
+	// actually serves is {APP_BASE_URL}/f/{slug} — the same shape
+	// ownOriginForm answers on. Emitting the hosted shape here sent a merchant a
+	// dead link in their own notification mail.
+	//
+	// NO FALL-THROUGH when the origin is unusable (unset APP_BASE_URL): the
+	// hosted resolution below would rebuild the very dead host this branch
+	// exists to stop printing. An absent link is a defect the merchant can see;
+	// a hosted-shaped link on an install with no such host is a 404 behind
+	// "Open form".
+	if h.SelfHosted {
+		return installFormURL(h.BaseURL, slug)
 	}
 	if h.Accounts != nil {
 		if acc, aerr := h.Accounts.ByID(ctx, accountID); aerr == nil && acc != nil &&

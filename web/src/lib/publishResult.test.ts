@@ -114,16 +114,25 @@ test("a live publish with no resolved URL says so instead of showing a dead link
   assert.equal(out.kind === "published" && out.url, "");
 });
 
-test("an empty or non-https URL can never become an href", () => {
+test("an empty or non-absolute URL can never become an href, and a self-host http origin can", () => {
   // An <a href=""> navigates to the CURRENT page — the "View form reloads
   // /forms" defect. A relative path would land the merchant back inside the
   // dashboard. Neither may reach an anchor.
-  for (const bad of ["", "   ", "/forms", "contest", "//acme.jomform.com/x", "http://acme.jomform.com/x", "javascript:alert(1)"]) {
+  for (const bad of ["", "   ", "/forms", "contest", "//acme.jomform.com/x", "javascript:alert(1)", "http://", "http:///path"]) {
     assert.equal(liveLink(bad), null, `${JSON.stringify(bad)} must not be a live link`);
   }
   assert.equal(liveLink("https://acme.jomform.com/contest"), "https://acme.jomform.com/contest");
   // Trailing whitespace is trimmed, not rejected.
   assert.equal(liveLink("  https://acme.jomform.com/x  "), "https://acme.jomform.com/x");
+
+  // SELF-HOST (card t_6c0badbe): the published form lives on the operator's own
+  // origin, and APP_BASE_URL is legitimately http on a local trial
+  // (docs/SELF-HOST.md: --base-url http://localhost:8080). The API answers
+  // exactly this shape, and https-only made the panel say "its public URL is
+  // not available yet" while that URL served the form — no Copy link at all.
+  for (const own of ["http://localhost:18099/f/browser-pub", "http://127.0.0.1:8080/f/slug", "https://forms.example.com/f/slug"]) {
+    assert.equal(liveLink(own), own, `${own} is the install's own working address and must be linkable`);
+  }
 });
 
 test("the API's no-products refusal is classified as needs_ack, not a generic error", () => {

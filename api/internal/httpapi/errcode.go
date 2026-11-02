@@ -90,6 +90,24 @@ const (
 	// that branches on 400 is perturbed.
 	CodeWorkspaceScopeRequired = "workspace.scopeRequired"
 
+	// The form-create refusal for an account with NO workspace (card
+	// t_6c0badbe).
+	//
+	// WHY IT IS NOT CodeWorkspaceScopeRequired. That code answers "your request
+	// did not say which workspace", and the remedy is to send ?workspace=<slug>.
+	// This one answers "this account has no workspace AT ALL", and the remedy is
+	// to create one — advice the scope code's sentence would not give, and a
+	// merchant cannot act on the wrong one: a form stored with
+	// `workspace_id IS NULL` can be published and is then 404 at every address
+	// forever, because every public serving path resolves a form through its
+	// workspace (measured on a clean self-host install: two published forms,
+	// both unreachable).
+	//
+	// 409 rather than 400: the request is well formed, it is the account's state
+	// that cannot carry it out, and the same request succeeds unchanged once a
+	// workspace exists.
+	CodeWorkspaceRequired = "workspace.required"
+
 	// The chat lane's "this card cannot be carried out at all" refusal
 	// (t_623676d1).
 	//
@@ -357,6 +375,11 @@ var errCodeByMessage = map[string]string{
 	// const's own declaration site satisfies exactly once — so the wire wording
 	// and this table cannot drift apart silently.
 	"skop workspace diperlukan — pilih workspace dahulu": CodeWorkspaceScopeRequired,
+
+	// The form-create refusal for an account with NO workspace (card
+	// t_6c0badbe). Keyed on the constant rest_handlers.go writes, so the code
+	// and the sentence cannot drift apart.
+	workspaceRequiredMessage: CodeWorkspaceRequired,
 
 	// The chat's "this card cannot be carried out" refusal (t_623676d1). Keyed on
 	// the exact literal rest_chat.go's chatConfirmMessageFor writes (see

@@ -53,6 +53,8 @@ func exampleServer(t *testing.T) (*RESTHandlers, *pgxpool.Pool, string, string) 
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	accountID, _ := bundleFixture(t, ctx, pool)
+	// The examples create forms, which needs a live workspace (card t_6c0badbe).
+	bundleLinkWorkspace(t, ctx, pool, accountID)
 
 	h := newBundleHandlers(pool)
 	// The examples create and publish forms, so the key needs readwrite.
