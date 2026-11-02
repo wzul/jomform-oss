@@ -78,7 +78,18 @@ export default function OperatorNotice({ className }: { className?: string }) {
     // adds the base direction for an RTL locale, and nothing for the rest.
     <p className={className} lang={lang === "en" ? undefined : lang} {...operatorDirProps(lang)}>
       {lead.trim()}
-      {regClause ? <> <bdi dir="ltr">{regClause}</bdi></> : null}
+      {/* `whitespace-nowrap`: the registration clause is ONE unit, never two
+          lines. The sentence is ~706px wide in a 720px legal-page paragraph, so
+          a line break only fits inside the clause — and the browser takes it at
+          the hyphen: measured in Chromium, `201403298654 (سابقًا PC0012291-`
+          ends line 1 and `H).` starts line 2, three glyphs stranded at the
+          paragraph's edge. Only 14px of slack separates a clean line from that
+          orphan, so it arrives whenever the font is a little wider (another
+          platform's Arabic fallback, a larger browser default size) or a locale
+          reads longer. Measured at a 692px paragraph: exactly that split. With
+          nowrap the whole clause moves to the next line instead (card
+          t_bdcee56f); it still fits at 320px (the clause is ~210px). */}
+      {regClause ? <> <bdi dir="ltr" className="whitespace-nowrap">{regClause}</bdi></> : null}
     </p>
   );
 }

@@ -259,14 +259,34 @@ test("operatorParts degrades instead of throwing when the number is gone", () =>
 
 test("the registration clause is isolated for RTL in the shared component", () => {
   const component = read(COMPONENT);
+  // The clause element itself, so both rules below are asserted against ONE tag
+  // rather than against the file: a second <bdi> appearing later must not be
+  // able to satisfy them.
+  const clauseTag = component.match(/<bdi [^>]*>\{regClause\}<\/bdi>/)?.[0];
+  assert.ok(
+    clauseTag,
+    "the registration clause must be rendered inside a <bdi> whose child is {regClause}",
+  );
   // Measured in Chromium under dir="rtl": without this, the Arabic sentence
   // renders its parenthesis pair inverted and strands the final period.
   assert.match(
-    component,
-    /<bdi dir="ltr">\{regClause\}<\/bdi>/,
-    "the registration clause must be wrapped in <bdi dir=\"ltr\"> — under the app's dir=\"rtl\" for " +
-      "Arabic the raw clause renders its parentheses inverted, and the sentence-final period lands " +
-      "at the start of the visual line (measured, not assumed)",
+    clauseTag,
+    /dir="ltr"/,
+    "the registration clause must keep dir=\"ltr\" — under the app's dir=\"rtl\" for Arabic the raw " +
+      "clause renders its parentheses inverted, and the sentence-final period lands at the start of " +
+      "the visual line (measured, not assumed)",
+  );
+  // Card t_bdcee56f. The sentence is ~706px wide in the 720px legal-page
+  // paragraph, so the only place a break fits is INSIDE the clause, at the
+  // hyphen — measured in Chromium: line 1 ends `…PC0012291-` and line 2 holds
+  // `H).`. Making the clause unbreakable moves it to the next line whole. This
+  // is the wiring half; the browser arm in e2e/a11y-docs-lang.spec.ts measures
+  // the served page across the widths where the split really happens.
+  assert.match(
+    clauseTag,
+    /whitespace-nowrap|white-space:\s*nowrap/,
+    "the registration clause must be unbreakable (whitespace-nowrap) — a break at its own hyphen " +
+      "strands `H).` on the next line as soon as the paragraph is a little narrower than the sentence",
   );
   assert.match(component, /lead\.trim\(\)/, "the lead must be trimmed or a locale doubles the gap in RTL");
   // The locale is per-visitor (jf_lang), so the block must read the shared

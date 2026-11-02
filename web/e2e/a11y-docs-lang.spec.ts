@@ -858,6 +858,111 @@ async function laidOutSentence(page: Page, path: string, sentence: string): Prom
   return layout as OperatorLayout;
 }
 
+// ══ the registration clause never SPLITS across lines (card t_bdcee56f) ══════
+//
+// The block above pins how the sentence is laid out. This one pins that its
+// registration clause stays ONE unit, because the sentence is ~706px wide in the
+// 720px legal-page paragraph: only 14px of slack separates "fits on one line"
+// from "a line break has to happen", and the only break opportunity that fits is
+// the hyphen INSIDE the code. Measured in Chromium on this tree at a 692px
+// paragraph (a 740px viewport): line 1 ended `201403298654 (سابقًا PC0012291-`
+// and line 2 held `H).` — three glyphs stranded at the paragraph's right edge,
+// exactly the fragment the card reports. It is a knife-edge, not a fixed width:
+// prod at 720px renders one line with the same build, so the orphan arrives
+// whenever the font is a little wider (another platform's Arabic fallback, a
+// larger browser default font size) or a locale reads longer.
+//
+// The fix is `whitespace-nowrap` on the <bdi>, so the clause wraps as a unit.
+// What this arm MEASURES, per viewport, from the live DOM:
+//   * the <bdi>'s client rects all share ONE line box — pre-fix the 692px case
+//     reads two tops, and the paragraph's per-character lines put a clause
+//     fragment on the second one;
+//   * no line carries a fragment of the clause shorter than a whole word (the
+//     `H).` shape), and the concatenated fragments are the clause byte for byte,
+//     so nothing was dropped instead of moved;
+//   * the no-wrap rule did not change the base direction: the passage is still
+//     computed `rtl`, the clause still `ltr`;
+//   * the clause stays INSIDE the paragraph box and the document does not scroll
+//     sideways — nowrap moves the clause to the next line, it must not make it
+//     overflow, which is the failure mode the 320px case guards.
+type ClauseWrap = {
+  /** Distinct line tops of the <bdi>'s own client rects (one = never split). */
+  bdiLineTops: number[];
+  /** The clause characters that landed on each paragraph line, in order. */
+  clauseParts: string[];
+  /** The <bdi>'s horizontal extent, and the paragraph's own box. */
+  bdiLeft: number;
+  bdiRight: number;
+  paragraphLeft: number;
+  paragraphRight: number;
+  paragraphWidth: number;
+  /** Direction is a property of the WORDS, not of the wrap: both must survive. */
+  paragraphDirection: string;
+  bdiDirection: string;
+  scrollWidth: number;
+  innerWidth: number;
+};
+
+async function clauseWrap(page: Page, sentence: string): Promise<ClauseWrap | null> {
+  return page.evaluate((s): ClauseWrap | null => {
+    const p = Array.from(document.querySelectorAll("p")).find((e) => (e.textContent ?? "").trim() === s);
+    const bdi = p?.querySelector("bdi") ?? null;
+    if (!p || !bdi) return null;
+    const box = p.getBoundingClientRect();
+    const rects = Array.from(bdi.getClientRects());
+    const bdiLineTops = Array.from(new Set(rects.map((r) => Math.round(r.top)))).sort((a, b) => a - b);
+    // Which clause characters sit on which line, read per character so a split
+    // INSIDE the clause cannot hide behind a line that merely looks short.
+    const lines = new Map<number, string[]>();
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      if (!bdi.contains(node)) continue;
+      const text = node as Text;
+      for (let i = 0; i < text.data.length; i++) {
+        const r = document.createRange();
+        r.setStart(text, i);
+        r.setEnd(text, i + 1);
+        const b = r.getBoundingClientRect();
+        if (b.width === 0 && b.height === 0) continue;
+        const key = Math.round(b.top);
+        if (!lines.has(key)) lines.set(key, []);
+        (lines.get(key) as string[]).push(text.data[i]);
+      }
+    }
+    return {
+      bdiLineTops,
+      clauseParts: Array.from(lines.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([, cs]) => cs.join("")),
+      bdiLeft: Math.round(Math.min(...rects.map((r) => r.left))),
+      bdiRight: Math.round(Math.max(...rects.map((r) => r.right))),
+      paragraphLeft: Math.round(box.left),
+      paragraphRight: Math.round(box.right),
+      paragraphWidth: Math.round(box.width),
+      paragraphDirection: getComputedStyle(p).direction,
+      bdiDirection: getComputedStyle(bdi).direction,
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+    };
+  }, sentence);
+}
+
+/** Navigates to `path` and waits for the passage, then reads the clause's wrap. */
+async function laidOutClause(page: Page, path: string, sentence: string): Promise<ClauseWrap> {
+  await page.goto(path, { waitUntil: "networkidle" });
+  await expect
+    .poll(async () => (await clauseWrap(page, sentence)) !== null, {
+      timeout: 30_000,
+      message: `${path} never rendered the operator sentence with its <bdi> clause`,
+    })
+    .toBe(true);
+  const wrap = await clauseWrap(page, sentence);
+  expect(wrap, `${path}: the sentence vanished between the wait and the read`).not.toBeNull();
+  return wrap as ClauseWrap;
+}
+
+
 test.describe("the operator sentence is laid out in its own direction", () => {
   test("with jf_lang=ar the sentence reads right-to-left inside the LTR legal page", async ({ page }) => {
     await freshState(page, "ar");
@@ -906,6 +1011,70 @@ test.describe("the operator sentence is laid out in its own direction", () => {
         dir: "ltr",
         direction: "ltr",
       });
+    }
+  });
+
+  test("with jf_lang=ar the registration clause is never split across two lines", async ({ page }) => {
+    await freshState(page, "ar");
+    const sentence = operatorSentence("ar");
+    const { regClause } = operatorParts(DICT[OPERATOR_KEY].ar);
+
+    // Viewports around the knife edge the defect lives on. The paragraph is
+    // min(viewport, 768) - 48px wide:
+    //   320x844  → 272px, the narrowest the card names. The clause is ~210px, so
+    //              nowrap must still FIT it — this is the no-overflow arm.
+    //   390x844  → 342px.
+    //   740x577  → 692px. MEASURED pre-fix on this tree: line 1 ended
+    //              `201403298654 (سابقًا PC0012291-`, line 2 held `H).`.
+    //   1280x577 → 720px, the width the card measured on prod.
+    const viewports = [
+      { width: 320, height: 844 },
+      { width: 390, height: 844 },
+      { width: 740, height: 577 },
+      { width: 1280, height: 577 },
+    ] as const;
+
+    for (const vp of viewports) {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      const w = await laidOutClause(page, "/legal/privacy", sentence);
+      const where = `${vp.width}x${vp.height} (paragraph ${w.paragraphWidth}px)`;
+
+      // 1. ONE line box. Pre-fix the 692px case reads two tops.
+      expect(
+        w.bdiLineTops.length,
+        `${where}: the registration clause was laid out on ${w.bdiLineTops.length} lines ` +
+          `(${JSON.stringify(w.clauseParts)}) — it must move to the next line WHOLE, never break at ` +
+          `its own hyphen and strand \`H).\` at the paragraph's edge`,
+      ).toBe(1);
+
+      // 2. …and the paragraph's per-character lines agree: the clause's
+      //    characters all land on ONE line and none went missing. A second line
+      //    carrying three glyphs (`H).`) is the reported shape.
+      const parts = w.clauseParts.filter((part) => part.trim().length > 0);
+      expect(
+        parts.length,
+        `${where}: the clause's characters landed on ${parts.length} lines: ${JSON.stringify(parts)}`,
+      ).toBe(1);
+      expect(parts[0], `${where}: the clause lost characters instead of moving whole`).toBe(regClause);
+
+      // 3. nowrap is a WRAP rule: it must not have touched the base direction.
+      //    The direction geometry arms above stay the authority on reading order;
+      //    this is the "wrapping only" half of that claim, at each width.
+      expect(w.paragraphDirection, `${where}: the passage is no longer RTL`).toBe("rtl");
+      expect(w.bdiDirection, `${where}: the clause is no longer LTR`).toBe("ltr");
+
+      // 4. …and it must not overflow. The clause stays inside the paragraph's own
+      //    box and the document does not scroll sideways — nowrap moves the clause
+      //    to the next line, it must not push it out of the column.
+      expect(
+        w.bdiLeft,
+        `${where}: the clause starts ${w.paragraphLeft - w.bdiLeft}px LEFT of the paragraph`,
+      ).toBeGreaterThanOrEqual(w.paragraphLeft - 1);
+      expect(
+        w.bdiRight,
+        `${where}: the clause ends ${w.bdiRight - w.paragraphRight}px RIGHT of the paragraph`,
+      ).toBeLessThanOrEqual(w.paragraphRight + 1);
+      expect(w.scrollWidth, `${where}: the page scrolls sideways`).toBe(w.innerWidth);
     }
   });
 
