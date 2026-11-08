@@ -51,18 +51,74 @@
 //      translation was inert (t_57a77d02). `r.error` is errorKey's ONLY consumer;
 //      nothing else in this file reads it.
 //
-//   7. THE CONVERSATION SURVIVES A RELOAD. The transcript is kept in this
-//      browser, keyed by user AND workspace, and restored on mount — a refresh,
-//      a tab close or a trip to another page used to destroy it, and with it the
-//      answers and the proposal cards the user had just been reading. The key
-//      and the codec live in lib/chatTranscript.ts; this page only decides WHEN
-//      to load, save and clear. Nothing here is stored on the server, and only
-//      the visible turns are stored: a proposal card's token is a single-use
-//      capability with a five-minute life, so it is deliberately not kept at
-//      rest. "New conversation" clears the stored transcript, and a bounce to
-//      /login clears every transcript in this browser — a retained conversation
-//      with no way to start clean, or one handed to the next person at a shared
-//      device, is its own defect.
+//   7. THE CONVERSATION LIVES ON THE SERVER, NOT IN THIS BROWSER. It used to be
+//      kept in localStorage and DELETED whenever the session ended — so logging
+//      out (or a session expiring, or another device) destroyed every
+//      conversation the user had had. The history is now stored per person and
+//      per workspace (GET/POST /v1/rest/chat/sessions, and the exchange itself is
+//      appended by POST /v1/rest/chat), the sidebar lists it, and the most recent
+//      conversation is re-opened on load. Signing out deletes nothing: the next
+//      login shows the same list.
+//      Only the WORDS are stored: a proposal card's token is a single-use
+//      capability with a five-minute life, so a restored conversation shows the
+//      answer and the tool trail and never a button whose token expired hours
+//      ago.
+//      "New conversation" starts a new stored conversation (the old one stays in
+//      the sidebar), and each row can be renamed or deleted. The parsing of the
+//      wire lives in lib/chatSessions.ts; this page only decides WHEN to load,
+//      create, rename and delete.
+//
+//   8. THE ANSWER ARRIVES WHILE THE MODEL WRITES IT (card t_148d7100). The
+//      exchange used to be one POST whose body appeared only at the end: measured
+//      on staging, the transcript jumped from 45 to 361 characters in a single
+//      frame, after 2–8 seconds of a static "Looking that up…". The request now
+//      asks for `?stream=1`, the server answers text/event-stream, and this page
+//      renders each `delta` into the bubble. THE FALLBACK IS THE POINT OF THE
+//      CONTENT-TYPE CHECK: a proxy that buffers, an older server, or a runner
+//      with no streaming capability all answer ONE JSON body, which is read
+//      exactly as before — the feature degrades to the previous behaviour rather
+//      than to an empty transcript.
+//
+//   9. STOP REALLY STOPS, AND KEEPS WHAT WAS WRITTEN. The send path had no
+//      AbortController at all, so a wrong question cost a whole answer to read and
+//      a full round of model calls to pay for. Stop aborts the fetch (the server
+//      sees the connection close and stops the model work behind it), and the
+//      partial text stays in the transcript, marked as incomplete — deleting it
+//      would throw away the only thing the user waited for.
+//
+//  10. THE STEP LINE SAYS WHAT IS HAPPENING. Tool steps used to be rendered ONLY
+//      when they were refused; the ordinary case showed nothing at all. The
+//      server emits a `step` event BEFORE it dispatches a tool, and this page says
+//      "Reading your forms…" while it runs (lib/chatSteps.ts turns the tool name
+//      into a sentence in the visitor's language — the API sends the identifier,
+//      never prose). The finished `called` steps stay in the transcript as a short
+//      trail, so the answer can be audited rather than merely believed.
+//
+//  11. THE EMPTY STATE IS CLICKABLE, THE ANSWER IS COPYABLE, THE BOX GROWS.
+//      Chips send a real question instead of describing one; a Copy button puts
+//      the assistant's own words on the clipboard; the textarea grows with its
+//      content up to eight lines (lib/chatComposerGrow.ts) instead of being a
+//      fixed two-line window with the resize handle disabled.
+//
+//  12. THE BUTTON IS A BUTTON AND THE STATUS IS A STATUS. While sending, the Send
+//      button used to change its label to "Looking that up…" — so the only control
+//      on the page was also the only state display, and the same sentence appeared
+//      twice. The button now always says Send (the e2e specs look it up by name),
+//      a Stop button appears beside it, and the state is its own `role="status"`
+//      line.
+//
+//  13. THE TRANSCRIPT NO LONGER ANNOUNCES ITSELF. `aria-live="polite"` sat on the
+//      WHOLE log, so a screen reader re-read the entire conversation every time a
+//      message arrived. The log is now a plain scroll region; only the LATEST
+//      assistant message is a live region, and it is `aria-busy` while the answer
+//      is being written, so assistive tech waits for the end of the answer instead
+//      of reading it character by character.
+//
+//  14. SCROLLING IS THE USER'S. The page called `scrollIntoView` on every change
+//      of `msgs.length`/`sending`, which pulled a reader who had scrolled up back
+//      to the bottom — and would have done it on every streamed fragment. The
+//      follow is now conditional on the reader being at the bottom (lib/chatScroll.ts);
+//      otherwise a "Jump to latest" control appears and the view stays put.
 //
 // The history it sends is the transcript the user can see, capped to the SERVER'S
 // own retention cap — the `max_history_turns` the availability probe reports,
@@ -101,18 +157,40 @@ import {
   proposalSummary,
   proposalTitle,
   proposalValue,
+  toolLabel,
   type ProposalCardData,
 } from "../../lib/chatProposal";
-import { dropWorkspaceScopeIfCurrent, workspaceQuery } from "../../lib/workspace";
+import { dropWorkspaceScopeIfCurrent, workspaceQuery, workspaceUrl } from "../../lib/workspace";
+// The stored conversations: the wire codec lives there (pure, executed by
+// lib/chatSessions.test.ts), so this page only decides WHEN to load one, create
+// one, rename one or delete one.
 import {
-  browserStorage,
-  chatTranscriptKey,
-  clearChatTranscripts,
-  clearTranscript,
-  loadTranscript,
-  maySaveTranscript,
-  saveTranscript,
-} from "../../lib/chatTranscript";
+  parseSessionDetail,
+  parseSessionList,
+  readSession,
+  sessionAfterDelete,
+  sessionLabel,
+  type ChatSession,
+} from "../../lib/chatSessions";
+// The streamed answer (card t_148d7100): the frame parser and the rule that turns
+// progress into the bubble's text. Both are pure and executed by
+// src/lib/chatStream.test.ts — a frame split across two network chunks is not a
+// case a rendering test can produce on demand.
+import {
+  applyChatStreamEvent,
+  createChatStreamParser,
+  type ChatStreamEvent,
+} from "../../lib/chatStream";
+// Whether the transcript may follow new content — the decision that used to be
+// "always", which is what pulled a reader who had scrolled up back to the bottom.
+import { isAtBottom } from "../../lib/chatScroll";
+// The composer's auto-growing height (eight lines, then it scrolls).
+import { CHAT_COMPOSER_MAX_ROWS, composerHeight } from "../../lib/chatComposerGrow";
+// A tool name becomes a sentence here, in this visitor's language: the API sends
+// the identifier and never prose (issue #6177).
+import { stepLabel } from "../../lib/chatSteps";
+// The empty state's questions, as keys — each chip SENDS its own text.
+import { CHAT_STARTERS } from "../../lib/chatStarters";
 
 type Turn = { role: "user" | "assistant"; content: string };
 
@@ -216,10 +294,31 @@ type Msg = {
   // produced them.
   filed?: Filed;
   refused?: Step[];
+  // steps is the trail of tools this answer DID call (status "called"), which the
+  // page renders as a short list of sentences (lib/chatSteps.ts). It exists so the
+  // answer is auditable: before this card a step was shown only when it was
+  // REFUSED, so the ordinary "it read something and answered" left no trace at all.
+  steps?: Step[];
   proposals?: Proposal[];
   // states maps a proposal token to what happened to it.
   states?: Record<string, ProposalState>;
+  // streaming: this bubble is still being written (the cursor is shown, and the
+  // message is the aria-busy live region).
+  streaming?: boolean;
+  // stopped: the user pressed Stop, so the text above is PARTIAL. Marking it is
+  // the difference between an incomplete answer and an answer that looks finished
+  // and happens to end mid-sentence.
+  stopped?: boolean;
 };
+
+// What the assistant is doing right now, for the status line. "step" carries the
+// tool name (not a sentence): the wording is the dashboard's, in the visitor's
+// language — see lib/chatSteps.ts.
+type Activity =
+  | { kind: "thinking" }
+  | { kind: "step"; tool: string }
+  | { kind: "stopped" }
+  | null;
 
 // How much history the page sends when the server has not told it the cap yet,
 // i.e. the window between the first paint and GET /v1/rest/chat answering.
@@ -253,8 +352,34 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState("");
+  // What the assistant is doing, for the status line — SEPARATE from `sending`
+  // (which drives the controls) and from the button's label (which is always
+  // "Send"). "stopped" is sticky until the next send, so a cancelled answer keeps
+  // saying it was cancelled.
+  const [activity, setActivity] = useState<Activity>(null);
+  // Whether the transcript should follow new content. `true` until the reader
+  // scrolls away from the bottom — see lib/chatScroll.ts for the measurement and
+  // the tolerance.
+  const [pinned, setPinned] = useState(true);
+  // Which assistant message was just copied, so the button can say so for a beat.
+  const [copied, setCopied] = useState<number | null>(null);
 
   const endRef = useRef<HTMLDivElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The transcript as it stands, readable from inside an async callback whose
+  // closure may be a frame behind (the history load decides whether to re-open a
+  // stored conversation, and it must not overwrite a message the user just sent).
+  const msgsRef = useRef<Msg[]>([]);
+  // The in-flight request. Aborting it is Stop: the browser closes the
+  // connection, the API sees its write fail, and the runner stops the model work
+  // behind it (api/internal/httpapi/rest_chat_stream.go).
+  const controllerRef = useRef<AbortController | null>(null);
+  // The answer's text as it has arrived so far. Stop's handler runs in a `catch`,
+  // where the component's `msgs` closure may be a frame behind the stream (each
+  // fragment re-renders), so "was anything written?" is answered from this ref
+  // rather than from a stale render.
+  const partialRef = useRef("");
 
   // The retention cap: the server's `max_history_turns` once the probe has
   // answered, the pre-probe fallback before that. ONE derivation, read by the
@@ -269,60 +394,249 @@ export default function ChatPage() {
   // in, not a state the server can send.
   const historyCap = limits?.max_history_turns || MAX_HISTORY;
 
-  // The stored transcript this page shows and writes, or "" when there is
-  // nothing to scope it to (no signed-in user id yet). Never a key shared
-  // between users or between workspaces — see lib/chatTranscript.ts.
-  const transcriptKey = chatTranscriptKey(user?.id ?? "", workspace);
+  // Keep the ref in step with the state, so a callback can ask "is the transcript
+  // empty right now?" without a stale closure.
+  useEffect(() => {
+    msgsRef.current = msgs;
+  }, [msgs]);
 
-  // Which key's turns are IN `msgs`. State, not a ref, and set in the SAME batch
-  // as the restore: the save effect must be able to tell "these turns belong to
-  // this key" from "this render is mid-transition", and a ref updated one commit
-  // early reports the wrong thing (measured in a browser: a first-paint key change
-  // then wrote the previous key's turns under the new key, and deleted the stored
-  // conversation under the old one).
-  const [shownKey, setShownKey] = useState<string | null>(null);
+  // The stored conversations in this scope, most recently used first — the order
+  // the server decides (see lib/chatSessions.ts: this page never re-sorts it).
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  // The conversation on screen, or null for one that has not been created yet.
+  const [activeId, setActiveId] = useState<string | null>(null);
+  // Which row is being renamed (its id), or null. An inline input rather than a
+  // prompt(): the label belongs in the list, next to the others, not in a modal
+  // that covers them.
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  // The scope whose conversations are ON SCREEN (ref, not state): the load
+  // effect must not re-run when it records what it has loaded. A `shownScope`
+  // STATE here cancelled its own fetch — setting it re-rendered, the dependency
+  // array changed, the cleanup set `cancelled = true`, and the effect's second
+  // pass returned early at the "already shown" guard, so the list silently
+  // stayed empty. Measured in the browser (e2e/chat-history.spec.ts), not
+  // reasoned about.
+  const shownScopeRef = useRef<string | null>(null);
+
+  // The scope this page's history belongs to. A conversation is stored per person
+  // AND per workspace, so a workspace switch is a different sidebar — and the
+  // value is built from the server's own answers (the session bundle's user id and
+  // the shell's workspace slug), never from anything a caller could type.
+  const historyScope = user?.id ? `${user.id}:${workspace || "-"}` : "";
 
   const goToLogin = useCallback(() => {
-    // A dead session must not hand the next person at this device the previous
-    // conversation. The sweep covers every chat transcript in this browser (the
-    // keys are per user, so they are found by prefix), and it runs BEFORE the
-    // navigation so a redirect that never completes still leaves nothing behind.
-    clearChatTranscripts(browserStorage());
+    // Nothing to clear here any more: the conversation is on the server, so a dead
+    // session loses nothing and a shared device hands the next person an empty
+    // page (the sign-out path still sweeps the keys the OLD browser-only version
+    // wrote — see lib/chatTranscript.ts and Shell.signOut).
     router.replace("/login");
     window.location.href = "/login";
   }, [router]);
 
-  // Restore the conversation on mount — and again on a workspace switch, because
-  // the transcript is per workspace and showing the previous workspace's turns
-  // would be exactly the leak the key prevents.
-  //
-  // THE FIRST RESTORE ONLY FILLS AN EMPTY TRANSCRIPT: a message already sent in
-  // this mount (the user typed before the session bundle answered) is newer than
-  // anything stored, and replacing it would drop what they just asked.
-  //
-  // `setShownKey` and `setMsgs` go together in one batch, so the render that
-  // carries the restored turns also carries the key they belong to.
-  useEffect(() => {
-    if (!transcriptKey) return;
-    if (shownKey === transcriptKey) return;
-    const isFirst = shownKey === null;
-    const stored = loadTranscript(browserStorage(), transcriptKey, historyCap);
-    setShownKey(transcriptKey);
-    setMsgs((prev) => (isFirst && prev.length > 0 ? prev : stored));
-  }, [transcriptKey, shownKey, historyCap]);
+  // Read one stored conversation and put it on screen.
+  const openSession = useCallback(
+    async (id: string) => {
+      const r = await runLoad(
+        () =>
+          fetchJson<unknown>(`/api/rest/chat/sessions/${id}${workspaceQuery()}`),
+        { onUnauth: goToLogin, message: t("chat.historyLoadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
+      );
+      if (!r.ok) {
+        // A refused read is reported, but it does not close the box: the
+        // conversation could not be restored, and the user can still ask a new
+        // question.
+        setErr(r.error || t("chat.historyLoadFail"));
+        return;
+      }
+      const detail = parseSessionDetail(r.data);
+      if (!detail) {
+        // A payload this page cannot render (a shape change, a partial write):
+        // start from an empty transcript rather than half a conversation.
+        setErr(t("chat.historyLoadFail"));
+        return;
+      }
+      setErr("");
+      setActiveId(detail.session.id);
+      setMsgs(
+        detail.turns.map((turn) => ({
+          role: turn.role,
+          content: turn.content,
+          steps: turn.steps,
+        })),
+      );
+    },
+    [goToLogin, t],
+  );
 
-  // Persist what is on screen. Only turns are written (the codec drops the
-  // filing/refusal/proposal cards, which are UI affordances — and a proposal card
-  // carries a single-use token that must not sit at rest).
+  // Start a conversation on the server ("New conversation", and the first message
+  // of a conversation that has no row yet).
   //
-  // The gate is `maySaveTranscript`, not "have we restored yet": on a first paint
-  // the key can change under the page (the session bundle answers, then the shell
-  // publishes the workspace it selected), and a save that trusted a one-shot flag
-  // wrote the previous key's turns under the new key. See its own comment.
+  // The row is created EAGERLY rather than on the first message: the card's
+  // contract is that the button starts a conversation, and a sidebar that only
+  // grows after you type is a control whose effect the user cannot see. The cost
+  // is that an abandoned new conversation stays in the list — which is why each
+  // row can be deleted, and why an unnamed one is labelled ("New conversation")
+  // rather than left blank.
+  const createSession = useCallback(async (): Promise<ChatSession | null> => {
+    const r = await runLoad(
+      () =>
+        fetchJson<unknown>(`/api/rest/chat/sessions${workspaceQuery()}`, {
+          method: "POST",
+          body: "{}",
+        }),
+      { onUnauth: goToLogin, message: t("chat.historyCreateFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
+    );
+    if (!r.ok) {
+      setErr(r.error || t("chat.historyCreateFail"));
+      return null;
+    }
+    const row = readSession((r.data as { session?: unknown } | null)?.session);
+    if (!row) {
+      setErr(t("chat.historyCreateFail"));
+      return null;
+    }
+    return row;
+  }, [goToLogin, t]);
+
+  // Reload the sidebar after an exchange. The server names a conversation from its
+  // first question and moves it to the top, so the row on screen is stale as soon
+  // as an answer lands. Best-effort: the transcript itself is already correct.
+  const refreshSessions = useCallback(async () => {
+    const r = await runLoad(
+      () => fetchJson<unknown>(`/api/rest/chat/sessions${workspaceQuery()}`),
+      { onUnauth: goToLogin, message: t("chat.historyLoadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
+    );
+    if (r.ok) setSessions(parseSessionList(r.data));
+  }, [goToLogin, t]);
+
+  // Rename one conversation. The input is inline (see `renaming`), and an empty
+  // value means "leave it alone" rather than "blank the label": the sidebar has a
+  // fallback for an unnamed row, but a user who opens the field and changes their
+  // mind must not lose the name the server gave it.
+  async function commitRename(id: string) {
+    const title = renameValue.trim();
+    setRenaming(null);
+    if (!title) return;
+    try {
+      const r = await fetch(`/api/rest/chat/sessions/${id}${workspaceQuery()}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (!r.ok) {
+        setErr(t("chat.historySaveFail"));
+        return;
+      }
+      setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
+    } catch {
+      setErr(t("chat.historySaveFail"));
+    }
+  }
+
+  // Delete one conversation. A delete destroys the messages (the server cascades),
+  // so it asks first — a mis-click on a list of similar-looking labels must not
+  // silently erase a transcript.
+  async function removeSession(id: string) {
+    if (!window.confirm(t("chat.deleteConfirm"))) return;
+    try {
+      const r = await fetch(`/api/rest/chat/sessions/${id}${workspaceQuery()}`, { method: "DELETE" });
+      if (!r.ok) {
+        setErr(t("chat.historySaveFail"));
+        return;
+      }
+    } catch {
+      setErr(t("chat.historySaveFail"));
+      return;
+    }
+    const next = sessionAfterDelete(sessions, id, activeId);
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    if (activeId === id) {
+      setMsgs([]);
+      setActiveId(null);
+      if (next) await openSession(next);
+    }
+  }
+
+  // Switch the transcript to another stored conversation. The row is marked
+  // active immediately and the turns are dropped while the read is in flight, so
+  // the header can never sit over the PREVIOUS conversation's messages.
+  async function selectSession(id: string) {
+    // Re-clicking the conversation already on screen is a no-op — unless it is
+    // empty because the last read was refused, in which case the click is the
+    // retry.
+    if (id === activeId && msgsRef.current.length > 0) return;
+    setErr("");
+    setRenaming(null);
+    setActiveId(id);
+    setMsgs([]);
+    await openSession(id);
+  }
+
+  // Open the rename field for one row, seeded with the label the user is
+  // looking at (empty for a conversation the server has not named yet).
+  function startRename(s: ChatSession) {
+    setRenaming(s.id);
+    setRenameValue(s.title || "");
+  }
+
+  // LOAD THE SIDEBAR, THEN RE-OPEN THE MOST RECENT CONVERSATION.
+  //
+  // This runs on mount and again on a scope change (a different user, or the
+  // workspace the shell publishes after it answers — the same two-step the
+  // availability probe already handles). `shownScopeRef` is what makes the effect
+  // run once per scope, and it is a REF so recording it does not re-render and
+  // cancel the very fetch it was recording (see the ref's own comment).
+  //
+  // A message already sent in this mount is never replaced: the page only opens a
+  // stored conversation into an EMPTY transcript, which is the state a fresh
+  // mount is in.
   useEffect(() => {
-    if (!maySaveTranscript(shownKey, transcriptKey)) return;
-    saveTranscript(browserStorage(), transcriptKey, msgs, historyCap);
-  }, [msgs, transcriptKey, shownKey, historyCap]);
+    if (!historyScope || shownScopeRef.current === historyScope) return;
+    let cancelled = false;
+    // A scope CHANGE invalidates the transcript on screen (it belongs to the
+    // previous workspace/user); the FIRST resolution does not, because the user
+    // may have typed before the session bundle answered and that message is newer
+    // than anything stored.
+    const firstScope = shownScopeRef.current === null;
+    shownScopeRef.current = historyScope;
+    setRenaming(null);
+    setSessions([]);
+    setActiveId(null);
+    if (!firstScope) setMsgs([]);
+    void (async () => {
+      const r = await runLoad(
+        () => fetchJson<unknown>(`/api/rest/chat/sessions${workspaceQuery()}`),
+        { onUnauth: goToLogin, message: t("chat.historyLoadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
+      );
+      if (cancelled) return;
+      if (!r.ok) {
+        // The availability probe above already reports a broken deployment; this
+        // is the history half, and it says so rather than showing an empty
+        // sidebar as if the user had never talked to the assistant.
+        setErr(r.error || t("chat.historyLoadFail"));
+        return;
+      }
+      const rows = parseSessionList(r.data);
+      setSessions(rows);
+      // Re-open the most recent conversation only into an EMPTY transcript: a
+      // question the user sent while the session bundle was still answering is
+      // newer than anything stored, and replacing it would drop what they asked.
+      if (rows.length > 0 && msgsRef.current.length === 0) await openSession(rows[0].id);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // `openSession` is stable, and adding it would re-run this on every render of
+    // the parent context — the scope is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyScope, goToLogin]);
+
+  // THE MESSAGE LIST IS SAVED BY THE SERVER, not by an effect here: POST
+  // /v1/rest/chat appends the question and the answer to the conversation named
+  // by `session_id` (api/internal/httpapi/rest_chat_sessions.go). There is no
+  // client-side write, so there is nothing to mirror — and nothing for a failed
+  // render or a closing tab to lose.
 
   // Availability first: with no LLM the box must not be offered at all.
   useEffect(() => {
@@ -408,15 +722,185 @@ export default function ChatPage() {
     if (anon) router.replace("/landing");
   }, [anon, router]);
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [msgs.length, sending]);
+  // WHICH SURFACE THE READER IS SCROLLING (card t_148d7100).
+  //
+  // The transcript is a BOUNDED scroll box (`max-h-[60vh]` on it below), so
+  // normally IT is what moves. On a short viewport the page around it scrolls
+  // too, and a reader who dragged THAT up is reading something else just as
+  // much. Measured on the built page before the box was capped: the log's
+  // `scrollHeight` equalled its `clientHeight` (404/404) on a transcript long
+  // enough to overflow, because a `flex-1` box in an auto-height column grows
+  // instead of scrolling — so the log's `onScroll` never fired, `pinned` stayed
+  // `true`, and the follow yanked the reader's WINDOW back down. That is the
+  // original defect with a different scrollbar, which is why the decision reads
+  // whichever surface actually scrolls rather than assuming the box does.
+  const decidePinned = useCallback(() => {
+    const el = logRef.current;
+    if (!el) return;
+    const scrollsItself = el.scrollHeight > el.clientHeight + 1;
+    setPinned(
+      isAtBottom(
+        scrollsItself
+          ? { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }
+          : {
+              scrollTop: window.scrollY,
+              scrollHeight: document.documentElement.scrollHeight,
+              clientHeight: window.innerHeight,
+            },
+      ),
+    );
+  }, []);
 
-  async function send(e: React.FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
+  // The page itself can be the scroller, so it is listened to as well as the log.
+  // `passive` because this handler only reads — it must never delay the reader's
+  // own scrolling.
+  useEffect(() => {
+    window.addEventListener("scroll", decidePinned, { passive: true });
+    return () => window.removeEventListener("scroll", decidePinned);
+  }, [decidePinned]);
+
+  // FOLLOW THE CONVERSATION ONLY WHEN THE READER IS AT THE BOTTOM.
+  //
+  // This effect used to run unconditionally on `msgs.length`/`sending`. Two
+  // things were wrong with that: a reader who had scrolled UP to re-read an
+  // earlier answer was yanked back down by the next message, and once the answer
+  // streams, "new content" happens many times a second — so the pull would have
+  // been continuous. `pinned` is the decision (lib/chatScroll.ts, executed by its
+  // test); the reader sets it by scrolling, and "Jump to latest" sets it back.
+  // `scrollIntoView` is the RIGHT primitive for two possible scrollers: it moves
+  // every scrollable ancestor as needed, so it follows the log when the log
+  // scrolls and the page when the page does.
+  useEffect(() => {
+    if (!pinned) return;
+    endRef.current?.scrollIntoView({ block: "end" });
+  }, [msgs, sending, activity, pinned]);
+
+  // THE COMPOSER GROWS WITH ITS CONTENT. `resize-none` + a fixed `rows` was a
+  // two-line window onto a 2,000-character message, and it removed the one
+  // affordance that could have made it bigger. The height is measured from the
+  // element itself (scrollHeight knows about wrapping, which a character count
+  // does not) and clamped to CHAT_COMPOSER_MAX_ROWS lines by the pure function.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const cs = window.getComputedStyle(el);
+    const lineHeight = parseFloat(cs.lineHeight) || 20;
+    const chrome =
+      (parseFloat(cs.paddingTop) || 0) +
+      (parseFloat(cs.paddingBottom) || 0) +
+      (parseFloat(cs.borderTopWidth) || 0) +
+      (parseFloat(cs.borderBottomWidth) || 0);
+    // Measure from `auto` so the box can SHRINK again when text is deleted —
+    // without the reset, scrollHeight is the height it already has and the box
+    // would only ever grow.
+    el.style.height = "auto";
+    el.style.height = `${composerHeight(el.scrollHeight, lineHeight, chrome, CHAT_COMPOSER_MAX_ROWS)}px`;
+  }, [input]);
+
+  // ── Sending, streaming, and Stop ────────────────────────────────────────────
+
+  // Replace the text of the LAST message. Only the streaming answer writes here,
+  // and only ever to the last turn — so a fragment that arrives after the answer
+  // was replaced (or after a Stop) cannot scribble on an earlier message.
+  function editLastMessage(fn: (m: Msg) => Msg) {
+    setMsgs((prev) => {
+      const i = prev.length - 1;
+      if (i < 0) return prev;
+      const next = [...prev];
+      next[i] = fn(next[i]);
+      return next;
+    });
+  }
+
+  // The finished answer, applied to the transcript. ONE renderer for both
+  // transports: the server puts the SAME body in a `done` frame that it would
+  // have returned from the plain POST, so a deployment without streaming renders
+  // the identical transcript.
+  function applyReply(d: ChatReply, hadPlaceholder: boolean) {
+    if (d.limits) setLimits(d.limits);
+    const refused = (d.steps ?? []).filter((s) => s.status === "refused");
+    // The steps that RAN. They used to be dropped from the transcript entirely
+    // unless they were refused, so "it looked something up" left no trace.
+    const called = (d.steps ?? []).filter((s) => s.status === "called");
+    const proposals = d.proposals ?? [];
+    const states: Record<string, ProposalState> = {};
+    for (const p of proposals) states[p.token] = "pending";
+    const msg: Msg = {
+      role: "assistant",
+      // The answer the visitor reads. The model's own words when it wrote any;
+      // otherwise the dictionary sentence the server named (t_7f1694cb), so a
+      // refused proposal cannot end the turn with an empty bubble. Both empty
+      // stays empty — the page must not invent a sentence of its own.
+      content: answerText(d.reply, d.reply_key, t),
+      filed: d.filed,
+      steps: called.length ? called : undefined,
+      refused: refused.length ? refused : undefined,
+      proposals: proposals.length ? proposals : undefined,
+      states: proposals.length ? states : undefined,
+    };
+    setMsgs((prev) => {
+      const last = prev[prev.length - 1];
+      if (hadPlaceholder && last?.role === "assistant") {
+        return [...prev.slice(0, -1), msg];
+      }
+      return [...prev, msg];
+    });
+  }
+
+  // Read one streamed answer into the transcript. Throws when the stream fails or
+  // ends without a `done` frame, so the caller's catch is the ONE failure path for
+  // both transports.
+  async function readStream(body: ReadableStream<Uint8Array>) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    const parser = createChatStreamParser();
+    // The answer as the stream has produced it. This is the accumulator the
+    // reducer is applied to — not the message in state, which React may not have
+    // committed yet when a second frame arrives in the same chunk.
+    let text = "";
+    let finished = false;
+    try {
+      while (!finished) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const events: ChatStreamEvent[] = parser.push(decoder.decode(value, { stream: true }));
+        for (const ev of events) {
+          if (ev.type === "delta" || ev.type === "retract") {
+            text = applyChatStreamEvent(text, ev);
+            partialRef.current = text;
+            editLastMessage((m) => ({ ...m, content: text }));
+            continue;
+          }
+          if (ev.type === "step") {
+            setActivity({ kind: "step", tool: ev.tool });
+            continue;
+          }
+          if (ev.type === "error") {
+            throw new Error("the assistant failed while answering");
+          }
+          if (ev.type === "done") {
+            applyReply(ev.result as ChatReply, true);
+            finished = true;
+            break;
+          }
+        }
+      }
+      if (!finished) throw new Error("the stream ended before the answer did");
+    } finally {
+      // Closing the reader is what tears the connection down; on the Stop path the
+      // abort has already done it, and cancelling twice is harmless.
+      void reader.cancel().catch(() => {});
+    }
+  }
+
+  // The one send path, used by the form AND by the starter chips. A chip that
+  // had its own fetch would be a second place for the scope, the cap and the
+  // streaming fallback to drift.
+  async function sendText(raw: string) {
+    const text = raw.trim();
     if (!text || sending) return;
     setErr("");
+    setCopied(null);
 
     const cap = limits?.max_message_chars ?? 0;
     if (cap > 0 && text.length > cap) {
@@ -438,11 +922,44 @@ export default function ChatPage() {
     setMsgs((prev) => [...prev, { role: "user", content: text }]);
     setInput("");
     setSending(true);
+    setActivity({ kind: "thinking" });
+    partialRef.current = "";
+    // Sending brings the reader back to the conversation: they just asked
+    // something, so the answer is what they want to see.
+    setPinned(true);
+
+    // THE CONVERSATION THIS EXCHANGE IS STORED IN. A page that has never sent
+    // anything has no row yet, so one is created here — lazily, so a visit that
+    // asks nothing does not leave an empty conversation behind.
+    //
+    // A failure here does NOT block the answer: the message is still sent, it just
+    // is not stored, and the page says so. Losing the copy is bad; refusing to
+    // answer because a side store is unavailable would be worse.
+    let sessionId = activeId;
+    if (!sessionId) {
+      const created = await createSession();
+      if (created) {
+        sessionId = created.id;
+        setActiveId(created.id);
+        setSessions((prev) => [created, ...prev]);
+      }
+    }
+
+    const ctrl = new AbortController();
+    controllerRef.current = ctrl;
+    let placeholder = false;
     try {
-      const r = await fetch(`/api/rest/chat${workspaceQuery()}`, {
+      // `?stream=1` is the trigger the dashboard can use: its /api proxy forwards
+      // the body, cookie and client address but NOT the Accept header
+      // (web/src/app/api/[...path]/route.ts). The API honours either.
+      const r = await fetch(workspaceUrl("/api/rest/chat?stream=1"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, history }),
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({ message: text, history, session_id: sessionId || undefined }),
+        signal: ctrl.signal,
       });
       // ONE decision for the failure statuses, shared with runLoad: a 401 (or an
       // uncoded 403) is a dead session; a 403 that NAMES the tenancy code
@@ -451,6 +968,10 @@ export default function ChatPage() {
       // /login for a slug in their own localStorage (t_da4b2031). The scope case
       // re-reads the reconciled slug instead of navigating away, and says what to
       // do, so no data is lost and no session is thrown away.
+      //
+      // Every one of these refusals is answered BEFORE the stream opens
+      // (rest_chat_stream.go), so they still arrive as statuses rather than as
+      // frames — which is why this block is unchanged by the streaming switch.
       if (!r.ok) {
         const failure = await classifyResponseFailure(r);
         if (failure === "scope") {
@@ -484,31 +1005,96 @@ export default function ChatPage() {
         setErr(t("chat.fail"));
         return;
       }
-      const d = (await r.json()) as ChatReply;
-      if (d.limits) setLimits(d.limits);
-      const refused = (d.steps ?? []).filter((s) => s.status === "refused");
-      const proposals = d.proposals ?? [];
-      const states: Record<string, ProposalState> = {};
-      for (const p of proposals) states[p.token] = "pending";
-      setMsgs((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          // The answer the visitor reads. The model's own words when it wrote any;
-          // otherwise the dictionary sentence the server named (t_7f1694cb), so a
-          // refused proposal cannot end the turn with an empty bubble. Both empty
-          // stays empty — the page must not invent a sentence of its own.
-          content: answerText(d.reply, d.reply_key, t),
-          filed: d.filed,
-          refused: refused.length ? refused : undefined,
-          proposals: proposals.length ? proposals : undefined,
-          states: proposals.length ? states : undefined,
-        },
-      ]);
+
+      const contentType = r.headers.get("content-type") ?? "";
+      if (r.body && contentType.includes("text/event-stream")) {
+        placeholder = true;
+        // The bubble exists BEFORE the first fragment, so the cursor has somewhere
+        // to sit while the model thinks — the visible difference between "nothing
+        // happened" and "it is answering".
+        setMsgs((prev) => [...prev, { role: "assistant", content: "", streaming: true }]);
+        await readStream(r.body);
+      } else {
+        // THE FALLBACK: one JSON body — a buffering proxy, an older server, or a
+        // runner with no streaming capability. Rendered by the same code as a
+        // `done` frame.
+        const d = (await r.json()) as ChatReply;
+        applyReply(d, false);
+      }
+      // The answer landed, so the conversation has two more turns and (on the
+      // first question) a name. Re-read the sidebar so the row says what the
+      // server now says; the transcript itself is already on screen.
+      void refreshSessions();
     } catch {
-      setErr(t("chat.fail"));
+      if (ctrl.signal.aborted) {
+        // STOP. What was written stays: it is the only thing the user waited for.
+        // An EMPTY bubble is removed instead — there is nothing to keep, and an
+        // empty assistant turn is noise — and in that case the status line carries
+        // the "incomplete" sentence, because there is no bubble left to mark.
+        const kept = partialRef.current.trim() !== "";
+        setMsgs((prev) => {
+          const last = prev[prev.length - 1];
+          if (!placeholder || last?.role !== "assistant") return prev;
+          if (!kept) return prev.slice(0, -1);
+          return [...prev.slice(0, -1), { ...last, streaming: false, stopped: true }];
+        });
+        setActivity(kept ? null : { kind: "stopped" });
+      } else {
+        setErr(t("chat.fail"));
+        setMsgs((prev) => {
+          const last = prev[prev.length - 1];
+          if (!placeholder || last?.role !== "assistant") return prev;
+          return last.content.trim()
+            ? [...prev.slice(0, -1), { ...last, streaming: false }]
+            : prev.slice(0, -1);
+        });
+      }
     } finally {
+      controllerRef.current = null;
       setSending(false);
+      // The cursor goes on EVERY path, including a throw between the placeholder
+      // and the answer.
+      setMsgs((prev) => {
+        const last = prev[prev.length - 1];
+        if (!last?.streaming) return prev;
+        return [...prev.slice(0, -1), { ...last, streaming: false }];
+      });
+      setActivity((a) => (a?.kind === "stopped" ? a : null));
+    }
+  }
+
+  function send(e: React.FormEvent) {
+    e.preventDefault();
+    void sendText(input);
+  }
+
+  // Stop: abort the request. The browser closes the connection, the API's write
+  // fails, and the runner returns that error — which stops the model work instead
+  // of paying for an answer nobody will read (rest_chat_stream.go).
+  //
+  // It does NOT set the status line to "stopped" here: the partial answer carries
+  // its own incomplete marker, and saying the same sentence twice (once under the
+  // composer, once in the bubble) is the duplication this card removed from the
+  // Send button. The status line gets it only when there is no bubble to mark.
+  function stop() {
+    controllerRef.current?.abort();
+  }
+
+  // "Jump to latest" — the control that makes NOT following the conversation
+  // acceptable. Without it, staying scrolled up would be a dead end.
+  function jumpToLatest() {
+    setPinned(true);
+    endRef.current?.scrollIntoView({ block: "end" });
+  }
+
+  async function copyMessage(index: number, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(index);
+      window.setTimeout(() => setCopied((c) => (c === index ? null : c)), 2000);
+    } catch {
+      // A refused clipboard (an insecure origin, or a browser that wants a user
+      // gesture) must not claim success: the text stays selectable by hand.
     }
   }
 
@@ -699,24 +1285,126 @@ export default function ChatPage() {
     );
   }
 
-  // "New conversation" — the control that makes the retention revocable. A
-  // retained transcript with no way to start clean is its own problem, so this
-  // drops the turns on screen AND the stored copy in one action. It clears the
-  // key explicitly rather than relying on the save effect: the effect is the
-  // mirror of the store, and a user asking for a clean sheet must not depend on
-  // an effect having run (nor be left with a key whose value is "[]").
-  function newConversation() {
+  // "New conversation" — a NEW stored conversation, with the previous one left
+  // where it is. It used to clear the browser's copy; now it creates a row on the
+  // server so the user can come back to the old one from the sidebar.
+  //
+  // The row is created immediately (see createSession). Starting a conversation is
+  // an action with a visible effect — a new entry in the list — and a control
+  // whose effect appears only after the next message reads as a control that did
+  // nothing.
+  async function newConversation() {
     setErr("");
     setInput("");
     setMsgs([]);
-    clearTranscript(browserStorage(), transcriptKey);
+    setRenaming(null);
+    setActiveId(null);
+    if (!historyScope) return; // not signed in yet: nothing to create under
+    const created = await createSession();
+    if (!created) return;
+    setActiveId(created.id);
+    setSessions((prev) => [created, ...prev]);
   }
 
   const disabled = sending || available === false;
 
   return (
     <Shell active="chat">
-      <div className="flex w-full flex-1 flex-col px-6 py-8">
+      <div className="flex w-full flex-1 flex-col gap-6 px-6 py-8 lg:flex-row">
+        {/* THE HISTORY SIDEBAR. The conversation is stored on the server, so this
+            is where every saved conversation lives — re-open one by clicking it,
+            rename it in place, or delete it. It is `aria-label`ed and each row is
+            a real button rather than a div so the whole list is reachable from a
+            keyboard. On a narrow screen it stacks above the transcript rather
+            than disappearing: a control that vanishes on a phone is a conversation
+            the user cannot get back there. */}
+        <aside aria-label={t("chat.history")} className="w-full shrink-0 lg:w-64">
+          <h2 className="text-jf-2xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+            {t("chat.history")}
+          </h2>
+          {sessions.length === 0 ? (
+            <p className="mt-2 text-xs text-[var(--jf-muted)]">{t("chat.historyEmpty")}</p>
+          ) : (
+            <ul className="mt-2 space-y-1">
+              {sessions.map((s) => {
+                const label = sessionLabel(s, t("chat.newConversation"));
+                const active = s.id === activeId;
+                return (
+                  <li key={s.id}>
+                    {renaming === s.id ? (
+                      // RENAME, IN PLACE. A form so Enter submits and the browser's
+                      // own "a text field in a form" behaviour applies; Escape
+                      // abandons the edit and leaves the stored label alone.
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          void commitRename(s.id);
+                        }}
+                        className="flex items-center gap-1"
+                      >
+                        <input
+                          autoFocus
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") setRenaming(null);
+                          }}
+                          aria-label={t("chat.rename")}
+                          maxLength={80}
+                          className="jf-input min-w-0 flex-1 px-2 py-1 text-xs"
+                        />
+                        <button
+                          type="submit"
+                          className="rounded px-2 py-1 text-xs font-medium text-[var(--jf-primary)] hover:underline"
+                        >
+                          {t("chat.renameSave")}
+                        </button>
+                      </form>
+                    ) : (
+                      <div
+                        className={`flex items-center gap-1 rounded-md border-l-2 ${
+                          active
+                            ? "border-[var(--jf-primary)] bg-slate-100"
+                            : "border-transparent hover:bg-slate-50"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => void selectSession(s.id)}
+                          aria-current={active ? "true" : undefined}
+                          title={label}
+                          className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs text-[var(--jf-text)]"
+                        >
+                          {label}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => startRename(s)}
+                          aria-label={`${t("chat.rename")}: ${label}`}
+                          title={t("chat.rename")}
+                          className="inline-flex min-h-8 min-w-8 shrink-0 items-center justify-center rounded text-jf-2xs text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-primary)]"
+                        >
+                          ✎
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void removeSession(s.id)}
+                          aria-label={`${t("chat.delete")}: ${label}`}
+                          title={t("chat.delete")}
+                          className="inline-flex min-h-8 min-w-8 shrink-0 items-center justify-center rounded text-jf-2xs text-[var(--jf-muted-on-tint)] hover:text-red-600"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </aside>
+
+        <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
@@ -727,18 +1415,17 @@ export default function ChatPage() {
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-[var(--jf-muted)]">{t("chat.subtitle")}</p>
           </div>
-          {/* The retention is revocable: this drops the conversation on screen and
-              the copy stored in this browser. It sits beside the "?" doc link, in
-              the header rather than over the transcript, so it cannot be hit by
-              accident while reading. Disabled while the transcript is empty (there
-              is nothing to clear) and while a message is in flight (the reply
-              would repopulate it immediately, which reads as a control that did
-              nothing). */}
+          {/* Starts a SECOND conversation; the one on screen stays in the sidebar.
+              It sits beside the "?" doc link, in the header rather than over the
+              transcript, so it cannot be hit by accident while reading. Disabled
+              while a message is in flight (the reply would land in the new
+              conversation) and while the current conversation is an EMPTY new one
+              (pressing it again would only add a second empty row). */}
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={newConversation}
-              disabled={sending || msgs.length === 0}
+              disabled={sending || (!!activeId && msgs.length === 0)}
               title={t("chat.newConversationHint")}
               className="jf-btn-ghost"
             >
@@ -758,10 +1445,30 @@ export default function ChatPage() {
         </div>
 
         <div className="mt-6 flex min-h-0 flex-1 flex-col rounded-lg border border-[var(--jf-border)] bg-white">
+          {/* THE LOG IS NOT A LIVE REGION. It was `role="log"` +
+              `aria-live="polite"`, which tells a screen reader to announce the
+              WHOLE transcript's new content — so every message re-read the
+              conversation, and once the answer streams it would have read it
+              fragment by fragment. `role="log"` alone implies aria-live="polite"
+              (WAI-ARIA 1.2 §5.2.9), so the role goes too: the scroll region is a
+              plain group, and the LAST assistant message is the only live region
+              (see its own comment below).
+
+              `ref`/`onScroll` are how the page learns whether the reader is at the
+              bottom — the decision that replaced an unconditional scroll. */}
           <div
-            className="min-h-[18rem] flex-1 space-y-3 overflow-y-auto p-4"
-            role="log"
-            aria-live="polite"
+            ref={logRef}
+            onScroll={decidePinned}
+            aria-label={t("chat.title")}
+            role="group"
+            // `max-h-[60vh]` is what makes this a REAL scroll region. Without a
+            // ceiling a `flex-1` box inside an auto-height column grows with its
+            // content instead of scrolling (measured: scrollHeight === clientHeight
+            // on a 2,000-character answer), so the reader's transcript was the
+            // whole page and this element's own onScroll could never fire — which
+            // is why "do not follow a reader who scrolled up" needs the box to be
+            // able to scroll in the first place.
+            className="max-h-[60vh] min-h-[18rem] flex-1 space-y-3 overflow-y-auto p-4"
           >
             {/* The unavailable STATE (a deployment that cannot answer) — and
                 only when the alert is not already carrying the reason for a
@@ -774,24 +1481,116 @@ export default function ChatPage() {
               <p className="text-sm text-[var(--jf-muted)]">{t("chat.unavailable")}</p>
             )}
             {available !== false && msgs.length === 0 && (
-              <p className="text-sm text-[var(--jf-muted)]">{t("chat.empty")}</p>
-            )}
-            {msgs.map((m, i) => (
-              <div key={i} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
-                <div
-                  className={`max-w-[46rem] min-w-0 rounded-lg px-3 py-2 text-sm ${
-                    m.role === "user"
-                      ? "bg-[var(--jf-primary)] text-white"
-                      : "bg-slate-50 text-[var(--jf-text)]"
-                  }`}
-                >
-                  {/* The answer is rendered as ELEMENTS, not raw text: the model
-                      writes Markdown, and showing its markers was the reported
-                      defect. One shared renderer with /feedback. */}
-                  <Markdown text={m.content} variant={m.role === "user" ? "user" : "assistant"} />
+              <div>
+                <p className="text-sm text-[var(--jf-muted)]">{t("chat.empty")}</p>
+                {/* THE EMPTY STATE IS CLICKABLE. It used to be that one sentence
+                    — a description of what to type, with nothing to press. Each
+                    chip SENDS its own (translated) question through the same
+                    send path as the composer, so a first-time user can see the
+                    assistant work without composing anything, and the chip can
+                    never promise a question the server refuses
+                    (lib/chatStarters.ts pins them against the read allowlist). */}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {CHAT_STARTERS.map((key) => {
+                    // Resolved ONCE per chip: the button's label and the text it
+                    // sends must be the same sentence, and one lookup keeps the
+                    // i18n coverage scan's unresolved count at one per chip list.
+                    const label = t(key);
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => void sendText(label)}
+                        disabled={disabled}
+                        className="rounded-full border border-[var(--jf-border)] px-3 py-1 text-xs text-[var(--jf-text)] hover:border-[var(--jf-primary)] hover:text-[var(--jf-primary)] disabled:opacity-50"
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
-            ))}
+            )}
+            {msgs.map((m, i) => {
+              // The LAST assistant message is the live region: it is the only
+              // part of the transcript that changes, so announcing it is the
+              // whole point and announcing anything older is repetition.
+              const isLast = i === msgs.length - 1;
+              const live = isLast && m.role === "assistant";
+              return (
+                <div
+                  key={i}
+                  // aria-busy tells assistive tech the text is still changing and
+                  // to wait for the end of the answer (WAI-ARIA 1.2 §6.6.1), which
+                  // is what stops a streamed answer being read out fragment by
+                  // fragment.
+                  aria-live={live ? "polite" : undefined}
+                  aria-busy={live && m.streaming ? true : undefined}
+                  className={m.role === "user" ? "flex justify-end" : "flex justify-start"}
+                >
+                  <div
+                    className={`max-w-[46rem] min-w-0 rounded-lg px-3 py-2 text-sm ${
+                      m.role === "user"
+                        ? "bg-[var(--jf-primary)] text-white"
+                        : "bg-slate-50 text-[var(--jf-text)]"
+                    }`}
+                  >
+                    {/* The answer is rendered as ELEMENTS, not raw text: the model
+                        writes Markdown, and showing its markers was the reported
+                        defect. One shared renderer with /feedback. */}
+                    <Markdown text={m.content} variant={m.role === "user" ? "user" : "assistant"} />
+                    {/* The cursor: the answer is still arriving. It is a glyph,
+                        not a spinner, because the text after it is the thing the
+                        user is reading. */}
+                    {m.streaming && (
+                      <span aria-hidden="true" className="ml-0.5 inline-block animate-pulse font-semibold">
+                        ▍
+                      </span>
+                    )}
+                    {/* WHAT IT READ, AND A WAY TO KEEP THE ANSWER — under THIS
+                        answer, not collected at the bottom of the log: a trail
+                        rendered after the whole transcript would read as belonging
+                        to the newest message, and to every message at once.
+
+                        The trail is the half the card was missing: a step used to
+                        be rendered ONLY when it was refused, so an ordinary "it
+                        read your forms and answered" left no trace of the read.
+                        These are the steps that RAN (status "called"); refusals
+                        keep their own amber block below, which says why. */}
+                    {m.role === "assistant" && (m.steps?.length || (m.content && !m.streaming)) && (
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-jf-2xs">
+                        {m.steps?.map((s) => (
+                          <span key={s.tool} className="rounded-full bg-slate-100 px-2 py-0.5">
+                            {stepLabel(s.tool, t, true)}
+                          </span>
+                        ))}
+                        {m.content && !m.streaming && (
+                          <button
+                            type="button"
+                            onClick={() => void copyMessage(i, m.content)}
+                            // The accessible name is the ACTION, and it is the
+                            // same word the visible label shows — "Copied" after
+                            // the click, so a sighted and a screen-reader user get
+                            // the same feedback.
+                            aria-label={copied === i ? t("chat.copied") : t("chat.copy")}
+                            className="underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)]"
+                          >
+                            {copied === i ? t("chat.copied") : t("chat.copy")}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {/* A STOPPED answer says so. Without the marker a partial
+                        answer is indistinguishable from a finished one that
+                        happens to end mid-sentence, which is how a user loses
+                        track of what the assistant actually said. */}
+                    {m.stopped && (
+                      <p className="mt-1 text-jf-2xs font-medium text-slate-700">{t("chat.stopped")}</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
 
             {/* A filing is announced in the transcript, with a way to go read it. */}
             {msgs.map((m, i) =>
@@ -833,7 +1632,7 @@ export default function ChatPage() {
                     const why = refusalText(s, t);
                     return (
                       <span key={s.tool} className="mt-1 block opacity-80">
-                        {s.tool}
+                        {toolLabel(s.tool, t)}
                         {why ? ` — ${why}` : ""}
                       </span>
                     );
@@ -929,13 +1728,16 @@ export default function ChatPage() {
                             {p.note}
                           </p>
                         )}
-                        {/* The tool name is the SMALLEST text on the card (10px)
-                            and it carries information the user is asked to judge
-                            ("update_product" is part of what they confirm), so it
-                            gets the card's strongest muted weight: opacity-80 =
-                            5.32:1 on the tint. At opacity-60 it measured 3.24:1,
-                            the worst node of the five axe reported (t_f5f269a8). */}
-                        <p className="mt-2 font-mono text-jf-3xs opacity-80">{p.tool}</p>
+                        {/* The tool name, in HUMAN WORDS (card t_ec87d6c7).
+                            It used to print the raw server identifier
+                            (`upsert_form`), which is not a word in any language —
+                            a merchant cannot look it up and it cannot be
+                            translated. toolLabel resolves `chat.tool.<name>` in
+                            the dashboard's language and humanises an unmapped
+                            name, so no snake_case can reach the screen. It stays
+                            the SMALLEST text on the card (10px) because it is a
+                            footnote, not the decision. */}
+                        <p className="mt-2 font-mono text-jf-3xs opacity-80">{toolLabel(p.tool, t)}</p>
 
                         {open && (
                           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -1008,10 +1810,35 @@ export default function ChatPage() {
                 : null,
             )}
 
-            {sending && <p className="text-xs text-[var(--jf-muted)]">{t("chat.thinking")}</p>}
+            {/* THE STATUS IS ITS OWN LINE, IN ITS OWN REGION (card t_148d7100).
+                It used to exist only as the Send button's label, which meant the
+                one control on the page was also the state display and the same
+                sentence appeared a second time in the transcript. A `role="status"`
+                region is announced politely when it changes, which is how the step
+                line reaches a screen-reader user as progress rather than as a
+                silent wait. */}
+            {activity && (
+              <p role="status" className="text-xs text-slate-700">
+                {activity.kind === "thinking"
+                  ? t("chat.thinking")
+                  : activity.kind === "stopped"
+                    ? t("chat.stopped")
+                    : stepLabel(activity.tool, t)}
+              </p>
+            )}
             <div ref={endRef} />
           </div>
 
+          {/* JUMP TO LATEST. The transcript no longer follows new content when the
+              reader has scrolled up (lib/chatScroll.ts), so staying put must not
+              be a dead end: this is the way back, and it appears only then. */}
+          {!pinned && (
+            <div className="flex justify-center pt-2">
+              <button type="button" onClick={jumpToLatest} className="jf-btn-ghost">
+                {t("chat.jumpLatest")}
+              </button>
+            </div>
+          )}
           {err && (
             <p role="alert" className="px-4 text-xs text-red-700">
               {err}
@@ -1024,6 +1851,7 @@ export default function ChatPage() {
             </label>
             <textarea
               id="chat-input"
+              ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -1031,18 +1859,34 @@ export default function ChatPage() {
                 // take a newline cannot take a pasted question either.
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  void send(e);
+                  void sendText(input);
                 }
               }}
-              rows={2}
+              // ONE row, then the height follows the content up to
+              // CHAT_COMPOSER_MAX_ROWS lines (the effect above sets it from
+              // scrollHeight). `rows={2}` was a fixed window; `resize-none` stays
+              // because a manual drag would be overwritten by the next keystroke,
+              // and a control that fights the user is worse than one that cannot
+              // be dragged.
+              rows={1}
               disabled={disabled}
               maxLength={limits?.max_message_chars || 2000}
               placeholder={t("chat.placeholder")}
               className="jf-input flex-1 resize-none disabled:opacity-50"
             />
+            {/* THE BUTTON IS ALWAYS "Send". It used to become "Looking that up…"
+                while sending, so the control's NAME changed under the user and the
+                state was shown in the one place a form's submit control should not
+                carry it. The state is the status line above; Stop is its own
+                control. */}
             <button type="submit" disabled={disabled || !input.trim()} className="jf-btn-primary disabled:opacity-50">
-              {sending ? t("chat.thinking") : t("chat.send")}
+              {t("chat.send")}
             </button>
+            {sending && (
+              <button type="button" onClick={stop} className="jf-btn-ghost">
+                {t("chat.stop")}
+              </button>
+            )}
           </form>
         </div>
 
@@ -1051,6 +1895,7 @@ export default function ChatPage() {
             {t("chat.limitNote", { n: limits.messages_per_hour })}
           </p>
         )}
+        </div>
       </div>
     </Shell>
   );

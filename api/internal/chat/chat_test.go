@@ -663,7 +663,7 @@ func TestRejectsEmptyAndOverlongMessages(t *testing.T) {
 func TestSystemPromptStatesTheRenderableMarkdownSubset(t *testing.T) {
 	// 1. The rule text itself.
 	for _, want := range []string{"**bold**", "HTML", "table", "code block"} {
-		if !strings.Contains(systemPromptText(), want) {
+		if !strings.Contains(systemPromptText(""), want) {
 			t.Errorf("the system prompt no longer tells the model about %q — the UI renders a "+
 				"Markdown subset and the model must be told which one (see "+
 				"web/src/components/Markdown.ts)", want)
@@ -672,12 +672,12 @@ func TestSystemPromptStatesTheRenderableMarkdownSubset(t *testing.T) {
 	// 2. A blank line still separates paragraphs: the renderer keeps a single
 	//    newline as a line break, so the model must know a paragraph break is a
 	//    blank line rather than a newline.
-	if !strings.Contains(systemPromptText(), "blank") {
+	if !strings.Contains(systemPromptText(""), "blank") {
 		t.Error("the prompt no longer mentions the blank-line paragraph rule")
 	}
 	// 3. The language rule must survive alongside it (they are both in HOW TO
 	//    ANSWER, and a formatting edit must not push the language rule out).
-	if !strings.Contains(systemPromptText(), "in Malay, answer") {
+	if !strings.Contains(systemPromptText(""), "in Malay, answer") {
 		t.Error("the language-matching rule was removed while adding the formatting rule")
 	}
 	// 4. The underscore rule: intra-word `_` is literal text, not emphasis (the
@@ -686,7 +686,7 @@ func TestSystemPromptStatesTheRenderableMarkdownSubset(t *testing.T) {
 	//    told, so it neither italicises a name accidentally nor pads one with
 	//    backticks to protect it. Drop this sentence and the prompt stops
 	//    describing what the UI does.
-	if !strings.Contains(systemPromptText(), "underscore") || !strings.Contains(systemPromptText(), "inside a word") {
+	if !strings.Contains(systemPromptText(""), "underscore") || !strings.Contains(systemPromptText(""), "inside a word") {
 		t.Error("the prompt no longer states that an underscore inside a word is literal text — " +
 			"the renderer treats it that way (CommonMark restricts intraword emphasis to asterisks), " +
 			"so the model is otherwise told about a rule the UI does not follow")

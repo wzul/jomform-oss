@@ -620,6 +620,11 @@ func main() {
 		// is explicit here rather than optional.
 		rest.Chat.(*chatpkg.Runner).SetProposalStore(dbstore.NewChatWriteProposalStore(pool))
 		rest.ChatConfirmLimiter = httpapi.NewChatConfirmLimiter()
+		// Stored chat history: the conversations a person has had with the
+		// assistant, scoped to them AND the workspace. Without this the transcript
+		// is the browser's alone, and signing out destroys it — which is the
+		// behaviour this store exists to end.
+		rest.ChatSessions = dbstore.NewChatSessionStore(pool)
 
 		// Public order-form renderer + submit.
 		deps.Public = &httpapi.PublicHandlers{

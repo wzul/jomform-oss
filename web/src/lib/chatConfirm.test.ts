@@ -831,3 +831,51 @@ test("a spent token never tells the user to try again (the card's bite proof)", 
     );
   }
 });
+
+// ── THE HEADER CONTRACT (t_144deb58) ─────────────────────────────────────────
+//
+// THE DEFECT. The block at the top of lib/chatConfirm.ts is the contract every
+// other lane reads before changing this module, and it is PROSE: none of the
+// executed tests above fail when it drifts. It did drift. #1637 made a 400 that
+// carries ANY machine code "refused" and left only an uncoded 400 on "failed",
+// and the header still read "any other 400 -> failed"; the same edit left the
+// 409 rules saying a bare "stale", although that status also answers
+// "unexecutable" and "workspaceRequired". Three outcomes the function can return
+// were documented nowhere at all.
+//
+// WHAT THIS PINS, and what it cannot. The header's rule list must name exactly
+// the outcomes the `ConfirmDecision` union declares — a rule added without an
+// outcome, or an outcome added without a rule, fails here instead of surviving
+// as a wrong contract. What it does NOT check is the CONDITION written beside
+// each outcome; that half is only verifiable by comparing the block against the
+// function, which is what the block's own "change one and change the other"
+// sentence asks of the next reader.
+test("the header contract lists exactly the outcomes the function can return", () => {
+  const src = read("./chatConfirm.ts");
+  const header = src.slice(0, src.indexOf("\nimport "));
+  const documented = [...header.matchAll(/->\s+"([A-Za-z]+)"/g)].map((m) => m[1]);
+  const union = src.slice(
+    src.indexOf("export type ConfirmDecision"),
+    src.indexOf("export function confirmDecisionFor"),
+  );
+  const declared = [...union.matchAll(/\|\s*"([A-Za-z]+)"/g)].map((m) => m[1]);
+  // A vacuous pass would be a guard that stops guarding: both sides have to have
+  // been parsed out of the real source.
+  assert.ok(
+    documented.length >= 9,
+    `parsed only ${documented.length} rule(s) out of lib/chatConfirm.ts's header block — the contract list ` +
+      `has been reformatted, and this guard is no longer reading it`,
+  );
+  assert.ok(
+    declared.length >= 9,
+    `parsed only ${declared.length} member(s) out of the ConfirmDecision union — this guard is no longer ` +
+      `reading the type it is supposed to compare the header against`,
+  );
+  assert.deepEqual(
+    [...new Set(documented)].sort(),
+    [...new Set(declared)].sort(),
+    `lib/chatConfirm.ts's header names ${JSON.stringify([...new Set(documented)].sort())} but ` +
+      `confirmDecisionFor can return ${JSON.stringify([...new Set(declared)].sort())} — the contract the ` +
+      `lanes read before changing this module has drifted from the function it documents`,
+  );
+});

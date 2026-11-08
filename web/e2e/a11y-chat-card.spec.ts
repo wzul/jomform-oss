@@ -18,8 +18,11 @@
 //     .font-mono (the tool name)        3.24  (#6190a9 on #f0f9ff, 10px)
 //     .flex-wrap.mt-2.gap-2 > .opacity-70 4.11
 //
-//   The tool name is the worst at 3.24, and it is not decoration: `update_product`
-//   is part of what the user is asked to judge before they press Confirm.
+//   The tool name is the worst at 3.24, and it is not decoration: the tool is
+//   part of what the user is asked to judge before they press Confirm. That node
+//   now carries the dictionary's human label — `update_product` is the raw
+//   identifier the card used to print, and a card is dashboard UI: it may not
+//   print snake_case (card t_ec87d6c7), so the label is what is measured here.
 //
 // THE ROOT CAUSE IS THE ALPHA, NOT THE COLOUR
 //   The card paints its text with `opacity-*`, and an opacity composites the
@@ -164,6 +167,17 @@ const PROPOSAL = {
 /** The card's title as the ENGLISH dashboard renders it. */
 const CARD_TITLE = DICT["chat.proposal.title.update_product"].en;
 
+/**
+ * The card's tool, as the ENGLISH dashboard renders it (card t_ec87d6c7).
+ *
+ * `PROPOSAL.tool` is what the SERVER sends on the wire; it is not what the
+ * merchant reads. The card is dashboard UI and may not print a snake_case
+ * identifier, so `page.tsx:908` resolves `chat.tool.<name>` through `toolLabel`
+ * and renders the dictionary's human label. A guard that pins the raw identifier
+ * asserts on a string the card is required NOT to show.
+ */
+const TOOL_LABEL = DICT["chat.tool.update_product"].en;
+
 const BUNDLE = {
   me: { id: "u1", email: "merchant@example.com", name: "Merchant", lang: "", is_super_admin: false },
   workspaces: [{ id: "ws-id-b", name: "Second", slug: WS, role: "admin" }],
@@ -264,7 +278,20 @@ async function openCard(page: Page, baseURL: string | undefined) {
   );
   // And the two things the defect's node set is made of must be on screen.
   await expect(card.locator("dt"), "the card's field rows must render").toHaveCount(2);
-  await expect(card.getByText(PROPOSAL.tool), "the card's tool name must render").toBeVisible();
+  // The tool is still NAMED — in the dashboard's words (t_ec87d6c7). Asserted on
+  // the footnote NODE, not by bare text: in another locale the label can equal
+  // another line on the card, and a text query would then be ambiguous.
+  await expect(
+    card.locator("p.font-mono"),
+    "the card's tool name must render — in human words, not as the raw identifier",
+  ).toHaveText(TOOL_LABEL);
+  // ...and the identifier itself must be absent. A label that rendered BESIDE
+  // `update_product` would satisfy the assertion above while the snake_case the
+  // rule forbids is still on screen.
+  await expect(
+    card,
+    `the card must name the tool in words, never as the identifier ${PROPOSAL.tool}`,
+  ).not.toContainText(PROPOSAL.tool);
   return card;
 }
 
@@ -482,7 +509,11 @@ test.describe("the /chat confirmation card clears AA on its own tint", () => {
       `the badge's pill is painted on ${badge.bg}; the on-screen pill must be an opaque ` +
         `background, not the card tint`,
     ).not.toBe("#f0f9ff");
-    // The tool name is the node the card calls out as the worst (3.24:1).
+    // The tool name is the node the card calls out as the worst (3.24:1). It now
+    // carries the dictionary's label rather than the raw identifier, so the text
+    // is pinned too: measuring some OTHER node and reporting it under this name
+    // would be the same vacuous pass this file exists to avoid.
+    expect(tool.text, "the measured footnote must be the tool's human label").toBe(TOOL_LABEL);
     expect(
       tool.ratio,
       `the tool name measured ${tool.ratio.toFixed(3)}:1, which is NOT above the pre-fix ` +

@@ -2084,6 +2084,28 @@ func (s *WorkspaceStore) WorkspaceIDByAccount(ctx context.Context, accountID str
 	return id, nil
 }
 
+// WorkspaceIDByAccountOrEmpty is WorkspaceIDByAccount for the callers that must
+// tell "this account has no workspace" apart from "the read failed".
+//
+// accounts.workspace_id is NULLABLE by design: a signup creates an account and no
+// workspace (issue #718), and such a person is a working user — they can open the
+// assistant, create forms, and so on. WorkspaceIDByAccount scans that column into
+// a string, so on exactly that row it returns a scan error, which a caller cannot
+// distinguish from a database failure. Chat history needs the difference: the
+// no-workspace state is its own scope, not an error.
+func (s *WorkspaceStore) WorkspaceIDByAccountOrEmpty(ctx context.Context, accountID string) (string, error) {
+	var id *string
+	err := s.pool.QueryRow(ctx,
+		`SELECT a.workspace_id::text FROM accounts a WHERE a.id=$1`, accountID).Scan(&id)
+	if err != nil {
+		return "", err
+	}
+	if id == nil {
+		return "", nil
+	}
+	return *id, nil
+}
+
 // HasLiveWorkspace reports whether the account is linked to a workspace that has
 // not been binned.
 //

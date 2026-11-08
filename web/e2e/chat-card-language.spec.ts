@@ -119,6 +119,20 @@ const PROPOSAL: ProposalFixture = {
 };
 
 /**
+ * The tool name as the DASHBOARD renders it, per language (card t_ec87d6c7).
+ *
+ * `ProposalFixture.tool` is what the SERVER sends on the wire; it is not what the
+ * merchant reads. A proposal card is dashboard UI and may not print a snake_case
+ * identifier, so `page.tsx` resolves `chat.tool.<name>` through `toolLabel` and
+ * renders the dictionary's label in the dashboard's language. These are the same
+ * `DICT` entries the card resolves, so the guard follows all five locales.
+ */
+const TOOL_LABEL: Record<string, Record<Lang, string>> = {
+  update_product: DICT["chat.tool.update_product"],
+  upsert_form: DICT["chat.tool.upsert_form"],
+};
+
+/**
  * The same tool with every count at ONE: what the server sends for a product whose
  * variation set has a single row and whose subscription is charged once. The counts
  * arrive as the SINGULAR key with no value_params — which is why the card cannot say
@@ -239,7 +253,24 @@ async function openCard(page: Page, baseURL: string | undefined, lang: Lang, pro
   );
   const wantRows = proposal.fields.length;
   await expect(card.locator("dt"), `the card's ${wantRows} field rows must render`).toHaveCount(wantRows);
-  await expect(card.getByText(proposal.tool)).toBeVisible();
+  const label = TOOL_LABEL[proposal.tool]?.[lang];
+  expect(
+    label,
+    `the fixture's tool ${proposal.tool} has no chat.tool.* label — the card would fall back to ` +
+      `a humanised English name in ${lang}, and this guard would be pinning the wrong string`,
+  ).toBeTruthy();
+  // The tool stays NAMED on the card — in the dashboard's words. Located by its
+  // NODE, not by bare text: in `ms` this label equals the card's title
+  // ("Kemas kini produk"), so a text query would match two elements.
+  await expect(
+    card.locator("p.font-mono"),
+    `the card must name the tool as ${JSON.stringify(label)} in ${lang}`,
+  ).toHaveText(label);
+  expect(
+    (await card.innerText()).includes(proposal.tool),
+    `the card prints the raw tool identifier ${proposal.tool} on an ${lang} dashboard — a card ` +
+      `is dashboard UI and may not print snake_case (t_ec87d6c7)`,
+  ).toBe(false);
   return card;
 }
 

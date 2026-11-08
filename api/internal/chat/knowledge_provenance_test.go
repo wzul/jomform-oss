@@ -211,7 +211,7 @@ func TestTheGuideMarksItsOwnBoundary(t *testing.T) {
 	if !strings.HasPrefix(guide, productGuideOpen) || !strings.HasSuffix(guide, productGuideClose) {
 		t.Fatalf("the rendered guide is not delimited by its markers:\n%s", guide)
 	}
-	if !strings.Contains(systemPromptText(), productGuideOpen) {
+	if !strings.Contains(systemPromptText(""), productGuideOpen) {
 		t.Fatal("the system prompt does not carry the guide block — the facts are checked by every test in " +
 			"this package but never reach the model")
 	}

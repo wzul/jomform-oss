@@ -361,6 +361,20 @@ func (s *UserStore) UpdateLang(ctx context.Context, userID, lang string) error {
 	return err
 }
 
+// Lang returns the user's preferred dashboard UI language ("" when unset).
+//
+// A single column, for the CHAT lane (card t_ec87d6c7): the confirmation card's
+// one model-authored sentence has to be written in the language the card is
+// displayed in, and that language is this column — the same one the dashboard
+// resolves its own locale from. Reading it must never fail a chat message, so a
+// caller treats an error as "not set" (English) rather than propagating it.
+func (s *UserStore) Lang(ctx context.Context, userID string) (string, error) {
+	var lang string
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(lang,'') FROM users WHERE id = $1`, userID).Scan(&lang)
+	return lang, err
+}
+
 // ValidProfileLang reports whether code is one of the five supported UI locales
 // ("en","ms","zh","ta","ar"). "" is valid and means "not set" (for the dashboard
 // that falls back to the browser value, then "en"). It mirrors the users.lang

@@ -916,14 +916,28 @@ test("the stored text is the raw model text — nothing is cleaned on write", ()
   // The card requires the raw text to survive, so a renderer fix needs no
   // migration and no data is lost. If a server-side "clean-up" appears, this
   // fails and the decision gets made deliberately instead of by accident.
+  //
+  // The reply is now written in TWO places: the wire response and the stored
+  // assistant turn (chat history, t_6b36e0d7). Both must carry `res.Reply`
+  // untouched — the first is what the page renders, the second is what a
+  // restored conversation renders, so cleaning either one silently changes the
+  // transcript. chatAnswer (rest_chat_sessions.go) is the one builder the
+  // one-shot path, the streamed `done` frame and the store all go through.
   const rest = read("../../../api/internal/httpapi/rest_chat.go");
+  const history = read("../../../api/internal/httpapi/rest_chat_sessions.go");
   assert.match(
-    rest,
+    history,
     /Reply:\s*res\.Reply/,
     "the chat reply is no longer passed straight through — re-anchor this guard",
   );
+  assert.match(
+    history,
+    /"assistant",\s*res\.Reply/,
+    "the stored assistant turn is no longer the raw reply — a restored conversation would differ from the one the user read",
+  );
   for (const pattern of [/stripMarkdown/i, /sanitizeMarkdown/i, /normalizeMarkdown/i]) {
-    assert.doesNotMatch(rest, pattern, "rest_chat.go now cleans the reply before storing it");
+    assert.doesNotMatch(rest, pattern, "rest_chat.go now cleans the reply before sending it");
+    assert.doesNotMatch(history, pattern, "rest_chat_sessions.go now cleans the reply before storing it");
   }
 });
 

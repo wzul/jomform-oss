@@ -208,6 +208,11 @@ type RESTHandlers struct {
 	// thing being bounded is how fast a person can be walked through confirmation
 	// cards, not spend. Nil in bare-mode tests.
 	ChatConfirmLimiter *middleware.RateLimiter
+	// ChatSessions is the stored chat history (see rest_chat_sessions.go). Nil
+	// when unwired: the history routes then answer 503 rather than an empty
+	// list, which the sidebar would render as "no conversations" — a wrong
+	// answer that looks like a true one.
+	ChatSessions *dbstore.ChatSessionStore
 }
 
 // ChatRunner answers one chat message. The production value is *chat.Runner;
@@ -497,6 +502,17 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// holds — the model never sees it. Session-only, per-user limited, and audited.
 	mux.Handle("POST /v1/rest/chat/confirm", h.authed(h.handleChatConfirm))
 	mux.Handle("POST /v1/rest/chat/cancel", h.authed(h.handleChatCancel))
+	// Chat history: the conversations a person has had with the assistant,
+	// stored server-side so a logout, a new device or a reload does not destroy
+	// them. Same lane rules as the message routes — session-only and
+	// workspace-scoped — and every read is scoped to (user, workspace) in the
+	// store, so one person's conversation is not another's, nor another
+	// workspace's.
+	mux.Handle("GET /v1/rest/chat/sessions", h.authed(h.handleChatSessionsList))
+	mux.Handle("POST /v1/rest/chat/sessions", h.authed(h.handleChatSessionsCreate))
+	mux.Handle("GET /v1/rest/chat/sessions/{id}", h.authed(h.handleChatSessionGet))
+	mux.Handle("PATCH /v1/rest/chat/sessions/{id}", h.authed(h.handleChatSessionPatch))
+	mux.Handle("DELETE /v1/rest/chat/sessions/{id}", h.authed(h.handleChatSessionDelete))
 	mux.Handle("GET /v1/rest/analytics/forms", h.authed(h.formAnalytics))
 	mux.Handle("GET /v1/rest/analytics/products", h.authed(h.productAnalytics))
 	// Issue #92: event-tracking read endpoints (audit log + behaviour analytics).

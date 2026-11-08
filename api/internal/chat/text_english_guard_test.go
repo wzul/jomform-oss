@@ -28,13 +28,18 @@ package chat
 // WHAT IS CHECKED. Every non-test file in this package is parsed (comments are
 // not part of the AST, so a comment quoting a pre-fix Malay sentence is allowed),
 // and every string literal that is RUNTIME text is checked against the Malay
-// vocabulary below. Skipped, because they are not this card's surface:
+// vocabulary below. Skipped, because they are not text:
 //
-//   - struct tags (`json:"…"`, `jsonschema:"…"`) — machine tokens;
-//   - the value of a `Description:` key — tool prose for the MODEL, which is the
-//     registry-prose lane (the mcpsrv equivalent went to the docs/registry card);
-//   - `json.RawMessage(...)` arguments — the two internal tool input schemas,
-//     whose `description` fields are that same registry prose.
+//   - struct tags (`json:"…"`, `jsonschema:"…"`) — machine tokens.
+//
+// THE TOOL PROSE IS IN SCOPE (card t_ec87d6c7, which removed the two exceptions
+// this guard used to carry). `Description:` values and the `json.RawMessage`
+// input schemas of submit_feedback / propose_write were left out as "registry
+// prose", and that is exactly where the lane's last Malay text lived: the model
+// read a Malay `reason` description telling it to write "in the merchant's
+// language" and a Malay propose_write description, one line away from an English
+// system prompt. A model treats its tool definitions as instructions, so leaving
+// them out of this check let an English prompt and a Malay one ship side by side.
 //
 // Everything else must be free of the vocabulary. Machine tokens are untouched by
 // the check: it only looks at word-shaped tokens, so `price_sen`, `totp_code` and
@@ -145,28 +150,6 @@ func TestChatTextIsEnglish(t *testing.T) {
 				// registry prose. Both are machine/prose tokens, not refusals.
 				if v.Tag != nil {
 					skip[v.Tag] = true
-				}
-			case *ast.KeyValueExpr:
-				// `Description: <expr>` — tool prose for the model. Skip the
-				// whole value subtree, including concatenations and helper calls.
-				if key, ok := v.Key.(*ast.Ident); ok && key.Name == "Description" {
-					ast.Inspect(v.Value, func(inner ast.Node) bool {
-						if lit, ok := inner.(*ast.BasicLit); ok {
-							skip[lit] = true
-						}
-						return true
-					})
-				}
-			case *ast.CallExpr:
-				// json.RawMessage(`{…}`) — a tool INPUT SCHEMA: its
-				// "description" fields are the same model-facing registry prose.
-				if sel, ok := v.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "RawMessage" {
-					ast.Inspect(v, func(inner ast.Node) bool {
-						if lit, ok := inner.(*ast.BasicLit); ok {
-							skip[lit] = true
-						}
-						return true
-					})
 				}
 			}
 			return true

@@ -75,7 +75,7 @@ func TestTheChatCanReadTheSettingsTheGuideExplains(t *testing.T) {
 // is that the rule is still there — dropping it is how a guide starts being
 // quoted as if it were the merchant's data.
 func TestTheGuideDoesNotPromiseASettingsAnswerItCannotGive(t *testing.T) {
-	prompt := systemPromptText()
+	prompt := systemPromptText("")
 	flat := strings.Join(strings.Fields(prompt), " ")
 	for _, want := range []string{
 		"Use the TOOLS, not the guide, for anything about this merchant's own account",

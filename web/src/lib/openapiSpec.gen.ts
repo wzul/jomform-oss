@@ -1111,6 +1111,325 @@ export const OPENAPI_SPEC: OpenApiSpec = {
         }
       }
     },
+    "/v1/rest/chat/sessions": {
+      "get": {
+        "description": "Archived conversations are included only with ?archived=1. A conversation belongs to one person in one workspace, so switching workspace shows a different list.\n\nResponse: The sidebar: each conversation's id, title, timestamps, archived flag and message count, most recently used first.",
+        "operationId": "handleChatSessionsList",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The backing service for this route is not configured on this deployment."
+          }
+        },
+        "summary": "List your saved conversations in this workspace",
+        "tags": [
+          "In-app assistant"
+        ],
+        "x-jomform-access": "session"
+      },
+      "post": {
+        "description": "Capped at 200 conversations per person per workspace; the refusal names the way out (delete old ones). The row is created eagerly so the sidebar shows the effect of the button.\n\nResponse: The new conversation; its title is empty until the first message names it.",
+        "operationId": "handleChatSessionsCreate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The backing service for this route is not configured on this deployment."
+          }
+        },
+        "summary": "Start a new conversation",
+        "tags": [
+          "In-app assistant"
+        ],
+        "x-jomform-access": "session"
+      }
+    },
+    "/v1/rest/chat/sessions/{id}": {
+      "delete": {
+        "description": "A real delete: the messages are removed with the conversation. Archiving is the reversible action.\n\nResponse: status=deleted.",
+        "operationId": "handleChatSessionDelete",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The backing service for this route is not configured on this deployment."
+          }
+        },
+        "summary": "Delete one of your conversations",
+        "tags": [
+          "In-app assistant"
+        ],
+        "x-jomform-access": "session"
+      },
+      "get": {
+        "description": "404 for an unknown id AND for another person's id. A proposal's confirmation token is never stored, so a restored conversation offers no button that could execute anything.\n\nResponse: The conversation and its turns, oldest first, capped to the assistant's own window; each answer carries the tool trail it left.",
+        "operationId": "handleChatSessionGet",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The backing service for this route is not configured on this deployment."
+          }
+        },
+        "summary": "Read one saved conversation and its messages",
+        "tags": [
+          "In-app assistant"
+        ],
+        "x-jomform-access": "session"
+      },
+      "patch": {
+        "description": "Send title and/or archived; a body with neither is a 400. An empty title clears the name, and the list falls back to the first message. Archiving is reversible.\n\nResponse: The updated conversation.",
+        "operationId": "handleChatSessionPatch",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The backing service for this route is not configured on this deployment."
+          }
+        },
+        "summary": "Rename or archive one of your conversations",
+        "tags": [
+          "In-app assistant"
+        ],
+        "x-jomform-access": "session"
+      }
+    },
     "/v1/rest/currency/rates": {
       "get": {
         "operationId": "getCurrencyRates",

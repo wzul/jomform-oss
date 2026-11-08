@@ -433,6 +433,32 @@ func (res *Result) answerOrKey(content string) {
 // ctx MUST carry the caller's identity (mcpsrv.WithAuthIdentity) — see the REST
 // handler, which builds it with READONLY scopes and the caller's user id.
 func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Result, error) {
+	return r.run(ctx, history, message, nil)
+}
+
+// RunStream answers one user message exactly as Run does, and additionally
+// reports progress WHILE it works — the tool steps as they start, and the
+// answer's prose as the model writes it (card t_148d7100).
+//
+// WHY THIS IS A SECOND ENTRY POINT AND NOT A FLAG ON Run. `Run` is what every
+// non-streaming caller uses (the JSON POST, and the tests that pin the loop's
+// behaviour). Keeping it a wrapper over the same loop means the two paths cannot
+// disagree about tool dispatch, the step budget, proposals or refusals — the only
+// difference is that this one calls emit as it goes.
+//
+// THE RESULT IS STILL AUTHORITATIVE. What emit carried is progress the UI may
+// render immediately; `res` is the same answer Run would have returned, and a
+// caller must render THAT when the exchange ends (a streamed fragment can be
+// bounded or trimmed differently, and a round that turns out to be a tool round
+// emits EventRetract to withdraw the prose the browser was shown).
+//
+// An error from emit aborts the exchange and is returned unchanged: it is how a
+// disconnected client stops the model work behind it.
+func (r *Runner) RunStream(ctx context.Context, history []Turn, message string, emit EventFunc) (*Result, error) {
+	return r.run(ctx, history, message, emit)
+}
+
+func (r *Runner) run(ctx context.Context, history []Turn, message string, emit EventFunc) (*Result, error) {
 	if r.llm == nil {
 		return nil, errors.New("chat: LLM unavailable")
 	}
@@ -455,12 +481,25 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 		return nil, err
 	}
 
-	turns := r.buildTurns(history, message)
+	turns := r.buildTurns(ctx, history, message)
 	res := &Result{Steps: []Step{}}
 	// Per-message state: the proposal budget is this message's, not the Runner's.
 	rs := &runState{}
 	for step := 0; step < MaxSteps; step++ {
-		reply, err := r.llm.ChatWithTools(ctx, turns, tools)
+		// Prose this round has already streamed to the caller. A round that ends
+		// with tool calls was NOT an answer — the model was thinking out loud
+		// ("let me check your forms") before calling one — so the caller is told
+		// to withdraw it rather than leaving a fragment of a discarded turn in the
+		// transcript.
+		streamed := false
+		var onDelta func(string) error
+		if emit != nil {
+			onDelta = func(s string) error {
+				streamed = true
+				return emit(Event{Type: EventDelta, Text: s})
+			}
+		}
+		reply, err := r.ask(ctx, turns, tools, onDelta)
 		if err != nil {
 			return nil, err
 		}
@@ -468,10 +507,24 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 			res.answerOrKey(reply.Content)
 			return res, nil
 		}
+		if streamed {
+			if err := emit(Event{Type: EventRetract}); err != nil {
+				return nil, err
+			}
+		}
 		// Record the assistant's own tool-request turn so the conversation the
 		// model sees next is well-formed.
 		turns = append(turns, llm.ChatTurn{Role: "assistant", Content: reply.Content, ToolCalls: reply.ToolCalls})
 		for _, tc := range reply.ToolCalls {
+			// BEFORE the dispatch: this is the event that lets the UI say what is
+			// happening while it happens ("Reading your forms…") instead of leaving
+			// a static "thinking" line for the whole tool round-trip — the shape a
+			// user read as the assistant being stuck (card t_148d7100).
+			if emit != nil {
+				if err := emit(Event{Type: EventStep, Tool: tc.Name}); err != nil {
+					return nil, err
+				}
+			}
 			out, ref, ferr := r.dispatchIn(ctx, caller, tc, rs)
 			if ferr != nil {
 				// A failure BEFORE the tool: the error text is an internal detail
@@ -527,7 +580,7 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 		// The turn budget is spent: ask once more WITHOUT tools so the user gets
 		// an answer built from what was gathered, rather than an error.
 		if step == MaxSteps-1 {
-			final, ferr := r.llm.ChatWithTools(ctx, turns, nil)
+			final, ferr := r.ask(ctx, turns, nil, onDelta)
 			if ferr != nil {
 				return nil, ferr
 			}
@@ -851,18 +904,27 @@ func (r *Runner) testToolDefs() []llm.ToolDef {
 }
 
 // submitFeedbackDef describes the one write to the model.
+//
+// THE PROSE IS ENGLISH (card t_ec87d6c7). This def and proposeWriteDef below were
+// the last model-facing text in the lane written in Malay, while the system
+// prompt, the MCP tool descriptions and every refusal are English. A model reads
+// its tool definitions as part of its instructions, and a Malay instruction block
+// next to an English one invites a Malay answer — which is exactly the defect this
+// card fixes (a Malay sentence on an English confirmation card). The model's
+// ANSWER language is decided by the rule in the system prompt, not by the language
+// of these descriptions.
 func submitFeedbackDef() llm.ToolDef {
 	return llm.ToolDef{
 		Name: ToolSubmitFeedback,
-		Description: "Failkan maklum balas atau permintaan ciri daripada perbualan ini supaya pasukan " +
-			"JomForm dapat membacanya dan membalas dalam thread. Guna apabila pengguna melaporkan masalah " +
-			"produk, meminta ciri baharu, atau meminta sesuatu yang tidak dapat anda bantu. Ia BUKAN cara " +
-			"menjawab soalan tentang data akaun — jawab soalan itu dengan alat bacaan.",
+		Description: "File feedback or a feature request from this conversation so the JomForm " +
+			"team can read it and reply in a thread. Use it when the merchant reports a problem " +
+			"with the product, asks for a new feature, or needs help you cannot give. It is NOT " +
+			"how you answer a question about account data — answer those with the read tools.",
 		Parameters: json.RawMessage(`{
   "type": "object",
   "properties": {
-    "subject": {"type": "string", "description": "Tajuk ringkas (maksimum 200 aksara)"},
-    "body": {"type": "string", "description": "Isi maklum balas, minimum 10 aksara. Tulis apa yang pengguna laporkan, dalam bahasa pengguna."}
+    "subject": {"type": "string", "description": "A short title (maximum 200 characters)"},
+    "body": {"type": "string", "description": "The feedback body, at least 10 characters. Write what the merchant reported, in the language they wrote it in."}
   },
   "required": ["body"],
   "additionalProperties": false
@@ -878,26 +940,30 @@ func submitFeedbackDef() llm.ToolDef {
 // here would be a second contract that can drift from the one the tool actually
 // validates. The model is told to build `arguments` from the tool's own
 // definition, which it also has in this same tool list.
+//
+// The `reason` description names the DASHBOARD language (card t_ec87d6c7): the
+// reason is printed on the confirmation card, which is dashboard UI, so it must
+// match the card's own language and not the conversation's. It used to say "in
+// the merchant's language", which produced a Malay sentence on an English card.
 func proposeWriteDef() llm.ToolDef {
 	proposable := mcpsrv.ChatProposableTools()
 	sort.Strings(proposable)
 	return llm.ToolDef{
 		Name: ToolProposeWrite,
-		Description: "CADANGKAN satu perubahan supaya PENGGUNA dapat mengesahkannya. Alat ini " +
-			"TIDAK melaksanakan apa-apa: ia menyediakan kad pengesahan dalam chat dan " +
-			"menunggu pengguna menekan Sahkan. Selepas memanggilnya, beritahu pengguna " +
-			"cadangan itu sedia dan minta mereka sahkan — JANGAN kata perubahan telah " +
-			"berlaku. Guna hujah yang sama seperti alat sebenar (lihat definisi alat itu " +
-			"dalam senarai ini) di dalam medan `arguments`. Boleh dicadangkan: " +
-			strings.Join(proposable, ", ") + ". Alat lain (padam, arkib, wang, kelayakan " +
-			"akses, emel, terbit) TIDAK boleh dicadangkan — beritahu pengguna untuk " +
-			"melakukannya sendiri di papan pemuka.",
+		Description: "PROPOSE one change so the MERCHANT can confirm it. This tool performs " +
+			"NOTHING: it prepares a confirmation card in the chat and waits for the merchant to " +
+			"click Confirm. After calling it, tell the merchant the proposal is ready and ask them " +
+			"to confirm — do NOT say the change has happened. Use the same arguments as the real " +
+			"tool (see that tool's definition in this list) inside the `arguments` field. " +
+			"Proposable: " + strings.Join(proposable, ", ") + ". Other tools (delete, archive, " +
+			"money, credentials, email, publish) CANNOT be proposed — tell the merchant to do " +
+			"those themselves on the dashboard.",
 		Parameters: json.RawMessage(`{
   "type": "object",
   "properties": {
-    "tool": {"type": "string", "description": "Nama alat yang mahu dijalankan, cth update_product."},
-    "arguments": {"type": "object", "description": "Hujah untuk alat itu, sama seperti anda memanggil alat itu sendiri.", "additionalProperties": true},
-    "reason": {"type": "string", "description": "Sebab ringkas dalam bahasa pengguna — dipaparkan pada kad sebagai kata-kata anda, bukan sebagai fakta."}
+    "tool": {"type": "string", "description": "The name of the tool to run, e.g. update_product."},
+    "arguments": {"type": "object", "description": "The arguments for that tool, exactly as you would pass them when calling the tool itself.", "additionalProperties": true},
+    "reason": {"type": "string", "description": "One short sentence in the DASHBOARD language named under CARD LANGUAGE — shown on the card as your words, not as a fact. It follows the card, not the conversation."}
   },
   "required": ["tool", "arguments"],
   "additionalProperties": false
@@ -909,8 +975,13 @@ func proposeWriteDef() llm.ToolDef {
 // the bounded client history, and the new message. A client-supplied "system" or
 // "tool" turn is DROPPED — those roles are server-owned, and accepting one would
 // let the caller overwrite the operating instructions.
-func (r *Runner) buildTurns(history []Turn, message string) []llm.ChatTurn {
-	turns := []llm.ChatTurn{{Role: "system", Content: systemPromptText()}}
+//
+// The system prompt carries the caller's DASHBOARD language (see
+// WithDashboardLang): the card's one model-authored string has to be written in
+// the language the card is displayed in, and the model is the only thing that
+// writes it.
+func (r *Runner) buildTurns(ctx context.Context, history []Turn, message string) []llm.ChatTurn {
+	turns := []llm.ChatTurn{{Role: "system", Content: systemPromptText(DashboardLangFrom(ctx))}}
 	if len(history) > MaxTurns {
 		history = history[len(history)-MaxTurns:]
 	}

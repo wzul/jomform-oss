@@ -19,31 +19,68 @@
 //
 // THE RULE. The server now gives the scope refusal its own code
 // (CodeWorkspaceScopeRequired in api/internal/httpapi/errcode.go, written by
-// rest_scope.go's scopeAmbiguous arm). This module is the ONE place that turns a
-// (status, body) pair into the card's outcome:
+// rest_scope.go's scopeAmbiguous arm), and every other refusal this route can
+// classify names itself the same way. This module is the ONE place that turns a
+// (status, body) pair into the card's outcome. The list below is the WHOLE
+// contract — it is what `confirmDecisionFor` implements, so
+// change one and change the other:
 //
-//   workspace.scopeRequired -> "scopeRequired"  the scope copy, and the card
-//                                               must NOT claim a failure: the
-//                                               server refuses this BEFORE it
-//                                               reads the token, so nothing was
-//                                               attempted and the token is live
-//                                               (PR 779's rule, t_790b1016).
-//   role.manageRequired     -> "roleDenied"     the write RAN and the workspace
-//                                               role gate refused it, so the
-//                                               token is spent: the card says the
-//                                               change did not go through, names
-//                                               the cause, and must not offer the
-//                                               retry the generic failure copy
-//                                               does (t_1900adef).
-//   any other 400           -> "failed"         a failure of the change, like any
-//                                               other non-2xx. The card says so,
-//                                               which is accurate here: for the
-//                                               post-claim refusal the token IS
-//                                               spent, so the change really did
-//                                               not happen.
-//   409                     -> "stale"          spent or expired token
-//   429                     -> "rateLimited"    the confirmation bucket
-//   2xx                     -> "done"           confirmed (or cancelled)
+//   400 workspace.scopeRequired  -> "scopeRequired"     the scope copy, and the card
+//                                                       must NOT claim a failure: the
+//                                                       server refuses this BEFORE it
+//                                                       reads the token, so nothing was
+//                                                       attempted and the token is live
+//                                                       (PR 779's rule, t_790b1016).
+//   400 role.manageRequired      -> "roleDenied"        the write RAN and the workspace
+//                                                       role gate refused it, so the
+//                                                       token is spent: the card says the
+//                                                       change did not go through, names
+//                                                       the cause, and must not offer the
+//                                                       retry the generic failure copy
+//                                                       does (t_1900adef).
+//   400 any other machine code   -> "refused"           the server answered and
+//                                                       CLASSIFIED the refusal, so the
+//                                                       change did not run and the token
+//                                                       is spent: the copy says exactly
+//                                                       that and offers no retry. This is
+//                                                       the route's `default:` arm writing
+//                                                       `request.badRequest` for a tool it
+//                                                       refused after claiming the token
+//                                                       (t_bf4feea2).
+//   400 no machine code at all   -> "failed"            nothing on the wire proves the
+//                                                       server decided anything (a proxy
+//                                                       error page, an empty body, a
+//                                                       truncated response), so the token
+//                                                       may still be live: this is the one
+//                                                       outcome whose copy may suggest
+//                                                       another attempt.
+//   409 chat.proposalArgsInvalid -> "unexecutable"      the tool would never accept this
+//                                                       card's arguments. Refused BEFORE
+//                                                       the token is claimed, so the token
+//                                                       is still live — but the same card
+//                                                       can never work, so the remedy is a
+//                                                       fresh one (t_623676d1).
+//   409 workspace.required       -> "workspaceRequired" the account has no workspace at
+//                                                       all. The token is spent, and the
+//                                                       remedy is two steps in that order:
+//                                                       create a workspace, then ask for a
+//                                                       fresh card (t_bf4feea2).
+//   409 anything else            -> "stale"             spent or expired token. No code, an
+//                                                       unknown code, and `request.conflict`
+//                                                       all land here.
+//   403 workspace.notFound       -> "scopeRequired"     the `?workspace=` slug no longer
+//                                                       resolves for this session (a stale
+//                                                       localStorage value), not a dead
+//                                                       session — so the user is told what
+//                                                       to do instead of being signed out
+//                                                       (t_da4b2031).
+//   403 anything else            -> "failed"            a genuine authorization refusal;
+//                                                       an absent or unknown code is never
+//                                                       softened into "choose a workspace".
+//   429 any body                 -> "rateLimited"       the confirmation bucket.
+//   2xx any body                 -> "done"              confirmed (or cancelled).
+//   any other status             -> "failed"            a 5xx, or a status this module
+//                                                       does not know.
 //
 // WHY A CODE AND NOT THE PROSE. The wire `error` string is Malay and the API does
 // not know the dashboard's language on a JSON call (issue #6177) — it is the

@@ -415,6 +415,16 @@ var classifierGates = []classifierGate{
 			"without one is stored with workspace_id NULL and 404 at every address " +
 			"once published",
 	},
+	{
+		// Chat history (t_6b36e0d7). The gate demands a SESSION user and writes
+		// 401 without one; an API key has no person behind it, so a conversation
+		// could not be scoped to it. It is weaker than `read` in the sense that it
+		// accepts FEWER callers, and published as `session` so the contract does
+		// not promise an API key a person's conversations.
+		Name:   "requireChatSession",
+		Access: AccessSession,
+		Why:    "session-only: a conversation belongs to a person, and an API key carries no person to scope it to",
+	},
 }
 
 // classifyHandlerAccess returns the access level a handler's own source applies,

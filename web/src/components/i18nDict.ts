@@ -2463,6 +2463,61 @@ export const DICT = {
   "chat.placeholder": { en: "Ask a question about your data…", ms: "Tanya soalan tentang data anda…", zh: "就您的数据提问…", ta: "உங்கள் தரவு பற்றி கேள்வி கேளுங்கள்…", ar: "اطرح سؤالاً عن بياناتك…" },
   "chat.send": { en: "Send", ms: "Hantar", zh: "发送", ta: "அனுப்பு", ar: "إرسال" },
   "chat.thinking": { en: "Looking that up…", ms: "Sedang mencari…", zh: "正在查询…", ta: "தேடுகிறது…", ar: "جارٍ البحث…" },
+  // ── Streaming, Stop, the live step line and the copy affordance (t_148d7100) ─
+  //
+  // The status line is SEPARATE from the Send button: the button said "Looking
+  // that up…" WHILE SENDING, so the one control a user presses was also the only
+  // place the state was shown, and the same sentence appeared a second time in the
+  // transcript. `chat.send` is now always the button's label (the e2e specs look
+  // it up by name) and these keys carry the state.
+  "chat.stop": { en: "Stop", ms: "Henti", zh: "停止", ta: "நிறுத்து", ar: "إيقاف" },
+  "chat.stopped": { en: "Stopped — this answer is incomplete.", ms: "Dihentikan — jawapan ini tidak lengkap.", zh: "已停止——此回答不完整。", ta: "நிறுத்தப்பட்டது — இந்தப் பதில் முழுமையடையவில்லை.", ar: "تم الإيقاف — هذه الإجابة غير مكتملة." },
+  "chat.copy": { en: "Copy", ms: "Salin", zh: "复制", ta: "நகலெடு", ar: "نسخ" },
+  "chat.copied": { en: "Copied", ms: "Disalin", zh: "已复制", ta: "நகலெடுக்கப்பட்டது", ar: "تم النسخ" },
+  "chat.jumpLatest": { en: "Jump to latest", ms: "Ke jawapan terkini", zh: "跳到最新", ta: "சமீபத்தியதற்குச் செல்", ar: "الانتقال إلى الأحدث" },
+  // The step line. A tool name becomes a SENTENCE here, in the visitor's
+  // language: the API sends the tool name only (issue #6177), and printing
+  // `list_form_submissions` at a merchant would be the same defect as printing a
+  // machine key. The noun is a separate key so the sentence's word order is the
+  // translator's, not an English concatenation's.
+  "chat.step.reading": { en: "Reading your {thing}…", ms: "Membaca {thing} anda…", zh: "正在读取您的{thing}…", ta: "உங்கள் {thing} படிக்கிறது…", ar: "جارٍ قراءة {thing}…" },
+  "chat.step.filing": { en: "Filing that for you…", ms: "Menghantar maklum balas anda…", zh: "正在提交反馈…", ta: "உங்கள் கருத்தை அனுப்புகிறது…", ar: "جارٍ إرسال ملاحظاتك…" },
+  "chat.step.working": { en: "Working on it…", ms: "Sedang diproses…", zh: "正在处理…", ta: "செயலாகிறது…", ar: "جارٍ العمل عليه…" },
+  // The same three, in the past tense, for the finished step trail under an answer.
+  // A trail line that still says "Reading your forms…" long after it read them
+  // reads as work that never finished — the same class of lie as a card that keeps
+  // saying "needs your confirmation" once it is settled.
+  "chat.step.read": { en: "Read your {thing}", ms: "Baca {thing} anda", zh: "已读取您的{thing}", ta: "உங்கள் {thing} படித்தது", ar: "قرأ {thing}" },
+  "chat.step.filed": { en: "Filed your feedback", ms: "Maklum balas anda dihantar", zh: "已提交您的反馈", ta: "உங்கள் கருத்தை அனுப்பியது", ar: "أرسل ملاحظاتك" },
+  "chat.step.worked": { en: "Looked that up", ms: "Selesai mencari", zh: "已查询", ta: "தேடி முடிந்தது", ar: "تم البحث" },
+  "chat.noun.account": { en: "account", ms: "akaun", zh: "账户", ta: "கணக்கு", ar: "الحساب" },
+  "chat.noun.workspaces": { en: "workspaces", ms: "ruang kerja", zh: "工作区", ta: "பணியிடங்கள்", ar: "مساحات العمل" },
+  "chat.noun.forms": { en: "forms", ms: "borang", zh: "表单", ta: "படிவங்கள்", ar: "النماذج" },
+  "chat.noun.analytics": { en: "analytics", ms: "analitik", zh: "分析数据", ta: "பகுப்பாய்வு", ar: "التحليلات" },
+  "chat.noun.submissions": { en: "form responses", ms: "respons borang", zh: "表单回复", ta: "படிவப் பதில்கள்", ar: "ردود النماذج" },
+  "chat.noun.products": { en: "products", ms: "produk", zh: "产品", ta: "தயாரிப்புகள்", ar: "المنتجات" },
+  "chat.noun.sales": { en: "sales", ms: "jualan", zh: "销售", ta: "விற்பனைகள்", ar: "المبيعات" },
+  "chat.noun.subscriptions": { en: "subscriptions", ms: "langganan", zh: "订阅", ta: "சந்தாக்கள்", ar: "الاشتراكات" },
+  "chat.noun.deliveries": { en: "email deliveries", ms: "penghantaran e-mel", zh: "邮件投递", ta: "மின்னஞ்சல் அனுப்புகை", ar: "تسليم البريد" },
+  "chat.noun.spam": { en: "spam reports", ms: "laporan spam", zh: "垃圾邮件举报", ta: "ஸ்பேம் புகார்கள்", ar: "تقارير الرسائل المزعجة" },
+  "chat.noun.media": { en: "media", ms: "media", zh: "媒体文件", ta: "மீடியா", ar: "الوسائط" },
+  "chat.noun.events": { en: "activity", ms: "aktiviti", zh: "动态", ta: "செயல்பாடுகள்", ar: "النشاط" },
+  "chat.noun.templates": { en: "templates", ms: "templat", zh: "模板", ta: "வார்ப்புருக்கள்", ar: "القوالب" },
+  "chat.noun.feedback": { en: "feedback", ms: "maklum balas", zh: "反馈", ta: "கருத்துகள்", ar: "الملاحظات" },
+  // The SETTINGS reads. The wording follows the dashboard's own labels
+  // (`set.tab.fees` = Payment fees, `fs.shipSave` = shipping rates,
+  // `fs.couriers` = courier providers) so the status line and the Settings page a
+  // merchant is asked to open use the same words.
+  "chat.noun.settings": { en: "workspace settings", ms: "tetapan ruang kerja", zh: "工作区设置", ta: "பணியிட அமைப்புகள்", ar: "إعدادات مساحة العمل" },
+  "chat.noun.fees": { en: "payment fees", ms: "caj bayaran", zh: "付款手续费", ta: "கட்டணக் கட்டணங்கள்", ar: "رسوم الدفع" },
+  "chat.noun.shippingRates": { en: "shipping rates", ms: "kadar penghantaran", zh: "运费", ta: "ஷிப்பிங் கட்டணங்கள்", ar: "أسعار الشحن" },
+  "chat.noun.couriers": { en: "couriers", ms: "kurier", zh: "快递服务商", ta: "கூரியர்கள்", ar: "شركات الشحن" },
+  // The starter chips. Each one is a QUESTION the chat's read allowlist really
+  // answers, and each is SENT as the message — so it exists in every locale.
+  "chat.starter.forms": { en: "Which of my forms are live?", ms: "Borang mana yang live?", zh: "我有哪些表单已上线？", ta: "எனது எந்தப் படிவங்கள் நேரலையில் உள்ளன?", ar: "أي نماذجي مُفعَّلة؟" },
+  "chat.starter.sales": { en: "How many sales came in this week?", ms: "Berapa banyak jualan masuk minggu ini?", zh: "本周有多少笔销售？", ta: "இந்த வாரம் எத்தனை விற்பனைகள் வந்தன?", ar: "كم عملية بيع وردت هذا الأسبوع؟" },
+  "chat.starter.submissions": { en: "Any new form responses today?", ms: "Ada respons borang baharu hari ini?", zh: "今天有新表单回复吗？", ta: "இன்று புதிய படிவப் பதில்கள் உள்ளனவா?", ar: "هل وردت ردود نماذج جديدة اليوم؟" },
+  "chat.starter.help": { en: "What can you do?", ms: "Apa yang anda boleh lakukan?", zh: "你能做什么？", ta: "நீங்கள் என்ன செய்ய முடியும்?", ar: "ماذا يمكنك أن تفعل؟" },
   "chat.empty": { en: "Ask something like \"which of my forms are live?\" or \"how many sales came in this week?\".", ms: "Tanya seperti \"borang mana yang live?\" atau \"berapa banyak jualan masuk minggu ini?\".", zh: "试试问“我有哪些表单已上线？”或“本周有多少笔销售？”。", ta: "\"என்னுடைய எந்தப் படிவங்கள் நேரலையில் உள்ளன?\" அல்லது \"இந்த வாரம் எத்தனை விற்பனைகள் வந்தன?\" போன்று கேளுங்கள்.", ar: "اسأل مثلاً \"أي نماذجي مُفعَّلة؟\" أو \"كم عملية بيع وردت هذا الأسبوع؟\"." },
   "chat.fail": { en: "The assistant could not answer. Please try again.", ms: "Pembantu tidak dapat menjawab. Sila cuba lagi.", zh: "助手无法回答。请重试。", ta: "உதவியாளரால் பதிலளிக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر على المساعد الإجابة. يرجى المحاولة مرة أخرى." },
   "chat.unavailable": { en: "The assistant is not available right now.", ms: "Pembantu tidak tersedia buat masa ini.", zh: "助手目前不可用。", ta: "உதவியாளர் இப்போது கிடைக்கவில்லை.", ar: "المساعد غير متاح حاليًا." },
@@ -2545,10 +2600,20 @@ export const DICT = {
   // actually prepare.
   "chat.reply.noAnswer": { en: "I could not finish that for you, and nothing was changed. Tell me the exact details — for a new form, its name and the fields you want — and I will try again.", ms: "Saya tidak dapat menyelesaikannya untuk anda, dan tiada apa-apa diubah. Beritahu saya butiran yang tepat — untuk borang baharu, namanya dan medan yang anda mahu — dan saya akan cuba lagi.", zh: "我无法为您完成这项操作，也没有任何更改。请告诉我具体细节——如果是新建表单，请给我表单名称和所需字段——我会再试一次。", ta: "அதை என்னால் முடிக்க முடியவில்லை, எதுவும் மாற்றப்படவில்லை. சரியான விவரங்களைச் சொல்லுங்கள் — புதிய படிவமாக இருந்தால், அதன் பெயரும் நீங்கள் விரும்பும் புலங்களும் — நான் மீண்டும் முயற்சிக்கிறேன்.", ar: "لم أتمكن من إنجاز ذلك، ولم يتغير شيء. أخبرني بالتفاصيل الدقيقة — إن كان نموذجًا جديدًا، فاسمه والحقول التي تريدها — وسأحاول مرة أخرى." },
   "chat.docs": { en: "What the assistant can and cannot do", ms: "Apa yang pembantu boleh dan tidak boleh lakukan", zh: "助手能做什么、不能做什么", ta: "உதவியாளர் என்ன செய்ய முடியும், முடியாது", ar: "ما يستطيع المساعد فعله وما لا يستطيع" },
-  // The conversation is kept in this browser across a reload, so the user needs a
-  // way to start clean (and the label must say what it clears, not merely "clear").
+  // A conversation is kept on the SERVER now, per person and per workspace, so
+  // the sidebar needs a name for the list, a way to start a second conversation
+  // without losing the first, and words for the two per-row actions.
   "chat.newConversation": { en: "New conversation", ms: "Perbualan baharu", zh: "新对话", ta: "புதிய உரையாடல்", ar: "محادثة جديدة" },
-  "chat.newConversationHint": { en: "Clears this conversation, including the copy saved in this browser", ms: "Kosongkan perbualan ini, termasuk salinan yang disimpan dalam pelayar ini", zh: "清除此对话，包括保存在本浏览器中的副本", ta: "இந்த உரையாடலை அழிக்கும், இந்த உலாவியில் சேமிக்கப்பட்ட நகலுடன்", ar: "يمسح هذه المحادثة، بما في ذلك النسخة المحفوظة في هذا المتصفح" },
+  "chat.newConversationHint": { en: "Starts a new conversation. The one you are reading stays in the history list.", ms: "Mulakan perbualan baharu. Perbualan yang sedang dibaca kekal dalam senarai sejarah.", zh: "开始新对话。您正在阅读的对话会保留在历史列表中。", ta: "புதிய உரையாடலைத் தொடங்கும். நீங்கள் படிக்கும் உரையாடல் வரலாற்றுப் பட்டியலில் இருக்கும்.", ar: "يبدأ محادثة جديدة. المحادثة التي تقرأها تبقى في قائمة السجل." },
+  "chat.history": { en: "History", ms: "Sejarah", zh: "历史", ta: "வரலாறு", ar: "السجل" },
+  "chat.historyEmpty": { en: "No saved conversations in this workspace yet.", ms: "Belum ada perbualan disimpan dalam ruang kerja ini.", zh: "此工作区还没有已保存的对话。", ta: "இந்தப் பணியிடத்தில் சேமிக்கப்பட்ட உரையாடல்கள் இன்னும் இல்லை.", ar: "لا توجد محادثات محفوظة في مساحة العمل هذه بعد." },
+  "chat.rename": { en: "Rename", ms: "Namakan semula", zh: "重命名", ta: "மறுபெயரிடு", ar: "إعادة التسمية" },
+  "chat.renameSave": { en: "Save", ms: "Simpan", zh: "保存", ta: "சேமி", ar: "حفظ" },
+  "chat.delete": { en: "Delete", ms: "Padam", zh: "删除", ta: "நீக்கு", ar: "حذف" },
+  "chat.deleteConfirm": { en: "Delete this conversation? Its messages are removed permanently.", ms: "Padam perbualan ini? Mesejnya akan dibuang secara kekal.", zh: "删除此对话？其中的消息将被永久移除。", ta: "இந்த உரையாடலை நீக்கவா? அதன் செய்திகள் நிரந்தரமாக அகற்றப்படும்.", ar: "حذف هذه المحادثة؟ ستُزال رسائلها نهائيًا." },
+  "chat.historyLoadFail": { en: "Your saved conversations could not be loaded. You can still ask a new question.", ms: "Perbualan yang disimpan tidak dapat dimuatkan. Anda masih boleh bertanya soalan baharu.", zh: "无法加载您保存的对话。您仍然可以提出新问题。", ta: "சேமிக்கப்பட்ட உரையாடல்களை ஏற்ற முடியவில்லை. புதிய கேள்வியை இன்னும் கேட்கலாம்.", ar: "تعذّر تحميل محادثاتك المحفوظة. يمكنك طرح سؤال جديد." },
+  "chat.historyCreateFail": { en: "A new conversation could not be started.", ms: "Perbualan baharu tidak dapat dimulakan.", zh: "无法开始新对话。", ta: "புதிய உரையாடலைத் தொடங்க முடியவில்லை.", ar: "تعذّر بدء محادثة جديدة." },
+  "chat.historySaveFail": { en: "That change could not be saved.", ms: "Perubahan itu tidak dapat disimpan.", zh: "该更改未能保存。", ta: "அந்த மாற்றத்தைச் சேமிக்க முடியவில்லை.", ar: "تعذّر حفظ ذلك التغيير." },
   "chat.limitNote": { en: "Up to {n} messages an hour. This is a limit, not a judgement — it keeps the feature affordable for everyone.", ms: "Sehingga {n} mesej sejam. Ini had, bukan penilaian — ia menjaga kos ciri ini untuk semua orang.", zh: "每小时最多 {n} 条消息。这是限额，不是评判——它让这项功能对所有人都可负担。", ta: "மணிக்கு அதிகபட்சம் {n} செய்திகள். இது ஒரு வரம்பு, தீர்ப்பு அல்ல — அனைவருக்கும் இந்த அம்சம் மலிவாக இருக்க இது உதவுகிறது.", ar: "{n} رسالة في الساعة كحد أقصى. هذا حد وليس حكمًا — فهو يبقي هذه الميزة في متناول الجميع." },
   // Proposal confirmation (phase 2). The card is a DECISION, so the copy has to
   // say plainly that nothing has happened yet: a user who believes the change was
@@ -2672,6 +2737,63 @@ export const DICT = {
   "chat.proposal.value.chargeCountOne": { en: "1 time", ms: "1 kali", zh: "1 次", ta: "1 முறை", ar: "1 مرة" },
   "chat.proposal.value.variationSet": { en: "{n} rows — the full list, replacing the existing one", ms: "{n} baris — senarai penuh, menggantikan senarai sedia ada", zh: "{n} 行——完整列表，将替换现有列表", ta: "{n} வரிசைகள் — முழுப் பட்டியல், தற்போதைய ஒன்றை மாற்றும்", ar: "{n} صفوف — القائمة الكاملة، وتستبدل القائمة الحالية" },
   "chat.proposal.value.variationSetOne": { en: "1 row — the full list, replacing the existing one", ms: "1 baris — senarai penuh, menggantikan senarai sedia ada", zh: "1 行——完整列表，将替换现有列表", ta: "1 வரிசை — முழுப் பட்டியல், தற்போதைய ஒன்றை மாற்றும்", ar: "1 صف — القائمة الكاملة، وتستبدل القائمة الحالية" },
+  // ── TOOL NAMES, IN HUMAN WORDS (card t_ec87d6c7) ──────────────────────────
+  // The confirmation card prints the tool it will run, and the refusal block
+  // prints the tool that was refused. Both used to print the RAW name — a
+  // merchant was shown `upsert_form` and `propose_write`, which are internal
+  // identifiers, not language. These keys are the human name of each tool the
+  // chat can DISPLAY, in all five locales.
+  //
+  // The list is not hand-maintained: src/lib/chatProposal.test.ts reads
+  // api/internal/mcpsrv/chat_tools.go (the read allowlist and the proposable set,
+  // the two lists the server's exposure comes from) and the two in-process tool
+  // names, and fails when one of them has no entry here — or when an entry
+  // carries an underscore. A tool added later therefore fails the suite instead of
+  // appearing on the card as an identifier; at runtime an unmapped name is
+  // humanised (`some_new_tool` → "Some new tool") so no snake_case can reach the
+  // screen even before its translation lands.
+  "chat.tool.get_account": { en: "Account details", ms: "Butiran akaun", zh: "账号详情", ta: "கணக்கு விவரங்கள்", ar: "تفاصيل الحساب" },
+  "chat.tool.list_workspaces": { en: "Workspace list", ms: "Senarai ruang kerja", zh: "工作区列表", ta: "பணியிடப் பட்டியல்", ar: "قائمة مساحات العمل" },
+  "chat.tool.list_forms": { en: "Form list", ms: "Senarai borang", zh: "表单列表", ta: "படிவப் பட்டியல்", ar: "قائمة النماذج" },
+  "chat.tool.get_form": { en: "Form details", ms: "Butiran borang", zh: "表单详情", ta: "படிவ விவரங்கள்", ar: "تفاصيل النموذج" },
+  "chat.tool.get_form_analytics": { en: "Form analytics", ms: "Analitik borang", zh: "表单分析", ta: "படிவ பகுப்பாய்வு", ar: "تحليلات النموذج" },
+  "chat.tool.list_form_submissions": { en: "Form responses", ms: "Respons borang", zh: "表单回复", ta: "படிவப் பதில்கள்", ar: "ردود النموذج" },
+  "chat.tool.list_products": { en: "Product list", ms: "Senarai produk", zh: "产品列表", ta: "தயாரிப்புப் பட்டியல்", ar: "قائمة المنتجات" },
+  "chat.tool.list_product_variations": { en: "Product variations", ms: "Variasi produk", zh: "产品变体", ta: "தயாரிப்பு மாறுபாடுகள்", ar: "أنواع المنتج" },
+  "chat.tool.get_product_analytics": { en: "Product analytics", ms: "Analitik produk", zh: "产品分析", ta: "தயாரிப்பு பகுப்பாய்வு", ar: "تحليلات المنتج" },
+  "chat.tool.list_sales": { en: "Sales list", ms: "Senarai jualan", zh: "销售列表", ta: "விற்பனைப் பட்டியல்", ar: "قائمة المبيعات" },
+  "chat.tool.get_sales_summary": { en: "Sales summary", ms: "Ringkasan jualan", zh: "销售汇总", ta: "விற்பனைச் சுருக்கம்", ar: "ملخص المبيعات" },
+  "chat.tool.get_sale_email_status": { en: "Sale email status", ms: "Status e-mel jualan", zh: "销售邮件状态", ta: "விற்பனை மின்னஞ்சல் நிலை", ar: "حالة بريد البيع" },
+  "chat.tool.list_subscriptions": { en: "Subscription list", ms: "Senarai langganan", zh: "订阅列表", ta: "சந்தாப் பட்டியல்", ar: "قائمة الاشتراكات" },
+  "chat.tool.list_email_deliveries": { en: "Email deliveries", ms: "Penghantaran e-mel", zh: "邮件送达", ta: "மின்னஞ்சல் அனுப்புகைகள்", ar: "تسليمات البريد" },
+  "chat.tool.list_spam_sales": { en: "Spam sales", ms: "Jualan spam", zh: "垃圾销售", ta: "ஸ்பேம் விற்பனைகள்", ar: "مبيعات مزعجة" },
+  "chat.tool.list_spam_submissions": { en: "Spam responses", ms: "Respons spam", zh: "垃圾回复", ta: "ஸ்பேம் பதில்கள்", ar: "ردود مزعجة" },
+  "chat.tool.list_media": { en: "Media library", ms: "Pustaka media", zh: "媒体库", ta: "ஊடக நூலகம்", ar: "مكتبة الوسائط" },
+  "chat.tool.list_events": { en: "Activity log", ms: "Log aktiviti", zh: "活动日志", ta: "செயல்பாட்டுப் பதிவு", ar: "سجل النشاط" },
+  "chat.tool.list_templates": { en: "Template list", ms: "Senarai templat", zh: "模板列表", ta: "வார்ப்புருப் பட்டியல்", ar: "قائمة القوالب" },
+  "chat.tool.list_own_templates": { en: "Your templates", ms: "Templat anda", zh: "您的模板", ta: "உங்கள் வார்ப்புருக்கள்", ar: "قوالبك" },
+  "chat.tool.list_feedback": { en: "Feedback threads", ms: "Thread maklum balas", zh: "反馈会话", ta: "கருத்து நூல்கள்", ar: "محادثات الملاحظات" },
+  "chat.tool.get_feedback_thread": { en: "One feedback thread", ms: "Satu thread maklum balas", zh: "单个反馈会话", ta: "ஒரு கருத்து நூல்", ar: "محادثة ملاحظات واحدة" },
+  // The four SETTINGS reads (mcpsrv.chatReadTools). The assistant answers questions
+  // about how this merchant's account is configured as well as about their records,
+  // so these names reach the refusal block like any other read tool and need words
+  // in every locale for the same reason: the merchant must never be shown
+  // `get_payment_fees`.
+  "chat.tool.get_workspace_settings": { en: "Workspace settings", ms: "Tetapan ruang kerja", zh: "工作区设置", ta: "பணியிட அமைப்புகள்", ar: "إعدادات مساحة العمل" },
+  "chat.tool.get_payment_fees": { en: "Processing fee settings", ms: "Tetapan caj pemprosesan", zh: "手续费设置", ta: "செயலாக்கக் கட்டண அமைப்புகள்", ar: "إعدادات رسوم المعالجة" },
+  "chat.tool.get_shipping_rates": { en: "Shipping rates", ms: "Kadar penghantaran", zh: "运费费率", ta: "ஷிப்பிங் கட்டணங்கள்", ar: "أسعار الشحن" },
+  "chat.tool.get_shipping_couriers": { en: "Courier connections", ms: "Sambungan kurier", zh: "快递连接", ta: "கூரியர் இணைப்புகள்", ar: "اتصالات شركات الشحن" },
+  // The four WRITE tools the chat may propose (mcpsrv.chatProposableTools).
+  // upsert_form's label is "Form save" rather than the card's own title ("Create
+  // or update form"): the title is rendered three lines above the footnote, and a
+  // footnote that repeats it tells the merchant nothing.
+  "chat.tool.update_product": { en: "Product update", ms: "Kemas kini produk", zh: "产品更新", ta: "தயாரிப்புப் புதுப்பிப்பு", ar: "تحديث منتج" },
+  "chat.tool.update_product_variation": { en: "Product variation update", ms: "Kemas kini variasi produk", zh: "产品变体更新", ta: "தயாரிப்பு மாறுபாடு புதுப்பிப்பு", ar: "تحديث نوع منتج" },
+  "chat.tool.set_form_theme": { en: "Form style update", ms: "Kemas kini gaya borang", zh: "表单样式更新", ta: "படிவ பாணி புதுப்பிப்பு", ar: "تحديث نمط النموذج" },
+  "chat.tool.upsert_form": { en: "Form save", ms: "Simpan borang", zh: "保存表单", ta: "படிவத்தைச் சேமி", ar: "حفظ النموذج" },
+  // The chat's two in-process tools, which appear in the refusal trace.
+  "chat.tool.propose_write": { en: "Change proposal", ms: "Cadangan perubahan", zh: "更改提议", ta: "மாற்ற முன்மொழிவு", ar: "مقترح تغيير" },
+  "chat.tool.submit_feedback": { en: "Feedback filing", ms: "Penghantaran maklum balas", zh: "提交反馈", ta: "கருத்துச் சமர்ப்பிப்பு", ar: "إرسال ملاحظات" },
   "chat.confirm": { en: "Confirm", ms: "Sahkan", zh: "确认", ta: "உறுதிப்படுத்து", ar: "تأكيد" },
   "chat.cancel": { en: "Cancel", ms: "Batal", zh: "取消", ta: "ரத்து", ar: "إلغاء" },
   "chat.confirmHint": { en: "Nothing has changed yet.", ms: "Belum ada apa-apa yang berubah.", zh: "目前尚未发生任何更改。", ta: "இதுவரை எதுவும் மாறவில்லை.", ar: "لم يتغير شيء بعد." },

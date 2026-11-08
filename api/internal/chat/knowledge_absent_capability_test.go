@@ -151,7 +151,7 @@ func absenceProblems(entries []absentCapability, prompt string) []string {
 }
 
 func TestThePromptNeverClaimsACapabilityTheCodeLacks(t *testing.T) {
-	for _, p := range absenceProblems(absentCapabilities, systemPromptText()) {
+	for _, p := range absenceProblems(absentCapabilities, systemPromptText("")) {
 		t.Error(p)
 	}
 }
@@ -175,7 +175,7 @@ func TestTheAbsenceCheckBites(t *testing.T) {
 			}
 			mutated = append(mutated, other)
 		}
-		problems := absenceProblems(mutated, systemPromptText())
+		problems := absenceProblems(mutated, systemPromptText(""))
 		found := false
 		for _, p := range problems {
 			if strings.HasPrefix(p, e.id+":") && strings.Contains(p, "has LANDED") {

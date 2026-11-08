@@ -87,7 +87,7 @@ func normalizeWS(s string) string {
 }
 
 func TestSystemPromptSendsPermanentDeletesToTheApiNotTheDashboard(t *testing.T) {
-	prompt := systemPromptText()
+	prompt := systemPromptText("")
 	para := normalizeWS(redirectSection(prompt))
 	if para == "" {
 		t.Fatalf("the prompt no longer contains %q at all, so this guard cannot judge where "+
@@ -152,8 +152,8 @@ func TestTheRedirectSentenceCannotReacquireDeleting(t *testing.T) {
 
 	// The mutation must actually land, or the proof below is vacuous. Assert that
 	// against the real template, not against a hand-written copy of it.
-	mutated := strings.Replace(systemPromptText(), redirectSection(systemPromptText()), preFix, 1)
-	if mutated == systemPromptText() {
+	mutated := strings.Replace(systemPromptText(""), redirectSection(systemPromptText("")), preFix, 1)
+	if mutated == systemPromptText("") {
 		t.Fatal("the pre-fix wording could not be substituted into the real prompt — this bite " +
 			"proof would pass without testing anything, which is the failure mode it exists to " +
 			"prevent. Fix the substitution, do not delete the proof")

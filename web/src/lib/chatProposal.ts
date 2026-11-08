@@ -43,11 +43,15 @@
 // every "chat.proposal.*" key the Go server can emit must exist in the dictionary
 // in all five locales.
 //
-// The one string on the card that deliberately has NO key is `note`: that is the
-// ASSISTANT's own wording, in the language of the conversation it is having (the
-// same language as its reply in the transcript above the card), not the server's
-// wording — and the prompt answers in the language the user wrote in. See the
-// ProposalCard doc comment in api/internal/chat/proposal.go.
+// The one string on the card that deliberately has NO key is `note`: it is the
+// ASSISTANT's own wording, so it does not exist until the model writes it and
+// there is nothing for this module to look up. It is NOT free to be any language,
+// though (card t_ec87d6c7): the note is printed on the card, so it follows the
+// card's language — the dashboard's — and the server tells the model which
+// language that is in the system prompt (see DashboardLangFrom in
+// api/internal/chat/lang.go). The page therefore renders it verbatim; making the
+// page guess at a language would be a second, worse answer to a question the
+// server already answers.
 
 import type { Key } from "../components/i18n";
 
@@ -117,4 +121,48 @@ export function proposalTitle(p: ProposalCardData, t: Translate): string {
 /** The card's one-sentence summary, in the dashboard's language. */
 export function proposalSummary(p: ProposalCardData, t: Translate): string {
   return p.summary_key ? t(p.summary_key as Key) : "";
+}
+
+/**
+ * The human name of a TOOL, in the dashboard's language (card t_ec87d6c7).
+ *
+ * WHY THIS EXISTS. The card printed the tool it would run, and the refusal block
+ * printed the tool that was refused, both as the RAW server name:
+ *
+ *     upsert_form
+ *     propose_write — The assistant could not prepare that change …
+ *
+ * `upsert_form` and `propose_write` are internal identifiers, not language. Wan's
+ * rule for the card is that it must read as the merchant's own UI, and an
+ * identifier in snake_case is not a word in ANY locale — it is the one string on
+ * the card that cannot be translated because it was never meant to be read.
+ *
+ * The mapping is `chat.tool.<name>` in the dictionary (five locales, next to the
+ * card's other keys). A name the dictionary does not cover yet is HUMANISED
+ * rather than passed through — `some_new_tool` becomes "Some new tool" — so a
+ * tool added after this file was written cannot put an identifier on the screen.
+ * It is English words in that case, which is the dashboard's default language and
+ * still language, not a token; the guard in chatProposal.test.ts fails the suite
+ * before it can ship.
+ */
+export function toolLabel(tool: string, t: Translate): string {
+  const name = typeof tool === "string" ? tool.trim() : "";
+  if (!name) return "";
+  const key = `chat.tool.${name}`;
+  const translated = t(key as Key);
+  // t() answers with the KEY ITSELF when the dictionary has no entry; that is the
+  // one answer this must never return.
+  if (translated && translated !== key) return translated;
+  return humanToolName(name);
+}
+
+/**
+ * The fallback for a tool the dictionary has not named yet: separators become
+ * spaces and the first letter is capitalised, so the result can never contain an
+ * underscore (or a dash) or start with a lowercase identifier.
+ */
+export function humanToolName(name: string): string {
+  const words = name.replace(/[_-]+/g, " ").trim().toLowerCase();
+  if (!words) return "";
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }

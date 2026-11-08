@@ -82,6 +82,12 @@ var _ = chatRatePerHour
 type chatRequestIn struct {
 	Message string      `json:"message"`
 	History []chat.Turn `json:"history"`
+	// SessionID is the stored conversation this exchange belongs to. When it is
+	// set, the server appends the user's turn and the reply to that conversation
+	// (scoped to the caller — somebody else's id is a 404 before the model is
+	// called). When it is empty the message is answered but not stored, which is
+	// what a caller that keeps its own transcript gets.
+	SessionID string `json:"session_id"`
 }
 
 type chatResponseOut struct {
@@ -96,6 +102,11 @@ type chatResponseOut struct {
 	// TOKEN they carry goes to the browser and is never sent to the model; without
 	// a click on one of these cards, no proposed write can happen.
 	Proposals []chat.ProposalCard `json:"proposals,omitempty"`
+	// SessionID echoes the stored conversation this exchange was appended to. It
+	// is the id the client sent, so a client can tell its own request apart; the
+	// field exists so a caller that did NOT send one learns nothing rather than
+	// accidentally adopting a conversation it does not own.
+	SessionID string `json:"session_id,omitempty"`
 	// Limits echoes the caps in force, so the UI can explain a 429 instead of
 	// showing a bare error.
 	Limits chatLimitsOut `json:"limits"`
@@ -203,6 +214,26 @@ func (h *RESTHandlers) chatWorkspaceScopeOr403(w http.ResponseWriter, r *http.Re
 	return h.requireResolvedWorkspaceScope(w, r, actx)
 }
 
+// chatDashboardLang is the caller's dashboard UI language from their profile
+// ("" when unset). It is the language the confirmation card is displayed in, and
+// therefore the language the model must write the card's one model-authored
+// sentence in (card t_ec87d6c7).
+//
+// BOTH failure modes are "not set", never an error: a nil store (bare-mode tests)
+// and a failed read. A chat message must not fail because a locale could not be
+// read — the card falls back to English, which is the dashboard's own default and
+// what a merchant with no preference sees anyway.
+func (h *RESTHandlers) chatDashboardLang(ctx context.Context, userID string) string {
+	if h.Users == nil || userID == "" {
+		return ""
+	}
+	lang, err := h.Users.Lang(ctx, userID)
+	if err != nil {
+		return ""
+	}
+	return lang
+}
+
 // handleChat: POST /v1/rest/chat — answer one message.
 func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	// Session only. A chat is a person's conversation, and the one write it has
@@ -249,6 +280,20 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 		writeErr(w, http.StatusBadRequest, "conversation history is too long")
 		return
 	}
+	// THE CONVERSATION THIS EXCHANGE BELONGS TO (chat history). Resolved BEFORE
+	// the model is called: a session id that is not the caller's must not cause a
+	// model call, and must above all not have the answer appended to somebody
+	// else's conversation. 404 for "unknown" and "somebody else's" alike — the
+	// store scopes the read, so the two are indistinguishable by construction.
+	//
+	// An empty id is legitimate: the message is answered and not stored, which is
+	// what a caller keeping its own transcript gets. Nothing is auto-created,
+	// because an auto-created row on every message is how a user with one
+	// question ends up with forty conversations in their sidebar.
+	sessionWorkspaceID, ok := h.chatSessionWorkspaceOr404(w, r, actx, scope, uid, in.SessionID)
+	if !ok {
+		return
+	}
 
 	// The same flag GET reports: no runner, or a runner whose model has no
 	// credential, is "the assistant is unavailable". Checked AFTER the request
@@ -276,6 +321,30 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 	// the workspace this request resolved, so those tools also read and write the
 	// workspace the user is looking at (issue #747).
 	ctx := chatContextFor(r.Context(), scope, actx.Account.ID, uid)
+	// The card's own words are dictionary keys the page resolves; the ONE
+	// sentence on it the MODEL writes (propose_write's reason) is prose. Tell the
+	// model which language that card is displayed in (card t_ec87d6c7): the
+	// merchant's DASHBOARD language — users.lang, the column the dashboard
+	// resolves its own locale from — not the language of the message, which may
+	// legitimately differ.
+	//
+	// It is read here, not sent by the client: the request body carries no
+	// language, and a client-supplied one would be a value the card's meaning
+	// depends on but nothing verifies. A failed read is NOT a failed message — the
+	// chat still answers, with the card in English, the dashboard's default.
+	ctx = chat.WithDashboardLang(ctx, h.chatDashboardLang(r.Context(), uid))
+
+	// STREAMED ANSWER (card t_148d7100). A client that asks for one gets its
+	// progress and its prose as they happen; a client that does not, or a
+	// deployment whose runner has no streaming capability, falls through to the
+	// one-shot JSON answer below — which is exactly what every existing caller
+	// (and every e2e stub) already receives.
+	if wantsChatStream(r) {
+		if sr, ok := h.Chat.(streamingChatRunner); ok {
+			h.streamChat(w, r, sr, actx, ctx, uid, in.History, msg, in.SessionID, sessionWorkspaceID)
+			return
+		}
+	}
 
 	res, err := h.Chat.Run(ctx, in.History, msg)
 	if err != nil {
@@ -287,11 +356,7 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 		respondAIErr(w, r, err, "the chat assistant is not available")
 		return
 	}
-	h.recordChatEvent(r, actx, res)
-	writeJSON(w, http.StatusOK, chatResponseOut{
-		Reply: res.Reply, ReplyKey: res.ReplyKey, Steps: res.Steps, Filed: res.Filed,
-		Proposals: res.Proposals, Limits: chatLimits(),
-	})
+	writeJSON(w, http.StatusOK, h.chatAnswer(r, actx, uid, sessionWorkspaceID, in.SessionID, msg, res))
 }
 
 // handleChatConfirm: POST /v1/rest/chat/confirm — the HUMAN's half of phase 2.

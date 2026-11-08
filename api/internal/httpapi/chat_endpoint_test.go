@@ -56,7 +56,11 @@ type recordingRunner struct {
 	gotScopes    []string
 	gotUserID    string
 	gotAccountID string
-	gotRuns      int
+	// gotLang is the DASHBOARD language the endpoint attached to the ctx
+	// (chat.WithDashboardLang). The card's one model-written sentence follows it,
+	// so a test can assert the endpoint read the right column (t_ec87d6c7).
+	gotLang string
+	gotRuns int
 	// ready is what Ready() reports. Default false so a test that forgets to
 	// set it sees the "unavailable" path rather than silently passing through
 	// the availability gate; the tests that want a working assistant set it.
@@ -128,6 +132,7 @@ func (r *recordingRunner) Run(ctx context.Context, history []chat.Turn, message 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.gotRuns++
+	r.gotLang = chat.DashboardLangFrom(ctx)
 	if id := mcpsrv.IdentityFromContext(ctx); id != nil {
 		r.gotScopes = append([]string(nil), id.Scopes...)
 		r.gotUserID = id.UserID
@@ -170,6 +175,11 @@ func newChatEnv(t *testing.T, runner ChatRunner) *chatEnv {
 		ChatLimiter: NewChatLimiter(),
 		// Phase 2: the confirmation bucket, fresh for the same reason.
 		ChatConfirmLimiter: NewChatConfirmLimiter(),
+		// Chat history: the stored conversations (rest_chat_sessions.go) and the
+		// workspace store that resolves their scope. Wired here so every chat test
+		// runs against the same server shape production has.
+		ChatSessions: dbstore.NewChatSessionStore(pool),
+		Workspaces:   dbstore.NewWorkspaceStore(pool),
 	}
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)

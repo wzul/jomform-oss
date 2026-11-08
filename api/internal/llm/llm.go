@@ -456,6 +456,25 @@ func (c *Client) chat(ctx context.Context, body []byte) (string, error) {
 	return strings.TrimSpace(out.Choices[0].Message.Content), nil
 }
 
+// providerStatusError maps a non-200 provider response to the typed error the
+// AI surfaces already branch on. It is shared by the buffered and the streaming
+// transports so a streamed call cannot lose the 401/403 (rejected credential) and
+// 404/410 (retired model) answers the deployment reports as "unavailable" — the
+// two states whose absence, measured on prod, left every AI surface offering a
+// control that only ever errored.
+func providerStatusError(status int, raw []byte) error {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return fmt.Errorf("%w (status %d): %s",
+			ErrCredential, status, strings.TrimSpace(string(raw)))
+	case http.StatusNotFound, http.StatusGone:
+		return fmt.Errorf("%w (status %d): %s",
+			ErrModelUnavailable, status, strings.TrimSpace(string(raw)))
+	default:
+		return fmt.Errorf("llm: status %d: %s", status, strings.TrimSpace(string(raw)))
+	}
+}
+
 // post sends a chat-completion request body and returns the raw response body.
 func (c *Client) post(ctx context.Context, body []byte) ([]byte, error) {
 	return c.postTo(ctx, "/chat/completions", body)
@@ -488,8 +507,7 @@ func (c *Client) postTo(ctx context.Context, path string, body []byte) ([]byte, 
 		// A rejected key is a deployment state, not a bug: the provider refused
 		// this credential. Typed so an AI surface can answer "unavailable"
 		// rather than masking it as a generic internal error.
-		return nil, fmt.Errorf("%w (status %d): %s",
-			ErrCredential, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return nil, providerStatusError(resp.StatusCode, raw)
 	}
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 		// A model that does not exist (404) or has been RETIRED (410) is the same
@@ -497,11 +515,10 @@ func (c *Client) postTo(ctx context.Context, path string, body []byte) ([]byte, 
 		// key, so it gets its own sentinel and its own log reason. The provider's
 		// own message ("… was retired at …") is carried through, because that text
 		// is what tells the operator which model to change.
-		return nil, fmt.Errorf("%w (status %d): %s",
-			ErrModelUnavailable, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return nil, providerStatusError(resp.StatusCode, raw)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("llm: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return nil, providerStatusError(resp.StatusCode, raw)
 	}
 	// Guard against non-JSON responses (e.g. an HTML landing page served by a
 	// misconfigured endpoint). json.Unmarshal would otherwise fail with a
@@ -607,25 +624,7 @@ type toolResponse struct {
 // It returns the model's prose and/or the functions it wants called. The caller
 // executes them (or refuses) and feeds the results back as "tool" turns.
 func (c *Client) ChatWithTools(ctx context.Context, turns []ChatTurn, tools []ToolDef) (ChatReply, error) {
-	msgs := make([]toolMessage, 0, len(turns))
-	for _, t := range turns {
-		m := toolMessage{Role: t.Role, Content: t.Content, ToolCallID: t.ToolCallID, Name: t.Name}
-		for _, tc := range t.ToolCalls {
-			var w toolCallWire
-			w.ID, w.Type = tc.ID, "function"
-			w.Function.Name, w.Function.Arguments = tc.Name, tc.Arguments
-			m.ToolCalls = append(m.ToolCalls, w)
-		}
-		msgs = append(msgs, m)
-	}
-	req := toolRequest{Model: c.model, Messages: msgs, Stream: false}
-	for _, t := range tools {
-		var tt toolTool
-		tt.Type, tt.Function.Name, tt.Function.Description = "function", t.Name, t.Description
-		tt.Function.Parameters = t.Parameters
-		req.Tools = append(req.Tools, tt)
-	}
-	body, err := json.Marshal(req)
+	body, err := toolRequestBody(c.model, turns, tools, false)
 	if err != nil {
 		return ChatReply{}, err
 	}
@@ -637,6 +636,38 @@ func (c *Client) ChatWithTools(ctx context.Context, turns []ChatTurn, tools []To
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return ChatReply{}, fmt.Errorf("llm: response is not valid JSON: %w", err)
 	}
+	return replyFromResponse(out)
+}
+
+// toolRequestBody renders one tool-using request. It is shared by ChatWithTools
+// and ChatWithToolsStream so the streaming and non-streaming paths cannot drift
+// on the message shape — the only difference between them is `stream`.
+func toolRequestBody(model string, turns []ChatTurn, tools []ToolDef, stream bool) ([]byte, error) {
+	msgs := make([]toolMessage, 0, len(turns))
+	for _, t := range turns {
+		m := toolMessage{Role: t.Role, Content: t.Content, ToolCallID: t.ToolCallID, Name: t.Name}
+		for _, tc := range t.ToolCalls {
+			var w toolCallWire
+			w.ID, w.Type = tc.ID, "function"
+			w.Function.Name, w.Function.Arguments = tc.Name, tc.Arguments
+			m.ToolCalls = append(m.ToolCalls, w)
+		}
+		msgs = append(msgs, m)
+	}
+	req := toolRequest{Model: model, Messages: msgs, Stream: stream}
+	for _, t := range tools {
+		var tt toolTool
+		tt.Type, tt.Function.Name, tt.Function.Description = "function", t.Name, t.Description
+		tt.Function.Parameters = t.Parameters
+		req.Tools = append(req.Tools, tt)
+	}
+	return json.Marshal(req)
+}
+
+// replyFromResponse turns one decoded response body into a ChatReply, with the
+// provider's own error and the empty-answer case handled the same way for the
+// buffered and the streamed paths.
+func replyFromResponse(out toolResponse) (ChatReply, error) {
 	if out.Error != nil && out.Error.Message != "" {
 		return ChatReply{}, fmt.Errorf("llm: %s", out.Error.Message)
 	}

@@ -235,7 +235,11 @@ test.describe("chat availability probe: a scope refusal is not 'unavailable'", (
 
     // Quoted evidence: the live DOM, not what the test expects to find.
     const alertText = await page.locator('p[role="alert"]').innerText();
-    const logText = await page.locator('[role="log"]').innerText();
+    // The transcript is a `role="group"` named by the page's own title, not a
+    // `role="log"` (t_148d7100 removed the log role: it implies aria-live, so the
+    // whole conversation re-announced). Same read, same meaning — the DOM text of
+    // the transcript.
+    const logText = await page.getByRole("group", { name: EN.title }).innerText();
     const composerDisabled = await page.locator("#chat-input").isDisabled();
     console.log(
       `PROBE-400 OBSERVED: alert=${JSON.stringify(alertText)} composerDisabled=${composerDisabled} ` +
@@ -320,7 +324,7 @@ test.describe("chat availability probe: a scope refusal is not 'unavailable'", (
     // Quoted evidence: the live DOM, not what the test expects to find.
     console.log(
       `PROBE-NAMED-CODE OBSERVED: alert=${JSON.stringify(await page.locator('p[role="alert"]').innerText())} ` +
-        `log=${JSON.stringify(await page.locator('[role="log"]').innerText())} ` +
+        `log=${JSON.stringify(await page.getByRole("group", { name: EN.title }).innerText())} ` +
         `composerDisabled=${await page.locator("#chat-input").isDisabled()} ` +
         `genericLinePresent=${(await page.getByText(EN.unavailable, { exact: true }).count()) > 0}`,
     );

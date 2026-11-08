@@ -45,6 +45,7 @@ import {
   proposalSummary,
   proposalTitle,
   proposalValue,
+  toolLabel,
   type ProposalCardData,
   type ProposalField,
 } from "./chatProposal.ts";
@@ -332,15 +333,131 @@ test("the card's heading renders in the dictionary's language, and the assistant
   assert.notEqual(proposalTitle(card, tIn("en")), proposalTitle(card, tIn("ar")));
   assert.notEqual(proposalSummary(card, tIn("en")), proposalSummary(card, tIn("ms")));
   // The whole card, rendered: no Malay sentence is left on it in English, which is
-  // the defect restated as one assertion.
+  // the defect restated as one assertion. The tool line is part of the card too —
+  // `upsert_form` was the identifier printed on it (t_ec87d6c7).
   const rendered = [
     proposalTitle(card, tIn("en")),
     proposalSummary(card, tIn("en")),
     ...(card.fields ?? []).map((f) => proposalLabel(f, tIn("en"))),
+    toolLabel(card.tool, tIn("en")),
   ].join(" | ");
   assert.doesNotMatch(
     rendered,
     /(Kemas kini|Medan|Produk\b|Nama\b)/,
     `the English card still carries Malay server wording: ${rendered}`,
   );
+
+  // The note is the ONE string on the card the model writes, so the page renders
+  // it verbatim; what language it arrives in is the SERVER's contract (the prompt
+  // names the dashboard language — api/internal/chat/prompt.go). Pinned here so a
+  // future "translate it in the page" idea has to argue with this comment first:
+  // the page cannot know which language the card was written for.
+  assert.equal(card.note, "Cadangan menukar nama produk.");
+});
+
+// ── TOOL NAMES IN HUMAN WORDS (card t_ec87d6c7) ─────────────────────────────
+
+/**
+ * Every tool name the chat page can DISPLAY, read out of the Go source that owns
+ * the lists: the read allowlist and the proposable set are what the server offers
+ * the model, and the two in-process tools are the rest of what the page prints.
+ *
+ * Read rather than copied: a tool added to chat_tools.go must fail this test until
+ * its label lands in the dictionary, or it reaches the card as an identifier.
+ */
+function displayableToolNames(): string[] {
+  const goTools = read("../../../api/internal/mcpsrv/chat_tools.go");
+  const names = new Set<string>();
+  for (const block of ["chatReadTools", "chatProposableTools"]) {
+    const m = goTools.match(new RegExp(`var ${block} = \\[\\]string\\{([^}]*)\\}`));
+    assert.ok(m, `could not find var ${block} in api/internal/mcpsrv/chat_tools.go — this guard ` +
+      `would otherwise check an empty list and pass`);
+    for (const hit of m[1].matchAll(/"([a-z0-9_]+)"/g)) names.add(hit[1]);
+  }
+  const consts = goTools.match(/ChatSubmitFeedbackTool = "([a-z0-9_]+)"[\s\S]*?ChatProposeWriteTool = "([a-z0-9_]+)"/) ??
+    goTools.match(/ChatProposeWriteTool = "([a-z0-9_]+)"[\s\S]*?ChatSubmitFeedbackTool = "([a-z0-9_]+)"/);
+  assert.ok(consts, "could not find the two in-process tool names in chat_tools.go");
+  for (const n of consts.slice(1)) names.add(n);
+  assert.ok(names.size > 10, `only ${names.size} tool names found — this guard is checking almost ` +
+    `nothing, which is how the raw identifiers shipped`);
+  return [...names].sort();
+}
+
+test("every tool the page can print has a human label in all five locales", () => {
+  const names = displayableToolNames();
+  const missing: string[] = [];
+  for (const name of names) {
+    const key = `chat.tool.${name}`;
+    const entry = (DICT as unknown as Record<string, Record<string, string>>)[key];
+    if (!entry) {
+      missing.push(`${key} (no dictionary entry — the card would print ${name})`);
+      continue;
+    }
+    for (const lang of LANGS) {
+      const v = String(entry[lang] ?? "").trim();
+      if (!v) missing.push(`${key}.${lang} (empty — the card would be blank there)`);
+      else if (v.includes("_")) missing.push(`${key}.${lang} = ${JSON.stringify(v)} (still an identifier)`);
+    }
+  }
+  assert.deepEqual(missing, [],
+    `tool names with no human label — a merchant sees the raw server identifier instead of words:\n\t` +
+    missing.join("\n\t"));
+});
+
+test("the tool line renders the label in the dashboard's language, not the wire name", () => {
+  // `upsert_form` is the identifier the reported card printed. In every locale it
+  // must be words, and the words must differ between locales (a label that ignores
+  // the argument would pass a "not the identifier" check on English alone).
+  assert.equal(toolLabel("upsert_form", tIn("en")), "Form save");
+  assert.equal(toolLabel("upsert_form", tIn("ms")), "Simpan borang");
+  assert.equal(toolLabel("propose_write", tIn("en")), "Change proposal");
+  // The footnote must not simply repeat the card's own title (which is
+  // chat.proposal.title.upsert_form, shown three lines above it).
+  assert.notEqual(toolLabel("upsert_form", tIn("en")), proposalTitle({
+    token: "t", args_hash: "h", tool: "upsert_form",
+    title_key: "chat.proposal.title.upsert_form",
+    summary_key: "chat.proposal.summary.upsert_form",
+    expires_at: "2026-01-01T00:00:00Z", reversible: true,
+  }, tIn("en")));
+  for (const lang of LANGS) {
+    for (const name of displayableToolNames()) {
+      const label = toolLabel(name, tIn(lang));
+      assert.ok(label.length > 0, `toolLabel(${name}, ${lang}) is empty`);
+      assert.ok(!label.includes("_"), `toolLabel(${name}, ${lang}) = ${JSON.stringify(label)} still ` +
+        `contains an underscore — the card is printing an identifier`);
+      assert.notEqual(label, `chat.tool.${name}`, `toolLabel(${name}, ${lang}) returned the raw KEY`);
+    }
+  }
+  assert.notEqual(toolLabel("upsert_form", tIn("en")), toolLabel("upsert_form", tIn("ms")),
+    "the tool label ignores the locale — every dashboard would read English");
+});
+
+test("an unmapped tool name is humanised, never printed as snake_case", () => {
+  // The realistic future: a tool is added to chat_tools.go and this branch ships
+  // before its dictionary entry. The guard above fails the suite, but the RUNTIME
+  // must still not hand a merchant `some_new_tool`.
+  assert.equal(toolLabel("some_new_tool", tIn("en")), "Some new tool");
+  assert.equal(toolLabel("dash-style-name", tIn("ms")), "Dash style name");
+  assert.equal(toolLabel("", tIn("en")), "");
+  assert.equal(toolLabel("UPPER_CASE", tIn("en")), "Upper case");
+  for (const raw of ["a_b_c", "x_y", "list_thing"]) {
+    assert.doesNotMatch(toolLabel(raw, tIn("ar")), /_/,
+      `the fallback left an underscore for ${raw} — that is the identifier the card must never show`);
+  }
+});
+
+test("the page prints the tool's human label at BOTH sites, never the wire name", () => {
+  // The card's footnote and the refusal trace both used to print `{p.tool}` /
+  // `{s.tool}` — `upsert_form` on the card, `propose_write` in the refusal. A
+  // helper nobody calls fixes nothing, so this scans the page's source. React's
+  // `key={s.tool}` is an ATTRIBUTE, not printed text, so attributes are stripped
+  // before the scan: what is left must not contain a raw tool expression.
+  const printed = page.replace(/\bkey=\{[^}]*\}/g, "");
+  assert.doesNotMatch(printed, /\{[ps]\.tool\}/,
+    "page.tsx still prints a step's or proposal's raw tool name — the merchant sees " +
+    "`upsert_form` / `propose_write`, which are identifiers, not words");
+  const calls = [...page.matchAll(/toolLabel\(([ps])\.tool, t\)/g)].map((m) => m[1]).sort();
+  assert.deepEqual(calls, ["p", "s"],
+    `page.tsx must resolve BOTH the card's tool line and the refusal trace through toolLabel; ` +
+    `found ${JSON.stringify(calls)}`);
 });

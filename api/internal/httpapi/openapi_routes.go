@@ -546,6 +546,33 @@ var restRouteDocs = []restRouteDoc{
 		Rate:       chatConfirmRatePolicy(),
 		RateSource: RateHandler,
 		Desc:       "Same request shape as confirm (token + args_hash), and it shares confirm's bucket. Withdrawing a proposal executes nothing."},
+
+	// ── Stored chat history (a person's own conversations) ──────────────────
+	//
+	// Every read and write is scoped by (user, workspace) in the store, not by a
+	// lookup followed by an owner check: an id that belongs to somebody else
+	// answers 404, exactly like an id that never existed, so these routes cannot
+	// be used to discover whether a conversation exists.
+	{Method: "GET", Path: "/v1/rest/chat/sessions", Handler: "handleChatSessionsList", Tag: "In-app assistant",
+		Summary: "List your saved conversations in this workspace", Access: AccessSession,
+		RespDesc: "The sidebar: each conversation's id, title, timestamps, archived flag and message count, most recently used first.",
+		Desc:     "Archived conversations are included only with ?archived=1. A conversation belongs to one person in one workspace, so switching workspace shows a different list."},
+	{Method: "POST", Path: "/v1/rest/chat/sessions", Handler: "handleChatSessionsCreate", Tag: "In-app assistant",
+		Summary: "Start a new conversation", Access: AccessSession, Body: true,
+		RespDesc: "The new conversation; its title is empty until the first message names it.",
+		Desc:     "Capped at 200 conversations per person per workspace; the refusal names the way out (delete old ones). The row is created eagerly so the sidebar shows the effect of the button."},
+	{Method: "GET", Path: "/v1/rest/chat/sessions/{id}", Handler: "handleChatSessionGet", Tag: "In-app assistant",
+		Summary: "Read one saved conversation and its messages", Access: AccessSession,
+		RespDesc: "The conversation and its turns, oldest first, capped to the assistant's own window; each answer carries the tool trail it left.",
+		Desc:     "404 for an unknown id AND for another person's id. A proposal's confirmation token is never stored, so a restored conversation offers no button that could execute anything."},
+	{Method: "PATCH", Path: "/v1/rest/chat/sessions/{id}", Handler: "handleChatSessionPatch", Tag: "In-app assistant",
+		Summary: "Rename or archive one of your conversations", Access: AccessSession, Body: true,
+		RespDesc: "The updated conversation.",
+		Desc:     "Send title and/or archived; a body with neither is a 400. An empty title clears the name, and the list falls back to the first message. Archiving is reversible."},
+	{Method: "DELETE", Path: "/v1/rest/chat/sessions/{id}", Handler: "handleChatSessionDelete", Tag: "In-app assistant",
+		Summary: "Delete one of your conversations", Access: AccessSession,
+		RespDesc: "status=deleted.",
+		Desc:     "A real delete: the messages are removed with the conversation. Archiving is the reversible action."},
 }
 
 // restSpecInfo is the document's info block.

@@ -318,5 +318,11 @@ step in front of writes the merchant could already make.
 
 Related routes (session-only, never API-key reachable): `POST /v1/rest/chat`
 (message), `POST /v1/rest/chat/confirm` (apply a confirmed proposal),
-`POST /v1/rest/chat/cancel` (kill one). Docs: `/docs/chat`.
+`POST /v1/rest/chat/cancel` (kill one), and the stored-history lane
+`GET/POST /v1/rest/chat/sessions` plus `GET/PATCH/DELETE
+/v1/rest/chat/sessions/{id}`. The history lane is not an MCP tool for the same
+reason as the rest of the lane and one stronger one: a conversation is scoped by
+BOTH the person and the workspace, and an API key carries no person to scope it
+to — a history tool reachable by key would either leak a person's conversations
+or answer for a caller that does not exist. Docs: `/docs/chat`.
 

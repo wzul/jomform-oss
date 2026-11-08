@@ -59,11 +59,48 @@ const untrustedFence = "===BEGIN-UNTRUSTED-TOOL-DATA==="
 // The PRODUCT GUIDE is interpolated from knowledge.go for the same reason: the
 // facts the model is told about JomForm live in one curated, provenance-checked
 // table, so nothing in this file can describe a feature the repo does not have.
-func systemPromptText() string {
+//
+// THE DASHBOARD LANGUAGE IS INTERPOLATED TOO (card t_ec87d6c7). The card's own
+// words are dictionary keys resolved by the page, but ONE string on it is prose
+// the MODEL writes: propose_write's reason, shown under the card's fields. It
+// used to be documented as "the language of the conversation", so a merchant on
+// an ENGLISH dashboard who asked in Malay got a Malay sentence on an English
+// card — half a card in each language, on the surface where the wording is the
+// safety mechanism (Wan's rule: an English UI may not carry Malay).
+//
+// The language is a property of the REQUEST (the person's profile), not of a
+// shared Runner: the model is told the dashboard language here and writes the
+// card's one model-authored string in it. The chat REPLY keeps following the
+// language the merchant wrote in — it is the conversation, not the card.
+func systemPromptText(dashboardLang string) string {
 	proposable := mcpsrv.ChatProposableTools()
 	sort.Strings(proposable)
 	out := strings.ReplaceAll(systemPromptTemplate, "{{PROPOSABLE}}", strings.Join(proposable, ", "))
+	out = strings.ReplaceAll(out, "{{DASHBOARD_LANG}}", dashboardLangName(dashboardLang))
 	return strings.ReplaceAll(out, "{{GUIDE}}", productGuideText())
+}
+
+// dashboardLanguages maps a profile language code (users.lang) to the name the
+// prompt uses. A name, not the code: "ms" is an opaque token to a model, while
+// "Malay" is a language it knows it can write.
+var dashboardLanguages = map[string]string{
+	"en": "English",
+	"ms": "Malay",
+	"zh": "Chinese",
+	"ta": "Tamil",
+	"ar": "Arabic",
+}
+
+// dashboardLangName resolves a profile language code to its English name.
+// Empty (the column is unset until a merchant picks a language) and any code
+// outside the dashboard's five locales resolve to English, which is what the
+// dashboard itself falls back to — the prompt must never name a language the UI
+// is not actually in.
+func dashboardLangName(code string) string {
+	if name, ok := dashboardLanguages[strings.ToLower(strings.TrimSpace(code))]; ok {
+		return name
+	}
+	return dashboardLanguages["en"]
 }
 
 const systemPromptTemplate = `You are the built-in assistant inside JomForm, a Malaysian form-builder and
@@ -133,11 +170,13 @@ HOW TO ANSWER
   price, and say RM.
 - Be brief and concrete. A merchant wants the answer, not a summary of your
   process. Do not describe which tools you called unless it helps them.
-- The confirmation card's own wording (its title, its summary, each field's label)
-  is written by the server in the merchant's DASHBOARD language, which you do not
-  know and do not need to. What you pass as propose_write's reason argument is shown
-  on the card as YOUR words, so write it in the language of the conversation (see HOW
-  ANSWER above). The result propose_write gives you back uses machine keys such as
+- The confirmation card is DASHBOARD UI, not part of this conversation: its title,
+  its summary, each field's label and its buttons are written by the server in the
+  merchant's dashboard language. What you pass as propose_write's reason is shown ON
+  that card as YOUR words, so write it in the dashboard language named under CARD
+  LANGUAGE below — even when the merchant writes to you in a different language.
+  Your chat reply still follows the language they wrote in (see HOW TO ANSWER). The
+  result propose_write gives you back uses machine keys such as
   chat.proposal.title.*; those are for the server and the page, so never read a key
   out to the merchant — say in your own words what you prepared.
 - When proposing a change, read the object first with a read tool so the
@@ -152,6 +191,16 @@ HOW TO ANSWER
   something you have no tool for, or it is a request to change the product — say
   so plainly and offer to file it as feedback. Do not guess. Do not promise a
   timeline.
+
+CARD LANGUAGE
+The merchant's dashboard is set to {{DASHBOARD_LANG}}. A confirmation card is part
+of that dashboard, not part of this conversation: its title, its summary, its field
+labels and its buttons are all in {{DASHBOARD_LANG}} whatever language the merchant
+writes to you in. The one string on the card that YOU write is propose_write's
+reason, so write that reason in {{DASHBOARD_LANG}} as well. Do not switch it to the
+conversation's language: a card that is half one language and half another is the
+one thing the merchant cannot check, because the card is what they are being asked
+to approve.
 
 THE PRODUCT GUIDE
 The block at the end of this message is a short guide to how JomForm itself

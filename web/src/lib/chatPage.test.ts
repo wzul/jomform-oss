@@ -2169,6 +2169,20 @@ function accountScopedUrls(code: string): string[] {
 const WORKSPACE_QUERY_CALL = String.raw`\bworkspaceQuery\s*\(`;
 
 /**
+ * THE OTHER SANCTIONED CALL: `workspaceUrl("…")` (lib/workspace.ts), which appends
+ * the scope to a URL that ALREADY carries a query.
+ *
+ * Added with the streamed chat POST (t_148d7100), whose URL is
+ * `/api/rest/chat?stream=1`. Appending `${workspaceQuery()}` to that produces a
+ * SECOND `?`, and everything after it belongs to the first parameter's value —
+ * the scope is silently dropped and the page answers from the user's first
+ * account (measured in lib/workspace.ts, card t_4010be39). So the census must
+ * accept either helper: refusing `workspaceUrl` would force the exact URL this
+ * repo has already fixed once.
+ */
+const WORKSPACE_SCOPE_CALL = String.raw`\bworkspace(?:Query|Url)\s*\(`;
+
+/**
  * True when `code` actually CALLS the shared workspace-scope helper.
  *
  * A CALL, NOT A MENTION (t_a39a1bd4). This census decided with
@@ -2203,7 +2217,7 @@ const WORKSPACE_QUERY_CALL = String.raw`\bworkspaceQuery\s*\(`;
  * is least entitled to, so the read is the call, whichever shape carries it.
  */
 function pageScopesWorkspace(code: string): boolean {
-  return new RegExp(WORKSPACE_QUERY_CALL).test(code);
+  return new RegExp(WORKSPACE_SCOPE_CALL).test(code);
 }
 
 /**
@@ -2237,9 +2251,9 @@ test("the chat page scopes EVERY call with workspaceQuery() — the shared helpe
   // decision route is written literally into `url` and fetched as
   // `${url}${workspaceQuery()}` — the route-parity rule demands the literal path
   // (see the phase-2 test above), so the guard has to look at the fetch site.
-  const chatFetches = [...page.matchAll(/fetch(?:Json<[^>]*>)?\(\s*(`[^`]*`|"[^"]*")/g)].map(
-    (m) => m[1],
-  );
+  const chatFetches = [
+    ...page.matchAll(/fetch(?:Json<[^>]*>)?\(\s*(`[^`]*`|"[^"]*"|workspaceUrl\(\s*"[^"]*"\s*\))/g),
+  ].map((m) => m[1]);
   const chatCalls = chatFetches.filter(
     (u) => u.includes("/api/rest/chat") || u === "`${url}${workspaceQuery()}`",
   );
@@ -2250,11 +2264,24 @@ test("the chat page scopes EVERY call with workspaceQuery() — the shared helpe
   );
   for (const u of chatCalls) {
     assert.ok(
-      u.includes("${workspaceQuery()}"),
-      `the chat call ${u} does not append \${workspaceQuery()} — an unscoped chat call resolves the ` +
-        `user's FIRST account, not the workspace they selected, and the confirmation lane WRITES there`,
+      u.includes("${workspaceQuery()}") || /^workspaceUrl\(/.test(u),
+      `the chat call ${u} does not go through a shared scope helper — an unscoped chat call ` +
+        `resolves the user's FIRST account, not the workspace they selected, and the confirmation ` +
+        `lane WRITES there. Use workspaceQuery() for a bare path and workspaceUrl() for a URL that ` +
+        `already carries a query (the streamed message path does)`,
     );
   }
+  // The streamed message call is the one URL that already has a query, so it is
+  // the one that must use workspaceUrl(). A `${workspaceQuery()}` there would put
+  // TWO `?` in the URL and the Go side would read the scope as part of
+  // `stream=1`'s value (lib/workspace.ts, t_4010be39) — it would silently answer
+  // from the wrong workspace, with no error.
+  assert.ok(
+    page.includes('workspaceUrl("/api/rest/chat?stream=1")'),
+    "the message fetch no longer asks for the stream through workspaceUrl() — the answer would " +
+      "render only when it is finished (the card's original defect), or the scope would be dropped " +
+      "if the query were appended by hand",
+  );
   // The decision URL still gets scoped even though its path is literal.
   assert.ok(
     page.includes("await fetch(`${url}${workspaceQuery()}`"),
@@ -2662,10 +2689,10 @@ test("the ACCOUNT-scope census reads a CALL, not a mention — an unused import 
     // CONTROL. The shipped page is a SUBJECT page and is SCOPED, so the flip
     // below is the mutation's doing and not a census that was already flagging
     // this page for some other reason.
-    const shippedCalls = [...shipped.matchAll(new RegExp(WORKSPACE_QUERY_CALL, "g"))].length;
+    const shippedCalls = [...shipped.matchAll(new RegExp(WORKSPACE_SCOPE_CALL, "g"))].length;
     assert.ok(
       shippedCalls >= calls,
-      `${rel}: only ${shippedCalls} workspaceQuery() call site(s) in the shipped page, want at ` +
+      `${rel}: only ${shippedCalls} workspace-scope call site(s) in the shipped page, want at ` +
         `least ${calls} — the page this proof mutates is not the page the card measured`,
     );
     assert.ok(
@@ -2678,8 +2705,16 @@ test("the ACCOUNT-scope census reads a CALL, not a mention — an unused import 
       `${rel}: the SHIPPED page is already an offender — this proof would pass for the wrong reason`,
     );
 
-    // THE MUTATION, by value: every call goes, the import stays.
-    const mutant = codeOnly(readAbs(join(appDir, page)).replace(/workspaceQuery\s*\(\s*\)/g, ""));
+    // THE MUTATION, by value: every call goes, the import stays. BOTH helper
+    // forms go with it — `workspaceUrl("…")` carries the scope just as
+    // `workspaceQuery()` does, and a mutation that left one behind would leave the
+    // page reading as scoped for a reason the census is supposed to catch.
+    const mutant = codeOnly(
+      readAbs(join(appDir, page)).replace(
+        /workspace(?:Query|Url)\s*\(\s*(?:`[^`]*`|"[^"]*")?\s*\)/g,
+        "",
+      ),
+    );
     assert.notEqual(
       mutant,
       shipped,
@@ -2689,6 +2724,12 @@ test("the ACCOUNT-scope census reads a CALL, not a mention — an unused import 
       [...mutant.matchAll(new RegExp(WORKSPACE_QUERY_CALL, "g"))].length,
       0,
       `${rel}: a workspaceQuery() call survived the mutation — the card's shape is "every call removed"`,
+    );
+    assert.equal(
+      [...mutant.matchAll(new RegExp(WORKSPACE_SCOPE_CALL, "g"))].length,
+      0,
+      `${rel}: a workspace-scope call survived the mutation — with one helper left, the census would ` +
+        `read the page as scoped and this proof could not tell a call-keyed rule from a mention-keyed one`,
     );
     assert.ok(
       /import\s*\{[^}]*\bworkspaceQuery\b[^}]*\}\s*from\s*"[^"]*lib\/workspace"/.test(mutant),
@@ -2864,7 +2905,13 @@ test("the chat page's availability fetch keeps the machine-code translation, not
   // THE call site. Isolated by its URL rather than by a line number, so an edit
   // above it cannot silently move the guard onto a different call.
   const pageCode = codeOnly(page);
-  const availability = runLoadCalls(pageCode).filter((s) => /\/api\/rest\/chat\b/.test(s));
+  // THE availability route is the bare `/api/rest/chat` fetch. The stored-history
+  // routes (`/api/rest/chat/sessions` and below) share that prefix but are a
+  // different call site with its own guards, so they are excluded explicitly
+  // rather than allowed to inflate the count this test refuses to guess across.
+  const availability = runLoadCalls(pageCode).filter(
+    (s) => /\/api\/rest\/chat\$\{workspaceQuery\(\)\}/.test(s) && !/\/sessions/.test(s),
+  );
   assert.equal(
     availability.length,
     1,
@@ -4920,5 +4967,137 @@ test("the confirm path's scope refusal is its own state, and cannot reach chat.c
     /outcome === "rateLimited"[\s\S]{0,300}?t\("chat\.confirmRateLimited"\)/,
     "the rate-limited outcome no longer renders chat.confirmRateLimited — a rate-limited user would " +
       "get the generic failure instead of the limit copy",
+  );
+});
+
+// ── The assistant's interaction wiring (card t_148d7100) ──────────────────────
+//
+// WHAT THESE OWN. The sibling modules are proved on their own:
+// src/lib/chatStarters.test.ts (the chips are questions, in five locales, that
+// the server's read allowlist answers), src/lib/chatScroll.test.ts (the follow
+// predicate), src/lib/chatSteps.test.ts (a tool name becomes a sentence). None of
+// them can prove the PAGE uses them. A chip rendered without its onClick, or a
+// scroll handler defined and never attached, leaves every one of those suites
+// green and the feature dead behind a mis-wired call site — the failure shape
+// this repo has measured more than once. There is no DOM runner here, so the
+// wiring is pinned at the source, like the workspace-scope census above; the
+// behaviour itself (a chip posting its question, the log not moving for a reader
+// who scrolled up) is executed in the browser by e2e/chat-ux.spec.ts and
+// e2e/chat-stream.spec.ts.
+test("the starter chips SEND their own question through the ONE send path", () => {
+  const page = codeOnly(read("../app/chat/page.tsx"));
+
+  assert.match(
+    page,
+    /CHAT_STARTERS\.map\(/,
+    "the empty state no longer renders the starter chips — it is back to being a sentence describing " +
+      "what a user could type, with nothing to press",
+  );
+  assert.match(
+    page,
+    /onClick=\{\(\) => void sendText\(label\)\}/,
+    "a chip is rendered without sending its own text. The chip's whole purpose is that pressing it asks " +
+      "the question; a label with no handler is a decoration",
+  );
+  // ONE send path. A chip with its own fetch would be a second place for the
+  // workspace scope, the message cap and the streaming fallback to drift.
+  const chatPosts = [...page.matchAll(/fetch\(\s*workspaceUrl\(\s*"\/api\/rest\/chat/g)].length;
+  assert.equal(
+    chatPosts,
+    1,
+    `${chatPosts} chat POST call sites: the composer and the chips must share one fetch, or the two can ` +
+      "disagree about the scope, the cap, or whether the answer streams",
+  );
+});
+
+test("the transcript follows new content ONLY while the reader is at the bottom", () => {
+  const page = codeOnly(read("../app/chat/page.tsx"));
+
+  // THE GATE. Without it the effect below is the pre-card behaviour: a
+  // scrollIntoView on every change, which pulled a reader who had scrolled up
+  // back to the bottom on every message — and on every streamed fragment.
+  assert.match(
+    page,
+    /useEffect\(\(\) => \{\s*if \(!pinned\) return;[\s\S]{0,120}?endRef\.current\?\.scrollIntoView/,
+    "the follow effect is not gated on `pinned` — it scrolls unconditionally, which is the defect this " +
+      "card removed (the user is dragged away from the answer they scrolled up to read)",
+  );
+  // The reader's own scrolling is what SETS it: the rule is lib/chatScroll.ts's
+  // predicate, from the three numbers the browser reports. `decidePinned` is the
+  // one place that reads them, and it is attached to the log — a handler defined
+  // and never wired is exactly the dead-feature shape this guard exists for.
+  assert.match(
+    page,
+    /const decidePinned = useCallback\(\(\) => \{[\s\S]{0,1200}?setPinned\(\s*isAtBottom\(/,
+    "nothing decides `pinned` from isAtBottom() — the page would be inferring from something other " +
+      "than the shared rule",
+  );
+  assert.match(
+    page,
+    /onScroll=\{decidePinned\}/,
+    "the transcript's onScroll is not wired to the pinned decision, so the user's own scrolling never " +
+      "reaches the rule and the page follows them regardless",
+  );
+  // And staying put must not be a dead end.
+  assert.match(
+    page,
+    /onClick=\{jumpToLatest\}/,
+    "the Jump to latest control is not wired — a reader who stays scrolled up would have no way back",
+  );
+  assert.match(
+    page,
+    /function jumpToLatest\(\)[\s\S]{0,200}?setPinned\(true\)/,
+    "Jump to latest does not re-pin the transcript, so the next fragment would leave the reader where " +
+      "they were and the button would appear to do nothing for long",
+  );
+});
+
+test("only the LATEST assistant message is a live region, and it is busy while streaming", () => {
+  const page = codeOnly(read("../app/chat/page.tsx"));
+
+  assert.match(
+    page,
+    /const live = isLast && m\.role === "assistant"/,
+    "the live-region decision is gone — every message would be announced again, or none would",
+  );
+  assert.match(
+    page,
+    /aria-live=\{live \? "polite" : undefined\}/,
+    "aria-live is not scoped to the latest assistant message — the whole log carries it, so a screen " +
+      "reader re-reads the entire transcript on every new message",
+  );
+  assert.match(
+    page,
+    /aria-busy=\{live && m\.streaming \? true : undefined\}/,
+    "the streaming message is not marked aria-busy, so assistive tech reads the answer out fragment by " +
+      "fragment as it arrives",
+  );
+  assert.ok(
+    !/role="log"/.test(page),
+    'role="log" implies aria-live="polite" (WAI-ARIA 1.2 §5.2.9), so it cannot stay on the transcript ' +
+      "after the log stopped being a live region",
+  );
+});
+
+test("the Send button keeps its name; the state is its own status line", () => {
+  const page = codeOnly(read("../app/chat/page.tsx"));
+
+  assert.match(
+    page,
+    /type="submit" disabled=\{disabled \|\| !input\.trim\(\)\} className="jf-btn-primary disabled:opacity-50">\s*\{t\("chat\.send"\)\}/,
+    "the submit button no longer renders chat.send on every state. It used to become \"Looking that " +
+      'up…" while sending, so the only control on the page was also the state display',
+  );
+  assert.match(
+    page,
+    /role="status"[\s\S]{0,200}?activity\.kind === "thinking"/,
+    "the in-flight state has no role=status line of its own — the step/thinking state would be " +
+      "invisible to a screen reader, and the Send button is not allowed to carry it",
+  );
+  assert.match(
+    page,
+    /role="status"[\s\S]{0,300}?stepLabel\(activity\.tool, t\)/,
+    "the step event is not turned into text by stepLabel — the API sends a tool NAME, never a " +
+      "sentence, so a page that prints it shows `list_form_submissions` to a merchant",
   );
 });

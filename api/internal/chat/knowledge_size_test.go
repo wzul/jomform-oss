@@ -85,7 +85,7 @@ func TestTheProductGuideFitsItsBudget(t *testing.T) {
 // alone does not bound the prompt: the instructions can grow too, and this is the
 // number that decides what a message costs.
 func TestTheSystemPromptFitsItsBudget(t *testing.T) {
-	prompt := systemPromptText()
+	prompt := systemPromptText("")
 	chars := len([]rune(prompt))
 	if chars > maxSystemPromptChars {
 		t.Errorf("the system prompt is %d characters, over its %d budget — every message carries it on every "+
@@ -154,7 +154,7 @@ func TestTheGuideIsTheOnlyCopyOfItsFacts(t *testing.T) {
 	}
 	// And the placeholder really is substituted: a literal {{GUIDE}} in the
 	// rendered prompt would be read by the model as content.
-	if strings.Contains(systemPromptText(), "{{GUIDE}}") {
+	if strings.Contains(systemPromptText(""), "{{GUIDE}}") {
 		t.Error("the rendered system prompt still contains the {{GUIDE}} placeholder")
 	}
 }

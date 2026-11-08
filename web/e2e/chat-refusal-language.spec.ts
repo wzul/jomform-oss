@@ -26,8 +26,10 @@
 //   * in each of the five languages the block renders the dictionary's own strings
 //     for BOTH steps (a bare key and a key with parameters);
 //   * the parameters are interpolated, not shown as a placeholder;
-//   * the tool name stays the identifier it is, and a step that was NOT refused is
-//     not dragged into the block;
+//   * the tool is still NAMED, but in the dashboard's words: the label from
+//     `chat.tool.<name>`, never the snake_case identifier the server sends (a
+//     refusal block is dashboard UI; card t_ec87d6c7), and a step that was NOT
+//     refused is not dragged into the block;
 //   * on the English dashboard no Malay sentence from the defect survives.
 //
 // A guard whose subject never rendered proves nothing, so the block and its two
@@ -53,6 +55,17 @@ const BLOCK = 'div[class*="bg-amber-50"]';
 /** The keys the server sends — the same literals as api/internal/chat/chat.go. */
 const KEY_WRITE_TOOL = "chat.refused.writeTool";
 const KEY_PROPOSAL_LIMIT = "chat.refused.proposalLimit";
+
+/**
+ * The tool LABELS the block renders — `chat.tool.<name>` out of the dictionary,
+ * NOT the identifiers on the wire (card t_ec87d6c7). A refusal block is dashboard
+ * UI: it names the tool in the dashboard's language, and a snake_case identifier
+ * is not a word in any of the five locales.
+ */
+const TOOL_UPDATE = "chat.tool.update_product";
+const TOOL_PROPOSE = "chat.tool.propose_write";
+const TOOL_GET_FORM = "chat.tool.get_form";
+const TOOL_LIST_FORMS = "chat.tool.list_forms";
 
 /**
  * The Malay the defect shipped. These are the SERVER's old literals (not the
@@ -179,10 +192,23 @@ test.describe("a refused tool call's why follows the dashboard language", () => 
       await expect(block).toContainText(DICT[KEY_WRITE_TOOL][lang]);
       await expect(block).toContainText(DICT[KEY_PROPOSAL_LIMIT][lang].replace("{max}", "3"));
 
-      // The tool names stay the identifiers they are — never translated, never
-      // hidden by the sentence.
-      await expect(block).toContainText("update_product");
-      await expect(block).toContainText("propose_write");
+      // The tools are still NAMED — in the dashboard's words, not as the raw
+      // identifiers the server sent. The identifier is what this block must NOT
+      // show: `toolLabel` resolves `chat.tool.<name>` so the name follows the
+      // dashboard language (Wan's rule for chat UI, card t_ec87d6c7).
+      const lines = block.locator("span.block");
+      await expect(
+        lines.nth(0),
+        `the refused ${JSON.stringify(REPLY.steps[0].tool)} must be named in ${lang}`,
+      ).toContainText(DICT[TOOL_UPDATE][lang]);
+      await expect(
+        lines.nth(1),
+        `the refused ${JSON.stringify(REPLY.steps[1].tool)} must be named in ${lang}`,
+      ).toContainText(DICT[TOOL_PROPOSE][lang]);
+      expect(
+        text.includes("update_product") || text.includes("propose_write"),
+        `the block prints a raw tool identifier in ${lang}: ${text}`,
+      ).toBe(false);
 
       // A sentence that was not interpolated, or a key that was not resolved,
       // reaches the user as itself: both are the failure this file exists for.
@@ -193,7 +219,7 @@ test.describe("a refused tool call's why follows the dashboard language", () => 
       // on status, and a block that lists every step would tell the user the
       // assistant was refused for reading their forms.
       expect(
-        text.includes("list_forms"),
+        text.includes(DICT[TOOL_LIST_FORMS][lang]),
         `the refusal block includes a step that was CALLED, not refused: ${text}`,
       ).toBe(false);
     }
@@ -227,10 +253,15 @@ test.describe("a refused tool call's why follows the dashboard language", () => 
     }
 
     // Everything else is still there, so the assertions above cannot be satisfied
-    // by a block that failed to render.
+    // by a block that failed to render. The tool is named in WORDS: "Product
+    // update", not `update_product` (t_ec87d6c7).
     await expect(block).toContainText(DICT["chat.refused"].en);
     await expect(block).toContainText(DICT[KEY_WRITE_TOOL].en);
-    await expect(block).toContainText("update_product");
+    await expect(block.locator("span.block").nth(0)).toContainText(DICT[TOOL_UPDATE].en);
+    expect(
+      text.includes("update_product"),
+      `the English block prints the raw tool identifier: ${text}`,
+    ).toBe(false);
   });
 });
 
@@ -296,10 +327,10 @@ test.describe("a tool-level refusal is not headed as a forbidden action", () => 
       // The step's own why still renders, so the assertion above cannot be satisfied
       // by a block that failed to render.
       await expect(block).toContainText(DICT["chat.refused.tool"][lang]);
-      await expect(block).toContainText("get_form");
+      await expect(block.locator("span.block").nth(0)).toContainText(DICT[TOOL_GET_FORM][lang]);
       expect(text.includes("chat.refused"), `the block shows a raw KEY in ${lang}: ${text}`).toBe(false);
       expect(
-        text.includes("list_forms"),
+        text.includes(DICT[TOOL_LIST_FORMS][lang]),
         `the refusal block includes a step that was CALLED, not refused: ${text}`,
       ).toBe(false);
     }
@@ -387,7 +418,14 @@ test.describe("a refused proposal with no model prose still answers the merchant
       await expect(block.locator("span.block"), "the refused steps must each have a line").toHaveCount(2);
 
       const blockText = (await block.innerText()).trim();
-      const transcript = (await page.locator('[role="log"]').innerText()).trim();
+      // The transcript is a `role="group"` named by the page's own title in the
+      // CURRENT language (`t("chat.title")`) — not a `role="log"`, which
+      // t_148d7100 removed because it implies aria-live and re-announced the
+      // whole conversation. Same read, same meaning: the rendered transcript's
+      // text, which is what "nothing raw reached the screen" is measured against.
+      const transcript = (
+        await page.getByRole("group", { name: DICT["chat.title"][lang] }).innerText()
+      ).trim();
       console.log(`silent-proposal turn in ${lang}: block=${JSON.stringify(blockText)}`);
 
       // (1) THE HEADING says the change could not be prepared — in this dashboard's

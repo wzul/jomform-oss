@@ -191,7 +191,7 @@ func TestStepBudgetFinalAnswerIsNeverEmptyEither(t *testing.T) {
 // TestSystemPromptTellsTheModelToAnswerAfterARefusal pins the model half: the
 // refusal is a dead end only if the model does not know it must still answer.
 func TestSystemPromptTellsTheModelToAnswerAfterARefusal(t *testing.T) {
-	prompt := systemPromptText()
+	prompt := systemPromptText("")
 	if !strings.Contains(prompt, "propose_write is refused") {
 		t.Fatalf("the system prompt says nothing about a refused propose_write — the model is left " +
 			"to decide on its own, and on prod it decided to say nothing (t_7f1694cb)")

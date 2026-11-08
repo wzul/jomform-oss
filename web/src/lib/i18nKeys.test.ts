@@ -278,9 +278,39 @@ test("the scan is looking at a real tree and resolving the bulk of it", () => {
   // A CEILING, not a target: the unresolved remainder must shrink, never grow.
   // Above this, the scanner has degraded into "we only check the easy half" and
   // the honest thing is to fix the scanner or say so in this file's header.
+  //
+  // RAISED 60 → 63, from three sites that arrived on two branches and all still
+  // exist after the merge. A ceiling raised without a reason is a guard being
+  // walked backwards, so each one names the guard that pays for it:
+  //
+  //   * 60 → 61 (card t_ec87d6c7): toolLabel in src/lib/chatProposal.ts asks for
+  //     `chat.tool.<name>` built from the tool name the server sent, so the key
+  //     exists only at runtime and no static scan can name it. That trade is paid
+  //     for by a guard written for exactly this set: src/lib/chatProposal.test.ts
+  //     reads the tool lists out of api/internal/mcpsrv/chat_tools.go and asserts
+  //     every one of them has a `chat.tool.*` entry in all five locales, so the
+  //     drift this scanner would have caught is caught there instead.
+  //   * 61 → 63 (card t_148d7100), two sites, one each in:
+  //     app/chat/page.tsx — the empty state's starter chips, one `t(key)` inside
+  //     `CHAT_STARTERS.map(...)`. The list is a const tuple, so the four keys are
+  //     fixed; the scanner cannot see through the `.map`. Those four keys are not
+  //     unguarded: src/lib/chatStarters.test.ts asserts every chip key exists in
+  //     all five locales AND that its question is one the Go read allowlist can
+  //     answer.
+  //     lib/chatSteps.ts — one `t(nounKey)`, the noun of a chat read tool, whose
+  //     key is chosen from the tool's name on the wire. Which is the point: the
+  //     tool list lives in Go. src/lib/chatSteps.test.ts reads
+  //     api/internal/mcpsrv/chat_tools.go and fails when a tool has no noun, and
+  //     asserts every noun key in all five locales.
+  //     Both were reduced to ONE site each before this raise (a chip resolves its
+  //     label once and sends that same string; the noun is resolved once and
+  //     interpolated into both tenses), so the growth is the irreducible part only.
+  //
+  // 63 is MEASURED on the merged tree (main + this branch), not the sum guessed in
+  // the card: the assertion below names tree.dynamic.length when it is exceeded.
   assert.ok(
-    tree.dynamic.length <= 60,
-    `${tree.dynamic.length} call sites are no longer statically resolved (ceiling 60). ` +
+    tree.dynamic.length <= 63,
+    `${tree.dynamic.length} call sites are no longer statically resolved (ceiling 63). ` +
       `The guard covers that many fewer keys than it did — see the dynamic list in src/lib/i18nKeys.ts:\n  ` +
       tree.dynamic.map((d) => `${rel(d.file)}:${d.line} ${d.expr.trim()}`).join("\n  "),
   );

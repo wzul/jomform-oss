@@ -130,6 +130,20 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "while-it-answers",
+    title: "While it is answering",
+    body: [
+      "The answer arrives as it is written, not all at once at the end. You see the words appear in the bubble — with a block cursor at the end while the assistant is still writing — and the answer is finished when the cursor goes. Before this, the panel sat on one sentence for the several seconds the model took, and then the whole answer appeared in a single jump, which made a working assistant look like a hung page.",
+      "Under the composer, a status line says what is happening: that it is thinking, or which of your records it is reading — your forms, your sales, your form responses, your products, your feedback. A read that ran is also listed under the answer afterwards, so you can see what the answer was built from instead of having to trust it. The status line and the button are separate: the Send button always says Send, and Stop sits beside it.",
+      "Stop really stops. Press it while an answer is being written and the request is cancelled — the browser closes the connection, the server stops the work behind it rather than finishing an answer nobody is waiting for, and no further model calls are made for it. What had already been written stays in the conversation, marked as incomplete, because a partial answer you can read is worth more than an empty bubble. Everything after that point is gone: the answer is not resumed, so ask again if you want the rest.",
+      "While the conversation is empty, the panel offers a few example questions. Clicking one sends it — it does not merely fill the composer — so a first question costs one click rather than a sentence you have to invent. They are ordinary questions; you can edit the result by asking a follow-up.",
+      "Every answer has a Copy button. It puts the answer's own words on your clipboard, not the page's formatting, so you can paste it into an email or a report. The button says Copied for a moment so you can see it worked.",
+      "The message box grows as you type, up to about eight lines, and then scrolls inside itself — so a long question stays readable while you write it. Enter sends; Shift+Enter starts a new line. It is still capped at 2000 characters, and the counter of what is left is the cap itself.",
+      "The conversation follows the answer only while you are at the bottom of it. Scroll up to re-read something earlier and it stays where you put it — new text no longer pulls you back down — and a Jump to latest control appears so you can return when you are ready.",
+      "If you use a screen reader, the answer is announced as it is written but the conversation is not. Only the latest answer is a live region, and it is marked busy while it streams, so assistive technology waits for the end of the answer instead of reading a fragment at a time; the earlier turns are not re-announced. The status line is announced politely, which is how you hear that the assistant is reading your forms rather than sitting silent.",
+    ],
+  },
+  {
     id: "limits",
     title: "Limits and cost",
     body: [
@@ -152,14 +166,14 @@ const SECTIONS: Section[] = [
   },
   {
     id: "remembering",
-    title: "Keeping the conversation across a reload",
+    title: "Your conversations are kept, and signing out does not delete them",
     body: [
-      "The conversation you can see is kept in this browser, for the signed-in user and for the workspace that was selected when you had it. Refresh the page, close the tab and come back, or visit another dashboard page and return, and the same turns are still there in the same order. Before this, a reload started an empty conversation: the answers you had just been reading, and the questions that produced them, were gone.",
-      "It is kept by your browser, not by JomForm. Nothing of the conversation is stored on the server, so it does not follow you to another browser or another device — those start with an empty conversation, exactly as they always did. The assistant still reads your data only while it is answering a message you have sent, and only inside the signed-in request that carries the turn.",
-      "Only what is on screen is kept, and only the last 16 turns of it — the same window the assistant is given. A confirmation card is deliberately not kept: its Confirm button is a single-use permission with five minutes of life, so a card brought back after a reload would be a button that cannot work, and storing it would leave a write permission lying in the browser.",
-      "Two workspaces do not share a conversation. If you belong to more than one, each keeps its own thread: the transcript you see is always the one for the workspace you selected, and switching workspace shows that workspace's conversation rather than the previous one.",
-      "You can end it whenever you want. New conversation, at the top of the page, clears the turns on screen and the copy kept in this browser, so the next question starts a fresh thread. Signing out clears it as well, and so does a session that expires: the conversation is never handed to the next person who signs in on this device.",
-      "If the stored copy cannot be read — a browser that was cleared mid-write, an extension, a build that changed the format — the page starts with an empty conversation rather than showing half of one. Nothing is recovered, and nothing about the previous thread is displayed out of order.",
+      "Every conversation you have with the assistant is saved to your JomForm account, for the signed-in user and for the workspace that was selected when you had it. Refresh the page, close the tab, sign out and sign back in, or open the assistant on another device: the conversation is still there. Before this, the transcript lived only in the browser and signing out deleted it, so a new login started from nothing.",
+      "The history sidebar, to the left of the transcript, lists your saved conversations in this workspace, most recently used first. Each row is named after the first question you asked, and you can rename it. Click a row to continue that conversation; the assistant receives its recent turns as context, so \"and how many this week?\" still means what it meant yesterday. New conversation starts a second conversation and leaves the first one in the list — it does not clear anything.",
+      "Two workspaces do not share a conversation. If you belong to more than one, each keeps its own thread and its own sidebar; switching workspace shows that workspace's conversations rather than the previous one's.",
+      "Only the words are stored: your questions, the assistant's answers, and the record of which lookups produced an answer. A confirmation card is deliberately not restored — its Confirm button is a single-use permission with five minutes of life, so bringing the card back after a reload or a login would offer a button that cannot work. Anything you want to change, ask the assistant to prepare again.",
+      "Each conversation keeps its most recent turns — the same window the assistant is given when it answers — so a very long conversation stays useful without growing without limit. You can delete a conversation from the sidebar at any time; deleting removes its messages permanently, which is why the page asks first. Deleting a conversation does not affect your forms, sales or other data.",
+      "If the saved history cannot be read — a database blip, a deployment mid-upgrade — the page says so and you can still ask a new question. Nothing is shown half-restored, and no conversation is displayed under the wrong account or workspace.",
     ],
   },
   {
