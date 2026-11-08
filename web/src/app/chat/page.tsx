@@ -463,6 +463,9 @@ export default function ChatPage() {
           role: turn.role,
           content: turn.content,
           steps: turn.steps,
+          // A restored answer the user stopped: the marker must survive the
+          // reload, or a partial answer reads as a finished one (t_babeaa84).
+          stopped: turn.stopped,
         })),
       );
     },

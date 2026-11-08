@@ -226,10 +226,10 @@ export default function Landing() {
               </div>
               {/* How to set it up — the real product paths, not marketing.
                   Every step names a control the shipped product has, and no
-                  step claims a capability the code lacks. There is no guide
-                  page for these yet, so the list ends on the honest "coming
-                  soon" note rather than a dead /docs/guides link
-                  (src/lib/landingUseCases.test.ts guards both). */}
+                  step claims a capability the code lacks. Every showcase has a
+                  screenshot guide now, so the list ends on a link to it under
+                  /docs/guides (src/lib/landingUseCases.test.ts checks each link
+                  lands on a page file and that no card still promises one). */}
               <div className="mt-6 rounded-xl border border-slate-100 bg-slate-50 p-5 text-left">
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
                   {t("land.setup")}
@@ -241,7 +241,14 @@ export default function Landing() {
                   <li>{t("land.weddingstep4")}</li>
                   <li>{t("land.weddingstep5")}</li>
                 </ol>
-                <p className="mt-3 text-xs text-slate-500">{t("land.guidesoon")}</p>
+                <p className="mt-3 text-xs">
+                  <a
+                    href="/docs/guides/wedding-rsvp"
+                    className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
+                  >
+                    {t("land.guidewedding")}
+                  </a>
+                </p>
               </div>
             </div>
           </div>
@@ -286,10 +293,10 @@ export default function Landing() {
               </div>
               {/* How to set it up — the real product paths, not marketing.
                   Every step names a control the shipped product has, and no
-                  step claims a capability the code lacks. There is no guide
-                  page for these yet, so the list ends on the honest "coming
-                  soon" note rather than a dead /docs/guides link
-                  (src/lib/landingUseCases.test.ts guards both). */}
+                  step claims a capability the code lacks. Every showcase has a
+                  screenshot guide now, so the list ends on a link to it under
+                  /docs/guides (src/lib/landingUseCases.test.ts checks each link
+                  lands on a page file and that no card still promises one). */}
               <div className="mt-6 rounded-xl border border-slate-100 bg-slate-50 p-5 text-left">
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
                   {t("land.setup")}
@@ -301,7 +308,14 @@ export default function Landing() {
                   <li>{t("land.qrstep4")}</li>
                   <li>{t("land.qrstep5")}</li>
                 </ol>
-                <p className="mt-3 text-xs text-slate-500">{t("land.guidesoon")}</p>
+                <p className="mt-3 text-xs">
+                  <a
+                    href="/docs/guides/qr-table-ordering"
+                    className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
+                  >
+                    {t("land.guideqr")}
+                  </a>
+                </p>
               </div>
             </div>
           </div>
@@ -377,10 +391,10 @@ export default function Landing() {
               </div>
               {/* How to set it up — the real product paths, not marketing.
                   Every step names a control the shipped product has, and no
-                  step claims a capability the code lacks. There is no guide
-                  page for these yet, so the list ends on the honest "coming
-                  soon" note rather than a dead /docs/guides link
-                  (src/lib/landingUseCases.test.ts guards both). */}
+                  step claims a capability the code lacks. Every showcase has a
+                  screenshot guide now, so the list ends on a link to it under
+                  /docs/guides (src/lib/landingUseCases.test.ts checks each link
+                  lands on a page file and that no card still promises one). */}
               <div className="mt-6 rounded-xl border border-slate-100 bg-slate-50 p-5 text-left">
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
                   {t("land.setup")}
@@ -392,7 +406,14 @@ export default function Landing() {
                   <li>{t("land.tuitionstep4")}</li>
                   <li>{t("land.tuitionstep5")}</li>
                 </ol>
-                <p className="mt-3 text-xs text-slate-500">{t("land.guidesoon")}</p>
+                <p className="mt-3 text-xs">
+                  <a
+                    href="/docs/guides/tuition-class"
+                    className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
+                  >
+                    {t("land.guidetuition")}
+                  </a>
+                </p>
               </div>
             </div>
           </div>
@@ -437,10 +458,10 @@ export default function Landing() {
               </div>
               {/* How to set it up — the real product paths, not marketing.
                   Every step names a control the shipped product has, and no
-                  step claims a capability the code lacks. There is no guide
-                  page for these yet, so the list ends on the honest "coming
-                  soon" note rather than a dead /docs/guides link
-                  (src/lib/landingUseCases.test.ts guards both). */}
+                  step claims a capability the code lacks. Every showcase has a
+                  screenshot guide now, so the list ends on a link to it under
+                  /docs/guides (src/lib/landingUseCases.test.ts checks each link
+                  lands on a page file and that no card still promises one). */}
               <div className="mt-6 rounded-xl border border-slate-100 bg-slate-50 p-5 text-left">
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
                   {t("land.setup")}
@@ -451,7 +472,14 @@ export default function Landing() {
                   <li>{t("land.canvastep3")}</li>
                   <li>{t("land.canvastep4")}</li>
                 </ol>
-                <p className="mt-3 text-xs text-slate-500">{t("land.guidesoon")}</p>
+                <p className="mt-3 text-xs">
+                  <a
+                    href="/docs/guides/design-with-mcp"
+                    className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
+                  >
+                    {t("land.guidecanva")}
+                  </a>
+                </p>
               </div>
             </div>
           </div>
@@ -502,10 +530,10 @@ export default function Landing() {
               </div>
               {/* How to set it up — the real product paths, not marketing.
                   Every step names a control the shipped product has, and no
-                  step claims a capability the code lacks. There is no guide
-                  page for these yet, so the list ends on the honest "coming
-                  soon" note rather than a dead /docs/guides link
-                  (src/lib/landingUseCases.test.ts guards both). */}
+                  step claims a capability the code lacks. Every showcase has a
+                  screenshot guide now, so the list ends on a link to it under
+                  /docs/guides (src/lib/landingUseCases.test.ts checks each link
+                  lands on a page file and that no card still promises one). */}
               <div className="mt-6 rounded-xl border border-slate-100 bg-slate-50 p-5 text-left">
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
                   {t("land.setup")}
@@ -516,7 +544,14 @@ export default function Landing() {
                   <li>{t("land.affstep3")}</li>
                   <li>{t("land.affstep4")}</li>
                 </ol>
-                <p className="mt-3 text-xs text-slate-500">{t("land.guidesoon")}</p>
+                <p className="mt-3 text-xs">
+                  <a
+                    href="/docs/guides/affiliate-programme"
+                    className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
+                  >
+                    {t("land.guideaff")}
+                  </a>
+                </p>
               </div>
             </div>
           </div>
@@ -568,10 +603,10 @@ export default function Landing() {
               </div>
               {/* How to set it up — the real product paths, not marketing.
                   Every step names a control the shipped product has, and no
-                  step claims a capability the code lacks. There is no guide
-                  page for these yet, so the list ends on the honest "coming
-                  soon" note rather than a dead /docs/guides link
-                  (src/lib/landingUseCases.test.ts guards both). */}
+                  step claims a capability the code lacks. Every showcase has a
+                  screenshot guide now, so the list ends on a link to it under
+                  /docs/guides (src/lib/landingUseCases.test.ts checks each link
+                  lands on a page file and that no card still promises one). */}
               <div className="mt-6 rounded-xl border border-slate-100 bg-slate-50 p-5 text-left">
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
                   {t("land.setup")}
@@ -582,7 +617,14 @@ export default function Landing() {
                   <li>{t("land.membershipstep3")}</li>
                   <li>{t("land.membershipstep4")}</li>
                 </ol>
-                <p className="mt-3 text-xs text-slate-500">{t("land.guidesoon")}</p>
+                <p className="mt-3 text-xs">
+                  <a
+                    href="/docs/guides/club-membership"
+                    className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
+                  >
+                    {t("land.guidemembership")}
+                  </a>
+                </p>
               </div>
             </div>
           </div>
@@ -648,10 +690,10 @@ export default function Landing() {
               </div>
               {/* How to set it up — the real product paths, not marketing.
                   Every step names a control the shipped product has, and no
-                  step claims a capability the code lacks. There is no guide
-                  page for these yet, so the list ends on the honest "coming
-                  soon" note rather than a dead /docs/guides link
-                  (src/lib/landingUseCases.test.ts guards both). */}
+                  step claims a capability the code lacks. Every showcase has a
+                  screenshot guide now, so the list ends on a link to it under
+                  /docs/guides (src/lib/landingUseCases.test.ts checks each link
+                  lands on a page file and that no card still promises one). */}
               <div className="mt-6 rounded-xl border border-slate-100 bg-slate-50 p-5 text-left">
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
                   {t("land.setup")}
@@ -663,7 +705,14 @@ export default function Landing() {
                   <li>{t("land.donationstep4")}</li>
                   <li>{t("land.donationstep5")}</li>
                 </ol>
-                <p className="mt-3 text-xs text-slate-500">{t("land.guidesoon")}</p>
+                <p className="mt-3 text-xs">
+                  <a
+                    href="/docs/guides/donations"
+                    className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
+                  >
+                    {t("land.guidedonation")}
+                  </a>
+                </p>
               </div>
             </div>
           </div>

@@ -41,6 +41,21 @@ const APEX_PAGES = [
   "/docs/shipping",
   // Card t_135c3c72: the buyer-borne processing fee guide.
   "/docs/payment-fees",
+  // Card t_7b9f6d18: the screenshot guides. docs/guides/<slug> is real content that had no
+  // route; /docs/guides is the index and the two guides are the pages it lists. They are
+  // public, canonical-carrying pages like every other guide (sitemapCoverage.test.ts pins
+  // this list against the pages on disk in both directions).
+  "/docs/guides",
+  "/docs/guides/payment-fees",
+  "/docs/guides/donations",
+  // Card t_343a45c8: the six showcase guides that landed in docs/guides with PR #1644. They are
+  // pages on disk, so sitemapCoverage.test.ts requires an entry for each.
+  "/docs/guides/affiliate-programme",
+  "/docs/guides/club-membership",
+  "/docs/guides/design-with-mcp",
+  "/docs/guides/qr-table-ordering",
+  "/docs/guides/tuition-class",
+  "/docs/guides/wedding-rsvp",
   // The per-workspace AI spam-detection toggle is documented here
   // and the Settings switch deep-links into it.
   "/docs/spam-detection",

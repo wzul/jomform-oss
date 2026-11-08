@@ -94,6 +94,11 @@ const NAV_GROUPS: Group[] = [
 // Issue #513: deep links into the guide sections the dashboard's inline "?"
 // buttons target, so the features are reachable from the docs nav.
 const NAV_SECTIONS = [
+  // Card t_7b9f6d18: the screenshot guides. They are their own pages now, so the
+  // row is the index rather than one deep link per guide — docsIndex.test.ts wants
+  // every sidebar row to be a real page reached from the index, and the index
+  // carries the quick link to this one.
+  { href: "/docs/guides", label: "Screenshot guides" },
   { href: "/docs/customize#affiliate-marketing", label: "Affiliate marketing guide" },
   { href: "/docs/customize#menu", label: "Restaurant menu guide" },
   { href: "/docs/customize#menu-basket", label: "Menu basket guide" },

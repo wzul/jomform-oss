@@ -164,7 +164,23 @@ func (h *RESTHandlers) streamChat(
 		slog.Debug("chat_stream_no_write_deadline", "err", err)
 	}
 
+	// THE PARTIAL ANSWER, KEPT (card t_babeaa84). emit is the ONLY place that sees
+	// every fragment, so it is where the text the reader is looking at is
+	// assembled — and on Stop that buffer is the whole of what survives, so it has
+	// to be the same text the page shows. `retract` empties it, exactly as the
+	// page's own accumulator does (web/src/lib/chatStream.ts): a round that ended
+	// by calling a tool was not an answer, and storing "let me check your forms"
+	// as the partial reply would file a discarded thought as the user's record of
+	// what the assistant said. A `step` does NOT clear it — the runner emits an
+	// explicit retract before the step when there is anything to withdraw.
+	var partial strings.Builder
 	emit := func(ev chat.Event) error {
+		switch ev.Type {
+		case chat.EventDelta:
+			partial.WriteString(ev.Text)
+		case chat.EventRetract:
+			partial.Reset()
+		}
 		return writeChatFrame(w, rc, chatStreamEvent{
 			Type: ev.Type, Tool: ev.Tool, Text: ev.Text,
 		})
@@ -175,6 +191,20 @@ func (h *RESTHandlers) streamChat(
 		// A GONE CLIENT is not a failure to report: the write that failed is what
 		// stopped the runner, and there is nobody left to read a frame.
 		if r.Context().Err() != nil || errors.Is(err, context.Canceled) {
+			// …but the EXCHANGE is not abandoned (card t_babeaa84). The user's
+			// question and the fragment they had already read are the only copy of
+			// that moment, and until this call they were stored nowhere: the next
+			// load of the conversation showed neither, so Stop looked like it had
+			// deleted a question the user had typed and an answer they had watched
+			// arrive.
+			//
+			// This runs on a context detached from the (already cancelled)
+			// request — see chatPersistCtx — because Stop IS that cancellation.
+			h.chatPersistStoppedExchange(r, uid, sessionWorkspaceID, sessionID, msg, partial.String())
+			slog.Info("chat_stream_client_gone",
+				"session_id", sessionID,
+				"partial_chars", len([]rune(partial.String())),
+			)
 			return
 		}
 		logStreamFailure(r, err)

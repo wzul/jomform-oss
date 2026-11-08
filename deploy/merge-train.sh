@@ -386,28 +386,27 @@ trap cleanup EXIT
 # ---------------------------------------------------------------- gate runner
 # The `web` gate refuses to pretend it built anything without node_modules (it reds
 # with "next is missing" rather than exiting 0 having built nothing). A fresh candidate
-# worktree has none, so seed it before gating. `npm ci` per candidate is deliberate:
-# hardlinking from another worktree would share `node_modules/.cache` between two
-# concurrent builds, which is exactly the kind of shared mutable state that produces
-# FALSE gate results.
+# worktree has none, so seed it before gating.
+#
+# THE SEEDER IS SHARED, NOT DUPLICATED: deploy/web_modules.sh is the same code the
+# RELEASE path (deploy/cut-release.sh) runs on its tag-pinned worktree, so the two
+# lanes cannot drift about what "seeded" means. It copies rather than hardlinking on
+# purpose: hardlinking would share `node_modules/.cache` between two concurrent
+# builds, which is exactly the kind of shared mutable state that produces FALSE gate
+# results. `npm ci` per candidate is the fallback (~81 s), and the train's own cache
+# ($WORK/web_modules, one copy for the whole run) keeps a bisect rebuild at a local
+# copy (~20 s) instead of another install.
+WM_LIB="$ROOT/deploy/web_modules.sh"
+[ -r "$WM_LIB" ] || die "$WM_LIB is missing — the train cannot seed web/node_modules, and a web-side gate would then refuse the candidate"
+# shellcheck source=deploy/web_modules.sh
+. "$WM_LIB"
+
 seed_web_modules() {
   [ -x "$CAND/web/node_modules/.bin/next" ] && return 0
-  # Bisect rebuilds the candidate per prefix; keep ONE copy for the whole train run so
-  # each rebuild costs a local copy (~20 s) instead of another `npm ci` (~81 s).
-  if [ -x "$WORK/web_modules/.bin/next" ]; then
-    say "seeding web/node_modules from the train cache"
-    cp -a "$WORK/web_modules" "$CAND/web/node_modules" && return 0
-  fi
-  local tpl=${TRAIN_NODE_MODULES:-}
-  if [ -n "$tpl" ] && [ -x "$tpl/.bin/next" ]; then
-    say "seeding web/node_modules from $tpl (copy)"
-    cp -a "$tpl" "$CAND/web/node_modules" && return 0
-  fi
-  say "seeding web/node_modules (npm ci, ~81s)"
-  ( cd "$CAND/web" && "${LAUNCH[@]}" npm ci --no-audit --no-fund ) >"$WORK/npm.log" 2>&1 \
-    || { tail -3 "$WORK/npm.log" | sed 's/^/    | /'; return 1; }
+  ( WM_PROG=$PROG; WM_REPO=$ROOT; WM_CACHE_DIR="$WORK/web_modules" \
+    WM_TEMPLATE="${TRAIN_NODE_MODULES:-}" WM_NPM_LOG="$WORK/npm.log" \
+    WM_LAUNCH=("${LAUNCH[@]}"); wm_seed "$CAND" ) || return 1
   [ -x "$CAND/web/node_modules/.bin/next" ] || return 1
-  cp -a "$CAND/web/node_modules" "$WORK/web_modules" 2>/dev/null || true
   return 0
 }
 

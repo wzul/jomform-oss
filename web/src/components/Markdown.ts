@@ -26,12 +26,14 @@
 //   CommonMark's rule, and the reason is in the inline section below. `*` is
 //   unchanged: `foo*bar*baz` is still emphasis, as CommonMark says it should be.
 //
-// DELIBERATELY NOT SUPPORTED (and therefore shown as their literal text, which
-// is still better than the pre-fix behaviour of showing every marker):
-//   tables, images, raw HTML, headings, block quotes, nested lists. The prompt
-//   tells the model not to emit the first three. `![alt](url)` renders its alt
-//   text; a `<script>` tag renders as visible text; a table row renders as a row
-//   of pipe characters.
+// DELIBERATELY NOT SUPPORTED in CHAT mode (and therefore shown as their literal
+// text, which is still better than the pre-fix behaviour of showing every
+// marker): tables, images, raw HTML, headings, block quotes, nested lists. The
+// prompt tells the model not to emit the first three. `![alt](url)` renders its
+// alt text; a `<script>` tag renders as visible text; a table row renders as a row
+// of pipe characters. `mode="docs"` (see MarkdownMode) adds headings, tables and
+// images — for /docs/guides, which renders checked-in repo content, not model
+// output. Chat mode is unchanged by it and every guard below still reads chat mode.
 //
 // LINKS: only http/https become an <a>. Anything else (javascript:, data:, a
 //   relative path) is rendered as plain text, per the same rule the repo applies
@@ -48,17 +50,48 @@ import { createElement, Fragment, type ReactNode } from "react";
 
 export type MarkdownVariant = "assistant" | "user" | "plain";
 
+// WHICH SURFACE IS BEING RENDERED (card t_7b9f6d18).
+//
+//   "chat" (default) — the deliberately small subset described above. Unchanged, deliberately:
+//     every security and performance guard in src/lib/markdown.test.ts reads this mode.
+//   "docs"          — additionally supports the three block shapes the repo's OWN screenshot
+//     guides are written in: `#`/`##`/`###` headings, pipe tables, and images. Those guides are
+//     checked-in repo content (docs/guides/<slug>/README.md, materialised into
+//     src/lib/guides.gen.ts), not model output, so the reason images are refused above — an
+//     assistant answer echoing merchant data — does not apply to them.
+//
+//   This is a MODE on the one renderer, not a second parser: /docs/guides renders through this
+//   component (AGENTS.md, and the card that added the routes, both say "do not write a second
+//   markdown parser"). The chat surface cannot reach the extra shapes by accident, and an
+//   image in an assistant answer is still reduced to its alt text.
+export type MarkdownMode = "chat" | "docs";
+
+/** A resolved <img>: the URL plus the intrinsic size, so the tag cannot shift layout. */
+export type MarkdownImage = { src: string; width?: number; height?: number };
+
+/**
+ * Turns one image reference in the markdown into a renderable <img>, or returns null to fall
+ * back to its alt text. Passed by /docs/guides, which closes over that guide's screenshot
+ * manifest — so the only URLs that can ever be emitted are the ones the generator copied.
+ * Never called in "chat" mode.
+ */
+export type ResolveImage = (src: string) => MarkdownImage | null;
+
 type Block =
   | { kind: "p"; text: string }
   | { kind: "code"; text: string }
-  | { kind: "list"; ordered: boolean; start: number; items: string[] };
+  | { kind: "list"; ordered: boolean; start: number; items: string[] }
+  | { kind: "heading"; level: number; text: string }
+  | { kind: "table"; head: string[]; rows: string[][] }
+  | { kind: "image"; alt: string; src: string };
 
 export type Inline =
   | { t: "text"; v: string }
   | { t: "code"; v: string }
   | { t: "strong"; v: Inline[] }
   | { t: "em"; v: Inline[] }
-  | { t: "link"; v: string; href: string };
+  | { t: "link"; v: string; href: string }
+  | { t: "image"; v: string; src: string };
 
 // ── block level ──────────────────────────────────────────────────────────────
 
@@ -66,10 +99,32 @@ const FENCE = /^\s*(```|~~~)\s*[\w+-]*\s*$/;
 const BULLET = /^(\s*)[-*+]\s+(.*)$/;
 const ORDERED = /^(\s*)(\d{1,9})[.)]\s+(.*)$/;
 
-// parseMarkdown splits text into paragraphs, fenced code blocks and lists.
-// Exported because the tests assert the block structure directly as well as the
-// rendered DOM.
-export function parseMarkdown(src: string): Block[] {
+// ── docs mode only (see MarkdownMode) ────────────────────────────────────────
+const HEADING = /^(#{1,6})\s+(.+?)\s*$/;
+/** A table's delimiter row: | --- | :---: |. Two or more dashes per column, as GFM asks. */
+const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+/** A paragraph that is ONE image and nothing else, so it can become a <figure>. */
+const IMAGE_ONLY = /^!\[([^\]]*)\]\(([^()\s]+)\)$/;
+/**
+ * The image references docs mode will render: a BARE filename. No scheme, no slash, no `..` —
+ * so a `javascript:`/`data:`/off-site URL can never reach an <img src> even if the guide file
+ * is edited carelessly. The generator (web/scripts/guides.mjs) rejects anything else at sync
+ * time, and resolveImage then maps the filename to the copied asset.
+ */
+const IMAGE_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.png$/;
+
+/** Cells of one pipe-table row. `\|` escapes are not supported — no guide uses one. */
+function tableRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  return s.split("|").map((c) => c.trim());
+}
+
+// parseMarkdown splits text into paragraphs, fenced code blocks, lists (and, in `docs` mode,
+// headings, tables and images). Exported because the tests assert the block structure directly
+// as well as the rendered DOM.
+export function parseMarkdown(src: string, mode: MarkdownMode = "chat"): Block[] {
   const lines = (src ?? "").replace(/\r\n?/g, "\n").split("\n");
   const blocks: Block[] = [];
   let i = 0;
@@ -100,6 +155,27 @@ export function parseMarkdown(src: string): Block[] {
     if (line.trim() === "") {
       i++;
       continue;
+    }
+
+    if (mode === "docs") {
+      const heading = HEADING.exec(line);
+      if (heading) {
+        blocks.push({ kind: "heading", level: heading[1].length, text: heading[2].trim() });
+        i++;
+        continue;
+      }
+      // A table needs the delimiter row directly under the header row; both are consumed.
+      if (line.trim().startsWith("|") && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1])) {
+        const head = tableRow(line);
+        const rows: string[][] = [];
+        i += 2;
+        while (i < lines.length && lines[i].trim().startsWith("|")) {
+          rows.push(tableRow(lines[i]));
+          i++;
+        }
+        blocks.push({ kind: "table", head, rows });
+        continue;
+      }
     }
 
     const ordered = ORDERED.exec(line);
@@ -140,12 +216,18 @@ export function parseMarkdown(src: string): Block[] {
       lines[i].trim() !== "" &&
       !FENCE.test(lines[i]) &&
       !BULLET.exec(lines[i]) &&
-      !ORDERED.exec(lines[i])
+      !ORDERED.exec(lines[i]) &&
+      !(mode === "docs" && (HEADING.test(lines[i]) || lines[i].trim().startsWith("|")))
     ) {
       para.push(lines[i]);
       i++;
     }
-    blocks.push({ kind: "p", text: para.join("\n") });
+    const text = para.join("\n");
+    // A paragraph that is exactly one image becomes a <figure> in docs mode; anywhere else it
+    // stays a paragraph and the image is handled inline (or, in chat mode, as its alt text).
+    const img = mode === "docs" ? IMAGE_ONLY.exec(text.trim()) : null;
+    if (img) blocks.push({ kind: "image", alt: img[1], src: img[2] });
+    else blocks.push({ kind: "p", text });
   }
 
   return blocks;
@@ -465,14 +547,17 @@ function at(pos: number, re: RegExp, src: string): RegExpExecArray | null {
   return re.exec(src);
 }
 
-function emphasis(kind: "strong" | "em", inner: string, depth: number): Inline {
+function emphasis(kind: "strong" | "em", inner: string, depth: number, mode: MarkdownMode): Inline {
   // Nested emphasis inside emphasis is parsed, but only a few levels deep. The
   // recursion is bounded by MAX_DEPTH AND the scan is linear (scanUnderDelims),
   // so a crafted answer cannot turn rendering quadratic.
-  return { t: kind, v: depth < MAX_DEPTH ? parseInline(inner, depth + 1) : [{ t: "text", v: inner }] };
+  return {
+    t: kind,
+    v: depth < MAX_DEPTH ? parseInline(inner, depth + 1, mode) : [{ t: "text", v: inner }],
+  };
 }
 
-export function parseInline(src: string, depth = 0): Inline[] {
+export function parseInline(src: string, depth = 0, mode: MarkdownMode = "chat"): Inline[] {
   const out: Inline[] = [];
   // One delimiter scan for this string, shared by every `_` position below —
   // this is the half that makes rendering linear (see scanUnderDelims).
@@ -503,7 +588,11 @@ export function parseInline(src: string, depth = 0): Inline[] {
     if (links && src[i] === "!" && linkExtent(src, i, links, true) >= 0 && (m = at(i, IMAGE, src))) {
       if (text) out.push({ t: "text", v: text });
       text = "";
-      out.push({ t: "text", v: m[1] }); // alt text only — images are not rendered
+      // Chat mode reduces an image to its alt text on purpose (the text can be model output).
+      // Docs mode renders it, but only a BARE filename — never a scheme or a path — so the
+      // resolver in /docs/guides can map it to a copied asset and nothing else can be reached.
+      if (mode === "docs" && IMAGE_FILE.test(m[2])) out.push({ t: "image", v: m[1], src: m[2] });
+      else out.push({ t: "text", v: m[1] });
       i += m[0].length;
       continue;
     }
@@ -526,7 +615,7 @@ export function parseInline(src: string, depth = 0): Inline[] {
     if ((m = at(i, STRONG_STAR, src))) {
       if (text) out.push({ t: "text", v: text });
       text = "";
-      out.push(emphasis("strong", m[1], depth));
+      out.push(emphasis("strong", m[1], depth, mode));
       i += m[0].length;
       continue;
     }
@@ -536,7 +625,7 @@ export function parseInline(src: string, depth = 0): Inline[] {
     if (strongUnder) {
       if (text) out.push({ t: "text", v: text });
       text = "";
-      out.push(emphasis("strong", strongUnder.inner, depth));
+      out.push(emphasis("strong", strongUnder.inner, depth, mode));
       i += strongUnder.length;
       continue;
     }
@@ -544,7 +633,7 @@ export function parseInline(src: string, depth = 0): Inline[] {
     if ((m = at(i, EM_STAR, src))) {
       if (text) out.push({ t: "text", v: text });
       text = "";
-      out.push(emphasis("em", m[1], depth));
+      out.push(emphasis("em", m[1], depth, mode));
       i += m[0].length;
       continue;
     }
@@ -553,7 +642,7 @@ export function parseInline(src: string, depth = 0): Inline[] {
     if (emUnder) {
       if (text) out.push({ t: "text", v: text });
       text = "";
-      out.push(emphasis("em", emUnder.inner, depth));
+      out.push(emphasis("em", emUnder.inner, depth, mode));
       i += emUnder.length;
       continue;
     }
@@ -590,8 +679,51 @@ function tone(variant: MarkdownVariant) {
   }
 }
 
-function renderInline(nodes: Inline[], variant: MarkdownVariant, key = "i"): ReactNode[] {
-  const t = tone(variant);
+/** Everything the block/inline renderers need besides the node itself. */
+type RenderCtx = { variant: MarkdownVariant; mode: MarkdownMode; resolveImage?: ResolveImage };
+
+/**
+ * One image reference → an <img>, or the alt text when there is nothing safe to point at.
+ *
+ * The resolver is what makes the URL safe: /docs/guides closes over that guide's generated
+ * screenshot manifest, so the only sources it can return are the files the generator copied
+ * into public/guides. A guide image that the manifest does not know falls back to its alt
+ * text — the same honest failure chat mode uses, instead of a broken <img>.
+ */
+function renderImage(n: { v: string; src: string }, ctx: RenderCtx, key: string, block: boolean): ReactNode {
+  const resolved =
+    ctx.mode === "docs" && ctx.resolveImage && IMAGE_FILE.test(n.src) ? ctx.resolveImage(n.src) : null;
+  if (!resolved) return n.v;
+  const img = createElement("img", {
+    key: `${key}-img`,
+    src: resolved.src,
+    alt: n.v,
+    // Intrinsic size (from the PNG header, via the generator): with w-full + the attribute
+    // pair the browser reserves the right box before the bytes arrive, so a step's screenshot
+    // never shoves the text under it down the page.
+    width: resolved.width,
+    height: resolved.height,
+    loading: "lazy",
+    decoding: "async",
+    className: block ? "w-full rounded-lg border border-slate-200" : "inline-block max-w-full align-middle",
+  });
+  if (!block) return img;
+  return createElement(
+    "figure",
+    { key, className: "mt-4" },
+    img,
+    // The caption repeats the alt text for SIGHTED readers; aria-hidden keeps a screen
+    // reader from announcing the same sentence twice (the <img alt> already carries it).
+    createElement(
+      "figcaption",
+      { "aria-hidden": "true", className: "mt-1 text-xs text-slate-500" },
+      n.v,
+    ),
+  );
+}
+
+function renderInline(nodes: Inline[], ctx: RenderCtx, key = "i"): ReactNode[] {
+  const t = tone(ctx.variant);
   return nodes.map((n, i) => {
     const k = `${key}-${i}`;
     switch (n.t) {
@@ -604,9 +736,9 @@ function renderInline(nodes: Inline[], variant: MarkdownVariant, key = "i"): Rea
           n.v,
         );
       case "strong":
-        return createElement("strong", { key: k, className: "font-semibold" }, ...renderInline(n.v, variant, k));
+        return createElement("strong", { key: k, className: "font-semibold" }, ...renderInline(n.v, ctx, k));
       case "em":
-        return createElement("em", { key: k }, ...renderInline(n.v, variant, k));
+        return createElement("em", { key: k }, ...renderInline(n.v, ctx, k));
       case "link":
         return createElement(
           "a",
@@ -617,16 +749,24 @@ function renderInline(nodes: Inline[], variant: MarkdownVariant, key = "i"): Rea
             rel: "noopener noreferrer",
             className: `underline decoration-dotted underline-offset-2 ${t.link}`,
           },
-          ...renderInline(parseInline(n.v), variant, k),
+          ...renderInline(parseInline(n.v, 0, ctx.mode), ctx, k),
         );
+      case "image":
+        return renderImage(n, ctx, k, false);
       default:
         return n.v;
     }
   });
 }
 
-function renderBlock(b: Block, variant: MarkdownVariant, key: string): ReactNode {
-  const t = tone(variant);
+const HEADING_CLASS: Record<number, string> = {
+  1: "mt-8 text-2xl font-bold text-slate-900 first:mt-0",
+  2: "mt-8 text-xl font-semibold text-slate-900 first:mt-0",
+  3: "mt-6 text-lg font-semibold text-slate-900",
+};
+
+function renderBlock(b: Block, ctx: RenderCtx, key: string): ReactNode {
+  const t = tone(ctx.variant);
   if (b.kind === "code") {
     return createElement(
       "pre",
@@ -648,17 +788,72 @@ function renderBlock(b: Block, variant: MarkdownVariant, key: string): ReactNode
         createElement(
           "li",
           { key: `${key}-${i}`, className: "whitespace-pre-wrap break-words" },
-          ...renderInline(parseInline(item), variant, `${key}-${i}`),
+          ...renderInline(parseInline(item, 0, ctx.mode), ctx, `${key}-${i}`),
         ),
       ),
     );
+  }
+  if (b.kind === "heading") {
+    const level = Math.min(6, Math.max(1, b.level));
+    return createElement(
+      `h${level}`,
+      // id from the text would be a second slugger to keep in step with the nav; the guides
+      // do not deep-link their own steps, so no id is emitted.
+      { key, className: HEADING_CLASS[level] ?? "mt-4 text-base font-semibold text-slate-900" },
+      ...renderInline(parseInline(b.text, 0, ctx.mode), ctx, key),
+    );
+  }
+  if (b.kind === "table") {
+    const cell = (tag: "th" | "td", text: string, at: string) =>
+      createElement(
+        tag,
+        {
+          key: at,
+          className:
+            tag === "th"
+              ? "border-b border-slate-200 px-2 py-1 text-left font-semibold text-slate-900"
+              : "border-b border-slate-100 px-2 py-1 align-top",
+        },
+        ...renderInline(parseInline(text, 0, ctx.mode), ctx, at),
+      );
+    return createElement(
+      "div",
+      // A table is the one block that can be wider than a phone: let it scroll INSIDE its
+      // own box (the same rule the docs <pre> uses) instead of panning the page.
+      { key, className: "mt-3 overflow-x-auto" },
+      createElement(
+        "table",
+        { className: "w-full border-collapse text-sm" },
+        createElement("thead", null, createElement("tr", null, ...b.head.map((h, i) => cell("th", h, `${key}-h${i}`)))),
+        createElement(
+          "tbody",
+          null,
+          ...b.rows.map((row, r) =>
+            createElement(
+              "tr",
+              { key: `${key}-r${r}` },
+              ...row.map((c, i) => cell("td", c, `${key}-r${r}c${i}`)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+  if (b.kind === "image") {
+    const rendered = renderImage({ v: b.alt, src: b.src }, ctx, key, true);
+    // The resolver returned nothing (an unknown filename): keep the alt text visible as a
+    // paragraph rather than emitting a broken image.
+    if (typeof rendered === "string") {
+      return createElement("p", { key, className: "mt-2 text-sm text-slate-600" }, rendered);
+    }
+    return rendered;
   }
   return createElement(
     "p",
     // whitespace-pre-wrap preserves the line breaks the old raw-text rendering
     // showed; break-words handles a long unbroken token.
     { key, className: "whitespace-pre-wrap break-words" },
-    ...renderInline(parseInline(b.text), variant, key),
+    ...renderInline(parseInline(b.text, 0, ctx.mode), ctx, key),
   );
 }
 
@@ -668,22 +863,34 @@ export type MarkdownProps = {
   /** Which surface it sits on, so code/links stay legible. Default "assistant". */
   variant?: MarkdownVariant;
   className?: string;
+  /** "chat" (default, the assistant subset) or "docs" (headings/tables/images). */
+  mode?: MarkdownMode;
+  /** docs mode only: maps a bare screenshot filename to the asset the generator copied. */
+  resolveImage?: ResolveImage;
 };
 
 /**
  * Markdown renders the assistant/user/feedback subset as React elements. It is
  * the ONE renderer for chat answers, feedback thread bodies (the /feedback page
- * and the /admin triage view) — do not write a second one.
+ * and the /admin triage view) — do not write a second one. `/docs/guides` renders
+ * through it too, in `mode="docs"` (card t_7b9f6d18).
  */
-export function Markdown({ text, variant = "assistant", className = "" }: MarkdownProps) {
-  const blocks = parseMarkdown(text);
+export function Markdown({
+  text,
+  variant = "assistant",
+  className = "",
+  mode = "chat",
+  resolveImage,
+}: MarkdownProps) {
+  const blocks = parseMarkdown(text, mode);
   if (blocks.length === 0) return null;
+  const ctx: RenderCtx = { variant, mode, resolveImage };
   return createElement(
     "div",
     // min-w-0 lets the block shrink inside a flex bubble (a flex item will not
     // go below its content width otherwise), which is what stops a wide code
     // block from widening the whole card at 412px.
     { className: `min-w-0 space-y-2 break-words ${className}`.trim() },
-    ...blocks.map((b, i) => renderBlock(b, variant, `b${i}`)),
+    ...blocks.map((b, i) => renderBlock(b, ctx, `b${i}`)),
   );
 }

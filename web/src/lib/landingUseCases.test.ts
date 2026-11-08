@@ -26,9 +26,12 @@
 //      product, RM1.00 floor) and keep the fixed denominations as the
 //      ALTERNATIVE. The negation arm survives only for capability that is
 //      genuinely absent: a donor wall, a progress bar.
-//   4. No dead guide link. /docs/guides/<slug> does not exist in this app
-//      (src/app/docs has no `guides` directory, and there is no catch-all), so
-//      the card's fallback applies: say the guide is coming, do not link a 404.
+//   4. No dead guide link. /docs/guides/<slug> EXISTS now (card t_7b9f6d18): the
+//      guides in docs/guides/ are rendered at /docs/guides/<slug>, so the rule is
+//      no longer "do not link" — it is "a link must land". Every /docs/guides href
+//      on this page has to resolve to a page file under src/app/docs/guides/. Since
+//      card t_d6a44ec9 every showcase has a guide, so every card links one and none
+//      may still render the "coming soon" note.
 //
 // WHAT THIS CANNOT SEE (stated honestly): it reads source and the dictionary.
 // It cannot prove the steps match the shipped UI, cannot judge translation
@@ -39,7 +42,7 @@
 //   (node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts)
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
@@ -50,6 +53,7 @@ const dict = DICT as unknown as Record<string, Record<Lang, string>>;
 const entry = (key: string) => dict[key];
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+const pathOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 
 const landing = read("../app/landing/page.tsx");
 // The LIVE constraint, not 000001: 000001 is append-only history, and the type
@@ -84,6 +88,28 @@ const SHOWCASES = [
   { name: "collect donations", prefix: "land.donation", steps: 5 },
 ];
 
+/**
+ * The showcases that have a WRITTEN guide, the /docs/guides page that renders it, and the
+ * dictionary key its link is labelled with. Card t_7b9f6d18 rendered the first guide; card
+ * t_d6a44ec9 linked the other six, so every showcase has one now and no card renders
+ * land.guidesoon. Adding a guide means adding its row here AND its link on the page — the
+ * counts below fail otherwise.
+ */
+const GUIDED_SHOWCASES = [
+  { prefix: "land.wedding", href: "/docs/guides/wedding-rsvp", labelKey: "land.guidewedding" },
+  { prefix: "land.qr", href: "/docs/guides/qr-table-ordering", labelKey: "land.guideqr" },
+  { prefix: "land.tuition", href: "/docs/guides/tuition-class", labelKey: "land.guidetuition" },
+  { prefix: "land.canva", href: "/docs/guides/design-with-mcp", labelKey: "land.guidecanva" },
+  { prefix: "land.aff", href: "/docs/guides/affiliate-programme", labelKey: "land.guideaff" },
+  {
+    prefix: "land.membership",
+    href: "/docs/guides/club-membership",
+    labelKey: "land.guidemembership",
+  },
+  { prefix: "land.donation", href: "/docs/guides/donations", labelKey: "land.guidedonation" },
+];
+
+
 /** The donation showcase's own keys (requirement 1 of the card). */
 const DONATION_KEYS = [
   "land.donationtitle",
@@ -97,7 +123,12 @@ const DONATION_KEYS = [
   ...Array.from({ length: 5 }, (_, i) => `land.donationstep${i + 1}`),
 ];
 
-const ALL_KEYS = [...DONATION_KEYS, "land.setup", "land.guidesoon"];
+const ALL_KEYS = [
+  ...DONATION_KEYS,
+  "land.setup",
+  "land.guidesoon",
+  ...GUIDED_SHOWCASES.map((g) => g.labelKey),
+];
 
 const count = (needle: string) => landing.split(needle).length - 1;
 
@@ -129,9 +160,11 @@ test("every showcase has a 'How to set it up' list, in order", () => {
   );
   assert.equal(
     count('t("land.guidesoon")'),
-    SHOWCASES.length,
-    `the closing note (land.guidesoon) must appear once per setup list — one showcase has no ` +
-      `list, or a list has no closing line`,
+    SHOWCASES.length - GUIDED_SHOWCASES.length,
+    `the closing note (land.guidesoon) must appear once per setup list that has NO guide — ` +
+      `${SHOWCASES.length - GUIDED_SHOWCASES.length} of ${SHOWCASES.length} showcases have no ` +
+      `guide yet, found ${count('t("land.guidesoon")')}. A showcase that has a guide must link ` +
+      `it instead (card t_7b9f6d18).`,
   );
   assert.equal(count("<ol className=\"mt-3 list-decimal"), SHOWCASES.length, "one ordered list per showcase");
 
@@ -288,20 +321,61 @@ test("the donation copy describes the shipped pay-what-you-want product, and the
   );
 });
 
-test("no dead /docs/guides link: the page says the guide is coming instead", () => {
-  // There is no app/docs/guides route (and no catch-all under app/docs), so a
-  // /docs/guides/<slug> href is a 404. The card allows the honest fallback.
-  // Only hrefs count: the render sites' own comments name the path to explain
-  // why it is NOT linked, and prose must not be able to fail this.
-  const guideHrefs = landing.match(/href=\{?["'`][^"'`]*\/docs\/guides/g) ?? [];
-  assert.deepEqual(
-    guideHrefs,
-    [],
-    "app/landing/page.tsx links /docs/guides/… — that route does not exist, so the link is a 404. " +
-      "Keep the land.guidesoon note until a guide page ships.",
+test("every /docs/guides link on the landing page lands on a page that exists", () => {
+  // Card t_7b9f6d18. The guides were always real (docs/guides/<slug>/README.md + screenshots);
+  // this app just had no route for them, so the old rule was "do not link". Now that
+  // /docs/guides/<slug> renders them, the rule inverts: a link is REQUIRED where a guide
+  // exists, and every link must resolve to a page file. Only hrefs count — the render sites'
+  // own comments name the path to explain the link, and prose must not be able to satisfy it.
+  const hrefs = [...landing.matchAll(/href=\{?["'`](\/docs\/guides\/[a-z0-9-]+)/g)].map((m) => m[1]);
+  assert.equal(
+    hrefs.length,
+    GUIDED_SHOWCASES.length,
+    `app/landing/page.tsx links ${hrefs.length} /docs/guides page(s) but ${GUIDED_SHOWCASES.length} ` +
+      `showcase(s) have a guide — one link per guided showcase is the shape this pins`,
   );
-  // The links that ARE on the page must point at real routes (the dashboard
-  // routes the CTAs use, plus the docs pages the footer already had).
+  const missing = hrefs.filter((href) => !existsSync(pathOf(`../app${href}/page.tsx`)));
+  assert.deepEqual(
+    missing,
+    [],
+    `app/landing/page.tsx links guides that have no page (a 404 for the reader):\n  ` +
+      `${missing.join("\n  ")}\n` +
+      `Add src/app${"/docs/guides/<slug>"}/page.tsx for the guide, or remove the link.`,
+  );
+
+  // The showcase with a guide must render the link INSIDE its own setup card, with its own
+  // label, and must not still say the guide is coming — that combination (a link in one
+  // place, "coming soon" in the card a reader is looking at) is what the old fallback
+  // produced. The card ends at the </section> after its OWN last step: three showcases have
+  // four steps, so anchoring on step5 would slice the wrong range for them.
+  for (const g of GUIDED_SHOWCASES) {
+    const showcase = SHOWCASES.find((s) => s.prefix === g.prefix);
+    if (!showcase) assert.fail(`${g.prefix}: no SHOWCASES row, so its step count is unguarded`);
+    const from = landing.indexOf(`t("${g.prefix}step1")`);
+    const lastStep = landing.indexOf(`t("${g.prefix}step${showcase.steps}")`);
+    const to = landing.indexOf("</section>", lastStep);
+    assert.ok(
+      from > 0 && lastStep > from && to > lastStep,
+      `${g.prefix}: could not find the showcase's step list on the page`,
+    );
+    const card = landing.slice(from, to);
+    assert.ok(
+      card.includes(`href="${g.href}"`),
+      `${g.prefix} has a guide at ${g.href} but its setup card does not link it — the reader is ` +
+        `told nothing about the guide that exists`,
+    );
+    assert.ok(
+      card.includes(`t("${g.labelKey}")`),
+      `${g.prefix} links its guide with no ${g.labelKey} label rendered inside the card`,
+    );
+    assert.ok(
+      !card.includes('t("land.guidesoon")'),
+      `${g.prefix} links its guide AND says the guide is coming soon — one of the two is wrong`,
+    );
+  }
+
+  // The links that are NOT guides must still point at real routes (the dashboard routes the
+  // CTAs use, plus the docs pages the footer already had).
   for (const href of ["/builder", "/mcp", "/login", "/docs", "/docs/api"]) {
     assert.ok(landing.includes(`href="${href}"`), `the landing page lost its ${href} link`);
   }

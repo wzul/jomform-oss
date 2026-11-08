@@ -106,6 +106,19 @@ export default function PaymentFeesDocsPage() {
         buyer sees, and what lands on the sale.
       </p>
 
+      {/* Card t_7b9f6d18: the screenshot walk-through for this feature already existed at
+          docs/guides/payment-fees and was reachable from nowhere. This is the prose surface it
+          belongs to, so the link lives here (the landing page's showcase is a different
+          feature set and does not carry a payment-fees card). */}
+      <p className="mt-3 text-sm text-slate-600">
+        <a
+          href="/docs/guides/payment-fees"
+          className="underline decoration-dotted underline-offset-2 hover:text-slate-900"
+        >
+          Follow the screenshot guide: six steps from Settings to what your buyer sees →
+        </a>
+      </p>
+
       <h2 className="mt-8 text-xl font-semibold text-slate-900">Setting it up</h2>
       <div className="mt-4 space-y-5">
         {STEPS.map((s) => (

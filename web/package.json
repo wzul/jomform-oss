@@ -15,6 +15,8 @@
     "lint": "eslint .",
     "test:unit": "node scripts/web-deps-check.mjs && node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts",
     "docs:facts": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/docsFacts.mjs",
+    "guides:sync": "node scripts/guides.mjs",
+    "guides:check": "node scripts/guides.mjs --check",
     "css:scan-scope": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/cssScanScope.mjs",
     "a11y": "playwright test --project=a11y",
     "e2e": "playwright test --project=feature-e2e",

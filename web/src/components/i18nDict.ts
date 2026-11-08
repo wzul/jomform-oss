@@ -2071,10 +2071,21 @@ export const DICT = {
   // Restaurant menu panels, Settings → Storefront / Affiliates, Subscriptions.
   // Product types are ONLY one_time and subscription
   // (000001_init.up.sql) — no entry here may promise a free amount.
-  // /docs/guides/<slug> does not exist yet, so no setup links there: each list
-  // ends with land.guidesoon instead (the card's own fallback).
+  // Card t_7b9f6d18: /docs/guides/<slug> renders every guide; card t_d6a44ec9 linked
+  // the six remaining showcase cards at theirs too (wedding-rsvp, qr-table-ordering,
+  // tuition-class, design-with-mcp, affiliate-programme, club-membership). Each label
+  // names its own guide, so a screen reader's link list does not repeat one string
+  // seven times. land.guidesoon is kept in the dictionary for any future showcase
+  // without a guide — the landing page no longer renders it.
   "land.setup": { en: "How to set it up", ms: "Cara menyediakannya", zh: "如何设置", ta: "எப்படி அமைப்பது", ar: "كيف تُعِدّه" },
   "land.guidesoon": { en: "Full step-by-step guide with screenshots — coming soon.", ms: "Panduan penuh langkah demi langkah dengan gambar — akan datang.", zh: "完整图文分步指南 —— 即将推出。", ta: "படங்களுடன் கூடிய முழு படிப்படியான வழிகாட்டி — விரைவில்.", ar: "دليل كامل خطوة بخطوة بالصور — قريباً." },
+  "land.guidedonation": { en: "Read the full step-by-step guide with screenshots →", ms: "Baca panduan penuh langkah demi langkah dengan gambar →", zh: "阅读完整的图文分步指南 →", ta: "படங்களுடன் கூடிய முழு படிப்படியான வழிகாட்டியைப் படிக்கவும் →", ar: "اقرأ الدليل الكامل خطوة بخطوة بالصور ←" },
+  "land.guidewedding": { en: "Read the full wedding + RSVP guide with screenshots →", ms: "Baca panduan penuh perkahwinan + RSVP dengan gambar →", zh: "阅读完整的婚礼 + RSVP 图文分步指南 →", ta: "படங்களுடன் கூடிய முழு திருமண + RSVP வழிகாட்டியைப் படிக்கவும் →", ar: "اقرأ دليل الزفاف + RSVP الكامل بالصور ←" },
+  "land.guideqr": { en: "Read the full QR ordering guide with screenshots →", ms: "Baca panduan penuh pesanan QR dengan gambar →", zh: "阅读完整的二维码点餐图文分步指南 →", ta: "படங்களுடன் கூடிய முழு QR ஆர்டர் வழிகாட்டியைப் படிக்கவும் →", ar: "اقرأ دليل الطلب عبر QR الكامل بالصور ←" },
+  "land.guidetuition": { en: "Read the full tuition + class fees guide with screenshots →", ms: "Baca panduan penuh tuisyen + yuran kelas dengan gambar →", zh: "阅读完整的补习班 + 课程费图文分步指南 →", ta: "படங்களுடன் கூடிய முழு பயிற்சி + வகுப்புக் கட்டண வழிகாட்டியைப் படிக்கவும் →", ar: "اقرأ دليل الدروس + رسوم الصفوف الكامل بالصور ←" },
+  "land.guidecanva": { en: "Read the full AI agent + MCP guide with screenshots →", ms: "Baca panduan penuh agent AI + MCP dengan gambar →", zh: "阅读完整的 AI 代理 + MCP 图文分步指南 →", ta: "படங்களுடன் கூடிய முழு AI முகவர் + MCP வழிகாட்டியைப் படிக்கவும் →", ar: "اقرأ دليل وكيل الذكاء الاصطناعي + MCP الكامل بالصور ←" },
+  "land.guideaff": { en: "Read the full affiliate guide with screenshots →", ms: "Baca panduan penuh affiliate dengan gambar →", zh: "阅读完整的联盟营销图文分步指南 →", ta: "படங்களுடன் கூடிய முழு இணைப்பு சந்தைப்படுத்தல் வழிகாட்டியைப் படிக்கவும் →", ar: "اقرأ دليل التسويق بالعمولة الكامل بالصور ←" },
+  "land.guidemembership": { en: "Read the full club membership guide with screenshots →", ms: "Baca panduan penuh keahlian kelab dengan gambar →", zh: "阅读完整的俱乐部会员图文分步指南 →", ta: "படங்களுடன் கூடிய முழு கிளப் உறுப்பினர் வழிகாட்டியைப் படிக்கவும் →", ar: "اقرأ دليل عضوية النادي الكامل بالصور ←" },
   "land.donationtitle": { en: "Collect donations with a paid form", ms: "Kutip derma dengan borang berbayar", zh: "用付费表单收集捐款", ta: "கட்டணப் படிவத்தால் நன்கொடை வசூலிக்கவும்", ar: "اجمع التبرعات بنموذج دفع" },
   "land.donationbody": { en: "A mosque, school, charity or community group publishes a donation form in minutes. One pay-what-you-want product lets the donor type the amount — RM1.00 minimum — and pay by card, FPX, DuitNow QR or e-wallet through CHIP. The server checks the amount against your minimum and maximum before charging, and every gift appears under Sales with the donor's name, email and amount.", ms: "Masjid, sekolah, badan kebajikan atau persatuan komuniti boleh terbitkan borang derma dalam beberapa minit. Satu produk bayar ikut suka membolehkan penderma menaip jumlahnya — minimum RM1.00 — dan membayar dengan kad, FPX, DuitNow QR atau e-dompet melalui CHIP. Server menyemak jumlah itu terhadap minimum dan maksimum anda sebelum mengecaj, dan setiap derma muncul di Jualan bersama nama, e-mel dan jumlah penderma.", zh: "清真寺、学校、慈善机构或社区团体几分钟内就能发布捐款表单。一个随意支付商品让捐款人自行输入金额（最低 RM1.00），再通过 CHIP 用卡、FPX、DuitNow QR 或电子钱包付款。服务器在收费前会按您设定的最低与最高金额校验，每笔捐款都会连同捐款人姓名、电邮和金额显示在销售中。", ta: "பள்ளிவாசல், பள்ளி, தொண்டு நிறுவனம் அல்லது சமூகக் குழு நிமிடங்களில் நன்கொடைப் படிவத்தை வெளியிடலாம். ஒரு விருப்பத் தொகை தயாரிப்பு மூலம் நன்கொடையாளர் தொகையைத் தட்டச்சு செய்கிறார் — குறைந்தபட்சம் RM1.00 — CHIP வழியாக கார்டு, FPX, DuitNow QR அல்லது மின் பணப்பையில் செலுத்துகிறார். கட்டணம் வசூலிக்கும் முன் சேவையகம் அந்தத் தொகையை உங்கள் குறைந்தபட்ச, அதிகப்பட்ச வரம்புகளுக்கு எதிராகச் சரிபார்க்கிறது; ஒவ்வொரு நன்கொடையும் நன்கொடையாளரின் பெயர், மின்னஞ்சல், தொகையுடன் விற்பனையில் தோன்றும்.", ar: "يستطيع مسجد أو مدرسة أو جمعية خيرية أو مجموعة مجتمعية نشر نموذج تبرع في دقائق. منتج واحد «ادفع ما تشاء» يتيح للمتبرع كتابة المبلغ — بحد أدنى RM1.00 — والدفع بالبطاقة أو FPX أو DuitNow QR أو المحفظة الإلكترونية عبر CHIP. يتحقق الخادم من المبلغ وفق الحد الأدنى والأقصى قبل التحصيل، ويظهر كل تبرع في المبيعات مع اسم المتبرع وبريده والمبلغ." },
   "land.donation1": { en: "Pay what you want: one donation product, the donor types the amount (RM1.00 minimum)", ms: "Bayar ikut suka: satu produk derma, penderma menaip jumlahnya (minimum RM1.00)", zh: "随意支付：一个捐款商品，由捐款人输入金额（最低 RM1.00）", ta: "விருப்பத் தொகை: ஒரு நன்கொடைத் தயாரிப்பு, நன்கொடையாளரே தொகையைத் தட்டச்சு செய்கிறார் (குறைந்தபட்சம் RM1.00)", ar: "ادفع ما تشاء: منتج تبرع واحد يكتب المتبرع مبلغه (بحد أدنى RM1.00)" },
@@ -2888,6 +2899,10 @@ export const DICT = {
   "docs.linkPlaceholders": { en: "Placeholders reference", ms: "Rujukan placeholder", zh: "占位符参考", ta: "இடமாற்றி குறிப்பு", ar: "مرجع العناصر النائبة" },
   "docs.linkEmbed": { en: "Embed on your site", ms: "Benamkan di laman anda", zh: "嵌入到您的网站", ta: "உங்கள் தளத்தில் இணைக்கவும்", ar: "التضمين في موقعك" },
   "docs.linkMCP": { en: "MCP tool reference", ms: "Rujukan alat MCP", zh: "MCP 工具参考", ta: "MCP கருவி குறிப்பு", ar: "مرجع أدوات MCP" },
+  // Card t_7b9f6d18: the screenshot guides (docs/guides/<slug>) now have a route, and the
+  // /docs index's quick-link row is how a reader on /docs reaches them (docsIndex.test.ts
+  // requires every sidebar row to be reachable from the index).
+  "docs.linkGuides": { en: "Screenshot guides", ms: "Panduan bergambar", zh: "图文指南", ta: "பட வழிகாட்டிகள்", ar: "أدلة مصوّرة" },
   // t_5425c958: the workspace guide is reached from its own two entries on the
   // index (which render `docs.next`), not from the quick-link row — so it needs
   // no label key here. Only keys with a real call site are declared.

@@ -25,6 +25,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,6 +62,18 @@ type chatSessionMessageOut struct {
 	Content   string      `json:"content"`
 	CreatedAt time.Time   `json:"created_at"`
 	Steps     []chat.Step `json:"steps,omitempty"`
+	// Stopped marks a PARTIAL answer: the user pressed Stop while it was being
+	// written, so the text above is the fragment that had already been shown and
+	// nothing followed it (card t_babeaa84).
+	//
+	// WHY THE FLAG HAS TO SURVIVE THE ROUND TRIP. While the answer streams, the
+	// dashboard marks it in place ("Stopped — this answer is incomplete"). A
+	// restored transcript that dropped the flag would render a sentence that
+	// stops mid-word as if the assistant had finished — the exact confusion the
+	// live marker exists to prevent. A boolean, not a sentence, for the same
+	// reason as every other chat value: the API does not know the reader's
+	// language (issue #6177).
+	Stopped bool `json:"stopped,omitempty"`
 }
 
 type chatSessionCreateIn struct {
@@ -225,7 +238,8 @@ func (h *RESTHandlers) handleChatSessionGet(w http.ResponseWriter, r *http.Reque
 	for _, m := range msgs {
 		out = append(out, chatSessionMessageOut{
 			ID: m.ID, Role: m.Role, Content: m.Content, CreatedAt: m.CreatedAt,
-			Steps: chatStepsFromMeta(m.Meta),
+			Steps:   chatStepsFromMeta(m.Meta),
+			Stopped: chatStoppedFromMeta(m.Meta),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -335,6 +349,52 @@ func chatStepsMeta(steps []chat.Step) map[string]any {
 	return map[string]any{"steps": steps}
 }
 
+// chatStoppedMetaKey is the chat_messages.meta field that marks an assistant turn
+// as PARTIAL: the user pressed Stop while it was being written (card t_babeaa84).
+//
+// A named boolean rather than a column because the flag describes the ANSWER, not
+// the conversation, and chat_messages.meta already carries the other per-answer
+// fact (the tool trail). It is additive: a build that does not know the key reads
+// the text and shows it unmarked, which is the pre-card behaviour rather than a
+// broken transcript.
+const chatStoppedMetaKey = "stopped"
+
+// chatStoppedFromMeta reports whether a stored assistant turn was CUT SHORT by
+// the user. Only a JSON `true` counts: anything else is a shape this build does
+// not understand, and guessing "partial" from it would put an incomplete marker
+// under a complete answer — the inverse of the defect this flag fixes.
+func chatStoppedFromMeta(meta map[string]any) bool {
+	v, ok := meta[chatStoppedMetaKey]
+	if !ok {
+		return false
+	}
+	stopped, ok := v.(bool)
+	return ok && stopped
+}
+
+// chatPersistTimeout bounds a transcript write. The write is deliberately
+// detached from the request's cancellation (see chatPersistCtx), so without a
+// deadline of its own a stuck database could hold the handler goroutine open with
+// nobody waiting for it.
+const chatPersistTimeout = 5 * time.Second
+
+// chatPersistCtx detaches a transcript write from the REQUEST's cancellation.
+//
+// WHY THIS IS THE WHOLE FIX FOR THE STOP PATH (card t_babeaa84). Stop is the
+// browser closing the connection, and the server learns about it BY that
+// cancellation — so on the one path where the transcript matters most
+// (a cancelled answer), the request context is already dead. A write that
+// inherited it would fail with `context canceled` every single time. Until this
+// fix a stopped exchange stored NOTHING: the stored conversation kept only the
+// previous, complete exchange, so the question the user had just typed and the
+// partial answer they were reading were both gone, and a reload showed neither.
+//
+// WithoutCancel keeps the request's VALUES (request id, account, logger), which
+// is what makes the failure log line still name the right request.
+func chatPersistCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), chatPersistTimeout)
+}
+
 // chatPersistExchange records one answered exchange into its conversation.
 //
 // It runs AFTER the model has answered, so a failure here is logged and never
@@ -344,19 +404,67 @@ func chatStepsMeta(steps []chat.Step) map[string]any {
 // called (chatSessionWorkspaceOr404), so the only ways this fails are a database
 // fault and the session being deleted mid-answer.
 func (h *RESTHandlers) chatPersistExchange(r *http.Request, uid, workspaceID, sessionID, msg string, res *chat.Result) {
-	if h.ChatSessions == nil || strings.TrimSpace(sessionID) == "" || res == nil {
+	if res == nil {
 		return
 	}
 	// The user's turn first: it is what names an unnamed conversation, and it is
 	// the part that must not be lost if the assistant's turn is refused.
-	if _, err := h.ChatSessions.Append(r.Context(), uid, workspaceID, sessionID, "user", msg, nil, chat.MaxTurns); err != nil {
-		logError(r, "chat_session_append_user_failed", err)
+	if !h.chatPersistTurn(r, uid, workspaceID, sessionID, "user", msg, nil) {
 		return
 	}
-	if _, err := h.ChatSessions.Append(r.Context(), uid, workspaceID, sessionID, "assistant", res.Reply,
-		chatStepsMeta(res.Steps), chat.MaxTurns); err != nil {
-		logError(r, "chat_session_append_assistant_failed", err)
+	h.chatPersistTurn(r, uid, workspaceID, sessionID, "assistant", res.Reply, chatStepsMeta(res.Steps))
+}
+
+// chatPersistStoppedExchange records a CANCELLED exchange (card t_babeaa84).
+//
+// THE DEFECT THIS CLOSES. Stop mid-answer used to store NOTHING: the stream
+// handler returned on the client-gone error before reaching chatAnswer, and
+// chatPersistExchange only ever ran for a completed *chat.Result. The dashboard
+// kept the partial in its own state and marked it, so it looked handled — until
+// the page was reloaded and the user's question and the answer they were reading
+// had both vanished. A conversation that loses a turn the user watched arrive is
+// worse than one that never showed it.
+//
+// THE PARTIAL IS THE TEXT THAT WAS ON SCREEN, not a reconstruction: the caller
+// accumulates exactly what it emitted (honouring retract), so a reload renders
+// the same fragment the user stopped on.
+//
+// NO TOOL TRAIL, DELIBERATELY. The stream knows a tool STARTED but never how it
+// ended (called, refused, proposed), and a stored step invented here would draw a
+// successful chip for a call that may have been refused. A partial answer with no
+// trail is honest; a wrong trail is not.
+func (h *RESTHandlers) chatPersistStoppedExchange(r *http.Request, uid, workspaceID, sessionID, msg, partial string) {
+	// THE QUESTION ALWAYS, even when the user stopped before the first fragment:
+	// it is what they typed, it is what names the conversation, and it is the half
+	// of the loss that is entirely theirs.
+	if !h.chatPersistTurn(r, uid, workspaceID, sessionID, "user", msg, nil) {
+		return
 	}
+	if strings.TrimSpace(partial) == "" {
+		// Nothing had been painted yet, so there is no partial to mark. An empty
+		// assistant turn would render as a blank bubble the user cannot tell from
+		// a broken answer — the page drops it for the same reason.
+		return
+	}
+	h.chatPersistTurn(r, uid, workspaceID, sessionID, "assistant", partial,
+		map[string]any{chatStoppedMetaKey: true})
+}
+
+// chatPersistTurn appends ONE turn to a stored conversation and reports whether it
+// landed. A failure is logged, never returned: a transcript write happens after
+// the answer was already delivered, and turning it into an error would throw away
+// work the user has read.
+func (h *RESTHandlers) chatPersistTurn(r *http.Request, uid, workspaceID, sessionID, role, content string, meta map[string]any) bool {
+	if h.ChatSessions == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	ctx, cancel := chatPersistCtx(r.Context())
+	defer cancel()
+	if _, err := h.ChatSessions.Append(ctx, uid, workspaceID, sessionID, role, content, meta, chat.MaxTurns); err != nil {
+		logError(r, "chat_session_append_"+role+"_failed", err)
+		return false
+	}
+	return true
 }
 
 // chatAnswer records the exchange and builds the wire response, so the one-shot

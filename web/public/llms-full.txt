@@ -52,6 +52,30 @@ prices, sales, refunds, analytics — without opening a dashboard.
   per CHIP payment method (fixed sen and/or basis points), grossed up so you receive the full
   asking amount (at most 1 sen short), the buyer's pre-payment disclosure, the method lock at the
   CHIP page, the per-form switch-off, and why a refund never returns the fee.
+- [Screenshot guides](https://jomform.com/docs/guides) — step-by-step setup walk-throughs, every
+  step with its own screenshot from the running product and the control you touch at that step
+  boxed in red.
+- [Collect donations guide](https://jomform.com/docs/guides/donations) — 8 steps: connect CHIP,
+  add the donation amounts, start from the Donation template, one product block per amount,
+  publish, copy the live link, and what the donor sees (pay-what-you-want with an RM1.00 floor,
+  or one one-time product per fixed tier).
+- [Payment fees guide](https://jomform.com/docs/guides/payment-fees) — 6 steps: open Settings →
+  Payment fees, tick the methods, enter the rate, acknowledge the pass-on, save, and the fee line
+  the buyer sees (with the RM100 at 2% worked example).
+- [Affiliate programme guide](https://jomform.com/docs/guides/affiliate-programme) — 2 steps:
+  create an affiliate with its code, name and commission, then hand over the referral link the
+  row carries; only paid sales earn a commission.
+- [Club membership guide](https://jomform.com/docs/guides/club-membership) — 5 steps: one repeating
+  membership fee, the members' sign-up form, and the renewal the buyer does not have to remember.
+- [Design with an AI agent (MCP) guide](https://jomform.com/docs/guides/design-with-mcp) — 4 steps:
+  connect an MCP client once, then add products, edit forms and read sales in plain language.
+- [QR table ordering guide](https://jomform.com/docs/guides/qr-table-ordering) — 7 steps: a QR code
+  on the table, the menu it opens in the diner's browser, and the order arriving with the table
+  number attached.
+- [Tuition / class registration guide](https://jomform.com/docs/guides/tuition-class) — 6 steps: a
+  registration form that takes a one-time fee today and the monthly class fee after that.
+- [Wedding page + RSVP form guide](https://jomform.com/docs/guides/wedding-rsvp) — 9 steps: build
+  the wedding page, set the RSVP form's response mode and blocks, publish, and read the answers.
 - [Customize](https://jomform.com/docs/customize) — design → AI agent → MCP flow, the restaurant
   menu and its basket, product images, templates, the brand colour on the public form, custom
   domains, language and affiliate marketing.

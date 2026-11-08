@@ -79,9 +79,15 @@ function guidePathsLinkedFromIndex(src: string): Set<string> {
 // anchored with a lookahead so `/docs` cannot be read as a prefix of
 // `/docs/sales` — the slug alternative is tried first, and the bare one only
 // matches when the next character is neither `/` nor a slug character.
+//
+// NESTED PATHS TOO (card t_7b9f6d18): `/docs/guides/payment-fees` is a real route
+// (`app/docs/guides/<slug>/page.tsx`), so a single-segment pattern would report every
+// screenshot guide as unnamed and fail the run on a file that names them correctly.
 function guidePathsNamedInLlmsFull(src: string): Set<string> {
   const paths = new Set<string>();
-  for (const m of src.matchAll(/https:\/\/jomform\.com(\/docs\/[a-z0-9-]+|\/docs(?![\/a-z0-9-]))/g))
+  for (const m of src.matchAll(
+    /https:\/\/jomform\.com(\/docs(?:\/[a-z0-9-]+)+|\/docs(?![\/a-z0-9-]))/g,
+  ))
     paths.add(m[1]);
   return paths;
 }

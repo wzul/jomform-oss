@@ -39,6 +39,14 @@
 #       4 the next version is already tagged · 5 the ship failed (the tag REMAINS — it is
 #       the record of the decision; fix and re-run with --ship-only) · 6 the mirror failed
 #       (the release stands; re-run with --oss-only)
+#
+# WHAT IT GUARANTEES ABOUT THE TREE IT SHIPS
+#   The ship runs in a DETACHED worktree pinned to the tag, so it is exactly the tagged
+#   bytes. That worktree has no web/node_modules (gitignored), so cut-release gives it
+#   one with deploy/web_modules.sh — the SAME seeder deploy/merge-train.sh uses —
+#   preferring the dependency set the per-tree gate record names. That is what lets a
+#   tree the merge train already gated be REUSED here instead of gated again, and it is
+#   why --ship-only is a real recovery: it re-seeds and retries the same tag.
 set -o pipefail
 
 PROG=${0##*/}
@@ -63,7 +71,7 @@ while [ $# -gt 0 ]; do
     --from)      FROM=${2:?--from needs a ref}; shift 2 ;;
     --tag)       WANT_TAG=${2:?--tag needs a version}; shift 2 ;;
     --notes-file) NOTES_FILE=${2:?--notes-file needs a path}; shift 2 ;;
-    -h|--help)   sed -n '2,45p' "$0"; exit 0 ;;
+    -h|--help)   sed -n '2,/^set -o pipefail/p' "$0" | sed '$d'; exit 0 ;;
     -*)          die "unknown flag: $1" ;;
     *)           die "unexpected argument: $1" ;;
   esac
@@ -72,6 +80,26 @@ done
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || die "not in a git repo"
 cd "$ROOT" || die "cannot cd $ROOT"
 [ -n "$(git status --porcelain)" ] && die "working tree is dirty — a release is cut from a clean tree"
+
+# THE RELEASE TREE IS DETACHED AT THE TAG, SO IT ARRIVES WITHOUT web/node_modules.
+# (gitignored, so `git worktree add` cannot bring it.) Both halves of step 3
+# depend on one existing:
+#   * the web-side gates REFUSE a tree without it rather than reporting a build
+#     that never happened — "web/node_modules/.bin/next is missing — 'npm run
+#     build' would exit 0 with 'sh: 1: next: not found' and build NOTHING";
+#   * the per-tree gate record's `webdeps` component is the sha256 of
+#     web/node_modules/.package-lock.json, so an unseeded tree reads
+#     `webdeps=none` and can NEVER reuse a record the merge train wrote for the
+#     same bytes — it pays the whole inventory again.
+# deploy/web_modules.sh is the SAME seeder deploy/merge-train.sh uses, not a
+# second implementation of it: it prefers a copy whose webdeps is exactly what the
+# record names (that is what keeps the reuse), then one installed from the same
+# web/package-lock.json, then `npm ci`. `--ship-only` goes through it too, which
+# is what makes the documented retry path an actual recovery.
+#
+# It is loaded from THE TREE BEING SHIPPED, falling back to this checkout: a
+# `--ship-only` of an OLD tag (the v1.27.0 repair, for instance) is a tag whose
+# tree predates this file, and the retry must still work.
 
 # bump_version: last tag + kind -> next tag. Pure arithmetic, so it is unit-tested.
 bump_version() {   # $1=last tag (or 'none'), $2=minor|patch
@@ -144,11 +172,24 @@ fi
 # frontend owes a SECOND image — missing it ships an API whose server no longer matches the web
 # bundle it serves.
 # Diffs the commit being released ($SHA), NOT $NEXT: on a dry run the tag does not exist yet.
+#
+# THE RANGE IS MEASURED FROM THE TAG BEFORE THE RELEASE, and on the first cut that is
+# exactly $LAST. On `--ship-only` (and on any re-run once the tag exists) `git describe
+# --abbrev=0 "$SHA"` names the tag ON $SHA, so `$LAST..$SHA` is EMPTY and nothing looks
+# like a web change: a retry of a web-touching release then ships the API image only and
+# reports success, leaving prod on an API whose bundle the web container does not match.
+# That is the recovery path this script documents, so it is measured against the PARENT's
+# last tag instead — the same range the first cut used.
 touches_web() {
-  if [ "$LAST" = none ]; then
+  local since=$LAST
+  if [ "$since" != none ] \
+     && [ "$(git rev-parse --verify --quiet "refs/tags/$since^{commit}" 2>/dev/null)" = "$SHA" ]; then
+    since=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$SHA^" 2>/dev/null || echo none)
+  fi
+  if [ "$since" = none ]; then
     git diff --name-only "$SHA" 2>/dev/null | grep -q '^web/'
   else
-    git diff --name-only "$LAST..$SHA" 2>/dev/null | grep -q '^web/'
+    git diff --name-only "$since..$SHA" 2>/dev/null | grep -q '^web/'
   fi
 }
 
@@ -205,10 +246,70 @@ WT=""
 cleanup_wt() { [ -n "$WT" ] && git worktree remove --force "$WT" >/dev/null 2>&1; }
 trap 'cleanup_wt; [ -n "${NOTES_TMP:-}" ] && rm -f "$NOTES_TMP"' EXIT
 
+# The gate's environment fingerprint includes the TEST DATABASE (see
+# scripts/gate_result.sh, gr_key_material). A record written by the merge train was
+# written with the test env loaded; a release cut from a shell that never sourced it
+# has `testdb=unset`, so the record is refused with "the environment changed since
+# that record" — and the api gates die on the same missing variable. deploy/
+# merge-train.sh sources this file for exactly this reason; the deploy lane's shell
+# is not guaranteed to have done it, and the release must not depend on that.
+load_test_env() {
+  local f="${TEST_ENV_FILE:-${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}}"
+  if [ ! -f "$f" ]; then
+    warn "no test-environment file at $f — gating with this shell's environment only (JOMFORM_TEST_DATABASE_URL is ${JOMFORM_TEST_DATABASE_URL:+set}${JOMFORM_TEST_DATABASE_URL:-unset})"
+    return 0
+  fi
+  # shellcheck disable=SC1090
+  set -a; . "$f"; set +a
+  say "test environment: $f"
+}
+
 if [ "$SHIP" = 1 ]; then
   WT=$(mktemp -d "${TMPDIR:-/tmp}/release-tree.XXXXXX")/tree
   git worktree add -q --detach "$WT" "$NEXT" || die "cannot create the release worktree at $NEXT"
   say "shipping the tagged tree in $WT (full inventory — this is the release gate)"
+  load_test_env
+
+  # The seeder comes from the tree being shipped when it is there (so a release runs
+  # the tag's own code), and from this checkout otherwise — an old tag re-shipped
+  # with --ship-only predates deploy/web_modules.sh.
+  WM_LIB="$WT/deploy/web_modules.sh"
+  [ -r "$WM_LIB" ] || WM_LIB="$ROOT/deploy/web_modules.sh"
+  if [ ! -r "$WM_LIB" ]; then
+    warn "SHIP NOT STARTED for $NEXT — no deploy/web_modules.sh in the tagged tree ($WT) or in"
+    warn "  $ROOT, so the release tree cannot be given a web/node_modules and the web-side"
+    warn "  gates would refuse it. NOTHING was built. The tag and release REMAIN."
+    exit 5
+  fi
+  # shellcheck source=deploy/web_modules.sh
+  . "$WM_LIB"
+
+  # Give the release tree its web/node_modules BEFORE the ship reads the gate
+  # record. `want` is the webdeps the per-tree record for THIS tree names — the
+  # bytes that make the record reusable — and it is empty when there is no record
+  # (then the seed just makes the web gates runnable).
+  TREE=$(git -C "$WT" rev-parse 'HEAD^{tree}')
+  WANT=$(wm_record_webdeps "$TREE")
+  WM_PROG="$PROG"
+  WM_REPO="$ROOT"
+  WM_LOCK_CACHE="${JOMFORM_WEB_MODULES_CACHE:-/var/lib/jomform/web-modules}"
+  say "release tree $TREE${WANT:+ — a gate record for it names webdeps ${WANT:0:12}}"
+  if ! wm_seed "$WT" "$WANT"; then
+    warn "SHIP NOT STARTED for $NEXT — the release tree could not be given a web/node_modules, and"
+    warn "  the web-side gates REFUSE an unseeded tree rather than reporting a build they did not run."
+    warn "  NOTHING was built. The tag and release REMAIN (they are the record of the decision)."
+    warn "  Point the seed at an existing install and retry:"
+    warn "    RELEASE_NODE_MODULES=<a worktree>/web/node_modules $PROG --yes --ship-only"
+    exit 5
+  fi
+  if [ -n "$WANT" ] && [ "$WM_MATCHED" = 1 ]; then
+    say "web deps match the gate record for tree ${TREE:0:7} — the ship REUSES that record instead of taking a gate slot"
+  elif [ -n "$WANT" ]; then
+    say "the record for tree ${TREE:0:7} names webdeps ${WANT:0:12} but this tree now has $(wm_webdeps "$WT" | cut -c1-12) — the ship gates in FULL (a record cannot vouch for a different dependency set)"
+  else
+    say "no gate record for tree ${TREE:0:7} — the ship gates in full"
+  fi
+
   if ! ( cd "$WT" && VERSION_OVERRIDE="$NEXT" ./deploy/build-and-ship.sh ); then
     warn "SHIP FAILED for $NEXT — the tag and release REMAIN (they are the record of the decision)"
     warn "  fix the tree, re-cut with --tag $NEXT after deleting the ref, or re-run: $PROG --yes --ship-only"

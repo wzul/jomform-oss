@@ -287,11 +287,20 @@ function parseGroups(src: string): {
 const { entries, labelKeys, groupIds, declaredIds, groupDecls } = parseGroups(docsSrc);
 
 // Resolve a /docs href (with an optional #anchor) to the page that must carry it.
+//
+// NESTED ROUTES ARE REAL (card t_7b9f6d18). This used to accept ONE segment
+// (`/^[a-z0-9-]+$/`), which was true only while every docs page was `app/docs/<seg>`.
+// The screenshot guides live at `app/docs/guides/<slug>/page.tsx`, and the landing page
+// links one of them — so the single-segment rule reported a REAL, existing page as
+// "no such page" for every nested route, which is the wrong direction for a guard whose
+// job is to find links that 404. Each segment keeps the same character class, and the
+// path is joined onto the app directory, so a traversal or an uppercase slug is still
+// rejected rather than resolved.
 function resolve(pathname: string): string | undefined {
   if (pathname === "/docs") return DOCS_PAGE;
   if (!pathname.startsWith("/docs/")) return undefined;
   const seg = pathname.slice("/docs/".length);
-  if (!/^[a-z0-9-]+$/.test(seg)) return undefined;
+  if (!/^[a-z0-9-]+(?:\/[a-z0-9-]+)*$/.test(seg)) return undefined;
   // Every docs route is a static page directory under app/docs.
   return `../app/docs/${seg}/page.tsx`;
 }

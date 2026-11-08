@@ -87,6 +87,20 @@ const PAGES = [
   // disk and fails when one of them is missing here, so this entry ships with
   // the page.
   { name: "docs-custom-forms", path: "/docs/custom-forms" },
+  // Card t_7b9f6d18: the screenshot guides. Same rule — docsA11y.test.ts fails when
+  // a page under app/docs is not in this list, and these three render the largest
+  // images on the docs site, so leaving them unscanned would repeat the gap.
+  { name: "docs-guides", path: "/docs/guides" },
+  { name: "docs-guides-payment-fees", path: "/docs/guides/payment-fees" },
+  { name: "docs-guides-donations", path: "/docs/guides/donations" },
+  // Card t_343a45c8: the six showcase guides that landed with PR #1644. Registering them here is
+  // not optional — docsA11y.test.ts fails when a page under app/docs is missing from this list.
+  { name: "docs-guides-affiliate-programme", path: "/docs/guides/affiliate-programme" },
+  { name: "docs-guides-club-membership", path: "/docs/guides/club-membership" },
+  { name: "docs-guides-design-with-mcp", path: "/docs/guides/design-with-mcp" },
+  { name: "docs-guides-qr-table-ordering", path: "/docs/guides/qr-table-ordering" },
+  { name: "docs-guides-tuition-class", path: "/docs/guides/tuition-class" },
+  { name: "docs-guides-wedding-rsvp", path: "/docs/guides/wedding-rsvp" },
 ];
 
 for (const page of PAGES) {

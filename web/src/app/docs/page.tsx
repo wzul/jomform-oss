@@ -388,6 +388,10 @@ const QUICK_LINKS: { href: string; labelKey: Key; primary?: boolean }[] = [
   // written. Every docs entry point is a quick link here, and
   // `docsApi.test.ts` requires the index to be able to reach /docs/api.
   { href: "/docs/api", labelKey: "docs.linkAPI" },
+  // Card t_7b9f6d18: the screenshot guides (/docs/guides) are in the sidebar, and
+  // docsIndex.test.ts requires every sidebar row to be reachable from the index —
+  // this row is that way in.
+  { href: "/docs/guides", labelKey: "docs.linkGuides" },
 ];
 
 const FAQ: FaqEntry[] = [

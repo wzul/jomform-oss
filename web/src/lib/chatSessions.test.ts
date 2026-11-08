@@ -213,6 +213,46 @@ test("after a delete, the open conversation stays open; else the newest remainin
   assert.equal(sessionAfterDelete(rows, "c", "gone"), "a");
 });
 
+// ── 4b. The partial answer the user stopped (card t_babeaa84) ────────────────
+
+test("a restored turn carries the partial marker, and the text is kept verbatim", () => {
+  const partial = "# Designing a loyalty programme\n\n## 1. Decide";
+  const detail = parseSessionDetail({
+    session: ROW,
+    messages: [
+      { id: "m1", role: "user", content: "design a loyalty programme" },
+      { id: "m2", role: "assistant", content: partial, stopped: true },
+    ],
+  });
+  assert.ok(detail);
+  assert.equal(detail.turns[1].stopped, true, "the stopped marker was dropped: a reload would show a "
+    + "partial answer as if it were finished");
+  // The page prints `content`; rewriting it here would reopen the defect from the
+  // other side (a reload showing something the user never read).
+  assert.equal(detail.turns[1].content, partial);
+  // A complete turn carries no marker at all.
+  assert.equal(detail.turns[0].stopped, undefined);
+});
+
+test("only a JSON true marks a turn stopped — a truthy payload is not a partial answer", () => {
+  for (const stopped of ["true", 1, {}, false, null]) {
+    const detail = parseSessionDetail({
+      session: ROW,
+      messages: [{ id: "m", role: "assistant", content: "an answer", stopped }],
+    });
+    assert.ok(detail);
+    assert.equal(detail.turns[0].stopped, undefined,
+      `stopped=${JSON.stringify(stopped)} marked a COMPLETE answer as incomplete`);
+  }
+});
+
+test("the page puts a restored turn's stopped marker on the transcript", () => {
+  const page = read("../app/chat/page.tsx");
+  assert.match(page, /stopped:\s*turn\.stopped/,
+    "the page opens a stored conversation without its stopped marker: a reload renders a partial "
+    + "answer as a finished one");
+});
+
 // ── 5. The page wires all of it ──────────────────────────────────────────────
 
 test("the page loads the list, opens a conversation, creates one, renames and deletes", () => {

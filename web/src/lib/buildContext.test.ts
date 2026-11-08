@@ -225,6 +225,17 @@ const HOST_ONLY: Array<{ file: string; literal: string; mechanism: RegExp; why: 
       "itself there through imageBuildSkipReasonAt() (measured: the webimage gate went red with " +
       "ENOENT /repo/docs/accessibility.md before that skip existed)",
   },
+  {
+    file: join(WEB_DIR, "src/lib/guidesContent.test.ts"),
+    literal: "../../../docs/guides",
+    mechanism: /function imageBuildSkipReasonAt\(/,
+    why:
+      "the screenshot guides' SOURCE (docs/guides/<slug>/README.md + PNGs) is not copied into " +
+      "the image either — web/scripts/guides.mjs materialises it into src/lib/guides.gen.ts and " +
+      "web/public/guides/, which ARE in the image — so the source-sync leg skips itself there " +
+      "through imageBuildSkipReasonAt() while the other five legs (pages, public assets, " +
+      "dimensions, the rendered <img> count, the marker sweep) still run against the image",
+  },
 ];
 
 /**

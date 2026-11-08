@@ -13,6 +13,9 @@
 #   I. the mirror carries the released tree under a commit named "Release <tag>"
 #   J. a tag that was never pushed cannot be mirrored (exit 2)
 #   J2. a key-shaped literal in the released tree is refused BEFORE the push (exit 6)
+#   Q. the tag-pinned release tree is SEEDED before it ships, and the dependency set
+#      is chosen by the per-tree record (reuse) — with `--ship-only` recovering a
+#      genuine ship failure
 #
 # Everything runs in throwaway repos: no network, no real remote, no docker, no ship.
 set -o pipefail
@@ -48,7 +51,10 @@ bad() { printf '  FAIL %s\n' "$*"; fail=$((fail+1)); }
 RRT="$HERE/require-release-tag.sh"
 CUT="$HERE/cut-release.sh"
 SYNC="$HERE/sync-oss.sh"
-for f in "$RRT" "$CUT" "$SYNC"; do
+# deploy/web_modules.sh is the SEEDER the release path needs (see section Q): without it
+# cut-release cannot give its tag-pinned worktree a web/node_modules, so a missing one is
+# a broken release path, not a skipped case.
+for f in "$RRT" "$CUT" "$SYNC" "$HERE/web_modules.sh"; do
   [ -f "$f" ] || { echo "$PROG: missing $f" >&2; exit 1; }
 done
 
@@ -466,6 +472,243 @@ printf '%s\n' "$OUT" | sed 's/^/    /'
 [ "$RC" -eq 0 ] && [ "$OUT" = "clean" ] \
   && ok "a caller's VERSION_OVERRIDE is dropped before any case runs" \
   || bad "the suite inherited its caller's VERSION_OVERRIDE (rc=$RC)"
+
+echo "== Q. the tag-pinned release tree is SEEDED before it ships"
+# THE DEFECT (measured on v1.27.0): cut-release ships from a DETACHED worktree pinned to
+# the tag. That worktree has no web/node_modules (gitignored), so for a web-touching
+# release the pre-build gate fail-stops with "web/node_modules/.bin/next is missing", and
+# the per-tree record's `webdeps` component reads `none` — which can never match a record
+# the merge train wrote for the SAME tree, so the reuse is dead as well.
+#
+# Proven WITHOUT docker, npm or a network: deploy/build-and-ship.sh is replaced by a
+# WITNESS that refuses to "ship" a tree that is not seeded with the dependency set the
+# per-tree record names, and refuses to run anywhere but the temp release worktree.
+# Deleting the `wm_seed` call from cut-release turns every case below RED.
+QREPO=$S/qrepo
+QENV=$S/qenv.sh
+printf 'export JOMFORM_TEST_DATABASE_URL=postgres://u:p@127.0.0.1:5432/fixture\n' > "$QENV"
+mkdir -p "$S/bin"
+cat > "$S/bin/gh" <<'GH'
+#!/usr/bin/env bash
+echo "gh-stub $*"
+GH
+chmod +x "$S/bin/gh"
+
+qfixture() {   # $1 = sandbox dir -> sets QD, QTREE, QDEPS, QGATE
+  QD=$1
+  QGATE="$1.gate"
+  rm -rf "$QD" "$QD.git-origin" "$QD.donor2" "$QGATE"
+  mkdir -p "$QD/deploy" "$QD/web" "$QGATE"
+  cp "$HERE/cut-release.sh" "$HERE/web_modules.sh" "$QD/deploy/"
+  printf 'node_modules/\n' > "$QD/.gitignore"
+  printf '{"name":"web","lockfileVersion":3}\n' > "$QD/web/package-lock.json"
+  # The WITNESS is the ship. Its three assertions ARE the acceptance: it ran in the
+  # tag-pinned temp worktree, that worktree was seeded, and the seeded dependency set is
+  # the one the record names — and seeding left the tree CLEAN, so the real builder's
+  # dirty-tree guard would still pass.
+  cat > "$QD/deploy/build-and-ship.sh" <<'WITNESS'
+#!/usr/bin/env bash
+printf 'SHIP image=%s version=%s cwd=%s\n' "${IMAGE:-jomform-api}" "${VERSION_OVERRIDE:-none}" "$PWD"
+case "$PWD" in
+  */release-tree.*/tree) ;;
+  *) echo "WITNESS FAIL: the ship did not run in a tag-pinned temp worktree ($PWD)" >&2; exit 1 ;;
+esac
+if [ -n "$(git status --porcelain)" ]; then
+  echo "WITNESS FAIL: the seeded tree is DIRTY — the real builder refuses a dirty tree:" >&2
+  git status --porcelain >&2
+  exit 1
+fi
+[ -x web/node_modules/.bin/next ] || {
+  echo "WITNESS FAIL: web/node_modules/.bin/next is missing in $PWD — the release tree was shipped UNSEEDED" >&2
+  exit 1
+}
+got=$(sha256sum web/node_modules/.package-lock.json | awk '{print $1}')
+echo "WITNESS webdeps=$got"
+[ "$got" = "${EXPECT_WEBDEPS:-}" ] || {
+  echo "WITNESS FAIL: webdeps $got != expected ${EXPECT_WEBDEPS:-<unset>}" >&2
+  exit 1
+}
+exit 0
+WITNESS
+  chmod +x "$QD/deploy/build-and-ship.sh"
+  # The DONOR: an install that already exists on the host (another worktree, in real life).
+  mkdir -p "$QD/web/node_modules/.bin"
+  printf '#!/bin/sh\nexit 0\n' > "$QD/web/node_modules/.bin/next"
+  chmod +x "$QD/web/node_modules/.bin/next"
+  printf '{"name":"next","packages":{"node_modules/next":{"version":"16.0.0"}}}\n' \
+    > "$QD/web/node_modules/.package-lock.json"
+  QDEPS=$(sha256sum "$QD/web/node_modules/.package-lock.json" | awk '{print $1}')
+  (
+    cd "$QD" || exit 1
+    git init -q .
+    git config user.name "Release Selftest"
+    git config user.email "selftest@users.noreply.github.com"
+    printf 'hello\n' > README.md
+    printf 'export const x = 1;\n' > web/page.tsx
+    git add -A && git commit -q -m "initial"
+    git branch -M main
+    git init -q --bare "$QD.git-origin"
+    git remote add origin "$QD.git-origin"
+    git tag -a v1.0.0 -m "Release v1.0.0"
+    git push -q -u origin main v1.0.0
+    printf 'export const x = 2;\n' > web/page.tsx
+    git commit -q -am "feat(web): a change worth releasing"
+    git push -q origin main
+  ) || { bad "could not build the release fixture $QD"; return 1; }
+  QTREE=$(git -C "$QD" rev-parse 'HEAD^{tree}')
+  return 0
+}
+
+# qadd_donor <marker> — a SECOND worktree of the same repo holding an install of the
+# SAME web/package-lock.json but a DIFFERENT .package-lock.json (a different install of
+# the same dependency set). This is what makes "the record's bytes won, not merely a
+# compatible install" testable: the seeder must pick THIS one when the record names it,
+# even though the main worktree comes first in `git worktree list`.
+qadd_donor() {   # $1 = payload marker -> sets QRDEPS
+  local d="$QD.donor2"
+  git -C "$QD" worktree add -q --detach "$d" HEAD || return 1
+  mkdir -p "$d/web/node_modules/.bin"
+  printf '#!/bin/sh\nexit 0\n' > "$d/web/node_modules/.bin/next"
+  chmod +x "$d/web/node_modules/.bin/next"
+  printf '{"name":"next","packages":{"node_modules/next":{"version":"16.0.0"},"marker":"%s"}}\n' "$1" \
+    > "$d/web/node_modules/.package-lock.json"
+  QRDEPS=$(sha256sum "$d/web/node_modules/.package-lock.json" | awk '{print $1}')
+  return 0
+}
+
+qrecord() {   # $1 = webdeps the per-tree record names (the reuse key)
+  cat > "$QGATE/$QTREE.json" <<REC
+{
+  "format": 1,
+  "tree": "$QTREE",
+  "key": "fixture",
+  "key_parts": "go=go1.0.0;webdeps=$1;gatescript=fixture;resultlib=fixture;testdb=loopback:5432/fixture;extra=fixture",
+  "gates": {},
+  "passed": 0,
+  "failed": 0,
+  "runs": 1,
+  "verdict": "green",
+  "complete": true,
+  "finished_at": "2026-01-01T00:00:00Z"
+}
+REC
+}
+
+qcut() {      # $1 = webdeps the witness must see; rest = extra env assignments for the child
+  local want=$1; shift
+  ( cd "$QD" && env PATH="$S/bin:$PATH" PREFLIGHT_RESULT_DIR="$QGATE" TEST_ENV_FILE="$QENV" \
+      EXPECT_WEBDEPS="$want" "$@" \
+      bash deploy/cut-release.sh --yes --no-oss 2>&1 )
+}
+qshiponly() {  # $1 = webdeps the witness must see
+  ( cd "$QD" && env PATH="$S/bin:$PATH" PREFLIGHT_RESULT_DIR="$QGATE" TEST_ENV_FILE="$QENV" \
+      EXPECT_WEBDEPS="$1" bash deploy/cut-release.sh --yes --ship-only --no-oss 2>&1 )
+}
+
+# Q1 — a record for the tagged tree names a dependency set that exists on the host in a
+# DIFFERENT worktree than the one `git worktree list` names first: the release tree must
+# be seeded with THOSE bytes (not merely with a compatible install), because only those
+# make the record reusable.
+if qfixture "$QREPO"; then
+  qadd_donor record
+  qrecord "$QRDEPS"
+  OUT=$(qcut "$QRDEPS"); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 0 ] && ok "a web-touching release reaches RELEASED with no hand-seeded worktree" \
+    || bad "expected exit 0, got $RC"
+  grep -q 'RELEASED v1.1.0' <<<"$OUT" && ok "released the bumped version" || bad "never reached RELEASED"
+  grep -q 'web deps match the gate record' <<<"$OUT" \
+    && ok "names the record it can reuse" || bad "the reuse the seed earns is not reported"
+  grep -q 'REUSES that record instead of taking a gate slot' <<<"$OUT" \
+    && ok "says the ship will reuse the record rather than gate again" || bad "reuse not announced"
+  [ "$(grep -c '^WITNESS webdeps=' <<<"$OUT")" -eq 2 ] \
+    && ok "both images shipped from a SEEDED release tree (api + web)" \
+    || bad "expected 2 seeded ship witnesses, got $(grep -c '^WITNESS webdeps=' <<<"$OUT")"
+  grep -q "^WITNESS webdeps=$QRDEPS" <<<"$OUT" \
+    && ok "the seeded set IS the record's webdeps — the record's install beat the first-listed worktree" \
+    || bad "the seeded dependency set is not the one the record names (a merely compatible install won)"
+  grep -q 'test environment:' <<<"$OUT" \
+    && ok "the test environment is loaded before gating (the fingerprint depends on it)" \
+    || bad "the test env file was not loaded"
+else
+  bad "section Q fixture could not be built"
+fi
+
+# Q2 — the record names a dependency set this host does not have, but an install of the
+# SAME web/package-lock.json does: the gates can run, and the ship must say it gates in
+# FULL instead of pretending the record vouches for those bytes.
+if qfixture "$QREPO"; then
+  qrecord "$(printf '1%.0s' $(seq 64))"
+  OUT=$(qcut "$QDEPS"); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 0 ] && ok "an unmatched record does not block the release" || bad "expected exit 0, got $RC"
+  grep -q 'gates in FULL (a record cannot vouch for a different dependency set)' <<<"$OUT" \
+    && ok "says the unmatched dependency set means a FULL gate" || bad "the loss of reuse is not reported"
+  grep -q "^WITNESS webdeps=$QDEPS" <<<"$OUT" \
+    && ok "shipped the same-lockfile install rather than an arbitrary one" \
+    || bad "the ship did not get the same-lockfile dependency set"
+else
+  bad "section Q fixture could not be built"
+fi
+
+# Q3 — no donor anywhere and npm cannot run: the ship must NOT start, must name the seed as
+# the reason, and must LEAVE THE TAG (the tag is the record of the decision).
+#
+# "NO DONOR" HAS TO BE ENFORCED, NOT ASSUMED. deploy/web_modules.sh deliberately borrows an
+# install from this host (PASS 1: the exact webdeps a record names; PASS 2: the same
+# lockfile), so a real machine that has ever built web/ hands the sandbox a donor and the
+# seeder SUCCEEDS — the run then dies later on the witness check with a different banner.
+# That is what made this case fail on this host while passing on a clean one. Every donor
+# source is therefore emptied for this case only: WM_REPO is a directory that is not a git
+# repository (so `worktree list` yields nothing), and the explicit override paths are blank.
+NODONOR=$(mktemp -d)
+if qfixture "$QREPO"; then
+  rm -rf "$QD/web/node_modules"
+  OUT=$(qcut x WM_NPM=/bin/false WM_REPO="$NODONOR" WM_TEMPLATE= WM_CACHE_DIR= \
+        WM_LOCK_CACHE= RELEASE_NODE_MODULES=); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 5 ] && ok "an unseedable release tree exits 5 instead of shipping" \
+    || bad "expected exit 5, got $RC"
+  grep -q 'SHIP NOT STARTED' <<<"$OUT" && ok "says the ship did not start" || bad "no refusal banner"
+  grep -q 'tag and release REMAIN' <<<"$OUT" && ok "says the tag remains the record" || bad "the tag's status is not stated"
+  ! grep -q '^SHIP image=' <<<"$OUT" && ok "NOTHING was built or shipped" || bad "the ship ran on an unseeded tree"
+  git -C "$QD" rev-parse --verify --quiet refs/tags/v1.1.0 >/dev/null \
+    && ok "the tag survived the failed ship" || bad "the tag was removed by a failed ship"
+else
+  bad "section Q fixture could not be built"
+fi
+
+# Q4 — a GENUINE ship failure keeps the tag, and --ship-only is a real recovery: it
+# recreates the release tree from the tag and SEEDS it again.
+if qfixture "$QREPO"; then
+  qrecord "$QDEPS"
+  OUT=$(qcut deadbeef); RC=$?
+  [ "$RC" -eq 5 ] && ok "a failed ship exits 5" || bad "expected exit 5 from a failing ship, got $RC"
+  grep -q 'the tag and release REMAIN' <<<"$OUT" && ok "the failed ship keeps the tag" || bad "tag status not stated"
+  OUT=$(qshiponly "$QDEPS"); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 0 ] && ok "--ship-only RECOVERS the failed ship" || bad "expected exit 0 from --ship-only, got $RC"
+  grep -q 'retrying for existing tag v1.1.0' <<<"$OUT" && ok "the retry ships the EXISTING tag" || bad "the retry did not name the tag"
+  [ "$(grep -c '^WITNESS webdeps=' <<<"$OUT")" -eq 2 ] \
+    && ok "--ship-only seeds the worktree it recreates (api + web)" \
+    || bad "--ship-only shipped an unseeded tree"
+else
+  bad "section Q fixture could not be built"
+fi
+
+# Q5 — no record at all (a release of a tree nothing has gated yet): the tree is still
+# seeded from the host's same-lockfile install, and the ship says it gates in full.
+if qfixture "$QREPO"; then
+  OUT=$(qcut "$QDEPS"); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 0 ] && ok "a never-gated tree still ships (seeded, then gated in full)" \
+    || bad "expected exit 0, got $RC"
+  grep -q 'no gate record for tree' <<<"$OUT" && ok "says there is no record to reuse" || bad "the missing record is not reported"
+  grep -q "^WITNESS webdeps=$QDEPS" <<<"$OUT" && ok "seeded from the same-lockfile install" || bad "not seeded"
+else
+  bad "section Q fixture could not be built"
+fi
+
 
 printf '\nrelease selftest: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

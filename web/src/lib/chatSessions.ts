@@ -38,6 +38,14 @@ export type RestoredTurn = {
   role: "user" | "assistant";
   content: string;
   steps?: Array<{ tool: string; status: string }>;
+  /**
+   * The answer was cut short by the user's Stop, so `content` is PARTIAL (card
+   * t_babeaa84). The page renders its "this answer is incomplete" sentence from
+   * this flag — without it a restored partial answer reads as a finished one that
+   * happens to stop mid-sentence, which is the confusion the live marker exists
+   * to prevent.
+   */
+  stopped?: boolean;
 };
 
 function str(v: unknown): string {
@@ -94,6 +102,11 @@ function readTurn(v: unknown): RestoredTurn | null {
   if (o.role !== "user" && o.role !== "assistant") return null;
   if (typeof o.content !== "string") return null;
   const turn: RestoredTurn = { role: o.role, content: o.content };
+  // The partial-answer flag (card t_babeaa84). Strictly `=== true`: a non-boolean
+  // is a payload this build does not understand, and treating it as "stopped"
+  // would put an incomplete marker under a COMPLETE answer — the inverse of the
+  // defect it fixes.
+  if (o.stopped === true) turn.stopped = true;
   if (Array.isArray(o.steps)) {
     // Only the steps that RAN. A "proposed" step belonged to a confirmation card
     // (whose token is never stored) and a "refused" step reads as a refusal block
