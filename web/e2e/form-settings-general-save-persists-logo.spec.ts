@@ -142,7 +142,7 @@ async function stubAPI(
     // on a green banner.
     if (body.logo_url && !body.logo_url.trim().startsWith("https://")) {
       return route.fulfill(
-        json(400, { error: "logo_url mesti bermula dengan https://", code: "" }),
+        json(400, { error: "logo_url must start with https://", code: "" }),
       );
     }
     const status = opts.settingsStatus ?? 200;

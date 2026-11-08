@@ -6,7 +6,7 @@ package httpapi
 // THE DEFECT (measured on prod v1.21.295, signed in, /templates → "Use template"):
 //
 //	POST /api/rest/templates/<id>/use?workspace=<ws>
-//	  -> 400 {"code":"request.badRequest","error":"custom_js ditolak: active code execution marker: eval("}
+//	  -> 400 {"code":"request.badRequest","error":"custom_js rejected: active code execution marker: eval("}
 //	the SAME click rendered role=alert "Failed to use template."
 //
 // The refusal was correct and nothing was cloned — but `request.badRequest` is a
@@ -118,7 +118,7 @@ func TestUseTemplateRefusalCarriesTheCustomJSCode(t *testing.T) {
 	}
 	// The prose is the pre-existing sentence, unchanged: `code` is an ADDITION for
 	// the dashboard, never a replacement for what curl/API-key/MCP callers read.
-	if got, want := decodeErrField(t, raw), "custom_js ditolak: active code execution marker: eval("; got != want {
+	if got, want := decodeErrField(t, raw), "custom_js rejected: active code execution marker: eval("; got != want {
 		t.Errorf("the Use refusal's prose = %q, want %q — the machine code must not reword the wire", got, want)
 	}
 	if after := liveForms(t, fx); after != before {
@@ -166,7 +166,7 @@ func TestUpdateTemplateRefusalCarriesTheCustomJSCode(t *testing.T) {
 			"merchant reads \"Failed to save this template.\" for a refusal it can name exactly.",
 			got, CodeFormCustomJSRejected, raw)
 	}
-	if got, want := decodeErrField(t, raw), "custom_js ditolak: active code execution marker: eval("; got != want {
+	if got, want := decodeErrField(t, raw), "custom_js rejected: active code execution marker: eval("; got != want {
 		t.Errorf("the builder-save refusal's prose = %q, want %q", got, want)
 	}
 	if js, _ := storedCustomJS(t, fx, created.ID); js != benign {

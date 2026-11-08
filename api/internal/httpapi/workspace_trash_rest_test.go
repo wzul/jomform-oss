@@ -876,7 +876,7 @@ func TestRESTWorkspacePurgeNotFoundIDsAnswer404(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	const trashNotFound = "workspace tidak dijumpai dalam tong sampah"
+	const trashNotFound = "workspace not found in the bin"
 
 	for _, tc := range []struct{ what, id string }{
 		{"an unknown uuid", "00000000-0000-0000-0000-0000000000ff"},

@@ -32,7 +32,7 @@ func ValidWorkspaceRole(role string) bool {
 }
 
 // ErrNotWorkspaceMember is returned when a user is not a member of a workspace.
-var ErrNotWorkspaceMember = errors.New("bukan ahli workspace")
+var ErrNotWorkspaceMember = errors.New("not a member of this workspace")
 
 // WorkspaceMember models a workspace_members row.
 type WorkspaceMember struct {

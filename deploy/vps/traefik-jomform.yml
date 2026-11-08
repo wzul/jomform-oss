@@ -52,14 +52,14 @@ http:
         certResolver: le
       priority: 15
     jf-custom-cert-halo:
-      rule: Host(`halo.example.com`)
+      rule: Host(`halo.wanzul-hosting.com`)
       entryPoints:
       - websecure
       service: jf-api
       tls:
         certResolver: le
         domains:
-        - halo.example.com
+        - halo.wanzul-hosting.com
       priority: 70
     jf-custom-root-http:
       rule: '!Host(`jomform.com`) && !Host(`www.jomform.com`) && !Host(`mcp.jomform.com`)'

@@ -85,7 +85,7 @@ func disable2faTrustNew(t *testing.T, tag string) disable2faTrustFixture {
 	ctx := context.Background()
 	pool := testdb.Open(t)
 
-	sessions, err := auth.NewSessions(valkeyURL)
+	sessions, err := auth.NewSessions(valkeyURL, testValkeyOptions()...)
 	if err != nil {
 		t.Fatalf("valkey sessions: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestMCPDisable2FAKeepsTrustOnRejectedProof(t *testing.T) {
 		map[string]any{"password": "definitely-not-the-password"})
 	if ok, msg := refused(res); !ok {
 		t.Fatalf("disable_2fa accepted a WRONG password (result: %s)", toolResultText(t, res))
-	} else if !strings.Contains(msg, "kata laluan") {
+	} else if !strings.Contains(msg, "invalid password") {
 		t.Errorf("disable_2fa was refused, but not for the credential reason (got %q)", msg)
 	}
 
@@ -287,7 +287,7 @@ func TestMCPDisable2FAKeepsTrustOnRejectedProof(t *testing.T) {
 // contract. The tool cannot revoke the trust set it does not own (the set lives
 // in the session store's Valkey keyspace), and clearing the factor without
 // revoking is the exact hole this card fixes — so the call is refused WHOLE, the
-// same "perkhidmatan tidak tersedia" the sibling revoke_all_trusted_devices
+// same "service not available" the sibling revoke_all_trusted_devices
 // returns, and 2FA stays on.
 func TestMCPDisable2FAWithoutSessionsIsRefused(t *testing.T) {
 	f := disable2faTrustNew(t, "d63nil")
@@ -304,8 +304,8 @@ func TestMCPDisable2FAWithoutSessionsIsRefused(t *testing.T) {
 			"the trust set, so it must refuse rather than leave the exemptions alive",
 			toolResultText(t, res))
 	}
-	if !strings.Contains(msg, "perkhidmatan tidak tersedia") {
-		t.Errorf("refusal message = %q, want the perkhidmatan tidak tersedia contract shared "+
+	if !strings.Contains(msg, "service not available") {
+		t.Errorf("refusal message = %q, want the service-not-available contract shared "+
 			"with revoke_all_trusted_devices", msg)
 	}
 	if !f.totpEnabled(t, f.userID) {

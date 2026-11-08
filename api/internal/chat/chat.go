@@ -299,7 +299,7 @@ func (r *Runner) SetProposalStore(s proposalStore) { r.proposals = s }
 // every tool call made through it.
 func (r *Runner) mcpSession(ctx context.Context) (toolCaller, error) {
 	if r.mcp == nil {
-		return nil, errors.New("chat: MCP server tiada")
+		return nil, errors.New("chat: MCP server not configured")
 	}
 	ct, st := mcp.NewInMemoryTransports()
 	ss, err := r.mcp.Raw().Connect(ctx, st, nil)
@@ -336,7 +336,7 @@ func (c *mcpCaller) call(ctx context.Context, name, argsJSON string) (string, bo
 	var args map[string]any
 	if strings.TrimSpace(argsJSON) != "" {
 		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return "", true, fmt.Errorf("argumen tidak sah: %w", err)
+			return "", true, fmt.Errorf("invalid arguments: %w", err)
 		}
 	}
 	res, err := c.cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
@@ -434,14 +434,14 @@ func (res *Result) answerOrKey(content string) {
 // handler, which builds it with READONLY scopes and the caller's user id.
 func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Result, error) {
 	if r.llm == nil {
-		return nil, errors.New("chat: LLM tidak tersedia")
+		return nil, errors.New("chat: LLM unavailable")
 	}
 	message = strings.TrimSpace(message)
 	if message == "" {
-		return nil, errors.New("chat: mesej kosong")
+		return nil, errors.New("chat: empty message")
 	}
 	if len([]rune(message)) > MaxMessageChars {
-		return nil, fmt.Errorf("chat: mesej terlalu panjang (maksimum %d aksara)", MaxMessageChars)
+		return nil, fmt.Errorf("chat: message too long (maximum %d characters)", MaxMessageChars)
 	}
 
 	caller, err := r.newSession(ctx)
@@ -477,7 +477,7 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 				// A failure BEFORE the tool: the error text is an internal detail
 				// and is one language, so the PROMPT keeps it and the step carries
 				// a code — the page has its own sentence for it.
-				out = "RALAT: " + ferr.Error()
+				out = "ERROR: " + ferr.Error()
 				ref = &refusal{key: keyRefusedError}
 			}
 			st := Step{Tool: tc.Name, Status: StepCalled}
@@ -535,7 +535,19 @@ func (r *Runner) Run(ctx context.Context, history []Turn, message string) (*Resu
 			return res, nil
 		}
 	}
-	res.Reply = "Maaf, saya tidak dapat menyelesaikan permintaan itu. Boleh cuba soalan yang lebih khusus?"
+	// No step left and no answer of the model's own: answer with the DICTIONARY key
+	// instead of writing prose here. A sentence at this line reaches all five
+	// dashboard languages in one language — that is exactly the Malay bubble a
+	// merchant on an English dashboard read (t_541a31d5, t_7f1694cb / issue #6177) —
+	// so return the key the dashboard resolves in the visitor's language rather than
+	// picking a language the API does not know.
+	//
+	// It is the zero-budget guard: MaxSteps > 0 means the loop above already
+	// answers on its last step, so normal traffic never lands here. It is kept
+	// rather than deleted because deleting it would make a future MaxSteps of 0
+	// return an empty reply with no key, which is the shape the page cannot
+	// repair.
+	res.answerOrKey("")
 	return res, nil
 }
 
@@ -640,13 +652,13 @@ func (r *Runner) dispatchIn(ctx context.Context, caller toolCaller, tc llm.ToolC
 		// the user the supported route instead of a dead end — and, for a write
 		// tool, says plainly that `confirm` proves nothing.
 		if isWriteToolName(tc.Name) {
-			return fmt.Sprintf("alat %q tidak boleh dilaksanakan oleh chat — penulisan mesti "+
-				"DICADANGKAN kepada pengguna dan disahkan oleh mereka (propose_write). "+
-				"Menetapkan confirm=true dalam hujah tidak mengesahkan apa-apa: model yang "+
-				"menulisnya bukan manusia. Cadangkan perubahan itu; pengguna akan sahkan "+
-				"dalam UI.", tc.Name), &refusal{key: keyRefusedWriteTool}, nil
+			return fmt.Sprintf("tool %q cannot be executed by the chat — a write must be "+
+				"PROPOSED to the user and confirmed by them (propose_write). "+
+				"Setting confirm=true in the arguments authorises nothing: a model that "+
+				"writes it is not a human. Propose the change instead; the user will confirm "+
+				"it in the UI.", tc.Name), &refusal{key: keyRefusedWriteTool}, nil
 		}
-		return fmt.Sprintf("alat %q tidak dibenarkan dalam chat ini", tc.Name),
+		return fmt.Sprintf("tool %q is not allowed in this chat", tc.Name),
 			&refusal{key: keyRefusedNotAllowed}, nil
 	}
 	if tc.Name == ToolSubmitFeedback {
@@ -707,8 +719,8 @@ func isWriteToolName(name string) bool {
 // single answer cannot become a wall of confirmations to click through.
 func (r *Runner) proposeWrite(ctx context.Context, caller toolCaller, argsJSON string, st *runState) (string, *refusal, error) {
 	if st.proposals >= MaxProposalsPerRun {
-		return fmt.Sprintf("had cadangan untuk satu mesej dicapai (%d). Jawab dengan cadangan "+
-				"yang sudah ada; pengguna boleh minta lagi selepas ini.", MaxProposalsPerRun),
+		return fmt.Sprintf("proposal limit for one message reached (%d). Answer with the proposals "+
+				"already prepared; the user can ask for more after this.", MaxProposalsPerRun),
 			&refusal{key: keyRefusedProposalLimit,
 				params: map[string]string{"max": strconv.Itoa(MaxProposalsPerRun)}}, nil
 	}
@@ -742,18 +754,18 @@ func (st *runState) lastCard() *ProposalCard {
 // notification as the /feedback page — not a second feedback path).
 func (r *Runner) submitFeedback(ctx context.Context, argsJSON string) (string, bool, error) {
 	if r.feedback == nil {
-		return "sistem maklum balas tidak dikonfigurasi", true, nil
+		return "feedback system is not configured", true, nil
 	}
 	var in struct {
 		Subject string `json:"subject"`
 		Body    string `json:"body"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &in); err != nil {
-		return "argumen tidak sah: subject dan body diperlukan", true, nil
+		return "invalid arguments: subject and body are required", true, nil
 	}
 	uid := userIDFrom(ctx)
 	if uid == "" {
-		return "pengguna tidak dikenali", true, nil
+		return "no user identity", true, nil
 	}
 	th, err := r.feedback.CreateThread(ctx, uid, in.Subject, in.Body)
 	if err != nil {

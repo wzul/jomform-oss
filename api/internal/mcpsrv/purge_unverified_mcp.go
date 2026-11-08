@@ -19,7 +19,7 @@ import (
 type purgeUnverifiedIn struct {
 	// Days is the age threshold (default 7). Accounts created before
 	// now-Days that are still unverified are counted.
-	Days int `json:"days,omitempty" jsonschema:"Umur minimum (hari) akaun belum disahkan untuk dikira. Default 7."`
+	Days int `json:"days,omitempty" jsonschema:"Minimum age (days) of an unverified account to be counted. Default 7."`
 }
 
 // purgeUnverifiedAccounts reports how many unverified accounts are older than
@@ -39,7 +39,7 @@ func (s *Server) purgeUnverifiedAccounts(
 		return nil, nil, err
 	}
 	if s.deps.Users == nil {
-		return nil, nil, errors.New("user store tidak dikonfigurasi")
+		return nil, nil, errors.New("user store not configured")
 	}
 	days := in.Days
 	if days <= 0 {
@@ -63,18 +63,18 @@ func (s *Server) purgeUnverifiedAccounts(
 	// worse, presenting a classification it did not get. `blocked: null` is that
 	// statement, and the note says so.
 	var blocked any
-	note := "Akaun belum disahkan dipadam automatik oleh sweep; tool ini hanya melaporkan kiraan."
+	note := "Unverified accounts are deleted automatically by the sweep; this tool only reports counts."
 	if cls, cerr := s.deps.Users.CountUnverifiedOlderThanClassified(ctx, cutoff); cerr == nil {
 		blocked = cls.Blocked
 		purgeable := cls.Deleted
 		note = fmt.Sprintf(
-			"%d boleh dipadam oleh sweep; %d calon TERSEKAT (akaun masih memegang jualan atau "+
-				"langganan) dan TIDAK akan dipadam — ini bacaan sahaja, tiada apa dipadam.",
+			"%d can be deleted by the sweep; %d candidates BLOCKED (accounts still hold sales or "+
+				"subscriptions) and will NOT be deleted — this is a read only, nothing is deleted.",
 			purgeable, cls.Blocked)
 	} else {
 		blocked = nil
-		note = "Akaun belum disahkan dipadam automatik oleh sweep; tool ini hanya melaporkan " +
-			"kiraan. Pecahan TERSEKAT tidak tersedia (pengelasan gagal)."
+		note = "Unverified accounts are deleted automatically by the sweep; this tool only reports " +
+			"counts. The BLOCKED breakdown is not available (classification failed)."
 	}
 	return nil, map[string]any{
 		"unverified_older_than_days": days,

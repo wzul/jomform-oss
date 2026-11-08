@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
 // In-app feedback — the docs page the dashboard's inline "?" links to
 // (AGENTS.md DOCUMENTATION PARITY rule 4), and the page the MCP tool reference
@@ -11,12 +12,12 @@ import type { Metadata } from "next";
 // account) and why the anti-abuse guard here is a rate limit rather than a spam
 // classifier.
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "In-app feedback — JomForm Docs",
   description:
     "How JomForm's in-app feedback works: file a report or feature request from the dashboard, follow the conversation in the thread, and triage the queue as a platform admin.",
-  alternates: { canonical: "https://jomform.com/docs/feedback" },
-};
+  path: "/docs/feedback",
+});
 
 type Section = { id: string; title: string; body: string[] };
 

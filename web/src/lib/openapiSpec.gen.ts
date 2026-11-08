@@ -750,7 +750,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -803,7 +803,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -856,7 +856,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "503": {
             "content": {
@@ -919,7 +919,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "429": {
             "content": {
@@ -998,7 +998,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "429": {
             "content": {
@@ -1077,7 +1077,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "429": {
             "content": {
@@ -1144,7 +1144,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1166,7 +1166,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
     },
     "/v1/rest/dashboard-bundle": {
       "get": {
-        "description": "Response: An object with me, workspaces, chip_status, keys, domains, webhooks, social, einvoice, products, summary, sales, form_analytics and product_analytics.",
+        "description": "Response: An object with currency, me, workspaces, chip_status, keys, domains, webhooks, social, einvoice, products, summary, sales, form_analytics and product_analytics. currency is the active workspace's currency — the money every price on the dashboard is labelled in.",
         "operationId": "dashboardBundle",
         "responses": {
           "200": {
@@ -1198,7 +1198,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1251,7 +1251,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1313,7 +1313,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1376,7 +1376,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1440,7 +1440,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1515,7 +1515,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1590,7 +1590,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1665,7 +1665,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1729,7 +1729,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1781,7 +1781,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1833,7 +1833,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1886,7 +1886,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1938,7 +1938,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -1992,7 +1992,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -2045,7 +2045,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "503": {
             "content": {
@@ -2107,7 +2107,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "503": {
             "content": {
@@ -2171,7 +2171,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "503": {
             "content": {
@@ -2246,7 +2246,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "503": {
             "content": {
@@ -2299,7 +2299,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -2319,7 +2319,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
         "x-jomform-access": "read"
       },
       "post": {
-        "description": "A blank slug is generated from the title and uniquified within the workspace. An explicit slug is used as given, and must be unique among the workspace's live forms: a slug another live form already serves is refused with 409 form.slugInUse (the same code and sentence a slug rename onto it answers). The form is created as a draft; publish it with POST /v1/rest/forms/{id}/publish.",
+        "description": "A blank slug is generated from the title and uniquified within the workspace. An explicit slug must be a usable URL path segment — 1-40 characters of a-z, 0-9 and hyphens, and not a name JomForm reserves for itself (a workspace-claim label such as login/api/docs, or a route served on the same host such as privacy/terms/refund/healthz): a malformed slug is refused with 400 form.slugInvalid and a reserved one with 400 form.slugReserved, before anything is stored. The slug must also be unique among the workspace's live forms: a slug another live form already serves is refused with 409 form.slugInUse (the same code and sentence a slug rename onto it answers). The form is created as a draft; publish it with POST /v1/rest/forms/{id}/publish.",
         "operationId": "createForm",
         "requestBody": {
           "content": {
@@ -2360,7 +2360,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -2424,7 +2424,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -2502,7 +2502,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -2556,7 +2556,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -2620,7 +2620,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -2682,7 +2682,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -2702,7 +2702,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
         "x-jomform-access": "read"
       },
       "patch": {
-        "description": "Partial update: an omitted title, config, theme or slug keeps the stored value, so a body that renames the form does not have to resend its title. An empty title (or slug) also means \"leave unchanged\" — this route never blanks a form's title. A slug another live form already serves is refused with 409 form.slugInUse, and nothing else in the same request is written; a malformed slug is 400 form.slugInvalid. A rename leaves a temporary 301 from the old URL.",
+        "description": "Partial update: an omitted title, config, theme or slug keeps the stored value, so a body that renames the form does not have to resend its title. An empty title (or slug) also means \"leave unchanged\" — this route never blanks a form's title. A slug is held to the same rule as create: 1-40 characters of a-z, 0-9 and hyphens and not a name JomForm reserves, so a malformed slug is 400 form.slugInvalid and a reserved one 400 form.slugReserved. A slug another live form already serves is refused with 409 form.slugInUse, and nothing else in the same request is written. A rename leaves a temporary 301 from the old URL.",
         "operationId": "updateForm",
         "parameters": [
           {
@@ -2754,7 +2754,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -2818,7 +2818,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -2892,7 +2892,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -2956,7 +2956,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3029,7 +3029,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3093,7 +3093,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3166,7 +3166,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3230,7 +3230,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3293,7 +3293,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3366,7 +3366,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3382,6 +3382,143 @@ export const OPENAPI_SPEC: OpenApiSpec = {
         "summary": "Set a form's email overrides",
         "tags": [
           "Form settings"
+        ],
+        "x-jomform-access": "write"
+      }
+    },
+    "/v1/rest/forms/{id}/fee-override": {
+      "get": {
+        "operationId": "getFormFeeOverride",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Read a form's processing-fee override",
+        "tags": [
+          "Forms"
+        ],
+        "x-jomform-access": "read"
+      },
+      "put": {
+        "operationId": "putFormFeeOverride",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Set a form's processing-fee override ('' inherit, 'off' switch off)",
+        "tags": [
+          "Forms"
         ],
         "x-jomform-access": "write"
       }
@@ -3430,7 +3567,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3503,7 +3640,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3568,7 +3705,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3641,7 +3778,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3714,7 +3851,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3796,7 +3933,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3871,7 +4008,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -3947,7 +4084,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4012,7 +4149,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4077,7 +4214,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4152,7 +4289,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4227,7 +4364,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4302,7 +4439,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4366,7 +4503,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4429,7 +4566,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4504,7 +4641,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4556,7 +4693,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4618,7 +4755,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4681,7 +4818,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4734,7 +4871,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4788,7 +4925,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4852,7 +4989,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4917,7 +5054,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -4982,7 +5119,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5035,7 +5172,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5096,7 +5233,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5160,7 +5297,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5214,7 +5351,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5278,7 +5415,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5339,7 +5476,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5411,7 +5548,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5487,7 +5624,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5552,7 +5689,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5617,7 +5754,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "503": {
             "content": {
@@ -5670,7 +5807,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5733,7 +5870,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5787,7 +5924,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5863,7 +6000,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5927,7 +6064,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -5991,7 +6128,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6067,7 +6204,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6131,7 +6268,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6184,7 +6321,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6235,7 +6372,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6297,7 +6434,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6350,7 +6487,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6401,7 +6538,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6463,7 +6600,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6516,7 +6653,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6578,7 +6715,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6592,6 +6729,121 @@ export const OPENAPI_SPEC: OpenApiSpec = {
           }
         },
         "summary": "Set e-Invoice (LHDN) settings",
+        "tags": [
+          "Settings"
+        ],
+        "x-jomform-access": "write"
+      }
+    },
+    "/v1/rest/settings/payment-fees": {
+      "get": {
+        "operationId": "getFeeSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Read per-method processing-fee rates + acknowledgement",
+        "tags": [
+          "Settings"
+        ],
+        "x-jomform-access": "read"
+      },
+      "put": {
+        "operationId": "putFeeSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Set per-method processing-fee rates (requires the pass-on acknowledgement)",
         "tags": [
           "Settings"
         ],
@@ -6631,7 +6883,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6693,7 +6945,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6747,7 +6999,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6802,7 +7054,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6865,7 +7117,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6919,7 +7171,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -6995,7 +7247,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7060,7 +7312,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7112,7 +7364,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7176,7 +7428,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7228,7 +7480,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7292,7 +7544,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7344,7 +7596,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7409,7 +7661,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7473,7 +7725,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7548,7 +7800,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7600,7 +7852,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7653,7 +7905,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7715,7 +7967,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7778,7 +8030,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7840,7 +8092,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7913,7 +8165,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -7976,7 +8228,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -8030,7 +8282,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -8098,7 +8350,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -8166,7 +8418,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -8232,7 +8484,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -8293,7 +8545,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -8356,7 +8608,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -8428,7 +8680,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -8491,7 +8743,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -8564,7 +8816,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {
@@ -8637,7 +8889,7 @@ export const OPENAPI_SPEC: OpenApiSpec = {
                 }
               }
             },
-            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
           },
           "403": {
             "content": {

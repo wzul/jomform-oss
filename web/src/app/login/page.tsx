@@ -659,7 +659,7 @@ export default function Login() {
                   required
                   defaultValue={cred.email}
                   autoComplete="email"
-                  placeholder="anda@kedai.my"
+                  placeholder={t("login.emailPh")}
                   className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50"
                 />
               </div>

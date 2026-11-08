@@ -41,11 +41,11 @@ func (h *RESTHandlers) setSystemSetting(w http.ResponseWriter, r *http.Request, 
 		Value string `json:"value"`
 	}
 	if err := decodeJSON(r, &in); err != nil || in.Key == "" {
-		writeErr(w, http.StatusBadRequest, "key wajib")
+		writeErr(w, http.StatusBadRequest, "key is required")
 		return
 	}
 	if !strings.HasPrefix(in.Key, "site_") && !strings.HasPrefix(in.Key, "landing_") {
-		writeErr(w, http.StatusBadRequest, "key tidak dibenarkan")
+		writeErr(w, http.StatusBadRequest, "key not allowed")
 		return
 	}
 	if err := h.SystemSettings.Set(r.Context(), in.Key, in.Value); err != nil {

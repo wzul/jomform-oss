@@ -11,8 +11,8 @@
 -- (rest_domains2.go's listCustomDomains -> DomainStore.ListDomains, and
 -- rest_dashboard.go feeding the dashboard bundle), so a domain that exists, is
 -- VERIFIED and is serving traffic is invisible in Settings. Measured on prod:
--- account `wan Store` owns `halo.example.com` in `account_domains` and
--- `jftest.example.com` in `accounts.custom_domain` (verified), and
+-- account `wan Store` owns `halo.wanzul-hosting.com` in `account_domains` and
+-- `jftest.wanzul-hosting.com` in `accounts.custom_domain` (verified), and
 -- Settings shows only the first. The merchant could not verify, remove, or
 -- configure TLS for a domain that was live — and the same database disagreed
 -- with itself about which domains the account owns.

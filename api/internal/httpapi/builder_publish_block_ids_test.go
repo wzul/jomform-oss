@@ -13,7 +13,7 @@ package httpapi
 // registered_fields list over the blocks, so the contract kept requiring
 // `field_id: "b2"` while the page emitted `name="db8x0qh"`:
 //
-//	400 {"code":"request.badRequest","error":"medan wajib tidak diisi: Nama"}
+//	400 {"code":"request.badRequest","error":"Nama is required"}
 //
 // Removing registered_fields from the same row and resubmitting the very same
 // page payload answered 201 — the stale contract was the whole cause.
@@ -218,8 +218,8 @@ func TestResponseSubmitAcceptsTheContractThePageEmits(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("pre-fix save submit status = %d, want 400 (body %s) — this arm no longer reproduces the card", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "medan wajib tidak diisi: Nama") {
-		t.Errorf("pre-fix save submit body = %s, want the card's %q", rec.Body.String(), "medan wajib tidak diisi: Nama")
+	if !strings.Contains(rec.Body.String(), "Nama is required") {
+		t.Errorf("pre-fix save submit body = %s, want the card's %q", rec.Body.String(), "Nama is required")
 	}
 	if n := submissionCount(t, h, accountID, brokenFormID); n != 0 {
 		t.Errorf("submissions stored = %d for the refused submit, want 0", n)

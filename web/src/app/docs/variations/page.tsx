@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "Variation products — JomForm Docs",
   description:
     "Sell one product in several options: per-variation price, stock and image, plus a per-variation subscription cycle (monthly/yearly, trial days, charge count) that falls back to the product's.",
-  alternates: { canonical: "https://jomform.com/docs/variations" },
-};
+  path: "/docs/variations",
+});
 
 type Section = { id: string; title: string; body: string[] };
 

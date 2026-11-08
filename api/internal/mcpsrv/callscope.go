@@ -105,11 +105,11 @@ func scopeFromArgs(raw json.RawMessage) (workspaceID, accountID string) {
 func (s *Server) resolveScope(ctx context.Context, raw json.RawMessage) (*CallScope, error) {
 	workspaceID, accountID := scopeFromArgs(raw)
 	if accountID != "" && workspaceID != "" {
-		return nil, errors.New("hanya satu daripada workspace_id atau account_id dibenarkan")
+		return nil, errors.New("only one of workspace_id or account_id is allowed")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, errors.New("token tiada atau tidak sah")
+		return nil, errors.New("token missing or invalid")
 	}
 
 	// API-key callers have no bound user (id.UserID == ""). Issue #307 scopes
@@ -128,21 +128,21 @@ func (s *Server) resolveScope(ctx context.Context, raw json.RawMessage) (*CallSc
 			return nil, err
 		}
 		if !ok {
-			return nil, errors.New("akaun tidak dijumpai")
+			return nil, errors.New("account not found")
 		}
 		return &CallScope{Accounts: []string{accountID}, ExplicitAccountID: accountID}, nil
 	}
 
 	if workspaceID != "" {
 		if s.deps.Workspaces == nil {
-			return nil, errors.New("workspaces tidak tersedia")
+			return nil, errors.New("workspaces not available")
 		}
 		acc, ok, err := s.deps.Workspaces.AccessByID(ctx, workspaceID, userID)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
-			return nil, errors.New("workspace tidak dijumpai")
+			return nil, errors.New("workspace not found")
 		}
 		return &CallScope{Accounts: acc.Accounts, WorkspaceID: workspaceID, Role: acc.Role}, nil
 	}
@@ -182,10 +182,10 @@ func (s *Server) userIDFor(ctx context.Context) string {
 func (s *Server) accountScopes(ctx context.Context, write bool) ([]string, error) {
 	id := IdentityFromContext(ctx)
 	if id == nil {
-		return nil, errors.New("token tiada atau tidak sah")
+		return nil, errors.New("token missing or invalid")
 	}
 	if write && !dbstore.ScopeHas(id.Scopes, "readwrite") {
-		return nil, errors.New("scope tidak mencukupi (perlu readwrite)")
+		return nil, errors.New("insufficient scope (needs readwrite)")
 	}
 	if cs := callScopeFrom(ctx); cs != nil && len(cs.Accounts) > 0 {
 		return cs.Accounts, nil
@@ -222,7 +222,7 @@ func isStoredNotFound(err error) bool {
 
 // errNotOwned is returned by owningAccount when an entity is not owned by any
 // accessible account.
-var errNotOwned = errors.New("entiti tidak dijumpai")
+var errNotOwned = errors.New("entity not found")
 
 // resolveEntityAccount finds the account (within the call's scope) that owns
 // an entity, using a lookup that returns nil when the account owns it and a
@@ -246,7 +246,7 @@ func (s *Server) resolveEntityAccount(ctx context.Context, lookup func(acc strin
 // resolveFormAccount returns the account owning formID within the call's scope.
 func (s *Server) resolveFormAccount(ctx context.Context, formID string) (string, error) {
 	if s.deps.Forms == nil {
-		return "", errors.New("forms tidak tersedia")
+		return "", errors.New("forms not available")
 	}
 	return s.resolveEntityAccount(ctx, func(acc string) error {
 		_, err := s.deps.Forms.GetByID(ctx, acc, formID)
@@ -258,7 +258,7 @@ func (s *Server) resolveFormAccount(ctx context.Context, formID string) (string,
 // call's scope.
 func (s *Server) resolveProductAccount(ctx context.Context, productID string) (string, error) {
 	if s.deps.Products == nil {
-		return "", errors.New("products tidak tersedia")
+		return "", errors.New("products not available")
 	}
 	return s.resolveEntityAccount(ctx, func(acc string) error {
 		if _, err := s.deps.Products.Get(ctx, acc, productID); err != nil {
@@ -289,7 +289,7 @@ func (s *Server) requireFormWrite(ctx context.Context, formID string) (string, e
 // entire purpose is reaching a trashed row.
 func (s *Server) resolveTrashedFormAccount(ctx context.Context, formID string) (string, error) {
 	if s.deps.Forms == nil {
-		return "", errors.New("forms tidak tersedia")
+		return "", errors.New("forms not available")
 	}
 	return s.resolveEntityAccount(ctx, func(acc string) error {
 		_, err := s.deps.Forms.GetTrashed(ctx, acc, formID)
@@ -303,7 +303,7 @@ func (s *Server) resolveTrashedFormAccount(ctx context.Context, formID string) (
 //
 // The SCOPE axis is checked FIRST, before the entity lookup. requireWriteRoleIn
 // also checks it, but only after the resolve — and the resolve's failure mode
-// ("entiti tidak dijumpai") differs from a refusal, so a readonly key could tell
+// ("entity not found") differs from a refusal, so a readonly key could tell
 // a real form id from a fake one by the wording of the error. Naming the gate
 // before any lookup removes that probe. Same reason the REST purge handler
 // checks the write role before reading the row.
@@ -338,7 +338,7 @@ func (s *Server) requireProductWrite(ctx context.Context, productID string) (str
 // scope, through the LIVE media read (ByIDAccount filters `deleted_at IS NULL`).
 func (s *Server) resolveMediaAccount(ctx context.Context, mediaID string) (string, error) {
 	if s.deps.Media == nil {
-		return "", errors.New("media tidak tersedia")
+		return "", errors.New("media not available")
 	}
 	return s.resolveEntityAccount(ctx, func(acc string) error {
 		_, err := s.deps.Media.ByIDAccount(ctx, acc, mediaID)
@@ -369,7 +369,7 @@ func (s *Server) requireTrashedMediaWrite(ctx context.Context, mediaID string) (
 		return "", err
 	}
 	if s.deps.Media == nil {
-		return "", errors.New("media tidak tersedia")
+		return "", errors.New("media not available")
 	}
 	acc, err := s.resolveEntityAccount(ctx, func(acc string) error {
 		row, err := s.deps.Media.GetTrashed(ctx, acc, mediaID)
@@ -394,7 +394,7 @@ func (s *Server) requireTrashedMediaWrite(ctx context.Context, mediaID string) (
 // given ref_code, or errNotOwned.
 func (s *Server) resolveSaleAccount(ctx context.Context, refCode string) (string, error) {
 	if s.deps.Sales == nil {
-		return "", errors.New("sales tidak tersedia")
+		return "", errors.New("sales not available")
 	}
 	return s.resolveEntityAccount(ctx, func(acc string) error {
 		sale, err := s.deps.Sales.ByRefCode(ctx, refCode)
@@ -425,7 +425,7 @@ func (s *Server) requireSaleWrite(ctx context.Context, refCode string) (string, 
 // resolveWebhookAccount returns the account within scope owning a webhook id.
 func (s *Server) resolveWebhookAccount(ctx context.Context, webhookID string) (string, error) {
 	if s.deps.Webhooks == nil {
-		return "", errors.New("webhooks tidak tersedia")
+		return "", errors.New("webhooks not available")
 	}
 	return s.resolveEntityAccount(ctx, func(acc string) error {
 		hooks, err := s.deps.Webhooks.ListByAccount(ctx, acc, "")
@@ -445,7 +445,7 @@ func (s *Server) resolveWebhookAccount(ctx context.Context, webhookID string) (s
 // subscription for email.
 func (s *Server) subscriptionByEmail(ctx context.Context, email string) (*dbstore.Subscription, string, error) {
 	if s.deps.Subs == nil {
-		return nil, "", errors.New("subscriptions tidak tersedia")
+		return nil, "", errors.New("subscriptions not available")
 	}
 	accs, err := s.ownedOrScopedAccounts(ctx)
 	if err != nil {
@@ -484,7 +484,7 @@ func (s *Server) roleForAccount(ctx context.Context, accountID string) (string, 
 //
 //   - api/internal/httpapi/errcode.go's message→code table, which decides the
 //     machine code from the wire text. That table keyed this refusal as an EXACT
-//     literal ("perlu peranan manage atau admin") while the confirm path's gate
+//     literal ("a manage or admin role is required") while the confirm path's gate
 //     emitted the one-word-longer wording, so the lookup missed, ErrCodeFor
 //     returned "", and the refusal shipped as the untranslatable class code
 //     `request.badRequest` — #6177's rule failing in the one place it exists to
@@ -496,14 +496,14 @@ func (s *Server) roleForAccount(ctx context.Context, accountID string) (string, 
 //
 // Referencing this constant from both sites is what makes a re-wording a
 // compile-time-visible change rather than a silent loss of the code.
-const RoleManageRequiredLeadIn = "perlu peranan manage atau admin"
+const RoleManageRequiredLeadIn = "a manage or admin role is required"
 
 // RoleManageRequiredMessage is the WORKSPACE-SCOPED wording of that refusal —
 // the sentence requireWriteRoleIn answers with. It is separate from the lead-in
 // because the confirm path surfaces THIS text on the wire (see
 // chatConfirmMessageFor) rather than paraphrasing it, so the cause the user's
 // card was refused for is named by the gate that refused it.
-const RoleManageRequiredMessage = RoleManageRequiredLeadIn + " dalam workspace ini"
+const RoleManageRequiredMessage = RoleManageRequiredLeadIn + " in this workspace"
 
 // requireWriteRoleIn enforces BOTH write gates for the workspace owning
 // accountID:
@@ -529,6 +529,75 @@ func (s *Server) requireWriteRoleIn(ctx context.Context, accountID string) error
 	return nil
 }
 
+// WorkspaceRequiredMessage is the refusal for an MCP write that MINTS a form
+// from an account with no live workspace (card t_7546eda5).
+//
+// It is the SAME sentence POST /v1/rest/forms answers with its 409
+// (httpapi's workspaceRequiredMessage, which is also the key of that package's
+// message→code table entry for `workspace.required`). The literal lives in both
+// packages because httpapi imports mcpsrv, so this one cannot import that
+// constant back; httpapi's
+// TestWorkspaceRequiredIsOneSentenceOnBothDoors pins the two equal AND pins that
+// this text still resolves to the `workspace.required` code, so an agent gets
+// the machine-readable refusal the REST client gets, and a re-wording cannot
+// detach it silently.
+//
+// WHY THIS EXISTS AT ALL. `accounts.workspace_id` is nullable — a signup creates
+// an account and no workspace (#718, ask-first onboarding) — and the
+// forms_sync_workspace_id trigger (migration 000045) copies that NULL onto the
+// form row. Such a form can be PUBLISHED and is then 404 at every address
+// forever, because every public serving path resolves a form through its
+// workspace. The REST door refuses it since t_6c0badbe; the MCP door minted
+// exactly the same orphan with no error, and the consequence is identical.
+const WorkspaceRequiredMessage = "this account has no workspace yet — create a workspace before creating a form"
+
+// requireLiveWorkspace refuses a form-MINTING write (upsert_form create,
+// use_template clone) unless the account is linked to a workspace that has not
+// been deleted.
+//
+// Refuse rather than pick a workspace for the caller: that would put a
+// merchant's form somewhere they never named, and the dashboard's ask-first flow
+// creates the workspace first (WorkspaceStore.CreateForAccount).
+//
+// A nil store is only reachable from bare-mode test fixtures — the production
+// literal in main.go sets Deps.Workspaces, and
+// TestMCPDepsWorkspacesReachesMainGo pins that hop the same way
+// TestWorkspacesReachesRESTHandlersInMainGo pins the REST one, because a
+// silently-unwired optional field would reopen this hole with nothing failing.
+func (s *Server) requireLiveWorkspace(ctx context.Context, accountID string) error {
+	if s.deps == nil || s.deps.Workspaces == nil {
+		return nil
+	}
+	has, err := s.deps.Workspaces.HasLiveWorkspace(ctx, accountID)
+	if err != nil {
+		// A failing lookup is NOT "no workspace": say so instead of telling the
+		// merchant to create one they may already have.
+		return fmt.Errorf("failed to check workspace: %w", err)
+	}
+	if !has {
+		return errors.New(WorkspaceRequiredMessage)
+	}
+	return nil
+}
+
+// hasGalleryAddress reports whether this write gives the row a public address
+// WITHOUT a workspace. Exactly one class does: an `is_template` row entering
+// `published`, because the gallery is a template's address (REST
+// GET /v1/templates serves `is_template AND status='published'` with no account
+// or workspace filter). The account that owns the gallery —
+// templates@system.jomform — must NEVER have a workspace
+// (dbstore.LegacyProvisionedEmails, migration 000059), so without this
+// exemption the workspace gate locks out the one account whose rows are
+// addressable without one (card t_8b185f34). The REST twin of this helper is
+// httpapi's hasGalleryAddress; the two doors must not disagree about the class.
+//
+// Every other row, and every other live status on a template, still needs a
+// workspace: `unlisted`/`private` templates are in no public list and are
+// served only through their workspace.
+func hasGalleryAddress(f *dbstore.Form, target string) bool {
+	return f != nil && f.IsTemplate && target == dbstore.FormStatusPublished
+}
+
 // requireAdminRoleIn enforces the admin-only gate for the workspace owning
 // accountID (CHIP credentials + member management), on BOTH axes: the API-key
 // write scope and the admin role.
@@ -541,7 +610,7 @@ func (s *Server) requireAdminRoleIn(ctx context.Context, accountID string) error
 		return fmt.Errorf("db: %w", err)
 	}
 	if role != "" && role != dbstore.RoleAdmin {
-		return errors.New("perlu admin workspace")
+		return errors.New("workspace admin required")
 	}
 	return nil
 }

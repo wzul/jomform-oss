@@ -21,19 +21,35 @@
 // /profile's "Bahasa dashboard" select persists it (i18n.tsx -> persistLang).
 //
 // THE RULE. A document's declaration must describe the text it actually
-// contains. These two trees are the English-only prose surfaces: /docs (the
-// knowledge base) and /legal (privacy policy, terms). Every other surface keeps
-// the visitor's locale, RTL included — an Arabic DASHBOARD genuinely renders
-// Arabic, so its `dir="rtl"` must not be dropped to fix this.
+// contains. Three trees are the English-only prose surfaces: /docs (the
+// knowledge base), /legal (privacy policy, terms) and /brand (the public
+// brand-assets page). Every other surface keeps the visitor's locale, RTL
+// included — an Arabic DASHBOARD genuinely renders Arabic, so its `dir="rtl"`
+// must not be dropped to fix this.
+//
+// /brand joined the list in card t_4d3691b9. It is public (linked from the docs
+// and the footer) and its prose is static English — h1 "Brand assets", the
+// "Logo mark" / "Downloads" / "Colors" / "Banner" / "Usage" headings, the asset
+// notes, the usage list and the contact line — but it was never in this list, so
+// an Arabic-preferring visitor got `lang="ar"` / `dir="rtl"` over that English
+// text. Measured live on a production build with `jf_lang=ar`: the document
+// declared Arabic, mirrored right-to-left, while every heading stayed English.
+// That is the same WCAG 3.1.1 defect this list was introduced for, in a third
+// tree. The alternative — translating the page — was rejected because its prose
+// is English today and a translation is a product decision, not a declaration
+// fix. If the page is ever localised, any translated part (its image ALTs, for
+// instance) must declare its own language inside this English document, so the
+// text is not read with an English voice (WCAG 3.1.2); that is a separate
+// change, not a reason to drop /brand from this list.
 //
 // ONE LIST, READ BY THE PROVIDER AND PINNED BY THE GUARD. `components/i18n.tsx`
 // gates the documentElement write on `isEnglishOnlyProsePath`, and
-// `src/lib/docsA11y.test.ts` walks the routes ON DISK under `src/app/docs` and
-// `src/app/legal` and fails when one of them is not matched by this rule — so a
-// page added later is covered without editing this file, and a typo'd prefix
-// cannot silently drop a whole tree from the rule.
+// `src/lib/docsA11y.test.ts` walks the routes ON DISK under `src/app/docs`,
+// `src/app/legal` and `src/app/brand` and fails when one of them is not matched
+// by this rule — so a page added later is covered without editing this file, and
+// a typo'd prefix cannot silently drop a whole tree from the rule.
 
-export const ENGLISH_ONLY_PROSE_PREFIXES = ["/docs", "/legal"] as const;
+export const ENGLISH_ONLY_PROSE_PREFIXES = ["/docs", "/legal", "/brand"] as const;
 
 // True when `pathname` is one of the English-only prose surfaces.
 //

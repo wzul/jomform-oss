@@ -58,6 +58,9 @@ const PAGES = [
   // leaves a public, sitemapped page unscanned.
   { name: "docs-index", path: "/docs" },
   { name: "docs-shipping", path: "/docs/shipping" },
+  // Card t_135c3c72: the buyer-borne processing fee guide. Every docs page must
+  // be scanned by the axe gate, and the GATE-INVENTORY `e2e` count pins this list.
+  { name: "docs-payment-fees", path: "/docs/payment-fees" },
   { name: "docs-builder", path: "/docs/builder" },
   { name: "docs-workspaces", path: "/docs/workspaces" },
   { name: "docs-sales", path: "/docs/sales" },

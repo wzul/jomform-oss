@@ -159,7 +159,7 @@ test("status classification: only 401/403 are unauth", () => {
 //
 // THE DEFECT. A `jf_workspace` slug the session cannot resolve (a workspace
 // renamed or deleted while selected) makes every scoped fetch carry a foreign
-// `?workspace=`, the server answers 403 "workspace tidak dijumpai", and the
+// `?workspace=`, the server answers 403 "workspace not found", and the
 // 401/403 rule above read that as a dead session and navigated to /login.
 // Measured on prod (v1.17.0): `/chat` with `jf_workspace = ws-gone` landed on
 // https://jomform.com/login for a signed-in merchant.
@@ -188,7 +188,7 @@ function goWorkspaceNotFoundCode(): string | null {
 
 /** The wire body the server sends for a slug the caller cannot resolve. */
 function scopeRefusalBody(): { error: string; code: string } {
-  return { error: "workspace tidak dijumpai", code: goWorkspaceNotFoundCode() ?? "" };
+  return { error: "workspace not found", code: goWorkspaceNotFoundCode() ?? "" };
 }
 
 test("the guard reads the real server code (it cannot pass vacuously)", () => {
@@ -204,7 +204,7 @@ test("the guard reads the real server code (it cannot pass vacuously)", () => {
       fileURLToPath(new URL("../../../api/internal/httpapi/rest_scope.go", import.meta.url)),
       "utf8",
     ),
-    /writeErr\(w, http\.StatusForbidden, "workspace tidak dijumpai"\)/,
+    /writeErr\(w, http\.StatusForbidden, "workspace not found"\)/,
     "rest_scope.go no longer writes the foreign-slug 403 — this guard's whole premise moved",
   );
   assert.ok(

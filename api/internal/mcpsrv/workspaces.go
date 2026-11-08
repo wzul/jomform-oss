@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/installurl"
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
@@ -21,7 +22,7 @@ import (
 // workspacesStore returns the workspace store, erroring when not wired.
 func (s *Server) workspacesStore() (*dbstore.WorkspaceStore, error) {
 	if s.deps.Workspaces == nil {
-		return nil, errors.New("workspaces tidak tersedia")
+		return nil, errors.New("workspaces not available")
 	}
 	return s.deps.Workspaces, nil
 }
@@ -32,7 +33,7 @@ func (s *Server) workspacesStore() (*dbstore.WorkspaceStore, error) {
 func (s *Server) workspaceOwner(ctx context.Context) (string, error) {
 	id := IdentityFromContext(ctx)
 	if id == nil {
-		return "", fmt.Errorf("token tiada atau tidak sah")
+		return "", fmt.Errorf("token missing or invalid")
 	}
 	if id.UserID != "" {
 		return id.UserID, nil
@@ -57,11 +58,11 @@ func (s *Server) accessibleWorkspace(ctx context.Context, workspaceID string) (*
 	}
 	workspace, err := sp.ByID(ctx, workspaceID)
 	if err != nil || workspace == nil {
-		return nil, "", errors.New("workspace tidak dijumpai")
+		return nil, "", errors.New("workspace not found")
 	}
 	acc, ok, err := sp.AccessByID(ctx, workspaceID, owner)
 	if err != nil || !ok {
-		return nil, "", errors.New("workspace tidak dijumpai")
+		return nil, "", errors.New("workspace not found")
 	}
 	return workspace, acc.Role, nil
 }
@@ -93,6 +94,30 @@ func (s *Server) requireWorkspaceWriteRole(ctx context.Context, workspaceID stri
 
 // ── list_workspaces ──────────────────────────────────────────────────────────────
 
+// workspaceURL is the MCP side of the ONE rule (card t_48a93084): the address a
+// workspace is published at, decided by the deployment flag. Same package
+// (internal/installurl) the REST payloads call, so the two transports cannot
+// print different addresses for the same workspace.
+// cnameHost is the MCP side of installurl.CNAMEHost (card t_48a93084): an
+// agent that relays "CNAME → custom.jomform.com" on a self-hosted install is
+// telling the merchant to point their domain at a server they do not use.
+func (s *Server) cnameHost() string {
+	if s.deps == nil {
+		return installurl.CNAMEHost("", false)
+	}
+	if host := installurl.CNAMEHost(s.deps.AppBaseURL, s.deps.SelfHosted); host != "" {
+		return host
+	}
+	return "your installation's origin"
+}
+
+func (s *Server) workspaceURL(slug string) string {
+	if s.deps == nil {
+		return installurl.Workspace("", false, slug)
+	}
+	return installurl.Workspace(s.deps.AppBaseURL, s.deps.SelfHosted, slug)
+}
+
 type workspaceOut struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -120,7 +145,7 @@ func (s *Server) listWorkspaces(
 	for _, x := range workspaces {
 		out = append(out, workspaceOut{
 			ID: x.WorkspaceID, Name: x.Name, Slug: x.Slug,
-			URL:  "https://" + x.Slug + ".jomform.com",
+			URL:  s.workspaceURL(x.Slug),
 			Role: x.Role,
 		})
 	}
@@ -130,8 +155,8 @@ func (s *Server) listWorkspaces(
 // ── create_workspace ─────────────────────────────────────────────────────────────
 
 type createWorkspaceIn struct {
-	Name string `json:"name" jsonschema:"Nama workspace / storefront"`
-	Slug string `json:"slug" jsonschema:"Slug URL unik — 3-40 aksara, a-z 0-9 dash sahaja"`
+	Name string `json:"name" jsonschema:"Workspace / storefront name"`
+	Slug string `json:"slug" jsonschema:"Unique URL slug — 3-40 characters, a-z 0-9 dash only"`
 }
 
 // validateWorkspaceSlug delegates to the ONE shared rule (dbstore) so the MCP
@@ -171,7 +196,7 @@ func (s *Server) createWorkspace(
 		return nil, nil, nerr
 	}
 	if name == "" || strings.TrimSpace(in.Slug) == "" {
-		return nil, nil, errors.New("name dan slug wajib")
+		return nil, nil, errors.New("name and slug are required")
 	}
 	slug, verr := validateWorkspaceSlug(in.Slug)
 	if verr != nil {
@@ -181,11 +206,11 @@ func (s *Server) createWorkspace(
 	// dbstore.scanWorkspace returns a non-nil *Workspace even when the query
 	// matched no row (it returns the struct it was filling, alongside
 	// pgx.ErrNoRows), so testing `existing != nil` was ALWAYS true and
-	// create_workspace answered "slug sudah digunakan" for every slug — the tool
+	// create_workspace answered "slug is already taken" for every slug — the tool
 	// could never create anything. Treat only a real row as taken; any other
 	// error is left to the INSERT below, which has the unique-constraint backstop.
 	if existing, berr := sp.BySlug(ctx, slug); berr == nil && existing != nil {
-		return nil, nil, errors.New("slug sudah digunakan")
+		return nil, nil, errors.New("slug is already taken")
 	} else if berr != nil && !errors.Is(berr, pgx.ErrNoRows) {
 		return nil, nil, fmt.Errorf("db: %w", berr)
 	}
@@ -220,20 +245,20 @@ func (s *Server) createWorkspace(
 		var pgErr *pgconn.PgError
 		if errors.Is(err, dbstore.ErrWorkspaceSlugTaken) ||
 			(errors.As(err, &pgErr) && pgErr.Code == "23505") {
-			return nil, nil, errors.New("slug sudah digunakan")
+			return nil, nil, errors.New("slug is already taken")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	return nil, map[string]string{
 		"status": "created", "id": workspace.ID, "name": workspace.Name, "slug": workspace.Slug,
-		"url": "https://" + workspace.Slug + ".jomform.com",
+		"url": s.workspaceURL(workspace.Slug),
 	}, nil
 }
 
 // ── set_default_workspace (issue #164) ──────────────────────────────────────────
 
 type setDefaultWorkspaceIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces). Kosong = buang default."`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces). Empty = remove the default."`
 }
 
 // setDefaultWorkspace sets (or clears, when workspace_id is empty) the user's default
@@ -248,7 +273,7 @@ func (s *Server) setDefaultWorkspace(
 		return nil, nil, err
 	}
 	if s.deps.Users == nil {
-		return nil, nil, errors.New("users tidak tersedia")
+		return nil, nil, errors.New("users not available")
 	}
 	owner, err := s.workspaceOwner(ctx)
 	if err != nil {
@@ -266,11 +291,11 @@ func (s *Server) setDefaultWorkspace(
 	}
 	workspace, err := sp.ByID(ctx, in.WorkspaceID)
 	if err != nil || workspace == nil {
-		return nil, nil, errors.New("workspace tidak dijumpai")
+		return nil, nil, errors.New("workspace not found")
 	}
 	// The workspace must belong to the user (owner or member, issue #162).
 	if _, ok, aerr := sp.AccessByID(ctx, in.WorkspaceID, owner); aerr != nil || !ok {
-		return nil, nil, errors.New("workspace tidak dijumpai")
+		return nil, nil, errors.New("workspace not found")
 	}
 	if err := s.deps.Users.SetDefaultWorkspace(ctx, owner, in.WorkspaceID); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -307,8 +332,8 @@ func mcpExemptKeyID(ctx context.Context) string {
 // revoke_api_key's confirm=true. This destroys the workspace, everything under
 // it, and its CHIP account, and cannot be undone.
 type deleteWorkspaceIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	ConfirmSlug string `json:"confirm_slug,omitempty" jsonschema:"Slug workspace itu sendiri, untuk sahkan pemadaman. Salah/tiada = ditolak."`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	ConfirmSlug string `json:"confirm_slug,omitempty" jsonschema:"The workspace's own slug, to confirm deletion. Wrong/absent = rejected."`
 }
 
 // deleteWorkspaceMCP permanently deletes a workspace the caller OWNS.
@@ -334,19 +359,19 @@ func (s *Server) deleteWorkspaceMCP(
 	}
 	workspace, err := sp.ByID(ctx, in.WorkspaceID)
 	if err != nil || workspace == nil {
-		return nil, nil, errors.New("workspace tidak dijumpai")
+		return nil, nil, errors.New("workspace not found")
 	}
 	// Ownership, not membership: the caller must be the OWNER. A member who is
 	// an admin is refused with the same message as REST.
 	if workspace.Owner != owner {
-		return nil, nil, errors.New("hanya pemilik workspace boleh memadamnya")
+		return nil, nil, errors.New("only the workspace owner can delete it")
 	}
 	// Confirmation: the caller must name the workspace it is destroying.
 	if strings.TrimSpace(in.ConfirmSlug) != workspace.Slug {
 		return nil, map[string]any{
 			"status": "refused",
-			"error": "taip slug workspace untuk sahkan pemadaman: " + workspace.Slug +
-				". Pemadaman workspace tidak boleh dibatalkan.",
+			"error": "type the workspace slug to confirm the deletion: " + workspace.Slug +
+				". A workspace deletion cannot be undone.",
 			"workspace_id": workspace.ID, "slug": workspace.Slug,
 		}, nil
 	}
@@ -357,28 +382,28 @@ func (s *Server) deleteWorkspaceMCP(
 			if de.Reason == "last_workspace" {
 				return nil, map[string]any{
 					"status": "refused",
-					"error": "anda perlu sekurang-kurangnya satu workspace — cipta workspace baharu dahulu " +
-						"sebelum memadam yang terakhir.",
+					"error": "you need at least one workspace — create a new workspace first " +
+						"before deleting the last one.",
 					"workspace_id": workspace.ID, "last_workspace": true,
 				}, nil
 			}
 			return nil, map[string]any{
 				"status":       "refused",
-				"error":        "hanya pemilik workspace boleh memadamnya",
+				"error":        "only the workspace owner can delete it",
 				"workspace_id": workspace.ID,
 			}, nil
 		}
 		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
-			return nil, nil, errors.New("workspace tidak dijumpai")
+			return nil, nil, errors.New("workspace not found")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	return nil, map[string]any{
 		"status": "trashed", "workspace_id": workspace.ID, "slug": workspace.Slug,
 		"name": workspace.Name, "deleted": deleted,
-		"note": "workspace masuk TONG SAMPAH — SEMUA data kekal (akaun, borang, produk, jualan, " +
-			"kunci API). Tiada apa-apa dimusnahkan. Pemilik boleh pulihkannya dari Settings → " +
-			"Workspace → Tong Sampah. Pemadaman KEKAL hanya melalui purge_workspace, dan chat tidak pernah boleh mencadangkannya — ia alat MCP pemilik sahaja.",
+		"note": "workspace moved to the TRASH — ALL data stays (accounts, forms, products, sales, " +
+			"API keys). Nothing is destroyed. The owner can restore it from Settings → " +
+			"Workspace → Trash. PERMANENT deletion only happens through purge_workspace, and chat can never suggest it — it is an owner-only MCP tool.",
 	}, nil
 }
 
@@ -453,8 +478,8 @@ func (s *Server) checkWorkspaceDeletionMCP(
 // revoke_api_key: a call that cannot be undone should make the caller name what
 // it is destroying.
 type purgeWorkspaceIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace dalam tong sampah (dari list_trashed_workspaces)"`
-	ConfirmSlug string `json:"confirm_slug,omitempty" jsonschema:"Slug workspace itu sendiri, untuk sahkan pemadaman kekal. Salah/tiada = ditolak."`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID in the trash (from list_trashed_workspaces)"`
+	ConfirmSlug string `json:"confirm_slug,omitempty" jsonschema:"The workspace's own slug, to confirm the permanent delete. Wrong/absent = rejected."`
 }
 
 // listTrashedWorkspacesMCP returns the caller's OWN trashed workspaces.
@@ -508,11 +533,11 @@ func (s *Server) restoreWorkspaceMCP(
 	// tool exists to bring back.
 	workspace, err := sp.TrashedByID(ctx, in.WorkspaceID)
 	if err != nil || workspace == nil {
-		return nil, nil, errors.New("workspace tidak dijumpai dalam tong sampah")
+		return nil, nil, errors.New("workspace not found in the Trash")
 	}
 	if workspace.Owner != owner {
 		return nil, map[string]any{
-			"status": "refused", "error": "hanya pemilik workspace boleh memulihkannya",
+			"status": "refused", "error": "only the workspace owner can restore it",
 			"workspace_id": workspace.ID,
 		}, nil
 	}
@@ -520,22 +545,22 @@ func (s *Server) restoreWorkspaceMCP(
 		if errors.Is(err, dbstore.ErrWorkspaceSlugTaken) {
 			return nil, map[string]any{
 				"status": "refused",
-				"error": "slug '" + workspace.Slug + "' sudah diambil workspace lain semasa ia dalam " +
-					"tong sampah — tukar slug workspace itu dahulu, kemudian pulihkan semula. " +
-					"Tiada penamaan semula automatik.",
+				"error": "slug '" + workspace.Slug + "' was taken by another workspace while it was in the " +
+					"Trash — change that workspace's slug first, then restore again. " +
+					"Nothing is renamed automatically.",
 				"workspace_id": workspace.ID, "slug": workspace.Slug, "slug_taken": true,
 			}, nil
 		}
 		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
-			return nil, nil, errors.New("workspace tidak dijumpai dalam tong sampah")
+			return nil, nil, errors.New("workspace not found in the Trash")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	return nil, map[string]any{
 		"status": "restored", "workspace_id": workspace.ID, "slug": workspace.Slug,
 		"name": workspace.Name,
-		"note": "workspace dipulihkan — akaun, borang, produk dan jualannya kembali seperti sediakala " +
-			"(tiada baris disentuh semasa dalam tong sampah).",
+		"note": "workspace restored — its accounts, forms, products and sales are back as they were " +
+			"(no row was touched while it was in the Trash).",
 	}, nil
 }
 
@@ -564,20 +589,20 @@ func (s *Server) purgeWorkspaceMCP(
 		// Deliberately the same refusal for "no such workspace" and "still
 		// live": purging a live row is not a thing, and saying so precisely
 		// would tell a caller whether a workspace they cannot touch exists.
-		return nil, nil, errors.New("workspace tidak dijumpai dalam tong sampah — " +
-			"hantar ke tong sampah dahulu guna delete_workspace")
+		return nil, nil, errors.New("workspace not found in the Trash — " +
+			"send it to the Trash first with delete_workspace")
 	}
 	if workspace.Owner != owner {
 		return nil, map[string]any{
-			"status": "refused", "error": "hanya pemilik workspace boleh memadamkannya secara kekal",
+			"status": "refused", "error": "only the workspace owner can permanently delete it",
 			"workspace_id": workspace.ID,
 		}, nil
 	}
 	if strings.TrimSpace(in.ConfirmSlug) != workspace.Slug {
 		return nil, map[string]any{
 			"status": "refused",
-			"error": "taip slug workspace untuk sahkan pemadaman kekal: " + workspace.Slug +
-				". Padam kekal tidak boleh dibatalkan.",
+			"error": "type the workspace slug to confirm the permanent deletion: " + workspace.Slug +
+				". A permanent delete cannot be undone.",
 			"workspace_id": workspace.ID, "slug": workspace.Slug,
 		}, nil
 	}
@@ -586,23 +611,23 @@ func (s *Server) purgeWorkspaceMCP(
 		if errors.Is(err, dbstore.ErrWorkspaceHasSales) {
 			return nil, map[string]any{
 				"status": "refused",
-				"error": "workspace ini mempunyai jualan, jadi ia tidak boleh dipadam kekal — " +
-					"jualan tidak pernah dimusnahkan atau dijadikan yatim. Biarkan ia dalam tong sampah " +
-					"(pulihkan bila perlu) atau selesaikan jualannya dahulu.",
+				"error": "this workspace has sales, so it cannot be permanently deleted — " +
+					"sales are never destroyed or orphaned. Leave it in the Trash " +
+					"(restore it when needed) or settle its sales first.",
 				"workspace_id": workspace.ID, "has_sales": true,
 			}, nil
 		}
 		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
-			return nil, nil, errors.New("workspace tidak dijumpai dalam tong sampah")
+			return nil, nil, errors.New("workspace not found in the Trash")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	return nil, map[string]any{
 		"status": "purged", "workspace_id": workspace.ID, "slug": workspace.Slug,
 		"name": workspace.Name, "deleted": deleted,
-		"note": "workspace dipadam KEKAL. Tidak boleh dibatalkan. Akaun CHIP yang SUDAH ADA " +
-			"sebelum workspace ini (akaun signup yang dipakai semasa ia dicipta) tidak " +
-			"dimusnahkan — ia dilepaskan semula sebagai akaun tanpa workspace; lihat " +
+		"note": "workspace PERMANENTLY deleted. Cannot be undone. The CHIP account that ALREADY EXISTED " +
+			"before this workspace (the signup account used when it was created) is not " +
+			"destroyed — it is released back as an account without a workspace; see " +
 			"deleted.accounts_unlinked.",
 	}, nil
 }
@@ -619,10 +644,10 @@ func (s *Server) purgeWorkspaceMCP(
 // merchant has already handed out, and an agent should never do that because it
 // inferred it. Renaming the NAME needs no confirmation: it is a label.
 type updateWorkspaceIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	Name        string `json:"name,omitempty" jsonschema:"Nama baru workspace (kosong = kekal). Nama ialah label dalaman/dashboard."`
-	Slug        string `json:"slug,omitempty" jsonschema:"Slug/alamat awam baru (kosong = kekal): 3-40 aksara a-z 0-9 dash, bukan akhiran 'jomform'. Ia menjadi https://<slug>.jomform.com. Hanya PEMILIK workspace boleh menukarnya, dan ia perlukan confirm=true. Slug LAMA disimpan sebagai alias dan terus berfungsi (pindah kekal ke slug baru), jadi pautan/QR yang sudah tersebar tidak mati."`
-	Confirm     bool   `json:"confirm,omitempty" jsonschema:"Set true untuk sahkan pertukaran SLUG. Wajib bila slug diisi."`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	Name        string `json:"name,omitempty" jsonschema:"New workspace name (empty = keep). The name is an internal/dashboard label."`
+	Slug        string `json:"slug,omitempty" jsonschema:"New slug/public address (empty = keep): 3-40 characters a-z 0-9 dash, not the suffix 'jomform'. It becomes https://<slug>.jomform.com. Only the workspace OWNER can change it, and it requires confirm=true. The OLD slug is kept as an alias and keeps working (permanent redirect to the new slug), so links/QRs already shared do not break."`
+	Confirm     bool   `json:"confirm,omitempty" jsonschema:"Set true to confirm the SLUG change. Required when a slug is provided."`
 }
 
 func (s *Server) updateWorkspace(
@@ -635,7 +660,7 @@ func (s *Server) updateWorkspace(
 		return nil, nil, err
 	}
 	if strings.TrimSpace(in.Name) == "" && strings.TrimSpace(in.Slug) == "" {
-		return nil, nil, errors.New("name atau slug diperlukan")
+		return nil, nil, errors.New("name or slug is required")
 	}
 	owner, err := s.workspaceOwner(ctx)
 	if err != nil {
@@ -648,7 +673,7 @@ func (s *Server) updateWorkspace(
 		if !in.Confirm {
 			return nil, map[string]any{
 				"status":       "refused",
-				"error":        "menukar slug memindahkan alamat AWAM workspace (https://" + workspace.Slug + ".jomform.com) — semua pautan, iframe dan QR yang sudah tersebar akan berpindah ke alamat baharu. Set confirm=true untuk sahkan. Alamat lama kekal berfungsi sebagai alias (pindah kekal).",
+				"error":        "changing the slug moves the workspace's PUBLIC address (https://" + workspace.Slug + ".jomform.com) — every link, iframe and QR already in the wild moves to the new address. Set confirm=true to confirm. The old address keeps working as an alias (permanent redirect).",
 				"workspace_id": workspace.ID, "slug": workspace.Slug,
 			}, nil
 		}
@@ -658,7 +683,7 @@ func (s *Server) updateWorkspace(
 		if !isOwner {
 			return nil, map[string]any{
 				"status":       "refused",
-				"error":        "hanya PEMILIK workspace boleh menukar slug — slug ialah alamat awam workspace (pautan, iframe, QR). Nama sahaja boleh ditukar oleh ahli manage/admin.",
+				"error":        "only the workspace OWNER can change the slug — the slug is the workspace's public address (links, iframe, QR). The name alone can be changed by manage/admin members.",
 				"workspace_id": workspace.ID, "slug": workspace.Slug, "is_owner": false,
 			}, nil
 		}
@@ -677,9 +702,9 @@ func (s *Server) updateWorkspace(
 	if err != nil {
 		switch {
 		case errors.Is(err, dbstore.ErrWorkspaceSlugTaken):
-			return nil, nil, errors.New("slug sudah digunakan — slug itu milik workspace lain (hidup atau dikhaskan sebagai alias lama)")
+			return nil, nil, errors.New("slug is already taken — that slug belongs to another workspace (live, or reserved as an old alias)")
 		case errors.Is(err, dbstore.ErrWorkspaceSlugNotOwned):
-			return nil, nil, errors.New("hanya pemilik workspace boleh menukar slug")
+			return nil, nil, errors.New("only the workspace owner can change the slug")
 		case errors.Is(err, dbstore.ErrWorkspaceNameLength):
 			return nil, nil, err
 		case errors.Is(err, dbstore.ErrWorkspaceSlugLength),
@@ -700,7 +725,7 @@ func (s *Server) updateWorkspace(
 			//     address") and #694's rule is that the caller decides its sentence
 			//     from the code rather than from prose. The shape legs above stay
 			//     transport errors: their remedy is to retype the value, and no
-			//     caller needs a token to act on "slug 3-40 aksara".
+			//     caller needs a token to act on "slug 3-40 characters".
 			return nil, map[string]any{
 				"status":       "refused",
 				"error":        err.Error(),
@@ -709,24 +734,30 @@ func (s *Server) updateWorkspace(
 				"slug":         workspace.Slug,
 			}, nil
 		case errors.Is(err, dbstore.ErrWorkspaceNoChange):
-			return nil, nil, errors.New("tiada perubahan — nama dan slug sama seperti sekarang")
+			return nil, nil, errors.New("no change — the name and slug are the same as now")
 		case errors.Is(err, dbstore.ErrWorkspaceNotFound):
-			return nil, nil, errors.New("workspace tidak dijumpai")
+			return nil, nil, errors.New("workspace not found")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 
+	url := s.workspaceURL(res.Workspace.Slug)
 	out := map[string]any{
 		"status": "updated", "workspace_id": res.Workspace.ID,
 		"name": res.Workspace.Name, "slug": res.Workspace.Slug,
-		"url":          "https://" + res.Workspace.Slug + ".jomform.com",
+		"url":          url,
 		"name_changed": res.NameChanged, "slug_changed": res.SlugChanged,
 		"previous_slug": res.OldSlug,
 	}
-	if res.SlugChanged {
-		// The promise the merchant needs to hear: the addresses already handed
-		// out still work. Stated explicitly so an agent relays it.
-		out["previous_url"] = "https://" + res.OldSlug + ".jomform.com"
+	// The promise the merchant needs to hear: the addresses already handed out
+	// still work. Stated explicitly so an agent relays it.
+	//
+	// Only when the address actually MOVED. One self-hosted origin serves every
+	// workspace (card t_48a93084), so a slug rename leaves the address alone —
+	// telling an agent that a previous_url redirects, and printing the same
+	// string twice, would be false.
+	if prev := s.workspaceURL(res.OldSlug); res.SlugChanged && prev != "" && prev != url {
+		out["previous_url"] = prev
 		out["previous_url_redirects"] = true
 	}
 	return nil, out, nil
@@ -735,7 +766,7 @@ func (s *Server) updateWorkspace(
 // ── update_profile_phone (issue #181) ───────────────────────────────────────
 
 type updateProfilePhoneIn struct {
-	Phone string `json:"phone" jsonschema:"Nombor telefon pilihan (kosong = buang). Format longgar: digit, +, ruang, 8-15 digit."`
+	Phone string `json:"phone" jsonschema:"Optional phone number (empty = remove). Loose format: digits, +, spaces, 8-15 digits."`
 }
 
 // updateProfilePhone sets (or clears, when phone is empty) the account owner's
@@ -749,7 +780,7 @@ func (s *Server) updateProfilePhone(
 		return nil, nil, err
 	}
 	if s.deps.Users == nil {
-		return nil, nil, errors.New("users tidak tersedia")
+		return nil, nil, errors.New("users not available")
 	}
 	owner, err := s.workspaceOwner(ctx)
 	if err != nil {
@@ -764,11 +795,11 @@ func (s *Server) updateProfilePhone(
 				digits++
 			case c == '+' || c == ' ' || c == '-' || c == '(' || c == ')':
 			default:
-				return nil, nil, errors.New("nombor telefon tidak sah")
+				return nil, nil, errors.New("invalid phone number")
 			}
 		}
 		if digits < 8 || digits > 15 {
-			return nil, nil, errors.New("nombor telefon tidak sah")
+			return nil, nil, errors.New("invalid phone number")
 		}
 	}
 	if err := s.deps.Users.UpdatePhone(ctx, owner, phone); err != nil {
@@ -780,7 +811,7 @@ func (s *Server) updateProfilePhone(
 // ── update_profile_timezone (issue #191) ───────────────────────────────────
 
 type updateProfileTimezoneIn struct {
-	Timezone string `json:"timezone" jsonschema:"Zona waktu IANA pilihan (kosong = Auto, ikut pelayar/PC). Contoh: Asia/Kuala_Lumpur, UTC."`
+	Timezone string `json:"timezone" jsonschema:"Optional IANA timezone (empty = Auto, follow the browser/PC). Example: Asia/Kuala_Lumpur, UTC."`
 }
 
 // updateProfileTimezone sets (or clears, when timezone is empty) the account
@@ -794,7 +825,7 @@ func (s *Server) updateProfileTimezone(
 		return nil, nil, err
 	}
 	if s.deps.Users == nil {
-		return nil, nil, errors.New("users tidak tersedia")
+		return nil, nil, errors.New("users not available")
 	}
 	owner, err := s.workspaceOwner(ctx)
 	if err != nil {
@@ -803,7 +834,7 @@ func (s *Server) updateProfileTimezone(
 	tz := strings.TrimSpace(in.Timezone)
 	if tz != "" {
 		if _, lerr := time.LoadLocation(tz); lerr != nil {
-			return nil, nil, errors.New("zona waktu tidak sah")
+			return nil, nil, errors.New("invalid timezone")
 		}
 	}
 	if err := s.deps.Users.UpdateTimezone(ctx, owner, tz); err != nil {
@@ -815,7 +846,7 @@ func (s *Server) updateProfileTimezone(
 // ── update_profile_language (language placement) ──────────────────────────
 
 type updateProfileLanguageIn struct {
-	Lang string `json:"lang" jsonschema:"Bahasa UI dashboard pilihan anda: en, ms, zh, ta atau ar. Kosong = buang tetapan (kembali ikut pelayar, kemudian English). Ini bahasa DASHBOARD sahaja — bahasa borang awam ditetapkan per-borang/per-workspace."`
+	Lang string `json:"lang" jsonschema:"Your preferred dashboard UI language: en, ms, zh, ta or ar. Empty = remove the setting (falls back to the browser, then English). This is the DASHBOARD language only — the public form language is set per-form/per-workspace."`
 }
 
 // updateProfileLanguage sets (or clears, when lang is empty) the account owner's
@@ -833,7 +864,7 @@ func (s *Server) updateProfileLanguage(
 		return nil, nil, err
 	}
 	if s.deps.Users == nil {
-		return nil, nil, errors.New("users tidak tersedia")
+		return nil, nil, errors.New("users not available")
 	}
 	owner, err := s.workspaceOwner(ctx)
 	if err != nil {
@@ -841,7 +872,7 @@ func (s *Server) updateProfileLanguage(
 	}
 	lang := strings.TrimSpace(in.Lang)
 	if !dbstore.ValidProfileLang(lang) {
-		return nil, nil, errors.New("bahasa tidak disokong (en, ms, zh, ta, ar)")
+		return nil, nil, errors.New("language not supported (en, ms, zh, ta, ar)")
 	}
 	if err := s.deps.Users.UpdateLang(ctx, owner, lang); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -852,7 +883,7 @@ func (s *Server) updateProfileLanguage(
 // ── get_workspace_settings ───────────────────────────────────────────────────────
 
 type workspaceRefIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
 }
 
 func (s *Server) getWorkspaceSettings(
@@ -875,29 +906,29 @@ func (s *Server) getWorkspaceSettings(
 // ── set_workspace_settings ───────────────────────────────────────────────────────
 
 type setWorkspaceSettingsIn struct {
-	WorkspaceID    string  `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	FooterText     *string `json:"footer_text,omitempty" jsonschema:"Teks footer storefront (omit = kekal, \"\" = kosongkan)"`
-	CompanyReg     *string `json:"company_reg,omitempty" jsonschema:"Nombor pendaftaran syarikat (omit = kekal)"`
-	PrivacyURL     *string `json:"privacy_url,omitempty" jsonschema:"URL polisi privasi — mesti https:// (omit = kekal)"`
-	TermsURL       *string `json:"terms_url,omitempty" jsonschema:"URL terma & syarat — mesti https:// (omit = kekal)"`
-	RefundURL      *string `json:"refund_url,omitempty" jsonschema:"URL polisi bayaran balik — mesti https:// (omit = kekal)"`
-	ContactPhone   *string `json:"contact_phone,omitempty" jsonschema:"Nombor telefon perniagaan untuk footer (omit = kekal)"`
-	ContactAddress *string `json:"contact_address,omitempty" jsonschema:"Alamat perniagaan untuk footer (omit = kekal)"`
-	BusinessName   *string `json:"business_name,omitempty" jsonschema:"Nama perniagaan untuk footer (omit = kekal)"`
-	MenuJSON       *string `json:"menu_json,omitempty" jsonschema:"Menu navigasi JSON, cth [{\"label\":\"Home\",\"url\":\"/\"}] (omit = kekal)"`
+	WorkspaceID    string  `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	FooterText     *string `json:"footer_text,omitempty" jsonschema:"Storefront footer text (omit = keep, \"\" = empty it)"`
+	CompanyReg     *string `json:"company_reg,omitempty" jsonschema:"Company registration number (omit = keep)"`
+	PrivacyURL     *string `json:"privacy_url,omitempty" jsonschema:"Privacy policy URL — must be https:// (omit = keep)"`
+	TermsURL       *string `json:"terms_url,omitempty" jsonschema:"Terms & conditions URL — must be https:// (omit = keep)"`
+	RefundURL      *string `json:"refund_url,omitempty" jsonschema:"Refund policy URL — must be https:// (omit = keep)"`
+	ContactPhone   *string `json:"contact_phone,omitempty" jsonschema:"Business phone number for the footer (omit = keep)"`
+	ContactAddress *string `json:"contact_address,omitempty" jsonschema:"Business address for the footer (omit = keep)"`
+	BusinessName   *string `json:"business_name,omitempty" jsonschema:"Business name for the footer (omit = keep)"`
+	MenuJSON       *string `json:"menu_json,omitempty" jsonschema:"Navigation menu JSON, e.g. [{\"label\":\"Home\",\"url\":\"/\"}] (omit = keep)"`
 	// Issue #276: per-workspace SEO indexing toggle. Omitted (nil) = keep current.
-	Indexing *bool `json:"indexing,omitempty" jsonschema:"Benarkan enjin carian/AI mengindeks storefront workspace ini (omit = kekal)"`
+	Indexing *bool `json:"indexing,omitempty" jsonschema:"Allow search engines/AI to index this workspace's storefront (omit = keep)"`
 	// Issue #447: per-workspace realtime notification sound toggle. Omitted
 	// (nil) = keep current; explicit true/false sets it.
-	SoundEnabled *bool `json:"sound_enabled,omitempty" jsonschema:"Mainkan bunyi beep pada dashboard bila jualan/respon baharu tiba (omit = kekal)"`
+	SoundEnabled *bool `json:"sound_enabled,omitempty" jsonschema:"Play a beep sound on the dashboard when a new sale/response arrives (omit = keep)"`
 	// Per-workspace AI spam-judge toggle. Omitted (nil) = keep
 	// current; explicit true/false sets it. Default true.
-	SpamJudgeEnabled *bool `json:"spam_judge_enabled,omitempty" jsonschema:"Hidupkan AI spam detection (model keputusan clef) untuk workspace ini — true = hidup (lalai), false = MATI: tiada job AI dihantar langsung dan is_spam tidak lagi ditetapkan, jadi /spam kekal kosong (omit = kekal)"`
+	SpamJudgeEnabled *bool `json:"spam_judge_enabled,omitempty" jsonschema:"Enable AI spam detection (clef decision model) for this workspace — true = on (default), false = OFF: no AI job is sent at all and is_spam is no longer set, so /spam stays empty (omit = keep)"`
 	// Language placement: the workspace's buyer-facing default language, used by
 	// PUBLIC forms when the form itself sets no config.lang (form-level wins).
 	// Omitted (nil) = keep current. This is the STOREFRONT language, not the
 	// dashboard UI language (that one is per-profile, update_profile_language).
-	DefaultLang *string `json:"default_lang,omitempty" jsonschema:"Bahasa lalai borang AWAM untuk workspace ini bila borang itu tidak menetapkan bahasa sendiri: en, ms, zh, ta atau ar. Ini bahasa pembeli, bukan bahasa dashboard anda (omit = kekal)."`
+	DefaultLang *string `json:"default_lang,omitempty" jsonschema:"Default language of PUBLIC forms for this workspace when the form does not set its own language: en, ms, zh, ta or ar. This is the buyer's language, not your dashboard language (omit = keep)."`
 }
 
 func (s *Server) setWorkspaceSettings(
@@ -924,7 +955,7 @@ func (s *Server) setWorkspaceSettings(
 		}
 	}
 	if in.MenuJSON != nil && *in.MenuJSON != "" && !jsonValid(*in.MenuJSON) {
-		return nil, nil, errors.New("menu_json bukan JSON yang sah")
+		return nil, nil, errors.New("menu_json is not valid JSON")
 	}
 	sp, err := s.workspacesStore()
 	if err != nil {
@@ -976,7 +1007,7 @@ func (s *Server) setWorkspaceSettings(
 	// leave the storefront on an unrenderable language.
 	if in.DefaultLang != nil {
 		if !dbstore.ValidProfileLang(*in.DefaultLang) || strings.TrimSpace(*in.DefaultLang) == "" {
-			return nil, nil, errors.New("bahasa tidak disokong (en, ms, zh, ta, ar)")
+			return nil, nil, errors.New("language not supported (en, ms, zh, ta, ar)")
 		}
 		st.DefaultLang = strings.TrimSpace(*in.DefaultLang)
 	}
@@ -992,7 +1023,7 @@ func (s *Server) setWorkspaceSettings(
 // ── get_workspace_landing_page / set_workspace_landing_page (issue #360) ─────────────
 
 type workspaceLandingRefIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
 }
 
 func (s *Server) getWorkspaceLandingPage(
@@ -1016,17 +1047,17 @@ func (s *Server) getWorkspaceLandingPage(
 }
 
 type setWorkspaceLandingPageIn struct {
-	WorkspaceID     string                 `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	Enabled         bool                   `json:"enabled" jsonschema:"true = papar landing page; false = jatuh ke senarai borang"`
-	Hero            string                 `json:"hero,omitempty" jsonschema:"Tajuk utama (hero)"`
-	Subtitle        string                 `json:"subtitle,omitempty" jsonschema:"Sub-tajuk di bawah hero"`
-	Body            string                 `json:"body,omitempty" jsonschema:"Teks badan landing page"`
-	ImageURL        string                 `json:"image_url,omitempty" jsonschema:"URL imej banner (mesti https://)"`
-	PrimaryColor    string                 `json:"primary_color,omitempty" jsonschema:"Warna aksen tema, cth #7c3aed"`
-	BackgroundColor string                 `json:"background_color,omitempty" jsonschema:"Warna latar, cth #ffffff"`
-	LogoURL         string                 `json:"logo_url,omitempty" jsonschema:"URL logo jenama (mesti https://)"`
-	CTAs            []dbstore.LandingCTA   `json:"ctas,omitempty" jsonschema:"Butang CTA menghubung ke borang diterbitkan, cth [{\"label\":\"RSVP\",\"form_slug\":\"rsvp\"}]"`
-	Forms           []dbstore.LandingEmbed `json:"forms,omitempty" jsonschema:"Borang diterbitkan dipapar inline dalam landing page, cth [{\"label\":\"RSVP\",\"form_slug\":\"rsvp\"}]"`
+	WorkspaceID     string                 `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	Enabled         bool                   `json:"enabled" jsonschema:"true = show the landing page; false = fall back to the forms list"`
+	Hero            string                 `json:"hero,omitempty" jsonschema:"Main heading (hero)"`
+	Subtitle        string                 `json:"subtitle,omitempty" jsonschema:"Sub-heading under the hero"`
+	Body            string                 `json:"body,omitempty" jsonschema:"Landing page body text"`
+	ImageURL        string                 `json:"image_url,omitempty" jsonschema:"Banner image URL (must be https://)"`
+	PrimaryColor    string                 `json:"primary_color,omitempty" jsonschema:"Theme accent color, e.g. #7c3aed"`
+	BackgroundColor string                 `json:"background_color,omitempty" jsonschema:"Background color, e.g. #ffffff"`
+	LogoURL         string                 `json:"logo_url,omitempty" jsonschema:"Brand logo URL (must be https://)"`
+	CTAs            []dbstore.LandingCTA   `json:"ctas,omitempty" jsonschema:"CTA button links to a published form, e.g. [{\"label\":\"RSVP\",\"form_slug\":\"rsvp\"}]"`
+	Forms           []dbstore.LandingEmbed `json:"forms,omitempty" jsonschema:"Published form is displayed inline in the landing page, e.g. [{\"label\":\"RSVP\",\"form_slug\":\"rsvp\"}]"`
 }
 
 func (s *Server) setWorkspaceLandingPage(

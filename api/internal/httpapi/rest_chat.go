@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -156,7 +157,7 @@ func (h *RESTHandlers) chatAvailable() bool {
 // guess wherever it is made.
 func (h *RESTHandlers) handleChatStatus(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if h.sessionOwnerID(r) == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	if _, ok := h.chatWorkspaceScopeOr403(w, r, actx); !ok {
@@ -214,11 +215,11 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
 		writeErr(w, http.StatusUnauthorized,
-			"chat memerlukan sesi pengguna — log masuk untuk menggunakannya")
+			"chat needs a user session — sign in to use it")
 		return
 	}
 	if actx == nil || actx.Account == nil {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	// Refuse a GUESSED account before anything else: the message's tools read
@@ -232,20 +233,20 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 
 	var in chatRequestIn
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "badan permintaan tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	msg := strings.TrimSpace(in.Message)
 	if msg == "" {
-		writeErr(w, http.StatusBadRequest, "mesej wajib")
+		writeErr(w, http.StatusBadRequest, "message is required")
 		return
 	}
 	if len([]rune(msg)) > chat.MaxMessageChars {
-		writeErr(w, http.StatusBadRequest, "mesej terlalu panjang")
+		writeErr(w, http.StatusBadRequest, "message too long")
 		return
 	}
 	if len(in.History) > chatMaxHistory {
-		writeErr(w, http.StatusBadRequest, "sejarah perbualan terlalu panjang")
+		writeErr(w, http.StatusBadRequest, "conversation history is too long")
 		return
 	}
 
@@ -256,7 +257,7 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 	// allowance, and the message that comes back is the one the page already
 	// handles (503 → setAvailable(false)).
 	if !h.chatAvailable() {
-		writeErr(w, http.StatusServiceUnavailable, "pembantu chat tidak tersedia")
+		writeErr(w, http.StatusServiceUnavailable, "the chat assistant is not available")
 		return
 	}
 
@@ -265,7 +266,7 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 	// user with several tabs must not multiply theirs.
 	if h.ChatLimiter != nil && !h.ChatLimiter.Allow("chat|"+uid) {
 		writeErr(w, http.StatusTooManyRequests,
-			fmt.Sprintf("had chat dicapai (%.0f mesej sejam). Sila cuba sebentar lagi.", chatRatePerHour))
+			fmt.Sprintf("chat limit reached (%.0f messages per hour). Please try again shortly.", chatRatePerHour))
 		return
 	}
 
@@ -283,7 +284,7 @@ func (h *RESTHandlers) handleChat(w http.ResponseWriter, r *http.Request, actx *
 		// request". A credential the provider REJECTED is the same answer — the
 		// deployment has no working model — so both land on 503 and the detail
 		// is logged for the operator, never returned.
-		respondAIErr(w, r, err, "pembantu chat tidak tersedia")
+		respondAIErr(w, r, err, "the chat assistant is not available")
 		return
 	}
 	h.recordChatEvent(r, actx, res)
@@ -313,11 +314,11 @@ func (h *RESTHandlers) handleChatConfirm(w http.ResponseWriter, r *http.Request,
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
 		writeErr(w, http.StatusUnauthorized,
-			"pengesahan memerlukan sesi pengguna — log masuk untuk menggunakannya")
+			"confirmation needs a user session — sign in to use it")
 		return
 	}
 	if actx == nil || actx.Account == nil {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	// The confirmation writes with THE ACCOUNT THIS REQUEST RESOLVED, so an
@@ -331,28 +332,28 @@ func (h *RESTHandlers) handleChatConfirm(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if h.Chat == nil {
-		writeErr(w, http.StatusServiceUnavailable, "pembantu chat tidak tersedia")
+		writeErr(w, http.StatusServiceUnavailable, "the chat assistant is not available")
 		return
 	}
 	var in chatConfirmRequestIn
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "badan permintaan tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if strings.TrimSpace(in.Token) == "" {
-		writeErr(w, http.StatusBadRequest, "token cadangan diperlukan")
+		writeErr(w, http.StatusBadRequest, "proposal token is required")
 		return
 	}
 	if strings.TrimSpace(in.ArgsHash) == "" {
 		// Without the hash there is nothing that binds the execution to what the
 		// user read, so the request is refused as malformed rather than treated as
 		// "no change requested".
-		writeErr(w, http.StatusBadRequest, "args_hash diperlukan untuk mengikat cadangan")
+		writeErr(w, http.StatusBadRequest, "args_hash is required to bind the proposal")
 		return
 	}
 	if h.ChatConfirmLimiter != nil && !h.ChatConfirmLimiter.Allow("chatconfirm|"+uid) {
 		writeErr(w, http.StatusTooManyRequests,
-			fmt.Sprintf("had pengesahan dicapai (%.0f sejam). Sila cuba sebentar lagi.", chatConfirmPerHour))
+			fmt.Sprintf("verification limit reached (%.0f per hour). Please try again shortly.", chatConfirmPerHour))
 		return
 	}
 
@@ -366,6 +367,7 @@ func (h *RESTHandlers) handleChatConfirm(w http.ResponseWriter, r *http.Request,
 
 	res, err := h.Chat.Confirm(r.Context(), writeCtx, uid, in.Token, in.ArgsHash)
 	if err != nil {
+		logChatDecisionFailure(r, actx, "chat_confirm_failed", in.Token, err)
 		h.recordChatConfirmEvent(r, actx, uid, in.Token, "", false, err)
 		writeErr(w, chatConfirmStatusFor(err), chatConfirmMessageFor(err))
 		return
@@ -395,7 +397,7 @@ func (h *RESTHandlers) handleChatCancel(w http.ResponseWriter, r *http.Request, 
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
 		writeErr(w, http.StatusUnauthorized,
-			"membatalkan cadangan memerlukan sesi pengguna — log masuk untuk menggunakannya")
+			"cancelling a proposal needs a user session — sign in to use it")
 		return
 	}
 	// The same scope rule as the confirm: a decision on a card belongs to the
@@ -406,16 +408,16 @@ func (h *RESTHandlers) handleChatCancel(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if h.Chat == nil {
-		writeErr(w, http.StatusServiceUnavailable, "pembantu chat tidak tersedia")
+		writeErr(w, http.StatusServiceUnavailable, "the chat assistant is not available")
 		return
 	}
 	var in chatConfirmRequestIn
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "badan permintaan tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if strings.TrimSpace(in.Token) == "" {
-		writeErr(w, http.StatusBadRequest, "token cadangan diperlukan")
+		writeErr(w, http.StatusBadRequest, "proposal token is required")
 		return
 	}
 	// The cancel counts against the same per-user bucket as a confirm: both are
@@ -423,10 +425,11 @@ func (h *RESTHandlers) handleChatCancel(w http.ResponseWriter, r *http.Request, 
 	// way.
 	if h.ChatConfirmLimiter != nil && !h.ChatConfirmLimiter.Allow("chatconfirm|"+uid) {
 		writeErr(w, http.StatusTooManyRequests,
-			fmt.Sprintf("had pengesahan dicapai (%.0f sejam). Sila cuba sebentar lagi.", chatConfirmPerHour))
+			fmt.Sprintf("verification limit reached (%.0f per hour). Please try again shortly.", chatConfirmPerHour))
 		return
 	}
 	if err := h.Chat.Cancel(r.Context(), uid, in.Token); err != nil {
+		logChatDecisionFailure(r, actx, "chat_cancel_failed", in.Token, err)
 		h.recordChatConfirmEvent(r, actx, uid, in.Token, "", false, err)
 		writeErr(w, chatConfirmStatusFor(err), chatConfirmMessageFor(err))
 		return
@@ -454,6 +457,15 @@ func chatConfirmStatusFor(err error) int {
 		// request the user sent is well formed — what has changed is the
 		// proposal's own fitness, which the user resolves by having the
 		// assistant prepare a fresh card, exactly like a spent or expired token.
+		return http.StatusConflict
+	case errors.Is(err, chat.ErrProposalWorkspaceRequired):
+		// The workspace gate refused the confirmed write AFTER the token was
+		// claimed (card t_bf4feea2): the account has no workspace at all, so a
+		// form creation can never land. Same reasoning as the unexecutable card
+		// above — and the same status the form-CREATE door answers this state
+		// with (rest_handlers.go's 409 workspace.required) — because the remedy is
+		// "create a workspace, then ask for a fresh card", never a retry of this
+		// one (its token is spent).
 		return http.StatusConflict
 	case errors.Is(err, dbstore.ErrChatProposalNotFound):
 		return http.StatusNotFound
@@ -483,24 +495,39 @@ func chatConfirmStatusFor(err error) int {
 func chatConfirmMessageFor(err error) string {
 	switch {
 	case errors.Is(err, dbstore.ErrChatProposalConsumed):
-		return "cadangan itu sudah digunakan atau dibatalkan — minta pembantu menyediakan semula"
+		return "that proposal was already used or cancelled — ask the assistant to prepare it again"
 	case errors.Is(err, dbstore.ErrChatProposalExpired):
-		return "cadangan itu telah luput — minta pembantu menyediakan semula"
+		return "that proposal has expired — ask the assistant to prepare it again"
 	case errors.Is(err, chat.ErrProposalArgsChanged):
-		return "cadangan berubah sejak dipaparkan — sahkan semula dari kad asal"
+		return "the proposal changed since it was shown — confirm it again from the original card"
 	case errors.Is(err, chat.ErrProposalArgsInvalid):
 		// NOT "try again": the token is UNSPENT, and the same card can never
 		// succeed. The remedy is a fresh proposal, and the copy says so.
-		return "cadangan itu tidak boleh dilaksanakan — minta pembantu menyediakan kad baharu"
+		return "that proposal cannot be carried out — ask the assistant to prepare a new card"
 	case errors.Is(err, chat.ErrProposalRoleRefused):
 		// The workspace ROLE gate refused the confirmed write, AFTER the token was
 		// claimed. The gate's own wording, so the reason the card was refused is
 		// the reason the user is shown.
 		return mcpsrv.RoleManageRequiredMessage
+	case errors.Is(err, chat.ErrProposalWorkspaceRequired):
+		// THE NO-WORKSPACE REFUSAL (card t_bf4feea2). The gate's own sentence,
+		// written as the shared literal so errcode.go's message→code table resolves
+		// it to `workspace.required` — the code the form-CREATE door already
+		// answers this state with, and the only thing that lets the dashboard name
+		// the cause instead of printing its generic failure copy.
+		//
+		// WHY NOT "request.badRequest". That is the class code, and the dashboard
+		// deliberately does not translate it (issue #6177): with it, every 400 on
+		// this route looks alike and the page cannot say WHY. Measured on staging:
+		// a magic-link account with no workspace confirmed a form-creation card and
+		// read "The change could not be applied. Please try again." — advice that
+		// cannot work, over a token the server had already spent, with no trace of
+		// the cause on the server either.
+		return workspaceRequiredMessage
 	case errors.Is(err, dbstore.ErrChatProposalNotFound):
-		return "cadangan tidak dijumpai"
+		return "proposal not found"
 	default:
-		return "cadangan tidak dapat dilaksanakan"
+		return "the proposal cannot be carried out"
 	}
 }
 
@@ -549,6 +576,53 @@ func chatAuditAccountID(actx *AccountCtx) string {
 	return actx.Account.ID
 }
 
+// logChatDecisionFailure writes the ONE line that makes a failed confirmation (or
+// cancellation) diagnosable without a forensic read of the database (card
+// t_bf4feea2).
+//
+// THE DEFECT. A failed confirm left only the access log's status:
+//
+//	INFO http_request method=POST path=/v1/rest/chat/confirm status=400 duration_ms=113
+//
+// — no tool, no reason, no error. By the time it was written the token had already
+// been CLAIMED (the refusal happens after the claim), so the only surviving record
+// that could explain it was the proposal row, and nothing tied the request to that
+// row. Wan's report was therefore answered by reading staging's
+// `chat_write_proposals.args` by hand. This line is what makes the next report
+// answerable from the log.
+//
+// WHAT IT CARRIES, and why each field earns its place:
+//
+//	request_id  correlates this line with the access log and with writeErr's body
+//	tool        WHICH tool the card named — the first question of every report
+//	stage       WHERE the lane stopped (a stable token, never prose), so failures
+//	            can be grouped without parsing error text
+//	reason      ProposeRefusalKind's classification (the same vocabulary the audit
+//	            row uses), e.g. workspace_required
+//	token_fp    a non-reversible fingerprint, so an operator can match the line to
+//	            the proposal row — never the token itself, which is an authorisation
+//	account_id  the workspace the attempt was made in
+//	err         the cause, quoted
+//
+// It is WARN and not ERROR: every one of these is a refused user action with an
+// explanation, not a server fault.
+func logChatDecisionFailure(r *http.Request, actx *AccountCtx, event, token string, err error) {
+	tool, stage := "", ""
+	var cf *chat.ConfirmFailure
+	if errors.As(err, &cf) {
+		tool, stage = cf.Tool, cf.Stage
+	}
+	slog.Warn(event,
+		"request_id", middleware.GetRequestID(r.Context()),
+		"tool", tool,
+		"stage", stage,
+		"reason", chat.ProposeRefusalKind(err),
+		"token_fp", chat.ProposalTokenFingerprint(token),
+		"account_id", chatAuditAccountID(actx),
+		"err", err.Error(),
+	)
+}
+
 // recordChatConfirmEvent logs the SHAPE of a confirmation attempt: which tool,
 // whether it succeeded. It never records the argument values — a confirmed edit is
 // the merchant's own business, and the audit table is read by operators.
@@ -556,6 +630,12 @@ func chatAuditAccountID(actx *AccountCtx) string {
 // The row is filed on the account the request RESOLVED (see chatAuditAccountID):
 // a card approved in one workspace must not show up in another workspace's
 // Activity history.
+//
+// A FAILED attempt names its tool and its stage too (card t_bf4feea2). Before
+// this, `tool` was written as "" for every failure — the handler only learns the
+// tool from a SUCCESSFUL Confirm result — so the audit row said a card failed and
+// nothing about which one, which is the same "no trail" defect as the missing log
+// line. chat.ConfirmFailure carries both.
 func (h *RESTHandlers) recordChatConfirmEvent(r *http.Request, actx *AccountCtx, uid, token, tool string, ok bool, err error) {
 	if h.Events == nil {
 		return
@@ -573,6 +653,15 @@ func (h *RESTHandlers) recordChatConfirmEvent(r *http.Request, actx *AccountCtx,
 	}
 	if err != nil {
 		props["reason"] = chat.ProposeRefusalKind(err)
+		var cf *chat.ConfirmFailure
+		if errors.As(err, &cf) {
+			if tool == "" {
+				props["tool"] = cf.Tool
+			}
+			if cf.Stage != "" {
+				props["stage"] = cf.Stage
+			}
+		}
 	}
 	_ = h.Events.Record(r.Context(), accountID, uid, "chat.proposal_confirmed", props, "", "")
 }

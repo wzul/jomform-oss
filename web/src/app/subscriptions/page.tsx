@@ -11,6 +11,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
+import { formatPrice } from "../../lib/money";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
@@ -31,13 +32,16 @@ type Subscription = {
 type ListResp = { items: Subscription[]; page: number; limit: number; total: number };
 
 const PER_PAGE = 10;
-const money = (sen: number) =>
-  `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
 
 export default function Subscriptions() {
   const { t } = useI18n();
-  const { anon, role, workspace, user } = useSession();
+  const { anon, role, workspace, user, currency } = useSession();
   const router = useRouter();
+
+  // Card t_d5f359c7: a subscription's amount_sen is a PRICE — it has no currency
+  // of its own and is charged in the workspace's currency (#185), so that is the
+  // label ("—" until the session bundle resolves; never a hardcoded RM).
+  const money = (sen: number) => formatPrice(sen, currency);
 
   // Issue #163: read_only members see no write actions (cancel/update card).
   // manage + admin keep full write access.

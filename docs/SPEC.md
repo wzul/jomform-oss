@@ -18,7 +18,7 @@
 | Backend | Go | 1.26.x |
 | DB | PostgreSQL | 18.x (18.6) |
 | Cache/queue | Valkey (bukan Redis) | 9.1.x (`valkey/valkey:9.1-alpine`) |
-| Storage | S3-compatible: MinIO (self-host) atau R2 | MinIO image `minio/minio` (pulled & verified Aug 2026) |
+| Storage | S3-compatible: SeaweedFS (self-host) atau R2 | `chrislusf/seaweedfs` (Apache-2.0). Image MinIO **tidak lagi boleh di-pull** (lihat Risiko) |
 | Dashboard + builder | Next.js | 16.4.2 (security release, Oct 2026 — patched for GHSA-2464-fhr4-w9xw, GHSA-p3m5-59mp-jv5r, GHSA-673q-mjm6-r5xr) |
 | UI kit | Tailwind CSS + shadcn/ui | latest |
 | MCP SDK | `github.com/modelcontextprotocol/go-sdk` | v1.7.x (official) |
@@ -33,7 +33,7 @@ Client Valkey: `go-redis/v9` works with Valkey (RESP protocol sama). Kalau mahu 
 [Buyer] → render (SSR form, Go) → api (Go)
                                     ├─ PostgreSQL 18 (data)
                                     ├─ Valkey 9 (queue: emails, webhooks, subscription charges)
-                                    ├─ S3/MinIO (images, proof, exports)
+                                    ├─ S3 (images, proof, exports)
                                     └─ CHIP Collect API (one-time + recurring)
 [Merchant] → web (Next.js dashboard) → api
 [Merchant's AI agent] → jomform MCP server (HTTP + OAuth) → api (scope = account)
@@ -135,11 +135,11 @@ audit_logs(id, account_id FK, actor, action, entity, entity_id, diff jsonb, crea
 
 ## 7. Deployment (plain server + Traefik)
 
-- `deploy/docker-compose.yml`: api · web · render · postgres:18 · valkey:9.1-alpine · minio (+ createbuckets init container)
-- MinIO console internal sahaja; S3 endpoint expose via subpath/domain sendiri (cth. `s3.<domain>`); TLS via Traefik; volume persisten
+- `deploy/docker-compose.yml`: api · web · caddy · postgres:18 · valkey:9.1-alpine · s3 (SeaweedFS; bucket dicipta oleh API masa startup, tiada init container)
+- S3 endpoint internal sahaja (`s3:8333`); media diserve melalui route `/media/` API; volume persisten (`s3data`); Caddy satu-satunya yang publish port
 - Production vars: `DATABASE_URL`, `VALKEY_URL`, `S3_ENDPOINT/KEY/SECRET/BUCKET`, `CHIP_*` tiada global (per-account), `ENCRYPTION_KEY` (AES-GCM untuk chip_secret_key_enc)
 - Health checks: `/healthz` api, `/readyz` DB+Valkey+S3
-- Backups: `pg_dump` nightly + S3 offsite; MinIO bucket versioning untuk media bucket
+- Backups: `pg_dump` nightly + S3 offsite; arkib volume `/data` object store (versi objek tidak diarkibkan, hanya objek semasa)
 
 ## 8. DNS (jomform.com @ Cloudflare)
 
@@ -168,7 +168,7 @@ Nota: wildcard `*.jomform.com` → host borang per-merchant; api & s3 DNS-only s
 
 | Risiko | Mitigasi |
 |---|---|
-| MinIO image status "Archived" di Docker Hub | Sudah verified masih pullable (Aug 2026); pin digest; alternatif: Garantio/Vespa-style S3 alternatif atau R2 terus — keputusan semasa deploy |
+| Image MinIO ditarik balik dari Docker Hub (Oct 2025) | `minio/minio:latest` dan `minio/mc:latest` menjawab `denied` pada `docker manifest inspect` (measured 2026-11-03), jadi compose yang menyebutnya **gagal pada `docker compose up`** di host baharu. Ditukar kepada SeaweedFS (`chrislusf/seaweedfs`, Apache-2.0) dalam kedua-dua `deploy/vps/compose.prod.yml` dan `deploy/docker-compose.yml`; bucket dicipta oleh API. Host prod sedia ada: `deploy/vps/migrate-media.sh` (copy melalui S3 API, verify count+bytes) — lihat `deploy/HOST-SETUP.md` |
 | Valkey go client maturity | Pakai go-redis/v9 (battle-tested, RESP sama); valkey-go sebagai option kedua |
 | MCP SDK changes fast | Pin version go.mod; subscribe releases |
 | Tokenization card-only | Semua product subscription UI kena communicate "subskripsi = kad sahaja" (CHIP constraint); FPX tak boleh recurring |

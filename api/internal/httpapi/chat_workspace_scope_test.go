@@ -369,7 +369,7 @@ func TestChatScopeRefusalNamesTheWorkspaceTheDashboardAlreadyHandles(t *testing.
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("unresolvable slug = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "workspace tidak dijumpai") {
+	if !strings.Contains(rec.Body.String(), "workspace not found") {
 		t.Fatalf("the refusal body is %s, want the message the dashboard already handles "+
 			"(resolveAccountScope's 403)", rec.Body.String())
 	}

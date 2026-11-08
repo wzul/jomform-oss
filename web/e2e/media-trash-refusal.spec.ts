@@ -82,9 +82,9 @@ const TRASHED = {
 // Verbatim wire prose from api/internal/httpapi/media.go, deliberately NOT used by
 // the page: Malay is what the dashboard must never print.
 const RESTORE_GONE_PROSE =
-  "fail media ini sudah tiada dalam storan — ia tidak boleh dipulihkan";
-const PURGE_NOT_FOUND_PROSE = "media tidak dijumpai";
-const ROLE_PROSE = "perlu peranan manage atau admin";
+  "this media file is no longer in storage — it cannot be restored";
+const PURGE_NOT_FOUND_PROSE = "media not found";
+const ROLE_PROSE = "you need the manage or admin role";
 
 const EN_OBJECT_GONE = "The file itself is no longer in storage, so this item cannot be restored.";
 const EN_RESTORE_FALLBACK = "We couldn't restore this file. Please try again.";
@@ -253,7 +253,7 @@ test("a purge refused for a row no longer in the bin shows the ENGLISH reason, k
   const shown = await readLine(line);
   expect(shown).toContain(EN_PURGE_FALLBACK);
   expect(shown).not.toContain(PURGE_NOT_FOUND_PROSE);
-  expect(shown).not.toContain("media tidak dijumpai");
+  expect(shown).not.toContain("media not found");
 
   // It is NOT the page's load-failure line: a refusal changes nothing about the
   // listing, so it must not arrive with a Retry that reloads it.
@@ -356,7 +356,7 @@ test("a restore refusal carrying a machine code renders the CODE's sentence, not
   const shown = await readLine(line);
   expect(shown).toContain(EN_MANAGE_REQUIRED);
   expect(shown).not.toContain(ROLE_PROSE);
-  expect(shown).not.toContain("perlu peranan manage");
+  expect(shown).not.toContain("manage or admin role is required");
 
   await expectSurvivesWindow(line, "the coded restore refusal");
   console.log(

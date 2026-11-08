@@ -117,7 +117,7 @@ test("(3) the logo picker shows the same promise", () => {
 test("(4) the MCP docs row for upload_media states the PNG/transparency rule", () => {
   const row = slice(docsMCP, '{ name: "upload_media"', '{ name: "delete_media"');
   assert.ok(
-    row.includes("PNG") && row.includes("lutsinar"),
+    row.includes("PNG") && row.includes("transparent"),
     "the upload_media docs row no longer states that an image with a transparent " +
       "background is stored as PNG (an agent would expect a .jpg back)",
   );

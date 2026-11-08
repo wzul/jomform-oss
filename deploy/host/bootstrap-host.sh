@@ -83,8 +83,8 @@ if [ -z "$ENV_FILE" ]; then
 fi
 [ -s "$ENV_FILE" ] || fail "the env file '$ENV_FILE' does not exist or is empty"
 
-# The file must not be readable by anyone else: it holds the DB and MinIO
-# passwords and the account credentials.
+# The file must not be readable by anyone else: it holds the DB and object-store
+# credentials and the account credentials.
 perms="$(stat -c '%a' "$ENV_FILE")"
 case "$perms" in
   600|400|640|440) : ;;
@@ -98,8 +98,14 @@ fi
 # ── 2. the env contract: every ${KEY} the compose reads must be in the file ────
 # DERIVED FROM THE COMPOSE, not from a list written here: a key added to the
 # compose without being added to the example is a silent empty credential.
-compose_keys="$(grep -oE '\$\{[A-Z_]+' "$COMPOSE_SRC" | tr -d '${' | sort -u)"
-env_keys="$(grep -oE '^[A-Z_]+=' "$ENV_FILE" | tr -d '=' | sort -u)"
+#
+# THE NAME PATTERN INCLUDES DIGITS. It used to be [A-Z_]+, which stops at the
+# first digit: `S3_ACCESS_KEY` was derived as `S`, so a CORRECT env file was
+# refused for missing a key called `S`, and the contract looked satisfied by a
+# key nobody has. Env names with digits are ordinary (S3_*, SES_*), so the class
+# is [A-Z0-9_]+ on both sides.
+compose_keys="$(grep -oE '\$\{[A-Z0-9_]+' "$COMPOSE_SRC" | tr -d '${' | sort -u)"
+env_keys="$(grep -oE '^[A-Z0-9_]+=' "$ENV_FILE" | tr -d '=' | sort -u)"
 missing="$(comm -23 <(echo "$compose_keys") <(echo "$env_keys") || true)"
 if [ -n "$missing" ]; then
   echo "bootstrap-host: REFUSED — $ENV_FILE is missing $(echo "$missing" | wc -l) key(s) the compose reads:" >&2

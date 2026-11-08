@@ -86,6 +86,18 @@ func (r productResolver) snapshotName(productID string) string {
 	return r.snapshot[productID].Name
 }
 
+// liveProduct returns the LIVE product row for an id, or nil when the id is not
+// a live row of the form's account (a pricing block, an archived product, or a
+// snapshot-only reference).
+//
+// Card t_06851d88: the product block renderer needs the product's TYPE and
+// buyer-chosen-amount limits, which the snapshot does not carry. A snapshot-only
+// reference (archived product) therefore renders as a fixed-price product — it
+// cannot be re-priced by a buyer whose product is gone.
+func (r productResolver) liveProduct(productID string) *dbstore.Product {
+	return r.live[productID]
+}
+
 // firstImage returns the first non-empty image URL, or "".
 func firstImage(images []string) string {
 	if len(images) > 0 && images[0] != "" {

@@ -54,7 +54,7 @@ func (s *Server) listAPIKeys(
 // ── create_api_key ───────────────────────────────────────────────────────────
 
 type createAPIKeyIn struct {
-	Name   string   `json:"name" jsonschema:"Nama untuk key ini"`
+	Name   string   `json:"name" jsonschema:"Name for this key"`
 	Scopes []string `json:"scopes,omitempty" jsonschema:"readonly|readwrite (default: readonly)"`
 }
 
@@ -68,7 +68,7 @@ func (s *Server) createAPIKey(
 		return nil, nil, err
 	}
 	if in.Name == "" {
-		return nil, nil, errors.New("nama key wajib")
+		return nil, nil, errors.New("key name is required")
 	}
 	scopes := in.Scopes
 	if len(scopes) == 0 {
@@ -88,15 +88,15 @@ func (s *Server) createAPIKey(
 		"name":   k.Name,
 		"scopes": k.Scopes,
 		"key":    raw,
-		"note":   "Simpan key ini sekarang — ia tidak akan dipapar lagi.",
+		"note":   "Save this key now — it will never be shown again.",
 	}, nil
 }
 
 // ── revoke_api_key ───────────────────────────────────────────────────────────
 
 type revokeAPIKeyIn struct {
-	ID      string `json:"id" jsonschema:"ID key (dari list_api_keys)"`
-	Confirm bool   `json:"confirm,omitempty" jsonschema:"Set true untuk sahkan revoke key yang sedang digunakan sekarang"`
+	ID      string `json:"id" jsonschema:"Key ID (from list_api_keys)"`
+	Confirm bool   `json:"confirm,omitempty" jsonschema:"Set true to confirm revoking the key that is currently in use"`
 }
 
 // revokeAPIKey permanently revokes an account API key. Ownership is checked
@@ -112,12 +112,12 @@ func (s *Server) revokeAPIKey(
 		return nil, nil, err
 	}
 	if in.ID == "" {
-		return nil, nil, errors.New("id key wajib")
+		return nil, nil, errors.New("key id is required")
 	}
 	// Refuse to silently revoke the key authenticating this session unless
 	// the caller explicitly confirms it in the same call.
 	if cur := KeyFromContext(ctx); cur != nil && cur.ID == in.ID && !in.Confirm {
-		return nil, nil, errors.New("ini key yang sedang digunakan untuk sesi ini — set confirm=true untuk sahkan revoke (ia akan memutuskan akses sendiri); atau cipta key baru")
+		return nil, nil, errors.New("this is the key the current session is using — set confirm=true to confirm the revoke (it will cut off its own access); or create a new key")
 	}
 	if err := s.deps.Keys.Revoke(ctx, acc, in.ID); err != nil {
 		return nil, nil, err

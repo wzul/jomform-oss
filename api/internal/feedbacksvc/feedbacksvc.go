@@ -53,13 +53,13 @@ const (
 // re-derive the rule from a string, because the message is user-facing copy and
 // the rule is what is enforced.
 var (
-	ErrNotConfigured    = errors.New("sistem maklum balas tidak dikonfigurasi")
-	ErrUserRequired     = errors.New("pengguna diperlukan untuk memfailkan maklum balas")
-	ErrTooShort         = errors.New("sila tulis sekurang-kurangnya 10 aksara supaya kami faham")
-	ErrTooLong          = errors.New("maklum balas terlalu panjang (maksimum 5000 aksara)")
-	ErrSubjectTooLong   = errors.New("tajuk terlalu panjang (maksimum 200 aksara)")
-	ErrDailyLimit       = errors.New("had maklum balas harian dicapai (10 sehari)")
-	ErrStoreUnavailable = errors.New("gagal menyimpan maklum balas")
+	ErrNotConfigured    = errors.New("the feedback system is not configured")
+	ErrUserRequired     = errors.New("a signed-in user is required to file feedback")
+	ErrTooShort         = errors.New("write at least 10 characters so we can understand the report")
+	ErrTooLong          = errors.New("the feedback is too long (maximum 5000 characters)")
+	ErrSubjectTooLong   = errors.New("the subject is too long (maximum 200 characters)")
+	ErrDailyLimit       = errors.New("the daily feedback limit is reached (10 per day)")
+	ErrStoreUnavailable = errors.New("could not save the feedback")
 )
 
 // ThreadStore is the slice of dbstore.FeedbackThreadStore this service uses.

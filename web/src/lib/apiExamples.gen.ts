@@ -46,7 +46,7 @@ export const API_EXAMPLES: { examples: ApiExample[] } = {
       "method": "GET",
       "needsFixture": false,
       "needsKey": false,
-      "note": "The body is {\"error\":\"auth diperlukan\"} — the API's own wording, not a fixed error catalogue.",
+      "note": "The body is {\"error\":\"authentication required\"} — the API's own wording, not a fixed error catalogue.",
       "path": "/v1/rest/keys",
       "title": "2. What a missing credential gets",
       "why": "An unauthenticated call is refused with 401 before any account is resolved, so a misconfigured client fails loudly instead of reading someone else's data."

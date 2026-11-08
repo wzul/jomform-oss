@@ -1,7 +1,7 @@
 package mcpsrv
 
 // Regression: an MCP tool call naming a form or product the caller does not
-// own must answer "entiti tidak dijumpai" — the not-owned sentinel that lets
+// own must answer "entity not found" — the not-owned sentinel that lets
 // the call-scope walk move on to the caller's next account — not a raw driver
 // error.
 //

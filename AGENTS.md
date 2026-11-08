@@ -9,13 +9,46 @@ about the code, so it was noise, not a gate. It will be rebuilt if/when the repo
 goes public. Until then, **the local preflight is the only gate**, and there is
 nothing upstream to catch what it misses: if it does not run, nothing ran.
 
-Before merging ANY PR (or any agent change), run the full preflight and confirm
-it is green:
+**The FULL preflight is owed once per RELEASE, not once per merge.** `deploy/build-and-ship.sh`
+runs it before any image exists, on the exact tree being shipped, and refuses to build on red
+(reusing a whole-inventory green record for the same bytes when one exists):
 
 ```bash
 source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}   # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
 ./scripts/preflight.sh
 ```
+
+A **merge** may proceed on the evidence the branch's own iteration run produced, provided the
+merge record says which evidence it was:
+
+| evidence | when it is enough to merge |
+|---|---|
+| full green (all gates) | yes |
+| scoped `--for-diff <base-ref>` green | yes — name the base-ref and the gates it skipped |
+| whole-inventory reuse of a per-tree record | yes — name the record and its tree |
+| partial (some gates ran, some never did) | yes — name the gates that did NOT run |
+| nothing ran | no |
+
+**A skipped gate is not a passing gate.** Merging on scoped or partial evidence is allowed; saying
+it was full when it was not is a false report, and that is the one thing this rule forbids. Every
+merge record names the gates that did not run, or states `full`.
+
+Why the release carries the full run instead of the merge:
+
+- the deploy gate runs on the exact bytes that ship, so a red there cannot be mistaken for a red
+  somewhere in a long branch history;
+- `deploy/build-and-ship.sh` already reuses a whole-inventory green record for the same tree, so a
+  tree that WAS fully gated costs nothing at release time — the full run is only paid when no such
+  record exists;
+- measured: roughly one PR per release on this repo (300+ PRs merged over 20 active days vs ~15
+  deploys a day), so per-release gating buys about the same number of full runs as per-merge
+  gating. What this rule is for is cheaper ITERATION (scoped runs save 40–72%), not fewer full runs.
+
+The release gate is CPU-bounded: `GATE_CPU_QUOTA` (default 400% = 4 of 6 cores) wraps the preflight
+in a transient systemd scope, so a release cannot take the whole host. Measured: an uncapped cold
+`go build ./...` peaked at 307% CPU and `npm run build` at 192%, so 400% costs no wall time; a
+quota of 100% (one core) cost 4.5x and 2.9x. The quota does NOT cover `docker build` — that runs
+inside dockerd, outside the shell's cgroup — which is why `--remote-build` exists.
 
 `scripts/preflight.sh` is the single entry point — the ported CI gates, in the
 same order as the three CI jobs they replace.

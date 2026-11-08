@@ -121,7 +121,7 @@ func shippingZoneSetsFromJSON(in []shippingSetJSON) []shipping.ZoneSet {
 // Route: GET /v1/rest/shipping
 func (h *RESTHandlers) getShipping(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if h.Shipping == nil {
-		writeErr(w, http.StatusServiceUnavailable, "kadar penghantaran tidak tersedia")
+		writeErr(w, http.StatusServiceUnavailable, "shipping rates are not available")
 		return
 	}
 	sets, err := h.Shipping.Sets(r.Context(), []string{actx.Account.ID})
@@ -143,7 +143,7 @@ func (h *RESTHandlers) getShipping(w http.ResponseWriter, r *http.Request, actx 
 // Route: PUT /v1/rest/shipping
 func (h *RESTHandlers) putShipping(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if h.Shipping == nil {
-		writeErr(w, http.StatusServiceUnavailable, "kadar penghantaran tidak tersedia")
+		writeErr(w, http.StatusServiceUnavailable, "shipping rates are not available")
 		return
 	}
 	// Issue #645: a write needs the API-key write scope AND the manage-or-admin
@@ -155,7 +155,7 @@ func (h *RESTHandlers) putShipping(w http.ResponseWriter, r *http.Request, actx 
 		Sets []shippingSetJSON `json:"sets"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		writeErr(w, http.StatusBadRequest, "incomplete details")
 		return
 	}
 	sets := shippingZoneSetsFromJSON(in.Sets)

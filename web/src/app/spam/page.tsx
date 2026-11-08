@@ -13,6 +13,7 @@ import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
+import { formatMoney } from "../../lib/money";
 import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { translateApiErr } from "../../lib/apiErr";
@@ -29,6 +30,10 @@ type SpamSale = {
   ref_code: string;
   status: string;
   total_sen: number;
+  // Card t_d5f359c7: the currency this sale was RECORDED in. The spam queue
+  // lists real sales, so each total is labelled per row like every other sale
+  // surface — never with the workspace's current setting (#185).
+  currency?: string;
   buyer: string;
   buyer_email?: string;
   form_id?: string;
@@ -37,9 +42,6 @@ type SpamSale = {
 };
 
 const PAGE_SIZE = 20;
-
-const money = (sen: number) =>
-  `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
 
 function SpamPageInner() {
   const { t } = useI18n();
@@ -285,7 +287,7 @@ function SpamPageInner() {
                         <span className="block truncate text-jf-3xs text-[var(--jf-muted)]">{s.buyer_email}</span>
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-2 py-3 text-xs font-semibold">{money(s.total_sen)}</td>
+                    <td className="whitespace-nowrap px-2 py-3 text-xs font-semibold">{formatMoney(s.total_sen, s.currency)}</td>
                     <td className="whitespace-nowrap px-2 py-3 text-xs">{s.status}</td>
                     <td className="hidden max-w-48 truncate px-2 py-3 text-xs text-[var(--jf-muted)] sm:table-cell">{reason(s.spam_reason)}</td>
                     <td className="hidden whitespace-nowrap px-2 py-3 text-jf-2xs text-[var(--jf-muted)] sm:table-cell">

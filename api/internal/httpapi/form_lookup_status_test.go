@@ -110,7 +110,7 @@ func TestFormRoutesAnswer404ForUnseenFormIDs(t *testing.T) {
 			t.Errorf("GET form (%s) = %d, want 404 (body=%s)", tc.name, code, raw)
 			continue
 		}
-		if got := formLookupBody(t, raw)["error"]; got != "tidak dijumpai" {
+		if got := formLookupBody(t, raw)["error"]; got != "not found" {
 			t.Errorf("GET form (%s) error = %v, want \"tidak dijumpai\"", tc.name, got)
 		}
 	}

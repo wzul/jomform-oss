@@ -22,7 +22,7 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 		MethodWhitelist []string `json:"payment_method_whitelist"`
 	}
 	if err := decodeJSON(r, &in); err != nil || in.BrandID == "" {
-		writeErr(w, http.StatusBadRequest, "brand_id wajib")
+		writeErr(w, http.StatusBadRequest, "brand_id is required")
 		return
 	}
 
@@ -51,7 +51,7 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 		secretEnc = enc
 	}
 	if secretEnc == "" {
-		writeErr(w, http.StatusBadRequest, "secret_key wajib")
+		writeErr(w, http.StatusBadRequest, "secret_key is required")
 		return
 	}
 
@@ -80,7 +80,7 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 	if h.ChipProbe != nil && secretKey != "" {
 		if verr := h.ChipProbe.ValidateCredentials(r.Context(), secretKey); verr != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error":    "kredensial tidak sah — semak Brand ID / Secret Key",
+				"error":    "invalid credentials — check the Brand ID / Secret Key",
 				"code":     CodeChipCredentialsBad,
 				"verified": false,
 			})

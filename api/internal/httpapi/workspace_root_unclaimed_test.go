@@ -1,11 +1,11 @@
 // Card t_204a48c4 — an unclaimed *.jomform.com label must answer 404, not a
-// "Kedai <label>" shell.
+// "Shop <label>" shell.
 //
 // MEASURED ON PROD v1.18.0 @ 15337da0, against the ORIGIN (curl --resolve to
 // bypass Cloudflare, so this was routing and not DNS):
 //
-//	notaworkspace-zzz.jomform.com/  200  <h1>Kedai notaworkspace-zzz</h1>
-//	templates.jomform.com/          200  <h1>Kedai templates</h1>
+//	notaworkspace-zzz.jomform.com/  200  <h1>Shop notaworkspace-zzz</h1>
+//	templates.jomform.com/          200  <h1>Shop templates</h1>
 //	support.jomform.com/            200  <h1>Kedai support</h1>
 //	abc.jomform.com/                200  <h1>Kedai abc</h1>   <- the real one
 //
@@ -164,11 +164,11 @@ func TestUnclaimedWorkspaceLabelRootIs404(t *testing.T) {
 			labelRootPath, invented, nowClaimed.Code, nowClaimed.Body.String())
 	}
 	body := nowClaimed.Body.String()
-	if !strings.Contains(body, "Kedai "+invented) {
+	if !strings.Contains(body, "Shop "+invented) {
 		t.Errorf("the claimed label %s serves no storefront shell: %q missing from body %.300s",
-			invented, "Kedai "+invented, body)
+			invented, "Shop "+invented, body)
 	}
-	if !strings.Contains(body, "Belum ada borang") {
+	if !strings.Contains(body, "No forms yet.") {
 		t.Errorf("the claimed-but-empty workspace %s should render the empty listing hint; body: %.300s",
 			invented, body)
 	}

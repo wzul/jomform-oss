@@ -44,7 +44,7 @@ import (
 // ErrCourierNoKey: the deployment has no encryption key, so a grant cannot be
 // sealed. Refusing is deliberate — the alternative is a plaintext token in the
 // database, which is exactly what this design exists to avoid.
-var ErrCourierNoKey = errors.New("kunci penyulitan tidak dikonfigurasi; sambungan pembekal penghantaran tidak boleh disimpan")
+var ErrCourierNoKey = errors.New("the encryption key is not configured; a courier connection cannot be stored")
 
 // CourierStore wraps pgx for courier connections + grants.
 type CourierStore struct {
@@ -182,12 +182,12 @@ func (s *CourierStore) Connections(ctx context.Context, accountID string) ([]shi
 // the grant (Save), so a routine origin edit can never clobber a live grant.
 func (s *CourierStore) SaveConnection(ctx context.Context, accountID string, c shipping.Connection) error {
 	if s == nil || s.pool == nil {
-		return errors.New("courier: store tidak tersedia")
+		return errors.New("courier: store is not available")
 	}
 	accountID = strings.TrimSpace(accountID)
 	provider := strings.TrimSpace(c.Provider)
 	if accountID == "" || provider == "" {
-		return errors.New("courier: account_id dan provider diperlukan")
+		return errors.New("courier: account_id and provider are required")
 	}
 	status := strings.TrimSpace(c.Status)
 	if status == "" {
@@ -196,7 +196,7 @@ func (s *CourierStore) SaveConnection(ctx context.Context, accountID string, c s
 	switch status {
 	case shipping.StatusConnected, shipping.StatusDisconnected, shipping.StatusError:
 	default:
-		return fmt.Errorf("courier: status tidak sah: %s", status)
+		return fmt.Errorf("courier: invalid status: %s", status)
 	}
 	// A connect stamps connected_at (and clears a previous disconnect); any other
 	// status keeps whatever was there — an origin edit on a disconnected
@@ -236,7 +236,7 @@ func (s *CourierStore) SaveConnection(ctx context.Context, accountID string, c s
 // reconnecting must not make them retype it.
 func (s *CourierStore) Disconnect(ctx context.Context, accountID, provider string) error {
 	if s == nil || s.pool == nil {
-		return errors.New("courier: store tidak tersedia")
+		return errors.New("courier: store is not available")
 	}
 	_, err := s.pool.Exec(ctx, `
 		UPDATE shipping_courier_accounts SET
@@ -250,7 +250,7 @@ func (s *CourierStore) Disconnect(ctx context.Context, accountID, provider strin
 // IssueState creates the single-use OAuth state of one connect attempt.
 func (s *CourierStore) IssueState(ctx context.Context, accountID, provider, redirectURI, createdBy string) (string, error) {
 	if s == nil || s.pool == nil {
-		return "", errors.New("courier: store tidak tersedia")
+		return "", errors.New("courier: store is not available")
 	}
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -309,7 +309,7 @@ type courierGrant struct {
 // dropped on the floor.
 func (s *CourierStore) Save(ctx context.Context, accountID, provider string, t shipping.TokenSet) error {
 	if s == nil || s.pool == nil {
-		return errors.New("courier: store tidak tersedia")
+		return errors.New("courier: store is not available")
 	}
 	if len(s.key) == 0 {
 		return ErrCourierNoKey
@@ -383,7 +383,7 @@ func (s *CourierStore) Load(ctx context.Context, accountID, provider string) (sh
 // MarkError records a bounded error CLASS on the connection (never a payload).
 func (s *CourierStore) MarkError(ctx context.Context, accountID, provider, class string) error {
 	if s == nil || s.pool == nil {
-		return errors.New("courier: store tidak tersedia")
+		return errors.New("courier: store is not available")
 	}
 	class = boundedClass(class)
 	_, err := s.pool.Exec(ctx, `

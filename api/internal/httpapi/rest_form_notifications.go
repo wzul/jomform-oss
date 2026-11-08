@@ -43,7 +43,7 @@ func (h *RESTHandlers) createFormNotification(w http.ResponseWriter, r *http.Req
 		Enabled   *bool                          `json:"enabled"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	if _, err := h.Forms.GetByID(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
@@ -51,11 +51,11 @@ func (h *RESTHandlers) createFormNotification(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if !validNotificationEvent(in.Event) {
-		writeErr(w, http.StatusBadRequest, "event tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid event")
 		return
 	}
 	if h.Notifications == nil {
-		writeErr(w, http.StatusBadRequest, "notifications tidak tersedia")
+		writeErr(w, http.StatusBadRequest, "notifications are not available")
 		return
 	}
 	n := &dbstore.FormNotification{
@@ -88,7 +88,7 @@ func (h *RESTHandlers) updateFormNotification(w http.ResponseWriter, r *http.Req
 		Enabled   *bool                          `json:"enabled"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	if _, err := h.Forms.GetByID(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
@@ -96,11 +96,11 @@ func (h *RESTHandlers) updateFormNotification(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if !validNotificationEvent(in.Event) {
-		writeErr(w, http.StatusBadRequest, "event tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid event")
 		return
 	}
 	if h.Notifications == nil {
-		writeErr(w, http.StatusBadRequest, "notifications tidak tersedia")
+		writeErr(w, http.StatusBadRequest, "notifications are not available")
 		return
 	}
 	n := &dbstore.FormNotification{
@@ -127,7 +127,7 @@ func (h *RESTHandlers) deleteFormNotification(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if h.Notifications == nil {
-		writeErr(w, http.StatusBadRequest, "notifications tidak tersedia")
+		writeErr(w, http.StatusBadRequest, "notifications are not available")
 		return
 	}
 	if err := h.Notifications.Delete(r.Context(), r.PathValue("id"), r.PathValue("nid")); err != nil {

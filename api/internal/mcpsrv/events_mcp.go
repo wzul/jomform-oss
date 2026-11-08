@@ -13,11 +13,11 @@ import (
 )
 
 type listEventsIn struct {
-	EventName string `json:"event_name,omitempty" jsonschema:"Optional — hadkan kepada satu jenis event (cth: form.created, sale.confirmed, auth.login). Akhiran '*' = wildcard (cth: mcp.* untuk semua panggilan MCP)."`
-	From      string `json:"from,omitempty" jsonschema:"Optional — RFC3339 mula (cth: 2026-01-01T00:00:00Z)"`
-	To        string `json:"to,omitempty" jsonschema:"Optional — RFC3339 tamat"`
-	Page      int    `json:"page,omitempty" jsonschema:"Muka surat (1-based, default 1)"`
-	Limit     int    `json:"limit,omitempty" jsonschema:"Bilangan per muka (default 20, maks 100)"`
+	EventName string `json:"event_name,omitempty" jsonschema:"Optional — limit to a single event type (e.g. form.created, sale.confirmed, auth.login). A trailing '*' = wildcard (e.g. mcp.* for all MCP calls)."`
+	From      string `json:"from,omitempty" jsonschema:"Optional — RFC3339 start (e.g. 2026-01-01T00:00:00Z)"`
+	To        string `json:"to,omitempty" jsonschema:"Optional — RFC3339 end"`
+	Page      int    `json:"page,omitempty" jsonschema:"Page (1-based, default 1)"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"Items per page (default 20, max 100)"`
 }
 
 type eventOut struct {
@@ -41,7 +41,7 @@ func (s *Server) listEvents(
 		return nil, nil, err
 	}
 	if s.deps.Events == nil {
-		return nil, nil, errors.New("event store tidak dikonfigurasi")
+		return nil, nil, errors.New("event store not configured")
 	}
 	f := dbstore.EventFilter{AccountIDs: accs, EventName: in.EventName}
 	if in.From != "" {

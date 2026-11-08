@@ -69,7 +69,7 @@ func TestUploadMediaAssetRefusesNonWellFormedSVG(t *testing.T) {
 	if err == nil {
 		t.Fatal("upload_media kind=asset stored a banner-led SVG; the browser shows a parsererror for it")
 	}
-	if !strings.Contains(err.Error(), "bukan XML yang sah") {
+	if !strings.Contains(err.Error(), "not valid XML") {
 		t.Fatalf("upload_media error = %q, want it to name the XML well-formedness problem", err)
 	}
 	var svgRows int

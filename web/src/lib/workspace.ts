@@ -68,7 +68,7 @@ export function workspaceScope(): string {
 // localStorage directly — so a slug left behind by a workspace that was since
 // renamed or deleted went out on the FIRST request of every page, before the
 // session bundle had a chance to reconcile it. The server answers that with 403
-// "workspace tidak dijumpai" (a TENANCY refusal), and wsfetch.ts's 401/403 rule
+// "workspace not found" (a TENANCY refusal), and wsfetch.ts's 401/403 rule
 // read it as a dead session and navigated to /login: measured on prod, a stale
 // jf_workspace signed a merchant out of /chat.
 //
@@ -237,7 +237,7 @@ export function resetConfirmedWorkspaceScope(): void {
 //   /api/auth/logout. So on a browser where anyone had ever selected a
 //   workspace, the NEXT user's session started with the previous user's slug in
 //   localStorage, and every scoped write sent it as ?workspace=<other tenant>:
-//   the server correctly answered 403 "workspace tidak dijumpai" while the
+//   the server correctly answered 403 "workspace not found" while the
 //   forms list still answered 200 (that is resolveSessionAccount falling back to
 //   the caller's own account for authed(), then resolveAccountScope rejecting
 //   the foreign slug). A brand-new user's very first action — create a form —

@@ -34,7 +34,7 @@ import (
 
 func TestIssue6177WriteErrCarriesMachineCode(t *testing.T) {
 	w := httptest.NewRecorder()
-	writeErr(w, http.StatusForbidden, "workspace tidak dijumpai")
+	writeErr(w, http.StatusForbidden, "workspace not found")
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", w.Code)
@@ -56,7 +56,7 @@ func TestIssue6177WriteErrCarriesMachineCode(t *testing.T) {
 	}
 	// The prose must survive: it is the wire message for API-key/curl/MCP
 	// callers and the public buyer-form JavaScript.
-	if got := body["error"]; got != "workspace tidak dijumpai" {
+	if got := body["error"]; got != "workspace not found" {
 		t.Errorf("error = %q, want the wire prose preserved", got)
 	}
 }
@@ -69,18 +69,22 @@ func TestIssue6177EveryFailureGetsACode(t *testing.T) {
 		msg    string
 		want   string
 	}{
-		{http.StatusBadRequest, "butiran tidak lengkap", ClassBadRequest},
-		{http.StatusUnauthorized, "auth diperlukan", ClassAuthRequired},
-		{http.StatusNotFound, "borang tidak dijumpai", ClassNotFound},
+		{http.StatusBadRequest, "incomplete details", ClassBadRequest},
+		{http.StatusUnauthorized, "authentication required", ClassAuthRequired},
+		{http.StatusNotFound, "form not found", ClassNotFound},
 		// 409 has BOTH a specific-code message and one without, so both the
 		// specific lookup and the class fallback for this status are pinned.
-		{http.StatusConflict, "produk telah habis (out of stock)", CodeProductOutOfStock},
+		{http.StatusConflict, "product is sold out (out of stock)", CodeProductOutOfStock},
 		{http.StatusConflict, "ahli sudah wujud dalam workspace ini", ClassConflict},
 		{http.StatusInternalServerError, "internal error", ClassInternal},
-		{http.StatusServiceUnavailable, "pembayaran tidak aktif", CodePaymentInactive},
-		{http.StatusRequestEntityTooLarge, "fail melebihi had 20MB", ClassPayloadTooLarge},
-		{http.StatusTooManyRequests, "terlalu banyak cubaan. Cuba lagi kemudian.", CodeRateLimited},
-		{http.StatusBadGateway, "token exchange gagal", ClassUpstreamFailed},
+		{http.StatusServiceUnavailable, "payment is not active", CodePaymentInactive},
+		{http.StatusRequestEntityTooLarge, "file exceeds the 20MB limit", ClassPayloadTooLarge},
+		// The buyer 429 carries its own code from the refusal catalogue
+		// (buyertext.CodeOrderRateLimited), so the class fallback is what a
+		// prose-only 429 gets — the point of the row: an uncatalogued message
+		// still answers SOMETHING the client can branch on.
+		{http.StatusTooManyRequests, "terlalu banyak cubaan. Cuba lagi kemudian.", ClassTooManyRequests},
+		{http.StatusBadGateway, "token exchange failed", ClassUpstreamFailed},
 	}
 	for _, c := range cases {
 		w := httptest.NewRecorder()
@@ -100,13 +104,13 @@ func TestIssue6177EveryFailureGetsACode(t *testing.T) {
 }
 
 func TestIssue6177URLGuardPrefixResolvesToItsOwnCode(t *testing.T) {
-	// urlguard.InvalidMessage() builds "<field> mesti bermula dengan https:// — …"
+	// urlguard.InvalidMessage() builds "<field> must start with https:// — …"
 	// around the field name, so no exact-key entry can ever match it. It is the
 	// one message shape that NEEDS the prefix rule; without it the dashboard
 	// would print the server's Malay/English mixture for every rejected image.
 	msgs := []string{
-		"theme.logo_url mesti bermula dengan https:// — skema lain (data:, http:, javascript:, …) ditolak supaya imej tidak rosak pada halaman pembeli",
-		"images mesti bermula dengan https:// — skema lain ditolak",
+		"theme.logo_url must start with https:// — other schemes (data:, http:, javascript:, …) are rejected so the image does not break on the buyer's page",
+		"images must start with https:// — other schemes rejected",
 	}
 	for _, m := range msgs {
 		if got := ErrCodeFor(m); got != CodeURLNotHTTPS {
@@ -127,10 +131,10 @@ func TestIssue6177ChatLimitPrefixResolvesToItsCode(t *testing.T) {
 	// the live constant AND at a changed one, because "resolves today" and
 	// "resolves after the limit moves" are the two different claims.
 	cases := []string{
-		fmt.Sprintf("had chat dicapai (%.0f mesej sejam). Sila cuba sebentar lagi.", chatRatePerHour),
-		fmt.Sprintf("had chat dicapai (%.0f mesej sejam). Sila cuba sebentar lagi.", 90.0),
-		fmt.Sprintf("had pengesahan dicapai (%.0f sejam). Sila cuba sebentar lagi.", chatConfirmPerHour),
-		fmt.Sprintf("had pengesahan dicapai (%.0f sejam). Sila cuba sebentar lagi.", 45.0),
+		fmt.Sprintf("chat limit reached (%.0f messages per hour). Please try again shortly.", chatRatePerHour),
+		fmt.Sprintf("chat limit reached (%.0f messages per hour). Please try again shortly.", 90.0),
+		fmt.Sprintf("verification limit reached (%.0f per hour). Please try again shortly.", chatConfirmPerHour),
+		fmt.Sprintf("verification limit reached (%.0f per hour). Please try again shortly.", 45.0),
 	}
 	for _, m := range cases {
 		if got := ErrCodeFor(m); got != CodeRateLimited {
@@ -141,7 +145,7 @@ func TestIssue6177ChatLimitPrefixResolvesToItsCode(t *testing.T) {
 	// And the message a rate-limited user actually gets from the handler is one
 	// of the shapes above: the constant is formatted with %0.f, so a value with
 	// a fractional part still has to resolve.
-	if got := ErrCodeFor(fmt.Sprintf("had chat dicapai (%.0f mesej sejam). Sila cuba sebentar lagi.", 60.5)); got != CodeRateLimited {
+	if got := ErrCodeFor(fmt.Sprintf("chat limit reached (%.0f messages per hour). Please try again shortly.", 60.5)); got != CodeRateLimited {
 		t.Errorf("a fractional chat limit does not resolve: got %q", got)
 	}
 }
@@ -172,18 +176,18 @@ func TestIssue6177ConfirmationMismatchPrefixesResolveToTheirOwnCode(t *testing.T
 		want string
 	}{
 		{"a product purge refusal (an ordinary name)",
-			"taip nama produk (Kopi Ais) untuk sahkan pemadaman kekal", CodeProductConfirmNameMismatch},
+			"type the product name (Kopi Ais) to confirm the permanent deletion", CodeProductConfirmNameMismatch},
 		{"a product purge refusal (a name with the sentence's own punctuation)",
-			"taip nama produk (Kopi (Ais) — 500ml) untuk sahkan pemadaman kekal", CodeProductConfirmNameMismatch},
+			"type the product name (Kopi (Ais) — 500ml) to confirm the permanent deletion", CodeProductConfirmNameMismatch},
 		{"a form purge refusal",
-			"taip slug borang (borang-saya-) untuk sahkan pemadaman kekal", CodeFormConfirmSlugMismatch},
+			"type the form slug (borang-saya-) to confirm the permanent deletion", CodeFormConfirmSlugMismatch},
 		// BOTH workspace sentences, because the bin and the permanent delete are
 		// two different messages that must land on the one code that describes
 		// their shared complaint.
 		{"a workspace BIN refusal",
-			"taip slug workspace (ws-saya) untuk sahkan pemadaman", CodeWorkspaceConfirmSlugMismatch},
+			"type the workspace slug (ws-saya) to confirm the deletion", CodeWorkspaceConfirmSlugMismatch},
 		{"a workspace PURGE refusal",
-			"taip slug workspace (ws-saya) untuk sahkan pemadaman kekal", CodeWorkspaceConfirmSlugMismatch},
+			"type the workspace slug (ws-saya) to confirm the permanent deletion", CodeWorkspaceConfirmSlugMismatch},
 	}
 	for _, c := range cases {
 		if got := ErrCodeFor(c.msg); got != c.want {
@@ -218,7 +222,7 @@ func TestIssue6177ConfirmationMismatchPrefixesResolveToTheirOwnCode(t *testing.T
 		src.WriteString("\n")
 	}
 	all := src.String()
-	for _, prefix := range []string{"taip slug borang (", "taip slug workspace (", "taip nama produk ("} {
+	for _, prefix := range []string{"type the form slug (", "type the workspace slug (", "type the product name ("} {
 		if !strings.Contains(all, `"`+prefix+`"`) {
 			t.Errorf("the confirmation prefix %q is keyed in errCodeByPrefix but no handler in "+
 				"this package writes it as a string literal any more — the code is unreachable and "+

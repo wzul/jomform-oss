@@ -220,7 +220,7 @@ var restRouteDocs = []restRouteDoc{
 		Desc: "Every form with its slug, status, public URL and mode. mode is payment (default) or response."},
 	{Method: "POST", Path: "/v1/rest/forms", Handler: "createForm", Tag: "Forms",
 		Summary: "Create a form", Access: AccessWrite, Body: true, Req: "FormWrite", Resp: "Form",
-		Desc: "A blank slug is generated from the title and uniquified within the workspace. An explicit slug is used as given, and must be unique among the workspace's live forms: a slug another live form already serves is refused with 409 form.slugInUse (the same code and sentence a slug rename onto it answers). The form is created as a draft; publish it with POST /v1/rest/forms/{id}/publish."},
+		Desc: "A blank slug is generated from the title and uniquified within the workspace. An explicit slug must be a usable URL path segment — 1-40 characters of a-z, 0-9 and hyphens, and not a name JomForm reserves for itself (a workspace-claim label such as login/api/docs, or a route served on the same host such as privacy/terms/refund/healthz): a malformed slug is refused with 400 form.slugInvalid and a reserved one with 400 form.slugReserved, before anything is stored. The slug must also be unique among the workspace's live forms: a slug another live form already serves is refused with 409 form.slugInUse (the same code and sentence a slug rename onto it answers). The form is created as a draft; publish it with POST /v1/rest/forms/{id}/publish."},
 	{Method: "POST", Path: "/v1/rest/forms/ai-generate", Handler: "aiGenerateForm", Tag: "Forms",
 		Summary: "Draft a form config from a prompt (AI)", Access: AccessWrite, Body: true, Resp: "Form",
 		RespDesc:   "A draft form config (blocks + theme) to review and then save.",
@@ -235,7 +235,7 @@ var restRouteDocs = []restRouteDoc{
 		Desc: "Includes the current config (blocks) and theme, so you can read, mutate the parts you want and send the whole config back."},
 	{Method: "PATCH", Path: "/v1/rest/forms/{id}", Handler: "updateForm", Tag: "Forms",
 		Summary: "Update a form's title, config, theme or slug", Access: AccessWrite, Body: true, Req: "FormWrite", Resp: "Form",
-		Desc: "Partial update: an omitted title, config, theme or slug keeps the stored value, so a body that renames the form does not have to resend its title. An empty title (or slug) also means \"leave unchanged\" — this route never blanks a form's title. A slug another live form already serves is refused with 409 form.slugInUse, and nothing else in the same request is written; a malformed slug is 400 form.slugInvalid. A rename leaves a temporary 301 from the old URL."},
+		Desc: "Partial update: an omitted title, config, theme or slug keeps the stored value, so a body that renames the form does not have to resend its title. An empty title (or slug) also means \"leave unchanged\" — this route never blanks a form's title. A slug is held to the same rule as create: 1-40 characters of a-z, 0-9 and hyphens and not a name JomForm reserves, so a malformed slug is 400 form.slugInvalid and a reserved one 400 form.slugReserved. A slug another live form already serves is refused with 409 form.slugInUse, and nothing else in the same request is written. A rename leaves a temporary 301 from the old URL."},
 	{Method: "DELETE", Path: "/v1/rest/forms/{id}", Handler: "deleteForm", Tag: "Forms",
 		Summary: "Delete a form (soft delete)", Access: AccessWrite, Resp: "Deleted",
 		Desc: "The form goes to the trash and can be restored; its public page and its share card stop being served. A card the CDN had cached is dropped in the same request and the reply names the outcome in edge."},
@@ -325,7 +325,7 @@ var restRouteDocs = []restRouteDoc{
 		Summary: "Workspace totals (sales, revenue, counts)", Access: AccessRead, Resp: "Summary"},
 	{Method: "GET", Path: "/v1/rest/dashboard-bundle", Handler: "dashboardBundle", Tag: "Account",
 		Summary: "One call for the whole dashboard payload", Access: AccessRead,
-		RespDesc: "An object with me, workspaces, chip_status, keys, domains, webhooks, social, einvoice, products, summary, sales, form_analytics and product_analytics."},
+		RespDesc: "An object with currency, me, workspaces, chip_status, keys, domains, webhooks, social, einvoice, products, summary, sales, form_analytics and product_analytics. currency is the active workspace's currency — the money every price on the dashboard is labelled in."},
 
 	// ── Settings ─────────────────────────────────────────────────────────────
 	{Method: "PUT", Path: "/v1/rest/settings/custom-domain", Handler: "setCustomDomain", Tag: "Settings",
@@ -334,6 +334,14 @@ var restRouteDocs = []restRouteDoc{
 		Summary: "Read the workspace's custom domain", Access: AccessRead},
 	{Method: "DELETE", Path: "/v1/rest/settings/custom-domain", Handler: "deleteCustomDomain", Tag: "Settings",
 		Summary: "Clear the workspace's custom domain", Access: AccessWrite},
+	{Method: "GET", Path: "/v1/rest/settings/payment-fees", Handler: "getFeeSettings", Tag: "Settings",
+		Summary: "Read per-method processing-fee rates + acknowledgement", Access: AccessRead},
+	{Method: "PUT", Path: "/v1/rest/settings/payment-fees", Handler: "putFeeSettings", Tag: "Settings",
+		Summary: "Set per-method processing-fee rates (requires the pass-on acknowledgement)", Access: AccessWrite, Body: true},
+	{Method: "GET", Path: "/v1/rest/forms/{id}/fee-override", Handler: "getFormFeeOverride", Tag: "Forms",
+		Summary: "Read a form's processing-fee override", Access: AccessRead},
+	{Method: "PUT", Path: "/v1/rest/forms/{id}/fee-override", Handler: "putFormFeeOverride", Tag: "Forms",
+		Summary: "Set a form's processing-fee override ('' inherit, 'off' switch off)", Access: AccessWrite, Body: true},
 	{Method: "PUT", Path: "/v1/rest/settings/einvoice", Handler: "putEinvoicing", Tag: "Settings",
 		Summary: "Set e-Invoice (LHDN) settings", Access: AccessWrite, Body: true},
 	{Method: "GET", Path: "/v1/rest/settings/einvoice", Handler: "getEinvoicing", Tag: "Settings",
@@ -930,7 +938,7 @@ func responsesFor(d restRouteDoc) map[string]any {
 		ok: success,
 		"400": errorResponse("The request body or parameters are invalid. " +
 			"Error messages are returned in the API's own words, not a fixed enumeration."),
-		"401": errorResponse("Missing, unknown or revoked credential. Body: {\"error\":\"auth diperlukan\"}."),
+		"401": errorResponse("Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."),
 	}
 	if d.Access != AccessSession {
 		out["403"] = errorResponse("The credential is not allowed to do this: a readonly key on a write, " +

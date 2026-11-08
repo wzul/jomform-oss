@@ -30,9 +30,9 @@ type S3Bucket struct {
 	bucket string
 }
 
-// NewS3Bucket builds the client. Path-style addressing is enabled for a local
-// endpoint (MinIO), matching objstore.NewObjectStore, so the tool talks to the
-// same store the API does.
+// NewS3Bucket builds the client. Path-style addressing is enabled for EVERY
+// custom endpoint, exactly as objstore.NewObjectStore does, so the reconcile
+// tool reaches the same store the API does.
 func NewS3Bucket(endpoint, accessKey, secretKey, bucket, region string) (*S3Bucket, error) {
 	if bucket == "" {
 		return nil, errors.New("bucket empty")
@@ -53,10 +53,22 @@ func NewS3Bucket(endpoint, accessKey, secretKey, bucket, region string) (*S3Buck
 		return nil, fmt.Errorf("s3 config: %w", err)
 	}
 	cli := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		if endpoint != "" && (strings.Contains(endpoint, "localhost") ||
-			strings.Contains(endpoint, "127.0.0.1") ||
-			strings.Contains(endpoint, "minio") ||
-			strings.Contains(endpoint, ":9000")) {
+		// PATH-STYLE FOR EVERY CUSTOM ENDPOINT, not just the four substrings this
+		// used to sniff for (`localhost`, `127.0.0.1`, `minio`, `:9000`).
+		//
+		// A custom endpoint means "not AWS S3": it is a self-hosted or
+		// third-party S3-compatible server (MinIO, SeaweedFS, Garage, Ceph RGW,
+		// R2, Spaces …). Virtual-host addressing asks the resolver for
+		// `<bucket>.<endpoint>`, which only exists if that service publishes a
+		// wildcard DNS record — compose-network service names never do. The old
+		// sniff made the tool work ONLY against a service named `minio` on
+		// :9000, so the production switch to `S3_ENDPOINT=http://s3:8333`
+		// (SeaweedFS) built `jomform-media.s3:8333` and died on DNS — an ops
+		// tool that could no longer read the store exactly when it was needed.
+		// With no endpoint set we are on real AWS S3, where virtual-host style
+		// is correct and path-style is being retired — so the rule is
+		// "endpoint set ⇒ path".
+		if endpoint != "" {
 			o.UsePathStyle = true
 		}
 	})

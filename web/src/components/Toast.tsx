@@ -52,6 +52,17 @@
 //
 // The 6s timer is re-armed per message and cleared on unmount, so saving twice
 // cannot leave a stale timer dismissing a newer toast.
+//
+// IT ENTERS (card t_ea568318). `.jf-toast-in` — the motion layer's toast
+// pattern (8px rise + fade, 180ms, `transform`/`opacity` only) — is on the
+// STATUS ELEMENT. The layer shipped that keyframes and no surface applied it,
+// so the one save-confirmation in the app appeared as a jump. It is not on the
+// fixed positioner above: a transform on that element would make IT the
+// containing block for anything it carries. Reduced motion switches the
+// animation off outright (globals.css), which is the deterministic reading —
+// the toast is still there, it just does not move. The success TICK scales in
+// with `.jf-check`; the failure bang does not carry it, because the tick is the
+// mark a successful save makes.
 
 import { useEffect } from "react";
 
@@ -86,7 +97,7 @@ export function Toast({
         role="status"
         data-testid="save-toast"
         data-tone={ok ? "success" : "failure"}
-        className={`pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-xl border px-4 py-3 shadow-lg ${
+        className={`jf-toast-in pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-xl border px-4 py-3 shadow-lg ${
           ok ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"
         }`}
       >
@@ -96,25 +107,34 @@ export function Toast({
             ok ? "bg-emerald-600" : "bg-red-600"
           }`}
         >
-          {ok ? (
-            <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5">
-              <path
-                d="M4.5 10.5l3.5 3.5 7.5-8"
-                stroke="var(--jf-on-color)"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          ) : (
-            /* A failure carries a bang, never the success tick: the tick is the
-               mark the emerald chrome makes, and reusing it here would say the
-               save succeeded on a screen where it did not. */
-            <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5">
-              <path d="M10 4.5v6.5" stroke="var(--jf-on-color)" strokeWidth="2.2" strokeLinecap="round" />
-              <circle cx="10" cy="14.7" r="1.25" fill="var(--jf-on-color)" />
-            </svg>
-          )}
+          {/* `.jf-check` (globals.css) scales the glyph up from 0.9. It goes on
+              THIS wrapper, not on the circle above: `.jf-check` carries
+              `display: inline-block` and it is unlayered, so it beats Tailwind's
+              `flex` utility — on the circle that would drop the
+              `items-center`/`justify-center` and left-align the tick in its
+              badge. Measured in the browser after the change (computed display
+              of the circle is `flex`). */}
+          <span className={ok ? "jf-check" : undefined}>
+            {ok ? (
+              <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5">
+                <path
+                  d="M4.5 10.5l3.5 3.5 7.5-8"
+                  stroke="var(--jf-on-color)"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ) : (
+              /* A failure carries a bang, never the success tick: the tick is the
+                 mark the emerald chrome makes, and reusing it here would say the
+                 save succeeded on a screen where it did not. */
+              <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5">
+                <path d="M10 4.5v6.5" stroke="var(--jf-on-color)" strokeWidth="2.2" strokeLinecap="round" />
+                <circle cx="10" cy="14.7" r="1.25" fill="var(--jf-on-color)" />
+              </svg>
+            )}
+          </span>
         </span>
         {/* text-emerald-800 / text-red-800, not the -600 steps: on these -50
             tints the 600s measure 3.47:1 (emerald, card t_fc1b67f1) and 4.36:1

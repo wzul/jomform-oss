@@ -166,7 +166,7 @@ test("THE DEFECT: the refusal renders in the dashboard's language, never the API
   const body = { error: goNoProductsProse(), code: PUBLISH_NEEDS_ACK, requires_ack: true };
   const prose = goNoProductsProse();
   // The fixture must really be the Malay string, or this test proves nothing.
-  assert.match(prose, /Borang bayaran ini tiada produk/, "the Go prose is not the reported Malay sentence");
+  assert.match(prose, /This payment form has no products/, "the Go prose is not the refusal this test was written for");
 
   const outcome = publishOutcome({ ok: false, status: 409, body }, "");
   // `Translate` is now apiErr's translator for ANY i18n key (see the module), so
@@ -182,8 +182,8 @@ test("THE DEFECT: the refusal renders in the dashboard's language, never the API
     const rendered = publishConfirmText(outcome, tIn(lang));
     assert.ok(rendered.trim() !== "", `lang=${lang} rendered nothing`);
     assert.ok(
-      !rendered.includes("Borang bayaran ini tiada produk"),
-      `lang=${lang} rendered the API's Malay prose: ${JSON.stringify(rendered)}`,
+      !rendered.includes(prose),
+      `lang=${lang} rendered the API's wire prose: ${JSON.stringify(rendered)}`,
     );
     // The English fallback is legitimate for an untranslated locale, Malay is
     // never legitimate for any locale.
@@ -250,7 +250,7 @@ test("the no-products refusal does not offer to collect anything, and says nothi
   const goProse = goNoProductsProse();
   assert.match(
     goProse,
-    /tidak mengumpul apa-apa/,
+    /will not collect anything/,
     `the Go refusal does not say the form collects nothing: ${JSON.stringify(goProse)}`,
   );
 });
@@ -353,11 +353,11 @@ test("publishErrorText yields the localized failure sentence, and nothing for a 
   assert.ok(!rendered.includes("penerbitan gagal"), "the server's Malay prose was rendered");
 
   // A KNOWN code wins over the fallback, translated.
-  const known = publishOutcome({ ok: false, status: 404, body: { error: "workspace tidak dijumpai", code: "workspace.notFound" } }, "");
+  const known = publishOutcome({ ok: false, status: 404, body: { error: "workspace not found", code: "workspace.notFound" } }, "");
   const viaDict = (lang: string) => (k: string) => dict(lang, k);
   const en = publishErrorText(known, "Failed to set the form status.", viaDict("en"));
   assert.notEqual(en, "Failed to set the form status.", "a known code did not translate");
-  assert.ok(!en.includes("workspace tidak dijumpai"), `lang=en rendered the server's Malay prose: ${JSON.stringify(en)}`);
+  assert.ok(!en.includes("workspace not found"), `lang=en rendered the server's Malay prose: ${JSON.stringify(en)}`);
   assert.match(en, /workspace was not found/i);
 });
 

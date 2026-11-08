@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
 import {
   API_BASE,
@@ -12,12 +13,12 @@ import {
   writeGatedReads,
 } from "../../../lib/openapi.ts";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "REST API reference — JomForm Docs",
   description:
     "The JomForm REST API: create a key, make your first call, and the full endpoint reference. Server-to-server only — the API sends no CORS headers and does not answer browser preflight requests.",
-  alternates: { canonical: "https://jomform.com/docs/api" },
-};
+  path: "/docs/api",
+});
 
 // The REST API reference (issue #395 docs structure).
 //
@@ -75,14 +76,25 @@ export default function ApiDocsPage() {
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
         The JomForm REST API lets your own server create forms, read sales and responses, manage
         products, subscriptions, webhooks and domains. It is served from{" "}
-        <code className="rounded bg-slate-100 px-1">{API_BASE}</code> and currently exposes{" "}
+        <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">{API_BASE}</code> and currently exposes{" "}
         <strong>{total} operations</strong>, every one of them listed on this page.
       </p>
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
         A machine-readable OpenAPI 3.1 contract for the same surface is published at{" "}
+        {/*
+          [overflow-wrap:anywhere] on the VISIBLE URL: unlike the versioning
+          anchor below (which prints the words "openapi.json"), this one prints
+          the whole absolute URL, one whitespace-free run. At a 360px viewport
+          with the browser default font size raised to 24px it measured 337px
+          wide against a ~296px column, so it floored the column and panned the
+          page 19px (373 vs 360); at 320px the same run panned 59px. "anywhere"
+          (not "break-word") also drops the min-content width to one character,
+          so the link shrinks INTO the column instead of widening it. The URL
+          itself is NOT shortened. Guard: src/lib/docsProseLinkWrap.test.ts.
+        */}
         <a
           href={OPENAPI_PUBLIC_URL}
-          className="text-[var(--jf-primary)] underline underline-offset-2"
+          className="text-[var(--jf-primary)] underline underline-offset-2 [overflow-wrap:anywhere]"
         >
           {OPENAPI_PUBLIC_URL}
         </a>
@@ -115,9 +127,9 @@ export default function ApiDocsPage() {
         <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-6 text-slate-600">
           <li>
             Sign in and open <strong>Settings → API keys</strong>, then create a key. Choose{" "}
-            <code className="rounded bg-slate-100 px-1">readwrite</code> if it needs to create or
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code> if it needs to create or
             change anything. The raw key is shown <strong>once</strong>; copy it then. You can also
-            create one over the API itself with <code className="rounded bg-slate-100 px-1">POST /v1/rest/keys</code>
+            create one over the API itself with <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">POST /v1/rest/keys</code>
             .
           </li>
           <li>
@@ -143,7 +155,7 @@ export default function ApiDocsPage() {
               </pre>
               <p className="mt-2 text-xs leading-5 text-slate-600">
                 Expect HTTP <strong>{e.expectStatus}</strong>, and a body containing{" "}
-                <code className="rounded bg-slate-100 px-1">{e.expectContains}</code>. {e.note}
+                <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">{e.expectContains}</code>. {e.note}
               </p>
             </div>
           ))}
@@ -174,7 +186,7 @@ export default function ApiDocsPage() {
           </li>
           <li>
             <strong>The same key drives the MCP server.</strong> There is one credential for both
-            surfaces — create it once and use it for <code className="rounded bg-slate-100 px-1">/v1/rest/*</code>{" "}
+            surfaces — create it once and use it for <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">/v1/rest/*</code>{" "}
             and for MCP (see the{" "}
             <a href="/docs/mcp" className="text-[var(--jf-primary)] underline underline-offset-2">
               MCP tool reference
@@ -196,7 +208,7 @@ export default function ApiDocsPage() {
         </p>
         <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600">
           <li>
-            <code className="rounded bg-slate-100 px-1">readonly</code> — read only. It is{" "}
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readonly</code> — read only. It is{" "}
             <strong>refused on every write with 403</strong>, and also on the reads whose handler
             writes anyway — an editor flow that saves through a write gate, or a value minted on
             first use. Those are the {writeGatedReads().length} routes below; the list comes from
@@ -204,7 +216,7 @@ export default function ApiDocsPage() {
             <ul className="mt-2 list-disc space-y-1 pl-5">
               {writeGatedReads().map((e) => (
                 <li key={`${e.method} ${e.path}`}>
-                  <code className="rounded bg-slate-100 px-1">
+                  <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">
                     {e.method} {e.path}
                   </code>
                   <span className="text-slate-500"> — {e.summary}</span>
@@ -213,11 +225,11 @@ export default function ApiDocsPage() {
             </ul>
           </li>
           <li>
-            <code className="rounded bg-slate-100 px-1">readwrite</code> — read and write.
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code> — read and write.
           </li>
         </ul>
         <p className="mt-3 text-sm leading-6 text-slate-600">
-          Inside a <code className="rounded bg-slate-100 px-1">?workspace=&lt;slug&gt;</code> scope
+          Inside a <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">?workspace=&lt;slug&gt;</code> scope
           there is a second, independent axis: your <strong>role in that workspace</strong>. A write
           needs both a readwrite key and the manage-or-admin role, and the payment-credential routes
           need admin. Scope is a property of the credential; role is a property of the person. The
@@ -232,12 +244,12 @@ export default function ApiDocsPage() {
           Failures use the HTTP status for the class and a JSON body that says what went wrong:
         </p>
         <pre tabIndex={0} className="mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs leading-5 text-slate-100">
-          <code>{`{ "error": "auth diperlukan" }`}</code>
+          <code>{`{ "error": "authentication required" }`}</code>
         </pre>
         <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600">
           <li>
             <strong>400</strong> — the request is invalid. The message is written for the caller
-            (&ldquo;nama dan price_sen wajib&rdquo;, &ldquo;tidak dijumpai&rdquo;) rather than being a
+            (&ldquo;name and price_sen are required&rdquo;, &ldquo;not found&rdquo;) rather than being a
             fixed catalogue, so it may change wording without a version bump.
           </li>
           <li>
@@ -245,9 +257,9 @@ export default function ApiDocsPage() {
           </li>
           <li>
             <strong>403</strong> — the credential is not allowed to do this: a readonly key on a
-            write, or no role in the <code className="rounded bg-slate-100 px-1">?workspace=</code>{" "}
+            write, or no role in the <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">?workspace=</code>{" "}
             you asked for. The body names the reason, and it always contains the word{" "}
-            <code className="rounded bg-slate-100 px-1">scope</code> when a scope is the cause.
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">scope</code> when a scope is the cause.
           </li>
           <li>
             <strong>404</strong> — no such object <em>in your workspace</em>.
@@ -255,9 +267,9 @@ export default function ApiDocsPage() {
           <li>
             <strong>409</strong> — the request conflicts with the object&apos;s state. Publishing a
             payment form that has no products returns 409 with{" "}
-            <code className="rounded bg-slate-100 px-1">requires_ack: true</code>, because that form
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">requires_ack: true</code>, because that form
             could never take money. Send{" "}
-            <code className="rounded bg-slate-100 px-1">{`{"acknowledge":true}`}</code> to publish it
+            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">{`{"acknowledge":true}`}</code> to publish it
             anyway.
           </li>
           <li>
@@ -285,7 +297,7 @@ export default function ApiDocsPage() {
         <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600">
           {limited.map((e) => (
             <li key={`${e.method} ${e.path}`}>
-              <code className="rounded bg-slate-100 px-1">
+              <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">
                 {e.method} {e.path}
               </code>{" "}
               — {e.rateLimit} ({e.summary})
@@ -296,7 +308,7 @@ export default function ApiDocsPage() {
           The upload and AI routes are limited per client IP. The in-app assistant is limited per
           user, counted inside the handler, and it is session-only. A throttled response is{" "}
           <strong>429</strong>; every throttled answer also carries{" "}
-          <code className="rounded bg-slate-100 px-1">Retry-After</code>, the number of seconds
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">Retry-After</code>, the number of seconds
           that client must wait before it is admitted again — read from the limiter&apos;s own bucket,
           so it is the real window for that route rather than one fixed number. Every other route —
           including the ones that write — is currently unmetered, so apply your own backoff and treat
@@ -314,10 +326,10 @@ export default function ApiDocsPage() {
         <p className="mt-3 text-sm leading-6 text-slate-600">
           This API is built for <strong>server-to-server</strong> calls. It sends{" "}
           <strong>no CORS headers at all</strong>: there is no{" "}
-          <code className="rounded bg-slate-100 px-1">Access-Control-Allow-Origin</code> and no{" "}
-          <code className="rounded bg-slate-100 px-1">Access-Control-Allow-Methods</code>, and a
-          browser&apos;s preflight <code className="rounded bg-slate-100 px-1">OPTIONS</code> request
-          is not answered with them. A <code className="rounded bg-slate-100 px-1">fetch()</code> from
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">Access-Control-Allow-Origin</code> and no{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">Access-Control-Allow-Methods</code>, and a
+          browser&apos;s preflight <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">OPTIONS</code> request
+          is not answered with them. A <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">fetch()</code> from
           a page on another origin will therefore be blocked by the browser, and the request may not
           even be sent.
         </p>
@@ -336,11 +348,20 @@ export default function ApiDocsPage() {
           All {total} operations, generated from the OpenAPI contract. The <em>Access</em> column is
           the gate the API&apos;s code enforces:
         </p>
+        {/* The rows below MUST be able to shrink and break. A flex item's
+            min-width is `auto` (its min-content size), so the "write" row — the
+            label plus the "Not every write route:" caveat rendered from the
+            contract — floored itself wider than the viewport at a raised text
+            size and panned the page 11px at 320px (measured: <dd> right 331 in a
+            320px viewport at root 24px, right 326 for the <strong> inside it).
+            min-w-0 lets the <dd> shrink; overflow-wrap:anywhere lets a run with
+            no whitespace in it break, and also lowers its min-content width.
+            Guarded by src/lib/docsApiAccessLegendWrap.test.ts. */}
         <dl className="mt-3 space-y-1 text-xs leading-5 text-slate-600">
           {accessLevels().map((level) => (
             <div key={level} className="flex gap-2">
               <dt className="shrink-0 font-mono font-semibold text-slate-900">{level}</dt>
-              <dd>
+              <dd className="min-w-0 [overflow-wrap:anywhere]">
                 {ACCESS_LABELS[level] ?? ""}
                 {/* THE LEGEND IS A DEFINITION OF THE LEVEL, applied to every route
                     carrying it — so it is only honest while EVERY write-labelled
@@ -355,7 +376,7 @@ export default function ApiDocsPage() {
                       .map((e) => `${e.method} ${e.path}`)
                       .join(", ")}{" "}
                     applies the key scope only and reads no{" "}
-                    <code className="rounded bg-slate-100 px-1">?workspace=</code> role. Its row
+                    <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">?workspace=</code> role. Its row
                     says so below.
                   </>
                 ) : null}
@@ -382,7 +403,7 @@ export default function ApiDocsPage() {
                       {e.scopeOnly ? (
                         <span className="normal-case">
                           {" "}
-                          (key scope only — no <code className="font-mono">?workspace=</code> role)
+                          (key scope only — no <code className="font-mono [overflow-wrap:anywhere]">?workspace=</code> role)
                         </span>
                       ) : null}
                     </span>
@@ -407,26 +428,35 @@ export default function ApiDocsPage() {
       <section id="versioning" className="mt-10 scroll-mt-24">
         <h2 className="text-lg font-semibold text-slate-900">Versioning &amp; changelog</h2>
         <p className="mt-3 text-sm leading-6 text-slate-600">
-          Everything here lives under <code className="rounded bg-slate-100 px-1">/v1</code>, and{" "}
+          Everything here lives under <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">/v1</code>, and{" "}
           <strong>/v1 is stable</strong>: existing endpoints keep their paths, their request fields
           and their response field names. Additive changes — a new endpoint, a new optional field, a
-          new event type — may land under <code className="rounded bg-slate-100 px-1">/v1</code> at
+          new event type — may land under <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">/v1</code> at
           any time, so tolerate unknown fields rather than rejecting a response that has grown one.
           A change that would break an existing integration means a new prefix (
-          <code className="rounded bg-slate-100 px-1">/v2</code>), with the old one kept running
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">/v2</code>), with the old one kept running
           alongside it.
         </p>
         <p className="mt-3 text-sm leading-6 text-slate-600">
           Error message <em>wording</em> is not covered by that promise — match on the status code
-          (and on the stable <code className="rounded bg-slate-100 px-1">code</code> field where one
+          (and on the stable <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">code</code> field where one
           is returned, such as{" "}
-          <code className="rounded bg-slate-100 px-1">requires_ack</code>), not on the text.
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">requires_ack</code>), not on the text.
         </p>
         <p className="mt-3 text-sm leading-6 text-slate-600">
           Changes to this contract show up in two places you can watch: the published{" "}
+          {/*
+            This anchor prints the WORDS "openapi.json", not the URL, so it does
+            not need the break guard for layout today — but it points at the same
+            contract as the intro anchor (which does print the URL) and the two
+            have already differed once, which is how the intro one panned at
+            360px. Both contract anchors carry the guard so the page cannot pan
+            again merely because a later edit swaps this label back to the URL.
+            Guard: src/lib/docsProseLinkWrap.test.ts.
+          */}
           <a
             href={OPENAPI_PUBLIC_URL}
-            className="text-[var(--jf-primary)] underline underline-offset-2"
+            className="text-[var(--jf-primary)] underline underline-offset-2 [overflow-wrap:anywhere]"
           >
             openapi.json
           </a>{" "}
@@ -435,12 +465,12 @@ export default function ApiDocsPage() {
         </p>
         <p className="mt-3 text-sm leading-6 text-slate-600">
           Two ways to read the release you are talking to.{" "}
-          <code className="rounded bg-slate-100 px-1">GET /version</code> answers the release tag,
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">GET /version</code> answers the release tag,
           the commit and the build date over HTTP. On a host you operate, the server binary
           answers the same pair by itself:{" "}
-          <code className="rounded bg-slate-100 px-1">jomform-api --version</code> prints{" "}
-          <code className="rounded bg-slate-100 px-1">version=&lt;version&gt; commit=&lt;commit&gt;</code>{" "}
-          and exits, and <code className="rounded bg-slate-100 px-1">jomform-api --help</code>{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">jomform-api --version</code> prints{" "}
+          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">version=&lt;version&gt; commit=&lt;commit&gt;</code>{" "}
+          and exits, and <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">jomform-api --help</code>{" "}
           prints the usage. Running either against a live instance is safe — including inside its
           own container — because the flag is answered before startup: no database or cache
           connection, no migration, no background worker and no port is opened.
@@ -455,14 +485,14 @@ export default function ApiDocsPage() {
           workspace, so an integration test that runs against production data is an integration test
           that may email a customer. Instead, build against a workspace you are willing to throw
           away: create one for the integration (the dashboard&apos;s workspace switcher does this in
-          a click, or <code className="rounded bg-slate-100 px-1">POST /v1/workspaces</code>), point
+          a click, or <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">POST /v1/workspaces</code>), point
           its CHIP credentials at CHIP&apos;s own sandbox if you are exercising payments, and create
           a key scoped to that workspace. When you are done, delete the workspace rather than leaving
           it to rot — a throwaway workspace you can delete is what makes testing without a sandbox
           safe.
         </p>
         <p className="mt-3 text-sm leading-6 text-slate-600">
-          Use <code className="rounded bg-slate-100 px-1">readonly</code> for anything that only
+          Use <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readonly</code> for anything that only
           reads. It is the cheapest safety net in this API: a readonly key cannot damage real data
           even if your test harness has a bug.
         </p>

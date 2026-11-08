@@ -70,7 +70,7 @@ Reasons:
   exclusion is needed.
 - **A host this edge routes that is NOT under jomform.com is DECLARED**, with its
   reason, in `urlguard.foreignRoutedHosts` (`api/internal/urlguard/subdomains.go`)
-  — today `halo.example.com`, a merchant custom domain served by
+  — today `halo.wanzul-hosting.com`, a merchant custom domain served by
   `jf-custom-cert-halo` with its own certificate. The Traefik guard reds on an
   undeclared foreign host and refuses an entry under jomform.com (those are
   classified by label through `reservedSubdomains`).
@@ -102,8 +102,8 @@ Reasons:
 - **There is NO wildcard certificate for `*.jomform.com` at the origin** (measured
   2026-10-23; the doc claimed one was "already issued and working" until then).
   `/opt/traefik/acme/acme.json` holds 5 certs — `jomform.com` (+ SAN
-  `www.jomform.com`), `mcp.jomform.com`, `docs.jomform.com`, `halo.example.com`,
-  `jftest.example.com` — none of them a wildcard. The `jf-wildcard` router does
+  `www.jomform.com`), `mcp.jomform.com`, `docs.jomform.com`, `halo.wanzul-hosting.com`,
+  `jftest.wanzul-hosting.com` — none of them a wildcard. The `jf-wildcard` router does
   ask for `domains: ['*.jomform.com', jomform.com]` from the `le` resolver, but that
   resolver is HTTP-01, which cannot issue a wildcard, so the request is unsatisfiable
   and Traefik falls back to its DEFAULT SELF-SIGNED cert for those hosts (SNI straight

@@ -20,8 +20,8 @@ import (
 const VerifyTokenTTL = 24 * time.Hour
 
 var (
-	ErrVerifyTokenExpired = errors.New("link tamat tempoh")
-	ErrVerifyTokenInvalid = errors.New("link tidak sah")
+	ErrVerifyTokenExpired = errors.New("the link has expired")
+	ErrVerifyTokenInvalid = errors.New("the link is invalid")
 )
 
 // SignVerifyToken mints a signed, expiring verification token for an email.

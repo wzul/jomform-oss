@@ -180,7 +180,7 @@ test("a 401 keeps the wrong-credentials sentence (the control)", async ({ page }
     r.fulfill({
       status: 401,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code: "login.invalid", error: "maklumat log masuk tidak sah" }),
+      body: JSON.stringify({ code: "login.invalid", error: "invalid login details" }),
     }),
   );
 

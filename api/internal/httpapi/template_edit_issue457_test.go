@@ -93,6 +93,11 @@ func TestEditOwnTemplateSavesConfigAndStaysOutOfTheGallery(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	acc, _ := bundleFixture(t, ctx, pool)
+	// No workspace is linked, deliberately: that is the state the gallery
+	// account is REQUIRED to be in (templates@system.jomform must never have
+	// one — dbstore.LegacyProvisionedEmails), and since t_8b185f34 a template
+	// may be saved without one. The template route never publishes, so the
+	// workspace gate (t_fadfe9f7) does not apply to this flow anyway.
 	key := bundleAPIKey(t, ctx, pool, acc)
 	h := newBundleHandlers(pool)
 
@@ -182,6 +187,11 @@ func TestPublishingATemplateBreaksBothLists(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	acc, _ := bundleFixture(t, ctx, pool)
+	// No workspace is linked, deliberately: a template's public address is the
+	// GALLERY, not a workspace (t_8b185f34), and the account that owns the
+	// gallery must never have one. This test therefore runs in the exact account
+	// state the system templates account is in — publishing here is what puts a
+	// template in GET /v1/templates, not the accident that guard was about.
 	key := bundleAPIKey(t, ctx, pool, acc)
 	h := newBundleHandlers(pool)
 

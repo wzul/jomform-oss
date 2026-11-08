@@ -126,22 +126,28 @@ type productImageBlock struct {
 	PriceSen        int64
 	HasPrice        bool
 	HasQuantity     bool
-	Image           string
-	ImgSize         string
-	ImgTop          bool
-	BaseImage       string
-	Style           string
-	Placeholder     string
-	Description     string
-	CSSClass        string
-	Format          string
-	Pattern         string
-	RequiredMsg     string
-	MaxLength       int
-	DefaultValue    string
-	Min, Max        string
-	Step            string
-	Variations      []struct{}
+	// Card t_06851d88: pay-what-you-want product blocks.
+	CustomAmount     bool
+	AmountMinSen     int64
+	AmountMaxSen     int64
+	AmountSuggestSen int64
+	AmountHint       string
+	Image            string
+	ImgSize          string
+	ImgTop           bool
+	BaseImage        string
+	Style            string
+	Placeholder      string
+	Description      string
+	CSSClass         string
+	Format           string
+	Pattern          string
+	RequiredMsg      string
+	MaxLength        int
+	DefaultValue     string
+	Min, Max         string
+	Step             string
+	Variations       []struct{}
 	// CondJSON is the block's conditional-logic rule (card t_9e875bca). The
 	// template reads it for EVERY block in the range — a conditional block is
 	// wrapped in the element the page's script shows/hides — so a fixture that

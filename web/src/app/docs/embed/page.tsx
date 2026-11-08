@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "Embed a form on your site — JomForm Docs",
   description:
     "Embed a JomForm form on any website with an iframe. Auto-height via postMessage, the merchant listener snippet, and the 640px fallback.",
-  alternates: { canonical: "https://jomform.com/docs/embed" },
-};
+  path: "/docs/embed",
+});
 
 // Issue #456: iframe embed docs. Follow-up from #60 (embed payment flow) and
 // #395 (knowledge base). Documents the auto-height postMessage contract: the
@@ -106,7 +107,12 @@ export default function EmbedDocsPage() {
       </p>
 
       <h2 className="mt-8 text-xl font-semibold text-slate-900">The message contract</h2>
-      <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+      <div
+        className="mt-4 overflow-x-auto rounded-lg border border-slate-200"
+        role="region"
+        aria-label="The message contract"
+        tabIndex={0}
+      >
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50 text-slate-700">
             <tr>

@@ -21,16 +21,16 @@ func (h *RESTHandlers) putFormRestrictions(w http.ResponseWriter, r *http.Reques
 		LimitMessage   string     `json:"limit_message"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	// A schedule window must not be inverted (start after end).
 	if in.StartAt != nil && in.EndAt != nil && in.EndAt.Before(*in.StartAt) {
-		writeErr(w, http.StatusBadRequest, "tarikh tamat mesti selepas tarikh mula")
+		writeErr(w, http.StatusBadRequest, "the end date must be after the start date")
 		return
 	}
 	if in.EntryLimit != nil && *in.EntryLimit < 0 {
-		writeErr(w, http.StatusBadRequest, "had penyertaan tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid entry limit")
 		return
 	}
 	if err := h.Forms.UpdateRestrictions(r.Context(), actx.Account.ID, r.PathValue("id"),

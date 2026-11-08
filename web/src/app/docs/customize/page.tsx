@@ -1,13 +1,14 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
 import { Endonym } from "../../../components/Endonym";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "Design → AI agent → MCP customization — JomForm Docs",
   description:
     "Design your form or landing page in a tool like Canva, then use an AI agent (e.g. Claude) connected to the JomForm MCP to apply that design and customize it with CSS and JS.",
-  alternates: { canonical: "https://jomform.com/docs/customize" },
-};
+  path: "/docs/customize",
+});
 
 // Issue #440: first-class documentation of the "design-tool → AI agent → MCP
 // → customize" flow. A merchant designs their interface in a tool like Canva,
@@ -92,7 +93,7 @@ const TOOLS: { name: string; purpose: string }[] = [
 export default function CustomizeDocsPage() {
   return (
     <div className="max-w-3xl">
-      <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+      <h1 className="text-3xl font-bold tracking-tight text-slate-900 [overflow-wrap:anywhere]">
         Design → AI agent → MCP customization
       </h1>
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
@@ -106,7 +107,7 @@ export default function CustomizeDocsPage() {
         {STEPS.map((s) => (
           <section key={s.title}>
             <h3 className="text-base font-semibold text-slate-900">{s.title}</h3>
-            <p className="mt-1 text-sm leading-relaxed text-slate-600">{s.body}</p>
+            <p className="mt-1 text-sm leading-relaxed text-slate-600 [overflow-wrap:anywhere]">{s.body}</p>
           </section>
         ))}
       </div>
@@ -306,14 +307,22 @@ export default function CustomizeDocsPage() {
             summary, so its walk-through — the character rule, the refusal, and the
             temporary redirect — lives here, and /docs links this anchor. */}
         Every form is served at the slug you gave it —{" "}
-        <span className="font-mono text-xs">your-workspace.jomform.com/your-form-slug</span> (or the
+        <span className="font-mono text-xs [overflow-wrap:anywhere]">your-workspace.jomform.com/your-form-slug</span> (or the
         same path on a verified custom domain). The slug is editable: change it in{" "}
         <strong>Form Settings → General</strong> and the form moves to the new URL immediately. A
         slug is 1–40 characters of <span className="font-mono text-xs">a-z</span>,{" "}
         <span className="font-mono text-xs">0-9</span> and dashes (uppercase and spaces are
         normalised), and it must be free within your workspace — a rename onto a slug another of
         your forms already serves is refused with an error rather than silently overwriting either
-        form&apos;s URL.
+        form&apos;s URL. A name JomForm keeps for itself is refused as well, on both creating and{" "}
+        renaming a form: the labels it uses for its own addresses (for example{" "}
+        <span className="font-mono text-xs">login</span>,{" "}
+        <span className="font-mono text-xs">api</span>,{" "}
+        <span className="font-mono text-xs">docs</span>) and the paths it already serves on the same
+        domain (<span className="font-mono text-xs">privacy</span>,{" "}
+        <span className="font-mono text-xs">terms</span>,{" "}
+        <span className="font-mono text-xs">refund</span>). The refusal names the rule, so pick a
+        different slug — nothing is stored when a slug is refused.
       </p>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         Renaming never orphans the URL you already handed out: the old slug keeps working through a{" "}
@@ -338,13 +347,27 @@ export default function CustomizeDocsPage() {
         {CART.map((s) => (
           <section key={s.title}>
             <h3 className="text-base font-semibold text-slate-900">{s.title}</h3>
-            <p className="mt-1 text-sm leading-relaxed text-slate-600">{s.body}</p>
+            <p className="mt-1 text-sm leading-relaxed text-slate-600 [overflow-wrap:anywhere]">{s.body}</p>
           </section>
         ))}
       </div>
 
       <h2 className="mt-8 text-xl font-semibold text-slate-900">MCP tools used</h2>
-      <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+      {/* t_7c3a76c0: this box used to be `overflow-hidden`, which CLIPPED the
+          table instead of letting it scroll — measured 405.1px of table inside a
+          270px box at 320px with a plain 16px root font, so the Purpose column
+          was simply unreachable (and 607.6px inside 246px at 24px). The wrapper
+          is the horizontal scroller now; `tabIndex={0}` + `role="region"` +
+          the label is what axe's scrollable-region-focusable rule requires of a
+          scroll container, and it is what makes the clipped columns reachable
+          from a keyboard. The rounded corners still clip (a scroll container
+          clips its descendants), so the box looks the same. */}
+      <div
+        className="mt-4 overflow-x-auto rounded-lg border border-slate-200"
+        role="region"
+        aria-label="MCP tools used"
+        tabIndex={0}
+      >
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50 text-slate-700">
             <tr>
@@ -372,7 +395,7 @@ export default function CustomizeDocsPage() {
         An <strong>affiliate</strong> is a promoter you pay for sales they bring. You give each
         affiliate a short <strong>code</strong>, and their link is your storefront URL with{" "}
         <span className="font-mono text-xs">?aff=CODE</span> appended — for example{" "}
-        <span className="font-mono text-xs">https://your-workspace.jomform.com/?aff=ALI</span>. When a
+        <span className="font-mono text-xs [overflow-wrap:anywhere]">https://your-workspace.jomform.com/?aff=ALI</span>. When a
         buyer arrives through that link and completes an order, the code is stored on the sale, so the
         sale is attributed to that affiliate and you can see what they earned. Attribution works on
         menu orders too (the code is carried to the basket checkout).
@@ -398,7 +421,7 @@ export default function CustomizeDocsPage() {
       <h3 className="mt-5 text-base font-semibold text-slate-900">Set the commission</h3>
       <p className="mt-1 text-sm leading-relaxed text-slate-600">
         Commission is a percentage stored per affiliate. Change it with{" "}
-        <span className="font-mono text-xs">set_affiliate_commission</span> (takes{" "}
+        <span className="font-mono text-xs [overflow-wrap:anywhere]">set_affiliate_commission</span> (takes{" "}
         <span className="font-mono text-xs">affiliate_id</span> and the new{" "}
         <span className="font-mono text-xs">commission_pct</span>). The rate used is the one stored on
         the affiliate, so a change applies to sales attributed from then on; it is not written back
@@ -428,7 +451,12 @@ export default function CustomizeDocsPage() {
       <p className="mt-1 text-sm leading-relaxed text-slate-600">
         The same surface is available over the REST API, authenticated as the workspace:
       </p>
-      <div className="mt-3 overflow-hidden rounded-lg border border-slate-200">
+      <div
+        className="mt-3 overflow-x-auto rounded-lg border border-slate-200"
+        role="region"
+        aria-label="Affiliate REST endpoints"
+        tabIndex={0}
+      >
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50 text-slate-700">
             <tr>
@@ -501,7 +529,7 @@ export default function CustomizeDocsPage() {
         <span className="font-mono text-xs">update_template</span> (with{" "}
         <span className="font-mono text-xs">template_id</span> from{" "}
         <span className="font-mono text-xs">list_own_templates</span>); the REST equivalent is{" "}
-        <span className="font-mono text-xs">PUT /v1/rest/templates/{`{id}`}</span> with{" "}
+        <span className="font-mono text-xs [overflow-wrap:anywhere]">PUT /v1/rest/templates/{`{id}`}</span> with{" "}
         <span className="font-mono text-xs">title</span> /{" "}
         <span className="font-mono text-xs">config</span> /{" "}
         <span className="font-mono text-xs">theme</span> (an omitted field is left unchanged).
@@ -632,6 +660,19 @@ export default function CustomizeDocsPage() {
         untouched body still follows it. Only the half you actually typed is treated as yours.
       </p>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        A new workspace&apos;s receipt subject and body start <strong>empty</strong>, and an empty
+        field is not a missing subject: it means JomForm&apos;s own receipt, written in the language
+        your form is set to — so an English form gets an English receipt and a Malay form a Malay
+        one with nothing for you to fill in. That is why the fields show a grey example instead of
+        text you have to delete.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
+        The same is true of a form&apos;s default <strong>notification rule</strong>: its subject and
+        body start empty, and an empty field there means JomForm&apos;s own message in the form&apos;s
+        language. A rule you never edited therefore shows a grey example rather than text you have
+        to delete, and the mail it sends follows the language your form is set to.
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">
         Related:{" "}
         <a href="/docs/placeholders" className="font-medium text-slate-900 underline">
           the placeholder reference
@@ -694,7 +735,7 @@ export default function CustomizeDocsPage() {
       <h2 className="mt-8 text-xl font-semibold text-slate-900">Image URLs must be https://</h2>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         Every image/URL you set — the form logo (<span className="font-mono text-xs">set_form_theme</span>), the
-        landing-page hero image and logo (<span className="font-mono text-xs">set_workspace_landing_page</span>, or
+        landing-page hero image and logo (<span className="font-mono text-xs [overflow-wrap:anywhere]">set_workspace_landing_page</span>, or
         Settings → Storefront), product images (<span className="font-mono text-xs">create_product</span> /{" "}
         <span className="font-mono text-xs">update_product</span>, or the Products editor) and a form&apos;s image
         block — must be an absolute <span className="font-mono text-xs">https://</span> URL. Uploaded media from the

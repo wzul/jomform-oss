@@ -36,6 +36,15 @@ const DESTINATION_FACTS: Record<string, string[]> = {
     "disconnect_shipping_courier",
     "never silently zero",
   ],
+  // Card t_135c3c72: the buyer-borne processing fee. The facts a reader must be
+  // told on the guide: both MCP tools, the gross-up, and the disclosure rule.
+  "Processing fees paid by the buyer": [
+    "get_payment_fees",
+    "set_payment_fees",
+    "grossed up",
+    "before paying",
+    "does not return the processing fee",
+  ],
   "Sales": [
     "reference code",
     "pending/confirmed/failed/refunded",
@@ -233,7 +242,7 @@ const DESTINATION_FACTS: Record<string, string[]> = {
     "sandboxed iframe",
     "validation is a hint",
     "required-only",
-    "medan wajib tiada dalam HTML",
+    "required field missing from the HTML",
     "an unregistered name never becomes a field of its own",
     "full_name, email and phone",
     "its value is stored as full_name",
@@ -250,6 +259,9 @@ const PER_ENTRY_FLOOR: Record<string, number> = {
   // guide and its fact list together (the floor exists to notice a list being
   // shortened to suit itself, so it moves WITH the list, in the same change).
   "Shipping by zone": 6,
+  // Card t_135c3c72: five facts on the payment-fee guide (both MCP tools, the
+  // gross-up, the pre-payment disclosure, the refund rule).
+  "Processing fees paid by the buyer": 5,
   Sales: 5,
   "One list for sales and responses": 4,
   "Responses (response-only forms)": 3,

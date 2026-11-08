@@ -4,6 +4,9 @@ package dbstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/wzul/jomform/api/internal/emailtext"
 )
@@ -44,9 +47,19 @@ func (st *FormEmailSettings) HasOverride() bool {
 		st.HTMLOverride != nil
 }
 
-// FormEmailSettings reads (creating a default row when missing) the per-form
-// email settings. Empty subject/body and nil toggles signal "use the workspace
-// defaults" (issue #453).
+// FormEmailSettings reads the per-form email settings. Empty subject/body and
+// nil toggles signal "use the workspace defaults" (issue #453).
+//
+// A form with no stored row reads as the built-in defaults and is NOT
+// materialised: a read must never write (card t_3c67947d). This used to INSERT
+// a default row from the error branch, so a plain page load — a single GET with
+// no save — created one and owned `updated_at`, making that column useless as
+// "did this merchant edit their email settings?". The row is created where a
+// write belongs: the first SaveFormEmailSettings (the PUT handler) upserts it.
+//
+// Only pgx.ErrNoRows means "no row yet". Every other failure is returned, so a
+// dropped connection or a renamed column surfaces as an error instead of being
+// answered with the defaults and HTTP 200.
 func (s *FormStore) FormEmailSettings(ctx context.Context, formID string) (*FormEmailSettings, error) {
 	st := &FormEmailSettings{FormID: formID, ReceiptEnabled: true}
 	err := s.pool.QueryRow(ctx,
@@ -58,12 +71,10 @@ func (s *FormStore) FormEmailSettings(ctx context.Context, formID string) (*Form
 		&st.NotifyMerchant, &st.MerchantNotifyEmail, &st.HTML,
 		&st.ReceiptEnabledOverride, &st.NotifyMerchantOverride, &st.HTMLOverride)
 	if err != nil {
-		// default row
-		_, ierr := s.pool.Exec(ctx,
-			`INSERT INTO form_email_settings (form_id) VALUES ($1) ON CONFLICT DO NOTHING`, formID)
-		if ierr != nil {
-			return nil, ierr
+		if errors.Is(err, pgx.ErrNoRows) {
+			return st, nil
 		}
+		return nil, err
 	}
 	return st, nil
 }
@@ -200,13 +211,15 @@ func (s *FormStore) ClearFormEmailOverrides(ctx context.Context, formID string) 
 // fields.
 //
 // lang is the resolved buyer-facing language (EmailLang) and decides the
-// language of the BUILT-IN templates. Those templates live in the database as
-// Malay literals: workspace_email_settings defaults to one (migration 000021)
-// and EnsureDefault stores another per rule (#597), so a workspace nobody
-// customised holds Malay and — before this — mailed Malay to a buyer whose form
-// was English. A stored value that still equals a built-in template is therefore
-// re-rendered in lang; anything a merchant actually wrote is passed through
-// verbatim and never translated.
+// language of the BUILT-IN templates. A workspace created before migration
+// 000083 still carries Malay literals: workspace_email_settings used to default
+// to one (000021) and EnsureDefault stores another per notification rule
+// (#597 / 000032), so a workspace nobody customised held Malay and — before
+// this — mailed Malay to a buyer whose form was English. 000083 emptied that
+// column DEFAULT and blanked the untouched rows, so a new workspace inherits an
+// empty half instead; a stored value that still equals a built-in template is
+// re-rendered in lang either way. Anything a merchant actually wrote is passed
+// through verbatim and never translated.
 func ResolveFormEmailSettings(form *FormEmailSettings, ws *EmailSettings, lang string) *FormEmailSettings {
 	l := emailtext.NormalizeLang(lang)
 	def := emailtext.Text(l, emailtext.Receipt, nil)

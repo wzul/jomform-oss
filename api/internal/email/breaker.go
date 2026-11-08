@@ -17,9 +17,9 @@ const (
 	// BreakerKeyPrefix and BreakerKeyTTL bound each hour bucket.
 	BreakerKeyPrefix    = "jf:bnc:"
 	BreakerKeyTTL       = 2 * time.Hour
-	BreakerDefaultMin   = 20                                                 // min sends before ratio counts
-	BreakerDefaultRatio = 0.05                                               // >5% bounces pauses verification
-	BreakerOpenMessage  = "banyak emel tidak dihantar, sila cuba lagi nanti" // 503 body
+	BreakerDefaultMin   = 20                                                                   // min sends before ratio counts
+	BreakerDefaultRatio = 0.05                                                                 // >5% bounces pauses verification
+	BreakerOpenMessage  = "email delivery is paused after too many failures — try again later" // 503 body
 )
 
 // Breaker tracks verification sends + bounces in Valkey hourly buckets and

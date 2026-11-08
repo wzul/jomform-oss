@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strings"
 	"time"
 
@@ -25,26 +24,33 @@ import (
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
-// slugUnsafe matches any character that is not URL-safe for a form slug.
-var slugUnsafe = regexp.MustCompile(`[^a-z0-9-]+`)
+// slugUnsafe was the MCP copy of the slugify rule; the generator moved to
+// dbstore.FormStore.UniqueSlug (card t_f76f81eb), which is the one place a
+// candidate slug is derived now.
 
 // ── Products update ──────────────────────────────────────────────────────
 
 type updateProductIn struct {
-	ProductID           string        `json:"product_id" jsonschema:"ID produk"`
-	Name                string        `json:"name,omitempty" jsonschema:"Nama baharu (optional)"`
-	Description         string        `json:"description,omitempty" jsonschema:"Penerangan baharu (optional)"`
-	PriceSen            *int64        `json:"price_sen,omitempty" jsonschema:"Harga baharu dalam sen (optional)"`
-	Images              []string      `json:"images,omitempty" jsonschema:"Gambar (URL) — set penuh; kosong = kosongkan" `
-	Stock               *int          `json:"stock,omitempty" jsonschema:"Stok baharu (optional); omit = tak berubah" `
-	Active              *bool         `json:"active,omitempty" jsonschema:"Aktifkan/Nyahaktif"`
-	Type                string        `json:"type,omitempty" jsonschema:"one_time atau subscription (optional)"`
-	BillingPeriod       string        `json:"billing_period,omitempty" jsonschema:"month atau year untuk subscription (optional)"`
-	TrialDays           *int          `json:"trial_days,omitempty" jsonschema:"Hari percubaan (subscription; optional)"`
-	Variations          []variationIn `json:"variations,omitempty" jsonschema:"Set penuh variasi (name, price_sen, stock, images, sort_order). Kosong = produk simple; omit = tak berubah."`
-	SubscriptionCharges **int         `json:"subscription_charges,omitempty" jsonschema:"Bilangan caj (subscription; omit = tak berubah, null = infinite, N = caj N kali)"`
+	ProductID           string        `json:"product_id" jsonschema:"Product ID"`
+	Name                string        `json:"name,omitempty" jsonschema:"New name (optional)"`
+	Description         string        `json:"description,omitempty" jsonschema:"New description (optional)"`
+	PriceSen            *int64        `json:"price_sen,omitempty" jsonschema:"New price in sen (optional)"`
+	Images              []string      `json:"images,omitempty" jsonschema:"Images (URL) — full set; empty = clear" `
+	Stock               *int          `json:"stock,omitempty" jsonschema:"New stock (optional); omit = unchanged" `
+	Active              *bool         `json:"active,omitempty" jsonschema:"Enable/disable"`
+	Type                string        `json:"type,omitempty" jsonschema:"one_time or subscription (optional)"`
+	BillingPeriod       string        `json:"billing_period,omitempty" jsonschema:"month or year for subscription (optional)"`
+	TrialDays           *int          `json:"trial_days,omitempty" jsonschema:"Trial days (subscription; optional)"`
+	Variations          []variationIn `json:"variations,omitempty" jsonschema:"Full set of variations (name, price_sen, stock, images, sort_order). Empty = simple product; omit = unchanged."`
+	SubscriptionCharges **int         `json:"subscription_charges,omitempty" jsonschema:"Number of charges (subscription; omit = unchanged, null = infinite, N = charge N times)"`
 	// round 13c: next-charge date policy after a SUCCESSFUL charge.
-	ScheduleMode *string `json:"schedule_mode,omitempty" jsonschema:"Polisi tarikh caj seterusnya: from_payment (dari saat berjaya, lalai) | catch_up (ikut tarikh asal; period tertinggal tetap dicaj) | skip_missed (ikut tarikh asal; period tertinggal dilangkau)"`
+	ScheduleMode *string `json:"schedule_mode,omitempty" jsonschema:"Next-charge-date policy: from_payment (from the moment it succeeds; default) | catch_up (follow the original date; missed periods are still charged) | skip_missed (follow the original date; missed periods are skipped)"`
+	// Card t_06851d88: pay-what-you-want limits. nil = unchanged;
+	// max/suggested are ** so an explicit null (clear the cap / the
+	// suggestion) is distinguishable from "not sent".
+	MinPriceSen       *int64  `json:"min_price_sen,omitempty" jsonschema:"custom_amount: new smallest accepted amount in SEN (>= 100). Only valid while the product's type is custom_amount."`
+	MaxPriceSen       **int64 `json:"max_price_sen,omitempty" jsonschema:"custom_amount: new largest accepted amount in SEN; null = no upper limit; omit = unchanged."`
+	SuggestedPriceSen **int64 `json:"suggested_price_sen,omitempty" jsonschema:"custom_amount: new pre-filled amount in SEN; null = start empty; omit = unchanged."`
 }
 
 func (s *Server) updateProduct(
@@ -68,23 +74,24 @@ func (s *Server) updateProduct(
 	}
 	var typPtr *string
 	if in.Type != "" {
-		if in.Type != dbstore.SaleTypeOneTime && in.Type != dbstore.SaleTypeSubscription {
-			return nil, nil, fmt.Errorf("type mesti one_time|subscription")
+		if in.Type != dbstore.SaleTypeOneTime && in.Type != dbstore.SaleTypeSubscription &&
+			in.Type != dbstore.SaleTypeCustomAmount {
+			return nil, nil, fmt.Errorf("type must be one_time|subscription|custom_amount")
 		}
 		typPtr = &in.Type
 	}
 	var periodPtr *string
 	if in.BillingPeriod != "" {
 		if in.BillingPeriod != "month" && in.BillingPeriod != "year" {
-			return nil, nil, fmt.Errorf("billing_period mesti month|year")
+			return nil, nil, fmt.Errorf("billing_period must be month|year")
 		}
 		periodPtr = &in.BillingPeriod
 	}
 	if in.TrialDays != nil && *in.TrialDays < 0 {
-		return nil, nil, fmt.Errorf("trial_days mesti >= 0")
+		return nil, nil, fmt.Errorf("trial_days must be >= 0")
 	}
 	if in.SubscriptionCharges != nil && *in.SubscriptionCharges != nil && **in.SubscriptionCharges < 1 {
-		return nil, nil, fmt.Errorf("subscription_charges mesti >= 1 (atau null untuk infinite)")
+		return nil, nil, fmt.Errorf("subscription_charges must be >= 1 (or null for infinite)")
 	}
 	var imagesPtr *[]string
 	if in.Images != nil {
@@ -106,11 +113,53 @@ func (s *Server) updateProduct(
 	}
 	// round 13c: validate the schedule mode before it reaches the store.
 	if in.ScheduleMode != nil && *in.ScheduleMode != "" && !payments.ValidScheduleMode(*in.ScheduleMode) {
-		return nil, nil, fmt.Errorf("schedule_mode tidak sah: %q (from_payment|catch_up|skip_missed)", *in.ScheduleMode)
+		return nil, nil, fmt.Errorf("invalid schedule_mode: %q (from_payment|catch_up|skip_missed)", *in.ScheduleMode)
+	}
+	// Card t_06851d88: pay-what-you-want limits. A partial write is judged as a
+	// MERGED triple against the stored row (raising min past an old suggested
+	// only fails as a triple), and only when the type or a limit is written.
+	if typPtr != nil || in.MinPriceSen != nil || in.MaxPriceSen != nil || in.SuggestedPriceSen != nil {
+		cur, gerr := s.deps.Products.Get(ctx, acc, in.ProductID)
+		if gerr != nil {
+			return nil, nil, gerr
+		}
+		effType := cur.Type
+		if typPtr != nil {
+			effType = *typPtr
+		}
+		if effType == dbstore.SaleTypeCustomAmount {
+			mergedMin := cur.MinPriceSen
+			if in.MinPriceSen != nil {
+				mergedMin = *in.MinPriceSen
+			}
+			mergedMax := cur.MaxPriceSen
+			if in.MaxPriceSen != nil {
+				mergedMax = *in.MaxPriceSen
+			}
+			mergedSug := cur.SuggestedPriceSen
+			if in.SuggestedPriceSen != nil {
+				mergedSug = *in.SuggestedPriceSen
+			}
+			if msg := payments.ValidateCustomAmountLimits(mergedMin, mergedMax, mergedSug); msg != "" {
+				return nil, nil, fmt.Errorf("%s", msg)
+			}
+			if in.Variations != nil && len(in.Variations) > 0 {
+				return nil, nil, fmt.Errorf("a custom_amount product cannot have variations")
+			}
+			// price_sen follows the limits: the buyer chooses the charge, so the
+			// display price is never editable on its own for this type.
+			priceSen := payments.CustomAmountDisplayPrice(mergedMin, mergedSug)
+			in.PriceSen = &priceSen
+			in.MinPriceSen = &mergedMin
+			in.MaxPriceSen = &mergedMax
+			in.SuggestedPriceSen = &mergedSug
+		} else if in.MinPriceSen != nil || in.MaxPriceSen != nil || in.SuggestedPriceSen != nil {
+			return nil, nil, fmt.Errorf("min_price_sen, max_price_sen and suggested_price_sen apply only to type custom_amount")
+		}
 	}
 	if err := s.deps.Products.Update(ctx, acc, in.ProductID, namePtr, descPtr,
 		in.PriceSen, imagesPtr, stockPtr, in.Active, typPtr, periodPtr, in.TrialDays, in.SubscriptionCharges,
-		in.ScheduleMode); err != nil {
+		in.ScheduleMode, in.MinPriceSen, in.MaxPriceSen, in.SuggestedPriceSen); err != nil {
 		return nil, nil, err
 	}
 	// Wholesale-replace variations when the caller sent them (nil = keep).
@@ -125,7 +174,7 @@ func (s *Server) updateProduct(
 
 // listProductVariationsIn is the input for the list_product_variations tool.
 type listProductVariationsIn struct {
-	ProductID string `json:"product_id" jsonschema:"ID produk"`
+	ProductID string `json:"product_id" jsonschema:"Product ID"`
 }
 
 // listProductVariations returns a product's variations (per-variation
@@ -138,11 +187,11 @@ func (s *Server) listProductVariations(
 		return nil, nil, err
 	}
 	if in.ProductID == "" {
-		return nil, nil, fmt.Errorf("product_id wajib")
+		return nil, nil, fmt.Errorf("product_id is required")
 	}
 	// Ownership check: the product must belong to the account.
 	if _, err := s.deps.Products.Get(ctx, acc, in.ProductID); err != nil {
-		return nil, nil, fmt.Errorf("produk tidak dijumpai")
+		return nil, nil, fmt.Errorf("product not found")
 	}
 	if s.deps.ProductVariations == nil {
 		return nil, newListOut([]variationOut{}), nil
@@ -171,7 +220,7 @@ func (s *Server) listProductVariations(
 
 // createVariationIn is the input for create_product_variation.
 type createVariationIn struct {
-	ProductID string `json:"product_id" jsonschema:"ID produk"`
+	ProductID string `json:"product_id" jsonschema:"Product ID"`
 	variationIn
 }
 
@@ -180,10 +229,10 @@ func (s *Server) createProductVariation(
 	ctx context.Context, _ *mcp.CallToolRequest, in createVariationIn,
 ) (*mcp.CallToolResult, variationOut, error) {
 	if in.ProductID == "" {
-		return nil, variationOut{}, fmt.Errorf("product_id wajib")
+		return nil, variationOut{}, fmt.Errorf("product_id is required")
 	}
 	if s.deps.ProductVariations == nil {
-		return nil, variationOut{}, fmt.Errorf("variasi produk tidak tersedia")
+		return nil, variationOut{}, fmt.Errorf("product variations not available")
 	}
 	if _, err := s.requireProductWrite(ctx, in.ProductID); err != nil {
 		return nil, variationOut{}, err
@@ -204,20 +253,20 @@ func (s *Server) createProductVariation(
 // to "not set", which is what makes the variation inherit the product again —
 // without them a cleared field could never be told apart from a set one.
 type updateVariationIn struct {
-	ProductID   string    `json:"product_id" jsonschema:"ID produk"`
-	VariationID string    `json:"variation_id" jsonschema:"ID variasi"`
-	Name        *string   `json:"name,omitempty" jsonschema:"Nama baharu (optional)"`
-	PriceSen    *int64    `json:"price_sen,omitempty" jsonschema:"Harga baharu dalam SEN (optional)"`
-	Stock       *int      `json:"stock,omitempty" jsonschema:"Stok baharu (optional)"`
-	Images      *[]string `json:"images,omitempty" jsonschema:"Gambar (URL mesti https://) — set penuh; kosong = kosongkan"`
+	ProductID   string    `json:"product_id" jsonschema:"Product ID"`
+	VariationID string    `json:"variation_id" jsonschema:"Variation ID"`
+	Name        *string   `json:"name,omitempty" jsonschema:"New name (optional)"`
+	PriceSen    *int64    `json:"price_sen,omitempty" jsonschema:"New price in SEN (optional)"`
+	Stock       *int      `json:"stock,omitempty" jsonschema:"New stock (optional)"`
+	Images      *[]string `json:"images,omitempty" jsonschema:"Images (URL must be https://) — full set; empty = clear"`
 
 	// Issue #623: the variation's own subscription cycle.
-	BillingPeriod            *string `json:"billing_period,omitempty" jsonschema:"month | year. Kosongkan dengan clear_billing_period=true untuk warisi produk semula."`
-	TrialDays                *int    `json:"trial_days,omitempty" jsonschema:"Hari percubaan. Kosongkan dengan clear_trial_days=true."`
-	SubscriptionCharges      *int    `json:"subscription_charges,omitempty" jsonschema:"Bilangan caj. Kosongkan dengan clear_subscription_charges=true."`
-	ClearBillingPeriod       bool    `json:"clear_billing_period,omitempty" jsonschema:"true = buang kitaran variasi ini supaya ia warisi produk semula"`
-	ClearTrialDays           bool    `json:"clear_trial_days,omitempty" jsonschema:"true = buang hari percubaan variasi supaya ia warisi produk semula"`
-	ClearSubscriptionCharges bool    `json:"clear_subscription_charges,omitempty" jsonschema:"true = buang bilangan caj variasi supaya ia warisi produk semula"`
+	BillingPeriod            *string `json:"billing_period,omitempty" jsonschema:"month | year. Clear with clear_billing_period=true to inherit from the product again."`
+	TrialDays                *int    `json:"trial_days,omitempty" jsonschema:"Trial days. Clear with clear_trial_days=true."`
+	SubscriptionCharges      *int    `json:"subscription_charges,omitempty" jsonschema:"Number of charges. Clear with clear_subscription_charges=true."`
+	ClearBillingPeriod       bool    `json:"clear_billing_period,omitempty" jsonschema:"true = remove this variation's billing cycle so it inherits from the product again"`
+	ClearTrialDays           bool    `json:"clear_trial_days,omitempty" jsonschema:"true = remove the variation's trial days so it inherits from the product again"`
+	ClearSubscriptionCharges bool    `json:"clear_subscription_charges,omitempty" jsonschema:"true = remove the variation's number of charges so it inherits from the product again"`
 }
 
 // updateProductVariation edits ONE variation (issue #623). A cleared cycle field
@@ -226,22 +275,22 @@ func (s *Server) updateProductVariation(
 	ctx context.Context, _ *mcp.CallToolRequest, in updateVariationIn,
 ) (*mcp.CallToolResult, variationOut, error) {
 	if in.ProductID == "" || in.VariationID == "" {
-		return nil, variationOut{}, fmt.Errorf("product_id dan variation_id wajib")
+		return nil, variationOut{}, fmt.Errorf("product_id and variation_id are required")
 	}
 	if s.deps.ProductVariations == nil {
-		return nil, variationOut{}, fmt.Errorf("variasi produk tidak tersedia")
+		return nil, variationOut{}, fmt.Errorf("product variations not available")
 	}
 	if _, err := s.requireProductWrite(ctx, in.ProductID); err != nil {
 		return nil, variationOut{}, err
 	}
 	if in.Name != nil && *in.Name == "" {
-		return nil, variationOut{}, fmt.Errorf("nama variasi tidak boleh kosong")
+		return nil, variationOut{}, fmt.Errorf("variation name cannot be empty")
 	}
 	if in.PriceSen != nil && *in.PriceSen < 0 {
-		return nil, variationOut{}, fmt.Errorf("variation price_sen mesti >= 0")
+		return nil, variationOut{}, fmt.Errorf("variation price_sen must be >= 0")
 	}
 	if in.Stock != nil && *in.Stock < 0 {
-		return nil, variationOut{}, fmt.Errorf("variation stok mesti >= 0")
+		return nil, variationOut{}, fmt.Errorf("variation stock must be >= 0")
 	}
 	if in.Images != nil && !urlguard.ValidList(*in.Images) {
 		return nil, variationOut{}, fmt.Errorf("%s", urlguard.InvalidMessage("variations[].images"))
@@ -249,13 +298,13 @@ func (s *Server) updateProductVariation(
 	// Issue #623: an unknown period is rejected, not silently dropped.
 	if in.BillingPeriod != nil && !in.ClearBillingPeriod &&
 		*in.BillingPeriod != "" && *in.BillingPeriod != "month" && *in.BillingPeriod != "year" {
-		return nil, variationOut{}, fmt.Errorf("variation billing_period mesti month|year")
+		return nil, variationOut{}, fmt.Errorf("variation billing_period must be month|year")
 	}
 	if in.TrialDays != nil && *in.TrialDays < 0 {
-		return nil, variationOut{}, fmt.Errorf("variation trial_days mesti >= 0")
+		return nil, variationOut{}, fmt.Errorf("variation trial_days must be >= 0")
 	}
 	if in.SubscriptionCharges != nil && *in.SubscriptionCharges < 1 {
-		return nil, variationOut{}, fmt.Errorf("variation subscription_charges mesti >= 1")
+		return nil, variationOut{}, fmt.Errorf("variation subscription_charges must be >= 1")
 	}
 	if err := s.deps.ProductVariations.Update(ctx, in.ProductID, in.VariationID,
 		in.Name, in.PriceSen, &in.Stock, in.Images, nil,
@@ -263,7 +312,7 @@ func (s *Server) updateProductVariation(
 		in.TrialDays, in.ClearTrialDays,
 		in.SubscriptionCharges, in.ClearSubscriptionCharges); err != nil {
 		if err == dbstore.ErrVariationNotFound {
-			return nil, variationOut{}, fmt.Errorf("variasi tidak dijumpai untuk produk ini")
+			return nil, variationOut{}, fmt.Errorf("variation not found for this product")
 		}
 		return nil, variationOut{}, fmt.Errorf("db: %w", err)
 	}
@@ -276,8 +325,8 @@ func (s *Server) updateProductVariation(
 
 // deleteVariationIn is the input for delete_product_variation.
 type deleteVariationIn struct {
-	ProductID   string `json:"product_id" jsonschema:"ID produk"`
-	VariationID string `json:"variation_id" jsonschema:"ID variasi"`
+	ProductID   string `json:"product_id" jsonschema:"Product ID"`
+	VariationID string `json:"variation_id" jsonschema:"Variation ID"`
 }
 
 // deleteProductVariation removes ONE variation from a product (issue #623),
@@ -288,17 +337,17 @@ func (s *Server) deleteProductVariation(
 	ctx context.Context, _ *mcp.CallToolRequest, in deleteVariationIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if in.ProductID == "" || in.VariationID == "" {
-		return nil, nil, fmt.Errorf("product_id dan variation_id wajib")
+		return nil, nil, fmt.Errorf("product_id and variation_id are required")
 	}
 	if s.deps.ProductVariations == nil {
-		return nil, nil, fmt.Errorf("variasi produk tidak tersedia")
+		return nil, nil, fmt.Errorf("product variations not available")
 	}
 	if _, err := s.requireProductWrite(ctx, in.ProductID); err != nil {
 		return nil, nil, err
 	}
 	if err := s.deps.ProductVariations.Delete(ctx, in.ProductID, in.VariationID); err != nil {
 		if err == dbstore.ErrVariationNotFound {
-			return nil, nil, fmt.Errorf("variasi tidak dijumpai untuk produk ini")
+			return nil, nil, fmt.Errorf("variation not found for this product")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -372,7 +421,7 @@ func chipMappingFromConfig(f *dbstore.Form) map[string]string {
 
 // getFormChipMappingIn is the input for get_form_chip_mapping (issue #186).
 type getFormChipMappingIn struct {
-	FormID string `json:"form_id" jsonschema:"ID borang"`
+	FormID string `json:"form_id" jsonschema:"Form ID"`
 }
 
 // getFormChipMapping returns the form's merchant-configured CHIP field
@@ -383,10 +432,10 @@ func (s *Server) getFormChipMapping(
 	ctx context.Context, _ *mcp.CallToolRequest, in getFormChipMappingIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	if in.FormID == "" {
-		return nil, nil, errors.New("form_id wajib")
+		return nil, nil, errors.New("form_id is required")
 	}
 	acc, err := s.resolveFormAccount(ctx, in.FormID)
 	if err != nil {
@@ -394,7 +443,7 @@ func (s *Server) getFormChipMapping(
 	}
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	mapping := chipMappingFromConfig(f)
 	if mapping == nil {
@@ -405,8 +454,8 @@ func (s *Server) getFormChipMapping(
 
 // setFormChipMappingIn is the input for set_form_chip_mapping (issue #186).
 type setFormChipMappingIn struct {
-	FormID  string            `json:"form_id" jsonschema:"ID borang"`
-	Mapping map[string]string `json:"mapping" jsonschema:"Peta medan CHIP → id blok borang, cth {\"full_name\":\"block_abc\",\"email\":\"block_def\"}. Kosong = guna lalai (name→full_name, email→email, phone→phone)."`
+	FormID  string            `json:"form_id" jsonschema:"Form ID"`
+	Mapping map[string]string `json:"mapping" jsonschema:"Map of CHIP fields → form block ids, e.g. {\"full_name\":\"block_abc\",\"email\":\"block_def\"}. Empty = use defaults (name→full_name, email→email, phone→phone)."`
 }
 
 // setFormChipMapping stores the form's CHIP field mapping in its config
@@ -415,7 +464,7 @@ func (s *Server) setFormChipMapping(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormChipMappingIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if in.FormID == "" {
-		return nil, nil, errors.New("form_id wajib")
+		return nil, nil, errors.New("form_id is required")
 	}
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
@@ -423,7 +472,7 @@ func (s *Server) setFormChipMapping(
 	}
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	cfg := orEmptyMap(f.Config)
 	if in.Mapping == nil || len(in.Mapping) == 0 {
@@ -438,7 +487,7 @@ func (s *Server) setFormChipMapping(
 }
 
 type upsertFormIn struct {
-	FormID string `json:"form_id,omitempty" jsonschema:"Kosong = borang baru; isi = kemaskini"`
+	FormID string `json:"form_id,omitempty" jsonschema:"Empty = new form; filled = update"`
 	// Card t_186b675c: slug MUST carry `omitempty`. The schema generator treats
 	// every field without it as a REQUIRED property, and the schema is enforced
 	// BEFORE the handler runs — so `json:"slug"` made the tool's own description
@@ -450,36 +499,36 @@ type upsertFormIn struct {
 	// description promises — an omitted slug auto-generates one on create
 	// (issue #176) and keeps the stored one on update — so the three now agree.
 	// Pinned in both directions by upsert_form_slug_optional_test.go.
-	Slug   string         `json:"slug,omitempty" jsonschema:"Slug URL unik (pilihan): kosong = jana automatik pada cipta, kekalkan slug sedia ada pada kemaskini. a-z, 0-9, sengkang; 1-40 aksara."`
-	Title  string         `json:"title" jsonschema:"Tajuk borang"`
-	Config map[string]any `json:"config,omitempty" jsonschema:"Block config — ambil contoh dari get_form"`
+	Slug   string         `json:"slug,omitempty" jsonschema:"Unique URL slug (optional): empty = generate automatically on create, keep the existing slug on update. a-z, 0-9, hyphens; 1-40 characters; not a name JomForm reserves for itself (login, api, docs, privacy, …)."`
+	Title  string         `json:"title" jsonschema:"Form title"`
+	Config map[string]any `json:"config,omitempty" jsonschema:"Block config — take an example from get_form"`
 	// Issue #254: optional custom styling/theme (colors, fonts, logo, layout,
 	// spacing, custom_css, custom_js). Omit to leave unchanged; pass {} to clear.
-	Theme map[string]any `json:"theme,omitempty" jsonschema:"Gaya/branding tersuai (pilihan): primary, background, text, card_background, card_border_radius, font_family, logo_url, layout, spacing, custom_css, custom_js (JS tersuai — dikawal pemilik + diimbas)"`
+	Theme map[string]any `json:"theme,omitempty" jsonschema:"Custom style/branding (optional): primary, background, text, card_background, card_border_radius, font_family, logo_url, layout, spacing, custom_css, custom_js (custom JS — owner-controlled + scanned)"`
 	// Issue #207: form restrictions (schedule + entry limit). Omit to leave
 	// unchanged; pass explicit nulls to clear.
-	StartAt        *time.Time `json:"start_at,omitempty" jsonschema:"Masa mula jadual (kosong = tiada)"`
-	EndAt          *time.Time `json:"end_at,omitempty" jsonschema:"Masa tamat jadual (kosong = tiada)"`
-	EntryLimit     *int       `json:"entry_limit,omitempty" jsonschema:"Had penyertaan (kosong = tiada)"`
-	PendingMessage string     `json:"pending_message,omitempty" jsonschema:"Mesej sebelum mula (kosong = lalai)"`
-	ExpiredMessage string     `json:"expired_message,omitempty" jsonschema:"Mesej selepas tamat (kosong = lalai)"`
-	LimitMessage   string     `json:"limit_message,omitempty" jsonschema:"Mesej had tercapai (kosong = lalai)"`
+	StartAt        *time.Time `json:"start_at,omitempty" jsonschema:"Schedule start time (empty = none)"`
+	EndAt          *time.Time `json:"end_at,omitempty" jsonschema:"Schedule end time (empty = none)"`
+	EntryLimit     *int       `json:"entry_limit,omitempty" jsonschema:"Entry limit (empty = none)"`
+	PendingMessage string     `json:"pending_message,omitempty" jsonschema:"Message before start (empty = default)"`
+	ExpiredMessage string     `json:"expired_message,omitempty" jsonschema:"Message after end (empty = default)"`
+	LimitMessage   string     `json:"limit_message,omitempty" jsonschema:"Limit-reached message (empty = default)"`
 	// Issue #208: per-form CHIP feeds (multiple, with conditional logic).
 	// Omit to leave unchanged; pass an empty array to clear all feeds.
-	ChipFeeds []chipFeedIn `json:"chip_feeds,omitempty" jsonschema:"Senarai feed CHIP borang. Feed tanpa condition = lalai (sentiasa padan). Feed pertama yang padan dipakai."`
+	ChipFeeds []chipFeedIn `json:"chip_feeds,omitempty" jsonschema:"List of form CHIP feeds. A feed without a condition = default (always matches). The first matching feed is used."`
 	// Issue #193: per-form notification rules. Omit to leave unchanged; pass
 	// an explicit list to replace the form's notifications wholesale.
-	Notifications []notificationIn `json:"notifications,omitempty" jsonschema:"Peraturan notifikasi emel (ganti semua bila diisi)"`
+	Notifications []notificationIn `json:"notifications,omitempty" jsonschema:"Email notification rules (replace all when provided)"`
 	// Issue #179: form confirmations (Gravity-Forms-style). Omit to leave
 	// unchanged; pass an empty array to reset to just the default.
-	Confirmations []confirmationIn `json:"confirmations,omitempty" jsonschema:"Pengesahan borang (ganti semua; lalai sentiasa dikekalkan)"`
+	Confirmations []confirmationIn `json:"confirmations,omitempty" jsonschema:"Form validation (replace all; defaults are always kept)"`
 	// Issue #255: fully-custom HTML response-only form. When set, the form
 	// becomes a response-mode custom form: the agent-authored HTML body is
 	// rendered in a sandboxed iframe (CSP + sanitized) and only the
 	// registered custom_fields are recorded on submit. Omit to leave
 	// unchanged; pass an empty string to clear the custom form.
-	CustomHTML   string             `json:"custom_html,omitempty" jsonschema:"HTML badan borang tersuai (response-only, sandboxed iframe). Kosong = buang mod tersuai."`
-	CustomFields []customform.Field `json:"custom_fields,omitempty" jsonschema:"Kontrak pendaftaran medan: [{field_id, type, label, required, validation}]. Input HTML mesti bawa field_id sebagai name. type=url menerima mana-mana URL mutlak yang diterima input[type=url] pelayar (https://, ftp://, mailto:), bukan http(s) sahaja; skema skrip (javascript:, data:, vbscript:) ditolak."`
+	CustomHTML   string             `json:"custom_html,omitempty" jsonschema:"Custom form body HTML (response-only, sandboxed iframe). Empty = remove custom mode."`
+	CustomFields []customform.Field `json:"custom_fields,omitempty" jsonschema:"Field registration contract: [{field_id, type, label, required, validation}]. The HTML input must carry field_id as its name. type=url accepts any absolute URL the browser's input[type=url] accepts (https://, ftp://, mailto:), not http(s) only; script schemes (javascript:, data:, vbscript:) are rejected."`
 }
 
 func (s *Server) upsertForm(
@@ -495,6 +544,24 @@ func (s *Server) upsertForm(
 		if err != nil {
 			return nil, nil, err
 		}
+		// Card t_7546eda5: an account with NO live workspace cannot mint a form.
+		//
+		// The tool used to store &dbstore.Form{AccountID: acc, …} with no
+		// workspace check, and `accounts.workspace_id` is nullable (a signup
+		// creates an account and no workspace, #718): the
+		// forms_sync_workspace_id trigger (000045) copied the NULL onto the row,
+		// the form could be PUBLISHED, and it was then 404 at every address
+		// forever — the same orphan POST /v1/rest/forms refuses since
+		// t_6c0badbe, reached through the other door into the same store.
+		//
+		// Only the CREATE half is gated: an update names an existing form, so it
+		// mints nothing. The refusal is the REST door's sentence and therefore
+		// its `workspace.required` machine code (httpapi's error-code table keys
+		// that message; TestWorkspaceRequiredIsOneSentenceOnBothDoors pins both
+		// halves), so the two write paths cannot disagree about this state.
+		if err := s.requireLiveWorkspace(ctx, acc); err != nil {
+			return nil, nil, err
+		}
 	} else {
 		acc, err = s.requireFormWrite(ctx, in.FormID)
 		if err != nil {
@@ -502,13 +569,13 @@ func (s *Server) upsertForm(
 		}
 	}
 	if in.Title == "" {
-		return nil, nil, errors.New("title wajib")
+		return nil, nil, errors.New("title is required")
 	}
 	if in.StartAt != nil && in.EndAt != nil && in.EndAt.Before(*in.StartAt) {
-		return nil, nil, errors.New("tarikh tamat mesti selepas tarikh mula")
+		return nil, nil, errors.New("end date must be after start date")
 	}
 	if in.EntryLimit != nil && *in.EntryLimit < 0 {
-		return nil, nil, errors.New("had penyertaan tidak sah")
+		return nil, nil, errors.New("invalid entry limit")
 	}
 	// Issue #501: upsert_form takes the config and theme maps verbatim from
 	// the agent. The builder image-block src (config.blocks[].src), the
@@ -638,7 +705,7 @@ func (s *Server) upsertForm(
 	if in.CustomHTML != "" || in.CustomFields != nil {
 		existing, gerr := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 		if gerr != nil {
-			return nil, nil, errors.New("borang tidak dijumpai")
+			return nil, nil, errors.New("form not found")
 		}
 		merged := orEmptyMap(existing.Config)
 		if err := applyCustomFormConfig(merged, in.CustomHTML, in.CustomFields); err != nil {
@@ -698,7 +765,7 @@ func (s *Server) upsertForm(
 			return nil, nil, err
 		}
 	}
-	// The title is non-empty here (the "title wajib" refusal above), and
+	// The title is non-empty here (the "title is required" refusal above), and
 	// Forms.Update keeps the stored value for an empty one, so an upsert can
 	// never blank a form's title (card t_0b7980f5).
 	if err := s.deps.Forms.Update(ctx, acc, in.FormID, in.Title, in.Config, in.Theme); err != nil {
@@ -749,11 +816,11 @@ func (s *Server) upsertForm(
 // and existing rules not in the list are deleted.
 func (s *Server) applyFormNotifications(ctx context.Context, formID string, in []notificationIn) error {
 	if s.deps.Notifications == nil {
-		return errors.New("notifications tidak tersedia")
+		return errors.New("notifications not available")
 	}
 	for _, n := range in {
 		if !validNotificationEvent(n.Event) {
-			return errors.New("event tidak sah: " + n.Event)
+			return errors.New("invalid event: " + n.Event)
 		}
 	}
 	existing, err := s.deps.Notifications.ListByForm(ctx, formID)
@@ -797,10 +864,10 @@ func (s *Server) applyConfirmations(ctx context.Context, formID string, in []con
 	confs := make([]*dbstore.Confirmation, 0, len(in))
 	for _, c := range in {
 		if strings.TrimSpace(c.Name) == "" {
-			return errors.New("nama pengesahan wajib")
+			return errors.New("confirmation name is required")
 		}
 		if c.Type != dbstore.ConfirmationTypeMessage && c.Type != dbstore.ConfirmationTypeRedirect {
-			return errors.New("jenis pengesahan tidak sah")
+			return errors.New("invalid confirmation type")
 		}
 		if c.Type == dbstore.ConfirmationTypeRedirect {
 			// Issue #549: the ONE shared URL rule (urlguard), not a hand-rolled
@@ -848,30 +915,11 @@ func applyCustomFormConfig(cfg map[string]any, html string, fields []customform.
 }
 
 // uniqueFormSlug generates a URL-safe, per-workspace-unique slug for a new form
-// (issue #176). Prefers a slugified title, falls back to a random token, and
-// appends a random suffix until the slug is free.
+// (issue #176). The derivation and the uniqueness loop live in
+// dbstore.FormStore.UniqueSlug — ONE generator for both create doors (card
+// t_f76f81eb); this wrapper only keeps the call sites stable.
 func (s *Server) uniqueFormSlug(ctx context.Context, accountID, title string) string {
-	base := strings.ToLower(strings.TrimSpace(title))
-	base = slugUnsafe.ReplaceAllString(base, "-")
-	base = strings.Trim(base, "-")
-	if base == "" {
-		base = "f-" + randHex(4)
-	}
-	if len(base) > 40 {
-		base = base[:40]
-	}
-	base = strings.Trim(base, "-")
-	if base == "" {
-		base = "f-" + randHex(4)
-	}
-	for i := 0; i < 5; i++ {
-		taken, err := s.deps.Forms.SlugExists(ctx, accountID, base)
-		if err != nil || !taken {
-			return base
-		}
-		base = base + "-" + randHex(2)
-	}
-	return base + "-" + randHex(4)
+	return s.deps.Forms.UniqueSlug(ctx, accountID, title)
 }
 
 // randHex returns n random bytes hex-encoded (lowercase).
@@ -903,19 +951,19 @@ func jsonValid(s string) bool {
 // It states BOTH halves (t_39906c0a): the form cannot take money AND collects
 // nothing — the legacy and block payment layouts both gate submit on a selected
 // product, so `acknowledge=true` is not a way to collect answers.
-const errPublishNeedsAck = "Borang bayaran ini tiada produk — ia tidak boleh menerima bayaran " +
-	"dan tidak mengumpul apa-apa. Tambah produk dahulu, atau hantar acknowledge=true untuk teruskan."
+const errPublishNeedsAck = "This payment form has no products — it cannot accept payment " +
+	"and collects nothing. Add a product first, or send acknowledge=true to continue."
 
 // publishFormIn extends publish_form for the private status (issue #176):
 // status=private requires a password; status=published/draft/unlisted clears it.
 type publishFormIn struct {
-	FormID   string `json:"form_id" jsonschema:"ID borang"`
-	Status   string `json:"status,omitempty" jsonschema:"published (lalai) | private | draft | unlisted"`
-	Password string `json:"password,omitempty" jsonschema:"Kata laluan akses (wajib bila status=private)"`
+	FormID   string `json:"form_id" jsonschema:"Form ID"`
+	Status   string `json:"status,omitempty" jsonschema:"published (default) | private | draft | unlisted"`
+	Password string `json:"password,omitempty" jsonschema:"Access password (required when status=private)"`
 	// Acknowledge accepts the "payment form with nothing to sell" warning. An
 	// agent reading the tool error sees exactly the same refusal the dashboard
 	// does, and re-calls with acknowledge=true to proceed.
-	Acknowledge bool `json:"acknowledge,omitempty" jsonschema:"Sahkan amaran: borang bayaran tanpa produk tetap diterbitkan"`
+	Acknowledge bool `json:"acknowledge,omitempty" jsonschema:"Confirm warning: a payment form without products is still published"`
 }
 
 func (s *Server) publishFormMCP(
@@ -936,7 +984,24 @@ func (s *Server) publishFormMCP(
 	// reading after the write would lose that.
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
+	}
+	// Card t_fadfe9f7: a form cannot go LIVE on an account with no live
+	// workspace. The published row would carry workspace_id NULL (the
+	// forms_sync_workspace_id trigger copies accounts.workspace_id) and every
+	// public serving path resolves a form through its workspace — so the tool
+	// would answer status:published for a page that is 404 at every address
+	// forever (apex /f/<slug> is refused by design, issue #77). Same sentence
+	// and same nil-store tolerance as the CREATE doors (t_7546eda5); the UPDATE
+	// half stays open, and moving the form back to draft stays open, because
+	// that is the remedy for a row that already exists.
+	// A gallery template entering `published` is exempt (t_8b185f34): publishing
+	// it is what puts it in the gallery, which is its address — see
+	// hasGalleryAddress.
+	if dbstore.IsLiveStatus(status) && !hasGalleryAddress(f, status) {
+		if err := s.requireLiveWorkspace(ctx, acc); err != nil {
+			return nil, nil, err
+		}
 	}
 	// Onboarding gap: a payment form with nothing to sell must not go live
 	// silently through MCP either — this is the same rule the REST publish and
@@ -954,7 +1019,7 @@ func (s *Server) publishFormMCP(
 		}
 	case dbstore.FormStatusPrivate:
 		if len(in.Password) < 4 {
-			return nil, nil, errors.New("password mesti sekurang-kurangnya 4 aksara")
+			return nil, nil, errors.New("password must be at least 4 characters")
 		}
 		hash, err := auth.HashPassword(in.Password)
 		if err != nil {
@@ -964,7 +1029,7 @@ func (s *Server) publishFormMCP(
 			return nil, nil, err
 		}
 	default:
-		return nil, nil, errors.New("status mesti published|private|draft")
+		return nil, nil, errors.New("status must be published|private|draft")
 	}
 	// THE EDGE: the row is written above, so a card the CDN cached while the form
 	// was published/unlisted is dropped here, in the same call (see
@@ -979,8 +1044,8 @@ func (s *Server) publishFormMCP(
 
 // setFormPasswordIn is the input for set_form_password (issue #176).
 type setFormPasswordIn struct {
-	FormID   string `json:"form_id" jsonschema:"ID borang"`
-	Password string `json:"password" jsonschema:"Kata laluan akses baharu (kosong = buang kata laluan)"`
+	FormID   string `json:"form_id" jsonschema:"Form ID"`
+	Password string `json:"password" jsonschema:"New access password (empty = remove password)"`
 }
 
 // setFormPassword stores (or clears) a private form's access password without
@@ -996,7 +1061,7 @@ func (s *Server) setFormPassword(
 	hash := ""
 	if in.Password != "" {
 		if len(in.Password) < 4 {
-			return nil, nil, errors.New("password mesti sekurang-kurangnya 4 aksara")
+			return nil, nil, errors.New("password must be at least 4 characters")
 		}
 		hash, err = auth.HashPassword(in.Password)
 		if err != nil {
@@ -1019,7 +1084,7 @@ func (s *Server) deleteFormMCP(
 	// The status it is LEAVING decides whether the CDN holds a public card for it.
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	if err := s.deps.Forms.SetStatus(ctx, acc, in.FormID, dbstore.FormStatusDraft); err != nil {
 		return nil, nil, err
@@ -1045,7 +1110,7 @@ func (s *Server) deleteFormMCPSoft(
 	// deleted_at IS NULL), so its cached card has to leave the edge with it.
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	if err := s.deps.Forms.SoftDelete(ctx, acc, in.FormID); err != nil {
 		return nil, nil, err
@@ -1064,30 +1129,30 @@ func (s *Server) deleteFormMCPSoft(
 // and it is duplicated as a literal here because httpapi imports this package, so
 // mcpsrv cannot import that constant back — httpapi's
 // TestBulkSkipReasonIsOneSentenceOnBothDoors pins the two equal instead.
-const BulkGallerySkippedReason = "template perlu category dan satu blok description (Section atau text) sebelum diterbitkan ke galeri"
+const BulkGallerySkippedReason = "a template needs a category and one description block (Section or text) before it can be published to the gallery"
 
 // bulkFormsMCP mirrors POST /v1/rest/forms/bulk: publish|draft|delete over
 // many ids in one call (dedup, ≤500), returning how many actually changed.
 type bulkFormsIn struct {
 	Action string   `json:"action" jsonschema:"publish | draft | delete"`
-	IDs    []string `json:"ids" jsonschema:"Senarai form id (maks 500)"`
+	IDs    []string `json:"ids" jsonschema:"List of form ids (max 500)"`
 	// Acknowledge accepts the "payment form with nothing to sell" warning for a
 	// bulk publish (see publish_form / dbstore.PublishNeedsAck). Without it the
 	// ids that cannot take money are withheld and reported instead.
-	Acknowledge bool `json:"acknowledge,omitempty" jsonschema:"Sahkan amaran: borang bayaran tanpa produk tetap diterbitkan"`
+	Acknowledge bool `json:"acknowledge,omitempty" jsonschema:"Confirm warning: a payment form without products is still published"`
 }
 
 func (s *Server) bulkFormsMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in bulkFormsIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
 	if in.Action != "publish" && in.Action != "draft" && in.Action != "delete" {
-		return nil, nil, errors.New("action mesti publish|draft|delete")
+		return nil, nil, errors.New("action must be publish|draft|delete")
 	}
 	if len(in.IDs) == 0 {
-		return nil, nil, errors.New("ids wajib")
+		return nil, nil, errors.New("ids is required")
 	}
 	if len(in.IDs) > 500 {
-		return nil, nil, errors.New("ids terlalu banyak (maks 500)")
+		return nil, nil, errors.New("too many ids (max 500)")
 	}
 	// Issue #307: a user-level agent may bulk-operate across all of their
 	// workspaces, but only up to their role in each. So we resolve each form's
@@ -1103,7 +1168,7 @@ func (s *Server) bulkFormsMCP(
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
-		return nil, nil, errors.New("ids mesti diisi")
+		return nil, nil, errors.New("ids must not be empty")
 	}
 	var updated int64
 	// Onboarding gap: ids the bulk publish would have flipped live with nothing
@@ -1141,6 +1206,30 @@ func (s *Server) bulkFormsMCP(
 		byAccount := make(map[string][]string, len(targets))
 		for _, t := range targets {
 			byAccount[t.acc] = append(byAccount[t.acc], t.id)
+		}
+		// Card t_fadfe9f7: the workspace precondition of publish_form applies
+		// to the bulk door too, or a bulk publish is the way around it. One
+		// account without a live workspace refuses the WHOLE call before any
+		// row is written: those ids would otherwise be reported `updated` and
+		// be 404 at every address forever. A bulk call normally spans one
+		// account (an API key is pinned to exactly that account), so this is
+		// the same refusal the single tool gives, not a partial batch.
+		//
+		// Exception (card t_8b185f34): a batch made ONLY of gallery templates
+		// has an address — the gallery — so that account is exempt, exactly
+		// like publish_form. One ordinary form in the batch puts the account
+		// back under the gate, because that row would go live with no address.
+		for acc, accIDs := range byAccount {
+			onlyTemplates, terr := s.deps.Forms.AllGalleryTemplates(ctx, acc, accIDs)
+			if terr != nil {
+				return nil, nil, terr
+			}
+			if onlyTemplates {
+				continue
+			}
+			if werr := s.requireLiveWorkspace(ctx, acc); werr != nil {
+				return nil, nil, werr
+			}
 		}
 		for acc, accIDs := range byAccount {
 			// BlockedGalleryTemplates is account-scoped, which is why the batch
@@ -1233,8 +1322,8 @@ func (s *Server) bulkFormsMCP(
 	}
 	if len(needsProducts) > 0 {
 		out["needs_products"] = needsProducts
-		out["needs_products_reason"] = "borang bayaran tanpa produk tidak diterbitkan — " +
-			"ia tidak mengumpul apa-apa; tambah produk dahulu, atau hantar acknowledge=true"
+		out["needs_products_reason"] = "a payment form without products is not published — " +
+			"it collects nothing; add a product first, or send acknowledge=true"
 	}
 	return nil, out, nil
 }
@@ -1242,7 +1331,7 @@ func (s *Server) bulkFormsMCP(
 // delete product alias to archive
 func (s *Server) archiveProductMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in struct {
-		ProductID string `json:"product_id" jsonschema:"ID produk"`
+		ProductID string `json:"product_id" jsonschema:"Product ID"`
 	},
 ) (*mcp.CallToolResult, map[string]string, error) {
 	// Issue #307: resolve + RBAC-gate the owning account across the user's workspaces.
@@ -1295,7 +1384,7 @@ func (s *Server) listDeletedProducts(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
 ) (*mcp.CallToolResult, *listOutput[trashedProductOut], error) {
 	if s.deps.Products == nil {
-		return nil, nil, errors.New("products tidak tersedia")
+		return nil, nil, errors.New("products not available")
 	}
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
@@ -1340,7 +1429,7 @@ func (s *Server) requireTrashedProductWrite(ctx context.Context, productID strin
 		return "", err
 	}
 	if s.deps.Products == nil {
-		return "", errors.New("products tidak tersedia")
+		return "", errors.New("products not available")
 	}
 	acc, err := s.resolveEntityAccount(ctx, func(acc string) error {
 		_, err := s.deps.Products.GetTrashed(ctx, acc, productID)
@@ -1400,8 +1489,8 @@ func (s *Server) purgeProductMCP(
 	if !textutil.SameTypedValue(in.ConfirmName, p.Name) {
 		return nil, map[string]any{
 			"status": "refused",
-			"error": "taip nama produk untuk sahkan pemadaman kekal (produk: " + p.Name + "). " +
-				"Pemadaman kekal tidak boleh dibatalkan.",
+			"error": "type the product name to confirm the permanent deletion (product: " + p.Name + "). " +
+				"Permanent deletion cannot be undone.",
 			"product_id": in.ProductID, "name": p.Name,
 		}, nil
 	}
@@ -1411,16 +1500,16 @@ func (s *Server) purgeProductMCP(
 			n, _ := s.deps.Products.CountSalesByProduct(ctx, acc, in.ProductID)
 			return nil, map[string]any{
 				"status": "refused",
-				"error": "produk ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan " +
-					"dengan memadam produk. Ia kekal dalam tong sampah.",
+				"error": "this product has sales — sales history cannot be destroyed " +
+					"by deleting the product. It stays in the Trash.",
 				"product_id": in.ProductID, "sales_count": n,
 			}, nil
 		case errors.Is(err, dbstore.ErrProductHasSubscriptions):
 			n, _ := s.deps.Products.CountSubscriptionsByProduct(ctx, acc, in.ProductID)
 			return nil, map[string]any{
 				"status": "refused",
-				"error": "produk ini masih dirujuk subscription — batalkan atau pindahkan " +
-					"langganan itu dahulu. Ia kekal dalam tong sampah.",
+				"error": "this product is still referenced by a subscription — cancel or move " +
+					"that subscription first. It stays in the Trash.",
 				"product_id": in.ProductID, "subscription_count": n,
 			}, nil
 		}
@@ -1435,17 +1524,17 @@ func (s *Server) purgeProductMCP(
 // POST /v1/rest/products/bulk). Issue #307: spans the user's workspaces (up to the
 // caller's role per workspace).
 type bulkProductsIn struct {
-	IDs []string `json:"ids" jsonschema:"Senarai produk id (maks 500)"`
+	IDs []string `json:"ids" jsonschema:"List of product ids (max 500)"`
 }
 
 func (s *Server) bulkProductsMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in bulkProductsIn,
 ) (*mcp.CallToolResult, map[string]any, error) {
 	if len(in.IDs) == 0 {
-		return nil, nil, errors.New("ids wajib")
+		return nil, nil, errors.New("ids is required")
 	}
 	if len(in.IDs) > 500 {
-		return nil, nil, errors.New("ids terlalu banyak (maks 500)")
+		return nil, nil, errors.New("too many ids (max 500)")
 	}
 	seen := make(map[string]struct{}, len(in.IDs))
 	ids := make([]string, 0, len(in.IDs))
@@ -1457,7 +1546,7 @@ func (s *Server) bulkProductsMCP(
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
-		return nil, nil, errors.New("ids mesti diisi")
+		return nil, nil, errors.New("ids must not be empty")
 	}
 	var updated int64
 	for _, id := range ids {
@@ -1507,7 +1596,7 @@ func (s *Server) getFormRestrictions(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, formRestrictionsOut, error) {
 	if s.deps.Forms == nil {
-		return nil, formRestrictionsOut{}, errors.New("forms tidak tersedia")
+		return nil, formRestrictionsOut{}, errors.New("forms not available")
 	}
 	acc, err := s.resolveFormAccount(ctx, in.FormID)
 	if err != nil {
@@ -1515,7 +1604,7 @@ func (s *Server) getFormRestrictions(
 	}
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, formRestrictionsOut{}, errors.New("borang tidak dijumpai")
+		return nil, formRestrictionsOut{}, errors.New("form not found")
 	}
 	return nil, formRestrictionsOut{
 		FormID: f.ID, StartAt: f.StartAt, EndAt: f.EndAt, EntryLimit: f.EntryLimit,
@@ -1525,13 +1614,13 @@ func (s *Server) getFormRestrictions(
 
 // setFormRestrictionsIn is the input for set_form_restrictions.
 type setFormRestrictionsIn struct {
-	FormID         string     `json:"form_id" jsonschema:"ID borang"`
-	StartAt        *time.Time `json:"start_at,omitempty" jsonschema:"Masa mula (kosong = tiada had mula)"`
-	EndAt          *time.Time `json:"end_at,omitempty" jsonschema:"Masa tamat (kosong = tiada had tamat)"`
-	EntryLimit     *int       `json:"entry_limit,omitempty" jsonschema:"Had penyertaan (kosong = tiada had)"`
-	PendingMessage string     `json:"pending_message,omitempty" jsonschema:"Mesej sebelum mula (kosong = lalai)"`
-	ExpiredMessage string     `json:"expired_message,omitempty" jsonschema:"Mesej selepas tamat (kosong = lalai)"`
-	LimitMessage   string     `json:"limit_message,omitempty" jsonschema:"Mesej had tercapai (kosong = lalai)"`
+	FormID         string     `json:"form_id" jsonschema:"Form ID"`
+	StartAt        *time.Time `json:"start_at,omitempty" jsonschema:"Start time (empty = no start limit)"`
+	EndAt          *time.Time `json:"end_at,omitempty" jsonschema:"End time (empty = no end limit)"`
+	EntryLimit     *int       `json:"entry_limit,omitempty" jsonschema:"Entry limit (empty = no limit)"`
+	PendingMessage string     `json:"pending_message,omitempty" jsonschema:"Message before start (empty = default)"`
+	ExpiredMessage string     `json:"expired_message,omitempty" jsonschema:"Message after end (empty = default)"`
+	LimitMessage   string     `json:"limit_message,omitempty" jsonschema:"Limit-reached message (empty = default)"`
 }
 
 // setFormRestrictions saves a form's schedule + entry limit (issue #207).
@@ -1539,17 +1628,17 @@ func (s *Server) setFormRestrictions(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormRestrictionsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if in.FormID == "" {
-		return nil, nil, errors.New("form_id wajib")
+		return nil, nil, errors.New("form_id is required")
 	}
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if in.StartAt != nil && in.EndAt != nil && in.EndAt.Before(*in.StartAt) {
-		return nil, nil, errors.New("tarikh tamat mesti selepas tarikh mula")
+		return nil, nil, errors.New("end date must be after start date")
 	}
 	if in.EntryLimit != nil && *in.EntryLimit < 0 {
-		return nil, nil, errors.New("had penyertaan tidak sah")
+		return nil, nil, errors.New("invalid entry limit")
 	}
 	if err := s.deps.Forms.UpdateRestrictions(ctx, acc, in.FormID,
 		in.StartAt, in.EndAt, in.EntryLimit, in.PendingMessage, in.ExpiredMessage, in.LimitMessage); err != nil {

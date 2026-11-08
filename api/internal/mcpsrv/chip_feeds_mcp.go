@@ -13,22 +13,22 @@ import (
 )
 
 type chipFeedIn struct {
-	ID              string   `json:"id" jsonschema:"ID unik feed (cth feed_1)"`
-	Name            string   `json:"name" jsonschema:"Nama feed"`
-	BrandID         string   `json:"brand_id" jsonschema:"CHIP Brand ID untuk feed ini"`
-	SecretKey       string   `json:"secret_key" jsonschema:"CHIP Secret Key (akan dienkripsi). Kosong pada feed sedia ada = kekalkan kunci lama"`
-	EmailFallback   string   `json:"email_fallback,omitempty" jsonschema:"Fallback emel bila buyer tak bagi emel (one-time saja)"`
-	MethodWhitelist []string `json:"payment_method_whitelist,omitempty" jsonschema:"Senarai kaedah bayaran, kosong = semua"`
+	ID              string   `json:"id" jsonschema:"Unique feed ID (e.g. feed_1)"`
+	Name            string   `json:"name" jsonschema:"Feed name"`
+	BrandID         string   `json:"brand_id" jsonschema:"CHIP Brand ID for this feed"`
+	SecretKey       string   `json:"secret_key" jsonschema:"CHIP Secret Key (will be encrypted). Empty on an existing feed = keep the old key"`
+	EmailFallback   string   `json:"email_fallback,omitempty" jsonschema:"Fallback email when the buyer provides no email (one-time only)"`
+	MethodWhitelist []string `json:"payment_method_whitelist,omitempty" jsonschema:"List of payment methods, empty = all"`
 	Condition       *struct {
-		FieldID string `json:"field_id" jsonschema:"ID blok borang yang dinilai"`
+		FieldID string `json:"field_id" jsonschema:"ID of the form block being evaluated"`
 		Op      string `json:"op" jsonschema:"equals | not_equals | contains | gt | lt | not_empty"`
-		Value   string `json:"value" jsonschema:"Nilai perbandingan"`
-	} `json:"condition,omitempty" jsonschema:"Logik bersyarat. Kosong = feed lalai (sentiasa padan)"`
+		Value   string `json:"value" jsonschema:"Comparison value"`
+	} `json:"condition,omitempty" jsonschema:"Conditional logic. Empty = default feed (always matches)"`
 }
 
 type chipFeedsIn struct {
-	FormID string       `json:"form_id" jsonschema:"ID borang"`
-	Feeds  []chipFeedIn `json:"feeds" jsonschema:"Senarai feed CHIP borang. Feed tanpa condition = lalai (sentiasa padan). Feed pertama yang padan dipakai."`
+	FormID string       `json:"form_id" jsonschema:"Form ID"`
+	Feeds  []chipFeedIn `json:"feeds" jsonschema:"List of the form's CHIP feeds. A feed with no condition = default (always matches). The first matching feed is used."`
 }
 
 type chipFeedOut struct {
@@ -50,7 +50,7 @@ func (s *Server) getFormChipFeedsMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, *listOutput[chipFeedOut], error) {
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	// Issue #307: the form may live in any of the user's workspaces.
 	acc, err := s.resolveFormAccount(ctx, in.FormID)
@@ -120,7 +120,7 @@ func (s *Server) setFormChipFeedsMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, in chipFeedsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if s.deps.Forms == nil || s.decKey == nil {
-		return nil, nil, errors.New("feeds tidak tersedia")
+		return nil, nil, errors.New("feeds not available")
 	}
 	// Issue #307: resolve + RBAC-gate the owning account across the user's workspaces.
 	acc, err := s.requireFormWrite(ctx, in.FormID)

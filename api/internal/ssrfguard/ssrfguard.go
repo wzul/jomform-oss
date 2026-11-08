@@ -71,14 +71,14 @@ func CheckHostname(ctx context.Context, host string) error {
 func ValidateURL(ctx context.Context, raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || !u.IsAbs() {
-		return "", errors.New("url tidak sah")
+		return "", errors.New("invalid url")
 	}
 	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
-		return "", errors.New("url mesti http/https")
+		return "", errors.New("url must be http/https")
 	}
 	host := u.Hostname()
 	if host == "" {
-		return "", errors.New("url mesti ada host")
+		return "", errors.New("url must have a host")
 	}
 	if err := CheckHostname(ctx, host); err != nil {
 		return "", err
@@ -95,14 +95,14 @@ func ValidateURL(ctx context.Context, raw string) (string, error) {
 func PrepareURL(resolver Resolver, raw string) (host string, pin *PinResult, err error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || !u.IsAbs() {
-		return "", nil, errors.New("url tidak sah")
+		return "", nil, errors.New("invalid url")
 	}
 	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
-		return "", nil, errors.New("url mesti http/https")
+		return "", nil, errors.New("url must be http/https")
 	}
 	host = u.Hostname()
 	if host == "" {
-		return "", nil, errors.New("url mesti ada host")
+		return "", nil, errors.New("url must have a host")
 	}
 	pin, err = Pin(resolver, host)
 	if err != nil {

@@ -46,7 +46,7 @@ import (
 // unsupportedBlockTypes maps a builder block type JomForm cannot serve to the
 // reason, so the rejection can say WHY and not only what.
 var unsupportedBlockTypes = map[string]string{
-	"file": "borang tidak boleh mengumpul lampiran: tiada laluan muat naik untuk pembeli",
+	"file": "the form cannot collect attachments: there is no upload path for buyers",
 }
 
 // UnsupportedBlock returns the first block type in config["blocks"] that no
@@ -87,7 +87,7 @@ func UnsupportedBlock(config map[string]any) string {
 
 // UnsupportedBlockMessage is the user-facing rejection for a config carrying a
 // block type no renderer can honour: it NAMES the type (so the merchant knows
-// which block to delete) and says why it cannot be stored. Malay, like every
+// which block to delete) and says why it cannot be stored. English, like every
 // other API validation message in this repo, and the ONE wording used by every
 // write path — REST returns it as the 400 body, MCP as the tool error.
 func UnsupportedBlockMessage(blockType string) string {
@@ -96,7 +96,7 @@ func UnsupportedBlockMessage(blockType string) string {
 	}
 	reason := unsupportedBlockTypes[blockType]
 	if reason == "" {
-		reason = "tiada renderer menyokongnya"
+		reason = "no renderer supports it"
 	}
-	return fmt.Sprintf("blok %s tidak disokong: %s — padam blok itu sebelum menyimpan", blockType, reason)
+	return fmt.Sprintf("block %s is not supported: %s — delete that block before saving", blockType, reason)
 }

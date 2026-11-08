@@ -114,6 +114,13 @@ type menuDOM struct {
 	// pathname is what the page sees as location.pathname — the custom page
 	// posts to location.pathname+'/order'.
 	pathname string
+
+	// reflows records the class list of the element whose layout was read
+	// (`offsetWidth`), one entry per read. Reading layout forces the style flush
+	// a CSS transition needs after a class change, so a guard that cares about
+	// "was there a style flush between these two class mutations" can see it
+	// here (card t_5b61dbaa).
+	reflows []string
 }
 
 // newMenuDOMPage serves a rendered menu and returns a DOM running its script.
@@ -788,6 +795,15 @@ func (d *menuDOM) installHost() {
 			n.AppendChild(&html.Node{Type: html.TextNode, Data: v})
 		}
 	})
+	d.vm.Set("__reflow", func(h int) int {
+		// A layout read (`offsetWidth`) forces the pending style change to be
+		// resolved — which is exactly what a CSS transition needs to see a
+		// "before" value that is not still held by an animation. Recording the
+		// class list at the read lets a guard insist the flush happens BETWEEN
+		// two class mutations (card t_5b61dbaa).
+		d.reflows = append(d.reflows, menuAttr(d.node(h), "class"))
+		return 0
+	})
 	d.vm.Set("__focus", func(h int) { d.focused = d.node(h) })
 	d.vm.Set("__lsGet", func(k string) goja.Value {
 		if v, ok := d.storage[k]; ok {
@@ -909,6 +925,10 @@ const menuDOMShim = `
         }
       },
       style: {},
+      // offsetWidth is a layout read: it is how JS forces a style flush, and a
+      // CSS transition only starts when the "before" value it reads is the
+      // element's own (card t_5b61dbaa).
+      get offsetWidth(){ return __reflow(h); },
       getBoundingClientRect: function(){ return unsupported('getBoundingClientRect'); },
       remove: function(){ unsupported('remove'); },
       cloneNode: function(){ return unsupported('cloneNode'); }

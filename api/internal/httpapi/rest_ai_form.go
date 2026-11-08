@@ -25,23 +25,23 @@ func (h *RESTHandlers) aiGenerateForm(w http.ResponseWriter, r *http.Request, ac
 		return
 	}
 	if h.LLM == nil {
-		writeErr(w, http.StatusServiceUnavailable, "penjanaan AI tidak tersedia")
+		writeErr(w, http.StatusServiceUnavailable, "AI generation is not available")
 		return
 	}
 	var in struct {
 		Prompt string `json:"prompt"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	prompt := strings.TrimSpace(in.Prompt)
 	if prompt == "" {
-		writeErr(w, http.StatusBadRequest, "prompt wajib")
+		writeErr(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
 	if len(prompt) > 2000 {
-		writeErr(w, http.StatusBadRequest, "prompt terlalu panjang (maks 2000 aksara)")
+		writeErr(w, http.StatusBadRequest, "prompt too long (max 2000 characters)")
 		return
 	}
 	raw, err := h.LLM.GenerateFormConfig(r.Context(), formgen.Prompt(prompt))
@@ -49,14 +49,14 @@ func (h *RESTHandlers) aiGenerateForm(w http.ResponseWriter, r *http.Request, ac
 		// A rejected credential means "AI generation is not available" — the
 		// same 503 as the nil-client branch above — rather than a bare 500 that
 		// tells the merchant nothing and hides a deployment problem.
-		respondAIErr(w, r, err, "penjanaan AI tidak tersedia")
+		respondAIErr(w, r, err, "AI generation is not available")
 		return
 	}
 	cfg, err := formgen.Parse(raw)
 	if err != nil {
 		// The model produced something we can't validate — surface it as a
 		// client error so the user can retry with a clearer prompt.
-		writeErr(w, http.StatusUnprocessableEntity, "penjanaan tidak sah: "+err.Error())
+		writeErr(w, http.StatusUnprocessableEntity, "invalid generation: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, cfg)

@@ -3,9 +3,10 @@
 // GET /v1/rest/email-deliveries?form_id=&sale_ref=&event_type=&page=&limit=
 //
 //	Account-scoped, paginated list of email delivery events (delivered /
-//	bounce / complaint / open / click) with email, event type, timestamp,
-//	sale ref and detail. Filterable by form (via the sale's form_id), sale
-//	ref, and event type. Read-only.
+//	bounce / complaint / open / click, plus enqueue_failed — an email that
+//	could not be queued at all and so was never sent, card t_1c4a3f54) with
+//	email, event type, timestamp, sale ref and detail. Filterable by form (via
+//	the sale's form_id), sale ref, and event type. Read-only.
 //
 // The store is nil in bare-mode tests → 503.
 package httpapi
@@ -34,7 +35,7 @@ type restEmailDelivery struct {
 // delivery-event log for the merchant's accounts.
 func (h *RESTHandlers) listEmailDeliveries(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if h.EmailDeliveryEvents == nil {
-		writeErr(w, http.StatusServiceUnavailable, "store penghantaran emel tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the email delivery store is not configured")
 		return
 	}
 	scope, ok := h.scopeOr403(w, r, actx)

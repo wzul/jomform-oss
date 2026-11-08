@@ -131,6 +131,27 @@ reading as "the sidebar rendered no nav glyph spans". Its `ROUTES` table is the
 authority for what is scanned, and every element it measured is printed as a
 `[single-char]` line in the gate's own output.
 
+**It measures a SETTLED paint, not a frame of the entrance (card `t_a4adf2f1`).** The
+dashboard's route container carries `.jf-enter` — an `opacity` fade over
+`--jf-dur-base` (180ms) with `both` fill — and the scan folds the ancestor `opacity`
+chain into the ink. It has to: a *static* `opacity-70` was the defect above. But
+sampling while that fade is still finishing measures a **frame**, and the verdict then
+depends on host load rather than on the tree. Measured: the `/sales` help glyph — 10px
+and `font-semibold`, so not WCAG large text — reddened at `op=0.989814` and 4.42:1 on a
+tree that PASSED on an independent re-run of the same bytes; its settled paint is
+4.5438:1 on `--jf-bg`. So the scan now settles the page's animations **inside its own
+`page.evaluate`**, before it measures anything: it waits (bounded by
+`ANIMATION_SETTLE_TIMEOUT_MS`, 3s) for every animation with a finite end, forces
+whatever is left to its end state at the ceiling, and never waits on or forces an
+infinite one (a `animate-pulse` skeleton has no settled state). Doing it in the same
+evaluate as the measurement is what makes it deterministic — a separate round trip
+leaves a window in which a late-committing route body starts a fresh entrance
+(measured on `/activity`, whose `jf-rise-in` is created ~250ms *after* the sidebar nav
+is on the page). An element that is *still* animating after that settle is marked
+`MID-ANIMATION` in the census line, and the floor verdict names it — it is not itself
+a failure, because compositing ink toward its own surface can only move a ratio
+*toward* 1, so a mid-animation sample can understate contrast but never overstate it.
+
 **What this does NOT cover (stated, not hidden).** Only the routes in that table are
 scanned: a single-character element on any other surface — a dynamic
 `/products/[id]`-style segment, a page that only renders with real data, the
@@ -197,20 +218,49 @@ right-to-left. Measured live on jomform.com v1.18.0 (fresh browser state) by car
 over English prose (h1 "Embed a form on your site", every nav label English), and
 `/legal/privacy` the same.
 
-The rule now lives in **one place**, `web/src/lib/proseSurfaces.ts`: `/docs` and
-`/legal` are the English-only prose surfaces and keep `lang="en"` and LTR
-whatever the visitor's locale is, while every other surface — the Arabic
+The rule now lives in **one place**, `web/src/lib/proseSurfaces.ts`: `/docs`,
+`/legal` and `/brand` are the English-only prose surfaces and keep `lang="en"`
+and LTR whatever the visitor's locale is, while every other surface — the Arabic
 dashboard included — still follows the locale and keeps its RTL. The match is on
 a **segment boundary**, so a future `/docsomething` is not swept in.
+
+`/brand` is the third surface (card `t_4d3691b9`). The public brand-assets page is
+static English prose — h1 "Brand assets", the "Logo mark" / "Downloads" / "Colors"
+/ "Banner" / "Usage" headings, the asset notes, the usage list and the contact
+line — but it was not in the list, so with `jf_lang=ar` the document declared
+Arabic and mirrored right-to-left over that English text. Measured live on a
+production build: pre-fix `lang="ar"` / `dir="rtl"` with the English headings;
+after the fix `lang="en"` / `dir="ltr"` in every state measured (default, `ar`,
+`ms`, `zh`, `ta`), while `/mcp` and `/landing` with `jf_lang=ar` still read
+`lang="ar"` / `dir="rtl"`. The page was declared English rather than translated
+because its prose is English today and a translation is a product decision, not
+a declaration fix.
+
+The page's two images carry **dictionary** ALTs (`brand.logoAlt` /
+`brand.bannerAlt`, five locales — PR #1602), which is a language of PARTS inside
+that now-English document (card `t_e35a44f5`, WCAG 3.1.2). Measured on a
+production build with `jf_lang=ar`, fresh browser state: the document read
+`lang="en"` / `dir="ltr"` while `<img alt="شعار JomForm">` and
+`<img alt="لافتة JomForm">` carried no `lang` and resolved, through the nearest
+declaration, to `"en"` — so a screen reader spoke both with an English voice.
+Both images now spread `ownLangProps(lang)` (`web/src/lib/ownLang.ts`): the
+RESOLVED locale from `useI18n()`, and **nothing** for English, because English is
+the document's own language (the same rule the /docs `T` island follows). The
+unit pin is `web/src/lib/ownLang.test.ts` — it executes the decision and requires
+both call sites; the served-DOM arms are in `web/e2e/a11y-docs-lang.spec.ts`,
+whose `mislabelledArabic` sweep now judges an image's `alt` the same way it
+judges an element's own text. That gap is why the sweep was green on this page
+while both ALTs were undeclared: an alt is an attribute, and the sweep read only
+own text nodes.
 
 Two guards hold it, and both were driven RED on the mutation they exist for:
 
 - `web/src/lib/docsA11y.test.ts` walks the routes **on disk** under
-  `src/app/docs` and `src/app/legal` and fails when one of them is not matched by
-  the rule (a new /legal page or a nested docs route is covered the day it
-  lands), and reads the provider to check the write really is gated on the rule
-  and on the ROUTE — a client-side navigation out of the docs tree must move the
-  declaration back.
+  `src/app/docs`, `src/app/legal` and `src/app/brand` and fails when one of them
+  is not matched by the rule (a new /legal page, a nested docs route or a second
+  /brand page is covered the day it lands), and reads the provider to check the
+  write really is gated on the rule and on the ROUTE — a client-side navigation
+  out of the prose tree must move the declaration back.
 - `web/e2e/a11y-docs-lang.spec.ts` (in the `a11y` gate) drives both states in a
   real browser — fresh, and `jf_lang=ar` — and reads `html` `lang` / `dir` plus
   the computed `direction` out of the live DOM. `dir` is written **only** by that

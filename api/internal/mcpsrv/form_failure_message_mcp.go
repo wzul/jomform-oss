@@ -10,7 +10,7 @@ import (
 
 // getFormFailureMessageIn is the input for get_form_failure_message.
 type getFormFailureMessageIn struct {
-	FormID string `json:"form_id" jsonschema:"ID borang"`
+	FormID string `json:"form_id" jsonschema:"Form ID"`
 }
 
 // getFormFailureMessage reads a form's payment-failed message (issue #393).
@@ -19,7 +19,7 @@ func (s *Server) getFormFailureMessage(
 	ctx context.Context, _ *mcp.CallToolRequest, in getFormFailureMessageIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	acc, err := s.resolveFormAccount(ctx, in.FormID)
 	if err != nil {
@@ -27,17 +27,17 @@ func (s *Server) getFormFailureMessage(
 	}
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	return nil, map[string]string{"form_id": f.ID, "failure_message": f.FailureMessage}, nil
 }
 
 // setFormFailureMessageIn is the input for set_form_failure_message.
 type setFormFailureMessageIn struct {
-	FormID string `json:"form_id" jsonschema:"ID borang"`
+	FormID string `json:"form_id" jsonschema:"Form ID"`
 	// Message is the HTML shown to a buyer when a payment fails. It is
 	// sanitized on render (no XSS). Empty = fall back to the default.
-	Message string `json:"message" jsonschema:"Mesej HTML (disanitasi, tiada XSS) bila pembayaran gagal. Kosong = guna lalai."`
+	Message string `json:"message" jsonschema:"HTML message (sanitised, no XSS) when payment fails. Empty = use default."`
 }
 
 // setFormFailureMessage saves a form's payment-failed message (issue #393).
@@ -45,17 +45,17 @@ func (s *Server) setFormFailureMessage(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormFailureMessageIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	if in.FormID == "" {
-		return nil, nil, errors.New("form_id wajib")
+		return nil, nil, errors.New("form_id is required")
 	}
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if _, err := s.deps.Forms.GetByID(ctx, acc, in.FormID); err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	if err := s.deps.Forms.SetFailureMessage(ctx, acc, in.FormID, in.Message); err != nil {
 		return nil, nil, err

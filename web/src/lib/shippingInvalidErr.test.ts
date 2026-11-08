@@ -65,7 +65,7 @@ const PAGE = readFileSync(
 // names the zone, and must never reach the screen.
 const REFUSAL = {
   code: CODE,
-  error: "kadar penghantaran tidak sah — zon \"West Malaysia\" belum ada kadar",
+  error: "invalid shipping rates — zone \"West Malaysia\" has no rates",
 };
 
 test("the shipping shape-refusal code is mapped to its own sentence", () => {
@@ -89,7 +89,7 @@ test("the sentence names what a shipping save requires, in every locale", () => 
     const rendered = apiErr(REFUSAL, FALLBACK, tIn(lang));
     assert.notEqual(rendered, FALLBACK, `lang=${lang}: a known code rendered the page's fallback`);
     assert.ok(
-      !rendered.includes("kadar penghantaran tidak sah"),
+      !rendered.includes("invalid shipping rates"),
       `lang=${lang}: the API's Malay prose reached the screen: ${JSON.stringify(rendered)}`,
     );
     // The three rules a save has to satisfy. One product term per locale keeps
@@ -153,7 +153,7 @@ test("other refusals from the same save keep the page's generic fallback", () =>
     );
   }
   assert.equal(
-    apiErr({ error: "kadar penghantaran tidak sah — zon \"West\" belum ada kadar" }, FALLBACK, tIn("en")),
+    apiErr({ error: "invalid shipping rates — zone \"West\" has no rates" }, FALLBACK, tIn("en")),
     FALLBACK,
     "a body with no code rendered something other than the page's own sentence",
   );

@@ -45,7 +45,7 @@ func TestRESTTemplateNonArrayBlocksRejected(t *testing.T) {
 			t.Errorf("%s: 400 body does not say what the value should have been: %s", tc.name, body)
 		}
 		// The rejection must NOT be the scheme wording: the caller's object is of
-		// the wrong JSON type, and "mesti bermula dengan https://" would be false.
+		// the wrong JSON type, and "must start with https://" would be false.
 		if strings.Contains(body, "https://") {
 			t.Errorf("%s: 400 body states the https:// scheme rule for a shape violation: %s", tc.name, body)
 		}

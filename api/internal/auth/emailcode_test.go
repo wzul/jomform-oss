@@ -58,7 +58,7 @@ func email2FATestStore(t *testing.T, master []byte) (*Sessions, *Email2FA) {
 	if err != nil {
 		t.Fatalf("derive email code key: %v", err)
 	}
-	s, err := NewSessions(url, WithEmailCodeKey(key))
+	s, err := NewSessions(url, valkeyTestOptions(WithEmailCodeKey(key))...)
 	if err != nil {
 		t.Fatalf("valkey sessions: %v", err)
 	}
@@ -72,7 +72,7 @@ func email2FAUserID(t *testing.T, s *Sessions, label string) string {
 	t.Helper()
 	id := fmt.Sprintf("t-a3f3aca5-%s-%d", label, time.Now().UnixNano())
 	t.Cleanup(func() {
-		_ = s.rdb.Del(context.Background(), email2FaCodeKey(id)).Err()
+		_ = s.rdb.Del(context.Background(), s.Email2FA().codeKeyName(id)).Err()
 	})
 	return id
 }
@@ -113,7 +113,7 @@ func TestEmailCodeStoredValueIsNotTheSha256OfAnySixDigitCode(t *testing.T) {
 	if err := store.Store(ctx, userID, code); err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	stored, err := sess.rdb.Get(ctx, email2FaCodeKey(userID)).Result()
+	stored, err := sess.rdb.Get(ctx, sess.Email2FA().codeKeyName(userID)).Result()
 	if err != nil {
 		t.Fatalf("read stored value: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestEmailCodeStoredValueIsNotTheSha256OfAnySixDigitCode(t *testing.T) {
 		t.Fatalf("stored value %q contains the plaintext code %q", stored, code)
 	}
 	// The window the exposure would have covered is bounded and unchanged.
-	ttl, err := sess.rdb.PTTL(ctx, email2FaCodeKey(userID)).Result()
+	ttl, err := sess.rdb.PTTL(ctx, sess.Email2FA().codeKeyName(userID)).Result()
 	if err != nil {
 		t.Fatalf("pttl: %v", err)
 	}
@@ -170,14 +170,14 @@ func TestEmailCodeStoreAcceptsTheRightCodeAndRejectsOthers(t *testing.T) {
 	if err := store.Consume(ctx, userID, ""); !errors.Is(err, ErrEmail2FAInvalid) {
 		t.Fatalf("empty code err = %v, want ErrEmail2FAInvalid", err)
 	}
-	if _, err := sess.rdb.Get(ctx, email2FaCodeKey(userID)).Result(); err != nil {
+	if _, err := sess.rdb.Get(ctx, sess.Email2FA().codeKeyName(userID)).Result(); err != nil {
 		t.Fatalf("wrong code consumed the stored value: %v", err)
 	}
 	if err := store.Consume(ctx, userID, code); err != nil {
 		t.Fatalf("correct code rejected: %v", err)
 	}
 	// Single-use: the atomic GetDel left nothing behind.
-	if _, err := sess.rdb.Get(ctx, email2FaCodeKey(userID)).Result(); !errors.Is(err, goredis.Nil) {
+	if _, err := sess.rdb.Get(ctx, sess.Email2FA().codeKeyName(userID)).Result(); !errors.Is(err, goredis.Nil) {
 		t.Fatalf("consumed key still present (err=%v), want redis.Nil", err)
 	}
 	if err := store.Consume(ctx, userID, code); !errors.Is(err, ErrEmail2FAInvalid) {
@@ -231,7 +231,7 @@ func TestEmailCodeStoreFailsClosedWithoutAKey(t *testing.T) {
 	sessA, keyed := email2FATestStore(t, testMasterKey(0x50))
 
 	url := os.Getenv("JOMFORM_TEST_VALKEY_URL")
-	keyless, err := NewSessions(url) // the production wiring mistake
+	keyless, err := NewSessions(url, valkeyTestOptions()...) // a store WITHOUT the code key: the production wiring mistake
 	if err != nil {
 		t.Fatalf("valkey sessions: %v", err)
 	}
@@ -246,9 +246,9 @@ func TestEmailCodeStoreFailsClosedWithoutAKey(t *testing.T) {
 	if err := store.Store(ctx, userID, code); !errors.Is(err, ErrEmail2FAKeyMissing) {
 		t.Fatalf("Store without a code key err = %v, want ErrEmail2FAKeyMissing", err)
 	}
-	if _, err := sessA.rdb.Get(ctx, email2FaCodeKey(userID)).Result(); !errors.Is(err, goredis.Nil) {
+	if _, err := sessA.rdb.Get(ctx, sessA.Email2FA().codeKeyName(userID)).Result(); !errors.Is(err, goredis.Nil) {
 		t.Fatalf("Store without a code key still wrote %s (err=%v) — it must write nothing",
-			email2FaCodeKey(userID), err)
+			sessA.Email2FA().codeKeyName(userID), err)
 	}
 	if err := store.Consume(ctx, userID, code); !errors.Is(err, ErrEmail2FAInvalid) {
 		t.Fatalf("Consume without a code key err = %v, want ErrEmail2FAInvalid", err)
@@ -258,13 +258,13 @@ func TestEmailCodeStoreFailsClosedWithoutAKey(t *testing.T) {
 	// accepted by a keyless store. The rule is "no key ⇒ verify nothing", not
 	// "no key ⇒ compare against a keyless digest", which is what a plain
 	// comparison would degrade to.
-	if err := sessA.rdb.Set(ctx, email2FaCodeKey(userID), emailCodeDigest(nil, userID, code), Email2FACodeTTL).Err(); err != nil {
+	if err := sessA.rdb.Set(ctx, sessA.Email2FA().codeKeyName(userID), emailCodeDigest(nil, userID, code), Email2FACodeTTL).Err(); err != nil {
 		t.Fatalf("plant keyless digest: %v", err)
 	}
 	if err := store.Consume(ctx, userID, code); !errors.Is(err, ErrEmail2FAInvalid) {
 		t.Fatalf("keyless store verified a keyless digest (err=%v), want ErrEmail2FAInvalid", err)
 	}
-	_ = sessA.rdb.Del(ctx, email2FaCodeKey(userID)).Err()
+	_ = sessA.rdb.Del(ctx, sessA.Email2FA().codeKeyName(userID)).Err()
 
 	// A keyless store must not accept a value armed by a keyed one either: it
 	// has no key to verify against, so it fails closed rather than open.
@@ -296,16 +296,16 @@ func TestEmailCodeDigestIsBoundToTheAccount(t *testing.T) {
 	if err := store.Store(ctx, attacker, code); err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	lifted, err := sess.rdb.Get(ctx, email2FaCodeKey(attacker)).Result()
+	lifted, err := sess.rdb.Get(ctx, sess.Email2FA().codeKeyName(attacker)).Result()
 	if err != nil {
 		t.Fatalf("read attacker value: %v", err)
 	}
 	// …and copies the digest onto the victim's key with the remaining TTL.
-	ttl, err := sess.rdb.PTTL(ctx, email2FaCodeKey(attacker)).Result()
+	ttl, err := sess.rdb.PTTL(ctx, sess.Email2FA().codeKeyName(attacker)).Result()
 	if err != nil {
 		t.Fatalf("pttl: %v", err)
 	}
-	if err := sess.rdb.Set(ctx, email2FaCodeKey(victim), lifted, ttl).Err(); err != nil {
+	if err := sess.rdb.Set(ctx, sess.Email2FA().codeKeyName(victim), lifted, ttl).Err(); err != nil {
 		t.Fatalf("plant on victim: %v", err)
 	}
 	if err := store.Consume(ctx, victim, code); !errors.Is(err, ErrEmail2FAInvalid) {

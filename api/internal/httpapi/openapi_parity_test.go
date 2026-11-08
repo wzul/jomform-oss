@@ -399,6 +399,22 @@ var classifierGates = []classifierGate{
 			"promise the page's \"any authenticated key (readonly or readwrite)\" — which " +
 			"is exactly the false claim this entry exists to stop.",
 	},
+	{
+		// Card t_d07c8fbb. The write gate PLUS a live workspace for the account:
+		// the three REST doors that mint a form row (createForm and both template
+		// clones) call this one gate, because a form minted for an account with
+		// no workspace is stored with workspace_id NULL and is unreachable once
+		// published. It is a `write` route and no weaker: the write role is the
+		// first thing it applies, so a readonly key is still refused with 403.
+		// It sits last because it is only ever the sole gate of a handler that
+		// also writes — a handler that names it alongside requireWriteRole would
+		// be ambiguous to this table and is reported separately.
+		Name:   "requireFormMint",
+		Access: AccessWrite,
+		Why: "the write gate plus a live workspace for the account — a form minted " +
+			"without one is stored with workspace_id NULL and 404 at every address " +
+			"once published",
+	},
 }
 
 // classifyHandlerAccess returns the access level a handler's own source applies,

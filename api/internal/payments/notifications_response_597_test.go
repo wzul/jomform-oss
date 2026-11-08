@@ -20,12 +20,17 @@ import (
 	"testing"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/emailtext"
 )
 
 // TestResponseDefaultNotificationRendersNoLiteralPlaceholders renders the
 // default body for a real submission and for a sparse one.
 func TestResponseDefaultNotificationRendersNoLiteralPlaceholders(t *testing.T) {
-	_, _, subject, body := dbstore.DefaultNotification(dbstore.FormModeResponse)
+	// The rule a response form gets, resolved the way the sender resolves it: the
+	// stored halves are EMPTY (card t_1768cb11), so the dictionary's template in
+	// the form's language is what actually gets rendered.
+	_, event, storedSubject, storedBody := dbstore.DefaultNotification(dbstore.FormModeResponse)
+	subject, body := notificationMessage(event, emailtext.En, storedSubject, storedBody)
 
 	cases := []struct {
 		name string

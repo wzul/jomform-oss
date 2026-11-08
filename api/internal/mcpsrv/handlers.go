@@ -24,10 +24,17 @@ type productOut struct {
 	Type                string   `json:"type"`
 	BillingPeriod       string   `json:"billing_period,omitempty"`
 	TrialDays           int      `json:"trial_days"`
-	SubscriptionCharges *int     `json:"subscription_charges,omitempty"`                          // nil = infinite
-	ScheduleMode        string   `json:"schedule_mode" jsonschema:"polisi tarikh caj seterusnya"` // round 13c
+	SubscriptionCharges *int     `json:"subscription_charges,omitempty"`                     // nil = infinite
+	ScheduleMode        string   `json:"schedule_mode" jsonschema:"next-charge-date policy"` // round 13c
 	Active              bool     `json:"active"`
 	Stock               *int     `json:"stock,omitempty"`
+	// Card t_06851d88: pay-what-you-want limits (type custom_amount), integer
+	// sen. max_price_sen omitted = no cap; suggested_price_sen omitted = no
+	// pre-filled amount. price_sen on such a product is only the display
+	// fallback — the buyer's validated amount is what is charged.
+	MinPriceSen       int64  `json:"min_price_sen,omitempty"`
+	MaxPriceSen       *int64 `json:"max_price_sen,omitempty"`
+	SuggestedPriceSen *int64 `json:"suggested_price_sen,omitempty"`
 	// Issue #153: variations for variable products (empty for simple products).
 	Variations []variationOut `json:"variations,omitempty"`
 }
@@ -53,6 +60,9 @@ func (s *Server) listProducts(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 			TrialDays: p.TrialDays, Active: p.Active, Stock: p.Stock,
 			SubscriptionCharges: p.SubscriptionCharges,
 			ScheduleMode:        p.ScheduleMode,
+			MinPriceSen:         p.MinPriceSen,
+			MaxPriceSen:         p.MaxPriceSen,
+			SuggestedPriceSen:   p.SuggestedPriceSen,
 		}
 		// Issue #153: include variations for variable products.
 		if s.deps.ProductVariations != nil {
@@ -66,17 +76,23 @@ func (s *Server) listProducts(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 }
 
 type createProductIn struct {
-	Name                string        `json:"name" jsonschema:"nama produk"`
-	Description         string        `json:"description,omitempty" jsonschema:"penerangan produk"`
-	PriceSen            *int64        `json:"price_sen" jsonschema:"harga dalam SEN (RM25.00 = 2500)"`
-	Type                string        `json:"type" jsonschema:"one_time atau subscription"`
-	BillingPeriod       string        `json:"billing_period,omitempty" jsonschema:"month atau year (subscription sahaja)"`
-	TrialDays           int           `json:"trial_days,omitempty" jsonschema:"hari percubaan (subscription)"`
-	Stock               *int          `json:"stock,omitempty" jsonschema:"stok (omit = unlimited)"`
-	Images              []string      `json:"images,omitempty" jsonschema:"gambar (URL mesti https:// — issue #501)"`
-	Variations          []variationIn `json:"variations,omitempty" jsonschema:"variasi produk (name, price_sen, stock, images, sort_order) — kosong = produk simple"`
-	SubscriptionCharges *int          `json:"subscription_charges,omitempty" jsonschema:"bilangan caj (subscription; omit/null = infinite, N = caj N kali)"`
-	ScheduleMode        *string       `json:"schedule_mode,omitempty" jsonschema:"from_payment (lalai) | catch_up | skip_missed"`
+	Name                string        `json:"name" jsonschema:"product name"`
+	Description         string        `json:"description,omitempty" jsonschema:"product description"`
+	PriceSen            *int64        `json:"price_sen" jsonschema:"price in SEN (RM25.00 = 2500). Omit for type custom_amount, whose price is derived from min_price_sen/suggested_price_sen and the buyer's own amount."`
+	Type                string        `json:"type" jsonschema:"one_time, subscription, or custom_amount (pay-what-you-want)"`
+	BillingPeriod       string        `json:"billing_period,omitempty" jsonschema:"month or year (subscription only)"`
+	TrialDays           int           `json:"trial_days,omitempty" jsonschema:"trial days (subscription)"`
+	Stock               *int          `json:"stock,omitempty" jsonschema:"stock (omit = unlimited)"`
+	Images              []string      `json:"images,omitempty" jsonschema:"image (URL must be https:// — issue #501)"`
+	Variations          []variationIn `json:"variations,omitempty" jsonschema:"product variations (name, price_sen, stock, images, sort_order) — empty = simple product"`
+	SubscriptionCharges *int          `json:"subscription_charges,omitempty" jsonschema:"number of charges (subscription; omit/null = infinite, N = charge N times)"`
+	ScheduleMode        *string       `json:"schedule_mode,omitempty" jsonschema:"from_payment (default) | catch_up | skip_missed"`
+	// Card t_06851d88: limits for a pay-what-you-want (custom_amount) product,
+	// integer sen. The buyer types the amount at checkout and the server
+	// validates it against these; nothing on this product is charged as-is.
+	MinPriceSen       *int64 `json:"min_price_sen,omitempty" jsonschema:"custom_amount: smallest accepted amount in SEN (>= 100, RM1.00). Required for type custom_amount, ignored otherwise."`
+	MaxPriceSen       *int64 `json:"max_price_sen,omitempty" jsonschema:"custom_amount: largest accepted amount in SEN. Omit or null = no upper limit."`
+	SuggestedPriceSen *int64 `json:"suggested_price_sen,omitempty" jsonschema:"custom_amount: amount pre-filled in the buyer's field, in SEN. Omit = start empty. Must be within min/max."`
 }
 
 // variationIn is the MCP input shape for one product variation.
@@ -87,16 +103,16 @@ type createProductIn struct {
 // value" and must stay so (pre-filling would silently make the product-level
 // cycle inert for that variation).
 type variationIn struct {
-	Name      string   `json:"name" jsonschema:"nama variasi (cth: Saiz M, Merah)"`
-	PriceSen  *int64   `json:"price_sen" jsonschema:"harga variasi dalam SEN"`
-	Stock     *int     `json:"stock,omitempty" jsonschema:"stok variasi (omit = unlimited)"`
-	Images    []string `json:"images,omitempty" jsonschema:"gambar variasi (URL mesti https:// — issue #501)"`
-	SortOrder int      `json:"sort_order,omitempty" jsonschema:"urutan (0 = ikut senarai)"`
+	Name      string   `json:"name" jsonschema:"variation name (e.g.: Size M, Red)"`
+	PriceSen  *int64   `json:"price_sen" jsonschema:"variation price in SEN"`
+	Stock     *int     `json:"stock,omitempty" jsonschema:"variation stock (omit = unlimited)"`
+	Images    []string `json:"images,omitempty" jsonschema:"variation image (URL must be https:// — issue #501)"`
+	SortOrder int      `json:"sort_order,omitempty" jsonschema:"sort order (0 = follow the list)"`
 	// Issue #623: the variation's own subscription cycle. Omit = inherit the
 	// product's for that field.
-	BillingPeriod       *string `json:"billing_period,omitempty" jsonschema:"kitaran variasi ini: month | year. Omit = ikut produk."`
-	TrialDays           *int    `json:"trial_days,omitempty" jsonschema:"hari percubaan variasi. Omit = ikut produk."`
-	SubscriptionCharges *int    `json:"subscription_charges,omitempty" jsonschema:"bilangan caj variasi (N = caj N kali). Omit = ikut produk."`
+	BillingPeriod       *string `json:"billing_period,omitempty" jsonschema:"billing cycle for this variation: month | year. Omit = follow product."`
+	TrialDays           *int    `json:"trial_days,omitempty" jsonschema:"trial days for the variation. Omit = follow product."`
+	SubscriptionCharges *int    `json:"subscription_charges,omitempty" jsonschema:"number of charges for the variation (N = charge N times). Omit = follow product."`
 }
 
 // validateVariationIn validates one MCP variation (money stays integer sen;
@@ -104,14 +120,14 @@ type variationIn struct {
 // omitted, but validated when present).
 func validateVariationIn(v variationIn) error {
 	if v.Name == "" {
-		return fmt.Errorf("variation name wajib")
+		return fmt.Errorf("variation name is required")
 	}
 	// Issue #551: *int64 so missing/null is a rejection, not a silent 0.
 	if v.PriceSen == nil || *v.PriceSen < 0 {
-		return fmt.Errorf("variation price_sen mesti >= 0")
+		return fmt.Errorf("variation price_sen must be >= 0")
 	}
 	if v.Stock != nil && *v.Stock < 0 {
-		return fmt.Errorf("variation stok mesti >= 0")
+		return fmt.Errorf("variation stock must be >= 0")
 	}
 	if !urlguard.ValidList(v.Images) {
 		return fmt.Errorf("%s", urlguard.InvalidMessage("variations[].images"))
@@ -121,13 +137,13 @@ func validateVariationIn(v variationIn) error {
 	// monthly.
 	if v.BillingPeriod != nil && *v.BillingPeriod != "" &&
 		*v.BillingPeriod != "month" && *v.BillingPeriod != "year" {
-		return fmt.Errorf("variation billing_period mesti month|year")
+		return fmt.Errorf("variation billing_period must be month|year")
 	}
 	if v.TrialDays != nil && *v.TrialDays < 0 {
-		return fmt.Errorf("variation trial_days mesti >= 0")
+		return fmt.Errorf("variation trial_days must be >= 0")
 	}
 	if v.SubscriptionCharges != nil && *v.SubscriptionCharges < 1 {
-		return fmt.Errorf("variation subscription_charges mesti >= 1")
+		return fmt.Errorf("variation subscription_charges must be >= 1")
 	}
 	return nil
 }
@@ -162,17 +178,23 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 	}
 	// Issue #551: price_sen is a POINTER so missing or explicit `null` is rejected
 	// rather than silently decoding to 0 (which created a RM 0.00 product).
-	if in.Name == "" || in.PriceSen == nil || *in.PriceSen < 0 {
-		return nil, productOut{}, fmt.Errorf("nama dan price_sen wajib")
+	//
+	// Card t_06851d88: a custom_amount product has no asking price — it is
+	// derived from the limits below — so the requirement does not apply to it.
+	if in.Name == "" {
+		return nil, productOut{}, fmt.Errorf("name and price_sen are required")
+	}
+	if in.PriceSen != nil && *in.PriceSen < 0 {
+		return nil, productOut{}, fmt.Errorf("price_sen must be >= 0")
 	}
 	if in.SubscriptionCharges != nil && *in.SubscriptionCharges < 1 {
-		return nil, productOut{}, fmt.Errorf("subscription_charges mesti >= 1 (atau null untuk infinite)")
+		return nil, productOut{}, fmt.Errorf("subscription_charges must be >= 1 (or null for infinite)")
 	}
 	// round 13c: schedule mode for the next-charge date.
 	schedMode := payments.ScheduleFromPayment
 	if in.ScheduleMode != nil && *in.ScheduleMode != "" {
 		if !payments.ValidScheduleMode(*in.ScheduleMode) {
-			return nil, productOut{}, fmt.Errorf("schedule_mode tidak sah: %q (from_payment|catch_up|skip_missed)", *in.ScheduleMode)
+			return nil, productOut{}, fmt.Errorf("invalid schedule_mode: %q (from_payment|catch_up|skip_missed)", *in.ScheduleMode)
 		}
 		schedMode = *in.ScheduleMode
 	}
@@ -186,14 +208,18 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 	if pType == "" {
 		pType = dbstore.SaleTypeOneTime
 	}
-	if pType != dbstore.SaleTypeOneTime && pType != dbstore.SaleTypeSubscription {
-		return nil, productOut{}, fmt.Errorf("type mesti one_time|subscription")
+	if pType != dbstore.SaleTypeOneTime && pType != dbstore.SaleTypeSubscription &&
+		pType != dbstore.SaleTypeCustomAmount {
+		return nil, productOut{}, fmt.Errorf("type must be one_time|subscription|custom_amount")
+	}
+	if in.PriceSen == nil && pType != dbstore.SaleTypeCustomAmount {
+		return nil, productOut{}, fmt.Errorf("name and price_sen are required")
 	}
 	period := ""
 	if pType == dbstore.SaleTypeSubscription {
 		period = in.BillingPeriod
 		if period != "month" && period != "year" {
-			return nil, productOut{}, fmt.Errorf("subscription perlu billing_period month|year")
+			return nil, productOut{}, fmt.Errorf("subscription requires billing_period month|year")
 		}
 	}
 	// Validate variations (money stays integer sen; stock nil = unlimited).
@@ -203,11 +229,36 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 			return nil, productOut{}, err
 		}
 	}
+	// Card t_06851d88: a custom_amount product's price is derived, and its
+	// limits are the pay-what-you-want contract — a variation would carry a
+	// fixed price that contradicts it.
+	priceSen := int64(0)
+	if in.PriceSen != nil {
+		priceSen = *in.PriceSen
+	}
+	var minSen int64
+	var maxSen, suggestSen *int64
+	if pType == dbstore.SaleTypeCustomAmount {
+		if in.MinPriceSen == nil {
+			return nil, productOut{}, fmt.Errorf("custom_amount requires min_price_sen (at least 100 sen / RM1.00)")
+		}
+		if len(in.Variations) > 0 {
+			return nil, productOut{}, fmt.Errorf("a custom_amount product cannot have variations")
+		}
+		if msg := payments.ValidateCustomAmountLimits(*in.MinPriceSen, in.MaxPriceSen, in.SuggestedPriceSen); msg != "" {
+			return nil, productOut{}, fmt.Errorf("%s", msg)
+		}
+		minSen, maxSen, suggestSen = *in.MinPriceSen, in.MaxPriceSen, in.SuggestedPriceSen
+		priceSen = payments.CustomAmountDisplayPrice(minSen, suggestSen)
+	} else if in.MinPriceSen != nil || in.MaxPriceSen != nil || in.SuggestedPriceSen != nil {
+		return nil, productOut{}, fmt.Errorf("min_price_sen, max_price_sen and suggested_price_sen apply only to type custom_amount")
+	}
 	p := &dbstore.Product{
 		AccountID: accountID, Name: in.Name, Description: in.Description,
-		PriceSen: *in.PriceSen, Images: in.Images, Type: pType,
+		PriceSen: priceSen, Images: in.Images, Type: pType,
 		BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
 		Stock: in.Stock, SubscriptionCharges: in.SubscriptionCharges, ScheduleMode: schedMode,
+		MinPriceSen: minSen, MaxPriceSen: maxSen, SuggestedPriceSen: suggestSen,
 	}
 	if err := s.deps.Products.Create(ctx, p); err != nil {
 		return nil, productOut{}, fmt.Errorf("db: %w", err)
@@ -222,7 +273,8 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 	out := productOut{ID: p.ID, Name: p.Name, Description: p.Description,
 		Images: p.Images, PriceSen: p.PriceSen, Type: p.Type,
 		BillingPeriod: p.BillingPeriod, TrialDays: p.TrialDays, Active: true,
-		Stock: p.Stock, SubscriptionCharges: p.SubscriptionCharges}
+		Stock: p.Stock, SubscriptionCharges: p.SubscriptionCharges,
+		MinPriceSen: p.MinPriceSen, MaxPriceSen: p.MaxPriceSen, SuggestedPriceSen: p.SuggestedPriceSen}
 	// Issue #153: return the persisted variations so the caller sees them.
 	if s.deps.ProductVariations != nil {
 		if vs, verr := s.deps.ProductVariations.ListByProduct(ctx, p.ID); verr == nil {
@@ -233,15 +285,15 @@ func (s *Server) createProduct(ctx context.Context, _ *mcp.CallToolRequest, in c
 }
 
 type archiveProductIn struct {
-	ProductID string `json:"product_id" jsonschema:"ID produk"`
+	ProductID string `json:"product_id" jsonschema:"Product ID"`
 }
 
 // purgeProductIn confirms a PERMANENT delete of a trashed product. The
 // identifier is the product's NAME, not a slug: products have no slug, so the
 // name is what the caller can name back.
 type purgeProductIn struct {
-	ProductID   string `json:"product_id" jsonschema:"ID produk (mesti dalam tong sampah)"`
-	ConfirmName string `json:"confirm_name,omitempty" jsonschema:"Nama produk itu sendiri, untuk sahkan pemadaman kekal. Salah/tiada = ditolak."`
+	ProductID   string `json:"product_id" jsonschema:"Product ID (must be in trash)"`
+	ConfirmName string `json:"confirm_name,omitempty" jsonschema:"The product's own name, to confirm permanent deletion. Wrong/absent = rejected."`
 }
 
 func (s *Server) archiveProduct(ctx context.Context, _ *mcp.CallToolRequest, in archiveProductIn) (*mcp.CallToolResult, map[string]string, error) {
@@ -298,8 +350,8 @@ type saleOut struct {
 }
 
 type listSalesIn struct {
-	FormID string `json:"form_id,omitempty" jsonschema:"Optional — hadkan kepada jualan borang ini (id dari list_forms/get_form)"`
-	Status string `json:"status,omitempty" jsonschema:"Optional — hadkan kepada status: pending|paid|confirmed|failed|cancelled"`
+	FormID string `json:"form_id,omitempty" jsonschema:"Optional — limit to this form's sales (id from list_forms/get_form)"`
+	Status string `json:"status,omitempty" jsonschema:"Optional — limit to status: pending|paid|confirmed|failed|cancelled"`
 }
 
 // recordScope resolves the ONE sales-read decision for this MCP call: which
@@ -328,7 +380,7 @@ func (s *Server) listSales(ctx context.Context, _ *mcp.CallToolRequest, in listS
 		return nil, nil, err
 	}
 	if s.deps.Sales == nil {
-		return nil, nil, fmt.Errorf("sales tidak tersedia")
+		return nil, nil, fmt.Errorf("sales not available")
 	}
 	// Issue #604 + the unfiltered-read defect: a response-mode form records no
 	// sales — its entries are submissions (issue #171). Reading `sales` for such
@@ -460,7 +512,7 @@ func (s *Server) salesSummary(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 }
 
 type confirmSaleIn struct {
-	RefCode string `json:"ref_code" jsonschema:"kod rujukan jualan"`
+	RefCode string `json:"ref_code" jsonschema:"sale reference code"`
 }
 
 func (s *Server) confirmSale(ctx context.Context, _ *mcp.CallToolRequest, in confirmSaleIn) (*mcp.CallToolResult, map[string]string, error) {
@@ -470,7 +522,7 @@ func (s *Server) confirmSale(ctx context.Context, _ *mcp.CallToolRequest, in con
 	}
 	sale, err := s.deps.Sales.ByRefCode(ctx, in.RefCode)
 	if err != nil || sale.AccountID != acc {
-		return nil, nil, fmt.Errorf("jualan tidak dijumpai")
+		return nil, nil, fmt.Errorf("sale not found")
 	}
 	if err := s.deps.Sales.SetStatus(ctx, sale.ID, dbstore.SaleConfirmed); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -481,7 +533,7 @@ func (s *Server) confirmSale(ctx context.Context, _ *mcp.CallToolRequest, in con
 // ─── Per-sale email status (issue #106) ────────────────────────────────────
 
 type saleEmailStatusIn struct {
-	RefCode string `json:"ref_code" jsonschema:"kod rujukan jualan (dari list_sales)"`
+	RefCode string `json:"ref_code" jsonschema:"sale reference code (from list_sales)"`
 }
 
 type saleEmailEventOut struct {
@@ -508,7 +560,7 @@ func (s *Server) saleEmailStatusMCP(ctx context.Context, _ *mcp.CallToolRequest,
 	}
 	sale, err := s.deps.Sales.ByRefCode(ctx, in.RefCode)
 	if err != nil || sale.AccountID != accountID {
-		return nil, saleEmailStatusOut{}, fmt.Errorf("jualan tidak dijumpai")
+		return nil, saleEmailStatusOut{}, fmt.Errorf("sale not found")
 	}
 	out := saleEmailStatusOut{RefCode: sale.RefCode, Sent: sale.ReceiptMessageID != "", Events: []saleEmailEventOut{}}
 	if s.deps.EmailDeliveryEvents != nil {
@@ -542,9 +594,9 @@ type subscriptionOut struct {
 }
 
 type listSubscriptionsIn struct {
-	Status string `json:"status,omitempty" jsonschema:"Optional — tapis mengikut status: active|past_due|cancelled"`
-	Page   int    `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
+	Status string `json:"status,omitempty" jsonschema:"Optional — filter by status: active|past_due|cancelled"`
+	Page   int    `json:"page,omitempty" jsonschema:"Optional — page (starting at 1)"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"Optional — limit per page (1-100, default 20)"`
 }
 
 func (s *Server) listSubscriptions(ctx context.Context, _ *mcp.CallToolRequest, in listSubscriptionsIn) (*mcp.CallToolResult, *listOutput[subscriptionOut], error) {
@@ -555,7 +607,7 @@ func (s *Server) listSubscriptions(ctx context.Context, _ *mcp.CallToolRequest, 
 	switch in.Status {
 	case "", dbstore.SubActive, dbstore.SubPastDue, dbstore.SubCanceled, dbstore.SubCompleted:
 	default:
-		return nil, nil, fmt.Errorf("status tidak sah")
+		return nil, nil, fmt.Errorf("invalid status")
 	}
 	page, limit := in.Page, in.Limit
 	if page < 1 {
@@ -589,7 +641,7 @@ func (s *Server) listSubscriptions(ctx context.Context, _ *mcp.CallToolRequest, 
 }
 
 type cancelSubIn struct {
-	Email string `json:"email" jsonschema:"emel pelanggan yang ada langganan"`
+	Email string `json:"email" jsonschema:"email of a customer with a subscription"`
 }
 
 func (s *Server) cancelSubscription(ctx context.Context, _ *mcp.CallToolRequest, in cancelSubIn) (*mcp.CallToolResult, map[string]string, error) {
@@ -623,7 +675,7 @@ type accountOut struct {
 func (s *Server) getAccount(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, accountOut, error) {
 	id := IdentityFromContext(ctx)
 	if id == nil {
-		return nil, accountOut{}, fmt.Errorf("token tiada atau tidak sah")
+		return nil, accountOut{}, fmt.Errorf("token missing or invalid")
 	}
 	// Issue #307: for a user-level OAuth token the account is scoped per call
 	// (workspace_id/account_id or the user's first accessible account).
@@ -636,7 +688,7 @@ func (s *Server) getAccount(ctx context.Context, _ *mcp.CallToolRequest, _ empty
 		}
 	}
 	if accountID == "" {
-		return nil, accountOut{}, fmt.Errorf("tiada akaun dalam skop")
+		return nil, accountOut{}, fmt.Errorf("no account in scope")
 	}
 	acc, err := s.deps.Accounts.ByID(ctx, accountID)
 	if err != nil {

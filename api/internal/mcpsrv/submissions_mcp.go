@@ -17,9 +17,9 @@ type submissionOut struct {
 }
 
 type listFormSubmissionsIn struct {
-	FormID string `json:"form_id" jsonschema:"ID borang (dari list_forms/get_form)"`
-	Page   int    `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
+	FormID string `json:"form_id" jsonschema:"Form ID (from list_forms/get_form)"`
+	Page   int    `json:"page,omitempty" jsonschema:"Optional — page (starting at 1)"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"Optional — limit per page (1-100, default 20)"`
 }
 
 // listFormSubmissions returns one page of response-only submissions for a
@@ -27,10 +27,10 @@ type listFormSubmissionsIn struct {
 // any of the user's workspaces (ownership enforced per store query). Read-only.
 func (s *Server) listFormSubmissions(ctx context.Context, _ *mcp.CallToolRequest, in listFormSubmissionsIn) (*mcp.CallToolResult, map[string]any, error) {
 	if s.deps.Submissions == nil {
-		return nil, nil, fmt.Errorf("submissions tidak tersedia")
+		return nil, nil, fmt.Errorf("submissions not available")
 	}
 	if in.FormID == "" {
-		return nil, nil, fmt.Errorf("form_id wajib")
+		return nil, nil, fmt.Errorf("form_id is required")
 	}
 	acc, err := s.resolveFormAccount(ctx, in.FormID)
 	if err != nil {

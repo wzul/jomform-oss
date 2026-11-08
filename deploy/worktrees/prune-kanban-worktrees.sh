@@ -102,6 +102,15 @@
 #       Measured on this host: 15 of 354 pids failed the read and every one was a
 #       zombie, so a blanket "a failed read means keep" would have kept everything
 #       and exited 1 on EVERY run.
+#     * NO ARGV AREA AT ALL (`/proc/<pid>/cmdline` reads ZERO bytes): the task has
+#       already released its address space, so it has NO cwd and never will. A
+#       task is in exactly this state between two steps of do_exit(): exit_mm()
+#       runs BEFORE exit_fs() (which drops the cwd) and before exit_notify()
+#       turns the state into `Z`, and a task blocked in `D` on the way out can sit
+#       in that window for a while. SKIPPED like a zombie — it cannot hold a
+#       worktree — while a REFUSED read on a task that still HAS its memory keeps
+#       its `cmdline`, so that case stays the cannot-judge below, unchanged
+#       (card t_1483975b: measured, 2026-11-03 — see the code comment).
 #     * NO STATE LINE AT ALL: the pid was REAPED between `find`'s readdir and its
 #       readlink, so there is no cwd link AND no `status` to read — nothing is
 #       left of it that could hold the worktree, which makes it the same kind of
@@ -421,7 +430,7 @@ has_process_matching() { # <literal substring>
 #
 # `JF_PROC_ROOT` (default /proc) is the self-test's seam.
 has_process_cwd_matching() { # <dir>
-  local dir="${1%/}" root="${JF_PROC_ROOT:-/proc}" path target pdir pid state sl
+  local dir="${1%/}" root="${JF_PROC_ROOT:-/proc}" path target pdir pid state sl argv
   local rows=0 denied=""
   while IFS= read -r -d '' path && IFS= read -r -d '' target; do
     rows=$((rows+1))
@@ -474,6 +483,32 @@ has_process_cwd_matching() { # <dir>
       # keeps the cannot-judge below exactly as it was: an EXISTING live pid whose
       # cwd cannot be read must still leave the worktree on disk and fail the run.
       [ -d "$pdir" ] || continue
+      # NO ARGV AREA = NO USER MEMORY = NO cwd (card t_1483975b). The check above
+      # (the pid's own directory) closes the window where the task has been REAPED;
+      # this one closes the window where it is EXITING. Linux drops the two things
+      # we are reading at DIFFERENT points of do_exit(): exit_mm() runs before
+      # exit_fs() (which is what makes the cwd link unreadable) and before
+      # exit_notify() (which is what makes the state `Z`). Between them the task
+      # reads as a live state with no cwd — and a task blocked in `D` on the way
+      # out (measured: `State: D (disk sleep)`) can stay there long enough to be
+      # seen. It is NOT a live process with a refused read: `proc_pid_cmdline_read`
+      # starts with `mm = get_task_mm(tsk); if (!mm) return 0;`, so a task that
+      # still HAS its memory always shows its argv here, and a task with no argv
+      # area cannot hold a cwd at all. Skipped like a zombie, on the same argument:
+      # there is nothing left of it that could be working inside the worktree.
+      #
+      # WHAT THIS COST, MEASURED (cards t_1483975b, t_2244109a): one such pid in one
+      # `find` of ~400 processes under churn (pid 487809, `State: D`, empty
+      # `cmdline`, `/proc/<pid>` gone microseconds later) was enough to red THREE
+      # checks of the self-test — `FAIL … cannot read the cwd of live pid(s) <pid>`
+      # — and to make the whole `prunesync` gate red on a tree that had not touched
+      # the pruner: `212 passed, 1 failed`, then `213 passed, 0 failed` on the same
+      # bytes a minute later. Reproduced twice in one session (2026-11-04, pids
+      # 480446 and 487809), each time from a card worktree and a stray whose only
+      # refusal reason was this cannot-judge.
+      argv=""
+      IFS= read -r -d '' argv <"$pdir/cmdline" 2>/dev/null || argv=""
+      [ -n "$argv" ] || continue
       denied="${denied:+$denied,}$pid"
       continue
     fi

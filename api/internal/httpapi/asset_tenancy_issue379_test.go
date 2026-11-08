@@ -201,10 +201,10 @@ func TestHandleAssetUnconfiguredStoreAnswers503Not500(t *testing.T) {
 	rec := publicAssetServe(t, h, slugA+".jomform.com", "u/"+accA+"/aaaa.css")
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("GET /assets/<same-tenant key> with an unconfigured store = %d (%s), want 503 %q",
-			rec.Code, strings.TrimSpace(rec.Body.String()), "media storage tidak dikonfigurasi")
+			rec.Code, strings.TrimSpace(rec.Body.String()), "Media storage is not configured")
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "media storage tidak dikonfigurasi") {
-		t.Fatalf("503 body = %q, want the guard's own message %q", body, "media storage tidak dikonfigurasi")
+	if body := rec.Body.String(); !strings.Contains(body, "Media storage is not configured") {
+		t.Fatalf("503 body = %q, want the guard's own message %q", body, "Media storage is not configured")
 	}
 }
 

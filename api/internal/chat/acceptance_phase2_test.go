@@ -168,7 +168,7 @@ func isSchemaValidationRefusal(out string) bool {
 // `refused` cannot tell a security refusal from an argument-validation failure.
 func isAllowlistBanRefusal(out string) bool {
 	return !isSchemaValidationRefusal(out) &&
-		strings.Contains(out, "tidak boleh dilaksanakan oleh chat") &&
+		strings.Contains(out, "cannot be executed by the chat") &&
 		strings.Contains(out, ToolProposeWrite)
 }
 
@@ -176,8 +176,19 @@ func isAllowlistBanRefusal(out string) bool {
 // (layer 2) — the message is the issue #645 scope gate. It is asserted
 // separately from the ban because it is the other load-bearing layer: a test
 // that only ever sees the ban cannot notice the identity being widened.
+//
+// BOTH WORDINGS ARE ACCEPTED, deliberately: the same refusal is English in the
+// sibling change that translates the MCP tool text (mcpsrv's "insufficient
+// scope (needs readwrite)") and still Malay on a tree that does not carry it.
+// Pinning one spelling would make this test fail on the merge of two changes
+// that are each correct; the assertion that matters is the REFUSAL, not its
+// language.
 func isScopeRefusal(out string) bool {
-	return !isSchemaValidationRefusal(out) && strings.Contains(out, "scope tidak mencukupi")
+	if isSchemaValidationRefusal(out) {
+		return false
+	}
+	return strings.Contains(out, "insufficient scope") ||
+		strings.Contains(out, "scope tidak mencukupi")
 }
 
 // TestChatModelCannotExecuteAWriteEvenWithConfirmInTheArguments is the card's

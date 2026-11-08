@@ -96,7 +96,16 @@ import AxeBuilder from "@axe-core/playwright";
 import type { AxeResults, Result } from "axe-core";
 
 import { signIn } from "./auth";
-import { SETTLE_TIMEOUT_MS, settledLine, waitForSettled } from "./settle";
+import {
+  ANIMATION_SETTLE_TIMEOUT_MS,
+  SETTLE_TIMEOUT_MS,
+  animationSettleScript,
+  animationsLine,
+  settleAnimations,
+  settledLine,
+  waitForSettled,
+  type AnimationsSettled,
+} from "./settle";
 
 // The gate's own rule, kept identical to e2e/a11y.spec.ts so the two cannot drift.
 const IMPACTS = ["critical", "serious"] as const;
@@ -119,6 +128,8 @@ type Found = {
   fontWeight: string;
   opacity: number;
   floor: number;
+  /** An ancestor (or the element itself) has an animation that has NOT finished. */
+  animating: boolean;
 };
 
 /**
@@ -130,8 +141,18 @@ type Found = {
  * the element's `opacity` chain — `opacity-70` is what turned this card's defect
  * into a 2.755:1 paint, so the alpha is part of the measurement, not a detail.
  * `[...text].length === 1` counts CODE POINTS, so an emoji glyph is one character.
+ *
+ * IT SETTLES THE PAGE'S ANIMATIONS FIRST, IN THIS SAME EVALUATE (t_a4adf2f1). The
+ * route container animates `opacity` for 180ms (`.jf-enter`), so a sample taken
+ * mid-fade reads a FRAME, not a paint — and the `/sales` arm reddened on one run and
+ * passed on the next for exactly that reason. Doing the settle HERE rather than in a
+ * separate `page.evaluate` before the scan is what makes it deterministic: a second
+ * round trip leaves a window in which a late-committing route body (measured on
+ * `/activity`: its `jf-rise-in` animation is created ~250ms AFTER the sidebar nav is
+ * on the page) starts a fresh fade between the settle and the measurement.
  */
-const SCAN = `(() => {
+const SCAN = `(async () => {
+  const settle = await ${animationSettleScript(ANIMATION_SETTLE_TIMEOUT_MS)};
   const cv = document.createElement("canvas");
   cv.width = cv.height = 1;
   const ctx = cv.getContext("2d", { willReadFrequently: true });
@@ -170,6 +191,18 @@ const SCAN = `(() => {
     return bits.join(" > ");
   };
   const out = [];
+  // Every element that a NOT-YET-FINISHED animation is currently painting (card
+  // t_a4adf2f1). An element's ratio is computed from its ancestor \`opacity\` chain,
+  // so an unfinished ancestor animation means the number below is a FRAME of that
+  // animation, not a settled paint. The settle at the top of this script finishes
+  // the finite ones first; this set is what is LEFT after that, and the caller marks
+  // those elements \`MID-ANIMATION\` instead of reading their ratio as a paint.
+  const animatingEls = new Set();
+  for (const a of document.getAnimations()) {
+    if (a.playState === "finished") continue;
+    const target = a.effect && a.effect.target;
+    if (target) animatingEls.add(target);
+  }
   for (const el of document.querySelectorAll("body *")) {
     const t = ownText(el);
     if ([...t].length !== 1) continue;
@@ -178,9 +211,11 @@ const SCAN = `(() => {
     const r = el.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) continue;
     let op = 1;
+    let animating = false;
     for (let n = el; n; n = n.parentElement) {
       const o = parseFloat(getComputedStyle(n).opacity);
       op *= isNaN(o) ? 1 : o;
+      if (animatingEls.has(n)) animating = true;
       if (n === document.body) break;
     }
     if (op === 0) continue;
@@ -209,10 +244,13 @@ const SCAN = `(() => {
       fontWeight: cs.fontWeight,
       opacity: op,
       floor: px >= 24 || (bold && px >= 18.66) ? 3 : 4.5,
+      animating: animating,
     });
   }
   return {
     found: out,
+    animatingCount: out.filter((m) => m.animating).length,
+    settle: settle,
     navLinks: document.querySelectorAll("nav a[href]").length,
     hasMain: !!document.querySelector("main"),
     bodyText: (document.body.innerText || "").replace(/\\s+/g, " ").trim().length,
@@ -384,12 +422,16 @@ test.describe("a11y: single-character text is measured against its own floor", (
         route.path,
       );
 
-      const { found, navLinks, hasMain, bodyText } = (await page.evaluate(SCAN)) as {
+      const { found, settle, navLinks, hasMain, bodyText } = (await page.evaluate(SCAN)) as {
         found: Found[];
+        settle: AnimationsSettled;
         navLinks: number;
         hasMain: boolean;
         bodyText: number;
       };
+      // What the scan's own settle had to do, before anything is measured — so a run
+      // log shows whether the entrance was still painting when the scan started.
+      console.log(animationsLine(route.path, settle));
 
       // (2) THE PAGE'S OWN SHELL RENDERED. Without this the count assertion below
       // could be satisfied by chrome that is not the route's. The wait in `open()`
@@ -427,9 +469,13 @@ test.describe("a11y: single-character text is measured against its own floor", (
 
       // (3) EVERY element found, logged BEFORE any assertion, so the run log
       // carries the census the doc quotes even when the run is red. This is the
-      // number the `min` floors below are measured from.
+      // number the `min` floors below are measured from. An element whose ancestor
+      // was STILL animating even after the settle is marked `MID-ANIMATION` — its
+      // ratio is a frame of that animation, and compositing ink toward its surface
+      // can only move a ratio toward 1, so such a sample can understate contrast
+      // but never overstate it.
       for (const m of found) {
-        console.log(censusLine(route.path, m, ""));
+        console.log(censusLine(route.path, m, m.animating ? "MID-ANIMATION" : ""));
       }
 
       // (4) THE CENSUS FLOOR: measured, never typed from a guess.
@@ -440,12 +486,25 @@ test.describe("a11y: single-character text is measured against its own floor", (
           `re-measure from the [single-char] lines in this run rather than lowering this number.`,
       ).toBeGreaterThanOrEqual(route.min);
 
+      // (4b) NOT an assertion: an element still animating after the settle is
+      // REPORTED, not failed (t_a4adf2f1). Compositing ink toward its own surface can
+      // only move a ratio toward 1, so a mid-animation sample can understate contrast
+      // but never overstate it — failing here would turn a passing element into a red
+      // for a defect it does not have. It is attached to the real verdict below
+      // instead, so a sub-floor element says whether its ratio was a paint or a frame.
+      const midFlight = found.filter((m) => m.animating);
+
       // (5) EVERY one of them — no exemption, and the two avatar-initial circles
       // PR 1102 fixed are judged here as well — against its OWN measured floor.
       const failing = found.filter((m) => m.ratio < m.floor);
       expect(
-        failing.map((m) => censusLine(route.path, m, "BELOW FLOOR")),
+        failing.map((m) => censusLine(route.path, m, m.animating ? "BELOW FLOOR (MID-ANIMATION)" : "BELOW FLOOR")),
         `${route.path}: ${failing.length} single-character element(s) are painted under their own AA floor. ` +
+          (midFlight.length
+            ? `${midFlight.length} of them had an ancestor still animating even after this scan settled the ` +
+              `page, so those ratios are a FRAME of that animation — an entrance that cannot be settled is its ` +
+              `own defect, and the entry's end state is what the floor is about. `
+            : "") +
           `axe CANNOT report these — a one-character node that fails is returned as \`incomplete\` ` +
           `(shortTextContent / nonBmp, axe.js:27277-27294), never as a violation — which is what this scan exists for.`,
       ).toEqual([]);
@@ -595,6 +654,65 @@ test.describe("a11y: the single-character scan bites, and axe is blind to it", (
       shippedFailing.map((m) => `${JSON.stringify(m.text)} ${m.ratio} < ${m.floor}`),
       "the shipped sidebar glyphs are not all above their floor",
     ).toEqual([]);
+
+    // ARM 0b — THE SETTLE IS WHAT MAKES THAT READING A PAINT, and this arm proves it
+    // in BOTH directions (card t_a4adf2f1). A fade frozen at its midpoint on an
+    // ancestor of the glyphs is exactly the shape the /sales flake had — a
+    // single-character element measured while an ancestor was mid-entrance — so:
+    //   (a) the raw measurement MUST drop below the floor (the state that reddened a
+    //       correct tree), and
+    //   (b) after `settleAnimations` the SAME elements MUST clear it.
+    // If the settle were removed, (b) fails. If the injected fade were not really
+    // applied, (a) fails (and so does the "it had to be forced" assertion). Neither
+    // half is decorative.
+    await page.evaluate(() => {
+      const nav = document.querySelector("nav")!;
+      nav.style.animation = "jf-rise-in 30s linear both";
+      nav.style.animationDelay = "-15s"; // frozen at the midpoint: opacity ~0.5
+    });
+    const midFlight = await measureIcons();
+    expect(
+      midFlight.length,
+      `the injected fade left ${midFlight.length} glyph(s) to measure — this arm did not run on the sidebar`,
+    ).toBeGreaterThanOrEqual(13);
+    for (const m of midFlight) {
+      console.log(
+        `[control mid-flight] ${JSON.stringify(m.text)} fg=${m.fg} surface=${m.surface} ratio=${m.ratio} floor=${m.floor}`,
+      );
+    }
+    expect(
+      midFlight.every((m) => m.ratio < m.floor),
+      "with a 30s fade frozen at its midpoint on the nav, NOT every glyph measured below its floor, so " +
+        `this arm does not reproduce a mid-animation frame: ${JSON.stringify(midFlight)}`,
+    ).toBe(true);
+
+    const settledAnim = await settleAnimations(page);
+    console.log(animationsLine("/", settledAnim));
+    expect(
+      settledAnim.forced,
+      `the settle forced ${settledAnim.forced} animation(s) at its ${ANIMATION_SETTLE_TIMEOUT_MS}ms ceiling: ` +
+        `the injected 30s fade cannot finish on its own inside that ceiling, so either it was never applied ` +
+        `or the settle is not seeing it`,
+    ).toBeGreaterThan(0);
+    const afterSettle = await measureIcons();
+    for (const m of afterSettle) {
+      console.log(
+        `[control settled] ${JSON.stringify(m.text)} fg=${m.fg} surface=${m.surface} ratio=${m.ratio} floor=${m.floor}`,
+      );
+    }
+    expect(
+      afterSettle
+        .filter((m) => m.ratio < m.floor)
+        .map((m) => `${JSON.stringify(m.text)} ${m.ratio} < ${m.floor}`),
+      "after settling the animation the sidebar glyphs are still under their floor — the settle did not " +
+        "reach the injected fade, so a scan would keep folding a frame into the ratio",
+    ).toEqual([]);
+    // Leave the page as ARM 1 expects it (the shipped nav, no injected declaration).
+    await page.evaluate(() => {
+      const nav = document.querySelector("nav")!;
+      nav.style.animation = "";
+      nav.style.animationDelay = "";
+    });
 
     // ARM 1 — THE PRE-FIX DECLARATION, restored on the real elements. This is the
     // exact class the fix removed (`opacity-70`), injected as the declaration

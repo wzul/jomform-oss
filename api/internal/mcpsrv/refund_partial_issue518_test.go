@@ -206,7 +206,7 @@ func TestIssue518MCPOverRefundRejectedBeforeChip(t *testing.T) {
 	if err == nil {
 		t.Fatalf("refund_sale ACCEPTED an over-refund (4000 + 2000 > 5000)")
 	}
-	if !strings.Contains(err.Error(), "baki") {
+	if !strings.Contains(err.Error(), "refundable balance") {
 		t.Errorf("over-refund error = %q, want it to name the remaining balance so the agent can act", err)
 	}
 	if after := atomic.LoadInt64(st.refundHits); after != before {

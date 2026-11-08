@@ -7,13 +7,13 @@ package httpapi
 // "Custom JS (power users)" textarea):
 //
 //	PATCH /api/rest/forms/<id>?workspace=<ws> {"theme":{"custom_js":"eval('2+2');"}}
-//	  -> 400 {"code":"request.badRequest","error":"custom_js ditolak: active code execution marker: eval("}
+//	  -> 400 {"code":"request.badRequest","error":"custom_js rejected: active code execution marker: eval("}
 //
 //	page: p[data-testid="action-msg"] data-tone="failure" role="alert" text "Failed"
 //
 // The REFUSAL was correct and nothing was written. What was missing was a name for
 // it on the wire: the sentence is ASSEMBLED around the scan's reason
-// ("custom_js ditolak: " + reason), so no exact key in errCodeByMessage could ever
+// ("custom_js rejected: " + reason), so no exact key in errCodeByMessage could ever
 // match one, and it fell through to the HTTP class code `request.badRequest` —
 // which web/src/lib/apiErr.ts deliberately does not translate, because a class
 // code says nothing a page cannot say better itself. The merchant therefore read
@@ -96,9 +96,9 @@ func TestCustomJSRefusalCodeIsNotTheClassCode(t *testing.T) {
 	// matters here is only that it is NOT the custom_js code.
 	for _, msg := range []string{
 		"invalid json",
-		"title wajib",
-		"product_image_size mesti small|medium|large|hidden",
-		"product_image_layout mesti thumbnail-left|image-top",
+		"title is required",
+		"product_image_size must be small|medium|large|hidden",
+		"product_image_layout must be thumbnail-left|image-top",
 	} {
 		if got := codeFor(http.StatusBadRequest, msg); got != ClassBadRequest {
 			t.Errorf("codeFor(400, %q) = %q, want the class code %q — a non-custom_js 400 "+
@@ -108,7 +108,7 @@ func TestCustomJSRefusalCodeIsNotTheClassCode(t *testing.T) {
 	}
 	// A neighbour that already owns a specific code keeps it: the new prefix must
 	// not claim messages it does not describe.
-	if got := codeFor(http.StatusBadRequest, "theme.logo_url mesti bermula dengan https:// — bukan http atau skema lain"); got != CodeURLNotHTTPS {
+	if got := codeFor(http.StatusBadRequest, "theme.logo_url must start with https:// — not http or another scheme"); got != CodeURLNotHTTPS {
 		t.Errorf("the non-https theme refusal = %q, want its own %q", got, CodeURLNotHTTPS)
 	}
 }
@@ -178,8 +178,8 @@ func TestCustomJSRefusalCodeOnEveryRestDoor(t *testing.T) {
 			if err := json.Unmarshal(raw, &out); err != nil {
 				t.Fatalf("decode refusal body %s: %v", raw, err)
 			}
-			if !strings.Contains(out.Error, "custom_js ditolak: ") || !strings.Contains(out.Error, tc.wantReason) {
-				t.Errorf("%s refusal prose = %q, want it to keep `custom_js ditolak: %s` — the "+
+			if !strings.Contains(out.Error, "custom_js rejected: ") || !strings.Contains(out.Error, tc.wantReason) {
+				t.Errorf("%s refusal prose = %q, want it to keep `custom_js rejected: %s` — the "+
 					"code is an ADDITION, not a replacement", d.name, out.Error, tc.wantReason)
 			}
 		}
@@ -226,7 +226,7 @@ func TestCustomJSRefusalCodeOnEveryRestDoor(t *testing.T) {
 // REST template create/update/use, the MCP form/template tools) builds its
 // sentence from that constant.
 func TestCustomJSRefusalLeadInHasExactlyOneCopy(t *testing.T) {
-	const literal = `"custom_js ditolak: "`
+	const literal = `"custom_js rejected: "`
 
 	root := filepath.Join("..") // api/internal
 	var (
@@ -261,7 +261,7 @@ func TestCustomJSRefusalLeadInHasExactlyOneCopy(t *testing.T) {
 	// The declaration is the one and only copy of the sentence's lead-in.
 	want := filepath.Join("..", "customform", "customform.go")
 	if len(holders) != 1 || filepath.Clean(holders[0]) != filepath.Clean(want) {
-		t.Fatalf("the `custom_js ditolak: ` literal appears in %v, want exactly one copy in %s "+
+		t.Fatalf("the `custom_js rejected: ` literal appears in %v, want exactly one copy in %s "+
 			"(the customform.RejectedLeadIn declaration).\nA second copy is a door that will "+
 			"silently stop matching %q — the merchant reads the dashboard's generic \"Failed\" "+
 			"again. Build every refusal with customform.RejectedMessage and key the code on "+

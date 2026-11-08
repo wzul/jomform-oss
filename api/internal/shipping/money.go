@@ -20,7 +20,7 @@ import (
 )
 
 // ErrAmount: the provider sent something that is not a decimal amount.
-var ErrAmount = errors.New("jumlah wang daripada pembekal tidak sah")
+var ErrAmount = errors.New("the amount from the provider is not a valid decimal")
 
 // ParseAmountSen converts a provider amount into integer sen.
 //

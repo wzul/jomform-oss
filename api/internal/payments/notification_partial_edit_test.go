@@ -290,3 +290,83 @@ func TestFullyAuthoredRuleIsUntouched(t *testing.T) {
 		t.Errorf("a fully-authored body was replaced by a built-in template:\n%s", sent.Body.Text.Data)
 	}
 }
+
+// TestUnwrittenNotificationRuleSendsTheSameBytesAsTheLegacyLiteral is card
+// t_1768cb11's safety half, measured at the last point the repo controls: the
+// SES request body.
+//
+// Migration 000084 blanks the Malay literal out of every never-customised rule so
+// the dashboard stops presenting the system's text as the merchant's. That is
+// only safe if the MAIL does not change, so this test sends the same rule twice in
+// each of the five locales — once as the pre-language release stored it (the
+// Malay literal) and once as this release stores it (empty) — and compares the
+// subject and body byte for byte. A blank half must resolve to exactly the text
+// the literal resolved to.
+//
+// It also pins the other direction in the same run: a rule the merchant DID write
+// is sent verbatim in every locale, with no translation and no substitution
+// beyond the template engine's own placeholders.
+func TestUnwrittenNotificationRuleSendsTheSameBytesAsTheLegacyLiteral(t *testing.T) {
+	legacySubject, legacyBody := emailtext.LegacyDefault(emailtext.NotificationSale)
+	if legacySubject == "" || legacyBody == "" {
+		t.Fatal("test setup: the sale notification legacy default is missing")
+	}
+
+	for _, lang := range emailtext.Langs {
+		t.Run(lang, func(t *testing.T) {
+			svc, rec := newObservedService(t)
+			ref := buyerAxisRef("form-same-bytes")
+			ref.FormLang = lang
+
+			// send fires one rule through the real sendNotification path and
+			// returns the exact subject/body SES was handed.
+			send := func(subject, body string) (sentSubject, sentBody string) {
+				t.Helper()
+				rec.requests = nil
+				svc.Notifications = fixedRules{rules: []*dbstore.FormNotification{{
+					ID: "n-same", FormID: ref.FormID, Event: dbstore.NotifyEventSalePaid,
+					ToEmail: "merchant@example.test",
+					Subject: subject, Body: body, Enabled: true,
+				}}}
+				svc.FireFormNotifications(context.Background(), ref, dbstore.NotifyEventSalePaid)
+				if len(rec.requests) != 1 {
+					t.Fatalf("SES received %d requests, want exactly 1", len(rec.requests))
+				}
+				return rec.requests[0].Content.Simple.Subject.Data,
+					rec.requests[0].Content.Simple.Body.Text.Data
+			}
+
+			// The never-customised rule, in the two shapes the database can hold.
+			emptySubject, emptyBody := send("", "")
+			legacySentSubject, legacySentBody := send(legacySubject, legacyBody)
+
+			if emptySubject != legacySentSubject || emptyBody != legacySentBody {
+				t.Errorf("lang %s: blanking the stored default CHANGED the email.\n"+
+					"empty  subject=%q\nlegacy subject=%q\nempty  body=%q\nlegacy body=%q",
+					lang, emptySubject, legacySentSubject, emptyBody, legacySentBody)
+			}
+			// And the resolved bytes really are this locale's template — otherwise
+			// the comparison above could be two identical wrong messages.
+			wantSubject, wantBody := expectedMessage(t, lang, emailtext.NotificationSale, ref)
+			if emptySubject != wantSubject || emptyBody != wantBody {
+				t.Errorf("lang %s: the never-customised rule is not the %s template.\n"+
+					"got  subject=%q body=%q\nwant subject=%q body=%q",
+					lang, lang, emptySubject, emptyBody, wantSubject, wantBody)
+			}
+			if lang == emailtext.En && strings.Contains(emptySubject, "Jualan baharu") {
+				t.Errorf("lang en: the resolved subject is Malay: %q", emptySubject)
+			}
+
+			// The merchant's own words, in the same locale: verbatim, both halves.
+			const merchantSubject = "Your order needs packing"
+			const merchantBody = "Please pack and post this order today."
+			gotSubject, gotBody := send(merchantSubject, merchantBody)
+			if gotSubject != merchantSubject {
+				t.Errorf("lang %s: a merchant-authored subject was rewritten: %q", lang, gotSubject)
+			}
+			if gotBody != merchantBody {
+				t.Errorf("lang %s: a merchant-authored body was rewritten: %q", lang, gotBody)
+			}
+		})
+	}
+}

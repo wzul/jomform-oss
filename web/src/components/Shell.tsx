@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useI18n, type Key } from "./i18n";
 import { useSession } from "./session";
 import { SessionFault } from "./SessionFault";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { clearPerUserStorage, clearUnknownWorkspaceScope, enterWorkspace, publishWorkspaceScope } from "../lib/workspace";
+import { errorBodyOf, fetchOrThrow } from "../lib/wsfetch";
+import { translateApiErr } from "../lib/apiErr";
 
 // AppShell: fixed left sidebar + topbar + content area. Light theme.
 // Issue #29: nav links are Next <Link> (client-side transitions + prefetch,
@@ -181,6 +183,15 @@ export function Shell({
   const [menuOpen, setMenuOpen] = useState(false);
   const { t } = useI18n();
   const router = useRouter();
+  // Card t_ea568318: the dashboard's route transition is keyed on this. Every
+  // dashboard page renders its own Shell, so a navigation unmounts one Shell and
+  // mounts the next — but keying the content container on the pathname too means
+  // the entrance fires on a ROUTE CHANGE and not on a re-render even if the
+  // shell is ever hoisted into a shared layout (where the container would
+  // otherwise survive the navigation and never animate again). A same-path
+  // navigation (a tab switch carried in the query string) keeps the key, so the
+  // page's own state is never remounted by this.
+  const pathname = usePathname();
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
 
@@ -238,7 +249,7 @@ export function Shell({
     // server actually returned. `if (!ws.length) return;` used to leave a
     // FOREIGN slug in localStorage when the caller has zero workspaces — the
     // next scoped write then went out as ?workspace=<other tenant> and the API
-    // answered 403 "workspace tidak dijumpai". clearUnknownWorkspaceScope drops
+    // answered 403 "workspace not found". clearUnknownWorkspaceScope drops
     // it (an empty list is a real answer) and is a no-op when there is no list.
     //
     // Every branch below PUBLISHES the resolved slug through
@@ -282,24 +293,54 @@ export function Shell({
 
   // Issue #164: set/clear the user's default workspace (server-side). Empty id
   // clears it, so the workspace-picker prompt returns on the next login.
-  async function setDefaultWorkspace(workspaceId: string) {
+  //
+  // THE OUTCOME IS PART OF THE CONTRACT (card t_f6de6395): this resolves to the
+  // SENTENCE to show when the write was refused, or null when it applied — the
+  // switcher renders it (WorkspaceSwitcher's onSetDefault). Before this the
+  // status was never read and a bare `catch {}` swallowed transport errors, so
+  // a 400/403/500 and a dead network were BOTH invisible: the menu had already
+  // closed and reload() re-read the unchanged state, so the merchant saw
+  // nothing happen and had no reason to think anything had gone wrong.
+  //
+  // `fetchOrThrow` is the shared "was this a failure" decision (lib/wsfetch.ts)
+  // — the module that owns isUnauthStatus/isScopeRefusal. No status branch is
+  // taken here on purpose: those rules exist to stop a TENANCY refusal (a 403
+  // naming `workspace.notFound`) from being mistaken for a dead session, which
+  // only matters for a surface that NAVIGATES on unauth. This one does not — a
+  // refused WRITE is not a dead session, and the next scoped read still routes
+  // through the session's own unauth path — so the whole classification would
+  // be a branch with one outcome. A hand-rolled `status === 401 || status ===
+  // 403` never appears here for the same reason it must not appear anywhere:
+  // it would bounce a signed-in merchant for their own stale slug (t_da4b2031).
+  async function setDefaultWorkspace(workspaceId: string): Promise<string | null> {
     try {
-      await fetch("/api/auth/profile/default-workspace", {
+      await fetchOrThrow("/api/auth/profile/default-workspace", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspace_id: workspaceId }),
       });
-    } catch {
-      // Best-effort; the picker/profile surfaces errors on its own path.
+    } catch (err) {
+      // The DIRECTION picks the sentence: a non-empty id is a SET, "" is a
+      // CLEAR. Both literals are spelled out rather than held in a `Key`
+      // variable, because src/lib/i18nKeys.test.ts only resolves a literal call
+      // site — a dynamic key is coverage the guard cannot see.
+      const fallback = workspaceId === "" ? t("workspace.clearDefaultFail") : t("workspace.setDefaultFail");
+      // A NAMED machine code gets its own translated sentence, the same rule
+      // workspace-picker uses (issue #6177: never render the server's Malay
+      // prose); with no code — or one this client does not know — the
+      // direction's own sentence is the answer.
+      return translateApiErr(errorBodyOf(err), t) || fallback;
     }
+    // Only a successful write changes anything, so only it re-reads the bundle.
     reload();
+    return null;
   }
 
   async function signOut() {
     // Clear the per-user cached scope BEFORE the session is destroyed. jf_workspace
     // is never cleared anywhere else, so without this the next user on this
     // browser inherits the previous user's slug and every scoped write 403s
-    // with "workspace tidak dijumpai" — the reported bug. The sweep covers every
+    // with "workspace not found" — the reported bug. The sweep covers every
     // per-user key (lib/workspace.PER_USER_STORAGE_KEYS), not just the one that
     // bit, so a sibling key cannot be inherited the same way.
     clearPerUserStorage();
@@ -477,7 +518,7 @@ export function Shell({
               floor. h-11/w-11 gives it a 44px box with the icon unchanged. */}
           <button
             onClick={() => setMenuOpen(true)}
-            aria-label="Open menu"
+            aria-label={t("nav.openMenu")}
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-[var(--jf-text)] hover:bg-slate-50"
           >
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
@@ -497,7 +538,7 @@ export function Shell({
               ref={drawerRef}
               role="dialog"
               aria-modal="true"
-              aria-label="Navigation menu"
+              aria-label={t("nav.menu")}
               className="absolute left-0 top-0 flex h-full w-64 flex-col bg-white shadow-xl"
               onClick={(e) => e.stopPropagation()}
             >
@@ -510,7 +551,7 @@ export function Shell({
                 <button
                   ref={closeBtnRef}
                   onClick={() => setMenuOpen(false)}
-                  aria-label="Close menu"
+                  aria-label={t("nav.closeMenu")}
                   className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-[var(--jf-muted)] hover:bg-slate-50"
                 >
                   ✕
@@ -540,7 +581,7 @@ export function Shell({
                   assistive tech still gets a navigation region inside the
                   dialog (the desktop <aside> has one and the drawer must not
                   silently lose it). */}
-              <nav className="min-h-0 flex-1 overflow-y-auto p-3" aria-label="Navigation menu">
+              <nav className="min-h-0 flex-1 overflow-y-auto p-3" aria-label={t("nav.menu")}>
                 <NavList
                   groups={navGroups}
                   active={active}
@@ -627,7 +668,25 @@ export function Shell({
           {sessionError ? (
             <SessionFault />
           ) : (
-            <main className="flex flex-1 flex-col">{children}</main>
+            /* THE ROUTE ENTRANCE (card t_ea568318). The dashboard had no route
+               transition at all: navigation swapped one page for the next with
+               no acknowledgement, which is what the owner saw as "no motion
+               effect". `.jf-enter` is the layer's page-enter pattern (fade +
+               4px rise, 180ms, transform/opacity only, globals.css), and the
+               `key` on the pathname is what makes it fire ONCE PER ROUTE:
+               React unmounts this node when the pathname changes, and a CSS
+               animation runs when its element is created — never on a
+               re-render, because a re-render keeps the same node. A same-path
+               navigation (a tab carried in the query string) keeps the key, so
+               a page's own state is not remounted by this.
+               `prefers-reduced-motion: reduce` switches the animation off
+               outright (globals.css, the LAST block in the file), so the
+               reduced-motion reader gets the page with no movement.
+               It is the SAME `<main>` box, not a wrapper — `{children}` stays
+               its direct child, the topology `sessionFault.test.ts` guards —
+               so the animation starts at the element's final layout position
+               and cannot shift layout (no CLS). */
+            <main key={pathname} className="jf-enter flex flex-1 flex-col">{children}</main>
           )}
         </div>
       </div>

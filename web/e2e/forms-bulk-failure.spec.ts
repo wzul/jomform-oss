@@ -67,7 +67,7 @@ const DRAFT = {
 // what the card's driver hit on the prefix build ("invalid json"); the sentence
 // here is the same shape — Malay, and something the dashboard must never print
 // (issue #6177). It rides `error`, the field the dashboard stopped reading.
-const SERVER_PROSE = "badan permintaan tidak sah";
+const SERVER_PROSE = "invalid request body";
 
 // The page's own sentence (`forms.loadFail`), which publishErrorText falls back
 // to when the machine code is the generic `request.badRequest`. Read from

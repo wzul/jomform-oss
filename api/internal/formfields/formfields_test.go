@@ -20,12 +20,12 @@ func TestValidateContract(t *testing.T) {
 		f    []Field
 		want string
 	}{
-		{"missing field_id", []Field{{Type: "name", Label: "Nama"}}, "field_id wajib"},
-		{"bad field_id", []Field{{FieldID: "a b", Type: "name", Label: "Nama"}}, "field_id tidak sah"},
-		{"duplicate field_id", []Field{{FieldID: "x", Type: "name", Label: "A"}, {FieldID: "x", Type: "email", Label: "B"}}, "didaftar dua kali"},
-		{"missing type", []Field{{FieldID: "x", Label: "A"}}, "type wajib"},
-		{"unknown type", []Field{{FieldID: "x", Type: "hacker", Label: "A"}}, "type \"hacker\" tidak sah"},
-		{"missing label", []Field{{FieldID: "x", Type: "name"}}, "label wajib"},
+		{"missing field_id", []Field{{Type: "name", Label: "Nama"}}, "field_id is required"},
+		{"bad field_id", []Field{{FieldID: "a b", Type: "name", Label: "Nama"}}, "invalid field_id"},
+		{"duplicate field_id", []Field{{FieldID: "x", Type: "name", Label: "A"}, {FieldID: "x", Type: "email", Label: "B"}}, "is registered twice"},
+		{"missing type", []Field{{FieldID: "x", Label: "A"}}, "type is required"},
+		{"unknown type", []Field{{FieldID: "x", Type: "hacker", Label: "A"}}, `invalid type "hacker"`},
+		{"missing label", []Field{{FieldID: "x", Type: "name"}}, "label is required"},
 	}
 	for _, c := range cases {
 		err := ValidateContract(c.f)
@@ -88,7 +88,7 @@ func TestValidateFallsBackToBuilderBlocks(t *testing.T) {
 	}
 	// Missing required block → rejected, naming the merchant's own label.
 	err := Validate(blocks, map[string]string{"note": "x"})
-	if err == nil || !strings.Contains(err.Error(), "medan wajib tidak diisi: Nama") {
+	if err == nil || !strings.Contains(err.Error(), "Nama is required") {
 		t.Errorf("missing required block: got %v, want the required-field error", err)
 	}
 	// A blank required value is missing too.
@@ -185,7 +185,7 @@ func TestTextBlockIsPartOfTheDerivedContract(t *testing.T) {
 
 	// Empty submission → refused, naming the merchant's own label.
 	err := Validate(cfg, map[string]string{})
-	if err == nil || !strings.Contains(err.Error(), "medan wajib tidak diisi: Syarikat") {
+	if err == nil || !strings.Contains(err.Error(), "Syarikat is required") {
 		t.Errorf("empty submission = %v, want the required-field error naming the label", err)
 	}
 	// A blank (whitespace-only) answer is missing too.

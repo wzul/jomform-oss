@@ -66,7 +66,7 @@ func TestRoleRefusalWireMessageResolvesToItsCode(t *testing.T) {
 			"defect)", mcpsrv.RoleManageRequiredMessage, got, CodeRoleManageRequired)
 	}
 	// The REST edge's spelling, which the table keyed exactly.
-	if got := ErrCodeFor("perlu peranan manage atau admin"); got != CodeRoleManageRequired {
+	if got := ErrCodeFor("you need the manage or admin role"); got != CodeRoleManageRequired {
 		t.Errorf("ErrCodeFor(the REST edge's spelling) = %q, want %q — the two spellings of one refusal "+
 			"must not carry two different codes", got, CodeRoleManageRequired)
 	}
@@ -78,7 +78,7 @@ func TestRoleRefusalWireMessageResolvesToItsCode(t *testing.T) {
 			got, CodeRoleManageRequired)
 	}
 	// Not a wildcard: a message that is NOT a role refusal keeps the class code.
-	if got := ErrCodeFor("cadangan tidak dapat dilaksanakan"); got != "" {
+	if got := ErrCodeFor("the proposal cannot be carried out"); got != "" {
 		t.Errorf("the generic confirm failure resolves to %q — the role rule has become a wildcard and "+
 			"every post-claim refusal would claim the role sentence", got)
 	}
@@ -119,7 +119,7 @@ func TestConfirmRoleRefusalAnswersItsOwnCodeOnTheWire(t *testing.T) {
 	// It must not be the generic sentence: an answer that names the cause AND
 	// carries a code has to be one or the other, never the pre-fix text with a code
 	// that would then name a different thing than the prose says.
-	if body["error"] == "cadangan tidak dapat dilaksanakan" {
+	if body["error"] == "the proposal cannot be carried out" {
 		t.Error("the refusal still answers the generic sentence — the cause the server knows is being thrown away")
 	}
 	// And it must not claim the SCOPE code: the two 400s on this route are the

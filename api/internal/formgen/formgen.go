@@ -129,18 +129,18 @@ func Parse(raw string) (*Config, error) {
 	// The model sometimes wraps JSON in a code fence — strip it.
 	raw = stripFence(raw)
 	if raw == "" {
-		return nil, fmt.Errorf("penjanaan kosong")
+		return nil, fmt.Errorf("the model returned no output")
 	}
 	var cfg Config
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		return nil, fmt.Errorf("output LLM bukan JSON sah: %w", err)
+		return nil, fmt.Errorf("the model's output is not valid JSON: %w", err)
 	}
 	cfg.Title = strings.TrimSpace(cfg.Title)
 	if cfg.Title == "" {
-		return nil, fmt.Errorf("title wajib dalam output LLM")
+		return nil, fmt.Errorf("the model's output has no title")
 	}
 	if len(cfg.Blocks) == 0 {
-		return nil, fmt.Errorf("tiada blok dalam output LLM")
+		return nil, fmt.Errorf("the model's output has no blocks")
 	}
 	seen := map[string]bool{}
 	for i := range cfg.Blocks {
@@ -149,20 +149,20 @@ func Parse(raw string) (*Config, error) {
 		b.Type = strings.TrimSpace(b.Type)
 		b.Value = strings.TrimSpace(b.Value)
 		if b.ID == "" {
-			return nil, fmt.Errorf("blok #%d: id wajib", i+1)
+			return nil, fmt.Errorf("block #%d: id is required", i+1)
 		}
 		if fieldIDUnsafe.MatchString(b.ID) {
-			return nil, fmt.Errorf("blok #%d: id tidak sah (hanya a-z, 0-9, _ , -)", i+1)
+			return nil, fmt.Errorf("block #%d: invalid id (only a-z, 0-9, _ , -)", i+1)
 		}
 		if seen[b.ID] {
-			return nil, fmt.Errorf("blok #%d: id %q didaftar dua kali", i+1, b.ID)
+			return nil, fmt.Errorf("block #%d: id %q is registered twice", i+1, b.ID)
 		}
 		seen[b.ID] = true
 		if b.Type == "" {
-			return nil, fmt.Errorf("blok #%d: type wajib", i+1)
+			return nil, fmt.Errorf("block #%d: type is required", i+1)
 		}
 		if !ValidBlockTypes[BlockType(b.Type)] {
-			return nil, fmt.Errorf("blok #%d: type %q tidak sah", i+1, b.Type)
+			return nil, fmt.Errorf("block #%d: invalid type %q", i+1, b.Type)
 		}
 		if b.Value == "" {
 			b.Value = defaultLabel(b.Type)
@@ -177,7 +177,7 @@ func Parse(raw string) (*Config, error) {
 			c := &b.Choices[ci]
 			c.Label = strings.TrimSpace(c.Label)
 			if c.Label == "" {
-				return nil, fmt.Errorf("blok #%d: pilihan tanpa label", i+1)
+				return nil, fmt.Errorf("block #%d: a choice has no label", i+1)
 			}
 			if c.Value == "" {
 				c.Value = c.Label
@@ -196,7 +196,7 @@ func Parse(raw string) (*Config, error) {
 		// ambiguity formfields.UnpricedPricingBlock refuses at save time.
 		if b.Type == "option" || b.Type == "shipping" {
 			if len(b.Choices) == 0 {
-				return nil, fmt.Errorf("blok #%d (%s): beri sekurang-kurangnya satu pilihan berharga", i+1, b.Type)
+				return nil, fmt.Errorf("block #%d (%s): provide at least one priced choice", i+1, b.Type)
 			}
 			for ci := range b.Choices {
 				if b.Choices[ci].PriceSen == nil && b.PriceSen != 0 {
@@ -204,7 +204,7 @@ func Parse(raw string) (*Config, error) {
 					b.Choices[ci].PriceSen = &p
 				}
 				if b.Choices[ci].PriceSen == nil {
-					return nil, fmt.Errorf("blok #%d (%s): pilihan %q tiada price_sen — letak harga dalam sen (0 untuk percuma)", i+1, b.Type, b.Choices[ci].Label)
+					return nil, fmt.Errorf("block #%d (%s): choice %q has no price_sen — set the price in sen (0 for free)", i+1, b.Type, b.Choices[ci].Label)
 				}
 			}
 			b.PriceSen = 0
@@ -213,10 +213,10 @@ func Parse(raw string) (*Config, error) {
 	// Validate theme allowlists.
 	if cfg.Theme != nil {
 		if cfg.Theme.Layout != "" && cfg.Theme.Layout != "centered" && cfg.Theme.Layout != "full_width" && cfg.Theme.Layout != "split" {
-			return nil, fmt.Errorf("layout mesti centered|full_width|split")
+			return nil, fmt.Errorf("layout must be centered|full_width|split")
 		}
 		if cfg.Theme.Spacing != "" && cfg.Theme.Spacing != "compact" && cfg.Theme.Spacing != "comfortable" && cfg.Theme.Spacing != "spacious" {
-			return nil, fmt.Errorf("spacing mesti compact|comfortable|spacious")
+			return nil, fmt.Errorf("spacing must be compact|comfortable|spacious")
 		}
 	}
 	return &cfg, nil

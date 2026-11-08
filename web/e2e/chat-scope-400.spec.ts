@@ -71,6 +71,7 @@ test.beforeEach(async ({ page, baseURL }) => {
 import { DICT } from "../src/components/i18nDict";
 import {
   WORKSPACE_SCOPE_REQUIRED_CODE,
+  WORKSPACE_REQUIRED_CODE,
   PROPOSAL_ARGS_INVALID_CODE,
   ROLE_MANAGE_REQUIRED_CODE,
 } from "../src/lib/chatConfirm";
@@ -80,6 +81,8 @@ const EN = {
   scopeRequired: DICT["chat.scopeRequired"].en,
   confirmFail: DICT["chat.confirmFail"].en,
   confirmRoleDenied: DICT["chat.confirmRoleDenied"].en,
+  confirmRefused: DICT["chat.confirmRefused"].en,
+  confirmWorkspaceRequired: DICT["chat.confirmWorkspaceRequired"].en,
   proposalStale: DICT["chat.proposalStale"].en,
   proposalUnexecutable: DICT["chat.proposalUnexecutable"].en,
   confirmRateLimited: DICT["chat.confirmRateLimited"].en,
@@ -89,6 +92,9 @@ const EN = {
   confirm: DICT["chat.confirm"].en,
   send: DICT["chat.send"].en,
   placeholder: DICT["chat.placeholder"].en,
+  // The pending card's footer ("Nothing has changed yet."). A card that has been
+  // ANSWERED must not still wear it — that is half of what the report described.
+  confirmHint: DICT["chat.confirmHint"].en,
 };
 
 const TOKEN = "tok-1";
@@ -164,7 +170,7 @@ async function stubAPI(page: Page, decisionStatus: number, decisionCode = "") {
       : r.fulfill(json({ reply: "Here is the change I would make.", proposals: [PROPOSAL] })),
   );
   const statusText: Record<number, string> = {
-    400: "skop workspace diperlukan — pilih workspace dahulu",
+    400: "a workspace scope is required — pick a workspace first",
     409: "cadangan ini sudah luput atau telah digunakan",
     429: "had pengesahan dicapai",
     500: "ralat dalaman",
@@ -178,13 +184,16 @@ async function stubAPI(page: Page, decisionStatus: number, decisionCode = "") {
     // must branch on the CODE, not on this prose.
     const unexecutable = decisionStatus === 409 && decisionCode === UNEXECUTABLE_CODE;
     const roleDenied = decisionStatus === 400 && decisionCode === ROLE_CODE;
+    const noWorkspace = decisionStatus === 409 && decisionCode === NO_WORKSPACE_CODE;
     const text = unexecutable
       ? UNEXECUTABLE_WIRE_TEXT
       : roleDenied
         ? ROLE_WIRE_TEXT
-        : decisionStatus === 400 && decisionCode === NON_SCOPE_400_CODE
-          ? NON_SCOPE_400_WIRE_TEXT
-          : (statusText[decisionStatus] ?? "ralat");
+        : noWorkspace
+          ? NO_WORKSPACE_WIRE_TEXT
+          : decisionStatus === 400 && decisionCode === NON_SCOPE_400_CODE
+            ? NON_SCOPE_400_WIRE_TEXT
+            : (statusText[decisionStatus] ?? "ralat");
     return r.fulfill({
       status: decisionStatus,
       contentType: "application/json",
@@ -210,7 +219,7 @@ const UNEXECUTABLE_CODE = PROPOSAL_ARGS_INVALID_CODE;
  * must carry the shape a real server sends, so this test proves the page tells
  * the live token from the dead one.
  */
-const UNEXECUTABLE_WIRE_TEXT = "cadangan itu tidak boleh dilaksanakan — minta pembantu menyediakan kad baharu";
+const UNEXECUTABLE_WIRE_TEXT = "that proposal cannot be carried out — ask the assistant to prepare a new card";
 
 /**
  * The scope refusal's code, read out of the WEB constant that mirrors the server's
@@ -234,7 +243,7 @@ const NON_SCOPE_400_CODE = "request.badRequest";
  * deliberately NOT the scope sentence: the stub must carry the shape a real server
  * sends, or the test would prove nothing about the page telling them apart.
  */
-const NON_SCOPE_400_WIRE_TEXT = "perlu peranan manage atau admin dalam workspace ini";
+const NON_SCOPE_400_WIRE_TEXT = "a manage or admin role is required in this workspace";
 
 /**
  * The ROLE refusal (t_1900adef). Same 400, same scoped request shape, and the same
@@ -243,6 +252,23 @@ const NON_SCOPE_400_WIRE_TEXT = "perlu peranan manage atau admin dalam workspace
  * fix. Read from the mirrored constant rather than typed, so a rename fails here.
  */
 const ROLE_CODE = ROLE_MANAGE_REQUIRED_CODE;
+
+/**
+ * The NO-WORKSPACE refusal (t_bf4feea2). A confirmed creation that the workspace
+ * gate declined because the ACCOUNT has no workspace at all — the shape a
+ * magic-link signup leaves behind (`accounts.workspace_id` NULL), measured on
+ * staging. Same 409 the form-CREATE door answers this state with; read from the
+ * mirrored constant rather than typed, so a rename fails here.
+ */
+const NO_WORKSPACE_CODE = WORKSPACE_REQUIRED_CODE;
+
+/**
+ * The prose the confirm route surfaces for that refusal: the GATE's own sentence,
+ * so the stub carries the shape a real server sends. It is deliberately not the
+ * scope sentence — the scope refusal is about the REQUEST's missing `?workspace=`,
+ * this one about the ACCOUNT having no workspace to select at all.
+ */
+const NO_WORKSPACE_WIRE_TEXT = "this account has no workspace yet — create a workspace before creating a form";
 
 /**
  * The prose the write gate itself emits for this refusal, which is what the confirm
@@ -385,7 +411,7 @@ test.describe("chat confirm path: a scope refusal is not a failed change", () =>
   test("a 400 that is NOT a scope refusal never renders the scope copy", async ({ page, baseURL }) => {
     // t_fb393abe. The route answers 400 for a second, unrelated condition: a tool
     // the server refused to execute AFTER it claimed the token (a read_only
-    // member's confirmed write, api/internal/chat/proposal.go's "server menolak").
+    // member's confirmed write, api/internal/chat/proposal.go's "server refused").
     // The page used to branch on the bare status, so that user — whose request
     // carried their own ?workspace= — was told to "Choose a workspace first".
     //
@@ -415,15 +441,31 @@ test.describe("chat confirm path: a scope refusal is not a failed change", () =>
     ).toHaveCount(0);
     await expect(page.locator('p[role="alert"]')).not.toHaveText(EN.scopeRequired);
 
-    // Instead the generic failure copy — the honest answer, and the one the card
-    // footer already carries. On this branch the token really IS spent and nothing
-    // changed, so the "try again" advice is accurate (it asks for a NEW card).
+    // Instead the "no retry" refusal copy — the honest answer: the server refused
+    // the write after claiming the token, so nothing changed AND this card is
+    // finished. It used to be the card footer's `chat.confirmFail`, whose "try
+    // again" invited a click that could not work (t_bf4feea2).
+    //
+    // The sentence is carried ONCE, by the page's single role="alert" — the same
+    // shape the scope, role and unexecutable refusals use. The card's job is the
+    // BADGE: this one really is a change that did not go through.
+    await expect(page.locator('p[role="alert"]')).toHaveText(EN.confirmRefused);
+    await expect(
+      page.getByText(EN.confirmRefused, { exact: true }),
+      "the refused-copy sentence must be rendered exactly once — the alert carries it, and a second copy " +
+        "on the card would be the duplication the other named refusals already avoid",
+    ).toHaveCount(1);
     const card = page.locator('[class*="border-sky-200"]').filter({ hasText: CARD_TITLE });
+    await expect(card).toContainText(EN.badgeFailed);
     await expect(
       card,
-      "a non-scope 400 must report a failed change on the card",
-    ).toContainText(EN.confirmFail);
-    await expect(card).toContainText(EN.badgeFailed);
+      `a refused write's token is spent, so nothing may tell the user to try the same card again ("${EN.confirmFail}")`,
+    ).not.toContainText(EN.confirmFail);
+    await expect(
+      card,
+      `the card still says "${EN.confirmHint}" after the decision — the user cannot tell whether their ` +
+        `click did anything (the other half of the reported defect)`,
+    ).not.toContainText(EN.confirmHint);
     await expect(
       card,
       `the card must not claim it needs a workspace — the user already had one selected`,
@@ -508,6 +550,72 @@ test.describe("chat confirm path: a scope refusal is not a failed change", () =>
         `request=${JSON.stringify(decision[0])} ` +
         `alert=${JSON.stringify(await page.locator('p[role="alert"]').textContent())} ` +
         `roleCopyCount=${await page.getByText(EN.confirmRoleDenied, { exact: true }).count()} ` +
+        `confirmFailCount=${await page.getByText(EN.confirmFail, { exact: true }).count()}`,
+    );
+  });
+
+  test("a 409 that names the NO-WORKSPACE code names the cause ONCE and offers no retry", async ({
+    page,
+    baseURL,
+  }) => {
+    // t_bf4feea2. THE SHAPE MEASURED ON STAGING (7 Nov), and the one that produced
+    // the user's screenshot: a magic-link account with no workspace at all, a
+    // form-creation card the assistant had prepared, Confirm pressed, and
+    //
+    //   INFO http_request method=POST path=/v1/rest/chat/confirm status=400
+    //   UI: "The change could not be applied. Please try again."
+    //   card: "Nothing has changed yet."
+    //
+    // The token was already spent (the gate refuses after the claim), so the page
+    // offered a retry that could not work and named no cause at all. The server now
+    // classifies the refusal and answers 409 with `workspace.required`; this test
+    // measures what the user then sees.
+    await stubAPI(page, 409, NO_WORKSPACE_CODE);
+    await freshState(page);
+    const decision = await confirmWithoutScope(page, baseURL, false);
+
+    expect(decision, "the decision must have been sent exactly once").toHaveLength(1);
+
+    // The card's OWN sentence: why it did not run, and that the card is finished.
+    // ONCE — the alert carries it; the footer must not repeat it.
+    await expect(page.locator('p[role="alert"]')).toHaveText(EN.confirmWorkspaceRequired);
+    await expect(
+      page.getByText(EN.confirmWorkspaceRequired, { exact: true }),
+      "the no-workspace refusal must be rendered exactly once — the alert and the card footer must not both carry it",
+    ).toHaveCount(1);
+
+    // NOT the spent/expired copy: this card did not expire, and telling the user it
+    // did would hide the one fact they can act on (there is no workspace yet).
+    await expect(
+      page.getByText(EN.proposalStale, { exact: true }),
+      `the no-workspace refusal rendered "${EN.proposalStale}" — the card neither expired nor was already used`,
+    ).toHaveCount(0);
+    // NOT the retry copy, and NOT the scope copy: the user has a workspace selected,
+    // and the account behind it is the one without a workspace — different remedy.
+    await expect(
+      page.getByText(EN.confirmFail, { exact: true }),
+      `the page offered "try again" ("${EN.confirmFail}") for a card whose token was spent by the refusal`,
+    ).toHaveCount(0);
+    await expect(
+      page.getByText(EN.scopeRequired, { exact: true }),
+      "a no-workspace refusal is not a missing `?workspace=` — telling the user to pick one is advice they cannot follow",
+    ).toHaveCount(0);
+
+    // The change really did not go through, so the card keeps the failure badge —
+    // there is no badge for "no workspace", and inventing one here would put a
+    // second state word on a card that can only be replaced.
+    const card = page.locator('[class*="border-sky-200"]').filter({ hasText: CARD_TITLE });
+    await expect(card).toContainText(EN.badgeFailed);
+    await expect(
+      card,
+      `the card still says "${EN.confirmHint}" after the decision — the user cannot tell whether their ` +
+        `click did anything, which is the "kad kekal 'Nothing has changed yet'" half of the report`,
+    ).not.toContainText(EN.confirmHint);
+
+    console.log(
+      `OBSERVED noWorkspace=409 code=${JSON.stringify(NO_WORKSPACE_CODE)} ` +
+        `alert=${JSON.stringify(await page.locator('p[role="alert"]').textContent())} ` +
+        `workspaceCopyCount=${await page.getByText(EN.confirmWorkspaceRequired, { exact: true }).count()} ` +
         `confirmFailCount=${await page.getByText(EN.confirmFail, { exact: true }).count()}`,
     );
   });

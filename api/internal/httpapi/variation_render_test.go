@@ -25,6 +25,12 @@ func TestBlockFormRendersVariationSelector(t *testing.T) {
 		Required         bool
 		HasPrice         bool
 		HasQuantity      bool
+		// Card t_06851d88: pay-what-you-want product blocks.
+		CustomAmount     bool
+		AmountMinSen     int64
+		AmountMaxSen     int64
+		AmountSuggestSen int64
+		AmountHint       string
 		CondJSON         string
 		Image            string
 		// Issue #471: product image size + layout + full-size fallback URL.

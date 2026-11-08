@@ -42,7 +42,7 @@ func (h *RESTHandlers) getFormQRStand(w http.ResponseWriter, r *http.Request, ac
 	// workspace subdomain — formURLForAccount).
 	target := h.formURLForAccount(r.Context(), actx.Account, f.Slug)
 	if target == "" {
-		writeErr(w, http.StatusConflict, "URL awam borang tidak dapat diselesaikan")
+		writeErr(w, http.StatusConflict, "the form's public URL cannot be resolved")
 		return
 	}
 	w.Header().Set("Cache-Control", "private, no-store")

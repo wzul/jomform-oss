@@ -26,7 +26,13 @@
 #                         main and 620s on the same host minutes later, so Go's
 #                         own 10m budget reds a package that passes. The value is
 #                         a CEILING, not a target — raising it does not hide a
-#                         hang, it stops the hang being confused with host load.)
+#                         hang, it stops the hang being confused with host load.
+#                         A NARROWED run may carry PREFLIGHT_TEST_PACKAGES
+#                         (deploy/merge-train.sh does), which replaces `./...`
+#                         with the batch's affected packages; it is refused on a
+#                         run with no narrowing flag and stamps the record
+#                         `test=scoped`, so a narrowed pass can never be read as
+#                         a full one.)
 #              govuln     govulncheck over the module graph (CVE scan)
 #   web        build      cd web && npm run build   (runs test:unit first)
 #              lint       cd web && npm run lint    (eslint . — repo-wide)
@@ -49,12 +55,12 @@
 #              a11y       cd web && npm run a11y    (axe-core family only)
 #              e2e        cd web && npm run e2e     (the feature specs under web/e2e)
 #              speccounts scripts/spec-counts.sh   (RE-READS the two spec counts the
-#                         `a11y`/`e2e` rows of GATE-INVENTORY.md quote: it runs each
-#                         project's `--list` on THIS tree and reds when a row's
-#                         current figure is not what the tree runs — ~5s, no build.
-#                         It exists because those rows carried bare typed numbers
-#                         that rotted repeatedly while every gate passed; see the
-#                         gate's own header)
+#                         `a11y`/`e2e` gates' detail files (gate-inventory/<gate>.md)
+#                         quote: it runs each project's `--list` on THIS tree and reds
+#                         when a detail file's current figure is not what the tree
+#                         runs — ~5s, no build. It exists because those figures
+#                         carried bare typed numbers that rotted repeatedly while
+#                         every gate passed; see the gate's own header)
 #              npmaudit   cd web && npm audit --audit-level=high
 #   lint       web        cd web && npm run lint    (eslint 9 + eslint-config-next
 #                         flat config — the compiler-diagnostic rules that have no
@@ -200,6 +206,13 @@
 #   wrong on a stacked branch and would silently widen or narrow the run. The
 #   DEFAULT (flag absent) is a full run. See the PATH-AWARE SELECTION section
 #   below for the dependency rules and the fail-closed properties.
+#
+#   PREFLIGHT_TEST_PACKAGES="<import paths>" is the MERGE TRAIN's seam, not a
+#   routine knob: it replaces the api test gate's `./...` with the packages a
+#   batch can affect (changed + importers). It is REFUSED on a run that would
+#   otherwise be FULL (no narrowing flag) — the release gate's shape always owes
+#   `go test ./...` — and any run that uses it stamps its record, so a narrowed
+#   pass can never be reused or read as a full one.
 #
 # REQUIREMENTS (the gate FAILS, never silently skips, when these are missing)
 #   JOMFORM_TEST_DATABASE_URL   real Postgres for the integration tests.
@@ -475,6 +488,62 @@ fi
 if [ "$FOR_DIFF_GIVEN" = 1 ] && { [ -n "$ONLY" ] || [ -n "$SKIP" ]; }; then
   die "--for-diff cannot be combined with --only/--skip (the diff decides the set; use one or the other)"
 fi
+
+# ---------------------------------------------------------------------------
+# PREFLIGHT_TEST_PACKAGES — the merge train's narrowed api test suite.
+#
+# WHY THIS SEAM EXISTS. `deploy/merge-train.sh` gates a BATCH once, on the merged
+# candidate. A batch that moves `api/` used to escalate to the FULL inventory, so
+# every api-touching PR paid `go test ./... -race` (~10-20 min of a 6-core host,
+# ~2.6 cores sustained, serialised behind the gate lock) — and almost every PR
+# moves api/, so merge throughput was 1 PR / (that run). That contradicts the
+# rule this repo already runs on (AGENTS.md): the FULL inventory is owed once per
+# RELEASE, not once per merge, and `deploy/build-and-ship.sh` still runs it on the
+# bytes that ship.
+#
+# So the train computes the packages a batch can affect — the CHANGED packages
+# plus every package whose build or TEST imports them, transitively — and names
+# them here. This script then runs `go test <that list> -race`, with every other
+# gate unchanged. It does not compute the list itself: the train owns that
+# judgement and prints what it chose.
+#
+# THE TWO GUARDS ARE THE POINT, and both are refusals rather than warnings:
+#   * a package list on a run with NO narrowing flag is refused. A full run — the
+#     default, and what the release gate does — must never be silently narrowed by
+#     an environment variable that happened to be exported in the caller's shell.
+#   * the record is STAMPED (`test=scoped` in PREFLIGHT_KEY_EXTRA), so a scoped
+#     pass can never be reused as evidence for a full one. Same rule, same
+#     mechanism as `--quick` (which drops -race and stamps `race=none`): a gate
+#     record must not be able to vouch for a run that measured less than it says.
+# Tokens are validated as package paths only — the list comes from another
+# script's computation, and `go test` would read a leading '-' as a flag.
+PREFLIGHT_TEST_PACKAGES="${PREFLIGHT_TEST_PACKAGES:-}"
+_test_pkgs_trimmed="${PREFLIGHT_TEST_PACKAGES//[[:space:]]/}"
+# ...AND NOT WHEN THE GATE SET IS ONLY BEING INSPECTED OR CLASSIFIED. `--gate-deps`,
+# `--classify` and `--explain-diff` run no gate, and they are invoked BY THE GATES
+# THEMSELVES (`selftest` drives `--gate-deps`/`--classify`; that is how it asserts the
+# gate table). A scoped run exports the list, so an unscoped guard here does not only
+# refuse the outer run: it made every nested inspection invocation die, which turned the
+# `selftest` gate red inside a legitimate scoped run and reported "the path-aware table
+# cannot be inspected" (measured 2026-11-07, before this condition existed).
+if [ -n "$_test_pkgs_trimmed" ] && [ "$GATE_DEPS" != 1 ] && [ "$CLASSIFY" != 1 ] && [ "$EXPLAIN_DIFF_GIVEN" != 1 ]; then
+  # THE SHAPE THAT MUST BE REFUSED IS A RUN THAT WOULD OTHERWISE BE FULL. A default
+  # run — and that is exactly what `deploy/build-and-ship.sh` executes on the bytes
+  # that ship — must never be silently narrowed by an inherited variable. An
+  # explicitly narrowed run (--for-diff, or a hand-picked --only/--skip that is
+  # already NOT full coverage) may carry the list; the record is stamped either way.
+  if [ "$FOR_DIFF_GIVEN" != 1 ] && [ -z "$ONLY" ] && [ -z "$SKIP" ]; then
+    die "PREFLIGHT_TEST_PACKAGES was set with no narrowing flag: a NARROWED api test suite may only ride an explicitly narrowed run (--for-diff for a merge, or --only/--skip for a bite proof). A default run (the release gate's shape) owes 'go test ./...' — refusing to report a narrowed suite as a full inventory."
+  fi
+  for _p in $PREFLIGHT_TEST_PACKAGES; do
+    case "$_p" in
+      -*) die "PREFLIGHT_TEST_PACKAGES contains '$_p': a leading '-' would be read by 'go test' as a FLAG, not a package — refusing." ;;
+      *[!A-Za-z0-9._/-]*) die "PREFLIGHT_TEST_PACKAGES contains '$_p', which is not a Go package path (allowed characters: letters, digits, '.', '_', '/', '-') — refusing to hand it to 'go test'." ;;
+      */*) : ;;
+      *) die "PREFLIGHT_TEST_PACKAGES contains '$_p', which is not a package path (no '/') — refusing to hand it to 'go test'." ;;
+    esac
+  done
+fi
 if [ "$FOR_DIFF_GIVEN" = 1 ] && ! git rev-parse --verify --quiet "$FOR_DIFF^{commit}" >/dev/null 2>&1; then
   die "--for-diff base ref '$FOR_DIFF' does not resolve to a commit (a guess would silently widen or narrow the run)"
 fi
@@ -575,13 +644,15 @@ pw_declared() {
   case "$1" in
     build|vet|test|govuln) printf '%s\n' 'api/*' ;;
     web|a11y|e2e|lint)    printf '%s\n' 'web/*' ;;
-    # `speccounts` reads the two spec FAMILIES (it enumerates them) and the table
-    # that quotes their sizes. Both directions matter: a new spec file must select
-    # it (that is the change that rots a count), and so must an edit to
-    # GATE-INVENTORY.md (that is the change that can get the number wrong). Its OWN
-    # source is in the claim too: the checker is what enforces those figures, and a
-    # diff to it that does not run it is how a checker stops enforcing anything.
-    speccounts)            printf '%s\n' 'web/e2e/*' 'web/playwright.config.ts' 'GATE-INVENTORY.md' 'scripts/spec-counts.sh' ;;
+    # `speccounts` reads the two spec FAMILIES (it enumerates them) and the
+    # per-gate detail files that quote their sizes. All of it matters: a new spec
+    # file must select it (that is the change that rots a count), and so must an
+    # edit to the figure's home, `gate-inventory/<gate>.md` (that is the change that
+    # can get the number wrong — the figures live there, not in the table rows, so
+    # that two gates' edits cannot conflict; card t_d6ce3d60). Its OWN source is in
+    # the claim too: the checker is what enforces those figures, and a diff to it
+    # that does not run it is how a checker stops enforcing anything.
+    speccounts)            printf '%s\n' 'web/e2e/*' 'web/playwright.config.ts' 'GATE-INVENTORY.md' 'gate-inventory/*' 'scripts/spec-counts.sh' ;;
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor|tmpkey|backup|host|prunewt|refguard) printf '%s\n' 'deploy/*' 'scripts/*' ;;
     # The self-host path is what a stranger runs, so its own artifacts AND the
@@ -596,7 +667,7 @@ pw_declared() {
     design)                printf '%s\n' 'web/src/*' 'scripts/design-guard.py' 'scripts/design-guard_test.sh' ;;
     prunesync)             printf '%s\n' 'deploy/worktrees/*' ;;
     prunehost)             printf '%s\n' 'deploy/host/*' ;;
-    selftest)              printf '%s\n' 'scripts/*' 'GATE-INVENTORY.md' ;;
+    selftest)              printf '%s\n' 'scripts/*' 'GATE-INVENTORY.md' 'gate-inventory/*' ;;
     gitleaks)              printf '%s\n' '*' ;;
     *)                     printf '%s\n' '*' ;;
   esac
@@ -2408,7 +2479,16 @@ hcached() {   # hcached <gate> <glob>... -- <cmd...>
     {
       for _g in "${globs[@]}"; do
         for _p in "$REPO_ROOT"/$_g; do
-          if [ -f "$_p" ]; then sha256sum "$_p"; _f=$((_f+1)); fi
+          if [ -f "$_p" ]; then
+            # The path RELATIVE to the root, then the content hash alone. Feeding
+            # `sha256sum "$_p"` would put the ABSOLUTE path into the key material, so
+            # two worktrees holding the same bytes would produce different keys and the
+            # cache would never hit — which is exactly what the first version did, and
+            # what nine real runs after the merge measured (0 hits, 574-814s each).
+            printf '%s ' "${_p#"$REPO_ROOT"/}"
+            sha256sum < "$_p" | cut -d' ' -f1
+            _f=$((_f+1))
+          fi
         done
       done
       # A glob that matched nothing must never look like a match that found nothing
@@ -2722,8 +2802,41 @@ if [ "$QUICK" -eq 1 ]; then
   printf '%s\n' "  deploying, run ./scripts/preflight.sh with no flags."
   printf '%s\n' "================================================================"
 fi
-run test "cd api && go test ./... $RACE -count=1 -timeout $API_TEST_TIMEOUT" \
-  bash -c "cd '$REPO_ROOT/api' && go test ./... $RACE -count=1 -timeout '$API_TEST_TIMEOUT'"
+# WHICH PACKAGES. The default is the whole module and stays the default: only
+# the merge train's PREFLIGHT_TEST_PACKAGES narrows it, only on an explicitly
+# narrowed run (refused otherwise above), and only with the record stamped so the
+# pass cannot be reused as a full one. The label NAMES THE LIST, so the recorded
+# verdict says exactly what executed instead of implying `./...`.
+TEST_PKGS=(./...)
+if [ -n "$_test_pkgs_trimmed" ]; then
+  # WORD SPLITTING, not `read -a`: the list arrives ONE IMPORT PATH PER LINE, and
+  # `read -r -a` stops at the first newline — which silently ran ONE package and
+  # reported the scope as "8". (Measured: it did exactly that before this line was
+  # fixed, and the gate was green on 1 of 8.) The tokens are validated above, so
+  # they can hold no glob metacharacter and this expansion cannot glob.
+  # shellcheck disable=SC2206
+  TEST_PKGS=( $PREFLIGHT_TEST_PACKAGES )
+  [ "${#TEST_PKGS[@]}" -gt 0 ] || die "PREFLIGHT_TEST_PACKAGES is set but names no package — refusing to run an empty api suite and call it a pass."
+  export PREFLIGHT_KEY_EXTRA="${PREFLIGHT_KEY_EXTRA:+$PREFLIGHT_KEY_EXTRA;}test=scoped"
+  printf '\n%s\n' "================================================================"
+  printf '%s\n' "PREFLIGHT: the api test gate is SCOPED to ${#TEST_PKGS[@]} package(s) (PREFLIGHT_TEST_PACKAGES)."
+  printf '%s\n' "  Scope: the changed packages plus every package whose build or test"
+  printf '%s\n' "  imports them (the merge train computed it). NOT the full inventory:"
+  printf '%s\n' "  'go test ./...' for the untouched packages was NEVER run here."
+  printf '%s\n' "  The RELEASE gate owes that run on the shipping bytes."
+  printf '%s\n' "  Record stamped test=scoped — it cannot be reused as a full record."
+  printf '%s\n' "================================================================"
+  # CONSUMED HERE: the value now lives in TEST_PKGS. Unset the transport so nothing
+  # downstream inherits it — gates spawn their own invocations, and `selftest` drives
+  # preflight in a sandbox to assert that a NO-FLAG run is a full run. With the list
+  # still exported, those nested default runs were refused by the guard above and the
+  # selftest gate of a legitimate scoped run went red ("a no-flag run printed a
+  # narrowing notice", "a green record for the whole inventory must be reused" —
+  # measured 2026-11-07).
+  unset PREFLIGHT_TEST_PACKAGES
+fi
+run test "cd api && go test ${TEST_PKGS[*]} $RACE -count=1 -timeout $API_TEST_TIMEOUT" \
+  bash -c "cd '$REPO_ROOT/api' && go test ${TEST_PKGS[*]} $RACE -count=1 -timeout '$API_TEST_TIMEOUT'"
 
 # ---------------------------------------------------------------------------
 # api/govuln — CVE scan over the module graph.
@@ -3086,23 +3199,30 @@ webserver_lock_release() {
   fi
   PREFLIGHT_WEBSERVER_LOCK_FD=""
 }
-# ---- web/speccounts: the a11y/e2e spec counts this table QUOTES --------------
+# ---- web/speccounts: the a11y/e2e spec counts a gate's DETAIL FILE quotes -----
 #
-# WHY THIS GATE EXISTS (card t_74e52a43). The `a11y` and `e2e` rows of
-# GATE-INVENTORY.md each carry a typed count of the specs their gate runs, and
-# both rows instruct the reader to re-measure it when the family grows. That
-# instruction was the only enforcement, so the number rotted — nine cards paid a
-# lane run to correct one figure each (t_9500edf3, t_df0857c6, t_07eb69c8,
-# t_44c9a306, t_769a5cb9, t_c33effe4, t_212be8da, t_3839995c, t_c5c7f37a), and it
-# had rotted AGAIN in both rows when this gate was written: on origin/main
-# 0aa385c0 the rows claimed 147 tests in 16 files and 274 in 54 while the
-# enumeration read 159 in 17 and 276 in 55 — with every gate in the set passing.
+# WHERE THE FIGURE LIVES (card t_d6ce3d60): `gate-inventory/<gate>.md`, the gate's own
+# detail file — not the table row. The rows are one physical line each and the
+# `a11y`/`e2e` rows are adjacent, so every count edit used to touch the same merge
+# region as its neighbour's count edit: thirteen rework cards, each a lane run whose
+# only product was a one-line splice. One file per gate means two gates' figures are
+# never in one diff.
+#
+# WHY THIS GATE EXISTS (card t_74e52a43). The `a11y` and `e2e` rows used to carry a
+# typed count of the specs their gate runs, and both rows instructed the reader to
+# re-measure it when the family grows. That instruction was the only enforcement, so
+# the number rotted — nine cards paid a lane run to correct one figure each
+# (t_9500edf3, t_df0857c6, t_07eb69c8, t_44c9a306, t_769a5cb9, t_c33effe4,
+# t_212be8da, t_3839995c, t_c5c7f37a), and it had rotted AGAIN in both rows when this
+# gate was written: on origin/main 0aa385c0 the rows claimed 147 tests in 16 files and
+# 274 in 54 while the enumeration read 159 in 17 and 276 in 55 — with every gate in
+# the set passing.
 #
 # THE GAP IT CLOSES is exactly that: `selftest` parses the table for gate NAMES
 # only, so a row can say any number at all and stay green. Nothing in the set
 # re-read the figures. This gate does, on the tree under test, using the same
 # enumeration each gate runs (`playwright test --project=… --list` — no build, no
-# server, no browser, ~5s), and it FAILS CLOSED: a missing row, a row with no
+# server, no browser, ~5s), and it FAILS CLOSED: a missing row, a detail file with no
 # parseable figure, a missing playwright binary, or `--list` output without its
 # `Total:` line are all RED, never a skip.
 #
@@ -3372,8 +3492,9 @@ run backup "nightly backup failure-path suite (exit 0 is not an upload, empty du
 host_run() {
   bash "$REPO_ROOT/deploy/host/bootstrap-host_test.sh"
   bash "$REPO_ROOT/deploy/vps/drift-check_test.sh"
+  bash "$REPO_ROOT/deploy/vps/migrate-media_test.sh"
 }
-run host "fresh-host bootstrap + repo/host drift self-tests (dry-run changes nothing; the env contract is derived from the compose; a missing live file is never a pass)" host_run
+run host "fresh-host bootstrap + repo/host drift + media-migration self-tests (dry-run changes nothing; the env contract is derived from the compose; a missing live file is never a pass; a copy that lost objects is never a success)" host_run
 
 # selfhost — the ONE-COMMAND self-host path a stranger runs from a fresh clone.
 # Same shape of gate as `host`/`backup`: what is testable in the repo is the
@@ -3485,13 +3606,31 @@ run prunewt "worktree pruner self-test (a stale refs/remotes/pr/N mirror is not 
 # offline — a throwaway repo with its own bare origin, a fake Hermes home, copies of the
 # shipped scripts; no host, no cron, no board — but it drives the installer's FULL proof
 # path (the pruner's own suite, run once on the extracted revision and again from the
-# installed location) plus its three guard mutations, so this gate is not free: measured
-# 123s inside a full 21-gate run on the agent host, 2026-10-15.
+# installed location) plus its guard mutations and the two arms that drive the failure
+# DIAGNOSTIC (card t_1483975b: a stub source suite, and the real installed suite sabotaged
+# between the two proofs), so this gate is not free: a flake in the pruner suite makes it
+# re-run that proof, and it was measured at 123s inside a full 21-gate run on 2026-10-15
+# and 473s end to end as `--only prunesync` on 2026-11-03 (load average 4-7, and that run
+# DID hit the flake, adding a proof run).
 #
 # ONE STATED LIMIT: the live half is a check of HOST state, so a per-tree result record
 # made before the host moved could vouch for it on identical bytes (the same shape
 # `refguard` has). The reference and its commit date are printed on every run, and
 # `--only prunesync` re-runs it without touching the record.
+#
+# AND THE HARNESS'S REPAIR ARM RUNS THE PRUNER SUITE, which measures the WHOLE HOST
+# (its live-process guard asks whether any process references a worktree, and the
+# pruner calls it with the CARD ID in a literal `worktrees/<name> ` pattern). The
+# sandbox's card ids USED TO BE fixed, so a CONCURRENT copy of that suite satisfied the
+# guard with its own `git worktree` argv and the arm that requires
+# `git worktree remove` to fail read `KEEP` instead: measured 2026-11-04, four
+# concurrent copies, one red at `210 passed, 3 failed`, and in PR #1535's merge train
+# the same red arrived through this gate's installer proof. The suite now derives its
+# fixture's card ids per run (`t_<6 hex><NN>`), so two copies can never match each
+# other's patterns — including a copy extracted with `--from-ref <rev>`, which a lock
+# could not have serialised because it would not carry the lock.
+# `scripts/biteproof_gate_concurrency.sh` drives both host-state gates under a peer
+# that creates and removes containers, on demand.
 prunesync_run() {
   bash "$REPO_ROOT/deploy/worktrees/check-prune-kanban-worktrees-host_test.sh" || return 1
   bash "$REPO_ROOT/deploy/worktrees/check-prune-kanban-worktrees-host.sh"
@@ -3529,9 +3668,24 @@ run prunesync "host pruner drift: the copy the cron RUNS must be the revision th
 # OURS (this run's audited path recorded the id — it only accepts ids it created,
 # so this is a real touch and FAILS), FOREIGN (a destroy event this run did not
 # issue — named with the container and the second, and NOT a failure of this
-# tree) or UNATTRIBUTED (neither — FAILS naming the container rather than counting
-# it). Every run exercises the live path: the suite plants two probe containers
-# on the host and a PEER PROCESS removes one mid-run.
+# tree) or FOREIGN-NOEVENT (the loss is not this run's by construction, but the
+# daemon no longer holds the event — RECORDED and PASSED with that reason, card
+# `t_d243986f`). Every run exercises the live path: the suite plants two probe
+# containers on the host and a PEER PROCESS removes one mid-run.
+#
+# WHY THE WINDOW HAS TWO SOURCES (card `t_d243986f`). A `docker events --since`
+# query is a REPLAY over the daemon's in-memory event ring, and that ring holds
+# only the last 256 events (measured on the agent host: `--since` 300s, 600s,
+# 1800s and 7200s all answer exactly 256). A concurrent lane's docker work fills
+# it inside this suite's own window, so the peer probe's destroy was evicted
+# before the end-of-run replay read it: PR #1535's merge run printed `2 of 112
+# checks FAILED` — `... its removal CANNOT be attributed` and `the probe container
+# the PEER removed mid-run is attributed FOREIGN and NAMED (want '1', got '0')` —
+# on a correct tree, and a red record cannot be reused, so each retry re-ran 25
+# gates (~48 min). The window is now a LIVE `docker events` subscriber (opened
+# before the before-snapshot, so nothing can be evicted from under it) merged with
+# the replay as a fallback, and the suite asserts on EVERY run that the live half
+# captured the peer probe's destroy while the stream was open.
 #
 # ITS BITE PROOF IS deploy/host/jomform-container-prune_bite.sh, ON DEMAND AND NOT
 # WIRED IN — the same convention as the `backup` gate's: it sabotages one gate of
@@ -3669,7 +3823,7 @@ selftest_run() {
   bash "$REPO_ROOT/scripts/preflight_test.sh"
 }
 run selftest "gate-runner self-test (empty run refused, missing prereq fails, no gate inventory drift)" \
-  hcached selftest "scripts/*.sh" "scripts/*.md" "GATE-INVENTORY.md" "deploy/monitoring/*" "docs/PREFLIGHT-REUSE.md" "AGENTS.md" \
+  hcached selftest "scripts/*.sh" "scripts/*.md" "GATE-INVENTORY.md" "gate-inventory/*" "deploy/monitoring/*" "docs/PREFLIGHT-REUSE.md" "AGENTS.md" \
   -- selftest_run
 
 # The run reached the END of its inventory: this is the one write that says so.

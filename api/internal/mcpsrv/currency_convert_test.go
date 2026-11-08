@@ -100,11 +100,11 @@ func TestConvertCurrencyRejectsMalformedCodes(t *testing.T) {
 		in   convertCurrencyIn
 		want string
 	}{
-		{"empty from", convertCurrencyIn{From: "", To: "MYR", AmountMinor: 100}, "from mesti"},
-		{"short from", convertCurrencyIn{From: "JP", To: "MYR", AmountMinor: 100}, "from mesti"},
-		{"dotted from", convertCurrencyIn{From: "JPY!", To: "MYR", AmountMinor: 100}, "from mesti"},
-		{"empty to", convertCurrencyIn{From: "JPY", To: "", AmountMinor: 100}, "to mesti"},
-		{"numeric to", convertCurrencyIn{From: "JPY", To: "12", AmountMinor: 100}, "to mesti"},
+		{"empty from", convertCurrencyIn{From: "", To: "MYR", AmountMinor: 100}, "from must be"},
+		{"short from", convertCurrencyIn{From: "JP", To: "MYR", AmountMinor: 100}, "from must be"},
+		{"dotted from", convertCurrencyIn{From: "JPY!", To: "MYR", AmountMinor: 100}, "from must be"},
+		{"empty to", convertCurrencyIn{From: "JPY", To: "", AmountMinor: 100}, "to must be"},
+		{"numeric to", convertCurrencyIn{From: "JPY", To: "12", AmountMinor: 100}, "to must be"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -128,7 +128,7 @@ func TestConvertCurrencyWithoutARateStore(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a refusal when no rate store is wired")
 	}
-	if !strings.Contains(err.Error(), "tidak tersedia") {
+	if !strings.Contains(err.Error(), "not available") {
 		t.Fatalf("error = %q, want it to say the rates are unavailable", err)
 	}
 }

@@ -256,6 +256,11 @@ func main() {
 		// name instead of retyping its own priced choice list (phase 1; the
 		// courier source of phase 2 resolves through the same store).
 		shippingStore := dbstore.NewShippingStore(pool)
+		// Card t_135c3c72: per-workspace processing-fee rates (one per CHIP
+		// payment method) + the merchant's pass-on acknowledgement. Shared by
+		// the public checkout, the dashboard settings and the MCP tools so all
+		// three resolve the same policy.
+		paymentFeeStore := dbstore.NewPaymentFeeStore(pool)
 		// Shipping phase 2: the courier provider layer. The credentials are read
 		// from files OUTSIDE the repo at startup (a missing file is a valid
 		// "not configured yet" state — production Lalamove keys and a live
@@ -335,6 +340,11 @@ func main() {
 		// Issue #199: receipts + merchant notifications go through the
 		// background email queue (nil when Valkey is absent → synchronous).
 		pay.EmailQueue = deps.EmailQueue
+		// Card t_1c4a3f54: a receipt that cannot even be enqueued (the job never
+		// reaches Valkey, so the queue's own retry ladder cannot see it) is
+		// recorded as an account-scoped `enqueue_failed` delivery event instead
+		// of vanishing into a log line.
+		pay.EmailEvents = deps.EmailDeliveryEvents
 		// Issue #557: EventLookup is REQUIRED. The dynamic callback-key path
 		// resolves the owning account from the callback payload's purchase id
 		// before it can fetch that account's CHIP verification key. Without it
@@ -426,7 +436,10 @@ func main() {
 			// reports is {APP_BASE_URL}/f/{slug}, not the hosted tenant
 			// subdomain shape (card t_6c0badbe). The SAME flag decides serving
 			// in the PublicHandlers literal below, so the printed URL and the
-			// host that answers cannot disagree.
+			// host that answers cannot disagree — and it decides the WORKSPACE
+			// address every REST payload prints (card t_48a93084). Wired here,
+			// from the flag and never inferred from BaseURL: the hosted product's
+			// APP_BASE_URL is its own apex (issue #77).
 			SelfHosted: cfg.SelfHosted,
 			Users:      usersStore,
 			// Nil interface when S3 is unconfigured — see makeStore. Never a
@@ -453,6 +466,9 @@ func main() {
 			Media: mediaStore,
 			// Shipping zones + rates (managed rate source for shipping blocks).
 			Shipping: shippingStore,
+			// Card t_135c3c72: per-method processing-fee rates + the pass-on
+			// acknowledgement (dashboard settings surface).
+			PaymentFees: paymentFeeStore,
 			// Shipping phase 2: the courier providers (a live quotation, with
 			// the workspace's zone rates as the fallback).
 			Couriers: couriers,
@@ -498,6 +514,10 @@ func main() {
 			Accounts: accounts, Products: products, Sales: sales,
 			ProductVariations: dbstore.NewProductVariationStore(pool),
 			Subs:              subs, Keys: keys, Forms: formsStore,
+			// Card t_48a93084: the address list_workspaces/create_workspace/
+			// update_workspace print. Flag-decided, never inferred from the URL
+			// (the hosted apex would satisfy a host test — issue #77).
+			SelfHosted: cfg.SelfHosted, AppBaseURL: cfg.AppBaseURL,
 			Webhooks:         dbstore.NewWebhookStore(pool),
 			Workspaces:       workspacesStore,
 			WorkspaceMembers: workspaceMembersStore,
@@ -519,6 +539,9 @@ func main() {
 			// Shipping zones + rates: the read/write MCP surface behind the
 			// dashboard's Shipping tab (same store, same validation).
 			Shipping: shippingStore,
+			// Card t_135c3c72: the read/write MCP surface behind the dashboard's
+			// Payment fees tab (same store, same acknowledgement gate).
+			PaymentFees: paymentFeeStore,
 			// Shipping phase 2: the courier providers, the SAME bundle the
 			// dashboard uses, so an agent and the form settings page agree on
 			// what is connected and what is still missing.
@@ -643,6 +666,10 @@ func main() {
 			// block can name (phase 1). Nil would make a zone-rate block refuse
 			// the order, so the store is wired here with every other store.
 			Shipping: shippingStore,
+			// Card t_135c3c72: the processing-fee policy the checkout page and
+			// the order route price from. Nil → fee inactive (pre-feature
+			// behaviour), never a silently different total.
+			PaymentFees: paymentFeeStore,
 			// Shipping phase 2: the courier providers. Nil (or a deployment
 			// with no credentials) is a supported state — a courier block then
 			// falls back to its zone set, which is why this is not fatal.

@@ -1,17 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageLoading } from "../../components/PageLoading";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
+import { currencyLabel, formatPrice } from "../../lib/money";
 import { workspaceQuery, workspaceUrl } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
 import { matchesTypedValue } from "../../lib/typedConfirm";
+import { customAmountBody, limitsToInputs } from "../../lib/productAmounts";
 
 type Product = {
   id: string;
@@ -26,6 +29,13 @@ type Product = {
   trial_days?: number;
   subscription_charges?: number | null; // null = infinite
   stock?: number | null;
+  // Card t_06851d88: pay-what-you-want (custom_amount) limits, integer sen.
+  // min is 0 for every other type; max null = no cap; suggested null = the
+  // buyer's field starts empty. `price_sen` of such a product is a DISPLAY
+  // value derived from these, never the amount charged.
+  min_price_sen?: number;
+  max_price_sen?: number | null;
+  suggested_price_sen?: number | null;
   active: boolean;
   created_at?: string;
 };
@@ -112,15 +122,23 @@ type TrashedProduct = {
   can_purge: boolean;
 };
 
-const money = (sen: number) =>
-  `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
-
 const PER_PAGE = 10;
 
 export default function Products() {
   const { t } = useI18n();
-  const { anon, bundle, role, workspace, user } = useSession();
+  const { anon, bundle, role, workspace, user, currency } = useSession();
   const router = useRouter();
+
+  // Card t_d5f359c7: a product's price_sen has no currency of its own — it is
+  // charged in the WORKSPACE's currency (#185), so that is the label. "—" until
+  // the session bundle resolves; never the old hardcoded RM.
+  const money = (sen: number) => formatPrice(sen, currency);
+  // The price FIELD's own label names the same money ("Price (RM)" → "Price (US$)").
+  const priceLabel = t("prod.price", { cur: currencyLabel(currency) });
+  // Card t_7eb3b623: the pay-what-you-want limits, labelled in the same money.
+  const minLabel = t("prod.minAmount", { cur: currencyLabel(currency) });
+  const maxLabel = t("prod.maxAmount", { cur: currencyLabel(currency) });
+  const sugLabel = t("prod.suggestedAmount", { cur: currencyLabel(currency) });
 
   // Issue #163: read_only members see no write actions (add/edit/archive).
   // manage + admin keep full write access.
@@ -335,6 +353,19 @@ export default function Products() {
   // ── create ───────────────────────────────────────────────────────────────
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
+  // Card t_7eb3b623: pay-what-you-want. A custom_amount product has no asking
+  // price — the buyer types the amount and the SERVER checks it against these
+  // limits (httpapi/custom_amount.go). They are typed in the workspace currency
+  // and converted to integer sen in ONE place (lib/productAmounts.ts).
+  //
+  // The minimum starts BLANK, not at the RM1.00 floor: this row labels its
+  // fields with placeholders (there is no room for a visible <label> beside an
+  // inline input), and a pre-filled value hides its own placeholder — the
+  // merchant would see an unlabelled "1.00". `required` is what stops an empty
+  // submit; the floor itself is the server's rule, not a default typed here.
+  const [minAmt, setMinAmt] = useState("");
+  const [maxAmt, setMaxAmt] = useState("");
+  const [sugAmt, setSugAmt] = useState("");
   const [type, setType] = useState("one_time");
   const [period, setPeriod] = useState("month");
   const [trial, setTrial] = useState("0");
@@ -347,19 +378,43 @@ export default function Products() {
   async function add(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    // Issue #551: this is the ONE place RM (typed) becomes sen. Never rely on
-    // Math.max/parseFloat to sanitise — a non-finite result serialises to null,
-    // which the server decodes as 0 (a silent RM 0.00 product). Reject it visibly.
-    const rm = parseFloat(price);
-    if (!Number.isFinite(rm) || rm < 0) {
-      setError(t("prod.priceInvalid", { name: name || t("prod.price") }));
-      return;
-    }
-    const priceSen = Math.round(rm * 100);
-    const r = await fetch(`/api/rest/products${workspaceQuery()}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    // Card t_7eb3b623: a custom_amount product is created from its LIMITS — the
+    // API accepts a request with no `price_sen` for this type and derives the
+    // display price from the suggestion (else the floor). Sending one would be a
+    // bogus asking price, so the two payloads are built separately.
+    let body: Record<string, unknown>;
+    if (type === "custom_amount") {
+      const parsed = customAmountBody(minAmt, maxAmt, sugAmt);
+      if (!parsed.ok) {
+        // A value that is not money at all. The LIMITS themselves (the RM1.00
+        // floor, min <= max) are the server's rule; this only refuses to send
+        // junk — `JSON.stringify(Infinity)` is null, which Go decodes as 0.
+        const field =
+          parsed.field === "min"
+            ? minLabel
+            : parsed.field === "max"
+              ? maxLabel
+              : sugLabel;
+        setError(t("prod.priceInvalid", { name: field }));
+        return;
+      }
+      body = {
+        name,
+        type,
+        ...parsed.body,
+        stock: stock === "" ? null : Math.max(0, parseInt(stock, 10) || 0),
+      };
+    } else {
+      // Issue #551: this is the ONE place RM (typed) becomes sen. Never rely on
+      // Math.max/parseFloat to sanitise — a non-finite result serialises to null,
+      // which the server decodes as 0 (a silent RM 0.00 product). Reject it visibly.
+      const rm = parseFloat(price);
+      if (!Number.isFinite(rm) || rm < 0) {
+        setError(t("prod.priceInvalid", { name: name || priceLabel }));
+        return;
+      }
+      const priceSen = Math.round(rm * 100);
+      body = {
         name,
         price_sen: priceSen,
         type,
@@ -372,7 +427,12 @@ export default function Products() {
         // round 13c: next-charge date policy.
         schedule_mode: type === "subscription" ? schedMode : undefined,
         stock: stock === "" ? null : Math.max(0, parseInt(stock, 10) || 0),
-      }),
+      };
+    }
+    const r = await fetch(`/api/rest/products${workspaceQuery()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
     if (r.ok) {
       setName("");
@@ -381,9 +441,19 @@ export default function Products() {
       setTrial("0");
       setCharges("");
       setChargesMode("infinite");
+      setMinAmt("");
+      setMaxAmt("");
+      setSugAmt("");
       load();
     } else {
       const d = await r.json().catch(() => ({}));
+      // A refused limit triple surfaces on this row's own failure line. The
+      // API's English sentence stays on the wire for REST/MCP clients: the
+      // dashboard never renders server prose (lib/apiErr), and a class-code
+      // refusal (`request.badRequest`) has no dictionary sentence — so the
+      // merchant is told the action failed, not the rule (measured: max below
+      // min answers "Failed to add product"). The rule itself is NOT re-typed
+      // here — the server is the authority.
       setError(apiErr(d, t("prod.failedAdd"), t));
     }
   }
@@ -545,6 +615,12 @@ export default function Products() {
     period: "month",
     trial: "0",
     stock: "",
+    // Card t_7eb3b623: the pay-what-you-want limits as typed text, seeded from
+    // the stored product (integer sen) by limitsToInputs below. Only sent when
+    // the type is custom_amount — for every other type the server refuses them.
+    min: "1.00",
+    max: "",
+    suggested: "",
     active: true,
     images: [] as string[],
     chargesMode: "infinite" as "infinite" | "fixed",
@@ -557,11 +633,16 @@ export default function Products() {
 
   const isDirty = useMemo(() => {
     if (!editing) return false;
+    const seed = limitsToInputs(editing);
     return (
       editForm.name !== editing.name ||
       editForm.description !== (editing.description || "") ||
       editForm.price !== (editing.price_sen / 100).toFixed(2) ||
       editForm.type !== editing.type ||
+      (editForm.type === "custom_amount" &&
+        (editForm.min !== seed.min ||
+          editForm.max !== seed.max ||
+          editForm.suggested !== seed.suggested)) ||
       (editForm.type === "subscription" &&
         editForm.period !== (editing.billing_period || "month")) ||
       editForm.trial !== String(editing.trial_days ?? 0) ||
@@ -590,6 +671,11 @@ export default function Products() {
         description: editing.description || "",
         price: (editing.price_sen / 100).toFixed(2),
         type: editing.type,
+        // Card t_7eb3b623: the limits are seeded from the stored product. A
+        // product that is not (yet) custom_amount stores min 0, which the server
+        // would refuse — limitsToInputs starts such a product at the floor, so
+        // switching it to pay-what-you-want begins from an accepted value.
+        ...limitsToInputs(editing),
         period: editing.billing_period || "month",
         trial: String(editing.trial_days ?? 0),
         stock: typeof editing.stock === "number" ? String(editing.stock) : "",
@@ -663,30 +749,61 @@ export default function Products() {
     }
     const stockVal = editForm.stock === "" ? null : Math.max(0, parseInt(editForm.stock, 10) || 0);
     const trialVal = Math.max(0, parseInt(editForm.trial || "0", 10) || 0);
-    // Issue #551: same single-conversion rule as the create path — RM typed here
-    // becomes sen exactly once, and a non-finite price is refused visibly.
-    const rm = parseFloat(editForm.price);
-    if (!Number.isFinite(rm) || rm < 0) {
-      setDrawerError(t("prod.priceInvalid", { name: editForm.name || t("prod.price") }));
-      setDrawerBusy(false);
-      return;
+    // Card t_7eb3b623: a custom_amount product is saved from its LIMITS, not
+    // from a price — the server derives the display price from the suggestion
+    // (else the floor) and ignores any price_sen sent alongside the limits. The
+    // inline dialog must therefore be able to CONVERT a product to this type,
+    // which is only possible if it sends the limits with the type change.
+    let body: Record<string, unknown>;
+    if (editForm.type === "custom_amount") {
+      const parsed = customAmountBody(editForm.min, editForm.max, editForm.suggested);
+      if (!parsed.ok) {
+        const field =
+          parsed.field === "min" ? minLabel : parsed.field === "max" ? maxLabel : sugLabel;
+        setDrawerError(t("prod.priceInvalid", { name: field }));
+        setDrawerBusy(false);
+        return;
+      }
+      body = {
+        name: editForm.name,
+        description: editForm.description,
+        type: editForm.type,
+        stock: stockVal,
+        active: editForm.active,
+        images: editForm.images,
+        ...parsed.body,
+        // A custom_amount product cannot carry variations (the server refuses
+        // such a product), so converting one clears them — the same wholesale
+        // replace ProductEditor's save performs. An empty list is an explicit
+        // "replace with none"; omitting the key would KEEP them.
+        variations: [],
+      };
+    } else {
+      // Issue #551: same single-conversion rule as the create path — RM typed here
+      // becomes sen exactly once, and a non-finite price is refused visibly.
+      const rm = parseFloat(editForm.price);
+      if (!Number.isFinite(rm) || rm < 0) {
+        setDrawerError(t("prod.priceInvalid", { name: editForm.name || priceLabel }));
+        setDrawerBusy(false);
+        return;
+      }
+      body = {
+        name: editForm.name,
+        description: editForm.description,
+        price_sen: Math.round(rm * 100),
+        type: editForm.type,
+        billing_period: editForm.type === "subscription" ? editForm.period : undefined,
+        trial_days: editForm.type === "subscription" ? trialVal : undefined,
+        subscription_charges:
+          editForm.type === "subscription" && editForm.chargesMode === "fixed"
+            ? Math.max(1, parseInt(editForm.charges || "1", 10) || 1)
+            : null,
+        schedule_mode: editForm.type === "subscription" ? editForm.scheduleMode : undefined,
+        stock: stockVal,
+        active: editForm.active,
+        images: editForm.images,
+      };
     }
-    const body: Record<string, unknown> = {
-      name: editForm.name,
-      description: editForm.description,
-      price_sen: Math.round(rm * 100),
-      type: editForm.type,
-      billing_period: editForm.type === "subscription" ? editForm.period : undefined,
-      trial_days: editForm.type === "subscription" ? trialVal : undefined,
-      subscription_charges:
-        editForm.type === "subscription" && editForm.chargesMode === "fixed"
-          ? Math.max(1, parseInt(editForm.charges || "1", 10) || 1)
-          : null,
-      schedule_mode: editForm.type === "subscription" ? editForm.scheduleMode : undefined,
-      stock: stockVal,
-      active: editForm.active,
-      images: editForm.images,
-    };
     try {
       const r = await fetch(`/api/rest/products/${editing.id}${workspaceQuery()}`, {
         method: "PUT",
@@ -720,14 +837,25 @@ export default function Products() {
         ? t("prod.inStock", { n: p.stock })
         : t("prod.soldOut")
       : "∞";
-  const typeLabel = (p: Product) =>
-    p.type === "subscription"
-      ? `${t("prod.subscription")} · ${p.billing_period === "year" ? t("prod.yearly") : t("prod.monthly")}${
-          typeof p.subscription_charges === "number"
-            ? ` · ${t("prod.chargesNLabel", { n: p.subscription_charges })}`
-            : ""
-        }`
-      : t("prod.oneTime");
+  const typeLabel = (p: Product) => {
+    if (p.type === "subscription") {
+      return `${t("prod.subscription")} · ${p.billing_period === "year" ? t("prod.yearly") : t("prod.monthly")}${
+        typeof p.subscription_charges === "number"
+          ? ` · ${t("prod.chargesNLabel", { n: p.subscription_charges })}`
+          : ""
+      }`;
+    }
+    // Pay-what-you-want: the range is the useful part of the type, so the list
+    // shows the limits the server will enforce — a bare "Pay what you want" row
+    // would not tell a merchant which of their products is capped (card
+    // t_7eb3b623).
+    if (p.type === "custom_amount") {
+      return p.max_price_sen != null
+        ? `${t("prod.customAmount")} · ${money(p.min_price_sen ?? 0)}–${money(p.max_price_sen)}`
+        : t("prod.customAmount");
+    }
+    return t("prod.oneTime");
+  };
 
   return (
     <Shell active="products">
@@ -737,6 +865,16 @@ export default function Products() {
             <h1 className="max-w-xl text-xl font-semibold tracking-tight">{t("prod.title")}</h1>
             <p className="max-w-xl text-sm text-[var(--jf-muted)]">{t("prod.subtitle")}</p>
           </div>
+          {/* Card t_7eb3b623: the full-page editor (/products/new) shipped in
+              issue #151 and NOTHING linked to it — `git grep 'products/new'`
+              across web/ returned nothing. It is the only surface with the
+              product-type switch, variations and images, so an orphaned route
+              hid all three. */}
+          {canWrite && (
+            <Link href="/products/new" className="jf-btn-primary">
+              {t("prod.newTitle")}
+            </Link>
+          )}
         </div>
 
         {/* Add form */}
@@ -754,14 +892,57 @@ export default function Products() {
               The name is announced only from `aria-label`, and it survives the
               user typing (the placeholder does not). */}
           <input value={name} onChange={(e) => setName(e.target.value)} required placeholder={t("prod.name")} aria-label={t("prod.name")} className="jf-input min-w-48 flex-1" />
-          <input value={price} onChange={(e) => setPrice(e.target.value)} required type="number" step="0.01" min="0" placeholder={t("prod.price")} aria-label={t("prod.price")} className="jf-input w-32" />
-          <input value={stock} onChange={(e) => setStock(e.target.value)} type="number" min="0" placeholder={t("prod.stock")} aria-label={t("prod.stock")} className="jf-input w-40" />
-          {/* The row's three `<select>`s carry the same `aria-label` treatment
-              for the `select-name` reason above (card t_3fbc6953). */}
-          <select value={type} onChange={(e) => setType(e.target.value)} className="jf-input w-36" aria-label={t("prod.type")}>
+          {/* The row's `<select>`s carry the same `aria-label` treatment for the
+              `select-name` reason above (card t_3fbc6953). The TYPE selector sits
+              before the money fields because it decides which of them apply — a
+              pay-what-you-want product has no asking price, only limits (card
+              t_7eb3b623). */}
+          <select value={type} onChange={(e) => setType(e.target.value)} className="jf-input w-48" aria-label={t("prod.type")}>
             <option value="one_time">{t("prod.oneTime")}</option>
             <option value="subscription">{t("prod.subscription")}</option>
+            <option value="custom_amount">{t("prod.customAmount")}</option>
           </select>
+          {type === "custom_amount" ? (
+            // Pay what you want: no asking price — the buyer types the amount and
+            // the SERVER checks it against these limits (httpapi/custom_amount.go).
+            // The minimum is required there, so it is required here; a maximum or
+            // a suggestion left blank means "none" (null), not zero.
+            <>
+              <input
+                value={minAmt}
+                onChange={(e) => setMinAmt(e.target.value)}
+                required
+                type="number"
+                step="0.01"
+                placeholder={minLabel}
+                aria-label={minLabel}
+                className="jf-input w-48"
+              />
+              <input
+                value={maxAmt}
+                onChange={(e) => setMaxAmt(e.target.value)}
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder={maxLabel}
+                aria-label={maxLabel}
+                className="jf-input w-52"
+              />
+              <input
+                value={sugAmt}
+                onChange={(e) => setSugAmt(e.target.value)}
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder={sugLabel}
+                aria-label={sugLabel}
+                className="jf-input w-52"
+              />
+            </>
+          ) : (
+            <input value={price} onChange={(e) => setPrice(e.target.value)} required type="number" step="0.01" min="0" placeholder={priceLabel} aria-label={priceLabel} className="jf-input w-32" />
+          )}
+          <input value={stock} onChange={(e) => setStock(e.target.value)} type="number" min="0" placeholder={t("prod.stock")} aria-label={t("prod.stock")} className="jf-input w-40" />
           {type === "subscription" && (
             <>
               <select value={period} onChange={(e) => setPeriod(e.target.value)} className="jf-input w-32" aria-label={t("prod.billingPeriod")}>
@@ -988,6 +1169,7 @@ export default function Products() {
             <option value="all">{t("prod.filterAll")}</option>
             <option value="one_time">{t("prod.oneTime")}</option>
             <option value="subscription">{t("prod.subscription")}</option>
+            <option value="custom_amount">{t("prod.customAmount")}</option>
           </select>
           <select value={stockFilter} onChange={(e) => setStockFilter(e.target.value)} className="jf-input w-44" aria-label={t("prod.filterStock")}>
             <option value="all">{t("prod.filterStockAll")}</option>
@@ -1020,7 +1202,7 @@ export default function Products() {
                 <th className="hidden px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)] sm:table-cell">
                   {t("prod.stockShort")}
                 </th>
-                <SortHeader label={t("prod.price")} k="price_sen" sortKey={sortKey} sortDir={sortDir} onToggle={toggleSort} className="px-2 py-3" />
+                <SortHeader label={priceLabel} k="price_sen" sortKey={sortKey} sortDir={sortDir} onToggle={toggleSort} className="px-2 py-3" />
                 <th className="px-2 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
                   {t("dash.status")}
                 </th>
@@ -1110,6 +1292,13 @@ export default function Products() {
                         <button onClick={() => setEditing(p)} className="jf-btn-ghost">
                           {t("forms.edit")}
                         </button>
+                        {/* Card t_7eb3b623: the inline dialog above is the QUICK
+                            edit (name/type/money/stock); the full-page editor at
+                            /products/<id>/edit is where variations and images
+                            live, and it had no link at all. */}
+                        <Link href={`/products/${p.id}/edit`} className="jf-btn-ghost">
+                          {t("prod.openEditor")}
+                        </Link>
                         <button
                           onClick={() => archiveOne(p)}
                           className="jf-btn-ghost text-rose-700"
@@ -1228,18 +1417,6 @@ export default function Products() {
                       />
                     </label>
                     <label className="block text-sm font-medium">
-                      {t("prod.price")}
-                      <input
-                        value={editForm.price}
-                        onChange={(e) => setEditForm((f) => ({ ...f, price: e.target.value }))}
-                        required
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        className="jf-input mt-1"
-                      />
-                    </label>
-                    <label className="block text-sm font-medium">
                       {t("prod.type")}
                       <select
                         value={editForm.type}
@@ -1248,8 +1425,70 @@ export default function Products() {
                       >
                         <option value="one_time">{t("prod.oneTime")}</option>
                         <option value="subscription">{t("prod.subscription")}</option>
+                        <option value="custom_amount">{t("prod.customAmount")}</option>
                       </select>
                     </label>
+                    {editForm.type === "custom_amount" ? (
+                      // Card t_7eb3b623: pay what you want — no asking price. The
+                      // limits ARE the contract the server checks the buyer's
+                      // amount against (httpapi/custom_amount.go). The floor and
+                      // min <= max stay the server's rule: a refused triple comes
+                      // back as this dialog's failure line, never as a second copy
+                      // of the rule typed into the client.
+                      <>
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <label className="block text-sm font-medium">
+                            {minLabel}
+                            <input
+                              value={editForm.min}
+                              onChange={(e) => setEditForm((f) => ({ ...f, min: e.target.value }))}
+                              required
+                              type="number"
+                              step="0.01"
+                              className="jf-input mt-1"
+                            />
+                          </label>
+                          <label className="block text-sm font-medium">
+                            {maxLabel}
+                            <input
+                              value={editForm.max}
+                              onChange={(e) => setEditForm((f) => ({ ...f, max: e.target.value }))}
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              className="jf-input mt-1"
+                            />
+                          </label>
+                          <label className="block text-sm font-medium">
+                            {sugLabel}
+                            <input
+                              value={editForm.suggested}
+                              onChange={(e) =>
+                                setEditForm((f) => ({ ...f, suggested: e.target.value }))
+                              }
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              className="jf-input mt-1"
+                            />
+                          </label>
+                        </div>
+                        <p className="text-xs text-[var(--jf-muted)]">{t("prod.amountHint")}</p>
+                      </>
+                    ) : (
+                      <label className="block text-sm font-medium">
+                        {priceLabel}
+                        <input
+                          value={editForm.price}
+                          onChange={(e) => setEditForm((f) => ({ ...f, price: e.target.value }))}
+                          required
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="jf-input mt-1"
+                        />
+                      </label>
+                    )}
                   </>
                 )}
 

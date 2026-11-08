@@ -417,7 +417,7 @@ func TestRespondAIErrDistinguishesCredentialFromInternal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/v1/rest/chat", nil)
-			respondAIErr(rec, req, tc.err, "pembantu chat tidak tersedia")
+			respondAIErr(rec, req, tc.err, "the chat assistant is not available")
 			if rec.Code != tc.want {
 				t.Fatalf("respondAIErr(%v) = %d, want %d (body %s)", tc.err, rec.Code, tc.want,
 					rec.Body.String())

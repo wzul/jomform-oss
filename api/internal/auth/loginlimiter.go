@@ -48,7 +48,7 @@ const (
 	FailDelayThreshold     = 5
 	FailLockoutThreshold   = 10
 	LoginLockoutRetryAfter = "900" // seconds — tells the client when the window clears
-	LoginLockoutMessage    = "Terlalu banyak percubaan. Sila cuba lagi dalam 15 minit."
+	LoginLockoutMessage    = "Too many attempts. Try again in 15 minutes."
 
 	// LoginFailDelay is the wall-clock penalty the login gate spends before the
 	// password check on every attempt that arrives while the source address

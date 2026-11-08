@@ -562,8 +562,11 @@ body {
    millisecond value. */
 
 /* Entrance: fade + 4px rise. The one pattern every "this appeared" surface
-   uses (public form card, an admin row, a panel). `both` fill so the element
-   is at its start state before the animation begins and never flashes at full
+   uses: the public form card (Go renderer, `class="card jf-enter"`), the
+   dashboard ROUTE CONTAINER (Shell.tsx — keyed on the pathname, so it fires on
+   a route change and never on a re-render), and any panel that appears in
+   answer to a click (the template picker). `both` fill so the element is at
+   its start state before the animation begins and never flashes at full
    opacity for a frame first.
 
    The keyframes are named `jf-rise-in`, NOT `jf-enter`, and the difference was
@@ -588,12 +591,18 @@ body {
   to   { opacity: 1; transform: none; }
 }
 
-/* Toast: 8px rise + fade (twice --jf-rise). Defined as part of the pattern set;
-   this card applies it on no surface (a toast is not one of the four), so it is
-   here for the next surface that shows one rather than being re-invented. */
+/* Toast: 8px rise + fade (twice --jf-rise). Applied by components/Toast.tsx,
+   the ONE save-confirmation surface (settings, media, admin, feedback) — the
+   message can appear several screens below the button that caused it, so the
+   entrance is what draws the eye to it. The class is applied to the status
+   element itself, not the positioner: a transform on the fixed wrapper would
+   make it the containing block for anything it carries. */
 @keyframes jf-toast-in {
   from { opacity: 0; transform: translateY(calc(var(--jf-rise) * 2)); }
   to   { opacity: 1; transform: none; }
+}
+.jf-toast-in {
+  animation: jf-toast-in var(--jf-dur-base) var(--jf-ease-out) both;
 }
 
 /* Submit → success: the success block fades in on the same card the form was
@@ -615,13 +624,21 @@ body {
   animation: jf-check-in var(--jf-dur-fast) var(--jf-ease-out) both;
 }
 
-/* The outgoing half of the submit crossfade. Applied by JS immediately before
-   the form's content is replaced; the JS reads `--jf-dur-fast` from the
-   document so the delay and the transition are the same number. */
-.jf-swap-out {
-  opacity: 0;
-  transition: opacity var(--jf-dur-fast) var(--jf-ease-out);
-}
+/* The outgoing half of the submit crossfade is NOT declared here (card
+   t_ea568318). It used to be — `.jf-swap-out`, an opacity transition applied by
+   JS immediately before the form's content is replaced — and card t_5b61dbaa
+   (PR #1560) gave it `animation: none !important` so the fade actually painted
+   instead of being pinned at the entrance animation's origin value.
+
+   That fix is untouched where it is used: the JS that applies the class is the
+   PUBLIC form's, and the Go API renders that page with its own copy of this
+   layer (`publicMotionCSS`, api/internal/httpapi/render_blocks.go), which the
+   `api/internal/httpapi/motion_test.go` assertions read. The rule here had no
+   web consumer at all — no component in this bundle applies `.jf-swap-out`, and
+   none can: no web surface swaps a submitted form for its success block. A
+   pattern declared in this stylesheet and applied nowhere is the exact defect
+   this card exists to fix, so the copy is gone rather than left reading like a
+   shipped feature of the web app. */
 
 /* Skeleton: the pulse the app shipped was a bare `animate-pulse` — infinite and
    immediate, so a fast response showed one half-cycle of a flash before the
@@ -707,6 +724,7 @@ body {
   .jf-ok-in,
   .jf-check,
   .jf-stagger-row,
+  .jf-toast-in,
   .jf-skeleton {
     animation: none !important;
   }

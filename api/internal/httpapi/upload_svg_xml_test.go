@@ -79,7 +79,7 @@ func TestSVGUploadRefusesANonWellFormedDocument(t *testing.T) {
 			if eb.Code != CodeUploadSVGInvalid {
 				t.Fatalf("error code = %q, want %q (the dashboard maps the code, never the prose)", eb.Code, CodeUploadSVGInvalid)
 			}
-			if !strings.Contains(eb.Error, "bukan XML yang sah") || !strings.Contains(eb.Error, "sebelum elemen akar") {
+			if !strings.Contains(eb.Error, "not valid XML") || !strings.Contains(eb.Error, "before the root element") {
 				t.Fatalf("error prose = %q, want a message naming the XML problem", eb.Error)
 			}
 			if after := storedSVGRows(t); after != before {

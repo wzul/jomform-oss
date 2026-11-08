@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
 // Issue #601: the suppression list, explained for the platform owner.
 //
@@ -12,12 +13,12 @@ import type { Metadata } from "next";
 // how to take an address off it), which is the part an operator needs; the
 // sending-identity hardening this list belongs to is summarised at the end.
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "Email suppression list — JomForm Docs",
   description:
     "How JomForm's email suppression list works: which addresses are never mailed, why each one was added, and how to remove a false positive.",
-  alternates: { canonical: "https://jomform.com/docs/ses-reputation" },
-};
+  path: "/docs/ses-reputation",
+});
 
 type Section = { id: string; title: string; body: string[] };
 
@@ -62,16 +63,16 @@ const SECTIONS: Section[] = [
     id: "never-delivered",
     title: "Addresses that can never receive mail",
     body: [
-      "Some recipient domains cannot accept delivery at all, so a message sent to one is a guaranteed hard bounce — the kind the provider counts most heavily against the sending identity. JomForm refuses these before the mail is handed to the provider, so nothing is sent and no bounce is generated.",
+      "Some recipient domains cannot accept delivery at all, so a message sent to one is a guaranteed hard bounce — the kind the provider counts most heavily against the sending identity. On the sign-in (magic-link) request path, JomForm refuses these before the mail is handed to the provider, so nothing is sent and no bounce is generated. That is the path this check covers today: mail sent to the same address by any other path (a receipt, a notification, a password reset) is still handed to the provider, and it is the suppression list — filled by the bounce the provider then reports — that stops the next attempt.",
       "Three families are refused: the reserved example domains (example.com, example.net, example.org and anything under them — example.com even publishes an MX record that says \"this domain accepts no mail\"); the reserved test names (.test, .invalid, .localhost and .example); and a short list of disposable/temp-mail providers that QA was aiming at, whose domains do resolve but whose addresses are throwaway.",
-      "A refused request is indistinguishable from an accepted one: the same confirmation is shown whether the address exists, does not exist, or was refused, so the check cannot be used to find out who has an account. The refusal is counted on the monitoring endpoint and logged without the address, so the platform owner can see how often it happens without any address being kept.",
+      "A refused magic-link request is indistinguishable from an accepted one: the same confirmation is shown whether the address exists, does not exist, or was refused, so the check cannot be used to find out who has an account. The refusal is counted on the monitoring endpoint and logged without the address, so the platform owner can see how often it happens without any address being kept.",
     ],
   },
   {
     id: "related",
     title: "Related protections",
     body: [
-      "Two further layers guard the sending identity. A verification circuit breaker pauses verification email when the bounce ratio over the last hour crosses a threshold, so an attack that registers many fake addresses cannot burn the identity before anyone notices; it resets by itself after a quiet hour. An MX pre-check rejects a registration outright when the address's domain does not accept mail at all, before anything is sent.",
+      "Two further layers guard the sending identity. A verification circuit breaker pauses verification email when the bounce ratio over the last hour crosses a threshold, so an attack that registers many fake addresses cannot burn the identity before anyone notices; it resets by itself after a quiet hour. An MX pre-check rejects a registration outright when the address's domain does not accept mail at all — including a domain whose DNS answer says exactly that, a \"null\" MX record — before anything is sent.",
       "Buyer receipts are not gated by the breaker — a paying customer's receipt must not be delayed by an unrelated bounce storm — but they ARE checked against the suppression list, for the same reason everything else is.",
     ],
   },

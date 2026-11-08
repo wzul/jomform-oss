@@ -47,7 +47,7 @@ const WorkspaceNameMaxChars = 120
 // switches: it fell through to the default and the merchant got
 // `500 {"error":"internal error"}` for a name that is simply too long. It is
 // returned as a stated 400 by REST and as a readable tool error by MCP.
-var ErrWorkspaceNameLength = errors.New("nama workspace maksimum 120 aksara")
+var ErrWorkspaceNameLength = errors.New("workspace name maximum 120 characters")
 
 // ValidateWorkspaceName trims a caller-supplied workspace name and reports
 // whether it is within the cap. It returns the NORMALISED (trimmed) name so a
@@ -89,7 +89,7 @@ func ValidateWorkspaceName(name string) (string, error) {
 // the MCP restore tool knows it too) rather than by a second sentinel — a
 // second exported error would have to be added to every switch that answers this
 // one, and the two are the same condition seen from two verbs.
-var ErrWorkspaceSlugTaken = errors.New("slug sudah digunakan")
+var ErrWorkspaceSlugTaken = errors.New("slug already in use")
 
 // WorkspaceStore wraps workspaces.
 type WorkspaceStore struct{ pool *pgxpool.Pool }
@@ -355,7 +355,7 @@ func (s *WorkspaceStore) CreateForAccount(ctx context.Context, ownerUserID, name
 
 // errAccountNotLinkable is returned when an account cannot be linked to a new
 // workspace (not owned by the caller, or already linked elsewhere).
-var errAccountNotLinkable = errors.New("akaun tidak boleh dikaitkan dengan workspace")
+var errAccountNotLinkable = errors.New("this account cannot be linked to a workspace")
 
 // ── Legacy onboarding: an owner who already has content but no workspace ──────
 //
@@ -451,10 +451,12 @@ func (s *WorkspaceStore) LegacyUnscopedAccount(ctx context.Context, ownerUserID 
 //     carrying table is synced explicitly here, as migration 000012 did.
 //   - affiliates.workspace_id is NOT NULL (000047), so no affiliate row can be
 //     sitting on an unscoped account — there is nothing to move for it.
-//   - workspace_settings / workspace_email_settings are materialised lazily by
-//     their own accessors (Settings / EmailSettings INSERT ... ON CONFLICT DO
-//     NOTHING), and workspace_legal_pages / workspace_invites are per-workspace
-//     content that simply does not exist yet. None need a row at provisioning.
+//   - workspace_settings is materialised lazily by its accessor (Settings
+//     INSERT ... ON CONFLICT DO NOTHING); workspace_email_settings is not
+//     materialised at all — its accessor (EmailSettings) answers the built-in
+//     defaults in memory and writes nothing, so the row appears with the first
+//     save. workspace_legal_pages / workspace_invites are per-workspace content
+//     that simply does not exist yet. None need a row at provisioning.
 func (s *WorkspaceStore) ProvisionLegacyWorkspace(ctx context.Context, ownerUserID, name, wantSlug string) (*Workspace, error) {
 	sp := &Workspace{}
 	tx, err := s.pool.Begin(ctx)
@@ -557,7 +559,7 @@ func (s *WorkspaceStore) ProvisionLegacyWorkspace(ctx context.Context, ownerUser
 
 // errWorkspaceSlugExhausted is returned when every deterministic slug candidate
 // was already taken. Bounded rather than unbounded so a caller always terminates.
-var errWorkspaceSlugExhausted = errors.New("slug workspace tidak dapat dijana")
+var errWorkspaceSlugExhausted = errors.New("a workspace slug could not be generated")
 
 // ProvisionLegacyWorkspaceForOwner is the entry point the LOGIN path uses: it
 // resolves the owner's email itself and applies Wan's derivation rule (first 5
@@ -598,7 +600,7 @@ func (s *WorkspaceStore) ProvisionLegacyWorkspaceForOwner(ctx context.Context, o
 	slug := SlugFromEmailLocalPart(email, ownerUserID)
 	if _, err := ValidateWorkspaceSlug(slug); err != nil {
 		if !errors.Is(err, ErrWorkspaceSlugReservedSubdomain) {
-			return nil, fmt.Errorf("slug legacy tidak sah (%q): %w", slug, err)
+			return nil, fmt.Errorf("invalid legacy slug (%q): %w", slug, err)
 		}
 		// Policy refusal about the name we derived, which the user never chose
 		// and must not be shown: fall through and let the ladder (below) pick
@@ -687,11 +689,11 @@ type WorkspaceRenameResult struct {
 
 // ErrWorkspaceSlugNotOwned means a slug change was requested by a caller without
 // the authority to move the tenant's public address.
-var ErrWorkspaceSlugNotOwned = errors.New("hanya pemilik workspace boleh menukar slug")
+var ErrWorkspaceSlugNotOwned = errors.New("only the workspace owner can change the slug")
 
 // ErrWorkspaceNoChange means the request asked for the values the workspace
 // already has.
-var ErrWorkspaceNoChange = errors.New("tiada perubahan")
+var ErrWorkspaceNoChange = errors.New("no changes")
 
 // Rename updates a workspace's name and/or slug in ONE transaction, remembering
 // the old slug so every URL already handed out keeps working.
@@ -993,9 +995,9 @@ type WorkspaceDeleteError struct {
 
 func (e *WorkspaceDeleteError) Error() string {
 	if e.Reason == "last_workspace" {
-		return "sekurang-kurangnya satu workspace diperlukan"
+		return "at least one workspace is required"
 	}
-	return "workspace tidak boleh dipadam"
+	return "the workspace cannot be deleted"
 }
 
 // IsLastWorkspaceError reports whether err is the "you would be left with no
@@ -1093,13 +1095,13 @@ func nullableKeyID(id string) any {
 
 // blockerLabels names each blocker for the refusal message.
 var blockerLabels = map[string]string{
-	"forms":         "borang (termasuk yang dalam tong sampah)",
-	"products":      "produk",
-	"sales":         "jualan",
-	"subscriptions": "langganan (sejarah bil)",
-	"domains":       "domain tersuai",
-	"webhooks":      "webhook",
-	"api_keys":      "kunci API",
+	"forms":         "forms (including those in the Trash)",
+	"products":      "products",
+	"sales":         "sales",
+	"subscriptions": "subscriptions (billing history)",
+	"domains":       "custom domains",
+	"webhooks":      "webhooks",
+	"api_keys":      "API keys",
 }
 
 // CountEmpty reports what still blocks the workspace from being deleted — the
@@ -1590,7 +1592,7 @@ var ErrWorkspaceNotFound = errors.New("workspace not found")
 // ErrWorkspaceHasSales refuses a purge of a workspace that has EVER received a
 // sale. Sales are the merchant's record of money received; a purge destroys
 // them, so a workspace holding any is not purgable.
-var ErrWorkspaceHasSales = errors.New("workspace ini mempunyai jualan")
+var ErrWorkspaceHasSales = errors.New("this workspace has sales")
 
 // AccountIsLive reports whether accountID belongs to a workspace that is NOT in
 // the bin.

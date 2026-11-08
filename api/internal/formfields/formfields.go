@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/wzul/jomform/api/internal/auth"
+	"github.com/wzul/jomform/api/internal/buyertext"
 )
 
 // Choice is one option of a select/radio/checkbox/image-choice field. It is
@@ -153,23 +154,23 @@ func ValidateContract(fields []Field) error {
 		fl.FieldID = strings.TrimSpace(fl.FieldID)
 		fl.Label = strings.TrimSpace(fl.Label)
 		if fl.FieldID == "" {
-			return fmt.Errorf("medan #%d: field_id wajib", i+1)
+			return fmt.Errorf("field #%d: field_id is required", i+1)
 		}
 		if fieldIDUnsafe.MatchString(fl.FieldID) {
-			return fmt.Errorf("medan #%d: field_id tidak sah (hanya a-z, 0-9, _ , -)", i+1)
+			return fmt.Errorf("field #%d: invalid field_id (only a-z, 0-9, _ , -)", i+1)
 		}
 		if seen[fl.FieldID] {
-			return fmt.Errorf("medan #%d: field_id %q didaftar dua kali", i+1, fl.FieldID)
+			return fmt.Errorf("field #%d: field_id %q is registered twice", i+1, fl.FieldID)
 		}
 		seen[fl.FieldID] = true
 		if fl.Type == "" {
-			return fmt.Errorf("medan #%d: type wajib", i+1)
+			return fmt.Errorf("field #%d: type is required", i+1)
 		}
 		if !ValidTypes[fl.Type] {
-			return fmt.Errorf("medan #%d: type %q tidak sah", i+1, fl.Type)
+			return fmt.Errorf("field #%d: invalid type %q", i+1, fl.Type)
 		}
 		if fl.Label == "" {
-			return fmt.Errorf("medan #%d: label wajib", i+1)
+			return fmt.Errorf("field #%d: label is required", i+1)
 		}
 	}
 	return nil
@@ -234,7 +235,7 @@ func ValidateFields(regs []Field, fields map[string]string) error {
 		val, present := fields[r.FieldID]
 		if r.Required {
 			if !present || strings.TrimSpace(val) == "" {
-				return fmt.Errorf("medan wajib tidak diisi: %s", r.Label)
+				return buyertext.New(buyertext.CodeFieldRequired, map[string]string{"label": r.Label})
 			}
 		}
 		if !present || strings.TrimSpace(val) == "" {
@@ -243,15 +244,15 @@ func ValidateFields(regs []Field, fields map[string]string) error {
 		switch r.Type {
 		case "email":
 			if !auth.ValidEmail(val) {
-				return fmt.Errorf("emel tidak sah: %s", r.Label)
+				return buyertext.New(buyertext.CodeFieldEmailInvalid, map[string]string{"label": r.Label})
 			}
 		case "website":
 			if !ValidWebsiteURL(val) {
-				return fmt.Errorf("URL tidak sah: %s", r.Label)
+				return buyertext.New(buyertext.CodeFieldURLInvalid, map[string]string{"label": r.Label})
 			}
 		case "number":
 			if _, err := strconv.ParseFloat(val, 64); err != nil {
-				return fmt.Errorf("nombor tidak sah: %s", r.Label)
+				return buyertext.New(buyertext.CodeFieldNumberInvalid, map[string]string{"label": r.Label})
 			}
 		case "select", "radio", "image-choice":
 			// Card t_efd99d75: these are the types whose control can only
@@ -266,14 +267,14 @@ func ValidateFields(regs []Field, fields map[string]string) error {
 			// registered_fields contract may legitimately omit them, and a
 			// contract that carries no choices has nothing to compare against.
 			if !declaredChoice(r.Choices, val) {
-				return fmt.Errorf("pilihan tidak sah: %s", r.Label)
+				return buyertext.New(buyertext.CodeFieldChoiceInvalid, map[string]string{"label": r.Label})
 			}
 		}
 		// Optional per-field validation pattern (string form).
 		if pat, ok := r.Validation.(string); ok && pat != "" {
 			re, err := regexp.Compile(pat)
 			if err == nil && !re.MatchString(val) {
-				return fmt.Errorf("nilai tidak sah: %s", r.Label)
+				return buyertext.New(buyertext.CodeFieldValueInvalid, map[string]string{"label": r.Label})
 			}
 		}
 	}

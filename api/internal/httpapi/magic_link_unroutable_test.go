@@ -149,7 +149,7 @@ func TestMagicLinkRefusedRecipientNeverReachesTheMailer(t *testing.T) {
 	}{
 		{"nonexistent address on a reserved domain", "nonexistent-t_c161c7d2@example.com"},
 		{"existing account on a reserved domain", reservedExisting},
-		{"disposable domain", "bounce-" + randSuffix() + "@example.com"},
+		{"disposable domain", "bounce-" + randSuffix() + "@uberip.com"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := postJSON(mux, "/v1/auth/magic-link/request", map[string]any{"email": tc.email}, uniqueTestIP())

@@ -130,8 +130,15 @@ func (s *Service) chargeSubscription(ctx context.Context, sub *dbstore.Subscript
 		Reference:       "SUB-" + sub.ID[:8] + "-" + time.Now().UTC().Format("060102"),
 		Purchase: chip.PurchaseDetails{
 			Currency: s.workspaceCurrency(ctx, sub.AccountID),
+			// Card t_129664c9: CHIP prints this title on ITS hosted checkout
+			// page exactly as sent, and the buyer's language never reaches that
+			// page, so there is no per-buyer wording to choose — one language
+			// for everyone, and it is English: the product's default for
+			// buyer-facing text, the language of the Reference token in the same
+			// request, and the only one of the two a buyer who does not read
+			// Malay can still understand.
 			Products: []chip.Product{{
-				Name:     fmt.Sprintf("Langganan #%s", sub.ProductID),
+				Name:     fmt.Sprintf("Subscription #%s", sub.ProductID),
 				Price:    sub.AmountSen,
 				Quantity: "1",
 			}},

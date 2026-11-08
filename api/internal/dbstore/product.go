@@ -19,10 +19,21 @@ type Product struct {
 	// #185). Set from the workspace's currency at creation; a later workspace currency
 	// change applies to new products going forward (existing prices keep their
 	// original currency).
-	Currency            string
-	Images              []string
-	Stock               *int
-	Type                string // one_time | subscription
+	Currency string
+	Images   []string
+	Stock    *int
+	Type     string // one_time | subscription | custom_amount
+	// MinPriceSen / MaxPriceSen / SuggestedPriceSen are the buyer-chosen-amount
+	// bounds of a custom_amount (pay-what-you-want) product, in integer sen.
+	// MaxPriceSen nil = no upper bound; SuggestedPriceSen nil = no pre-filled
+	// amount. They are zero/nil on every other product type.
+	//
+	// PriceSen on a custom_amount product is a DISPLAY value only (the
+	// suggested amount, else the floor): the charge comes from the amount the
+	// buyer typed, validated server-side against MinPriceSen/MaxPriceSen.
+	MinPriceSen         int64
+	MaxPriceSen         *int64
+	SuggestedPriceSen   *int64
 	BillingPeriod       string // month | year when subscription
 	TrialDays           int
 	SubscriptionCharges *int // NULL = infinite; N = stop after Nth charge
@@ -52,14 +63,14 @@ var ErrProductNotFound = errors.New("product not found")
 // live in `sales.items` JSONB, so the delete itself would succeed and silently
 // detach every sale from the product it records. Sales are history: history is
 // never destroyed by deleting the thing that produced it.
-var ErrProductHasSales = errors.New("produk ini mempunyai jualan")
+var ErrProductHasSales = errors.New("this product has sales")
 
 // ErrProductHasSubscriptions refuses a permanent purge of a product a customer
 // is still subscribed to. `subscriptions.product_id` is ON DELETE RESTRICT, so
 // without this named refusal the delete would surface as a raw SQLSTATE 23503
 // and a 500 — a billing commitment is not something a purge may quietly take
 // with it, and the caller is told which obstacle to clear.
-var ErrProductHasSubscriptions = errors.New("produk ini masih ada langganan aktif")
+var ErrProductHasSubscriptions = errors.New("this product still has an active subscription")
 
 // ProductStore wraps pgx for products.
 type ProductStore struct{ pool *pgxpool.Pool }
@@ -74,7 +85,8 @@ func NewProductStore(pool *pgxpool.Pool) *ProductStore { return &ProductStore{po
 // product is invisible everywhere except the dedicated trash query.
 const productSelect = `SELECT id, account_id, name, COALESCE(description,''), price_sen, currency,
 	images, stock, type, COALESCE(billing_period,''), trial_days, subscription_charges, active, created_at, updated_at,
-	COALESCE(schedule_mode, 'from_payment'), deleted_at
+	COALESCE(schedule_mode, 'from_payment'), deleted_at,
+	min_price_sen, max_price_sen, suggested_price_sen
 	FROM products WHERE deleted_at IS NULL`
 
 // scanProductFull scans a productSelect row (the shared destination list, so a
@@ -91,18 +103,20 @@ func (s *ProductStore) scanProductFull(row rowScanner) (*Product, error) {
 	q := &Product{}
 	err := row.Scan(&q.ID, &q.AccountID, &q.Name, &q.Description, &q.PriceSen, &q.Currency,
 		&q.Images, &q.Stock, &q.Type, &q.BillingPeriod, &q.TrialDays, &q.SubscriptionCharges,
-		&q.Active, &q.CreatedAt, &q.UpdatedAt, &q.ScheduleMode, &q.DeletedAt)
+		&q.Active, &q.CreatedAt, &q.UpdatedAt, &q.ScheduleMode, &q.DeletedAt,
+		&q.MinPriceSen, &q.MaxPriceSen, &q.SuggestedPriceSen)
 	return q, err
 }
 
 // Create inserts a product.
 func (s *ProductStore) Create(ctx context.Context, p *Product) error {
 	return s.pool.QueryRow(ctx,
-		`INSERT INTO products (account_id, name, description, price_sen, currency, type, billing_period, trial_days, subscription_charges, stock, images, schedule_mode)
-		 VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),$8,$9,$10,COALESCE($11::jsonb,'[]'::jsonb),COALESCE(NULLIF($12,''),'from_payment'))
+		`INSERT INTO products (account_id, name, description, price_sen, currency, type, billing_period, trial_days, subscription_charges, stock, images, schedule_mode, min_price_sen, max_price_sen, suggested_price_sen)
+		 VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),$8,$9,$10,COALESCE($11::jsonb,'[]'::jsonb),COALESCE(NULLIF($12,''),'from_payment'),$13,$14,$15)
 		 RETURNING id, created_at, updated_at`,
 		p.AccountID, p.Name, p.Description, p.PriceSen, orDefault(p.Currency, "MYR"), p.Type, p.BillingPeriod,
 		p.TrialDays, p.SubscriptionCharges, p.Stock, p.Images, p.ScheduleMode,
+		p.MinPriceSen, p.MaxPriceSen, p.SuggestedPriceSen,
 	).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 }
 
@@ -291,7 +305,8 @@ func (s *ProductStore) SoftDelete(ctx context.Context, accountID, productID stri
 // one, on purpose — see the block comment above.
 const trashedProductSelect = `SELECT id, account_id, name, COALESCE(description,''), price_sen, currency,
 	images, stock, type, COALESCE(billing_period,''), trial_days, subscription_charges, active, created_at, updated_at,
-	COALESCE(schedule_mode, 'from_payment'), deleted_at
+	COALESCE(schedule_mode, 'from_payment'), deleted_at,
+	min_price_sen, max_price_sen, suggested_price_sen
 	FROM products WHERE deleted_at IS NOT NULL`
 
 // ListTrashed lists a set of accounts' trashed products, newest trash first.
@@ -610,11 +625,13 @@ func (s *ProductStore) DecrementStock(ctx context.Context, productID string, qty
 }
 
 // ErrOutOfStock rejects submissions past available inventory.
-var ErrOutOfStock = errors.New("produk telah habis (out of stock)")
+var ErrOutOfStock = errors.New("product is sold out (out of stock)")
 
 // Update modifies a product's editable fields (nil = unchanged).
 // Fields covered: name, description, price_sen, images[], stock, active, type,
-// billing_period, trial_days, subscription_charges. Money stays integer sen.
+// billing_period, trial_days, subscription_charges, schedule_mode, and the
+// custom_amount limits (min_price_sen / max_price_sen / suggested_price_sen).
+// Money stays integer sen.
 // When type is set to one_time, billing_period is forced NULL (a one-time
 // product can't carry a period); when type is subscription a caller-supplied
 // billing_period is applied, otherwise the stored one is kept. images == nil
@@ -625,7 +642,7 @@ var ErrOutOfStock = errors.New("produk telah habis (out of stock)")
 func (s *ProductStore) Update(ctx context.Context, accountID, productID string,
 	name, description *string, priceSen *int64, images *[]string, stock *int,
 	active *bool, typ, billingPeriod *string, trialDays *int, subscriptionCharges **int,
-	scheduleMode *string) error {
+	scheduleMode *string, minPriceSen *int64, maxPriceSen, suggestedPriceSen **int64) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE products SET
 		   name = COALESCE($3, name),
@@ -634,16 +651,21 @@ func (s *ProductStore) Update(ctx context.Context, accountID, productID string,
 		   images = CASE WHEN $6::boolean THEN $7::jsonb ELSE images END,
 		   stock = CASE WHEN $8::boolean THEN $9 ELSE stock END,
 		   type = COALESCE($10, type),
-		   billing_period = CASE WHEN COALESCE($10, type) = 'one_time' THEN NULL ELSE COALESCE($11, billing_period) END,
+		   billing_period = CASE WHEN COALESCE($10, type) IN ('one_time','custom_amount') THEN NULL ELSE COALESCE($11, billing_period) END,
 		   trial_days = COALESCE($12, trial_days),
 		   active = COALESCE($13, active),
 		   subscription_charges = CASE WHEN $14::boolean THEN $15 ELSE subscription_charges END,
 		   schedule_mode = COALESCE(NULLIF($16,''), schedule_mode),
+		   min_price_sen = COALESCE($17, min_price_sen),
+		   max_price_sen = CASE WHEN $18::boolean THEN $19 ELSE max_price_sen END,
+		   suggested_price_sen = CASE WHEN $20::boolean THEN $21 ELSE suggested_price_sen END,
 		   updated_at = now()
 		 WHERE id=$2 AND account_id=$1`,
 		accountID, productID, name, description, priceSen, images != nil, images,
 		stock != nil, stock, typ, billingPeriod, trialDays, active,
-		subscriptionCharges != nil, derefIntPtr(subscriptionCharges), derefStr(scheduleMode))
+		subscriptionCharges != nil, derefIntPtr(subscriptionCharges), derefStr(scheduleMode),
+		minPriceSen, maxPriceSen != nil, derefI64Ptr(maxPriceSen),
+		suggestedPriceSen != nil, derefI64Ptr(suggestedPriceSen))
 	if isNoSuchRow(err) {
 		return ErrProductNotFound
 	}
@@ -660,6 +682,16 @@ func (s *ProductStore) Update(ctx context.Context, accountID, productID string,
 // itself be nil, mapping to SQL NULL). Used to pass an optional nullable int
 // (e.g. subscription_charges) through a CASE WHEN guard.
 func derefIntPtr(p **int) *int {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// derefI64Ptr is derefIntPtr for int64 money columns (max_price_sen /
+// suggested_price_sen): nil = keep the stored value, &nil = set SQL NULL,
+// &N = set N.
+func derefI64Ptr(p **int64) *int64 {
 	if p == nil {
 		return nil
 	}

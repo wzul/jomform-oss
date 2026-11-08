@@ -230,7 +230,7 @@ test("a refused workspace delete leaves its reason readable, not wiped by its ow
   // The server's own refusal body: 400 + the wire prose + the class code. The
   // prose is what the dashboard must never print; the code is unknown to this
   // build, so the page's own sentence is the answer.
-  const REFUSAL_PROSE = "taip slug workspace (demo) untuk sahkan pemadaman";
+  const REFUSAL_PROSE = "type the workspace slug (demo) to confirm the deletion";
   await page.route(/(.*)\/api\/workspaces\/[^/]+(\?.*)?$/, (r) => {
     if (r.request().method() !== "DELETE") return r.fallback();
     return r.fulfill({
@@ -370,7 +370,7 @@ test("a refused workspace delete leaves the dialog usable again, not stuck on Wo
   // The same server refusal the guard above stubs: 400 + the wire prose + the
   // class code. `fallback()` keeps this route from shadowing the deletion-check
   // and trash stubs for every non-DELETE request.
-  const REFUSAL_PROSE = "taip slug workspace (demo) untuk sahkan pemadaman";
+  const REFUSAL_PROSE = "type the workspace slug (demo) to confirm the deletion";
   await page.route(/(.*)\/api\/workspaces\/[^/]+(\?.*)?$/, (r) => {
     if (r.request().method() !== "DELETE") return r.fallback();
     return r.fulfill({
@@ -470,7 +470,7 @@ test("a refused workspace delete leaves the dialog usable again, not stuck on Wo
 // Both are deterministic (no race): the failing refetch is the only thing that can
 // set `check` to null after a successful render, which is why a single settled read
 // is the evidence here and not a sampled window.
-const DELETE_REFUSAL_PROSE = "taip slug workspace (demo) untuk sahkan pemadaman";
+const DELETE_REFUSAL_PROSE = "type the workspace slug (demo) to confirm the deletion";
 
 /**
  * Stubs the two failures this card needs: the action is REFUSED by the server, and

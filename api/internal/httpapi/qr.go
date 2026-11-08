@@ -270,7 +270,7 @@ func writeQRStand(w http.ResponseWriter, title, table, target string) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := qrStandTmpl.Execute(w, data); err != nil {
-		http.Error(w, "ralat", http.StatusInternalServerError)
+		http.Error(w, "error", http.StatusInternalServerError)
 	}
 }
 

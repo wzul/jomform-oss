@@ -78,7 +78,7 @@ const EN = {
 const NAMED_CODE = "workspace.notFound";
 const NAMED_SENTENCE = DICT["apiErr.workspaceNotFound"].en;
 /** The server's own prose for the refusal — it must never reach the screen. */
-const SERVER_PROSE = "skop workspace diperlukan — pilih workspace dahulu";
+const SERVER_PROSE = "a workspace scope is required — pick a workspace first";
 
 /** The two-workspace session: the probe must not guess between them. */
 const BUNDLE = {

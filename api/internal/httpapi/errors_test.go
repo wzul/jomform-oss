@@ -104,19 +104,19 @@ func TestRespondErrUserActionable(t *testing.T) {
 		wantCode int
 		wantMsg  string
 	}{
-		{dbstore.ErrFormNotFound, http.StatusNotFound, "tidak dijumpai"},
-		{dbstore.ErrProductNotFound, http.StatusNotFound, "tidak dijumpai"},
-		{dbstore.ErrAPIKeyInvalid, http.StatusNotFound, "tidak dijumpai"},
+		{dbstore.ErrFormNotFound, http.StatusNotFound, "not found"},
+		{dbstore.ErrProductNotFound, http.StatusNotFound, "not found"},
+		{dbstore.ErrAPIKeyInvalid, http.StatusNotFound, "not found"},
 		// The workspace sentinel belongs in this family: it is a not-found, and
 		// card t_a71ee62b is about a route that answered 500 because the RAW
 		// driver miss (pgx.ErrNoRows / SQLSTATE 22P02) never became it. Any path
 		// that lets this sentinel reach respondErr — listWorkspaces, the
 		// settings reads on a stale id — must answer 404, not the default 500.
-		{dbstore.ErrWorkspaceNotFound, http.StatusNotFound, "tidak dijumpai"},
-		{payments.ErrNotFound, http.StatusNotFound, "tidak dijumpai"},
-		{dbstore.ErrEmailTaken, http.StatusConflict, "emel sudah didaftarkan"},
-		{dbstore.ErrOutOfStock, http.StatusConflict, "produk telah habis (out of stock)"},
-		{payments.ErrNotConfigured, http.StatusBadRequest, "chip belum dikonfigurasi akaun ini"},
+		{dbstore.ErrWorkspaceNotFound, http.StatusNotFound, "not found"},
+		{payments.ErrNotFound, http.StatusNotFound, "not found"},
+		{dbstore.ErrEmailTaken, http.StatusConflict, "email already registered"},
+		{dbstore.ErrOutOfStock, http.StatusConflict, "product is sold out (out of stock)"},
+		{payments.ErrNotConfigured, http.StatusBadRequest, "CHIP is not configured for this account"},
 	}
 	for _, c := range cases {
 		req := httptest.NewRequest("GET", "/v1/rest/forms", nil)

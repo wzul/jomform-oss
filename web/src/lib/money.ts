@@ -92,6 +92,43 @@ export function formatMoney(sen: number, currency?: string | null): string {
 
 export type SaleAmount = { sen: number; currency?: string | null };
 
+// ── PRICES vs RECORDED MONEY (card t_d5f359c7) ──────────────────────────────
+//
+// formatMoney above labels an amount that HAS a currency of its own — a sale
+// row keeps the currency it was charged in, so the row wins and the workspace
+// setting is irrelevant.
+//
+// A PRICE is the other direction: a product's price_sen, a subscription amount,
+// a builder option/shipping rate, a menu picker price. None of them carry a
+// currency — they are denominated in `workspace_settings.currency` and charged
+// in whatever that is when the sale happens (issue #185). So the workspace's
+// currency is the ONLY correct label, and it comes from the session bundle.
+//
+// WHY AN EM DASH WHEN THE CURRENCY IS UNKNOWN
+//   The bundle is fetched once per workspace and every price page shares it. A
+//   page whose own data can arrive FIRST (the products list is one query; the
+//   bundle is a dozen) must not paint an amount before it knows the money — the
+//   old fallback (a hardcoded RM) is exactly the defect. Rendering "—" for that
+//   window is honest: no amount is claimed until its currency is known.
+//
+//   formatPrice(1200, "USD") === "US$12.00"
+//   formatPrice(1200, "MYR") === "RM12.00"      (the shipped default, unchanged)
+//   formatPrice(1200, "")    === "—"            (currency not resolved yet)
+export function formatPrice(sen: number, workspaceCurrency?: string | null): string {
+  const c = (workspaceCurrency ?? "").trim();
+  if (c === "") return "—";
+  return formatMoney(sen, c);
+}
+
+// currencyLabel is what a FIELD LABEL names its money with (the "Price (RM)"
+// header/placeholder/aria-label on a price input). Same rule as formatPrice:
+// the workspace's currency when it is known, an ellipsis while the session is
+// still resolving it — never a guessed RM.
+export function currencyLabel(code?: string | null): string {
+  const c = (code ?? "").trim();
+  return c === "" ? "…" : currencySymbol(c);
+}
+
 // formatCurrencyTotals renders a per-currency total map — the shape the API's
 // `revenue_by_currency` / `paid_revenue_by_currency` fields carry — the same way
 // formatTotals renders a list of rows: ONE LABEL PER CURRENCY, never a sum

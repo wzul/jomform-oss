@@ -122,7 +122,8 @@ func Enabled(cfg map[string]any) bool {
 }
 
 // Validate checks the field-registration contract. Returns a human-readable
-// error message (Malay, matching the codebase) when the contract is invalid.
+// error message (English wire text; machine tokens such as `field_id` stay
+// verbatim) when the contract is invalid.
 //
 // Card t_73a5db6e: it also refuses an UNSATISFIABLE contract — a `required:true`
 // field whose controls do not exist in the HTML. The buyer's page can only
@@ -139,14 +140,14 @@ func Validate(c *Config) error {
 	seen := map[string]bool{}
 	for _, f := range c.Fields {
 		if strings.TrimSpace(f.ID) == "" {
-			return errField("field_id wajib")
+			return errField("field_id is required")
 		}
 		if seen[f.ID] {
-			return errField("field_id duplikat: " + f.ID)
+			return errField("duplicate field_id: " + f.ID)
 		}
 		seen[f.ID] = true
 		if !validType(f.Type) {
-			return errField("jenis medan tidak sah: " + f.Type)
+			return errField("invalid field type: " + f.Type)
 		}
 	}
 	if missing := MissingRequiredControls(c); len(missing) > 0 {
@@ -154,7 +155,7 @@ func Validate(c *Config) error {
 		for _, id := range missing {
 			quoted = append(quoted, `name="`+id+`"`)
 		}
-		return errField("medan wajib tiada dalam HTML (" + strings.Join(quoted, ", ") + ")")
+		return errField("required field missing from the HTML (" + strings.Join(quoted, ", ") + ")")
 	}
 	return nil
 }
@@ -200,7 +201,7 @@ func ValidateConfig(cfg map[string]any) error {
 	}
 	c := FromConfig(cfg)
 	if c == nil {
-		return errField("custom_html tidak sah")
+		return errField("invalid custom_html")
 	}
 	return Validate(c)
 }
@@ -603,7 +604,7 @@ func ScanCustomJS(js string) string {
 // and from every write site is what makes a re-wording a compile-time-visible
 // change instead of a silent loss of the code — the same reasoning as
 // mcpsrv.RoleManageRequiredLeadIn and objstore.SVGNotXMLMessageLeadIn.
-const RejectedLeadIn = "custom_js ditolak: "
+const RejectedLeadIn = "custom_js rejected: "
 
 // RejectedMessage builds the refusal sentence for a ScanCustomJS reason. A
 // reason is always non-empty here (callers test `reason != ""` first), so an

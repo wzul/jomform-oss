@@ -13,7 +13,7 @@ package httpapi
 //
 // The fix refuses the order in words, before the subscription/shipping
 // resolution (so a doomed order never makes a live courier quotation and never
-// records a sale): "tiada produk untuk dibayar". A delivery-only form has
+// records a sale): "There are no products to pay for". A delivery-only form has
 // nothing to sell; charging postage on an empty cart is not a sale.
 //
 // WHAT THESE PIN, and why each exists:
@@ -44,7 +44,9 @@ import (
 
 // deliveryOnlyRefusal is the buyer-facing sentence the route answers with. Kept
 // as a constant here so the test reads the production wording exactly.
-const deliveryOnlyRefusal = "tiada produk untuk dibayar"
+// The refusal is English on the wire and the form's language in `message`
+// (card t_874021eb): this fixture's form sets no lang, so both read English.
+const deliveryOnlyRefusal = "There are no products to pay for"
 
 // deliveryOnlyForm creates a PUBLISHED form in accountID whose builder config
 // carries exactly `blocks` — no "products" key at all, which is the shape

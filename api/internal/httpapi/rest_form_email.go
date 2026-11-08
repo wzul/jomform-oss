@@ -29,6 +29,11 @@ type formEmailSettingsView struct {
 }
 
 // getFormEmailSettings: GET /v1/rest/forms/{id}/email-settings
+//
+// A form that has never been configured answers the built-in defaults and does
+// NOT get a row: the read is a read (card t_3c67947d). The row is written by the
+// first PUT (saveFormEmailSettings), so `updated_at` still means "the merchant
+// edited these settings".
 func (h *RESTHandlers) getFormEmailSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
@@ -115,7 +120,7 @@ func (h *RESTHandlers) saveFormEmailSettings(w http.ResponseWriter, r *http.Requ
 		HTMLOverride           *bool `json:"html_override"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	formID := r.PathValue("id")

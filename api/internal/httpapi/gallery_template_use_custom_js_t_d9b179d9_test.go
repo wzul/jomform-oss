@@ -142,7 +142,7 @@ func TestGalleryUseTemplateRefusesBlockedCustomJSByTemplateID(t *testing.T) {
 				"Without it the dashboard's template picker renders its own generic failure sentence "+
 				"and names neither Custom JS nor the reason.", got, CodeFormCustomJSRejected, raw)
 		}
-		if got, want := decodeErrField(t, raw), "custom_js ditolak: "+tc.wantReason; got != want {
+		if got, want := decodeErrField(t, raw), "custom_js rejected: "+tc.wantReason; got != want {
 			t.Errorf("refusal for %s = %q, want %q — one rule, one wording", tc.name, got, want)
 		}
 		if after := liveForms(t, fx); after != before {

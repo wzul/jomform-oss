@@ -26,7 +26,7 @@ func randomToken() (string, error) {
 // workspaceMembersStore returns the workspace-member store, erroring when not wired.
 func (s *Server) workspaceMembersStore() (*dbstore.WorkspaceMemberStore, error) {
 	if s.deps.WorkspaceMembers == nil {
-		return nil, errors.New("workspace members tidak tersedia")
+		return nil, errors.New("workspace members not available")
 	}
 	return s.deps.WorkspaceMembers, nil
 }
@@ -48,7 +48,7 @@ func (s *Server) requireWorkspaceAdmin(ctx context.Context, workspaceID string) 
 	}
 	workspace, err := sp.ByID(ctx, workspaceID)
 	if err != nil || workspace == nil {
-		return "", errors.New("workspace tidak dijumpai")
+		return "", errors.New("workspace not found")
 	}
 	if workspace.Owner == owner {
 		return workspaceID, nil
@@ -61,7 +61,7 @@ func (s *Server) requireWorkspaceAdmin(ctx context.Context, workspaceID string) 
 	if aerr == nil && admin {
 		return workspaceID, nil
 	}
-	return "", errors.New("perlu admin workspace")
+	return "", errors.New("workspace admin required")
 }
 
 // requireWorkspaceAdminWrite is requireWorkspaceAdmin plus the API-key write
@@ -77,9 +77,9 @@ func (s *Server) requireWorkspaceAdminWrite(ctx context.Context, workspaceID str
 // ── invite_workspace_member ─────────────────────────────────────────────────────
 
 type inviteWorkspaceMemberIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	Email       string `json:"email" jsonschema:"Emel ahli yang dijemput"`
-	Role        string `json:"role,omitempty" jsonschema:"Peranan: read_only|manage|admin (lalai read_only)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	Email       string `json:"email" jsonschema:"Email of the invited member"`
+	Role        string `json:"role,omitempty" jsonschema:"Role: read_only|manage|admin (default read_only)"`
 }
 
 func (s *Server) inviteWorkspaceMember(
@@ -94,10 +94,10 @@ func (s *Server) inviteWorkspaceMember(
 		role = dbstore.RoleReadOnly
 	}
 	if !dbstore.ValidWorkspaceRole(role) {
-		return nil, nil, errors.New("role mesti read_only|manage|admin")
+		return nil, nil, errors.New("role must be read_only|manage|admin")
 	}
 	if in.Email == "" {
-		return nil, nil, errors.New("emel wajib")
+		return nil, nil, errors.New("email is required")
 	}
 	sm, err := s.workspaceMembersStore()
 	if err != nil {
@@ -126,7 +126,7 @@ func (s *Server) inviteWorkspaceMember(
 // ── list_workspace_members ──────────────────────────────────────────────────────
 
 type listWorkspaceMembersIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
 }
 
 type workspaceMemberOut struct {
@@ -160,9 +160,9 @@ func (s *Server) listWorkspaceMembers(
 // ── update_workspace_member_role ────────────────────────────────────────────────
 
 type updateWorkspaceMemberRoleIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	UserID      string `json:"user_id" jsonschema:"ID ahli (dari list_workspace_members)"`
-	Role        string `json:"role" jsonschema:"Peranan baharu: read_only|manage|admin"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	UserID      string `json:"user_id" jsonschema:"Member ID (from list_workspace_members)"`
+	Role        string `json:"role" jsonschema:"New role: read_only|manage|admin"`
 }
 
 func (s *Server) updateWorkspaceMemberRole(
@@ -173,7 +173,7 @@ func (s *Server) updateWorkspaceMemberRole(
 		return nil, nil, err
 	}
 	if !dbstore.ValidWorkspaceRole(in.Role) {
-		return nil, nil, errors.New("role mesti read_only|manage|admin")
+		return nil, nil, errors.New("role must be read_only|manage|admin")
 	}
 	sm, err := s.workspaceMembersStore()
 	if err != nil {
@@ -181,7 +181,7 @@ func (s *Server) updateWorkspaceMemberRole(
 	}
 	if err := sm.UpdateRole(ctx, in.WorkspaceID, in.UserID, in.Role); err != nil {
 		if errors.Is(err, dbstore.ErrNotWorkspaceMember) {
-			return nil, nil, errors.New("ahli tidak dijumpai")
+			return nil, nil, errors.New("member not found")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -191,8 +191,8 @@ func (s *Server) updateWorkspaceMemberRole(
 // ── cancel_workspace_invite ─────────────────────────────────────────────────────
 
 type cancelWorkspaceInviteIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	InviteID    string `json:"invite_id" jsonschema:"ID jemputan (dari list_workspace_invites)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	InviteID    string `json:"invite_id" jsonschema:"Invite ID (from list_workspace_invites)"`
 }
 
 func (s *Server) cancelWorkspaceInvite(
@@ -208,7 +208,7 @@ func (s *Server) cancelWorkspaceInvite(
 	}
 	if err := sm.DeleteInvite(ctx, in.WorkspaceID, in.InviteID); err != nil {
 		if errors.Is(err, dbstore.ErrNotWorkspaceMember) {
-			return nil, nil, errors.New("jemputan tidak dijumpai")
+			return nil, nil, errors.New("invitation not found")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -218,7 +218,7 @@ func (s *Server) cancelWorkspaceInvite(
 // ── list_workspace_invites ──────────────────────────────────────────────────────
 
 type listWorkspaceInvitesIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
 }
 
 type workspaceInviteOut struct {
@@ -252,8 +252,8 @@ func (s *Server) listWorkspaceInvites(
 // ── remove_workspace_member ─────────────────────────────────────────────────────
 
 type removeWorkspaceMemberIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	UserID      string `json:"user_id" jsonschema:"ID ahli (dari list_workspace_members)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	UserID      string `json:"user_id" jsonschema:"Member ID (from list_workspace_members)"`
 }
 
 func (s *Server) removeWorkspaceMember(
@@ -270,7 +270,7 @@ func (s *Server) removeWorkspaceMember(
 	}
 	workspace, err := sp.ByID(ctx, in.WorkspaceID)
 	if err == nil && workspace != nil && workspace.Owner == in.UserID {
-		return nil, nil, errors.New("pemilik workspace tidak boleh dibuang")
+		return nil, nil, errors.New("the workspace owner cannot be removed")
 	}
 	sm, err := s.workspaceMembersStore()
 	if err != nil {
@@ -278,7 +278,7 @@ func (s *Server) removeWorkspaceMember(
 	}
 	if err := sm.RemoveMember(ctx, in.WorkspaceID, in.UserID); err != nil {
 		if errors.Is(err, dbstore.ErrNotWorkspaceMember) {
-			return nil, nil, errors.New("ahli tidak dijumpai")
+			return nil, nil, errors.New("member not found")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}

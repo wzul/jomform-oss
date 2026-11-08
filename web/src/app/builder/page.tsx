@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useI18n } from "../../components/i18n";
+import { useSession } from "../../components/session";
+import { SessionFault } from "../../components/SessionFault";
+import { currencyLabel, formatPrice } from "../../lib/money";
 import { workspaceQuery, workspaceUrl } from "../../lib/workspace";
 import { canMove, moveBlock } from "../../lib/blockReorder";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
@@ -27,6 +30,7 @@ import {
 } from "../../lib/publishResult";
 import TemplatePicker from "../../components/TemplatePicker";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
+import { rateLimitErr } from "../../lib/rateLimitErr";
 import { formDescription } from "../../lib/formDescription";
 import { blockTypeLabel, isWithdrawnBlockType } from "../../lib/withdrawnBlock";
 import { hydrateBlockIds } from "../../lib/blockHydrate";
@@ -250,9 +254,6 @@ function uid() {
   return Math.random().toString(36).slice(2, 9);
 }
 
-const money = (sen: number) =>
-  `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
-
 /* default field labels, keyed for i18n */
 const FIELD_LABEL_KEY: Partial<Record<BlockType, import("../../components/i18n").Key>> = {
   name: "blk.fullName",
@@ -278,6 +279,16 @@ function defaultBlocks(products: { id: string; name: string; price_sen: number }
 export default function Builder() {
   const { t } = useI18n();
   const router = useRouter();
+  // Card t_d5f359c7: a product price is denominated in the WORKSPACE's currency
+  // (#185), never in a hardcoded RM. "—" until the session bundle resolves.
+  const { anon, currency, sessionError } = useSession();
+  const money = (sen: number) => formatPrice(sen, currency);
+  const priceLabel = t("bld.choicePrice", { cur: currencyLabel(currency) });
+  // Issue #503 convention, now that this page reads the session: an anonymous
+  // visitor goes to /landing rather than editing a form whose save would 401.
+  useEffect(() => {
+    if (anon) router.replace("/landing");
+  }, [anon, router]);
   /* translated palette/field labels; block type "textarea" displays as "Note" */
   /* Card t_3abab22c: a stored block whose type left the palette has no
      dictionary entry left either, and `t()` hands back the KEY when an entry is
@@ -1169,10 +1180,16 @@ export default function Builder() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
+        // A 429 here is NOT "a moment": this route's bucket is 5 an hour with a
+        // burst of 3 (api/internal/httpapi/rest.go, aiGenerateRatePerHour), so a
+        // drained client is refused with `Retry-After: 720` — twelve minutes.
+        // The shared mapper states the window the SERVER chose (and falls back
+        // to `apiErr.rateLimited` for a window it cannot phrase, e.g. the 1 s one
+        // the per-2/s upload bucket would produce). Returning "" for anything
+        // that is not a throttle keeps this surface's own failure sentence.
         setAiMsg(
-          r.status === 429
-            ? t("bld.aiRateLimited")
-            : t("bld.aiError", { error: apiErr(d, String(r.status), t) }),
+          rateLimitErr(r.status, r.headers.get("retry-after"), d, t) ||
+            t("bld.aiError", { error: apiErr(d, String(r.status), t) }),
         );
         return;
       }
@@ -1521,7 +1538,7 @@ export default function Builder() {
                   {(b.type === "option" || b.type === "shipping") && (
                     <input
                       id={fid("choicePrice", ci)}
-                      aria-label={`${t("bld.choicePrice")} ${ci + 1}`}
+                      aria-label={`${priceLabel} ${ci + 1}`}
                       type="number"
                       min={0}
                       step="0.01"
@@ -1532,8 +1549,8 @@ export default function Builder() {
                         ch[ci] = { ...ch[ci], price_sen: Number.isFinite(rm) && rm > 0 ? Math.round(rm * 100) : 0 };
                         upd({ choices: ch });
                       }}
-                      placeholder="RM"
-                      title={t("bld.choicePrice")}
+                      placeholder={currencyLabel(currency)}
+                      title={priceLabel}
                       className="w-20 rounded-md border border-[var(--jf-border)] bg-white px-2 py-1.5 text-xs outline-none focus:border-[var(--jf-accent)]/60"
                     />
                   )}
@@ -1920,6 +1937,13 @@ export default function Builder() {
     );
   }
 
+  // Card t_d5f359c7 made this page read the session bundle (for the workspace
+  // currency every price on the canvas is labelled with), so it owes the two
+  // duties every session page owes: an anonymous visitor is sent to /landing,
+  // and a SETTLED bootstrap fault renders the shared fault surface instead of a
+  // sentence-less canvas (sessionFault.test.ts / card t_d1c9a43a).
+  if (sessionError) return <SessionFault />;
+
   return (
     <main className="min-h-screen bg-[var(--jf-bg)] text-[var(--jf-text)]">
       {/* Issue #174: template picker on the new-form path (no ?form= param). */}
@@ -2246,7 +2270,7 @@ export default function Builder() {
              #652: on mobile the canvas and the edit panel are the same slot —
              selecting a block swaps the canvas for the panel below, so a tap on
              a field goes straight to its settings. */}
-        <section className={`p-4 md:p-6 ${mobileTab === "canvas" && !panelVisible ? "block" : "hidden"} md:block jf-panel-in`}>
+        <section className={`p-4 md:p-6 ${mobileTab === "canvas" && !panelVisible ? "block" : "hidden"} md:block jf-enter jf-panel-in`}>
           <div className="mx-auto max-w-full md:max-w-lg">
             {blocks.length === 0 && (
               <div
@@ -2625,6 +2649,9 @@ export default function Builder() {
 /* renders a non-interactive preview of each block type */
 function BlockPreview({ block, products }: { block: Block; products: Product[] }) {
   const { t } = useI18n();
+  // Card t_d5f359c7: prices on the canvas are workspace-currency PRICES (#185).
+  const { currency } = useSession();
+  const money = (sen: number) => formatPrice(sen, currency);
   const p = products.find((x) => x.id === block.productId);
   /* Card t_3abab22c: a block whose type the palette no longer offers can only
      come from a form saved BEFORE its withdrawal (nothing can add it now, and
@@ -2742,7 +2769,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
       return (
         <div className="flex items-center justify-between rounded-md border border-[var(--jf-border)] bg-slate-50 px-3 py-2">
           <span className="text-sm">{block.value || "Total"}</span>
-          <span className="text-sm font-medium text-[var(--jf-primary-on-tint)]">RM0.00</span>
+          <span className="text-sm font-medium text-[var(--jf-primary-on-tint)]">{formatPrice(0, currency)}</span>
         </div>
       );
     case "divider":

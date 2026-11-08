@@ -27,6 +27,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/wzul/jomform/api/internal/emailtext"
 )
 
 // requireLiveNotificationForMode is THE GUARD. It reads the form's mode through
@@ -189,9 +191,18 @@ func TestModeChangeBackToPaymentRePointsTheDefault(t *testing.T) {
 		t.Fatalf("payment form's live rules = %+v, want exactly one sale.paid — a sales form "+
 			"that stopped notifying on a sale is the worse regression", live)
 	}
-	if !strings.Contains(live[0].Subject, "{{ref_code}}") || !strings.Contains(live[0].Body, "RM {{amount}}") {
-		t.Errorf("re-pointed payment rule lost its sale placeholders:\nsubject=%q\nbody=%q",
+	// The re-pointed row stores NO template (card t_1768cb11): the event decides
+	// which dictionary kind renders at send time, and that kind is the one that
+	// carries the sale placeholders. Assert the resolution rather than the stored
+	// bytes, because an unedited default is now exactly the empty pair.
+	if live[0].Subject != "" || live[0].Body != "" {
+		t.Errorf("re-pointed payment rule stores text: subject=%q body=%q",
 			live[0].Subject, live[0].Body)
+	}
+	sale := emailtext.Text(emailtext.En, emailtext.NotificationSale, nil)
+	if !strings.Contains(sale.Subject, "{{ref_code}}") || !strings.Contains(sale.Body, "RM {{amount}}") {
+		t.Errorf("the sale template the re-pointed rule now renders lost its placeholders:\n"+
+			"subject=%q\nbody=%q", sale.Subject, sale.Body)
 	}
 }
 

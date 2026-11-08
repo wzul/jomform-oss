@@ -113,35 +113,54 @@ func TestUnknownFormAndWorkspaceLanguageResolvesToEnglish(t *testing.T) {
 // TestNotificationFollowsTheBuyerAxis mirrors the above for the per-form
 // notification (the merchant's "someone responded / paid" alert). It is part of
 // the buyer's submission flow, so it follows the buyer axis too — and a rule the
-// merchant never edited must not mail the Malay literal the database holds.
+// merchant never edited must not carry (or mail) the Malay literal the database
+// used to hold.
 func TestNotificationFollowsTheBuyerAxis(t *testing.T) {
-	// The rule EnsureDefault installs still holds the system template.
+	// The rule EnsureDefault installs stores NO template at all (card
+	// t_1768cb11): the subject and body are empty, and the dictionary supplies
+	// the text in the form's language. If a future change put the Malay literal
+	// back into the row, this is where it shows up.
 	_, _, defSubject, defBody := dbstore.DefaultNotification(dbstore.FormModeResponse)
-	if !emailtext.IsSystemDefault(emailtext.NotificationResponse, defSubject, defBody) {
-		t.Fatalf("the default rule's stored template is not recognised as a system default," +
-			" so a never-edited rule would keep mailing Malay")
+	if defSubject != "" || defBody != "" {
+		t.Fatalf("the default rule's stored subject/body = %q/%q, want empty strings — a language is "+
+			"pinned into a field the dashboard renders verbatim", defSubject, defBody)
 	}
 
-	for _, lang := range []string{"en", "ms", "zh"} {
+	// An empty rule, and a rule an older release wrote the literal into, must
+	// both resolve to the dictionary's template in ALL five locales.
+	legacySubject, legacyBody := emailtext.LegacyDefault(emailtext.NotificationResponse)
+	for _, lang := range emailtext.Langs {
 		want := emailtext.Text(lang, emailtext.NotificationResponse, nil)
-		gotSubject, gotBody := defSubject, defBody
-		if emailtext.IsSystemDefault(emailtext.NotificationResponse, gotSubject, gotBody) {
-			gotSubject, gotBody = want.Subject, want.Body
+		for _, stored := range [][2]string{
+			{defSubject, defBody},       // how this release writes it
+			{legacySubject, legacyBody}, // how the pre-000084 release wrote it
+		} {
+			gotSubject, gotBody := notificationMessage(
+				dbstore.NotifyEventResponseSubmitted, lang, stored[0], stored[1])
+			if gotSubject != want.Subject {
+				t.Errorf("lang %q: notification subject = %q, want %q", lang, gotSubject, want.Subject)
+			}
+			if gotBody != want.Body {
+				t.Errorf("lang %q: notification body is not the %s template", lang, lang)
+			}
 		}
-		if gotSubject != want.Subject {
-			t.Errorf("lang %q: notification subject = %q, want %q", lang, gotSubject, want.Subject)
-		}
-		if gotBody != want.Body {
-			t.Errorf("lang %q: notification body is not the %s template", lang, lang)
+		if lang == emailtext.En && strings.Contains(want.Subject, "Pendaftaran") {
+			t.Errorf("lang en: the resolved response subject is Malay: %q", want.Subject)
 		}
 	}
 
 	// A merchant-authored rule is NEVER rewritten — that is the other half of the
 	// same rule, and getting it wrong would silently translate a merchant's own
-	// words under him.
+	// words under him. Checked in every language, because "passed through" must
+	// not depend on which locale happens to be resolved.
 	merchantSubject, merchantBody := "My shop's alert", "Someone responded. Handle it."
-	if emailtext.IsSystemDefault(emailtext.NotificationResponse, merchantSubject, merchantBody) {
-		t.Fatal("merchant-authored copy was classified as a system default — it would be translated")
+	for _, lang := range emailtext.Langs {
+		gotSubject, gotBody := notificationMessage(
+			dbstore.NotifyEventResponseSubmitted, lang, merchantSubject, merchantBody)
+		if gotSubject != merchantSubject || gotBody != merchantBody {
+			t.Errorf("lang %q: merchant copy was translated or dropped: subject=%q body=%q",
+				lang, gotSubject, gotBody)
+		}
 	}
 }
 

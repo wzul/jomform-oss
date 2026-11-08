@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "Workspaces — JomForm Docs",
   description:
     "What a workspace owns, its public address, its currency and exchange rates, how you create one, and what moving one to the Trash (and deleting it for good) requires.",
-  alternates: { canonical: "https://jomform.com/docs/workspaces" },
-};
+  path: "/docs/workspaces",
+});
 
 // The full text behind the summaries on /docs (t_5425c958): "Workspaces
 // (your account's tenant)", "Renaming a workspace" and "Deleting a workspace".
@@ -71,10 +72,21 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "footer-legal-links",
+    title: "The storefront footer and its legal links",
+    body: [
+      "Every public form can carry a footer with your business name, registration number, contact details and up to three legal links (Privacy, Terms, Refund). It is one footer per WORKSPACE, set in Settings → Storefront and saved with \"Save footer\"; every form that workspace publishes shows it, on {slug}.jomform.com and on a custom domain alike.",
+      "The three URL fields take any https:// address, and a link to your own website always appears exactly as you typed it — JomForm does not fetch it and cannot know whether it works, so it is published unchanged.",
+      "A link on your workspace's OWN JomForm host is different, because JomForm serves those pages itself. Two things must both be true for it to appear: the address must be exactly https://{slug}.jomform.com/privacy, /terms or /refund (no trailing slash, no capitalised segment, no extra path), and that hosted page must have saved content in Settings → Legal. A link to your own host that fails either test is NOT published — the footer is dropped rather than carrying a link that answers 404.",
+      "When that happens you are told at the field you typed into: saving a legal URL the footer will not publish still succeeds and still stores exactly what you entered, and the field then shows the reason underneath it together with the address the route actually serves. The two reasons are a path JomForm does not serve (for example a trailing slash) and a hosted page with no saved text yet — in the second case write the page in Settings → Legal and save the footer again. An empty field is never reported: no link is not a problem.",
+      "The REST settings endpoints answer with the same verdict: GET /v1/workspaces/{id}/settings and the PUT that saves it both carry legal_link_status — one entry per field, giving shown plus the reason and the address the route actually serves when the link will not be published — so a client saving over REST sees exactly the reason the dashboard shows. An AI agent writing through the MCP tool set_workspace_settings sets the same three fields (privacy_url, terms_url, refund_url) and the footer applies the same rule, so it should point a hosted link at the canonical address with the page written, or use an address on the merchant's own website.",
+    ],
+  },
+  {
     id: "currency",
     title: "Workspace currency & exchange rates",
     body: [
-      "Everything a workspace sells is priced in its own currency: Settings → Currency sets it (default MYR), and the workspace's CHIP account inherits it for purchases. Changing it applies to NEW products and sales only — a completed sale keeps the currency it was paid in, a refund must be issued in that same currency, and nothing already recorded is ever re-priced or re-converted. The Sales page labels each amount with the currency its sale was recorded in, so after a switch an old MYR sale still reads RM24.90 while a new USD sale reads US$24.90 (the row carries it as currency on GET /v1/rest/sales and list_sales). The dashboard follows the same rule: the revenue stat, the 14-day chart and the per-form/per-product panels group their money by the currency each sale was recorded in and show one label per currency (RM24.90 + US$1.00) instead of adding different monies under one symbol, and the CSV export names the currency in its own column beside total/refunded/outstanding.",
+      "Everything a workspace sells is priced in its own currency: Settings → Currency sets it (default MYR), and the workspace's CHIP account inherits it for purchases. Changing it applies to NEW products and sales only — a completed sale keeps the currency it was paid in, a refund must be issued in that same currency, and nothing already recorded is ever re-priced or re-converted. The Sales page labels each amount with the currency its sale was recorded in, so after a switch an old MYR sale still reads RM24.90 while a new USD sale reads US$24.90 (the row carries it as currency on GET /v1/rest/sales and list_sales). The dashboard follows the same rule: the revenue stat, the 14-day chart and the per-form/per-product panels group their money by the currency each sale was recorded in and show one label per currency (RM24.90 + US$1.00) instead of adding different monies under one symbol, and the CSV export names the currency in its own column beside total/refunded/outstanding. A PRICE is the other direction: a product, subscription, builder option or shipping-rate amount has no currency of its own, so every price field, list and canvas label names the workspace's current currency — a workspace set to USD reads US$12.00 on Products and in the form builder, never RM12.00 — and switching the setting relabels those prices (only recorded sales keep their original money).",
       // Card t_467614db: the surface's old hint said the rate table was "used for
       // display/conversion of new amounts" while nothing in the product converted
       // an amount at all. The guide states what the table is (reference data) and

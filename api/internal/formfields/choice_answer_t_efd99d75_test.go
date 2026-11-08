@@ -63,14 +63,14 @@ func TestChoiceFieldsAcceptOnlyDeclaredValues(t *testing.T) {
 				// Assert the message, not merely "an error": the required-blank
 				// arm produces an error too, and only this text can tell the
 				// membership refusal apart from it.
-				if !strings.Contains(err.Error(), "pilihan tidak sah: Pilih "+typ) {
+				if !strings.Contains(err.Error(), "Invalid choice: Pilih "+typ) {
 					t.Errorf("%s: answer %q = %v, want the membership refusal for %q", typ, bad, err, "Pilih "+typ)
 				}
 			}
 			// The required arm keeps its own message: a blank answer is
 			// "missing", not "not offered".
 			err := ValidateFields(regs, nil)
-			if err == nil || !strings.Contains(err.Error(), "medan wajib tidak diisi: Pilih "+typ) {
+			if err == nil || !strings.Contains(err.Error(), "Pilih "+typ+" is required") {
 				t.Errorf("%s: blank required answer = %v, want the required refusal", typ, err)
 			}
 		})

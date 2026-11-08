@@ -33,7 +33,7 @@ type PurchaseArgs struct {
 
 // toCHIPProducts maps JomForm items to CHIP products. Prices already in sen.
 func toCHIPProducts(items []dbstore.SaleItem) []chip.Product {
-	out := make([]chip.Product, 0, len(items))
+	out := make([]chip.Product, 0, len(items)+1)
 	for _, it := range items {
 		out = append(out, chip.Product{
 			Name:     it.Name,
@@ -42,6 +42,54 @@ func toCHIPProducts(items []dbstore.SaleItem) []chip.Product {
 		})
 	}
 	return out
+}
+
+// chipProductsForSale is toCHIPProducts plus the buyer-borne processing fee as
+// its OWN line item (card t_135c3c72), so the CHIP checkout shows the charge
+// instead of a total that silently exceeds the item sum. The line carries the
+// FROZEN rate wording from the sale's snapshot, never the merchant's current
+// rate — the same rule the receipt follows.
+//
+// The amount CHIP actually charges is purchase.total_override (= sale.TotalSen),
+// which is what makes the fee exactly F even when shipping is also in the total.
+func chipProductsForSale(sale *dbstore.Sale) []chip.Product {
+	products := toCHIPProducts(sale.Items)
+	if sale.FeeSen > 0 {
+		products = append(products, chip.Product{
+			Name:     "Processing fee — " + FeeRateLabel(sale.FeeMethod, sale.FeeFixedSen, sale.FeePercentBp),
+			Price:    sale.FeeSen,
+			Quantity: "1",
+		})
+	}
+	return products
+}
+
+// feeWhitelist is the payment-method whitelist for a sale. A sale that carries a
+// processing fee is restricted to EXACTLY the method the buyer chose, so they
+// cannot switch to a method whose rate differs at the CHIP page after seeing the
+// charge (card t_135c3c72). A sale with no fee keeps the merchant's configured
+// whitelist unchanged.
+func feeWhitelist(sale *dbstore.Sale, configured []string) []string {
+	if sale.FeeMethod != "" {
+		return []string{sale.FeeMethod}
+	}
+	return configured
+}
+
+// totalOverride is the amount CHIP must charge for a sale: the sale's own total,
+// which includes shipping and the grossed-up processing fee — neither of which
+// `products` can express exactly.
+//
+// A non-positive total returns nil rather than 0: CHIP treats
+// `total_override: 0` as the PREAUTHORIZATION scenario (hold funds, charge
+// nothing), so sending 0 for an unpriced sale would silently turn a payment into
+// a card check. A sale with no total is left to CHIP's products sum instead.
+func totalOverride(sale *dbstore.Sale) *int64 {
+	if sale.TotalSen <= 0 {
+		return nil
+	}
+	t := sale.TotalSen
+	return &t
 }
 
 // saleClientDetails builds the CHIP client details from the sale's resolved
@@ -88,7 +136,7 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 		clientEmail = acc.ChipEmailFallback
 	}
 
-	whitelist := s.ResolveWhitelist(ctx, string(secret), sale.Currency, sale.TotalSen, acc.ChipMethodWhitelist)
+	whitelist := s.ResolveWhitelist(ctx, string(secret), sale.Currency, sale.TotalSen, feeWhitelist(sale, acc.ChipMethodWhitelist))
 
 	sRedirect, fRedirect := s.formRedirects(ctx, acc.ID, sale.FormID)
 	// Issue #83: thank-you redirects must land on the workspace subdomain (or
@@ -112,13 +160,17 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 		Client:                 saleClientDetails(sale, clientEmail),
 		ForceRecurring:         sale.SaleType == dbstore.SaleTypeSubscription, // card must be saved for future charges
 		Purchase: chip.PurchaseDetails{
-			Products:        toCHIPProducts(sale.Items),
+			Products:        chipProductsForSale(sale),
 			Currency:        sale.Currency,
 			Reference:       sale.RefCode,
 			SuccessRedirect: sRedirect,
 			FailureRedirect: fRedirect,
 			SuccessCallback: fmt.Sprintf("%s/v1/payments/chip/callback", s.BaseURL),
 			CreatorAgent:    "JomForm",
+			// Charged amount = the sale total (card t_135c3c72). CHIP computes
+			// the total from `products`, which cannot express shipping or a
+			// grossed-up fee exactly, so the server's own total is the amount.
+			TotalOverride: totalOverride(sale),
 		},
 	}
 
@@ -203,26 +255,20 @@ func (s *Service) ProcessCallbackTx(ctx context.Context, tx pgx.Tx, p *chip.Purc
 			}
 			slog.Info("sale_paid_auto_unspam", "sale", cur.ID, "ref", cur.RefCode)
 		}
-		if s.OnPaid != nil {
-			event := "sale.paid"
-			if cur.SaleType == dbstore.SaleTypeSubscription {
-				event = "subscription.charged"
-			}
-			go s.OnPaid(ctx, cur.AccountID, event, map[string]any{
-				"ref_code": cur.RefCode, "amount_sen": cur.TotalSen,
-				"buyer_email": cur.Client.Email, "purchase_id": p.ID,
-				// Issue #196: form-scoped webhooks key off the sale's form.
-				"form_id": cur.FormID,
-				// Issue #438: QR ordering flow — the table number the QR
-				// stand encoded, so the merchant's webhook knows where to serve.
-				"table_number": cur.TableNumber,
-			})
-		}
-		// Issue #193: fire per-form notifications on the paid event.
 		event := "sale.paid"
 		if cur.SaleType == dbstore.SaleTypeSubscription {
 			event = "subscription.charged"
 		}
+		s.goOnPaid(ctx, cur.AccountID, event, map[string]any{
+			"ref_code": cur.RefCode, "amount_sen": cur.TotalSen,
+			"buyer_email": cur.Client.Email, "purchase_id": p.ID,
+			// Issue #196: form-scoped webhooks key off the sale's form.
+			"form_id": cur.FormID,
+			// Issue #438: QR ordering flow — the table number the QR
+			// stand encoded, so the merchant's webhook knows where to serve.
+			"table_number": cur.TableNumber,
+		})
+		// Issue #193: fire per-form notifications on the paid event.
 		s.fireSaleNotifications(ctx, cur, event)
 		// Receipt (one-time sales only; subscription receipts follow their
 		// own charge lifecycle). Never blocks the payment flow.
@@ -246,11 +292,9 @@ func (s *Service) ProcessCallbackTx(ctx context.Context, tx pgx.Tx, p *chip.Purc
 				"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SaleFailed)
 			return nil
 		}
-		if s.OnPaid != nil {
-			go s.OnPaid(ctx, cur.AccountID, "sale.failed", map[string]any{
-				"ref_code": cur.RefCode, "buyer_email": cur.Client.Email,
-			})
-		}
+		s.goOnPaid(ctx, cur.AccountID, "sale.failed", map[string]any{
+			"ref_code": cur.RefCode, "buyer_email": cur.Client.Email,
+		})
 		// Issue #193: fire per-form notifications on the failed event.
 		s.fireSaleNotifications(ctx, cur, "sale.failed")
 		if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SaleFailed); err != nil {
@@ -285,21 +329,66 @@ func (s *Service) ProcessCallbackTx(ctx context.Context, tx pgx.Tx, p *chip.Purc
 		if err := s.Sales.SetRefundedSenTx(ctx, tx, cur.ID, cur.TotalSen); err != nil {
 			return err
 		}
-		if s.OnPaid != nil {
-			go s.OnPaid(ctx, cur.AccountID, "sale.refunded", map[string]any{
-				"ref_code": cur.RefCode, "buyer_email": cur.Client.Email,
-				"purchase_id": p.ID, "form_id": cur.FormID,
-			})
-		}
+		s.goOnPaid(ctx, cur.AccountID, "sale.refunded", map[string]any{
+			"ref_code": cur.RefCode, "buyer_email": cur.Client.Email,
+			"purchase_id": p.ID, "form_id": cur.FormID,
+		})
 		s.fireSaleNotifications(ctx, cur, "sale.refunded")
 	}
 	return nil
+}
+
+// webhookFanoutTimeout bounds the detached webhook fan-out (card t_e579a4c2).
+// The fan-out is a webhook list plus one enqueue per matching hook, so a minute
+// is generous; the point of the bound is that background work is not unbounded,
+// not that it is slow.
+const webhookFanoutTimeout = time.Minute
+
+// goOnPaid hands one outbound sale event to the OnPaid hook on a DETACHED
+// context (card t_e579a4c2).
+//
+// The hook runs in a goroutine that outlives the CHIP callback response, but it
+// used to be handed the REQUEST context. net/http cancels that context the
+// moment the response is written, and the fan-out's own work — list the active
+// webhooks, then enqueue a durable webhook_retries row for each — runs after
+// it. Both queries then failed with `context canceled` and the only trace was
+// slog.Error("wh_list"/"wh_enqueue"): the merchant never received sale.paid and
+// no retry row existed for the sweep to recover.
+//
+// Detaching at the goroutine boundary is the same fix the buyer receipt uses
+// (sendReceiptAsync): WithoutCancel keeps the request's values (log/trace
+// fields) and drops its cancellation and deadline, and the timeout bounds the
+// background work instead. Callers pass whatever context they have.
+func (s *Service) goOnPaid(ctx context.Context, accountID, event string, payload map[string]any) {
+	if s.OnPaid == nil {
+		return
+	}
+	hook := s.OnPaid
+	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), webhookFanoutTimeout)
+	go func() {
+		defer cancel()
+		hook(bgCtx, accountID, event, payload)
+	}()
 }
 
 // sendReceiptAsync builds and fires the buyer receipt for a one-time sale in
 // the background (issue #202: only called on a real pending → paid transition,
 // so a sale already marked paid never re-sends the receipt).
 func (s *Service) sendReceiptAsync(ctx context.Context, sale *dbstore.Sale) {
+	// Card t_1c4a3f54: everything here belongs to a sale that is ALREADY paid,
+	// and the caller fires it from the HTTP callback. That handler's context is
+	// cancelled the moment the callback response is written, and the receipt's
+	// work (settings reads, PDF render, queue offer) runs after that — which is
+	// how the buyer receipt for sale JF-374daeb0ce61 died with
+	// `receipt_enqueue_failed err="context canceled"` while the cheap,
+	// synchronous form notification succeeded.
+	//
+	// So detach up front: WithoutCancel keeps the request's values (log/trace
+	// fields) and drops its cancellation and deadline; the timeout is what bounds
+	// the background work instead.
+	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sendReceiptBackgroundTimeout)
+	ctx = bgCtx
+
 	summary := itemsSummary(sale.Items)
 	tin, msic := "", ""
 	if acc2, aerr := s.Accounts.ByID(ctx, sale.AccountID); aerr == nil {
@@ -333,21 +422,35 @@ func (s *Service) sendReceiptAsync(ctx context.Context, sale *dbstore.Sale) {
 			wsLang = st.WorkspaceLang()
 		}
 	}
-	go s.SendSaleReceipt(ctx, SaleRef{
-		SaleID:        sale.ID,
-		RefCode:       sale.RefCode,
-		BuyerEmail:    sale.Client.Email,
-		BuyerName:     sale.Client.FullName,
-		AmountSen:     sale.TotalSen,
-		ItemsSummary:  summary,
-		FormURL:       formURL,
-		WorkspaceID:   workspaceID,
-		FormID:        sale.FormID,
-		TIN:           tin,
-		MSIC:          msic,
+	// The receipt is rendered and enqueued in a goroutine that outlives this
+	// call, on the detached context set up at the top of this function.
+	ref := SaleRef{
+		SaleID:       sale.ID,
+		AccountID:    sale.AccountID,
+		RefCode:      sale.RefCode,
+		BuyerEmail:   sale.Client.Email,
+		BuyerName:    sale.Client.FullName,
+		AmountSen:    sale.TotalSen,
+		ItemsSummary: summary,
+		FormURL:      formURL,
+		WorkspaceID:  workspaceID,
+		FormID:       sale.FormID,
+		TIN:          tin,
+		MSIC:         msic,
+		// Card t_135c3c72: the processing fee is a SEPARATE line on the receipt,
+		// with the rate FROZEN at purchase time — never recomputed from the
+		// merchant's current settings.
+		FeeSen:        sale.FeeSen,
+		FeeMethod:     sale.FeeMethod,
+		FeeFixedSen:   sale.FeeFixedSen,
+		FeePercentBp:  sale.FeePercentBp,
 		FormLang:      formLang,
 		WorkspaceLang: wsLang,
-	})
+	}
+	go func() {
+		defer cancel()
+		s.SendSaleReceipt(bgCtx, ref)
+	}()
 }
 
 // formLangForSale reads the language a sale's form declares in its own
@@ -628,7 +731,7 @@ func (s *Service) completeIfLimitReached(ctx context.Context, sub *dbstore.Subsc
 // means capture the full original amount.
 func (s *Service) CaptureSale(ctx context.Context, sale *dbstore.Sale, amountSen *int64) error {
 	if sale.ChipPurchaseID == "" || !sale.SkipCapture {
-		return errors.New("bukan jualan authorize (skip_capture)")
+		return errors.New("not an authorize sale (skip_capture)")
 	}
 	secret, err := s.decryptSecret(ctx, sale.AccountID)
 	if err != nil {
@@ -643,7 +746,7 @@ func (s *Service) CaptureSale(ctx context.Context, sale *dbstore.Sale, amountSen
 // ReleaseSale voids an authorization so the card is never charged.
 func (s *Service) ReleaseSale(ctx context.Context, sale *dbstore.Sale) error {
 	if sale.ChipPurchaseID == "" || !sale.SkipCapture {
-		return errors.New("bukan jualan authorize (skip_capture)")
+		return errors.New("not an authorize sale (skip_capture)")
 	}
 	secret, err := s.decryptSecret(ctx, sale.AccountID)
 	if err != nil {
@@ -672,7 +775,7 @@ type RefundResult struct {
 
 // ErrRefundNotRefundable is returned when a refund is attempted on a sale that
 // is not in a refundable state (the pre-existing paid/confirmed guard).
-var ErrRefundNotRefundable = errors.New("jualan bukan dalam status boleh-refund (paid/confirmed)")
+var ErrRefundNotRefundable = errors.New("the sale is not in a refundable status (paid/confirmed)")
 
 // RefundSale issues a refund against a paid sale (issue #407) and records the
 // amount on the sale (issue #518). amountSen nil = full refund of the
@@ -700,7 +803,7 @@ var ErrRefundNotRefundable = errors.New("jualan bukan dalam status boleh-refund 
 // ErrRefundAmountInvalid identifying the guard that fired.
 func (s *Service) RefundSale(ctx context.Context, sale *dbstore.Sale, amountSen *int64) (*RefundResult, error) {
 	if sale.ChipPurchaseID == "" {
-		return nil, errors.New("jualan tiada purchase CHIP")
+		return nil, errors.New("the sale has no CHIP purchase")
 	}
 	if amountSen != nil && *amountSen <= 0 {
 		return nil, dbstore.ErrRefundAmountInvalid
@@ -789,13 +892,11 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 	secretEnc := acc.ChipSecretKeyEnc
 	fallback := acc.ChipEmailFallback
 	whitelist := acc.ChipMethodWhitelist
-	fromForm := false
 	if ov != nil && ov.BrandID != "" && ov.SecretEnc != "" {
 		brand = ov.BrandID
 		secretEnc = ov.SecretEnc
 		fallback = ov.EmailFallback
 		whitelist = ov.MethodWhitelist
-		fromForm = true
 	}
 	if brand == "" || secretEnc == "" {
 		return ErrNotConfigured
@@ -811,13 +912,10 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 		clientEmail = fallback
 	}
 
-	wl := whitelist
-	if fromForm {
-		// form whitelists resolve directly (no account-level merge)
-		wl = s.ResolveWhitelist(ctx, string(secret), sale.Currency, sale.TotalSen, whitelist)
-	} else {
-		wl = s.ResolveWhitelist(ctx, string(secret), sale.Currency, sale.TotalSen, whitelist)
-	}
+	// Card t_135c3c72: a sale that carries a processing fee is restricted to the
+	// ONE method the buyer chose (see feeWhitelist), whoever configured the
+	// whitelist and wherever it came from.
+	wl := s.ResolveWhitelist(ctx, string(secret), sale.Currency, sale.TotalSen, feeWhitelist(sale, whitelist))
 
 	// Issue #83: thank-you redirects must land on the workspace subdomain (or
 	// custom domain) the buyer came from, not the apex base. Fall back to the
@@ -839,8 +937,11 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 		SuccessCallback: fmt.Sprintf("%s/v1/payments/chip/callback", s.BaseURL),
 		Reference:       sale.RefCode,
 		Purchase: chip.PurchaseDetails{
-			Products: toCHIPProducts(sale.Items),
+			Products: chipProductsForSale(sale),
 			Currency: sale.Currency,
+			// Charged amount = the sale total (card t_135c3c72): the grossed-up
+			// fee is not expressible through `products` alone.
+			TotalOverride: totalOverride(sale),
 		},
 	}
 
@@ -858,15 +959,32 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 }
 
 // decryptSecret fetches the account and decrypts its CHIP secret key.
-// decryptSecret fetches the account and decrypts its CHIP secret key.
+//
+// This is the credential resolver for the SALE LIFECYCLE operations — capture,
+// release and refund — so it must refuse an account with no CHIP keys the same
+// way its siblings do (accountSecrets in service.go, CreateChipPurchaseForSale
+// below). Without the empty-value guard it went straight to
+// cryptoutil.Decrypt(""), which answers "ciphertext too short": a fresh signup
+// that never configured CHIP got that raw crypto string back as a 400 on every
+// refund/capture/release, instead of the ErrNotConfigured refusal the merchant
+// can act on (card t_0eb36e44).
+//
+// A key that IS present but will not open is a different case: it is not the
+// caller's fault, so it answers ErrChipKeyUnreadable (the REST door masks that
+// to a logged 500) rather than a 400. The cause is logged here, once, with the
+// account id, because the sentinel deliberately carries no inner detail.
 func (s *Service) decryptSecret(ctx context.Context, accountID string) (string, error) {
 	acc, err := s.Accounts.ByID(ctx, accountID)
 	if err != nil {
 		return "", err
 	}
+	if acc.ChipBrandID == "" || acc.ChipSecretKeyEnc == "" {
+		return "", ErrNotConfigured
+	}
 	dec, err := cryptoutil.Decrypt(s.DecryptKey, acc.ChipSecretKeyEnc)
 	if err != nil {
-		return "", err
+		slog.Error("chip_key_decrypt_failed", "account_id", accountID, "err", err)
+		return "", ErrChipKeyUnreadable
 	}
 	return string(dec), nil
 }

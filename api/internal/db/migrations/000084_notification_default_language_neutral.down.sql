@@ -1,0 +1,11 @@
+-- Reverse of 000084. It restores NOTHING, deliberately: an empty subject/body
+-- and a row still holding the pre-language literal render identically at send
+-- time (payments.sendNotification resolves both to the dictionary's template in
+-- the form's language), so a re-fill would only put Malay back into a field the
+-- dashboard shows verbatim — the defect 000084 removes — and it cannot tell an
+-- untouched row from one the merchant deliberately emptied since.
+--
+-- The column DEFAULTs were already an empty string (000032), so there is no
+-- schema change to undo either. This file exists so every migration still has a
+-- down step (TestEveryMigrationHasDownFile); it is intentionally a no-op.
+SELECT 1;

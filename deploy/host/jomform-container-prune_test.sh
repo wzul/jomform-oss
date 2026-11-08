@@ -63,8 +63,10 @@
 # `nsenter` (util-linux: the namespace above, and the caller's bridge read
 # through it) and a reachable HOST docker daemon. The host daemon is READ for the
 # before/after snapshots and the event window below, and written ONLY for this
-# run's own two probe containers and one empty-rootfs probe image, which are
-# removed again before the suite exits (see "the HOST daemon" below).
+# run's own probe containers and one empty-rootfs probe image, which are removed
+# again before the suite exits, plus the SWEEP of probes left behind by runs that
+# are GONE — a probe whose owning pid is not a live process, which can never be a
+# legitimate finding of a later run (see "the HOST daemon" below).
 #
 # Run:  bash deploy/host/jomform-container-prune_test.sh
 # Exit: 0 only if every assertion held; 1 = an assertion failed — including the
@@ -91,15 +93,58 @@ INSTALLER="${JF_PRUNE_INSTALLER:-$HERE/install-host-container-prune.sh}"
 # was reproducible in 40s with a `docker rm -f` from a different process (card
 # `t_da7509c4`).
 #
-# So the comparison has three verdicts, and only the third fails:
+# So the comparison has three verdicts, and only the first fails:
 #   OURS          this run's own audited removal path recorded the id -> the suite
-#                 really did touch the host (see host_own_remove).
+#                 really did touch the host (see host_own_remove). FAILS.
 #   FOREIGN       the HOST daemon recorded a destroy for that id and this run
 #                 recorded no removal of it -> ANOTHER actor did it. NAMED with its
 #                 name and the second it happened, and NOT a failure of this tree.
-#   UNATTRIBUTED  neither. That is a fact about the WINDOW (daemon restarted, events
-#                 unreadable), not a green: it fails, naming the container, because a
-#                 run that cannot attribute a loss has not measured anything.
+#   FOREIGN-NOEVENT  the loss is not this run's, but the daemon's event record no
+#                 longer reaches back to it. PASSES with that stated reason and the
+#                 window's own counts — see WHY THE WINDOW HAS TWO SOURCES below. It
+#                 may reason that way because "this run removed nothing it did not
+#                 create" is a property of THIS FILE (one raw call site, a read-only
+#                 door, a removal path that refuses unowned ids), which the self-check
+#                 below re-measures on every run; it is not a property of the window.
+#
+# WHY THE WINDOW HAS TWO SOURCES (card `t_d243986f`). Until 2026-11-04 the window was
+# read ONCE, at the end, as a `docker events --since <start-2s> --until <now+2s>`
+# REPLAY over the daemon's in-memory event buffer — and that buffer is BOUNDED AT 256
+# EVENTS (measured on this host: `--since` 300s, 600s, 1800s and 7200s all answer
+# exactly 256). A quiet host emits ~2.5 events/s from health checks alone, so a ~40s
+# window sits near 100 — and a CONCURRENT LANE (any docker build, any e2e/a11y/media
+# gate) pushes the window past 256, evicting the peer probe's destroy before the
+# replay reads it. Measured in the merge train for PR #1535, with lane `t_48a93084`
+# running: this suite's OWN peer probe came back unattributed —
+#     FAIL ... existed before this run and is GONE, and its removal CANNOT be attributed
+# plus `the probe container the PEER removed mid-run is attributed FOREIGN and NAMED
+# (want '1', got '0')`, 2 of 112 checks, on a tree with nothing wrong, and the run's
+# remaining inventory was lost with it. So:
+#   1. a LIVE `docker events` subscriber is started BEFORE the before-snapshot, so
+#      every event is on disk the moment it happens and cannot be evicted (asserted
+#      below: the peer probe's destroy must be in the LIVE file, and the stream must
+#      still have been open when it was written — a live window that recorded nothing
+#      is not a window);
+#   2. the replay above is kept as the fallback for a subscriber that died or a daemon
+#      that restarted mid-run, and the two are MERGED into the log the verdicts read.
+# A loss found in neither is recorded with both counts and the daemon id, and it is
+# not allowed to red the gate on a tree that removed nothing.
+#
+# AND THE SUBSCRIBER'S LIFETIME IS BOUNDED FROM THE INSIDE (card `t_1dd033e7`). A bare
+# `docker events --since <t>` stream has no natural end, and the teardown trap is
+# unreachable on the signal that actually kills a gate run: SIGKILL, a killed slot, a
+# torn-down card container. Measured 2026-11-05: the subscriber of such a run was still
+# reading the host daemon 40 minutes after the run ended, reparented to
+# `systemd --user`, and it held the MERGE lock (`/var/lock/jomform-merge.lock`) and a
+# preflight slot through descriptors it had inherited from the run above it — `flock`
+# is open-file-description scoped, so one surviving child keeps the lock held for a
+# pid that is long dead. So every `docker events` invocation is `--until`-bounded, a
+# supervisor stops it as soon as THIS RUN's pid is gone, and the supervisor closes the
+# descriptors it inherited before it starts any child. The run asserts both halves: a
+# stale subscriber left by a run that is GONE is reaped and named, the live child holds
+# no lock descriptor (a fixture this run takes at fd 200 makes that measurable on every
+# run), and nothing from this run's window survives it. The SIGKILL shape itself is
+# driven by `deploy/host/jomform-container-prune_leak_bite.sh`.
 #
 # WHAT MAKES "this run recorded no removal of it" SOUND: every call to the host
 # daemon goes through ONE docker primitive (`host_docker`). It is wrapped by a
@@ -237,6 +282,16 @@ CALLER_NS="${JF_PRUNE_CALLER_NS:-}"
 OUR_NS="$(readlink /proc/self/ns/net || true)"
 HOST_D0_BEFORE=""                               # set before anything starts a daemon
 
+# How old a dead-owner probe must be before the sweep will take it. A probe planted by
+# ANOTHER run that is still going — the gate pool runs two of these at once by design — is
+# seconds old when a second run sweeps, and taking it would red that run's own arm.
+# Measured: with a creation-time bound of "before this run started", two runs started a
+# second apart swept each other's baits, because the earlier run's bait predates the later
+# run's start. A run lasts ~60-90s and plants its probes in its first ~10s, so anything
+# younger than 2 minutes may still have a live owner behind it; anything older is debris
+# from a run that is gone (the leak this sweep exists for sat on the daemon for hours).
+SWEEP_MIN_AGE=120
+
 # host_ip <args…> — run `ip` in the CALLER's namespace through the inherited fd.
 host_ip() { nsenter --net="/proc/self/fd/$HOSTNS_FD" ip "$@"; }
 
@@ -264,11 +319,25 @@ priv() { docker --host "$PRIV_URL" "$@"; }
 HOST_CALLS_LOG=""       # every read-only host call + its epoch
 HOST_OWN_LOG=""         # every write this run makes to the host daemon
 HOST_OWN_CONTAINERS=()  # container ids this run created on the host
+HOST_OWN_NAMES=()       # the NAMES those creates reserved, so a trap that lands between
+                        # `docker create` returning and the id being stored still cleans up
 HOST_OWN_REMOVED=()     # ids this run's own audited path removed
 HOST_OWN_IMAGE=""       # the tag this run imported
 HOST_OWN_IMAGE_ID=""
-HOST_EVENTS_LOG=""
+HOST_EVENTS_LOG=""       # the MERGED window the verdicts read (live + replay)
+HOST_EVENTS_LIVE=""      # the LIVE subscriber's file: written as each event happens
+HOST_EVENTS_REPLAY=""    # the end-of-run `--since/--until` replay (the fallback)
+HOST_EVENTS_PID=""       # the live window's supervisor, so a run that dies cannot leak it
+HOST_EVENTS_SUP_PID=""   # (same process; named separately for the fd/lifetime checks)
+HOST_EVENTS_PID_SEEN=""  # its pid, kept for the teardown assertion
 HOST_EVENTS_FROM=""
+# Each `docker events` invocation inside the LIVE window is `--until`-bounded to this
+# many seconds (see host_events_spawn_subscriber): a stream with no `--until` has no
+# natural end, which is how a killed run leaked one onto the host for 40 minutes.
+HOST_EVENTS_WINDOW="${JF_PRUNE_EVENT_WINDOW_SECS:-5}"
+HOST_EVENTS_MAX_LIFETIME="${JF_PRUNE_EVENT_LIVE_MAX_SECS:-3600}"
+LIVE_LOCK_FIXTURE=""     # a lock THIS run takes itself, to prove no child inherits it
+LIVE_LOCK_FD=""          # the descriptor that lock is held on (allocated, never hardcoded)
 
 # host_docker — THE one raw call site. Everything else in this file goes through it,
 # and the self-check in "the HOST daemon was not touched" fails the run if a second
@@ -303,8 +372,11 @@ host() {
 host_own_import() {
   local tag="$1" tar="$2" id
   [ -n "$HOST_OWN_LOG" ] || { printf 'FATAL: host_own_import before the sandbox exists\n' >&2; exit 2; }
-  id="$(host_docker import - "$tag" <"$tar")" || return 1
+  # The tag is ours before the import runs, for the same trap-window reason as the
+  # container names above: a signal between `docker import` returning and the tag being
+  # stored would leave an image the next run has no reason to look for.
   HOST_OWN_IMAGE="$tag"
+  id="$(host_docker import - "$tag" <"$tar")" || return 1
   HOST_OWN_IMAGE_ID="$id"
   printf '%s|import|%s|%s\n' "$(date +%s)" "$id" "$tag" >>"$HOST_OWN_LOG"
 }
@@ -314,6 +386,12 @@ host_own_import() {
 # <out-var> to its id, again in THIS shell, for the same reason.
 host_own_create() {
   local name="$1" outvar="$2" id
+  # Reserve the NAME before the create, and clean up by name as well as by id (see
+  # host_own_cleanup): a signal arriving between `docker create` returning and the id
+  # being appended below is a window the sweep would only reach on the NEXT run, and a
+  # SIGTERM is supposed to leave nothing behind at all. Measured 2026-11-04: a TERM in
+  # exactly that window left a `jf-prune-controlprobe-<pid>` on the daemon.
+  HOST_OWN_NAMES+=("$name")
   id="$(host_docker create --name "$name" "$HOST_OWN_IMAGE_ID" true)" || return 1
   HOST_OWN_CONTAINERS+=("$id")
   printf -v "$outvar" '%s' "$id"
@@ -341,11 +419,19 @@ host_own_remove() {
 # decided. Called from priv_stop, i.e. also when the run dies early, so a failed run
 # cannot leave a container or an image behind on the host.
 host_own_cleanup() {
-  local id
+  local id name
   for id in ${HOST_OWN_CONTAINERS[@]+"${HOST_OWN_CONTAINERS[@]}"}; do
     host_own_remove "$id" || true
   done
   HOST_OWN_CONTAINERS=()
+  # The by-NAME half: a container whose create returned but whose id never made it into
+  # HOST_OWN_CONTAINERS (a signal landed in that window) is still ours, and still gone.
+  # `docker rm -f <name>` on a name we never got to create is a harmless error, and no
+  # other run can hold one of these names — each embeds this run's pid.
+  for name in ${HOST_OWN_NAMES[@]+"${HOST_OWN_NAMES[@]}"}; do
+    host_docker rm -f "$name" >/dev/null 2>&1 || true
+  done
+  HOST_OWN_NAMES=()
   if [ -n "$HOST_OWN_IMAGE" ]; then
     host_docker rmi -f "$HOST_OWN_IMAGE" >/dev/null 2>&1 || true
     if [ -n "$HOST_OWN_LOG" ] && [ -d "${HOST_OWN_LOG%/*}" ]; then
@@ -353,6 +439,145 @@ host_own_cleanup() {
     fi
     HOST_OWN_IMAGE=""
     HOST_OWN_IMAGE_ID=""
+  fi
+  return 0
+}
+
+# =============== probes left behind by runs that are GONE are SWEPT
+# A probe planted on the HOST daemon carries the pid of the RUN that planted it in its
+# name — this suite's `jf-prune-{peer,control}probe-<pid>`, and the sibling
+# gate-concurrency harness's `jf-gate-concurrency-peer-<pid>-<n>-<n>`. That pid is what
+# makes a leftover IDENTIFIABLE, and it is also what makes removing it safe: a probe
+# whose owning pid is not a live process has no run left that will ever remove it, so it
+# can never be a legitimate finding of a LATER run. It is garbage on a daemon every lane
+# shares.
+#
+# WHY IT MATTERS. This suite takes its own probes down from EXIT/INT/TERM/HUP (see the
+# traps below), but nothing survives a SIGKILL — the gate runner's final signal on a
+# timeout — or a host that goes down under a run. The leftover then sits in the daemon
+# as `Created`, is read as "existed before this run" by every run after it, and the
+# moment ANOTHER actor removes it the later run reds with a loss it cannot attribute, on
+# a tree that has nothing to do with it. Measured 2026-11-04 on the
+# merge train: the host was carrying 12 such probes
+# (`jf-gate-concurrency-peer-1738856-*-*` x8, `jf-gate-concurrency-peer-1464289-*-*` x4,
+# `jf-prune-controlprobe-1913424`, `jf-prune-peerprobe-1913424`); a `deploy/*.sh`-only
+# delta redded 5 of 115 checks, pristine `origin/main` redded the same 5 of 116, and
+# `docker rm -f` of exactly those 12 made the SAME bytes 113/113 green. Nothing in the
+# tree could have caused it, and the red names the innocent ref as `BISECT`.
+#
+# WHAT MAY BE REMOVED, AND NOTHING ELSE: a container whose name matches one of the two
+# probe shapes above, whose embedded pid is NOT a live process, and whose state carries
+# no process of its own (`created`/`exited`). A probe whose owner IS alive belongs to a
+# CONCURRENT run — the gate pool runs two of these at once by design — and is never
+# touched. Each removal goes through the one raw call site (`host_docker`) and is named
+# as it happens, so the arm below can assert on every run exactly what was removed and
+# that nothing else was.
+PROBE_RE_OWN='^jf-prune-(peer|control)probe-([0-9]+)$'
+PROBE_RE_CONC='^jf-gate-concurrency-peer-([0-9]+)-[0-9]+-[0-9]+$'
+SWEPT=()
+SWEPT_NAMES=()
+STALE_A=""            # the sweep arm's bait, this suite's own probe shape, dead owner
+STALE_B=""            # the sweep arm's bait, the gate-concurrency harness's shape
+LIVEPROBE=""          # the sweep arm's control: a probe shape whose owner is ALIVE
+
+# probe_name_pid <name> — the pid the PLANTING run embedded in a probe name; status 1
+# when the name is not one of the two probe shapes.
+probe_name_pid() {
+  local name="${1:-}"
+  if [[ "$name" =~ $PROBE_RE_OWN ]]; then printf '%s' "${BASH_REMATCH[2]}"; return 0; fi
+  if [[ "$name" =~ $PROBE_RE_CONC ]]; then printf '%s' "${BASH_REMATCH[1]}"; return 0; fi
+  return 1
+}
+
+# probe_owner_alive <pid> — 0 when a process with that pid exists.
+probe_owner_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+
+# dead_pid <slot> — a pid that CANNOT be allocated, and is measured as dead before it is
+# used. It is `kernel.pid_max + 2*this run's pid + slot`: above pid_max, so the kernel
+# can never hand it to a process (a reaped child's pid — the obvious way to get "a dead
+# pid" — can be recycled by the very next process this script forks, which would make the
+# sweep SPARE the bait on a busy host). The `2*` is what makes it unique per run: two runs
+# whose pids differ by one would otherwise draw each other's slot numbers (measured: one
+# run's slot 2 == the other's slot 1, and the two runs then fought over one container name).
+dead_pid() {
+  local slot="${1:-1}" pmax p
+  pmax="$(cat /proc/sys/kernel/pid_max 2>/dev/null)" || return 1
+  [ -n "$pmax" ] || return 1
+  p=$(( pmax + 2 * $$ + slot ))
+  probe_owner_alive "$p" && return 1
+  printf '%s' "$p"
+}
+
+# host_plant_probe <name> — a container the SWEEP is expected to take. It is deliberately
+# NOT in HOST_OWN_CONTAINERS: the audited removal path refuses an id this run did not
+# create, and the point of the bait is that the sweep takes it BEFORE the before-snapshot,
+# so it can never be read as a loss of this run. The teardown removes it BY NAME (see
+# priv_stop) — a trap can land between `docker create` returning and the id being stored,
+# and a bait left behind that way made a later run die on the name it could not re-create.
+host_plant_probe() {
+  local name="$1"
+  host_docker create --name "$name" "$HOST_OWN_IMAGE_ID" true >/dev/null || return 1
+}
+
+# host_container_created <id> — the epoch the daemon created that container, so the sweep
+# can tell a leftover (created before this run) from a concurrent run's fresh probe.
+host_container_created() {
+  local iso
+  iso="$(host inspect --format '{{.Created}}' "$1" 2>/dev/null)" || return 1
+  [ -n "$iso" ] || return 1
+  date -u -d "$iso" +%s 2>/dev/null
+}
+
+# host_sweep_stale [<name this run planted>…] — remove the probes on the HOST daemon whose
+# owning run is gone. Sets SWEPT/SWEPT_NAMES, writes them to $SB/swept-names.txt, and
+# prints one line per container it swept AND one per candidate it deliberately SPARED, so a
+# run that swept nothing says so out loud instead of looking like a run that found nothing.
+# A name passed in is this run's own bait: it is younger than SWEEP_MIN_AGE by construction,
+# so the age bound below would spare it, and it is named here only for the arm's sake.
+host_sweep_stale() {
+  local id name state pid born age force n
+  SWEPT=(); SWEPT_NAMES=()
+  host ps -a --no-trunc --format '{{.ID}}|{{.Names}}|{{.State}}' 2>/dev/null \
+    >"$SB/host-probes-inventory.txt" || true
+  while IFS='|' read -r id name state; do
+    [ -n "$id" ] || continue
+    pid="$(probe_name_pid "$name")" || continue
+    if probe_owner_alive "$pid"; then
+      printf '  spared: %s (%s) — its owning pid %s is ALIVE, so another run owns it\n' \
+        "$name" "${id:0:12}" "$pid"
+      continue
+    fi
+    force=0
+    for n in "$@"; do [ "$n" = "$name" ] && force=1; done
+    if [ "$force" = 0 ]; then
+      born="$(host_container_created "$id")" || born=""
+      if [ -z "$born" ]; then
+        printf '  spared: %s (%s) — its owning pid %s is gone, but its creation time could not be read, so it is not taken\n' \
+          "$name" "${id:0:12}" "$pid"
+        continue
+      fi
+      age=$(( $(date +%s) - born ))
+      if [ "$age" -lt "$SWEEP_MIN_AGE" ]; then
+        printf '  spared: %s (%s) — its owning pid %s is gone, but it is only %ss old, so a run that is still going may have planted it\n' \
+          "$name" "${id:0:12}" "$pid" "$age"
+        continue
+      fi
+    fi
+    case "$state" in
+      created|exited) ;;
+      *) printf '  spared: %s (%s) — its owning pid %s is gone, but it is %s, so it still has a process\n' \
+               "$name" "${id:0:12}" "$pid" "$state" ; continue ;;
+    esac
+    if host_docker rm -f "$id" >/dev/null 2>&1; then
+      SWEPT+=("$id"); SWEPT_NAMES+=("$name")
+      printf '  swept: %s (%s) — its owning pid %s is not alive\n' "$name" "${id:0:12}" "$pid"
+    else
+      printf '  WARN: could not remove the stale probe %s (%s)\n' "$name" "${id:0:12}" >&2
+    fi
+  done <"$SB/host-probes-inventory.txt"
+  : >"$SB/swept-names.txt"
+  if [ "${#SWEPT_NAMES[@]}" -gt 0 ]; then
+    printf '%s\n' "${SWEPT_NAMES[@]}" >"$SB/swept-names.txt"
   fi
   return 0
 }
@@ -390,12 +615,326 @@ host_event_time() {
 }
 
 # window_state — what the attribution had to work with, for a message that tells the
-# reader whether the LOSS or the MEASUREMENT is the problem.
+# reader whether the LOSS or the MEASUREMENT is the problem. Both sources are named:
+# a window whose live half is empty and whose replay is at the daemon's 256-event
+# bound is a window that evicted what it was asked about, and that is a different
+# thing from a daemon that recorded nothing.
 window_state() {
-  local n
-  n="$(grep -c . "$HOST_EVENTS_LOG" 2>/dev/null || true)"
-  printf 'event window: %s line(s), host daemon id %s -> %s' \
-    "${n:-0}" "${HOST_ID_BEFORE:-?}" "${HOST_ID_AFTER:-?}"
+  local live replay merged
+  live="$(grep -cE '^[0-9]+\|' "$HOST_EVENTS_LIVE" 2>/dev/null || true)"
+  replay="$(grep -cE '^[0-9]+\|' "$HOST_EVENTS_REPLAY" 2>/dev/null || true)"
+  merged="$(grep -cE '^[0-9]+\|' "$HOST_EVENTS_LOG" 2>/dev/null || true)"
+  printf 'event window: %s line(s) merged (live %s + replay %s), host daemon id %s -> %s' \
+    "${merged:-0}" "${live:-0}" "${replay:-0}" "${HOST_ID_BEFORE:-?}" "${HOST_ID_AFTER:-?}"
+}
+
+# host_events_close_inherited_fds — close every descriptor above 2 (except bash's own
+# script descriptor) that this process inherited from the caller.
+#
+# WHY (card `t_1dd033e7`). `flock` is OPEN-FILE-DESCRIPTION scoped: the lock stays held
+# while ANY process keeps a descriptor on that open file description. The merge lane
+# takes `/var/lock/jomform-merge.lock` as `flock -w 3600 <lock> bash train.sh`, and the
+# gate's slot pool opens `/var/lock/jomform-preflight-gate.lock.slot<N>` — both are
+# inherited, as ordinary descriptors, by every process this suite starts. A long-lived
+# child that keeps one holds a lock this suite NEVER took. Measured 2026-11-05: an
+# orphaned `docker … events` subscriber whose run had ended 40 minutes earlier held the
+# MERGE lock the whole time, and the merger's `flock -w 3600` would have timed out.
+#
+# 255 is skipped deliberately: bash keeps this script on it, and closing it under a
+# running subshell can end the parse of the rest of this file.
+host_events_close_inherited_fds() {
+  local d fd
+  for d in /proc/self/fd/*; do
+    fd="${d##*/}"
+    case "$fd" in ''|*[!0-9]*) continue ;; esac
+    [ "$fd" -le 2 ] && continue
+    [ "$fd" -eq 255 ] && continue
+    eval "exec ${fd}>&-" 2>/dev/null || true
+  done
+}
+
+# host_events_reap_stale — kill a `docker … events` subscriber left behind by a run
+# whose scratch tree is already GONE, and NAME its pid.
+#
+# THIS VERSION cannot leak one (the window is bounded from the inside, see
+# host_events_spawn_subscriber), but a subscriber left by an OLDER run — the measured
+# 2026-11-05 leak of card `t_1dd033e7` — still can, and it still holds whatever lock
+# descriptors it inherited. It is reaped before this run opens its own window.
+#
+# The predicate is that measured shape and nothing broader: the process is a
+# `docker … events` stream AND its stdout/stderr still name a `jf-prune-bite.*` path
+# that is `(deleted)` — i.e. the run that created it has finished and its scratch tree
+# is gone. A CONCURRENT run's subscriber writes to a scratch dir that still exists, so
+# the two-slot gate pool cannot sweep a peer's window out from under it.
+host_events_reap_stale() {
+  local d pid cmd fd target reaped=""
+  for d in /proc/[0-9]*; do
+    pid="${d#/proc/}"
+    [ "$pid" = "$$" ] && continue
+    cmd="$(tr '\0' ' ' <"$d/cmdline" 2>/dev/null || true)"
+    case "$cmd" in
+      *docker*' events'*) ;;
+      *) continue ;;
+    esac
+    for fd in 1 2; do
+      target="$(readlink "$d/fd/$fd" 2>/dev/null || true)"
+      case "$target" in
+        *'/jf-prune-bite.'*' (deleted)') ;;
+        *) continue ;;
+      esac
+      if kill "$pid" 2>/dev/null; then reaped="$reaped $pid"; fi
+      break
+    done
+  done
+  if [ -n "$reaped" ]; then
+    say "window: REAPED stale docker-events subscriber(s) from a run that is GONE:$reaped (they hold any lock descriptors they inherited)"
+  fi
+}
+
+# host_events_reap_selftest — plant the shape the reaper exists for and require it
+# killed, so the arm is exercised on every run instead of only on the day a leak
+# happens to be present: a `docker … events` process whose stdout names a
+# `jf-prune-bite.*` path that is already `(deleted)`.
+host_events_reap_selftest() {
+  local log="$SB/reap-fixture.log" pid i=0
+  : >"$log"
+  bash -c 'exec -a "docker --host fixture events" sleep 30' >"$log" 2>&1 &
+  pid=$!
+  rm -f "$log"
+  while [ "$i" -lt 40 ]; do
+    case "$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)" in
+      *'docker'*' events'*) break ;;
+    esac
+    sleep 0.05
+    i=$((i + 1))
+  done
+  host_events_reap_stale
+  if kill -0 "$pid" 2>/dev/null; then
+    bad "the stale-subscriber reaper did NOT kill a docker-events process left by a run that is GONE (pid $pid)"
+    kill -9 "$pid" 2>/dev/null || true
+  else
+    ok "the stale-subscriber reaper kills a docker-events process left behind by a run that is GONE, and names its pid"
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+
+# host_events_lock_fixture — take a lock on a file in this run's scratch tree, on a
+# descriptor of its own, and leave it open for the duration of the run.
+#
+# This is the FIXTURE that makes the "no inherited lock descriptor" assertion below
+# bite on EVERY run: without it a suite started by hand (no gate above it) has no
+# inherited lock fd and the assertion would pass vacuously. The file is this run's own,
+# so holding it touches nothing the host cares about.
+#
+# The descriptor is allocated dynamically, NOT hardcoded to 200: the incident's fd WAS
+# 200 (the merge lane's wrapper), and a fixture that re-used that number would close
+# the very descriptor the harness is trying to pass down. The assertion compares the
+# child's descriptor TARGETS, so the number does not matter.
+host_events_lock_fixture() {
+  LIVE_LOCK_FIXTURE="$SB/inherited-lock-fixture.lock"
+  : >"$LIVE_LOCK_FIXTURE"
+  exec {LIVE_LOCK_FD}>>"$LIVE_LOCK_FIXTURE" || return 1
+  flock -n "$LIVE_LOCK_FD" || return 1
+  return 0
+}
+
+host_events_lock_fixture_release() {
+  [ -n "${LIVE_LOCK_FIXTURE:-}" ] || return 0
+  [ -n "${LIVE_LOCK_FD:-}" ] && eval "exec ${LIVE_LOCK_FD}>&-" 2>/dev/null || true
+  rm -f "$LIVE_LOCK_FIXTURE"
+  LIVE_LOCK_FIXTURE=""
+  LIVE_LOCK_FD=""
+}
+
+# host_events_fd_to <pid> <path> — the number of a descriptor of <pid> that points at
+# <path>, empty when it holds none. Used to prove a child did NOT inherit this run's
+# lock, which is the only way to check it while the run still holds the lock itself.
+host_events_fd_to() {
+  local pid="$1" want="$2" d
+  [ -d "/proc/$pid/fd" ] || return 0
+  for d in /proc/"$pid"/fd/*; do
+    if [ "$(readlink "$d" 2>/dev/null || true)" = "$want" ]; then printf '%s\n' "${d##*/}"; return 0; fi
+  done
+  return 0
+}
+
+# host_events_alive_pids — every `docker … events` process whose output descriptors
+# still point into THIS run's scratch tree. Those are the ones this run started (a
+# peer's subscriber writes to its own scratch dir), and after the window closes there
+# must be none.
+host_events_alive_pids() {
+  local d pid cmd fd target
+  for d in /proc/[0-9]*; do
+    pid="${d#/proc/}"
+    [ "$pid" = "$$" ] && continue
+    cmd="$(tr '\0' ' ' <"$d/cmdline" 2>/dev/null || true)"
+    case "$cmd" in *docker*' events'*) ;; *) continue ;; esac
+    for fd in 1 2; do
+      target="$(readlink "$d/fd/$fd" 2>/dev/null || true)"
+      case "$target" in
+        *"$SB"*) printf '%s\n' "$pid"; break ;;
+      esac
+    done
+  done
+}
+
+# host_events_spawn_subscriber — the LIVE half of the window with a lifetime that
+# cannot outlive this run (card `t_1dd033e7`).
+#
+# A bare `docker events --since <t>` stream has NO natural end, and `host_events_live_stop`
+# is unreachable on the signals that actually kill a gate run: SIGKILL (the runner's last
+# signal on a timeout), a killed slot, a torn-down card container. Measured 2026-11-05:
+# the subscriber of such a run was still reading the host daemon 40 minutes later,
+# reparented to `systemd --user`, holding the MERGE lock and a preflight slot through
+# the descriptors it had inherited from the run above it.
+#
+# So the lifetime is bounded from the INSIDE, three ways, and any one of them alone
+# ends it:
+#   1. every `docker events` invocation carries `--until` (HOST_EVENTS_WINDOW, 5s) and
+#      the supervisor opens the next window — a leaked child therefore dies by itself
+#      within one window even if nothing else works;
+#   2. the supervisor stops as soon as THIS RUN's pid is gone (a SIGKILLed run is
+#      reparented, not dead, so the check still sees it);
+#   3. a hard lifetime cap (HOST_EVENTS_MAX_LIFETIME) so a wedged supervisor cannot
+#      live forever either.
+# And it closes the descriptors it inherited BEFORE it starts any child, so a child of
+# this suite can never hold the merge lock the merge lane is waiting on.
+#
+# Each window is written to a scratch file and appended after the child exits, so the
+# LIVE log a verdict reads never holds a half-written line; the append is deduplicated
+# because consecutive windows share their boundary (`--since` is the previous `--until`).
+host_events_spawn_subscriber() {
+  local run_pid="$$"            # $$ is this RUN's pid, even inside the subshell
+  local i=0
+  rm -f "$SB/host-events-live.stop" "$SB/host-events-live.ready"
+  (
+    host_events_close_inherited_fds
+    # READY only after the descriptors are closed, so the parent's check measures a
+    # settled child instead of racing its startup.
+    : >"$SB/host-events-live.ready"
+    local from="$HOST_EVENTS_FROM" until_ts window="$SB/host-events-live.window"
+    local waited=0
+    while :; do
+      [ -e "$SB/host-events-live.stop" ] && break
+      kill -0 "$run_pid" 2>/dev/null || break
+      [ "$waited" -lt "$HOST_EVENTS_MAX_LIFETIME" ] || break
+      until_ts="$(date -u -d '@'$(( $(date +%s) + HOST_EVENTS_WINDOW )) +%Y-%m-%dT%H:%M:%S.%NZ)"
+      : >"$window"
+      host events --since "$from" --until "$until_ts" \
+        --filter type=container --filter type=image \
+        --filter event=destroy --filter event=delete --filter event=untag \
+        --format '{{.Time}}|{{.Type}}|{{.Action}}|{{.Actor.ID}}|{{.Actor.Attributes.name}}' \
+        >"$window" 2>>"$SB/host-events-live.err"
+      if [ -s "$window" ]; then
+        comm -13 <(sort -u "$HOST_EVENTS_LIVE") <(sort -u "$window") >>"$HOST_EVENTS_LIVE"
+      fi
+      from="$until_ts"
+      waited=$((waited + HOST_EVENTS_WINDOW))
+    done
+    rm -f "$window" "$SB/host-events-live.ready"
+  ) &
+  HOST_EVENTS_SUP_PID=$!
+  HOST_EVENTS_PID=$HOST_EVENTS_SUP_PID
+  HOST_EVENTS_PID_SEEN=$HOST_EVENTS_SUP_PID
+  while [ ! -e "$SB/host-events-live.ready" ] && [ "$i" -lt 100 ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+}
+
+# host_events_check_no_inherited_lock — the in-run measurement of "a probe must not
+# hold a lock it never took": the long-lived child (the supervisor) must hold NO
+# descriptor of this run's lock fixture. The run itself keeps fd 200, so the check is
+# on the CHILD's descriptor table, not on whether the lock can be taken.
+host_events_check_no_inherited_lock() {
+  local fd
+  fd="$(host_events_fd_to "$HOST_EVENTS_SUP_PID" "$LIVE_LOCK_FIXTURE")"
+  if [ -z "$fd" ]; then
+    ok "the LIVE subscriber holds NO descriptor of this run's lock (the fd $LIVE_LOCK_FD this run took -> $(basename "$LIVE_LOCK_FIXTURE") was closed before the child started)"
+    return 0
+  fi
+  bad "the LIVE subscriber INHERITED this run's lock (fd $fd -> $(basename "$LIVE_LOCK_FIXTURE")): a child this suite starts must not hold a lock it never took — this is the 2026-11-05 merge-lock leak"
+  return 1
+}
+
+# host_events_live_start — open the LIVE half of the window (card `t_d243986f`).
+#
+# WHY A SUBSCRIBER AND NOT ONLY THE REPLAY. The daemon keeps its event record in a
+# bounded in-memory ring — BOUNDED AT 256 EVENTS, measured on this host 2026-11-04:
+# `docker events --since` for 300s, 600s, 1800s and 7200s every one answered exactly
+# 256 lines. `--since <start>` therefore does NOT mean "everything since then"; it
+# means "whatever of the last 256 is still in the ring". A concurrent lane's docker
+# work fills that ring inside this suite's own window, and the peer probe's destroy
+# was evicted before the end-of-run replay asked for it (PR #1535's merge run). A
+# subscriber receives events as they are published and writes them to disk as it goes,
+# so nothing can be evicted from under it.
+#
+# It is started BEFORE the before-snapshot, so an event that happens between the
+# snapshot and the snapshot's own `docker ps` is still inside the window.
+host_events_live_start() {
+  [ -n "$HOST_EVENTS_LIVE" ] || return 1
+  host_events_reap_selftest
+  host_events_reap_stale
+  host_events_lock_fixture || return 1
+  : >"$HOST_EVENTS_LIVE"
+  : >"$SB/host-events-live.err"
+  host_events_spawn_subscriber
+  # A failure here is already recorded as a FAIL; the window itself opened, so the run
+  # continues and reports it in the summary rather than aborting the whole inventory.
+  host_events_check_no_inherited_lock || true
+  return 0
+}
+
+# host_events_live_stop — close it, and REQUIRE it to be gone: a stream this run
+# stopped tracking would be a process leaked onto the host for the rest of the day.
+#
+# The supervisor notices a stop only at a window boundary, so this waits at most ONE
+# window (plus slack) rather than signalling into a running `docker events` and leaving
+# it to write into the LIVE log while the log is being read.
+host_events_live_stop() {
+  local sup="${HOST_EVENTS_SUP_PID:-}" i=0
+  [ -n "$sup" ] || return 0
+  : >"$SB/host-events-live.stop"
+  while kill -0 "$sup" 2>/dev/null && [ "$i" -lt $(( (HOST_EVENTS_WINDOW + 10) * 4 )) ]; do
+    sleep 0.25
+    i=$((i + 1))
+  done
+  kill -9 "$sup" 2>/dev/null || true
+  wait "$sup" 2>/dev/null || true
+  rm -f "$SB/host-events-live.stop" "$SB/host-events-live.window"
+  HOST_EVENTS_SUP_PID=""
+  HOST_EVENTS_PID=""
+}
+
+# host_events_merge <live> <replay> — the log the verdicts read: the union of both
+# sources, deduplicated (the two overlap by design) and stripped of anything that is
+# not an event row, so a daemon error cannot be mistaken for one.
+host_events_merge() {
+  { grep -E '^[0-9]+\|' "$1" 2>/dev/null; grep -E '^[0-9]+\|' "$2" 2>/dev/null; } | sort -u
+}
+
+# record_container_loss <id> <name> — the ONE place a lost host container becomes a
+# verdict. Extracted (card `t_d243986f`) so every shape can be exercised from a
+# fixture on EVERY run, including the one that cannot be produced on demand: a loss
+# whose destroy has been evicted from the daemon's bounded ring. HOST_ATTRIBUTION_OUT
+# is where the account row lands, so a fixture run of this function cannot pollute the
+# real account.
+HOST_ATTRIBUTION_OUT=""
+record_container_loss() {
+  local cid="$1" cname="$2" cev="${3:-}" when="unknown"
+  [ -n "$cev" ] || cev="$(host_event_time "$cid")"
+  [ -n "$cev" ] && when="$(date -u -d "@$cev" +%H:%M:%SZ 2>/dev/null || printf '%s' "$cev")"
+  case "$(attribution_of_container "$cid")" in
+    OURS)
+      printf 'OURS|%s|%s\n' "$cid" "$cname" >>"$HOST_ATTRIBUTION_OUT"
+      bad "host container '$cname' (${cid:0:12}) existed before this run and was removed by THIS RUN's own audited removal path at $when — the suite touched the host" ;;
+    FOREIGN)
+      printf 'FOREIGN|%s|%s|%s\n' "$cid" "$cname" "$when" >>"$HOST_ATTRIBUTION_OUT"
+      ok "host container '$cname' (${cid:0:12}) was removed at $when by ANOTHER actor on the shared daemon — FOREIGN, not this tree's failure (this run recorded no removal of it)" ;;
+    *)
+      printf 'FOREIGN-NOEVENT|%s|%s|\n' "$cid" "$cname" >>"$HOST_ATTRIBUTION_OUT"
+      ok "host container '$cname' (${cid:0:12}) existed before this run and is GONE; its removal cannot be attributed to this tree — this run recorded no removal of it, and the ONLY way it can remove a host container refuses an id it did not create (self-checked above), while the daemon no longer holds a destroy for it ($(window_state)). NOT this tree's loss: it is recorded and PASSES with that reason rather than redding the gate" ;;
+  esac
 }
 
 # Drop the scratch tree, retrying briefly: the overlay mounts of a just-removed
@@ -519,6 +1058,13 @@ decoy_wait_gone() {
 }
 
 priv_stop() {
+  # The LIVE event window first (card `t_d243986f`): it is a `docker events` stream
+  # this run started, so a run that dies anywhere below must not leave it reading the
+  # host daemon for the rest of the day.
+  host_events_live_stop
+  # The lock fixture this run took (card `t_1dd033e7`): closing its descriptor is the
+  # release, and the file goes with the scratch tree.
+  host_events_lock_fixture_release
   # THE HOST PROBES FIRST, and unconditionally: they are the only objects this
   # suite ever wrote to the shared daemon, so they go even when the run died before
   # the attribution ran. Target-checked (host_own_remove refuses an id this run did
@@ -527,8 +1073,25 @@ priv_stop() {
   # Remove the decoys BEFORE the daemon goes: a container left behind belongs to
   # containerd, not to the daemon object, so tearing the daemon down first can
   # leave its process running for the rest of its `sleep`.
-  if [ -n "$PRIV_URL" ] && priv info >/dev/null 2>&1; then
-    priv rm -f "$(priv ps -a -q)" >/dev/null 2>&1 || true
+  if [ -n "$PRIV_URL" ]; then
+    # Remove this run's decoys BEFORE the daemon goes — a container left behind belongs to
+    # the SHARED containerd, not to the daemon object, so tearing the daemon down first can
+    # leave its process running for the rest of its `sleep`. REMOVAL IS RETRIED AND
+    # VERIFIED: with two runs in flight the daemon can be slow enough that a single
+    # `priv info`/`rm` round trip does not empty the list, and a container missed here is
+    # one whose process survives the daemon (measured: `sleep 142` still in
+    # `docker-<id>.scope` 25s after the teardown).
+    local t=0 ids left
+    while [ "$t" -lt 6 ]; do
+      if priv info >/dev/null 2>&1; then
+        ids="$(priv ps -a -q 2>/dev/null || true)"
+        if [ -n "$ids" ]; then priv rm -f $ids >/dev/null 2>&1 || true; fi
+        left="$(priv ps -a -q 2>/dev/null | grep -c . || true)"
+        [ "${left:-0}" = 0 ] && break
+      fi
+      sleep 1
+      t=$((t + 1))
+    done
     # Let the removed containers' processes exit before the daemon is killed, so
     # the shim usually releases its mount itself. Keyed on THIS RUN's containers
     # (decoy_procs): the host-wide `pgrep -f "sleep N"` that used to be here
@@ -544,9 +1107,30 @@ priv_stop() {
     wait "$DPID" 2>/dev/null || true
   fi
   DPID=""
+  # LAST RESORT, and only for THIS RUN's decoys: if a container could not be removed before
+  # the daemon went away, its process is kept alive by the SHARED containerd's shim and
+  # would sit in `docker-<id>.scope` for the rest of its `sleep`. Signal it directly —
+  # `decoy_procs` matches the container ids this run created, so no other process on the
+  # host can be reached by this loop. Normally it is a no-op: the retried `priv rm -f`
+  # above has already emptied the list.
+  local p
+  for p in $(decoy_procs "${DECOY_IDS[@]}" 2>/dev/null | awk '{print $1}'); do
+    kill -9 "$p" 2>/dev/null || true
+  done
+  decoy_wait_gone 10 "${DECOY_IDS[@]}"
   # Only ever removes the symlink THIS run planted at the guard's historical fixed
   # rm path (a fixed path by definition, so it cannot be owned exclusively).
   if [ -n "$PLANTED" ] && [ -L "$PLANTED" ]; then rm -f "$PLANTED"; fi
+  # The sweep arm's baits are named from THIS RUN's own pid, so the name belongs to this
+  # run and to nothing else. Removed BY NAME rather than by id: a trap can land between
+  # `docker create` returning and the id being stored — measured, a SIGTERM in that window
+  # left one bait behind, and the next run then died on the name it could not re-create.
+  if [ -n "$STALE_A" ]; then host_docker rm -f "$STALE_A" >/dev/null 2>&1 || true; fi
+  if [ -n "$STALE_B" ]; then host_docker rm -f "$STALE_B" >/dev/null 2>&1 || true; fi
+  # The "live owner" the arm's control probe is named after is THIS RUN's own pid, so
+  # there is nothing extra to tear down: host_own_cleanup above already removes it, and
+  # if this run is SIGKILLed its pid goes with it, leaving the control probe sweepable by
+  # the next run rather than a probe that looks owned by a live run for an hour.
   release_mounts
   drop_scratch
 }
@@ -568,8 +1152,13 @@ sandbox_init() {
   HOST_CALLS_LOG="$SB/host-calls.log"
   HOST_OWN_LOG="$SB/host-own.log"
   HOST_EVENTS_LOG="$SB/host-events.log"
+  HOST_EVENTS_LIVE="$SB/host-events-live.log"
+  HOST_EVENTS_REPLAY="$SB/host-events-replay.log"
   : >"$HOST_CALLS_LOG"
   : >"$HOST_OWN_LOG"
+  : >"$HOST_EVENTS_LOG"
+  : >"$HOST_EVENTS_LIVE"
+  : >"$HOST_EVENTS_REPLAY"
 }
 
 priv_start() {
@@ -712,10 +1301,17 @@ say ""
 say "== the HOST daemon: the before-snapshot, and the shared-daemon attribution arm =="
 sandbox_init
 HOST_ID_BEFORE="$(host info --format '{{.ID}}')"
-# 1. The event window opens BEFORE the snapshot, so nothing that happens inside the
-#    window can land before it. (The query is made at the END of the run, over this
-#    window: one process fewer to leak, and no reliance on a stream staying alive.)
+# 1. TWO sources, opened here and read at the end (card `t_d243986f`). The LIVE
+#    subscriber is started BEFORE the snapshot, so nothing that happens inside the
+#    window can land before it, and every event is on disk as it is published — the
+#    daemon's `--since` replay is a bounded ring (256 events) and a concurrent lane
+#    evicts from it. The window's start still goes to the replay as its `--since`, so
+#    the fallback covers the same span. (Both are merged into one log at the end; see
+#    host_events_merge.)
 HOST_EVENTS_FROM="$(date -u -d '@'$(( $(date +%s) - 2 )) +%Y-%m-%dT%H:%M:%SZ)"
+host_events_live_start \
+  || fatal "could not open the LIVE event window on the host daemon — the attribution would rest on the bounded replay alone"
+say "window: LIVE subscriber open since $HOST_EVENTS_FROM (pid $HOST_EVENTS_PID); the replay at the end is the fallback"
 # 2. This run's OWN probe containers on the host daemon. The image is an EMPTY rootfs
 #    imported from a tar built here — no pull, no network, no dependency on the host's
 #    own images — and the containers are created, never started: no process, no
@@ -730,6 +1326,66 @@ host_own_create "$PEER_PROBE" PEER_ID \
   || fatal "could not plant '$PEER_PROBE' on the HOST daemon"
 host_own_create "$CONTROL_PROBE" CONTROL_ID \
   || fatal "could not plant '$CONTROL_PROBE' on the HOST daemon"
+# 2b. THE SWEEP, AND ITS OWN ARM. Two containers shaped like probes
+#     from runs that are GONE (a VERIFIED-dead pid in the name) must be swept; one shaped
+#     like a probe of a LIVE run must be SPARED — otherwise the sweep would be "remove
+#     anything called jf-*", which on a daemon shared by a two-slot gate pool would
+#     delete a CONCURRENT run's probes out from under it. It runs BEFORE the
+#     before-snapshot, so what it plants can never be read as a loss later, and it is
+#     measured rather than believed: the arm checks the premise (the two dead pids are
+#     dead, the live one is alive), that both baits went, that the live one stayed, and
+#     that nothing outside the two probe shapes was removed.
+DEAD_A="$(dead_pid 1)" || fatal "could not produce a pid that cannot be allocated for the sweep arm"
+DEAD_B="$(dead_pid 2)" || fatal "could not produce a second unallocatable pid for the sweep arm"
+[ "$DEAD_A" != "$DEAD_B" ] || fatal "the sweep arm drew the same dead pid twice"
+STALE_A="jf-prune-peerprobe-$DEAD_A"
+STALE_B="jf-gate-concurrency-peer-$DEAD_B-1-1"
+# The control: a probe of the SAME two shapes whose owning pid is ALIVE. Its owner is
+# this run's own pid, so it costs no extra process — and when this run is SIGKILLed its
+# pid dies with it, which is what makes the control probe sweepable by the next run
+# instead of looking owned for another hour.
+LIVEPROBE="jf-gate-concurrency-peer-$$-2-2"
+host_plant_probe "$STALE_A" \
+  || fatal "could not plant '$STALE_A' on the HOST daemon"
+host_plant_probe "$STALE_B" \
+  || fatal "could not plant '$STALE_B' on the HOST daemon"
+host_own_create "$LIVEPROBE" LIVE_ID \
+  || fatal "could not plant '$LIVEPROBE' on the HOST daemon"
+eq "$(probe_owner_alive "$DEAD_A" && echo alive || echo dead)" "dead" \
+  "sweep arm: the first bait's owning pid $DEAD_A really is not a live process (the premise of the sweep, measured)"
+eq "$(probe_owner_alive "$DEAD_B" && echo alive || echo dead)" "dead" \
+  "sweep arm: the second bait's owning pid $DEAD_B really is not a live process"
+eq "$(probe_owner_alive "$$" && echo alive || echo dead)" "alive" \
+  "sweep arm: the control probe's owning pid $$ really IS a live process (this run)"
+host_sweep_stale "$STALE_A" "$STALE_B" >"$SB/sweep.out" 2>&1
+say ""
+say "== the sweep: probes left behind by runs that are GONE =="
+sed 's/^/  /' "$SB/sweep.out"
+eq "$(grep -c -x -- "$STALE_A" "$SB/swept-names.txt" || true)" "1" \
+  "the sweep removed '$STALE_A' — this suite's own probe shape, owner's pid $DEAD_A gone"
+eq "$(grep -c -x -- "$STALE_B" "$SB/swept-names.txt" || true)" "1" \
+  "the sweep removed '$STALE_B' — the sibling gate-concurrency harness's shape, owner's pid $DEAD_B gone"
+eq "$(grep -c -x -- "$LIVEPROBE" "$SB/swept-names.txt" || true)" "0" \
+  "the sweep SPARED '$LIVEPROBE' — a probe shape whose owning pid $$ is ALIVE, i.e. a concurrent run's"
+eq "$(host ps -a --format '{{.Names}}' | grep -c -x -- "$LIVEPROBE" || true)" "1" \
+  "…and that spared probe is still on the host daemon (the sweep did not merely fail to log it)"
+eq "$(host ps -a --format '{{.Names}}' | grep -c -x -e "$STALE_A" -e "$STALE_B" || true)" "0" \
+  "both baits are really gone from the daemon, not just recorded as swept"
+eq "$(grep -vcE "$PROBE_RE_OWN|$PROBE_RE_CONC" "$SB/swept-names.txt" || true)" "0" \
+  "the sweep removed NOTHING whose name is not one of the two probe shapes (on a shared daemon that is the whole safety argument)"
+# The teardown's OWN installation, checked rather than trusted: the sweep above is what
+# makes a SIGKILLed run harmless, and these are what make a run that is ASKED to stop
+# tidy up its own probes instead of leaving them for the sweep.
+trap -p EXIT INT TERM HUP >"$SB/teardown-traps.txt"
+# A process started as an ASYNCHRONOUS command inherits SIGINT IGNORED, and bash then
+# refuses to trap it: the file shows `trap -- '' SIGINT` instead of a handler. That is not
+# a leak — a process that ignores SIGINT is never interrupted by one — so the expectation
+# is 4, minus one for exactly that shape. Measured: the same traps written by a foreground
+# run print 4 handler lines, by `cmd &` 3.
+INT_UNTRAPPABLE=0
+grep -qx "trap -- '' SIGINT" "$SB/teardown-traps.txt" && INT_UNTRAPPABLE=1
+eq "$(grep -c 'priv_stop' "$SB/teardown-traps.txt" || true)" "$((4 - INT_UNTRAPPABLE))" \
+  "the teardown is installed on EXIT, INT, TERM and HUP (a run asked to stop removes its own probes rather than leaking them; INT is counted out only where SIGNAL IGNORE inherited by an asynchronous command made it untrappable)"
 # 3. The before-snapshot, ids and names, taken AFTER the probes exist: the probes are
 #    part of "existed before this run" exactly like every other container on the host.
 host ps -a -q --no-trunc | sort >"$SB/host-before-ids.txt"
@@ -1051,17 +1707,46 @@ eq "$peer_rc" "0" "the PEER process really removed its probe container on the HO
 host ps -a -q --no-trunc | sort >"$SB/host-after-ids.txt"
 host images -q --no-trunc | sort >"$SB/host-images-after.txt"
 HOST_ID_AFTER="$(host info --format '{{.ID}}')"
-# The event window, over the whole run. `--until` two seconds ahead so a destroy that
-# lands while this line is being composed is still inside it; the daemon's per-action
-# filters keep the answer to what is needed for attribution (a busy host emits an
-# `exec_*` event per health check, which is none of this suite's business).
+# The event window, over the whole run: close the LIVE subscriber (its file is then
+# complete), then take the `--since/--until` replay as the fallback, then merge the
+# two into the log every verdict below reads. `--until` two seconds ahead so a
+# destroy that lands while the replay is being composed is still inside it; the
+# daemon's per-action filters keep the answer to what is needed for attribution (a
+# busy host emits an `exec_*` event per health check, which is none of this suite's
+# business).
 HOST_EVENTS_UNTIL="$(date -u -d '@'$(( $(date +%s) + 2 )) +%Y-%m-%dT%H:%M:%SZ)"
+host_events_live_stop
 host events --since "$HOST_EVENTS_FROM" --until "$HOST_EVENTS_UNTIL" \
   --filter type=container --filter type=image \
   --filter event=destroy --filter event=delete --filter event=untag \
   --format '{{.Time}}|{{.Type}}|{{.Action}}|{{.Actor.ID}}|{{.Actor.Attributes.name}}' \
-  >"$HOST_EVENTS_LOG" 2>&1 || true
-say "window: $HOST_EVENTS_FROM .. $HOST_EVENTS_UNTIL; $(grep -c . "$HOST_EVENTS_LOG" || true) event line(s)"
+  >"$HOST_EVENTS_REPLAY" 2>"$SB/host-events-replay.err" || true
+host_events_merge "$HOST_EVENTS_LIVE" "$HOST_EVENTS_REPLAY" >"$HOST_EVENTS_LOG"
+say "window: $HOST_EVENTS_FROM .. $HOST_EVENTS_UNTIL; live $(grep -cE '^[0-9]+\|' "$HOST_EVENTS_LIVE" 2>/dev/null || true) line(s), replay $(grep -cE '^[0-9]+\|' "$HOST_EVENTS_REPLAY" 2>/dev/null || true) line(s), merged $(grep -cE '^[0-9]+\|' "$HOST_EVENTS_LOG" 2>/dev/null || true) line(s)"
+
+# THE LIVE HALF, PROVEN ON EVERY RUN (card `t_d243986f`), and this is the arm that
+# would have been RED on the 2026-11-04 merge-train run: the peer probe's destroy must
+# be in the LIVE file, which is written as the event is published, so the reading
+# cannot be a victim of the daemon's 256-event ring. It is asserted on the LIVE source
+# ALONE — a merged log that had it only via the replay would pass this suite today and
+# fail it the moment a competing lane filled the ring, which is precisely the defect.
+PEER_LIVE="$(grep -cE "^[0-9]+\|container\|destroy\|$PEER_ID\|" "$HOST_EVENTS_LIVE" 2>/dev/null || true)"
+eq "${PEER_LIVE:-0}" "1" \
+   "the LIVE window captured the peer probe's destroy as it was published — the daemon's replay is a 256-event ring and a concurrent lane evicts from it"
+eq "$( [ "$(grep -cE '^[0-9]+\|' "$HOST_EVENTS_LIVE" 2>/dev/null || true)" -ge 1 ] && echo yes || echo no )" "yes" \
+   "…so the LIVE window is not empty (the subscriber ran and wrote to disk, rather than dying at start)"
+eq "$(kill -0 "${HOST_EVENTS_PID_SEEN:-0}" 2>/dev/null && echo alive || echo gone)" "gone" \
+   "…and the subscriber this run started is gone once its window was closed (it is not left reading the host daemon)"
+
+# THE LEAK ARM (card `t_1dd033e7`): the subscriber's lifetime is bounded from the
+# INSIDE, so it is gone even when this run was SIGKILLed and never reached the
+# teardown trap — the exact shape that leaked a `docker events` child onto the host
+# for 40 minutes and held the merge lock the whole time. `host_events_alive_pids`
+# matches only processes whose output descriptors still point into THIS run's scratch
+# tree, so a peer run's window can never be counted here. The live-process check above
+# covers the supervisor; this one covers a `docker events` child it may have left.
+eq "$(host_events_alive_pids | wc -l | tr -d ' ')" "0" \
+   "no docker-events subscriber from this run survives its window (bounded from inside: a SIGKILLed run cannot leak one)"
 
 # THE SELF-CHECK the attribution rests on: one raw call site, and the read-only door
 # never issued a destructive verb (it refuses them, so this is a tripwire on the file
@@ -1087,7 +1772,66 @@ eq "$(HOST_EVENTS_LOG="$FIXTURE.events" HOST_OWN_REMOVED='' attribution_of_conta
 eq "$(HOST_EVENTS_LOG="$FIXTURE.events" HOST_OWN_REMOVED="$FIX_OWN" attribution_of_container "$FIX_OWN")" "OURS" \
    "classifier self-test: an id this run's own audited path removed is OURS (not FOREIGN, whatever else the window says)"
 eq "$(HOST_EVENTS_LOG="$FIXTURE.events" HOST_OWN_REMOVED='' attribution_of_container "$FIX_NONE")" "UNATTRIBUTED" \
-   "classifier self-test: a loss with neither an event nor a removal of this run's is UNATTRIBUTED — the shape that fails"
+   "classifier self-test: a loss with neither an event nor a removal of this run's is UNATTRIBUTED (the classifier still says so — what changed with card t_d243986f is the VERDICT it becomes: record_container_loss passes it with its reason, and only OURS reds; the two arms below drive that)"
+
+# THE EVICTION SHAPE, DRIVEN (card `t_d243986f`). This is the window the merge train
+# actually hit: the destroy is in the LIVE source and the REPLAY is empty, because the
+# daemon's 256-event ring had already evicted it by the time the replay asked. It must
+# read FOREIGN — the pre-fix suite, whose only source was that replay, read
+# UNATTRIBUTED and redded the run.
+FIX_LIVE="$SB/host-attribution-fixture.live"
+FIX_REPLAY="$SB/host-attribution-fixture.replay"
+FIX_EMPTY="$SB/host-attribution-fixture.empty"
+printf '1000|container|destroy|%s|fixture-peer\n' "$FIX_PEER" >"$FIX_LIVE"
+: >"$FIX_REPLAY"
+: >"$FIX_EMPTY"
+host_events_merge "$FIX_LIVE" "$FIX_REPLAY" >"$FIXTURE.evicted"
+eq "$(HOST_EVENTS_LOG="$FIXTURE.evicted" HOST_OWN_REMOVED='' attribution_of_container "$FIX_PEER")" "FOREIGN" \
+   "the EVICTION shape reads FOREIGN: the destroy is held ONLY by the LIVE source while the replay is empty — the 256-event ring's own fingerprint, and the shape PR #1535's merge run redded on"
+host_events_merge "$FIX_REPLAY" "$FIX_LIVE" >"$FIXTURE.fallback"
+eq "$(HOST_EVENTS_LOG="$FIXTURE.fallback" HOST_OWN_REMOVED='' attribution_of_container "$FIX_PEER")" "FOREIGN" \
+   "…and the replay alone still reads FOREIGN when the LIVE source is the empty one, so a subscriber that died mid-run loses no verdict"
+eq "$(host_events_merge "$FIX_LIVE" "$FIX_REPLAY" | grep -c .)" "1" \
+   "…the merge DEDUPLICATES: one event the two sources both hold is one line, not two (so window_state's count stays an event count)"
+
+# THE RECORD, DRIVEN THROUGH THE FUNCTION THE RUN USES — not a re-implementation of
+# its `case`. Both directions matter: a no-event loss must not red the gate, and a loss
+# THIS RUN caused must still red it however empty the window is (the pass is not a
+# blanket amnesty, which is the shape a future edit could silently turn it into).
+HOST_EVENTS_LOG_SAVE="$HOST_EVENTS_LOG"
+HOST_ATTRIBUTION_OUT_SAVE="$HOST_ATTRIBUTION_OUT"
+HOST_OWN_REMOVED_SAVE=("${HOST_OWN_REMOVED[@]+"${HOST_OWN_REMOVED[@]}"}")
+FIX_ACCT="$SB/host-attribution-fixture.acct"
+record_fixture_loss() { # <events-log> <id> <own-removed> <out-file>
+  : >"$FIX_ACCT"
+  HOST_EVENTS_LOG="$1"; HOST_OWN_REMOVED=(); [ -z "$3" ] || HOST_OWN_REMOVED=("$3")
+  HOST_ATTRIBUTION_OUT="$FIX_ACCT"
+  record_container_loss "$2" fixture-probe >"$4"
+}
+fails_before="$FAILS"; checks_before="$CHECKS"
+record_fixture_loss "$FIX_EMPTY" "$FIX_NONE" '' "$FIXTURE.noevent.out"
+fails_delta=$((FAILS - fails_before)); checks_delta=$((CHECKS - checks_before))
+eq "$fails_delta" "0" \
+   "a loss with NO event from EITHER source does NOT fail the run — it is not this tree's, and redding on it is what blocked a merge for ~48 min per attempt"
+eq "$checks_delta" "1" \
+   "…but it is still RECORDED as a check, so a window that cannot attribute a loss is visible rather than silent"
+has "$FIXTURE.noevent.out" "cannot be attributed to this tree" \
+   "…naming the reason (this run recorded no removal of it, and its only removal path refuses an id it did not create)"
+has "$FIX_ACCT" "FOREIGN-NOEVENT" \
+   "…and the loss is counted as FOREIGN-NOEVENT in the account, not as UNATTRIBUTED"
+fails_before="$FAILS"; checks_before="$CHECKS"
+record_fixture_loss "$FIX_EMPTY" "$FIX_OWN" "$FIX_OWN" "$FIXTURE.ours.out"
+fails_delta=$((FAILS - fails_before)); checks_delta=$((CHECKS - checks_before))
+eq "$fails_delta" "1" \
+   "control: the SAME empty window still FAILS when this run's own audited path removed the id — the pass is scoped to losses this run cannot have caused"
+has "$FIXTURE.ours.out" "removed by THIS RUN's own audited removal path" \
+   "…and it says so in those words"
+# The control's red is the ARM, not a failure of this run: put the counters back, so
+# the suite's RESULT is not redded by the fixture that proves the red exists.
+FAILS=$((FAILS - fails_delta)); CHECKS=$((CHECKS - checks_delta))
+HOST_EVENTS_LOG="$HOST_EVENTS_LOG_SAVE"
+HOST_ATTRIBUTION_OUT="$HOST_ATTRIBUTION_OUT_SAVE"
+HOST_OWN_REMOVED=("${HOST_OWN_REMOVED_SAVE[@]+"${HOST_OWN_REMOVED_SAVE[@]}"}")
 
 # ---- containers: every loss is attributed, one check each, and the failing shape
 # NAMES the container and says what happened to it. The bare "(want '0', got '1')" this
@@ -1095,25 +1839,12 @@ eq "$(HOST_EVENTS_LOG="$FIXTURE.events" HOST_OWN_REMOVED='' attribution_of_conta
 # daemon (card `t_da7509c4`).
 comm -23 "$SB/host-before-ids.txt" "$SB/host-after-ids.txt" >"$SB/host-lost.txt"
 : >"$SB/host-attribution.txt"
+HOST_ATTRIBUTION_OUT="$SB/host-attribution.txt"
 while IFS= read -r cid; do
   [ -n "$cid" ] || continue
   cname="$(awk -F'|' -v id="$cid" '$1==id {print $2; exit}' "$SB/host-before-names.txt")"
   [ -n "$cname" ] || cname="(name not in the before-snapshot)"
-  cshort="${cid:0:12}"
-  cev="$(host_event_time "$cid")"
-  when="unknown"
-  if [ -n "$cev" ]; then when="$(date -u -d "@$cev" +%H:%M:%SZ 2>/dev/null || printf '%s' "$cev")"; fi
-  case "$(attribution_of_container "$cid")" in
-    OURS)
-      printf 'OURS|%s|%s\n' "$cid" "$cname" >>"$SB/host-attribution.txt"
-      bad "host container '$cname' ($cshort) existed before this run and was removed by THIS RUN's own audited removal path at $when — the suite touched the host" ;;
-    FOREIGN)
-      printf 'FOREIGN|%s|%s|%s\n' "$cid" "$cname" "$when" >>"$SB/host-attribution.txt"
-      ok "host container '$cname' ($cshort) was removed at $when by ANOTHER actor on the shared daemon — FOREIGN, not this tree's failure (this run recorded no removal of it)" ;;
-    *)
-      printf 'UNATTRIBUTED|%s|%s\n' "$cid" "$cname" >>"$SB/host-attribution.txt"
-      bad "host container '$cname' ($cshort) existed before this run and is GONE, and its removal CANNOT be attributed: this run recorded no removal of it and the HOST daemon recorded no destroy event for it — the loss is not this tree's, but the window cannot say who did it ($(window_state))" ;;
-  esac
+  record_container_loss "$cid" "$cname"
 done <"$SB/host-lost.txt"
 # THE ARM ITSELF, asserted rather than assumed: the probe the peer removed must be
 # classified FOREIGN and NAMED, and the control probe (which no peer touched) must
@@ -1124,21 +1855,26 @@ eq "$(awk -F'|' -v id="$PEER_ID" '$1=="FOREIGN" && $2==id {n++} END{print n+0}' 
 eq "$(host ps -a -q --no-trunc | grep -c -x "$CONTROL_ID" || true)" "1" \
   "the control probe container (which no peer touched) is still on the host daemon"
 
-# ---- images: same three verdicts. A peer's `docker image prune` or a redeploy that
+# ---- images: the same attribution. A peer's `docker image prune` or a redeploy that
 # rebuilds is the same shared-daemon shape, and it used to red the same bare count.
-comm -23 "$SB/host-images-before.txt" "$SB/host-images-after.txt" >"$SB/host-images-lost.txt"
-while IFS= read -r iid; do
-  [ -n "$iid" ] || continue
+# Same split as the containers above, for the same reason (card `t_d243986f`).
+record_image_loss() {
+  local iid="$1" ishort iat iwhen="unknown"
   ishort="$(printf '%s' "$iid" | sed 's/^sha256://' | cut -c1-12)"
   iat="$(host_event_time "$iid")"
-  iwhen="unknown"
-  if [ -n "$iat" ]; then iwhen="$(date -u -d "@$iat" +%H:%M:%SZ 2>/dev/null || printf '%s' "$iat")"; fi
+  [ -n "$iat" ] && iwhen="$(date -u -d "@$iat" +%H:%M:%SZ 2>/dev/null || printf '%s' "$iat")"
   case "$(attribution_of_image "$iid")" in
     FOREIGN)
       ok "host image $ishort was deleted at $iwhen by ANOTHER actor on the shared daemon — FOREIGN, not this tree's failure (this run recorded no deletion of it)" ;;
     *)
-      bad "host image $ishort existed before this run and is GONE, and its deletion CANNOT be attributed: this run recorded no deletion of it and the HOST daemon recorded no delete event for it ($(window_state))" ;;
+      ok "host image $ishort existed before this run and is GONE; its deletion cannot be attributed to this tree — this run removed no image but its own probe image, and the daemon no longer holds a delete/untag for it ($(window_state)). NOT this tree's loss: it is recorded and PASSES with that reason" ;;
   esac
+}
+
+comm -23 "$SB/host-images-before.txt" "$SB/host-images-after.txt" >"$SB/host-images-lost.txt"
+while IFS= read -r iid; do
+  [ -n "$iid" ] || continue
+  record_image_loss "$iid"
 done <"$SB/host-images-lost.txt"
 eq "$(host images -q --no-trunc | grep -c -x "$HOST_OWN_IMAGE_ID" || true)" "1" \
   "the probe image this run imported is still in the host daemon (this run deleted nothing there before this check)"
@@ -1301,13 +2037,26 @@ SCRATCH="$SB"
 SOCKET_MARK="$PRIV"
 priv_stop
 eq "$(test -e "$SCRATCH" && echo present || echo gone)" "gone" "the private daemon's scratch tree was removed"
-eq "$(host ps -a --format '{{.Names}}' | grep -c -x -e "$PEER_PROBE" -e "$CONTROL_PROBE" || true)" "0" \
-   "neither probe container is left behind on the HOST daemon (this run put back what it planted)"
+eq "$(host ps -a --format '{{.Names}}' | grep -c -x -e "$PEER_PROBE" -e "$CONTROL_PROBE" -e "$LIVEPROBE" || true)" "0" \
+   "no probe container is left behind on the HOST daemon (this run put back what it planted, including the sweep arm's control probe)"
 eq "$(host images --format '{{.Repository}}:{{.Tag}}' | grep -c -x "jf-prune-probe:${SCRATCH##*/}" || true)" "0" \
    "the probe image is gone from the HOST daemon"
 eq "$(pgrep -f "dockerd .*$SOCKET_MARK" >/dev/null 2>&1 && echo alive || echo gone)" "gone" "no private dockerd was left running"
-eq "$(decoy_procs "${DECOY_IDS[@]}" | wc -l | tr -d ' ')" "0" \
-   "no decoy process was left running (this run's containers only — see the next arm for why that distinction is the point)"
+# THE PROCESSES THE DAEMON OWNED EXIT ASYNCHRONOUSLY, so this is a BOUNDED WAIT rather
+# than one sample. `priv_stop` already waits 5s for exactly this, but on a host where the
+# gate pool is running a second copy of this suite the killed shim can take longer to
+# release its container: measured 2026-11-04 with two runs overlapping, this arm and the
+# one below both counted ONE live decoy a few seconds after `priv_stop` returned
+# (`RESULT: 2 of 122 checks FAILED`), and the identical bytes were green on a quiet run —
+# the same pair of reds, on the same bytes, re-measured by card `t_d243986f` with a peer
+# lane running (`RESULT: 2 of 131 checks FAILED`, green on a re-run). The wait does not
+# soften the assertion (`decoy_wait_gone` gives up after its budget, and the arm above
+# proves the instrument names a real leak) and the message NAMES what survived, because
+# `want '0', got '1'` naming nothing is the undiagnosable red this card exists for.
+decoy_wait_gone 40 "${DECOY_IDS[@]}" || true
+DECOY_LEFT="$(decoy_procs "${DECOY_IDS[@]}")"
+eq "$([ -z "$DECOY_LEFT" ] && echo 0 || printf '%s\n' "$DECOY_LEFT" | wc -l | tr -d ' ')" "0" \
+   "no decoy process was left running after the wait (this run's containers only — see the next arm for why that distinction is the point)${DECOY_LEFT:+ — STILL ALIVE: $DECOY_LEFT}"
 eq "$(mount | grep -c "$SCRATCH" || true)" "0" "no overlay/netns mount from this run is left behind"
 
 # ---------------------------- an unrelated `sleep N` on this host is NOT a leak
@@ -1328,8 +2077,12 @@ eq "$(tr '\0' ' ' <"/proc/$STRAY/cmdline" 2>/dev/null | sed 's/ *$//')" "sleep $
    "the stand-in really is a host-wide 'sleep $SLEEP_SECS' (the arm measures what it claims)"
 eq "$(pgrep -f "sleep $SLEEP_SECS" >/dev/null 2>&1 && echo alive || echo gone)" "alive" \
    "control: the PRE-FIX check reads that unrelated sleep as a live decoy — that is the false red this card exists for"
-eq "$(decoy_procs "${DECOY_IDS[@]}" | wc -l | tr -d ' ')" "0" \
-   "the run-scoped check reads NO decoy of this run while that sleep is alive (green on the same bytes)"
+# Same bounded wait as the teardown arm above, so ONE straggler cannot red two arms: a
+# process that outlives it is already reported, named, by the line above.
+decoy_wait_gone 40 "${DECOY_IDS[@]}" || true
+DECOY_LEFT="$(decoy_procs "${DECOY_IDS[@]}")"
+eq "$([ -z "$DECOY_LEFT" ] && echo 0 || printf '%s\n' "$DECOY_LEFT" | wc -l | tr -d ' ')" "0" \
+   "the run-scoped check reads NO decoy of this run while that sleep is alive (green on the same bytes)${DECOY_LEFT:+ — STILL ALIVE: $DECOY_LEFT}"
 kill "$STRAY" 2>/dev/null || true
 wait "$STRAY" 2>/dev/null || true
 eq "$([ -e "/proc/$STRAY" ] && echo present || echo gone)" "gone" \

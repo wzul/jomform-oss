@@ -53,13 +53,13 @@ import (
 var (
 	// ErrChatProposalNotFound means no unspent proposal with this (token, user)
 	// exists — including the case where the token belongs to somebody else.
-	ErrChatProposalNotFound = errors.New("cadangan tidak dijumpai")
+	ErrChatProposalNotFound = errors.New("proposal not found")
 	// ErrChatProposalExpired means the proposal existed but its window closed.
 	// A proposal is decided while the user is reading the card, not later.
-	ErrChatProposalExpired = errors.New("cadangan telah luput")
+	ErrChatProposalExpired = errors.New("the proposal has expired")
 	// ErrChatProposalConsumed means the token was already confirmed or
 	// cancelled: a spent token is never spent twice.
-	ErrChatProposalConsumed = errors.New("cadangan sudah digunakan atau dibatalkan")
+	ErrChatProposalConsumed = errors.New("the proposal was already used or cancelled")
 )
 
 // chatProposalSelect is the column list every read in this file scans, kept as
@@ -148,10 +148,10 @@ func HashProposalToken(raw string) string {
 // inconsistency the confirm path would then be trusting.
 func (s *ChatWriteProposalStore) Create(ctx context.Context, p *ChatWriteProposal) error {
 	if p == nil {
-		return errors.New("cadangan kosong")
+		return errors.New("empty proposal")
 	}
 	if p.TokenHash == "" || p.UserID == "" || p.AccountID == "" || p.Tool == "" {
-		return errors.New("cadangan tidak lengkap (token, pengguna, akaun dan alat diperlukan)")
+		return errors.New("incomplete proposal (token, user, account and tool are required)")
 	}
 	canon, err := CanonicalArgs(p.Args)
 	if err != nil {
@@ -161,7 +161,7 @@ func (s *ChatWriteProposalStore) Create(ctx context.Context, p *ChatWriteProposa
 	p.ArgsHash = hex.EncodeToString(h[:])
 	p.CreatedAt = time.Now().UTC()
 	if p.ExpiresAt.IsZero() {
-		return errors.New("cadangan tanpa masa luput — tetapan luput wajib")
+		return errors.New("proposal with no expiry — an expiry setting is required")
 	}
 	return s.pool.QueryRow(ctx,
 		`INSERT INTO chat_write_proposals

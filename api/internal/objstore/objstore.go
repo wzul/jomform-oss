@@ -1036,11 +1036,11 @@ func familyOf(ext string) UploadKind { return extFamily[ext] }
 // `application/octet-stream` type are not rejected.
 func MagicByteMismatch(kind UploadKind, declaredFilename, declaredMIME, sniffedExt string) string {
 	if sniffedExt == "" {
-		return "kandungan fail tidak dapat dikenal pasti"
+		return "the file contents could not be identified"
 	}
 	allowed, ok := uploadKindExts[kind]
 	if !ok || !allowed[sniffedExt] {
-		return "kandungan fail tidak sepadan dengan jenis fail yang didakwa"
+		return "the file contents do not match the declared file type"
 	}
 	sniffed := canonicalExt(sniffedExt)
 	sniffedFamily := familyOf(sniffed)
@@ -1048,13 +1048,13 @@ func MagicByteMismatch(kind UploadKind, declaredFilename, declaredMIME, sniffedE
 		if declFamily, known := extFamily[dex]; known {
 			// Exact comparison unless both sides are heuristic text assets.
 			if !(textExts[dex] && textExts[sniffed]) && (declFamily != sniffedFamily || dex != sniffed) {
-				return "kandungan fail tidak sepadan dengan sambungan fail"
+				return "the file contents do not match the file extension"
 			}
 		}
 	}
 	if dm := strings.ToLower(strings.TrimSpace(strings.SplitN(declaredMIME, ";", 2)[0])); dm != "" {
 		if declFamily, known := mimeFamily[dm]; known && declFamily != sniffedFamily {
-			return "kandungan fail tidak sepadan dengan jenis kandungan yang didakwa"
+			return "the file contents do not match the declared content type"
 		}
 	}
 	return ""
@@ -1210,7 +1210,7 @@ func VariantURLs(ctx context.Context, fullKey string, exists ObjectExister, publ
 // than fail the upload. The Dockerfile installs Ghostscript for production.
 func RenderPDFPreview(data []byte) ([]byte, error) {
 	if len(data) == 0 {
-		return nil, errors.New("fail kosong")
+		return nil, errors.New("the file is empty")
 	}
 	gsPath, err := exec.LookPath("gs")
 	if err != nil {
@@ -1236,23 +1236,23 @@ func RenderPDFPreview(data []byte) ([]byte, error) {
 	cmd.Stderr = io.Discard
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
-			return nil, errors.New("papar PDF tamat masa")
+			return nil, errors.New("the PDF preview timed out")
 		}
-		return nil, errors.New("gagal papar PDF")
+		return nil, errors.New("could not render a PDF preview")
 	}
 	if out.Len() == 0 {
-		return nil, errors.New("gagal papar PDF")
+		return nil, errors.New("could not render a PDF preview")
 	}
 	img, err := decodeImage(out.Bytes())
 	if err != nil {
-		return nil, errors.New("gagal decode paparan PDF")
+		return nil, errors.New("could not decode the PDF preview")
 	}
 	if b := img.Bounds(); b.Dx() > PDFPreviewEdge || b.Dy() > PDFPreviewEdge {
 		img = imaging.Fit(img, PDFPreviewEdge, PDFPreviewEdge, imaging.Lanczos)
 	}
 	preview := encodeJPEG(img, JPEGQuality)
 	if len(preview) == 0 {
-		return nil, errors.New("gagal papar PDF")
+		return nil, errors.New("could not render a PDF preview")
 	}
 	return preview, nil
 }
@@ -1293,7 +1293,7 @@ func RenderPDFPreview(data []byte) ([]byte, error) {
 func OptimizeImage(data []byte, ext string) ([]byte, error) {
 	img, err := decodeImage(data)
 	if err != nil {
-		return nil, errors.New("gagal decode imej")
+		return nil, errors.New("could not decode the image")
 	}
 	transparent := imageHasAlpha(img)
 
@@ -1326,7 +1326,7 @@ func OptimizeImage(data []byte, ext string) ([]byte, error) {
 		out = encodeJPEG(img, JPEGQuality)
 	}
 	if len(out) > MaxStoredBytes {
-		return nil, errors.New("imej tidak dapat dimampatkan bawah 2MB")
+		return nil, errors.New("the image could not be compressed below 2MB")
 	}
 	return out, nil
 }
@@ -1344,7 +1344,7 @@ func OptimizeImage(data []byte, ext string) ([]byte, error) {
 func encodeTransparentPNG(img image.Image) ([]byte, error) {
 	out := encodePNG(img, png.DefaultCompression)
 	if len(out) == 0 {
-		return nil, errors.New("gagal encode imej")
+		return nil, errors.New("could not encode the image")
 	}
 	if len(out) > MaxStoredBytes {
 		if b := img.Bounds(); b.Dx() > MaxStoredLongEdge || b.Dy() > MaxStoredLongEdge {
@@ -1353,7 +1353,7 @@ func encodeTransparentPNG(img image.Image) ([]byte, error) {
 		}
 	}
 	if len(out) > MaxStoredBytes {
-		return nil, errors.New("imej lutsinar tidak dapat dimampatkan bawah 2MB; kecilkan imej atau eksport tanpa latar lutsinar")
+		return nil, errors.New("the transparent image could not be compressed below 2MB; shrink the image or export it without the transparent background")
 	}
 	return out, nil
 }
@@ -1371,7 +1371,7 @@ func OptimizeImageSize(data []byte, ext string, size ImageSize) ([]byte, error) 
 	}
 	img, err := decodeImage(data)
 	if err != nil {
-		return nil, errors.New("gagal decode imej")
+		return nil, errors.New("could not decode the image")
 	}
 	transparent := imageHasAlpha(img)
 	edge := SizeLongEdge(size)
@@ -1389,7 +1389,7 @@ func OptimizeImageSize(data []byte, ext string, size ImageSize) ([]byte, error) 
 		out = encodeJPEG(img, JPEGQuality)
 	}
 	if len(out) > MaxStoredBytes {
-		return nil, errors.New("imej tidak dapat dimampatkan bawah 2MB")
+		return nil, errors.New("the image could not be compressed below 2MB")
 	}
 	return out, nil
 }
@@ -1401,11 +1401,11 @@ func OptimizeImageSize(data []byte, ext string, size ImageSize) ([]byte, error) 
 // artifact is tiny.
 func OptimizeAvatar(data []byte, ext string) ([]byte, error) {
 	if len(data) == 0 {
-		return nil, errors.New("fail kosong")
+		return nil, errors.New("the file is empty")
 	}
 	img, err := decodeImage(data)
 	if err != nil {
-		return nil, errors.New("gagal decode imej")
+		return nil, errors.New("could not decode the image")
 	}
 	transparent := imageHasAlpha(img)
 	if b := img.Bounds(); b.Dx() > AvatarLongEdge || b.Dy() > AvatarLongEdge {
@@ -1422,7 +1422,7 @@ func OptimizeAvatar(data []byte, ext string) ([]byte, error) {
 		out = encodeJPEG(img, q)
 	}
 	if len(out) > MaxStoredBytes {
-		return nil, errors.New("imej avatar tidak dapat dimampatkan")
+		return nil, errors.New("the avatar image could not be compressed")
 	}
 	return out, nil
 }

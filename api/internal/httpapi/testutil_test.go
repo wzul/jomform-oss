@@ -29,6 +29,22 @@ func testLogger() *slog.Logger {
 // No mail leaves the process: every test wires a recording mailer.
 const testMailDomain = "qa.jomform.com"
 
+// testRegistrableDomain is the recipient domain for a test whose REGISTRATION
+// must pass the MX pre-check (issue #56) and then reach the layer the test
+// actually names (suppression skip, verification breaker).
+//
+// It has to be a domain that publishes real MX records, and it is deliberately
+// neither of the other two candidates:
+//   - not testMailDomain: qa.jomform.com has no MX, which is fine on the
+//     magic-link path (no MX check there) but makes registration return 400;
+//   - not example.com/.net/.org: those apexes publish an RFC 7505 null MX,
+//     which since card t_f5b4d28a the checker correctly reads as "accepts no
+//     mail" — a registration aimed there is refused before the code under test
+//     (that is exactly what TestSESRegisterRefusesNullMXDomain asserts).
+//
+// No mail leaves the process: every test wires a recording mailer.
+const testRegistrableDomain = "jomform.com"
+
 var testIPCounter atomic.Uint32
 
 // uniqueTestIP returns a fresh IP for one test. The auth handlers key their

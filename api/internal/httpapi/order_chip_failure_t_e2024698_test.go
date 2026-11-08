@@ -71,7 +71,7 @@ func payableFormFixture(t *testing.T, withCreds bool) (h *PublicHandlers, host, 
 	h, workspaceSlug, accountID, prod, _ := menuOrderFixture(t)
 	ctx := context.Background()
 
-	formSlug = "it-t_e2024698-" + accountID[:8]
+	formSlug = "it-t-e2024698-" + accountID[:8]
 	f := &dbstore.Form{
 		AccountID: accountID, Slug: formSlug, Title: "Donation", Status: "published",
 		Config: map[string]any{

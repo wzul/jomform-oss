@@ -65,7 +65,7 @@ var reservedTLDs = []string{
 // SES suppression list after their addresses hard-bounced. They resolve to real
 // MX hosts, so only this list can refuse them.
 var disposableDomains = []string{
-	"example.com",
+	"uberip.com",
 	"1secmail.net",
 	"simulator.amazonses.com",
 }

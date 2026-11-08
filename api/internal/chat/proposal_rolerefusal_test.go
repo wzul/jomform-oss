@@ -19,7 +19,7 @@ package chat
 // WHAT THIS FILE PINS, over the REAL MCP server and the REAL database:
 //
 //  1. A confined write refused by the workspace ROLE comes back as the TYPED
-//     ErrProposalRoleRefused, not as the anonymous `server menolak: %s` wrap every
+//     ErrProposalRoleRefused, not as the anonymous `server refused: %s` wrap every
 //     other post-claim refusal gets. That distinction is the whole mechanism: the
 //     REST edge maps this sentinel to the wire code `role.manageRequired`, and it
 //     can only do that if the lane tells it which refusal fired.
@@ -138,8 +138,8 @@ func TestConfirmRefusedByWorkspaceRoleKeepsTheCause(t *testing.T) {
 	}
 	// It must NOT also wear the generic wrap: an error that is both would let a
 	// caller read either cause out of it.
-	if strings.Contains(err.Error(), "server menolak:") {
-		t.Errorf("the role refusal also carries the generic `server menolak:` wrap: %v", err)
+	if strings.Contains(err.Error(), "server refused:") {
+		t.Errorf("the role refusal also carries the generic `server refused:` wrap: %v", err)
 	}
 	// (3) THE TOKEN IS SPENT. This is why the page must not offer a retry on this
 	// outcome and must say the card cannot be used again.

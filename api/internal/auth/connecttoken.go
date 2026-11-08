@@ -27,9 +27,9 @@ const ConnectTokenTTL = 24 * time.Hour
 
 var (
 	// ErrConnectTokenExpired is returned when the link has passed its TTL.
-	ErrConnectTokenExpired = errors.New("connect link tamat tempoh")
+	ErrConnectTokenExpired = errors.New("the connect link has expired")
 	// ErrConnectTokenInvalid is returned for a malformed or forged link.
-	ErrConnectTokenInvalid = errors.New("connect link tidak sah")
+	ErrConnectTokenInvalid = errors.New("the connect link is invalid")
 )
 
 // SignConnectToken mints a signed, expiring email-ownership token for a social

@@ -56,7 +56,18 @@ func (h *RESTHandlers) listTemplates(w http.ResponseWriter, r *http.Request) {
 // Accepts either a gallery `slug` (published system template) or a
 // `template_id` naming one of the caller's own templates (issue #457).
 func (h *RESTHandlers) useTemplate(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+	// Card t_d07c8fbb: this door MINTS a form row (a real draft, not a template)
+	// by copying a template into it, so it answers the SAME refusal
+	// POST /v1/rest/forms answers: an account with no live workspace gets
+	// 409 workspace.required, because the stored row would carry
+	// `workspace_id IS NULL` and be 404 at every address once published.
+	//
+	// It runs BEFORE the template is resolved and before the clone's slug is
+	// uniquified: the account's state cannot carry the call at all, so the
+	// answer must not depend on WHICH template was named (a gallery slug, a
+	// template_id, or one that does not exist), and nothing must be computed
+	// for a request that can never be stored.
+	if !h.requireFormMint(w, r, actx) {
 		return
 	}
 	var in struct {
@@ -65,7 +76,7 @@ func (h *RESTHandlers) useTemplate(w http.ResponseWriter, r *http.Request, actx 
 		Name       string `json:"name,omitempty"`
 	}
 	if err := decodeJSON(r, &in); err != nil || (in.Slug == "" && in.TemplateID == "") {
-		writeErr(w, http.StatusBadRequest, "slug atau template_id wajib")
+		writeErr(w, http.StatusBadRequest, "slug or template_id is required")
 		return
 	}
 	var tpl *dbstore.Form
@@ -77,7 +88,7 @@ func (h *RESTHandlers) useTemplate(w http.ResponseWriter, r *http.Request, actx 
 		tpl, err = h.Forms.TemplateBySlug(r.Context(), in.Slug)
 	}
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "template tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "template not found")
 		return
 	}
 	// Card t_d9b179d9: this older door copies tpl.Theme verbatim onto a real
@@ -169,7 +180,7 @@ func (h *RESTHandlers) getOwnTemplate(w http.ResponseWriter, r *http.Request, ac
 	})
 }
 
-// refuseBlockedCustomJS answers the same 400 (`custom_js ditolak: <reason>`) the
+// refuseBlockedCustomJS answers the same 400 (`custom_js rejected: <reason>`) the
 // form write paths (updateForm, createForm) and both MCP form doors answer, and
 // reports whether it refused.
 //
@@ -215,7 +226,7 @@ func (h *RESTHandlers) createOwnTemplate(w http.ResponseWriter, r *http.Request,
 		Theme  map[string]any `json:"theme"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	// Card t_5c35bfeb: a template's theme is cloned onto a real form
@@ -289,7 +300,7 @@ func (h *RESTHandlers) createOwnTemplate(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	if title == "" {
-		writeErr(w, http.StatusBadRequest, "title atau form_id wajib")
+		writeErr(w, http.StatusBadRequest, "title or form_id is required")
 		return
 	}
 
@@ -323,7 +334,7 @@ func (h *RESTHandlers) updateOwnTemplate(w http.ResponseWriter, r *http.Request,
 		Theme  map[string]any `json:"theme"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	// Card t_5c35bfeb: same custom_js refusal as createOwnTemplate — an update
@@ -411,7 +422,12 @@ func (h *RESTHandlers) deleteOwnTemplate(w http.ResponseWriter, r *http.Request,
 // useOwnTemplate: POST /v1/rest/templates/{id}/use
 // Clones one of the caller's own templates into a new draft form.
 func (h *RESTHandlers) useOwnTemplate(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+	// Card t_d07c8fbb: this door MINTS a form row too (the clone is a real
+	// draft), so it answers the same 409 workspace.required as
+	// POST /v1/rest/forms — before the template is even looked up, so an
+	// account with no workspace cannot be told "template not found" for a call
+	// it could never complete, and no clone is stored.
+	if !h.requireFormMint(w, r, actx) {
 		return
 	}
 	var in struct {

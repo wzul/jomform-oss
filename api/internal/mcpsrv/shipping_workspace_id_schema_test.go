@@ -3,13 +3,13 @@ package mcpsrv
 // The shipping write tools — set_shipping_rates, connect_shipping_courier,
 // disconnect_shipping_courier — used to promise "Kosong = akaun anda sendiri" in
 // their own input schemas and then refuse an empty `workspace_id` with
-// "workspace tidak dijumpai", while the READ halves (get_shipping_rates,
+// "workspace not found", while the READ halves (get_shipping_rates,
 // get_shipping_couriers) really do fall back to the caller's account.
 //
 // OBSERVED with one readwrite API key on one workspace, one variable per call:
 //
 //	tools/call get_shipping_rates {}                      -> {account_id, sets:[…]}   (ok)
-//	tools/call set_shipping_rates {"sets":[…]}             -> isError "workspace tidak dijumpai"
+//	tools/call set_shipping_rates {"sets":[…]}             -> isError "workspace not found"
 //	tools/call set_shipping_rates {"workspace_id":"…","sets":[…]} -> written, read back OK
 //
 // So an agent that followed the write tool's own schema got a message that reads
@@ -40,7 +40,7 @@ package mcpsrv
 //  2. TestShippingWorkspaceIDWritesTheBehaviourTheSchemaStates — the behaviour
 //     the schemas now claim, over the real handlers with a real database and the
 //     API-KEY identity shape that was measured: an empty id on the WRITE is
-//     refused with "workspace tidak dijumpai" and writes NOTHING, the same key
+//     refused with "workspace not found" and writes NOTHING, the same key
 //     with an explicit workspace writes and reads back, and the empty id on the
 //     READ still resolves the caller's own account (the promise the read keeps).
 //     It passes on the pre-fix tree as well, so it is a CONTRACT NET, not the fix
@@ -64,7 +64,7 @@ import (
 // ownAccountFallbackPromise is the exact sentence the write schemas used to carry.
 // It is spelled out HERE, not read from the source, so deleting it from the schema
 // cannot also delete the guard's ability to notice it coming back.
-const ownAccountFallbackPromise = "Kosong = akaun anda sendiri"
+const ownAccountFallbackPromise = "Empty = your own account"
 
 // workspaceWriteGateFunc is the gate whose presence makes the promise a lie: it
 // refuses an empty workspace id by construction.
@@ -195,7 +195,7 @@ func TestNoWriteToolAdvertisesTheOwnAccountFallback(t *testing.T) {
 			"gate needs an EXPLICIT workspace because the role it checks is a role IN a workspace), "+
 			"or implement the fallback in the gate and keep the sentence.",
 			len(offenders), ownAccountFallbackPromise, workspaceWriteGateFunc,
-			"workspace tidak dijumpai", offenders)
+			"workspace not found", offenders)
 	}
 	t.Logf("%d served tools reach %s; %d serve the own-account fallback sentence "+
 		"(expected: the reads only — get_shipping_rates / get_shipping_couriers)",
@@ -285,10 +285,10 @@ func TestShippingWorkspaceIDWritesTheBehaviourTheSchemaStates(t *testing.T) {
 			"fallback was implemented (then the sentence belongs in the schema again — %s)",
 			ownAccountFallbackPromise, "TestNoWriteToolAdvertisesTheOwnAccountFallback")
 	}
-	if !strings.Contains(err.Error(), "workspace tidak dijumpai") {
+	if !strings.Contains(err.Error(), "workspace not found") {
 		t.Errorf("set_shipping_rates with an empty workspace_id refused with %q, want the tenancy "+
 			"message %q — a different error means the call failed somewhere other than the workspace "+
-			"gate and this test no longer measures the gate", err.Error(), "workspace tidak dijumpai")
+			"gate and this test no longer measures the gate", err.Error(), "workspace not found")
 	}
 	setsAfterRefusal, err := store.Sets(ctx, []string{accountID})
 	if err != nil {
@@ -337,9 +337,9 @@ func TestShippingWorkspaceIDWritesTheBehaviourTheSchemaStates(t *testing.T) {
 	// ── And the gate is still a TENANCY gate, not merely an empty-string check:
 	// another user's workspace is refused and writes nothing.
 	_, _, err = srv.setShippingRates(ctx, nil, setShippingRatesIn{WorkspaceID: foreignWorkspaceID(t, pool, srv), Sets: oneShippingSet()})
-	if err == nil || !strings.Contains(err.Error(), "workspace tidak dijumpai") {
+	if err == nil || !strings.Contains(err.Error(), "workspace not found") {
 		t.Errorf("set_shipping_rates on ANOTHER owner's workspace returned %v, want %q — the write "+
-			"gate must not become an empty-string check", err, "workspace tidak dijumpai")
+			"gate must not become an empty-string check", err, "workspace not found")
 	}
 	stillOne, err := store.Sets(ctx, []string{accountID})
 	if err != nil {

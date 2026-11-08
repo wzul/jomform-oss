@@ -52,7 +52,7 @@ func (h *RESTHandlers) putFormMenu(w http.ResponseWriter, r *http.Request, actx 
 		OrderFormSlug string                 `json:"order_form_slug"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	f, err := h.Forms.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))

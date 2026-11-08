@@ -82,7 +82,7 @@ func (h *RESTHandlers) recordEventFor(r *http.Request, accountID, userID, eventN
 // listEvents: GET /v1/rest/events — paginated, filterable audit log.
 func (h *RESTHandlers) listEvents(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if h.Events == nil {
-		writeErr(w, http.StatusServiceUnavailable, "event store tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "event store is not configured")
 		return
 	}
 	scope, ok := h.scopeOr403(w, r, actx)
@@ -113,7 +113,7 @@ func (h *RESTHandlers) listEvents(w http.ResponseWriter, r *http.Request, actx *
 // countEvents: GET /v1/rest/events/count — behaviour-analytics count.
 func (h *RESTHandlers) countEvents(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if h.Events == nil {
-		writeErr(w, http.StatusServiceUnavailable, "event store tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "event store is not configured")
 		return
 	}
 	scope, ok := h.scopeOr403(w, r, actx)
@@ -132,7 +132,7 @@ func (h *RESTHandlers) countEvents(w http.ResponseWriter, r *http.Request, actx 
 // breakdownEvents: GET /v1/rest/events/breakdown — counts by event_name.
 func (h *RESTHandlers) breakdownEvents(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if h.Events == nil {
-		writeErr(w, http.StatusServiceUnavailable, "event store tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "event store is not configured")
 		return
 	}
 	scope, ok := h.scopeOr403(w, r, actx)

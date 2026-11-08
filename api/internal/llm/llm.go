@@ -40,7 +40,7 @@ const DefaultModel = "deepseek-v4.1-flash:1017"
 // It does NOT fire for an empty key: a client with no credential never reaches
 // the provider. Use HasCredential for that case — the two together are what
 // callers need to answer "is the feature usable, and if not, why".
-var ErrCredential = errors.New("llm: kredensial model ditolak oleh pembekal")
+var ErrCredential = errors.New("llm: the provider rejected the model credential")
 
 // ErrModelUnavailable is returned when the provider says the configured MODEL is
 // not there (HTTP 404) or has been RETIRED (HTTP 410). It is deliberately a
@@ -53,7 +53,7 @@ var ErrCredential = errors.New("llm: kredensial model ditolak oleh pembekal")
 // existed: a retired model answered the provider's 410, fell to the generic
 // branch, and every AI surface returned a bare 500 {"code":"internal"} while the
 // assistant was still offered — for ~13 h.
-var ErrModelUnavailable = errors.New("llm: model yang dikonfigurasi tidak tersedia di pembekal")
+var ErrModelUnavailable = errors.New("llm: the configured model is not available at the provider")
 
 // HasCredential reports whether an API key is CONFIGURED. It is a presence
 // check, not a validity check: only the provider can say whether the key still

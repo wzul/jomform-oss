@@ -101,7 +101,7 @@ func (h *RealtimeHub) Publish(accountID, event string, payload map[string]any) {
 // comment so proxies/browsers don't time the connection out.
 func (h *RESTHandlers) handleEventsStream(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if h.Realtime == nil {
-		writeErr(w, http.StatusServiceUnavailable, "realtime tidak tersedia")
+		writeErr(w, http.StatusServiceUnavailable, "realtime is not available")
 		return
 	}
 	// Issue #615: do NOT assert the writer directly for http.Flusher. The
@@ -127,7 +127,7 @@ func (h *RESTHandlers) handleEventsStream(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	if err := rc.Flush(); err != nil {
-		writeErr(w, http.StatusInternalServerError, "streaming tidak disokong")
+		writeErr(w, http.StatusInternalServerError, "streaming is not supported")
 		return
 	}
 	// The flush above already committed the 200 and the headers, so there is no

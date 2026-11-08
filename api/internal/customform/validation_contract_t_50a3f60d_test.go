@@ -53,7 +53,7 @@ func TestValidationContractEnforcesRequiredAndTypes(t *testing.T) {
 
 	if err := formfields.ValidateFields(regs, map[string]string{"email": "a@b.test"}); err == nil {
 		t.Fatal("missing required field passed validation")
-	} else if err.Error() != "medan wajib tidak diisi: Name" {
+	} else if err.Error() != "Name is required" {
 		t.Errorf("error = %q, want it to name Name", err.Error())
 	}
 	if err := formfields.ValidateFields(regs, map[string]string{"name": "Ali", "email": "nope"}); err == nil {

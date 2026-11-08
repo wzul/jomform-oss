@@ -403,13 +403,13 @@ var correctedClaimSites = []struct {
 	},
 	{
 		file:  "api/internal/mcpsrv/tools.go",
-		wants: []string{"TIDAK PERNAH DICADANGKAN OLEH CHAT", "ia alat MCP untuk pemilik"},
+		wants: []string{"NEVER SUGGESTED BY CHAT", "it is an MCP tool for owners"},
 		why: "purge_workspace's registered description is what an MCP client's model reads; it must " +
 			"tell the owner the tool is for them and that the in-app chat may never propose it.",
 	},
 	{
 		file:  "web/src/app/docs/mcp/page.tsx",
-		wants: []string{"TIDAK PERNAH DICADANGKAN OLEH CHAT"},
+		wants: []string{"NEVER SUGGESTED BY CHAT"},
 		why:   "The tool reference is the merchant-facing copy of the same description.",
 	},
 	{
@@ -986,14 +986,14 @@ func TestTheClaimScanBites(t *testing.T) {
 		{
 			label:  "tools.go — purge_workspace's description",
 			file:   "api/internal/mcpsrv/tools.go",
-			now:    "TIDAK PERNAH DICADANGKAN OLEH CHAT: chat dalam aplikasi tidak boleh mencadangkan",
-			before: "ALAT MANUSIA: chat tidak pernah boleh mencadangkannya.",
+			now:    "NEVER SUGGESTED BY CHAT: in-app chat must not suggest this tool",
+			before: "HUMAN-ONLY, BY CONSTRUCTION: chat can never suggest it.",
 		},
 		{
 			label:  "tools.go — delete_workspace's description",
 			file:   "api/internal/mcpsrv/tools.go",
-			now:    "ia alat MCP untuk pemilik, bukan untuk chat.",
-			before: "padam KEKAL hanya melalui purge_workspace, dan itu manusia sahaja.",
+			now:    "it is an MCP tool for the owner, not for chat",
+			before: "PERMANENT delete is only via purge_workspace, and that is humans only.",
 		},
 		{
 			label:  "docs/workspaces/page.tsx — the docs sentence",

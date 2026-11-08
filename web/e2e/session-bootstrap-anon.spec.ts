@@ -331,7 +331,7 @@ test("CONTROL: an authoritative 401 STILL bounces to /landing", async ({ page, b
   // that swallowed every failure would leave an expired session on a dead
   // dashboard.
   await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, (r) =>
-    r.fulfill(json(401, { error: "tidak log masuk" })),
+    r.fulfill(json(401, { error: "not signed in" })),
   );
 
   await page.goto(`${baseURL}/chat`, { waitUntil: "domcontentloaded" });

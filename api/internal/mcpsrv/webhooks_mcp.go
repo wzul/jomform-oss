@@ -33,10 +33,10 @@ var validWebhookEvents = map[string]bool{
 func validateWebhookURL(ctx context.Context, raw string) error {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || !strings.EqualFold(u.Scheme, "https") {
-		return errors.New("url webhook mesti https")
+		return errors.New("webhook url must be https")
 	}
 	if _, err := ssrfguard.ValidateURL(ctx, raw); err != nil {
-		return errors.New("url webhook tidak sah (bukan host peribadi/loopback)")
+		return errors.New("invalid webhook url (it resolves to a private or loopback host)")
 	}
 	return nil
 }
@@ -45,7 +45,7 @@ func validateWebhookURL(ctx context.Context, raw string) error {
 func validateWebhookEvents(events []string) error {
 	for _, e := range events {
 		if !validWebhookEvents[e] {
-			return fmt.Errorf("event tidak sah: %q (sale.paid|sale.failed|subscription.charged|*)", e)
+			return fmt.Errorf("invalid event: %q (sale.paid|sale.failed|subscription.charged|*)", e)
 		}
 	}
 	return nil
@@ -54,8 +54,8 @@ func validateWebhookEvents(events []string) error {
 // ── e-Invoice settings ──────────────────────────────────────────────────────
 
 type setEinvoiceIn struct {
-	TIN  string `json:"tin" jsonschema:"Nombor TIN LHDN (kosong = clear)"`
-	MSIC string `json:"msic" jsonschema:"Kod MSIC 5 digit"`
+	TIN  string `json:"tin" jsonschema:"LHDN TIN number (empty = clear)"`
+	MSIC string `json:"msic" jsonschema:"5-digit MSIC code"`
 }
 
 func (s *Server) setEinvoice(
@@ -95,7 +95,7 @@ type webhookIn struct {
 	Events []string `json:"events,omitempty" jsonschema:"sale.paid|sale.failed|subscription.charged|*"`
 	// Issue #196: optional form_id scopes the webhook to one form (fires only
 	// for that form's events). Empty = workspace/account-wide.
-	FormID string `json:"form_id,omitempty" jsonschema:"ID borang (pilihan). Set = webhook hanya untuk borang ini; kosong = seluruh workspace/akaun."`
+	FormID string `json:"form_id,omitempty" jsonschema:"Form ID (optional). Set = webhook for this form only; empty = whole workspace/account."`
 }
 
 func (s *Server) createWebhookMCP(
@@ -108,7 +108,7 @@ func (s *Server) createWebhookMCP(
 		return nil, nil, err
 	}
 	if len(in.URL) < 8 || len(in.Secret) < 8 {
-		return nil, nil, errors.New("url dan secret (min 8 char) wajib")
+		return nil, nil, errors.New("url and secret (min 8 chars) are required")
 	}
 	events := in.Events
 	if len(events) == 0 {
@@ -123,7 +123,7 @@ func (s *Server) createWebhookMCP(
 	// Issue #196: a form-scoped webhook must reference a form the account owns.
 	if in.FormID != "" {
 		if _, err := s.deps.Forms.GetByID(ctx, acc, in.FormID); err != nil {
-			return nil, nil, errors.New("borang tidak dijumpai")
+			return nil, nil, errors.New("form not found")
 		}
 	}
 	wh, err := s.deps.Webhooks.Create(ctx, acc, in.FormID, in.URL, in.Secret, events)
@@ -147,7 +147,7 @@ type webhookListOut struct {
 type webhookListIn struct {
 	// Issue #196: optional form_id narrows to that form's webhooks; empty =
 	// workspace/account-wide webhooks.
-	FormID string `json:"form_id,omitempty" jsonschema:"ID borang (pilihan). Set = senarai webhook borang ini sahaja; kosong = webhook seluruh workspace/akaun."`
+	FormID string `json:"form_id,omitempty" jsonschema:"Form ID (optional). Set = list only this form's webhooks; empty = workspace/account-wide webhooks."`
 }
 
 func (s *Server) listWebhooksMCP(
@@ -198,9 +198,9 @@ func (s *Server) deleteWebhookMCP(
 }
 
 type webhookUpdateIn struct {
-	ID     string   `json:"id" jsonschema:"ID webhook (dari list_webhooks)"`
-	URL    string   `json:"url" jsonschema:"URL endpoint baharu (https)"`
-	Secret string   `json:"secret,omitempty" jsonschema:"Rahsia baharu; kosong = kekal sedia ada (min 8 char jika diisi)"`
+	ID     string   `json:"id" jsonschema:"Webhook ID (from list_webhooks)"`
+	URL    string   `json:"url" jsonschema:"New endpoint URL (https)"`
+	Secret string   `json:"secret,omitempty" jsonschema:"New secret; empty = keep existing (min 8 char if provided)"`
 	Events []string `json:"events,omitempty" jsonschema:"sale.paid|sale.failed|subscription.charged|*"`
 }
 
@@ -215,10 +215,10 @@ func (s *Server) updateWebhookMCP(
 		return nil, nil, err
 	}
 	if len(in.URL) < 8 {
-		return nil, nil, errors.New("url wajib (min 8 char)")
+		return nil, nil, errors.New("url is required (min 8 chars)")
 	}
 	if in.Secret != "" && len(in.Secret) < 8 {
-		return nil, nil, errors.New("secret (min 8 char) wajib bila diisi; kosong = kekal sedia ada")
+		return nil, nil, errors.New("secret (min 8 chars) is required when provided; empty = keep the existing one")
 	}
 	if err := validateWebhookURL(ctx, in.URL); err != nil {
 		return nil, nil, err
@@ -267,8 +267,8 @@ func (s *Server) webhookDeliveriesMCP(
 
 // retryWebhookDeliveryIn is the input for retry_webhook_delivery.
 type retryWebhookDeliveryIn struct {
-	WebhookID  string `json:"webhook_id" jsonschema:"ID webhook (dari list_webhooks)"`
-	DeliveryID string `json:"delivery_id" jsonschema:"ID penghantaran yang gagal (dari webhook_deliveries)"`
+	WebhookID  string `json:"webhook_id" jsonschema:"Webhook ID (from list_webhooks)"`
+	DeliveryID string `json:"delivery_id" jsonschema:"Failed delivery ID (from webhook_deliveries)"`
 }
 
 // retryWebhookDeliveryMCP re-enqueues a failed webhook delivery immediately
@@ -291,12 +291,12 @@ func (s *Server) retryWebhookDeliveryMCP(
 	delivery, err := s.deps.Webhooks.GetDelivery(ctx, acc, in.DeliveryID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil, errors.New("penghantaran tidak dijumpai")
+			return nil, nil, errors.New("delivery not found")
 		}
 		return nil, nil, err
 	}
 	if owned, _ := delivery["webhook_id"].(string); owned != in.WebhookID {
-		return nil, nil, errors.New("penghantaran tidak dijumpai")
+		return nil, nil, errors.New("delivery not found")
 	}
 	event, _ := delivery["event"].(string)
 	payload, _ := delivery["payload"].(string)

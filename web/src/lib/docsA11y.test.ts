@@ -240,11 +240,14 @@ test("no docs page or the docs chrome still carries text-slate-400 (2.63:1 at 11
 // describe the text the page actually contains.
 //
 // WHAT IS PINNED HERE, and what is NOT:
-//   (a) COVERAGE: every route ON DISK under `src/app/docs` and `src/app/legal`
-//       is matched by the shared rule (`src/lib/proseSurfaces.ts`) that the
-//       provider gates the write on. A new /legal page, a nested docs route, or
-//       a typo'd prefix fails HERE rather than silently shipping an Arabic
-//       declaration over English prose.
+//   (a) COVERAGE: every route ON DISK under `src/app/docs`, `src/app/legal` and
+//       `src/app/brand` is matched by the shared rule
+//       (`src/lib/proseSurfaces.ts`) that the provider gates the write on. A new
+//       /legal page, a nested docs route, a second /brand page or a typo'd
+//       prefix fails HERE rather than silently shipping an Arabic declaration
+//       over English prose. (/brand is the third tree, added by card
+//       t_4d3691b9: its prose is static English and it was declaring the
+//       visitor's locale over it.)
 //   (b) THE RULE'S SHAPE: it matches on a SEGMENT boundary (a future
 //       `/docsomething` is not swept in) and it does NOT match a translated
 //       surface, so the RTL an Arabic dashboard needs is untouched.
@@ -260,6 +263,7 @@ test("no docs page or the docs chrome still carries text-slate-400 (2.63:1 at 11
 
 const I18N_FILE = pathOf("../components/i18n.tsx");
 const LEGAL_DIR = pathOf("../app/legal");
+const BRAND_DIR = pathOf("../app/brand");
 
 // The provider's source, and the ONE declaration effect inside it, sliced out
 // around its first statement so a rule below cannot be satisfied by a match
@@ -274,6 +278,7 @@ const DECLARATION_EFFECT = EFFECT_AT === -1 ? "" : I18N_SRC.slice(EFFECT_AT, EFF
 // walk the docs guards already share (docsRoutes.ts).
 const DOCS_DISK = docsRoutesOnDisk(DOCS_DIR);
 const LEGAL_ROUTES = routesOnDisk(LEGAL_DIR, "/legal");
+const BRAND_ROUTES = routesOnDisk(BRAND_DIR, "/brand");
 
 test("the prose-declaration guard is reading real files (it cannot pass vacuously)", () => {
   assert.ok(I18N_SRC.includes("export function I18nProvider"), `${I18N_FILE} is not the i18n provider`);
@@ -297,32 +302,60 @@ test("the prose-declaration guard is reading real files (it cannot pass vacuousl
     `the /legal walk found ${JSON.stringify(LEGAL_ROUTES)} — the privacy policy and the terms are the two ` +
       "pages card t_c9d23e2c measured as English prose declared Arabic",
   );
+  assert.ok(
+    BRAND_ROUTES.includes("/brand"),
+    `the /brand walk found ${JSON.stringify(BRAND_ROUTES)} — the public brand-assets page is the surface ` +
+      "card t_4d3691b9 measured declaring the visitor's locale over English prose",
+  );
 });
 
 test("every English-only prose route on disk is matched by the rule the provider uses", () => {
-  const routes = [...DOCS_DISK, ...LEGAL_ROUTES];
+  const routes = [...DOCS_DISK, ...LEGAL_ROUTES, ...BRAND_ROUTES];
   const missing = routes.filter((r) => !isEnglishOnlyProsePath(r));
   assert.deepEqual(
     missing,
     [],
     `these routes are English-only prose but the shared rule does not match them: ${missing.join(", ")} — ` +
-      `an English /docs or /legal page reached in a non-default locale would declare that locale ` +
+      `an English /docs, /legal or /brand page reached in a non-default locale would declare that locale ` +
       `(WCAG 3.1.1) and render RTL over English text`,
   );
   assert.ok(
-    routes.length >= 13,
-    `only ${routes.length} routes were read off disk — the walk is not reaching the two trees`,
+    routes.length >= 14,
+    `only ${routes.length} routes were read off disk — the walk is not reaching the three trees`,
   );
 });
 
 test("the rule is a SEGMENT match, and it does not claim a translated surface", () => {
-  for (const r of ["/docs", "/docs/embed", "/docs/api", "/docs/embed/", "/legal", "/legal/privacy", "/legal/terms"]) {
+  for (const r of [
+    "/docs",
+    "/docs/embed",
+    "/docs/api",
+    "/docs/embed/",
+    "/legal",
+    "/legal/privacy",
+    "/legal/terms",
+    "/brand",
+    "/brand/",
+  ]) {
     assert.ok(
       isEnglishOnlyProsePath(r),
       `${r} is an English-only prose surface (its text is static English) but the rule does not match it`,
     );
   }
-  for (const r of ["/docssomething", "/legals", "/docsx/y", "/", "/landing", "/mcp", "/products/p1", "", null, undefined]) {
+  for (const r of [
+    "/docssomething",
+    "/legals",
+    "/docsx/y",
+    "/brands",
+    "/branding/x",
+    "/",
+    "/landing",
+    "/mcp",
+    "/products/p1",
+    "",
+    null,
+    undefined,
+  ]) {
     assert.equal(
       isEnglishOnlyProsePath(r),
       false,

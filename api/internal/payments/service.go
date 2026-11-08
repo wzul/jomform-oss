@@ -39,6 +39,11 @@ type Service struct {
 	// are enqueued and sent by a background worker instead of synchronously in
 	// the request handler. Nil (bare-mode tests) → synchronous send.
 	EmailQueue *emailqueue.Queue
+	// EmailEvents (card t_1c4a3f54) records an email that could not even be
+	// ENQUEUED. The queue's own retry ladder cannot see that failure — the job
+	// never reached Valkey — so without this record a paid buyer's receipt could
+	// vanish with nothing but a log line. Nil → the failure is only logged.
+	EmailEvents *dbstore.EmailDeliveryEventStore
 	// Notifications (issue #193): per-form notification rules. When non-nil,
 	// form events (sale.paid, sale.failed, response.submitted,
 	// subscription.charged) evaluate the form's rules and enqueue matching
@@ -58,9 +63,20 @@ func New(chipClient *chip.Client, accounts *dbstore.AccountStore, sales *dbstore
 
 var (
 	// ErrNotConfigured: the account has no CHIP keys set up.
-	ErrNotConfigured = errors.New("chip belum dikonfigurasi akaun ini")
+	ErrNotConfigured = errors.New("CHIP is not configured for this account")
 	// ErrNotFound: sale/reference does not exist.
-	ErrNotFound = errors.New("jualan tidak dijumpai")
+	ErrNotFound = errors.New("sale not found")
+	// ErrChipKeyUnreadable: the account HAS a stored CHIP secret key, but it
+	// will not open with the running ENCRYPTION_KEY — a rotated key, a
+	// truncated row, or data written under a different key. Nothing the caller
+	// did or can fix, so the REST door masks it to a logged 500
+	// (httpapi.writePaymentErr) instead of answering 400 with crypto prose.
+	//
+	// Deliberately carries NO inner detail: the underlying cryptoutil error
+	// ("ciphertext too short", "message authentication failed") names the
+	// implementation, so it is logged where the key is opened, not put on the
+	// wire where every door that forwards err.Error() would ship it.
+	ErrChipKeyUnreadable = errors.New("the stored chip secret key cannot be decrypted")
 )
 
 // accountSecrets decrypts the account's stored CHIP credentials.

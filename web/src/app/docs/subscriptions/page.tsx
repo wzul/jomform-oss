@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "Subscriptions & recurring billing — JomForm Docs",
   description:
     "How JomForm recurring billing works: billing periods, a fixed number of charges, the next-charge schedule modes, the retry ladder, failed-card recovery, and the notifications a merchant receives.",
-  alternates: { canonical: "https://jomform.com/docs/subscriptions" },
-};
+  path: "/docs/subscriptions",
+});
 
 type Section = { id: string; title: string; body: string[] };
 

@@ -55,19 +55,19 @@ func toAdminSuppressionOut(se dbstore.SuppressedEmail) adminSuppressionOut {
 // Super-admin only, read-only, audited.
 func (h *RESTHandlers) handleAdminListSuppressions(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if !h.requireSuperAdmin(r) {
-		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		writeErr(w, http.StatusForbidden, "super-admin is required for this action")
 		return
 	}
 	h.auditSuperAdminAccess(r, "admin.suppressions.list")
 	if h.Suppressions == nil {
-		writeErr(w, http.StatusServiceUnavailable, "senarai suppression tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the suppression list is not configured")
 		return
 	}
 	page, limit := parsePageLimit(r)
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	rows, total, err := h.Suppressions.Search(r.Context(), q, page, limit)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "gagal membaca senarai suppression")
+		writeErr(w, http.StatusInternalServerError, "failed to read the suppression list")
 		return
 	}
 	out := make([]adminSuppressionOut, 0, len(rows))
@@ -95,22 +95,22 @@ type adminAddSuppressionIn struct {
 // operator's point of view the address IS suppressed either way.
 func (h *RESTHandlers) handleAdminAddSuppression(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if !h.requireSuperAdmin(r) {
-		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		writeErr(w, http.StatusForbidden, "super-admin is required for this action")
 		return
 	}
 	h.auditSuperAdminAccess(r, "admin.suppressions.add")
 	if h.Suppressions == nil {
-		writeErr(w, http.StatusServiceUnavailable, "senarai suppression tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the suppression list is not configured")
 		return
 	}
 	var in adminAddSuppressionIn
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "badan permintaan tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	addr := strings.ToLower(strings.TrimSpace(in.Email))
 	if !auth.ValidEmail(addr) {
-		writeErr(w, http.StatusBadRequest, "emel tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid email")
 		return
 	}
 	reason := strings.ToLower(strings.TrimSpace(in.Reason))
@@ -118,7 +118,7 @@ func (h *RESTHandlers) handleAdminAddSuppression(w http.ResponseWriter, r *http.
 		reason = dbstore.SuppressionReasonManual
 	}
 	if !dbstore.IsCanonicalReason(reason) {
-		writeErr(w, http.StatusBadRequest, "sebab tidak sah (hard_bounce | complaint | manual)")
+		writeErr(w, http.StatusBadRequest, "invalid reason (hard_bounce | complaint | manual)")
 		return
 	}
 
@@ -128,7 +128,7 @@ func (h *RESTHandlers) handleAdminAddSuppression(w http.ResponseWriter, r *http.
 	created, err := h.Suppressions.Add(r.Context(), addr, reason, dbstore.SuppressionSourceManual,
 		strings.TrimSpace(in.Note), actor)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "gagal menyimpan suppression")
+		writeErr(w, http.StatusInternalServerError, "failed to store the suppression")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -145,26 +145,26 @@ func (h *RESTHandlers) handleAdminAddSuppression(w http.ResponseWriter, r *http.
 // PathValue returns it.
 func (h *RESTHandlers) handleAdminRemoveSuppression(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if !h.requireSuperAdmin(r) {
-		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		writeErr(w, http.StatusForbidden, "super-admin is required for this action")
 		return
 	}
 	h.auditSuperAdminAccess(r, "admin.suppressions.remove")
 	if h.Suppressions == nil {
-		writeErr(w, http.StatusServiceUnavailable, "senarai suppression tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the suppression list is not configured")
 		return
 	}
 	addr := strings.ToLower(strings.TrimSpace(r.PathValue("email")))
 	if addr == "" {
-		writeErr(w, http.StatusBadRequest, "emel tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid email")
 		return
 	}
 	removed, err := h.Suppressions.RemoveIfPresent(r.Context(), addr)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "gagal membuang suppression")
+		writeErr(w, http.StatusInternalServerError, "failed to remove the suppression")
 		return
 	}
 	if !removed {
-		writeErr(w, http.StatusNotFound, "tiada dalam senarai")
+		writeErr(w, http.StatusNotFound, "not in the list")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

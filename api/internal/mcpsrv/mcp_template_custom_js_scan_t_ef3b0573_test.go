@@ -9,7 +9,7 @@ package mcpsrv
 // code. create_template / update_template ran every sibling guard (scheme,
 // config shape, unsupported block, unsatisfiable custom form — each justified
 // by that clone) but never customform.ScanCustomJS, so a value the form write
-// paths refuse with `custom_js ditolak: <reason>` was storable on a template
+// paths refuse with `custom_js rejected: <reason>` was storable on a template
 // over MCP and then cloned onto a real form.
 //
 // Assertions read the DATABASE where a write is refused: the defect class is a
@@ -47,10 +47,10 @@ func wantCustomJSRefusal(t *testing.T, what string, err error) {
 		t.Fatalf("%s: a blocked theme.custom_js was ACCEPTED — it can be cloned onto a "+
 			"real form and served as live code", what)
 	}
-	if !strings.Contains(err.Error(), "custom_js ditolak: ") ||
+	if !strings.Contains(err.Error(), "custom_js rejected: ") ||
 		!strings.Contains(err.Error(), "active code execution marker: eval(") {
 		t.Fatalf("%s: refusal = %q, want the form paths' sentence "+
-			"`custom_js ditolak: active code execution marker: eval(`", what, err)
+			"`custom_js rejected: active code execution marker: eval(`", what, err)
 	}
 }
 

@@ -29,8 +29,8 @@ func TestUnroutableDomainRefusesNamesThatCannotReceiveMail(t *testing.T) {
 		{"someone@foo.invalid", UnroutableReserved, "RFC 6761 reserved TLD"},
 		{"someone@foo.localhost", UnroutableReserved, "RFC 6761 reserved TLD"},
 		{"someone@foo.example", UnroutableReserved, "RFC 6761 reserved TLD"},
-		{"someone@example.com", UnroutableDisposable, "temp-mail provider on the suppression list"},
-		{"someone@in.example.com", UnroutableDisposable, "a subdomain of a disposable provider"},
+		{"someone@uberip.com", UnroutableDisposable, "temp-mail provider on the suppression list"},
+		{"someone@in.uberip.com", UnroutableDisposable, "a subdomain of a disposable provider"},
 		{"someone@1secmail.net", UnroutableDisposable, "disposable provider on the suppression list"},
 		{"someone@simulator.amazonses.com", UnroutableDisposable, "SES's own bounce simulator"},
 	}

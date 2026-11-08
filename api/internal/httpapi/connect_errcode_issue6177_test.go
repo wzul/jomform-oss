@@ -159,15 +159,15 @@ func TestConnectSpecificCodesReachErrCodeFor(t *testing.T) {
 		msg  string
 		want string
 	}{
-		{"pautan penghubung tidak sah", CodeConnectInvalid},
-		{"pautan penghubung telah tamat tempoh", CodeConnectExpired},
-		{"akaun untuk alamat ini tidak dijumpai lagi", CodeConnectNoAccount},
-		{"identiti sudah dipautkan ke akaun lain", CodeConnectOtherLinked},
-		{"token penghubung diperlukan", CodeConnectTokenMissing},
+		{"invalid connect link", CodeConnectInvalid},
+		{"the connect link has expired", CodeConnectExpired},
+		{"an account for this address no longer exists", CodeConnectNoAccount},
+		{"identity is already linked to another account", CodeConnectOtherLinked},
+		{"connect token is required", CodeConnectTokenMissing},
 		// The wire `error` string, not the class code: ErrCodeFor answers "" for a
 		// message with no specific entry and the caller applies the HTTP class, so
 		// "" here is the proof that this literal was NOT claimed by a connect code.
-		{"akaun tidak dijumpai", ""},
+		{"account not found", ""},
 	}
 	for _, c := range cases {
 		if got := ErrCodeFor(c.msg); got != c.want {

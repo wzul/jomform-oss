@@ -191,7 +191,7 @@ func TestBuilderShapedPricingBlockRefusesAChoiceThatWasNeverOffered(t *testing.T
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("submit with an answer the block never offered = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "pilihan tidak sah") {
+	if !strings.Contains(rec.Body.String(), "Invalid choice") {
 		t.Errorf("400 body = %s, want it to say the choice is invalid", rec.Body.String())
 	}
 }

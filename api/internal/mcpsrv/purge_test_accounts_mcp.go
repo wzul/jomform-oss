@@ -39,10 +39,10 @@ type purgeTestAccountsIn struct {
 	// Confirm is the destructive switch. Absent/false = DRY RUN (the default):
 	// report exactly what would be removed and commit nothing. The tool deletes
 	// nothing unless the caller explicitly says confirm=true.
-	Confirm bool `json:"confirm,omitempty" jsonschema:"Lalai false = DRY RUN: laporkan apa yang AKAN dipadam, tiada apa dipadam. Set true untuk benar-benar memadam."`
+	Confirm bool `json:"confirm,omitempty" jsonschema:"Default false = DRY RUN: report what WILL be deleted, nothing is deleted. Set true to actually delete."`
 	// Email scopes the run to ONE account. An account that is not marked as a
 	// test account is REFUSED, not silently skipped.
-	Email string `json:"email,omitempty" jsonschema:"Pilihan — hadkan kepada SATU akaun (emel). Akaun yang tidak bertanda is_test akan DITOLAK."`
+	Email string `json:"email,omitempty" jsonschema:"Optional — limit to ONE account (email). An account not marked is_test will be REJECTED."`
 }
 
 // purgeTestAccountOut names one account the run removed (or, in a dry run,
@@ -93,7 +93,7 @@ func (s *Server) purgeTestAccounts(
 		}
 	}
 	if s.deps.Users == nil {
-		return nil, out, errors.New("user store tidak dikonfigurasi")
+		return nil, out, errors.New("user store not configured")
 	}
 
 	res, err := s.deps.Users.PurgeTestAccounts(ctx, dbstore.TestPurgeOptions{
@@ -103,10 +103,10 @@ func (s *Server) purgeTestAccounts(
 	if err != nil {
 		switch {
 		case errors.Is(err, dbstore.ErrNotATestAccount):
-			return nil, out, fmt.Errorf("%w — tool ini hanya memadam akaun yang ditanda is_test; "+
-				"akaun pelanggan sebenar tidak akan disentuh", err)
+			return nil, out, fmt.Errorf("%w — this tool only deletes accounts flagged is_test; "+
+				"real customer accounts are never touched", err)
 		case errors.Is(err, dbstore.ErrProtectedAccount):
-			return nil, out, fmt.Errorf("%w — akaun ini dilindungi dan mesti kekal hidup", err)
+			return nil, out, fmt.Errorf("%w — this account is protected and must stay alive", err)
 		}
 		return nil, out, err
 	}
@@ -127,15 +127,15 @@ func (s *Server) purgeTestAccounts(
 	out.BlockedCount = len(out.Blocked)
 	out.Scanned = res.Scanned
 
-	verb := "AKAN dipadam"
+	verb := "WILL be deleted"
 	if in.Confirm {
-		verb = "TELAH dipadam"
+		verb = "ALREADY deleted"
 	}
-	out.Note = fmt.Sprintf("%d akaun ujian %s, %d TERSEKAT (masih memegang jualan/langganan atau "+
-		"dirujuk data lain — tidak disentuh), %d diimbas. Akaun dilindungi dan akaun bukan-ujian "+
-		"tidak pernah disentuh.", out.RemovedCount, verb, out.BlockedCount, out.Scanned)
+	out.Note = fmt.Sprintf("%d test accounts %s, %d BLOCKED (still holding sales/subscriptions or "+
+		"referenced by other data — not touched), %d scanned. Protected accounts and non-test accounts "+
+		"are never touched.", out.RemovedCount, verb, out.BlockedCount, out.Scanned)
 	if in.Confirm && out.RemovedCount == 0 && out.BlockedCount == 0 {
-		out.Note = "Tiada akaun ujian bertanda — tiada apa dipadam (selamat dijalankan berulang)."
+		out.Note = "No test accounts flagged — nothing deleted (safe to run repeatedly)."
 	}
 
 	// Every super-admin action is audited; the report fields are part of the

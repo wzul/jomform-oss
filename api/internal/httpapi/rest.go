@@ -72,17 +72,21 @@ type RESTHandlers struct {
 	// background worker instead of synchronously in the request handler. Nil
 	// (bare-mode tests) → synchronous send via Mailer.
 	EmailQueue *emailqueue.Queue
-	// BaseURL is the app origin used to build invite signup links.
+	// BaseURL is the app origin used to build invite signup links, and — on a
+	// self-hosted install — the workspace/form address every payload prints.
 	BaseURL string
 	// SelfHosted declares that this deployment IS the origin its buyers load
 	// (JOMFORM_SELF_HOSTED): ONE hostname for every workspace, no tenant
 	// subdomain. It decides the shape of the public form URL this API reports
 	// (card t_6c0badbe): on a self-hosted install {BaseURL}/f/{slug} is the only
-	// address that serves the form, and `<workspace>.jomform.com/{slug}` — the
-	// hosted product's shape — is a 404. Wired here from config.Config.SelfHosted
-	// by main.go; the same flag PublicHandlers uses to SERVE the form from its
-	// own origin (issue #77 / PublicHandlers.ownOriginForm), so the URL the
-	// dashboard prints and the host that answers cannot disagree.
+	// address that serves the form, and the hosted product's tenant-subdomain
+	// shape is a 404. Wired here from config.Config.SelfHosted by main.go; the
+	// same flag PublicHandlers uses to SERVE the form from its own origin (issue
+	// #77 / PublicHandlers.ownOriginForm), so the URL the dashboard prints and
+	// the host that answers cannot disagree. The SAME field decides the WORKSPACE
+	// address every REST payload prints (card t_48a93084), and it is decided by
+	// the flag, never by comparing hosts: the hosted product's APP_BASE_URL is
+	// its own apex (issue #77).
 	SelfHosted bool
 	Users      *dbstore.UserStore
 	Domains    *dbstore.DomainStore
@@ -171,6 +175,12 @@ type RESTHandlers struct {
 	// endpoint returns 503. The payments OnPaid + response.submitted paths
 	// publish sale/response events here so connected dashboards update live.
 	Realtime *RealtimeHub
+
+	// PaymentFees is the per-workspace processing-fee store (card t_135c3c72):
+	// one rate per CHIP payment method, plus the merchant's pass-on
+	// acknowledgement. Nil in bare-mode tests → the fee is simply inactive,
+	// which is the pre-feature behaviour.
+	PaymentFees *dbstore.PaymentFeeStore
 
 	// Feedback is the in-app feedback thread store (system-owned, two-way
 	// conversation). Nil → the feedback endpoints report the store as
@@ -285,6 +295,12 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /v1/rest/settings/custom-domain", h.authed(h.setCustomDomain))
 	mux.Handle("GET /v1/rest/settings/custom-domain", h.authed(h.getCustomDomain))
 	mux.Handle("PUT /v1/rest/settings/einvoice", h.authed(h.putEinvoicing))
+	// Card t_135c3c72: per-method processing-fee rates + the merchant's
+	// pass-on disclosure acknowledgement, and the per-form override.
+	mux.Handle("GET /v1/rest/settings/payment-fees", h.authed(h.getFeeSettings))
+	mux.Handle("PUT /v1/rest/settings/payment-fees", h.authed(h.putFeeSettings))
+	mux.Handle("GET /v1/rest/forms/{id}/fee-override", h.authed(h.getFormFeeOverride))
+	mux.Handle("PUT /v1/rest/forms/{id}/fee-override", h.authed(h.putFormFeeOverride))
 	mux.Handle("PUT /v1/rest/settings/tracking", h.authed(h.putTracking))
 	mux.Handle("GET /v1/rest/settings/tracking", h.authed(h.getTracking))
 	mux.Handle("PUT /v1/rest/forms/{id}/tracking", h.authed(h.putFormTracking))
@@ -315,6 +331,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/rest/forms/{id}/confirmations", h.authed(h.getFormConfirmations))
 	mux.Handle("PUT /v1/rest/forms/{id}/confirmations", h.authed(h.saveFormConfirmations))
 	mux.HandleFunc("GET /v1/templates", h.listTemplates)
+	// Card t_48a93084: the deployment's own facts, so the dashboard can print a
+	// workspace address that EXISTS on this install (see meta.go).
+	mux.HandleFunc("GET /v1/meta", h.deploymentMeta)
 	mux.HandleFunc("GET /v1/system-settings/public", h.publicSystemSettings)
 	mux.Handle("GET /v1/system-settings", h.authed(h.listSystemSettings))
 	mux.Handle("PUT /v1/system-settings", h.authed(h.setSystemSetting))
@@ -701,7 +720,7 @@ func (h *RESTHandlers) authed(next func(http.ResponseWriter, *http.Request, *Acc
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		actx, ok := h.resolve(w, r)
 		if !ok {
-			writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+			writeErr(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
 		ctx := context.WithValue(r.Context(), acctRequestKey{}, actx)

@@ -31,7 +31,7 @@ type DeliveryPage = { items: Delivery[]; page: number; limit: number; total: num
 type FormRow = { id: string; slug: string; title: string; status: string };
 
 const PER_PAGE = 20;
-const EVENT_TYPES = ["delivered", "bounce", "complaint", "open", "click"] as const;
+const EVENT_TYPES = ["delivered", "bounce", "complaint", "open", "click", "enqueue_failed"] as const;
 
 // Event-type badge colors (mirror the dashboard email status palette).
 // Card t_10266084. The FALLBACK (an event type the map does not name) sits on
@@ -46,6 +46,9 @@ const eventBadge = (e: string) =>
     complaint: "bg-orange-50 text-orange-700 border-orange-200",
     open: "bg-blue-50 text-blue-700 border-blue-200",
     click: "bg-violet-50 text-violet-700 border-violet-200",
+    // Card t_1c4a3f54: the email never reached the queue at all, so it was
+    // never sent — a failure, not a delivery state.
+    enqueue_failed: "bg-red-50 text-red-700 border-red-200",
   })[e] || "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200";
 
 // Short date-time (e.g. "3 Sep 2026, 14:05").

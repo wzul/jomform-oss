@@ -26,6 +26,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/wzul/jomform/api/internal/buyertext"
 )
 
 // Courier providers this build knows how to talk to. The string is what a
@@ -61,27 +63,27 @@ const (
 	FallbackNotConfigured = "not_configured"
 )
 
-// Errors. The two refusals are buyer-facing (Malay, like every other public
-// submit message here); the provider faults are internal and only ever surface
-// as a fallback reason on the sale.
+// Errors. The two refusals are buyer-facing (a stable code plus English wire
+// prose, localized by the HTTP layer); the provider faults are internal and only
+// ever surface as a fallback reason on the sale.
 var (
 	// ErrProviderUnknown: a block named a provider this build does not have.
-	ErrProviderUnknown = errors.New("pembekal penghantaran ini tidak dikenali")
+	ErrProviderUnknown = buyertext.New(buyertext.CodeShipProviderUnknown, nil)
 	// ErrProviderUnavailable: the provider has no usable credentials (a missing
 	// env file, a production key Wan has not obtained yet) or is not connected
 	// for this workspace. NEVER an error on the merchant's form — it is the
 	// signal to fall back.
-	ErrProviderUnavailable = errors.New("pembekal penghantaran ini belum disambung")
+	ErrProviderUnavailable = buyertext.New(buyertext.CodeShipProviderNotConnected, nil)
 	// ErrProviderNoCoverage: the provider cannot quote this destination (a
 	// Lalamove stop with no coordinates, an EasyParcel address outside MY).
-	ErrProviderNoCoverage = errors.New("pembekal ini tidak meliputi alamat ini")
+	ErrProviderNoCoverage = buyertext.New(buyertext.CodeShipProviderNoCoverage, nil)
 	// ErrProviderFault: the provider answered with an error.
-	ErrProviderFault = errors.New("pembekal penghantaran gagal memberi sebut harga")
+	ErrProviderFault = buyertext.New(buyertext.CodeShipProviderFailed, nil)
 	// ErrCourierNoFallback: the quote failed AND the block declares no zone set
 	// to fall back to. A refusal, never a silent 0.
-	ErrCourierNoFallback = errors.New("sebut harga penghantaran gagal dan tiada kadar zon lalai")
+	ErrCourierNoFallback = buyertext.New(buyertext.CodeShipQuoteFailedNoFallback, nil)
 	// ErrCourierAddress: the courier block could not be given a usable address.
-	ErrCourierAddress = errors.New("alamat penghantaran tidak lengkap untuk sebut harga")
+	ErrCourierAddress = buyertext.New(buyertext.CodeShipAddressIncomplete, nil)
 )
 
 // Dimensions is a parcel's size in centimetres (0 = unknown). Only EasyParcel

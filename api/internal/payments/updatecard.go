@@ -28,7 +28,7 @@ import (
 
 // ErrNoCardUpdate signals a callback for a purchase that is not a pending
 // card-update re-tokenize (e.g. a stale/duplicate event).
-var ErrNoCardUpdate = errors.New("bukan kemas kini kad yang belum selesai")
+var ErrNoCardUpdate = errors.New("not a pending card update")
 
 // CreateUpdateCardPurchase creates a new CHIP token purchase for the
 // subscription's customer so they can authorize a new card. On success the
@@ -58,8 +58,11 @@ func (s *Service) CreateUpdateCardPurchase(ctx context.Context, sub *dbstore.Sub
 		SkipCapture:    true,
 		Purchase: chip.PurchaseDetails{
 			Currency: s.workspaceCurrency(ctx, sub.AccountID),
+			// Same rule as the recurring charge's line item (recurring.go): CHIP
+			// renders this title verbatim on its own checkout page and no locale
+			// reaches it, so there is one wording for everyone — English.
 			Products: []chip.Product{{
-				Name:     fmt.Sprintf("Kemas kini kad — Langganan #%s", sub.ProductID),
+				Name:     fmt.Sprintf("Card update — Subscription #%s", sub.ProductID),
 				Price:    0,
 				Quantity: "1",
 			}},

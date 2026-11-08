@@ -22,7 +22,7 @@ type mcpAgentOut struct {
 func (a *AuthHandlers) listMCPAgents(w http.ResponseWriter, r *http.Request) {
 	userID := a.currentUserID(r)
 	if userID == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	if a.OAuth == nil {
@@ -53,12 +53,12 @@ func (a *AuthHandlers) listMCPAgents(w http.ResponseWriter, r *http.Request) {
 func (a *AuthHandlers) revokeMCPAgent(w http.ResponseWriter, r *http.Request) {
 	userID := a.currentUserID(r)
 	if userID == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	clientID := r.PathValue("client_id")
 	if clientID == "" || a.OAuth == nil {
-		writeErr(w, http.StatusBadRequest, "client_id wajib")
+		writeErr(w, http.StatusBadRequest, "client_id is required")
 		return
 	}
 	if err := a.OAuth.RevokeAllByUserClient(r.Context(), userID, clientID); err != nil {

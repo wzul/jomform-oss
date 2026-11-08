@@ -154,7 +154,7 @@ type passkeyRelyingParty struct {
 // the deployment's own domain. It is a sentinel so the handler can answer 403
 // (the caller's origin is not this deployment) rather than 500 (this server's
 // own configuration is broken) — two conditions that look alike from here.
-var errPasskeyOriginOutsideApp = errors.New("passkey tidak tersedia pada hos ini (bukan domain aplikasi)")
+var errPasskeyOriginOutsideApp = errors.New("passkeys are not available on this host (not the application domain)")
 
 // passkeyBrowserHost returns the host the BROWSER is on for this request.
 //
@@ -200,7 +200,7 @@ func passkeyBrowserHost(r *http.Request) string {
 // assigned the same literal — so it read like a subdomain rule while the value
 // was constant — which meant a ceremony could only ever complete on a
 // *.jomform.com origin. The staging deployment (APP_BASE_URL=
-// https://jomform-staging.example.com) was served an rpId its browser
+// https://jomform-staging.wanzul-hosting.com) was served an rpId its browser
 // refused outright, and the user's only symptom was "Passkey cancelled or not
 // supported by this browser" (card t_bca19fe1).
 //
@@ -208,7 +208,7 @@ func passkeyBrowserHost(r *http.Request) string {
 // domain, i.e. the spec's DEFAULT value. It stays valid for the app host and for
 // every subdomain of it (workspace and product subdomains such as
 // mcp.jomform.com), and it is deliberately NOT the registrable domain the same
-// rule would also permit ("example.com" for the staging host) — a public
+// rule would also permit ("wanzul-hosting.com" for the staging host) — a public
 // suffix that broad would scope the credentials to every unrelated service on
 // that host.
 //
@@ -230,11 +230,11 @@ func passkeyBrowserHost(r *http.Request) string {
 func passkeyRPIdentity(appBaseURL, requestHost string) (passkeyRelyingParty, error) {
 	u, err := url.Parse(strings.TrimSpace(appBaseURL))
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
-		return passkeyRelyingParty{}, fmt.Errorf("APP_BASE_URL %q tidak sah — RP ID passkey tidak dapat ditentukan", appBaseURL)
+		return passkeyRelyingParty{}, fmt.Errorf("APP_BASE_URL %q is invalid — the passkey RP ID cannot be determined", appBaseURL)
 	}
 	appHost := strings.ToLower(u.Hostname())
 	if appHost == "" {
-		return passkeyRelyingParty{}, fmt.Errorf("APP_BASE_URL %q tidak mempunyai hos", appBaseURL)
+		return passkeyRelyingParty{}, fmt.Errorf("APP_BASE_URL %q has no host", appBaseURL)
 	}
 	// A base URL spelled with a leading "www." is the same site, and the RP ID
 	// must cover the bare host as well: an RP ID may not be a SUBdomain of the
@@ -389,12 +389,12 @@ func (h *RESTHandlers) passkeyRegisterStart(w http.ResponseWriter, r *http.Reque
 	}
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	prof, err := h.profileUser(r)
 	if err != nil || prof == nil {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	var in struct {
@@ -442,7 +442,7 @@ func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Requ
 	uid := h.sessionOwnerID(r)
 	prof, _ := h.profileUser(r)
 	if uid == "" || prof == nil {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	// The WebAuthn parsers below re-read the body, so read it exactly once
@@ -455,7 +455,7 @@ func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Requ
 	// can register. See its comment for why that belongs on the server.
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "response tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid response")
 		return
 	}
 	raw = normalizePasskeyBase64(raw)
@@ -465,7 +465,7 @@ func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Requ
 		TOTPCode string `json:"totp_code"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil || in.Key == "" {
-		writeErr(w, http.StatusBadRequest, "key wajib")
+		writeErr(w, http.StatusBadRequest, "key is required")
 		return
 	}
 	if !h.gateMagicStepUpREST(w, r, actx, prof, in.TOTPCode) {
@@ -473,12 +473,12 @@ func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Requ
 	}
 	sessRaw, err := h.Passkeys.TakeChallenge(r.Context(), in.Key, "register")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "sesi luput — cuba lagi")
+		writeErr(w, http.StatusBadRequest, "session expired — try again")
 		return
 	}
 	session := &webauthn.SessionData{}
 	if err := json.Unmarshal([]byte(sessRaw), session); err != nil {
-		writeErr(w, http.StatusBadRequest, "sesi rosak")
+		writeErr(w, http.StatusBadRequest, "corrupt session")
 		return
 	}
 	wu, err := h.Passkeys.UserFor(r.Context(), uid, prof.Email)
@@ -492,12 +492,12 @@ func (h *RESTHandlers) passkeyRegisterFinish(w http.ResponseWriter, r *http.Requ
 	}
 	parsed, err := protocol.ParseCredentialCreationResponseBody(bytes.NewReader(raw))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "response tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid response")
 		return
 	}
 	cred, err := wa.CreateCredential(wu, *session, parsed)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "gagal sahkan passkey")
+		writeErr(w, http.StatusBadRequest, "failed to verify the passkey")
 		return
 	}
 	if err := h.Passkeys.Save(r.Context(), uid, *cred); err != nil {
@@ -545,7 +545,7 @@ func (h *RESTHandlers) passkeyLoginFinish(w http.ResponseWriter, r *http.Request
 	// lib/webauthn.ts is not locked out of passkey sign-in. See its comment.
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "response tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid response")
 		return
 	}
 	raw = normalizePasskeyBase64(raw)
@@ -553,22 +553,22 @@ func (h *RESTHandlers) passkeyLoginFinish(w http.ResponseWriter, r *http.Request
 		Key string `json:"key"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil || in.Key == "" {
-		writeErr(w, http.StatusBadRequest, "key wajib")
+		writeErr(w, http.StatusBadRequest, "key is required")
 		return
 	}
 	sessRaw, err := h.Passkeys.TakeChallenge(r.Context(), in.Key, "login")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "sesi luput — cuba lagi")
+		writeErr(w, http.StatusBadRequest, "session expired — try again")
 		return
 	}
 	session := &webauthn.SessionData{}
 	if err := json.Unmarshal([]byte(sessRaw), session); err != nil {
-		writeErr(w, http.StatusBadRequest, "sesi rosak")
+		writeErr(w, http.StatusBadRequest, "corrupt session")
 		return
 	}
 	parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(raw))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "response tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid response")
 		return
 	}
 	var foundUID string
@@ -606,12 +606,12 @@ func (h *RESTHandlers) passkeyLoginFinish(w http.ResponseWriter, r *http.Request
 			}
 		}
 		slog.Warn("passkey_login_rejected", attrs...)
-		writeErr(w, http.StatusUnauthorized, "passkey tidak sah")
+		writeErr(w, http.StatusUnauthorized, "invalid passkey")
 		return
 	}
 	if foundUID == "" {
 		slog.Warn("passkey_login_rejected", "reason", "verify reported no user")
-		writeErr(w, http.StatusUnauthorized, "passkey tidak sah")
+		writeErr(w, http.StatusUnauthorized, "invalid passkey")
 		return
 	}
 	if repairedLegacyFlags {
@@ -636,7 +636,7 @@ func (h *RESTHandlers) passkeyLoginFinish(w http.ResponseWriter, r *http.Request
 func (h *RESTHandlers) passkeyList(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	creds, err := h.Passkeys.ListCreatedAt(r.Context(), uid)
@@ -666,13 +666,13 @@ func (h *RESTHandlers) passkeyList(w http.ResponseWriter, r *http.Request, actx 
 func (h *RESTHandlers) passkeyDelete(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	id := r.PathValue("id")
 	raw, err := base64URLDecode(id)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "id tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
 	if err := h.Passkeys.Delete(r.Context(), uid, raw); err != nil {

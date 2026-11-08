@@ -80,9 +80,12 @@ func EmailCodeKey(encryptionKey []byte) ([]byte, error) {
 	return hkdf.Key(sha256.New, encryptionKey, nil, emailCodeKeyInfo, 32)
 }
 
-func email2FaCodeKey(userID string) string { return Email2FACodeKeyPrefix + userID }
-func email2FaPendingKey(ip, email string) string {
-	return Email2FAPendingPrefix + ip + ":" + strings.ToLower(email)
+func (e *Email2FA) codeKeyName(userID string) string {
+	return namespacePrefix(Email2FACodeKeyPrefix, e.namespace) + userID
+}
+
+func (e *Email2FA) pendingKeyName(ip, email string) string {
+	return namespacePrefix(Email2FAPendingPrefix, e.namespace) + ip + ":" + strings.ToLower(email)
 }
 
 // emailCodeDigest binds the code to the server key AND to the account it was
@@ -99,8 +102,12 @@ func emailCodeDigest(key []byte, userID, code string) string {
 }
 
 // Email2FA exposes the email-backup-code store sharing the session client and
-// its server-side code key.
-func (s *Sessions) Email2FA() *Email2FA { return &Email2FA{rdb: s.rdb, codeKey: s.emailCodeKey} }
+// its server-side code key. It inherits the store's key namespace, so a
+// namespaced test store writes `jf:2faemail:<ns>:<userID>` and
+// `jf:2fa_pending:<ns>:<ip>:<email>` and the exit sweep can reclaim both.
+func (s *Sessions) Email2FA() *Email2FA {
+	return &Email2FA{rdb: s.rdb, codeKey: s.emailCodeKey, namespace: s.namespace}
+}
 
 type Email2FA struct {
 	rdb *goredis.Client
@@ -108,6 +115,10 @@ type Email2FA struct {
 	// wired without ENCRYPTION_KEY: the store then refuses to arm a code rather
 	// than falling back to a hash anyone can invert.
 	codeKey []byte
+	// namespace scopes this store's keys under `jf:2faemail:<ns>:` and
+	// `jf:2fa_pending:<ns>:`. Empty in production. See
+	// Sessions.WithKeyNamespace.
+	namespace string
 }
 
 // ErrEmail2FAKeyMissing is returned by Store when the store has no server-side
@@ -130,7 +141,7 @@ func (e *Email2FA) Store(ctx context.Context, userID, code string) error {
 	if len(e.codeKey) == 0 {
 		return ErrEmail2FAKeyMissing
 	}
-	return e.rdb.Set(ctx, email2FaCodeKey(userID), emailCodeDigest(e.codeKey, userID, code), Email2FACodeTTL).Err()
+	return e.rdb.Set(ctx, e.codeKeyName(userID), emailCodeDigest(e.codeKey, userID, code), Email2FACodeTTL).Err()
 }
 
 // ErrEmail2FAInvalid is returned when the supplied code does not match any
@@ -145,7 +156,7 @@ func (e *Email2FA) Consume(ctx context.Context, userID, code string) error {
 	if code == "" || len(e.codeKey) == 0 {
 		return ErrEmail2FAInvalid
 	}
-	key := email2FaCodeKey(userID)
+	key := e.codeKeyName(userID)
 	stored, err := e.rdb.Get(ctx, key).Result()
 	if err != nil {
 		if errors.Is(err, goredis.Nil) {
@@ -177,12 +188,12 @@ func (e *Email2FA) Consume(ctx context.Context, userID, code string) error {
 // ArmPending grants email-code access to an ip+email pair (called when a
 // correct-password login returned totp_required). The flag expires after 5 min.
 func (e *Email2FA) ArmPending(ctx context.Context, ip, email string) error {
-	return e.rdb.Set(ctx, email2FaPendingKey(ip, email), "1", Email2FAPendingTTL).Err()
+	return e.rdb.Set(ctx, e.pendingKeyName(ip, email), "1", Email2FAPendingTTL).Err()
 }
 
 // Pending reports whether the ip+email pair has a live pending flag.
 func (e *Email2FA) Pending(ctx context.Context, ip, email string) (bool, error) {
-	_, err := e.rdb.Get(ctx, email2FaPendingKey(ip, email)).Result()
+	_, err := e.rdb.Get(ctx, e.pendingKeyName(ip, email)).Result()
 	if err == nil {
 		return true, nil
 	}
@@ -194,7 +205,7 @@ func (e *Email2FA) Pending(ctx context.Context, ip, email string) (bool, error) 
 
 // ConsumePending clears the pending flag (called after a code is issued).
 func (e *Email2FA) ConsumePending(ctx context.Context, ip, email string) error {
-	return e.rdb.Del(ctx, email2FaPendingKey(ip, email)).Err()
+	return e.rdb.Del(ctx, e.pendingKeyName(ip, email)).Err()
 }
 
 // ─── passwordless magic link (issue #73) ────────────────────────────────────
@@ -206,13 +217,20 @@ const (
 	MagicLinkTTL       = 15 * time.Minute
 )
 
-func magicLinkKey(hash string) string { return MagicLinkKeyPrefix + hash }
+func (m *MagicLink) key(hash string) string {
+	return namespacePrefix(MagicLinkKeyPrefix, m.namespace) + hash
+}
 
-// MagicLink exposes the magic-link store sharing the session client.
-func (s *Sessions) MagicLink() *MagicLink { return &MagicLink{rdb: s.rdb} }
+// MagicLink exposes the magic-link store sharing the session client. It
+// inherits the store's key namespace, so a namespaced test store's link tokens
+// are swept with its sessions.
+func (s *Sessions) MagicLink() *MagicLink { return &MagicLink{rdb: s.rdb, namespace: s.namespace} }
 
 type MagicLink struct {
 	rdb *goredis.Client
+	// namespace scopes this store's keys under `jf:magic:<ns>:`. Empty in
+	// production. See Sessions.WithKeyNamespace.
+	namespace string
 }
 
 // Generate mints a fresh 32-byte token, stores its SHA-256 → userID and
@@ -222,7 +240,7 @@ func (m *MagicLink) Generate(ctx context.Context, userID string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	if err := m.rdb.Set(ctx, magicLinkKey(hashOf(token)), userID, MagicLinkTTL).Err(); err != nil {
+	if err := m.rdb.Set(ctx, m.key(hashOf(token)), userID, MagicLinkTTL).Err(); err != nil {
 		return "", fmt.Errorf("magiclink set: %w", err)
 	}
 	return token, nil
@@ -241,7 +259,7 @@ func (m *MagicLink) GenerateForEmail(ctx context.Context, email string) (string,
 	if err != nil {
 		return "", err
 	}
-	if err := m.rdb.Set(ctx, magicLinkKey(hashOf(token)), "email:"+strings.ToLower(email), MagicLinkTTL).Err(); err != nil {
+	if err := m.rdb.Set(ctx, m.key(hashOf(token)), "email:"+strings.ToLower(email), MagicLinkTTL).Err(); err != nil {
 		return "", fmt.Errorf("magiclink signup set: %w", err)
 	}
 	return token, nil
@@ -254,7 +272,7 @@ func (m *MagicLink) ConsumeEmail(ctx context.Context, token string) (string, err
 	if token == "" {
 		return "", ErrMagicLinkInvalid
 	}
-	val, err := m.rdb.GetDel(ctx, magicLinkKey(hashOf(token))).Result()
+	val, err := m.rdb.GetDel(ctx, m.key(hashOf(token))).Result()
 	if err != nil {
 		if errors.Is(err, goredis.Nil) {
 			return "", ErrMagicLinkInvalid
@@ -277,7 +295,7 @@ func (m *MagicLink) Consume(ctx context.Context, token string) (string, error) {
 	if token == "" {
 		return "", ErrMagicLinkInvalid
 	}
-	userID, err := m.rdb.GetDel(ctx, magicLinkKey(hashOf(token))).Result()
+	userID, err := m.rdb.GetDel(ctx, m.key(hashOf(token))).Result()
 	if err != nil {
 		if errors.Is(err, goredis.Nil) {
 			return "", ErrMagicLinkInvalid
@@ -308,7 +326,7 @@ func (m *MagicLink) ConsumeAny(ctx context.Context, token string) (MagicLinkKind
 	if token == "" {
 		return 0, "", ErrMagicLinkInvalid
 	}
-	val, err := m.rdb.GetDel(ctx, magicLinkKey(hashOf(token))).Result()
+	val, err := m.rdb.GetDel(ctx, m.key(hashOf(token))).Result()
 	if err != nil {
 		if errors.Is(err, goredis.Nil) {
 			return 0, "", ErrMagicLinkInvalid

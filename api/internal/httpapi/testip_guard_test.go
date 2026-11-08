@@ -30,6 +30,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -38,6 +39,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -86,22 +88,18 @@ var ipHeaderNames = map[string]bool{"X-Real-IP": true, "CF-Connecting-IP": true}
 // TestNoLiteralClientIPInTests is the guard: no test may hand the HTTP layer a
 // hand-written client address, in any of the positions the layer reads one.
 func TestNoLiteralClientIPInTests(t *testing.T) {
-	files := packageTestGoFiles(t)
+	files := parsedPackageTestFiles(t)
 	if len(files) < 100 {
 		t.Fatalf("scanned only %d test file(s) — the file walker is broken, so this guard would pass vacuously", len(files))
 	}
 
 	var findings []string
-	for _, path := range files {
-		fset := token.NewFileSet()
-		f, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
+	for _, f := range files {
+		fset, parsed := f.fset, f.file
+		ast.Inspect(parsed, func(n ast.Node) bool {
 			for _, off := range literalClientIPOffsets(n) {
 				pos := fset.Position(off)
-				findings = append(findings, formatFinding(path, pos.Line))
+				findings = append(findings, formatFinding(f.path, pos.Line))
 			}
 			return true
 		})
@@ -609,16 +607,12 @@ func detectorHits(t *testing.T, src string) []token.Pos {
 	return hits
 }
 
-// packageTestGoFiles returns this package's _test.go files, walked rather than
-// listed so a NEW file is scanned because it exists.
-func packageTestGoFiles(t *testing.T) []string {
-	t.Helper()
-	entries, err := filepath.Glob("*_test.go")
-	if err != nil {
-		t.Fatalf("list package test files: %v", err)
-	}
-	sort.Strings(entries)
-	return entries
+// parsedPackageTestFile is one of this package's _test.go files, parsed once,
+// with the FileSet its positions belong to.
+type parsedPackageTestFile struct {
+	path string
+	file *ast.File
+	fset *token.FileSet
 }
 
 // testFuncDecl is one func declaration from this package's test files, carrying
@@ -629,24 +623,63 @@ type testFuncDecl struct {
 	decl *ast.FuncDecl
 }
 
-// packageFuncDecls parses each of this package's _test.go files once and returns
-// the funcs they declare.
-func packageFuncDecls(t *testing.T) []testFuncDecl {
+// packageTestSource is the PARSE of this package's _test.go files, taken once per
+// test process. The guards below are source scans for the same tree, and each of
+// them used to re-glob and re-parse all of it on every call:
+// TestEveryRequestHelperTakesATestIP alone calls findFuncDecl once per
+// ipArgHelpers entry — 11 full parses of ~330 files (~8.9 MB) for one test.
+// Parsing is a pure function of a tree that does not change during a run, so the
+// parse is memoised HERE; the assertions are not, and every guard still walks
+// what the cache holds and still fails on a walker that saw too little.
+var packageTestSource struct {
+	once  sync.Once
+	files []parsedPackageTestFile
+	decls []testFuncDecl
+	err   error
+}
+
+// parsedPackageTestFiles returns the cached parse of this package's _test.go
+// files, globbed rather than listed so a NEW file is scanned because it exists.
+func parsedPackageTestFiles(t *testing.T) []parsedPackageTestFile {
 	t.Helper()
-	var out []testFuncDecl
-	for _, path := range packageTestGoFiles(t) {
+	c := &packageTestSource
+	c.once.Do(func() { c.files, c.decls, c.err = parsePackageTestFiles() })
+	if c.err != nil {
+		t.Fatal(c.err)
+	}
+	return c.files
+}
+
+func parsePackageTestFiles() ([]parsedPackageTestFile, []testFuncDecl, error) {
+	entries, err := filepath.Glob("*_test.go")
+	if err != nil {
+		return nil, nil, fmt.Errorf("list package test files: %w", err)
+	}
+	sort.Strings(entries)
+	files := make([]parsedPackageTestFile, 0, len(entries))
+	var decls []testFuncDecl
+	for _, path := range entries {
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
+			return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 		}
+		files = append(files, parsedPackageTestFile{path: path, file: f, fset: fset})
 		for _, d := range f.Decls {
 			if fd, ok := d.(*ast.FuncDecl); ok {
-				out = append(out, testFuncDecl{name: fd.Name.Name, file: filepath.Base(path), decl: fd})
+				decls = append(decls, testFuncDecl{name: fd.Name.Name, file: filepath.Base(path), decl: fd})
 			}
 		}
 	}
-	return out
+	return files, decls, nil
+}
+
+// packageFuncDecls returns the funcs this package's test files declare, from the
+// one parse above.
+func packageFuncDecls(t *testing.T) []testFuncDecl {
+	t.Helper()
+	parsedPackageTestFiles(t)
+	return packageTestSource.decls
 }
 
 func findFuncDecl(t *testing.T, name string) *ast.FuncDecl {

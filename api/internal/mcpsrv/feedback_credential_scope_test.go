@@ -34,7 +34,7 @@ import (
 )
 
 // newFeedbackMCP builds a Server with the feedback deps unset, so any call that
-// gets PAST the scope guard fails with "sistem maklum balas tidak dikonfigurasi"
+// gets PAST the scope guard fails with "feedback system not configured"
 // rather than panicking. That distinction is what lets these tests tell
 // "refused for the right reason" from "never reached the check".
 func newFeedbackMCP() *Server {
@@ -179,12 +179,12 @@ func TestFeedbackToolsAcceptAUserBoundIdentity(t *testing.T) {
 	if err == nil {
 		t.Fatal("list_feedback succeeded with an unconfigured store")
 	}
-	if strings.Contains(err.Error(), "tidak boleh mengaksesnya") {
+	if strings.Contains(err.Error(), "an API key cannot access it") {
 		t.Errorf("list_feedback refused a USER-BOUND identity: %v — the API-key refusal must key on the "+
 			"missing user, not disable the tool for everyone (a tool that always errors passes the "+
 			"refusal test while delivering no feature)", err)
 	}
-	if !strings.Contains(err.Error(), "tidak dikonfigurasi") {
+	if !strings.Contains(err.Error(), "not configured") {
 		t.Errorf("list_feedback err = %v, want it to reach the store check (store is nil here)", err)
 	}
 

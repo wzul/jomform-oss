@@ -172,7 +172,7 @@ const MCP_SOURCES = readdirSync(MCP_DIR)
 // no production caller at all (0 call sites since issue #185), so the "used for
 // conversion" copy on three surfaces was false. The tool is that caller; the pin
 // moves by one.
-const EXPECTED_TOOL_COUNT = 188;
+const EXPECTED_TOOL_COUNT = 190;
 
 const REGISTRY_SRC = MCP_SOURCES.join("\n");
 

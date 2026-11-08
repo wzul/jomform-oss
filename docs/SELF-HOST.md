@@ -210,16 +210,28 @@ an Email block, and the form mode is **Response form** — no products, no payme
 ![The form is live](assets/selfhost/06-03-published.png)
 
 > **The link is your install's own origin.** The dialog's **Copy link** button
-> prints (and the "Open form" target is) your own public address:
+> prints (and the "Open form" target is) your own public address — a
+> self-hosted install has ONE origin, the `APP_BASE_URL` you set, and no
+> per-workspace subdomains:
 >
-> ```
-> https://forms.example.com/f/<slug>
-> ```
+> | What | Address on your install | Address on the hosted product |
+> | --- | --- | --- |
+> | Workspace (dashboard-facing address) | `https://forms.example.com/` | `https://<workspace>.<product-domain>` |
+> | A published form | `https://forms.example.com/f/<form-slug>` | `https://<workspace>.<product-domain>/<form-slug>` |
+> | Custom domain (`Settings → Domains`) | CNAME it to **your install's host**, e.g. `forms.example.com` | CNAME it to the product's own CNAME target, which `Settings → Domains` prints beside the record |
 >
-> i.e. `{APP_BASE_URL}/f/{slug}` — the same stack serves it through Caddy. On a
-> self-hosted install there are no `<workspace>.<domain>` subdomains; one
-> hostname serves every workspace, and a form whose slug two workspaces both
-> hold answers 404 rather than guessing.
+> i.e. `{APP_BASE_URL}/f/{slug}` — the same stack serves it through Caddy, so
+> nothing extra has to be configured for the `/f/<slug>` route. One hostname
+> serves every workspace, and a form whose slug two workspaces both hold answers
+> 404 rather than guessing.
+>
+> The dashboard, the REST payloads and the MCP tools all read the deployment
+> from `GET /v1/meta` (`{"origin": ..., "self_hosted": true}`) and name your own
+> origin — the slug identifies the workspace, it is not part of the address.
+>
+> (The product domain is left as `<product-domain>` here on purpose: this page is
+> read by install scripts and operators who run their own domain, and a literal
+> hostname in it would be copied onto an install that does not serve it.)
 
 For a payment form, do § 7 first and add at least one product; a payment form
 with nothing sellable has no checkout to show.

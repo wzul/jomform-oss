@@ -14,15 +14,15 @@ import (
 )
 
 type formOverrideIn struct {
-	FormID          string   `json:"form_id" jsonschema:"ID borang"`
-	BrandID         string   `json:"brand_id" jsonschema:"CHIP Brand ID untuk borang ini"`
-	SecretKey       string   `json:"secret_key" jsonschema:"CHIP Secret Key (akan dienkripsi)"`
-	EmailFallback   string   `json:"email_fallback,omitempty" jsonschema:"Fallback emel bila buyer tak bagi emel (one-time saja)"`
-	MethodWhitelist []string `json:"payment_method_whitelist,omitempty" jsonschema:"Senarai kaedah bayaran, kosong = semua"`
+	FormID          string   `json:"form_id" jsonschema:"Form ID"`
+	BrandID         string   `json:"brand_id" jsonschema:"CHIP Brand ID for this form"`
+	SecretKey       string   `json:"secret_key" jsonschema:"CHIP Secret Key (will be encrypted)"`
+	EmailFallback   string   `json:"email_fallback,omitempty" jsonschema:"Fallback email when the buyer does not provide an email (one-time only)"`
+	MethodWhitelist []string `json:"payment_method_whitelist,omitempty" jsonschema:"List of payment methods, empty = all"`
 }
 
 type formRefIn struct {
-	FormID string `json:"form_id" jsonschema:"ID borang"`
+	FormID string `json:"form_id" jsonschema:"Form ID"`
 }
 
 // purgeFormIn confirms a permanent form delete. The confirmation is the form's
@@ -36,20 +36,20 @@ type formRefIn struct {
 // error instead of this tool's own message naming what to type. Same shape as
 // api_key_mcp.go's Confirm.
 type purgeFormIn struct {
-	FormID      string `json:"form_id" jsonschema:"ID borang (mesti dalam tong sampah)"`
-	ConfirmSlug string `json:"confirm_slug,omitempty" jsonschema:"Slug borang itu sendiri, untuk sahkan pemadaman kekal. Salah/tiada = ditolak."`
+	FormID      string `json:"form_id" jsonschema:"Form ID (must be in trash)"`
+	ConfirmSlug string `json:"confirm_slug,omitempty" jsonschema:"The form's own slug, to confirm the permanent delete. Wrong/absent = rejected."`
 }
 
 type saleRefIn struct {
-	RefCode   string `json:"ref_code" jsonschema:"Kod rujukan jualan (JF-...)"`
-	AmountSen *int64 `json:"amount_sen,omitempty" jsonschema:"Optional: jumlah penuh dalam sen untuk partial capture"`
+	RefCode   string `json:"ref_code" jsonschema:"Sale reference code (JF-...)"`
+	AmountSen *int64 `json:"amount_sen,omitempty" jsonschema:"Optional: full amount in sen for partial capture"`
 }
 
 func (s *Server) setFormChipOverride(
 	ctx context.Context, _ *mcp.CallToolRequest, in formOverrideIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if s.deps.Forms == nil || s.decKey == nil {
-		return nil, nil, errors.New("override tidak tersedia")
+		return nil, nil, errors.New("override not available")
 	}
 	// Issue #307: resolve + RBAC-gate the owning account (CHIP creds are admin-only).
 	acc, err := s.formForAdmin(ctx, in.FormID)
@@ -97,7 +97,7 @@ func (s *Server) captureSaleMCP(
 ) (*mcp.CallToolResult, map[string]string, error) {
 	pay := s.pay
 	if pay == nil {
-		return nil, nil, errors.New("payments tidak aktif")
+		return nil, nil, errors.New("payments not active")
 	}
 	acc, err := s.requireSaleWrite(ctx, in.RefCode)
 	if err != nil {
@@ -105,7 +105,7 @@ func (s *Server) captureSaleMCP(
 	}
 	sale, err := s.deps.Sales.ByRefCode(ctx, in.RefCode)
 	if err != nil || sale.AccountID != acc {
-		return nil, nil, errors.New("jualan tidak dijumpai")
+		return nil, nil, errors.New("sale not found")
 	}
 	if err := pay.CaptureSale(ctx, sale, in.AmountSen); err != nil {
 		return nil, nil, err
@@ -121,7 +121,7 @@ func (s *Server) releaseSaleMCP(
 ) (*mcp.CallToolResult, map[string]string, error) {
 	pay := s.pay
 	if pay == nil {
-		return nil, nil, errors.New("payments tidak aktif")
+		return nil, nil, errors.New("payments not active")
 	}
 	acc, err := s.requireSaleWrite(ctx, in.RefCode)
 	if err != nil {
@@ -129,7 +129,7 @@ func (s *Server) releaseSaleMCP(
 	}
 	sale, err := s.deps.Sales.ByRefCode(ctx, in.RefCode)
 	if err != nil || sale.AccountID != acc {
-		return nil, nil, errors.New("jualan tidak dijumpai")
+		return nil, nil, errors.New("sale not found")
 	}
 	if err := pay.ReleaseSale(ctx, sale); err != nil {
 		return nil, nil, err
@@ -151,7 +151,7 @@ func (s *Server) refundSaleMCP(
 ) (*mcp.CallToolResult, map[string]any, error) {
 	pay := s.pay
 	if pay == nil {
-		return nil, nil, errors.New("payments tidak aktif")
+		return nil, nil, errors.New("payments not active")
 	}
 	acc, err := s.requireSaleWrite(ctx, in.RefCode)
 	if err != nil {
@@ -159,7 +159,7 @@ func (s *Server) refundSaleMCP(
 	}
 	sale, err := s.deps.Sales.ByRefCode(ctx, in.RefCode)
 	if err != nil || sale.AccountID != acc {
-		return nil, nil, errors.New("jualan tidak dijumpai")
+		return nil, nil, errors.New("sale not found")
 	}
 	res, err := pay.RefundSale(ctx, sale, in.AmountSen)
 	if err != nil {
@@ -212,7 +212,7 @@ func (s *Server) captureAllPendingMCP(
 ) (*mcp.CallToolResult, captureAllPendingOut, error) {
 	pay := s.pay
 	if pay == nil {
-		return nil, captureAllPendingOut{}, errors.New("payments tidak aktif")
+		return nil, captureAllPendingOut{}, errors.New("payments not active")
 	}
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {

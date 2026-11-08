@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wzul/jomform/api/internal/buyertext"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/shipping"
@@ -287,10 +288,10 @@ func (h *PublicHandlers) resolveZoneBlocks(ctx context.Context, tgt orderTarget,
 		return 0, nil, nil
 	}
 	if tgt.Form == nil {
-		return 0, nil, &shippingError{"borang tidak dijumpai untuk kadar penghantaran"}
+		return 0, nil, buyertext.New(buyertext.CodeShipFormNotFound, nil)
 	}
 	if h.Shipping == nil {
-		return 0, nil, &shippingError{"kadar penghantaran mengikut zon tidak dikonfigurasi"}
+		return 0, nil, buyertext.New(buyertext.CodeShipZonesNotConfigured, nil)
 	}
 	accounts := []string{tgt.AccountID}
 
@@ -302,7 +303,7 @@ func (h *PublicHandlers) resolveZoneBlocks(ctx context.Context, tgt orderTarget,
 	for _, spec := range specs {
 		setID := strings.TrimSpace(spec.ZoneSetID)
 		if setID == "" {
-			return 0, nil, &shippingError{"blok penghantaran ini belum dipautkan ke set zon"}
+			return 0, nil, buyertext.New(buyertext.CodeShipBlockNotLinked, nil)
 		}
 		set, ok := cache[setID]
 		if !ok {
@@ -311,7 +312,7 @@ func (h *PublicHandlers) resolveZoneBlocks(ctx context.Context, tgt orderTarget,
 				return 0, nil, err
 			}
 			if !found {
-				return 0, nil, &shippingError{"set zon penghantaran tidak dijumpai"}
+				return 0, nil, buyertext.New(buyertext.CodeShipZoneSetNotFound, nil)
 			}
 			set = loaded
 			cache[setID] = set
@@ -326,7 +327,7 @@ func (h *PublicHandlers) resolveZoneBlocks(ctx context.Context, tgt orderTarget,
 			WeightG:      spec.WeightG,
 		})
 		if err != nil {
-			return 0, nil, &shippingError{err.Error()}
+			return 0, nil, err
 		}
 		total += quote.PriceSen
 		blocks = append(blocks, shippingDetailBlock{BlockID: spec.ID, Source: shipping.FeeSourceZones, Quote: quote})
@@ -368,12 +369,6 @@ func marshalShippingDetail(blocks []shippingDetailBlock) json.RawMessage {
 	}
 	return raw
 }
-
-// shippingError is a buyer-facing refusal on the shipping path: a 400 whose
-// message is the resolver's own sentence (never an internal error).
-type shippingError struct{ msg string }
-
-func (e *shippingError) Error() string { return e.msg }
 
 // zoneOptionView is one <option> of a zone-sourced shipping select.
 type zoneOptionView struct {

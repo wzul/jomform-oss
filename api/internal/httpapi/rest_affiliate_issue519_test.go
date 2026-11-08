@@ -145,7 +145,7 @@ func TestIssue519RESTCrossTenantCommissionRefused(t *testing.T) {
 	if strings.Contains(body, "bukan") || strings.Contains(body, "peranan") {
 		t.Errorf("refusal body leaks a distinction between unknown and other-tenant: %s", body)
 	}
-	if !strings.Contains(body, "affiliate tidak dijumpai") {
+	if !strings.Contains(body, "affiliate not found") {
 		t.Errorf("refusal body = %s, want the not-found message", body)
 	}
 	if after := st.commissionOf(t, st.affA.ID); after != before {

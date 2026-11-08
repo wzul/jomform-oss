@@ -107,7 +107,27 @@ contains() { # desc haystack needle
   # The pruner's log grew past that with the exit-code work, and this helper started
   # reporting "missing" for text that was plainly in the log.
   if grep -qF -- "$3" <<<"$2"; then ok "$1"
-  else bad "$1 (missing '$3' in: $(printf '%s' "$2" | tr '\n' '|' | cut -c1-600))"; fi
+  else bad "$1 (missing '$3' in: $(clip "$2"))"; fi
+}
+
+# clip: a haystack as one line for a failure message, HEAD **and TAIL**.
+# WHY NOT `cut -c1-600` (card t_1483975b). The haystack is almost always a run's LOG,
+# and the verdict the assertion is about is at its END — the card loop's lines come
+# first, the stray and artefact verdicts last. A head-only cut printed everything
+# except the thing being asked about. Measured on the flake this card was filed for:
+# `a STRAY worktree with a real pushed branch was REMOVED (want 'no', got 'yes')` plus
+# the missing RM line, and the cut-off 600 characters showed the CARD loop, so the log
+# never said WHY the stray was kept. Same repair the `prunesync` harness got for its
+# own message (card t_e89e95c7).
+clip() { # <text> [<head chars>] [<tail chars>]
+  local flat head tail
+  flat="$(printf '%s' "$1" | tr '\n' '|')"
+  head="${2:-300}"; tail="${3:-1200}"
+  if [ "${#flat}" -le $(( head + tail )) ]; then printf '%s' "$flat"; return 0; fi
+  if [ "$tail" -le 0 ]; then printf '%s…[%d chars omitted]' "${flat:0:head}" \
+    "$(( ${#flat} - head ))"; return 0; fi
+  printf '%s…[%d chars omitted]…%s' "${flat:0:head}" \
+    "$(( ${#flat} - head - tail ))" "${flat: -tail}"
 }
 
 # guard_real: the pruner's OWN predicate, against the REAL process table.
@@ -153,6 +173,45 @@ wait_for_guard() { # <literal> [<seconds>] -> match | nomatch
   echo nomatch
 }
 
+# ─── the fixture's card ids are RUN-UNIQUE, and that is a correctness property ────
+# WHY (card `t_d243986f`). Several assertions here are about the WHOLE host — "before the
+# stand-in starts, this run's pattern matches NOTHING", "no process references this
+# worktree" — and the pruner asks the second one with
+#     has_process_matching "worktrees/$name "
+# — a LITERAL substring of the worktree's leaf, which is derived from the CARD ID. Two
+# copies of this suite that share an id namespace therefore MEASURE EACH OTHER: a
+# concurrent copy's own `git worktree add …/worktrees/t_00000003 <sha>` satisfies THIS
+# run's guard for a worktree nothing local is holding. Measured 2026-11-04 on the
+# unmodified file with four concurrent copies of this suite: `210 passed, 3 failed` —
+# section 8c plants no process at all (only a git lock) and requires `git worktree
+# remove` to FAIL, yet it read `KEEP  t_00000003 (a process references this worktree)`
+# and exited 3 instead of 1. In PR #1535's merge train the same red arrived through
+# `prunesync`, whose installer runs this suite as its source proof, and the merge lost
+# over an hour to it.
+#
+# AN EXCLUSIVE LOCK DOES NOT FIX THIS. A copy only takes a lock if it CARRIES the lock,
+# and the copies that collide here are exactly the ones that do not: every stale lane's
+# worktree (they are routinely hundreds of commits behind), every `--from-ref <rev>`
+# extraction the installer makes from a revision older than this card, and every copy of
+# these bytes somebody already has. Serialising the cooperative copies would leave the
+# uncooperative ones free to red any run they overlap.
+#
+# So the IDs themselves are derived here, per run, from the pid and the clock:
+#
+#     t_<6 hex><NN>   — one shared prefix (so the pruner's ordering by name is
+#                       unchanged: the fixture slot is the last two digits) + the slot.
+#
+# Two runs cannot collide, and the names stay the shape the pruner derives a card id
+# from (`grep -oE 't_[0-9a-f]{8}'`). It also works in BOTH directions: an OLD copy's
+# fixed `t_00000003` cannot match this run's `worktrees/t_9f3ac103 `, and this run's
+# argv cannot match an old copy's pattern.
+RUN_TAG="$(printf '%06x' $(( ($$ * 65537 + $(date +%s)) % 16777216 )))"
+T00="t_${RUN_TAG}00"; T01="t_${RUN_TAG}01"; T02="t_${RUN_TAG}02"; T03="t_${RUN_TAG}03"
+T04="t_${RUN_TAG}04"; T05="t_${RUN_TAG}05"; T06="t_${RUN_TAG}06"; T07="t_${RUN_TAG}07"
+T08="t_${RUN_TAG}08"; T09="t_${RUN_TAG}09"; T10="t_${RUN_TAG}10"; T11="t_${RUN_TAG}11"
+T12="t_${RUN_TAG}12"; T13="t_${RUN_TAG}13"; T14="t_${RUN_TAG}14"; T15="t_${RUN_TAG}15"
+T16="t_${RUN_TAG}16"; T17="t_${RUN_TAG}17"
+
 SB="$(mktemp -d /tmp/jf-prunewt-test.XXXXXX)"
 # The live-worker stand-in is killed on EVERY exit, including a suite that dies part
 # way through (card t_eec1d8fd): it used to be bounded only by its own `sleep`, so its
@@ -161,6 +220,19 @@ SB="$(mktemp -d /tmp/jf-prunewt-test.XXXXXX)"
 cleanup() {
   [ -n "${WORKER_PID:-}" ] && kill "$WORKER_PID" 2>/dev/null
   [ -n "${STRAY_LIVE_PID:-}" ] && kill "$STRAY_LIVE_PID" 2>/dev/null
+  # ON A RED, KEEP THE PRUNER'S OWN LOGS (card t_1483975b). Every assertion below is
+  # read off a real run's log, and the FAIL line quotes it — but the sandbox (and with
+  # it the log) used to be deleted before anyone could page through the rest of it, so
+  # a red that quoted the wrong 600 characters left NOTHING to read. The copy is taken
+  # outside $SB and its path is printed, so a red survives the sandbox cleanup.
+  if [ "${FAIL:-0}" -gt 0 ]; then
+    KEEP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jf-prunewt-failed.XXXXXX" 2>/dev/null)" || KEEP_DIR=""
+    if [ -n "${KEEP_DIR:-}" ]; then
+      [ -n "${LOG:-}" ] && cp "$LOG" "$KEEP_DIR/prune.log" 2>/dev/null
+      [ -n "${UNBORN_LOG:-}" ] && cp "$UNBORN_LOG" "$KEEP_DIR/prune-unborn.log" 2>/dev/null
+      printf 'self-test red: the pruner logs were kept in %s\n' "$KEEP_DIR" >&2
+    fi
+  fi
   rm -rf "$SB"
 }
 trap cleanup EXIT
@@ -207,10 +279,10 @@ ORPHAN_SHA="$(fresh_commit 'orphan work')"
 # The hand-made mirror, made exactly the documented way.
 git -C "$REPO" update-ref refs/remotes/pr/999 "$MIRROR_SHA"
 # A genuine pushed branch on the real remote.
-git -C "$REPO" push -q origin "$PUSHED_SHA:refs/heads/wt/t_00000003-pushed"
+git -C "$REPO" push -q origin "$PUSHED_SHA:refs/heads/wt/$T03-pushed"
 git -C "$REPO" fetch -q origin
 # A local branch holding a commit that is on no remote at all.
-git -C "$REPO" branch -q wt/t_00000004-local "$LOCAL_SHA"
+git -C "$REPO" branch -q wt/$T04-local "$LOCAL_SHA"
 
 # ── the cases ────────────────────────────────────────────────────────────────
 #   t_00000001 merged-into-main  commit reachable from origin/main       -> remove
@@ -230,10 +302,10 @@ git -C "$REPO" branch -q wt/t_00000004-local "$LOCAL_SHA"
 #   commit, so this directory may hold the only copy. It is what the exit-3
 #   "reclaimed nothing while keeping at-risk work" alarm is made of, and it
 #   must be a card the script CAN read, or the run is a failure (exit 1) instead.
-for spec in "t_00000001:$MERGED_SHA" "t_00000002:$MIRROR_SHA" "t_00000003:$PUSHED_SHA" \
-            "t_00000004:$LOCAL_SHA" "t_00000005:$PUSHED_SHA" "t_00000006:$PUSHED_SHA" \
-            "t_00000007:$PUSHED_SHA" "t_00000009:$PUSHED_SHA" \
-            "t_00000010:$ORPHAN_SHA"; do
+for spec in "$T01:$MERGED_SHA" "$T02:$MIRROR_SHA" "$T03:$PUSHED_SHA" \
+            "$T04:$LOCAL_SHA" "$T05:$PUSHED_SHA" "$T06:$PUSHED_SHA" \
+            "$T07:$PUSHED_SHA" "$T09:$PUSHED_SHA" \
+            "$T10:$ORPHAN_SHA"; do
   id="${spec%%:*}"; sha="${spec#*:}"
   git -C "$REPO" worktree add -q --detach "$REPO/.worktrees/$id" "$sha"
 done
@@ -244,9 +316,9 @@ git -C "$REPO" worktree add -q --detach "$REPO/.worktrees/$WORKER_TASK" "$PUSHED
 # The DIRTY case: a change to a TRACKED file, which is what `git status
 # --porcelain` reports. (The proof-of-survival below is the worktree DIRECTORY,
 # not an untracked file — an untracked marker would make every case dirty.)
-printf 'modified\n' >>"$REPO/.worktrees/t_00000005/README"
+printf 'modified\n' >>"$REPO/.worktrees/$T05/README"
 check "the DIRTY case really is dirty (its tracked README is modified)" \
-  "yes" "$( [ -n "$(git -C "$REPO/.worktrees/t_00000005" status --porcelain)" ] && echo yes || echo no )"
+  "yes" "$( [ -n "$(git -C "$REPO/.worktrees/$T05" status --porcelain)" ] && echo yes || echo no )"
 
 # ── the fake `hermes kanban show` ────────────────────────────────────────────
 # Answers from $SB/fake-hermes/<task>: line 1 "status", line 2 "YYYY-MM-DD HH:MM".
@@ -275,15 +347,15 @@ EOF
 chmod +x "$SB/bin/hermes"
 
 OLD="2020-01-01 00:00"   # comfortably older than --min-age-hours
-for id in t_00000001 t_00000002 t_00000003 t_00000004 t_00000005; do
+for id in $T01 $T02 $T03 $T04 $T05; do
   printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$id"
 done
 # t_00000010 is the readable at-risk case (its card is terminal and old), so it is
 # what the exit-3 alarm is built from — it must NOT also be unreadable, or the run
 # would be a failure (exit 1) and never reach the exit-3 verdict.
-printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/t_00000010"
-printf 'done\n%s\n' "$(date -d '-5 minutes' '+%F %T')" >"$SB/fake-hermes/t_00000006"
-printf 'running\n%s\n' "$OLD" >"$SB/fake-hermes/t_00000007"
+printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$T10"
+printf 'done\n%s\n' "$(date -d '-5 minutes' '+%F %T')" >"$SB/fake-hermes/$T06"
+printf 'running\n%s\n' "$OLD" >"$SB/fake-hermes/$T07"
 # t_00000008 (live worker process) and t_00000009 (a card that cannot be read)
 # deliberately have NO state file at this point: the first run's process is
 # started later, and an unreadable card must survive that run. Both get a `done`
@@ -311,8 +383,8 @@ git -C "$REPO" update-ref refs/remotes/pr/999 "$MIRROR_SHA"   # fresh, as a lane
 git -C "$REPO" fetch -q --prune origin
 check "a real 'git fetch --prune origin' leaves refs/remotes/pr/999 in place" \
   "$MIRROR_SHA" "$(git -C "$REPO" rev-parse --verify -q refs/remotes/pr/999 2>/dev/null)"
-check "...while that same fetch is what created origin/wt/t_00000003-pushed" \
-  "$PUSHED_SHA" "$(git -C "$REPO" rev-parse --verify -q origin/wt/t_00000003-pushed 2>/dev/null)"
+check "...while that same fetch is what created origin/wt/$T03-pushed" \
+  "$PUSHED_SHA" "$(git -C "$REPO" rev-parse --verify -q origin/wt/$T03-pushed 2>/dev/null)"
 
 echo "--- the durability predicate: the old one, and this script's ---"
 
@@ -343,7 +415,7 @@ check "the script's verdict for a commit on origin/main is merged-into-main" \
 check "the script's verdict for local-only work is local-branch" \
   "local-branch" "$(lib "durable_verdict '$REPO' '$LOCAL_SHA'")"
 check "the local holder is named" \
-  "wt/t_00000004-local" "$(lib "local_holder '$REPO' '$LOCAL_SHA'")"
+  "wt/$T04-local" "$(lib "local_holder '$REPO' '$LOCAL_SHA'")"
 contains "mirror_note names the ref it refuses to trust" \
   "$(lib "mirror_note '$REPO' '$MIRROR_SHA'")" "refs/remotes/pr/999"
 check "mirror_note is empty when nothing non-remote-tracking holds the commit" \
@@ -359,39 +431,39 @@ run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
 check "an unreadable card is a FAILURE, not a silent keep: the run exits 1" "1" "$RC"
 
 # 3. THE CARD'S DEFECT, as an outcome on disk: the mirror-only worktree survives.
-check "mirror-only worktree SURVIVES (its only ref is a mirror)" "yes" "$(survives t_00000002)"
-contains "it is reported UNSAFE" "$(cat "$LOG")" "UNSAFE t_00000002"
+check "mirror-only worktree SURVIVES (its only ref is a mirror)" "yes" "$(survives $T02)"
+contains "it is reported UNSAFE" "$(cat "$LOG")" "UNSAFE $T02"
 contains "...naming refs/remotes/pr/999 as the ref it refuses to trust" \
   "$(cat "$LOG")" "ignoring non-remote-tracking ref(s): refs/remotes/pr/999"
 contains "...and saying the commit is on no ref at all" "$(cat "$LOG")" "on no ref at all"
 
 # 4. The fix must not neuter the pruner: real durability still prunes.
-check "merged-into-main worktree was REMOVED" "no" "$(survives t_00000001)"
-check "genuinely pushed worktree was REMOVED" "no" "$(survives t_00000003)"
-contains "the removal records the merged verdict" "$(cat "$LOG")" "RM    t_00000001"
+check "merged-into-main worktree was REMOVED" "no" "$(survives $T01)"
+check "genuinely pushed worktree was REMOVED" "no" "$(survives $T03)"
+contains "the removal records the merged verdict" "$(cat "$LOG")" "RM    $T01"
 contains "...as durable=merged-into-main" "$(cat "$LOG")" "durable=merged-into-main"
-contains "the removal records the pushed verdict" "$(cat "$LOG")" "RM    t_00000003"
+contains "the removal records the pushed verdict" "$(cat "$LOG")" "RM    $T03"
 contains "...as durable=pushed-branch" "$(cat "$LOG")" "durable=pushed-branch"
 
 # 5. Every other refusal keeps its own reason, so a later edit cannot collapse
 #    them all into one indistinguishable "kept for some reason".
-check "local-only worktree SURVIVES" "yes" "$(survives t_00000004)"
+check "local-only worktree SURVIVES" "yes" "$(survives $T04)"
 contains "local-only work is reported with its branch named" \
-  "$(cat "$LOG")" "only on LOCAL branch 'wt/t_00000004-local'"
-check "a worktree with uncommitted changes SURVIVES" "yes" "$(survives t_00000005)"
+  "$(cat "$LOG")" "only on LOCAL branch 'wt/$T04-local'"
+check "a worktree with uncommitted changes SURVIVES" "yes" "$(survives $T05)"
 contains "uncommitted changes are reported" "$(cat "$LOG")" "uncommitted change(s)"
-check "a card completed 5 minutes ago SURVIVES (min-age)" "yes" "$(survives t_00000006)"
-contains "the age refusal quotes the completion time" "$(cat "$LOG")" "KEEP  t_00000006 (completed"
-check "a card still running SURVIVES" "yes" "$(survives t_00000007)"
-contains "the status refusal names the status" "$(cat "$LOG")" "KEEP  t_00000007 (card status=running)"
+check "a card completed 5 minutes ago SURVIVES (min-age)" "yes" "$(survives $T06)"
+contains "the age refusal quotes the completion time" "$(cat "$LOG")" "KEEP  $T06 (completed"
+check "a card still running SURVIVES" "yes" "$(survives $T07)"
+contains "the status refusal names the status" "$(cat "$LOG")" "KEEP  $T07 (card status=running)"
 check "a card that cannot be read SURVIVES (never act on a card you cannot read)" \
-  "yes" "$(survives t_00000009)"
+  "yes" "$(survives $T09)"
 contains "...and is named as a FAILURE, not assumed terminal" \
-  "$(cat "$LOG")" "FAIL  t_00000009 (card status unreadable"
+  "$(cat "$LOG")" "FAIL  $T09 (card status unreadable"
 # ...and t_00000009's card is then made terminal. It was deliberately unreadable to
 # prove the never-act-on-an-unreadable-card guard; leaving it unreadable would make
 # every later run exit 1 (correctly) and hide the exit-code assertions built below.
-printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/t_00000009"
+printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$T09"
 
 # 6. The live-process guard: a worker holding the card keeps the worktree even
 #    though the work is durable and the card is old. The card is made terminal
@@ -426,7 +498,7 @@ printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$WORKER_TASK"
 check "premise of the premise: before the stand-in starts, this run's pattern matches NOTHING" \
   "nomatch" "$(guard_real "$WORKER_PAT")"
 check "...and a literal no process can hold answers nomatch too (the helper is not a rubber stamp)" \
-  "nomatch" "$(guard_real "work kanban task t_00000000-not-a-worker")"
+  "nomatch" "$(guard_real "work kanban task $T00-not-a-worker")"
 # ...and the MECHANISM the shipped shape fell for, pinned before the stand-in exists: an
 # argv that IS that reader's own. The predicate excludes a scanner's argv (`grep` is
 # one), so the old pipeline's "match" could only ever have been the reader itself. The
@@ -570,15 +642,15 @@ echo "--- --dry-run must delete nothing ---"
 # Recreate a removable worktree (the run above removed it), so the dry run has
 # something it WOULD remove.
 git -C "$REPO" worktree prune
-git -C "$REPO" worktree add -q --detach "$REPO/.worktrees/t_00000003" "$PUSHED_SHA"
+git -C "$REPO" worktree add -q --detach "$REPO/.worktrees/$T03" "$PUSHED_SHA"
 BEFORE="$(git -C "$REPO" worktree list --porcelain | grep -c '^worktree ')"
 : >"$LOG"
 run_prune --dry-run --min-age-hours 24 >/dev/null 2>&1; DRY_RC=$?
 AFTER="$(git -C "$REPO" worktree list --porcelain | grep -c '^worktree ')"
 check "a dry run leaves the worktree count unchanged" "$BEFORE" "$AFTER"
-check "a dry run leaves the removable worktree on disk" "yes" "$(survives t_00000003)"
-contains "a dry run says WOULD, not RM" "$(cat "$LOG")" "WOULD t_00000003"
-if grep -q "RM    t_00000003" "$LOG"; then
+check "a dry run leaves the removable worktree on disk" "yes" "$(survives $T03)"
+contains "a dry run says WOULD, not RM" "$(cat "$LOG")" "WOULD $T03"
+if grep -q "RM    $T03" "$LOG"; then
   bad "a dry run performed a removal"
 else
   ok "a dry run performed no removal"
@@ -601,11 +673,11 @@ echo "--- the exit-code contract: what a caller can alert on ---"
 #     almost every day, and it is the one that must NOT be an error. The dry run above
 #     left the pushed t_00000003 on disk, so this real run reclaims it while keeping the
 #     at-risk work (t_00000010 and the jf-orphan stray — 2 ref-less commits).
-check "the reclaimable worktree is still on disk from the dry run" "yes" "$(survives t_00000003)"
+check "the reclaimable worktree is still on disk from the dry run" "yes" "$(survives $T03)"
 : >"$LOG"
 run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
 check "a run that keeps at-risk work AND reclaims is exit 0 — kept on purpose is not a failure" "0" "$RC"
-contains "...the reclaim is recorded" "$(cat "$LOG")" "RM    t_00000003"
+contains "...the reclaim is recorded" "$(cat "$LOG")" "RM    $T03"
 contains "...and the at-risk keeps are counted separately from the unsafe total" \
   "$(cat "$LOG")" "at_risk=2"
 contains "...while the unsafe total still counts them" "$(cat "$LOG")" "unsafe="
@@ -644,21 +716,21 @@ contains "...and it reclaimed literally nothing, artefact reaps included" "$(cat
 #     `removed=0`/`stray_removed=0` are asserted alongside the artefact count, so the
 #     reclaim really is artefact-only, and the at-risk work is asserted to still be
 #     there, so the run really is the shape the alarm is built from.
-PAYLOAD="$REPO/.worktrees/t_00000010/web/node_modules"
+PAYLOAD="$REPO/.worktrees/$T10/web/node_modules"
 mkdir -p "$PAYLOAD"
 printf 'built\n' >"$PAYLOAD/.jf-suite-marker"
 # The artefact pass judges AGE from the worktree directory's mtime and this sandbox
 # is minutes old, so the at-risk worktree is aged the way an operator's would be
 # after a day. This cannot change that worktree's fate: its card-loop verdict is its
 # ref-less HEAD, which is reached before mtime is ever consulted.
-touch -d '2020-01-01' "$REPO/.worktrees/t_00000010"
+touch -d '2020-01-01' "$REPO/.worktrees/$T10"
 check "premise: the at-risk worktree really holds a node_modules payload to reap" "yes" \
   "$( [ -f "$PAYLOAD/.jf-suite-marker" ] && echo yes || echo no )"
 : >"$LOG"
 run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
 check "reclaiming ONLY build artefacts while keeping at-risk work is exit 0 — that is progress, not the alarm" "0" "$RC"
 contains "...the artefact reclaim is logged, with its size" "$(cat "$LOG")" \
-  "RM    artefact web/node_modules in t_00000010 ("
+  "RM    artefact web/node_modules in $T10 ("
 contains "...and counted separately from worktree removals in the summary" "$(cat "$LOG")" " artefacts=1 "
 contains "...while no worktree is claimed as reclaimed (the reclaim really was artefact-only)" \
   "$(cat "$LOG")" " removed=0 skipped="
@@ -669,24 +741,24 @@ contains "...and the run records nothing as a failure" "$(grep -c 'FAIL ' "$LOG"
 check "...the payload really is gone from disk" "no" \
   "$( [ -e "$PAYLOAD" ] && echo yes || echo no )"
 check "...and the worktree holding it was NOT removed (an artefact is not a worktree)" "yes" \
-  "$(survives t_00000010)"
+  "$(survives $T10)"
 
 # 8c. A FAILED removal is exit 1, not a silent keep: the worktree is retained because
 #     git refused, which is a different thing from a deliberate refusal. A locked
 #     worktree reproduces it deterministically (git 2.43; `remove --force` cannot
 #     remove a locked tree, only `remove --force --force` can).
-git -C "$REPO" worktree add -q --detach "$REPO/.worktrees/t_00000003" "$PUSHED_SHA"
-git -C "$REPO" worktree lock --reason sandbox "$REPO/.worktrees/t_00000003"
+git -C "$REPO" worktree add -q --detach "$REPO/.worktrees/$T03" "$PUSHED_SHA"
+git -C "$REPO" worktree lock --reason sandbox "$REPO/.worktrees/$T03"
 : >"$LOG"
 run_prune --min-age-hours 24 >/dev/null 2>&1; RC=$?
 check "a removal that git REFUSES is exit 1" "1" "$RC"
 contains "...and the refusal is logged as a FAIL, not as a keep" \
-  "$(cat "$LOG")" "FAIL  t_00000003 (git worktree remove failed)"
-check "...and the locked worktree is still on disk" "yes" "$(survives t_00000003)"
+  "$(cat "$LOG")" "FAIL  $T03 (git worktree remove failed)"
+check "...and the locked worktree is still on disk" "yes" "$(survives $T03)"
 contains "...and the summary counts it as a failure" "$(cat "$LOG")" "failures=1"
-git -C "$REPO" worktree unlock "$REPO/.worktrees/t_00000003" 2>/dev/null
+git -C "$REPO" worktree unlock "$REPO/.worktrees/$T03" 2>/dev/null
 check "the lock is what caused it (unlocking makes the same worktree removable)" "no" \
-  "$( git -C "$REPO" worktree remove --force "$REPO/.worktrees/t_00000003" >/dev/null 2>&1; [ -d "$REPO/.worktrees/t_00000003" ] && echo yes || echo no )"
+  "$( git -C "$REPO" worktree remove --force "$REPO/.worktrees/$T03" >/dev/null 2>&1; [ -d "$REPO/.worktrees/$T03" ] && echo yes || echo no )"
 
 # 8d. A failed FETCH is exit 1 too: the durability verdict was then taken on
 #     possibly-stale refs, which is the state that both keeps pushed work forever and
@@ -760,9 +832,9 @@ ucommit() { # <message> -> a commit whose tree is main's, parented on main
 }
 # The healthy shapes' commits, each pushed to a real origin branch => pushed-branch.
 U13_SHA="$(ucommit 'healthy detached work')"
-git -C "$UNBORN_REPO" push -q origin "$U13_SHA:refs/heads/wt/t_00000013-pushed"
+git -C "$UNBORN_REPO" push -q origin "$U13_SHA:refs/heads/wt/$T13-pushed"
 U14_SHA="$(ucommit 'healthy branch-headed work')"
-git -C "$UNBORN_REPO" push -q origin "$U14_SHA:refs/heads/wt/t_00000014-pushed"
+git -C "$UNBORN_REPO" push -q origin "$U14_SHA:refs/heads/wt/$T14-pushed"
 USTRAY_SHA="$(ucommit 'healthy stray work')"
 git -C "$UNBORN_REPO" push -q origin "$USTRAY_SHA:refs/heads/wt/jf-healthy-pushed"
 git -C "$UNBORN_REPO" fetch -q origin
@@ -770,7 +842,7 @@ git -C "$UNBORN_REPO" fetch -q origin
 # The unborn card worktree: created as a real worktree, then its HEAD is left
 # pointing at a branch that does not exist. That IS the shape the card measured —
 # the gitdir stays valid, only the ref is missing.
-UNBORN_TASK="t_00000012"
+UNBORN_TASK="$T12"
 UNBORN_WT="$UNBORN_REPO/.worktrees/$UNBORN_TASK"
 git -C "$UNBORN_REPO" worktree add -q --detach "$UNBORN_WT" "$USTRAY_SHA"
 UNBORN_REF="refs/heads/wt/$UNBORN_TASK-deleted"
@@ -783,12 +855,12 @@ git -C "$UNBORN_REPO" worktree add -q --detach "$UNBORN_STRAY" "$USTRAY_SHA"
 printf 'ref: %s\n' "$UNBORN_STRAY_REF" >"$(git -C "$UNBORN_STRAY" rev-parse --absolute-git-dir)/HEAD"
 touch -d '2020-01-01' "$UNBORN_STRAY"
 # The two healthy shapes, and a healthy stray.
-git -C "$UNBORN_REPO" worktree add -q --detach "$UNBORN_REPO/.worktrees/t_00000013" "$U13_SHA"
-git -C "$UNBORN_REPO" worktree add -q -b wt/t_00000014-pushed "$UNBORN_REPO/.worktrees/t_00000014" "$U14_SHA"
+git -C "$UNBORN_REPO" worktree add -q --detach "$UNBORN_REPO/.worktrees/$T13" "$U13_SHA"
+git -C "$UNBORN_REPO" worktree add -q -b wt/$T14-pushed "$UNBORN_REPO/.worktrees/$T14" "$U14_SHA"
 UNBORN_STRAY_OK="$UNBORN_SB/strayroot/jf-healthy"
 git -C "$UNBORN_REPO" worktree add -q --detach "$UNBORN_STRAY_OK" "$USTRAY_SHA"
 touch -d '2020-01-01' "$UNBORN_STRAY_OK"
-for id in "$UNBORN_TASK" t_00000013 t_00000014; do
+for id in "$UNBORN_TASK" $T13 $T14; do
   printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$id"
 done
 
@@ -811,15 +883,15 @@ check "the script's own HEAD read yields nothing for it, so the guard fires" "" 
 # give the same sha as a plain read for a detached worktree and for a branch-headed
 # one, and it must be the commit the worktree was made at.
 check "a healthy DETACHED worktree still resolves to its own commit" "$U13_SHA" \
-  "$(lib "worktree_head '$UNBORN_REPO/.worktrees/t_00000013'")"
+  "$(lib "worktree_head '$UNBORN_REPO/.worktrees/$T13'")"
 check "...i.e. the same sha a plain read gives (the fix changed no healthy read)" \
-  "$(git -C "$UNBORN_REPO/.worktrees/t_00000013" rev-parse HEAD 2>/dev/null || echo "")" \
-  "$(lib "worktree_head '$UNBORN_REPO/.worktrees/t_00000013'")"
+  "$(git -C "$UNBORN_REPO/.worktrees/$T13" rev-parse HEAD 2>/dev/null || echo "")" \
+  "$(lib "worktree_head '$UNBORN_REPO/.worktrees/$T13'")"
 check "a healthy BRANCH-HEADED worktree still resolves to its own commit" "$U14_SHA" \
-  "$(lib "worktree_head '$UNBORN_REPO/.worktrees/t_00000014'")"
+  "$(lib "worktree_head '$UNBORN_REPO/.worktrees/$T14'")"
 check "...i.e. the same sha a plain read gives" \
-  "$(git -C "$UNBORN_REPO/.worktrees/t_00000014" rev-parse HEAD 2>/dev/null || echo "")" \
-  "$(lib "worktree_head '$UNBORN_REPO/.worktrees/t_00000014'")"
+  "$(git -C "$UNBORN_REPO/.worktrees/$T14" rev-parse HEAD 2>/dev/null || echo "")" \
+  "$(lib "worktree_head '$UNBORN_REPO/.worktrees/$T14'")"
 
 run_unborn() { # extra args…
   env PATH="$SB/bin:$PATH" \
@@ -854,17 +926,17 @@ check "...with no other FAIL anywhere in the run" "2" "$(grep -c 'FAIL ' "$UNBOR
 # unborn reads as its ONLY failures and still removed every healthy shape, with the
 # same verdict each had before (measured on disk).
 check "the healthy detached worktree was still REMOVED" "no" \
-  "$( [ -d "$UNBORN_REPO/.worktrees/t_00000013" ] && echo yes || echo no )"
+  "$( [ -d "$UNBORN_REPO/.worktrees/$T13" ] && echo yes || echo no )"
 check "the healthy branch-headed worktree was still REMOVED" "no" \
-  "$( [ -d "$UNBORN_REPO/.worktrees/t_00000014" ] && echo yes || echo no )"
+  "$( [ -d "$UNBORN_REPO/.worktrees/$T14" ] && echo yes || echo no )"
 check "the healthy stray was still REMOVED" "no" \
   "$( [ -d "$UNBORN_STRAY_OK" ] && echo yes || echo no )"
 line_of() { grep -F -- "$1" "$UNBORN_LOG" | sed -n '1p'; }
 line_has() { case "$2" in *"$1"*) echo yes;; *) echo no;; esac; }
 check "the healthy detached removal records the pushed verdict, as before" "yes" \
-  "$(line_has 'durable=pushed-branch' "$(line_of "RM    t_00000013" "$UNBORN_LOG")")"
+  "$(line_has 'durable=pushed-branch' "$(line_of "RM    $T13" "$UNBORN_LOG")")"
 check "the healthy branch-headed removal records the pushed verdict, as before" "yes" \
-  "$(line_has 'durable=pushed-branch' "$(line_of "RM    t_00000014" "$UNBORN_LOG")")"
+  "$(line_has 'durable=pushed-branch' "$(line_of "RM    $T14" "$UNBORN_LOG")")"
 check "...and the healthy stray's removal does too" "yes" \
   "$(line_has 'durable=pushed-branch' "$(line_of 'RM    jf-healthy (stray' "$UNBORN_LOG")")"
 
@@ -985,7 +1057,7 @@ check "...and the sandbox is left clean (the stray is gone and no longer registe
 #     shape the exit-1 contract exists for. Asserted as a FAIL AND explicitly as NOT
 #     a KEEP: the branch the card measured under its mutant logged the very same FAIL
 #     line while the run exited 0, so the log line alone pins nothing.
-NOREF_TASK="t_00000011"
+NOREF_TASK="$T11"
 git -C "$REPO" worktree add -q --detach "$REPO/.worktrees/$NOREF_TASK" "$PUSHED_SHA"
 printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$NOREF_TASK"
 printf 'ref: refs/heads/no-such-branch\n' >"$REPO/.worktrees/$NOREF_TASK/.git"
@@ -1175,12 +1247,27 @@ wait_for_cwd() { # <pid> <dir> [tries of 0.1s] -> 0 once /proc/<pid>/cwd is <dir
   done
   return 1
 }
+# cwd_premise: the premise above as a VALUE, and a failing one says WHICH WAY it
+# failed (card t_1483975b). `yes`/`no` alone leaves the reader unable to tell "the
+# stand-in never got scheduled/started" (pid gone) from "it is alive but its cwd reads
+# somewhere else, or cannot be read" (a real defect in the guard's input) — and those
+# two want opposite fixes. It is still a premise that can fail: anything but exactly
+# `yes` is a red.
+cwd_premise() { # <pid> <dir> -> yes | no (<why>)
+  if wait_for_cwd "$1" "$2"; then echo yes; return 0; fi
+  if [ -d "/proc/$1" ]; then
+    printf 'no (pid %s is alive, its cwd reads %s)' "$1" \
+      "$(readlink "/proc/$1/cwd" 2>/dev/null || echo '<unreadable>')"
+  else
+    printf 'no (pid %s is GONE from the process table)' "$1"
+  fi
+}
 
 CWD_ARGV="npm run build"
 CWD_SHA="$(ucommit 'cwd-held work')"
-git -C "$UNBORN_REPO" push -q origin "$CWD_SHA:refs/heads/wt/t_00000015-cwd"
+git -C "$UNBORN_REPO" push -q origin "$CWD_SHA:refs/heads/wt/$T15-cwd"
 git -C "$UNBORN_REPO" fetch -q origin
-CWD_TASK="t_00000015"
+CWD_TASK="$T15"
 CWD_WT="$UNBORN_REPO/.worktrees/$CWD_TASK"
 git -C "$UNBORN_REPO" worktree add -q --detach "$CWD_WT" "$CWD_SHA"
 printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$CWD_TASK"
@@ -1189,7 +1276,7 @@ git -C "$UNBORN_REPO" worktree add -q --detach "$CWD_STRAY" "$CWD_SHA"
 touch -d '2020-01-01' "$CWD_STRAY"
 # A third worktree, for the same guard on the ARTEFACT path: `rm -rf web/node_modules`
 # under a live build damages the build in flight rather than the worktree.
-CWD_ART_TASK="t_00000016"
+CWD_ART_TASK="$T16"
 CWD_ART_WT="$UNBORN_REPO/.worktrees/$CWD_ART_TASK"
 git -C "$UNBORN_REPO" worktree add -q --detach "$CWD_ART_WT" "$CWD_SHA"
 printf 'done\n%s\n' "$OLD" >"$SB/fake-hermes/$CWD_ART_TASK"
@@ -1217,11 +1304,11 @@ CWD_ART_PID=$!
 # through the script's OWN argv predicate on the real table (guard_real, literal via
 # the ENVIRONMENT).
 check "premise: the stray's stand-in is inside it (readlink /proc/<pid>/cwd)" "yes" \
-  "$( wait_for_cwd "$CWD_STRAY_PID" "$CWD_STRAY" && echo yes || echo no )"
+  "$( cwd_premise "$CWD_STRAY_PID" "$CWD_STRAY" )"
 check "premise: the card worktree's stand-in is inside IT" "yes" \
-  "$( wait_for_cwd "$CWD_WT_PID" "$CWD_WT" && echo yes || echo no )"
+  "$( cwd_premise "$CWD_WT_PID" "$CWD_WT" )"
 check "premise: the artefact worktree's stand-in is inside IT" "yes" \
-  "$( wait_for_cwd "$CWD_ART_PID" "$CWD_ART_WT" && echo yes || echo no )"
+  "$( cwd_premise "$CWD_ART_PID" "$CWD_ART_WT" )"
 check "premise: the stand-in's argv does NOT carry the stray's path (only a cwd read can see it)" \
   "nomatch" "$(guard_real "$CWD_STRAY ")"
 check "premise: ...nor the '.worktrees/<name>' form of it" "nomatch" \
@@ -1242,16 +1329,29 @@ FAKE="$SB/fake-proc"
 FAKE_TARGET="$SB/cwd-target"
 mkdir -p "$FAKE_TARGET/sub" "$FAKE_TARGET-sibling"
 mkdir -p "$FAKE/live/9999001" "$FAKE/zombie-only/9999002" "$FAKE/deny-only/9999003" \
-         "$FAKE/sub-only/9999004" "$FAKE/sibling-only/9999005" "$FAKE/empty" "$FAKE/self"
+         "$FAKE/sub-only/9999004" "$FAKE/sibling-only/9999005" "$FAKE/exiting-only/9999007" \
+         "$FAKE/empty" "$FAKE/self"
 ln -s "$FAKE_TARGET"               "$FAKE/live/9999001/cwd"
 printf 'State:\tS (sleeping)\n' >"$FAKE/live/9999001/status"
 # The zombie: a cwd entry whose target cannot be read (a dead process's /proc entry
 # behaves the same way at the syscall find uses) with `State: Z`.
 printf 'not-a-link\n'          >"$FAKE/zombie-only/9999002/cwd"
 printf 'State:\tZ (zombie)\n'  >"$FAKE/zombie-only/9999002/status"
-# ...the same unreadable cwd, but a LIVE state: this is the cannot-judge.
+# ...the same unreadable cwd, but a LIVE state and a READABLE argv area: this is the
+# cannot-judge. The argv area is what keeps it one (card t_1483975b): a task that still
+# has its memory can hold a cwd, so an unreadable one is a read we could not make.
 printf 'not-a-link\n'          >"$FAKE/deny-only/9999003/cwd"
 printf 'State:\tS (sleeping)\n' >"$FAKE/deny-only/9999003/status"
+printf 'npm\0run\0build\0'     >"$FAKE/deny-only/9999003/cmdline"
+# The EXITING task (card t_1483975b): cwd unreadable, state NOT `Z`, and NO argv area
+# — the /proc shape a task has between exit_mm() and exit_fs()/exit_notify() of
+# do_exit(), which a task blocked in `D` on the way out can hold for a while. It cannot
+# hold a cwd (there is no memory left to hold one with), so it must be SKIPPED, not
+# read as a cannot-judge. This is the fixture that reds `prunesync` on correct trees
+# when it is read the other way: measured pids 480446 and 487809 on 2026-11-04.
+printf 'not-a-link\n'          >"$FAKE/exiting-only/9999007/cwd"
+printf 'State:\tD (disk sleep)\n' >"$FAKE/exiting-only/9999007/status"
+: >"$FAKE/exiting-only/9999007/cmdline"
 # The REAPED/VANISHED pid (cards t_d53b71b8, t_e7ac4bcd) has its fixture in the vanish
 # block below, NOT here: its defining property is that the pid's own directory is GONE
 # by the time the row is read, and a directory of pid directories cannot express that —
@@ -1271,6 +1371,10 @@ check "premise: ...and its State: line says Z, so the state is the only thing th
   "$(awk '/^State:/{print $2}' "$FAKE/zombie-only/9999002/status")"
 check "premise: the third pid's cwd cannot be read either, but its state is NOT Z" "S" \
   "$(awk '/^State:/{print $2}' "$FAKE/deny-only/9999003/status")"
+check "premise: ...and it DOES have an argv area, which is what a live task holds a cwd with" "npm run build" \
+  "$(tr '\0' ' ' <"$FAKE/deny-only/9999003/cmdline" | sed 's/ *$//')"
+check "premise: the fourth pid is the same unreadable cwd and a NON-Z state, with NO argv area at all" "0" \
+  "$(wc -c <"$FAKE/exiting-only/9999007/cmdline")"
 
 check "a synthetic live pid inside the target reads 'inside'" "inside" \
   "$(cwd_check "$FAKE_TARGET" "$FAKE/live")"
@@ -1282,6 +1386,13 @@ check "a ZOMBIE's unreadable cwd is SKIPPED, not read as a cannot-judge" "none" 
   "$(cwd_check "$SB/stub" "$FAKE/zombie-only")"
 check "...because a LIVE pid whose cwd cannot be read IS the cannot-judge, naming the pid" "denied:9999003" \
   "$(cwd_check "$SB/stub" "$FAKE/deny-only")"
+# The EXITING task (card t_1483975b). Same unreadable cwd and same non-Z state as the
+# cannot-judge above; the ONE difference is that it has no argv area, i.e. no memory
+# left to hold a cwd with. Read as a cannot-judge it keeps a removable worktree AND
+# fails the run — which is exactly how this gate redded on trees that had not touched
+# the pruner (`212 passed, 1 failed`, then `213 passed, 0 failed` on the same bytes).
+check "an EXITING task (unreadable cwd but NO argv area) is SKIPPED, not a cannot-judge" "none" \
+  "$(cwd_check "$SB/stub" "$FAKE/exiting-only")"
 check "a process table that comes back empty is a cannot-judge, NEVER 'nothing is inside'" "denied:?" \
   "$(cwd_check "$SB/stub" "$FAKE/empty")"
 check "the scan does not match the process asking the question (its own cwd, at a fake pid)" "none" \
@@ -1348,22 +1459,32 @@ check "premise: the probe really would use the stub \`find\`, not the walking on
 # there is nothing to remove and that copy already IS the pre-fix predicate, so the
 # premises expect it unchanged.
 VANISH_CTL="$SB/vanish-prefix-control.sh"
-if grep -q '\[ -d "\$pdir" \] || continue' "$SCRIPT"; then
-  VANISH_CTL_LINES_WANT="$(( $(wc -l <"$SCRIPT") - 1 ))"
-else
-  VANISH_CTL_LINES_WANT="$(wc -l <"$SCRIPT")"
-fi
-sed '/^[[:space:]]*\[ -d "\$pdir" \] || continue$/d' "$SCRIPT" >"$VANISH_CTL"
-check "premise: the control is this script with the vanished-pid re-check removed (that one line, or none on a pre-fix copy)" \
+# TWO lines are removed, because the pre-fix predicate had NEITHER re-check: the pid's
+# directory AND its argv area (card t_1483975b). Removing only the first leaves the
+# argv check in place, and on a row with no `cmdline` that check alone answers "skip" —
+# the control would then read `none` and prove nothing.
+VANISH_CTL_MARKERS='^[[:space:]]*\[ -d "\$pdir" \] \|\| continue$|^[[:space:]]*\[ -n "\$argv" \] \|\| continue$'
+VANISH_CTL_LINES_WANT="$(grep -cE "$VANISH_CTL_MARKERS" "$SCRIPT")"
+VANISH_CTL_LINES_WANT="$(( $(wc -l <"$SCRIPT") - VANISH_CTL_LINES_WANT ))"
+sed -E "/$VANISH_CTL_MARKERS/d" "$SCRIPT" >"$VANISH_CTL"
+check "premise: the control is this script with the vanished-pid AND no-argv-area re-checks removed (both lines; one on the copy that predates only the argv re-check)" \
   "$VANISH_CTL_LINES_WANT" "$(wc -l <"$VANISH_CTL")"
-check "premise: ...and the control carries no vanished-pid re-check" "0" \
-  "$(grep -c '\[ -d "\$pdir" \] || continue' "$VANISH_CTL")"
+check "premise: ...and the control carries neither re-check" "0 0" \
+  "$(grep -c '\[ -d "\$pdir" \] || continue' "$VANISH_CTL") $(grep -c '\[ -n "\$argv" \] || continue' "$VANISH_CTL")"
 check "control: on the pre-fix predicate the SAME row IS a cannot-judge, naming a pid that is not in the process table" \
   "denied:$VANISH_PID" "$(cwd_check "$SB/stub" "$VANISH_ROOT" "$VANISH_BIN" "$VANISH_CTL")"
 check "a pid that VANISHED between the readdir and the status read is NOT a cannot-judge (rc != 2, no pid reported)" \
   "none" "$(cwd_check "$SB/stub" "$VANISH_ROOT" "$VANISH_BIN")"
-check "...while the SAME row for a pid whose directory IS still there stays the cannot-judge (fail-safe, not weakened)" \
-  "denied:$VANISH_PID" "$(mkdir -p "$VANISH_ROOT/$VANISH_PID" && cwd_check "$SB/stub" "$VANISH_ROOT" "$VANISH_BIN")"
+# The fail-safe arm: the same row, but the pid's directory IS still there AND it has an
+# argv area — i.e. a task that could still be holding a directory. That stays a
+# cannot-judge. (Without the argv area it would be the EXITING shape above, which is a
+# skip by design: see the `exiting-only` fixture.)
+check "...while the SAME row for a LIVE pid whose directory IS still there stays the cannot-judge (fail-safe, not weakened)" \
+  "denied:$VANISH_PID" \
+  "$(mkdir -p "$VANISH_ROOT/$VANISH_PID" && printf 'npm\0run\0build\0' >"$VANISH_ROOT/$VANISH_PID/cmdline" && cwd_check "$SB/stub" "$VANISH_ROOT" "$VANISH_BIN")"
+check "...and the SAME row for a pid whose directory is there but whose argv area is GONE is the EXITING skip, not a cannot-judge" \
+  "none" \
+  "$( : >"$VANISH_ROOT/$VANISH_PID/cmdline" && cwd_check "$SB/stub" "$VANISH_ROOT" "$VANISH_BIN")"
 rm -rf "$VANISH_ROOT"
 
 # ── run 1: both directories are the cwd of a live stand-in, so both SURVIVE ──────

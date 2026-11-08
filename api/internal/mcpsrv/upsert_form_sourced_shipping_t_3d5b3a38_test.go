@@ -132,7 +132,7 @@ func TestMCPUpsertFormStillRefusesUnpricedStaticAndOptionBlocks(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s: upsert_form ACCEPTED an unpriced block the submit path charges from its own config (%v)", name, out)
 		}
-		if !strings.Contains(err.Error(), "harga") {
+		if !strings.Contains(err.Error(), "price") {
 			t.Errorf("%s: refusal does not name the missing price: %v", name, err)
 		}
 	}

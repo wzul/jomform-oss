@@ -1,33 +1,40 @@
 #!/usr/bin/env bash
-# spec-counts.sh — RE-READ the a11y/e2e spec counts GATE-INVENTORY.md quotes.
+# spec-counts.sh — RE-READ the a11y/e2e spec counts a gate's detail file quotes.
 #
-# WHY THIS EXISTS (card t_74e52a43). The `a11y` and `e2e` rows of
-# GATE-INVENTORY.md each carry a bare typed count of the specs their gate runs,
-# and both rows used to instruct the reader to "re-measure the count when the
-# specs grow". It rotted anyway, because NOTHING re-read the number: the only
-# enforcement was a future card noticing. Nine cards each paid a lane run for
-# one number (t_9500edf3, t_df0857c6, t_07eb69c8, t_44c9a306, t_769a5cb9,
-# t_c33effe4, t_212be8da, t_3839995c, t_c5c7f37a), and when this script was
-# written the rot was BACK in both rows on origin/main 0aa385c0 — they claimed
-# 147 tests in 16 files (`a11y`) and 274 in 54 (`e2e`) while the enumeration read
-# 159 in 17 and 276 in 55 — with every gate in the set passing. The reason is
-# structural: `selftest` parses that table for gate NAMES only, so a row can say
-# any number at all and stay green.
+# WHY THIS EXISTS (card t_74e52a43). The `a11y` and `e2e` gates each run a spec
+# family whose size is a known figure, and both rows used to instruct the reader to
+# "re-measure the count when the specs grow". It rotted anyway, because NOTHING
+# re-read the number: the only enforcement was a future card noticing. Nine cards
+# each paid a lane run for one number (t_9500edf3, t_df0857c6, t_07eb69c8,
+# t_44c9a306, t_769a5cb9, t_c33effe4, t_212be8da, t_3839995c, t_c5c7f37a), and when
+# this script was written the rot was BACK in both rows on origin/main 0aa385c0 —
+# they claimed 147 tests in 16 files (`a11y`) and 274 in 54 (`e2e`) while the
+# enumeration read 159 in 17 and 276 in 55 — with every gate in the set passing. The
+# reason is structural: `selftest` parses that table for gate NAMES only, so a row
+# can say any number at all and stay green.
+#
+# WHERE THE FIGURE LIVES NOW (card t_d6ce3d60). In `gate-inventory/<gate>.md`, the
+# gate's own detail file — NOT in the table row. The rows are one physical line each
+# and `a11y`/`e2e` are adjacent, so every count edit used to touch the same merge
+# region as its neighbour's count edit: thirteen rework cards, each a lane run whose
+# only product was a one-line splice. One file per gate means two gates' figures are
+# never in one diff. This script reads the DETAIL FILE and still requires the row to
+# exist, so deleting either half is RED rather than a silent skip.
 #
 # WHAT IT ASSERTS. For each family below it runs the SAME enumeration the gate
 # itself runs — `playwright test --project=<p> --list`, which starts no server
 # and no browser — parses playwright's own `Total: N tests in M files` line, and
-# compares BOTH numbers against the CURRENT figure in that family's row.
+# compares BOTH numbers against the CURRENT figure in that family's detail file.
 #
-# THE ROW CONTRACT. The CURRENT figure is the FIRST `**N tests in M files**`
-# span in the row; everything after it is history ("the figure before it was
-# **145 tests in 16 files**"), which is why the comparison reads the FIRST match
-# and not the last. A row that carries no such span is a FAILURE, never a skip —
-# a guard that reads nothing proves nothing. When you add specs, put the new
+# THE FILE CONTRACT. The CURRENT figure is the FIRST `**N tests in M files**`
+# span in `gate-inventory/<gate>.md`; everything after it is history ("the figure
+# before it was **145 tests in 16 files**"), which is why the comparison reads the
+# FIRST match and not the last. A file that carries no such span is a FAILURE, never
+# a skip — a guard that reads nothing proves nothing. When you add specs, put the new
 # figure first and keep the old one after it with what grew and by which card, so
 # the history stays checkable.
 #
-# WHAT IT DOES NOT CHECK. The rows also quote each gate's own summary line
+# WHAT IT DOES NOT CHECK. The detail files also quote each gate's own summary line
 # ("2 skipped / 222 passed"). Those cannot be read without RUNNING the suites,
 # so they stay prose and the `a11y`/`e2e` gates print them on every run. A figure
 # this script cannot re-read must not look like one it did.
@@ -43,11 +50,12 @@ set -uo pipefail
 
 REPO_ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 INVENTORY="$REPO_ROOT/GATE-INVENTORY.md"
+NOTES_DIR="$REPO_ROOT/gate-inventory"
 PLAYWRIGHT="$REPO_ROOT/web/node_modules/.bin/playwright"
 
-# The families, as "<gate row in GATE-INVENTORY.md>:<playwright project>". Kept as
-# a literal list here rather than derived from the inventory: a row that VANISHES
-# must be a failure, and a list derived from the file could not notice that.
+# The families, as "<gate>:<playwright project>". Kept as a literal list here rather
+# than derived from the tree: a gate whose detail file VANISHES must be a failure,
+# and a list derived from the tree could not notice that.
 FAMILIES="a11y:a11y e2e:feature-e2e"
 
 if [ ! -f "$INVENTORY" ]; then
@@ -64,12 +72,12 @@ row_of() {
   grep -m1 -E "^\| \`$1\` \|" "$INVENTORY" 2>/dev/null
 }
 
-# current_figure <row> — the FIRST `**N tests in M files**` span's TEXT without the
-# bold markers ("159 tests in 17 files"), or empty.
+# current_figure — the FIRST `**N tests in M files**` span's TEXT without the bold
+# markers ("159 tests in 17 files") in the detail file on STDIN, or empty.
 # awk's match() reports the LEFTMOST match, which is the contract; a greedy sed
 # (`s/.*\*\*//`) would silently read the LAST one, i.e. a historical figure.
 current_figure() {
-  printf '%s\n' "$1" | awk '{
+  awk '{
     if (match($0, /\*\*[0-9]+ tests in [0-9]+ files\*\*/)) {
       print substr($0, RSTART + 2, RLENGTH - 4); exit
     }
@@ -100,9 +108,15 @@ for fam in $FAMILIES; do
     status=1
     continue
   fi
-  claim="$(current_figure "$row")"
+  note="$NOTES_DIR/$gate.md"
+  if [ ! -f "$note" ]; then
+    echo "SPEC COUNTS FAIL: gate-inventory/$gate.md is missing — a gate's detail (and the spec figure this gate re-reads) lives in its own file so that two gates' edits cannot conflict, and the \`$gate\` figure has nowhere to be read from. Put the current count in that file, in the \`**N tests in M files**\` form, with the history after it." >&2
+    status=1
+    continue
+  fi
+  claim="$(current_figure < "$note")"
   if [ -z "$claim" ]; then
-    echo "SPEC COUNTS FAIL: the \`$gate\` row carries no \`**N tests in M files**\` figure — a guard that reads nothing proves nothing. Put the current count in the row in that exact form, first, with the history after it." >&2
+    echo "SPEC COUNTS FAIL: the \`$gate\` detail file (gate-inventory/$gate.md) carries no \`**N tests in M files**\` figure — a guard that reads nothing proves nothing. Put the current count in that file in that exact form, first, with the history after it." >&2
     status=1
     continue
   fi
@@ -138,9 +152,9 @@ for fam in $FAMILIES; do
   checked="${checked}${gate}=${listed_tests}/${listed_files}; "
 
   if [ "$claim_tests" = "$listed_tests" ] && [ "$claim_files" = "$listed_files" ]; then
-    echo "speccounts: \`$gate\` row says **$claim** and 'playwright test --project=$project --list' on THIS tree reads $listed — current"
+    echo "speccounts: \`$gate\` detail file says **$claim** and 'playwright test --project=$project --list' on THIS tree reads $listed — current"
   else
-    stale="${stale}  \`$gate\`: the row says **$claim**; --list reads **$listed**\\n"
+    stale="${stale}  \`$gate\`: the detail file says **$claim**; --list reads **$listed**\\n"
     status=1
   fi
 done
@@ -154,14 +168,14 @@ fi
 
 if [ "$status" -ne 0 ]; then
   echo "" >&2
-  echo "SPEC COUNTS STALE — GATE-INVENTORY.md quotes a spec count that is not what this tree runs:" >&2
+  echo "SPEC COUNTS STALE — a gate detail file quotes a spec count that is not what this tree runs:" >&2
   printf '%b' "$stale" >&2
   echo "" >&2
-  echo "Fix the CURRENT figure in each row (the FIRST \`**N tests in M files**\` span; the later ones" >&2
-  echo "are history and must stay), say what grew and by which card, and re-run THIS gate:" >&2
+  echo "Fix the CURRENT figure in that gate's file under gate-inventory/ (the FIRST \`**N tests in M files**\` span; the later" >&2
+  echo "ones are history and must stay), say what grew and by which card, and re-run THIS gate:" >&2
   echo "  ./scripts/preflight.sh --only speccounts" >&2
   exit 1
 fi
 
-echo "speccounts: every spec count GATE-INVENTORY.md quotes is what this tree runs (${checked%; })"
+echo "speccounts: every spec count the gate detail files quote is what this tree runs (${checked%; })"
 exit 0

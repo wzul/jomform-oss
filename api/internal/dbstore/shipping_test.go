@@ -409,33 +409,33 @@ func TestValidateShippingSets(t *testing.T) {
 		sets []shipping.ZoneSet
 		want string
 	}{
-		{"unnamed set", []shipping.ZoneSet{{Zones: []shipping.Zone{zone("A")}}}, "set zon perlu ada nama"},
+		{"unnamed set", []shipping.ZoneSet{{Zones: []shipping.Zone{zone("A")}}}, "a zone set needs a name"},
 		{"duplicate set name", []shipping.ZoneSet{
 			{Name: "Same", Zones: []shipping.Zone{zone("A")}},
 			{Name: "same", Zones: []shipping.Zone{zone("B")}},
-		}, "nama set zon berganda"},
-		{"empty set", []shipping.ZoneSet{{Name: "Malaysia"}}, "belum ada zon"},
-		{"unnamed zone", []shipping.ZoneSet{{Name: "Malaysia", Zones: []shipping.Zone{zone("")}}}, "zon tanpa nama"},
+		}, "duplicate zone set name"},
+		{"empty set", []shipping.ZoneSet{{Name: "Malaysia"}}, "has no zones"},
+		{"unnamed zone", []shipping.ZoneSet{{Name: "Malaysia", Zones: []shipping.Zone{zone("")}}}, "unnamed zone"},
 		{"zone with no rule", []shipping.ZoneSet{{Name: "Malaysia", Zones: []shipping.Zone{
 			{Name: "A", Rates: rate},
-		}}}, "peraturan"},
+		}}}, "at least one rule"},
 		{"zone with no rate", []shipping.ZoneSet{{Name: "Malaysia", Zones: []shipping.Zone{
 			{Name: "A", States: []string{"peninsular"}},
-		}}}, "belum ada kadar"},
+		}}}, "has no rates"},
 		{"negative price", []shipping.ZoneSet{{Name: "Malaysia", Zones: []shipping.Zone{
 			{Name: "A", States: []string{"peninsular"}, Rates: []shipping.Rate{{PriceSen: -1}}},
-		}}}, "tidak boleh negatif"},
+		}}}, "cannot be negative"},
 		{"inverted band", []shipping.ZoneSet{{Name: "Malaysia", Zones: []shipping.Zone{
 			{Name: "A", States: []string{"peninsular"}, Rates: []shipping.Rate{
 				{PriceSen: 100, MinWeightG: 5000, MaxWeightG: 1000}}},
-		}}}, "julat berat tidak sah"},
+		}}}, "invalid weight range"},
 		{"two fallbacks", []shipping.ZoneSet{{Name: "Malaysia", Zones: []shipping.Zone{
 			{Name: "A", Fallback: true, Rates: rate},
 			{Name: "B", Fallback: true, Rates: rate},
-		}}}, "lebih daripada satu zon lalai"},
+		}}}, "more than one default zone"},
 		{"non-numeric postcode range", []shipping.ZoneSet{{Name: "Malaysia", Zones: []shipping.Zone{
 			{Name: "A", PostcodeFrom: "abc", Rates: rate},
-		}}}, "poskod mesti nombor"},
+		}}}, "postcodes must be numbers"},
 	}
 	for _, c := range cases {
 		err := ValidateShippingSets(c.sets)

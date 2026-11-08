@@ -18,11 +18,11 @@ var ErrEmailTaken = errors.New("email already registered")
 // ErrProtectedAccount is returned when a caller asks this store to do something
 // to a protected account that its designation forbids — mark it as a disposable
 // test account, or purge it. See ProtectedAccountEmails.
-var ErrProtectedAccount = errors.New("akaun ini dilindungi: tidak boleh ditanda sebagai akaun ujian dan tidak boleh dipadam")
+var ErrProtectedAccount = errors.New("this account is protected: it cannot be marked as a test account and cannot be deleted")
 
 // ErrNotATestAccount is returned when a purge is asked to remove a specific
 // account that does not carry the is_test marker.
-var ErrNotATestAccount = errors.New("akaun ini bukan akaun ujian (is_test = false)")
+var ErrNotATestAccount = errors.New("this account is not a test account (is_test = false)")
 
 // User models a row from users table.
 type User struct {

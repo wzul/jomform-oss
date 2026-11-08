@@ -119,7 +119,7 @@ func (h *RESTHandlers) workspaceQuotaExceeded(ctx context.Context, accountID str
 		return ""
 	}
 	if objstore.ExceedsWorkspaceQuota(current, additional) {
-		return "had storan workspace dicapai (1GB)"
+		return "workspace storage limit reached (1GB)"
 	}
 	return ""
 }
@@ -140,13 +140,13 @@ func (h *RESTHandlers) reserveMediaQuota(w http.ResponseWriter, ctx context.Cont
 	if err := h.Media.ReserveQuota(ctx, accountID, bytes); err != nil {
 		if errors.Is(err, dbstore.ErrQuotaExceeded) {
 			recordUploadFailure("workspace_quota")
-			writeErr(w, http.StatusRequestEntityTooLarge, "had storan workspace dicapai (1GB)")
+			writeErr(w, http.StatusRequestEntityTooLarge, "workspace storage limit reached (1GB)")
 			return false
 		}
 		slog.Error("media_quota_reserve", "err", err, "account", accountID)
 		// Fail closed: never store bytes we could not account for.
 		recordUploadFailure("workspace_quota")
-		writeErr(w, http.StatusServiceUnavailable, "had storan tidak dapat disemak")
+		writeErr(w, http.StatusServiceUnavailable, "the storage limit could not be checked")
 		return false
 	}
 	return true
@@ -310,14 +310,17 @@ func publishServedContentType(ctx context.Context, w http.ResponseWriter, media 
 // intentionally public (forms/products render them from any origin).
 func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 	if storeUnavailable(h.Store) {
-		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+		buyerErr(w, "en", http.StatusServiceUnavailable, errMediaUnconfigured)
 		return
 	}
 	key := mediaKeyFromPath(r.PathValue("key"))
 	if key == "" {
-		writeErr(w, http.StatusBadRequest, "kunci media tidak sah")
+		buyerErr(w, "en", http.StatusBadRequest, errMediaInvalidKey)
 		return
 	}
+	// The key names its account, and that workspace's default language is the
+	// buyer's (t_874021eb). A key that names no account resolves to English.
+	lang := buyerLangByAccountStore(r.Context(), h.Workspaces, accountIDFromKey(key))
 	body, ct, err := h.Store.GetObject(r.Context(), key)
 	if err != nil {
 		// A store that reports itself unconfigured is a deployment gap, not a
@@ -325,13 +328,13 @@ func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 		// already catches a typed nil, so this only fires if the store itself
 		// says so — one meaning, one status, never a 500.
 		if errors.Is(err, objstore.ErrNotConfigured) {
-			writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+			buyerErr(w, lang, http.StatusServiceUnavailable, errMediaUnconfigured)
 			return
 		}
 		// Distinguish a missing object (404) from a storage failure (500).
 		var nf *types.NoSuchKey
 		if errors.As(err, &nf) {
-			writeErr(w, http.StatusNotFound, "media tidak dijumpai")
+			buyerErr(w, lang, http.StatusNotFound, errMediaNotFound)
 			return
 		}
 		slog.Error("media_get", "err", err, "key", key)
@@ -344,14 +347,14 @@ func (h *RESTHandlers) handleMedia(w http.ResponseWriter, r *http.Request) {
 	if isCodeAsset(ct) {
 		requestingAccount := requestingAccountID(r.Context(), h.Accounts, h.Domains, h.Workspaces, r.Host)
 		if !assetOwnedByRequestingTenant(key, requestingAccount) {
-			writeErr(w, http.StatusNotFound, "media tidak tersedia")
+			writeErr(w, http.StatusNotFound, "media is not available")
 			return
 		}
 	}
 	// Issue #364: code-asset scan gate. A not-yet-scanned, needs-review, or
 	// quarantined code asset is never served (404). Images are unaffected.
 	if !scanGateAllowed(r.Context(), h.Media, key, ct) {
-		writeErr(w, http.StatusNotFound, "media tidak tersedia")
+		writeErr(w, http.StatusNotFound, "media is not available")
 		return
 	}
 	// t_05fd8d2a: publish what the bytes ARE, not what the uploader once
@@ -392,14 +395,14 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	}
 	if storeUnavailable(h.Store) {
 		recordUploadFailure("not_configured")
-		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "media storage is not configured")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+1<<20)
 
 	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
 		recordUploadFailure("bad_multipart")
-		writeErr(w, http.StatusBadRequest, "fail imej tidak sah atau melebihi 20MB")
+		writeErr(w, http.StatusBadRequest, "invalid image file or larger than 20MB")
 		return
 	}
 	defer func() { _ = r.MultipartForm.RemoveAll() }()
@@ -407,7 +410,7 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
 		recordUploadFailure("missing_file")
-		writeErr(w, http.StatusBadRequest, "part 'file' diperlukan")
+		writeErr(w, http.StatusBadRequest, "part 'file' is required")
 		return
 	}
 	defer file.Close()
@@ -415,17 +418,17 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	data, err := io.ReadAll(io.LimitReader(file, maxUploadBytes+1))
 	if err != nil {
 		recordUploadFailure("read_failed")
-		writeErr(w, http.StatusBadRequest, "gagal membaca fail")
+		writeErr(w, http.StatusBadRequest, "failed to read the file")
 		return
 	}
 	if len(data) == 0 {
 		recordUploadFailure("empty")
-		writeErr(w, http.StatusBadRequest, "fail kosong")
+		writeErr(w, http.StatusBadRequest, "empty file")
 		return
 	}
 	if len(data) > maxUploadBytes {
 		recordUploadFailure("too_large")
-		writeErr(w, http.StatusRequestEntityTooLarge, "imej melebihi had 20MB")
+		writeErr(w, http.StatusRequestEntityTooLarge, "image exceeds the 20MB limit")
 		return
 	}
 
@@ -445,7 +448,7 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	}
 	if !ok {
 		recordUploadFailure("bad_type")
-		writeErr(w, http.StatusBadRequest, "jenis fail tidak disokong (png/jpeg/webp/gif/css/js/html/svg/woff2/pdf sahaja)")
+		writeErr(w, http.StatusBadRequest, "unsupported file type (png/jpeg/webp/gif/css/js/html/svg/woff2/pdf only)")
 		return
 	}
 	if msg := magicByteMismatch(objstore.KindMedia, fileHeader.Filename, fileHeader.Header.Get("Content-Type"), ext); msg != "" {
@@ -468,7 +471,7 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	if isCodeAsset(mime) || mime == "application/pdf" {
 		if len(data) > maxAssetBytes {
 			recordUploadFailure("asset_too_large")
-			writeErr(w, http.StatusRequestEntityTooLarge, "fail melebihi had 2MB")
+			writeErr(w, http.StatusRequestEntityTooLarge, "file exceeds the 2MB limit")
 			return
 		}
 		// t_20af3915: an SVG is served as image/svg+xml, so the browser parses
@@ -553,7 +556,7 @@ func (h *RESTHandlers) uploadImage(w http.ResponseWriter, r *http.Request, actx 
 	}
 	if len(stored) > maxStoredBytes {
 		recordUploadFailure("compress_failed")
-		writeErr(w, http.StatusBadRequest, "imej gagal dimampatkan bawah 2MB; cuba imej lain")
+		writeErr(w, http.StatusBadRequest, "the image could not be compressed below 2MB; try another image")
 		return
 	}
 	// t_05fd8d2a: the stored artifact's type is a property of the BYTES, never
@@ -650,14 +653,14 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 	}
 	if storeUnavailable(h.Store) {
 		recordUploadFailure("not_configured")
-		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "media storage is not configured")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+1<<20)
 
 	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
 		recordUploadFailure("bad_multipart")
-		writeErr(w, http.StatusBadRequest, "fail imej tidak sah atau melebihi 20MB")
+		writeErr(w, http.StatusBadRequest, "invalid image file or larger than 20MB")
 		return
 	}
 	defer func() { _ = r.MultipartForm.RemoveAll() }()
@@ -665,7 +668,7 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
 		recordUploadFailure("missing_file")
-		writeErr(w, http.StatusBadRequest, "part 'file' diperlukan")
+		writeErr(w, http.StatusBadRequest, "part 'file' is required")
 		return
 	}
 	defer file.Close()
@@ -673,17 +676,17 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 	data, err := io.ReadAll(io.LimitReader(file, maxUploadBytes+1))
 	if err != nil {
 		recordUploadFailure("read_failed")
-		writeErr(w, http.StatusBadRequest, "gagal membaca fail")
+		writeErr(w, http.StatusBadRequest, "failed to read the file")
 		return
 	}
 	if len(data) == 0 {
 		recordUploadFailure("empty")
-		writeErr(w, http.StatusBadRequest, "fail kosong")
+		writeErr(w, http.StatusBadRequest, "empty file")
 		return
 	}
 	if len(data) > maxUploadBytes {
 		recordUploadFailure("too_large")
-		writeErr(w, http.StatusRequestEntityTooLarge, "imej melebihi had 20MB")
+		writeErr(w, http.StatusRequestEntityTooLarge, "image exceeds the 20MB limit")
 		return
 	}
 
@@ -692,7 +695,7 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 	ext, ok := sniffImageType(data)
 	if !ok {
 		recordUploadFailure("bad_type")
-		writeErr(w, http.StatusBadRequest, "jenis imej tidak disokong (png/jpeg/webp/gif sahaja)")
+		writeErr(w, http.StatusBadRequest, "unsupported image type (png/jpeg/webp/gif only)")
 		return
 	}
 	if msg := magicByteMismatch(objstore.KindRasterImage, fileHeader.Filename, fileHeader.Header.Get("Content-Type"), ext); msg != "" {
@@ -708,7 +711,7 @@ func (h *RESTHandlers) uploadAvatar(w http.ResponseWriter, r *http.Request, actx
 	}
 	if len(stored) > maxStoredBytes {
 		recordUploadFailure("compress_failed")
-		writeErr(w, http.StatusBadRequest, "imej avatar tidak dapat dimampatkan")
+		writeErr(w, http.StatusBadRequest, "the avatar image could not be compressed")
 		return
 	}
 	// t_05fd8d2a: an avatar is re-encoded (JPEG, or PNG when it carries
@@ -766,14 +769,14 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	}
 	if storeUnavailable(h.Store) {
 		recordUploadFailure("not_configured")
-		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "media storage is not configured")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxAssetUploadBytes+1<<20)
 
 	if err := r.ParseMultipartForm(maxAssetUploadBytes); err != nil {
 		recordUploadFailure("bad_multipart")
-		writeErr(w, http.StatusBadRequest, "fail tidak sah atau melebihi 20MB")
+		writeErr(w, http.StatusBadRequest, "invalid file or larger than 20MB")
 		return
 	}
 	defer func() { _ = r.MultipartForm.RemoveAll() }()
@@ -781,7 +784,7 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
 		recordUploadFailure("missing_file")
-		writeErr(w, http.StatusBadRequest, "part 'file' diperlukan")
+		writeErr(w, http.StatusBadRequest, "part 'file' is required")
 		return
 	}
 	defer file.Close()
@@ -789,17 +792,17 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	data, err := io.ReadAll(io.LimitReader(file, maxAssetUploadBytes+1))
 	if err != nil {
 		recordUploadFailure("read_failed")
-		writeErr(w, http.StatusBadRequest, "gagal membaca fail")
+		writeErr(w, http.StatusBadRequest, "failed to read the file")
 		return
 	}
 	if len(data) == 0 {
 		recordUploadFailure("empty")
-		writeErr(w, http.StatusBadRequest, "fail kosong")
+		writeErr(w, http.StatusBadRequest, "empty file")
 		return
 	}
 	if len(data) > maxAssetUploadBytes {
 		recordUploadFailure("too_large")
-		writeErr(w, http.StatusRequestEntityTooLarge, "fail melebihi had 20MB")
+		writeErr(w, http.StatusRequestEntityTooLarge, "file exceeds the 20MB limit")
 		return
 	}
 
@@ -810,7 +813,7 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	ext, ok := sniffAssetType(data)
 	if !ok {
 		recordUploadFailure("bad_type")
-		writeErr(w, http.StatusBadRequest, "jenis fail tidak disokong (css/js/html/svg/woff2 sahaja)")
+		writeErr(w, http.StatusBadRequest, "unsupported file type (css/js/html/svg/woff2 only)")
 		return
 	}
 	if msg := magicByteMismatch(objstore.KindAsset, fileHeader.Filename, fileHeader.Header.Get("Content-Type"), ext); msg != "" {
@@ -823,7 +826,7 @@ func (h *RESTHandlers) uploadAsset(w http.ResponseWriter, r *http.Request, actx 
 	// Size cap: code assets are stored as-is, so enforce a stored ceiling.
 	if len(data) > maxAssetBytes {
 		recordUploadFailure("asset_too_large")
-		writeErr(w, http.StatusRequestEntityTooLarge, "fail melebihi had 2MB")
+		writeErr(w, http.StatusRequestEntityTooLarge, "file exceeds the 2MB limit")
 		return
 	}
 	// t_20af3915: an SVG is served as image/svg+xml, so the browser parses it as

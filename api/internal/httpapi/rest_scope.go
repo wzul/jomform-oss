@@ -33,7 +33,7 @@ type scopeResult struct {
 // belong to the session user (or does not exist).
 type workspaceForbiddenError struct{ slug string }
 
-func (e *workspaceForbiddenError) Error() string { return "workspace tidak dijumpai: " + e.slug }
+func (e *workspaceForbiddenError) Error() string { return "workspace not found: " + e.slug }
 
 // resolveAccountScope computes the account-id set for a dashboard list call.
 // With ?workspace=<slug> it verifies the workspace belongs to the session user (owner
@@ -66,7 +66,7 @@ func (h *RESTHandlers) scopeOr403(w http.ResponseWriter, r *http.Request, actx *
 	scope, err := h.resolveAccountScope(r, actx)
 	if err != nil {
 		if _, bad := err.(*workspaceForbiddenError); bad {
-			writeErr(w, http.StatusForbidden, "workspace tidak dijumpai")
+			writeErr(w, http.StatusForbidden, "workspace not found")
 			return nil, false
 		}
 		respondErr(w, r, err)
@@ -131,7 +131,7 @@ const (
 // The code is what the chat page branches on, so the two must not drift:
 // TestScopeRequiredRefusalCarriesItsOwnCode drives the refusal through the real
 // handler and reads the code out of the body.
-const scopeRequiredMessage = "skop workspace diperlukan — pilih workspace dahulu"
+const scopeRequiredMessage = "a workspace scope is required — pick a workspace first"
 
 // workspaceScopeResolutionFor classifies the caller's ?workspace= scope for the
 // endpoints that must not silently fall back to the first owned account. It is
@@ -223,7 +223,7 @@ func (h *RESTHandlers) requireResolvedWorkspaceScope(w http.ResponseWriter, r *h
 	}
 	switch h.workspaceScopeResolutionFor(r, h.sessionOwnerID(r)) {
 	case scopeUnresolved:
-		writeErr(w, http.StatusForbidden, "workspace tidak dijumpai")
+		writeErr(w, http.StatusForbidden, "workspace not found")
 		return nil, false
 	case scopeAmbiguous:
 		writeErr(w, http.StatusBadRequest, scopeRequiredMessage)
@@ -268,7 +268,7 @@ func (h *RESTHandlers) requireWriteScope(w http.ResponseWriter, actx *AccountCtx
 		return true // session caller: role is the gate
 	}
 	if !dbstore.ScopeHasWrite(actx.KeyScopes) {
-		writeErr(w, http.StatusForbidden, "scope tidak mencukupi (perlu readwrite)")
+		writeErr(w, http.StatusForbidden, "insufficient scope (readwrite required)")
 		return false
 	}
 	return true
@@ -288,7 +288,7 @@ func (h *RESTHandlers) requireWriteRole(w http.ResponseWriter, r *http.Request, 
 		return nil, false
 	}
 	if !roleAtLeast(scope.Role, dbstore.RoleManage) {
-		writeErr(w, http.StatusForbidden, "perlu peranan manage atau admin")
+		writeErr(w, http.StatusForbidden, "you need the manage or admin role")
 		return nil, false
 	}
 	return scope, true
@@ -308,7 +308,7 @@ func (h *RESTHandlers) requireAdminRole(w http.ResponseWriter, r *http.Request, 
 		return nil, false
 	}
 	if !roleAtLeast(scope.Role, dbstore.RoleAdmin) {
-		writeErr(w, http.StatusForbidden, "perlu admin workspace")
+		writeErr(w, http.StatusForbidden, "you need the workspace admin role")
 		return nil, false
 	}
 	return scope, true

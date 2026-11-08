@@ -279,14 +279,28 @@ test("the registration clause is isolated for RTL in the shared component", () =
   // Card t_bdcee56f. The sentence is ~706px wide in the 720px legal-page
   // paragraph, so the only place a break fits is INSIDE the clause, at the
   // hyphen — measured in Chromium: line 1 ends `…PC0012291-` and line 2 holds
-  // `H).`. Making the clause unbreakable moves it to the next line whole. This
-  // is the wiring half; the browser arm in e2e/a11y-docs-lang.spec.ts measures
-  // the served page across the widths where the split really happens.
+  // `H).`. An atomic inline-level box (`inline-block`) moves the clause to the
+  // next line whole: the surrounding paragraph can no longer break inside it,
+  // which is the same guarantee `whitespace-nowrap` gave — WITHOUT making the
+  // box unbreakable when it is wider than the paragraph. That second half is
+  // card t_68456ead: `whitespace-nowrap` alone measured 347.59px inside a 248px
+  // footer paragraph at a 24px browser root and panned the page 64px, and
+  // 441.52px on /legal/privacy. `max-w-full` lets the box take the paragraph's
+  // width and wrap its own words instead. This is the wiring half; the browser
+  // arm in e2e/a11y-docs-lang.spec.ts measures the served page across the widths
+  // where the split really happens.
   assert.match(
     clauseTag,
-    /whitespace-nowrap|white-space:\s*nowrap/,
-    "the registration clause must be unbreakable (whitespace-nowrap) — a break at its own hyphen " +
-      "strands `H).` on the next line as soon as the paragraph is a little narrower than the sentence",
+    /\binline-block\b/,
+    "the registration clause must be an atomic inline-level box (inline-block) — a break at its own " +
+      "hyphen strands `H).` on the next line as soon as the paragraph is a little narrower than the sentence",
+  );
+  assert.match(
+    clauseTag,
+    /\bmax-w-full\b/,
+    "the registration clause must be capped at its paragraph's width (max-w-full) — when the clause is " +
+      "wider than the paragraph (raised browser text) an uncapped unbreakable box drags the page into a " +
+      "sideways pan (measured 64px on / at 320px with a 24px root)",
   );
   assert.match(component, /lead\.trim\(\)/, "the lead must be trimmed or a locale doubles the gap in RTL");
   // The locale is per-visitor (jf_lang), so the block must read the shared

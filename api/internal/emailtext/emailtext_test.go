@@ -331,7 +331,12 @@ func TestPerFieldSystemDefaultClassifiesEachHalfOnItsOwn(t *testing.T) {
 // migration would silently stop the receipt from following the buyer's language,
 // and nothing else in the suite would notice.
 func TestStoredLiteralsMatchTheDatabaseDefaults(t *testing.T) {
-	// migration 000021_space_email_settings.up.sql — the column DEFAULTs.
+	// The literal migration 000021 wrote into every workspace row. Migration
+	// 000083 emptied the column DEFAULT and blanked the rows that still held
+	// this text, but the literal must stay byte-identical: a row restored from a
+	// pre-000083 backup is still recognised and rendered in the buyer's language
+	// (dbstore's 000083 backfill test pins the same bytes against the migration
+	// file that blanks them).
 	const (
 		wsReceiptSubject = "Resit pembayaran — {{ref_code}}"
 		wsReceiptBody    = "Terima kasih atas pembayaran anda!\n\n" +
@@ -344,7 +349,7 @@ func TestStoredLiteralsMatchTheDatabaseDefaults(t *testing.T) {
 			"Borang dibeli: {{form_url}}"
 	)
 	if got := legacyDefaults[Receipt]; got.Subject != wsReceiptSubject || got.Body != wsReceiptBody {
-		t.Errorf("the receipt legacy default no longer matches migration 000021's column DEFAULT.\n"+
+		t.Errorf("the receipt legacy default no longer matches the literal migration 000021 wrote (and 000083 blanks).\n"+
 			"migration: subject=%q\n           body=%q\ndictionary: subject=%q\n           body=%q",
 			wsReceiptSubject, wsReceiptBody, got.Subject, got.Body)
 	}

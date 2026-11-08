@@ -205,7 +205,7 @@ test("the contract text still contains a run that needs the guard", () => {
   // The specific token this defect was filed on must still be present in full:
   // the card's acceptance is "still readable in full (not truncated)", so a
   // shortened contract text is not a valid way to go green.
-  const rff = strings.find((s) => s.includes("type mesti jenis input JomForm")) ?? "";
+  const rff = strings.find((s) => s.includes("type must be a JomForm input type")) ?? "";
   const alternation = rff.match(/\(([a-z-]+(?:\|[a-z-]+)+)\)/)?.[1] ?? "";
   assert.ok(
     alternation.split("|").length >= 15,

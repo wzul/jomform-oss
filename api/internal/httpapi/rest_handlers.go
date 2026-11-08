@@ -59,12 +59,18 @@ type restProduct struct {
 	SubscriptionCharges *int     `json:"subscription_charges,omitempty"` // nil = infinite
 	// ScheduleMode is the next-charge date policy (round 13c). Always present:
 	// the column is NOT NULL DEFAULT 'from_payment'.
-	ScheduleMode string          `json:"schedule_mode"`
-	Active       bool            `json:"active"`
-	Stock        *int            `json:"stock,omitempty"` // nil = unlimited
-	Variations   []restVariation `json:"variations,omitempty"`
-	CreatedAt    string          `json:"created_at,omitempty"`
-	UpdatedAt    string          `json:"updated_at,omitempty"`
+	ScheduleMode string `json:"schedule_mode"`
+	Active       bool   `json:"active"`
+	Stock        *int   `json:"stock,omitempty"` // nil = unlimited
+	// Card t_06851d88: pay-what-you-want limits (custom_amount only), in
+	// integer sen. max_price_sen omitted = no cap; suggested_price_sen omitted
+	// = no pre-filled amount.
+	MinPriceSen       int64           `json:"min_price_sen,omitempty"`
+	MaxPriceSen       *int64          `json:"max_price_sen,omitempty"`
+	SuggestedPriceSen *int64          `json:"suggested_price_sen,omitempty"`
+	Variations        []restVariation `json:"variations,omitempty"`
+	CreatedAt         string          `json:"created_at,omitempty"`
+	UpdatedAt         string          `json:"updated_at,omitempty"`
 }
 
 // toRestProduct maps a store Product to the REST JSON shape (money stays
@@ -78,6 +84,9 @@ func toRestProduct(p *dbstore.Product) restProduct {
 		Stock:               p.Stock,
 		SubscriptionCharges: p.SubscriptionCharges,
 		ScheduleMode:        p.ScheduleMode,
+		MinPriceSen:         p.MinPriceSen,
+		MaxPriceSen:         p.MaxPriceSen,
+		SuggestedPriceSen:   p.SuggestedPriceSen,
 		CreatedAt:           p.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if !p.UpdatedAt.IsZero() {
@@ -96,26 +105,26 @@ func toRestProduct(p *dbstore.Product) restProduct {
 func validateRestVariations(vs []restVariation) string {
 	for _, v := range vs {
 		if v.Name == "" {
-			return "variation name wajib"
+			return "variation name is required"
 		}
 		if v.PriceSen < 0 {
-			return "variation price_sen mesti >= 0"
+			return "variation price_sen must be >= 0"
 		}
 		if v.Stock != nil && *v.Stock < 0 {
-			return "variation stok mesti >= 0"
+			return "variation stock must be >= 0"
 		}
 		if !urlguard.ValidList(v.Images) {
 			return urlguard.InvalidMessage("variations[].images")
 		}
 		if v.BillingPeriod != nil && *v.BillingPeriod != "" &&
 			*v.BillingPeriod != "month" && *v.BillingPeriod != "year" {
-			return "variations[].billing_period mesti month|year"
+			return "variations[].billing_period must be month|year"
 		}
 		if v.TrialDays != nil && *v.TrialDays < 0 {
-			return "variations[].trial_days mesti >= 0"
+			return "variations[].trial_days must be >= 0"
 		}
 		if v.SubscriptionCharges != nil && *v.SubscriptionCharges < 1 {
-			return "variations[].subscription_charges mesti >= 1"
+			return "variations[].subscription_charges must be >= 1"
 		}
 	}
 	return ""
@@ -226,40 +235,47 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 		SubscriptionCharges **int            `json:"subscription_charges"` // nil = keep; &nil = infinite; &N = fixed count
 		// round 13c: next-charge date policy after a successful charge.
 		ScheduleMode *string `json:"schedule_mode"` // nil = keep
+		// Card t_06851d88: custom-amount (pay-what-you-want) limits, integer
+		// sen. nil = keep; ** = distinguish "sent as null" (clear the cap /
+		// the suggestion) from "not sent".
+		MinPriceSen       *int64  `json:"min_price_sen"`
+		MaxPriceSen       **int64 `json:"max_price_sen"`
+		SuggestedPriceSen **int64 `json:"suggested_price_sen"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 	if in.Name != nil && *in.Name == "" {
-		writeErr(w, http.StatusBadRequest, "nama tidak boleh kosong")
+		writeErr(w, http.StatusBadRequest, "name cannot be empty")
 		return
 	}
 	if in.PriceSen != nil && *in.PriceSen < 0 {
-		writeErr(w, http.StatusBadRequest, "price_sen mesti >= 0")
+		writeErr(w, http.StatusBadRequest, "price_sen must be >= 0")
 		return
 	}
 	if in.TrialDays != nil && *in.TrialDays < 0 {
-		writeErr(w, http.StatusBadRequest, "trial_days mesti >= 0")
+		writeErr(w, http.StatusBadRequest, "trial_days must be >= 0")
 		return
 	}
 	var typPtr, periodPtr *string
 	if in.Type != nil {
-		if *in.Type != dbstore.SaleTypeOneTime && *in.Type != dbstore.SaleTypeSubscription {
-			writeErr(w, http.StatusBadRequest, "type mesti one_time|subscription")
+		if *in.Type != dbstore.SaleTypeOneTime && *in.Type != dbstore.SaleTypeSubscription &&
+			*in.Type != dbstore.SaleTypeCustomAmount {
+			writeErr(w, http.StatusBadRequest, "type must be one_time|subscription|custom_amount")
 			return
 		}
 		typPtr = in.Type
 	}
 	if in.BillingPeriod != nil && (typPtr == nil || *typPtr == dbstore.SaleTypeSubscription) {
 		if *in.BillingPeriod != "month" && *in.BillingPeriod != "year" {
-			writeErr(w, http.StatusBadRequest, "billing_period mesti month|year")
+			writeErr(w, http.StatusBadRequest, "billing_period must be month|year")
 			return
 		}
 		periodPtr = in.BillingPeriod
 	}
 	if in.Stock != nil && *in.Stock < 0 {
-		writeErr(w, http.StatusBadRequest, "stok mesti >= 0")
+		writeErr(w, http.StatusBadRequest, "stock must be >= 0")
 		return
 	}
 	// Issue #501: product images render into buyer-facing `<img src>`
@@ -279,7 +295,7 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 		}
 	}
 	if in.SubscriptionCharges != nil && *in.SubscriptionCharges != nil && **in.SubscriptionCharges < 1 {
-		writeErr(w, http.StatusBadRequest, "subscription_charges mesti >= 1 (atau null untuk infinite)")
+		writeErr(w, http.StatusBadRequest, "subscription_charges must be >= 1 (or null for infinite)")
 		return
 	}
 	// round 13c: reject an unknown schedule mode rather than silently keeping
@@ -287,12 +303,62 @@ func (h *RESTHandlers) updateProduct(w http.ResponseWriter, r *http.Request, act
 	// billing schedule without knowing).
 	if in.ScheduleMode != nil && *in.ScheduleMode != "" && !payments.ValidScheduleMode(*in.ScheduleMode) {
 		writeErr(w, http.StatusBadRequest,
-			"schedule_mode tidak sah (from_payment|catch_up|skip_missed)")
+			"invalid schedule_mode (from_payment|catch_up|skip_missed)")
 		return
+	}
+	// Card t_06851d88: custom-amount (pay-what-you-want) limits. A partial
+	// update is judged as a MERGED triple against the stored row (raising
+	// min_price_sen past an old suggested_price_sen only fails as a triple), so
+	// the row is read whenever the type or any limit is actually being written.
+	if typPtr != nil || in.MinPriceSen != nil || in.MaxPriceSen != nil || in.SuggestedPriceSen != nil {
+		cur, gerr := h.Products.Get(r.Context(), actx.Account.ID, r.PathValue("id"))
+		if gerr != nil {
+			respondErr(w, r, gerr)
+			return
+		}
+		effType := cur.Type
+		if typPtr != nil {
+			effType = *typPtr
+		}
+		if effType == dbstore.SaleTypeCustomAmount {
+			var setMax bool
+			var newMax *int64
+			if in.MaxPriceSen != nil {
+				setMax, newMax = true, *in.MaxPriceSen
+			}
+			var setSug bool
+			var newSug *int64
+			if in.SuggestedPriceSen != nil {
+				setSug, newSug = true, *in.SuggestedPriceSen
+			}
+			vals, msg := mergeCustomAmountLimits(cur.MinPriceSen, cur.MaxPriceSen, cur.SuggestedPriceSen,
+				in.MinPriceSen, setMax, newMax, setSug, newSug)
+			if msg != "" {
+				writeErr(w, http.StatusBadRequest, msg)
+				return
+			}
+			if in.Variations != nil && len(*in.Variations) > 0 {
+				writeErr(w, http.StatusBadRequest, "a custom_amount product cannot have variations")
+				return
+			}
+			// The merged triple is written back whole, and price_sen follows it:
+			// the buyer chooses the charge, so price_sen is only the display
+			// fallback and must not be editable independently.
+			priceSen := vals.PriceSen
+			in.PriceSen = &priceSen
+			in.MinPriceSen = &vals.MinSen
+			in.MaxPriceSen = &vals.MaxSen
+			in.SuggestedPriceSen = &vals.SuggestSen
+		} else if in.MinPriceSen != nil || in.MaxPriceSen != nil || in.SuggestedPriceSen != nil {
+			writeErr(w, http.StatusBadRequest,
+				"min_price_sen, max_price_sen and suggested_price_sen apply only to type custom_amount")
+			return
+		}
 	}
 	err := h.Products.Update(r.Context(), actx.Account.ID, r.PathValue("id"),
 		in.Name, in.Description, in.PriceSen, in.Images, in.Stock, in.Active,
-		typPtr, periodPtr, in.TrialDays, in.SubscriptionCharges, in.ScheduleMode)
+		typPtr, periodPtr, in.TrialDays, in.SubscriptionCharges, in.ScheduleMode,
+		in.MinPriceSen, in.MaxPriceSen, in.SuggestedPriceSen)
 	if err != nil {
 		respondErr(w, r, err)
 		return
@@ -463,7 +529,7 @@ func (h *RESTHandlers) purgeProduct(w http.ResponseWriter, r *http.Request, actx
 		ConfirmName string `json:"confirm_name"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	// Read the trashed product to compare the confirmation. GetTrashed is scoped
@@ -481,7 +547,7 @@ func (h *RESTHandlers) purgeProduct(w http.ResponseWriter, r *http.Request, actx
 	// below stores the name verbatim. The caller still has to name the product.
 	if !textutil.SameTypedValue(in.ConfirmName, p.Name) {
 		writeErr(w, http.StatusBadRequest,
-			"taip nama produk ("+p.Name+") untuk sahkan pemadaman kekal")
+			"type the product name ("+p.Name+") to confirm the permanent deletion")
 		return
 	}
 	if err := h.Products.Purge(r.Context(), actx.Account.ID, productID); err != nil {
@@ -492,7 +558,7 @@ func (h *RESTHandlers) purgeProduct(w http.ResponseWriter, r *http.Request, actx
 				n = 0
 			}
 			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":       "produk ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan dengan memadam produk. Ia kekal dalam tong sampah.",
+				"error":       "this product has sales — sales history cannot be destroyed by deleting the product. It stays in the bin.",
 				"code":        CodeProductHasSales,
 				"sales_count": n,
 			})
@@ -503,7 +569,7 @@ func (h *RESTHandlers) purgeProduct(w http.ResponseWriter, r *http.Request, actx
 				n = 0
 			}
 			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":              "produk ini masih ada langganan — batalkan langganan itu dahulu. Ia kekal dalam tong sampah.",
+				"error":              "this product still has subscriptions — cancel that subscription first. It stays in the bin.",
 				"code":               CodeProductHasSubscriptions,
 				"subscription_count": n,
 			})
@@ -534,15 +600,15 @@ func (h *RESTHandlers) bulkProducts(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 	if in.Action != "archive" {
-		writeErr(w, http.StatusBadRequest, "action mesti archive")
+		writeErr(w, http.StatusBadRequest, "action must be archive")
 		return
 	}
 	if len(in.IDs) == 0 {
-		writeErr(w, http.StatusBadRequest, "ids wajib")
+		writeErr(w, http.StatusBadRequest, "ids are required")
 		return
 	}
 	if len(in.IDs) > 500 {
-		writeErr(w, http.StatusBadRequest, "ids terlalu banyak (maks 500)")
+		writeErr(w, http.StatusBadRequest, "too many ids (max 500)")
 		return
 	}
 	// Dedupe + keep only valid UUIDs; malformed ids are ignored, not fatal.
@@ -560,7 +626,7 @@ func (h *RESTHandlers) bulkProducts(w http.ResponseWriter, r *http.Request, actx
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
-		writeErr(w, http.StatusBadRequest, "ids mesti uuid")
+		writeErr(w, http.StatusBadRequest, "ids must be uuid")
 		return
 	}
 	updated, err := h.Products.ArchiveMany(r.Context(), actx.Account.ID, ids)
@@ -592,22 +658,45 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		SubscriptionCharges *int            `json:"subscription_charges"` // nil = infinite
 		// round 13c: next-charge date policy after a successful charge.
 		ScheduleMode *string `json:"schedule_mode"`
+		// Card t_06851d88: pay-what-you-want (type=custom_amount) limits, in
+		// integer sen. min_price_sen is required for that type (>= RM1.00);
+		// max_price_sen null = no cap; suggested_price_sen is the pre-filled
+		// amount. price_sen is DERIVED from them for this type.
+		MinPriceSen       *int64 `json:"min_price_sen"`
+		MaxPriceSen       *int64 `json:"max_price_sen"`
+		SuggestedPriceSen *int64 `json:"suggested_price_sen"`
+	}
+	if err := decodeJSON(r, &in); err != nil || in.Name == "" {
+		writeErr(w, http.StatusBadRequest, "name and price_sen are required")
+		return
+	}
+	pType := in.Type
+	if pType == "" {
+		pType = dbstore.SaleTypeOneTime
+	}
+	if pType != dbstore.SaleTypeOneTime && pType != dbstore.SaleTypeSubscription &&
+		pType != dbstore.SaleTypeCustomAmount {
+		writeErr(w, http.StatusBadRequest, "type must be one_time|subscription|custom_amount")
+		return
 	}
 	// Issue #551: price_sen is a POINTER so a missing or explicit `null` is
 	// distinguishable from a legitimate 0. Previously a plain int64 meant
 	// `{"price_sen":null}` decoded to 0 with NO error, so a client sending a
 	// non-finite price (JSON.stringify(Infinity) === null) silently created a
 	// RM 0.00 product which could then be sold and charged at zero.
-	if err := decodeJSON(r, &in); err != nil || in.Name == "" || in.PriceSen == nil || *in.PriceSen < 0 {
-		writeErr(w, http.StatusBadRequest, "nama dan price_sen wajib")
+	//
+	// Card t_06851d88: a custom_amount product has NO asking price — its price
+	// is derived from the limits below — so the requirement does not apply.
+	if in.PriceSen == nil && pType != dbstore.SaleTypeCustomAmount {
+		writeErr(w, http.StatusBadRequest, "name and price_sen are required")
 		return
 	}
 	if in.TrialDays < 0 {
-		writeErr(w, http.StatusBadRequest, "trial_days mesti >= 0")
+		writeErr(w, http.StatusBadRequest, "trial_days must be >= 0")
 		return
 	}
 	if in.SubscriptionCharges != nil && *in.SubscriptionCharges < 1 {
-		writeErr(w, http.StatusBadRequest, "subscription_charges mesti >= 1 (atau null untuk infinite)")
+		writeErr(w, http.StatusBadRequest, "subscription_charges must be >= 1 (or null for infinite)")
 		return
 	}
 	// Issue #501: the product's images (and its variations' images) render
@@ -617,19 +706,13 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		writeErr(w, http.StatusBadRequest, urlguard.InvalidMessage("images"))
 		return
 	}
-	pType := in.Type
-	if pType == "" {
-		pType = dbstore.SaleTypeOneTime
-	}
-	if pType != dbstore.SaleTypeOneTime && pType != dbstore.SaleTypeSubscription {
-		writeErr(w, http.StatusBadRequest, "type mesti one_time|subscription")
-		return
-	}
+	// Card t_06851d88: pType was resolved above (before the price check), so a
+	// custom_amount product is no longer rejected as an unknown type here.
 	period := ""
 	if pType == dbstore.SaleTypeSubscription {
 		period = in.BillingPeriod
 		if period != "month" && period != "year" {
-			writeErr(w, http.StatusBadRequest, "subscription perlu billing_period month|year")
+			writeErr(w, http.StatusBadRequest, "a subscription needs billing_period month|year")
 			return
 		}
 	}
@@ -639,21 +722,56 @@ func (h *RESTHandlers) createProduct(w http.ResponseWriter, r *http.Request, act
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
+	// Card t_06851d88: a custom_amount product's price comes from its limits,
+	// never from the client's price_sen — the buyer's validated amount is what
+	// gets charged, and price_sen is only the display fallback (suggested,
+	// else the floor).
+	priceSen := int64(0)
+	if in.PriceSen != nil {
+		priceSen = *in.PriceSen
+	}
+	var minSen int64
+	var maxSen, suggestSen *int64
+	if pType == dbstore.SaleTypeCustomAmount {
+		if in.MinPriceSen == nil {
+			writeErr(w, http.StatusBadRequest,
+				"custom_amount requires min_price_sen (at least 100 sen / RM1.00)")
+			return
+		}
+		if len(in.Variations) > 0 {
+			writeErr(w, http.StatusBadRequest, "a custom_amount product cannot have variations")
+			return
+		}
+		vals, msg := mergeCustomAmountLimits(0, nil, nil,
+			in.MinPriceSen, true, in.MaxPriceSen, true, in.SuggestedPriceSen)
+		if msg != "" {
+			writeErr(w, http.StatusBadRequest, msg)
+			return
+		}
+		minSen, maxSen, suggestSen, priceSen = vals.MinSen, vals.MaxSen, vals.SuggestSen, vals.PriceSen
+	} else if in.MinPriceSen != nil || in.MaxPriceSen != nil || in.SuggestedPriceSen != nil {
+		writeErr(w, http.StatusBadRequest,
+			"min_price_sen, max_price_sen and suggested_price_sen apply only to type custom_amount")
+		return
+	}
 	schedMode := payments.ScheduleFromPayment
 	if in.ScheduleMode != nil && *in.ScheduleMode != "" {
 		if !payments.ValidScheduleMode(*in.ScheduleMode) {
 			writeErr(w, http.StatusBadRequest,
-				"schedule_mode tidak sah (from_payment|catch_up|skip_missed)")
+				"invalid schedule_mode (from_payment|catch_up|skip_missed)")
 			return
 		}
 		schedMode = *in.ScheduleMode
 	}
 	p := &dbstore.Product{
 		AccountID: actx.Account.ID, Name: in.Name, Description: in.Description,
-		PriceSen: *in.PriceSen, Images: in.Images, Type: pType,
+		PriceSen: priceSen, Images: in.Images, Type: pType,
 		BillingPeriod: period, TrialDays: in.TrialDays, Active: true,
 		Stock: in.Stock, SubscriptionCharges: in.SubscriptionCharges,
-		ScheduleMode: schedMode,
+		ScheduleMode:      schedMode,
+		MinPriceSen:       minSen,
+		MaxPriceSen:       maxSen,
+		SuggestedPriceSen: suggestSen,
 	}
 	if err := h.Products.Create(r.Context(), p); err != nil {
 		respondErr(w, r, err)
@@ -817,33 +935,13 @@ func (h *RESTHandlers) publicHostSlugFor(ctx context.Context, accountID string) 
 	return slug
 }
 
-// uniqueFormSlug generates a URL-safe slug for a new form (issue #176). It
-// prefers a slugified form title, falling back to a random token when the
-// title yields nothing usable, and appends a random suffix until the slug is
-// free within the account's workspace (uniqueness is per-workspace, #77).
+// uniqueFormSlug generates a URL-safe slug for a new form (issue #176). The
+// derivation, the per-workspace uniqueness loop and the reserved-label avoidance
+// live in dbstore.FormStore.UniqueSlug — ONE generator for both create doors
+// (card t_f76f81eb). REST and MCP used to carry identical copies, which is how
+// a generator can drift into minting a value its own validator refuses.
 func (h *RESTHandlers) uniqueFormSlug(ctx context.Context, accountID, title string) string {
-	base := strings.ToLower(strings.TrimSpace(title))
-	base = slugUnsafe.ReplaceAllString(base, "-")
-	base = strings.Trim(base, "-")
-	if base == "" {
-		base = "f-" + randHex(4)
-	}
-	if len(base) > 40 {
-		base = base[:40]
-	}
-	base = strings.Trim(base, "-")
-	if base == "" {
-		base = "f-" + randHex(4)
-	}
-	// Ensure uniqueness within the workspace; append a random suffix on collision.
-	for i := 0; i < 5; i++ {
-		taken, err := h.Forms.SlugExists(ctx, accountID, base)
-		if err != nil || !taken {
-			return base
-		}
-		base = base + "-" + randHex(2)
-	}
-	return base + "-" + randHex(4)
+	return h.Forms.UniqueSlug(ctx, accountID, title)
 }
 
 // randHex returns n random bytes hex-encoded (lowercase).
@@ -904,46 +1002,143 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 // with no live workspace (card t_6c0badbe). Declared as a constant so the
 // error-code table in errcode.go resolves it by the same literal the handler
 // writes — a re-wording cannot silently detach the code.
-const workspaceRequiredMessage = "akaun ini belum ada workspace — buat workspace dahulu sebelum mencipta borang"
+const workspaceRequiredMessage = "this account has no workspace yet — create a workspace before creating a form"
+
+// requireFormMint is the ONE gate every REST door that MINTS a form row calls:
+// the write role, then a live workspace for the account. It reports whether the
+// handler may continue, and it writes the refusal itself.
+//
+// Card t_6c0badbe put the workspace half inside createForm; card t_d07c8fbb
+// found the same hole on the two REST template-CLONE doors
+// (POST /v1/templates/use and POST /v1/rest/templates/{id}/use), which also call
+// h.Forms.Create. Rather than copy a 20-line guard a third time, both halves now
+// live here and the three handlers name ONE gate — which is also the shape this
+// package's contract parity expects (openapi_parity_test.go classifies a route
+// by the single gate its handler calls; requireFormMint is registered there as
+// `write`). The two MCP twins (upsert_form's create half, use_template) answer
+// the identical sentence via mcpsrv.requireLiveWorkspace, so one account state
+// gets one answer on every door.
+//
+// ORDER: the write gate runs FIRST, so a readonly key still gets the 403 the
+// published contract promises for a write route; the account's workspace state
+// is only consulted for a caller who may write at all.
+//
+// `accounts.workspace_id` is nullable — a signup creates an account and no
+// workspace (#718, ask-first onboarding) — and the forms_sync_workspace_id
+// trigger (migration 000045) copies that NULL onto the form row. A door that
+// accepted the write anyway produced a form that could be PUBLISHED and was then
+// unreachable forever, because every public serving path resolves a form through
+// its workspace (host, or the workspace behind the slug on a self-hosted
+// install). Measured on a clean self-host run: two forms (`clean-test`,
+// `clean-test-2`) left `published` with `workspace_id IS NULL`, both 404 at
+// /f/<slug>.
+//
+// REFUSE rather than silently pick a workspace: choosing one for the caller
+// would put a merchant's form in a workspace they never named, and the
+// dashboard's own flow always creates the workspace first. 409 (not 400) — the
+// request is well formed; the ACCOUNT's state is what cannot carry it out, and
+// the client can retry unchanged once a workspace exists.
+//
+// A nil store (only the package's bare-mode handlers omit it) is not resolvable
+// here; the production literal always sets it, and
+// TestWorkspacesReachesRESTHandlersInMainGo pins that hop, the same way
+// selfhost_flag_wiring_test.go pins PublicHandlers.SelfHosted.
+func (h *RESTHandlers) requireFormMint(w http.ResponseWriter, r *http.Request, actx *AccountCtx) bool {
+	if _, ok := h.requireWriteRole(w, r, actx); !ok {
+		return false
+	}
+	return h.refuseWithoutLiveWorkspace(w, r, actx)
+}
+
+// refuseWithoutLiveWorkspace is the workspace half of the address gate: it
+// reports whether the account can give a form a public ADDRESS today, and
+// writes the refusal when it cannot. It is the same rule requireFormMint uses
+// for a CREATE, split out because a PUBLISH needs it too — and needs it for the
+// same reason (card t_fadfe9f7).
+//
+// WHY PUBLISH NEEDS IT. A form row whose `workspace_id` is NULL has no address
+// at all: every public serving path resolves a form through its workspace
+// (subdomain, custom domain, or — on a self-hosted install — BySlugAnyWorkspace,
+// which joins accounts→workspaces), and the apex /f/<slug> is refused by design
+// (issue #77). `publish_form` and the REST publish/status routes accepted such a
+// row and answered `status: published`, so the merchant was told the page was
+// live while it was 404 everywhere, forever. No new orphan can be MINTED since
+// t_6c0badbe, but the rows that predate it are still one call away from that
+// outcome.
+//
+// WHY THE ACCOUNT, NOT THE ROW. `forms.workspace_id` is maintained from the
+// account: the forms_sync_workspace_id trigger copies accounts.workspace_id on
+// every insert (migration 000045) and WorkspaceStore.CreateForAccount backfills
+// every NULL row when the account is linked. So "the account has no live
+// workspace" is the state that makes the row (and every row it owns)
+// unaddressable, and asking it here also refuses a form whose workspace was
+// SOFT-DELETED — publishing that one is the same dead end, and HasLiveWorkspace
+// is the one query that answers both.
+//
+// The status gate is the caller's: refuse only when the form is ENTERING a live
+// status (dbstore.IsLiveStatus). Moving an orphan back to draft stays allowed —
+// that is the remedy, not a second orphan.
+//
+// THE ONE CLASS WITH AN ADDRESS BUT NO WORKSPACE (card t_8b185f34). A gallery
+// template is NOT an orphan. Its public address is the GALLERY —
+// GET /v1/templates serves `is_template AND status='published'` with no
+// account or workspace filter — and the account that owns the gallery
+// (templates@system.jomform) must never have a workspace
+// (dbstore.LegacyProvisionedEmails, migration 000059: giving it one would
+// re-expose every template as a public storefront and empty the picker). So a
+// template entering `published` skips this check via hasGalleryAddress; every
+// other row, and every other live status on a template (unlisted/private are
+// in no public list and are served only through a workspace), still needs one.
+// Refusing the class outright was the accident this card fixes: the refusal's
+// own remedy ("buat workspace dahulu") is the one thing that account may never
+// do.
+//
+// Nil store (bare-mode test fixtures only) means "no guard here"; the production
+// literal always sets Workspaces and TestWorkspacesReachesRESTHandlersInMainGo
+// pins that hop. The name deliberately does not start with `require`: the
+// openapi-parity classifier treats every gate a contracted handler names
+// directly as that route's access level, and this route must keep answering to
+// requireWriteRole (a readonly key is still 403, not 409). This check runs
+// AFTER the form is resolved, so a missing/foreign id keeps answering 404.
+func (h *RESTHandlers) refuseWithoutLiveWorkspace(w http.ResponseWriter, r *http.Request, actx *AccountCtx) bool {
+	if h.Workspaces == nil {
+		return true
+	}
+	has, werr := h.Workspaces.HasLiveWorkspace(r.Context(), actx.Account.ID)
+	if werr != nil {
+		// A failing lookup is not "no workspace": refuse loudly instead of
+		// telling the merchant to create one they may already have.
+		writeErr(w, http.StatusInternalServerError, "failed to check the workspace")
+		return false
+	}
+	if !has {
+		writeErr(w, http.StatusConflict, workspaceRequiredMessage)
+		return false
+	}
+	return true
+}
+
+// hasGalleryAddress reports whether this write gives the row a public address
+// WITHOUT a workspace. Exactly one class does: an `is_template` row entering
+// `published`, because the gallery is a template's address (GET /v1/templates
+// lists `is_template AND status='published'` with no account or workspace
+// filter). The account that owns the gallery — templates@system.jomform — must
+// NEVER have a workspace (dbstore.LegacyProvisionedEmails, migration 000059),
+// so without this exemption the workspace gate locks out the one account whose
+// rows are addressable without one (card t_8b185f34).
+//
+// Every other row, and every other live status on a template, still needs a
+// workspace: `unlisted`/`private` templates are in no public list and are
+// served only through their workspace (PublishedByWorkspaceSlug does not filter
+// is_template).
+func hasGalleryAddress(f *dbstore.Form, target string) bool {
+	return f != nil && f.IsTemplate && target == dbstore.FormStatusPublished
+}
 
 func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
-	if _, ok := h.requireWriteRole(w, r, actx); !ok {
-		return
-	}
 	// Card t_6c0badbe: an account with NO live workspace cannot mint a form.
-	//
-	// `accounts.workspace_id` is nullable — a signup creates an account and no
-	// workspace (#718, ask-first onboarding) — and the forms_sync_workspace_id
-	// trigger (migration 000045) copies that NULL onto the row. The handler used
-	// to accept the POST anyway: the form was created, it could be PUBLISHED,
-	// and it was then unreachable forever, because every public serving path
-	// resolves a form through its workspace (host, or the workspace behind the
-	// slug on a self-hosted install). Measured on a clean self-host run: two
-	// forms (`clean-test`, `clean-test-2`) left `published` with
-	// `workspace_id IS NULL`, both 404 at /f/<slug>.
-	//
-	// REFUSE rather than silently pick a workspace: choosing one for the caller
-	// would put a merchant's form in a workspace they never named, and the
-	// dashboard's own flow always creates the workspace first. 409 (not 400) —
-	// the request is well formed; the ACCOUNT's state is what cannot carry it
-	// out, and the client can retry unchanged once a workspace exists.
-	//
-	// A nil store (only the package's bare-mode handlers omit it) is not
-	// resolvable here; the production literal always sets it, and
-	// TestWorkspacesReachesRESTHandlersInMainGo pins that hop, the same way
-	// selfhost_flag_wiring_test.go pins PublicHandlers.SelfHosted.
-	if h.Workspaces != nil {
-		has, werr := h.Workspaces.HasLiveWorkspace(r.Context(), actx.Account.ID)
-		if werr != nil {
-			// A failing lookup is not "no workspace": refuse loudly instead of
-			// telling the merchant to create one they may already have.
-			writeErr(w, http.StatusInternalServerError, "gagal menyemak workspace")
-			return
-		}
-		if !has {
-			writeErr(w, http.StatusConflict, workspaceRequiredMessage)
-			return
-		}
+	if !h.requireFormMint(w, r, actx) {
+		return
 	}
 	var in struct {
 		Slug   string         `json:"slug"`
@@ -952,7 +1147,7 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 		Theme  map[string]any `json:"theme"`
 	}
 	if err := decodeJSON(r, &in); err != nil || in.Title == "" {
-		writeErr(w, http.StatusBadRequest, "title wajib")
+		writeErr(w, http.StatusBadRequest, "title is required")
 		return
 	}
 	// Issue #388 (parity with updateForm, card t_62190342): power-user custom JS
@@ -1077,11 +1272,11 @@ func (h *RESTHandlers) updateForm(w http.ResponseWriter, r *http.Request, actx *
 		// Issue #471: product image size + layout are validated against the
 		// renderer's allowlist so a bad value never reaches the buyer's page.
 		if v, ok := in.Theme["product_image_size"].(string); ok && !ValidProductImageSize(v) {
-			writeErr(w, http.StatusBadRequest, "product_image_size mesti small|medium|large|hidden")
+			writeErr(w, http.StatusBadRequest, "product_image_size must be small|medium|large|hidden")
 			return
 		}
 		if v, ok := in.Theme["product_image_layout"].(string); ok && !ValidProductImageLayout(v) {
-			writeErr(w, http.StatusBadRequest, "product_image_layout mesti thumbnail-left|image-top")
+			writeErr(w, http.StatusBadRequest, "product_image_layout must be thumbnail-left|image-top")
 			return
 		}
 		// Issue #501: the theme's logo_url is rendered into a buyer-facing
@@ -1228,6 +1423,17 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 		respondErr(w, r, err)
 		return
 	}
+	// Card t_fadfe9f7: a form with no workspace has no address, so a publish
+	// that answered 200 would be a lie — the row would be `published` and 404
+	// at every URL forever. Refuse with the sentence the create door uses.
+	// AFTER the read, so a missing/foreign id still answers 404, and before the
+	// acknowledgement, so a payment form with nothing to sell is not asked to
+	// confirm a publish that cannot happen.
+	// A gallery template is the exception (t_8b185f34): publishing it is what
+	// puts it in GET /v1/templates, so it has an address with no workspace.
+	if !hasGalleryAddress(f, dbstore.FormStatusPublished) && !h.refuseWithoutLiveWorkspace(w, r, actx) {
+		return
+	}
 	if dbstore.PublishNeedsAck(f, dbstore.FormStatusPublished) && !publishAcknowledged(r) {
 		writePublishNeedsAck(w)
 		return
@@ -1261,8 +1467,8 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 // `bld.noProductsWarn` and never prints this prose.
 func writePublishNeedsAck(w http.ResponseWriter) {
 	writeJSON(w, http.StatusConflict, map[string]any{
-		"error": "Borang bayaran ini tiada produk — ia tidak boleh menerima bayaran " +
-			"dan tidak mengumpul apa-apa. Tambah produk dahulu, atau sahkan untuk teruskan.",
+		"error": "This payment form has no products — it cannot accept payment " +
+			"and will not collect anything. Add a product first, or confirm to continue.",
 		"code":         dbstore.PublishWarningNoProducts,
 		"requires_ack": true,
 	})
@@ -1318,6 +1524,17 @@ func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, act
 		respondErr(w, r, ferr)
 		return
 	}
+	// Card t_fadfe9f7: entering a LIVE status (published/unlisted/private) is a
+	// publish by another name — the dashboard's status control reaches THIS
+	// route — so the same workspace precondition applies here, or the guard on
+	// /publish is one header away from being bypassed. Back to draft stays
+	// allowed: that is how an existing orphan is taken out of a live state.
+	// A gallery template entering `published` is exempt (t_8b185f34): the
+	// gallery is its address. Private/unlisted templates stay gated — neither
+	// status is in any public list, so without a workspace they have no address.
+	if dbstore.IsLiveStatus(in.Status) && !hasGalleryAddress(f, in.Status) && !h.refuseWithoutLiveWorkspace(w, r, actx) {
+		return
+	}
 	// Onboarding gap: entering a LIVE status with a payment form that has
 	// nothing to sell is the same silent mistake the publish route refuses, and
 	// the dashboard's status control reaches THIS route. Gated on the
@@ -1337,12 +1554,12 @@ func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, act
 		}
 	case dbstore.FormStatusPrivate:
 		if len(in.Password) < 4 {
-			writeErr(w, http.StatusBadRequest, "password mesti sekurang-kurangnya 4 aksara")
+			writeErr(w, http.StatusBadRequest, "the password must be at least 4 characters")
 			return
 		}
 		hash, err := auth.HashPassword(in.Password)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "gagal hash password")
+			writeErr(w, http.StatusInternalServerError, "failed to hash the password")
 			return
 		}
 		if err := h.Forms.SetStatusWithPassword(r.Context(), actx.Account.ID, id, in.Status, hash); err != nil {
@@ -1350,7 +1567,7 @@ func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, act
 			return
 		}
 	default:
-		writeErr(w, http.StatusBadRequest, "status mesti draft|private|published")
+		writeErr(w, http.StatusBadRequest, "status must be draft|private|published")
 		return
 	}
 	// THE EDGE. The row is written above; the artefacts the CDN cached while this
@@ -1492,7 +1709,7 @@ func (h *RESTHandlers) restoreForm(w http.ResponseWriter, r *http.Request, actx 
 	if err := h.Forms.Restore(r.Context(), actx.Account.ID, formID); err != nil {
 		if errors.Is(err, dbstore.ErrFormSlugTaken) {
 			writeErr(w, http.StatusConflict,
-				"tidak boleh dipulihkan: slug borang ini telah diambil borang lain — tukar slug borang itu dahulu, kemudian cuba pulihkan semula")
+				"cannot be restored: this form's slug has been taken by another form — change that form's slug first, then try restoring again")
 			return
 		}
 		respondErr(w, r, err)
@@ -1520,7 +1737,7 @@ func (h *RESTHandlers) purgeForm(w http.ResponseWriter, r *http.Request, actx *A
 		ConfirmSlug string `json:"confirm_slug"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	// Read the trashed form to compare the confirmation slug. GetTrashed is
@@ -1533,7 +1750,7 @@ func (h *RESTHandlers) purgeForm(w http.ResponseWriter, r *http.Request, actx *A
 	}
 	if strings.TrimSpace(in.ConfirmSlug) != f.Slug {
 		writeErr(w, http.StatusBadRequest,
-			"taip slug borang ("+f.Slug+") untuk sahkan pemadaman kekal")
+			"type the form slug ("+f.Slug+") to confirm the permanent deletion")
 		return
 	}
 	if err := h.Forms.Purge(r.Context(), actx.Account.ID, formID); err != nil {
@@ -1543,7 +1760,7 @@ func (h *RESTHandlers) purgeForm(w http.ResponseWriter, r *http.Request, actx *A
 				n = 0
 			}
 			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":       "borang ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan dengan memadam borang. Ia kekal dalam tong sampah.",
+				"error":       "this form has sales — sales history cannot be destroyed by deleting the form. It stays in the bin.",
 				"code":        CodeFormHasSales,
 				"sales_count": n,
 			})
@@ -1584,15 +1801,15 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 		return
 	}
 	if in.Action != "publish" && in.Action != "draft" && in.Action != "delete" {
-		writeErr(w, http.StatusBadRequest, "action mesti publish|draft|delete")
+		writeErr(w, http.StatusBadRequest, "action must be publish|draft|delete")
 		return
 	}
 	if len(in.IDs) == 0 {
-		writeErr(w, http.StatusBadRequest, "ids wajib")
+		writeErr(w, http.StatusBadRequest, "ids are required")
 		return
 	}
 	if len(in.IDs) > 500 {
-		writeErr(w, http.StatusBadRequest, "ids terlalu banyak (maks 500)")
+		writeErr(w, http.StatusBadRequest, "too many ids (max 500)")
 		return
 	}
 	// Dedupe + keep only valid UUIDs; malformed ids are ignored, not fatal.
@@ -1610,8 +1827,30 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
-		writeErr(w, http.StatusBadRequest, "ids mesti uuid")
+		writeErr(w, http.StatusBadRequest, "ids must be uuid")
 		return
+	}
+	// Card t_fadfe9f7: a bulk publish must not be a way around the workspace
+	// precondition the single publish applies. The whole call is refused (and
+	// nothing is written) rather than silently skipping the ids: every id in
+	// this batch belongs to the caller's account, so the account's missing
+	// workspace is the one thing that has to change before any of them can be
+	// live. `draft` and `delete` stay allowed — they are how an existing
+	// orphan is taken out of a live state.
+	//
+	// Exception (card t_8b185f34): a batch made ONLY of gallery templates has
+	// an address — the gallery — so it is exempt like the single publish. One
+	// ordinary form in the batch puts the whole call back under the gate,
+	// because that row would go live with no address at all.
+	if in.Action == "publish" {
+		onlyTemplates, terr := h.Forms.AllGalleryTemplates(r.Context(), actx.Account.ID, ids)
+		if terr != nil {
+			respondErr(w, r, terr)
+			return
+		}
+		if !onlyTemplates && !h.refuseWithoutLiveWorkspace(w, r, actx) {
+			return
+		}
 	}
 
 	var updated int64
@@ -1670,9 +1909,9 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 			if len(needsProd) > 0 {
 				if !in.Acknowledge {
 					writeJSON(w, http.StatusConflict, map[string]any{
-						"error": "Sebahagian borang bayaran tiada produk, jadi ia tidak " +
-							"diterbitkan. Borang itu tidak mengumpul apa-apa sehingga produk " +
-							"ditambah — tambah produk dahulu, atau sahkan untuk teruskan.",
+						"error": "Some payment forms have no products, so they are not " +
+							"published. The form does not collect anything until a product is " +
+							"added — add a product first, or confirm to continue.",
 						"code":           dbstore.PublishWarningNoProducts,
 						"requires_ack":   true,
 						"needs_products": needsProd,
@@ -1715,8 +1954,8 @@ func (h *RESTHandlers) bulkForms(w http.ResponseWriter, r *http.Request, actx *A
 	}
 	if len(needsProducts) > 0 {
 		out["needs_products"] = needsProducts
-		out["needs_products_reason"] = "borang bayaran tanpa produk — ia diterbitkan, " +
-			"tetapi tidak boleh menerima bayaran dan tidak mengumpul apa-apa sehingga produk ditambah"
+		out["needs_products_reason"] = "a payment form without a product is still published, " +
+			"but cannot accept payment and does not collect anything until a product is added"
 	}
 	writeJSON(w, http.StatusOK, withEdgeFields(out, edge))
 }
@@ -1751,7 +1990,7 @@ func (h *RESTHandlers) createKey(w http.ResponseWriter, r *http.Request, actx *A
 		Scopes []string `json:"scopes"`
 	}
 	if err := decodeJSON(r, &in); err != nil || in.Name == "" {
-		writeErr(w, http.StatusBadRequest, "nama key wajib")
+		writeErr(w, http.StatusBadRequest, "key name is required")
 		return
 	}
 	if len(in.Scopes) == 0 {
@@ -1772,7 +2011,7 @@ func (h *RESTHandlers) createKey(w http.ResponseWriter, r *http.Request, actx *A
 	// The raw key is shown exactly once.
 	respond(w, http.StatusCreated, map[string]any{
 		"id": k.ID, "name": k.Name, "scopes": k.Scopes, "key": raw,
-		"note": "Simpan key ini sekarang — ia tidak akan dipapar lagi.",
+		"note": "Save this key now — it will not be shown again.",
 	})
 }
 
@@ -1850,12 +2089,19 @@ type saleRow struct {
 	// CLASS of failure that left a courier-named block on the zone rate
 	// ("unavailable" | "error" | "timeout") and is empty on a sale no courier
 	// failed to price.
-	ShippingSource         string    `json:"shipping_source,omitempty"`
-	ShippingSourceDetail   string    `json:"shipping_source_detail,omitempty"`
-	ShippingFallbackReason string    `json:"shipping_fallback_reason,omitempty"`
-	DiscountSen            int64     `json:"discount_sen,omitempty"`
-	Items                  []itemRow `json:"items,omitempty"`
-	Updated                string    `json:"updated_at,omitempty"`
+	ShippingSource         string `json:"shipping_source,omitempty"`
+	ShippingSourceDetail   string `json:"shipping_source_detail,omitempty"`
+	ShippingFallbackReason string `json:"shipping_fallback_reason,omitempty"`
+	DiscountSen            int64  `json:"discount_sen,omitempty"`
+	// Card t_135c3c72: the processing fee the BUYER bore, and the rate that was
+	// in force when they paid. Frozen on the sale, so a later rate change cannot
+	// rewrite what a past buyer was charged. FeeSen is part of TotalSen.
+	FeeSen       int64     `json:"fee_sen,omitempty"`
+	FeeMethod    string    `json:"fee_method,omitempty"`
+	FeeFixedSen  int64     `json:"fee_fixed_sen,omitempty"`
+	FeePercentBp int64     `json:"fee_percent_bp,omitempty"`
+	Items        []itemRow `json:"items,omitempty"`
+	Updated      string    `json:"updated_at,omitempty"`
 	// Issue #438: QR ordering flow — the table number the QR stand encoded
 	// (e.g. "8"). Empty = a regular online order with no table.
 	TableNumber string `json:"table_number,omitempty"`
@@ -1931,6 +2177,10 @@ func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
 		SubtotalSen:    s.SubtotalSen,
 		ShippingSen:    s.ShippingSen,
 		DiscountSen:    s.DiscountSen,
+		FeeSen:         s.FeeSen,
+		FeeMethod:      s.FeeMethod,
+		FeeFixedSen:    s.FeeFixedSen,
+		FeePercentBp:   s.FeePercentBp,
 		Updated:        s.UpdatedAt.UTC().Format(time.RFC3339),
 		TableNumber:    s.TableNumber,
 		RefundedSen:    s.RefundedSen,
@@ -2199,7 +2449,7 @@ func (h *RESTHandlers) saleEmailStatus(w http.ResponseWriter, r *http.Request, a
 	ref := r.PathValue("ref")
 	sale, err := h.Sales.ByRefCode(r.Context(), ref)
 	if err != nil || sale.AccountID != actx.Account.ID {
-		writeErr(w, http.StatusNotFound, "jualan tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "sale not found")
 		return
 	}
 	type eventOut struct {
@@ -2234,13 +2484,13 @@ func (h *RESTHandlers) captureSale(w http.ResponseWriter, r *http.Request, actx 
 		return
 	}
 	if h.Pay == nil {
-		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
+		writeErr(w, http.StatusServiceUnavailable, "payment is not active")
 		return
 	}
 	ref := r.PathValue("ref")
 	sale, err := h.Sales.ByRefCode(r.Context(), ref)
 	if err != nil || sale.AccountID != actx.Account.ID {
-		writeErr(w, http.StatusNotFound, "jualan tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "sale not found")
 		return
 	}
 	var in struct {
@@ -2249,7 +2499,7 @@ func (h *RESTHandlers) captureSale(w http.ResponseWriter, r *http.Request, actx 
 	_ = decodeJSON(r, &in)
 	if err := h.Pay.CaptureSale(r.Context(), sale, in.AmountSen); err != nil {
 		recordPaymentFailure("capture")
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writePaymentErr(w, r, err)
 		return
 	}
 	if err := h.Sales.MarkCaptured(r.Context(), sale.ID); err != nil {
@@ -2266,18 +2516,18 @@ func (h *RESTHandlers) releaseSale(w http.ResponseWriter, r *http.Request, actx 
 		return
 	}
 	if h.Pay == nil {
-		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
+		writeErr(w, http.StatusServiceUnavailable, "payment is not active")
 		return
 	}
 	ref := r.PathValue("ref")
 	sale, err := h.Sales.ByRefCode(r.Context(), ref)
 	if err != nil || sale.AccountID != actx.Account.ID {
-		writeErr(w, http.StatusNotFound, "jualan tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "sale not found")
 		return
 	}
 	if err := h.Pay.ReleaseSale(r.Context(), sale); err != nil {
 		recordPaymentFailure("release")
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writePaymentErr(w, r, err)
 		return
 	}
 	if err := h.Sales.SetStatus(r.Context(), sale.ID, dbstore.SaleCancelled); err != nil {
@@ -2300,18 +2550,27 @@ func (h *RESTHandlers) releaseSale(w http.ResponseWriter, r *http.Request, actx 
 // atomic inside payments.RefundSale (per-sale lock), so a partial leaves the
 // sale reading as partial and only a refund that clears the whole total marks
 // it fully refunded.
+//
+// Card t_135c3c72 (buyer-borne processing fee): a refund NEVER recalculates the
+// fee. The refundable balance is the sale's total, which already includes
+// fee_sen — a full refund therefore returns what the buyer actually paid (fee
+// included), while the merchant still bears the acquirer's own charge (CHIP does
+// not return it) and the sale keeps showing that fee at the rate frozen when the
+// buyer paid. That is the documented policy, not an accident: recomputing a fee
+// here would charge the buyer twice for a refund, and adding it back to the
+// merchant's side would be a number no payment provider ever moved.
 func (h *RESTHandlers) refundSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
 	}
 	if h.Pay == nil {
-		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
+		writeErr(w, http.StatusServiceUnavailable, "payment is not active")
 		return
 	}
 	ref := r.PathValue("ref")
 	sale, err := h.Sales.ByRefCode(r.Context(), ref)
 	if err != nil || sale.AccountID != actx.Account.ID {
-		writeErr(w, http.StatusNotFound, "jualan tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "sale not found")
 		return
 	}
 	var in struct {
@@ -2321,7 +2580,7 @@ func (h *RESTHandlers) refundSale(w http.ResponseWriter, r *http.Request, actx *
 	res, err := h.Pay.RefundSale(r.Context(), sale, in.AmountSen)
 	if err != nil {
 		recordPaymentFailure("refund")
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writePaymentErr(w, r, err)
 		return
 	}
 	// Issue #407: audit refunds (who, amount, when). Issue #518: extend the
@@ -2368,7 +2627,7 @@ func (h *RESTHandlers) bulkCaptureSales(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if h.Pay == nil {
-		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
+		writeErr(w, http.StatusServiceUnavailable, "payment is not active")
 		return
 	}
 	var in struct {
@@ -2380,11 +2639,11 @@ func (h *RESTHandlers) bulkCaptureSales(w http.ResponseWriter, r *http.Request, 
 	if len(in.Refs) > 0 && string(in.Refs) != `"all"` {
 		var refs []string
 		if err := json.Unmarshal(in.Refs, &refs); err != nil {
-			writeErr(w, http.StatusBadRequest, "refs mesti array atau \"all\"")
+			writeErr(w, http.StatusBadRequest, "refs must be an array or \"all\"")
 			return
 		}
 		if len(refs) > 200 {
-			writeErr(w, http.StatusBadRequest, "refs terlalu banyak (maks 200)")
+			writeErr(w, http.StatusBadRequest, "too many refs (max 200)")
 			return
 		}
 		for _, ref := range refs {
@@ -2413,10 +2672,10 @@ func (h *RESTHandlers) bulkCaptureSales(w http.ResponseWriter, r *http.Request, 
 	for _, sale := range sales {
 		res := result{RefCode: sale.RefCode}
 		if !sale.SkipCapture || sale.CapturedAt != nil || sale.ChipPurchaseID == "" {
-			res.Error = "bukan authorisasi yang menunggu capture"
+			res.Error = "not an authorization awaiting capture"
 		} else if err := h.Pay.CaptureSale(r.Context(), sale, nil); err != nil {
 			recordPaymentFailure("bulk_capture")
-			res.Error = err.Error()
+			res.Error = paymentErrText(err)
 		} else if err := h.Sales.MarkCaptured(r.Context(), sale.ID); err != nil {
 			res.Error = err.Error()
 		} else {
@@ -2444,7 +2703,7 @@ func (h *RESTHandlers) confirmSale(w http.ResponseWriter, r *http.Request, actx 
 	ref := r.PathValue("ref")
 	sale, err := h.Sales.ByRefCode(r.Context(), ref)
 	if err != nil || sale.AccountID != actx.Account.ID {
-		writeErr(w, http.StatusNotFound, "jualan tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "sale not found")
 		return
 	}
 	if err := h.Sales.SetStatus(r.Context(), sale.ID, dbstore.SaleConfirmed); err != nil {

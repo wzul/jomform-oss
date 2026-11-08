@@ -123,7 +123,7 @@ never handed to SES at all:
 |---|---|---|
 | RFC 2606 reserved | `example.com`, `example.net`, `example.org` (and every subdomain) | never delegated; `example.com` publishes a null MX (RFC 7505, `MX 0 .`) meaning "accepts no mail" |
 | RFC 6761 special-use TLDs | `.test`, `.invalid`, `.localhost`, `.example` | reserved for exactly this purpose; nothing under them routes |
-| known disposable / QA providers | `example.com`, `1secmail.net`, `simulator.amazonses.com` | throwaway mailboxes that resolve to real MX hosts, so only a static list can refuse them; their addresses are already on the suppression list |
+| known disposable / QA providers | `uberip.com`, `1secmail.net`, `simulator.amazonses.com` | throwaway mailboxes that resolve to real MX hosts, so only a static list can refuse them; their addresses are already on the suppression list |
 
 The rule is **static and network-free on purpose**. A null-MX lookup can only
 confirm what the reserved names already imply, while adding a resolver
@@ -142,9 +142,14 @@ one `magiclink_unroutable_domain_skipped` line carrying **only the reason**
 operational signal: a refused send and a silently dropped one look identical to
 the caller.
 
-Registration already refuses most of these through the MX pre-check (§3);
-`example.com` is the exception that matters: it *has* an MX record (the null
-one), so the null-MX apex passes the MX check and only this list refuses it.
+Registration refuses these as well: the MX pre-check (§3) resolves the domain and —
+since the null-MX fix — reads an RFC 7505 null MX as the "accepts no mail" it is, so
+a registration for `anything@example.com` is rejected (`400`) before a user row
+exists. The static list is still the guarantee, because the magic-link path performs
+no DNS lookup at all, and because two of the families are not refusable by a
+resolver: disposable providers resolve to real MX hosts, and the reserved test names
+only fail to resolve (which the MX check treats as "cannot prove it accepts mail" —
+also a refusal, but by a different rule).
 
 ### Inspect / un-suppress a false positive (ops)
 
@@ -189,6 +194,16 @@ rejected with `400 "domain emel tidak menerima emel"` **before the user row is
 created**. Results are cached in Valkey (`jf:mx:{sha256(domain)}`): **positive
 24h**, **negative 1h** (resilient to DNS flapping). A DNS error fails closed
 (rejected) as the conservative reputation posture.
+
+A resolved record set is only "accepts mail" if it names at least one real
+exchange. The **null MX** (RFC 7505) — a single `MX 0 .` record, which
+`example.com`, `example.net` and `example.org` publish at their apex — is the domain
+stating in DNS that it accepts **no** mail, so it scores `false` and is cached as the
+negative entry (1h) like a domain with no records at all. Before this was handled, the
+check only asked whether the record list was non-empty; Go's resolver surfaces the
+null MX as one record with exchange `.`, so a registration for `anything@example.com`
+passed the pre-check, created the user row, and then hard-bounced the verification
+email against the identity every receipt and login link shares.
 
 ## 4. Environment variables (SES / SNS wiring)
 

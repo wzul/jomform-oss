@@ -19,7 +19,7 @@ import (
 
 // generateFormIn is the input for generate_form.
 type generateFormIn struct {
-	Prompt string `json:"prompt" jsonschema:"Arahan semula jadi untuk bina borang, cth 'a booking form for a hair salon with name, phone, date, service dropdown'"`
+	Prompt string `json:"prompt" jsonschema:"Natural-language instruction to build a form, e.g. 'a booking form for a hair salon with name, phone, date, service dropdown'"`
 }
 
 // generateForm drafts a validated form config from a natural-language prompt
@@ -32,14 +32,14 @@ func (s *Server) generateForm(
 		return nil, nil, err
 	}
 	if s.deps.LLM == nil {
-		return nil, nil, errors.New("penjanaan AI tidak tersedia")
+		return nil, nil, errors.New("AI generation not available")
 	}
 	prompt := strings.TrimSpace(in.Prompt)
 	if prompt == "" {
-		return nil, nil, errors.New("prompt wajib")
+		return nil, nil, errors.New("prompt is required")
 	}
 	if len(prompt) > 2000 {
-		return nil, nil, errors.New("prompt terlalu panjang (maks 2000 aksara)")
+		return nil, nil, errors.New("prompt too long (max 2000 characters)")
 	}
 	raw, err := s.deps.LLM.GenerateFormConfig(ctx, formgen.Prompt(prompt))
 	if err != nil {
@@ -47,7 +47,7 @@ func (s *Server) generateForm(
 	}
 	cfg, err := formgen.Parse(raw)
 	if err != nil {
-		return nil, nil, errors.New("penjanaan tidak sah: " + err.Error())
+		return nil, nil, errors.New("invalid generation: " + err.Error())
 	}
 	return nil, cfg, nil
 }

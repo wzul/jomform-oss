@@ -5,6 +5,7 @@ import { useI18n, type Key } from "./i18n";
 import { WORKSPACE_NAME_MAX_CHARS } from "../lib/workspaceIdentity";
 import type { WorkspaceRow } from "./session";
 import { createWorkspace } from "../lib/workspace";
+import { addressLabel } from "../lib/deployment";
 
 // Compact workspace selector for the TOPBAR (issue #380). The old full-width
 // switcher lived in the sidebar user card and pushed the nav menu down so not
@@ -42,8 +43,13 @@ export function WorkspaceSwitcher({
   // dropdown shows a "make this the default" action for the active workspace
   // (and marks the current default). onSetDefault(workspaceId) persists the
   // choice server-side.
+  //
+  // CARD t_f6de6395: it resolves to the SENTENCE to render when the write was
+  // REFUSED, or null when it applied. The refusal is rendered HERE rather than
+  // in the caller because the panel closes on click — a sentence inside the
+  // panel would unmount with it, which is exactly how the silence happened.
   defaultWorkspaceId?: string;
-  onSetDefault?: (workspaceId: string) => void;
+  onSetDefault?: (workspaceId: string) => Promise<string | null>;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -52,6 +58,8 @@ export function WorkspaceSwitcher({
   const [slug, setSlug] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Card t_f6de6395: the sentence for a REFUSED set/clear default, or null.
+  const [defaultError, setDefaultError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   // Issue #460: ref to the dropdown panel itself. In the drawer (fullWidth)
   // the panel renders in flow inside the drawer's scroll body; when it opens
@@ -94,6 +102,19 @@ export function WorkspaceSwitcher({
     if (!role) return "";
     if (role === "owner") return t("role.owner");
     return t(`role.${role}` as Key) || role;
+  }
+
+  // Card t_f6de6395: a set/clear of the default workspace is a WRITE the server
+  // can refuse. The panel closes on click (the action is fire-and-wait), so the
+  // outcome is rendered under the TRIGGER — outside the panel — and the sentence
+  // stays until the next attempt. Before this the caller ignored the status and
+  // swallowed the network error, so a refusal looked like a click that did
+  // nothing.
+  async function applyDefault(workspaceId: string) {
+    if (!onSetDefault) return;
+    setDefaultError(null);
+    const failure = await onSetDefault(workspaceId);
+    if (failure) setDefaultError(failure);
   }
 
   async function createWorkspaceSubmit(e: React.FormEvent) {
@@ -147,7 +168,9 @@ export function WorkspaceSwitcher({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t("common.workspace")}
-        title={active ? `${active.name} (${active.slug}.jomform.com)` : t("common.workspace")}
+        // Card t_48a93084: the address is what the API publishes for THIS
+        // deployment, never a composed `<slug>.jomform.com`.
+        title={active ? (addressLabel(active.url) ? `${active.name} (${addressLabel(active.url)})` : active.name) : t("common.workspace")}
         className={
           fullWidth
             ? "flex min-h-11 w-full items-center justify-between gap-2 rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-left text-sm font-medium text-[var(--jf-text)] hover:bg-slate-50"
@@ -233,7 +256,7 @@ export function WorkspaceSwitcher({
                         (5.98:1, the inactive items' surface), so the token is
                         safe for both states of this row. */}
                     <span className="block break-all text-xs text-[var(--jf-muted-on-tint)]">
-                      {s.slug}.jomform.com{s.role ? ` · ${roleLabel(s.role)}` : ""}
+                      {[addressLabel(s.url), s.role ? roleLabel(s.role) : ""].filter(Boolean).join(" · ")}
                     </span>
                   </span>
                   {s.slug === value && <span className="shrink-0 text-[var(--jf-primary-on-tint)]">✓</span>}
@@ -245,7 +268,7 @@ export function WorkspaceSwitcher({
             <div className="px-2.5 py-2 text-sm text-[var(--jf-text)]">
               <span className="block break-words font-medium">{active.name}</span>
               <span className="block break-all text-xs text-[var(--jf-muted)]">
-                {active.slug}.jomform.com{active.role ? ` · ${roleLabel(active.role)}` : ""}
+                {[addressLabel(active.url), active.role ? roleLabel(active.role) : ""].filter(Boolean).join(" · ")}
               </span>
             </div>
           ) : null}
@@ -258,7 +281,7 @@ export function WorkspaceSwitcher({
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    onSetDefault("");
+                    void applyDefault("");
                     setOpen(false);
                   }}
                   className="min-h-11 w-full rounded-md px-2.5 py-1.5 text-left text-sm text-[var(--jf-muted)] hover:bg-slate-50 hover:text-red-700"
@@ -270,7 +293,7 @@ export function WorkspaceSwitcher({
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    onSetDefault(active.id);
+                    void applyDefault(active.id);
                     setOpen(false);
                   }}
                   // The two STATES paint on different surfaces, so they take
@@ -366,6 +389,27 @@ export function WorkspaceSwitcher({
             )}
           </div>
         </div>
+      )}
+
+      {/* Card t_f6de6395: a REFUSED set/clear default is a real answer and must
+          be visible. `role="alert"` makes it a live region, so a screen reader
+          is told as well as a sighted merchant. It sits under the TRIGGER, not
+          inside the panel, because the panel has already closed by the time the
+          answer lands (WorkspaceSwitcher's applyDefault). Desktop paints it in
+          the panel's own slot (absolute, same width, below the chip); the drawer
+          (fullWidth) paints it in flow, where it is visible without closing the
+          drawer. z-40 keeps a re-opened panel (z-50) above it. */}
+      {defaultError && (
+        <p
+          role="alert"
+          className={
+            fullWidth
+              ? "mt-1 break-words rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-sm text-red-700"
+              : "absolute right-0 top-full z-40 mt-1 w-64 break-words rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-sm text-red-700"
+          }
+        >
+          {defaultError}
+        </p>
       )}
     </div>
   );

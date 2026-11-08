@@ -199,12 +199,12 @@ test("the page-shell tap targets are at least 44px tall", () => {
   // desktop sidebar sign-out 46x17, mobile sign-out button 34px, Requeue 71x26.
   assert.match(
     shell,
-    /aria-label="Open menu"[\s\S]{0,200}?className="[^"]*\bh-11\b[^"]*\bw-11\b/,
+    /aria-label=\{t\("nav\.openMenu"\)\}[\s\S]{0,200}?className="[^"]*\bh-11\b[^"]*\bw-11\b/,
     "the mobile hamburger is not 44x44 (measured 32x32)",
   );
   assert.match(
     shell,
-    /aria-label="Close menu"[\s\S]{0,200}?className="[^"]*\bh-11\b[^"]*\bw-11\b/,
+    /aria-label=\{t\("nav\.closeMenu"\)\}[\s\S]{0,200}?className="[^"]*\bh-11\b[^"]*\bw-11\b/,
     "the drawer close button is not 44x44 (measured 21x32)",
   );
   // Both sign-out buttons (desktop sidebar text link + drawer button).
@@ -268,7 +268,7 @@ test("the mobile topbar controls are 44px tall and no language control sits in t
   );
   assert.match(
     shell,
-    /md:hidden[\s\S]{0,1200}?aria-label="Open menu"[\s\S]{0,300}?h-11 w-11/,
+    /md:hidden[\s\S]{0,1200}?aria-label=\{t\("nav\.openMenu"\)\}[\s\S]{0,300}?h-11 w-11/,
     "the mobile hamburger is under 44px (it was 32x32)",
   );
   assert.match(

@@ -92,7 +92,7 @@ func (h *RESTHandlers) setFormChipFeeds(w http.ResponseWriter, r *http.Request, 
 	}
 	var in chipFeedsIn
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	// Load existing feeds so a blank secret_key preserves the stored secret.

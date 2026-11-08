@@ -105,6 +105,12 @@ async function stubAPI(page: Page) {
       json({
         me: { id: "u1", email: "merchant@example.com", name: "Merchant" },
         workspaces: [{ id: "ws1", name: "Demo", slug: "demo", role: "admin" }],
+        // Card t_d5f359c7: the builder now labels every canvas PRICE in the
+        // workspace's currency, which rides in the bundle (lib/money.ts
+        // formatPrice). A stub without it renders "—" and this guard would
+        // measure nothing; the workspace is MYR here because the contrast
+        // subject below is the shipped default's "RM12.34" span.
+        currency: "MYR",
       }),
     ),
   );

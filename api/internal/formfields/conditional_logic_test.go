@@ -99,7 +99,7 @@ func TestValidateFieldsSkipsAHiddenField(t *testing.T) {
 	}
 	// t1 filled → t2 is visible → required again, naming the merchant's label.
 	err := ValidateFields(regs, map[string]string{"t1": "Ali"})
-	if err == nil || !strings.Contains(err.Error(), "medan wajib tidak diisi: Emel") {
+	if err == nil || !strings.Contains(err.Error(), "Emel is required") {
 		t.Errorf("a visible required field was not enforced: %v", err)
 	}
 	// Filled → accepted, and the value is validated as before the change.

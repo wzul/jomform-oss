@@ -254,7 +254,7 @@ func TestMenuVariationOrderWithoutVariationIsRejected(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("menu order without a variation = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "pilih variasi") {
+	if !strings.Contains(rec.Body.String(), "Choose a variation") {
 		t.Errorf("rejection should tell the buyer to pick a variation, got %s", rec.Body.String())
 	}
 }

@@ -76,7 +76,7 @@ func Valid(raw string) bool {
 // sees the same explanation wherever they entered the value. The wording is
 // Malay like every other API validation message in this repo.
 func InvalidMessage(field string) string {
-	return fmt.Sprintf("%s mesti bermula dengan https:// — skema lain (data:, http:, javascript:, …) ditolak supaya imej tidak rosak pada halaman pembeli", field)
+	return fmt.Sprintf("%s must start with https:// — other schemes (data:, http:, javascript:, …) are rejected so the image does not break on the buyer's page", field)
 }
 
 // FirstInvalidList returns the first non-empty value in values that is not an
@@ -198,13 +198,13 @@ func CheckConfigShape(cfg map[string]any) (field, want string) {
 // InvalidShapeMessage is the user-facing rejection message for a config key
 // whose JSON type is one the reads cannot survive. Like InvalidMessage it names
 // the field, and it is the ONE wording used by every write path (REST returns it
-// as the 400 body, MCP returns it as the tool error). Malay, like every other API
-// validation message in this repo.
+// as the 400 body, MCP returns it as the tool error). English, like every other
+// API validation message in this repo.
 //
 // It is deliberately NOT InvalidMessage: that message states the https:// scheme
 // rule, which says nothing true about a value of the wrong JSON type.
 func InvalidShapeMessage(field, want string) string {
-	return fmt.Sprintf("%s mesti %s — bentuk lain (objek, teks, nombor) ditolak kerana ia menggagalkan penerbitan template", field, want)
+	return fmt.Sprintf("%s must be %s — other shapes (object, text, number) are rejected because they break template publishing", field, want)
 }
 
 // CheckTheme returns the caller-supplied URL field in a form theme map that

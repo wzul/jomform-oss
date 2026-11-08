@@ -71,9 +71,9 @@ const TRASHED = {
 // rest_workspaces are deliberately NOT used here; these are the two bodies the
 // page's code must translate. Malay is what the dashboard must never print.
 const PURGE_PROSE =
-  "borang ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan dengan memadam borang. Ia kekal dalam tong sampah.";
+  "this form has sales — sales history cannot be destroyed by deleting the form. It stays in the bin.";
 const RESTORE_PROSE =
-  "tidak boleh dipulihkan: slug borang ini telah diambil borang lain — tukar slug borang itu dahulu, kemudian cuba pulihkan semula";
+  "cannot be restored: this form's slug has been taken by another form — change that form's slug first, then try restoring again";
 
 const EN_HAS_SALES =
   "This form has sales, so it can't be deleted for good — sales history must not be destroyed with the form. It stays in the trash.";

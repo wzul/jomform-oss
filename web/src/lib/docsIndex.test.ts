@@ -495,6 +495,10 @@ const ORIGINAL_TITLES = [
   // Settings' inline "?" deep-links /docs#form-url-slug, so the entry (and its
   // slug) has to stay on the index; slugRenameErr.test.ts asserts it does.
   "Form URLs and slugs (rename a form)",
+  // Card t_135c3c72: the buyer-borne processing fee. It is a live destination —
+  // Settings → Payment fees and this entry point at /docs/payment-fees — so it is
+  // part of the contract like the entries above.
+  "Processing fees paid by the buyer",
   "MCP (AI agents)",
   "Design → AI agent → MCP customization",
   "Embed on your site",

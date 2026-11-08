@@ -321,7 +321,7 @@ func TestResponseSubmitAppliesBlockConditions(t *testing.T) {
 	// again and the same shape is refused. Without this the 201s above could
 	// come from a server that stopped enforcing required blocks.
 	rec = postSlug(t, h, host, slug, `{"fields":{"t1":"Ali"}}`)
-	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "medan wajib tidak diisi: Emel") {
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Emel is required") {
 		t.Errorf("visible required block: status = %d body %s, want 400 naming Emel",
 			rec.Code, rec.Body.String())
 	}
@@ -356,7 +356,7 @@ func TestFormOrderAppliesBlockConditions(t *testing.T) {
 
 	// Neutralising arm: the condition holds, so the required block is enforced.
 	rec = postSlug(t, h, host, orderSlug, `{`+client+`"fields":{"t1":"Ali"},`+items+`}`)
-	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "medan wajib tidak diisi: Emel") {
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Emel is required") {
 		t.Errorf("visible required block: status = %d body %s, want 400 naming Emel",
 			rec.Code, rec.Body.String())
 	}

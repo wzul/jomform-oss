@@ -200,6 +200,19 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		CourierNote     string
 		// Issue #249: per-product quantity selector (Gravity-Forms-style).
 		HasQuantity bool
+		// Card t_06851d88: a pay-what-you-want product block. The template
+		// renders an amount input instead of a fixed price, the page's JS folds
+		// the typed amount into the totals live, and the submit echoes it as
+		// items[].amount_sen — which the SERVER re-validates against these same
+		// limits before it prices the sale.
+		CustomAmount bool
+		AmountMinSen int64 // always ≥ payments.MinCustomAmountSen
+		AmountMaxSen int64 // 0 = no upper bound
+		// AmountSuggestSen pre-fills the input; 0 = start empty.
+		AmountSuggestSen int64
+		// AmountHint is the localized range sentence under the input
+		// ("Any amount from RM1.00").
+		AmountHint string
 	}
 
 	// Issue #471: product image size + layout, read from the form theme.
@@ -301,6 +314,30 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 						vb.Value = liveName
 					}
 				}
+				// Card t_06851d88: a pay-what-you-want product renders an amount
+				// input instead of a fixed price. Only a LIVE row can be priced
+				// by the buyer — the limits live in the products table, so a
+				// snapshot-only (archived) reference stays fixed-price rather
+				// than offering an input the server would refuse.
+				if pr := resolver.liveProduct(b.ProductID); pr != nil && pr.Type == dbstore.SaleTypeCustomAmount {
+					vb.CustomAmount = true
+					vb.HasQuantity = false // a gift is one amount, not amount × qty
+					vb.AmountMinSen = amountFloorSen(pr)
+					if pr.MaxPriceSen != nil {
+						vb.AmountMaxSen = *pr.MaxPriceSen
+					}
+					if pr.SuggestedPriceSen != nil && *pr.SuggestedPriceSen > 0 {
+						vb.AmountSuggestSen = *pr.SuggestedPriceSen
+					}
+					if vb.AmountMaxSen > 0 {
+						vb.AmountHint = strings.ReplaceAll(
+							strings.ReplaceAll(ls.AmountHintRange, "{min}", moneyLabel(vb.AmountMinSen, pr.Currency)),
+							"{max}", moneyLabel(vb.AmountMaxSen, pr.Currency))
+					} else {
+						vb.AmountHint = strings.ReplaceAll(ls.AmountHintFrom,
+							"{amount}", moneyLabel(vb.AmountMinSen, pr.Currency))
+					}
+				}
 				// Issue #153: load the product's variations for the selector.
 				if h.ProductVariations != nil {
 					if vs, verr := h.ProductVariations.ListByProduct(r.Context(), b.ProductID); verr == nil {
@@ -378,6 +415,11 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 	// are derived from the same hue so a themed button does not get an indigo
 	// hover.
 	cta := themePrimaryValues(f)
+	// Card t_135c3c72: the buyer picks the payment method HERE so the fee for
+	// that method is priced and shown before they commit. One active method is
+	// preselected (no extra click for a choice with one answer); more than one
+	// requires a pick, which the route enforces too.
+	feeOptions := h.feeChoiceViews(r.Context(), f)
 	view := map[string]any{
 		"Slug": f.Slug, "Title": f.Title, "Blocks": blocks,
 		"TrackHead":  headInjection(globalTr, formTrackingHead(f)),
@@ -405,6 +447,9 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		// Card t_9e875bca: the conditional-logic script. Both renderers emit the
 		// SAME constant so a payment form and a response form cannot drift.
 		"ConditionJS": template.HTML(blockConditionJS),
+		// Card t_135c3c72: the per-method fee chooser. Nil (no active method)
+		// renders no chooser and no fee row — the page stays exactly as it was.
+		"FeeOptions": feeOptions,
 	}
 	// Card t_a7bf0fb2: the theme keys live in ONE function both renderers call
 	// (see blockThemeView) — a copy in each renderer is how the custom-CSS
@@ -986,8 +1031,26 @@ const publicMotionCSS = `
      selector keeps this animation the page's, not the theme's. */
   .card.jf-enter { animation: jf-rise-in var(--jf-dur-base) var(--jf-ease-out) both; }
   /* Submit -> success: the current content fades out, the ok block fades in and
-     its check scales 0.9 -> 1. All three read --jf-dur-fast: 240ms total. */
-  .jf-swap-out { opacity:0; transition: opacity var(--jf-dur-fast) var(--jf-ease-out); }
+     its check scales 0.9 -> 1. All three read --jf-dur-fast: 240ms total.
+
+     .card.jf-enter's entrance fills FORWARD (both), so after it has finished it
+     is still pinning the element at the animation's origin value — and an
+     animation-origin value outranks EVERY normal author declaration, whatever
+     its specificity. A plain opacity:0 here therefore computed to 1: the class
+     was applied and the outgoing half never painted (card t_5b61dbaa, measured
+     on prod — opacity 1 at every sample of the 120ms window).
+     animation:none !important takes the entrance out of the cascade, so the
+     computed opacity actually moves; !important rather than a heavier selector
+     because the competing rule is .card.jf-enter (0,2,0) against this one's
+     (0,1,0) — a priority fight, not a specificity one.
+
+     This declaration alone is a CUT, not a fade: measured in Chromium, an
+     element whose before-change opacity comes from the animation gets no
+     transition at all and goes 1 -> 0 in one frame. The fade needs
+     jfSwapSuccess to drop jf-enter AND flush style before adding this class.
+     This rule is the fallback that keeps another caller from leaving the card
+     frozen at opacity 1. */
+  .jf-swap-out { animation: none !important; opacity:0; transition: opacity var(--jf-dur-fast) var(--jf-ease-out); }
   .jf-ok-in { animation: jf-rise-in var(--jf-dur-fast) var(--jf-ease-out) both; }
   .jf-check { display:inline-block; animation: jf-check-in var(--jf-dur-fast) var(--jf-ease-out) both; }
   @media (prefers-reduced-motion: reduce) {
@@ -1039,6 +1102,20 @@ const publicMotionJS = `
     var d=0;
     if(typeof getComputedStyle==='function'){d=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--jf-dur-fast'))||0;}
     if(!d){el.innerHTML=html;return;}
+    // The entrance animation is already at rest, but with fill:both it is still
+    // holding opacity at the animation's origin value — which outranks
+    // .jf-swap-out's normal opacity:0, so the class alone paints nothing (card
+    // t_5b61dbaa, measured on prod).
+    //
+    // Dropping jf-enter and adding jf-swap-out in ONE task is not enough
+    // either: measured in Chromium, the transition is then never created and
+    // the card cuts 1 -> 0 in a single frame, because the before-change value
+    // it would start from is still the animation's. Forcing the style/layout
+    // flush in between makes the element's OWN opacity (1) the before-change
+    // value, and the 120ms transition runs: measured 1 -> 0.477 -> 0.195 ->
+    // 0.073 -> 0.024 -> 0.006 -> 0 with transitionrun/transitionend firing.
+    el.classList.remove('jf-enter');
+    void el.offsetWidth;
     el.classList.add('jf-swap-out');
     setTimeout(function(){el.classList.remove('jf-swap-out');el.innerHTML=html;},d);
   }
@@ -1202,6 +1279,12 @@ var blockTmpl = template.Must(template.New("blocks").
   /* Issue #249: per-product quantity selector inside each product block. */
   .pqrow { display:flex; align-items:center; gap:10px; padding:0 14px 12px; }
   .pqrow input[type=number] { width:80px; margin-bottom:0; }
+  /* Card t_06851d88: the pay-what-you-want amount field (label, input, range
+     hint) sits under the product row, mirroring the quantity row. */
+  .parow { padding:0 14px 12px; }
+  .parow .lbl { display:block; margin-bottom:6px; }
+  .parow input[type=number] { width:150px; margin-bottom:0; }
+  .parow .desc { margin-top:6px; }
   .section { font-size:18px; font-weight:600; margin:18px 0 6px; color:#17181c; }
   hr { border:0; border-top:1px solid rgba(255,255,255,0.08); margin:16px 0; }
   .total { display:flex; justify-content:space-between; padding-top:12px; margin-top:8px;
@@ -1274,7 +1357,7 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "section"}}  <div class="section{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}>{{.Value}}</div>
 {{else if eq .Type "html"}}  <div class="text{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}>{{.Value}}</div>
 {{else if eq .Type "total"}}  <div class="total{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><span>{{.Value}}</span><span class="total-val">RM0.00</span></div>
-{{else if eq .Type "product"}}  <div class="prod{{if .ImgTop}} menu-card{{end}}{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><label>{{if .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}<span class="prow">{{end}}<input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}">{{if not .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}{{end}}<span class="pname">{{.Value}}</span><span class="price">{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}</span>{{if .ImgTop}}</span>{{end}}</label>{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
+{{else if eq .Type "product"}}  <div class="prod{{if .ImgTop}} menu-card{{end}}{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><label>{{if .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}<span class="prow">{{end}}<input type="checkbox" class="p" data-id="{{.ProductID}}" data-price="{{.PriceSen}}">{{if not .ImgTop}}{{if .Image}}<img class="pimg" data-size="{{.ImgSize}}" src="{{.Image}}" alt="{{.Value}}" data-base="{{.BaseImage}}">{{end}}{{end}}<span class="pname">{{.Value}}</span><span class="price">{{if .CustomAmount}}{{else}}{{if .HasPrice}}RM{{printf "%.2f" (divf .PriceSen 100)}}{{end}}{{end}}</span>{{if .ImgTop}}</span>{{end}}</label>{{if .CustomAmount}}<div class="parow"><label class="lbl" style="margin:0">{{$.Ls.AmountLabel}}</label><input type="number" class="pa" data-id="{{.ProductID}}" min="{{printf "%.2f" (divf .AmountMinSen 100)}}"{{if .AmountMaxSen}} max="{{printf "%.2f" (divf .AmountMaxSen 100)}}"{{end}} step="0.01" inputmode="decimal" value="{{if .AmountSuggestSen}}{{printf "%.2f" (divf .AmountSuggestSen 100)}}{{end}}"><div class="desc">{{.AmountHint}}</div></div>{{end}}{{if .Variations}}<div class="varwrap"><select class="v" data-id="{{.ProductID}}"><option value="" disabled selected>{{$.Ls.SelectVariation}}</option>{{range .Variations}}<option value="{{.ID}}" data-price="{{.PriceSen}}"{{if .SoldOut}} disabled{{end}}>{{.Name}} — RM{{printf "%.2f" (divf .PriceSen 100)}}{{if .Stock}} ({{.Stock}} {{$.Ls.InStock}}){{end}}</option>{{end}}</select><div class="varstock"></div></div>{{end}}{{if .HasQuantity}}<div class="pqrow"><label class="lbl" style="margin:0">{{$.Ls.Quantity}}</label><input type="number" class="pq" data-id="{{.ProductID}}" min="1" value="1"></div>{{end}}</div>
 {{else if eq .Type "quantity"}}  <div class="qtyrow{{if .CSSClass}} {{.CSSClass}}{{end}}"{{styleAttr .Style}}><label class="lbl" style="margin:0">{{.Value}}</label><input type="number" class="qty" min="1" value="{{if .DefaultValue}}{{.DefaultValue}}{{else}}1{{end}}"></div>
 {{else if eq .Type "option"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label><select class="opt{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" selected>{{$.Ls.SelectOption}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (+RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>
 {{else if eq .Type "shipping"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}{{if .Required}} {{$.Ls.Required}}{{end}}</label>{{if .Zones}}<select class="ship{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}"{{if .Courier}} data-courier="{{.CourierProvider}}"{{end}} required{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Zones}}<option value="{{.Value}}" data-price="{{.PriceSen}}"{{if .FreeOverSen}} data-free-over="{{.FreeOverSen}}"{{end}}>{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}{{if .Note}} — {{.Note}}{{end}}</option>{{end}}</select>{{else}}<select class="ship{{if .CSSClass}} {{.CSSClass}}{{end}}" data-id="{{.ProductID}}"{{if .Required}} required{{end}}{{if .RequiredMsg}} oninvalid="this.setCustomValidity('{{.RequiredMsg}}')" oninput="this.setCustomValidity('')"{{end}}><option value="" selected>{{$.Ls.SelectShipping}}</option>{{range .Choices}}<option value="{{.Value}}" data-price="{{.PriceSen}}">{{.Label}}{{if .PriceSen}} (RM{{printf "%.2f" (divf .PriceSen 100)}}){{end}}</option>{{end}}</select>{{end}}{{if .CourierNote}}<div class="desc shipnote">{{.CourierNote}}</div>{{end}}
@@ -1300,6 +1383,12 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "coupon"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}</label><div class="desc">{{$.Ls.CouponUnsupported}}</div>
 {{end}}</span>{{if .Description}}<div class="desc">{{.Description}}</div>{{end}}{{if .CondJSON}}</div>{{end}}
 {{end}}
+  {{if .FeeOptions}}<div class="jf-fees">
+  {{if gt (len .FeeOptions) 1}}<div class="lbl">{{.Ls.FeeChoose}}</div>{{end}}
+  {{range .FeeOptions}}<label class="chk"><input type="radio" name="fee_method" class="feee" value="{{.Method}}" data-fixed="{{.FixedSen}}" data-bp="{{.PercentBP}}"{{if .Selected}} checked{{end}}> {{.RateLabel}}</label>{{end}}
+  </div>{{end}}
+  {{if .FeeOptions}}<div class="total"><span>{{.Ls.FeeSubtotal}}</span><span id="fee-sub">RM0.00</span></div>
+  <div class="total"><span>{{.Ls.FeeLine}} <small id="fee-rate"></small></span><span id="fee-amt">RM0.00</span></div>{{end}}
   <div class="total"><span>{{$.Ls.Total}}</span><span id="total">RM0.00</span></div>
   {{.AntiSpam}}
   <button type="submit" form="of">{{$.Ls.Submit}}</button>
@@ -1345,7 +1434,15 @@ var blockTmpl = template.Must(template.New("blocks").
   // other blocks' line items from the order, so the page and the charge
   // disagreed. Every shipping control the page renders is part of the total.
   var ships=document.querySelectorAll('select.ship');
+  // Card t_06851d88: pay-what-you-want product amount inputs. Typing here must
+  // repaint the processing fee and the total WITHOUT a reload (the buyer is
+  // told the price before they commit), so every .pa input is wired to upd()
+  // below and its value feeds effPrice().
+  var amounts=document.querySelectorAll('input.pa');
+  function customInput(b){return document.querySelector('input.pa[data-id="'+b.dataset.id+'"]');}
   function effPrice(b){
+    var pa=customInput(b);
+    if(pa){var av=parseFloat(pa.value);return (isFinite(av)&&av>0)?Math.round(av*100):0;}
     var sel=document.querySelector('select.v[data-id="'+b.dataset.id+'"]');
     if(sel&&sel.value){var o=sel.options[sel.selectedIndex];if(o&&o.dataset.price)return Number(o.dataset.price);}
     return Number(b.dataset.price||0);
@@ -1380,18 +1477,83 @@ var blockTmpl = template.Must(template.New("blocks").
     });
     return t;
   }
-  function upd(){var t=itemsSubtotal()+shipPrice();
-    var s='RM'+(t/100).toFixed(2);
+  function upd(){
+    var base=itemsSubtotal()+shipPrice();
+    // Card t_c19c095f: an EMPTY cart is not a zero-priced order. The gross-up
+    // below mirrors payments.GrossUp, which deliberately returns the FIXED
+    // charge for a zero asking amount (a genuinely free item still costs the
+    // buyer the acquirer's fixed fee). On a page whose cart is merely NOT YET
+    // FILLED that rule painted the fixed part as "Total RM0.50" before the
+    // buyer chose anything. So the fee is priced only once the buyer has put
+    // something in the cart — a checked product, a chosen option add-on or a
+    // chosen shipping rate. A zero-priced SELECTION still grosses up, because
+    // that is exactly what the server charges for it.
+    var hasSelection=false;
+    boxes.forEach(function(b){
+      if(!b.checked)return;
+      // A checked pay-what-you-want product with no amount typed yet is not a
+      // selection: grossing up its fixed fee would paint a total for a gift
+      // the donor has not decided on.
+      if(customInput(b)&&effPrice(b)<=0)return;
+      hasSelection=true;
+    });
+    opts.forEach(function(s){if(s.value)hasSelection=true;});
+    ships.forEach(function(s){if(s.value)hasSelection=true;});
+    // Card t_135c3c72: the buyer bears the CHIP processing fee for the method
+    // they picked. The page MUST show the grossed-up total BEFORE the buyer
+    // commits (a price shown is the price paid), and it must agree with the
+    // server to the sen — so this mirrors payments.GrossUp exactly:
+    //   fee(F) = fixed + floor((F*bp + 5000) / 10000)   [round half up]
+    //   F = smallest integer with F - fee(F) >= base
+    // The naive formula (base + base*rate) is 10 sen short on RM1,000 at 1%.
+    var fr=document.querySelector('input.feee:checked');
+    var fx=fr?Number(fr.dataset.fixed||0):0;
+    var bp=fr?Number(fr.dataset.bp||0):0;
+    function feeOf(v){return fx+Math.floor((v*bp+5000)/10000);}
+    var total=base;
+    if((fx>0||bp>0)&&hasSelection){
+      var f=Math.ceil((base+fx)*10000/Math.max(1,10000-bp));
+      if(!isFinite(f)||f<base)f=base;
+      while(f-feeOf(f)<base)f++;
+      while(f>base&&(f-1)-feeOf(f-1)>=base)f--;
+      total=f;
+    }
+    var s='RM'+(total/100).toFixed(2);
     var tv=document.querySelectorAll('.total-val');tv.forEach(function(el){el.textContent=s});
-    var t1=document.getElementById('total');if(t1)t1.textContent=s;}
+    var t1=document.getElementById('total');if(t1)t1.textContent=s;
+    var fs=document.getElementById('fee-sub');
+    if(fs){fs.textContent='RM'+(base/100).toFixed(2);}
+    var fa=document.getElementById('fee-amt');
+    if(fa){fa.textContent='RM'+((total-base)/100).toFixed(2);}
+    var frl=document.getElementById('fee-rate');
+    if(frl&&fr){
+      var lbl=fr.parentNode.textContent||'';
+      frl.textContent='— '+lbl.replace(/^\s+|\s+$/g,'');
+    }
+    jfTotal=total;
+  }
+  // jfTotal is the total this page DISPLAYED; it is echoed as
+  // expected_total_sen so the server refuses to charge a different amount if a
+  // price or a rate moved while the buyer was filling the form.
+  var jfTotal=0;
   boxes.forEach(function(b){b.addEventListener('change',upd)});
   sels.forEach(function(s){s.addEventListener('change',upd)});
   document.querySelectorAll('input.pq').forEach(function(el){el.addEventListener('input',upd)});
+  amounts.forEach(function(el){el.addEventListener('input',upd)});
   opts.forEach(function(s){s.addEventListener('change',upd)});
   ships.forEach(function(s){s.addEventListener('change',upd)});
+  // Card t_135c3c72: picking a different method re-prices the fee (each method
+  // carries its own rate), so the total must be repainted on the spot.
+  document.querySelectorAll('input.feee').forEach(function(el){el.addEventListener('change',upd)});
+  // Paint the initial total/fee BEFORE the buyer touches anything: a form whose
+  // items are already selected would otherwise show RM0.00 (and echo
+  // expected_total_sen=0, disabling the server's mismatch check) until the
+  // first change — and with a processing fee active that is exactly the
+  // "surprise charge at CHIP" the disclosure rule forbids.
+  upd();
   document.getElementById('of').addEventListener('submit',function(e){
     e.preventDefault();
-    var items=[];var ok=true;
+    var items=[];var ok=true;var needAmount=false;
     boxes.forEach(function(b){
       if(!b.checked)return;
       var sel=document.querySelector('select.v[data-id="'+b.dataset.id+'"]');
@@ -1399,6 +1561,16 @@ var blockTmpl = template.Must(template.New("blocks").
       if(sel){
         if(!sel.value){ok=false;return;}
         item.variation_id=sel.value;
+      }
+      // Card t_06851d88: a pay-what-you-want product posts the amount the
+      // buyer typed. The page only checks it is non-empty and positive — the
+      // SERVER re-validates it against the product's limits and is the price
+      // authority. Quantity is 1: the amount IS the gift.
+      if(customInput(b)){
+        var amt=effPrice(b);
+        if(amt<=0){needAmount=true;return;}
+        item.quantity=1;
+        item.amount_sen=amt;
       }
       items.push(item);
     });
@@ -1416,6 +1588,7 @@ var blockTmpl = template.Must(template.New("blocks").
     ships.forEach(function(s){
       if(s.value)items.push({product_id:s.dataset.id,quantity:1});
     });
+    if(needAmount){alert('{{.Ls.AmountRequiredAlert}}');return;}
     if(!items.length){alert('{{.Ls.NoProductAlert}}');return;}
     if(!ok){alert('{{.Ls.SelectVariationAlert}}');return;}
     // Issue #186: collect every input block's value keyed by its block id so
@@ -1444,6 +1617,12 @@ var blockTmpl = template.Must(template.New("blocks").
       email:live('[name=email]'),
       phone:live('[name=phone]')},
       fields:fields,items:items,payment_method:'chip',
+      // Card t_135c3c72: the method the buyer chose ('' when no fee applies) and
+      // the total this page displayed. Both are CLAIMS the server re-checks: it
+      // re-resolves the rate, recomputes the total, and refuses (400) rather
+      // than silently charging a different amount.
+      fee_method:(function(){var f=document.querySelector('input.feee:checked');return f?f.value:'';})(),
+      expected_total_sen:jfTotal,
       // Issue #444: affiliate marketing — echo the ?aff=CODE the buyer landed
       // with so the sale is attributed to that affiliate.
       affiliate_code:(new URLSearchParams(location.search).get('aff')||''),
@@ -1466,7 +1645,7 @@ var blockTmpl = template.Must(template.New("blocks").
           if(window.self!==window.top){window.top.location.href=url;}
           else{location.href=url;}
         }
-        else{alert('{{.Ls.ErrorAlert}}'+(d.error?': '+d.error:''));}})
+        else{var em=d.message||d.error;alert('{{.Ls.ErrorAlert}}'+(em?': '+em:''));}})
       // Card t_e2024698: without this, a non-JSON answer (an edge error page, a
       // proxy 5xx) made r.json() reject and the buyer's click did NOTHING — no
       // message at all. Any unreadable answer is reported as the same
@@ -1964,7 +2143,8 @@ var responseTmpl = template.Must(template.New("response").
           // with the reference, instead of an alert the buyer can dismiss.
           jfPayFail(d);
         } else {
-          alert('{{$.Ls.ErrorAlert}}'+(d.error?': '+d.error:''));
+          var em=d.message||d.error;
+          alert('{{$.Ls.ErrorAlert}}'+(em?': '+em:''));
         }
       })
       // Card t_e2024698: a non-JSON answer must not leave the buyer with

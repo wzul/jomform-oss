@@ -179,8 +179,19 @@ run_installer() { INST_OUT="$(bash "$INSTALLER_LIVE" "$@" 2>&1)"; INST_RC=$?; }
 # failure explained itself was past the cut. Called on every non-zero installer exit.
 # It prints and nothing else (no counters, no globals), so a caller may run it inside
 # a `$(…)` — which is how the diagnostic's own control arm reads it.
+#
+# IT LED WITH THE FAILING CHECKS (card t_1483975b). The installer's own failure block
+# is `failing check(s)` → `tail -20` → `proof log kept: …` → `ERROR: …`, so a fixed
+# tail of the INSTALLER's output could still end above the one line that names the
+# failing check. Any line that looks like a per-check FAIL is therefore printed FIRST,
+# whatever the tail window is.
 dump_installer_output() { # [<lines>] -> installer output on stdout
-  local n="${1:-25}"
+  local n="${1:-25}" fails
+  fails="$(printf '%s\n' "$INST_OUT" | grep -E '^[[:space:]]*(FAIL|✘|not ok)' || true)"
+  if [ -n "$fails" ]; then
+    printf '    ---- failing check(s) named by the installer ----\n'
+    printf '%s\n' "$fails" | sed 's/^/    | /'
+  fi
   printf '    ---- installer output, last %s line(s) ----\n' "$n"
   printf '%s\n' "$INST_OUT" | tail -n "$n" | sed 's/^/    | /'
   printf '    ---- end installer output ----\n'
@@ -459,6 +470,85 @@ check "...which the old head-only cut would have dropped (so this arm measures t
 cp "$SB/installer.keep.diag" "$INSTALLER_LIVE"
 check "...and the installer copy is restored" "0" \
   "$(grep -cF 'rm -f "$DEST_DIR/$SUITE_NAME"' "$INSTALLER_LIVE")"
+
+echo "--- the diagnostic on the SOURCE proof (card t_1483975b), on a stub suite ---"
+# The red this card is about did not always land on the installed copy: the log kept by
+# card t_16d159f5 shows the SAME shape at step 1 (`212 passed, 1 failed` on the
+# `--from-ref` extraction, failing check above the installer's `tail -20`). The source
+# call site therefore gets its own arm. A STUB suite stands in for the real one so the
+# arm costs milliseconds (the real suite's log shape is driven below, on the installed
+# copy): what is pinned here is the CALL SITE — that a failing source proof names its
+# failing check and keeps its log, and that nothing is installed.
+git -C "$REPO" checkout -q -b failing-source main
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'printf "  FAIL stub: the source proof failed\\n"\n'
+  printf 'printf "stub suite: 0 passed, 1 failed\\n"\n'
+  printf 'exit 1\n'
+} >"$REPO/deploy/worktrees/prune-kanban-worktrees_test.sh"
+git -C "$REPO" commit -q -am "a source suite that fails"
+git -C "$REPO" checkout -q main
+mkdir -p "$SB/repair-h"
+run_installer --from-ref failing-source --hermes-home "$SB/repair-h"
+check "S5a a failing SOURCE proof exits 1" "1" "$INST_RC"
+contains "...naming the failing check from the SOURCE proof" "$INST_OUT" "FAIL stub: the source proof failed"
+contains "...and saying WHICH proof it was" "$INST_OUT" "failing check(s) in the source self-test"
+contains "...and refusing to install anything" "$INST_OUT" "refusing to install a pruner that has not proven itself"
+KEPT_SRC="$(printf '%s\n' "$INST_OUT" | sed -n 's/^proof log kept: //p' | tail -n1)"
+check "S5a ...with the proof log KEPT and named" "yes" \
+  "$( [ -n "$KEPT_SRC" ] && [ -f "$KEPT_SRC" ] && echo yes || echo no )"
+contains "S5a ...holding the same failing line after the installer exited" \
+  "$(cat "$KEPT_SRC" 2>/dev/null)" "FAIL stub: the source proof failed"
+contains "S5a ...and the log carries the summary the gate would have seen" \
+  "$(cat "$KEPT_SRC" 2>/dev/null)" "stub suite: 0 passed, 1 failed"
+check "S5a ...and NOTHING was installed" "absent" \
+  "$( [ -e "$SB/repair-h/scripts" ] && echo present || echo absent )"
+rm -f "$KEPT_SRC"
+
+echo "--- the diagnostic on the INSTALLED proof, on the REAL suite (card t_1483975b) ---"
+# THE ARM THE CARD ASKS FOR. The installed copy is sabotaged between step 2 and step 3
+# so exactly ONE of the suite's checks fails — the live-process KEEP message is renamed —
+# and it fails EARLY in the suite, far above the last 20 lines. That is the shape the
+# card measured (`212 passed, 1 failed` with no failing line in the dump): the source
+# proof still passes, so the red is the installed copy's, and the old display could not
+# have named it. Everything below is read off the run.
+cp "$INSTALLER_LIVE" "$SB/installer.keep.s5"
+awk -v inject='  sed -i "s@(worker process alive)@(worker process alive!)@" "$DEST_DIR/$SRC_NAME"' '
+  /SKIP_PROOF.*= 0/ && !done { print; print inject; done = 1; next }
+  { print }
+' "$INSTALLER_LIVE" >"$SB/installer.diag2"
+cp "$SB/installer.diag2" "$INSTALLER_LIVE"
+check "S5b premise: the sabotage landed (the installed pruner's KEEP message is renamed just before step 3)" \
+  "1" "$(grep -cF 'sed -i "s@(worker process alive)@(worker process alive!)@" "$DEST_DIR/$SRC_NAME"' "$INSTALLER_LIVE")"
+check "S5b premise: ...and that anchor exists exactly once, so it cannot fire twice or not at all" \
+  "1" "$(grep -c 'SKIP_PROOF.*= 0' "$INSTALLER_LIVE")"
+mkdir -p "$SB/repair-g"
+run_installer --from-ref main --hermes-home "$SB/repair-g"
+check "S5b a sabotaged installed copy FAILS the repair" "1" "$INST_RC"
+contains "...while the SOURCE proof passed, so the red is the INSTALLED copy's" "$INST_OUT" "source verified:"
+check "...and the installed pruner really carries the mutation" "yes" \
+  "$(grep -qF '(worker process alive!)' "$SB/repair-g/scripts/prune-kanban-worktrees.sh" && echo yes || echo no)"
+DIAG_INST="$(dump_installer_output)"
+contains "...the installer's own output names the failing check BY NAME" \
+  "$DIAG_INST" "the live-process refusal is logged"
+contains "...under a heading that says which proof failed" \
+  "$DIAG_INST" "failing check(s) in the installed self-test"
+contains "...and says it kept the log" "$DIAG_INST" "proof log kept:"
+KEPT_LOG="$(printf '%s\n' "$INST_OUT" | sed -n 's/^proof log kept: //p' | tail -n1)"
+check "S5b ...the named log still EXISTS after the installer exited (it used to be deleted with the run)" \
+  "yes" "$( [ -n "$KEPT_LOG" ] && [ -f "$KEPT_LOG" ] && echo yes || echo no )"
+check "S5b ...and it really is the failing installed-copy proof: exactly ONE check failed" \
+  "1" "$(grep -oE '[0-9]+ failed' "$KEPT_LOG" 2>/dev/null | tail -1 | cut -d' ' -f1)"
+contains "S5b ...naming the same failing check in the log" \
+  "$(cat "$KEPT_LOG" 2>/dev/null)" "the live-process refusal is logged"
+# The defect, measured on the SAME log: the pre-fix dump was `tail -20`, and the failing
+# check is not in it. So this arm cannot be satisfied by the old display.
+check "S5b ...which the pre-fix 'tail -20' dump could NOT have shown" "0" \
+  "$(tail -20 "$KEPT_LOG" 2>/dev/null | grep -cF 'the live-process refusal is logged')"
+cp "$SB/installer.keep.s5" "$INSTALLER_LIVE"
+check "S5b ...and the installer copy is restored" "0" \
+  "$(grep -cF 'worker process alive!)' "$INSTALLER_LIVE")"
+rm -f "$KEPT_LOG"
 
 echo "--- the bite: each guard, neutered on a copy, flips its own arm ---"
 # A green arm is not evidence until the guard behind it has been seen to matter. Each

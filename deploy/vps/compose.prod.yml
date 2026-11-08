@@ -1,5 +1,27 @@
-# JomForm production stack (Dokploy) — api + web + pg18 + valkey + minio
+# JomForm production stack (Dokploy) — api + web + pg18 + valkey + S3 (SeaweedFS)
 # All images local (built on host) or pinned public images.
+#
+# WHY SEAWEEDFS AND NOT MINIO (measured 2026-11-03). MinIO's community images are
+# not published any more: `docker manifest inspect minio/minio:latest` and
+# `minio/mc:latest` both answer `denied: requested access to the resource is
+# denied` on Docker Hub, and `quay.io/minio/minio:latest` has no such manifest.
+# A stack that names them cannot be stood up on a fresh host — `docker compose
+# up` aborts at the pull, before anything starts — and the `minio-init` one-shot
+# had the same problem with `minio/mc`. SeaweedFS is Apache-2.0, publishes a
+# public image, and speaks the S3 API this stack needs (the same substitution
+# deploy/docker-compose.yml made for the self-hosted install).
+#
+# THE BUCKET IS NOT PROVISIONED HERE. The API creates it at startup
+# (objstore.EnsureBucket: HeadBucket → CreateBucket → PutBucketPolicy), so
+# `minio-init` — the container that used to run `mc mb` — has nothing left to do.
+#
+# THE EXISTING HOST'S MEDIA IS NOT CONVERTED BY THIS FILE. MinIO and SeaweedFS do
+# not share an on-disk format, so the `miniodata` volume is not readable by the
+# new service: the objects have to be copied through the S3 API while the old
+# server is still running. That is deploy/vps/migrate-media.sh, and it must be
+# run BEFORE the first `up` of this file on an existing host — see
+# deploy/HOST-SETUP.md § "Moving production off MinIO". A FRESH host needs none of
+# it: there is no data, and the API creates the bucket.
 
 services:
   postgres:
@@ -35,39 +57,39 @@ services:
       timeout: 3s
       retries: 12
 
-  minio:
-    image: minio/minio:latest
+  # ── object storage ────────────────────────────────────────────────────────
+  # One process: master + volume + filer + the S3 gateway on 8333. The bucket is
+  # created by the api at startup (see the header), so there is no init service.
+  # The secrets are REQUIRED and fail closed (`:?`), so a host whose env file has
+  # not been updated refuses to start instead of coming up with empty
+  # credentials — which is how a half-finished migration would otherwise look.
+  s3:
+    image: chrislusf/seaweedfs:4.50
     restart: unless-stopped
-    command: ["server", "/data", "--console-address", ":9001"]
+    # -ip.bind=0.0.0.0 so the compose network can reach it; without it the
+    # services advertise 127.0.0.1 and the api's requests land on its own
+    # loopback.
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-ip.bind=0.0.0.0"]
     environment:
-      MINIO_ROOT_USER: jomform
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # The S3 identity the api authenticates as. Both sides read the same two
+      # values, so they cannot drift into "the bucket exists but nobody may
+      # write to it".
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required — see deploy/vps/.env.prod.example}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — see deploy/vps/.env.prod.example}
     volumes:
-      - miniodata:/data
+      - s3data:/data
     networks:
-      - dokploy-network
       - internal
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      # An UNSIGNED GET / answered with the S3 error document proves the S3
+      # handler is serving, not merely that a socket is open: a port check would
+      # pass while the filer is still starting, and the api would then fail its
+      # one-shot bucket provisioning and disable uploads for good.
+      test: ["CMD-SHELL", "curl -s http://127.0.0.1:8333/ | grep -q AccessDenied"]
       interval: 10s
       timeout: 5s
       retries: 10
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_started
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 jomform $$MINIO_ROOT_PASSWORD &&
-      mc mb --ignore-existing local/jomform-media &&
-      mc version enable local/jomform-media &&
-      echo 'buckets ready'"
-    environment:
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    networks:
-      - internal
+      start_period: 15s
 
   api:
     image: jomform-api:latest
@@ -75,9 +97,9 @@ services:
     environment:
       DATABASE_URL: postgres://jomform:${POSTGRES_PASSWORD}@postgres:5432/jomform?sslmode=disable
       VALKEY_URL: valkey://valkey:6379/0
-      S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: jomform
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_ENDPOINT: http://s3:8333
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required — see deploy/vps/.env.prod.example}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — see deploy/vps/.env.prod.example}
       S3_BUCKET: jomform-media
       S3_REGION: us-east-1
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
@@ -114,6 +136,12 @@ services:
         condition: service_healthy
       valkey:
         condition: service_healthy
+      # The api provisions the bucket itself, but it needs the S3 endpoint to be
+      # SERVING when it does: a failed EnsureBucket disables the media store for
+      # the life of the process (uploads answer 503), so the api must not start
+      # while the store is still coming up.
+      s3:
+        condition: service_healthy
     networks:
       - dokploy-network
       - internal
@@ -131,7 +159,10 @@ services:
 volumes:
   pgdata:
   valkeydata:
-  miniodata:
+  # The object store's own data. NOT the old `miniodata`: that volume is MinIO's
+  # on-disk format and this server cannot read it (see the header). It is left in
+  # place, untouched, until the migration has been verified.
+  s3data:
 
 networks:
   dokploy-network:

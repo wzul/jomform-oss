@@ -51,11 +51,11 @@ func (h *RESTHandlers) generateWorkspaceLegalPage(w http.ResponseWriter, r *http
 		return
 	}
 	if !roleAtLeast(role, dbstore.RoleManage) {
-		writeErr(w, http.StatusForbidden, "perlu peranan manage atau admin")
+		writeErr(w, http.StatusForbidden, "you need the manage or admin role")
 		return
 	}
 	if h.LLM == nil {
-		writeErr(w, http.StatusServiceUnavailable, "penjanaan LLM tidak tersedia")
+		writeErr(w, http.StatusServiceUnavailable, "LLM generation is not available")
 		return
 	}
 	var in struct {
@@ -71,11 +71,11 @@ func (h *RESTHandlers) generateWorkspaceLegalPage(w http.ResponseWriter, r *http
 		EffectiveDate  string `json:"effective_date"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	if !validLegalPageType(in.Type) {
-		writeErr(w, http.StatusBadRequest, "type mesti privacy|terms|refund")
+		writeErr(w, http.StatusBadRequest, "type must be privacy|terms|refund")
 		return
 	}
 	content, err := h.LLM.GenerateLegalPage(r.Context(), in.Type, llm.BusinessDetails{
@@ -94,7 +94,7 @@ func (h *RESTHandlers) generateWorkspaceLegalPage(w http.ResponseWriter, r *http
 		// 503 the nil-client branch above answers), not a generic internal
 		// error: the merchant's fix is an operator fixing the key, and the UI
 		// already has copy for the unavailable case.
-		respondAIErr(w, r, err, "penjanaan LLM tidak tersedia")
+		respondAIErr(w, r, err, "LLM generation is not available")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
@@ -112,7 +112,7 @@ func (h *RESTHandlers) saveWorkspaceLegalPage(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if !roleAtLeast(role, dbstore.RoleManage) {
-		writeErr(w, http.StatusForbidden, "perlu peranan manage atau admin")
+		writeErr(w, http.StatusForbidden, "you need the manage or admin role")
 		return
 	}
 	var in struct {
@@ -121,15 +121,15 @@ func (h *RESTHandlers) saveWorkspaceLegalPage(w http.ResponseWriter, r *http.Req
 		Mode    string `json:"mode"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	if !validLegalPageType(in.Type) {
-		writeErr(w, http.StatusBadRequest, "type mesti privacy|terms|refund")
+		writeErr(w, http.StatusBadRequest, "type must be privacy|terms|refund")
 		return
 	}
 	if in.Mode != dbstore.LegalModeAuto && in.Mode != dbstore.LegalModeManual {
-		writeErr(w, http.StatusBadRequest, "mode mesti auto|manual")
+		writeErr(w, http.StatusBadRequest, "mode must be auto|manual")
 		return
 	}
 	if err := h.Workspaces.SaveLegalPage(r.Context(), &dbstore.LegalPage{
@@ -179,7 +179,7 @@ func (h *PublicHandlers) handlePublicLegalPage(w http.ResponseWriter, r *http.Re
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, "ralat", http.StatusInternalServerError)
+		http.Error(w, "error", http.StatusInternalServerError)
 		return
 	}
 	title := map[string]string{

@@ -26,12 +26,19 @@ import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { createWorkspace, enterWorkspace } from "../../lib/workspace";
 import { translateApiErr } from "../../lib/apiErr";
 import { pickerCopyKeys, pickerMode } from "../../lib/workspacePickerState";
+import { addressLabel, workspaceAddressLabel } from "../../lib/deployment";
+import { useDeployment } from "../../components/useDeployment";
 
 // The subset of /api/auth/me this page needs.
 type Me = { default_workspace_id?: string };
 
 export default function WorkspacePickerPage() {
   const { t } = useI18n();
+  // Card t_48a93084: the hint under the slug field used to promise
+  // "<slug>.jomform.com" on EVERY install. On a self-hosted deployment that
+  // host does not exist; the workspace is the install's own origin. null until
+  // /api/meta answers, so the hint is absent rather than wrong.
+  const deployment = useDeployment();
   const router = useRouter();
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
   const [defaultId, setDefaultId] = useState("");
@@ -45,6 +52,13 @@ export default function WorkspacePickerPage() {
   // account with zero workspaces.
   const [loadError, setLoadError] = useState("");
   const [createError, setCreateError] = useState("");
+  // And a THIRD failure, its own state (card t_57954ce5): the set-default
+  // WRITE's refusal. It used to be written into `loadError`, so a 4xx on
+  // "Make this the default workspace" replaced the whole list — the rows the
+  // merchant was acting on — with the load-error panel and a Retry button, even
+  // though the list had been read successfully and was still valid. A failed
+  // write is not a failed read: the refusal is rendered beside the rows.
+  const [setDefaultError, setSetDefaultError] = useState("");
   // Issue #503: a REAL loading flag. Never infer "loading" from an empty list —
   // that is what made empty, failed and loading indistinguishable.
   const [checking, setChecking] = useState(true);
@@ -70,10 +84,30 @@ export default function WorkspacePickerPage() {
     window.location.href = "/login";
   }, [router]);
 
+  // A 401/403 on a READ means the session may be gone, so the read arms below
+  // still bounce. A WRITE is a different question (card t_25e9224b): only a
+  // **401** says the session itself is dead. This route answers "not your
+  // workspace" with `403 {"code":"request.forbidden"}`
+  // (api/internal/httpapi/profile.go's handleSetDefaultWorkspace) — a refusal of
+  // the CHANGE from a session that is still perfectly alive. Sending that
+  // through `goToLogin` navigated a signed-in merchant to /login and destroyed
+  // the rows they were working on: measured on prod v1.22.126, `location.href`
+  // became /login, `main li` 0, no sentence, while `/api/auth/me` still answered
+  // 200 with the default unchanged. So the write navigates ONLY on 401 and every
+  // other refusal lands in `setDefaultError`, beside the rows.
+  const goToLoginIfSessionDead = useCallback(
+    (status: number) => {
+      if (status === 401) goToLogin();
+    },
+    [goToLogin],
+  );
+
   const load = useCallback(async () => {
     setChecking(true);
     setLoadError("");
     setCreateError("");
+    // A fresh read supersedes any refusal the old list produced.
+    setSetDefaultError("");
     // The workspaces list is the one that decides the page state. `me` only
     // supplies the default-workspace badge, so a failure there must never hide
     // a perfectly good list.
@@ -144,29 +178,44 @@ export default function WorkspacePickerPage() {
 
   async function setDefault(workspaceId: string) {
     setBusy(true);
-    setLoadError("");
+    // NEVER `setLoadError` here (card t_57954ce5): `loadError` means "the
+    // workspace LIST could not be read", and it is an input to `pickerMode` —
+    // writing this refusal into it swapped the list out for the error panel and
+    // a Retry button (measured: 2 rows -> 0). The list this write was made from
+    // is still valid, so the refusal belongs beside the rows.
+    setSetDefaultError("");
     const r = await runLoad(
       () => fetchJson<unknown>("/api/auth/profile/default-workspace", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspace_id: workspaceId }),
       }),
-      { onUnauth: goToLogin, message: t("workspace.setDefaultFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
+      // NOT `goToLogin` (card t_25e9224b): a refused WRITE is a 4xx about the
+      // change, and this route's answer for "not your workspace" is a 403 with
+      // `request.forbidden` — a code `wsfetch` does not know as a tenancy
+      // refusal, so it classifies as `unauth`. Navigating on that threw a
+      // signed-in merchant out of the list for a session that was still alive.
+      // Only a 401 (the session really is gone) navigates.
+      { onUnauth: goToLoginIfSessionDead, message: t("workspace.setDefaultFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
     );
     if (!r.ok) {
-      setLoadError(r.error);
+      setSetDefaultError(r.error);
       setBusy(false);
       return;
     }
     setDefaultId(workspaceId);
+    setSetDefaultError("");
     setBusy(false);
   }
 
-  // The mode is decided by the LOAD's outcome only (card t_6c0badbe) — see
-  // lib/workspacePickerState.ts. `createError` is deliberately not an input:
-  // a refused slug cannot take the merchant's fields away from them.
+  // The mode is decided by the LOAD's outcome only (cards t_6c0badbe and
+  // t_57954ce5) — see lib/workspacePickerState.ts. Neither `createError` nor
+  // `setDefaultError` is an input: a refused slug cannot take the merchant's
+  // fields away from them, and a refused set-default cannot take the rows away.
   const mode = pickerMode({ checking, loadError, workspaceCount: workspaces.length });
-  const copy = pickerCopyKeys(mode);
+  // The count goes into the copy too: with one workspace the "multiple
+  // workspaces, pick one" sentence is false (that is the whole bug).
+  const copy = pickerCopyKeys(mode, workspaces.length);
 
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[var(--jf-bg)] px-6">
@@ -253,9 +302,9 @@ export default function WorkspacePickerPage() {
                   disabled={busy}
                   className="min-h-11 w-full rounded-md border border-[var(--jf-border)] bg-white px-3 text-sm text-[var(--jf-text)] outline-none focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50 disabled:opacity-50"
                 />
-                {newSlug && (
+                {newSlug && workspaceAddressLabel(newSlug, deployment) && (
                   <p className="mt-1 text-jf-2xs text-[var(--jf-muted)]">
-                    {t("workspace.askHost", { slug: newSlug })}
+                    {t("workspace.askHost", { host: workspaceAddressLabel(newSlug, deployment) })}
                   </p>
                 )}
               </div>
@@ -273,54 +322,70 @@ export default function WorkspacePickerPage() {
               </button>
             </form>
           ) : (
-            <ul className="space-y-2">
-              {workspaces.map((s) => {
-                const isDefault = s.id === defaultId;
-                return (
-                  <li
-                    key={s.id}
-                    className="flex flex-col gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-[var(--jf-text)]">
-                        {s.name}
-                        {isDefault && (
-                          <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-primary-on-tint)]">
-                            {t("workspace.defaultLabel")}
-                          </span>
+            <>
+              {/* A refused set-default renders HERE, beside the rows it failed
+                  to change (card t_57954ce5) — never as the page's load-error
+                  panel, which says the list could not be read. The badge on the
+                  default row below is the page's claim about SERVER state, and
+                  it is still true. */}
+              {setDefaultError && (
+                <p role="alert" className="mb-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-jf-sm text-red-700">
+                  {setDefaultError}
+                </p>
+              )}
+              <ul className="space-y-2">
+                {workspaces.map((s) => {
+                  const isDefault = s.id === defaultId;
+                  return (
+                    <li
+                      key={s.id}
+                      className="flex flex-col gap-3 rounded-lg border border-[var(--jf-border)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-[var(--jf-text)]">
+                          {s.name}
+                          {isDefault && (
+                            <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-primary-on-tint)]">
+                              {t("workspace.defaultLabel")}
+                            </span>
+                          )}
+                          {s.role && (
+                            <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-muted-on-tint)]">
+                              {roleLabel(s.role)}
+                            </span>
+                          )}
+                        </p>
+                        {/* The address the API publishes for this deployment
+                            (card t_48a93084) — never composed here. */}
+                        {s.url && (
+                          <p className="truncate text-jf-2xs text-[var(--jf-muted)]">{addressLabel(s.url)}</p>
                         )}
-                        {s.role && (
-                          <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-muted-on-tint)]">
-                            {roleLabel(s.role)}
-                          </span>
+                        {!isDefault && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setDefault(s.id)}
+                            title={t("workspace.setDefault")}
+                            className="mt-1.5 text-jf-2xs text-[var(--jf-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)] disabled:opacity-50"
+                          >
+                            {t("workspace.setDefault")}
+                          </button>
                         )}
-                      </p>
-                      <p className="truncate text-jf-2xs text-[var(--jf-muted)]">{s.slug}.jomform.com</p>
-                      {!isDefault && (
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2 sm:justify-end">
                         <button
                           type="button"
-                          disabled={busy}
-                          onClick={() => setDefault(s.id)}
-                          title={t("workspace.setDefault")}
-                          className="mt-1.5 text-jf-2xs text-[var(--jf-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)] disabled:opacity-50"
+                          onClick={() => enter(s.slug)}
+                          className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
                         >
-                          {t("workspace.setDefault")}
+                          {t("workspace.enter")}
                         </button>
-                      )}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2 sm:justify-end">
-                      <button
-                        type="button"
-                        onClick={() => enter(s.slug)}
-                        className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
-                      >
-                        {t("workspace.enter")}
-                      </button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
           )}
         </div>
 

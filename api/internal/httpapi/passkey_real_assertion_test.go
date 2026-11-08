@@ -422,7 +422,7 @@ func TestPasskeyLoginStillRejectsAChangedBackupEligibleFlag(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode the 401 body: %v (%s)", err, rec.Body.String())
 	}
-	if out["error"] != "passkey tidak sah" {
+	if out["error"] != "invalid passkey" {
 		t.Fatalf("the 401 body is %v, want the passkey error — the refusal must stay the passkey path's",
 			rec.Body.String())
 	}

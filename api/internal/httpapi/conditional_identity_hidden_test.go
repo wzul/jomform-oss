@@ -29,7 +29,7 @@ package httpapi
 //     whatever the page does. The order route must also stop demanding a
 //     client.email its own page cannot fill (the hidden email block disables the
 //     only control that could supply it), which used to make such a payment form
-//     unorderable — 400 "butiran tidak lengkap" for a field never shown.
+//     unorderable — 400 "Incomplete details" for a field never shown.
 //
 // BITE: re-introduce either half and the named test reds while the shipped
 // 201-with-the-block-id-absent behaviour (card t_9e875bca, TestResponseSubmitAppliesBlockConditions)
@@ -372,7 +372,7 @@ func TestResponseSubmitDropsTheIdentityOfAHiddenBlock(t *testing.T) {
 // Acceptance #3 (order route): a payment form whose email block is hidden for
 // this submission cannot be ordered today — the page's only control for
 // client.email is disabled, so client.email is empty and the order route refuses
-// the order with 400 "butiran tidak lengkap" for a field the buyer was never
+// the order with 400 "Incomplete details" for a field the buyer was never
 // shown. The requirement must be skipped for exactly that submission, and the
 // identity rule still applies to what is stored.
 func TestFormOrderAcceptsAHiddenConditionalEmailBlock(t *testing.T) {
@@ -409,8 +409,8 @@ func TestFormOrderAcceptsAHiddenConditionalEmailBlock(t *testing.T) {
 	// Neutralising arm: with the rule TRUE the email block is visible, the page
 	// fills it, and the requirement still applies to a POST that omits it.
 	rec = postSlug(t, h, host, orderSlug, `{"fields":{"`+identityGateField+`":"`+identityGateShow+`"},`+items+`}`)
-	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "butiran tidak lengkap") {
-		t.Errorf("a VISIBLE email block must still be required: status = %d body %s, want 400 butiran tidak lengkap",
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Incomplete details") {
+		t.Errorf("a VISIBLE email block must still be required: status = %d body %s, want 400 Incomplete details",
 			rec.Code, rec.Body.String())
 	}
 

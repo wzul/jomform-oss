@@ -419,7 +419,8 @@ var customFormTmpl = template.Must(template.New("custom").
           // fallback inside jfSwapSuccess.
           jfSwapSuccess(card,'<div class="ok jf-ok-in"><h1><span class="jf-check">✓</span> {{$.Ls.ThankYou}}</h1><div class="msg">'+msg+'</div></div>');
         } else {
-          alert('{{$.Ls.ErrorAlert}}'+(d.error?': '+d.error:''));
+          var em=d.message||d.error;
+          alert('{{$.Ls.ErrorAlert}}'+(em?': '+em:''));
         }
       })
       // Card t_e2024698: a non-JSON answer (an edge error page, a proxy 5xx)

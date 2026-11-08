@@ -26,9 +26,10 @@
 package shipping
 
 import (
-	"errors"
 	"sort"
 	"strings"
+
+	"github.com/wzul/jomform/api/internal/buyertext"
 )
 
 // Rate sources a shipping block can name in its `source` field.
@@ -58,27 +59,28 @@ const (
 	OnNoMatchDefault = "default"
 )
 
-// Errors the caller turns into a buyer-facing 400. They are Malay like every
-// other public submit message in this repo.
+// Errors the caller turns into a buyer-facing 400. Each carries a stable
+// refusal code and its English wire prose; the HTTP layer renders the same
+// sentence in the buyer's resolved language (internal/buyertext).
 var (
 	// ErrNoZone: nothing in the set matches the submitted address and the
 	// block rejects unmatched addresses.
-	ErrNoZone = errors.New("tiada penghantaran ke alamat ini")
+	ErrNoZone = buyertext.New(buyertext.CodeShipNoDelivery, nil)
 	// ErrNoFallback: on_no_match=default but the set declares no fallback zone.
-	ErrNoFallback = errors.New("alamat ini tiada zon penghantaran dan set zon tiada zon lalai")
+	ErrNoFallback = buyertext.New(buyertext.CodeShipNoZoneNoDefault, nil)
 	// ErrZoneUnknown: the submitted zone choice is not in the block's set.
-	ErrZoneUnknown = errors.New("zon penghantaran tidak sah")
+	ErrZoneUnknown = buyertext.New(buyertext.CodeShipZoneInvalid, nil)
 	// ErrZoneMismatch: the submitted zone choice disagrees with the zone the
 	// address resolves to. Refused rather than re-priced behind the buyer's
 	// back — the client's shown price would be a lie.
-	ErrZoneMismatch = errors.New("zon penghantaran tidak sepadan dengan alamat")
+	ErrZoneMismatch = buyertext.New(buyertext.CodeShipZoneMismatch, nil)
 	// ErrNoRate: the matched zone carries no rate row.
-	ErrNoRate = errors.New("zon penghantaran ini belum ada kadar")
+	ErrNoRate = buyertext.New(buyertext.CodeShipZoneNoRate, nil)
 	// ErrNoRateForWeight: the block declares a parcel weight and no rate row's
 	// band covers it.
-	ErrNoRateForWeight = errors.New("tiada kadar penghantaran untuk berat ini")
+	ErrNoRateForWeight = buyertext.New(buyertext.CodeShipNoRateForWeight, nil)
 	// ErrNotSupported: a source this phase does not implement (courier).
-	ErrNotSupported = errors.New("sumber kadar penghantaran ini belum disokong")
+	ErrNotSupported = buyertext.New(buyertext.CodeShipSourceUnsupported, nil)
 )
 
 // Rate is one rate row of a zone: a price, an optional weight band and an

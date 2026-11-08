@@ -76,7 +76,7 @@ func assertIDMiss(t *testing.T, h *RESTHandlers, key, method, path, body, what s
 		t.Errorf("%s %s (%s) = %d, want 404 (body=%s)", method, path, what, code, raw)
 		return
 	}
-	if got := idLookupBody(t, raw)["error"]; got != "tidak dijumpai" {
+	if got := idLookupBody(t, raw)["error"]; got != "not found" {
 		t.Errorf("%s %s (%s) error = %v, want \"tidak dijumpai\" (body=%s)", method, path, what, got, raw)
 	}
 }
@@ -277,9 +277,9 @@ func TestIDTakingRoutesAnswer404ForUnresolvableIDs(t *testing.T) {
 	// the status plus that the answer is a not-found rather than the masked
 	// internal error a 22P02 leak produced.
 	for _, c := range []struct{ name, path, wantMsg string }{
-		{"non-uuid delivery id", "/v1/rest/webhooks/" + mineHook.ID + "/deliveries/not-a-uuid/retry", "penghantaran tidak dijumpai"},
-		{"non-uuid retry id", "/v1/rest/webhooks/" + mineHook.ID + "/retries/not-a-uuid/retry", "retry tidak dijumpai"},
-		{"foreign delivery id", "/v1/rest/webhooks/" + mineHook.ID + "/deliveries/" + theirsHook.ID + "/retry", "penghantaran tidak dijumpai"},
+		{"non-uuid delivery id", "/v1/rest/webhooks/" + mineHook.ID + "/deliveries/not-a-uuid/retry", "delivery not found"},
+		{"non-uuid retry id", "/v1/rest/webhooks/" + mineHook.ID + "/retries/not-a-uuid/retry", "retry not found"},
+		{"foreign delivery id", "/v1/rest/webhooks/" + mineHook.ID + "/deliveries/" + theirsHook.ID + "/retry", "delivery not found"},
 	} {
 		code, raw := tplReq(t, h, keyA, http.MethodPost, c.path, "")
 		if code != http.StatusNotFound {
@@ -308,7 +308,7 @@ func TestIDTakingRoutesAnswer404ForUnresolvableIDs(t *testing.T) {
 	// whose error class is not_found (that is the error_class log field and the
 	// metric bucket respondErr would otherwise count as internal).
 	for _, tc := range idShapes(uuid.NewString(), theirsProduct.ID) {
-		if err := products.Update(ctx, accA, tc.id, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil); !errors.Is(err, dbstore.ErrProductNotFound) {
+		if err := products.Update(ctx, accA, tc.id, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil); !errors.Is(err, dbstore.ErrProductNotFound) {
 			t.Errorf("Products.Update(%s) err = %v, want dbstore.ErrProductNotFound", tc.name, err)
 		} else if class := errorClass(err); class != "not_found" {
 			t.Errorf("errorClass(Products.Update(%s)) = %q, want not_found", tc.name, class)
@@ -429,7 +429,7 @@ func TestIDTakingRoutesAnswer404ForUnresolvableIDs(t *testing.T) {
 		if tc.id == "" {
 			continue
 		}
-		assertIDMissMsg(t, h, keyA, http.MethodPost, "/v1/rest/subscriptions/"+tc.id+"/cancel", "", "langganan tidak dijumpai", tc.name)
+		assertIDMissMsg(t, h, keyA, http.MethodPost, "/v1/rest/subscriptions/"+tc.id+"/cancel", "", "subscription not found", tc.name)
 		if _, err := subs.ByIDForAccount(ctx, accA, tc.id); !errors.Is(err, pgx.ErrNoRows) {
 			t.Errorf("Subs.ByIDForAccount(%s) err = %v, want pgx.ErrNoRows", tc.name, err)
 		}
@@ -438,7 +438,7 @@ func TestIDTakingRoutesAnswer404ForUnresolvableIDs(t *testing.T) {
 	assertIDOK(t, h, keyA, http.MethodPost, "/v1/rest/subscriptions/"+mineSub+"/cancel", "", "own subscription cancel")
 	// A foreign subscription id is a miss, not a cancel.
 	foreignSub := seedIdLookupSubscription(t, ctx, pool, accB)
-	assertIDMissMsg(t, h, keyA, http.MethodPost, "/v1/rest/subscriptions/"+foreignSub+"/cancel", "", "langganan tidak dijumpai", "foreign subscription")
+	assertIDMissMsg(t, h, keyA, http.MethodPost, "/v1/rest/subscriptions/"+foreignSub+"/cancel", "", "subscription not found", "foreign subscription")
 	var foreignCancelled *string
 	if err := pool.QueryRow(ctx, `SELECT cancelled_at::text FROM subscriptions WHERE id=$1`, foreignSub).Scan(&foreignCancelled); err != nil {
 		t.Fatalf("re-read foreign subscription: %v", err)
@@ -458,8 +458,8 @@ func TestIDTakingRoutesAnswer404ForUnresolvableIDs(t *testing.T) {
 		accA, "k-"+uuid.NewString()).Scan(&mineMedia); err != nil {
 		t.Fatalf("seed media row: %v", err)
 	}
-	assertIDMissMsg(t, h, keyA, http.MethodDelete, "/v1/rest/media/not-a-uuid", "", "media tidak dijumpai", "non-uuid media id")
-	assertIDMissMsg(t, h, keyA, http.MethodDelete, "/v1/rest/media/"+uuid.NewString(), "", "media tidak dijumpai", "nonexistent media id")
+	assertIDMissMsg(t, h, keyA, http.MethodDelete, "/v1/rest/media/not-a-uuid", "", "media not found", "non-uuid media id")
+	assertIDMissMsg(t, h, keyA, http.MethodDelete, "/v1/rest/media/"+uuid.NewString(), "", "media not found", "nonexistent media id")
 	// A foreign media row is invisible rather than deleted.
 	var foreignMedia string
 	if err := pool.QueryRow(ctx,
@@ -468,7 +468,7 @@ func TestIDTakingRoutesAnswer404ForUnresolvableIDs(t *testing.T) {
 		accB, "k-"+uuid.NewString()).Scan(&foreignMedia); err != nil {
 		t.Fatalf("seed foreign media row: %v", err)
 	}
-	assertIDMissMsg(t, h, keyA, http.MethodDelete, "/v1/rest/media/"+foreignMedia, "", "media tidak dijumpai", "foreign media id")
+	assertIDMissMsg(t, h, keyA, http.MethodDelete, "/v1/rest/media/"+foreignMedia, "", "media not found", "foreign media id")
 	var foreignMediaDeleted *string
 	if err := pool.QueryRow(ctx, `SELECT deleted_at::text FROM media WHERE id=$1`, foreignMedia).Scan(&foreignMediaDeleted); err != nil {
 		t.Fatalf("re-read foreign media row: %v", err)

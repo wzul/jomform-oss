@@ -60,7 +60,7 @@ function goStringSet(src: string, name: string): Set<string> {
 
 /** The `(a|b|c)` type list spelled in the register_form_fields description. */
 function registerFormFieldsList(src: string, where: string): Set<string> {
-  const m = src.match(/type mesti jenis input JomForm \(([^)]*)\)/);
+  const m = src.match(/type must be a JomForm input type \(([^)]*)\)/);
   assert.ok(m, `the register_form_fields type list not found in ${where} — reworded? update this guard`);
   return new Set(m[1].split("|").map((s) => s.trim()).filter(Boolean));
 }

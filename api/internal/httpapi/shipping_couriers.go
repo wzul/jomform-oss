@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/wzul/jomform/api/internal/buyertext"
 	"github.com/wzul/jomform/api/internal/shipping"
 )
 
@@ -44,7 +45,7 @@ func (h *PublicHandlers) resolveCourierBlocks(ctx context.Context, tgt orderTarg
 		return 0, nil, nil
 	}
 	if tgt.Form == nil {
-		return 0, nil, &shippingError{"borang tidak dijumpai untuk kadar penghantaran"}
+		return 0, nil, buyertext.New(buyertext.CodeShipFormNotFound, nil)
 	}
 	var total int64
 	blocks := []shippingDetailBlock{}
@@ -63,7 +64,7 @@ func (h *PublicHandlers) resolveCourierBlocks(ctx context.Context, tgt orderTarg
 			// would break every form the moment a courier is unavailable, which
 			// is exactly what "the zone table is the fallback" rules out.
 			if fallback == nil {
-				return 0, nil, &shippingError{shipping.ErrCourierNoFallback.Error()}
+				return 0, nil, shipping.ErrCourierNoFallback
 			}
 			quote, err := shipping.Resolve(set, addressFor(spec, in), subtotalSen, shipping.Options{
 				OnNoMatch:    spec.OnNoMatch,
@@ -71,7 +72,7 @@ func (h *PublicHandlers) resolveCourierBlocks(ctx context.Context, tgt orderTarg
 				WeightG:      spec.WeightG,
 			})
 			if err != nil {
-				return 0, nil, &shippingError{err.Error()}
+				return 0, nil, err
 			}
 			total += quote.PriceSen
 			blocks = append(blocks, shippingDetailBlock{
@@ -105,7 +106,7 @@ func (h *PublicHandlers) resolveCourierBlocks(ctx context.Context, tgt orderTarg
 		if err != nil {
 			// A refusal the buyer must see verbatim: no courier AND no zone table
 			// to fall back to, or an address a courier cannot be asked about.
-			return 0, nil, &shippingError{err.Error()}
+			return 0, nil, err
 		}
 		total += quote.PriceSen
 		blocks = append(blocks, courierDetailBlock(spec.ID, spec.Provider, quote))

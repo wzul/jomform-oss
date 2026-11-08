@@ -15,6 +15,7 @@ import QRCode from "qrcode";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { currencyLabel, formatPrice } from "../../lib/money";
 import { Switch } from "../../components/Switch";
 import MediaPicker from "../../components/MediaPicker";
 import ProductPicker, { type PickerProduct } from "../../components/ProductPicker";
@@ -22,6 +23,16 @@ import { activeWorkspaceScope, enterWorkspace, workspaceQuery, workspaceUrl } fr
 import { defaultNotificationEvent, formEntriesAction } from "../../lib/formMode";
 import { acknowledgmentBody, publishConfirmText, publishErrorText, publishOutcome } from "../../lib/publishResult";
 import { apiErr } from "../../lib/apiErr";
+// t_f76f81eb: the slug field applies the SAME rule the API enforces, so it can
+// never offer a value the server refuses (charset + length + the reserved
+// names JomForm owns or serves). lib/formSlug.ts mirrors dbstore.ValidateFormSlug
+// and a cross-language test fails when the two drift.
+import {
+  formSlugBlocked,
+  formSlugProblem,
+  normalizeFormSlug,
+  type FormSlugProblem,
+} from "../../lib/formSlug";
 // t_106955f6: the General Save writes the theme it READ laid over the keys this
 // tab owns — the API's PATCH replaces the whole jsonb, so an owned-keys-only map
 // deleted `layout`/`spacing`/`background`/`font`/`custom_css` on every save.
@@ -514,6 +525,16 @@ const NOTIF_EVENTS = [
   "subscription.charged",
 ] as const;
 
+// The two events the system installs a BUILT-IN message for — the same mapping
+// api/internal/dbstore.NotificationKind makes for the sender. Only on these does
+// an empty subject/body mean "JomForm's own message": on sale.failed or
+// subscription.charged the system never wrote one, so the hint would be a lie.
+const NOTIF_SYSTEM_DEFAULT_EVENTS = ["sale.paid", "response.submitted"] as const;
+
+function hasSystemDefaultNotification(event: string): boolean {
+  return (NOTIF_SYSTEM_DEFAULT_EVENTS as readonly string[]).includes(event);
+}
+
 // Issue #394: map each notification event value to its i18n key explicitly
 // (avoids fragile string manipulation that produced keys like
 // `fs.notifEventSalepaid` which don't exist in the dictionary).
@@ -649,7 +670,10 @@ export default function FormSettingsPage() {
 
 function FormSettingsInner() {
   const { t } = useI18n();
-  const { anon, role } = useSession();
+  const { anon, role, currency } = useSession();
+  // Card t_d5f359c7: every amount on this page is a workspace-currency PRICE
+  // (#185), so it is labelled from the workspace setting, not a literal RM.
+  const priceLabel = currencyLabel(currency);
   const router = useRouter();
   const search = useSearchParams();
   const formId = search.get("form") || "";
@@ -681,6 +705,19 @@ function FormSettingsInner() {
     setMsg(text);
   }, []);
 
+  // t_f76f81eb: the one place the slug field and the slug save turn a refused
+  // slug into a sentence. Both keys are spelled out here (not composed at
+  // runtime) because lib/i18nKeys.test.ts requires every t() call site in the
+  // tree to be statically resolvable — a computed key would drop these two out
+  // of its coverage. A reserved name and a malformed one need different
+  // remedies ("pick another name" vs "fix the characters"), so they must never
+  // collapse into one message.
+  const slugProblemText = useCallback(
+    (problem: FormSlugProblem) =>
+      problem === "reserved" ? t("apiErr.formSlugReserved") : t("apiErr.formSlugInvalid"),
+    [t],
+  );
+
   // Issue #438: QR ordering flow — QR generation for the form's public URL.
   const [qrTable, setQrTable] = useState("");
   const [qrDataUrl, setQrDataUrl] = useState("");
@@ -690,6 +727,10 @@ function FormSettingsInner() {
   // General
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
+  // t_f76f81eb: the verdict of the SAME rule the API enforces on the value in
+  // the field. Drives the inline refusal AND the save gate, so the field can
+  // never send a slug the server refuses.
+  const slugProblem = formSlugProblem(slug);
   const [status, setStatus] = useState<"draft" | "private" | "published" | "unlisted">("draft");
   const [accessPw, setAccessPw] = useState("");
   const [fsTheme, setFsTheme] = useState(DEFAULT_FORM_THEME);
@@ -1102,7 +1143,21 @@ function FormSettingsInner() {
     // logo_url and allow_embed are NOT fields of this PATCH (its body is
     // title|slug|config|theme) — they belong to PUT /forms/{id}/settings and
     // are written below, by the same function the Confirmation tab's Save uses.
-    const payload = { slug: slug.toLowerCase().replace(/[^a-z0-9-]/g, "-"), title, theme };
+    //
+    // t_f76f81eb: the slug is REFUSED here rather than sent and rejected. The
+    // rule the API enforces (charset, 1-40, and the names JomForm owns or serves
+    // — login/api/docs/privacy) is applied by lib/formSlug.ts before the
+    // request, so the field can never offer a value the server 400s. The one
+    // exception is a value the form ALREADY has: a row stored before this rule
+    // existed keeps its slug, and re-saving its settings must not be blocked by
+    // a name nobody is trying to claim now (the store only refuses NEW claims).
+    const nextSlug = normalizeFormSlug(slug);
+    const blocked = formSlugBlocked(nextSlug, form?.slug || "");
+    if (blocked) {
+      showMsgFail(slugProblemText(blocked));
+      return;
+    }
+    const payload = { slug: nextSlug, title, theme };
     const r = await fetch(`/api/rest/forms/${id}${workspaceQuery()}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -1923,8 +1978,10 @@ function FormSettingsInner() {
                         <input
                           id="fs-slug"
                           value={slug}
-                          onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))}
+                          onChange={(e) => setSlug(normalizeFormSlug(e.target.value))}
                           className={`${inputCls} font-mono`}
+                          aria-invalid={slugProblem === "reserved" ? true : undefined}
+                          aria-describedby={slugProblem === "reserved" ? "fs-slug-error" : undefined}
                         />
                         {/* The rename is not obvious from a bare "Slug (URL)"
                             label: a merchant needs to know the save MOVES the
@@ -1932,6 +1989,23 @@ function FormSettingsInner() {
                             the field reads as cosmetic (the reported defect was
                             exactly that — a field that looked like it worked). */}
                         <p className="mt-1 text-jf-2xs text-slate-500">{t("fs.slugHint")}</p>
+                        {/* t_f76f81eb: a well-formed but RESERVED name (login,
+                            api, docs, privacy, …) is refused by the API, and the
+                            field normalises rather than rejects, so without this
+                            line the only way to learn it would be a 400 after
+                            the save. Rendered from the same rule the save gate
+                            uses (lib/formSlug.ts), so the two cannot disagree.
+                            A value the form ALREADY has is not flagged: a row
+                            stored before the rule keeps its slug. */}
+                        {slugProblem && slug !== (form?.slug || "") && (
+                          <p
+                            id="fs-slug-error"
+                            role="alert"
+                            className="mt-1 text-jf-2xs font-medium text-red-700"
+                          >
+                            {slugProblemText(slugProblem)}
+                          </p>
+                        )}
                       </div>
                       <div>
                         <label className={labelCls}>{t("bld.status")}</label>
@@ -2068,7 +2142,7 @@ function FormSettingsInner() {
                               <div className={fsImgLayout === "image-top" ? "flex w-full items-center gap-3" : "flex flex-1 items-center gap-3"}>
                                 <span className="inline-block h-5 w-5 shrink-0 rounded border-2 border-slate-300 bg-white" />
                                 <span className="flex-1 text-sm font-medium text-slate-700">{t("fs.prodImgSample")}</span>
-                                <span className="ml-auto text-sm font-semibold text-[var(--jf-primary)]">RM 12.00</span>
+                                <span className="ml-auto text-sm font-semibold text-[var(--jf-primary)]">{formatPrice(1200, currency)}</span>
                               </div>
                             </div>
                           </div>
@@ -2563,7 +2637,7 @@ function FormSettingsInner() {
                                                   {p.name}
                                                 </span>
                                                 <span className="block text-jf-3xs text-[var(--jf-muted)]">
-                                                  {`RM${(p.price_sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`}
+                                                  {formatPrice(p.price_sen, currency)}
                                                 </span>
                                               </span>
                                             </span>
@@ -2859,7 +2933,7 @@ function FormSettingsInner() {
                           onChange={(e) => setEmelSubject(e.target.value)}
                           disabled={!canWrite}
                           className={inputCls}
-                          placeholder={emelWorkspace?.receipt_subject || "Resit pembayaran — {{ref_code}}"}
+                          placeholder={emelWorkspace?.receipt_subject || t("set.emelSubjectPh")}
                         />
                       </div>
                       <div>
@@ -3061,7 +3135,7 @@ function FormSettingsInner() {
                                 ?
                               </a>
                             </label>
-                            <input id="fs-notif-subject" value={edSubject} onChange={(e) => setEdSubject(e.target.value)} className={inputCls} placeholder="Jualan baharu — {{ref_code}}" />
+                            <input id="fs-notif-subject" value={edSubject} onChange={(e) => setEdSubject(e.target.value)} className={inputCls} placeholder={edEvent === "response.submitted" ? t("fs.notifSubjectPhResponse") : t("fs.notifSubjectPh")} />
                           </div>
                           <div>
                             <label className={labelCls} htmlFor="fs-notif-body">
@@ -3089,7 +3163,7 @@ function FormSettingsInner() {
                                 ?
                               </a>
                             </label>
-                            <textarea id="fs-notif-body" value={edBody} onChange={(e) => setEdBody(e.target.value)} rows={6} className={`${inputCls} font-mono text-xs`} />
+                            <textarea id="fs-notif-body" value={edBody} onChange={(e) => setEdBody(e.target.value)} rows={6} className={`${inputCls} font-mono text-xs`} placeholder={hasSystemDefaultNotification(edEvent) ? t("fs.notifBodyPh") : undefined} />
                           </div>
                           <div>
                             <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -3155,7 +3229,7 @@ function FormSettingsInner() {
                     <div className="mt-4 space-y-3">
                       <div>
                         <label className={labelCls} htmlFor="fs-chip-brand">{t("fs.chipBrandId")}</label>
-                        <input id="fs-chip-brand" value={ovBrand} onChange={(e) => setOvBrand(e.target.value)} placeholder="Brand ID" className={inputCls} />
+                        <input id="fs-chip-brand" value={ovBrand} onChange={(e) => setOvBrand(e.target.value)} placeholder={t("fs.chipBrandIdPh")} className={inputCls} />
                       </div>
                       <div>
                         <label className={labelCls} htmlFor="fs-chip-secret">{t("set.secretKey")}</label>
@@ -3163,7 +3237,7 @@ function FormSettingsInner() {
                       </div>
                       <div>
                         <label className={labelCls} htmlFor="fs-chip-fallback">{t("set.emailFallback")}</label>
-                        <input id="fs-chip-fallback" value={ovFallback} onChange={(e) => setOvFallback(e.target.value)} type="email" placeholder="Email fallback (one-time forms)" className={inputCls} />
+                        <input id="fs-chip-fallback" value={ovFallback} onChange={(e) => setOvFallback(e.target.value)} type="email" placeholder={t("fs.emailFallbackPh")} className={inputCls} />
                       </div>
                       <p className="text-jf-2xs text-[var(--jf-muted)]">{t("bld.emptyDefaults")}</p>
                       <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -3216,7 +3290,7 @@ function FormSettingsInner() {
                                   id={`fs-feed-${f.id}-brand`}
                                   value={f.brand_id}
                                   onChange={(e) => updateChipFeed(f.id, { brand_id: e.target.value })}
-                                  placeholder="Brand ID"
+                                  placeholder={t("fs.chipBrandIdPh")}
                                   className={inputCls}
                                 />
                               </div>
@@ -3241,7 +3315,7 @@ function FormSettingsInner() {
                                   value={f.email_fallback}
                                   onChange={(e) => updateChipFeed(f.id, { email_fallback: e.target.value })}
                                   type="email"
-                                  placeholder="Email fallback (one-time forms)"
+                                  placeholder={t("fs.emailFallbackPh")}
                                   className={inputCls}
                                 />
                               </div>
@@ -3474,7 +3548,7 @@ function FormSettingsInner() {
                                       </div>
                                       <div className="w-24">
                                         <label htmlFor={`ship-rate-price-${si}-${zi}-${ri}`} className="text-xs text-[var(--jf-muted)]">
-                                          {t("fs.shipRatePrice")}
+                                          {t("fs.shipRatePrice", { cur: priceLabel })}
                                         </label>
                                         <input
                                           id={`ship-rate-price-${si}-${zi}-${ri}`}
@@ -3514,7 +3588,7 @@ function FormSettingsInner() {
                                       </div>
                                       <div className="w-28">
                                         <label htmlFor={`ship-rate-free-${si}-${zi}-${ri}`} className="text-xs text-[var(--jf-muted)]">
-                                          {t("fs.shipFreeOver")}
+                                          {t("fs.shipFreeOver", { cur: priceLabel })}
                                         </label>
                                         <input
                                           id={`ship-rate-free-${si}-${zi}-${ri}`}

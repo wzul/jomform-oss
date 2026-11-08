@@ -1,8 +1,9 @@
 // MCP parity tool: list_email_deliveries — account-scoped, read-only email
 // delivery status view (issue #194). Mirrors GET /v1/rest/email-deliveries
 // for merchant agents: list delivery events (delivered/bounce/complaint/
-// open/click) with email, event type, timestamp, sale ref and detail,
-// filterable by form/sale/status.
+// open/click, plus enqueue_failed — an email that could not be queued at all
+// and was therefore never sent, card t_1c4a3f54) with email, event type,
+// timestamp, sale ref and detail, filterable by form/sale/status.
 package mcpsrv
 
 import (
@@ -16,11 +17,11 @@ import (
 )
 
 type listEmailDeliveriesIn struct {
-	FormID    string `json:"form_id,omitempty" jsonschema:"Optional — hadkan kepada jualan satu borang (id borang)"`
-	SaleRef   string `json:"sale_ref,omitempty" jsonschema:"Optional — hadkan kepada satu jualan (ref_code)"`
-	EventType string `json:"event_type,omitempty" jsonschema:"Optional — delivered | bounce | complaint | open | click"`
-	Page      int    `json:"page,omitempty" jsonschema:"Muka surat (1-based, default 1)"`
-	Limit     int    `json:"limit,omitempty" jsonschema:"Bilangan per muka (default 20, maks 100)"`
+	FormID    string `json:"form_id,omitempty" jsonschema:"Optional — limit to sales of one form (form id)"`
+	SaleRef   string `json:"sale_ref,omitempty" jsonschema:"Optional — limit to a single sale (ref_code)"`
+	EventType string `json:"event_type,omitempty" jsonschema:"Optional — delivered | bounce | complaint | open | click | enqueue_failed"`
+	Page      int    `json:"page,omitempty" jsonschema:"Page (1-based, default 1)"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"Items per page (default 20, max 100)"`
 }
 
 type emailDeliveryOut struct {
@@ -45,7 +46,7 @@ func (s *Server) listEmailDeliveries(
 		return nil, nil, err
 	}
 	if s.deps.EmailDeliveryEvents == nil {
-		return nil, nil, errors.New("store penghantaran emel tidak dikonfigurasi")
+		return nil, nil, errors.New("email delivery store not configured")
 	}
 	f := dbstore.DeliveryFilter{
 		AccountIDs: accs,

@@ -34,7 +34,7 @@ func (h *RESTHandlers) saveFormConfirmations(w http.ResponseWriter, r *http.Requ
 		Confirmations []*dbstore.Confirmation `json:"confirmations"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	if _, err := h.Forms.GetByID(r.Context(), actx.Account.ID, r.PathValue("id")); err != nil {
@@ -45,11 +45,11 @@ func (h *RESTHandlers) saveFormConfirmations(w http.ResponseWriter, r *http.Requ
 	// message confirmations may carry HTML (sanitized on render).
 	for _, c := range in.Confirmations {
 		if strings.TrimSpace(c.Name) == "" {
-			writeErr(w, http.StatusBadRequest, "nama pengesahan wajib")
+			writeErr(w, http.StatusBadRequest, "confirmation name is required")
 			return
 		}
 		if c.Type != dbstore.ConfirmationTypeMessage && c.Type != dbstore.ConfirmationTypeRedirect {
-			writeErr(w, http.StatusBadRequest, "jenis pengesahan tidak sah")
+			writeErr(w, http.StatusBadRequest, "invalid confirmation type")
 			return
 		}
 		if c.Type == dbstore.ConfirmationTypeRedirect {

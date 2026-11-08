@@ -36,7 +36,7 @@ const chipPaymentUnavailableStatus = http.StatusOK
 // does not know the buyer's language); a buyer's page ignores it and paints its
 // own localized copy through payFailJS, while a curl/MCP caller gets a sentence
 // it can act on.
-const salePaymentUnavailableMessage = "pembayaran tidak dapat dimulakan — sila hubungi penjual"
+const salePaymentUnavailableMessage = "the payment could not be started — please contact the seller"
 
 // answerChipPurchaseFailed answers a buyer whose CHIP purchase could not be
 // created (rejected merchant key, provider outage, missing credentials).

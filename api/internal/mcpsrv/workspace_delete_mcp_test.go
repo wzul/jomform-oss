@@ -357,7 +357,7 @@ func TestMCPWorkspaceDeleteRefusesNonOwnerAdminMember(t *testing.T) {
 	if !ok {
 		t.Fatalf("an ADMIN MEMBER (not the owner) deleted the owner's workspace — %s", toolResultText(t, res))
 	}
-	if !strings.Contains(strings.ToLower(msg), "pemilik") {
+	if !strings.Contains(strings.ToLower(msg), "owner") {
 		t.Errorf("refusal message %q does not say it is owner-only", msg)
 	}
 

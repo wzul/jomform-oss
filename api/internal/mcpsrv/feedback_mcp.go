@@ -60,12 +60,12 @@ import (
 func (s *Server) feedbackScopeFor(ctx context.Context) (dbstore.FeedbackScope, error) {
 	id := IdentityFromContext(ctx)
 	if id == nil {
-		return dbstore.FeedbackScope{}, errors.New("token tiada atau tidak sah")
+		return dbstore.FeedbackScope{}, errors.New("token missing or invalid")
 	}
 	if id.UserID == "" {
 		return dbstore.FeedbackScope{}, errors.New(
-			"maklum balas ialah data peribadi pengguna — API key tidak boleh mengaksesnya. " +
-				"Guna token OAuth (terikat pada pengguna) atau papan pemuka /feedback.")
+			"feedback is users' personal data — an API key cannot access it. " +
+				"Use an OAuth token (bound to a user) or the /feedback dashboard.")
 	}
 	if s.isSuperAdmin(ctx) {
 		return dbstore.FeedbackAdminScope(), nil
@@ -76,7 +76,7 @@ func (s *Server) feedbackScopeFor(ctx context.Context) (dbstore.FeedbackScope, e
 // feedbackStore returns the feedback store or an actionable error.
 func (s *Server) feedbackStore() (*dbstore.FeedbackThreadStore, error) {
 	if s.deps == nil || s.deps.Feedback == nil {
-		return nil, errors.New("sistem maklum balas tidak dikonfigurasi")
+		return nil, errors.New("feedback system not configured")
 	}
 	return s.deps.Feedback, nil
 }
@@ -85,8 +85,8 @@ func (s *Server) feedbackStore() (*dbstore.FeedbackThreadStore, error) {
 
 type listFeedbackIn struct {
 	Status string `json:"status,omitempty" jsonschema:"Optional — open|in_progress|resolved|closed"`
-	Page   int    `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
+	Page   int    `json:"page,omitempty" jsonschema:"Optional — page (starting at 1)"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"Optional — per-page limit (1-100, default 20)"`
 }
 
 type feedbackThreadOut struct {
@@ -123,7 +123,7 @@ func (s *Server) listFeedback(ctx context.Context, _ *mcp.CallToolRequest, in li
 	}
 	status := strings.ToLower(strings.TrimSpace(in.Status))
 	if status != "" && !dbstore.ValidFeedbackStatus(status) {
-		return nil, nil, fmt.Errorf("status tidak sah: %q (open|in_progress|resolved|closed)", in.Status)
+		return nil, nil, fmt.Errorf("invalid status: %q (open|in_progress|resolved|closed)", in.Status)
 	}
 	page, limit := in.Page, in.Limit
 	if page < 1 {
@@ -161,12 +161,12 @@ func (s *Server) listFeedback(ctx context.Context, _ *mcp.CallToolRequest, in li
 // ── get_feedback_thread ─────────────────────────────────────────────────────
 
 type getFeedbackThreadIn struct {
-	ThreadID string `json:"thread_id" jsonschema:"ID thread maklum balas (dari list_feedback)"`
+	ThreadID string `json:"thread_id" jsonschema:"Feedback thread ID (from list_feedback)"`
 }
 
 type feedbackMessageOut struct {
 	ID          string `json:"id"`
-	AuthorKind  string `json:"author_kind" jsonschema:"user atau admin"`
+	AuthorKind  string `json:"author_kind" jsonschema:"user or admin"`
 	AuthorEmail string `json:"author_email,omitempty"`
 	Body        string `json:"body"`
 	CreatedAt   string `json:"created_at"`
@@ -187,12 +187,12 @@ func (s *Server) getFeedbackThread(ctx context.Context, _ *mcp.CallToolRequest, 
 		return nil, nil, err
 	}
 	if strings.TrimSpace(in.ThreadID) == "" {
-		return nil, nil, errors.New("thread_id wajib")
+		return nil, nil, errors.New("thread_id is required")
 	}
 	th, err := store.Thread(ctx, sc, in.ThreadID)
 	if err != nil {
 		if errors.Is(err, dbstore.ErrFeedbackNotFound) {
-			return nil, nil, errors.New("thread maklum balas tidak dijumpai")
+			return nil, nil, errors.New("feedback thread not found")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -238,8 +238,8 @@ func (s *Server) getFeedbackThread(ctx context.Context, _ *mcp.CallToolRequest, 
 // ── reply_feedback ──────────────────────────────────────────────────────────
 
 type replyFeedbackIn struct {
-	ThreadID string `json:"thread_id" jsonschema:"ID thread maklum balas"`
-	Body     string `json:"body" jsonschema:"Isi mesej (minimum 10 aksara)"`
+	ThreadID string `json:"thread_id" jsonschema:"Feedback thread ID"`
+	Body     string `json:"body" jsonschema:"Message body (minimum 10 characters)"`
 }
 
 // replyFeedback appends a message to a thread. The author kind is derived from
@@ -263,10 +263,10 @@ func (s *Server) replyFeedback(ctx context.Context, _ *mcp.CallToolRequest, in r
 	}
 	body := strings.TrimSpace(in.Body)
 	if len(body) < 10 {
-		return nil, nil, errors.New("sila tulis sekurang-kurangnya 10 aksara")
+		return nil, nil, errors.New("please write at least 10 characters")
 	}
 	if len(body) > 5000 {
-		return nil, nil, errors.New("mesej terlalu panjang (maksimum 5000 aksara)")
+		return nil, nil, errors.New("message too long (maximum 5000 characters)")
 	}
 
 	authorKind := dbstore.FeedbackMessageAuthorUser
@@ -282,13 +282,13 @@ func (s *Server) replyFeedback(ctx context.Context, _ *mcp.CallToolRequest, in r
 			authorID = id.UserID
 		}
 		if authorID == "" {
-			return nil, nil, errors.New("token tiada atau tidak sah")
+			return nil, nil, errors.New("token missing or invalid")
 		}
 	}
 	m, err := store.AddMessage(ctx, sc, in.ThreadID, authorKind, authorID, body)
 	if err != nil {
 		if errors.Is(err, dbstore.ErrFeedbackNotFound) {
-			return nil, nil, errors.New("thread maklum balas tidak dijumpai")
+			return nil, nil, errors.New("feedback thread not found")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
@@ -306,7 +306,7 @@ func (s *Server) replyFeedback(ctx context.Context, _ *mcp.CallToolRequest, in r
 // ── retry_feedback_notify ───────────────────────────────────────────────────
 
 type retryFeedbackNotifyIn struct {
-	ThreadID string `json:"thread_id" jsonschema:"ID thread maklum balas (dari list_feedback)"`
+	ThreadID string `json:"thread_id" jsonschema:"Feedback thread ID (from list_feedback)"`
 }
 
 type retryFeedbackNotifyOut struct {
@@ -347,16 +347,16 @@ func (s *Server) retryFeedbackNotify(ctx context.Context, _ *mcp.CallToolRequest
 		return nil, retryFeedbackNotifyOut{}, err
 	}
 	if s.deps == nil || s.deps.RetryFeedbackNotify == nil {
-		return nil, retryFeedbackNotifyOut{}, errors.New("sistem maklum balas tidak dikonfigurasi")
+		return nil, retryFeedbackNotifyOut{}, errors.New("feedback system not configured")
 	}
 	threadID := strings.TrimSpace(in.ThreadID)
 	if threadID == "" {
-		return nil, retryFeedbackNotifyOut{}, errors.New("thread_id wajib")
+		return nil, retryFeedbackNotifyOut{}, errors.New("thread_id is required")
 	}
 	outcome, err := s.deps.RetryFeedbackNotify(ctx, threadID)
 	if err != nil {
 		if errors.Is(err, dbstore.ErrFeedbackNotFound) {
-			return nil, retryFeedbackNotifyOut{}, errors.New("thread maklum balas tidak dijumpai")
+			return nil, retryFeedbackNotifyOut{}, errors.New("feedback thread not found")
 		}
 		return nil, retryFeedbackNotifyOut{}, fmt.Errorf("db: %w", err)
 	}
@@ -368,7 +368,7 @@ func (s *Server) retryFeedbackNotify(ctx context.Context, _ *mcp.CallToolRequest
 // ── set_feedback_status ─────────────────────────────────────────────────────
 
 type setFeedbackStatusIn struct {
-	ThreadID string `json:"thread_id" jsonschema:"ID thread maklum balas"`
+	ThreadID string `json:"thread_id" jsonschema:"Feedback thread ID"`
 	Status   string `json:"status" jsonschema:"open|in_progress|resolved|closed"`
 }
 
@@ -397,14 +397,14 @@ func (s *Server) setFeedbackStatus(ctx context.Context, _ *mcp.CallToolRequest, 
 	}
 	status := strings.ToLower(strings.TrimSpace(in.Status))
 	if !dbstore.ValidFeedbackStatus(status) {
-		return nil, nil, fmt.Errorf("status tidak sah: %q (open|in_progress|resolved|closed)", in.Status)
+		return nil, nil, fmt.Errorf("invalid status: %q (open|in_progress|resolved|closed)", in.Status)
 	}
 	if strings.TrimSpace(in.ThreadID) == "" {
-		return nil, nil, errors.New("thread_id wajib")
+		return nil, nil, errors.New("thread_id is required")
 	}
 	if err := store.SetStatus(ctx, dbstore.FeedbackAdminScope(), in.ThreadID, status); err != nil {
 		if errors.Is(err, dbstore.ErrFeedbackNotFound) {
-			return nil, nil, errors.New("thread maklum balas tidak dijumpai")
+			return nil, nil, errors.New("feedback thread not found")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}

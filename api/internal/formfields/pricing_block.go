@@ -245,9 +245,9 @@ func UnpricedPricingBlock(config map[string]any) string {
 		}
 		switch {
 		case !priced && b.PriceSen == nil:
-			return fmt.Sprintf("blok %s %q tiada harga: tetapkan harga pada setiap pilihan (0 untuk percuma) sebelum menyimpan", typ, label)
+			return fmt.Sprintf("block %s %q has no price: set a price on every choice (0 for free) before saving", typ, label)
 		case !priced && len(b.Choices) > 0:
-			return fmt.Sprintf("blok %s %q menyimpan harga blok yang tidak digunakan kerana pilihannya tiada harga: letak harga pada setiap pilihan (0 untuk percuma) sebelum menyimpan", typ, label)
+			return fmt.Sprintf("block %s %q stores a block price that is unused because none of its choices carry a price: set a price on every choice (0 for free) before saving", typ, label)
 		}
 	}
 	return ""

@@ -29,11 +29,15 @@ func TestE2EResponseNotificationSendsRealEmail(t *testing.T) {
 	}
 
 	// The rule a new response-mode form gets, from the single definition
-	// EnsureDefault uses.
-	_, event, subject, body := dbstore.DefaultNotification(dbstore.FormModeResponse)
+	// EnsureDefault uses. Its stored halves are empty (card t_1768cb11); the text
+	// that leaves is the dictionary's template in the form's language, resolved by
+	// the same helper the send path uses.
+	_, event, storedSubject, storedBody := dbstore.DefaultNotification(dbstore.FormModeResponse)
 	if event != dbstore.NotifyEventResponseSubmitted {
 		t.Fatalf("default rule for a response form fires on %q, not %q", event, dbstore.NotifyEventResponseSubmitted)
 	}
+	lang := "en" // the documented default; the operator sees a language they can read
+	subject, body := notificationMessage(event, lang, storedSubject, storedBody)
 	t.Logf("response-form default rule: event=%q subject=%q", event, subject)
 
 	// A response submission as the public submit path builds it.
@@ -62,9 +66,8 @@ func TestE2EResponseNotificationSendsRealEmail(t *testing.T) {
 		Region:   "ap-southeast-1",
 	})
 	// The notification is a response-mode default, so its language is the
-	// buyer/form axis. This E2E proof sends the ENGLISH rendering — the
-	// documented default — so the operator sees a language they can read.
-	lang := "en"
+	// buyer/form axis; `lang` above is the ENGLISH rendering — the documented
+	// default — so the operator sees a language they can read.
 	msgID, err := sender.SendReceipt(to, subj, rendered, lang)
 	if err != nil {
 		t.Fatalf("REAL SES SEND FAILED: %v", err)

@@ -412,7 +412,7 @@ func countGalleryRows(t *testing.T, ctx context.Context, account string) (total,
 // TestLegacySlugCandidatesAreDeterministicAndTerminate pins the collision ladder.
 // Prod has the real case: owner00@example.com and owner00+test@
 // gmail.com both reduce to "owner", and a user who never chose a slug must not be
-// shown "slug sudah digunakan". The sequence must be identical on every call
+// shown "slug already in use". The sequence must be identical on every call
 // (deterministic) and finite (terminating).
 func TestLegacySlugCandidatesAreDeterministicAndTerminate(t *testing.T) {
 	const userID = "11111111-2222-3333-4444-555555555555"

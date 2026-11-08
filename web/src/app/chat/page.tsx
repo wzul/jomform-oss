@@ -184,6 +184,17 @@ type ChatReply = {
 // "try again" invites a click on a card that is already spent (t_1900adef). The
 // cause sentence is carried ONCE, by the page's own role="alert", exactly like the
 // other two named refusals.
+//
+// "workspaceRequired" and "refused" are the same shape for the two post-claim
+// refusals that had no state at all (t_bf4feea2):
+//
+//   - workspaceRequired: the account has no workspace, so a form creation can never
+//     land (the gate's own refusal, measured on staging). The remedy is two steps —
+//     create a workspace, then ask for a fresh card — and neither is "try again".
+//   - refused: the server answered and refused but this build cannot classify why.
+//     The change did not run and the token is spent, so the copy says the card must
+//     be prepared again. Only "failed" — no readable body, a 5xx, a transport error
+//     — may suggest another attempt, because there nothing proves the token is gone.
 type ProposalState =
   | "pending"
   | "confirming"
@@ -194,6 +205,8 @@ type ProposalState =
   | "unexecutable"
   | "scopeRequired"
   | "roleDenied"
+  | "workspaceRequired"
+  | "refused"
   | "failed";
 
 type Msg = {
@@ -611,6 +624,27 @@ export default function ChatPage() {
         // cannot fire is a branch nothing can ever prove.
         setState(msgIndex, p.token, "roleDenied");
         setErr(t("chat.confirmRoleDenied"));
+        return;
+      }
+      if (outcome === "workspaceRequired") {
+        // The account has NO workspace, so the confirmed creation could never land
+        // (the gate refused it after the server claimed the token). Two facts have
+        // to reach the user and only this sentence may carry them (once, by the
+        // alert): WHY it did not run, and that this card is finished — the token
+        // was spent, so pressing Confirm again cannot work. "Create a workspace" is
+        // the first step of the remedy; a fresh card afterwards is the second.
+        setState(msgIndex, p.token, "workspaceRequired");
+        setErr(t("chat.confirmWorkspaceRequired"));
+        return;
+      }
+      if (outcome === "refused") {
+        // The server answered and refused; this build cannot classify why. The
+        // change did not run and the token is SPENT, so the copy may not offer a
+        // retry — it says the card has to be prepared again (t_bf4feea2). A cancel
+        // is the exception only in words: a cancel that the server refused leaves
+        // the card unsettled, and its own sentence already says so.
+        setState(msgIndex, p.token, "refused");
+        setErr(action === "confirm" ? t("chat.confirmRefused") : t("chat.cancelFail"));
         return;
       }
       if (outcome === "stale") {

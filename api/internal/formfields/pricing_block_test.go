@@ -201,7 +201,7 @@ func TestUnpricedPricingBlockReadsAStoredConfig(t *testing.T) {
 		t.Fatal("a JSON-decoded unpriced option block was accepted")
 	}
 	// The message has to tell the merchant WHICH block and WHAT to do.
-	for _, want := range []string{"option", "Tambahan", "harga", "pilihan"} {
+	for _, want := range []string{"option", "Tambahan", "price", "choice"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message %q does not contain %q", msg, want)
 		}

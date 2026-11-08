@@ -25,7 +25,7 @@
 //      unreachable from the workspace being worked in).
 //
 //   C. the API answered `?workspace=<unknown>` on the live list with 200 + the first
-//      account's rows instead of 403 "workspace tidak dijumpai". That half is the Go
+//      account's rows instead of 403 "workspace not found". That half is the Go
 //      suite's (httpapi/media_workspace_scope_test.go); this file only proves the client
 //      actually SENDS a well-formed scope for the server to refuse.
 //

@@ -15,7 +15,7 @@ package httpapi
 //
 //	required option   block → 201 {"status":"bank_direct"}
 //	required shipping block → 201 {"status":"bank_direct"}
-//	required text     block → 400 "medan wajib tidak diisi: Nama"
+//	required text     block → 400 "Nama is required"
 //
 // THE FIX SHAPE. `formfields.Contract` is untouched, because THREE surfaces
 // derive from it and only one of them renders a pricing control:
@@ -235,7 +235,7 @@ func TestOrderRefusesARequiredPricingChoiceLeftUnanswered(t *testing.T) {
 					"two surfaces disagree and a direct POST buys without the choice.",
 					kind, rec.Code, rec.Body.String())
 			}
-			if want := "medan wajib tidak diisi: " + fx.blockLabel; !strings.Contains(rec.Body.String(), want) {
+			if want := fx.blockLabel + " is required"; !strings.Contains(rec.Body.String(), want) {
 				t.Errorf("refusal body = %s, want it to contain %q (the same shape a required text "+
 					"block gets)", rec.Body.String(), want)
 			}
@@ -420,7 +420,7 @@ func TestPricingContractKeysAreThePagesSubmitKeys(t *testing.T) {
 		t.Errorf("a non-required pricing block refused an empty answer: %v", err)
 	}
 	if err := formfields.ValidateFields(got, nil); err == nil ||
-		!strings.Contains(err.Error(), "medan wajib tidak diisi: Saiz") {
+		!strings.Contains(err.Error(), "Saiz is required") {
 		t.Errorf("a required pricing block with no answer = %v, want the required message naming the label", err)
 	}
 }
@@ -510,7 +510,7 @@ func TestPaymentPageWrapsAConditionalPricingBlock(t *testing.T) {
 //	fields.em="pergi", choice="l" + its item  -> 201
 //
 // Row 1 is the bug: before the fix the route answered 400
-// "medan wajib tidak diisi: Saiz" for a control the page had hidden and disabled.
+// "Saiz is required" for a control the page had hidden and disabled.
 // Row 2 keeps the fix from becoming "a conditional pricing block is never
 // required" — the rule is what decides, not the presence of the rule. Row 3 is
 // the control: a fix that simply stopped enforcing any pricing block would pass
@@ -547,7 +547,7 @@ func TestOrderHonoursAPricingBlocksConditionalRule(t *testing.T) {
 					"unanswered = %d, want 400 (body %s). A rule that happens to exist must not "+
 					"neutralise the requirement while it holds.", kind, rec.Code, rec.Body.String())
 			}
-			if want := "medan wajib tidak diisi: " + fx.blockLabel; !strings.Contains(rec.Body.String(), want) {
+			if want := fx.blockLabel + " is required"; !strings.Contains(rec.Body.String(), want) {
 				t.Errorf("refusal body = %s, want it to contain %q", rec.Body.String(), want)
 			}
 

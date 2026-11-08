@@ -48,7 +48,7 @@ func mustRejectUnsubmittableCustom(t *testing.T, what string, err error) {
 		t.Fatalf("%s: an unsatisfiable custom-form contract was ACCEPTED — the form is stored "+
 			"and every submit answers 400 `medan wajib tidak diisi`", what)
 	}
-	if !strings.Contains(err.Error(), "medan wajib tiada dalam HTML") ||
+	if !strings.Contains(err.Error(), "required field missing from the HTML") ||
 		!strings.Contains(err.Error(), `name="nama"`) {
 		t.Errorf("%s: refusal = %q, want it to name the missing control (name=\"nama\")", what, err)
 	}

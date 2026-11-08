@@ -18,7 +18,7 @@ func (h *RESTHandlers) setFormChipOverride(w http.ResponseWriter, r *http.Reques
 		MethodWhitelist []string `json:"payment_method_whitelist"`
 	}
 	if err := decodeJSON(r, &in); err != nil || in.BrandID == "" || in.SecretKey == "" {
-		writeErr(w, http.StatusBadRequest, "brand_id dan secret_key wajib")
+		writeErr(w, http.StatusBadRequest, "brand_id and secret_key are required")
 		return
 	}
 	enc, err := cryptoutil.Encrypt(h.SecretsKey, []byte(in.SecretKey))

@@ -79,7 +79,7 @@ func (s *Server) listDomains(ctx context.Context, _ *mcp.CallToolRequest, _ empt
 		return nil, nil, err
 	}
 	if s.deps.Domains == nil {
-		return nil, nil, errors.New("domain store tidak tersedia")
+		return nil, nil, errors.New("domain store not available")
 	}
 	rows, err := s.deps.Domains.ListDomains(ctx, acc)
 	if err != nil {
@@ -94,7 +94,7 @@ func (s *Server) listDomains(ctx context.Context, _ *mcp.CallToolRequest, _ empt
 }
 
 type addDomainIn struct {
-	Domain string `json:"domain" jsonschema:"Nama domain (cth: kedai.com). Jangan sertakan https:// atau slash."`
+	Domain string `json:"domain" jsonschema:"Domain name (e.g. kedai.com). Do not include https:// or a slash."`
 }
 
 func (s *Server) addDomain(ctx context.Context, _ *mcp.CallToolRequest, in addDomainIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -103,11 +103,11 @@ func (s *Server) addDomain(ctx context.Context, _ *mcp.CallToolRequest, in addDo
 		return nil, nil, err
 	}
 	if s.deps.Domains == nil {
-		return nil, nil, errors.New("domain store tidak tersedia")
+		return nil, nil, errors.New("domain store not available")
 	}
 	domain := normalizeDomainMCP(in.Domain)
 	if domain == "" || strings.HasSuffix(domain, "jomform.com") {
-		return nil, nil, errors.New("domain tidak sah")
+		return nil, nil, errors.New("invalid domain")
 	}
 	d, err := s.deps.Domains.AddDomain(ctx, acc, domain, "cname")
 	if err != nil {
@@ -115,12 +115,12 @@ func (s *Server) addDomain(ctx context.Context, _ *mcp.CallToolRequest, in addDo
 	}
 	return nil, map[string]any{
 		"id": d.ID, "domain": domain, "status": "pending_dns",
-		"hint": "CNAME " + domain + " → custom.jomform.com, kemudian panggil verify_domain",
+		"hint": "CNAME " + domain + " → " + s.cnameHost() + ", then call verify_domain",
 	}, nil
 }
 
 type domainIDIn struct {
-	DomainID string `json:"domain_id" jsonschema:"ID domain (dari list_domains)"`
+	DomainID string `json:"domain_id" jsonschema:"Domain ID (from list_domains)"`
 }
 
 func (s *Server) verifyDomain(ctx context.Context, _ *mcp.CallToolRequest, in domainIDIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -129,17 +129,17 @@ func (s *Server) verifyDomain(ctx context.Context, _ *mcp.CallToolRequest, in do
 		return nil, nil, err
 	}
 	if s.deps.Domains == nil {
-		return nil, nil, errors.New("domain store tidak tersedia")
+		return nil, nil, errors.New("domain store not available")
 	}
 	d, err := s.deps.Domains.GetByID(ctx, acc, in.DomainID)
 	if err != nil {
-		return nil, nil, errors.New("domain tidak dijumpai")
+		return nil, nil, errors.New("domain not found")
 	}
 	// Authoritative check (issue #237): the domain must actually serve a
 	// JomForm page. SSRF-pinned probe (issue #366).
 	if !probeServesJomFormMCP(d.Domain) {
 		return nil, map[string]any{"verified": false, "detail": "verify_failed",
-			"hint": "Pastikan CNAME " + d.Domain + " → custom.jomform.com (atau Cloudflare proxy), kemudian cuba lagi"}, nil
+			"hint": "Make sure the CNAME " + d.Domain + " → " + s.cnameHost() + " is in place (or Cloudflare proxy), then try again"}, nil
 	}
 	if err := s.deps.Domains.MarkVerified(ctx, acc, d.Domain); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -153,10 +153,10 @@ func (s *Server) removeDomain(ctx context.Context, _ *mcp.CallToolRequest, in do
 		return nil, nil, err
 	}
 	if s.deps.Domains == nil {
-		return nil, nil, errors.New("domain store tidak tersedia")
+		return nil, nil, errors.New("domain store not available")
 	}
 	if _, err := s.deps.Domains.GetByID(ctx, acc, in.DomainID); err != nil {
-		return nil, nil, errors.New("domain tidak dijumpai")
+		return nil, nil, errors.New("domain not found")
 	}
 	if err := s.deps.Domains.RemoveDomain(ctx, acc, in.DomainID); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -172,11 +172,11 @@ func (s *Server) autoCNAMEDomain(ctx context.Context, _ *mcp.CallToolRequest, in
 		return nil, nil, err
 	}
 	if s.deps.Domains == nil {
-		return nil, nil, errors.New("domain store tidak tersedia")
+		return nil, nil, errors.New("domain store not available")
 	}
 	d, err := s.deps.Domains.GetByID(ctx, acc, in.DomainID)
 	if err != nil {
-		return nil, nil, errors.New("domain tidak dijumpai")
+		return nil, nil, errors.New("domain not found")
 	}
 	if err := s.cfCreateCNAMEForDomainMCP(ctx, acc, d.Domain); err != nil {
 		_ = s.deps.Domains.SetAutoCNAME(ctx, acc, d.Domain, "failed")
@@ -194,15 +194,15 @@ func (s *Server) setDomainTLSModeMCP(ctx context.Context, _ *mcp.CallToolRequest
 		return nil, nil, err
 	}
 	if s.deps.Domains == nil {
-		return nil, nil, errors.New("domain store tidak tersedia")
+		return nil, nil, errors.New("domain store not available")
 	}
 	d, err := s.deps.Domains.GetByID(ctx, acc, in.DomainID)
 	if err != nil {
-		return nil, nil, errors.New("domain tidak dijumpai")
+		return nil, nil, errors.New("domain not found")
 	}
 	mode := strings.ToLower(strings.TrimSpace(in.Mode))
 	if mode != "auto" && mode != "custom" {
-		return nil, nil, errors.New("mode tidak sah (auto|custom)")
+		return nil, nil, errors.New("invalid mode (auto|custom)")
 	}
 	if err := s.deps.Domains.SetTLSMode(ctx, acc, d.Domain, mode); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -211,8 +211,8 @@ func (s *Server) setDomainTLSModeMCP(ctx context.Context, _ *mcp.CallToolRequest
 }
 
 type domainTLSModeIn struct {
-	DomainID string `json:"domain_id" jsonschema:"ID domain (dari list_domains)"`
-	Mode     string `json:"mode" jsonschema:"Mode TLS: auto (Let's Encrypt, default) atau custom (bring-your-own-cert)"`
+	DomainID string `json:"domain_id" jsonschema:"Domain ID (from list_domains)"`
+	Mode     string `json:"mode" jsonschema:"TLS mode: auto (Let's Encrypt, default) or custom (bring-your-own-cert)"`
 }
 
 // getDomainTLSEmailMCP (issue #398): read the per-domain ACME/Let's Encrypt
@@ -225,18 +225,18 @@ func (s *Server) getDomainTLSEmailMCP(ctx context.Context, _ *mcp.CallToolReques
 		return nil, nil, err
 	}
 	if s.deps.Domains == nil {
-		return nil, nil, errors.New("domain store tidak tersedia")
+		return nil, nil, errors.New("domain store not available")
 	}
 	d, err := s.deps.Domains.GetByID(ctx, acc, in.DomainID)
 	if err != nil {
-		return nil, nil, errors.New("domain tidak dijumpai")
+		return nil, nil, errors.New("domain not found")
 	}
 	return nil, map[string]any{"domain": d.Domain, "tls_email": d.TLSEmail}, nil
 }
 
 type domainTLSEmailIn struct {
-	DomainID string `json:"domain_id" jsonschema:"ID domain (dari list_domains)"`
-	Email    string `json:"email" jsonschema:"Emel ACME/Let's Encrypt untuk domain. Kosong = kembali ke emel akaun, kemudian ACME_EMAIL global."`
+	DomainID string `json:"domain_id" jsonschema:"Domain ID (from list_domains)"`
+	Email    string `json:"email" jsonschema:"ACME/Let's Encrypt email for the domain. Empty = fall back to the account email, then the global ACME_EMAIL."`
 }
 
 // setDomainTLSEmailMCP (issue #398): set the per-domain ACME/Let's Encrypt
@@ -249,15 +249,15 @@ func (s *Server) setDomainTLSEmailMCP(ctx context.Context, _ *mcp.CallToolReques
 		return nil, nil, err
 	}
 	if s.deps.Domains == nil {
-		return nil, nil, errors.New("domain store tidak tersedia")
+		return nil, nil, errors.New("domain store not available")
 	}
 	d, err := s.deps.Domains.GetByID(ctx, acc, in.DomainID)
 	if err != nil {
-		return nil, nil, errors.New("domain tidak dijumpai")
+		return nil, nil, errors.New("domain not found")
 	}
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	if email != "" && !strings.Contains(email, "@") {
-		return nil, nil, errors.New("email tidak sah")
+		return nil, nil, errors.New("invalid email")
 	}
 	if err := s.deps.Domains.SetTLSEmail(ctx, acc, d.Domain, email); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -273,23 +273,23 @@ func (s *Server) setDomainCustomCertMCP(ctx context.Context, _ *mcp.CallToolRequ
 		return nil, nil, err
 	}
 	if s.deps.Domains == nil {
-		return nil, nil, errors.New("domain store tidak tersedia")
+		return nil, nil, errors.New("domain store not available")
 	}
 	d, err := s.deps.Domains.GetByID(ctx, acc, in.DomainID)
 	if err != nil {
-		return nil, nil, errors.New("domain tidak dijumpai")
+		return nil, nil, errors.New("domain not found")
 	}
 	certPEM := strings.TrimSpace(in.Cert)
 	keyPEM := strings.TrimSpace(in.Key)
 	if certPEM == "" || keyPEM == "" {
-		return nil, nil, errors.New("cert dan key wajib")
+		return nil, nil, errors.New("cert and key are required")
 	}
 	cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 	if err != nil {
-		return nil, nil, errors.New("cert/key tidak sah — semak format PEM dan padanan kunci")
+		return nil, nil, errors.New("invalid cert/key — check the PEM format and that the key matches")
 	}
 	if len(cert.Certificate) == 0 {
-		return nil, nil, errors.New("cert tidak sah")
+		return nil, nil, errors.New("invalid cert")
 	}
 	certEnc, err := cryptoutil.Encrypt(s.decKey, []byte(certPEM))
 	if err != nil {
@@ -306,9 +306,9 @@ func (s *Server) setDomainCustomCertMCP(ctx context.Context, _ *mcp.CallToolRequ
 }
 
 type domainCustomCertIn struct {
-	DomainID string `json:"domain_id" jsonschema:"ID domain (dari list_domains)"`
-	Cert     string `json:"cert" jsonschema:"PEM sijil (chain) untuk domain"`
-	Key      string `json:"key" jsonschema:"PEM kunci peribadi yang sepadan"`
+	DomainID string `json:"domain_id" jsonschema:"Domain ID (from list_domains)"`
+	Cert     string `json:"cert" jsonschema:"Certificate PEM (chain) for the domain"`
+	Key      string `json:"key" jsonschema:"Matching private key PEM"`
 }
 
 // normalizeDomainMCP strips scheme/slash and lowercases (mirror of the REST
@@ -373,7 +373,7 @@ func (s *Server) getTracking(ctx context.Context, _ *mcp.CallToolRequest, _ empt
 }
 
 type setTrackingIn struct {
-	Head string `json:"head" jsonschema:"Skrip <head> (Google Analytics, Facebook Pixel, dll). Hanya <script src=https://...>, <meta> dan komen dibenarkan."`
+	Head string `json:"head" jsonschema:"<head> script (Google Analytics, Facebook Pixel, etc.). Only <script src=https://...>, <meta> and comments are allowed."`
 }
 
 func (s *Server) setTracking(ctx context.Context, _ *mcp.CallToolRequest, in setTrackingIn) (*mcp.CallToolResult, map[string]string, error) {
@@ -416,18 +416,22 @@ func (s *Server) getChipSettings(ctx context.Context, _ *mcp.CallToolRequest, _ 
 	}
 	if out.Configured && s.decKey != nil {
 		if secret, derr := cryptoutil.Decrypt(s.decKey, a.ChipSecretKeyEnc); derr == nil {
-			out.SecretKeyMasked = maskSecretMCP(string(secret))
+			// Card t_56a2bd7f: cryptoutil.MaskSecret, not a local copy. The
+			// copy that lived here kept every character but the last four, so
+			// this tool answered with nearly the whole CHIP secret even though
+			// its own description promises the full secret is never returned.
+			out.SecretKeyMasked = cryptoutil.MaskSecret(string(secret))
 		}
 	}
 	return nil, out, nil
 }
 
 type setChipSettingsIn struct {
-	BrandID         string   `json:"brand_id" jsonschema:"CHIP Brand ID (wajib)"`
-	SecretKey       string   `json:"secret_key,omitempty" jsonschema:"CHIP Secret Key. Kosong = kekalkan kunci sedia ada."`
-	Mode            string   `json:"mode,omitempty" jsonschema:"test|live (auto-derive dari prefix sk_test_/sk_live_ bila kosong)"`
-	EmailFallback   string   `json:"email_fallback,omitempty" jsonschema:"Fallback emel bila buyer tak bagi emel"`
-	MethodWhitelist []string `json:"payment_method_whitelist,omitempty" jsonschema:"Senarai kaedah bayaran, kosong = semua"`
+	BrandID         string   `json:"brand_id" jsonschema:"CHIP Brand ID (required)"`
+	SecretKey       string   `json:"secret_key,omitempty" jsonschema:"CHIP Secret Key. Empty = keep the existing key."`
+	Mode            string   `json:"mode,omitempty" jsonschema:"test|live (auto-derived from the sk_test_/sk_live_ prefix when empty)"`
+	EmailFallback   string   `json:"email_fallback,omitempty" jsonschema:"Fallback email when the buyer does not provide an email"`
+	MethodWhitelist []string `json:"payment_method_whitelist,omitempty" jsonschema:"List of payment methods, empty = all"`
 }
 
 func (s *Server) setChipSettings(ctx context.Context, _ *mcp.CallToolRequest, in setChipSettingsIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -436,7 +440,7 @@ func (s *Server) setChipSettings(ctx context.Context, _ *mcp.CallToolRequest, in
 		return nil, nil, err
 	}
 	if in.BrandID == "" {
-		return nil, nil, errors.New("brand_id wajib")
+		return nil, nil, errors.New("brand_id is required")
 	}
 	secretEnc := ""
 	existingMode := ""
@@ -455,7 +459,7 @@ func (s *Server) setChipSettings(ctx context.Context, _ *mcp.CallToolRequest, in
 		secretEnc = enc
 	}
 	if secretEnc == "" {
-		return nil, nil, errors.New("secret_key wajib")
+		return nil, nil, errors.New("secret_key is required")
 	}
 	mode := strings.ToLower(in.Mode)
 	if in.SecretKey == "" && existingMode != "" {
@@ -471,7 +475,7 @@ func (s *Server) setChipSettings(ctx context.Context, _ *mcp.CallToolRequest, in
 	verified := false
 	if s.chip != nil && in.SecretKey != "" {
 		if verr := s.chip.ValidateCredentials(ctx, in.SecretKey); verr != nil {
-			return nil, map[string]any{"error": "kredensial tidak sah — semak Brand ID / Secret Key", "verified": false}, nil
+			return nil, map[string]any{"error": "invalid credentials — check the Brand ID / Secret Key", "verified": false}, nil
 		}
 		verified = true
 	} else if in.SecretKey == "" {
@@ -497,7 +501,7 @@ func (s *Server) clearChipSettings(ctx context.Context, _ *mcp.CallToolRequest, 
 // ─── Profile avatar (issue #396) ──────────────────────────────────────────
 
 type updateAvatarIn struct {
-	AvatarURL string `json:"avatar_url" jsonschema:"URL avatar (mesti imej yang dihoskan JomForm dari upload bucket). Kosong = buang avatar."`
+	AvatarURL string `json:"avatar_url" jsonschema:"Avatar URL (must be an image hosted by JomForm from the upload bucket). Empty = remove avatar."`
 }
 
 func (s *Server) updateProfileAvatar(ctx context.Context, _ *mcp.CallToolRequest, in updateAvatarIn) (*mcp.CallToolResult, map[string]string, error) {
@@ -506,15 +510,15 @@ func (s *Server) updateProfileAvatar(ctx context.Context, _ *mcp.CallToolRequest
 		return nil, nil, err
 	}
 	if s.deps.Users == nil {
-		return nil, nil, errors.New("perkhidmatan tidak tersedia")
+		return nil, nil, errors.New("service not available")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, nil, errors.New("auth diperlukan")
+		return nil, nil, errors.New("authentication required")
 	}
 	u := strings.TrimSpace(in.AvatarURL)
 	if u != "" && !jomformMediaURLMCP(u) {
-		return nil, nil, errors.New("URL avatar tidak sah (imej daripada pelayan JomForm diperlukan)")
+		return nil, nil, errors.New("invalid avatar URL (the image must come from the JomForm server)")
 	}
 	if err := s.deps.Users.UpdateAvatar(ctx, userID, u); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -540,11 +544,11 @@ type passkeyOut struct {
 // gone so a regression here is a wrong value rather than a vanished key.
 func (s *Server) listPasskeys(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[passkeyOut], error) {
 	if s.deps.Passkeys == nil {
-		return nil, nil, errors.New("passkey store tidak tersedia")
+		return nil, nil, errors.New("passkey store not available")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, nil, errors.New("auth diperlukan")
+		return nil, nil, errors.New("authentication required")
 	}
 	creds, err := s.deps.Passkeys.ListCreatedAt(ctx, userID)
 	if err != nil {
@@ -558,7 +562,7 @@ func (s *Server) listPasskeys(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 }
 
 type deletePasskeyIn struct {
-	PasskeyID string `json:"passkey_id" jsonschema:"ID passkey (dari list_passkeys)"`
+	PasskeyID string `json:"passkey_id" jsonschema:"Passkey ID (from list_passkeys)"`
 }
 
 func (s *Server) deletePasskey(ctx context.Context, _ *mcp.CallToolRequest, in deletePasskeyIn) (*mcp.CallToolResult, map[string]string, error) {
@@ -568,15 +572,15 @@ func (s *Server) deletePasskey(ctx context.Context, _ *mcp.CallToolRequest, in d
 		return nil, nil, err
 	}
 	if s.deps.Passkeys == nil {
-		return nil, nil, errors.New("passkey store tidak tersedia")
+		return nil, nil, errors.New("passkey store not available")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, nil, errors.New("auth diperlukan")
+		return nil, nil, errors.New("authentication required")
 	}
 	raw, err := base64URLDecodeMCP(in.PasskeyID)
 	if err != nil {
-		return nil, nil, errors.New("id tidak sah")
+		return nil, nil, errors.New("invalid id")
 	}
 	if err := s.deps.Passkeys.Delete(ctx, userID, raw); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -596,11 +600,11 @@ type socialAccountOut struct {
 
 func (s *Server) listSocialAccounts(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[socialAccountOut], error) {
 	if s.deps.Users == nil {
-		return nil, nil, errors.New("perkhidmatan tidak tersedia")
+		return nil, nil, errors.New("service not available")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, nil, errors.New("auth diperlukan")
+		return nil, nil, errors.New("authentication required")
 	}
 	links, err := s.deps.Users.ListIdentities(ctx, userID)
 	if err != nil {
@@ -617,7 +621,7 @@ func (s *Server) listSocialAccounts(ctx context.Context, _ *mcp.CallToolRequest,
 }
 
 type unlinkSocialIn struct {
-	Provider string `json:"provider" jsonschema:"Pembekal sosial (google|azure_ad|github|cloudflare)"`
+	Provider string `json:"provider" jsonschema:"Social provider (google|azure_ad|github|cloudflare)"`
 }
 
 func (s *Server) unlinkSocialAccount(ctx context.Context, _ *mcp.CallToolRequest, in unlinkSocialIn) (*mcp.CallToolResult, map[string]string, error) {
@@ -628,14 +632,14 @@ func (s *Server) unlinkSocialAccount(ctx context.Context, _ *mcp.CallToolRequest
 		return nil, nil, err
 	}
 	if s.deps.Users == nil {
-		return nil, nil, errors.New("perkhidmatan tidak tersedia")
+		return nil, nil, errors.New("service not available")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, nil, errors.New("auth diperlukan")
+		return nil, nil, errors.New("authentication required")
 	}
 	if in.Provider == "" {
-		return nil, nil, errors.New("provider wajib")
+		return nil, nil, errors.New("provider is required")
 	}
 	if err := s.deps.Users.UnlinkIdentity(ctx, userID, in.Provider); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -651,15 +655,15 @@ type twoFAStatusOut struct {
 
 func (s *Server) getTwoFAStatus(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, twoFAStatusOut, error) {
 	if s.deps.Users == nil {
-		return nil, twoFAStatusOut{}, errors.New("perkhidmatan tidak tersedia")
+		return nil, twoFAStatusOut{}, errors.New("service not available")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, twoFAStatusOut{}, errors.New("auth diperlukan")
+		return nil, twoFAStatusOut{}, errors.New("authentication required")
 	}
 	u, err := s.deps.Users.ByID(ctx, userID)
 	if err != nil || u == nil {
-		return nil, twoFAStatusOut{}, errors.New("pengguna tidak dijumpai")
+		return nil, twoFAStatusOut{}, errors.New("user not found")
 	}
 	return nil, twoFAStatusOut{Enabled: u.TOTPEnabled}, nil
 }
@@ -676,15 +680,15 @@ func (s *Server) setupTwoFA(ctx context.Context, _ *mcp.CallToolRequest, _ empty
 		return nil, twoFASetupOut{}, err
 	}
 	if s.deps.Users == nil || s.deps.Sessions == nil {
-		return nil, twoFASetupOut{}, errors.New("perkhidmatan tidak tersedia")
+		return nil, twoFASetupOut{}, errors.New("service not available")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, twoFASetupOut{}, errors.New("auth diperlukan")
+		return nil, twoFASetupOut{}, errors.New("authentication required")
 	}
 	u, err := s.deps.Users.ByID(ctx, userID)
 	if err != nil || u == nil {
-		return nil, twoFASetupOut{}, errors.New("pengguna tidak dijumpai")
+		return nil, twoFASetupOut{}, errors.New("user not found")
 	}
 	secret, otpauthURL, err := auth.GenerateTOTPSecret(u.Email)
 	if err != nil {
@@ -697,7 +701,7 @@ func (s *Server) setupTwoFA(ctx context.Context, _ *mcp.CallToolRequest, _ empty
 }
 
 type enableTwoFAIn struct {
-	Code string `json:"code" jsonschema:"Kod 6-digit dari aplikasi authenticator (selepas setup_2fa)"`
+	Code string `json:"code" jsonschema:"6-digit code from the authenticator app (after setup_2fa)"`
 }
 
 func (s *Server) enableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in enableTwoFAIn) (*mcp.CallToolResult, map[string]string, error) {
@@ -706,21 +710,21 @@ func (s *Server) enableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in ena
 		return nil, nil, err
 	}
 	if s.deps.Users == nil || s.deps.Sessions == nil {
-		return nil, nil, errors.New("perkhidmatan tidak tersedia")
+		return nil, nil, errors.New("service not available")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, nil, errors.New("auth diperlukan")
+		return nil, nil, errors.New("authentication required")
 	}
 	if in.Code == "" {
-		return nil, nil, errors.New("kod diperlukan")
+		return nil, nil, errors.New("code is required")
 	}
 	pending, err := s.deps.Sessions.PendingTOTP().Get(ctx, userID)
 	if err != nil || pending == "" {
-		return nil, nil, errors.New("2fa belum di-setup atau ralat")
+		return nil, nil, errors.New("2FA not set up, or an error occurred")
 	}
 	if !auth.ValidateTOTPSecret(pending, in.Code) {
-		return nil, nil, errors.New("kod tidak sah")
+		return nil, nil, errors.New("invalid code")
 	}
 	if err := s.deps.Users.EnableTOTP(ctx, userID, pending); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -740,12 +744,12 @@ func (s *Server) enableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in ena
 // that enforces it before a handler ever runs.
 type disableTwoFAIn struct {
 	// Password is the account password — the baseline confirmation.
-	Password string `json:"password,omitempty" jsonschema:"Kata laluan akaun untuk pengesahan"`
+	Password string `json:"password,omitempty" jsonschema:"Account password for verification"`
 	// TOTPCode is a CURRENT code from the authenticator app. It is not a second
 	// factor on top of the password: MCP has no session at all and an API key is
 	// a credential, not a second factor, so the code *replaces* the password as
 	// the proof that the caller really holds this account.
-	TOTPCode string `json:"totp_code,omitempty" jsonschema:"Kod 2FA semasa (6 digit) daripada aplikasi authenticator. Menggantikan kata laluan sebagai bukti, bukan menambah faktor kedua — MCP tiada sesi dan kunci API bukan faktor kedua."`
+	TOTPCode string `json:"totp_code,omitempty" jsonschema:"Current 2FA code (6 digits) from the authenticator app. Replaces the password as proof, not an added second factor — MCP has no session and the API key is not a second factor."`
 }
 
 // disable2FATool is the registered definition of `disable_2fa`.
@@ -778,26 +782,26 @@ func disable2FATool() *mcp.Tool {
 	}
 	return &mcp.Tool{
 		Name: "disable_2fa",
-		Description: "Matikan 2FA akaun anda. Bukti yang diterima — TEPAT SATU daripada dua, bukan " +
-			"kedua-duanya: kod 2FA semasa dalam totp_code (kod 6 digit dari aplikasi authenticator, " +
-			"disahkan sekali sahaja dan tidak memerlukan kata laluan) ATAU kata laluan akaun dalam " +
-			"password (untuk akaun yang menyertai melalui pautan emel dan tidak mempunyai kata laluan " +
-			"yang boleh digunakan). Menghantar kedua-duanya ditolak oleh skema, dan tanpa kedua-duanya " +
-			"panggilan ditolak. Kunci API sahaja tidak pernah memadai untuk mematikan faktor kedua. " +
-			"(Borang di dashboard (Profil → Keselamatan) meminta kod 2FA semasa.) " +
+		Description: "Disable 2FA on your account. Accepted proof — EXACTLY ONE of the two, not " +
+			"both: the current 2FA code in totp_code (a 6-digit code from the authenticator " +
+			"app, checked once only and not requiring a password) OR the account password in " +
+			"password (for accounts that joined through an email link and have no usable " +
+			"password). Sending both is rejected by the schema, and without either the call is " +
+			"rejected. An API key alone is never enough to turn off the second factor. " +
+			"(The dashboard form (Profile → Security) asks for the current 2FA code.) " +
 			// Issue #63/#713: this sentence arrived on main from PR 713, which
 			// changed the tool's plain Description. This tool's definition was
 			// written before that landed (the branch was cut from #686's head),
 			// so the union has to carry the clause here too — otherwise the
 			// revocation behaviour is undocumented while it still happens.
-			"Mematikan 2FA juga membatalkan SEMUA peranti dipercayai akaun — peranti yang " +
-			"melangkau faktor yang kini dibuang tidak boleh kekal dikecualikan (sama seperti REST dan " +
-			"borang profil dashboard; guna list_trusted_devices untuk semak baki peranti).",
+			"Turning off 2FA also revokes EVERY trusted device on the account — a device that " +
+			"skipped the factor that has now been removed cannot stay exempt (same as REST and " +
+			"the dashboard profile form; use list_trusted_devices to review the remaining devices).",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"password":  str("Kata laluan akaun untuk pengesahan"),
-				"totp_code": str("Kod 2FA semasa (6 digit) daripada aplikasi authenticator. Menggantikan kata laluan sebagai bukti, bukan menambah faktor kedua."),
+				"password":  str("Account password, for verification"),
+				"totp_code": str("Current 2FA code (6 digits) from the authenticator app. Replaces the password as proof, it does not add a second factor."),
 			},
 			// No unknown fields: the declared set is the whole contract, so a
 			// typo is a refusal rather than a silently ignored argument.
@@ -840,24 +844,24 @@ func (s *Server) disableTwoFA(ctx context.Context, _ *mcp.CallToolRequest, in di
 	// is the same answer the sibling revoke_all_trusted_devices gives on a nil
 	// store.
 	if s.deps.Users == nil || s.deps.Sessions == nil {
-		return nil, nil, errors.New("perkhidmatan tidak tersedia")
+		return nil, nil, errors.New("service not available")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, nil, errors.New("auth diperlukan")
+		return nil, nil, errors.New("authentication required")
 	}
 	u, err := s.deps.Users.ByID(ctx, userID)
 	if err != nil || u == nil {
-		return nil, nil, errors.New("pengguna tidak dijumpai")
+		return nil, nil, errors.New("user not found")
 	}
 	if code := strings.TrimSpace(in.TOTPCode); code != "" {
 		if !checkAndConsumeTOTP(ctx, s.deps.Users, u, code) {
-			return nil, nil, errors.New("kod 2FA tidak sah")
+			return nil, nil, errors.New("invalid 2FA code")
 		}
 	} else {
 		ok, err := auth.VerifyPassword(in.Password, u.PasswordHash)
 		if err != nil || !ok {
-			return nil, nil, errors.New("kata laluan tidak sah")
+			return nil, nil, errors.New("invalid password")
 		}
 	}
 	// Issue #63 (REST parity — httpapi handle2FADisable, api/internal/httpapi/
@@ -921,11 +925,11 @@ type trustDeviceMCPOut struct {
 // listTrustedDevices (issue #454): list the account owner's trusted devices.
 func (s *Server) listTrustedDevices(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[trustDeviceMCPOut], error) {
 	if s.deps.Sessions == nil {
-		return nil, nil, errors.New("perkhidmatan tidak tersedia")
+		return nil, nil, errors.New("service not available")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, nil, errors.New("auth diperlukan")
+		return nil, nil, errors.New("authentication required")
 	}
 	devices, err := s.deps.Sessions.TrustedDevices().List(ctx, userID, "")
 	if err != nil {
@@ -942,7 +946,7 @@ func (s *Server) listTrustedDevices(ctx context.Context, _ *mcp.CallToolRequest,
 }
 
 type revokeTrustedDeviceIn struct {
-	DeviceID string `json:"device_id" jsonschema:"ID peranti dipercayai (dari list_trusted_devices)"`
+	DeviceID string `json:"device_id" jsonschema:"Trusted device ID (from list_trusted_devices)"`
 }
 
 // revokeTrustedDevice (issue #454): revoke ONE trusted device by id. The next
@@ -953,14 +957,14 @@ func (s *Server) revokeTrustedDevice(ctx context.Context, _ *mcp.CallToolRequest
 		return nil, nil, err
 	}
 	if s.deps.Sessions == nil {
-		return nil, nil, errors.New("perkhidmatan tidak tersedia")
+		return nil, nil, errors.New("service not available")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, nil, errors.New("auth diperlukan")
+		return nil, nil, errors.New("authentication required")
 	}
 	if strings.TrimSpace(in.DeviceID) == "" {
-		return nil, nil, errors.New("device_id wajib")
+		return nil, nil, errors.New("device_id is required")
 	}
 	if err := s.deps.Sessions.TrustedDevices().RevokeHash(ctx, userID, strings.TrimSpace(in.DeviceID)); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -976,11 +980,11 @@ func (s *Server) revokeAllTrustedDevices(ctx context.Context, _ *mcp.CallToolReq
 		return nil, nil, err
 	}
 	if s.deps.Sessions == nil {
-		return nil, nil, errors.New("perkhidmatan tidak tersedia")
+		return nil, nil, errors.New("service not available")
 	}
 	userID := s.userIDFor(ctx)
 	if userID == "" {
-		return nil, nil, errors.New("auth diperlukan")
+		return nil, nil, errors.New("authentication required")
 	}
 	if err := s.deps.Sessions.TrustedDevices().RevokeAll(ctx, userID); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -997,7 +1001,7 @@ type systemSettingOut struct {
 
 func (s *Server) getSystemSettings(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, *listOutput[systemSettingOut], error) {
 	if s.deps.SystemSettings == nil {
-		return nil, nil, errors.New("system settings tidak tersedia")
+		return nil, nil, errors.New("system settings not available")
 	}
 	all, err := s.deps.SystemSettings.All(ctx)
 	if err != nil {
@@ -1011,8 +1015,8 @@ func (s *Server) getSystemSettings(ctx context.Context, _ *mcp.CallToolRequest, 
 }
 
 type setSystemSettingIn struct {
-	Key   string `json:"key" jsonschema:"Kunci tetapan (mesti bermula site_ atau landing_)"`
-	Value string `json:"value" jsonschema:"Nilai tetapan"`
+	Key   string `json:"key" jsonschema:"Settings key (must start with site_ or landing_)"`
+	Value string `json:"value" jsonschema:"Settings value"`
 }
 
 func (s *Server) setSystemSetting(ctx context.Context, _ *mcp.CallToolRequest, in setSystemSettingIn) (*mcp.CallToolResult, map[string]string, error) {
@@ -1021,13 +1025,13 @@ func (s *Server) setSystemSetting(ctx context.Context, _ *mcp.CallToolRequest, i
 		return nil, nil, err
 	}
 	if s.deps.SystemSettings == nil {
-		return nil, nil, errors.New("system settings tidak tersedia")
+		return nil, nil, errors.New("system settings not available")
 	}
 	if in.Key == "" {
-		return nil, nil, errors.New("key wajib")
+		return nil, nil, errors.New("key is required")
 	}
 	if !strings.HasPrefix(in.Key, "site_") && !strings.HasPrefix(in.Key, "landing_") {
-		return nil, nil, errors.New("key tidak dibenarkan")
+		return nil, nil, errors.New("key not allowed")
 	}
 	if err := s.deps.SystemSettings.Set(ctx, in.Key, in.Value); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
@@ -1042,11 +1046,11 @@ func (s *Server) setSystemSetting(ctx context.Context, _ *mcp.CallToolRequest, i
 // page) shows — an export that ignored the filters produced a different data set
 // from the list it mirrors.
 type exportSalesIn struct {
-	FormID   string `json:"form_id,omitempty" jsonschema:"Optional — hadkan eksport kepada jualan borang ini"`
-	Status   string `json:"status,omitempty" jsonschema:"Optional — hadkan kepada status: pending|paid|confirmed|failed|cancelled"`
-	DateFrom string `json:"date_from,omitempty" jsonschema:"Optional — YYYY-MM-DD, termasuk hari itu"`
-	DateTo   string `json:"date_to,omitempty" jsonschema:"Optional — YYYY-MM-DD, termasuk hari itu"`
-	Q        string `json:"q,omitempty" jsonschema:"Optional — cari pada kod rujukan/nama pembeli (jualan) atau nilai jawapan (respons)"`
+	FormID   string `json:"form_id,omitempty" jsonschema:"Optional — limit the export to sales of this form"`
+	Status   string `json:"status,omitempty" jsonschema:"Optional — limit to status: pending|paid|confirmed|failed|cancelled"`
+	DateFrom string `json:"date_from,omitempty" jsonschema:"Optional — YYYY-MM-DD, including that day"`
+	DateTo   string `json:"date_to,omitempty" jsonschema:"Optional — YYYY-MM-DD, including that day"`
+	Q        string `json:"q,omitempty" jsonschema:"Optional — search on reference code/buyer name (sales) or answer value (responses)"`
 }
 
 func (s *Server) exportSalesCSV(ctx context.Context, _ *mcp.CallToolRequest, in exportSalesIn) (*mcp.CallToolResult, map[string]string, error) {
@@ -1055,7 +1059,7 @@ func (s *Server) exportSalesCSV(ctx context.Context, _ *mcp.CallToolRequest, in 
 		return nil, nil, err
 	}
 	if s.deps.Sales == nil {
-		return nil, nil, fmt.Errorf("sales tidak tersedia")
+		return nil, nil, fmt.Errorf("sales not available")
 	}
 	// Same scope decision as list_sales and as the REST export: an unfiltered
 	// export covers the account's sales AND its response entries, and a status
@@ -1263,9 +1267,9 @@ func (s *Server) getCloudflareStatus(ctx context.Context, _ *mcp.CallToolRequest
 }
 
 type connectCFAPITokenIn struct {
-	AccountEmail string `json:"account_email" jsonschema:"Emel akaun Cloudflare"`
-	APIToken     string `json:"api_token" jsonschema:"API token Cloudflare (disahkan serta-merta, disimpan terenkripsi)"`
-	AccountName  string `json:"account_name,omitempty" jsonschema:"Label pilihan"`
+	AccountEmail string `json:"account_email" jsonschema:"Cloudflare account email"`
+	APIToken     string `json:"api_token" jsonschema:"Cloudflare API token (verified immediately, stored encrypted)"`
+	AccountName  string `json:"account_name,omitempty" jsonschema:"Optional label"`
 }
 
 func (s *Server) connectCloudflareAPIToken(ctx context.Context, _ *mcp.CallToolRequest, in connectCFAPITokenIn) (*mcp.CallToolResult, map[string]bool, error) {
@@ -1276,10 +1280,10 @@ func (s *Server) connectCloudflareAPIToken(ctx context.Context, _ *mcp.CallToolR
 	in.AccountEmail = strings.TrimSpace(in.AccountEmail)
 	in.APIToken = strings.TrimSpace(in.APIToken)
 	if in.AccountEmail == "" || in.APIToken == "" {
-		return nil, nil, errors.New("account email dan API token wajib")
+		return nil, nil, errors.New("account email and API token are required")
 	}
 	if err := cfVerifyAPITokenMCP(ctx, in.APIToken); err != nil {
-		return nil, nil, fmt.Errorf("API token tidak sah atau tamat tempoh: %w", err)
+		return nil, nil, fmt.Errorf("invalid or expired API token: %w", err)
 	}
 	blob, _ := json.Marshal(cfCredMCP{Kind: cfKindAPITokenMCP, Access: in.APIToken, AccountEmail: in.AccountEmail, AccountName: in.AccountName})
 	sealed, err := cryptoutil.Encrypt(s.decKey, blob)
@@ -1293,9 +1297,9 @@ func (s *Server) connectCloudflareAPIToken(ctx context.Context, _ *mcp.CallToolR
 }
 
 type connectCFGlobalKeyIn struct {
-	AccountEmail string `json:"account_email" jsonschema:"Emel akaun Cloudflare"`
-	APIKey       string `json:"api_key" jsonschema:"Global API key Cloudflare (disahkan serta-merta, disimpan terenkripsi)"`
-	AccountName  string `json:"account_name,omitempty" jsonschema:"Label pilihan"`
+	AccountEmail string `json:"account_email" jsonschema:"Cloudflare account email"`
+	APIKey       string `json:"api_key" jsonschema:"Cloudflare Global API key (verified immediately, stored encrypted)"`
+	AccountName  string `json:"account_name,omitempty" jsonschema:"Optional label"`
 }
 
 func (s *Server) connectCloudflareGlobalKey(ctx context.Context, _ *mcp.CallToolRequest, in connectCFGlobalKeyIn) (*mcp.CallToolResult, map[string]bool, error) {
@@ -1306,10 +1310,10 @@ func (s *Server) connectCloudflareGlobalKey(ctx context.Context, _ *mcp.CallTool
 	in.AccountEmail = strings.TrimSpace(in.AccountEmail)
 	in.APIKey = strings.TrimSpace(in.APIKey)
 	if in.AccountEmail == "" || in.APIKey == "" {
-		return nil, nil, errors.New("account email dan global API key wajib")
+		return nil, nil, errors.New("account email and global API key are required")
 	}
 	if err := cfVerifyGlobalKeyMCP(ctx, in.AccountEmail, in.APIKey); err != nil {
-		return nil, nil, fmt.Errorf("global API key tidak sah: %w", err)
+		return nil, nil, fmt.Errorf("invalid global API key: %w", err)
 	}
 	blob, _ := json.Marshal(cfCredMCP{Kind: cfKindGlobalKeyMCP, Access: in.APIKey, AccountEmail: in.AccountEmail, AccountName: in.AccountName})
 	sealed, err := cryptoutil.Encrypt(s.decKey, blob)
@@ -1356,7 +1360,7 @@ func (s *Server) getWebhookSigningKey(ctx context.Context, _ *mcp.CallToolReques
 	}
 	pub, _ := ensureSigningKeyMCP(ctx, s, acc)
 	if pub == nil {
-		return nil, webhookKeyOut{}, errors.New("gagal jana kunci tandatangan")
+		return nil, webhookKeyOut{}, errors.New("failed to generate signing key")
 	}
 	return nil, webhookKeyOut{
 		KeyID: acc, PublicKey: base64.StdEncoding.EncodeToString(pub), Alg: "ed25519",
@@ -1382,17 +1386,10 @@ func sanitizeTrackingMCP(js string) string {
 	return strings.Join(out, "\n")
 }
 
-func maskSecretMCP(secret string) string {
-	s := strings.TrimSpace(secret)
-	if s == "" {
-		return ""
-	}
-	const tailLen = 4
-	if len(s) <= tailLen {
-		return "••••"
-	}
-	return s[:len(s)-tailLen] + "••••" + s[len(s)-tailLen:]
-}
+// maskSecretMCP used to live here: a byte-for-byte copy of httpapi.maskSecret,
+// with the same defect (it kept every character BUT the last four, card
+// t_56a2bd7f). Both doors now call cryptoutil.MaskSecret so the rule cannot
+// drift between them again.
 
 func base64URLMCP(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 func base64URLDecodeMCP(s string) ([]byte, error) {
@@ -1479,14 +1476,14 @@ func cfVerifyAPITokenMCP(ctx context.Context, token string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
-		return errors.New("token ditolak oleh Cloudflare")
+		return errors.New("token rejected by Cloudflare")
 	}
 	var vr struct {
 		Success bool `json:"success"`
 	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&vr)
 	if !vr.Success {
-		return errors.New("token tidak sah")
+		return errors.New("invalid token")
 	}
 	return nil
 }
@@ -1501,14 +1498,14 @@ func cfVerifyGlobalKeyMCP(ctx context.Context, email, key string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return errors.New("email atau key ditolak oleh Cloudflare")
+		return errors.New("email or key rejected by Cloudflare")
 	}
 	var ur struct {
 		Success bool `json:"success"`
 	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ur)
 	if !ur.Success {
-		return errors.New("email atau key tidak sah")
+		return errors.New("invalid email or key")
 	}
 	return nil
 }

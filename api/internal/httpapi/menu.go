@@ -39,6 +39,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/wzul/jomform/api/internal/buyertext"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/formfields"
 )
@@ -1274,7 +1275,9 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
             location.href=d.checkout_url||d.next;
             return;
           }
-          fail(d.error);
+          // Prefer the server's sentence in the buyer's language; fall back
+          // to the English wire prose for an older api.
+          fail(d.message||d.error);
         })
         .catch(function(){ fail(''); });
     };
@@ -1546,7 +1549,7 @@ func (h *PublicHandlers) renderFormMenu(w http.ResponseWriter, r *http.Request, 
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := menuPageTmpl.Execute(w, data); err != nil {
-		http.Error(w, "ralat", http.StatusInternalServerError)
+		plainErr(w, http.StatusInternalServerError, ls.Lang, buyertext.CodePageError)
 	}
 }
 
@@ -1606,7 +1609,7 @@ func (h *PublicHandlers) handleMenuStock(w http.ResponseWriter, r *http.Request)
 // way to read the stock of a form that is not a menu.
 func (h *PublicHandlers) resolveMenuStockForm(w http.ResponseWriter, r *http.Request) *dbstore.Form {
 	if h.Forms == nil {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		buyerErr(w, h.buyerLangForHost(r.Context(), r), http.StatusNotFound, errFormNotFound)
 		return nil
 	}
 	slug := r.PathValue("slug")
@@ -1620,23 +1623,25 @@ func (h *PublicHandlers) resolveMenuStockForm(w http.ResponseWriter, r *http.Req
 		f, err = nil, dbstore.ErrFormNotFound
 	}
 	if err != nil || f == nil {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		buyerErr(w, h.buyerLangForHost(r.Context(), r), http.StatusNotFound, errFormNotFound)
 		return nil
 	}
+	// The form resolved, so every refusal below speaks its language.
+	lang := h.buyerLang(r.Context(), f, f.AccountID)
 	// A draft form is never publicly served (serveForm), so its stock is not
 	// public either. A private form's stock is refused unless THIS request is
 	// unlocked, so the read can never become a side door around the password
 	// gate the page itself enforces.
 	if f.Status == dbstore.FormStatusDraft {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		buyerErr(w, lang, http.StatusNotFound, errFormNotFound)
 		return nil
 	}
 	if f.Status == dbstore.FormStatusPrivate && !h.privateUnlocked(r, f) {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		buyerErr(w, lang, http.StatusNotFound, errFormNotFound)
 		return nil
 	}
 	if menu := dbstore.MenuFromConfig(f.Config); menu == nil || !menu.Enabled {
-		writeErr(w, http.StatusNotFound, "menu tidak dijumpai")
+		buyerErr(w, lang, http.StatusNotFound, errOrderMenuNotFound)
 		return nil
 	}
 	return f

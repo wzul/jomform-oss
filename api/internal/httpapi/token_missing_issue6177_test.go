@@ -64,10 +64,10 @@ import (
 // it is written on. Spelling it twice is how the pins in this file's header
 // drifted in the first place.
 const (
-	msgConnectTokenMissing = "token penghubung diperlukan"
-	msgVerifyTokenMissing  = "token pengesahan diperlukan"
-	msgResetTokenMissing   = "token set semula diperlukan"
-	msgMagicTokenMissing   = "token log masuk diperlukan"
+	msgConnectTokenMissing = "connect token is required"
+	msgVerifyTokenMissing  = "verification token is required"
+	msgResetTokenMissing   = "reset token is required"
+	msgMagicTokenMissing   = "sign-in token is required"
 )
 
 // The four sites, named by the literal each handler writes so that a failure

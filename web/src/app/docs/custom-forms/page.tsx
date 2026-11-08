@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 import Link from "next/link";
 
 // AGENTS.md DOCUMENTATION PARITY: the fully-custom HTML response form (issue
@@ -14,12 +15,12 @@ import Link from "next/link";
 // bridge) and public.go's handleResponseSubmit (what is validated and stored),
 // and the sanitizer claims were measured against SanitizeHTML before they were
 // written down.
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "JomForm Docs — custom HTML forms",
   description:
     "The fully-custom HTML response form: what the sanitizer keeps, how the field-registration contract works, the field types and what the server enforces on submit.",
-  alternates: { canonical: "https://jomform.com/docs/custom-forms" },
-};
+  path: "/docs/custom-forms",
+});
 
 export default function CustomFormsDocsPage() {
   return (
@@ -123,9 +124,9 @@ export default function CustomFormsDocsPage() {
         tabIndex={0}
       >
         <code>{`"custom_fields": [
-  { "field_id": "nama", "type": "text",   "label": "Nama",   "required": true },
-  { "field_id": "emel", "type": "email",  "label": "E-mel",  "required": true },
-  { "field_id": "nota", "type": "textarea", "label": "Nota", "required": false,
+  { "field_id": "full_name", "type": "text",     "label": "Full name", "required": true },
+  { "field_id": "email",     "type": "email",    "label": "Email",     "required": true },
+  { "field_id": "notes",     "type": "textarea", "label": "Notes",     "required": false,
     "validation": "optional - what the answer should look like" }
 ]`}</code>
       </pre>
@@ -134,8 +135,8 @@ export default function CustomFormsDocsPage() {
           <strong>field_id is the name.</strong> Every control in the markup must carry that exact
           value in its name attribute — that is how a submitted value is matched to the contract.
           Each id must be non-empty and unique; a save with an empty id, a duplicate id or a type
-          outside the vocabulary is refused and says which one (field_id wajib, field_id duplikat,
-          jenis medan tidak sah).
+          outside the vocabulary is refused and says which one (field_id is required, duplicate
+          field_id, invalid field type).
         </li>
         <li>
           <strong>label is what an error names.</strong> The server&apos;s validation message quotes
@@ -157,7 +158,7 @@ export default function CustomFormsDocsPage() {
         field_id has no control the page can read — an input, select or textarea carrying that name,
         or a button carrying a non-empty value — because the buyer&apos;s page can only submit
         controls it can find, and a contract with no control behind it would make every submit fail.
-        The refusal names the field (medan wajib tiada dalam HTML, then the missing name attributes)
+        The refusal names the field (required field missing from the HTML, then the missing name attributes)
         and comes back from the form and template write paths as well as from upsert_form,
         create_template and update_template. Optional fields need no control at all.
       </p>

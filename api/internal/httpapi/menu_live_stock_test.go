@@ -94,7 +94,7 @@ func TestMenuLiveStockRefusesAVariantThatSoldOutWhileThePageWasOpen(t *testing.T
 
 	if got := len(d.cart()); got != 0 {
 		t.Fatalf("picking a variant that went sold out while the page was open added %d basket "+
-			"line(s) — the basket holds a line the order endpoint refuses with 409 stok habis\nbasket: %v",
+			"line(s) — the basket holds a line the order endpoint refuses with 409 is out of stock\nbasket: %v",
 			got, d.cart())
 	}
 	// The page must have ASKED: without the read the outcome above could come
@@ -464,7 +464,7 @@ func TestMenuLiveStockRefusesASoldOutSimpleDishTap(t *testing.T) {
 
 	if got := len(d.cart()); got != 0 {
 		t.Fatalf("tapping a sold-out simple dish added %d basket line(s) — the basket holds a line "+
-			"the order endpoint refuses with 409 stok habis\nbasket: %v", got, d.cart())
+			"the order endpoint refuses with 409 is out of stock\nbasket: %v", got, d.cart())
 	}
 	// The page must have asked ON THE TAP. The page-open read (loadLiveStock on
 	// startup) is not evidence about the tap: the served markup is byte-for-byte

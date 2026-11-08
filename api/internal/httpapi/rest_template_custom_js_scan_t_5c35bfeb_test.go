@@ -20,7 +20,7 @@ package httpapi
 //	       </script>
 //
 // while PATCH /v1/rest/forms/{id} and both MCP form doors already answered the
-// same value with 400 `custom_js ditolak: <reason>`.
+// same value with 400 `custom_js rejected: <reason>`.
 //
 // These tests drive the REAL mux with a real API key against real Postgres and
 // assert on the ROW (what was written) as well as the status, because a guard
@@ -157,7 +157,7 @@ func TestCreateOwnTemplateRefusesBlockedCustomJS(t *testing.T) {
 				"A 201 here is the carded defect: useOwnTemplate clones that value onto a real "+
 				"form and the buyer's page serves it as live code.", tc.js, code, raw)
 		}
-		want := "custom_js ditolak: " + tc.wantReason
+		want := "custom_js rejected: " + tc.wantReason
 		if got := decodeErrField(t, raw); got != want {
 			t.Errorf("refusal for %s = %q, want %q — one rule, one wording", tc.name, got, want)
 		}
@@ -196,7 +196,7 @@ func TestUpdateOwnTemplateRefusesBlockedCustomJS(t *testing.T) {
 			t.Fatalf("PUT with custom_js %q = %d (body %s), want 400 — an update that stores it "+
 				"re-arms the clone door", tc.js, code, raw)
 		}
-		if got, want := decodeErrField(t, raw), "custom_js ditolak: "+tc.wantReason; got != want {
+		if got, want := decodeErrField(t, raw), "custom_js rejected: "+tc.wantReason; got != want {
 			t.Errorf("PUT refusal for %s = %q, want %q", tc.name, got, want)
 		}
 		if js, _ := storedCustomJS(t, fx, created.ID); js != benign {
@@ -248,7 +248,7 @@ func TestUseOwnTemplateRefusesCloningBlockedCustomJS(t *testing.T) {
 			"want 400.\nA 201 here puts the blocked value on a real form, whose buyer page serves "+
 			"it as live code.", blocked, code, raw)
 	}
-	if got, want := decodeErrField(t, raw), "custom_js ditolak: active code execution marker: eval("; got != want {
+	if got, want := decodeErrField(t, raw), "custom_js rejected: active code execution marker: eval("; got != want {
 		t.Errorf("use refusal = %q, want %q", got, want)
 	}
 	if after := liveForms(t, fx); after != before {
@@ -288,7 +288,7 @@ func TestUseOwnTemplateRefusesCloningBlockedCustomJS(t *testing.T) {
 func TestTemplateDoorAnswersBlockedCustomJSLikeTheFormDoor(t *testing.T) {
 	fx := newRenameFixture(t, "it-tpl-cjs-parity-"+randHex(4))
 	const js = "eval('2+2');"
-	const want = "custom_js ditolak: active code execution marker: eval("
+	const want = "custom_js rejected: active code execution marker: eval("
 
 	patchCode, patchRaw := fx.patch(t, `{"theme":{"custom_js":"`+js+`"}}`)
 	if patchCode != http.StatusBadRequest {

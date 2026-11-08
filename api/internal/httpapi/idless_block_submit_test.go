@@ -17,7 +17,7 @@ package httpapi
 // the REAL renderers:
 //
 //   - a published form whose only required markers are id-less blocks refuses
-//     POST {} / {"fields":{}} with 400 "medan wajib tidak diisi: <label>" and
+//     POST {} / {"fields":{}} with 400 "<label> is required" and
 //     stores nothing (response route) / no sale (order route);
 //   - the page emits a control under exactly the key the contract validates, and
 //     a payload built from the page's own keys is still accepted (201) — a
@@ -165,11 +165,11 @@ func TestIdlessRequiredBlockIsEnforcedOnTheResponseRoute(t *testing.T) {
 		body string
 		want string
 	}{
-		{"empty object", `{}`, "medan wajib tidak diisi: Nama Penuh"},
-		{"empty fields map", `{"fields":{}}`, "medan wajib tidak diisi: Nama Penuh"},
-		{"only the first id-less block", `{"fields":{"_block_1":"Ali"}}`, "medan wajib tidak diisi: Emel"},
+		{"empty object", `{}`, "Nama Penuh is required"},
+		{"empty fields map", `{"fields":{}}`, "Nama Penuh is required"},
+		{"only the first id-less block", `{"fields":{"_block_1":"Ali"}}`, "Emel is required"},
 		// The reported shape on prod: a direct POST with no field values at all.
-		{"client only, no fields", `{"client":{"full_name":"Ali","email":"ali@example.test"}}`, "medan wajib tidak diisi: Nama Penuh"},
+		{"client only, no fields", `{"client":{"full_name":"Ali","email":"ali@example.test"}}`, "Nama Penuh is required"},
 	}
 	for _, c := range cases {
 		rec := postSlug(t, h, host, respSlug, c.body)
@@ -263,7 +263,7 @@ func TestIdlessRequiredBlockIsEnforcedOnTheFormOrderRoute(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("order without fields: status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "medan wajib tidak diisi: Nama Penuh") {
+	if !strings.Contains(rec.Body.String(), "Nama Penuh is required") {
 		t.Errorf("order without fields: body %s, want the id-less block's required message", rec.Body.String())
 	}
 	sales, err := h.Sales.ListByAccount(ctx, accountID, 10)
@@ -277,7 +277,7 @@ func TestIdlessRequiredBlockIsEnforcedOnTheFormOrderRoute(t *testing.T) {
 	// One id-less answer given, the other missing — still refused, for the
 	// block that is actually empty.
 	rec = postSlug(t, h, host, orderSlug, `{`+client+`"fields":{"`+nameKey+`":"Ali"},`+items+`}`)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "medan wajib tidak diisi: Emel") {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Emel is required") {
 		t.Fatalf("order with one answer: status = %d body %s, want 400 for the second id-less block", rec.Code, rec.Body.String())
 	}
 

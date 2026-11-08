@@ -9,9 +9,9 @@
 // A 400 there is not necessarily a workspace-scope refusal:
 // api/internal/httpapi/rest_chat.go's chatConfirmStatusFor maps everything it does
 // not recognise to 400, and one such class arrives AFTER the token is claimed —
-// chat/proposal.go returns `fmt.Errorf("server menolak: %s", …)` when a tool
+// chat/proposal.go returns `fmt.Errorf("server refused: %s", …)` when a tool
 // refuses to execute, and mcpsrv's write-role gate
-// (callscope.go's "perlu peranan manage atau admin dalam workspace ini") is one
+// (callscope.go's "a manage or admin role is required in this workspace") is one
 // producer. A read_only member confirming a prepared change therefore read advice
 // they could not act on: the request carried ?workspace=<their workspace>, and the
 // refusal they needed to understand was the role.
@@ -47,7 +47,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { API_ERROR_KEYS, apiErrorCode } from "./apiErr.ts";
-import { WORKSPACE_SCOPE_REQUIRED_CODE, PROPOSAL_ARGS_INVALID_CODE, ROLE_MANAGE_REQUIRED_CODE, confirmDecisionFor } from "./chatConfirm.ts";
+import {
+  WORKSPACE_SCOPE_REQUIRED_CODE,
+  WORKSPACE_REQUIRED_CODE,
+  PROPOSAL_ARGS_INVALID_CODE,
+  ROLE_MANAGE_REQUIRED_CODE,
+  confirmDecisionFor,
+} from "./chatConfirm.ts";
 import { DICT, LANGS } from "../components/i18nDict.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
@@ -70,11 +76,18 @@ function goScopeRequiredMessage(): string | null {
 
 /** The exact wire body the server writes for each refusal, as a parsed object. */
 const scopeRefusalBody = {
-  error: "skop workspace diperlukan — pilih workspace dahulu",
+  error: "a workspace scope is required — pick a workspace first",
   code: "workspace.scopeRequired",
 };
-/** Two DIFFERENT 400s, both reachable from /chat/confirm. */
-const TOOL_REFUSAL_BODY = { error: "server menolak: perlu peranan manage atau admin", code: "request.badRequest" };
+/**
+ * Two DIFFERENT 400s, both reachable from /chat/confirm.
+ *
+ * The prefix mirrors api/internal/chat/proposal.go's wrap. The detail is the
+ * write-role gate's own sentence (mcpsrv's RoleManageRequiredLeadIn), which is the
+ * producer this class is documented from; what the client branches on is the CODE,
+ * never the prose (issue #6177).
+ */
+const TOOL_REFUSAL_BODY = { error: "server refused: a manage or admin role is required", code: "request.badRequest" };
 
 test("the guard reads the real server and the real page (it cannot pass vacuously)", () => {
   const code = goCodeValue("CodeWorkspaceScopeRequired");
@@ -85,7 +98,7 @@ test("the guard reads the real server and the real page (it cannot pass vacuousl
   );
   assert.equal(
     goScopeRequiredMessage(),
-    "skop workspace diperlukan — pilih workspace dahulu",
+    "a workspace scope is required — pick a workspace first",
     "rest_scope.go's scopeRequiredMessage moved or changed wording — errcode.go's message→code table keys on " +
       "the EXACT literal, so the refusal would keep answering 400 but silently lose its code",
   );
@@ -132,28 +145,39 @@ test("a 400 is a scope refusal ONLY when the body names the scope code", () => {
     "a 400 carrying workspace.scopeRequired no longer marks the card scopeRequired — the user would be told " +
       "the change failed and would not learn that choosing a workspace is the fix",
   );
-  // (b) The same 400 with the code the server ACTUALLY ships today when the
-  //     table has no entry for the message. This is not hypothetical: it is the
-  //     pre-fix wire shape, and it must NOT produce the scope copy.
+  // (b) The same 400 with the code the server ships for an UNCLASSIFIED post-claim
+  //     refusal. The token is spent there (the refusal happens after the claim), so
+  //     the outcome is "refused" — its copy says nothing was applied and the card
+  //     must be prepared again, and it offers no retry. It must NOT be the scope
+  //     copy: that is the pre-fix behaviour.
   assert.equal(
     confirmDecisionFor(400, { ...scopeRefusalBody, code: "request.badRequest" }),
-    "failed",
-    "a 400 whose code is the generic class code is treated as a workspace-scope refusal — that is the " +
-      "pre-fix behaviour, and the class code is exactly what the server used to send for EVERY 400",
+    "refused",
+    "a 400 carrying the class code is treated as a workspace-scope refusal — that is the pre-fix " +
+      "behaviour, and the class code is exactly what the server sends for a post-claim tool refusal",
   );
-  // (c) THE CASE THAT WAS INVISIBLE. A post-claim tool refusal (write-role gate)
-  //     answers 400 with its own message and no specific code. Before this fix the
-  //     page rendered "Choose a workspace first" for it, to a user who already had
-  //     a workspace selected.
+  // (c) THE CASE THAT WAS INVISIBLE. A post-claim tool refusal (write-role gate, or
+  //     before t_1900adef any gate at all) answers 400 with the class code. Before
+  //     the fix the page rendered "Choose a workspace first" for it, to a user who
+  //     already had a workspace selected; and its retry copy was false advice on a
+  //     token the refusal had already spent.
   assert.equal(
     confirmDecisionFor(400, TOOL_REFUSAL_BODY),
+    "refused",
+    "a 400 from a tool the server REFUSED (after the token was claimed) is reported as a workspace-scope " +
+      "refusal — the user is told to choose a workspace they already have, and the reason they need is " +
+      "never shown (t_fb393abe)",
+  );
+  assert.notEqual(
+    confirmDecisionFor(400, TOOL_REFUSAL_BODY),
     "failed",
-    "a 400 from a tool the server REFUSED (role/ownership, after the token was claimed) is reported as a " +
-      "workspace-scope refusal — the user is told to choose a workspace they already have, and the reason " +
-      "they need (their role) is never shown (t_fb393abe)",
+    "a post-claim refusal is back on the generic failure copy, whose 'please try again' invites a retry of " +
+      "a card the server has already spent (t_bf4feea2)",
   );
   // (d) A body that cannot be read at all (a proxy error page, an empty 400).
-  //     No code means no scope claim: the failure copy is the honest answer.
+  //     NO CODE means the server never classified the request: nothing proves the
+  //     token was spent, so the failure copy — the only one that may suggest another
+  //     attempt — stays the honest answer.
   assert.equal(
     confirmDecisionFor(400, null),
     "failed",
@@ -162,17 +186,24 @@ test("a 400 is a scope refusal ONLY when the body names the scope code", () => {
   );
   assert.equal(confirmDecisionFor(400, undefined), "failed");
   assert.equal(confirmDecisionFor(400, {}), "failed");
-  // (e) A code the server adds LATER, which this build does not know: the scope
-  //     branch must not become a wildcard.
+  // (e) A code the server adds LATER, which this build does not know. It must not
+  //     become the SCOPE refusal (that is the defect this file exists for) nor the
+  //     retry copy; the honest answer is "the server refused, this card is spent".
   assert.equal(
     confirmDecisionFor(400, { code: "workspace.someFutureRefusal" }),
-    "failed",
-    "any unknown code on a 400 now maps to the scope refusal — the branch has become a wildcard and the " +
-      "defect is back for every future refusal",
+    "refused",
+    "an unknown code on a 400 no longer maps onto its own outcome — the branch has become a wildcard over " +
+      "every refusal this build cannot classify",
   );
-  // (f) A near-miss: the prefix must not match.
-  assert.equal(confirmDecisionFor(400, { code: "workspace.scopeRequired.extra" }), "failed");
-  assert.equal(confirmDecisionFor(400, { code: "workspace.scopeRequireds" }), "failed");
+  assert.notEqual(
+    confirmDecisionFor(400, { code: "workspace.someFutureRefusal" }),
+    "scopeRequired",
+    "any unknown code on a 400 maps to the scope refusal — the pre-fix defect is back for every future refusal",
+  );
+  // (f) A near-miss: the prefix must not match the scope code.
+  assert.equal(confirmDecisionFor(400, { code: "workspace.scopeRequired.extra" }), "refused");
+  assert.notEqual(confirmDecisionFor(400, { code: "workspace.scopeRequired.extra" }), "scopeRequired");
+  assert.equal(confirmDecisionFor(400, { code: "workspace.scopeRequireds" }), "refused");
 });
 
 test("the other statuses keep their own outcome, and are not decided by the code", () => {
@@ -305,8 +336,11 @@ test("a 409 for an unexecutable card is its own outcome, not 'stale'", () => {
   // (d) A near-miss prefix must not match, the same rule the scope code follows.
   assert.equal(confirmDecisionFor(409, { code: "chat.proposalArgsInvalid.extra" }), "stale");
   // (e) The unexecutable code is NOT a 400: it is decided by the code on a 409 only,
-  //     so it can never be confused with the scope refusal on this route.
-  assert.equal(confirmDecisionFor(400, unexecutableBody), "failed");
+  //     so it can never be confused with the scope refusal on this route. On a 400
+  //     it is just another code this build does not classify for that status.
+  assert.equal(confirmDecisionFor(400, unexecutableBody), "refused");
+  assert.notEqual(confirmDecisionFor(400, unexecutableBody), "unexecutable");
+  assert.notEqual(confirmDecisionFor(400, unexecutableBody), "scopeRequired");
 });
 
 test("the unexecutable code is cross-language, mapped, and defined in every locale", () => {
@@ -419,8 +453,8 @@ test("the unexecutable card claims neither a failure nor an expiry on the page",
 //
 //   1. THE SERVER THREW THE CODE AWAY. errcode.go keys its code by wire MESSAGE,
 //      and it keyed this refusal as the exact literal the REST edge writes
-//      ("perlu peranan manage atau admin") while the write gate emits one word
-//      longer ("… dalam workspace ini"), so ErrCodeFor answered "" and writeErr
+//      ("a manage or admin role is required") while the write gate emits one word
+//      longer ("… in this workspace"), so ErrCodeFor answered "" and writeErr
 //      re-coded the 400 as the untranslatable class code. Fixed on the Go side
 //      (a lead-in rule, pinned by chat_role_refusal_errcode_test.go); what THIS
 //      file pins is the client half — the page's constant must equal the server's
@@ -434,7 +468,7 @@ test("a 400 naming the role code is its own outcome, never the generic failure",
   const roleBody = {
     // The gate's own wire prose, exactly as the confirm route surfaces it
     // (api/internal/mcpsrv's RoleManageRequiredMessage).
-    error: "perlu peranan manage atau admin dalam workspace ini",
+    error: "a manage or admin role is required in this workspace",
     code: "role.manageRequired",
   };
   // (a) THE MAPPING, executed.
@@ -457,12 +491,13 @@ test("a 400 naming the role code is its own outcome, never the generic failure",
         `retry that cannot work, or advice to choose a workspace they already had selected`,
     );
   }
-  // (c) The OTHER 400s are unchanged: this branch is not a wildcard.
-  assert.equal(confirmDecisionFor(400, { ...roleBody, code: "request.badRequest" }), "failed");
+  // (c) The OTHER 400s keep their own answers: the named refusals above are not
+  //     claimed by this branch, and an UNCODED 400 stays the retry copy.
+  assert.equal(confirmDecisionFor(400, { ...roleBody, code: "request.badRequest" }), "refused");
   assert.equal(confirmDecisionFor(400, { ...roleBody, code: "" }), "failed");
   assert.equal(confirmDecisionFor(400, { error: roleBody.error }), "failed", "the PROSE must not decide");
-  assert.equal(confirmDecisionFor(400, { code: "role.manageRequired.extra" }), "failed");
-  assert.equal(confirmDecisionFor(400, { code: "role.adminRequired" }), "failed", "a near-miss code");
+  assert.equal(confirmDecisionFor(400, { code: "role.manageRequired.extra" }), "refused");
+  assert.equal(confirmDecisionFor(400, { code: "role.adminRequired" }), "refused", "a near-miss code");
   // (d) The two named 400s stay distinct: the scope refusal must not become a role
   //     refusal, and vice versa.
   assert.equal(confirmDecisionFor(400, scopeRefusalBody), "scopeRequired");
@@ -574,3 +609,225 @@ test("the role-denied card carries its sentence ONCE and never the retry copy", 
   );
 });
 
+
+// ── THE NO-WORKSPACE REFUSAL, AND THE COPY ON A SPENT TOKEN (t_bf4feea2) ─────
+//
+// THE DEFECT, measured on staging (7 Nov). A magic-link account never got a
+// workspace (`accounts.workspace_id` NULL). The assistant prepared a form-creation
+// card, the user pressed Confirm, and the route answered a bare 400:
+//
+//   INFO http_request method=POST path=/v1/rest/chat/confirm status=400
+//   UI: "The change could not be applied. Please try again."
+//   card: "Nothing has changed yet."
+//
+// while `chat_write_proposals` showed the token already USED — the workspace gate
+// refuses AFTER the atomic claim. So the page gave advice that could not work, over
+// a card that could never be used again, and named no cause (the server had none to
+// give: the refusal was wrapped as `server refused: …`, which matched no arm).
+//
+// THE FIX, in two halves:
+//   * the server classifies the refusal (chat.ErrProposalWorkspaceRequired) and
+//     answers 409 + `workspace.required` — the code the form-CREATE door already
+//     uses for this state;
+//   * the page gives it its own outcome and its own sentence, and an UNCLASSIFIED
+//     post-claim refusal ("refused") stops claiming the token might still be good.
+//
+// The tests below EXECUTE the decision and read the copy out of the real dictionary
+// and the real Go source, rather than restating either.
+const restChatGo = read("../../../api/internal/httpapi/rest_chat.go");
+
+/** The prose the confirm route writes for a SPENT token, read out of rest_chat.go. */
+function goSpentTokenMessage(): string | null {
+  const m = restChatGo.match(
+    /errors\.Is\(err, dbstore\.ErrChatProposalConsumed\):\s*\n\s*return "([^"]+)"/,
+  );
+  return m ? m[1] : null;
+}
+
+test("the no-workspace code is the server's, mapped, and on its own status", () => {
+  const server = goCodeValue("CodeWorkspaceRequired");
+  assert.ok(
+    server,
+    "errcode.go declares no CodeWorkspaceRequired — the no-workspace refusal has no code of its own, so " +
+      "the page is back to telling it apart from every other refusal with the bare status",
+  );
+  assert.equal(
+    WORKSPACE_REQUIRED_CODE,
+    server,
+    `lib/chatConfirm.ts's WORKSPACE_REQUIRED_CODE is ${JSON.stringify(WORKSPACE_REQUIRED_CODE)} but ` +
+      `errcode.go declares ${JSON.stringify(server)} — the page would branch on a code the server never ` +
+      `sends and the no-workspace refusal would fall to the generic failure copy`,
+  );
+  // The server really writes it. errcode.go's table is keyed on the shared LITERAL,
+  // which both doors write through the `workspaceRequiredMessage` constant, so the
+  // pin has two halves: the table row (constant → code) and the constant's value.
+  assert.match(
+    errcodeGo,
+    /workspaceRequiredMessage:\s*CodeWorkspaceRequired/,
+    "errcode.go's message→code table does not map the no-workspace wire message onto " +
+      "CodeWorkspaceRequired — the refusal would ship with the untranslatable class code and the page " +
+      "could not name the cause",
+  );
+  const restHandlersGo = read("../../../api/internal/httpapi/rest_handlers.go");
+  const wire = restHandlersGo.match(/\bworkspaceRequiredMessage\s*=\s*"([^"]+)"/);
+  assert.ok(wire, "rest_handlers.go no longer declares workspaceRequiredMessage — the table row would key on nothing");
+  assert.match(
+    wire[1],
+    /no workspace/i,
+    `the no-workspace wire message is ${JSON.stringify(wire[1])} — it does not name the condition the code ` +
+      `stands for, so an operator reading the log line learns nothing`,
+  );
+  assert.ok(
+    server in API_ERROR_KEYS,
+    `${server} has no entry in API_ERROR_KEYS — translateApiErr cannot resolve a refusal the server named`,
+  );
+});
+
+test("a 409 naming the no-workspace code is its own outcome, never 'stale'", () => {
+  const body = {
+    // The shared literal both the gate and errcode.go use (mcpsrv's
+    // WorkspaceRequiredMessage). The page must NOT branch on it — it branches on
+    // the code — but the fixture is the real wire shape.
+    error: "this account has no workspace yet — create a workspace before creating a form",
+    code: WORKSPACE_REQUIRED_CODE,
+  };
+  assert.equal(
+    confirmDecisionFor(409, body),
+    "workspaceRequired",
+    "a 409 carrying workspace.required is reported as the spent/expired card — the user is told the card " +
+      "expired or was used, which is false (the refusal spent it), and never learns that there is no " +
+      "workspace to create a form in (t_bf4feea2)",
+  );
+  // THE BITE. Every other outcome is wrong for this card, and each fails by name.
+  for (const wrong of ["stale", "failed", "unexecutable", "scopeRequired", "refused"]) {
+    assert.notEqual(
+      confirmDecisionFor(409, body),
+      wrong,
+      `the no-workspace refusal is reported as "${wrong}" — the card's own cause and its two-step remedy ` +
+        `(create a workspace, then a fresh card) never reach the user`,
+    );
+  }
+  // Not a wildcard: a near-miss code stays the default 409 outcome.
+  assert.equal(confirmDecisionFor(409, { code: "workspace.required.extra" }), "stale");
+  assert.equal(confirmDecisionFor(409, { code: "workspace.requireds" }), "stale");
+  assert.equal(confirmDecisionFor(409, { code: "request.conflict" }), "stale");
+  // The PROSE must not decide (issue #6177): the same sentence with no code is a
+  // plain conflict.
+  assert.equal(confirmDecisionFor(409, { error: body.error }), "stale");
+  // And the status is the server's, not the client's guess: this outcome is only
+  // reachable on a 409, exactly like the unexecutable one.
+  assert.notEqual(confirmDecisionFor(400, body), "workspaceRequired");
+  assert.notEqual(confirmDecisionFor(409, null), "workspaceRequired");
+});
+
+test("the no-workspace copy names the cause in every locale and offers no retry", () => {
+  const dict = DICT as unknown as Record<string, Record<string, string>>;
+  const generic = dict["chat.confirmFail"];
+  for (const key of ["chat.confirmWorkspaceRequired", "chat.confirmRefused"]) {
+    const own = dict[key];
+    assert.ok(own, `the dictionary has no ${key} — the card would render a raw key`);
+    for (const lang of LANGS) {
+      const v = own[lang];
+      assert.ok(
+        typeof v === "string" && v.trim() !== "",
+        `${key}.${lang} is empty — that locale silently shows English`,
+      );
+      assert.notEqual(own[lang], generic[lang], `${key}.${lang} is the generic failure sentence verbatim`);
+      // THE RETRY. Both refusals arrive after the token is claimed, so a sentence
+      // that tells the user to try again is false in every language.
+      const retry: Record<string, RegExp> = {
+        en: /try again/i,
+        ms: /cuba lagi/i,
+        zh: /重试/,
+        ta: /மீண்டும் முயற்சிக்கவும்/,
+        ar: /يرجى المحاولة/,
+      };
+      assert.ok(
+        !retry[lang].test(v),
+        `${key}.${lang} tells the user to try again ("${v}") — the token is spent, so retrying the same ` +
+          `card cannot work`,
+      );
+    }
+  }
+  // The no-workspace sentence must actually name the workspace, or it is just the
+  // generic "refused" copy wearing a different key.
+  assert.match(
+    dict["chat.confirmWorkspaceRequired"].en,
+    /no workspace/i,
+    "the no-workspace copy does not name the workspace — the user cannot act on it",
+  );
+  // And it must say the CARD is finished, because the next step after creating a
+  // workspace is asking again.
+  assert.match(
+    dict["chat.confirmWorkspaceRequired"].en,
+    /new card/i,
+    "the no-workspace copy does not say a new card is needed — after creating a workspace the user would " +
+      "press Confirm on a token the refusal already spent",
+  );
+});
+
+test("a spent token never tells the user to try again (the card's bite proof)", () => {
+  // THE SERVER'S HALF. The wire sentence for a consumed token was rewritten when the
+  // 409s stopped meaning "retry"; this asserts the sentence that came back is still
+  // the "ask for a new card" one, read out of the Go source rather than restated.
+  const spent = goSpentTokenMessage();
+  assert.ok(spent, "rest_chat.go no longer writes a message for ErrChatProposalConsumed");
+  assert.doesNotMatch(
+    spent as string,
+    /try again/i,
+    `the 409 for a spent token still says "try again" ("${spent}") — the server claimed the token at the ` +
+      `same moment it refused, so a retry of the same card cannot work`,
+  );
+  assert.match(
+    spent as string,
+    /prepare/i,
+    `the 409 for a spent token does not tell the user to prepare the change again ("${spent}")`,
+  );
+
+  // THE PAGE'S HALF. A 409 without a classifying code is "stale", and the page's
+  // stale branch is the sentence that names the remedy. This is the assertion that
+  // fails if a later change routes a spent token back to the retry copy.
+  assert.equal(confirmDecisionFor(409, { error: spent, code: "request.conflict" }), "stale");
+  const decide = chatPage.slice(chatPage.indexOf("async function decide("));
+  assert.match(
+    decide,
+    /if \(outcome === "stale"\)[\s\S]{0,1200}?setState\(msgIndex,\s*p\.token,\s*"stale"\)/,
+    "the page has no stale branch marking the card stale — a spent token would fall through to the " +
+      "generic failure branch and render 'Please try again' over a card that can never be used again",
+  );
+  // No site other than the stale branch may carry the stale copy. (The branch
+  // picks between the confirm and the cancel sentence, so the copy is a ternary —
+  // what is counted is the confirm half, which is what a spent token renders.)
+  const staleBranch = decide.slice(
+    decide.indexOf('if (outcome === "stale")'),
+    decide.indexOf('if (outcome === "unexecutable")'),
+  );
+  assert.match(
+    staleBranch,
+    /t\("chat\.proposalStale"\)/,
+    "the page's stale branch no longer renders chat.proposalStale — the sentence for a spent token has " +
+      "moved, and the copy checked below may no longer be the one on screen",
+  );
+  assert.doesNotMatch(
+    decide.slice(0, decide.indexOf('if (outcome === "stale")')),
+    /t\("chat\.proposalStale"\)/,
+    "the stale copy is rendered before the stale branch — it would appear for other outcomes too",
+  );
+  // And every locale of the stale sentence is retry-free, so the copy the page
+  // shows a spent token cannot advise a retry in any language.
+  const stale = (DICT as unknown as Record<string, Record<string, string>>)["chat.proposalStale"];
+  const retry: Record<string, RegExp> = {
+    en: /try again/i,
+    ms: /cuba lagi/i,
+    zh: /重试/,
+    ta: /மீண்டும் முயற்சிக்கவும்/,
+    ar: /يرجى المحاولة/,
+  };
+  for (const lang of LANGS) {
+    assert.ok(
+      !retry[lang].test(stale[lang]),
+      `chat.proposalStale.${lang} tells the user to try again ("${stale[lang]}") — this is the sentence a ` +
+        `spent token renders, and the card cannot be confirmed twice`,
+    );
+  }
+});

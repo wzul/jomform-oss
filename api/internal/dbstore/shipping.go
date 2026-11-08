@@ -34,7 +34,7 @@ import (
 // It is a REFUSAL, not an upsert: a stale dashboard that lost the id must not
 // silently mint a new set (every form pointing at the old one would keep
 // resolving to nothing).
-var ErrShippingSetNotFound = errors.New("set zon penghantaran tidak dijumpai")
+var ErrShippingSetNotFound = errors.New("shipping zone set not found")
 
 // ShippingSetInUseError: a save tried to DELETE a zone set that a form still
 // references. Deleting it would leave that form's shipping block resolving to
@@ -49,13 +49,13 @@ type ShippingSetInUseError struct {
 // (httpapi/errcode.go's errCodeByPrefix), so the dashboard can translate the
 // refusal into the merchant's own language; a re-wording here cannot silently
 // detach the code from the sentence.
-const ShippingSetInUseLeadIn = "sedang digunakan oleh borang"
+const ShippingSetInUseLeadIn = "is used by a form"
 
 func (e *ShippingSetInUseError) Error() string {
 	if len(e.Forms) == 0 {
-		return "set zon ini " + ShippingSetInUseLeadIn
+		return "this zone set " + ShippingSetInUseLeadIn
 	}
-	return fmt.Sprintf("set zon %q %s: %s", e.SetName, ShippingSetInUseLeadIn, strings.Join(e.Forms, ", "))
+	return fmt.Sprintf("zone set %q %s: %s", e.SetName, ShippingSetInUseLeadIn, strings.Join(e.Forms, ", "))
 }
 
 // ShippingFormRef is a form that references a zone set (id + title).
@@ -462,7 +462,7 @@ func shippingSetFormsByAccounts(ctx context.Context, q querier, accountIDs []str
 // generic "Failed to save shipping rates" (card t_417fbacb). It lives here,
 // beside the validation that writes it, so a re-wording cannot silently detach
 // the code from the sentence — the same pairing ShippingSetInUseLeadIn uses.
-const ShippingInvalidLeadIn = "kadar penghantaran tidak sah — "
+const ShippingInvalidLeadIn = "invalid shipping rates — "
 
 // ValidateShippingSets refuses a configuration that cannot resolve: an unnamed
 // set, a set with no zone, an unnamed zone, a zone with no rate, a negative
@@ -493,72 +493,72 @@ func validateShippingSets(sets []shipping.ZoneSet) error {
 	for _, set := range sets {
 		name := strings.TrimSpace(set.Name)
 		if name == "" {
-			return errors.New("set zon perlu ada nama")
+			return errors.New("a zone set needs a name")
 		}
 		if names[strings.ToLower(name)] {
-			return fmt.Errorf("nama set zon berganda: %s", name)
+			return fmt.Errorf("duplicate zone set name: %s", name)
 		}
 		names[strings.ToLower(name)] = true
 		if len(set.Zones) == 0 {
-			return fmt.Errorf("set zon %q belum ada zon", name)
+			return fmt.Errorf("zone set %q has no zones", name)
 		}
 		fallbacks := 0
 		for _, z := range set.Zones {
 			zn := strings.TrimSpace(z.Name)
 			if zn == "" {
-				return fmt.Errorf("set zon %q ada zon tanpa nama", name)
+				return fmt.Errorf("zone set %q has an unnamed zone", name)
 			}
 			if z.Fallback {
 				fallbacks++
 			}
 			if !z.Fallback && len(z.States) == 0 && len(z.Districts) == 0 &&
 				strings.TrimSpace(z.PostcodeFrom) == "" {
-				return fmt.Errorf("zon %q perlu sekurang-kurangnya satu peraturan (negeri, daerah atau poskod)", zn)
+				return fmt.Errorf("zone %q needs at least one rule (state, district or postcode)", zn)
 			}
 			if strings.TrimSpace(z.PostcodeFrom) != "" || strings.TrimSpace(z.PostcodeTo) != "" {
 				from, to := postcodeValue(z.PostcodeFrom), postcodeValue(z.PostcodeTo)
 				if strings.TrimSpace(z.PostcodeFrom) != "" && from < 0 {
-					return fmt.Errorf("zon %q: poskod mesti nombor", zn)
+					return fmt.Errorf("zone %q: postcodes must be numbers", zn)
 				}
 				if strings.TrimSpace(z.PostcodeTo) != "" && to < 0 {
-					return fmt.Errorf("zon %q: poskod mesti nombor", zn)
+					return fmt.Errorf("zone %q: postcodes must be numbers", zn)
 				}
 				if from >= 0 && to >= 0 && to < from {
-					return fmt.Errorf("zon %q: poskod akhir mesti lebih besar daripada poskod mula", zn)
+					return fmt.Errorf("zone %q: the end postcode must be greater than the start postcode", zn)
 				}
 			}
 			if len(z.Rates) == 0 {
-				return fmt.Errorf("zon %q belum ada kadar", zn)
+				return fmt.Errorf("zone %q has no rates", zn)
 			}
 			// A zone's own point (phase 2). Both coordinates or neither: a zone
 			// with a latitude and no longitude would be quoted to a place that
 			// does not exist, and 0/0 is a real point in the Atlantic.
 			lat, lng := strings.TrimSpace(z.Lat), strings.TrimSpace(z.Lng)
 			if (lat == "") != (lng == "") {
-				return fmt.Errorf("zon %q: latitud dan longitud mesti diberi bersama", zn)
+				return fmt.Errorf("zone %q: latitude and longitude must be given together", zn)
 			}
 			if lat != "" {
 				if !validCoordinate(lat) || !validCoordinate(lng) {
-					return fmt.Errorf("zon %q: latitud/longitud mesti nombor perpuluhan", zn)
+					return fmt.Errorf("zone %q: latitude/longitude must be decimal numbers", zn)
 				}
 			}
 			for _, r := range z.Rates {
 				if r.PriceSen < 0 {
-					return fmt.Errorf("zon %q: kadar tidak boleh negatif", zn)
+					return fmt.Errorf("zone %q: the rate cannot be negative", zn)
 				}
 				if r.FreeOverSen < 0 {
-					return fmt.Errorf("zon %q: ambang penghantaran percuma tidak boleh negatif", zn)
+					return fmt.Errorf("zone %q: the free-shipping threshold cannot be negative", zn)
 				}
 				if r.MinWeightG < 0 || r.MaxWeightG < 0 {
-					return fmt.Errorf("zon %q: berat tidak boleh negatif", zn)
+					return fmt.Errorf("zone %q: weight cannot be negative", zn)
 				}
 				if r.MaxWeightG > 0 && r.MaxWeightG < r.MinWeightG {
-					return fmt.Errorf("zon %q: julat berat tidak sah", zn)
+					return fmt.Errorf("zone %q: invalid weight range", zn)
 				}
 			}
 		}
 		if fallbacks > 1 {
-			return fmt.Errorf("set zon %q ada lebih daripada satu zon lalai", name)
+			return fmt.Errorf("zone set %q has more than one default zone", name)
 		}
 	}
 	return nil

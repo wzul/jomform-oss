@@ -26,15 +26,18 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
-// valkeySessions opens the shared test Valkey, or skips the test when the URL is
-// not configured.
+// valkeySessions opens the shared test Valkey under this process's key
+// namespace, or skips the test when the URL is not configured. The namespace is
+// what keeps the store off the PRODUCTION `jf:session:<hash>` layout: a run
+// killed before cleanup can only leave `jf:session:jftest:p<pid>:…` keys, which
+// TestMain sweeps and the production keyspace never contains (card t_d08b36c2).
 func valkeySessions(t *testing.T) *Sessions {
 	t.Helper()
 	url := os.Getenv("JOMFORM_TEST_VALKEY_URL")
 	if url == "" {
 		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping session-keyspace test")
 	}
-	s, err := NewSessions(url)
+	s, err := NewSessions(url, valkeyTestOptions()...)
 	if err != nil {
 		t.Fatalf("valkey sessions: %v", err)
 	}
@@ -92,11 +95,15 @@ func TestSessionTokenIsNeverAKeyName(t *testing.T) {
 	}
 	cleanupToken(t, s, token)
 
-	// The pre-change layout, named exactly.
-	if n, err := s.rdb.Exists(ctx, sessionKeyPrefix+token).Result(); err != nil {
-		t.Fatalf("exists raw key: %v", err)
-	} else if n != 0 {
-		t.Errorf("the raw session token %q is still a key name — a Valkey dump would hand out this login", sessionKeyPrefix+token)
+	// The pre-change layout, named exactly. Both the store's own raw-token key
+	// (namespaced) and the bare PRODUCTION key must be absent: a Valkey dump
+	// would hand out this login from either.
+	for _, raw := range []string{s.legacySessionKey(token), sessionKeyPrefix + token} {
+		if n, err := s.rdb.Exists(ctx, raw).Result(); err != nil {
+			t.Fatalf("exists raw key %q: %v", raw, err)
+		} else if n != 0 {
+			t.Errorf("the raw session token %q is still a key name — a Valkey dump would hand out this login", raw)
+		}
 	}
 
 	// And nowhere else: a scan for the token text must come back empty.
@@ -183,7 +190,7 @@ func TestLegacyRawTokenSessionResolvesAndIsRekeyed(t *testing.T) {
 	const remaining = 2 * time.Hour
 	issued := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
 	value := encodeValue("user-legacy", issued, true, true)
-	if err := s.rdb.Set(ctx, sessionKeyPrefix+token, value, remaining).Err(); err != nil {
+	if err := s.rdb.Set(ctx, s.legacySessionKey(token), value, remaining).Err(); err != nil {
 		t.Fatalf("seed legacy session: %v", err)
 	}
 
@@ -191,7 +198,7 @@ func TestLegacyRawTokenSessionResolvesAndIsRekeyed(t *testing.T) {
 	if err != nil || uid != "user-legacy" {
 		t.Fatalf("Get(legacy token) = (%q, %v), want (user-legacy, nil) — a pre-deploy session must not be logged out", uid, err)
 	}
-	if n, err := s.rdb.Exists(ctx, sessionKeyPrefix+token).Result(); err != nil || n != 0 {
+	if n, err := s.rdb.Exists(ctx, s.legacySessionKey(token)).Result(); err != nil || n != 0 {
 		t.Errorf("legacy raw-token key survived the migration (exists=%d err=%v) — it must be deleted once hashed", n, err)
 	}
 	ttl, err := s.rdb.PTTL(ctx, s.sessionKey(token)).Result()
@@ -225,6 +232,13 @@ func TestLegacyRawTokenSessionResolvesAndIsRekeyed(t *testing.T) {
 // is no deadline to carry over, so a durable copy must not be minted from it —
 // the session is still served (it was live a moment ago) and is left for
 // Destroy/expiry to end.
+//
+// The branch is reached by a legacy key whose deadline runs out between the GET
+// that reads it and the PTTL that would carry it over — NOT by seeding a TTL-0
+// key. A TTL-0 seed would be an IMMORTAL production-layout key: a run killed
+// before cleanup leaves it on the shared test Valkey for good, and neither an
+// expiry nor a sweep can ever remove it (card t_d08b36c2). The key here carries
+// a short TTL and the hook deletes it, so a killed run leaves nothing.
 func TestLegacyKeyWithoutExpiryIsServedButNotRekeyed(t *testing.T) {
 	s := valkeySessions(t)
 	ctx := context.Background()
@@ -235,15 +249,28 @@ func TestLegacyKeyWithoutExpiryIsServedButNotRekeyed(t *testing.T) {
 	}
 	cleanupToken(t, s, token)
 
-	if err := s.rdb.Set(ctx, sessionKeyPrefix+token, encodeValue("user-nottl", time.Now().UTC(), false, false), 0).Err(); err != nil {
+	legacy := s.legacySessionKey(token)
+	if err := s.rdb.Set(ctx, legacy, encodeValue("user-nottl", time.Now().UTC(), false, false), valkeyTestLegacyTTL).Err(); err != nil {
 		t.Fatalf("seed legacy session: %v", err)
 	}
+
+	expirer, err := NewSessions(os.Getenv("JOMFORM_TEST_VALKEY_URL"), valkeyTestOptions()...)
+	if err != nil {
+		t.Fatalf("second valkey client: %v", err)
+	}
+	defer func() { _ = expirer.Close() }()
+	expire := &expireOnLegacyTTL{client: expirer.rdb, legacy: legacy}
+	s.rdb.AddHook(expire)
+
 	uid, err := s.Get(ctx, token)
 	if err != nil || uid != "user-nottl" {
-		t.Fatalf("Get(legacy token, no expiry) = (%q, %v), want (user-nottl, nil)", uid, err)
+		t.Fatalf("Get(legacy token, deadline lost mid-read) = (%q, %v), want (user-nottl, nil)", uid, err)
+	}
+	if !expire.fired {
+		t.Fatal("the legacy key never lost its deadline between the GET and the PTTL — the assertion below is vacuous")
 	}
 	if n, err := s.rdb.Exists(ctx, s.sessionKey(token)).Result(); err != nil || n != 0 {
-		t.Errorf("a legacy key with no expiry was re-keyed (exists=%d err=%v) — the copy would never expire either", n, err)
+		t.Errorf("a legacy key with no remaining deadline was re-keyed (exists=%d err=%v) — the copy would never expire either", n, err)
 	}
 }
 
@@ -260,7 +287,7 @@ func TestLogoutEndsALegacySession(t *testing.T) {
 	}
 	cleanupToken(t, s, token)
 
-	if err := s.rdb.Set(ctx, sessionKeyPrefix+token, encodeValue("user-out", time.Now().UTC(), false, false), time.Hour).Err(); err != nil {
+	if err := s.rdb.Set(ctx, s.legacySessionKey(token), encodeValue("user-out", time.Now().UTC(), false, false), valkeyTestLegacyTTL).Err(); err != nil {
 		t.Fatalf("seed legacy session: %v", err)
 	}
 	if err := s.Destroy(ctx, token); err != nil {
@@ -269,7 +296,7 @@ func TestLogoutEndsALegacySession(t *testing.T) {
 	if _, err := s.Get(ctx, token); !isRedisNil(err) {
 		t.Errorf("Get after logout = %v, want redis.Nil — the legacy key must be destroyed too", err)
 	}
-	for _, k := range []string{s.sessionKey(token), sessionKeyPrefix + token} {
+	for _, k := range []string{s.sessionKey(token), s.legacySessionKey(token)} {
 		if n, err := s.rdb.Exists(ctx, k).Result(); err != nil || n != 0 {
 			t.Errorf("key %q survived logout (exists=%d err=%v)", k, n, err)
 		}
@@ -297,7 +324,7 @@ func TestGetOnMissingAndEmptyTokenDoesNotTouchTheKeyspace(t *testing.T) {
 	if _, err := s.Get(ctx, missing); !isRedisNil(err) {
 		t.Errorf("Get(unknown token) = %v, want redis.Nil", err)
 	}
-	if n, err := s.rdb.Exists(ctx, s.sessionKey(missing), sessionKeyPrefix+missing).Result(); err != nil || n != 0 {
+	if n, err := s.rdb.Exists(ctx, s.sessionKey(missing), s.legacySessionKey(missing)).Result(); err != nil || n != 0 {
 		t.Errorf("reading an unknown token created a key (exists=%d err=%v)", n, err)
 	}
 }
@@ -319,17 +346,17 @@ func TestLogoutDuringMigrationDoesNotResurrect(t *testing.T) {
 		t.Fatalf("random token: %v", err)
 	}
 	cleanupToken(t, s, token)
-	if err := s.rdb.Set(ctx, sessionKeyPrefix+token, encodeValue("user-race", time.Now().UTC(), false, false), time.Hour).Err(); err != nil {
+	if err := s.rdb.Set(ctx, s.legacySessionKey(token), encodeValue("user-race", time.Now().UTC(), false, false), valkeyTestLegacyTTL).Err(); err != nil {
 		t.Fatalf("seed legacy session: %v", err)
 	}
 
-	loggedOut, err := NewSessions(os.Getenv("JOMFORM_TEST_VALKEY_URL"))
+	loggedOut, err := NewSessions(os.Getenv("JOMFORM_TEST_VALKEY_URL"), valkeyTestOptions()...)
 	if err != nil {
 		t.Fatalf("second valkey client: %v", err)
 	}
 	defer func() { _ = loggedOut.Close() }()
 
-	hook := &logoutOnLegacyTTL{logout: loggedOut, token: token, legacy: sessionKeyPrefix + token}
+	hook := &logoutOnLegacyTTL{logout: loggedOut, token: token, legacy: s.legacySessionKey(token)}
 	s.rdb.AddHook(hook)
 
 	if _, err := s.Get(ctx, token); !isRedisNil(err) {
@@ -341,7 +368,7 @@ func TestLogoutDuringMigrationDoesNotResurrect(t *testing.T) {
 	if n, err := s.rdb.Exists(ctx, s.sessionKey(token)).Result(); err != nil || n != 0 {
 		t.Errorf("the migration resurrected a logged-out session under the hashed key (exists=%d err=%v)", n, err)
 	}
-	if n, err := s.rdb.Exists(ctx, sessionKeyPrefix+token).Result(); err != nil || n != 0 {
+	if n, err := s.rdb.Exists(ctx, s.legacySessionKey(token)).Result(); err != nil || n != 0 {
 		t.Errorf("the legacy key survived the logout (exists=%d err=%v)", n, err)
 	}
 }
@@ -376,6 +403,36 @@ func (h *logoutOnLegacyTTL) ProcessHook(next goredis.ProcessHook) goredis.Proces
 		// session is still under the raw-token key.
 		_ = h.logout.Destroy(context.Background(), h.token)
 		return err
+	}
+}
+
+// expireOnLegacyTTL models a legacy key whose deadline runs out between the GET
+// that reads it and the PTTL that would carry it over: the same `ttl <= 0`
+// branch a TTL-0 key reaches, reached without writing an immortal key.
+type expireOnLegacyTTL struct {
+	client *goredis.Client
+	legacy string
+	fired  bool
+}
+
+func (h *expireOnLegacyTTL) DialHook(next goredis.DialHook) goredis.DialHook { return next }
+
+func (h *expireOnLegacyTTL) ProcessPipelineHook(next goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
+	return next
+}
+
+func (h *expireOnLegacyTTL) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+	return func(ctx context.Context, cmd goredis.Cmder) error {
+		if !h.fired && strings.EqualFold(cmd.Name(), "pttl") {
+			args := cmd.Args()
+			if len(args) >= 2 && fmt.Sprint(args[1]) == h.legacy {
+				h.fired = true
+				// The key's deadline ran out (it is gone server-side) just
+				// before the PTTL below could read it.
+				_ = h.client.Del(context.Background(), h.legacy).Err()
+			}
+		}
+		return next(ctx, cmd)
 	}
 }
 

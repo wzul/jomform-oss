@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "Placeholders reference — JomForm Docs",
   description:
     "Every dynamic placeholder you can use in JomForm emails and notifications: {admin_email}, {{ref_code}}, {{amount}}, {{items}}, {{buyer_name}}, {{form_url}}, {{date}}, {{table_number}} and any {{field_id}}.",
-  alternates: { canonical: "https://jomform.com/docs/placeholders" },
-};
+  path: "/docs/placeholders",
+});
 
 // Single source of truth for the placeholder reference. Kept in sync with
 // api/internal/payments/receipt.go and api/internal/payments/notifications.go.
@@ -85,7 +86,12 @@ export default function PlaceholdersPage() {
         email address, <code className="rounded bg-slate-100 px-1">{"{admin_email}"}</code>, or a
         submitted field value.
       </p>
-      <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+      <div
+        className="mt-4 overflow-x-auto rounded-lg border border-slate-200"
+        role="region"
+        aria-label="Recipient placeholders"
+        tabIndex={0}
+      >
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
             <tr>
@@ -110,7 +116,12 @@ export default function PlaceholdersPage() {
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         Used in the subject and body of receipt emails and notification rules.
       </p>
-      <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+      <div
+        className="mt-4 overflow-x-auto rounded-lg border border-slate-200"
+        role="region"
+        aria-label="Subject and body placeholders"
+        tabIndex={0}
+      >
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
             <tr>
@@ -136,13 +147,15 @@ export default function PlaceholdersPage() {
         tabIndex={0}
         className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100"
       >
-{`Subject: Jualan baharu — {{ref_code}}
+{`Subject: New sale — {{ref_code}}
 Body:
-  Rujukan : {{ref_code}}
-  Jumlah  : RM {{amount}}
-  Item    : {{items}}
-  Pembeli : {{buyer_name}}
-  Borang  : {{form_url}}`}
+  New sale received!
+
+  Reference : {{ref_code}}
+  Amount    : RM {{amount}}
+  Item      : {{items}}
+  Buyer     : {{buyer_name}}
+  Form      : {{form_url}}`}
       </pre>
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
         A <strong>response form</strong> gets a different default notification, because a response

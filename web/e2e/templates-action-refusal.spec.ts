@@ -72,7 +72,7 @@ const errcodeGo = readFileSync(join(__dirname, "../../api/internal/httpapi/errco
 const CUSTOM_JS_CODE = (errcodeGo.match(/\bCodeFormCustomJSRejected\s*=\s*"([^"]+)"/) ?? [])[1] ?? "";
 
 /** The wire prose this handler answers for a blocked value. Malay must never render. */
-const CUSTOM_JS_PROSE = "custom_js ditolak: active code execution marker: eval(";
+const CUSTOM_JS_PROSE = "custom_js rejected: active code execution marker: eval(";
 
 const EN = {
   use: DICT["tplmg.use"].en,

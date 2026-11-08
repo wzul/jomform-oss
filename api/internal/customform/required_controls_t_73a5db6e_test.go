@@ -148,7 +148,7 @@ func TestRequiredControlsRuleMatchesWhatTheBridgeCanRead(t *testing.T) {
 				t.Fatalf("unsatisfiable contract ACCEPTED for %q (%s) — this form could be saved "+
 					"and every submit would answer 400 `medan wajib tidak diisi: Nama`", tc.html, tc.why)
 			}
-			if msg := err.Error(); !strings.Contains(msg, "medan wajib tiada dalam HTML") ||
+			if msg := err.Error(); !strings.Contains(msg, "required field missing from the HTML") ||
 				!strings.Contains(msg, `name="nama"`) {
 				t.Fatalf("refusal message = %q, want it to name the missing control (name=\"nama\") "+
 					"so the caller knows what to add", msg)

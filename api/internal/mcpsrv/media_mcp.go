@@ -39,10 +39,10 @@ type mediaOut struct {
 }
 
 type listMediaIn struct {
-	FormID string `json:"form_id,omitempty" jsonschema:"Optional — tapis media mengikut borang (id dari list_forms)"`
-	Source string `json:"source,omitempty" jsonschema:"Optional — merchant|customer (lalai: semua)"`
-	Page   int    `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
+	FormID string `json:"form_id,omitempty" jsonschema:"Optional — filter media by form (id from list_forms)"`
+	Source string `json:"source,omitempty" jsonschema:"Optional — merchant|customer (default: all)"`
+	Page   int    `json:"page,omitempty" jsonschema:"Optional — page (starting at 1)"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"Optional — per-page limit (1-100, default 20)"`
 }
 
 // listMedia returns one page of the user's uploaded media, newest first,
@@ -54,10 +54,10 @@ func (s *Server) listMedia(ctx context.Context, _ *mcp.CallToolRequest, in listM
 		return nil, nil, err
 	}
 	if s.deps.Media == nil {
-		return nil, nil, fmt.Errorf("media tidak tersedia")
+		return nil, nil, fmt.Errorf("media not available")
 	}
 	if in.Source != "" && in.Source != "merchant" && in.Source != "customer" {
-		return nil, nil, fmt.Errorf("source mesti merchant|customer")
+		return nil, nil, fmt.Errorf("source must be merchant|customer")
 	}
 	page, limit := in.Page, in.Limit
 	if page < 1 {
@@ -96,8 +96,8 @@ func (s *Server) listMedia(ctx context.Context, _ *mcp.CallToolRequest, in listM
 // the background scan to flip them to 'ok' before they render.
 
 type uploadMediaIn struct {
-	Kind string `json:"kind" jsonschema:"Jenis fail: 'image' (png/jpeg/webp/gif — dioptimumkan, EXIF dibuang; imej legap jadi JPEG, imej berlatar lutsinar kekal PNG supaya latar lutsinarnya tidak hilang; GIF animasi jadi imej pegun, bingkai pertama sahaja; setiap imej dapat saiz thumbnail/medium/full), 'asset' (css/js/html/svg/woff2 — disimpan asli, scan-gated) atau 'pdf' (disimpan asli)"`
-	Data string `json:"data" jsonschema:"Fail content base64-encoded. Imej ≤20MB input / ≤2MB stored; asset ≤20MB input / ≤2MB stored; pdf ≤20MB input / ≤2MB stored."`
+	Kind string `json:"kind" jsonschema:"File type: 'image' (png/jpeg/webp/gif — optimised, EXIF stripped; opaque images become JPEG, images on a transparent background stay PNG so their transparency is not lost; animated GIFs become a still image, first frame only; every image gets thumbnail/medium/full sizes), 'asset' (css/js/html/svg/woff2 — stored as-is, scan-gated) or 'pdf' (stored as-is)"`
+	Data string `json:"data" jsonschema:"File content, base64-encoded. image ≤20MB input / ≤2MB stored; asset ≤20MB input / ≤2MB stored; pdf ≤20MB input / ≤2MB stored."`
 }
 
 func (s *Server) uploadMedia(
@@ -113,14 +113,14 @@ func (s *Server) uploadMedia(
 		return nil, mediaOut{}, err
 	}
 	if s.deps.Store == nil {
-		return nil, mediaOut{}, errors.New("media storage tidak dikonfigurasi")
+		return nil, mediaOut{}, errors.New("media storage not configured")
 	}
 	if in.Data == "" {
-		return nil, mediaOut{}, errors.New("data wajib diisi (base64)")
+		return nil, mediaOut{}, errors.New("data is required (base64)")
 	}
 	raw, err := base64.StdEncoding.DecodeString(in.Data)
 	if err != nil {
-		return nil, mediaOut{}, errors.New("data bukan base64 yang sah")
+		return nil, mediaOut{}, errors.New("data is not valid base64")
 	}
 
 	switch in.Kind {
@@ -131,7 +131,7 @@ func (s *Server) uploadMedia(
 	case "pdf":
 		return s.uploadMediaPDF(ctx, acc, raw)
 	default:
-		return nil, mediaOut{}, errors.New("kind mesti 'image', 'asset' atau 'pdf'")
+		return nil, mediaOut{}, errors.New("kind must be 'image', 'asset' or 'pdf'")
 	}
 }
 
@@ -141,14 +141,14 @@ func (s *Server) uploadMedia(
 // immediately.
 func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (*mcp.CallToolResult, mediaOut, error) {
 	if len(raw) == 0 {
-		return nil, mediaOut{}, errors.New("fail kosong")
+		return nil, mediaOut{}, errors.New("empty file")
 	}
 	if len(raw) > objstore.MaxUploadBytes {
-		return nil, mediaOut{}, fmt.Errorf("imej melebihi had %dMB", objstore.MaxUploadBytes>>20)
+		return nil, mediaOut{}, fmt.Errorf("image exceeds the %dMB limit", objstore.MaxUploadBytes>>20)
 	}
 	ext, ok := objstore.SniffImageType(raw)
 	if !ok {
-		return nil, mediaOut{}, errors.New("jenis imej tidak disokong (png/jpeg/webp/gif sahaja)")
+		return nil, mediaOut{}, errors.New("unsupported image type (png/jpeg/webp/gif only)")
 	}
 	// Issue #455: enforce the magic-byte (file signature) check — the sniffed
 	// signature must match the declared image kind.
@@ -160,7 +160,7 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 		return nil, mediaOut{}, err
 	}
 	if len(stored) > objstore.MaxStoredBytes {
-		return nil, mediaOut{}, errors.New("imej gagal dimampatkan bawah 2MB; cuba imej lain")
+		return nil, mediaOut{}, errors.New("the image could not be compressed below 2MB; try another image")
 	}
 	// t_05fd8d2a: the stored artifact is JPEG, so its key extension and its
 	// stored content-type come from the BYTES, never from the uploaded file's
@@ -168,7 +168,7 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 	// image/png over JPEG bytes too.
 	storedMIME, storedExt, ok := objstore.ImageArtifactMeta(stored)
 	if !ok {
-		return nil, mediaOut{}, errors.New("jenis imej simpanan tidak dapat ditentukan")
+		return nil, mediaOut{}, errors.New("could not determine the stored image type")
 	}
 	// Issue #384/#545: reserve ATOMICALLY before storing, then settle to the true
 	// stored total (base + variants) once every object is written.
@@ -241,16 +241,16 @@ func (s *Server) uploadMediaImage(ctx context.Context, acc string, raw []byte) (
 // the background scan flips them to 'ok'; otherwise fail-closed.
 func (s *Server) uploadMediaAsset(ctx context.Context, acc string, raw []byte) (*mcp.CallToolResult, mediaOut, error) {
 	if s.deps.Media == nil {
-		return nil, mediaOut{}, errors.New("media metadata tidak tersedia")
+		return nil, mediaOut{}, errors.New("media metadata not available")
 	}
 	if len(raw) == 0 {
-		return nil, mediaOut{}, errors.New("fail kosong")
+		return nil, mediaOut{}, errors.New("empty file")
 	}
 	if len(raw) > objstore.MaxAssetUploadBytes {
-		return nil, mediaOut{}, fmt.Errorf("fail melebihi had %dMB", objstore.MaxAssetUploadBytes>>20)
+		return nil, mediaOut{}, fmt.Errorf("file exceeds the %dMB limit", objstore.MaxAssetUploadBytes>>20)
 	}
 	if len(raw) > objstore.MaxAssetBytes {
-		return nil, mediaOut{}, fmt.Errorf("fail melebihi had %dMB", objstore.MaxAssetBytes>>20)
+		return nil, mediaOut{}, fmt.Errorf("file exceeds the %dMB limit", objstore.MaxAssetBytes>>20)
 	}
 	// Issue #384: reject an upload that would push the workspace over the 1GB
 	// per-workspace storage quota.
@@ -259,7 +259,7 @@ func (s *Server) uploadMediaAsset(ctx context.Context, acc string, raw []byte) (
 	}
 	ext, ok := objstore.SniffAssetType(raw)
 	if !ok {
-		return nil, mediaOut{}, errors.New("jenis fail tidak disokong (css/js/html/svg/woff2 sahaja)")
+		return nil, mediaOut{}, errors.New("unsupported file type (css/js/html/svg/woff2 only)")
 	}
 	// Issue #455: enforce the magic-byte (file signature) check — the sniffed
 	// signature must match the declared asset kind.
@@ -330,16 +330,16 @@ func (s *Server) uploadMediaAsset(ctx context.Context, acc string, raw []byte) (
 // scan-gated and serve immediately.
 func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*mcp.CallToolResult, mediaOut, error) {
 	if s.deps.Media == nil {
-		return nil, mediaOut{}, errors.New("media metadata tidak tersedia")
+		return nil, mediaOut{}, errors.New("media metadata not available")
 	}
 	if len(raw) == 0 {
-		return nil, mediaOut{}, errors.New("fail kosong")
+		return nil, mediaOut{}, errors.New("empty file")
 	}
 	if len(raw) > objstore.MaxUploadBytes {
-		return nil, mediaOut{}, fmt.Errorf("fail melebihi had %dMB", objstore.MaxUploadBytes>>20)
+		return nil, mediaOut{}, fmt.Errorf("file exceeds the %dMB limit", objstore.MaxUploadBytes>>20)
 	}
 	if len(raw) > objstore.MaxPDFBytes {
-		return nil, mediaOut{}, fmt.Errorf("fail melebihi had %dMB", objstore.MaxPDFBytes>>20)
+		return nil, mediaOut{}, fmt.Errorf("file exceeds the %dMB limit", objstore.MaxPDFBytes>>20)
 	}
 	// Issue #384: reject an upload that would push the workspace over the 1GB
 	// per-workspace storage quota.
@@ -348,7 +348,7 @@ func (s *Server) uploadMediaPDF(ctx context.Context, acc string, raw []byte) (*m
 	}
 	ext, ok := objstore.SniffPDFType(raw)
 	if !ok {
-		return nil, mediaOut{}, errors.New("jenis fail tidak disokong (pdf sahaja)")
+		return nil, mediaOut{}, errors.New("unsupported file type (pdf only)")
 	}
 	// Issue #455: enforce the magic-byte (file signature) check — the sniffed
 	// signature must match the declared PDF kind.
@@ -506,11 +506,11 @@ type trashedMediaOut struct {
 func (s *Server) deleteMediaMCP(
 	ctx context.Context, _ *mcp.CallToolRequest,
 	in struct {
-		MediaID string `json:"media_id" jsonschema:"ID media (dari list_media)"`
+		MediaID string `json:"media_id" jsonschema:"Media ID (from list_media)"`
 	},
 ) (*mcp.CallToolResult, map[string]any, error) {
 	if in.MediaID == "" {
-		return nil, nil, errors.New("media_id wajib")
+		return nil, nil, errors.New("media_id is required")
 	}
 	acc, err := s.requireMediaWrite(ctx, in.MediaID)
 	if err != nil {
@@ -523,15 +523,15 @@ func (s *Server) deleteMediaMCP(
 	if !ok {
 		return nil, map[string]any{
 			"status":   "not_found",
-			"error":    "media tidak dijumpai dalam senarai aktif (mungkin sudah dalam tong sampah)",
+			"error":    "media not found in the active list (it may already be in the Trash)",
 			"media_id": in.MediaID,
 		}, nil
 	}
 	return nil, map[string]any{
 		"status": "deleted", "media_id": in.MediaID, "key": key, "size": size,
 		"bytes_released": false, "quota_released": false,
-		"note": "objek masih di storan dan masih dikira terhadap had 1GB; " +
-			"guna purge_media untuk memusnahkannya secara kekal",
+		"note": "the object is still in storage and still counts against the 1GB limit; " +
+			"use purge_media to destroy it permanently",
 	}, nil
 }
 
@@ -540,7 +540,7 @@ func (s *Server) listDeletedMedia(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
 ) (*mcp.CallToolResult, *listOutput[trashedMediaOut], error) {
 	if s.deps.Media == nil {
-		return nil, nil, errors.New("media tidak tersedia")
+		return nil, nil, errors.New("media not available")
 	}
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
@@ -579,11 +579,11 @@ func (s *Server) listDeletedMedia(
 func (s *Server) restoreMediaMCP(
 	ctx context.Context, _ *mcp.CallToolRequest,
 	in struct {
-		MediaID string `json:"media_id" jsonschema:"ID media dalam tong sampah (dari list_deleted_media)"`
+		MediaID string `json:"media_id" jsonschema:"Media ID in trash (from list_deleted_media)"`
 	},
 ) (*mcp.CallToolResult, map[string]any, error) {
 	if in.MediaID == "" {
-		return nil, nil, errors.New("media_id wajib")
+		return nil, nil, errors.New("media_id is required")
 	}
 	acc, err := s.requireTrashedMediaWrite(ctx, in.MediaID)
 	if err != nil {
@@ -596,22 +596,22 @@ func (s *Server) restoreMediaMCP(
 	if row == nil {
 		return nil, map[string]any{
 			"status":   "not_found",
-			"error":    "media tidak dijumpai dalam tong sampah",
+			"error":    "media not found in the Trash",
 			"media_id": in.MediaID,
 		}, nil
 	}
 	if s.deps.Store == nil {
-		return nil, nil, errors.New("media storage tidak dikonfigurasi")
+		return nil, nil, errors.New("media storage not configured")
 	}
 	present, perr := s.deps.Store.ObjectExists(ctx, row.Key)
 	if perr != nil {
-		return nil, nil, fmt.Errorf("storan tidak dapat disemak: %w", perr)
+		return nil, nil, fmt.Errorf("could not check storage: %w", perr)
 	}
 	if !present {
 		return nil, map[string]any{
 			"status": "refused",
-			"error": "fail media ini sudah tiada dalam storan — ia tidak boleh dipulihkan " +
-				"(memulihkannya hanya akan memberi URL yang 404)",
+			"error": "this media file is already gone from storage — it cannot be restored " +
+				"(restoring it would only hand out a URL that 404s)",
 			"media_id": in.MediaID, "key": row.Key,
 		}, nil
 	}
@@ -620,7 +620,7 @@ func (s *Server) restoreMediaMCP(
 		return nil, nil, err
 	}
 	if !ok {
-		return nil, nil, errors.New("media tidak dijumpai dalam tong sampah")
+		return nil, nil, errors.New("media not found in the Trash")
 	}
 	return nil, map[string]any{
 		"status": "restored", "media_id": in.MediaID, "url": m.URL,
@@ -642,11 +642,11 @@ func (s *Server) restoreMediaMCP(
 func (s *Server) purgeMediaMCP(
 	ctx context.Context, _ *mcp.CallToolRequest,
 	in struct {
-		MediaID string `json:"media_id" jsonschema:"ID media dalam tong sampah (dari list_deleted_media)"`
+		MediaID string `json:"media_id" jsonschema:"Media ID in trash (from list_deleted_media)"`
 	},
 ) (*mcp.CallToolResult, map[string]any, error) {
 	if in.MediaID == "" {
-		return nil, nil, errors.New("media_id wajib")
+		return nil, nil, errors.New("media_id is required")
 	}
 	acc, err := s.requireTrashedMediaWrite(ctx, in.MediaID)
 	if err != nil {
@@ -659,7 +659,7 @@ func (s *Server) purgeMediaMCP(
 	if !ok {
 		return nil, map[string]any{
 			"status":   "not_found",
-			"error":    "media tidak dijumpai dalam tong sampah (hantar ke bin dulu guna delete_media)",
+			"error":    "media not found in the Trash (send it to the bin first with delete_media)",
 			"media_id": in.MediaID,
 		}, nil
 	}
@@ -764,7 +764,7 @@ func (s *Server) workspaceQuotaExceeded(ctx context.Context, accountID string, a
 		return nil // best-effort — a usage read failure must not block uploads
 	}
 	if objstore.ExceedsWorkspaceQuota(current, additional) {
-		return errors.New("had storan workspace dicapai (1GB)")
+		return errors.New("workspace storage limit reached (1GB)")
 	}
 	return nil
 }
@@ -778,7 +778,7 @@ func (s *Server) reserveQuota(ctx context.Context, accountID string, bytes int64
 	}
 	if err := s.deps.Media.ReserveQuota(ctx, accountID, bytes); err != nil {
 		if errors.Is(err, dbstore.ErrQuotaExceeded) {
-			return errors.New("had storan workspace dicapai (1GB)")
+			return errors.New("workspace storage limit reached (1GB)")
 		}
 		return fmt.Errorf("quota check: %w", err)
 	}

@@ -11,7 +11,7 @@
 //
 // THE CONTRACT. Every error response carries a stable machine `code`:
 //
-//		{"error":"workspace tidak dijumpai","code":"workspace.notFound"}
+//		{"error":"workspace not found","code":"workspace.notFound"}
 //
 //	  - The `error` prose is KEPT. It is the wire message for API-key callers,
 //	    curl, MCP and the public buyer-form JavaScript, none of which can consume
@@ -77,7 +77,7 @@ const (
 	// POST /chat/confirm is NOT necessarily this condition: chatConfirmStatusFor
 	// maps everything it does not recognise to 400, and one reachable class is a
 	// tool the server refused AFTER the token was spent (chat/proposal.go's
-	// "server menolak: %s"). The web page branched on the bare status, so a
+	// "server refused: %s"). The web page branched on the bare status, so a
 	// read_only member whose confirmed write was refused was told to "choose a
 	// workspace first" — advice they cannot act on, because they already had one
 	// selected (the request carried ?workspace=), and the refusal they needed was
@@ -164,7 +164,7 @@ const (
 	// A power-user `theme.custom_js` the deterministic #388 scan refuses.
 	//
 	// WHY IT NEEDS ITS OWN CODE (card t_2717ba30). The refusal's wire prose is
-	// assembled around the scan's reason ("custom_js ditolak: active code
+	// assembled around the scan's reason ("custom_js rejected: active code
 	// execution marker: eval("), so no exact key can match it, and it fell
 	// through to the class code `request.badRequest` — which the dashboard
 	// deliberately does not translate. Measured on prod v1.21.296: pasting
@@ -346,22 +346,23 @@ func classCode(status int) string {
 // literal anywhere in this package, so a reworded message cannot silently leave
 // a stale code behind, and a table entry cannot be dead weight.
 //
-// Two different messages may share one code: "email tidak sah" and "emel tidak
-// sah" are the same user-facing complaint.
+// Two different messages may share one code — several handlers answer the same
+// user-facing complaint with their own wording, and the code table is keyed on
+// the text, so each distinct wording needs its own row.
 var errCodeByMessage = map[string]string{
 	// Tenancy / workspace scope — the reported case is the first entry.
-	"workspace tidak dijumpai": CodeWorkspaceNotFound,
-	"bukan workspace anda":     CodeWorkspaceNotFound,
+	"workspace not found": CodeWorkspaceNotFound,
+	"not your workspace":  CodeWorkspaceNotFound,
 
-	"slug sudah digunakan":        CodeWorkspaceSlugTaken,
-	"slug 3-40 aksara":            CodeWorkspaceSlugBad,
-	"slug: a-z, 0-9, dash sahaja": CodeWorkspaceSlugBad,
-	"slug tidak sah":              CodeWorkspaceSlugBad,
+	"slug already in use":       CodeWorkspaceSlugTaken,
+	"slug 3-40 characters":      CodeWorkspaceSlugBad,
+	"slug: a-z, 0-9, dash only": CodeWorkspaceSlugBad,
+	"invalid slug":              CodeWorkspaceSlugBad,
 
 	// Roles / key scope.
-	"perlu peranan manage atau admin":         CodeRoleManageRequired,
-	"perlu admin workspace":                   CodeRoleAdminRequired,
-	"scope tidak mencukupi (perlu readwrite)": CodeScopeReadonly,
+	"you need the manage or admin role":       CodeRoleManageRequired,
+	"you need the workspace admin role":       CodeRoleAdminRequired,
+	"insufficient scope (readwrite required)": CodeScopeReadonly,
 
 	// The chat lane's ambiguous-scope refusal (t_fb393abe). Keyed on the exact
 	// literal rest_scope.go writes for scopeAmbiguous. Without this entry the
@@ -374,7 +375,7 @@ var errCodeByMessage = map[string]string{
 	// as a Go string literal in a non-errcode.go file of this package, which the
 	// const's own declaration site satisfies exactly once — so the wire wording
 	// and this table cannot drift apart silently.
-	"skop workspace diperlukan — pilih workspace dahulu": CodeWorkspaceScopeRequired,
+	"a workspace scope is required — pick a workspace first": CodeWorkspaceScopeRequired,
 
 	// The form-create refusal for an account with NO workspace (card
 	// t_6c0badbe). Keyed on the constant rest_handlers.go writes, so the code
@@ -387,79 +388,80 @@ var errCodeByMessage = map[string]string{
 	// row the page would see `request.conflict` and print "expired or was already
 	// used" for a proposal that was neither — and, worse, would not learn that the
 	// token is still live.
-	"cadangan itu tidak boleh dilaksanakan — minta pembantu menyediakan kad baharu": CodeProposalArgsInvalid,
+	"that proposal cannot be carried out — ask the assistant to prepare a new card": CodeProposalArgsInvalid,
 
 	// Payments / CHIP / subscriptions.
-	"chip belum dikonfigurasi akaun ini":                 CodePaymentNotConfigured,
-	"pembayaran tidak aktif":                             CodePaymentInactive,
-	"kredensial tidak sah — semak Brand ID / Secret Key": CodeChipCredentialsBad,
-	"langganan telah dibatalkan":                         CodeSubscriptionCancelled,
+	"CHIP is not configured for this account":               CodePaymentNotConfigured,
+	"payment is not active":                                 CodePaymentInactive,
+	"invalid credentials — check the Brand ID / Secret Key": CodeChipCredentialsBad,
+	"the subscription has been cancelled":                   CodeSubscriptionCancelled,
 
 	// Form / product / template validation.
-	"status mesti draft|private|published":       CodeFormStatusBad,
-	"password mesti sekurang-kurangnya 4 aksara": CodeFormPasswordTooShort,
-	"produk telah habis (out of stock)":          CodeProductOutOfStock,
-	"template perlu category dan satu blok description (Section atau text) sebelum diterbitkan ke galeri": CodeTemplateNeedMetadata,
+	"status must be draft|private|published":     CodeFormStatusBad,
+	"the password must be at least 4 characters": CodeFormPasswordTooShort,
+	"product is sold out (out of stock)":         CodeProductOutOfStock,
+	"a template needs a category and one description block (Section or text) before it can be published to the gallery": CodeTemplateNeedMetadata,
 
 	// Trash refusals. These two are assembled around a literal, so they are keyed
 	// by the exact wire message the handler writes.
-	"tidak boleh dipulihkan: slug borang ini telah diambil borang lain — " +
-		"tukar slug borang itu dahulu, kemudian cuba pulihkan semula": CodeFormSlugTaken,
-	"borang ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan " +
-		"dengan memadam borang. Ia kekal dalam tong sampah.": CodeFormHasSales,
+	"cannot be restored: this form's slug has been taken by another form — " +
+		"change that form's slug first, then try restoring again": CodeFormSlugTaken,
+	"this form has sales — sales history cannot be destroyed " +
+		"by deleting the form. It stays in the bin.": CodeFormHasSales,
 
 	// Form-slug RENAME refusals (the two a PATCH /forms/{id} slug write can
 	// answer). A collision and a malformed value are both refusals the merchant
 	// can act on, and both are written here by the handler that maps the store's
 	// sentinel error, so the key is the exact wire message.
-	"slug sudah digunakan oleh borang lain dalam workspace ini": CodeFormSlugInUse,
+	"the slug is already used by another form in this workspace": CodeFormSlugInUse,
 	// dbstore.ErrInvalidSlug's own text — the store's sentinel IS the rule, so the
 	// wire message states it rather than inventing a second wording. The literal
 	// is pinned equal to the sentinel by TestFormSlugInvalidWireMessageMatchesTheStore.
 	"form slug must be 1-40 characters of a-z, 0-9 or -": CodeFormSlugInvalid,
 
 	// The product bin's refusals, same shape as the form's above.
-	"produk ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan dengan memadam produk. Ia kekal dalam tong sampah.": CodeProductHasSales,
-	"produk ini masih ada langganan — batalkan langganan itu dahulu. Ia kekal dalam tong sampah.":                             CodeProductHasSubscriptions,
+	"this product has sales — sales history cannot be destroyed by deleting the product. It stays in the bin.": CodeProductHasSales,
+	"this product still has subscriptions — cancel that subscription first. It stays in the bin.":              CodeProductHasSubscriptions,
 
 	// Outbound webhook URL (ssrfguard refusal).
-	"url webhook tidak sah (menunjuk ke host peribadi/loopback)": CodeWebhookURLInvalid,
+	"invalid webhook url (points to a private/loopback host)": CodeWebhookURLInvalid,
 
 	// Custom-domain TLS material.
-	"cert/key tidak sah — semak format PEM dan padanan kunci": CodeDomainCertInvalid,
-	"cert tidak sah": CodeDomainCertInvalid,
+	"invalid cert/key — check the PEM format and that the key matches": CodeDomainCertInvalid,
+	"invalid certificate": CodeDomainCertInvalid,
 
 	// Uploads / media.
-	"had storan workspace dicapai (1GB)":                                             CodeUploadStorageQuota,
-	"jenis fail tidak disokong (png/jpeg/webp/gif/css/js/html/svg/woff2/pdf sahaja)": CodeUploadTypeUnsupported,
-	"jenis imej tidak disokong (png/jpeg/webp/gif sahaja)":                           CodeUploadTypeUnsupported,
-	"jenis fail tidak disokong (css/js/html/svg/woff2 sahaja)":                       CodeUploadTypeUnsupported,
+	"workspace storage limit reached (1GB)":                                    CodeUploadStorageQuota,
+	"unsupported file type (png/jpeg/webp/gif/css/js/html/svg/woff2/pdf only)": CodeUploadTypeUnsupported,
+	"unsupported image type (png/jpeg/webp/gif only)":                          CodeUploadTypeUnsupported,
+	"unsupported file type (css/js/html/svg/woff2 only)":                       CodeUploadTypeUnsupported,
 
-	// Throttling.
-	"terlalu banyak cubaan. Cuba lagi kemudian.": CodeRateLimited,
+	// Throttling has no exact-key entry any more: the buyer 429
+	// ("... terlalu banyak cubaan ...") is a refusal from the catalogue, so it
+	// answers its own code (order.rateLimited) instead of a class code, and the
+	// dashboard's 429s are the assembled chat/confirm shapes below, which match
+	// by prefix.
 
 	// Account / auth (login, register, profile).
-	"email sudah didaftarkan":         CodeEmailTaken,
-	"emel sudah didaftarkan":          CodeEmailTaken,
-	"email sudah digunakan":           CodeEmailTaken,
-	"email tidak sah":                 CodeEmailInvalid,
-	"emel tidak sah":                  CodeEmailInvalid,
-	"domain emel tidak menerima emel": CodeEmailDomainNoMX,
-	"sila sahkan email anda sebelum log masuk (semak peti masuk untuk pautan pengesahan)": CodeEmailUnverified,
-	"kata laluan mesti sekurang-kurangnya 10 aksara":                                      CodePasswordTooShort,
-	"kata laluan baharu mesti sekurang-kurangnya 10 aksara":                               CodePasswordTooShort,
-	"kata laluan salah":            CodePasswordInvalid,
-	"maklumat log masuk tidak sah": CodeLoginInvalid,
+	"email already registered":               CodeEmailTaken,
+	"email already in use":                   CodeEmailTaken,
+	"invalid email":                          CodeEmailInvalid,
+	"the email domain does not accept email": CodeEmailDomainNoMX,
+	"please verify your email before signing in (check your inbox for the verification link)": CodeEmailUnverified,
+	"the password must be at least 10 characters":                                             CodePasswordTooShort,
+	"the new password must be at least 10 characters":                                         CodePasswordTooShort,
+	"wrong password":        CodePasswordInvalid,
+	"invalid login details": CodeLoginInvalid,
 
 	// Social connect ownership link (social.go). Note "akaun tidak dijumpai" is
 	// deliberately ABSENT: that literal is shared with the email-verify and
 	// password-recovery handlers (verify.go, auth_ux.go, auth_recovery.go), so
 	// naming a code for it would also change those endpoints' wire contract — a
 	// different surface with its own pages.
-	"pautan penghubung tidak sah":                CodeConnectInvalid,
-	"pautan penghubung telah tamat tempoh":       CodeConnectExpired,
-	"identiti sudah dipautkan ke akaun lain":     CodeConnectOtherLinked,
-	"akaun untuk alamat ini tidak dijumpai lagi": CodeConnectNoAccount,
+	"invalid connect link":                          CodeConnectInvalid,
+	"the connect link has expired":                  CodeConnectExpired,
+	"identity is already linked to another account": CodeConnectOtherLinked,
+	"an account for this address no longer exists":  CodeConnectNoAccount,
 
 	// "No token in the request", one entry per surface (issue #6177 follow-up).
 	// These four were ONE shared literal ("token diperlukan") until each handler
@@ -467,10 +469,10 @@ var errCodeByMessage = map[string]string{
 	// could not identify the surface, so no single code could give the right
 	// sentence. errcode_test.go's dead-key guard fails if a key here stops
 	// appearing as a literal in a handler, so the split cannot silently revert.
-	"token pengesahan diperlukan": CodeVerifyTokenMissing,
-	"token set semula diperlukan": CodeResetTokenMissing,
-	"token log masuk diperlukan":  CodeMagicTokenMissing,
-	"token penghubung diperlukan": CodeConnectTokenMissing,
+	"verification token is required": CodeVerifyTokenMissing,
+	"reset token is required":        CodeResetTokenMissing,
+	"sign-in token is required":      CodeMagicTokenMissing,
+	"connect token is required":      CodeConnectTokenMissing,
 }
 
 // errCodeByPrefix handles messages the handler assembles around a literal, so
@@ -480,7 +482,7 @@ var errCodeByPrefix = []struct {
 	code   string
 }{
 	// urlguard.InvalidMessage(field) → "<field> mesti bermula dengan https:// — …"
-	{" mesti bermula dengan https://", CodeURLNotHTTPS},
+	{" must start with https://", CodeURLNotHTTPS},
 	// The shipping zone-set delete refusal (card t_e11bf975): assembled around
 	// the set name and the form titles that still reference it, so the lead-in
 	// is the only fixed part. Keyed on dbstore's own constant rather than a
@@ -493,7 +495,7 @@ var errCodeByPrefix = []struct {
 	// reference, not a silently lost code.
 	{prefix: dbstore.ShippingInvalidLeadIn, code: CodeShippingInvalid},
 	// payments.CaptureSale/ReleaseSale/Refund refusals are surfaced verbatim.
-	{"jualan bukan dalam status boleh-refund", CodeRefundNotAllowed},
+	{"the sale is not in a refundable status", CodeRefundNotAllowed},
 	// The workspace-ROLE refusal, keyed on the LEAD-IN rather than as one more
 	// exact literal (card t_1900adef).
 	//
@@ -522,14 +524,14 @@ var errCodeByPrefix = []struct {
 	// it follows chatRatePerHour. The prefix keeps the code stable across a
 	// limit change, and the number itself is deliberately NOT written here —
 	// a second copy of it in this table would be one more thing to drift.
-	{"had chat dicapai (", CodeRateLimited},
-	{"had pengesahan dicapai (", CodeRateLimited},
+	{"chat limit reached (", CodeRateLimited},
+	{"verification limit reached (", CodeRateLimited},
 	// The workspace NAME cap, forwarded from dbstore.ErrWorkspaceNameLength. A
 	// prefix rather than an exact key because the store owns the wording and
-	// states the cap in it ("nama workspace maksimum 120 aksara"); matching the
-	// lead-in means a future re-wording that keeps the sentence's shape keeps its
-	// code, and #6177's rule (the code decides, not the status) still holds.
-	{"nama workspace maksimum ", CodeWorkspaceNameTooLong},
+	// states the cap in it ("workspace name maximum 120 characters"); matching
+	// the lead-in means a future re-wording that keeps the sentence's shape keeps
+	// its code, and #6177's rule (the code decides, not the status) still holds.
+	{"workspace name maximum ", CodeWorkspaceNameTooLong},
 	// The TYPED-CONFIRMATION refusals (the three codes above). Each prefix is
 	// EXACTLY the first string fragment the handler writes, before the value it
 	// interpolates — `"taip slug borang ("` in rest_handlers.go's purgeForm is
@@ -541,11 +543,11 @@ var errCodeByPrefix = []struct {
 	// Longest-match keeps the three apart (they share no lead-in), and the two
 	// workspace messages collapse onto one prefix on purpose — see
 	// CodeWorkspaceConfirmSlugMismatch.
-	{"taip slug borang (", CodeFormConfirmSlugMismatch},
-	{"taip slug workspace (", CodeWorkspaceConfirmSlugMismatch},
-	{"taip nama produk (", CodeProductConfirmNameMismatch},
+	{"type the form slug (", CodeFormConfirmSlugMismatch},
+	{"type the workspace slug (", CodeWorkspaceConfirmSlugMismatch},
+	{"type the product name (", CodeProductConfirmNameMismatch},
 	// The custom_js scan refusal (card t_2717ba30). A PREFIX because the
-	// sentence is assembled around the scan's own reason — "custom_js ditolak:
+	// sentence is assembled around the scan's own reason — "custom_js rejected:
 	// active code execution marker: eval(", "… obfuscation/beacon marker: atob(",
 	// "… reference to external URL from custom JS" — so no exact key can ever
 	// match one. The prefix is the constant EVERY write site builds the sentence

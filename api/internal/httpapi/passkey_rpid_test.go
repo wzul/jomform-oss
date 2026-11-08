@@ -9,7 +9,7 @@ package httpapi
 // the page's origin (the RP ID must be equal to the origin's effective domain or
 // a registrable domain suffix of it, WebAuthn Level 2 §5.1.3 step 8), which is a
 // SecurityError raised before an authenticator is reached. Measured live on
-// https://jomform-staging.example.com: `POST /v1/auth/passkeys/login/start`
+// https://jomform-staging.wanzul-hosting.com: `POST /v1/auth/passkeys/login/start`
 // answered `"rpId":"jomform.com"` for a page at a different origin and
 // `navigator.credentials.get()` threw "The relying party ID is not a registrable
 // domain suffix of, nor equal to the current domain".
@@ -60,7 +60,7 @@ import (
 // stagingHost is the origin this card measured the defect at, and the value its
 // staging deployment sets APP_BASE_URL to (dokploy compose for the staging
 // stack). A deployment on a host that is not jomform.com is the whole point.
-const stagingHost = "jomform-staging.example.com"
+const stagingHost = "jomform-staging.wanzul-hosting.com"
 
 func TestPasskeyRPIdentityFollowsTheConfiguredAppBaseURL(t *testing.T) {
 	cases := []struct {
@@ -103,7 +103,7 @@ func TestPasskeyRPIdentityFollowsTheConfiguredAppBaseURL(t *testing.T) {
 		},
 		{
 			// The RP ID is the app host, not the registrable domain: the same
-			// WebAuthn rule would also have permitted "example.com", which
+			// WebAuthn rule would also have permitted "wanzul-hosting.com", which
 			// would scope the credentials to every unrelated service on that host.
 			name: "staging subdomain", appBaseURL: "https://" + stagingHost, requestHost: "shop." + stagingHost,
 			wantRPID: stagingHost,

@@ -6,7 +6,7 @@ package httpapi
 // session, same value, the two halves of one REST surface:
 //
 //	PATCH /v1/rest/forms/{id}?workspace=<ws> {"theme":{"custom_js":"eval('2+2');"}}
-//	  -> 400 {"code":"request.badRequest","error":"custom_js ditolak: active code execution marker: eval("}
+//	  -> 400 {"code":"request.badRequest","error":"custom_js rejected: active code execution marker: eval("}
 //	POST  /v1/rest/forms?workspace=<ws>      {"theme":{"custom_js":"eval('2+2');"}}
 //	  -> 201, and `select theme->>'custom_js' from forms` returned eval('2+2'); verbatim
 //
@@ -97,13 +97,13 @@ func TestCreateFormRefusesBlockedCustomJS(t *testing.T) {
 		if code != http.StatusBadRequest {
 			t.Fatalf("POST /v1/rest/forms with custom_js %q (%s) = %d (body %s), want 400.\n"+
 				"A 201 here IS the carded defect: createForm stores the value unscanned while "+
-				"PATCH /v1/rest/forms/{id} answers 400 `custom_js ditolak: …` for the identical "+
+				"PATCH /v1/rest/forms/{id} answers 400 `custom_js rejected: …` for the identical "+
 				"string, and since v1.21.283 the block-rendered buyer page executes what was stored.",
 				tc.js, tc.name, code, raw)
 		}
 		bodyText := string(raw)
-		if !strings.Contains(bodyText, `"custom_js ditolak: `) {
-			t.Errorf("400 body for %s = %s, want it to carry `custom_js ditolak: <reason>` — the "+
+		if !strings.Contains(bodyText, `"custom_js rejected: `) {
+			t.Errorf("400 body for %s = %s, want it to carry `custom_js rejected: <reason>` — the "+
 				"same wording updateForm answers, so one rule reads one way on both form write paths",
 				tc.name, bodyText)
 		}
@@ -181,7 +181,7 @@ func TestCreateFormWithoutCustomJSStillCreates(t *testing.T) {
 func TestCreateAndPatchAnswerBlockedCustomJSIdentically(t *testing.T) {
 	fx := newRenameFixture(t, "it-cjs-parity-"+randHex(4))
 	const js = "eval('2+2');"
-	want := `custom_js ditolak: active code execution marker: eval(`
+	want := `custom_js rejected: active code execution marker: eval(`
 
 	// PATCH the fixture's existing form — the half that already worked.
 	patchCode, patchRaw := fx.patch(t, `{"theme":{"custom_js":"eval('2+2');"}}`)

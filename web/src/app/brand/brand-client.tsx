@@ -3,6 +3,8 @@
 // Brand assets — publicly served at https://jomform.com/brand
 import Image from "next/image";
 import { useEffect, useState } from "react";
+import { useI18n } from "../../components/i18n";
+import { ownLangProps } from "../../lib/ownLang";
 
 const BASE = "https://jomform.com";
 
@@ -45,6 +47,11 @@ function CopyBtn({ text, label }: { text: string; label: string }) {
 }
 
 export default function BrandPage() {
+  // `lang` is the RESOLVED dashboard locale: the two ALTs below come from the
+  // dictionary, and this document declares English (it is an English-only prose
+  // surface), so each image has to declare the language of its own alt —
+  // WCAG 3.1.2. English adds nothing (`ownLangProps`), see lib/ownLang.ts.
+  const { t, lang } = useI18n();
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
       <h1 className="text-3xl font-bold">Brand assets</h1>
@@ -57,7 +64,7 @@ export default function BrandPage() {
       <section className="jf-card mt-8 p-6">
         <h2 className="text-lg font-semibold">Logo mark</h2>
         <div className="mt-4 flex items-center gap-8">
-          <Image src="/brand/icon-512.png" alt="JomForm logo" width={160} height={160} className="rounded-2xl" />
+          <Image src="/brand/icon-512.png" alt={t("brand.logoAlt")} {...ownLangProps(lang)} width={160} height={160} className="rounded-2xl" />
           <div className="space-y-2 text-sm">
             <p><strong>JF</strong> monogram on a white form sheet, indigo→violet gradient tile.</p>
             <p className="text-slate-500">Rounded-square, safe area = 12% of width.</p>
@@ -93,7 +100,7 @@ export default function BrandPage() {
       </div>
 
       <h2 className="mt-10 text-lg font-semibold">Banner</h2>
-      <img src="/brand/banner-1200x360.png" alt="JomForm banner" className="mt-3 w-full rounded-xl border border-[var(--jf-border)]" />
+      <img src="/brand/banner-1200x360.png" alt={t("brand.bannerAlt")} {...ownLangProps(lang)} className="mt-3 w-full rounded-xl border border-[var(--jf-border)]" />
 
       <h2 className="mt-10 text-lg font-semibold">Usage</h2>
       <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-slate-600">

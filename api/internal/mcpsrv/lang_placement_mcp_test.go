@@ -112,7 +112,7 @@ func TestMCPUpdateProfileLanguageRejectsUnsupported(t *testing.T) {
 			t.Errorf("update_profile_language(%q) was accepted; an unsupported code must be rejected", code)
 			continue
 		}
-		if !strings.Contains(err.Error(), "tidak disokong") {
+		if !strings.Contains(err.Error(), "not supported") {
 			t.Errorf("update_profile_language(%q) error = %q, want an unsupported-language message", code, err)
 		}
 		if got := st.storedLang(t); got != "ms" {

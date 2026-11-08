@@ -119,7 +119,7 @@ func TestPurgeMediaDescriptionQualifiesEdgeURLs(t *testing.T) {
 			"A purge that sends no URL (not_configured, no_urls, out_of_zone) returns NO 'edge_urls' "+
 			"key at all — cdnpurge.Result.Fields() publishes it only when len(URLs) > 0 (see "+
 			"TestPurgeReplyOmitsEdgeURLsWhenNoURLWasSent). Say so in the clause that names the field, "+
-			"e.g. \"'edge_urls' hanya apabila CDN menerima sekurang-kurangnya satu permintaan purge\". "+
+			"e.g. \"'edge_urls' only when the CDN accepted at least one purge request\". "+
 			"web/src/app/docs/mcp/page.tsx must carry the same corrected sentence — "+
 			"docs_mcp_page_description_test.go compares the two.", clause)
 	}
@@ -206,12 +206,11 @@ func indexRunes(r, sub []rune, from int) int {
 }
 
 // hasConditionalMarker reports whether a clause qualifies what it says, rather
-// than promising it flatly. Deliberately language-level: the description is
-// Malay, and the point is that SOME qualifier is present next to the mention, not
-// which wording was chosen.
+// than promising it flatly. Deliberately language-level: the point is that SOME
+// qualifier is present next to the mention, not which wording was chosen.
 func hasConditionalMarker(clause string) bool {
 	lower := strings.ToLower(clause)
-	for _, marker := range []string{"hanya", "apabila", "bila", "jika", "tiada", "tidak"} {
+	for _, marker := range []string{"only", "when", "if ", "unless", "not ", "no ", "empty", "absent", "omit"} {
 		if strings.Contains(lower, marker) {
 			return true
 		}

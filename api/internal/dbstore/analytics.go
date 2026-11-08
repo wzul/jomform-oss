@@ -57,6 +57,11 @@ type FormStats struct {
 	RevenueByCurrency map[string]int64 `json:"revenue_by_currency,omitempty"`
 	// RefundedSen is the total refunded across the form's sales.
 	RefundedSen int64 `json:"refunded_sen"`
+	// RefundedByCurrency is RefundedSen grouped by the currency each sale was
+	// recorded in (issue #185), in integer minor units — the same reason as
+	// RevenueByCurrency above: a reader that labels the figure must not put one
+	// symbol over refunds taken in more than one currency.
+	RefundedByCurrency map[string]int64 `json:"refunded_by_currency,omitempty"`
 }
 
 // ProductStats summarises how often a product appears in sales.
@@ -162,29 +167,43 @@ func (s *SaleStore) FormAnalyticsAccounts(ctx context.Context, accountIDs []stri
 	// Issue #185: the money above is one number because the payload's
 	// consumers used to read it that way, but a form's sales can be recorded in
 	// more than one currency (a workspace that switched). The label needs the
-	// split, so read the same NET revenue grouped by the sale's own currency.
+	// split, so read both money figures (NET revenue and refunds) grouped by
+	// the sale's own currency.
 	// A second query rather than a GROUP BY on the rollup: the `submissions`
 	// subquery is per-form, so grouping the join by currency would repeat it
 	// once per currency and summing would over-count it.
-	byCurrency, err := s.formRevenueByCurrency(ctx, accountIDs)
+	byCurrency, err := s.formCurrencyTotals(ctx, accountIDs)
 	if err != nil {
 		return nil, err
 	}
 	for i := range out {
-		out[i].RevenueByCurrency = byCurrency[out[i].FormID]
+		if t, ok := byCurrency[out[i].FormID]; ok {
+			out[i].RevenueByCurrency = t.revenue
+			out[i].RefundedByCurrency = t.refunded
+		}
 	}
 	return out, nil
 }
 
-// formRevenueByCurrency returns form id → currency → NET paid+confirmed revenue
-// (minor units), reading the currency off each SALE. Forms with no sales are
-// absent; a currency that only holds unpaid sales is present with 0, so the
-// caller can still label a zero in the form's own money.
-func (s *SaleStore) formRevenueByCurrency(ctx context.Context, accountIDs []string) (map[string]map[string]int64, error) {
+// formCurrencyTotals is form id → currency → the two money figures FormStats
+// reports, in integer minor units. Kept as one struct so the revenue and the
+// refunds of a form are read in the SAME query: they come off the same sale
+// rows, and two queries could disagree if a sale changed between them.
+type formCurrencyTotals struct {
+	revenue  map[string]int64
+	refunded map[string]int64
+}
+
+// formCurrencyTotals returns form id → currency → NET paid+confirmed revenue
+// and refunded total (minor units), reading the currency off each SALE. Forms
+// with no sales are absent; a currency that only holds unpaid sales is present
+// with 0 revenue, so the caller can still label a zero in the form's own money.
+func (s *SaleStore) formCurrencyTotals(ctx context.Context, accountIDs []string) (map[string]formCurrencyTotals, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT f.id,
 		       COALESCE(NULLIF(upper(btrim(s.currency)), ''), 'MYR') AS currency,
-		       COALESCE(SUM(s.total_sen - s.refunded_sen) FILTER (WHERE s.status IN `+paidSet+`), 0) AS revenue
+		       COALESCE(SUM(s.total_sen - s.refunded_sen) FILTER (WHERE s.status IN `+paidSet+`), 0) AS revenue,
+		       COALESCE(SUM(s.refunded_sen), 0) AS refunded
 		FROM forms f
 		JOIN sales s ON s.form_id = f.id
 		WHERE f.account_id = ANY($1)
@@ -193,17 +212,20 @@ func (s *SaleStore) formRevenueByCurrency(ctx context.Context, accountIDs []stri
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string]map[string]int64{}
+	out := map[string]formCurrencyTotals{}
 	for rows.Next() {
 		var formID, cur string
-		var revenue int64
-		if err := rows.Scan(&formID, &cur, &revenue); err != nil {
+		var revenue, refunded int64
+		if err := rows.Scan(&formID, &cur, &revenue, &refunded); err != nil {
 			return nil, err
 		}
-		if out[formID] == nil {
-			out[formID] = map[string]int64{}
+		t, ok := out[formID]
+		if !ok {
+			t = formCurrencyTotals{revenue: map[string]int64{}, refunded: map[string]int64{}}
 		}
-		out[formID][cur] = revenue
+		t.revenue[cur] = revenue
+		t.refunded[cur] = refunded
+		out[formID] = t
 	}
 	return out, rows.Err()
 }

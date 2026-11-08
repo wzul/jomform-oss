@@ -7,7 +7,7 @@ package httpapi
 //   - the caller sent no usable workspace scope (rest_scope.go's scopeAmbiguous
 //     arm), refused BEFORE the proposal token is read, and
 //   - a tool the server refused to execute AFTER the token was claimed
-//     (chat/proposal.go's `fmt.Errorf("server menolak: %s", …)`, which matches none
+//     (chat/proposal.go's `fmt.Errorf("server refused: %s", …)`, which matches none
 //     of consumed/expired/argsChanged/notFound and therefore reaches
 //     chatConfirmStatusFor's `default:` arm).
 //

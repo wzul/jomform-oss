@@ -23,6 +23,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/wzul/jomform/api/internal/auth"
+	"github.com/wzul/jomform/api/internal/buyertext"
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/email"
@@ -107,6 +108,12 @@ type PublicHandlers struct {
 	// dashboard updates live when a response form is submitted. Nil in
 	// bare-mode tests → no publish (no-op).
 	Realtime *RealtimeHub
+
+	// PaymentFees resolves the processing-fee policy for a checkout (card
+	// t_135c3c72): the merchant's per-method MDR, the pass-on acknowledgement
+	// and the per-form override in ONE place. Nil in bare-mode tests → the fee
+	// is inactive and the page renders exactly as before.
+	PaymentFees *dbstore.PaymentFeeStore
 }
 
 // RegisterRoutes wires public endpoints.
@@ -357,6 +364,21 @@ const antiSpamFormLimitPerHour = 15
 // arrive at least antiSpamMinRenderTime later.
 const antiSpamRenderField = "jf_ts"
 
+// submitItem is one line the buyer's page posts.
+//
+// AmountSen (card t_06851d88) is the buyer's own amount for a custom_amount
+// (pay-what-you-want) product. It is a json.Number — NOT an int64 — so a value
+// like 100.5 is READ as a non-integer sen amount and refused with a sentence,
+// instead of failing the whole body decode into a generic "incomplete" answer
+// (or, worse, being rounded). Money stays integer sen: the server parses this
+// as an int and never accepts a fraction.
+type submitItem struct {
+	ProductID   string       `json:"product_id"`
+	VariationID string       `json:"variation_id"`
+	Quantity    int64        `json:"quantity"`
+	AmountSen   *json.Number `json:"amount_sen,omitempty"`
+}
+
 // submitInput is the JSON body of a public form submit (payment mode). Shared
 // by handleSubmit and the anti-spam checks so the field shape stays in sync.
 type submitInput struct {
@@ -373,11 +395,7 @@ type submitInput struct {
 		RegistrationNum string `json:"registration_number"`
 		TaxNumber       string `json:"tax_number"`
 	} `json:"client"`
-	Items []struct {
-		ProductID   string `json:"product_id"`
-		VariationID string `json:"variation_id"`
-		Quantity    int64  `json:"quantity"`
-	} `json:"items"`
+	Items         []submitItem      `json:"items"`
 	PaymentMethod string            `json:"payment_method"`         // chip | bank_direct
 	SkipCapture   bool              `json:"skip_capture,omitempty"` // authorize now, capture later
 	Fields        map[string]string `json:"fields,omitempty"`
@@ -389,6 +407,17 @@ type submitInput struct {
 	// buyer landed with. The client JS reads ?aff=CODE from the URL and echoes
 	// it back so the sale is attributed to that affiliate.
 	AffiliateCode string `json:"affiliate_code,omitempty"`
+	// FeeMethod is the CHIP payment method the buyer CHOSE on the JomForm page
+	// (card t_135c3c72): 'fpx', 'card', 'ewallet' or 'duitnow_qr'. It is what
+	// the per-method processing fee is priced from, and it is NOT trusted — the
+	// server re-resolves the rate for this method and refuses a method that is
+	// not active (400), rather than silently correcting it.
+	FeeMethod string `json:"fee_method,omitempty"`
+	// ExpectedTotalSen is the total the page DISPLAYED to the buyer, echoed
+	// back so the server can refuse a checkout whose price moved underneath
+	// them (a product edited, a rate changed) instead of charging a different
+	// amount than the one on screen. 0/absent = no comparison (older pages).
+	ExpectedTotalSen int64 `json:"expected_total_sen,omitempty"`
 }
 
 // pruneHiddenIdentity drops the DERIVED buyer identity that a name/email/phone
@@ -664,7 +693,7 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// lands on the form the buyer actually filled in.
 	form := h.findPublicForm(r.Context(), r, slug)
 	if form == nil {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		buyerErr(w, h.buyerLangForHost(r.Context(), r), http.StatusNotFound, errFormNotFound)
 		return
 	}
 	h.submitResolvedForm(w, r, form)
@@ -682,14 +711,17 @@ func (h *PublicHandlers) handleSubmit(w http.ResponseWriter, r *http.Request) {
 // embed URL serves — but the GATES and the DISPATCH must be identical, so they
 // live here rather than in each handler.
 func (h *PublicHandlers) submitResolvedForm(w http.ResponseWriter, r *http.Request, form *dbstore.Form) {
+	// The form is resolved before any gate runs, so every refusal below is
+	// rendered in the buyer's language (t_874021eb).
+	lang := h.buyerLang(r.Context(), form, form.AccountID)
 	// Issue #176: draft forms are never submittable; private forms require a
 	// valid unlock cookie (the buyer must have passed the password gate).
 	if form.Status == dbstore.FormStatusDraft {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		buyerErr(w, lang, http.StatusNotFound, errFormNotFound)
 		return
 	}
 	if form.Status == dbstore.FormStatusPrivate && !h.privateUnlocked(r, form) {
-		writeErr(w, http.StatusForbidden, "kata laluan diperlukan")
+		buyerErr(w, lang, http.StatusForbidden, errFormPasswordRequired)
 		return
 	}
 	// Issue #207: entry limit. Reject submissions once the form's entry count
@@ -735,6 +767,9 @@ func (h *PublicHandlers) submitResolvedForm(w http.ResponseWriter, r *http.Reque
 // submission row (no sale, no payment, no CHIP) and return a success/thank-you
 // with no checkout URL.
 func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Request, form *dbstore.Form) {
+	// Every refusal on this surface is read by the buyer: render it in the
+	// form's language (t_874021eb).
+	lang := h.buyerLang(r.Context(), form, form.AccountID)
 	var in struct {
 		Client struct {
 			FullName string `json:"full_name"`
@@ -744,7 +779,7 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 		Fields map[string]any `json:"fields"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderIncomplete)
 		return
 	}
 	if in.Fields == nil {
@@ -819,7 +854,7 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 		// its own block id was correctly dropped.
 		pruneHiddenIdentity(regs, hidden, &in.Client.FullName, &in.Client.Email, &in.Client.Phone)
 		if err := formfields.ValidateFields(regs, strFields); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+			buyerErrOf(w, lang, http.StatusBadRequest, err)
 			return
 		}
 	}
@@ -832,18 +867,18 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 	if v, ok := in.Fields[antiSpamHoneypotField]; ok {
 		if s, isStr := v.(string); isStr && strings.TrimSpace(s) != "" {
 			slog.Warn("form_honeypot_caught", "ip", middleware.ClientIP(r))
-			writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+			buyerErr(w, lang, http.StatusBadRequest, errOrderIncomplete)
 			return
 		}
 	}
 	// Layer 5 — email/domain validation (format + MX) when an email is given.
 	if in.Client.Email != "" && h.antiSpamCheckEmail(r, in.Client.Email) {
-		writeErr(w, http.StatusBadRequest, "emel tidak sah")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderEmailInvalid)
 		return
 	}
 	// Layer 2 — per-form rate limit (15/form/IP/hour), skipped for owner.
 	if !owner && h.antiSpamCheckRateLimit(r, form) {
-		writeErr(w, http.StatusTooManyRequests, "terlalu banyak cubaan. Cuba lagi kemudian.")
+		buyerErr(w, lang, http.StatusTooManyRequests, errOrderRateLimited)
 		return
 	}
 	// Layer 3 — time-based check (reject too-fast submits), skipped for owner.
@@ -851,7 +886,7 @@ func (h *PublicHandlers) handleResponseSubmit(w http.ResponseWriter, r *http.Req
 		if raw, ok := in.Fields[antiSpamRenderField]; ok {
 			if s, isStr := raw.(string); isStr {
 				if ts, perr := strconv.ParseInt(s, 10, 64); perr == nil && time.Since(time.Unix(ts, 0)) < antiSpamMinRenderTime {
-					writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+					buyerErr(w, lang, http.StatusBadRequest, errOrderIncomplete)
 					return
 				}
 			}
@@ -1192,7 +1227,7 @@ func (h *PublicHandlers) lookupProduct(ctx context.Context, accountID string, fo
 					}
 					return b.Value, price, nil
 				}
-				return "", 0, fmt.Errorf("pilihan tidak sah untuk %s — muat semula halaman dan pilih sekali lagi", b.Value)
+				return "", 0, buyertext.New(buyertext.CodeOrderChoiceInvalid, map[string]string{"name": b.Value})
 			}
 			if b.PriceSen != nil {
 				return b.Value, *b.PriceSen, nil
@@ -1252,6 +1287,13 @@ type legacyFormView struct {
 	// legacy layout used to be hardcoded Malay regardless of the workspace.
 	Lang string
 	Ls   langStrings
+	// Card t_135c3c72: the per-method processing-fee chooser. This LAST-RESORT
+	// layout posts to the same /order route as the block renderer, so a form it
+	// serves must ALSO let the buyer pick the method the fee is priced for —
+	// otherwise a multi-method workspace would price a method the buyer never
+	// chose (or refuse the order outright). Nil renders no chooser and no fee
+	// row, leaving the page exactly as it was.
+	FeeOptions []feeChoiceView
 	// Card t_d48f0930: the merchant's brand triple. This layout was the one Go
 	// form renderer that never read f.Theme at all — its button was a
 	// hard-coded indigo→violet gradient and its accents a hard-coded #4f46e5.
@@ -1358,6 +1400,12 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(withMot
     <input type="email" name="email" required>
     <label class="sub">{{.Ls.PhoneLabel}}</label>
     <input type="tel" name="phone">
+    {{if .FeeOptions}}<div class="jf-fees">
+    {{if gt (len .FeeOptions) 1}}<div class="sub">{{.Ls.FeeChoose}}</div>{{end}}
+    {{range .FeeOptions}}<label class="prod"><input type="radio" name="fee_method" class="feee" value="{{.Method}}" data-fixed="{{.FixedSen}}" data-bp="{{.PercentBP}}"{{if .Selected}} checked{{end}}> <span class="pname">{{.RateLabel}}</span></label>{{end}}
+    </div>{{end}}
+    {{if .FeeOptions}}<div class="total"><span>{{.Ls.FeeSubtotal}}</span><span id="fee-sub">RM0.00</span></div>
+    <div class="total"><span>{{.Ls.FeeLine}} <small id="fee-rate"></small></span><span id="fee-amt">RM0.00</span></div>{{end}}
     <div class="total"><span>{{.Ls.Total}}</span><span id="total">RM0.00</span></div>
     {{.AntiSpam}}
     <button type="submit">{{.Ls.Submit}}</button>
@@ -1387,12 +1435,51 @@ document.querySelectorAll('img.pimg[data-base]').forEach(function(im){
   },{once:true});
 });
 const boxes = document.querySelectorAll('.p');
+// Card t_135c3c72: the buyer bears the processing fee of the method they pick,
+// and the price shown must be the price paid — so this layout prices and shows
+// the grossed-up total before the buyer commits, with the SAME integer formula
+// the server uses:
+//   fee(F) = fixed + floor((F*bp + 5000)/10000)   [round half up]
+//   F = smallest integer with F - fee(F) >= base
+// The naive formula (base + base*rate) is 10 sen short on RM1,000 at 1%.
+let jfTotal = 0;
 function update() {
   let total = 0;
   boxes.forEach(b => { if (b.checked) total += Number(b.dataset.price); });
+  // total is the asking price of the checked items; the gross-up below raises
+  // it to what the buyer pays once the processing fee is included.
+  const base = total;
+  const fr = document.querySelector('input.feee:checked');
+  const fx = fr ? Number(fr.dataset.fixed || 0) : 0;
+  const bp = fr ? Number(fr.dataset.bp || 0) : 0;
+  const feeOf = v => fx + Math.floor((v*bp + 5000)/10000);
+  // Card t_c19c095f: an EMPTY cart is not a zero-priced order. The server
+  // charges the FIXED part of the fee on a zero asking amount (deliberate for a
+  // genuinely free item), but a page whose cart is merely NOT YET FILLED must
+  // not paint that fixed part as a total before the buyer has chosen anything.
+  // Price the fee only once at least one product is ticked; a zero-priced
+  // selection still grosses up, because that is what the server charges.
+  let hasSelection = false;
+  boxes.forEach(b => { if (b.checked) hasSelection = true; });
+  if ((fx > 0 || bp > 0) && hasSelection) {
+    let f = Math.ceil((base + fx) * 10000 / Math.max(1, 10000 - bp));
+    if (!isFinite(f) || f < base) f = base;
+    while (f - feeOf(f) < base) f++;
+    while (f > base && (f - 1) - feeOf(f - 1) >= base) f--;
+    total = f;
+  }
   document.getElementById('total').textContent = 'RM' + (total/100).toFixed(2);
+  const fs = document.getElementById('fee-sub');
+  if (fs) fs.textContent = 'RM' + (base/100).toFixed(2);
+  const fa = document.getElementById('fee-amt');
+  if (fa) fa.textContent = 'RM' + ((total - base)/100).toFixed(2);
+  const frl = document.getElementById('fee-rate');
+  if (frl && fr) frl.textContent = '— ' + (fr.parentNode.textContent || '').trim();
+  jfTotal = total;
 }
 boxes.forEach(b => b.addEventListener('change', update));
+document.querySelectorAll('input.feee').forEach(el => el.addEventListener('change', update));
+update();
 document.getElementById('of').addEventListener('submit', async (e) => {
   e.preventDefault();
   const items = [];
@@ -1401,6 +1488,11 @@ document.getElementById('of').addEventListener('submit', async (e) => {
   const body = {
     client: { full_name: e.target.full_name.value, email: e.target.email.value, phone: e.target.phone.value },
     items, payment_method: 'chip',
+    // Card t_135c3c72: the method the buyer picked ('' when no fee is active)
+    // and the total this page displayed. The server re-resolves the rate and
+    // recomputes; a mismatch is refused rather than charged.
+    fee_method: ((document.querySelector('input.feee:checked')||{}).value) || '',
+    expected_total_sen: jfTotal,
     fields: {
       website: (document.querySelector('[name=website]')||{}).value || '',
       jf_ts: (document.querySelector('[name=jf_ts]')||{}).value || ''
@@ -1432,7 +1524,7 @@ document.getElementById('of').addEventListener('submit', async (e) => {
   if (data.status === 'payment_error') { jfPayFail(data); return; }
   if (data.checkout_url) { location.href = data.checkout_url; }
   else if (data.next) { location.href = data.next; }
-  else { alert(data.error || '{{.Ls.ErrorAlert}}'); }
+  else { alert(data.message || data.error || '{{.Ls.ErrorAlert}}'); }
 });
 </script>
 {{.HeightJS}}
@@ -1504,7 +1596,7 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 			f, ferr = h.Forms.RedirectedFormByWorkspaceSlug(r.Context(), sub, slug)
 		}
 		if ferr != nil || f == nil {
-			http.Error(w, "Borang tidak dijumpai untuk domain ini", http.StatusNotFound)
+			plainErr(w, http.StatusNotFound, h.buyerLangForHost(r.Context(), r), buyertext.CodeFormNotFound)
 			return
 		}
 		if f.Slug != slug {
@@ -1524,7 +1616,7 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 			f, ferr = h.Forms.RedirectedFormByAccountSlug(r.Context(), cd, slug)
 		}
 		if ferr != nil || f == nil {
-			http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
+			plainErr(w, http.StatusNotFound, h.buyerLangForHost(r.Context(), r), buyertext.CodeFormNotFound)
 			return
 		}
 		if f.Slug != slug {
@@ -1547,7 +1639,7 @@ func (h *PublicHandlers) handleRender(w http.ResponseWriter, r *http.Request) {
 		h.serveForm(w, r, f)
 		return
 	}
-	http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
+	plainErr(w, http.StatusNotFound, h.buyerLangForHost(r.Context(), r), buyertext.CodeFormNotFound)
 }
 
 // legacyHasProducts reports whether the legacy payment layout would paint at
@@ -1635,14 +1727,18 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 	ls := h.effectiveLangStrings(r.Context(), f)
 	if err := formTmpl.Execute(w, legacyFormView{
 		Slug: f.Slug, Title: f.Title, Description: cfg.Description, Products: prods,
-		OGMeta:     h.formOGMeta(r, f),
-		Footer:     h.workspaceFooter(r.Context(), f),
-		AntiSpam:   template.HTML(antiSpamRenderFields()),
-		NoIndex:    h.formNoIndex(r, f),
-		HeightJS:   template.HTML(iframeHeightJS),
-		PayFailJS:  payFailJS(ls),
-		Lang:       ls.Lang,
-		Ls:         ls,
+		OGMeta:    h.formOGMeta(r, f),
+		Footer:    h.workspaceFooter(r.Context(), f),
+		AntiSpam:  template.HTML(antiSpamRenderFields()),
+		NoIndex:   h.formNoIndex(r, f),
+		HeightJS:  template.HTML(iframeHeightJS),
+		PayFailJS: payFailJS(ls),
+		Lang:      ls.Lang,
+		Ls:        ls,
+		// Card t_135c3c72: the buyer picks the fee method here too — this layout
+		// posts to the same /order route, so a form it serves must show (and let
+		// the buyer choose) the same processing fee the block layout does.
+		FeeOptions: h.feeChoiceViews(r.Context(), f),
 		CtaPrimary: cta.Primary, CtaHover: cta.Hover, CtaActive: cta.Active,
 		CtaLabel: cta.Label, CtaText: cta.Text,
 	}); err != nil {
@@ -1653,7 +1749,7 @@ func (h *PublicHandlers) renderLegacy(w http.ResponseWriter, r *http.Request, f 
 func (h *PublicHandlers) handleThankYou(w http.ResponseWriter, r *http.Request) {
 	sale, err := h.Sales.ByRefCode(r.Context(), r.PathValue("ref"))
 	if err != nil {
-		http.Error(w, "Tempahan tidak dijumpai", http.StatusNotFound)
+		plainErr(w, http.StatusNotFound, "en", buyertext.CodeOrderNotFound)
 		return
 	}
 	// Issue #179: resolve the form's confirmation against the submitted field
@@ -1917,15 +2013,30 @@ func (fi footerInfo) anySet() bool {
 func judgedLegalLinkCount(fi footerInfo, workspaceSlug string) int {
 	n := 0
 	for _, u := range []string{fi.PrivacyURL, fi.TermsURL, fi.RefundURL} {
-		if _, ours := classifyHostedLegalURL(u, workspaceSlug); ours {
-			n++
-			continue
-		}
-		if unservableStorefrontLegalLink(u, workspaceSlug) {
+		if legalLinkNeedsPageLookup(u, workspaceSlug) {
 			n++
 		}
 	}
 	return n
+}
+
+// legalLinkNeedsPageLookup reports whether ONE stored legal slot is judged by the
+// footer's page-content rule — i.e. whether its verdict can depend on
+// workspace_legal_pages at all.
+//
+// It is the single predicate behind BOTH lookup gates: the footer's
+// (judgedLegalLinkCount) and the dashboard's (legalLinkJudgedCount). The
+// dashboard's gate was own-host-only, which is the same shape of drift card
+// t_8366310f removed from the footer's: after card t_022ea9cf a stale slug at an
+// unservable path (https://old-slug.jomform.com/privacy/) is dropped by the
+// footer while `ours` is false, so an own-host-only gate skipped the lookup and
+// reported has_content=false from nil pages — telling the merchant to write a
+// page that may already have text.
+func legalLinkNeedsPageLookup(raw, workspaceSlug string) bool {
+	if _, ours := classifyHostedLegalURL(raw, workspaceSlug); ours {
+		return true
+	}
+	return unservableStorefrontLegalLink(raw, workspaceSlug)
 }
 
 // classifyHostedLegalURL answers, in one classification, the TWO questions the
@@ -2007,10 +2118,20 @@ func servableHostedLegalLink(raw, workspaceSlug string, pages map[string]*dbstor
 		}
 		return raw
 	}
-	if p := pages[pageType]; p != nil && strings.TrimSpace(p.Content) != "" {
+	if hostedLegalPageHasContent(pages, pageType) {
 		return raw
 	}
 	return ""
+}
+
+// hostedLegalPageHasContent reports whether the hosted legal page has stored
+// content — the ONE "is this page a page" rule. It is shared by the footer's
+// drop rule (servableHostedLegalLink) and by the dashboard's warning
+// (legalLinkStateFor), so "the footer will not show it because there is no
+// content" cannot become a second, drifting copy of that judgement.
+func hostedLegalPageHasContent(pages map[string]*dbstore.LegalPage, pageType string) bool {
+	p := pages[pageType]
+	return p != nil && strings.TrimSpace(p.Content) != ""
 }
 
 // hostedLegalPathNearMiss reports whether path names one of the hosted legal
@@ -2085,6 +2206,132 @@ func unservableStorefrontLegalLink(raw, workspaceSlug string) bool {
 	return hostedLegalPathNearMiss(u.Path)
 }
 
+// ── The dashboard's view of the SAME link rule (card t_e8b4f7da) ───────────────
+
+// legalLinkState is how the PUBLIC FOOTER will treat one stored legal-URL field,
+// in the shape the dashboard can render.
+//
+// Why it exists: the footer silently drops a link the public route would 404
+// (non-canonical path on our own host, or a hosted page with no content), and
+// before this the merchant was still told "Footer saved ✓" with an empty footer
+// and no reason. The settings handler returns one of these per field, on save
+// AND on load, so the reason can be shown next to the field the merchant typed
+// into.
+//
+// Shown=false with Reason="" means nothing was saved in that field (an absent
+// link, not a warning).
+type legalLinkState struct {
+	// Shown is whether the footer will publish this link.
+	Shown bool `json:"shown"`
+	// Reason is "" when shown, else one of the legalLink* constants below.
+	Reason string `json:"reason,omitempty"`
+	// PageType is the hosted legal page the link addresses (after the footer's
+	// stale-slug rewrite), or "" for a link on the merchant's own host.
+	PageType string `json:"page_type,omitempty"`
+	// ServedURL is the exact own-host URL the public route serves for that page.
+	// For a dropped link this is the value to type instead of the stored one.
+	ServedURL string `json:"served_url,omitempty"`
+	// HasContent reports whether the hosted page has stored content, so the
+	// dashboard can say "write the page" rather than "change the URL".
+	HasContent bool `json:"has_content"`
+}
+
+const (
+	// legalLinkPathNotServed: own host, but the public route does not serve that
+	// path (/privacy/, /Privacy, /privacy/1, /policies/privacy, …).
+	legalLinkPathNotServed = "hosted_path_not_served"
+	// legalLinkNoContent: canonical own-host path, but workspace_legal_pages has
+	// no content for it, so handlePublicLegalPage answers 404.
+	legalLinkNoContent = "hosted_page_has_no_content"
+)
+
+// legalLinkStatesForSettings returns one legalLinkState per legal-URL field of
+// st, keyed by the REST field name the dashboard sends.
+func legalLinkStatesForSettings(st *dbstore.WorkspaceSettings, workspaceSlug string, pages map[string]*dbstore.LegalPage) map[string]legalLinkState {
+	fields := []struct{ field, pageType, raw string }{
+		{"privacy_url", dbstore.LegalPagePrivacy, st.PrivacyURL},
+		{"terms_url", dbstore.LegalPageTerms, st.TermsURL},
+		{"refund_url", dbstore.LegalPageRefund, st.RefundURL},
+	}
+	out := make(map[string]legalLinkState, len(fields))
+	for _, f := range fields {
+		out[f.field] = legalLinkStateFor(f.pageType, f.raw, workspaceSlug, pages)
+	}
+	return out
+}
+
+// legalLinkStateFor mirrors, step for step, what workspaceFooter does with one
+// stored legal URL: rewriteHostedLegalURL onto the current slug, then
+// servableHostedLegalLink against the same page content. It NEVER re-derives the
+// host or path rule by hand — the verdict is the footer's own function's verdict,
+// and the reason only explains why that function returned nothing.
+func legalLinkStateFor(fieldPageType, raw, workspaceSlug string, pages map[string]*dbstore.LegalPage) legalLinkState {
+	if strings.TrimSpace(raw) == "" {
+		return legalLinkState{}
+	}
+	// The footer judges the REWRITTEN url (workspaceFooter), so judge that too:
+	// a stale-slug link is reported as what the merchant will actually get.
+	rewritten := rewriteHostedLegalURL(raw, workspaceSlug)
+	if servableHostedLegalLink(rewritten, workspaceSlug, pages) != "" {
+		pageType, ours := classifyHostedLegalURL(rewritten, workspaceSlug)
+		st := legalLinkState{Shown: true}
+		if ours {
+			st.PageType = pageType
+			st.ServedURL = rewritten
+			st.HasContent = true
+		}
+		// A link on another host is the merchant's own site: we do not serve it,
+		// so it is published unchanged and there is nothing to say about it.
+		return st
+	}
+	pageType, ours := classifyHostedLegalURL(rewritten, workspaceSlug)
+	if !ours && !unservableStorefrontLegalLink(rewritten, workspaceSlug) {
+		// A link on another host is the merchant's own site: we do not serve it,
+		// so the footer publishes it unchanged and there is nothing to say. This
+		// is fail-open BY CONSTRUCTION — it returns "shown" only for the hosts
+		// servableHostedLegalLink keeps.
+		return legalLinkState{Shown: true}
+	}
+	// Two states reach here: our own host (any path), and another tenant's
+	// storefront host at a path the public route serves nowhere — the stale slug
+	// rewriteHostedLegalURL cannot correct (it only rewrites the three canonical
+	// paths), so `ours` stays false while the footer drops the link anyway
+	// (card t_022ea9cf). Both need the same warning, and in both the page the
+	// merchant MEANT is this field's own page (privacy_url → /privacy), which is
+	// also what `pageType == ""` resolves to below.
+	st := legalLinkState{Reason: legalLinkNoContent}
+	if pageType == "" {
+		// The path the merchant typed is not one the public route serves. The
+		// page they MEANT is the one this field is for (privacy_url → /privacy).
+		st.Reason = legalLinkPathNotServed
+		pageType = fieldPageType
+	}
+	st.PageType = pageType
+	st.ServedURL = "https://" + workspaceSlug + ".jomform.com/" + pageType
+	st.HasContent = hostedLegalPageHasContent(pages, pageType)
+	return st
+}
+
+// legalLinkJudgedCount counts the stored legal URLs that the footer JUDGES and
+// whose verdict therefore depends on the content lookup — after the footer's
+// stale-slug rewrite, through the same predicate the footer's own gate uses
+// (legalLinkNeedsPageLookup). Used to skip that lookup for the common
+// all-external footer.
+//
+// It is NOT own-host-only: after card t_022ea9cf the footer also drops another
+// tenant's storefront host at an unservable path, so such a link is judged too —
+// and skipping the lookup for it would report has_content=false from nil pages
+// (card t_16d159f5).
+func legalLinkJudgedCount(st *dbstore.WorkspaceSettings, workspaceSlug string) int {
+	n := 0
+	for _, raw := range []string{st.PrivacyURL, st.TermsURL, st.RefundURL} {
+		if legalLinkNeedsPageLookup(rewriteHostedLegalURL(raw, workspaceSlug), workspaceSlug) {
+			n++
+		}
+	}
+	return n
+}
+
 // rewriteHostedLegalURL rewrites a stored legal-page URL that points at one of
 // the workspace's own hosted pages ({workspace}.jomform.com/privacy|terms|refund) to
 // the current workspace's subdomain. External URLs (any other host) are returned
@@ -2144,7 +2391,7 @@ func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *db
 	// Draft forms are never publicly served (issue #176). Only published and
 	// private forms are reachable; private forms show a password gate.
 	if f.Status == dbstore.FormStatusDraft {
-		http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
+		plainErr(w, http.StatusNotFound, h.buyerLang(r.Context(), f, f.AccountID), buyertext.CodeFormNotFound)
 		return
 	}
 	// Issue #176: a private form shows a password gate until the buyer
@@ -2193,7 +2440,7 @@ func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *db
 		// there cannot silently restore the fallthrough, and it fails loudly
 		// instead of serving a payment page the form can never submit.
 		slog.Error("form_render_response_failed", "form", f.ID, "slug", f.Slug)
-		http.Error(w, "Borang tidak dapat dipaparkan", http.StatusInternalServerError)
+		plainErr(w, http.StatusInternalServerError, h.buyerLang(r.Context(), f, f.AccountID), buyertext.CodeFormUnavailable)
 		return
 	}
 	// Card t_bfdcafbc: renderBlocks is ALSO the payment layout — the block
@@ -2270,7 +2517,7 @@ func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request
 	// bogus unlock must be a 404, not a panic recovered into a 500.
 	f := h.findPublicForm(r.Context(), r, slug)
 	if f == nil {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		buyerErr(w, h.buyerLangForHost(r.Context(), r), http.StatusNotFound, errFormNotFound)
 		return
 	}
 	h.unlockResolvedForm(w, r, f)
@@ -2284,34 +2531,37 @@ func (h *PublicHandlers) handleFormUnlock(w http.ResponseWriter, r *http.Request
 // submit routes. Only the LOOKUP differs between them, and it differs because it
 // must.
 func (h *PublicHandlers) unlockResolvedForm(w http.ResponseWriter, r *http.Request, f *dbstore.Form) {
+	// The gate page is rendered in the form's language, so its refusals are
+	// too — the page's JS prints `message` (t_874021eb).
+	lang := h.buyerLang(r.Context(), f, f.AccountID)
 	if f.Status != dbstore.FormStatusPrivate {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		buyerErr(w, lang, http.StatusNotFound, errFormNotFound)
 		return
 	}
 	if h.AccessKey == nil {
-		writeErr(w, http.StatusForbidden, "akses tidak tersedia")
+		buyerErr(w, lang, http.StatusForbidden, errFormAccessUnavailable)
 		return
 	}
 	var in struct {
 		Password string `json:"password"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json")
+		buyerErr(w, lang, http.StatusBadRequest, errFormRequestInvalid)
 		return
 	}
 	hash, err := h.Forms.AccessPassword(r.Context(), f.AccountID, f.ID)
 	if err != nil || hash == "" {
-		writeErr(w, http.StatusForbidden, "kata laluan salah")
+		buyerErr(w, lang, http.StatusForbidden, errFormWrongPassword)
 		return
 	}
 	ok, err := auth.VerifyPassword(in.Password, hash)
 	if err != nil || !ok {
-		writeErr(w, http.StatusForbidden, "kata laluan salah")
+		buyerErr(w, lang, http.StatusForbidden, errFormWrongPassword)
 		return
 	}
 	token, err := signFormAccessToken(h.AccessKey, f.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "gagal buka kunci")
+		buyerErr(w, lang, http.StatusInternalServerError, errFormUnlockFailed)
 		return
 	}
 	http.SetCookie(w, newFormAccessCookie(token))
@@ -2418,7 +2668,7 @@ button{width:100%%;background:#5e6ad2;color:#fff;border:0;border-radius:8px;padd
 <script>
 async function unlock(e){e.preventDefault();var p=document.getElementById('pw').value;
 var r=await fetch(location.pathname+'/unlock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
-if(r.ok){location.reload();}else{var d=await r.json().catch(function(){return{};});document.getElementById('err').textContent=d.error||'%s';}
+if(r.ok){location.reload();}else{var d=await r.json().catch(function(){return{};});document.getElementById('err').textContent=d.message||d.error||'%s';}
 return false;}
 </script></body></html>`,
 		htmlEsc(ls.Lang), dirAttr(ls.Lang), htmlEsc(f.Title), htmlEsc(ls.UnlockTitle), htmlEsc(f.Title), htmlEsc(ls.UnlockHelp),
@@ -2610,7 +2860,7 @@ func (h *PublicHandlers) handleWorkspaceRootForm(w http.ResponseWriter, r *http.
 	// subdomain or a custom domain (issue #297).
 	f := h.findPublicForm(r.Context(), r, slug)
 	if f == nil {
-		http.Error(w, "Borang tidak dijumpai", http.StatusNotFound)
+		plainErr(w, http.StatusNotFound, h.buyerLangForHost(r.Context(), r), buyertext.CodeFormNotFound)
 		return
 	}
 	// The request arrived on a slug this form no longer serves: it is a rename's
@@ -2782,7 +3032,7 @@ func (h *PublicHandlers) handleWorkspaceRoot(w http.ResponseWriter, r *http.Requ
 		forms, err = h.Forms.ListPublishedByWorkspace(r.Context(), slug)
 	}
 	if err != nil {
-		http.Error(w, "ralat", http.StatusInternalServerError)
+		plainErr(w, http.StatusInternalServerError, h.buyerLangForHost(r.Context(), r), buyertext.CodePageError)
 		return
 	}
 
@@ -2814,21 +3064,35 @@ func (h *PublicHandlers) handleWorkspaceRoot(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// Fallback: the auto-generated bare listing (existing behavior).
+	// Fallback: the auto-generated bare listing (existing behavior). It follows
+	// the workspace default language and declares it, like every other buyer
+	// page (card t_874021eb, WCAG 3.1.1) — before this it was hardcoded Malay
+	// with no `lang` at all, so a workspace set to English served "Kedai <slug>".
+	writeWorkspaceListing(w, slug, h.buyerLangForHost(r.Context(), r), forms)
+}
+
+// writeWorkspaceListing is the auto-generated storefront root: the shop name and
+// its published forms. It is built with fmt-style HTML (no template), so the
+// language has to be handed in and the values escaped here — the merchant's form
+// titles are caller-supplied text.
+func writeWorkspaceListing(w http.ResponseWriter, slug, lang string, forms []*dbstore.Form) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	io.WriteString(w, "<!doctype html><html><head><meta charset='utf-8'><title>"+slug+"</title>")
-	io.WriteString(w, "<style>body{font-family:system-ui;background:#f7f8f8;margin:0;padding:40px}")
-	io.WriteString(w, ".g{max-width:640px;margin:0 auto;display:grid;gap:12px}")
-	io.WriteString(w, ".g a{background:#fff;border:1px solid #e6e8ec;border-radius:14px;padding:18px 20px;")
-	io.WriteString(w, "color:#17181c;text-decoration:none;font-weight:600;display:block}")
-	io.WriteString(w, "</style></head><body><div class='g'><h1 style='font-size:22px'>Kedai "+slug+"</h1>")
+	var b strings.Builder
+	b.WriteString("<!doctype html><html lang=\"" + htmlEsc(lang) + "\"" + dirAttr(lang) + "><head><meta charset='utf-8'><title>" + htmlEsc(slug) + "</title>")
+	b.WriteString("<style>body{font-family:system-ui;background:#f7f8f8;margin:0;padding:40px}")
+	b.WriteString(".g{max-width:640px;margin:0 auto;display:grid;gap:12px}")
+	b.WriteString(".g a{background:#fff;border:1px solid #e6e8ec;border-radius:14px;padding:18px 20px;")
+	b.WriteString("color:#17181c;text-decoration:none;font-weight:600;display:block}")
+	b.WriteString("</style></head><body><div class='g'><h1 style='font-size:22px'>" +
+		htmlEsc(buyertext.Text(lang, buyertext.CodeShopTitle, map[string]string{"slug": slug})) + "</h1>")
 	if len(forms) == 0 {
-		io.WriteString(w, "<p>Belum ada borang.</p>")
+		b.WriteString("<p>" + htmlEsc(buyertext.Text(lang, buyertext.CodeShopNoForms, nil)) + "</p>")
 	}
 	for _, f := range forms {
-		io.WriteString(w, "<a href='/"+f.Slug+"'>"+f.Title+"</a>")
+		b.WriteString("<a href='/" + htmlEsc(f.Slug) + "'>" + htmlEsc(f.Title) + "</a>")
 	}
-	io.WriteString(w, "</div></body></html>")
+	b.WriteString("</div></body></html>")
+	io.WriteString(w, b.String())
 }
 
 // workspaceLandingData is the template payload for the customizable storefront
@@ -2933,7 +3197,7 @@ func (h *PublicHandlers) renderWorkspaceLanding(w http.ResponseWriter, r *http.R
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := landingPageTmpl.Execute(w, data); err != nil {
-		http.Error(w, "ralat", http.StatusInternalServerError)
+		plainErr(w, http.StatusInternalServerError, h.buyerLangForHost(r.Context(), r), buyertext.CodePageError)
 	}
 }
 
@@ -3017,7 +3281,8 @@ func assetOwnedByRequestingTenant(key, requestingAccountID string) bool {
 // valid workspace/custom domain.
 func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
 	if storeUnavailable(h.Store) {
-		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+		// No key yet, so no tenant to take a language from: the wire language.
+		buyerErr(w, "en", http.StatusServiceUnavailable, errMediaUnconfigured)
 		return
 	}
 	// Tenant-scope check: only a workspace subdomain or a custom domain mapped to
@@ -3028,9 +3293,10 @@ func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	lang := h.buyerLang(r.Context(), nil, requestingAccount)
 	key := mediaKeyFromPath(r.PathValue("key"))
 	if key == "" {
-		writeErr(w, http.StatusBadRequest, "kunci media tidak sah")
+		buyerErr(w, lang, http.StatusBadRequest, errMediaInvalidKey)
 		return
 	}
 	// Issue #379: the asset must belong to the requesting tenant. A key whose
@@ -3045,12 +3311,12 @@ func (h *PublicHandlers) handleAsset(w http.ResponseWriter, r *http.Request) {
 		// Same one-meaning/one-status rule as handleMedia: a store that
 		// reports itself unconfigured is a deployment gap (503), never a 500.
 		if errors.Is(err, objstore.ErrNotConfigured) {
-			writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+			buyerErr(w, lang, http.StatusServiceUnavailable, errMediaUnconfigured)
 			return
 		}
 		var nf *types.NoSuchKey
 		if errors.As(err, &nf) {
-			writeErr(w, http.StatusNotFound, "media tidak dijumpai")
+			buyerErr(w, lang, http.StatusNotFound, errMediaNotFound)
 			return
 		}
 		slog.Error("asset_get", "err", err, "key", key)

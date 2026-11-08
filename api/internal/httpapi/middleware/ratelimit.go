@@ -176,7 +176,7 @@ func RateLimitWith(rate, burst float64) func(http.Handler) http.Handler {
 			allowed, retryAfter := limiter.AllowRetry(ClientIP(r))
 			if !allowed {
 				w.Header().Set("Retry-After", strconv.FormatInt(int64(retryAfter/time.Second), 10))
-				http.Error(w, "Terlalu banyak percubaan. Cuba lagi sebentar. (429)", http.StatusTooManyRequests)
+				http.Error(w, "Too many attempts. Try again shortly. (429)", http.StatusTooManyRequests)
 				return
 			}
 			next.ServeHTTP(w, r)

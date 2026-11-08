@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "Sales, responses & analytics — JomForm Docs",
   description:
     "The Sales page: every sale and every response in one list, per-form counts, partial refunds, and the realtime notifications and order-screen beep.",
-  alternates: { canonical: "https://jomform.com/docs/sales" },
-};
+  path: "/docs/sales",
+});
 
 // The full text behind the summaries on /docs (t_d768342e): the Sales page, the
 // combined sale+response list, response-only forms, the per-form counter, partial
@@ -54,7 +55,7 @@ const SECTIONS: Section[] = [
     body: [
       "The dashboard lists one card per form with a count of the entries that form has recorded — the rows the form actually produced, read from the table it writes to.",
       "Set the form mode to response and the card says Submissions, counting that form's responses; leave it as a payment form (the default) and the card says Entries, counting that form's sales in every status (paid, confirmed, pending, failed, refunded). The two tables are never added together, because a form's mode decides which one it writes: the counter counts exactly one of them, so a form cannot double count.",
-      "Beside the counter the card shows the money figures as their own separately named values — Paid+Confirmed (how many of the form's sales reached the paid set, each sale counted once), Pending, Failed and revenue in RM net of refunds.",
+      "Beside the counter the card shows the money figures as their own separately named values — Paid+Confirmed (how many of the form's sales reached the paid set, each sale counted once), Pending, Failed and revenue net of refunds, that revenue labelled in the currency each sale was recorded in.",
       "AI agents read the same rollup with get_form_analytics, which reports the form's mode as mode so the figure can be labelled correctly, and GET /v1/rest/dashboard-bundle carries it as form_analytics.",
     ],
   },

@@ -16,7 +16,7 @@
 //	    → 500 {"error":"internal error"}
 //	    + ERROR panic_recovered err="runtime error: invalid memory address or nil
 //	      pointer dereference" path=/media/u/... error_class=panic
-//	The route's own guard (whose text is "media storage tidak dikonfigurasi")
+//	The route's own guard (whose text is "Media storage is not configured")
 //	was written to answer 503 and never ran.
 //
 // These tests drive the REAL handler through the production recoverer, so a
@@ -102,10 +102,10 @@ func TestHandleMediaTypedNilStoreAnswers503NotPanic(t *testing.T) {
 	}
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("GET /media/<valid key> with an unconfigured store = %d (%s), want 503 %q",
-			rec.Code, strings.TrimSpace(rec.Body.String()), "media storage tidak dikonfigurasi")
+			rec.Code, strings.TrimSpace(rec.Body.String()), "Media storage is not configured")
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "media storage tidak dikonfigurasi") {
-		t.Fatalf("503 body = %q, want the guard's own message %q", body, "media storage tidak dikonfigurasi")
+	if body := rec.Body.String(); !strings.Contains(body, "Media storage is not configured") {
+		t.Fatalf("503 body = %q, want the guard's own message %q", body, "Media storage is not configured")
 	}
 }
 
@@ -132,7 +132,7 @@ func TestHandleMediaUnconfiguredMessageIsTheGuard(t *testing.T) {
 			if rec.Code != http.StatusServiceUnavailable {
 				t.Fatalf("status = %d (%s), want 503", rec.Code, strings.TrimSpace(rec.Body.String()))
 			}
-			if !strings.Contains(rec.Body.String(), "media storage tidak dikonfigurasi") {
+			if !strings.Contains(rec.Body.String(), "Media storage is not configured") {
 				t.Fatalf("body = %q, want the guard's message", rec.Body.String())
 			}
 		})

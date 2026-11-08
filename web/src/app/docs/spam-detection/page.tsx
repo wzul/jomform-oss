@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "AI spam detection — JomForm Docs",
   description:
     "How JomForm's AI spam detection works, what happens to a flagged entry, and how to turn it off for one workspace from the dashboard or over MCP.",
-  alternates: { canonical: "https://jomform.com/docs/spam-detection" },
-};
+  path: "/docs/spam-detection",
+});
 
 type Section = { id: string; title: string; body: string[] };
 

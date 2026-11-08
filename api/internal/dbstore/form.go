@@ -2,6 +2,8 @@ package dbstore
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"regexp"
@@ -9,6 +11,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/wzul/jomform/api/internal/urlguard"
 )
 
 // Form statuses (issue #176): draft | private (password-protected) |
@@ -82,26 +86,82 @@ var ErrSlugTaken = errors.New("form slug already taken")
 // ErrInvalidSlug indicates a requested slug is not a usable URL segment.
 var ErrInvalidSlug = errors.New("form slug must be 1-40 characters of a-z, 0-9 or -")
 
-// formSlugMaxLen is the cap the create path's generator already applies
-// (uniqueFormSlug truncates a title-derived base to 40). A rename accepts the
-// same bound so it can never produce a slug the create path would not have.
+// ErrFormSlugReserved is the POLICY refusal for a form slug (card t_f76f81eb):
+// the value is well formed, but it names something JomForm owns or already
+// serves on the same host (see urlguard.ReservedFormSlug). It is a separate
+// sentinel from ErrInvalidSlug because the remedy differs — "shape your input
+// differently" versus "choose another name" — and the two carry different
+// machine codes.
+var ErrFormSlugReserved = errors.New("form slug is reserved for JomForm")
+
+// formSlugReservedRefusal answers the class sentinel to errors.Is (so a
+// transport classifies it without reading prose) while its message is the
+// SHARED urlguard wording, which names the refused label and therefore cannot
+// be the sentinel's own fixed text. Same shape as reservedSlugRefusal in
+// workspace_slug.go.
+type formSlugReservedRefusal struct{ label string }
+
+func (e *formSlugReservedRefusal) Error() string { return urlguard.ReservedFormSlugMessage(e.label) }
+
+func (e *formSlugReservedRefusal) Unwrap() error { return ErrFormSlugReserved }
+
+// formSlugMaxLen is the cap the create path's generator applies (a
+// title-derived base is truncated to 40), and the window every documented
+// surface states (the MCP `slug` schema, the dashboard's fs.slugHint and the
+// apiErr.formSlugInvalid sentence): 1-40 characters.
 const formSlugMaxLen = 40
 
 // validFormSlugChars matches any byte that may not appear in a form slug.
 var validFormSlugChars = regexp.MustCompile(`^[a-z0-9-]+$`)
 
-// ValidFormSlug reports whether s is a usable form slug: 1-40 characters of
-// a-z, 0-9 and '-'. ONE rule, applied by FormStore.RenameSlug, so every write
-// path that can move a form's URL (REST PATCH /forms/{id}, MCP upsert_form)
-// enforces the same shape and a future third caller cannot bypass it by
-// forgetting its own copy.
+// ValidateFormSlug normalises a caller-supplied form slug and reports whether it
+// is usable as a public path segment. It returns the NORMALISED value (trimmed,
+// lower-cased) so a caller writes exactly what was validated.
 //
-// Deliberately NOT applied to the create path's verbatim slug in this change:
-// the scope of this work is that a slug must be editable, unique, and that a
-// rename must not break references to it. Rewiring create is a separate
-// decision.
+// THE ONE RULE, enforced at the two store choke points every write path reaches
+// — FormStore.Create (REST createForm, MCP upsert_form's create half, both
+// template-use routes) and FormStore.RenameSlug (REST PATCH, MCP upsert_form's
+// update half) — rather than re-implemented per transport. Before card
+// t_f76f81eb only the rename leg existed and only for shape: the create path
+// stored the caller's value verbatim, so `"bad slug!!/x"` was accepted and
+// served as a public URL no router could answer.
+//
+// The rule:
+//   - trimmed, then lower-cased, so "  MyShop  " is accepted as "myshop";
+//   - a name JomForm owns or serves on the same host is refused — see
+//     urlguard.ReservedFormSlug (workspace-claim labels reused, plus the API's
+//     own single-segment GET routes like /privacy). This leg runs first because
+//     its answer is the useful one when it fires: "pick another name" rather
+//     than "fix the characters". It cannot mask a shape refusal — every reserved
+//     label is itself well formed and inside the cap, so no value trips both;
+//   - 1-40 characters (the documented window, and what the title-derived
+//     generator already produced);
+//   - only a-z, 0-9 and '-'.
+func ValidateFormSlug(s string) (string, error) {
+	s = formSlugNormalise(s)
+	if urlguard.ReservedFormSlug(s) {
+		return "", &formSlugReservedRefusal{label: s}
+	}
+	if len(s) > formSlugMaxLen || !validFormSlugChars.MatchString(s) {
+		return "", ErrInvalidSlug
+	}
+	return s, nil
+}
+
+// formSlugNormalise is the normalisation half of the rule (trim + lower-case).
+// RenameSlug needs it separately so it can recognise an UNCHANGED slug before
+// the rule judges it: a form stored before the rule existed may carry a name the
+// rule now refuses, and re-saving its settings must not be blocked by a claim
+// nobody is making (see RenameSlug). One implementation, so the comparison is
+// always made on the value Create would have stored.
+func formSlugNormalise(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+
+// ValidFormSlug is the boolean form of ValidateFormSlug, kept for callers that
+// only ask a yes/no question. It delegates so there is never a second copy of
+// the rule to drift.
 func ValidFormSlug(s string) bool {
-	return len(s) > 0 && len(s) <= formSlugMaxLen && validFormSlugChars.MatchString(s)
+	_, err := ValidateFormSlug(s)
+	return err == nil
 }
 
 // ErrTemplateGalleryMetadata indicates a template is being published into the
@@ -128,7 +188,7 @@ var ErrFormHasSales = errors.New("form has sales")
 // violate the index (SQLSTATE 23505), which without this mapping escaped as a
 // 500. Two live forms can never share a slug, so the restore is refused by name
 // rather than silently renaming the row into a URL nobody was told about.
-var ErrFormSlugTaken = errors.New("slug borang itu telah diambil borang lain")
+var ErrFormSlugTaken = errors.New("that form slug has been taken by another form")
 
 // validFormStatus reports whether status is one of the accepted form statuses
 // (draft | private | published | unlisted).
@@ -185,6 +245,18 @@ const formSelect = `SELECT id, account_id, slug, title, config, theme, status, i
 // caller — REST createForm, the two template-use routes, MCP upsert_form's
 // create path and MCP template clone — rather than repeated at each of them.
 func (s *FormStore) Create(ctx context.Context, f *Form) error {
+	// Card t_f76f81eb: the slug is validated HERE, at the one insert path behind
+	// every create (REST POST /forms, MCP upsert_form's create half, both
+	// template-use routes, MCP template clone), so no transport can store a
+	// slug at an address that is unservable or one JomForm already answers.
+	// The refusal is returned unchanged for the transport to classify:
+	// ErrInvalidSlug (shape) or ErrFormSlugReserved (policy, carrying the
+	// label-specific message). The normalised value is what gets written.
+	slug, verr := ValidateFormSlug(f.Slug)
+	if verr != nil {
+		return verr
+	}
+	f.Slug = slug
 	if f.Config == nil {
 		f.Config = map[string]any{}
 	}
@@ -206,6 +278,66 @@ func (s *FormStore) Create(ctx context.Context, f *Form) error {
 		return ErrSlugTaken
 	}
 	return err
+}
+
+// UniqueSlug derives a per-workspace-unique, rule-valid slug from a title, for a
+// form created without one (issue #176).
+//
+// THE ONE GENERATOR (card t_f76f81eb). The REST and MCP create paths carried
+// byte-identical copies of this loop; the copies are the shape that lets a
+// generator start minting values its own validator refuses — and with the slug
+// rule now enforced at Create, a title like "Login" would otherwise have
+// derived the RESERVED slug "login" and failed the create for a reason the
+// caller never typed. The reserved leg therefore takes the same suffix path a
+// collision does, and every returned value is one ValidateFormSlug accepts.
+func (s *FormStore) UniqueSlug(ctx context.Context, accountID, title string) string {
+	base := formSlugBase(title)
+	if base == "" {
+		base = "f-" + slugToken(4)
+	}
+	for i := 0; i < 5; i++ {
+		if _, verr := ValidateFormSlug(base); verr == nil {
+			taken, terr := s.SlugExists(ctx, accountID, base)
+			if terr != nil || !taken {
+				return base
+			}
+		}
+		base = formSlugBase(base + "-" + slugToken(2))
+	}
+	// Last resort: a hex token is always shape-valid and can never be a reserved
+	// label (no reserved entry is `f-` followed by hex).
+	for {
+		token := "f-" + slugToken(4)
+		taken, terr := s.SlugExists(ctx, accountID, token)
+		if terr != nil || !taken {
+			return token
+		}
+	}
+}
+
+// formSlugBase slugifies a candidate: lower-case, every run of characters the
+// slug rule forbids collapsed to a dash, dashes trimmed, and the result capped
+// at the rule's 40 characters (trimming again after the cut, which can land on a
+// dash). It makes no claim about validity — ValidateFormSlug is the authority.
+func formSlugBase(s string) string {
+	b := strings.ToLower(strings.TrimSpace(s))
+	b = formSlugUnsafe.ReplaceAllString(b, "-")
+	b = strings.Trim(b, "-")
+	if len(b) > formSlugMaxLen {
+		b = strings.Trim(b[:formSlugMaxLen], "-")
+	}
+	return b
+}
+
+// formSlugUnsafe matches any run of characters a form slug may not contain.
+var formSlugUnsafe = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// slugToken returns n random bytes hex-encoded (lowercase) — a-z, 0-9 only, so
+// the token can be appended to a slug without re-validating the charset.
+func slugToken(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // ListByAccount lists all non-deleted forms for an account. Templates
@@ -391,10 +523,6 @@ const formSlugRedirectTTL = 90 * 24 * time.Hour
 // can never shadow a live form that later claims the slug — the claimant wins
 // by being found first, which is exactly Wan's rule.
 func (s *FormStore) RenameSlug(ctx context.Context, accountID, id, newSlug string) (string, error) {
-	newSlug = strings.ToLower(strings.TrimSpace(newSlug))
-	if !ValidFormSlug(newSlug) {
-		return "", ErrInvalidSlug
-	}
 	var oldSlug string
 	err := s.pool.QueryRow(ctx,
 		`SELECT slug FROM forms WHERE id=$2 AND account_id=$1 AND deleted_at IS NULL`,
@@ -405,11 +533,23 @@ func (s *FormStore) RenameSlug(ctx context.Context, accountID, id, newSlug strin
 	if err != nil {
 		return "", err
 	}
-	if oldSlug == newSlug {
-		// Nothing to do: the caller asked for the slug the form already has.
-		// No redirect row is written, because the old URL is still the live
-		// URL and a redirect onto itself would be a loop.
+	// An unchanged slug is NOT a claim, so it is answered before the rule judges
+	// it. A form stored before this rule existed can carry a name it now refuses
+	// (prod accepted "login" — the defect this card fixes), and its settings must
+	// still be saveable: nothing is written here, so nothing is claimed. The
+	// comparison is made on the normalised form, i.e. the value Create would have
+	// stored, so re-sending "LOGIN" for a stored "login" is also a no-op.
+	if formSlugNormalise(newSlug) == oldSlug {
+		// No redirect row is written, because the old URL is still the live URL
+		// and a redirect onto itself would be a loop.
 		return "", nil
+	}
+	newSlug, verr := ValidateFormSlug(newSlug)
+	if verr != nil {
+		// Shape (ErrInvalidSlug) or policy (ErrFormSlugReserved) — the same ONE
+		// rule the create path applies, so a rename can never produce a slug a
+		// create would have refused (card t_f76f81eb).
+		return "", verr
 	}
 	// Another live form in the same account already serves this slug.
 	taken, terr := s.SlugExistsNotID(ctx, accountID, newSlug, id)
@@ -668,7 +808,7 @@ func classifyStatusWrite(matched, blocked int64) error {
 // putting an unlabelled card in the gallery.
 func (s *FormStore) SetStatus(ctx context.Context, accountID, id, status string) error {
 	if !validFormStatus(status) {
-		return errors.New("status mesti draft|private|published|unlisted")
+		return errors.New("status must be draft|private|published|unlisted")
 	}
 	var matched, blocked int64
 	if err := s.pool.QueryRow(ctx, setStatusSQL, accountID, id, status).Scan(&matched, &blocked); err != nil {
@@ -687,7 +827,7 @@ func (s *FormStore) SetStatus(ctx context.Context, accountID, id, status string)
 // gallery-metadata rule of SetStatus applies unchanged (issue #594).
 func (s *FormStore) SetStatusWithPassword(ctx context.Context, accountID, id, status, passwordHash string) error {
 	if !validFormStatus(status) {
-		return errors.New("status mesti draft|private|published|unlisted")
+		return errors.New("status must be draft|private|published|unlisted")
 	}
 	var matched, blocked int64
 	if err := s.pool.QueryRow(ctx, setStatusWithPasswordSQL,
@@ -1496,6 +1636,34 @@ func (s *FormStore) BlockedGalleryTemplates(ctx context.Context, accountID strin
 	return out, rows.Err()
 }
 
+// AllGalleryTemplates reports whether every one of formIDs that belongs to the
+// account is an `is_template` row, and at least one does. Ids the account does
+// not own, or that are already trashed, are ignored — those are the rows the
+// write itself will not touch.
+//
+// It exists for the bulk publish gate (card t_8b185f34). A batch made only of
+// gallery templates HAS a public address, and it is not a workspace: the
+// gallery (ListTemplates: `is_template AND status='published'`, no account
+// filter) is where a published template is served. The account that owns that
+// gallery — templates@system.jomform — must never have a workspace
+// (workspace.go LegacyProvisionedEmails, migration 000059), so a bulk publish
+// of its own templates must not be refused for the one state it is required to
+// be in. A batch containing ANY ordinary form is not exempt: that row would go
+// live with no address at all, which is the defect t_fadfe9f7 closed.
+func (s *FormStore) AllGalleryTemplates(ctx context.Context, accountID string, formIDs []string) (bool, error) {
+	if len(formIDs) == 0 {
+		return false, nil
+	}
+	var owned, templates int64
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*), count(*) FILTER (WHERE is_template) FROM forms
+		  WHERE account_id=$1 AND deleted_at IS NULL AND id = ANY($2)`,
+		accountID, formIDs).Scan(&owned, &templates); err != nil {
+		return false, err
+	}
+	return owned > 0 && owned == templates, nil
+}
+
 // FormCard is the minimum a bulk write path needs to know about a form it is
 // about to move: the slug that names its /og/{slug}.png card, and the status
 // that decides whether that card is publicly cached (see OGImagePubliclyCached).
@@ -1556,7 +1724,7 @@ func (s *FormStore) CardFormsForIDs(ctx context.Context, accountID string, formI
 // by TemplateStatusBlocked, which the handler reports back to the caller.
 func (s *FormStore) SetStatusMany(ctx context.Context, accountID string, formIDs []string, status string) (int64, error) {
 	if !validFormStatus(status) {
-		return 0, errors.New("status mesti draft|private|published|unlisted")
+		return 0, errors.New("status must be draft|private|published|unlisted")
 	}
 	// galleryMetadataMissingSQL refers to `forms` columns via bare names, so
 	// the UPDATE's table must stay named `forms` (no alias).

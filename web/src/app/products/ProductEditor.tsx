@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
+import { currencyLabel } from "../../lib/money";
 import { workspaceQuery, workspaceUrl } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
@@ -36,12 +37,19 @@ export type ProductForm = {
   description: string;
   price_sen: number;
   images: string[];
-  type: string; // one_time | subscription
+  type: string; // one_time | subscription | custom_amount
   billing_period: string; // month | year
   trial_days: number;
   stock?: number | null;
   active: boolean;
   variations: Variation[];
+  // Card t_06851d88: pay-what-you-want (custom_amount) limits, integer sen.
+  // min_price_sen is required for that type (>= 100 = RM1.00); max_price_sen
+  // null = no cap; suggested_price_sen null = the buyer's field starts empty.
+  // For every other type these are unused and never sent.
+  min_price_sen: number;
+  max_price_sen: number | null;
+  suggested_price_sen: number | null;
   // Issue #152: subscription billing count — null = infinite, N = fixed charges.
   subscription_charges?: number | null;
   // round 13c: next-charge date policy after a successful charge.
@@ -80,14 +88,16 @@ const emptyForm = (): ProductForm => ({
   schedule_mode: "from_payment",
   variations: [],
   subscription_charges: null,
+  // Card t_06851d88: the platform floor is RM1.00 — start there rather than at
+  // 0, which the server would refuse as a minimum.
+  min_price_sen: 100,
+  max_price_sen: null,
+  suggested_price_sen: null,
 });
-
-const money = (sen: number) =>
-  `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
 
 export default function ProductEditor({ productId }: { productId?: string }) {
   const { t } = useI18n();
-  const { anon } = useSession();
+  const { anon, currency } = useSession();
   const router = useRouter();
   const isNew = !productId;
 
@@ -150,6 +160,12 @@ export default function ProductEditor({ productId }: { productId?: string }) {
           stock: typeof p.stock === "number" ? p.stock : null,
           active: p.active !== false,
           subscription_charges: typeof p.subscription_charges === "number" ? p.subscription_charges : null,
+          // Card t_06851d88: an unset minimum on a NON-custom product reads as
+          // 0 from the API; seed the RM1.00 floor so switching this product to
+          // custom_amount starts from a value the server accepts.
+          min_price_sen: typeof p.min_price_sen === "number" && p.min_price_sen > 0 ? p.min_price_sen : 100,
+          max_price_sen: typeof p.max_price_sen === "number" ? p.max_price_sen : null,
+          suggested_price_sen: typeof p.suggested_price_sen === "number" ? p.suggested_price_sen : null,
           variations: Array.isArray(p.variations)
             ? p.variations.map((v: Variation) => ({
                 id: v.id,
@@ -282,14 +298,29 @@ export default function ProductEditor({ productId }: { productId?: string }) {
     });
   }
 
+  const isCustomAmount = form.type === "custom_amount";
+
   // ── save ─────────────────────────────────────────────────────────────────
   const canSave = useMemo(() => {
     if (!form.name.trim()) return false;
+    if (isCustomAmount) {
+      // Card t_06851d88: mirror the server's rule in the BUTTON, so the
+      // merchant is not sent to a 400. The server still decides.
+      if (!isSenPrice(form.min_price_sen) || form.min_price_sen < 100) return false;
+      if (form.max_price_sen !== null && (!isSenPrice(form.max_price_sen) || form.max_price_sen < form.min_price_sen)) {
+        return false;
+      }
+      if (form.suggested_price_sen !== null) {
+        if (!isSenPrice(form.suggested_price_sen) || form.suggested_price_sen < form.min_price_sen) return false;
+        if (form.max_price_sen !== null && form.suggested_price_sen > form.max_price_sen) return false;
+      }
+      return true;
+    }
     if (isVariable) {
       return form.variations.every((v) => v.name.trim() && v.price_sen >= 0);
     }
     return form.price_sen >= 0;
-  }, [form, isVariable]);
+  }, [form, isVariable, isCustomAmount]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -310,7 +341,16 @@ export default function ProductEditor({ productId }: { productId?: string }) {
           : null,
       active: form.active,
     };
-    if (isVariable) {
+    if (isCustomAmount) {
+      // Card t_06851d88: a pay-what-you-want product has no asking price. Its
+      // price_sen is DERIVED server-side from the suggestion (else the floor),
+      // so it is never sent; the limits are the contract the checkout enforces.
+      body.min_price_sen = Math.round(form.min_price_sen);
+      body.max_price_sen = form.max_price_sen === null ? null : Math.round(form.max_price_sen);
+      body.suggested_price_sen =
+        form.suggested_price_sen === null ? null : Math.round(form.suggested_price_sen);
+      body.variations = [];
+    } else if (isVariable) {
       // Variable: per-variation price/stock/images; product-level ignored.
       //
       // Issue #551: v.price_sen is ALREADY sen (it is loaded straight from the API
@@ -506,11 +546,22 @@ export default function ProductEditor({ productId }: { productId?: string }) {
               {t("prod.type")}
               <select
                 value={form.type}
-                onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
+                onChange={(e) => {
+                  const nextType = e.target.value;
+                  // Card t_06851d88: a buyer-chosen amount contradicts a
+                  // variation's own fixed price, so switching to custom_amount
+                  // drops them (the server refuses such a product anyway).
+                  setForm((f) => ({
+                    ...f,
+                    type: nextType,
+                    variations: nextType === "custom_amount" ? [] : f.variations,
+                  }));
+                }}
                 className="jf-input mt-1"
               >
                 <option value="one_time">{t("prod.oneTime")}</option>
                 <option value="subscription">{t("prod.subscription")}</option>
+                <option value="custom_amount">{t("prod.customAmount")}</option>
               </select>
             </label>
             {form.type === "subscription" && (
@@ -624,7 +675,10 @@ export default function ProductEditor({ productId }: { productId?: string }) {
             )}
           </div>
 
-          {/* Simple / Variable type */}
+          {/* Simple / Variable type. Hidden for a custom_amount product: a
+              variation carries its own fixed price, which contradicts a
+              buyer-chosen amount (the server refuses such a product). */}
+          {!isCustomAmount && (
           <div className="rounded-lg border border-[var(--jf-border)] p-4">
             <div className="text-sm font-medium">{t("prod.productType")}</div>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -661,15 +715,45 @@ export default function ProductEditor({ productId }: { productId?: string }) {
               {isVariable ? t("prod.variableHint") : t("prod.simpleHint")}
             </p>
           </div>
+          )}
 
           {/* Simple: product-level price/stock/images */}
           {!isVariable && (
             <>
               <div className="grid gap-4 sm:grid-cols-2">
-                <label className="block text-sm font-medium">
-                  {t("prod.simplePrice")}
-                  {priceInput(form.price_sen, (n) => setForm((f) => ({ ...f, price_sen: n })))}
-                </label>
+                {isCustomAmount ? (
+                  <div className="sm:col-span-2">
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <label className="block text-sm font-medium">
+                        {t("prod.minAmount", { cur: currencyLabel(currency) })}
+                        {priceInput(form.min_price_sen, (n) => setForm((f) => ({ ...f, min_price_sen: n })))}
+                      </label>
+                      <label className="block text-sm font-medium">
+                        {t("prod.maxAmount", { cur: currencyLabel(currency) })}
+                        {priceInput(form.max_price_sen ?? 0, (n) =>
+                          setForm((f) => ({ ...f, max_price_sen: n === 0 ? null : n })),
+                        )}
+                      </label>
+                      <label className="block text-sm font-medium">
+                        {t("prod.suggestedAmount", { cur: currencyLabel(currency) })}
+                        {priceInput(form.suggested_price_sen ?? 0, (n) =>
+                          setForm((f) => ({ ...f, suggested_price_sen: n === 0 ? null : n })),
+                        )}
+                      </label>
+                    </div>
+                    <p className="mt-2 text-xs text-[var(--jf-muted)]">
+                      {t("prod.amountHint")}
+                    </p>
+                    <p className="mt-1 text-xs text-[var(--jf-muted)]">
+                      {t("prod.amountFloor", { cur: currencyLabel(currency) })}
+                    </p>
+                  </div>
+                ) : (
+                  <label className="block text-sm font-medium">
+                    {t("prod.simplePrice", { cur: currencyLabel(currency) })}
+                    {priceInput(form.price_sen, (n) => setForm((f) => ({ ...f, price_sen: n })))}
+                  </label>
+                )}
                 <label className="block text-sm font-medium">
                   {t("prod.simpleStock")}
                   {stockInput(form.stock, (n) => setForm((f) => ({ ...f, stock: n })))}
@@ -761,7 +845,7 @@ export default function ProductEditor({ productId }: { productId?: string }) {
                         />
                       </label>
                       <label className="block text-sm font-medium">
-                        {t("prod.variationPrice")}
+                        {t("prod.variationPrice", { cur: currencyLabel(currency) })}
                         {priceInput(v.price_sen, (n) => updateVariation(idx, { price_sen: n }))}
                       </label>
                       <label className="block text-sm font-medium">

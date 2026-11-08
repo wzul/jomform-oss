@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "Shipping by zone — JomForm Docs",
   description:
     "Charge a delivery fee per delivery zone: workspace-managed zones (state, district or postcode range) with rate rows, weight bands and a free-shipping threshold, resolved from the buyer's address at checkout into sales.shipping_sen.",
-  alternates: { canonical: "https://jomform.com/docs/shipping" },
-};
+  path: "/docs/shipping",
+});
 
 // Docs for the managed shipping rate source (phase 1). The page is static
 // English like every other /docs guide (see the note in customize/page.tsx), and
@@ -205,7 +206,7 @@ export default function ShippingDocsPage() {
       <div className="mt-4 space-y-4">
         {TOOLS.map((t) => (
           <section key={t.name}>
-            <h3 className="font-mono text-sm font-semibold text-slate-900">{t.name}</h3>
+            <h3 className="font-mono text-sm font-semibold text-slate-900 [overflow-wrap:anywhere]">{t.name}</h3>
             <p className="mt-1 text-sm leading-relaxed text-slate-600">{t.purpose}</p>
           </section>
         ))}
@@ -255,19 +256,19 @@ export default function ShippingDocsPage() {
       <div className="mt-4 space-y-4">
         {COURIER_TOOLS.map((t) => (
           <section key={t.name}>
-            <h3 className="font-mono text-sm font-semibold text-slate-900">{t.name}</h3>
+            <h3 className="font-mono text-sm font-semibold text-slate-900 [overflow-wrap:anywhere]">{t.name}</h3>
             <p className="mt-1 text-sm leading-relaxed text-slate-600">{t.purpose}</p>
           </section>
         ))}
       </div>
       <p className="mt-2 text-sm leading-relaxed text-slate-600">
         The same surface is on the REST API as{" "}
-        <span className="font-mono text-xs">GET /v1/rest/shipping/couriers</span>,{" "}
-        <span className="font-mono text-xs">POST /v1/rest/shipping/couriers/&#123;provider&#125;/connect</span>{" "}
+        <span className="font-mono text-xs [overflow-wrap:anywhere]">GET /v1/rest/shipping/couriers</span>,{" "}
+        <span className="font-mono text-xs [overflow-wrap:anywhere]">POST /v1/rest/shipping/couriers/&#123;provider&#125;/connect</span>{" "}
         and{" "}
-        <span className="font-mono text-xs">POST /v1/rest/shipping/couriers/&#123;provider&#125;/disconnect</span>.
+        <span className="font-mono text-xs [overflow-wrap:anywhere]">POST /v1/rest/shipping/couriers/&#123;provider&#125;/disconnect</span>.
         The public OAuth return for EasyParcel is{" "}
-        <span className="font-mono text-xs">/api/shipping/easyparcel/callback</span>, which is the URL
+        <span className="font-mono text-xs [overflow-wrap:anywhere]">/api/shipping/easyparcel/callback</span>, which is the URL
         registered in the EasyParcel Developer Hub.
       </p>
     </div>

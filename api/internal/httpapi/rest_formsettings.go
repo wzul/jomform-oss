@@ -21,7 +21,7 @@ func (h *RESTHandlers) putFormSettings(w http.ResponseWriter, r *http.Request, a
 		FailureMessage string `json:"failure_message"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	// Issue #501: ONE shared scheme rule for every caller-supplied URL field

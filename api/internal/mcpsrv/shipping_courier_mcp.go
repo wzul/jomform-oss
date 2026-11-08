@@ -30,7 +30,7 @@ import (
 // errCouriersUnavailable: the courier wiring is absent (a bare-mode deployment).
 // Refusing loudly is deliberate — a tool that answered "no providers configured"
 // would read as "this deployment has no couriers", which is a different fact.
-var errCouriersUnavailable = errCourierErr("sambungan pembekal penghantaran tidak tersedia")
+var errCouriersUnavailable = errCourierErr("shipping courier connection not available")
 
 // errCourierErr builds a plain error (small helper so the var block above reads
 // as a sentence).
@@ -94,7 +94,7 @@ type shippingCouriersOut struct {
 // getShippingCouriersIn is the read input: the per-call scope is carried by the
 // reserved arguments (workspace_id/account_id), handled by the call-scope plumbing.
 type getShippingCouriersIn struct {
-	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"ID workspace (dari list_workspaces). Kosong = akaun anda sendiri"`
+	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"Workspace ID (from list_workspaces). Empty = your own account"`
 }
 
 // getShippingCouriers reads every provider's status for one workspace.
@@ -116,21 +116,21 @@ func (s *Server) getShippingCouriers(
 // HMAC key pair lives in the deployment's runtime env file, and an OAuth grant
 // comes from the MERCHANT's own consent.
 type connectShippingCourierIn struct {
-	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"ID workspace (dari list_workspaces). WAJIB: tool tulis ini menolak workspace_id kosong — panggil list_workspaces dahulu"`
-	Provider    string `json:"provider" jsonschema:"Pembekal: lalamove atau easyparcel"`
+	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"Workspace ID (from list_workspaces). Required: this write tool rejects an empty workspace_id — call list_workspaces first"`
+	Provider    string `json:"provider" jsonschema:"Provider: lalamove or easyparcel"`
 	// OriginPostcode / OriginState are required by EasyParcel, which needs the
 	// ISO 3166-2 subdivision code derived from the state name.
-	OriginPostcode string `json:"origin_postcode,omitempty" jsonschema:"Poskod tempat barang diambil (wajib untuk easyparcel)"`
-	OriginState    string `json:"origin_state,omitempty" jsonschema:"Negeri tempat barang diambil, cth Selangor / Penang (wajib untuk easyparcel)"`
-	OriginCountry  string `json:"origin_country,omitempty" jsonschema:"Kod negara 2 huruf (lalai MY)"`
+	OriginPostcode string `json:"origin_postcode,omitempty" jsonschema:"Postcode of the pickup location (required for easyparcel)"`
+	OriginState    string `json:"origin_state,omitempty" jsonschema:"State of the pickup location, e.g. Selangor / Penang (required for easyparcel)"`
+	OriginCountry  string `json:"origin_country,omitempty" jsonschema:"Two-letter country code (default MY)"`
 	// OriginLat / OriginLng are required by a point-based provider (Lalamove).
-	OriginLat string `json:"origin_lat,omitempty" jsonschema:"Latitud tempat ambil (wajib untuk lalamove)"`
-	OriginLng string `json:"origin_lng,omitempty" jsonschema:"Longitud tempat ambil (wajib untuk lalamove)"`
+	OriginLat string `json:"origin_lat,omitempty" jsonschema:"Latitude of the pickup location (required for lalamove)"`
+	OriginLng string `json:"origin_lng,omitempty" jsonschema:"Longitude of the pickup location (required for lalamove)"`
 	// ServiceType is the provider's own service code (Lalamove: MOTORCYCLE/CAR/VAN).
-	ServiceType string `json:"service_type,omitempty" jsonschema:"Kod servis pembekal (lalamove: MOTORCYCLE, CAR, VAN). Kosong = lalai pembekal"`
+	ServiceType string `json:"service_type,omitempty" jsonschema:"Provider service code (lalamove: MOTORCYCLE, CAR, VAN). Empty = provider default"`
 	// Environment is what the merchant IS authorizing: a DEMO account (sandbox) or
 	// a live one. Say sandbox when demoing, because a sandbox rate is simulated.
-	Environment string `json:"environment,omitempty" jsonschema:"sandbox (akaun demo) atau live. Untuk easyparcel, ini bergantung pada akaun yang dibenarkan"`
+	Environment string `json:"environment,omitempty" jsonschema:"sandbox (demo account) or live. For easyparcel, this depends on the account that is enabled"`
 }
 
 // shippingCourierConnectOut is the connect answer.
@@ -193,8 +193,8 @@ func (s *Server) connectShippingCourier(
 		// The consent handoff contract, in the tool's own words: the link is
 		// HIS to open, on any device, at a time of his choosing, and the lane
 		// never handles his password.
-		out.HumanStep = "Hantar pautan ini kepada pemilik akaun untuk dibuka sendiri (mana-mana peranti). " +
-			"Jangan buka, jangan taip kata laluan, jangan minta kata laluan. Pautan ini luput — panggil tool ini semula untuk pautan baharu."
+		out.HumanStep = "Send this link to the account owner to open it themselves (any device). " +
+			"Do not open it, do not type the password, do not ask for the password. This link expires — call this tool again for a new link."
 	}
 	for _, st := range s.deps.Couriers.States(ctx, accountID) {
 		if st.Info.Name == outcome.Provider {
@@ -207,8 +207,8 @@ func (s *Server) connectShippingCourier(
 
 // disconnectShippingCourierIn is the disconnect input.
 type disconnectShippingCourierIn struct {
-	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"ID workspace (dari list_workspaces). WAJIB: tool tulis ini menolak workspace_id kosong — panggil list_workspaces dahulu"`
-	Provider    string `json:"provider" jsonschema:"Pembekal: lalamove atau easyparcel"`
+	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"Workspace ID (from list_workspaces). Required: this write tool rejects an empty workspace_id — call list_workspaces first"`
+	Provider    string `json:"provider" jsonschema:"Provider: lalamove or easyparcel"`
 }
 
 // disconnectShippingCourier drops the workspace's connection and its grant, keeping

@@ -92,7 +92,7 @@ func derivedOutcomeRun(t *testing.T) string {
 		t.Fatalf("the output schema no longer lists \"skipped\" (%v) — the retry path answers it when no super-admin recipient is configured (api/internal/httpapi/rest_feedback.go, TestFeedbackNotifyAdminRetryWithNoRecipientsIsNotQueued)", outcomes)
 	}
 
-	return "Keputusan: " + strings.Join(outcomes, "|")
+	return "Outcome: " + strings.Join(outcomes, "|")
 }
 
 // TestRetryFeedbackNotifyProseNamesEveryOutcomeItsSchemaReturns fails when the

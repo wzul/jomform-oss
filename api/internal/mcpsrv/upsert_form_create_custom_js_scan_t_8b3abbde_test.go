@@ -13,7 +13,7 @@ package mcpsrv
 //	     GET https://<ws>.jomform.com/<slug> served
 //	     <script>eval('2+2');</script>
 //
-// while the SAME value on the same build was 400 `custom_js ditolak: active code
+// while the SAME value on the same build was 400 `custom_js rejected: active code
 // execution marker: eval(` from POST and PATCH /v1/rest/forms, and isError from
 // set_form_theme (form_creation.go). One rule, two answers.
 //
@@ -124,12 +124,12 @@ func TestUpsertFormCreateRefusesBlockedCustomJS(t *testing.T) {
 			t.Fatalf("upsert_form CREATE (form_id omitted) with custom_js %q (%s) answered %s with NO "+
 				"isError.\nThat IS the carded defect: the create half of upsert_form stores the value "+
 				"unscanned while its update half, set_form_theme and both REST form routes answer "+
-				"`custom_js ditolak: …` for the identical string — and since v1.21.283 the "+
+				"`custom_js rejected: …` for the identical string — and since v1.21.283 the "+
 				"block-rendered buyer page executes what was stored.",
 				tc.js, tc.name, toolResultText(t, res))
 		}
-		if !strings.Contains(msg, "custom_js ditolak: ") {
-			t.Errorf("refusal for %s = %q, want it to carry `custom_js ditolak: <reason>` — the same "+
+		if !strings.Contains(msg, "custom_js rejected: ") {
+			t.Errorf("refusal for %s = %q, want it to carry `custom_js rejected: <reason>` — the same "+
 				"wording the other three form write doors answer, so one rule reads one way", tc.name, msg)
 		}
 		if !strings.Contains(msg, tc.wantReason) {
@@ -249,8 +249,8 @@ func TestUpsertFormUpdateRefusesBlockedCustomJS(t *testing.T) {
 		t.Fatalf("upsert_form UPDATE with a blocked custom_js answered %s with no isError",
 			toolResultText(t, res))
 	}
-	if !strings.Contains(msg, "custom_js ditolak: active code execution marker: eval(") {
-		t.Errorf("update refusal = %q, want `custom_js ditolak: active code execution marker: eval(`", msg)
+	if !strings.Contains(msg, "custom_js rejected: active code execution marker: eval(") {
+		t.Errorf("update refusal = %q, want `custom_js rejected: active code execution marker: eval(`", msg)
 	}
 	if js, ok := cjsStoredJS(t, pool, accountID, slug); ok {
 		t.Fatalf("a refused update left theme.custom_js = %q on the row", js)

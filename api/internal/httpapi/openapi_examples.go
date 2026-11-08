@@ -84,7 +84,7 @@ var restAPIExamples = []restAPIExample{
 		ExpectStatus:   401,
 		ExpectContains: "\"error\"",
 		NeedsKey:       false,
-		Note:           "The body is {\"error\":\"auth diperlukan\"} — the API's own wording, not a fixed error catalogue.",
+		Note:           "The body is {\"error\":\"authentication required\"} — the API's own wording, not a fixed error catalogue.",
 	},
 	{
 		ID:             "create-form",

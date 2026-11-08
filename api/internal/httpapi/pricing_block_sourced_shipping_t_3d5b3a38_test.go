@@ -202,7 +202,7 @@ func TestCreateFormStillRefusesAnUnpricedStaticShippingBlockAndOption(t *testing
 				"The sourced-shipping exemption must not open up an unpriced static shipping block "+
 				"or an option block — those are charged from their own config.", name, code, raw)
 		}
-		if !strings.Contains(string(raw), "harga") {
+		if !strings.Contains(string(raw), "price") {
 			t.Errorf("%s: 400 body = %s, want it to name the missing price", name, raw)
 		}
 		if n := liveFormCount(t, fx, slug); n != 0 {

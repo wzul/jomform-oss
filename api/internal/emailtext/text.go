@@ -187,11 +187,20 @@ func Kinds() []Kind {
 // The built-in templates the PRE-LANGUAGE release wrote into the database, and
 // which every never-customised row still carries:
 //
-//   - workspace_email_settings.receipt_subject / receipt_body default to this
-//     literal (migration 000021), so a workspace nobody customised holds Malay
-//     and would keep mailing Malay in every language.
-//   - the default notification rule EnsureDefault installs for a new form
-//     (000032 / #597) is stored per row in the same way.
+//   - workspace_email_settings.receipt_subject / receipt_body USED to default to
+//     this literal (migration 000021). Migration 000083 changed the column
+//     DEFAULT to an empty string and blanked every row that still held this
+//     literal, so a workspace created today stores nothing and the sender
+//     renders the receipt in the buyer's language. The literal stays here
+//     because a row restored from a pre-000083 backup (or written by a
+//     still-running old binary) can still carry it, and that row must not mail
+//     Malay to an English buyer.
+//   - the default notification rule EnsureDefault installed for a new form
+//     (000032 / #597) was stored per row in the same way. Migration 000084
+//     blanks that literal too and EnsureDefault now writes an empty subject and
+//     body, so a rule created today stores no language; the literal stays here
+//     for the same reason as the receipt one — a restored row, or one written by
+//     a still-running old binary, must not mail Malay to an English buyer.
 //
 // A stored value that still matches one of these is not a merchant decision: it
 // is the system's own default text, and the sender must render the language-

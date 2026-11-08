@@ -174,7 +174,7 @@ test("(5) the logo picker's success message branches on image/gif like the media
 test("(6) the MCP docs row for upload_media states the GIF conversion", () => {
   const row = slice(docsMCP, '{ name: "upload_media"', '{ name: "delete_media"');
   assert.ok(
-    row.includes("GIF animasi jadi imej pegun"),
+    row.includes("an animated GIF becomes a still image (first frame only)"),
     "the upload_media docs row no longer states that an animated GIF is stored as one still " +
       "image (first frame only)",
   );

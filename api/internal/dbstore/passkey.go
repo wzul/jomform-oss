@@ -29,7 +29,7 @@ func (u *PasskeyUser) WebAuthnCredentials() []webauthn.Credential {
 func (u *PasskeyUser) WebAuthnIcon() string { return "" }
 
 // errNoChallenge marks an expired/unknown challenge.
-var errNoChallenge = errors.New("challenge tidak sah")
+var errNoChallenge = errors.New("invalid challenge")
 
 // PasskeyStore wraps passkeys + challenge storage.
 type PasskeyStore struct {

@@ -7,7 +7,10 @@
   },
   "scripts": {
     "dev": "next dev",
+    "predev": "npm run og:image",
+    "prebuild": "npm run og:image",
     "build": "npm run test:unit && next build && npm run docs:facts && npm run css:scan-scope",
+    "og:image": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/og-image-version.mjs",
     "start": "next start",
     "lint": "eslint .",
     "test:unit": "node scripts/web-deps-check.mjs && node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts",

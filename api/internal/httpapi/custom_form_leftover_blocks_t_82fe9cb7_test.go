@@ -9,8 +9,8 @@ package httpapi
 // refuses EVERY submit, because that form's page is rendered from
 // custom_html, not from blocks (renderCustomForm wins, issue #255) and posts
 // only the names in custom_html.fields. Every required block is then absent
-// from the payload and the buyer gets 400 "medan wajib tidak diisi: <block
-// label>" forever.
+// from the payload and the buyer gets 400 "<block
+// label> is required" forever.
 //
 // The shape is reachable through the documented MCP door: upsert_form merges
 // custom_html into an EXISTING config and deliberately preserves blocks
@@ -154,7 +154,7 @@ func TestCustomFormLeftoverRequiredBlocksAcceptsItsOwnPayload(t *testing.T) {
 
 	// The exact payload the custom page posts: the registered custom field and
 	// nothing else. No block id (nm/em) is present — applying the block contract
-	// to this form refuses it with 400 "medan wajib tidak diisi: Nama".
+	// to this form refuses it with 400 "Nama is required".
 	const payload = `{"client":{},"fields":{"cf":"hello"}}`
 
 	rec := postSlug(t, h, host, leftoverSlug, payload)
@@ -199,7 +199,7 @@ func TestCustomFormLeftoverRequiredBlocksAcceptsItsOwnPayload(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("blocks-only form, same payload: status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "medan wajib tidak diisi: Nama") {
+	if body := rec.Body.String(); !strings.Contains(body, "Nama is required") {
 		t.Errorf("blocks-only form, same payload: body %s, want the first required block's message", body)
 	}
 	if n := submissionCount(t, h, accountID, blocksOnlyFormID); n != 0 {
@@ -220,7 +220,7 @@ func TestCustomFormLeftoverBlocksStillEnforcesItsOwnContract(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("custom required field omitted: status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "medan wajib tidak diisi: Nickname") {
+	if body := rec.Body.String(); !strings.Contains(body, "Nickname is required") {
 		t.Errorf("custom required field omitted: body %s, want it to name the custom field", body)
 	}
 	if n := submissionCount(t, h, accountID, leftoverFormID); n != 0 {

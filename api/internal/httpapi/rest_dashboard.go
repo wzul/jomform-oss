@@ -41,13 +41,40 @@ func (h *RESTHandlers) chipStatusData(ctx context.Context, accountID string) (ma
 		// tail (like Woo's settings page) so it can't leak via page source,
 		// network, or screen share. A new non-empty value replaces it on
 		// save; a blank value keeps the stored key.
+		//
+		// Card t_56a2bd7f: the mask is cryptoutil.MaskSecret — the ONE rule
+		// both doors share. The previous local copy returned everything BUT
+		// the last four characters, so this bundle (which is not role-gated:
+		// every workspace member, read_only included, receives it) published
+		// nearly the whole key.
 		if secret, err := cryptoutil.Decrypt(h.SecretsKey, acc.ChipSecretKeyEnc); err == nil {
-			resp["secret_key_masked"] = maskSecret(string(secret))
+			resp["secret_key_masked"] = cryptoutil.MaskSecret(string(secret))
 		}
 	}
 	resp["whitelist"] = acc.ChipMethodWhitelist
 	resp["email_fallback"] = acc.ChipEmailFallback
 	return resp, nil
+}
+
+// workspaceCurrency is the ACTIVE workspace's currency for the request's
+// account — the money every PRICE on the client is denominated in (card
+// t_d5f359c7). It is not a sale's currency: a sale row keeps the currency it
+// was recorded in (dbstore.Sale.CurrencyOrMYR), while a product/subscription/
+// shipping price has no currency of its own and is charged in the workspace's
+// setting (issue #185).
+//
+// ok is false when the setting cannot be read (no workspace linked to the
+// account, or a database error). The caller must then OMIT the field rather
+// than assume MYR: a guessed RM over a USD price is the defect this exists for.
+func (h *RESTHandlers) workspaceCurrency(ctx context.Context, accountID string) (string, bool) {
+	if h.Workspaces == nil || accountID == "" {
+		return "", false
+	}
+	cur, err := h.Workspaces.WorkspaceCurrencyByAccount(ctx, accountID)
+	if err != nil {
+		return "", false
+	}
+	return dbstore.NormaliseCurrency(cur), true
 }
 
 // summaryFor adds the scope's DEFAULT currency to the rollup — a label fallback
@@ -61,10 +88,8 @@ func (h *RESTHandlers) summaryFor(ctx context.Context, accountIDs []string, acco
 	if err != nil {
 		return nil, err
 	}
-	if h.Workspaces != nil {
-		if cur, cerr := h.Workspaces.WorkspaceCurrencyByAccount(ctx, accountID); cerr == nil {
-			sum["currency"] = dbstore.NormaliseCurrency(cur)
-		}
+	if cur, ok := h.workspaceCurrency(ctx, accountID); ok {
+		sum["currency"] = cur
 	}
 	return sum, nil
 }
@@ -124,7 +149,17 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 	}
 
 	bundle := struct {
-		Me               *map[string]any        `json:"me"`
+		Me *map[string]any `json:"me"`
+		// Currency is the ACTIVE workspace's currency, so every PRICE surface
+		// (products, subscriptions, builder blocks, shipping rates, the menu
+		// picker) labels an amount in the money the workspace actually charges
+		// instead of a hardcoded RM (card t_d5f359c7, issue #185). It is a
+		// workspace-level fact independent of the sales rollup, so it is its own
+		// field rather than a read of summary.currency — a price must stay
+		// correctly labelled even when the sales section is empty or failed.
+		// Omitted when it cannot be read; the client renders "—" rather than
+		// guessing MYR.
+		Currency         string                 `json:"currency,omitempty"`
 		Workspaces       []map[string]any       `json:"workspaces"`
 		ChipStatus       map[string]any         `json:"chip_status"`
 		Keys             []restKey              `json:"keys"`
@@ -173,10 +208,20 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 		if workspaces, err := h.Workspaces.ByMember(ctx, userID); err == nil {
 			out := make([]map[string]any, 0, len(workspaces))
 			for _, s := range workspaces {
-				out = append(out, map[string]any{"id": s.WorkspaceID, "name": s.Name, "slug": s.Slug, "role": s.Role})
+				out = append(out, map[string]any{"id": s.WorkspaceID, "name": s.Name, "slug": s.Slug,
+					// Same address the REST workspace endpoints publish (card
+					// t_48a93084): the install's own origin when self-hosted.
+					"url": h.workspaceURL(s.Slug), "role": s.Role})
 			}
 			bundle.Workspaces = out
 		}
+	}
+
+	// The active workspace's currency — the label every PRICE surface needs
+	// (card t_d5f359c7). Best-effort like every other section: when it cannot be
+	// read the field is omitted and the client shows "—" instead of RM.
+	if cur, ok := h.workspaceCurrency(ctx, actx.Account.ID); ok {
+		bundle.Currency = cur
 	}
 
 	// chip_status — stored credentials only (no live CHIP probe: speed).
@@ -287,17 +332,6 @@ func (h *RESTHandlers) dashboardBundle(w http.ResponseWriter, r *http.Request, a
 	writeJSON(w, http.StatusOK, bundle)
 }
 
-// maskSecret renders a CHIP secret key as a masked tail (e.g. sk_live_••••abcd)
-// so the full value is never exposed to the client. Only the last 4 characters
-// are shown; the prefix is kept so the merchant can still tell live vs test.
-func maskSecret(secret string) string {
-	s := strings.TrimSpace(secret)
-	if s == "" {
-		return ""
-	}
-	const tailLen = 4
-	if len(s) <= tailLen {
-		return "••••"
-	}
-	return s[:len(s)-tailLen] + "••••" + s[len(s)-tailLen:]
-}
+// maskSecret used to live here: a copy of the mask that kept every character
+// BUT the last four (card t_56a2bd7f). The rule is now cryptoutil.MaskSecret,
+// shared with the MCP door so the two cannot drift again.

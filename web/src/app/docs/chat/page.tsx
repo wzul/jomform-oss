@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 import type { ReactNode } from "react";
 
 import { Endonym } from "../../../components/Endonym";
@@ -18,13 +19,22 @@ import { Endonym } from "../../../components/Endonym";
 // documents the reversible set it may prepare, the confirmation step, the
 // rate/cost limits and why they exist, and the behaviour that matters when the
 // assistant does not know — the honest answer, not a guess.
+//
+// PRODUCT KNOWLEDGE (card t_1e3af6b8) is the second half of what it answers. The
+// assistant is not only a data reader: it carries a short, provenance-checked
+// guide to how JomForm works (api/internal/chat/knowledge.go), so "how do I pass
+// the processing fee to a buyer" is answered from the product's own rules rather
+// than from the model's priors. The "What it knows about JomForm" section below
+// states that, including the two properties a reader needs to trust it: every
+// fact is checked against these docs when the app is built, and a fact the guide
+// does not cover is answered with "I do not know" rather than a guess.
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "In-app assistant — JomForm Docs",
   description:
-    "What JomForm's built-in chat assistant can and cannot do: it answers questions about your own forms, sales and products, it can file a feedback report, and it can prepare a small reversible change for you to confirm — it can never apply a change by itself.",
-  alternates: { canonical: "https://jomform.com/docs/chat" },
-};
+    "What JomForm's built-in chat assistant can and cannot do: it answers questions about how JomForm works and about your own forms, sales and products, it can file a feedback report, and it can prepare a small reversible change for you to confirm — it can never apply a change by itself.",
+  path: "/docs/chat",
+});
 
 // A paragraph is either plain English prose or, when it NAMES one of the
 // supported languages, JSX that renders the name through `<Endonym>` — the name
@@ -38,12 +48,22 @@ const SECTIONS: Section[] = [
     id: "what",
     title: "What the assistant is",
     body: [
-      "The assistant is a chat panel inside the dashboard. Ask it a question about your own account in plain language — which forms are live, what a form recorded, how many sales came in, what a customer's submission said, which subscriptions are past due — and it looks the answer up in your data with the same tools an AI agent would use over MCP.",
-      "It is not a general chatbot and it is not a support ticket by another name. It answers from your data, and when the answer is not in your data it says so.",
+      "The assistant is a chat panel inside the dashboard. Ask it a question in plain language and it answers two kinds of question: how JomForm works, and what your own account holds — which forms are live, what a form recorded, how many sales came in, what a customer's submission said, which subscriptions are past due. For your account it looks the answer up in your data with the same tools an AI agent would use over MCP.",
+      "It is not a general chatbot: it is the assistant for JomForm specifically. Ask how to pass the processing fee to a buyer, how delivery is priced, whether you can take donations or use your own domain, and it answers from a short guide to the product that ships with the app — not from whatever the underlying model happens to remember about other form builders. When neither the guide nor your data can answer, it says so.",
       <>
         It speaks the language you write in: <Endonym l="en" />, <Endonym l="ms" />,{" "}
         <Endonym l="zh" />, <Endonym l="ta" /> or <Endonym l="ar" />.
       </>,
+    ],
+  },
+  {
+    id: "product-guide",
+    title: "What it knows about JomForm",
+    body: [
+      "The product answers come from a short guide that ships inside the app. It covers the questions a merchant asks most: the buyer-borne processing fee and who pays it, shipping zones and courier quotes, products including pay-what-you-want and donations, subscriptions and what happens when a charge fails, refunds, forms that collect responses rather than payments, custom domains, email notifications, spam review, two-factor sign-in, the MCP server that AI agents connect to, and the REST API.",
+      "Every fact in that guide is checked against these documentation pages when the app is built. If a guide sentence stops matching the docs — a rate model changed, a block was withdrawn, a limit moved — the build fails and names the sentence, so the assistant is re-read against the docs instead of quietly repeating a rule that is no longer true.",
+      "It also knows what the product does NOT do, and says so plainly instead of inventing a workaround. Discount codes are the example: there is no coupon block and nothing applies a discount code at checkout, so asking for one is answered with that fact and an offer to file it as a feature request — never with a description of a coupon setting that does not exist. The same applies to anything the guide does not cover: it says it does not know rather than guessing, because a merchant sent looking for a control that was never built concludes the product is broken.",
+      "The guide is small on purpose. It is a fixed, bounded block of a few thousand characters, part of the same bounded request as the assistant's own instructions, so a product question does not cost more than the limits below describe. It is also not a substitute for your data: a question about your forms, prices or customers is still answered by reading them, and the assistant will not answer it from the guide.",
     ],
   },
   {
@@ -70,7 +90,8 @@ const SECTIONS: Section[] = [
       "The proposal is bound to what you were shown. If the arguments changed between the card appearing and your click, the confirmation is refused rather than applied — so the thing you approved is the thing that runs. The card is also single-use (a second click is refused, not applied twice) and it expires 5 minutes after it appears, because it is a decision made while you are reading it, not an approval left lying around.",
       "Only you can confirm your proposals. The token belongs to the person it was issued to, and another account presenting it is refused in exactly the same way as a token that does not exist.",
       "A confirmed change runs with your own permission and the same workspace and ownership checks as a change made from the dashboard. If your role does not allow the edit, the confirmation is refused and the tool says why — the chat never grants an ability your account does not have.",
-      "Each refusal is reported as the thing it actually is. A confirmation refused because your workspace could not be determined says so; a confirmation the server refused for any other reason — your role, ownership, a validation the card could not have predicted — is reported as a failed change. The two are never mixed up: being told to choose a workspace when you already had one selected would send you looking for the wrong problem.",
+      "Each refusal is reported as the thing it actually is, and the sentence on screen names the cause in every case. A confirmation refused because your request carried no workspace says so, and nothing was attempted. A confirmation refused because your ROLE in that workspace does not allow the edit says so, and names the role you would need. A confirmation refused because your ACCOUNT has no workspace at all — the shape a brand-new sign-in can have — says that, and tells you to create a workspace first and then ask for the card again; creating a form without one would leave a form nobody can reach. Any other refusal by the server is reported as a change that was not carried out, together with the fact that the card cannot be used again.",
+      "A refused confirmation is never told to try again. The server spends the proposal the moment it decides to run it, so a refusal that arrives afterwards leaves the card finished: asking you to press Confirm once more would be advice that cannot work, over a token that is already gone. The remedy is always a fresh card — and where the cause is something you can fix, such as a missing workspace, the sentence says that first.",
       "A proposal whose arguments the tool would never accept is refused before your token is touched, and it says so. This is the case where the assistant built a card from an id keyed the wrong way — the assistant's read tools return an object's id under one name and the write tool wants it under another, so it can get this wrong. When it does, the confirmation is refused with the token still unused: nothing was attempted and nothing was used up, and the fix is to ask the assistant to prepare the card again rather than to retry the same one. The card never claims a change went through, and it never claims the proposal expired when it did not.",
       "The confirmation writes in THE WORKSPACE THE CALL BELONGED TO — the workspace you have selected, not your first account. This matters if you belong to more than one: a chat call carries the selected workspace with it, and if that workspace cannot be resolved the request is refused outright rather than quietly answered from another one. A refusal is a plain \"workspace not found\" or \"choose a workspace first\" answer, not a silent edit somewhere you were not looking.",
       "The proposal lane is in-app, not an MCP tool. There is no propose_write over MCP: a proposal is prepared by the assistant inside the dashboard and confirmed by the signed-in person, so the confirmation is a click and is deliberately not something an API call can supply. An agent that wants a change over MCP calls that change's own tool itself — its own client is the human's confirmation channel.",
@@ -145,7 +166,7 @@ const SECTIONS: Section[] = [
     id: "when-stuck",
     title: "When it does not know",
     body: [
-      "If the assistant cannot answer from your data, it says so and offers to file it as feedback. It is not allowed to guess about your money, your customers or your settings, and it will not invent a number to look helpful.",
+      "If the assistant cannot answer from your data or from its guide to the product, it says so and offers to file it as feedback. It is not allowed to guess about your money, your customers or your settings, and it will not invent a number or a feature to look helpful.",
       "If it tells you it found nothing, that is a statement about the lookup that ran, not about your account — and saying which form or period it looked at is a fair question to ask.",
       "For anything about a payment that went wrong, a payout, or an account you cannot access, file it from the Feedback page or reply in the assistant's thread: a conversation with a person is the right channel, and the chat will say so rather than pretend otherwise.",
     ],
@@ -160,9 +181,9 @@ export default function ChatDocsPage() {
       </p>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">In-app assistant</h1>
       <p className="mt-3 text-sm text-[var(--jf-muted)]">
-        The built-in chat: it answers questions about your own data, it files feedback for you, and
-        it can prepare a small reversible change for you to confirm. It cannot apply a change by
-        itself — by design, and enforced on the server.
+        The built-in chat: it answers questions about how JomForm works and about your own data, it files
+        feedback for you, and it can prepare a small reversible change for you to confirm. It cannot apply a
+        change by itself — by design, and enforced on the server.
       </p>
       <nav className="mt-6 flex flex-wrap gap-2">
         {SECTIONS.map((s) => (

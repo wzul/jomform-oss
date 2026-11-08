@@ -109,7 +109,7 @@ func (a *AuthHandlers) handleEmail2FACode(w http.ResponseWriter, r *http.Request
 func (a *AuthHandlers) replyEmail2FACodeOK(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":  "ok",
-		"message": "Jika akaun anda memenuhi syarat, kod 6-angka telah dihantar ke emel anda.",
+		"message": "If your account is eligible, a 6-digit code has been sent to your email.",
 	})
 }
 
@@ -293,7 +293,7 @@ func (a *AuthHandlers) handleMagicLinkRequest(w http.ResponseWriter, r *http.Req
 func (a *AuthHandlers) replyMagicLinkRequestOK(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":  "ok",
-		"message": "Jika emel tersebut berdaftar dan disahkan, pautan log masuk telah dihantar ke peti masuk anda.",
+		"message": "If that email is registered and verified, a sign-in link has been sent to your inbox.",
 	})
 }
 
@@ -443,7 +443,7 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 	if err := decodeJSON(r, &req); err != nil || req.Token == "" {
 		// Own wording for THIS surface (issue #6177 follow-up) — see
 		// CodeMagicTokenMissing in errcode.go.
-		writeErr(w, http.StatusBadRequest, "token log masuk diperlukan")
+		writeErr(w, http.StatusBadRequest, "sign-in token is required")
 		return
 	}
 	if a.Sessions == nil {
@@ -453,7 +453,7 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 	kind, val, err := a.Sessions.MagicLink().ConsumeAny(r.Context(), req.Token)
 	if err != nil {
 		if errors.Is(err, auth.ErrMagicLinkInvalid) {
-			writeErr(w, http.StatusBadRequest, "pautan log masuk tidak sah atau telah tamat tempoh")
+			writeErr(w, http.StatusBadRequest, "the sign-in link is invalid or has expired")
 			return
 		}
 		slog.Error("magiclink_consume", "err", err)
@@ -467,7 +467,7 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 		// Login token → existing user.
 		user, err = a.Users.ByID(r.Context(), val)
 		if err != nil || user == nil {
-			writeErr(w, http.StatusBadRequest, "akaun tidak dijumpai")
+			writeErr(w, http.StatusBadRequest, "account not found")
 			return
 		}
 	case auth.MagicLinkEmail:
@@ -481,7 +481,7 @@ func (a *AuthHandlers) handleMagicLinkVerify(w http.ResponseWriter, r *http.Requ
 			return
 		}
 	default:
-		writeErr(w, http.StatusBadRequest, "pautan log masuk tidak sah atau telah tamat tempoh")
+		writeErr(w, http.StatusBadRequest, "the sign-in link is invalid or has expired")
 		return
 	}
 

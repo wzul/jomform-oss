@@ -172,22 +172,22 @@ func TestResponseSubmitEnforcesRequiredBlocks(t *testing.T) {
 		body string
 		want string
 	}{
-		{"empty object", `{}`, "medan wajib tidak diisi: Nama"},
-		{"empty fields map", `{"fields":{}}`, "medan wajib tidak diisi: Nama"},
-		{"only the first required block", `{"fields":{"nm":"Ali"}}`, "medan wajib tidak diisi: Emel"},
-		{"blank required value", `{"fields":{"nm":"   ","em":"ali@example.test","dt":"2026-10-10"}}`, "medan wajib tidak diisi: Nama"},
+		{"empty object", `{}`, "Nama is required"},
+		{"empty fields map", `{"fields":{}}`, "Nama is required"},
+		{"only the first required block", `{"fields":{"nm":"Ali"}}`, "Emel is required"},
+		{"blank required value", `{"fields":{"nm":"   ","em":"ali@example.test","dt":"2026-10-10"}}`, "Nama is required"},
 		// Card t_28e6658d: every OTHER required block is answered, so this 400
 		// can only be the `text` block — the one the old allowlist dropped (its
 		// `required` was an HTML attribute a direct POST could ignore).
 		{
 			"all required blocks but the text one",
 			`{"fields":{"nm":"Ali","em":"ali@example.test","dt":"2026-10-10"}}`,
-			"medan wajib tidak diisi: Syarikat",
+			"Syarikat is required",
 		},
 		{
 			"the text block answered with blanks only",
 			`{"fields":{"nm":"Ali","em":"ali@example.test","dt":"2026-10-10","txt":"   "}}`,
-			"medan wajib tidak diisi: Syarikat",
+			"Syarikat is required",
 		},
 	}
 	for _, c := range cases {
@@ -269,7 +269,7 @@ func TestFormOrderEnforcesRequiredBlocks(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("order without fields: status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "medan wajib tidak diisi: Nama") {
+	if !strings.Contains(rec.Body.String(), "Nama is required") {
 		t.Errorf("order without fields: body %s, want the required-block message", rec.Body.String())
 	}
 	sales, err := h.Sales.ListByAccount(ctx, accountID, 10)
@@ -291,7 +291,7 @@ func TestFormOrderEnforcesRequiredBlocks(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("order without the text answer: status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "medan wajib tidak diisi: Syarikat") {
+	if !strings.Contains(rec.Body.String(), "Syarikat is required") {
 		t.Errorf("order without the text answer: body %s, want the text block's message", rec.Body.String())
 	}
 	if sales, err = h.Sales.ListByAccount(ctx, accountID, 10); err != nil {

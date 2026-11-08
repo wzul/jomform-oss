@@ -228,7 +228,7 @@ func TestMenuSoldOutVariantPickIsRefused(t *testing.T) {
 	d.dispatch("change", sel)
 
 	if got := len(d.cart()); got != 0 {
-		t.Fatalf("picking a sold-out variant added %d basket line(s) — the basket holds a line the order endpoint refuses with 409 stok habis\nbasket: %v", got, d.cart())
+		t.Fatalf("picking a sold-out variant added %d basket line(s) — the basket holds a line the order endpoint refuses with 409 is out of stock\nbasket: %v", got, d.cart())
 	}
 	if !menuHasClass(sel, "missing") {
 		t.Error("the refused pick did not flag the selector, so the buyer got no feedback")
@@ -676,6 +676,12 @@ func renderBlockFormPage(t *testing.T, productID string, priceSen int64, vars []
 		Required         bool
 		HasPrice         bool
 		HasQuantity      bool
+		// Card t_06851d88: pay-what-you-want product blocks.
+		CustomAmount     bool
+		AmountMinSen     int64
+		AmountMaxSen     int64
+		AmountSuggestSen int64
+		AmountHint       string
 		CondJSON         string
 		Image            string
 		ImgSize          string

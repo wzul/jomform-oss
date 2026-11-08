@@ -114,10 +114,20 @@ func TestAuthRememberMeUncheckedShortSession(t *testing.T) {
 	if hdr := rec.Header().Get("Set-Cookie"); strings.Contains(hdr, "Max-Age") {
 		t.Errorf("unchecked remember Set-Cookie must not contain Max-Age, got: %s", hdr)
 	}
-	// Server-side: the session key must not live long. Read its TTL.
+	// Server-side the unchecked session carries the handler's rememberShortTTL
+	// (24h), NOT the fixture store's testSessionTTL (15m): startSession passes an
+	// explicit TTL to CreateSession, and only Create consults the store's
+	// WithDefaultTTL. The LOWER bound is the point of this assertion, not the
+	// upper one — a handler that started honouring the store default would still
+	// satisfy "<= ~24h" while turning a real user's session into a 15-minute one,
+	// and the comment in test_session_valkey_t_e4c8ea65_test.go used to claim
+	// exactly that wrong thing about these fixtures (card t_39e2b840).
 	ttl := requireSessionTTL(t, h, cookie.Value)
-	if ttl > 25*time.Hour {
-		t.Errorf("unchecked session TTL = %v, want <= ~24h", ttl)
+	const slack = time.Hour
+	t.Logf("unchecked session TTL = %v (want ~%v)", ttl, rememberShortTTL)
+	if ttl < rememberShortTTL-slack || ttl > rememberShortTTL+slack {
+		t.Errorf("unchecked session TTL = %v, want ~%v (rememberShortTTL): the login handler passes an "+
+			"explicit TTL to CreateSession, so a fixture store's default TTL must not shorten it", ttl, rememberShortTTL)
 	}
 }
 

@@ -68,7 +68,14 @@ KEEP_WEEKLY="${JFBACKUP_KEEP_WEEKLY:-12}"
 KEEP_MONTHLY="${JFBACKUP_KEEP_MONTHLY:-18}"
 MEDIA_ENABLED="${JFBACKUP_MEDIA_ENABLED:-1}"
 PG_SERVICE_LABEL="com.docker.compose.service=postgres"
-MINIO_SERVICE_LABEL="com.docker.compose.service=minio"
+# The object store. It is the `s3` service (SeaweedFS) since the MinIO images
+# were withdrawn, and a host that has NOT been migrated yet still runs the old
+# `minio` one — so both labels are tried and whichever container is actually
+# running is the one archived. Backing up the wrong one is not possible: the
+# volume path is resolved from the container that was found. Get this list wrong
+# and the nightly job fails loudly at 02:17 instead of quietly archiving
+# nothing, which is the direction that matters.
+S3_SERVICE_LABELS=("com.docker.compose.service=s3" "com.docker.compose.service=minio")
 
 HOSTNAME_S="$(hostname)"
 STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -656,17 +663,20 @@ do_dump() {
 }
 
 # --------------------------------------------------------------- media volume
-# Covered deliberately: the MinIO volume holds customer-uploaded media and is
-# small (hundreds of KB today). A DB-only restore would leave media rows pointing
-# at objects that no longer exist.
+# Covered deliberately: the object store's volume holds customer-uploaded media
+# and is small (a few MB today). A DB-only restore would leave media rows
+# pointing at objects that no longer exist.
 do_media() {
   [ "$MEDIA_ENABLED" = "1" ] || { log INFO "media archive disabled"; return 0; }
   [ "$NO_MEDIA" = "1" ] && { log INFO "media archive skipped (--no-media)"; return 0; }
-  local minio src out
-  minio="$(container_for "$MINIO_SERVICE_LABEL")"
-  [ -n "$minio" ] || { echo "no running container with label $MINIO_SERVICE_LABEL"; return 1; }
-  src="$(docker inspect "$minio" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}')"
-  [ -n "$src" ] && [ -d "$src" ] || { echo "could not resolve the minio /data volume source (got '$src')"; return 1; }
+  local label svc src out
+  for label in "${S3_SERVICE_LABELS[@]}"; do
+    svc="$(container_for "$label")"
+    if [ -n "$svc" ]; then break; fi
+  done
+  [ -n "${svc:-}" ] || { echo "no running container with label ${S3_SERVICE_LABELS[*]}"; return 1; }
+  src="$(docker inspect "$svc" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}')"
+  [ -n "$src" ] && [ -d "$src" ] || { echo "could not resolve the object store's /data volume source (got '$src')"; return 1; }
   out="$STAGE_DIR/$DAILY_NAME-media.tar.gz"
   log INFO "media archive $src -> $out"
   if ! tar -C "$src" -czf "$out" .; then
@@ -788,7 +798,7 @@ fi
 if ! do_media; then
   fail "media archive failed"
   alert_email "[JomForm] Backup FAILED on $HOSTNAME_S — media" \
-    "The Postgres dump succeeded but the MinIO media archive failed at $STAMP.
+    "The Postgres dump succeeded but the object-store media archive failed at $STAMP.
 Restore the media volume by hand before trusting a restore: tail -n 100 $LOG_FILE"
   exit 1
 fi

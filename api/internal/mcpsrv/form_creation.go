@@ -27,29 +27,29 @@ import (
 
 // setFormThemeIn is the input for set_form_theme.
 type setFormThemeIn struct {
-	FormID string `json:"form_id" jsonschema:"ID borang"`
+	FormID string `json:"form_id" jsonschema:"Form ID"`
 	// Theme keys are all optional; omitted keys keep their current value.
 	// Pass an explicit empty string to clear a key.
-	Primary          string `json:"primary,omitempty" jsonschema:"Warna utama (butang/aksen), cth #5e6ad2"`
-	Background       string `json:"background,omitempty" jsonschema:"Warna latar halaman, cth #f7f8f8"`
-	Text             string `json:"text,omitempty" jsonschema:"Warna teks, cth #17181c"`
-	CardBackground   string `json:"card_background,omitempty" jsonschema:"Warna latar kad borang, cth #ffffff"`
-	CardBorderRadius string `json:"card_border_radius,omitempty" jsonschema:"Jejari sudut kad, cth 16px"`
-	FontFamily       string `json:"font_family,omitempty" jsonschema:"Stack fon, cth 'Inter, system-ui, sans-serif'"`
-	LogoURL          string `json:"logo_url,omitempty" jsonschema:"URL logo (branding)"`
-	Layout           string `json:"layout,omitempty" jsonschema:"Susun atur: centered (lalai) | full_width | split"`
-	Spacing          string `json:"spacing,omitempty" jsonschema:"Jarak: compact | comfortable (lalai) | spacious"`
+	Primary          string `json:"primary,omitempty" jsonschema:"Primary color (buttons/accent), e.g. #5e6ad2"`
+	Background       string `json:"background,omitempty" jsonschema:"Page background color, e.g. #f7f8f8"`
+	Text             string `json:"text,omitempty" jsonschema:"Text color, e.g. #17181c"`
+	CardBackground   string `json:"card_background,omitempty" jsonschema:"Form card background colour, e.g. #ffffff"`
+	CardBorderRadius string `json:"card_border_radius,omitempty" jsonschema:"Card corner radius, e.g. 16px"`
+	FontFamily       string `json:"font_family,omitempty" jsonschema:"Font stack, e.g. 'Inter, system-ui, sans-serif'"`
+	LogoURL          string `json:"logo_url,omitempty" jsonschema:"Logo URL (branding)"`
+	Layout           string `json:"layout,omitempty" jsonschema:"Layout: centered (default) | full_width | split"`
+	Spacing          string `json:"spacing,omitempty" jsonschema:"Spacing: compact | comfortable (default) | spacious"`
 	// Issue #471: product image size + layout on the buyer's form.
-	ProductImageSize   string `json:"product_image_size,omitempty" jsonschema:"Saiz imej produk: small (52px, lalai) | medium (96px) | large (160px) | hidden. Guna medium/large untuk menu restoran; hidden menyembunyikan imej."`
-	ProductImageLayout string `json:"product_image_layout,omitempty" jsonschema:"Susun atur imej produk: thumbnail-left (lalai, imej di kiri nama) | image-top (kad menu: imej penuh di atas nama)."`
+	ProductImageSize   string `json:"product_image_size,omitempty" jsonschema:"Product image size: small (52px, default) | medium (96px) | large (160px) | hidden. Use medium/large for restaurant menus; hidden hides the image."`
+	ProductImageLayout string `json:"product_image_layout,omitempty" jsonschema:"Product image layout: thumbnail-left (default, image to the left of the name) | image-top (menu card: full image above the name)."`
 	// CustomCSS is arbitrary CSS injected into the rendered page. It is
 	// HTML-escaped so a </style> cannot break out of the style block. The
 	// agent controls look-and-feel only — never prices or payment logic.
-	CustomCSS string `json:"custom_css,omitempty" jsonschema:"CSS tersuai (bebas) — guna untuk gaya/branding/layout"`
+	CustomCSS string `json:"custom_css,omitempty" jsonschema:"Custom CSS (free-form) — use for styling/branding/layout"`
 	// CustomJS is arbitrary JS injected into the rendered page (issue #388).
 	// Owner-gated and scanned with the deterministic code-asset scan (#364) so
 	// obviously malicious JS is never served on the buyer's page.
-	CustomJS string `json:"custom_js,omitempty" jsonschema:"JS tersuai (kuasa pengguna) — guna untuk tingkah laku borang. Dikawal pemilik + diimbas."`
+	CustomJS string `json:"custom_js,omitempty" jsonschema:"Custom JS (user power) — use for form behaviour. Owner-controlled + scanned."`
 }
 
 // setFormTheme stores a form's custom styling/theme (issue #254). The theme
@@ -59,7 +59,7 @@ func (s *Server) setFormTheme(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormThemeIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if in.FormID == "" {
-		return nil, nil, errors.New("form_id wajib")
+		return nil, nil, errors.New("form_id is required")
 	}
 	// Issue #307: resolve + RBAC-gate the owning account across the user's workspaces.
 	acc, err := s.requireFormWrite(ctx, in.FormID)
@@ -68,20 +68,20 @@ func (s *Server) setFormTheme(
 	}
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	theme := orEmptyMap(f.Theme)
 	// Layout/spacing are validated against a small allowlist so the renderer
 	// can map them to known CSS without trusting arbitrary strings.
 	if in.Layout != "" {
 		if in.Layout != "centered" && in.Layout != "full_width" && in.Layout != "split" {
-			return nil, nil, errors.New("layout mesti centered|full_width|split")
+			return nil, nil, errors.New("layout must be centered|full_width|split")
 		}
 		theme["layout"] = in.Layout
 	}
 	if in.Spacing != "" {
 		if in.Spacing != "compact" && in.Spacing != "comfortable" && in.Spacing != "spacious" {
-			return nil, nil, errors.New("spacing mesti compact|comfortable|spacious")
+			return nil, nil, errors.New("spacing must be compact|comfortable|spacious")
 		}
 		theme["spacing"] = in.Spacing
 	}
@@ -89,10 +89,10 @@ func (s *Server) setFormTheme(
 	// allowlist the renderer uses (empty = unset → clear the key, restoring the
 	// default small / thumbnail-left look).
 	if in.ProductImageSize != "" && !validProductImageSize(in.ProductImageSize) {
-		return nil, nil, errors.New("product_image_size mesti small|medium|large|hidden")
+		return nil, nil, errors.New("product_image_size must be small|medium|large|hidden")
 	}
 	if in.ProductImageLayout != "" && !validProductImageLayout(in.ProductImageLayout) {
-		return nil, nil, errors.New("product_image_layout mesti thumbnail-left|image-top")
+		return nil, nil, errors.New("product_image_layout must be thumbnail-left|image-top")
 	}
 	setThemeStr(theme, "product_image_size", in.ProductImageSize)
 	setThemeStr(theme, "product_image_layout", in.ProductImageLayout)
@@ -168,8 +168,8 @@ func validProductImageLayout(v string) bool {
 
 // registerFormFieldsIn is the input for register_form_fields.
 type registerFormFieldsIn struct {
-	FormID string             `json:"form_id" jsonschema:"ID borang"`
-	Fields []formfields.Field `json:"fields" jsonschema:"Senarai medan input berdaftar: {field_id, type, label, required, validation?, product_id?}. Ganti semua medan sedia ada."`
+	FormID string             `json:"form_id" jsonschema:"Form ID"`
+	Fields []formfields.Field `json:"fields" jsonschema:"List of registered input fields: {field_id, type, label, required, validation?, product_id?}. Replaces all existing fields."`
 }
 
 // registerFormFields validates and stores a form's registered input fields
@@ -180,7 +180,7 @@ func (s *Server) registerFormFields(
 	ctx context.Context, _ *mcp.CallToolRequest, in registerFormFieldsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if in.FormID == "" {
-		return nil, nil, errors.New("form_id wajib")
+		return nil, nil, errors.New("form_id is required")
 	}
 	// Issue #307: resolve + RBAC-gate the owning account across the user's workspaces.
 	acc, err := s.requireFormWrite(ctx, in.FormID)
@@ -189,7 +189,7 @@ func (s *Server) registerFormFields(
 	}
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	// Validate the contract before persisting anything.
 	if err := formfields.ValidateContract(in.Fields); err != nil {

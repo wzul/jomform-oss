@@ -45,6 +45,11 @@ func TestPublishRefusesAPaymentFormWithNoProductsUntilAcknowledged(t *testing.T)
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	acc, _ := bundleFixture(t, ctx, pool)
+	// The production shape for anything that publishes: ask-first onboarding
+	// makes the workspace BEFORE the form (t_6c0badbe). Since t_fadfe9f7 a form
+	// cannot enter a live status on an account with no live workspace, so the
+	// ack rule this test is about must be measured on a linked account.
+	bundleLinkWorkspace(t, ctx, pool, acc)
 	key := bundleAPIKey(t, ctx, pool, acc)
 	h := newBundleHandlers(pool)
 	forms := dbstore.NewFormStore(pool)
@@ -131,6 +136,9 @@ func TestResponseFormWithNoProductsPublishesWithoutAWarning(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	acc, _ := bundleFixture(t, ctx, pool)
+	// A publish needs a live workspace (t_fadfe9f7); link one so this test
+	// measures the ack rule, not that guard.
+	bundleLinkWorkspace(t, ctx, pool, acc)
 	key := bundleAPIKey(t, ctx, pool, acc)
 	h := newBundleHandlers(pool)
 	forms := dbstore.NewFormStore(pool)
@@ -170,6 +178,10 @@ func TestStatusRouteAppliesTheSameRuleAsThePublishRoute(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	acc, _ := bundleFixture(t, ctx, pool)
+	// The status route is a publish door too: since t_fadfe9f7 it refuses
+	// entering a live status on an account with no live workspace, so link one
+	// before measuring the ack rule.
+	bundleLinkWorkspace(t, ctx, pool, acc)
 	key := bundleAPIKey(t, ctx, pool, acc)
 	h := newBundleHandlers(pool)
 	forms := dbstore.NewFormStore(pool)
@@ -241,6 +253,9 @@ func TestBulkPublishWithholdsPaymentFormsWithNoProducts(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	acc, _ := bundleFixture(t, ctx, pool)
+	// A bulk publish needs a live workspace too (t_fadfe9f7); link one so this
+	// test measures the ack withholding, not that guard.
+	bundleLinkWorkspace(t, ctx, pool, acc)
 	key := bundleAPIKey(t, ctx, pool, acc)
 	h := newBundleHandlers(pool)
 	forms := dbstore.NewFormStore(pool)

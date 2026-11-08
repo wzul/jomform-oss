@@ -10,7 +10,7 @@ import (
 func (a *AuthHandlers) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
-		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		writeErr(w, http.StatusUnauthorized, "not signed in")
 		return
 	}
 	var req struct {
@@ -21,11 +21,11 @@ func (a *AuthHandlers) handleChangePassword(w http.ResponseWriter, r *http.Reque
 		TOTPCode string `json:"totp_code"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.OldPassword == "" || req.NewPassword == "" {
-		writeErr(w, http.StatusBadRequest, "old_password dan new_password diperlukan")
+		writeErr(w, http.StatusBadRequest, "old_password and new_password are required")
 		return
 	}
 	if len(req.NewPassword) < 10 {
-		writeErr(w, http.StatusBadRequest, "kata laluan baharu mesti sekurang-kurangnya 10 aksara")
+		writeErr(w, http.StatusBadRequest, "the new password must be at least 10 characters")
 		return
 	}
 	// Issue #458 (option C): a magic-link session for a 2FA-enabled user must
@@ -35,7 +35,7 @@ func (a *AuthHandlers) handleChangePassword(w http.ResponseWriter, r *http.Reque
 	}
 	ok, err := auth.VerifyPassword(req.OldPassword, user.PasswordHash)
 	if err != nil || !ok {
-		writeErr(w, http.StatusUnauthorized, "kata laluan lama tidak sah")
+		writeErr(w, http.StatusUnauthorized, "the old password is incorrect")
 		return
 	}
 	hash, err := auth.HashPassword(req.NewPassword)

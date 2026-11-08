@@ -44,16 +44,44 @@
 #   6. verify: docker compose logs <service> | head   → startup line shows
 #      version=... commit=... matching the tag; then curl the health route
 #
-# Usage:
-#   ./deploy/build-and-ship.sh [--skip-tests] [VERSION]
+# THIS IS THE RELEASE GATE. AGENTS.md moved the FULL preflight here: a merge may
+# proceed on the evidence the branch's own iteration run produced (full, scoped or
+# reused), but a RELEASE runs the whole inventory on the exact tree being shipped,
+# and refuses to build on red. A tree that already holds a whole-inventory green
+# record is reused rather than re-gated, so a tree that WAS fully gated costs
+# nothing here.
 #
-#   --skip-tests  DANGER: bypass the pre-build preflight (scripts/preflight.sh,
-#                 every gate it lists) and print a loud warning naming them.
-#                 Only for a genuine emergency (e.g. an urgent hotfix while the
-#                 local test Postgres/Valkey is down) — never for a normal
-#                 release.
-#                 The gate is what keeps a broken build from crash-looping prod,
-#                 so re-run WITHOUT this flag as soon as the emergency is over.
+# REMOTE BUILD (--remote-build): the image is built ON the deployment server
+# instead of on this host, because the compile is what makes this host's load
+# spike. The source leaves as a `git archive` of HEAD, is verified by sha256 on the
+# far side before it is unpacked, and is built there with the same stamps. No
+# tarball is produced and nothing is scp'd — `docker load` is not needed either,
+# because the image already exists where it runs.
+#
+# Usage:
+#   ./deploy/build-and-ship.sh [--skip-tests] [--remote-build] [VERSION]
+#
+#   VERSION (or VERSION_OVERRIDE in the environment) may only RESTATE the tag on HEAD: the
+#   version comes from deploy/require-release-tag.sh, and a contradicting override is refused
+#   instead of silently ignored.
+#
+# Exit: 0 shipped · 1 refused or failed · 4 HEAD carries no release tag · 5 VERSION_OVERRIDE
+#       contradicts the tag on HEAD
+#
+#   --skip-tests    DANGER: bypass the pre-build preflight (scripts/preflight.sh,
+#                   every gate it lists) and print a loud warning naming them.
+#                   Only for a genuine emergency (e.g. an urgent hotfix while the
+#                   local test Postgres/Valkey is down) — never for a normal
+#                   release.
+#                   The gate is what keeps a broken build from crash-looping prod,
+#                   so re-run WITHOUT this flag as soon as the emergency is over.
+#
+#   --remote-build  build on REMOTE_BUILD_HOST (the deployment server). Requires
+#                   REMOTE_BUILD_HOST to be set — there is no default, so a typo
+#                   can never silently build somewhere nobody looked. Note what a
+#                   docker build does NOT inherit: the build itself runs inside the
+#                   far side's dockerd, so GATE_CPU_QUOTA (below) bounds only the
+#                   gate on THIS host, never the remote compile.
 #
 #   Before the gate takes a slot in the host gate pool it consults the per-tree
 #   result record (scripts/preflight_reuse.sh). A tree whose verdict is ALREADY
@@ -77,11 +105,26 @@
 #                                     so the clean-tree guard stays valid)
 #   SSH_HOST    set to enable scp of the tarball (e.g. 203.0.113.10)
 #   SSH_USER    (default: root)   SSH_PORT (default: 22)   SSH_PATH (default: /tmp)
+#   GATE_CPU_QUOTA  cgroup quota for the pre-build gate (default: 300% = 3 cores;
+#                   set to "" to run it uncapped). systemd's CPUQuota counts
+#                   CORES, not a share of the host. Measured on a 6-core host: an
+#                   uncapped cold `go build ./...` peaked at 307% CPU and
+#                   `npm run build` at 192%, while CPUQuota=100% (one core) cost
+#                   4.5x and 2.9x wall time — so 400% bounds the gate's draw
+#                   without costing any wall time. `nice` does NOT do this: it
+#                   changes who runs, not how many threads are runnable, so it
+#                   leaves the load average untouched.
+#   REMOTE_BUILD_HOST      build on this host (e.g. 217.216.39.61) — see above
+#   REMOTE_BUILD_DIR       where the source is unpacked there (default /root/jomform-build)
+#   REMOTE_BUILD_SSH_USER  (default: root)   REMOTE_BUILD_SSH_PORT (default: 22)
 #
 # Example — build the web image instead (context is the repo ROOT: the web
 # unit tests, which `npm run build` runs first, read api/ sources — see
 # web/Dockerfile and deploy/DEPLOY.md):
 #   IMAGE=jomform-web CONTEXT=. DOCKERFILE=web/Dockerfile ./deploy/build-and-ship.sh
+#
+# Example — the same, built on the deployment server:
+#   REMOTE_BUILD_HOST=217.216.39.61 ./deploy/build-and-ship.sh --remote-build
 
 set -euo pipefail
 
@@ -107,19 +150,59 @@ SSH_PORT="${SSH_PORT:-22}"
 SSH_PATH="${SSH_PATH:-/tmp}"
 LOCK_FILE="${LOCK_FILE:-/tmp/jomform-build.lock}"
 SKIP_TESTS="${SKIP_TESTS:-0}"
+# --- release-path knobs (see the header for the measurements behind them) ----
+# GATE_CPU_QUOTA bounds the pre-build GATE on this host. It is deliberately NOT
+# applied to a docker build: a build executes inside dockerd, not in this shell's
+# cgroup, so a client-side quota would be theatre. That is exactly why
+# --remote-build exists — it moves the compile to a host whose job is not running
+# lanes. Default 300% = 3 of 6 cores, so half the host stays free for other apps;
+# empty = uncapped. Wan's standing rule is 300% at EVERY stage (dev/qa/merge/deploy),
+# not just here — deploy/merge-train.sh takes the same quota.
+GATE_CPU_QUOTA="${GATE_CPU_QUOTA-300%}"
+# The BUILD is a second CPU draw, and it does NOT inherit this shell's cgroup: the
+# compile runs inside dockerd's builder. `docker build --cpu-quota` is the supported
+# way to bound it and it really does apply to the buildkit worker — measured on the
+# deployment host (6 cores, alpine image, 6 parallel busy loops, host CPU from
+# /proc/stat deltas): uncapped 4820 ms at ~4.7 cores; `--cpu-quota 300000` 8237 ms at
+# 2.9 cores, reproduced 8186 ms / 2.9 cores. So the same 300% rule is applied to the
+# build on BOTH paths (remote and local). Empty = uncapped.
+BUILD_CPU_QUOTA="${BUILD_CPU_QUOTA-${GATE_CPU_QUOTA:-}}"
+# "300%" -> 300000 (docker wants microseconds per 100 ms period); "300000" passes through.
+quota_to_micros() {
+  case "$1" in
+    "") return 0 ;;
+    *%) printf '%s' $(( ${1%\%} * 1000 )) ;;   # 1 core = 100000us per 100ms period
+    *)  printf '%s' "$1" ;;
+  esac
+}
+BUILD_CPU_FLAGS=()
+if [ -n "$BUILD_CPU_QUOTA" ]; then
+  _micros=$(quota_to_micros "$BUILD_CPU_QUOTA")
+  [ -n "$_micros" ] && BUILD_CPU_FLAGS=(--cpu-quota "$_micros")
+fi
+REMOTE_BUILD_HOST="${REMOTE_BUILD_HOST:-}"
+REMOTE_BUILD_DIR="${REMOTE_BUILD_DIR:-/root/jomform-build}"
+REMOTE_BUILD_SSH_USER="${REMOTE_BUILD_SSH_USER:-root}"
+REMOTE_BUILD_SSH_PORT="${REMOTE_BUILD_SSH_PORT:-22}"
+REMOTE_BUILD_FLAG=0
 
 die() { echo "ERROR: $*" >&2; exit 1; }
+# die_rc — same message shape, but the exit code is the one the FAILING STEP chose, so a
+# caller can tell "no release tag" (4) from "the override contradicts the tag" (5) instead of
+# reading both as a generic 1.
+die_rc() { local rc=$1; shift; echo "ERROR: $*" >&2; exit "$rc"; }
 info() { echo "==> $*"; }
 
 # usage() prints this script's own header comment (from line 2 down to the
 # `set -euo pipefail` line) with the leading "# " stripped.
 usage() { sed -n '2,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
-VERSION_OVERRIDE=""
+VERSION_OVERRIDE="${VERSION_OVERRIDE:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)   usage; exit 0 ;;
     --skip-tests) SKIP_TESTS=1 ;;
+    --remote-build) REMOTE_BUILD_FLAG=1 ;;
     --)          shift; break ;;
     -*)          die "unknown flag: $1 (see --help)" ;;
     *)           [ -z "$VERSION_OVERRIDE" ] || die "unexpected extra argument: $1 (see --help)"
@@ -127,6 +210,21 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+# The version stamp is resolved by deploy/require-release-tag.sh, which runs as a CHILD
+# process — so the override must be EXPORTED and must not be reset here. Both shapes are
+# accepted (env and positional) and both mean the same thing: a restatement of the tag that
+# must equal it. Until this export existed, `VERSION_OVERRIDE=v9.9.9 ./deploy/build-and-ship.sh`
+# on a v1.0.0 tree stamped v1.0.0 and shipped: the override was silently discarded, so a
+# caller could not make the ship refuse a tree it thought it was not shipping.
+export VERSION_OVERRIDE
+
+# --remote-build names no host of its own on purpose: the host must be explicit in
+# the environment, so a release can never be built somewhere nobody chose.
+if [ "$REMOTE_BUILD_FLAG" = "1" ]; then
+  [ -n "$REMOTE_BUILD_HOST" ] || die \
+    "--remote-build needs REMOTE_BUILD_HOST=<host> (there is no default host — e.g. REMOTE_BUILD_HOST=217.216.39.61)"
+fi
 
 # ---------------------------------------------------------------------------
 # 1. Single-writer lock: fail fast if another build is already running.
@@ -146,17 +244,57 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Resolve provenance stamps from git (tag first, then build).
+# 3. Resolve provenance stamps from git — A DEPLOY SHIPS A RELEASE, so HEAD must be
+#    tagged. This used to be `git describe --tags --always`, which silently stamped an
+#    untagged HEAD with a raw SHA: the deploy happened with no release decision behind
+#    it, and tags became a by-product of deploying (measured 2026-11-07: 806 tags on
+#    1,341 commits, 102 in seven days). The rule now lives in
+#    deploy/require-release-tag.sh, which deploy/release_selftest.sh tests directly.
 # ---------------------------------------------------------------------------
-VERSION="${VERSION_OVERRIDE:-$(git describe --tags --always)}"
+VERSION="$(bash "$REPO_ROOT/deploy/require-release-tag.sh")" || {
+  rc=$?
+  case "$rc" in
+    4) die_rc 4 "refusing to build: HEAD carries no release tag — cut a release with ./deploy/cut-release.sh" ;;
+    5) die_rc 5 "refusing to build: VERSION_OVERRIDE=${VERSION_OVERRIDE:-} does not match the tag on HEAD — a release is a TAG, not an override (see deploy/require-release-tag.sh)" ;;
+    *) die_rc "$rc" "refusing to build: deploy/require-release-tag.sh exited $rc" ;;
+  esac
+}
 COMMIT="$(git rev-parse --short HEAD)"
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 info "stamps: version=$VERSION commit=$COMMIT date=$BUILD_DATE"
 
+# The release rules are TESTED before they are used, here, because this is the only path that
+# ships: require-release-tag (above), cut-release's version arithmetic, and the mirror sync.
+# Hermetic — throwaway git repos, no network, no docker — so it cannot be the reason a release
+# waits on a resource. SKIP_RELEASE_SELFTEST=1 is for a machine with no git binary at all.
+#
+# VERSION_OVERRIDE is DROPPED from the child's environment (`env -u`). This script exports it
+# for require-release-tag.sh above, but the selftest sets its OWN override per case; handing it
+# the caller's value does not describe those fixtures, it rewrites them. Measured before this
+# existed, on a v9.9.9 tree: the cut-release shape (`VERSION_OVERRIDE=v9.9.9
+# ./deploy/build-and-ship.sh`, exactly what deploy/cut-release.sh runs) scored the suite at
+# 72 passed / 7 failed and refused to build, while the same bytes with the variable unset
+# scored 79/0 — so the documented release path could not ship at all. deploy/release_selftest.sh
+# drops the variable itself as well; the two are independent so neither call shape can leak it.
+if [ -x "$REPO_ROOT/deploy/release_selftest.sh" ] && [ "${SKIP_RELEASE_SELFTEST:-0}" != 1 ]; then
+  selftest_log="${TMPDIR:-/tmp}/release-selftest.$$.log"
+  if env -u VERSION_OVERRIDE bash "$REPO_ROOT/deploy/release_selftest.sh" >"$selftest_log" 2>&1; then
+    info "release rules selftest: passed ($(grep -c '^  ok' "$selftest_log" 2>/dev/null || echo '?') checks)"
+    rm -f "$selftest_log"
+  else
+    tail -25 "$selftest_log" >&2 || true
+    die "the release rules selftest FAILED — refusing to build (full log: $selftest_log)"
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # 4. Preflight.
 # ---------------------------------------------------------------------------
-command -v docker >/dev/null 2>&1 || die "docker not found in PATH"
+command -v docker >/dev/null 2>&1 || [ -n "$REMOTE_BUILD_HOST" ] || die "docker not found in PATH"
+if [ -n "$REMOTE_BUILD_HOST" ]; then
+  command -v ssh >/dev/null 2>&1 || die "ssh not found in PATH — required for REMOTE_BUILD_HOST"
+  command -v tar >/dev/null 2>&1 || die "tar not found in PATH — required to unpack the source archive"
+fi
 [ -f "$DOCKERFILE" ] || die "$DOCKERFILE not found — the api image Dockerfile lives on the Dockerfile branch (issue #25); merge/checkout it first"
 mkdir -p "$OUT_DIR"
 
@@ -280,11 +418,33 @@ else
     echo "    — GATING IN FULL (a deploy must not skip a gate it cannot look up)." >&2
   fi
   [ -z "$REUSE_LINE" ] || info "reuse: $REUSE_LINE"
-  # The argv is passed as SEPARATE arguments after the `bash -c` script, so a
-  # reuse flag is never re-split or word-split: `exec "$@"` runs exactly the array
-  # this script decided on, from inside $REPO_ROOT.
-  run_gate_step "${GATE_ARGV[*]} ($GATE_INVENTORY)" \
-    bash -c "cd '$REPO_ROOT' && exec \"\$@\"" bash "${GATE_ARGV[@]}"
+  # CPU-QUOTA THE GATE. The gate is the CPU-hungry half of a release (`go test
+  # -race ./...`, `next build`, the shell suites) and on a host that also runs
+  # lanes and other people's containers it takes whatever it can find. Bound it in
+  # a transient systemd scope rather than deprioritising it: `nice` does not lower
+  # the load average (the threads stay runnable), a cgroup quota does. Measured
+  # here — CPUQuota=100% (1 core) cost 4.5x on `go build ./...` and 2.9x on
+  # `npm run build`. A 300% quota sits above `npm run build`'s own peak (192%) and
+  # shaves only the very top of a cold `go build` (307%), so it costs ~nothing in
+  # wall time while guaranteeing three of six cores stay free for everything else
+  # on this host. Falls back to an uncapped run, loudly.
+  GATE_LAUNCH=()
+  GATE_QUOTA_LABEL="no CPU quota"
+  if [ -n "$GATE_CPU_QUOTA" ]; then
+    if command -v systemd-run >/dev/null 2>&1; then
+      GATE_LAUNCH=(systemd-run --scope -q -p "CPUQuota=$GATE_CPU_QUOTA")
+      GATE_QUOTA_LABEL="CPUQuota=$GATE_CPU_QUOTA"
+    else
+      info "WARNING: systemd-run not found — the pre-build gate runs UNCAPPED (it will take every core it can)"
+    fi
+  fi
+  # The argv is passed as SEPARATE arguments after the `bash -c` script, and is
+  # expanded HERE (not into a prebuilt array) so a change to GATE_ARGV above is
+  # always what runs: deploy/biteproof_build_and_ship_gate.sh case E sabotages the
+  # routing by rewriting GATE_ARGV just before this call, and a prebuilt command
+  # would make that sabotage a no-op — a vacuous bite proof.
+  run_gate_step "${GATE_ARGV[*]} ($GATE_INVENTORY) [$GATE_QUOTA_LABEL]" \
+    "${GATE_LAUNCH[@]}" bash -c "cd '$REPO_ROOT' && exec \"\$@\"" bash "${GATE_ARGV[@]}"
   if [ "${#GATE_ARGV[@]}" -gt 1 ]; then
     info "pre-build gate green: the per-tree record was read; the gates above are the ones it could not vouch for (the rest are REMEMBERED, and were NOT re-run)"
   else
@@ -302,32 +462,101 @@ fi
 #    api/internal/version/dockerfile_wiring_test.go fails when that wiring rots.
 # ---------------------------------------------------------------------------
 info "building $IMAGE:$VERSION from $DOCKERFILE (context: $CONTEXT)"
-docker build \
-  -f "$DOCKERFILE" \
-  "$CONTEXT" \
-  --build-arg "VERSION=$VERSION" \
-  --build-arg "COMMIT=$COMMIT" \
-  --build-arg "BUILD_DATE=$BUILD_DATE" \
-  --label "org.opencontainers.image.title=$IMAGE" \
-  --label "org.opencontainers.image.version=$VERSION" \
-  --label "org.opencontainers.image.revision=$COMMIT" \
-  --label "org.opencontainers.image.created=$BUILD_DATE" \
-  --tag "$IMAGE:$VERSION"
+TREE_SHA="$(git rev-parse "HEAD^{tree}")"
+info "tree being built: $TREE_SHA (this is the tree the gate just covered)"
 
-IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE:$VERSION")"
-info "built $IMAGE:$VERSION ($IMAGE_ID)"
+BUILD_ARGS=(
+  --build-arg "VERSION=$VERSION"
+  --build-arg "COMMIT=$COMMIT"
+  --build-arg "BUILD_DATE=$BUILD_DATE"
+  --label "org.opencontainers.image.title=$IMAGE"
+  --label "org.opencontainers.image.version=$VERSION"
+  --label "org.opencontainers.image.revision=$COMMIT"
+  --label "org.opencontainers.image.created=$BUILD_DATE"
+  --tag "$IMAGE:$VERSION"
+)
+
+if [ -n "$REMOTE_BUILD_HOST" ]; then
+  # -------------------------------------------------------------------------
+  # 6r. REMOTE BUILD — compile on the deployment server, not on this host.
+  #
+  #     The compile is what spikes this host's load, and a docker build cannot be
+  #     bounded from here (it runs inside dockerd). Moving it means the bytes have
+  #     to leave as SOURCE, so the source is a `git archive` of exactly HEAD and is
+  #     verified by sha256 on the far side BEFORE it is unpacked: a truncated or
+  #     replaced archive fails the release instead of building the wrong code.
+  #
+  #     What is deliberately NOT done here: tagging `:latest` or recreating the
+  #     service. Those stay printed, human-run steps — same policy as the local
+  #     path, where this script never touches the running stack.
+  # -------------------------------------------------------------------------
+  SSH_OPTS=(-p "$REMOTE_BUILD_SSH_PORT" -o BatchMode=yes)
+  SSH_DEST="$REMOTE_BUILD_SSH_USER@$REMOTE_BUILD_HOST"
+  ARCHIVE="$(mktemp "${OUT_DIR:-/tmp}/jomform-src-XXXXXX.tar")"
+  trap 'rm -f "$ARCHIVE"' EXIT
+
+  info "remote build on $SSH_DEST → $REMOTE_BUILD_DIR (source = git archive of HEAD $COMMIT)"
+  git archive --format=tar -o "$ARCHIVE" HEAD \
+    || die "git archive failed — nothing to build from"
+  LOCAL_SUM="$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
+  info "source archive: $(du -h "$ARCHIVE" | cut -f1), sha256 $LOCAL_SUM"
+
+  REMOTE_SUM="$(cat "$ARCHIVE" | ssh "${SSH_OPTS[@]}" "$SSH_DEST" \
+      "mkdir -p '$REMOTE_BUILD_DIR' && cat > '$REMOTE_BUILD_DIR/src.tar' && sha256sum '$REMOTE_BUILD_DIR/src.tar' | cut -d' ' -f1")" \
+    || die "shipping the source archive to $SSH_DEST failed"
+  [ "$REMOTE_SUM" = "$LOCAL_SUM" ] || die \
+    "source archive differs on $SSH_DEST (local $LOCAL_SUM, remote $REMOTE_SUM) — refusing to build bytes that are not the gated tree"
+  info "source archive verified on $SSH_DEST (sha256 $REMOTE_SUM)"
+
+  ssh "${SSH_OPTS[@]}" "$SSH_DEST" \
+    "set -euo pipefail; rm -rf '$REMOTE_BUILD_DIR/src'; mkdir -p '$REMOTE_BUILD_DIR/src'; tar -xf '$REMOTE_BUILD_DIR/src.tar' -C '$REMOTE_BUILD_DIR/src'" \
+    || die "unpacking the source archive on $SSH_DEST failed"
+
+  # Quoted as $REMOTE_BUILD_DIR/src/<path>: the archive root IS the repo root.
+  info "docker build on $SSH_DEST (context: $REMOTE_BUILD_DIR/src/$CONTEXT)"
+  ssh "${SSH_OPTS[@]}" "$SSH_DEST" \
+    "set -euo pipefail; cd '$REMOTE_BUILD_DIR/src' && docker build $(printf '%q ' "${BUILD_CPU_FLAGS[@]}")-f '$DOCKERFILE' '$CONTEXT' $(printf '%q ' "${BUILD_ARGS[@]}")" \
+    || die "remote docker build FAILED on $SSH_DEST — nothing was tagged or recreated"
+
+  REMOTE_IMAGE_ID="$(ssh "${SSH_OPTS[@]}" "$SSH_DEST" "docker image inspect --format '{{.Id}}' '$IMAGE:$VERSION'")" \
+    || die "the build reported success but $SSH_DEST has no $IMAGE:$VERSION image"
+  info "built $IMAGE:$VERSION ON $SSH_DEST ($REMOTE_IMAGE_ID) — no tarball, no docker load"
+  info "labels on that image (proves provenance):"
+  ssh "${SSH_OPTS[@]}" "$SSH_DEST" \
+    "docker image inspect --format '{{index .Config.Labels \"org.opencontainers.image.version\"}} {{index .Config.Labels \"org.opencontainers.image.revision\"}}' '$IMAGE:$VERSION'" \
+    || true
+  BUILD_HOST_LINE="$SSH_DEST (remote — nothing was compiled on this host)"
+else
+  docker build \
+    "${BUILD_CPU_FLAGS[@]}" \
+    -f "$DOCKERFILE" \
+    "$CONTEXT" \
+    "${BUILD_ARGS[@]}"
+
+  IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE:$VERSION")"
+  info "built $IMAGE:$VERSION ($IMAGE_ID)"
+  BUILD_HOST_LINE="this host"
+fi
 
 # ---------------------------------------------------------------------------
 # 7. Save as a gzip tarball (server-to-server pattern: no registry needed).
+#    Skipped entirely for a remote build: the image is already where it runs.
 # ---------------------------------------------------------------------------
-TARBALL="$OUT_DIR/$IMAGE-$VERSION.tar.gz"
-info "saving image → $TARBALL"
-docker save "$IMAGE:$VERSION" | gzip > "$TARBALL"
+if [ -n "$REMOTE_BUILD_HOST" ]; then
+  info "skipping tarball (remote build: the image already lives on $REMOTE_BUILD_HOST)"
+  TARBALL=""
+else
+  TARBALL="$OUT_DIR/$IMAGE-$VERSION.tar.gz"
+  info "saving image → $TARBALL"
+  docker save "$IMAGE:$VERSION" | gzip > "$TARBALL"
+fi
 
 # ---------------------------------------------------------------------------
 # 8. Ship (optional): scp to the server when SSH_HOST is set.
 # ---------------------------------------------------------------------------
-if [ -n "$SSH_HOST" ]; then
+if [ -n "$REMOTE_BUILD_HOST" ]; then
+  info "skipping scp (remote build: nothing to ship)"
+elif [ -n "$SSH_HOST" ]; then
   info "shipping $TARBALL → $SSH_USER@$SSH_HOST:$SSH_PATH/ (port $SSH_PORT)"
   scp -P "$SSH_PORT" "$TARBALL" "$SSH_USER@$SSH_HOST:$SSH_PATH/"
 else
@@ -337,8 +566,26 @@ fi
 # ---------------------------------------------------------------------------
 # 9. Print the remaining server-side steps (never executed from here).
 # ---------------------------------------------------------------------------
+if [ -n "$REMOTE_BUILD_HOST" ]; then
+cat <<EOF
+
+Build host: $BUILD_HOST_LINE
+Gated tree: $TREE_SHA
+
+Remaining steps ON THE SERVER for service '$SERVICE' (run manually).
+NOTE the first line is different from a local build: there is no docker load,
+because the image was built there.
+
+  docker tag $IMAGE:$VERSION $IMAGE:latest
+  cd ${REMOTE_COMPOSE_DIR:-/opt/jomform} && docker compose up -d --force-recreate $SERVICE
+  docker compose logs $SERVICE | head   # must show version=$VERSION commit=$COMMIT
+EOF
+else
 REMOTE_TARBALL="$SSH_PATH/$(basename "$TARBALL")"
 cat <<EOF
+
+Build host: $BUILD_HOST_LINE
+Gated tree: $TREE_SHA
 
 Remaining steps ON THE SERVER for service '$SERVICE' (run manually):
   docker load -i $REMOTE_TARBALL
@@ -346,6 +593,7 @@ Remaining steps ON THE SERVER for service '$SERVICE' (run manually):
   docker compose up -d --force-recreate $SERVICE
   docker compose logs $SERVICE | head   # must show version=$VERSION commit=$COMMIT
 EOF
+fi
 
 # The API image carries the version banner, so its log line proves the deploy.
 # The web image has no such banner - a successful recreate proves nothing about

@@ -100,7 +100,7 @@ func TestCustomFormWithoutModeRendersTheCustomPage(t *testing.T) {
 // TestCustomFormWithoutModeSubmitsAsAResponse pins the OTHER end: the page and
 // the server must agree about what this form is. If the page renders custom but
 // the submit path still treats the form as a payment order, the buyer fills the
-// merchant's form and the POST is answered 400 "butiran tidak lengkap" (the
+// merchant's form and the POST is answered 400 "Incomplete details" (the
 // custom page posts {client, fields} and no items), which is a worse dead end
 // than the bug itself. The submission is what must be recorded — not a sale.
 func TestCustomFormWithoutModeSubmitsAsAResponse(t *testing.T) {

@@ -33,6 +33,14 @@ type EmailDeliveryEvent struct {
 	CreatedAt time.Time
 }
 
+// EmailEventEnqueueFailed is the event_type recorded when a job could not be
+// offered to the email queue at all (card t_1c4a3f54). Unlike
+// delivered/bounce/complaint/open/click it is NOT SES feedback: the email never
+// left the API process, so no delivery attempt exists to observe. It is recorded
+// so a lost email is visible in the account-scoped delivery log instead of being
+// a log line nobody reads.
+const EmailEventEnqueueFailed = "enqueue_failed"
+
 // EmailDeliveryEventStore wraps pgx for the email_delivery_events table.
 type EmailDeliveryEventStore struct{ pool *pgxpool.Pool }
 

@@ -1074,7 +1074,19 @@ rm -f "$SB/web/Dockerfile"
 #     the DATA lives here, where agents can edit it — same split as MCP-PARITY.md.
 #     A missing or unparseable table is a FAILURE, never a skip: a guard that reads
 #     nothing would report the exact green it is meant to prevent.
+#
+#     THE DETAIL HALF (card t_d6ce3d60). The long prose — what each gate catches, the
+#     spec counts, the history — lives in one file per gate under `gate-inventory/`,
+#     because the rows are one physical line each and the `a11y`/`e2e` rows are
+#     adjacent: two branches that each rewrote one row conflicted on every merge
+#     (thirteen rework cards). So the row set and the FILE set are checked in BOTH
+#     directions here — a row whose detail file is gone has lost the only place its
+#     figure may be edited, and a file with no row is a gate nobody can run — and no
+#     table row may carry a spec-count figure (a figure in a row is the edit that
+#     starts the conflict again). Check 50 proves the split MERGES where the old
+#     shape conflicts.
 INV="$HERE/../GATE-INVENTORY.md"
+NOTES="$HERE/../gate-inventory"
 if [ ! -f "$INV" ]; then
   bad "GATE-INVENTORY.md not found at $INV — the documented gate table is missing, so nothing checks it against --list"
 else
@@ -1091,6 +1103,46 @@ else
     bad "gate-table drift — in the runner but NOT documented: [$(comm -13 <(printf '%s\n' "$documented") <(printf '%s\n' $GATES | sort -u) | tr '\n' ' ')] / documented but NOT runnable: [$(comm -23 <(printf '%s\n' "$documented") <(printf '%s\n' $GATES | sort -u) | tr '\n' ' ')]"
   fi
 
+  # 15-i. The detail files, both directions.
+  if [ ! -d "$NOTES" ]; then
+    bad "gate-inventory/ is missing at $NOTES — each gate's detail (what it catches, its spec counts, its history) is supposed to live in its own file so that two gates' edits cannot conflict; with no directory the table has no detail behind it"
+  elif [ -z "$documented" ]; then
+    bad "cannot check the gate detail files: no gate name could be parsed from GATE-INVENTORY.md's table"
+  else
+    missing_notes=""; orphan_notes=""
+    for g in $documented; do
+      [ -f "$NOTES/$g.md" ] || missing_notes="$missing_notes $g"
+    done
+    nfiles=0
+    for f in "$NOTES"/*.md; do
+      [ -e "$f" ] || continue
+      nfiles=$((nfiles + 1))
+      b="$(basename "$f" .md)"
+      grep -qxF -- "$b" <<<"$documented" || orphan_notes="$orphan_notes $b"
+    done
+    if [ "$nfiles" -eq 0 ]; then
+      bad "gate-inventory/ holds no .md file — every gate's detail file is missing, so a guard that reads nothing would pass"
+    elif [ -n "$missing_notes" ]; then
+      bad "GATE-INVENTORY.md has no gate-inventory/<gate>.md detail for:$missing_notes — add that file in the same change as the row. The detail (prose, spec counts, history) belongs there and NOT in the row, because the rows are adjacent one-liners whose edits conflict on merge (card t_d6ce3d60)"
+    elif [ -n "$orphan_notes" ]; then
+      bad "gate-inventory/ has a detail file for a gate that is NOT a runnable, documented gate:$orphan_notes — every file there must be named for a row in GATE-INVENTORY.md, or it is a gate nobody can run"
+    elif [ "$nfiles" -ne "$NGATES" ]; then
+      bad "gate-inventory/ holds $nfiles detail files for $NGATES gates — the sets must agree exactly (no shared file, no missing gate)"
+    else
+      ok "gate-inventory/ carries exactly one detail file per documented gate ($nfiles), and every row has its own — no gate's detail shares a file with another's"
+    fi
+  fi
+
+  # 15-ii. A figure in a ROW is the edit that re-creates the adjacency trap: those
+  #        two rows are one line each and next to each other, so a count edit in one
+  #        conflicts with a count edit in the other. The figure lives in the detail
+  #        file; `speccounts` reads it there.
+  row_figs="$(grep -cE '^\|.*\*\*[0-9]+ tests? in [0-9]+ files?\*\*' "$INV" 2>/dev/null || true)"
+  if [ "${row_figs:-0}" -ne 0 ]; then
+    bad "$row_figs table row(s) in GATE-INVENTORY.md carry a \`**N tests in M files**\` figure. The rows are adjacent one-liners: a count in one row is what made every a11y/e2e rewrite a merge conflict (13 rework cards). Put the figure in that gate's gate-inventory/<gate>.md — the FIRST such span there is the current one"
+  else
+    ok "no table row carries a spec-count figure — the mutating detail (incl. \`**N tests in M files**\`) lives only in the per-gate files, so a count edit cannot land in the a11y/e2e adjacency"
+  fi
 fi
 
 # 16. The self-test must run on its OWN pool path, never the production one.
@@ -1864,14 +1916,16 @@ fi
 #      A file is pinned to a SPECIFIC gate: MCP-PARITY.md and BITE-HARNESSES.md are
 #      read by the api suite (the `test` gate — mcp_parity_test.go and
 #      biteharness/inventory_test.go), GATE-INVENTORY.md and AGENTS.md by
-#      scripts/preflight_test.sh (the `selftest` gate), and deploy/backup/README.md
-#      by the backup suite (the `backup` gate).
+#      scripts/preflight_test.sh (the `selftest` gate), a per-gate detail file
+#      (gate-inventory/a11y.md) by scripts/spec-counts.sh (the `speccounts` gate,
+#      which re-reads the figure it carries — card t_d6ce3d60), and
+#      deploy/backup/README.md by the backup suite (the `backup` gate).
 #      BITE-HARNESSES.md is the newest member and it was missed for a while: it is
 #      named through a `const` in a Go test, like MCP-PARITY.md, and its name was
 #      not in the runner's hand-written list of repo-root files, so a diff touching
 #      it alone widened a one-gate run to all 15. It is pinned here so the next
 #      regression is RED instead of merely expensive.
-trap_specs="MCP-PARITY.md:test GATE-INVENTORY.md:selftest AGENTS.md:selftest deploy/backup/README.md:backup BITE-HARNESSES.md:test"
+trap_specs="MCP-PARITY.md:test GATE-INVENTORY.md:selftest gate-inventory/a11y.md:speccounts AGENTS.md:selftest deploy/backup/README.md:backup BITE-HARNESSES.md:test"
 trap_out=""
 for spec in $trap_specs; do
   tfile="${spec%%:*}"; tgate="${spec##*:}"
@@ -1906,6 +1960,36 @@ if [ "$bite_n" = "$NGATES" ] || grep -q 'no gate claims' <<<"$bite_sel"; then
   bad "BITE-HARNESSES.md alone is read by the api suite only, so its diff must NARROW to the gates that read it — got the FULL $NGATES-gate set: [$(printf '%s' "$bite_sel" | tr '\n' ' ')]"
 else
   ok "BITE-HARNESSES.md alone narrows to $bite_n gates INCLUDING test, not the full $NGATES — a repo-root file named by a gate source is derived as that gate's input"
+fi
+
+# 15e-iii. THE SAME TRAP FOR A NON-PROSE FILE OUTSIDE THE GATE'S OWN AREA (card
+#      t_7184eede). `deploy/build-and-ship.sh` is the only place a release sets
+#      the provenance stamps it passes to `docker build`, and
+#      api/internal/version/dockerfile_wiring_test.go reads it to fail when a
+#      stamp api/Dockerfile needs is not passed as --build-arg. A change to that
+#      script can therefore red the api suite, so the classifier must select
+#      `test` for it.
+#
+#      IT DID NOT, AND THAT IS THE BUG THIS CHECK PINS. The script was claimed by
+#      the deploy/scripts gates only (their area is `deploy/*`), so a PR that
+#      rewrote its --build-arg wiring ran every deploy gate and skipped the ONE
+#      test that reads it. The derived read was absent because the Go test named
+#      the script in its prose and its failure messages but never READ it — a
+#      dependency nothing could derive. Both halves are needed for that reason:
+#      the test must read the file, and the classifier must then select `test`
+#      for a diff to it. Fixing only the first leaves the second to luck.
+#
+#      NARROWED-ness is asserted too, for the reason 15e-i gives: `test` is IN the
+#      full set, so a widened run satisfies a bare `grep -qx test` while the claim
+#      this check exists to prove is gone.
+ship_sel="$(sel_classify 'deploy/build-and-ship.sh')"
+ship_n="$(grep -cv '^#reason:' <<<"$ship_sel")"
+if ! grep -qx 'test' <<<"$ship_sel"; then
+  bad "deploy/build-and-ship.sh must select \`test\`: api/internal/version/dockerfile_wiring_test.go reads that script (it fails when a stamp api/Dockerfile requires is not passed as --build-arg), so a diff to it can red the api suite — got: [$(printf '%s' "$ship_sel" | tr '\n' ' ')]"
+elif [ "$ship_n" = "$NGATES" ] || grep -q 'no gate claims' <<<"$ship_sel"; then
+  bad "deploy/build-and-ship.sh must NARROW to the gates that read it, not drag in the full $NGATES set (a widened run would name \`test\` for the wrong reason): [$(printf '%s' "$ship_sel" | tr '\n' ' ')]"
+else
+  ok "deploy/build-and-ship.sh selects test (the api suite reads it through dockerfile_wiring_test.go) and still narrows to $ship_n gates, not the full $NGATES"
 fi
 
 # 15e-ii. THE METACHARACTER HALF of the same trap, and this is the half that escaped.
@@ -4736,28 +4820,33 @@ fi
 #     FIGURE, NOT A HISTORICAL ONE (card t_74e52a43).
 #
 # The checker (scripts/spec-counts.sh) is the only thing in the gate set that
-# enforces the spec counts the `a11y` and `e2e` rows of GATE-INVENTORY.md quote.
-# A checker that always exits 0 would put those rows straight back where they
-# were for nine cards: green everywhere, wrong in the table. So it is driven here
-# with a STUB playwright — the sandbox has no node_modules and `selftest` is
-# offline by contract, and none of these arms needs a browser, a server or a
-# network. The stub prints what a real `--list` prints, which is the only thing
-# the checker parses.
+# enforces the spec counts the `a11y` and `e2e` gates quote. A checker that always
+# exits 0 would put those figures straight back where they were for nine cards:
+# green everywhere, wrong in the file. So it is driven here with a STUB playwright —
+# the sandbox has no node_modules and `selftest` is offline by contract, and none of
+# these arms needs a browser, a server or a network. The stub prints what a real
+# `--list` prints, which is the only thing the checker parses.
+#
+# THE FIGURE'S HOME (card t_d6ce3d60): each gate's detail file under
+# `gate-inventory/<gate>.md`, not the table row. Every arm therefore writes BOTH the
+# row (the checker still requires it) and the note, and arm E removes only the note to
+# prove the new home is enforced rather than merely documented.
 #
 # ARMS, each measured (not reasoned about):
-#   current   rows that match --list                       -> rc 0
-#   stale     a11y figure 147/16 where --list says 159/17 -> rc 1, names BOTH
+#   current   figures that match --list                    -> rc 0
+#   stale     a11y figure 147/16 where --list says 159/17  -> rc 1, names BOTH
 #   history   the STALE figure is first and a matching one
-#             follows it in the row (the shape every real row
-#             has: "**147 …**, the figure before it was …")
-#                                                         -> rc 1, names 147
+#             follows it in the note (the shape every real
+#             note has: "**147 …**, the figure before it
+#             was …")                                      -> rc 1, names 147
 #             This is the arm that fails if the parse is greedy: a `s/.*\*\*//`
-#             reads the LAST bold span, i.e. the history, and would pass a row
+#             reads the LAST bold span, i.e. the history, and would pass a note
 #             whose current figure is wrong — the exact rot this gate exists for.
 #   no row    the e2e row is gone                          -> rc 1
-#   no figure the figure is present but not bolded        -> rc 1
-#   --list 1  the enumeration exits non-zero              -> rc 1
-#   no total  the enumeration prints no `Total:` line     -> rc 1
+#   no note   the e2e row is there, its detail file is gone -> rc 1
+#   no figure the figure is present but not bolded          -> rc 1
+#   --list 1  the enumeration exits non-zero                -> rc 1
+#   no total  the enumeration prints no `Total:` line       -> rc 1
 #
 # Every arm runs the SANDBOX copy (`$SB/scripts/spec-counts.sh`), i.e. the bytes
 # this commit would ship, against a throwaway root OUTSIDE the sandbox repo so the
@@ -4801,38 +4890,49 @@ s45_arm() {  # <label> <want-rc> <want-substring> [<stub-mode>]; inventory pre-w
   S45_PROBLEMS="${S45_PROBLEMS}${S45_PROBLEMS:+; }$1 [rc=$rc, wanted rc=$2 naming \"$3\"; got: $(printf '%s' "$out" | tail -n 2 | tr '\n' ' ')]"
   return 1
 }
-s45_row() { printf '| `%s` | web | `x` | %s |\n' "$1" "$2"; }
+s45_row() { printf '| `%s` | web | `x` | see [`gate-inventory/%s.md`](gate-inventory/%s.md) |\n' "$1" "$1" "$1"; }
+# The FIGURE lives in the gate's detail file (card t_d6ce3d60), not in the row: the
+# rows are adjacent one-liners and a count edit in one conflicted with a count edit in
+# its neighbour on every merge. So each arm writes the table row AND the note.
+s45_note() {
+  mkdir -p "$s45/gate-inventory"
+  printf '# `%s` — web gate detail\n\nCommand (what the table row runs): `x`\n\n## What it catches\n\n%s\n' \
+    "$1" "$2" > "$s45/gate-inventory/$1.md"
+}
+s45_both() { s45_row a11y; s45_note a11y "$1"; s45_row e2e; s45_note e2e "$2"; }
 # A. current figures -> PASS (a red-only checker would pass every arm below and
 #    still be useless: this one has to be able to say yes).
-{ s45_row a11y '**159 tests in 17 files**'
-  s45_row e2e  '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
-s45_arm current 0 'every spec count GATE-INVENTORY.md quotes is what this tree runs'
+{ s45_both '**159 tests in 17 files**' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+s45_arm current 0 'every spec count the gate detail files quote is what this tree runs'
 # B. a stale a11y figure -> RED, naming both numbers.
-{ s45_row a11y '**147 tests in 16 files**'
-  s45_row e2e  '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
-s45_arm stale 1 '`a11y`: the row says **147 tests in 16 files**; --list reads **159 tests in 17 files**'
+{ s45_both '**147 tests in 16 files**' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+s45_arm stale 1 '`a11y`: the detail file says **147 tests in 16 files**; --list reads **159 tests in 17 files**'
 # C. the SAME stale figure followed by a matching historical one -> still RED.
-{ s45_row a11y '**147 tests in 16 files**, re-measured by a card that forgot; the figure before it was **159 tests in 17 files**.'
-  s45_row e2e  '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
-s45_arm history 1 '`a11y`: the row says **147 tests in 16 files**; --list reads **159 tests in 17 files**'
-# D. the e2e row is gone -> RED (a guard that reads nothing must not pass).
-s45_row a11y '**159 tests in 17 files**' > "$s45/GATE-INVENTORY.md"
+{ s45_both '**147 tests in 16 files**, re-measured by a card that forgot; the figure before it was **159 tests in 17 files**.' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+s45_arm history 1 '`a11y`: the detail file says **147 tests in 16 files**; --list reads **159 tests in 17 files**'
+# D. the e2e ROW is gone -> RED (a guard that reads nothing must not pass).
+{ s45_row a11y; s45_note a11y '**159 tests in 17 files**'
+  s45_note e2e '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
 s45_arm norow 1 'GATE-INVENTORY.md has no row for the `e2e` gate'
-# E. the figure is there but not in the parseable form -> RED, never a skip.
-{ s45_row a11y '159 tests in 17 files'
-  s45_row e2e  '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+# E. the e2e DETAIL FILE is gone (the row is there) -> RED naming the file. This is
+#    the arm that pins the figure's new home: without it, "the row no longer carries
+#    the number" could degrade into "nobody carries it" and stay green.
+{ s45_row a11y; s45_note a11y '**159 tests in 17 files**'
+  s45_row e2e; rm -f "$s45/gate-inventory/e2e.md"; } > "$s45/GATE-INVENTORY.md"
+s45_arm nonote 1 'gate-inventory/e2e.md is missing'
+# F. the figure is there but not in the parseable form -> RED, never a skip.
+{ s45_both '159 tests in 17 files' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
 s45_arm nofigure 1 'carries no `**N tests in M files**` figure'
-# F. the enumeration itself fails -> RED, and it says the count was not read.
-{ s45_row a11y '**159 tests in 17 files**'
-  s45_row e2e  '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+# G. the enumeration itself fails -> RED, and it says the count was not read.
+{ s45_both '**159 tests in 17 files**' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
 s45_arm listfail 1 'exited 1 on this tree' fail
-# G. the enumeration prints no Total line -> RED (a parse that finds nothing
+# H. the enumeration prints no Total line -> RED (a parse that finds nothing
 #    must not be mistaken for a match).
 s45_arm nototal 1 "carries no 'Total: N tests in M files' line" nototal
 if [ -n "$S45_PROBLEMS" ]; then
   bad "check 46 — the speccounts checker must pass on a current figure and RED on each way of being unreadable; it did not: $S45_PROBLEMS"
 else
-  ok "check 46 — the speccounts checker passes on figures that match --list and REDS naming both numbers on a stale FIRST figure (including when a matching historical figure follows it, which a greedy parse would read), on a missing row, on an un-bolded figure, on a --list that exits non-zero and on one with no Total line (7 arms, stub playwright, offline)"
+  ok "check 46 — the speccounts checker passes on figures that match --list and REDS naming both numbers on a stale FIRST figure (including when a matching historical figure follows it, which a greedy parse would read), on a missing row, on a missing DETAIL FILE, on an un-bolded figure, on a --list that exits non-zero and on one with no Total line (8 arms, stub playwright, offline)"
 fi
 rm -rf "$s45"
 
@@ -5124,16 +5224,26 @@ rm -rf "$r48_dir"
       n3=$(wc -l < "$c")
       PREFLIGHT_HARNESS_CACHE=0 hcached probe "scripts/*.sh" -- _bump > "$d/o4" 2>&1
       n4=$(wc -l < "$c")
+      # THE CONTROL FOR THE BUG THIS CACHE SHIPPED WITH: the same bytes in a
+      # DIFFERENT absolute path must hit. The first version fed `sha256sum "$path"`
+      # into the key, so every worktree looked different and nine real runs after
+      # the merge paid 574-814s each for a suite that could not have changed.
+      cp -a "$d/repo" "$d/other-root"
+      REPO_ROOT="$d/other-root"
+      hcached probe "scripts/*.sh" -- _bump > "$d/o5" 2>&1
+      n5=$(wc -l < "$c")
+      hit5=no; grep -q "harness cache HIT" "$d/o5" && hit5=yes
       hit2=no; grep -q "harness cache HIT" "$d/o2" && hit2=yes
       hit3=no; grep -q "harness cache HIT" "$d/o3" && hit3=yes
       markok=no; case "$mark" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*Z) markok=yes;; esac
-      printf "%s:%s:%s:%s|%s|%s|%s\n" "$n1" "$n2" "$n3" "$n4" "$hit2" "$hit3" "$markok" | tail -1
+      printf "%s:%s:%s:%s:%s|%s|%s|%s|%s\n" "$n1" "$n2" "$n3" "$n4" "$n5" "$hit2" "$hit3" "$markok" "$hit5" | tail -1
     ' _ "$r49_dir")"
     r49_n="${r49%%|*}"; r49_rest="${r49#*|}"
     r49_hit2="${r49_rest%%|*}"; r49_rest="${r49_rest#*|}"
-    r49_hit3="${r49_rest%%|*}"; r49_mark="${r49_rest#*|}"
+    r49_hit3="${r49_rest%%|*}"; r49_rest="${r49_rest#*|}"
+    r49_mark="${r49_rest%%|*}"; r49_hit5="${r49_rest#*|}"
     r49_c1="${r49_n%%:*}"; r49_t="${r49_n#*:}"; r49_c2="${r49_t%%:*}"; r49_t="${r49_t#*:}"
-    r49_c3="${r49_t%%:*}"; r49_c4="${r49_t#*:}"
+    r49_c3="${r49_t%%:*}"; r49_t="${r49_t#*:}"; r49_c4="${r49_t%%:*}"; r49_c5="${r49_t#*:}"
     if [ "$r49_c1" != "1" ] || [ "$r49_c2" != "1" ]; then
       bad "check 49 (a) — an unchanged harness must run ONCE and then hit the cache: it ran $r49_c1 then $r49_c2 times (a hit must not re-run the suite, and a miss must not be silently skipped)"
     elif [ "$r49_hit2" != "yes" ]; then
@@ -5144,11 +5254,135 @@ rm -rf "$r48_dir"
       bad "check 49 (d) — one changed byte in a file under test must invalidate the cache and re-run (it ran $r49_c3 times, hit=$r49_hit3); an invalidation that does not fire serves a stale pass for changed bytes"
     elif [ "$r49_c4" != "3" ]; then
       bad "check 49 (e) — PREFLIGHT_HARNESS_CACHE=0 must run the gate as before, got $r49_c4 runs (expected 3)"
+    elif [ "$r49_hit5" != "yes" ] || [ "$r49_c5" != "3" ]; then
+      bad "check 49 (f) — the same bytes under a DIFFERENT absolute path must hit (hit=$r49_hit5, runs=$r49_c5, expected run count to stay 3): a key that carries the worktree path makes every card a miss, which is the defect nine real runs measured after the first merge"
     else
-      ok "check 49 — harness cache: runs once ($r49_c1) then hits without re-running ($r49_c2), says HIT and leaves the observation time, re-runs when a byte under test changes (run $r49_c3), and obeys the kill switch (run $r49_c4)"
+      ok "check 49 — harness cache: runs once ($r49_c1) then hits without re-running ($r49_c2), says HIT, leaves the observation time, re-runs when a byte under test changes (run $r49_c3), obeys the kill switch (run $r49_c4), and hits for the same bytes in another absolute path (run $r49_c5)"
     fi
   fi
   rm -rf "$r49_dir"
+
+# 50. TWO GATE EDITS CANNOT CONFLICT (card t_d6ce3d60).
+#
+#     THE DEFECT THIS PINS. Every gate row used to be ONE physical line carrying what
+#     the gate catches, the size of the spec family it runs and the history of every
+#     figure it had ever quoted. The `a11y` and `e2e` rows are ADJACENT, so a branch
+#     that rewrote `a11y` and a main that rewrote `e2e` touched the same merge region
+#     and `git merge` reported a conflict with both sides separately correct.
+#     Measured: thirteen rework cards, each a full lane run whose only product was a
+#     one-line splice, each holding the merge train until it landed. The cure is a
+#     SHAPE: the rows are a stable index and each gate's mutable detail lives in its
+#     own file under gate-inventory/.
+#
+#     This check proves the shape with a REAL git merge, driven on the LIVE bytes
+#     (GATE-INVENTORY.md and gate-inventory/*.md copied into a throwaway repo — the
+#     live tree is never mutated):
+#       * arm 1: one branch grows the `a11y` figure in its own detail file, another
+#         grows `e2e` in its own — the merge must be CLEAN, both figures must survive,
+#         and the shared table must be untouched (neither side edited it);
+#       * arm 2, the CONTROL: the SAME pair of edits in the OLD one-line-row shape
+#         must CONFLICT. Without it a clean merge could be git being tolerant rather
+#         than the split working.
+#     Both arms refuse to conclude from a fixture that did not reproduce: if the edit
+#     does not apply (a figure moved and the premise is stale), or the control merges
+#     cleanly, that is RED rather than a pass — the same discipline check 43 uses.
+s50="$SB_STATE/s50"
+rm -rf "$s50"
+mkdir -p "$s50/live/gate-inventory" "$s50/old"
+cp "$HERE/../GATE-INVENTORY.md" "$s50/live/" 2>/dev/null
+cp "$HERE"/../gate-inventory/*.md "$s50/live/gate-inventory/" 2>/dev/null
+# s50_fig <file> — the FIRST `**N tests in M files**` span's text, or empty. Read with
+# awk's LEFTMOST match, the contract spec-counts.sh uses, so this check's premise is
+# the number the gate would actually compare.
+s50_fig() {
+  awk '{ if (match($0, /\*\*[0-9]+ tests? in [0-9]+ files?\*\*/)) { print substr($0, RSTART + 2, RLENGTH - 4); exit } }' "$1"
+}
+# s50_next <"N tests in M files"> — the same figure one test larger, so each arm's
+# edit is exactly what a PR adding one spec does to its gate's file.
+s50_next() {
+  local n m
+  n="${1%% test*}"; m="${1##* in }"; m="${m%% file*}"
+  printf '%s tests in %s files\n' "$((n + 1))" "$m"
+}
+s50_git() { local d="$1"; shift; git -C "$d" -c user.email=t@t -c user.name=t "$@"; }
+
+s50_a="$(s50_fig "$s50/live/gate-inventory/a11y.md")"
+s50_e="$(s50_fig "$s50/live/gate-inventory/e2e.md")"
+if [ -z "$s50_a" ] || [ -z "$s50_e" ]; then
+  bad "check 50 cannot run: gate-inventory/{a11y,e2e}.md do not both carry a \`**N tests in M files**\` figure (a11y=[$s50_a] e2e=[$s50_e]), so the two edits this check merges would not be the edits that used to conflict"
+else
+  s50_a_new="$(s50_next "$s50_a")"
+  s50_e_new="$(s50_next "$s50_e")"
+
+  # ---- arm 1: the live bytes, each side in its own gate's detail file ----------
+  s50_git "$s50/live" init -q .
+  s50_git "$s50/live" add -A >/dev/null 2>&1
+  s50_git "$s50/live" commit -q -m base >/dev/null 2>&1
+  s50_base="$(s50_git "$s50/live" rev-parse --abbrev-ref HEAD)"
+  s50_git "$s50/live" checkout -q -b side-a
+  sed -i "s/\*\*$s50_a\*\*/**$s50_a_new**/" "$s50/live/gate-inventory/a11y.md"
+  if grep -qF "**$s50_a_new**" "$s50/live/gate-inventory/a11y.md"; then
+    s50_a_bit=yes
+  else
+    s50_a_bit=no
+  fi
+  s50_git "$s50/live" commit -qam "a11y detail grows" >/dev/null 2>&1
+  s50_git "$s50/live" checkout -q "$s50_base"
+  s50_git "$s50/live" checkout -q -b side-b
+  sed -i "s/\*\*$s50_e\*\*/**$s50_e_new**/" "$s50/live/gate-inventory/e2e.md"
+  if grep -qF "**$s50_e_new**" "$s50/live/gate-inventory/e2e.md"; then
+    s50_e_bit=yes
+  else
+    s50_e_bit=no
+  fi
+  s50_git "$s50/live" commit -qam "e2e detail grows" >/dev/null 2>&1
+  s50_git "$s50/live" checkout -q side-a
+  s50_out="$(s50_git "$s50/live" merge --no-edit side-b 2>&1)"
+  s50_rc=$?
+  if [ "$s50_a_bit" != yes ] || [ "$s50_e_bit" != yes ]; then
+    bad "check 50 premise broken: a figure edit did not apply (a11y=[$s50_a] -> [$s50_a_new] bit=$s50_a_bit, e2e=[$s50_e] -> [$s50_e_new] bit=$s50_e_bit). The live figure moved and the fixture no longer reproduces a count edit, so nothing can be concluded from the merge below"
+  elif [ "$s50_rc" -ne 0 ]; then
+    bad "check 50 — two branches that each grew ONE gate's detail file CONFLICTED (git merge rc=$s50_rc): $(printf '%s' "$s50_out" | tr '\n' ' ') — the split is not delivering the property it exists for"
+  elif ! grep -qF "**$s50_a_new**" "$s50/live/gate-inventory/a11y.md"; then
+    bad "check 50 — the merge was clean but the a11y edit ($s50_a_new) is not in the merged file: a merge that silently drops one side is worse than a conflict"
+  elif ! grep -qF "**$s50_e_new**" "$s50/live/gate-inventory/e2e.md"; then
+    bad "check 50 — the merge was clean but the e2e edit ($s50_e_new) is not in the merged file: a merge that silently drops one side is worse than a conflict"
+  elif ! s50_git "$s50/live" diff --quiet "$s50_base" -- GATE-INVENTORY.md; then
+    bad "check 50 — the shared table CHANGED in a merge that only grew two detail files, so a detail edit still reaches the adjacent one-liner rows"
+  else
+    ok "check 50 arm 1 — two branches that each grew ONE gate's figure ($s50_a_new in gate-inventory/a11y.md, $s50_e_new in gate-inventory/e2e.md) merged CLEAN with both edits surviving and the table untouched"
+  fi
+
+  # ---- arm 2: the CONTROL, in the old one-line-row shape ----------------------
+  cat > "$s50/old/GATE-INVENTORY.md" <<'S50OLD'
+| Gate | Job | Command | What it catches |
+|---|---|---|---|
+| `a11y` | web | `cd web && npm run a11y` | the axe family only, **159 tests in 17 files**, re-measured on a tree; the figure before it was **145 tests in 16 files** |
+| `e2e` | web | `cd web && npm run e2e` | the feature specs, **276 tests in 55 files**, re-measured on a tree; the figure before it was **274 in 54** |
+S50OLD
+  s50_git "$s50/old" init -q .
+  s50_git "$s50/old" add -A >/dev/null 2>&1
+  s50_git "$s50/old" commit -q -m base >/dev/null 2>&1
+  s50_obase="$(s50_git "$s50/old" rev-parse --abbrev-ref HEAD)"
+  s50_git "$s50/old" checkout -q -b side-a
+  sed -i '/^| `a11y` |/ s/159 tests in 17 files/162 tests in 17 files/' "$s50/old/GATE-INVENTORY.md"
+  s50_git "$s50/old" commit -qam "a11y row grows" >/dev/null 2>&1
+  s50_git "$s50/old" checkout -q "$s50_obase"
+  s50_git "$s50/old" checkout -q -b side-b
+  sed -i '/^| `e2e` |/ s/276 tests in 55 files/279 tests in 56 files/' "$s50/old/GATE-INVENTORY.md"
+  s50_git "$s50/old" commit -qam "e2e row grows" >/dev/null 2>&1
+  s50_git "$s50/old" checkout -q side-a
+  s50_oout="$(s50_git "$s50/old" merge --no-edit side-b 2>&1)"
+  s50_orc=$?
+  if [ "$s50_orc" -eq 0 ]; then
+    bad "check 50 CONTROL did not reproduce: the OLD one-line-row shape merged the two count edits CLEANLY, so the fixture proves nothing about the defect the split exists to remove"
+  elif ! grep -q 'CONFLICT' <<<"$s50_oout"; then
+    bad "check 50 CONTROL failed for the wrong reason: git merge exited $s50_orc without reporting a CONFLICT: $(printf '%s' "$s50_oout" | tr '\n' ' ')"
+  else
+    ok "check 50 arm 2 CONTROL — the SAME pair of count edits in the old one-line-row shape CONFLICTS (git merge rc=$s50_orc, 'CONFLICT (content)'), so arm 1's clean merge is the per-gate split's doing and not git's tolerance"
+  fi
+fi
+rm -rf "$s50"
 
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"

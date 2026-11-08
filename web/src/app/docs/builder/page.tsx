@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 import Link from "next/link";
 
 // AGENTS.md DOCUMENTATION PARITY rule: #652 changed how a block is edited on a
@@ -6,12 +7,12 @@ import Link from "next/link";
 // replaced the card's four buttons with ↑↓ + one ⋯ menu. Docs that described
 // the old flow would be wrong, so the flow is documented here and the builder
 // links to this page with an inline "?" (rule 4).
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "JomForm Docs — the form builder",
   description:
     "How the JomForm form builder works: the field palette, the canvas, editing a block's settings on desktop and on a phone, and the per-block actions.",
-  alternates: { canonical: "https://jomform.com/docs/builder" },
-};
+  path: "/docs/builder",
+});
 
 export default function BuilderDocsPage() {
   return (

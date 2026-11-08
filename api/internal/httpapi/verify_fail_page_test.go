@@ -250,8 +250,8 @@ func TestVerifyPostKeepsJSONEnvelope(t *testing.T) {
 		status int
 		want   string // the `error` prose
 	}{
-		{"no token", "", connectTestKey(), http.StatusBadRequest, "token pengesahan diperlukan"},
-		{"bad token", "garbage", connectTestKey(), http.StatusBadRequest, "pautan pengesahan tidak sah atau telah tamat tempoh"},
+		{"no token", "", connectTestKey(), http.StatusBadRequest, "verification token is required"},
+		{"bad token", "garbage", connectTestKey(), http.StatusBadRequest, "the verification link is invalid or has expired"},
 		{"no verify key", "garbage", nil, http.StatusInternalServerError, "internal error"},
 	}
 	for _, c := range cases {

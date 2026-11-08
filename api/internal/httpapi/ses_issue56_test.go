@@ -9,8 +9,10 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/wzul/jomform/api/internal/auth"
@@ -66,7 +68,7 @@ func TestSESSuppressedEmailNotResent(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	emailAddr := "suppressed-" + randSuffix() + "@example.com"
+	emailAddr := "suppressed-" + randSuffix() + "@" + testRegistrableDomain
 	// Simulate an SNS permanent-bounce feedback landing in the suppression list.
 	if _, err := supps.Upsert(context.Background(), emailAddr, "permanent bounce (Permanent)", dbstore.SuppressionSourceBounce); err != nil {
 		t.Fatalf("upsert suppression: %v", err)
@@ -104,7 +106,7 @@ func TestSESBreakerGatesRegister(t *testing.T) {
 	}
 
 	if rec := postJSON(mux, "/v1/auth/register", map[string]any{
-		"email": "breaker-" + randSuffix() + "@example.com", "password": "password123",
+		"email": "breaker-" + randSuffix() + "@" + testRegistrableDomain, "password": "password123",
 	}, ip); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("register under breaker status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -128,7 +130,7 @@ func TestSESBreakerDoesNotGateLowBounce(t *testing.T) {
 	_ = breaker.RecordBounceCount(ctx, 1) // 1/25 = 4% < 5%
 
 	if rec := postJSON(mux, "/v1/auth/register", map[string]any{
-		"email": "clean-" + randSuffix() + "@example.com", "password": "password123",
+		"email": "clean-" + randSuffix() + "@" + testRegistrableDomain, "password": "password123",
 	}, ip); rec.Code != http.StatusCreated {
 		t.Fatalf("register under low-bounce status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -162,6 +164,53 @@ func TestSESNotificationsRejectUnverifiedWrites(t *testing.T) {
 	}
 	if sup, err := supps.IsSuppressed(context.Background(), "victim@example.com"); err == nil && sup {
 		t.Fatal("unauthenticated SNS request must NOT write a suppression")
+	}
+}
+
+// TestSESRegisterRefusesNullMXDomain is the call-site proof for the null-MX fix
+// (card t_f5b4d28a).
+//
+// example.com's apex publishes the RFC 7505 null MX — `MX 0 .` — which is the
+// domain stating in DNS that it accepts no mail. The MX pre-check used to read
+// "the record list is non-empty" as "accepts mail", so a registration for
+// anything@example.com was accepted, the user row was created, and the
+// verification email was a guaranteed hard bounce against the identity every
+// receipt and login link shares. With the checker wired, the same request must
+// now be refused 400 before the row exists and before any mail is handed on.
+//
+// This layer cannot be driven by a swapped resolver from this package (the seam
+// is inside internal/email), so it uses the published record and SKIPS when the
+// host cannot see it: a DNS blip must not read as a regression. The logic itself
+// is pinned network-free in internal/email/mx_null_test.go.
+func TestSESRegisterRefusesNullMXDomain(t *testing.T) {
+	records, err := net.LookupMX("example.com")
+	if err != nil {
+		t.Skipf("cannot resolve example.com MX here: %v", err)
+	}
+	if len(records) != 1 || (records[0].Host != "." && records[0].Host != "") {
+		t.Skipf("this resolver does not return the published null MX for example.com: %+v", records)
+	}
+
+	ip := testIP(t)
+	h, users, _, _, mailer := sesTestFixture(t)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	addr := "nullmx-" + randSuffix() + "@example.com"
+	rec := postJSON(mux, "/v1/auth/register", map[string]any{
+		"email": addr, "password": "password123",
+	}, ip)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("register for a null-MX domain = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "email.domainUnreachable") {
+		t.Fatalf("register 400 is not the MX refusal: body %s", rec.Body.String())
+	}
+	if _, err := users.ByEmail(context.Background(), addr); err == nil {
+		t.Fatal("user row was created for a null-MX domain — the pre-check must run before the row")
+	}
+	if mailer.wasCalled() {
+		t.Fatal("verification email was handed to the mailer for a null-MX domain")
 	}
 }
 

@@ -132,6 +132,8 @@ const TAB_KEYS: ReadonlyArray<{ key: keyof typeof DICT; adminOnly?: true }> = [
   { key: "set.tab.domains" },
   { key: "set.tab.tracking" },
   { key: "set.tab.einvoice" },
+  // Card t_135c3c72: the buyer-borne processing fee (admin-only, like CHIP).
+  { key: "set.tab.fees", adminOnly: true },
   { key: "set.tab.webhooks" },
   { key: "set.tab.emel" },
   { key: "set.tab.members", adminOnly: true },

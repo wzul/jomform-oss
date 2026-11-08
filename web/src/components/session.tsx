@@ -58,7 +58,18 @@ export type SessionUser = {
   is_super_admin?: boolean; // issue #387 (site super-admin, #385)
 };
 
-export type WorkspaceRow = { id: string; name: string; slug: string; role?: string };
+export type WorkspaceRow = {
+  id: string;
+  name: string;
+  slug: string;
+  role?: string;
+  // The address this deployment publishes for the workspace (card
+  // t_48a93084): `<slug>.jomform.com` on the hosted product, the install's own
+  // origin on a self-hosted one. Built by the API, so no component has to
+  // compose it — and no component can compose the wrong shape for the
+  // deployment it is running on.
+  url?: string;
+};
 
 // Landing-data sections of the bundle, consumed by the dashboard page.
 export type BundleLanding = {
@@ -90,6 +101,12 @@ export type ChipStatusShape = {
 
 export type BundleData = {
   me?: SessionUser | null;
+  // Card t_d5f359c7: the ACTIVE workspace's currency (issue #185). Every PRICE
+  // surface labels its amount with this — a product/subscription/builder price
+  // has no currency of its own, it is charged in whatever the workspace is set
+  // to. Omitted when the API could not read the setting; the client then shows
+  // "—" instead of guessing RM (see lib/money.ts formatPrice).
+  currency?: string;
   // Issue #452: the dashboard-bundle field was renamed spaces → workspaces in
   // the #431 Space→Workspace refactor; the frontend was still reading `spaces`,
   // so the workspace list came back empty and the switcher showed only one
@@ -110,6 +127,14 @@ type SessionCtx = {
   // The active workspace slug (from localStorage "jf_workspace"), used to scope
   // every dashboard fetch (issue #158).
   workspace: string;
+  // The active workspace's currency, from the dashboard bundle (card
+  // t_d5f359c7). This is the label for PRICES (product/subscription/builder/
+  // shipping amounts), which are denominated in the workspace setting. It is
+  // "" until the bundle settles — an unresolved currency must never be guessed
+  // as MYR on a page whose own fetch can land first (lib/money.ts formatPrice).
+  // NEVER use it to label a recorded amount: a sale row carries the currency it
+  // was charged in (lib/money.ts formatMoney with the row's own `currency`).
+  currency: string;
   // The caller's role in the active workspace (issue #163): "admin" | "manage" |
   // "read_only" | "" (unknown / not a member). Carried per-workspace in the
   // bundle so the UI can gate actions by role.
@@ -118,6 +143,19 @@ type SessionCtx = {
   // null = confirmed anonymous (an AUTHORITATIVE 401/uncoded-403, never a wedge
   // timeout — see BundleRead in this file, card t_48319be9) — the auth gate.
   bundle: BundleData | null | undefined;
+  // The workspace slug `bundle` was FETCHED FOR (card t_de220c75). "" means the
+  // unscoped bootstrap read / no workspace selected.
+  //
+  // WHY IT IS EXPOSED. `bundle` is workspace-scoped data, and a switch publishes
+  // the new scope one commit BEFORE the new bundle's answer can land — so for
+  // that window `bundle` still describes the workspace the merchant just left.
+  // A page that renders rows out of it (Settings → Domains listed the previous
+  // workspace's custom domains, each with a live `Remove` button) needs to be
+  // able to tell "this payload is the scope on screen" from "this payload is the
+  // one before it". This provider never APPLIES an answer for a scope that is no
+  // longer active, so the pair can only disagree in that one window — which is
+  // exactly the window a page must render as empty, not as the old rows.
+  bundleScope: string;
   // true once the fetch settled with no session (401) — auth gate.
   anon: boolean;
   // true when the bootstrap read produced NO answer (a 5xx or a dropped
@@ -138,8 +176,10 @@ const SessionContext = createContext<SessionCtx>({
   user: null,
   workspaces: [],
   workspace: "",
+  currency: "",
   role: "",
   bundle: undefined,
+  bundleScope: "",
   anon: false,
   sessionError: false,
   reload: () => {},
@@ -288,6 +328,8 @@ function fetchBundle(workspace: string): Promise<BundleRead> {
 export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [workspace, setWorkspace] = useState<string>("");
   const [bundle, setBundle] = useState<BundleData | null | undefined>(undefined);
+  // The scope `bundle` was fetched for (card t_de220c75) — see SessionCtx.
+  const [bundleScope, setBundleScope] = useState<string>("");
   const [mounted, setMounted] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
   // `sessionError` is the state the 5s wedge used to collapse into `anon`
@@ -378,12 +420,39 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     publishWorkspaceScope(surviving || list[0]?.slug || "");
   }, [bundle]);
 
+  // applyBundleRead is the ONE place a settled read becomes `bundle` (card
+  // t_de220c75). It refuses an answer whose scope is no longer the ACTIVE one:
+  //
+  //   * a switch publishes the new scope immediately, while reads for the scope
+  //     being left are still in flight — `Shell.switchWorkspace` used to call
+  //     `reload()` with the PREVIOUS slug closed over it, so exactly such a read
+  //     was issued on every switch, and whichever answer landed LAST won the
+  //     assignment. Measured on prod v1.22.91: Settings → Domains showed one
+  //     workspace behind, in both directions, with both scoped bundles on the
+  //     wire — the server was right and the panel applied the wrong answer;
+  //   * the mount's UNSCOPED bootstrap read answers for the caller's first-owned
+  //     account (`resolveSessionAccount`), so it must never be applied once a
+  //     real scope is published.
+  //
+  // `activeWorkspaceScope()` is the authority every scoped fetch reads and the
+  // value `publishWorkspaceScope` sets synchronously, so comparing against it
+  // (rather than this render's `workspace`) sees the current scope even from a
+  // promise callback created before the switch.
+  const applyBundleRead = useCallback((res: BundleRead, slug: string) => {
+    if (slug !== activeWorkspaceScope()) return;
+    setBundleScope(slug);
+    setBundle(res.kind === "session" ? res.data : res.kind === "anon" ? null : undefined);
+    setSessionError(res.kind === "error");
+  }, []);
+
   useEffect(() => {
     const key = workspace || "__default__";
     const settled = bundleCache.get(key);
     if (settled) {
-      setBundle(settled.kind === "session" ? settled.data : null);
-      setSessionError(false);
+      // A cached read is keyed by the slug it was fetched for, so it is this
+      // scope's answer — the guard inside applyBundleRead still applies, because
+      // the scope can have moved since the render that scheduled this effect.
+      applyBundleRead(settled, workspace);
       return;
     }
     // The three settled states map onto the context EXACTLY (card t_48319be9):
@@ -393,11 +462,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     // (the reason the 5s wedge existed) — WITHOUT inventing an anonymous session
     // to pay for it.
     setSessionError(false);
-    fetchBundle(workspace).then((res) => {
-      setBundle(res.kind === "session" ? res.data : res.kind === "anon" ? null : undefined);
-      setSessionError(res.kind === "error");
-    });
-  }, [workspace, retryNonce]);
+    fetchBundle(workspace).then((res) => applyBundleRead(res, workspace));
+  }, [workspace, retryNonce, applyBundleRead]);
 
   // Issue #69: reload() (used after session-rotating actions like 2FA enable /
   // disable / password change) must keep showing the PREVIOUS bundle until the
@@ -406,19 +472,34 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   // bundle instead of nulling the UI. A nonce guards against a slow, stale
   // reload clobbering a newer one.
   const reload = useCallback(() => {
-    const key = workspace || "__default__";
+    // THE SCOPE AT CALL TIME, NOT THE ONE THIS RENDER CLOSED OVER (card
+    // t_de220c75). `Shell.switchWorkspace` calls `reload()` immediately after
+    // `enterWorkspace(slug)` publishes the NEW scope, but its closure was built
+    // on the previous render — so `[workspace]` here was still the workspace the
+    // merchant just LEFT. Every switch therefore re-fetched the old workspace's
+    // bundle, and when that answer landed after the new workspace's it won the
+    // assignment: Settings → Domains rendered one workspace behind, and the
+    // header chip and the list disagreed.
+    //
+    // `activeWorkspaceScope()` is published synchronously by `enterWorkspace`,
+    // so it names the workspace the merchant selected. A stable identity (no
+    // deps) is deliberate: a caller must not have to re-bind `reload` to get the
+    // current scope.
+    const slug = activeWorkspaceScope();
+    const key = slug || "__default__";
     bundleCache.delete(key);
     inflightByWorkspace.delete(key);
     reloadNonce.current += 1;
     const nonce = reloadNonce.current;
-    fetchBundle(workspace).then((res) => {
+    fetchBundle(slug).then((res) => {
       if (nonce !== reloadNonce.current) return; // superseded by a newer reload
-      if (res.kind === "session") setBundle(res.data);
-      else if (res.kind === "anon") setBundle(null);
+      // Only a settled ANSWER replaces the bundle, and only while its scope is
+      // still the active one (applyBundleRead enforces both).
+      if (res.kind === "session" || res.kind === "anon") applyBundleRead(res, slug);
       // `error` (fault / offline) → keep the previous bundle rather than
       // blanking the app shell during a session rotation.
     });
-  }, [workspace]);
+  }, [applyBundleRead]);
 
   // retry() re-attempts the bootstrap after a FAULT (an `error` read, not a
   // confirmed-anonymous one). It drops only the in-flight entry — an `error` was
@@ -444,10 +525,16 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   // per-workspace in the bundle. Used to gate write/member/CHIP actions in the UI.
   const activeWorkspace = workspaces.find((s) => s.slug === workspace);
   const role = activeWorkspace?.role || "";
+  // The workspace's currency for PRICE labels (card t_d5f359c7). "" while the
+  // bundle is unresolved — formatPrice renders "—" rather than assume MYR.
+  // `summary.currency` is the fallback for a payload from an older API that
+  // predates the bundle-level field; both are the same workspace setting, and
+  // neither is ever a sale's currency.
+  const currency = bundle?.currency ?? bundle?.summary?.currency ?? "";
 
   return (
     <SessionContext.Provider
-      value={{ user, workspaces, workspace, role, bundle, anon: mounted && bundle === null, sessionError, reload, retry }}
+      value={{ user, workspaces, workspace, currency, role, bundle, bundleScope, anon: mounted && bundle === null, sessionError, reload, retry }}
     >
       {children}
     </SessionContext.Provider>

@@ -94,7 +94,7 @@ type adminOverview struct {
 // Super-admin only, read-only, audited (issue #387).
 func (h *RESTHandlers) handleAdminOverview(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if !h.requireSuperAdmin(r) {
-		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		writeErr(w, http.StatusForbidden, "super-admin is required for this action")
 		return
 	}
 	h.auditSuperAdminAccess(r, "admin.overview")
@@ -164,12 +164,12 @@ type adminDeadLetterOut struct {
 // an MCP client.
 func (h *RESTHandlers) handleAdminDeadLetters(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if !h.requireSuperAdmin(r) {
-		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		writeErr(w, http.StatusForbidden, "super-admin is required for this action")
 		return
 	}
 	h.auditSuperAdminAccess(r, "admin.dead_letters")
 	if h.WebhookEvents == nil {
-		writeErr(w, http.StatusServiceUnavailable, "store peristiwa webhook tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the webhook event store is not configured")
 		return
 	}
 	limit := 100
@@ -180,7 +180,7 @@ func (h *RESTHandlers) handleAdminDeadLetters(w http.ResponseWriter, r *http.Req
 	}
 	events, err := h.WebhookEvents.ListDead(r.Context(), limit)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "gagal membaca dead letter")
+		writeErr(w, http.StatusInternalServerError, "failed to read the dead letters")
 		return
 	}
 	out := make([]adminDeadLetterOut, 0, len(events))
@@ -209,30 +209,30 @@ type adminRequeueDeadLetterIn struct {
 // same sweep pass before it has had a chance to run.
 func (h *RESTHandlers) handleAdminRequeueDeadLetter(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if !h.requireSuperAdmin(r) {
-		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		writeErr(w, http.StatusForbidden, "super-admin is required for this action")
 		return
 	}
 	h.auditSuperAdminAccess(r, "admin.requeue_dead_letter")
 	if h.WebhookEvents == nil {
-		writeErr(w, http.StatusServiceUnavailable, "store peristiwa webhook tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the webhook event store is not configured")
 		return
 	}
 	var in adminRequeueDeadLetterIn
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "badan permintaan tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if strings.TrimSpace(in.DedupKey) == "" {
-		writeErr(w, http.StatusBadRequest, "dedup_key wajib diisi")
+		writeErr(w, http.StatusBadRequest, "dedup_key is required")
 		return
 	}
 	ok, err := h.WebhookEvents.RequeueDead(r.Context(), in.DedupKey)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "gagal menghidupkan semula peristiwa")
+		writeErr(w, http.StatusInternalServerError, "failed to revive the event")
 		return
 	}
 	if !ok {
-		writeErr(w, http.StatusNotFound, "peristiwa tidak dijumpai atau bukan dalam keadaan dead")
+		writeErr(w, http.StatusNotFound, "event not found or not in the dead state")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"requeued": true, "dedup_key": in.DedupKey})

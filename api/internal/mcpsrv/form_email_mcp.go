@@ -19,7 +19,7 @@ import (
 
 // getFormEmailSettingsIn is the input for get_form_email_settings.
 type getFormEmailSettingsIn struct {
-	FormID string `json:"form_id" jsonschema:"ID borang"`
+	FormID string `json:"form_id" jsonschema:"Form ID"`
 }
 
 // formEmailSettingsOut mirrors dbstore.FormEmailSettings for the MCP response.
@@ -66,7 +66,7 @@ func (s *Server) getFormEmailSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, in getFormEmailSettingsIn,
 ) (*mcp.CallToolResult, getFormEmailSettingsOut, error) {
 	if s.deps.Forms == nil {
-		return nil, getFormEmailSettingsOut{}, errors.New("forms tidak tersedia")
+		return nil, getFormEmailSettingsOut{}, errors.New("forms not available")
 	}
 	acc, err := s.resolveFormAccount(ctx, in.FormID)
 	if err != nil {
@@ -74,7 +74,7 @@ func (s *Server) getFormEmailSettings(
 	}
 	form, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, getFormEmailSettingsOut{}, errors.New("borang tidak dijumpai")
+		return nil, getFormEmailSettingsOut{}, errors.New("form not found")
 	}
 	st, err := s.deps.Forms.FormEmailSettings(ctx, in.FormID)
 	if err != nil {
@@ -149,35 +149,35 @@ func (s *Server) workspaceLang(ctx context.Context, accountID string) string {
 // per-form override, null (or omitted) inherits the workspace setting. Use
 // clear_form_email_overrides to reset every override at once.
 type setFormEmailSettingsIn struct {
-	FormID              string  `json:"form_id" jsonschema:"ID borang"`
-	ReceiptSubject      *string `json:"receipt_subject,omitempty" jsonschema:"Subjek resit (kosong = guna lalai workspace; omit = kekal)"`
-	ReceiptBody         *string `json:"receipt_body,omitempty" jsonschema:"Badan resit (kosong = guna lalai workspace; omit = kekal)"`
-	ReceiptEnabled      *bool   `json:"receipt_enabled,omitempty" jsonschema:"(legacy) Hantar resit kepada pembeli — dianggap sebagai override eksplisit"`
-	NotifyMerchant      *bool   `json:"notify_merchant,omitempty" jsonschema:"(legacy) Hantar notifikasi jualan kepada merchant — dianggap sebagai override eksplisit"`
-	MerchantNotifyEmail *string `json:"merchant_notify_email,omitempty" jsonschema:"Emel merchant untuk notifikasi (kosong = guna emel akaun/workspace; omit = kekal)"`
-	HTML                *bool   `json:"html,omitempty" jsonschema:"(legacy) Badan HTML — dianggap sebagai override eksplisit"`
+	FormID              string  `json:"form_id" jsonschema:"Form ID"`
+	ReceiptSubject      *string `json:"receipt_subject,omitempty" jsonschema:"Receipt subject (empty = use workspace default; omit = keep)"`
+	ReceiptBody         *string `json:"receipt_body,omitempty" jsonschema:"Receipt body (empty = use workspace default; omit = keep)"`
+	ReceiptEnabled      *bool   `json:"receipt_enabled,omitempty" jsonschema:"(legacy) Send receipt to buyer — treated as an explicit override"`
+	NotifyMerchant      *bool   `json:"notify_merchant,omitempty" jsonschema:"(legacy) Send sale notification to merchant — treated as an explicit override"`
+	MerchantNotifyEmail *string `json:"merchant_notify_email,omitempty" jsonschema:"Merchant email for notifications (empty = use account/workspace email; omit = keep)"`
+	HTML                *bool   `json:"html,omitempty" jsonschema:"(legacy) HTML body — treated as an explicit override"`
 
 	// Issue #453 tri-state overrides.
-	ReceiptEnabledOverride *bool `json:"receipt_enabled_override,omitempty" jsonschema:"Override per-borang: hantar resit kepada pembeli (true/false; null = ikut tetapan workspace)"`
-	NotifyMerchantOverride *bool `json:"notify_merchant_override,omitempty" jsonschema:"Override per-borang: notifikasi jualan kepada merchant (true/false; null = ikut tetapan workspace)"`
-	HTMLOverride           *bool `json:"html_override,omitempty" jsonschema:"Override per-borang: badan HTML (true/false; null = ikut tetapan workspace)"`
+	ReceiptEnabledOverride *bool `json:"receipt_enabled_override,omitempty" jsonschema:"Per-form override: send receipt to buyer (true/false; null = follow workspace settings)"`
+	NotifyMerchantOverride *bool `json:"notify_merchant_override,omitempty" jsonschema:"Per-form override: sale notification to merchant (true/false; null = follow workspace settings)"`
+	HTMLOverride           *bool `json:"html_override,omitempty" jsonschema:"Per-form override: HTML body (true/false; null = follow workspace settings)"`
 }
 
 func (s *Server) setFormEmailSettings(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormEmailSettingsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	if in.FormID == "" {
-		return nil, nil, errors.New("form_id wajib")
+		return nil, nil, errors.New("form_id is required")
 	}
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if _, err := s.deps.Forms.GetByID(ctx, acc, in.FormID); err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	// Read-modify-write: omit a field = keep its current value.
 	st, err := s.deps.Forms.FormEmailSettings(ctx, in.FormID)
@@ -221,7 +221,7 @@ func (s *Server) setFormEmailSettings(
 
 // clearFormEmailOverridesIn is the input for clear_form_email_overrides.
 type clearFormEmailOverridesIn struct {
-	FormID string `json:"form_id" jsonschema:"ID borang"`
+	FormID string `json:"form_id" jsonschema:"Form ID"`
 }
 
 // clearFormEmailOverrides resets every per-form email override so the form
@@ -230,17 +230,17 @@ func (s *Server) clearFormEmailOverrides(
 	ctx context.Context, _ *mcp.CallToolRequest, in clearFormEmailOverridesIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	if in.FormID == "" {
-		return nil, nil, errors.New("form_id wajib")
+		return nil, nil, errors.New("form_id is required")
 	}
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if _, err := s.deps.Forms.GetByID(ctx, acc, in.FormID); err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	if err := s.deps.Forms.ClearFormEmailOverrides(ctx, in.FormID); err != nil {
 		return nil, nil, err

@@ -165,18 +165,19 @@ func (s *FormNotificationStore) Delete(ctx context.Context, formID, id string) e
 // A PAYMENT form records a sale, so its default rule keys off sale.paid and can
 // use the sale placeholders (ref_code / amount / items / buyer_name).
 //
-// The templates come from the shared transactional dictionary rather than being
-// spelled out here. They were duplicated before: the same Malay literal lived in
-// this file AND in that dictionary, and the dictionary's job is to recognise a
-// never-customised rule by comparing the stored value against it. Two copies
-// drift silently — one added space and the comparison stops matching, so a
-// Malay receipt goes on being mailed to an English buyer while every test still
-// passes. One definition, one writer, one recogniser.
-var (
-	defaultSaleNotificationSubject, defaultSaleNotificationBody         = emailtext.LegacyDefault(emailtext.NotificationSale)
-	defaultResponseNotificationSubject, defaultResponseNotificationBody = emailtext.LegacyDefault(emailtext.NotificationResponse)
-)
-
+// The default rule stores an EMPTY subject and body, and that is the whole point
+// (card t_1768cb11). The text of a never-customised rule is the SYSTEM's, not
+// merchant content, so it must not be pinned to one language in the row: the
+// dashboard renders the stored value verbatim (form settings -> Notifications ->
+// Edit), and a stored Malay literal made an English merchant's rule look like
+// something he had written. An empty half means "JomForm's own message, in the
+// form's language", which is exactly what the send path resolves — payments
+// classifies each half on its own and re-renders an empty half, or a half that
+// still equals a built-in template, in the buyer-facing language. The templates
+// themselves live in the shared transactional dictionary (emailtext), the one
+// place that decides what an email says in each locale; this file no longer
+// spells any of that copy out, and no longer writes a language into the row.
+//
 // The notification NAME is not email content — it is a label in the dashboard's
 // rule list — so it stays here.
 const (
@@ -198,24 +199,28 @@ const defaultNotificationRecipient = "{admin_email}"
 // placeholders that carry a real value for a submission: the responder's
 // identity, which the public submit path always captures on the fields map
 // (`full_name` / `email`), plus {{date}} and {{form_url}}. Its template, like
-// the sale default above, comes from the shared dictionary.
+// the sale default, is the dictionary's kind for the event.
 //
 // defaultNotificationFor returns the name, event, subject and body of the
-// default notification rule for a form in the given mode.
+// default notification rule for a form in the given mode. Subject and body are
+// empty: see the comment above.
 func defaultNotificationFor(mode string) (name, event, subject, body string) {
 	if mode == FormModeResponse {
-		return defaultResponseNotificationName, NotifyEventResponseSubmitted,
-			defaultResponseNotificationSubject, defaultResponseNotificationBody
+		return defaultResponseNotificationName, NotifyEventResponseSubmitted, "", ""
 	}
-	return defaultSaleNotificationName, NotifyEventSalePaid,
-		defaultSaleNotificationSubject, defaultSaleNotificationBody
+	return defaultSaleNotificationName, NotifyEventSalePaid, "", ""
 }
 
 // DefaultNotification exposes the default notification rule for a form mode:
 // its name, event, subject template and body template. EnsureDefault creates
 // exactly this rule, so a caller that needs to know what a new form will get —
-// the migration that repaired response forms in place (issue #597) and the tests
-// that pin both modes — reads it from the one definition rather than a copy.
+// the mode-change reconcile (issue #597) and the tests that pin both modes —
+// reads it from the one definition rather than a copy.
+//
+// The subject and body are EMPTY by design (card t_1768cb11): the stored bytes
+// of a never-customised rule carry no language, and the send path renders the
+// dictionary's template for the event in the form's language. A caller that needs
+// the TEXT for a language asks emailtext.Text, not this function.
 func DefaultNotification(mode string) (name, event, subject, body string) {
 	return defaultNotificationFor(mode)
 }
@@ -314,6 +319,14 @@ func (s *FormNotificationStore) ReconcileDefault(ctx context.Context, f *Form) (
 	if otherEvent == wantEvent {
 		return false, nil
 	}
+	// A default rule is "unedited" either as THIS release writes it (an empty
+	// subject and body — card t_1768cb11) or as the pre-language release wrote it
+	// (the Malay literal 000032/000062 stored, which the send path still
+	// classifies as system text). Accepting both shapes keeps a row restored from
+	// a pre-000084 backup reconcilable: the reconcile and the sender must agree
+	// about which rows are the system's, or a mode change would leave a dead rule
+	// on a form whose event it can never fire.
+	otherLegacySubject, otherLegacyBody := legacyNotificationDefault(otherEvent)
 	// ONE statement, so the row that is judged is the row that is written: a
 	// SELECT-then-UPDATE would leave a window in which the merchant edits his
 	// rule and this pass overwrites the edit it never saw. Every predicate in
@@ -325,10 +338,12 @@ func (s *FormNotificationStore) ReconcileDefault(ctx context.Context, f *Form) (
 		  WHERE form_id=$1
 		    AND is_default=true
 		    AND COALESCE(to_email,'')=$6
-		    AND event=$7 AND subject=$8 AND body=$9
+		    AND event=$7
+		    AND ((subject=$8 AND body=$9) OR (subject=$10 AND body=$11))
 		  RETURNING id`,
 		f.ID, wantEvent, wantName, wantSubject, wantBody,
-		defaultNotificationRecipient, otherEvent, otherSubject, otherBody)
+		defaultNotificationRecipient, otherEvent, otherSubject, otherBody,
+		otherLegacySubject, otherLegacyBody)
 	if err != nil {
 		return false, err
 	}
@@ -353,4 +368,39 @@ func otherFormMode(mode string) string {
 		return FormModePayment
 	}
 	return FormModeResponse
+}
+
+// NotificationKind maps a notification event onto the dictionary kind whose
+// BUILT-IN template the system installs for it, so a sender (or the reconcile
+// above) can render or recognise that template without inventing a second
+// mapping. An event with no default (sale.failed, subscription.charged) has no
+// kind: the system never wrote a template for it, so whatever the row holds is
+// the merchant's own.
+//
+// It lives here, beside the event constants themselves, because both the writer
+// (EnsureDefault / ReconcileDefault, this package) and the reader
+// (payments.sendNotification) must agree on the same mapping — one definition,
+// two consumers, exactly like emailtext.LegacyDefault.
+func NotificationKind(event string) (emailtext.Kind, bool) {
+	switch event {
+	case NotifyEventSalePaid:
+		return emailtext.NotificationSale, true
+	case NotifyEventResponseSubmitted:
+		return emailtext.NotificationResponse, true
+	}
+	return "", false
+}
+
+// legacyNotificationDefault returns the pre-language literal the database used
+// to hold for an event's built-in template — the bytes emailtext.IsSystemDefault
+// still recognises — so a row a pre-000084 database wrote can be reconciled and
+// re-rendered rather than mistaken for merchant copy.
+//
+// Returns ("", "") for an event with no built-in template.
+func legacyNotificationDefault(event string) (subject, body string) {
+	kind, ok := NotificationKind(event)
+	if !ok {
+		return "", ""
+	}
+	return emailtext.LegacyDefault(kind)
 }

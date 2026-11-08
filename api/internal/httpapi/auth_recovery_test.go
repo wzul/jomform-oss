@@ -99,7 +99,7 @@ func TestEmail2FARequiresPendingFlagProvesPassword(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("email-code status = %d body=%s (want generic 200)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "dihantar") {
+	if !strings.Contains(rec.Body.String(), "has been sent") {
 		t.Fatalf("unexpected generic body: %s", rec.Body.String())
 	}
 	// No 6-digit code should have been emailed by the LAST send. We check the

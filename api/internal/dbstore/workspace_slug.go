@@ -41,9 +41,9 @@ var workspaceSlugUnsafe = regexp.MustCompile(`[^a-z0-9-]+`)
 // A caller that needs to tell one refusal from another (the MCP rename tool
 // switches on them) matches these by errors.Is rather than by comparing text.
 var (
-	ErrWorkspaceSlugLength   = errors.New("slug 3-40 aksara")
-	ErrWorkspaceSlugChars    = errors.New("slug: a-z, 0-9, dash sahaja")
-	ErrWorkspaceSlugReserved = errors.New("slug tidak sah")
+	ErrWorkspaceSlugLength   = errors.New("slug 3-40 characters")
+	ErrWorkspaceSlugChars    = errors.New("slug: a-z, 0-9, dash only")
+	ErrWorkspaceSlugReserved = errors.New("invalid slug")
 )
 
 // ErrWorkspaceSlugReservedSubdomain is the reserved-LIST refusal: the label the
@@ -57,7 +57,7 @@ var (
 //
 //	ErrWorkspaceSlugReserved — the "*jomform" TAIL rule. The caller's own input
 //	                           is shaped badly, so the answer is the generic
-//	                           slug wording ("slug tidak sah") and the generic
+//	                           slug wording ("invalid slug") and the generic
 //	                           slug code.
 //	ErrWorkspaceSlugReservedSubdomain — a POLICY refusal about a name that is
 //	                           perfectly well formed. Its answer names WHY (the

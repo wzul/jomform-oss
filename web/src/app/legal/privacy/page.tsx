@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { PRIVACY_SECTIONS, PRIVACY_POLICY } from "../privacy-content";
 import OperatorNotice from "../../../components/OperatorNotice";
+import { OG_IMAGE, OG_IMAGE_URL } from "../../../lib/ogImage";
 
 export const metadata: Metadata = {
   title: "Privacy Policy — JomForm",
@@ -12,14 +13,16 @@ export const metadata: Metadata = {
     url: "https://jomform.com/legal/privacy",
     siteName: "JomForm",
     type: "website",
-    // Issue #411: brand og:image so sharing shows a preview.
-    images: [{ url: "https://jomform.com/og-default.png", width: 1200, height: 630, alt: "JomForm" }],
+    // Issue #411: brand og:image so sharing shows a preview. Content-versioned
+    // URL (og-default-<hash>.png) so a client that cached an older card is
+    // forced to the new file.
+    images: [OG_IMAGE],
   },
   twitter: {
     card: "summary_large_image",
     title: "Privacy Policy — JomForm",
     description: "How JomForm collects, uses, and protects your data.",
-    images: ["https://jomform.com/og-default.png"],
+    images: [OG_IMAGE_URL],
   },
 };
 

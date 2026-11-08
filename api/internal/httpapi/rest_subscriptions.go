@@ -56,7 +56,7 @@ func (h *RESTHandlers) listSubscriptions(w http.ResponseWriter, r *http.Request,
 	switch status {
 	case "", dbstore.SubActive, dbstore.SubPastDue, dbstore.SubCanceled, dbstore.SubCompleted:
 	default:
-		writeErr(w, http.StatusBadRequest, "status tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid status")
 		return
 	}
 	rows, total, err := h.Subs.ListByAccountsPage(r.Context(), scope.Accounts, status, page, limit)
@@ -83,13 +83,13 @@ func (h *RESTHandlers) cancelSubscription(w http.ResponseWriter, r *http.Request
 	}
 	id := r.PathValue("id")
 	if id == "" {
-		writeErr(w, http.StatusBadRequest, "id diperlukan")
+		writeErr(w, http.StatusBadRequest, "id is required")
 		return
 	}
 	sub, err := h.Subs.ByIDForAccount(r.Context(), actx.Account.ID, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, "langganan tidak dijumpai")
+			writeErr(w, http.StatusNotFound, "subscription not found")
 			return
 		}
 		respondErr(w, r, err)
@@ -115,24 +115,24 @@ func (h *RESTHandlers) updateSubscriptionCard(w http.ResponseWriter, r *http.Req
 	}
 	id := r.PathValue("id")
 	if id == "" {
-		writeErr(w, http.StatusBadRequest, "id diperlukan")
+		writeErr(w, http.StatusBadRequest, "id is required")
 		return
 	}
 	sub, err := h.Subs.ByIDForAccount(r.Context(), actx.Account.ID, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, "langganan tidak dijumpai")
+			writeErr(w, http.StatusNotFound, "subscription not found")
 			return
 		}
 		respondErr(w, r, err)
 		return
 	}
 	if sub.Status == dbstore.SubCanceled {
-		writeErr(w, http.StatusConflict, "langganan telah dibatalkan")
+		writeErr(w, http.StatusConflict, "the subscription has been cancelled")
 		return
 	}
 	if h.Pay == nil {
-		writeErr(w, http.StatusServiceUnavailable, "pembayaran tidak aktif")
+		writeErr(w, http.StatusServiceUnavailable, "payment is not active")
 		return
 	}
 	p, err := h.Pay.CreateUpdateCardPurchase(r.Context(), sub)
@@ -165,13 +165,13 @@ func (h *RESTHandlers) retrySubscription(w http.ResponseWriter, r *http.Request,
 	}
 	id := r.PathValue("id")
 	if id == "" {
-		writeErr(w, http.StatusBadRequest, "id diperlukan")
+		writeErr(w, http.StatusBadRequest, "id is required")
 		return
 	}
 	sub, err := h.Subs.ByIDForAccount(r.Context(), actx.Account.ID, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, "langganan tidak dijumpai")
+			writeErr(w, http.StatusNotFound, "subscription not found")
 			return
 		}
 		respondErr(w, r, err)
@@ -180,7 +180,7 @@ func (h *RESTHandlers) retrySubscription(w http.ResponseWriter, r *http.Request,
 	if err := h.Subs.Reactivate(r.Context(), actx.Account.ID, sub.ID); err != nil {
 		if err == dbstore.ErrNotPastDue {
 			writeErr(w, http.StatusConflict,
-				"hanya langganan past_due boleh dicuba semula (status: "+sub.Status+")")
+				"only past_due subscriptions can be retried (status: "+sub.Status+")")
 			return
 		}
 		respondErr(w, r, err)

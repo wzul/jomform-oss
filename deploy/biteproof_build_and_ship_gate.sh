@@ -41,21 +41,28 @@
 #     call that records the argv it was handed. They prove the call site; they do
 #     NOT re-prove the record format or the reusable-refusal rules — that is
 #     `scripts/biteproof_preflight_reuse.sh`'s job, on the real scripts.
-#   * Case A is END TO END on the real repo: the real runner, the real consumer,
-#     a real record written by the real `scripts/gate_result.sh`. It is bounded by
-#     TIMEOUT seconds so a REGRESSED plumbing fails fast instead of silently
-#     running the real ~15 min gate.
+#   * Case A is END TO END on the real scripts: the real runner, the real
+#     consumer, a real record written by the real scripts/gate_result.sh. It runs
+#     in a THROWAWAY CLONE of this repo's HEAD, tagged there in its own ref
+#     namespace, because deploy/build-and-ship.sh resolves the version through
+#     deploy/require-release-tag.sh BEFORE it reads the record and refuses an
+#     untagged HEAD — see the case A banner for why tagging the shared repo is
+#     not an option. It is bounded by TIMEOUT seconds so a REGRESSED plumbing
+#     fails fast instead of silently running the real ~15 min gate.
 #   * Case A needs a CLEAN working tree (build-and-ship refuses a dirty one, by
-#     design). A dirty tree is reported as a case-A setup refusal, not a bite.
+#     design, and the clone carries HEAD's content rather than uncommitted
+#     edits). A dirty tree is reported as a case-A setup refusal, not a bite.
 #
 # Run:  ./deploy/biteproof_build_and_ship_gate.sh
 # Exit: 0 if every case BITES, 1 otherwise.
 #
 # Nothing under the repo is mutated: every mutation lives in $WORK (a private
-# /tmp dir, removed on exit), and the shipped build-and-ship.sh is sha-checked
-# before and after. This harness therefore never takes a gate-pool slot and never
-# writes to the host record store — PREFLIGHT_RESULT_DIR and PREFLIGHT_LOCK_FILE
-# are pinned to $WORK for the whole run.
+# /tmp dir, removed on exit), the shipped build-and-ship.sh is sha-checked
+# before and after, and NO tag or branch is created in the shared repository —
+# case A tags its own clone, whose refs no other worktree can see. This harness
+# therefore never takes a gate-pool slot and never writes to the host record
+# store — PREFLIGHT_RESULT_DIR and PREFLIGHT_LOCK_FILE are pinned to $WORK for
+# the whole run.
 
 set -uo pipefail
 
@@ -69,8 +76,17 @@ RESULT="scripts/gate_result.sh"
 
 # Ceiling for case A. A pre-pool reuse exit is seconds; the full gate it replaces
 # measured 910s. Anything between is a regression that must be reported, not
-# waited out.
+# waited out. The shipped build-and-ship.sh runs deploy/release_selftest.sh before
+# the gate on a release-tagged script (measured 21s on this host), so the wall
+# clock ceiling allows for that and is still an order of magnitude below the gate.
 TIMEOUT=240
+CASE_A_MAX_SECONDS=120
+# The tag case A puts on its throwaway clone's HEAD. It IS the version the shipped
+# script resolves (deploy/require-release-tag.sh reads the tag on HEAD), so the case
+# passes NO version argument: an override may only RESTATE a tag, and that rule —
+# including the contradiction and positional forms — is deploy/release_selftest.sh's
+# subject, not this harness's.
+CASE_A_TAG="v9.9.9"
 
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
@@ -117,6 +133,17 @@ make_sandbox() {
   mkdir -p "$d/scripts" "$d/deploy" "$d/api"
   cp "$REPO_ROOT/$BUILD_SHIP" "$d/$BUILD_SHIP"
   : > "$d/api/Dockerfile"
+  # build-and-ship resolves its version through deploy/require-release-tag.sh, a CHILD process.
+  # That rule (a deploy ships a TAGGED tree) is deploy/release_selftest.sh's subject, not this
+  # harness's: here the version only has to be stable so the preflight call site can be reached
+  # and measured. Stubbing it pins v9.9.9 with no tag, no docker and no gate. (The stub is inert
+  # on a tree whose build-and-ship predates the release-tag rule, so this case works on both.)
+  cat > "$d/deploy/require-release-tag.sh" <<'RRT_STUB'
+#!/usr/bin/env bash
+# sandbox stub: this harness measures the preflight CALL SITE, not the tag rule.
+printf 'v9.9.9\n'
+RRT_STUB
+  chmod +x "$d/deploy/require-release-tag.sh"
   cat > "$d/scripts/gate_result.sh" <<'GR_STUB'
 gr_short_sha() { printf '%.7s\n' "$1"; }
 GR_STUB
@@ -167,6 +194,33 @@ PF_STUB
   git -C "$d" -c user.email=bite@example.invalid -c user.name=biteproof commit -qm "sandbox"
 }
 
+# make_tagged_tree <dir> — a THROWAWAY CLONE of this repo at HEAD, tagged
+# CASE_A_TAG in its OWN ref namespace. Prints <dir> on success.
+#
+# Why a clone and not a tag here: `git tag` in this worktree writes to the SHARED
+# repository's refs/tags, which every other worktree of this repo can see — a
+# lane midway through cut-release, or any `git describe`, would read a v9.9.9
+# that no human released. A clone has its own .git, so its tags are invisible
+# outside $WORK, while --shared keeps it cheap (measured ~1s, 33 MB of
+# checkout, objects borrowed read-only).
+#
+# It also has to be the tree the RECORD is written and read in:
+# scripts/gate_result.sh keys a record on the CONTENT tree sha (path-independent)
+# plus an environment fingerprint whose webdeps component is
+# web/node_modules/.package-lock.json. The clone carries only committed content —
+# no node_modules (gitignored) — so writer and reader must both live here, or they
+# would compute two different fingerprints for "the same" tree.
+make_tagged_tree() {
+  local d="$1"
+  git clone --quiet --shared "$REPO_ROOT" "$d" >/dev/null 2>&1 || return 1
+  git -C "$d" tag "$CASE_A_TAG" >/dev/null 2>&1 || return 1
+  # The tag must be ON HEAD, not merely in the clone: require-release-tag uses
+  # `git describe --tags --exact-match HEAD`.
+  [ "$(git -C "$d" describe --tags --exact-match HEAD 2>/dev/null)" = "$CASE_A_TAG" ] || return 1
+  [ -z "$(git -C "$d" status --porcelain)" ] || return 1
+  printf '%s\n' "$d"
+}
+
 # run_sandbox <dir> <tag> <logfile> <argvlog> — run the shipped script in the sandbox.
 run_sandbox() {
   local d="$1" tag="$2" log="$3" argvlog="$4" rc=0
@@ -189,94 +243,150 @@ echo "---"
 
 # ============================================================================
 # case A — a full-green record must NOT join the pool (REAL runner, end to end)
+#
+# THE TREE IS A THROWAWAY, TAGGED CLONE OF HEAD — not this worktree. Two facts
+# force that, and both were measured, not assumed:
+#
+#   1. build-and-ship.sh resolves the version through
+#      deploy/require-release-tag.sh BEFORE it reads the record, so on an
+#      UNTAGGED HEAD it exits 4/5 without ever reaching the preflight call site
+#      this case exists to measure. That is the release rule working; the harness
+#      hands it a TAGGED tree and passes no version, so the tag itself is what
+#      the release stamps.
+#   2. `git tag` HERE would write to the SHARED repository's refs/tags, which
+#      every worktree of this repo can see: a lane midway through cut-release,
+#      or any `git describe`, would read a v9.9.9 nobody released. A clone owns
+#      its refs, so the tag lives and dies inside $WORK.
+#
+# The record is written AND read in that clone. scripts/gate_result.sh keys a
+# record on the CONTENT tree sha (path-independent) plus an environment
+# fingerprint that includes webdeps (web/node_modules/.package-lock.json), and a
+# clone carries only committed content — no node_modules — so a writer in one
+# tree and a reader in another would compute two fingerprints for "the same"
+# tree. The two trees' content shas are compared below, so "the clone is the
+# bytes this harness reports" is measured rather than assumed.
 # ============================================================================
 echo "== case A: a full-green record does not join the gate pool (real scripts, timing) =="
 CA="$WORK/caseA"; mkdir -p "$CA/store"
 CLEAN=1
 [ -z "$(git status --porcelain)" ] || CLEAN=0
 if [ "$CLEAN" != "1" ]; then
-  bad "case A — the working tree is DIRTY, so build-and-ship refuses at the clean-tree guard and this case cannot run. Commit or stash, then re-run. (This is a setup refusal, NOT a bite.)"
+  bad "case A — the working tree is DIRTY: this case measures a throwaway clone of HEAD, so uncommitted edits would not be the bytes it gates. Commit or stash, then re-run. (This is a setup refusal, NOT a bite.)"
+elif git -C "$REPO_ROOT" rev-parse --verify -q "refs/tags/$CASE_A_TAG" >/dev/null 2>&1; then
+  bad "case A — the SHARED repository already carries the tag $CASE_A_TAG, so this case could not tell its own throwaway tag from a pre-existing release. Delete it (git -C $REPO_ROOT tag -d $CASE_A_TAG) and re-run. (setup refusal, NOT a bite.)"
+elif ! TREE="$(make_tagged_tree "$CA/tree")"; then
+  bad "case A — could not clone HEAD to $CA/tree and tag it $CASE_A_TAG (git clone --shared / git tag failed), so a release-tagged build-and-ship would refuse before the call site. (setup refusal, NOT a bite.)"
 else
-  # A REAL record for THIS tree, written by the REAL gate_result.sh, under THIS
-  # environment (gr_flush keys it on gr_key, i.e. the caller's own fingerprint).
-  # PREFLIGHT_RESULT_DIR is EXPORTED so both the writer and the reader below (and
-  # the preflight child) key on the same private store, never the host's.
+  # A REAL record for the CLONE's tree, written by the REAL gate_result.sh, under
+  # THIS environment (gr_flush keys it on gr_key, i.e. the caller's own
+  # fingerprint). PREFLIGHT_RESULT_DIR is EXPORTED so the writer, the reader below
+  # and the preflight child all key on the same private store, never the host's.
   REC_DIR="$CA/store"
   export PREFLIGHT_RESULT_DIR="$REC_DIR"
-  export PREFLIGHT_REUSE_REPO="$REPO_ROOT"
+  export PREFLIGHT_REUSE_REPO="$TREE"
   # shellcheck source=scripts/gate_result.sh
-  . "$REPO_ROOT/$RESULT"
-  GR_TREE="$(gr_tree_sha "$REPO_ROOT")"
-  GR_TREE_SHORT="$(gr_short_sha "$GR_TREE")"
-  GR_REPO="$REPO_ROOT"
-  GR_COMMIT="$(git rev-parse --short HEAD)"
-  GR_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-  GR_PID=$$
-  GR_GATE_NAMES=()
-  while IFS= read -r g; do [ -n "$g" ] && GR_GATE_NAMES+=("$g"); done < <(bash "$REPO_ROOT/scripts/preflight.sh" --list)
-  GR_PASSED="${#GR_GATE_NAMES[@]}"; GR_FAILED=0; GR_SKIPPED=0
-  # A FINISHED run: since card t_d49a99f1 the reader refuses a record whose run did
-  # not reach the end of its inventory (`complete: false`), and this fixture models
-  # exactly that — a full-inventory run that finished.
-  GR_COMPLETE=1
-  _now="$(gr_now)"
-  for g in "${GR_GATE_NAMES[@]}"; do
-    GR_STATUS[$g]="pass"; GR_SECONDS[$g]=45; GR_AT[$g]="$_now"; GR_REUSED[$g]=false
-  done
-  if gr_flush 910; then
-    REC_FILE="$(gr_file "$GR_TREE")"
-    ok "case A — wrote a REAL full-green record for tree $(gr_short_sha "$GR_TREE") (${#GR_GATE_NAMES[@]} gates) at $REC_FILE"
-    # The REAL consumer must call it usable BEFORE the run, or the case would be
-    # measuring a refusal and calling it a bite.
-    # shellcheck source=scripts/preflight_reuse.sh
-    . "$REPO_ROOT/$REUSE"
-    preflight_reuse_decision >/dev/null 2>&1
-    if [ "${PREFLIGHT_DECISION:-}" = "full" ]; then
-      ok "case A — the REAL consumer reads it as usable: full (${PREFLIGHT_REMEMBERED_SECONDS}s remembered) — so anything below is the call site, not the record"
-    else
-      bad "case A — the record is not usable by the real consumer (decision=[${PREFLIGHT_DECISION:-}]): ${PREFLIGHT_EVIDENCE:-} — the case would prove nothing"
-    fi
-    # The gate must not take any slot in the pool: a whole-inventory reuse exits
-    # BEFORE the pool, so no slot file may be created (the slot files are
-    # `<base>.slot<N>`, derived by preflight.sh — see its SLOT POOL block).
-    A_LOCK="$CA/host-gate.lock"
-    t0="$(date +%s)"
-    CA_RC=0
-    PREFLIGHT_RESULT_DIR="$REC_DIR" \
-      PATH="$WORK/bin:$PATH" LOCK_FILE="$CA/build.lock" OUT_DIR="$CA/out" \
-      DOCKER_STUB_LOG="$CA/docker.log" \
-      PREFLIGHT_LOCK_FILE="$A_LOCK" \
-      timeout "$TIMEOUT" bash "$BUILD_SHIP" v9.9.9 >"$CA/out.log" 2>&1 || CA_RC=$?
-    t1="$(date +%s)"; a_secs=$((t1 - t0))
-    if [ "$CA_RC" -eq 124 ]; then
-      bad "case A — build-and-ship did NOT exit within ${TIMEOUT}s: with a full-green record it must exit in seconds, so the reuse plumbing is not being consulted"
-    elif [ "$CA_RC" -ne 0 ]; then
-      bad "case A — build-and-ship exited $CA_RC with a full-green record present (a reused gate must not red the deploy)"; show "$CA/out.log"
-    elif grep -q 'took NO slot and ran NO gate' "$CA/out.log" \
-         && grep -q 'summary: 0 passed' "$CA/out.log" \
-         && grep -q 'WHOLE-INVENTORY REUSE' "$CA/out.log"; then
-      ok "case A — the runner exited BEFORE the slot pool (0 gates run): '$(grep -m1 'took NO slot' "$CA/out.log" | sed 's/^ *//')'"
-    else
-      bad "case A — with a full-green record present the gate did NOT take the pre-pool reuse exit"; show "$CA/out.log"
-    fi
-    if [ ! -e "$A_LOCK" ] && [ -z "$(ls -A "$A_LOCK".slot* 2>/dev/null)" ]; then
-      ok "case A — NO gate-pool slot was taken (neither $A_LOCK nor ${A_LOCK}.slot<N> exists): this deploy never joined the pool"
-    else
-      bad "case A — a gate-pool slot EXISTS ($A_LOCK / $(ls "$A_LOCK".slot* 2>/dev/null | tr '\n' ' ')): the run joined the pool despite a full-green record"
-    fi
-    if [ -r "$CA/docker.log" ] && grep -q '^docker build' "$CA/docker.log"; then
-      ok "case A — the image build DID proceed after the reused gate (the gate did not block the release)"
-    else
-      bad "case A — no image build followed the reused gate, so the reuse did not behave as a green gate"; show "$CA/out.log"
-    fi
-    if [ "$a_secs" -lt 60 ]; then
-      ok "case A — WALL CLOCK ${a_secs}s (the same bytes re-gated in full cost a measured 910s on this host): the record removed ~$((910 - a_secs))s of serialised gate"
-    else
-      bad "case A — WALL CLOCK ${a_secs}s is NOT what a pre-pool reuse exit takes — the record did not remove the gate"
-    fi
+  . "$TREE/$RESULT"
+  REAL_TREE="$(gr_tree_sha "$REPO_ROOT")"
+  GR_TREE="$(gr_tree_sha "$TREE")"
+  # MEASURED, not asserted: (a) the tree under test is a CLONE, not this worktree —
+  # a tag on this worktree would be shared with every other lane — and (b) that
+  # clone's HEAD really carries the tag, because require-release-tag uses
+  # `git describe --tags --exact-match HEAD`.
+  TREE_GITDIR="$(git -C "$TREE" rev-parse --absolute-git-dir 2>/dev/null)"
+  REPO_GITDIR="$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir 2>/dev/null)"
+  TREE_TAG="$(git -C "$TREE" describe --tags --exact-match HEAD 2>/dev/null)"
+  if [ -z "$REAL_TREE" ] || [ -z "$GR_TREE" ]; then
+    bad "case A — could not compute a content tree sha (harness [$REAL_TREE], throwaway clone [$GR_TREE]), so nothing below would be evidence about either"
+  elif [ "$REAL_TREE" != "$GR_TREE" ]; then
+    bad "case A — the throwaway clone does NOT carry this harness's bytes (content tree $(gr_short_sha "$GR_TREE") vs $(gr_short_sha "$REAL_TREE")): the case would be evidence about a tree the repo does not hold. (setup refusal, NOT a bite.)"
+  elif [ -z "$TREE_GITDIR" ] || [ "$TREE_GITDIR" = "$REPO_GITDIR" ]; then
+    bad "case A — the tree under test is not a separate clone (git dir [${TREE_GITDIR:-none}] vs this worktree's [$REPO_GITDIR]): tagging it would either hit the shared refs or no refs at all. (setup refusal, NOT a bite.)"
+  elif [ "$TREE_TAG" != "$CASE_A_TAG" ]; then
+    bad "case A — the throwaway clone's HEAD carries no $CASE_A_TAG (describe --tags --exact-match = [${TREE_TAG:-none}]), so a release-tagged build-and-ship refuses before the call site. (setup refusal, NOT a bite.)"
   else
-    bad "case A — could not write the REAL record for tree $(gr_short_sha "$GR_TREE") into $REC_DIR, so this case cannot run"
+    GR_TREE_SHORT="$(gr_short_sha "$GR_TREE")"
+    GR_REPO="$TREE"
+    GR_COMMIT="$(git -C "$TREE" rev-parse --short HEAD)"
+    GR_BRANCH="$(git -C "$TREE" rev-parse --abbrev-ref HEAD)"
+    GR_PID=$$
+    GR_GATE_NAMES=()
+    while IFS= read -r g; do [ -n "$g" ] && GR_GATE_NAMES+=("$g"); done < <(bash "$TREE/scripts/preflight.sh" --list)
+    GR_PASSED="${#GR_GATE_NAMES[@]}"; GR_FAILED=0; GR_SKIPPED=0
+    # A FINISHED run: since card t_d49a99f1 the reader refuses a record whose run did
+    # not reach the end of its inventory (`complete: false`), and this fixture models
+    # exactly that — a full-inventory run that finished.
+    GR_COMPLETE=1
+    _now="$(gr_now)"
+    for g in "${GR_GATE_NAMES[@]}"; do
+      GR_STATUS[$g]="pass"; GR_SECONDS[$g]=45; GR_AT[$g]="$_now"; GR_REUSED[$g]=false
+    done
+    if gr_flush 910; then
+      REC_FILE="$(gr_file "$GR_TREE")"
+      ok "case A — throwaway clone $TREE (git dir $TREE_GITDIR, distinct from this worktree's $REPO_GITDIR): HEAD $(git -C "$TREE" rev-parse --short HEAD) on tag $TREE_TAG; content tree $GR_TREE_SHORT == the harness tree — wrote a REAL full-green record (${#GR_GATE_NAMES[@]} gates) at $REC_FILE"
+      # The REAL consumer must call it usable BEFORE the run, or the case would be
+      # measuring a refusal and calling it a bite.
+      # shellcheck source=scripts/preflight_reuse.sh
+      . "$TREE/$REUSE"
+      preflight_reuse_decision >/dev/null 2>&1
+      if [ "${PREFLIGHT_DECISION:-}" = "full" ]; then
+        ok "case A — the REAL consumer reads it as usable: full (${PREFLIGHT_REMEMBERED_SECONDS}s remembered) — so anything below is the call site, not the record"
+      else
+        bad "case A — the record is not usable by the real consumer (decision=[${PREFLIGHT_DECISION:-}]): ${PREFLIGHT_EVIDENCE:-} — the case would prove nothing"
+      fi
+      # The gate must not take any slot in the pool: a whole-inventory reuse exits
+      # BEFORE the pool, so no slot file may be created (the slot files are
+      # `<base>.slot<N>`, derived by preflight.sh — see its SLOT POOL block).
+      A_LOCK="$CA/host-gate.lock"
+      t0="$(date +%s)"
+      CA_RC=0
+      ( cd "$TREE" && \
+        PREFLIGHT_RESULT_DIR="$REC_DIR" PREFLIGHT_REUSE_REPO="$TREE" \
+        PATH="$WORK/bin:$PATH" LOCK_FILE="$CA/build.lock" OUT_DIR="$CA/out" \
+        DOCKER_STUB_LOG="$CA/docker.log" \
+        PREFLIGHT_LOCK_FILE="$A_LOCK" \
+        timeout "$TIMEOUT" bash "$TREE/$BUILD_SHIP" >"$CA/out.log" 2>&1 ) || CA_RC=$?
+      t1="$(date +%s)"; a_secs=$((t1 - t0))
+      if [ "$CA_RC" -eq 124 ]; then
+        bad "case A — build-and-ship did NOT exit within ${TIMEOUT}s: with a full-green record it must exit in seconds, so the reuse plumbing is not being consulted"
+      elif [ "$CA_RC" -ne 0 ]; then
+        bad "case A — build-and-ship exited $CA_RC with a full-green record present (a reused gate must not red the deploy); tree $TREE is tagged $(git -C "$TREE" describe --tags --exact-match HEAD 2>/dev/null || echo NONE), so this is NOT the untagged-tree refusal"; show "$CA/out.log"
+      elif grep -q 'took NO slot and ran NO gate' "$CA/out.log" \
+           && grep -q 'summary: 0 passed' "$CA/out.log" \
+           && grep -q 'WHOLE-INVENTORY REUSE' "$CA/out.log"; then
+        ok "case A — the runner exited BEFORE the slot pool (0 gates run): '$(grep -m1 'took NO slot' "$CA/out.log" | sed 's/^ *//')'"
+      else
+        bad "case A — with a full-green record present the gate did NOT take the pre-pool reuse exit"; show "$CA/out.log"
+      fi
+      if [ ! -e "$A_LOCK" ] && [ -z "$(ls -A "$A_LOCK".slot* 2>/dev/null)" ]; then
+        ok "case A — NO gate-pool slot was taken (neither $A_LOCK nor ${A_LOCK}.slot<N> exists): this deploy never joined the pool"
+      else
+        bad "case A — a gate-pool slot EXISTS ($A_LOCK / $(ls "$A_LOCK".slot* 2>/dev/null | tr '\n' ' ')): the run joined the pool despite a full-green record"
+      fi
+      if [ -r "$CA/docker.log" ] && grep -q '^docker build' "$CA/docker.log"; then
+        ok "case A — the image build DID proceed after the reused gate (the gate did not block the release)"
+      else
+        bad "case A — no image build followed the reused gate, so the reuse did not behave as a green gate"; show "$CA/out.log"
+      fi
+      # The tag, not an override, must be what the release stamped: the case passes
+      # no VERSION_OVERRIDE, so this line is evidence the release-tag step ran on a
+      # TAGGED tree instead of being bypassed.
+      if grep -q "==> stamps: version=$CASE_A_TAG " "$CA/out.log"; then
+        ok "case A — the deploy stamped version $CASE_A_TAG from the clone's TAG (no VERSION_OVERRIDE passed, so the release-tag step was exercised, not bypassed)"
+      else
+        bad "case A — the deploy did not stamp version $CASE_A_TAG from the tag, so the release-tag resolution never reached the build"; show "$CA/out.log"
+      fi
+      if [ "$a_secs" -lt "$CASE_A_MAX_SECONDS" ]; then
+        ok "case A — WALL CLOCK ${a_secs}s (the same bytes re-gated in full cost a measured 910s on this host): the record removed ~$((910 - a_secs))s of serialised gate"
+      else
+        bad "case A — WALL CLOCK ${a_secs}s is NOT what a pre-pool reuse exit takes (ceiling ${CASE_A_MAX_SECONDS}s) — the record did not remove the gate"
+      fi
+    else
+      bad "case A — could not write the REAL record for tree $GR_TREE_SHORT into $REC_DIR, so this case cannot run"
+    fi
   fi
+  # The private store and repo pin are for case A only; do not leak them into the
+  # sandbox cases (their stubs ignore them, but a leak would be invisible).
+  unset PREFLIGHT_RESULT_DIR PREFLIGHT_REUSE_REPO
 fi
 
 # ============================================================================

@@ -76,13 +76,20 @@ func bundleLinkWorkspace(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	return wsID
 }
 
-// newBundleHandlers wires a RESTHandlers over the test pool with a real
-// SecretsKey so chip_status decryption works.
-func newBundleHandlers(pool *pgxpool.Pool) *RESTHandlers {
+// bundleSecretsKey is the AES-256 key newBundleHandlers gives the handlers, so
+// a test can unseal what it stored and compare against what the bundle
+// published (card t_56a2bd7f).
+func bundleSecretsKey() []byte {
 	key := make([]byte, 32)
 	for i := range key {
 		key[i] = byte(i + 1)
 	}
+	return key
+}
+
+// newBundleHandlers wires a RESTHandlers over the test pool with a real
+// SecretsKey so chip_status decryption works.
+func newBundleHandlers(pool *pgxpool.Pool) *RESTHandlers {
 	return &RESTHandlers{
 		Accounts:          dbstore.NewAccountStore(pool),
 		Products:          dbstore.NewProductStore(pool),
@@ -96,7 +103,7 @@ func newBundleHandlers(pool *pgxpool.Pool) *RESTHandlers {
 		Workspaces:        dbstore.NewWorkspaceStore(pool),
 		Shipping:          dbstore.NewShippingStore(pool),
 		Users:             dbstore.NewUserStore(pool),
-		SecretsKey:        key,
+		SecretsKey:        bundleSecretsKey(),
 	}
 }
 
@@ -271,21 +278,49 @@ func TestDashboardBundleWorkspaceScopeHonoured(t *testing.T) {
 	}
 }
 
+// TestDashboardBundleChipSecretMasked: the bundle is a SECOND call site of the
+// CHIP mask, and it is not role-gated — every workspace member, read_only
+// included, receives it. Card t_56a2bd7f: the mask used to keep every
+// character BUT the last four, so this response carried 84 of an 88-character
+// key.
+//
+// The assertion is not "the mask looks short": it unseals the SAME stored
+// ciphertext from the accounts row and checks that no window of the secret's
+// interior survives in what the bundle published, so the leak cannot come back
+// through this door while the standalone endpoint stays fixed.
 func TestDashboardBundleChipSecretMasked(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	accountID, _ := bundleFixture(t, ctx, pool)
 
-	key := make([]byte, 32)
-	for i := range key {
-		key[i] = byte(i + 1)
+	// A prod-shaped value: sk_test_ + a base64ish 76-character body ending
+	// Kw==, 88 bytes total — the length the defect was measured on.
+	const secretBody = "wXlgutZT0OomZWba7U/vFYO3TezMtkdahoMJyJth8DASzM2RmPa+6PiIXAG3kJFRAneL3boSLpAd76"
+	secret := "sk_test_" + secretBody[:76] + "Kw=="
+	if len(secret) != 88 {
+		t.Fatalf("test secret is %d bytes, want the 88 the defect was measured on", len(secret))
 	}
-	sealed, err := cryptoutil.Encrypt(key, []byte("sk_test_abcdefghijklmnopqrstuvwxyz1234"))
+	sealed, err := cryptoutil.Encrypt(bundleSecretsKey(), []byte(secret))
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
 	if err := dbstore.NewAccountStore(pool).SetChipCredentials(ctx, accountID, "br_bundle", sealed, "test", "", nil, true); err != nil {
 		t.Fatalf("set chip creds: %v", err)
+	}
+
+	// The stored plaintext, read back through the account store and unsealed —
+	// the comparison source, not the local variable, so a broken encryption
+	// path cannot make this test vacuous.
+	stored, err := dbstore.NewAccountStore(pool).ByID(ctx, accountID)
+	if err != nil {
+		t.Fatalf("read account back: %v", err)
+	}
+	plaintext, err := cryptoutil.Decrypt(bundleSecretsKey(), stored.ChipSecretKeyEnc)
+	if err != nil {
+		t.Fatalf("decrypt stored secret: %v", err)
+	}
+	if string(plaintext) != secret {
+		t.Fatalf("stored secret round-trip = %q, want %q", plaintext, secret)
 	}
 
 	h := newBundleHandlers(pool)
@@ -304,10 +339,27 @@ func TestDashboardBundleChipSecretMasked(t *testing.T) {
 	if masked == "" {
 		t.Fatalf("secret_key_masked missing: %v", cs)
 	}
-	if strings.Contains(masked, "sk_test_abcdefghijklmnopqrstuvwxyz1234") {
-		t.Errorf("masked value must not contain the full secret, got %q", masked)
+	// The badge and the "leave blank to keep" flow read these, not the mask.
+	if mode, _ := cs["mode"].(string); mode != "test" {
+		t.Errorf("mode = %q, want test (the mask change must not touch it)", mode)
 	}
-	if !strings.HasSuffix(masked, "1234") {
-		t.Errorf("masked value should keep the last 4 chars, got %q", masked)
+	if verified, _ := cs["verified"].(bool); !verified {
+		t.Errorf("verified = %v, want true (the mask change must not touch it)", verified)
+	}
+
+	// The shape: a public mode prefix + the bullet run + the last 4 characters.
+	if want := "sk_test_••••Kw=="; masked != want {
+		t.Errorf("secret_key_masked = %q, want %q", masked, want)
+	}
+	if n := len([]rune(masked)); n > len("sk_test_")+8 {
+		t.Errorf("secret_key_masked is %d runes, over the prefix+bullet-run+4 budget: it must not grow with the secret", n)
+	}
+
+	// THE LEAK ASSERTION: no interior window of the stored secret may appear.
+	interior := string(plaintext)[len("sk_test_") : len(plaintext)-4]
+	for i := 0; i+4 <= len(interior); i++ {
+		if window := interior[i : i+4]; strings.Contains(masked, window) {
+			t.Fatalf("bundle leaked interior window %q (offset %d of the stored secret) in secret_key_masked %q", window, i, masked)
+		}
 	}
 }

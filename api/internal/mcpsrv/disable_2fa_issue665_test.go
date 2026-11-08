@@ -281,7 +281,7 @@ func valkeySessionsForTest(t *testing.T) *auth.Sessions {
 		t.Skip("JOMFORM_TEST_VALKEY_URL not set; disable_2fa revokes the account's " +
 			"trusted devices (#713), and that set lives in Valkey")
 	}
-	sessions, err := auth.NewSessions(valkeyURL)
+	sessions, err := auth.NewSessions(valkeyURL, testValkeyOptions()...)
 	if err != nil {
 		t.Fatalf("valkey sessions: %v", err)
 	}

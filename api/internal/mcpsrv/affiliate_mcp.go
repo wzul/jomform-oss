@@ -16,7 +16,7 @@ import (
 // affiliatesStore returns the affiliate store (nil-safe).
 func (s *Server) affiliatesStore() (*dbstore.AffiliateStore, error) {
 	if s.deps == nil || s.deps.Affiliates == nil {
-		return nil, errors.New("affiliate store tidak tersedia")
+		return nil, errors.New("affiliate store not available")
 	}
 	return s.deps.Affiliates, nil
 }
@@ -24,7 +24,7 @@ func (s *Server) affiliatesStore() (*dbstore.AffiliateStore, error) {
 // salesStore returns the sale store (nil-safe).
 func (s *Server) salesStore() (*dbstore.SaleStore, error) {
 	if s.deps == nil || s.deps.Sales == nil {
-		return nil, errors.New("sale store tidak tersedia")
+		return nil, errors.New("sale store not available")
 	}
 	return s.deps.Sales, nil
 }
@@ -32,11 +32,11 @@ func (s *Server) salesStore() (*dbstore.SaleStore, error) {
 // ── create_affiliate ────────────────────────────────────────────────────────────
 
 type createAffiliateIn struct {
-	WorkspaceID   string  `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	Code          string  `json:"code" jsonschema:"Kod affiliate (cth: ALI, KAKAK)"`
-	Name          string  `json:"name,omitempty" jsonschema:"Nama affiliate (pilihan)"`
-	Email         string  `json:"email,omitempty" jsonschema:"Emel affiliate (pilihan)"`
-	CommissionPct float64 `json:"commission_pct" jsonschema:"Kadar komisen %% (cth: 10 = 10%%)"`
+	WorkspaceID   string  `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	Code          string  `json:"code" jsonschema:"Affiliate code (e.g. ALI, KAKAK)"`
+	Name          string  `json:"name,omitempty" jsonschema:"Affiliate name (optional)"`
+	Email         string  `json:"email,omitempty" jsonschema:"Affiliate email (optional)"`
+	CommissionPct float64 `json:"commission_pct" jsonschema:"Commission rate %% (e.g. 10 = 10%%)"`
 }
 
 type affiliateOut struct {
@@ -64,7 +64,7 @@ func (s *Server) createAffiliate(
 		return nil, nil, err
 	}
 	if existing, _ := affStore.ByCode(ctx, in.WorkspaceID, in.Code); existing != nil {
-		return nil, nil, errors.New("code sudah wujud")
+		return nil, nil, errors.New("code already exists")
 	}
 	a := &dbstore.Affiliate{
 		ID:            uuid.NewString(),
@@ -83,7 +83,7 @@ func (s *Server) createAffiliate(
 // ── list_affiliates ──────────────────────────────────────────────────────────────
 
 type listAffiliatesIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
 }
 
 func (s *Server) listAffiliates(
@@ -111,8 +111,8 @@ func (s *Server) listAffiliates(
 // ── get_affiliate_sales ─────────────────────────────────────────────────────────
 
 type getAffiliateSalesIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	AffiliateID string `json:"affiliate_id" jsonschema:"ID affiliate (dari list_affiliates)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	AffiliateID string `json:"affiliate_id" jsonschema:"Affiliate ID (from list_affiliates)"`
 }
 
 type affiliateSaleOut struct {
@@ -135,7 +135,7 @@ func (s *Server) getAffiliateSales(
 	}
 	aff, err := affStore.ByID(ctx, in.AffiliateID)
 	if err != nil || aff == nil || aff.WorkspaceID != in.WorkspaceID {
-		return nil, nil, errors.New("affiliate tidak dijumpai")
+		return nil, nil, errors.New("affiliate not found")
 	}
 	salesStore, err := s.salesStore()
 	if err != nil {
@@ -158,9 +158,9 @@ func (s *Server) getAffiliateSales(
 // ── set_affiliate_commission ─────────────────────────────────────────────────────
 
 type setAffiliateCommissionIn struct {
-	WorkspaceID   string  `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	AffiliateID   string  `json:"affiliate_id" jsonschema:"ID affiliate (dari list_affiliates)"`
-	CommissionPct float64 `json:"commission_pct" jsonschema:"Kadar komisen %% (cth: 10 = 10%%)"`
+	WorkspaceID   string  `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	AffiliateID   string  `json:"affiliate_id" jsonschema:"Affiliate ID (from list_affiliates)"`
+	CommissionPct float64 `json:"commission_pct" jsonschema:"Commission rate %% (e.g. 10 = 10%%)"`
 }
 
 // setAffiliateCommission sets an affiliate's commission rate (issue #444).
@@ -183,13 +183,13 @@ func (s *Server) setAffiliateCommission(
 	// Scope check (issue #519): the affiliate must belong to in.WorkspaceID.
 	aff, err := affStore.ByID(ctx, in.AffiliateID)
 	if err != nil || aff == nil || aff.WorkspaceID != in.WorkspaceID {
-		return nil, nil, errors.New("affiliate tidak dijumpai")
+		return nil, nil, errors.New("affiliate not found")
 	}
 	// Scoped store write (issue #519): the UPDATE itself is bound to the
 	// authorised workspace, so a future caller cannot reintroduce the bug.
 	if err := affStore.SetCommission(ctx, in.WorkspaceID, in.AffiliateID, in.CommissionPct); err != nil {
 		if errors.Is(err, dbstore.ErrAffiliateNotFound) {
-			return nil, nil, errors.New("affiliate tidak dijumpai")
+			return nil, nil, errors.New("affiliate not found")
 		}
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}

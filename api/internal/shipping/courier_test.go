@@ -313,7 +313,7 @@ func testEasyParcelConfig(base string) EasyParcelConfig {
 		APIBase: base, APIVersion: "2026-09",
 		AuthorizeURL:    "https://api.easyparcel.com/oauth/login",
 		TokenURL:        base + "/oauth/token",
-		RedirectStaging: "https://jomform-staging.example.com/api/shipping/easyparcel/callback",
+		RedirectStaging: "https://jomform-staging.wanzul-hosting.com/api/shipping/easyparcel/callback",
 		RedirectProd:    "https://jomform.com/api/shipping/easyparcel/callback",
 	}
 }
@@ -321,7 +321,7 @@ func testEasyParcelConfig(base string) EasyParcelConfig {
 func TestEasyParcelAuthorizeURLCarriesTheStateAndTheRegisteredRedirect(t *testing.T) {
 	cfg := testEasyParcelConfig("https://api.easyparcel.com")
 	link, err := EasyParcelAuthorizeURL(cfg, "state-123",
-		"https://jomform-staging.example.com/api/shipping/easyparcel/callback")
+		"https://jomform-staging.wanzul-hosting.com/api/shipping/easyparcel/callback")
 	if err != nil {
 		t.Fatalf("authorize url: %v", err)
 	}

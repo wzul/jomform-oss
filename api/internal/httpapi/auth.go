@@ -283,7 +283,7 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 	slog.Info("register_attempt", "ip", ip, "email", obfuscateEmail(req.Email))
 
 	if !auth.ValidEmail(req.Email) {
-		writeErr(w, http.StatusBadRequest, "email tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid email")
 		return
 	}
 
@@ -298,11 +298,11 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 		// The ONE reused production test login is not a throwaway: it must never
 		// be marked disposable, or a purge would delete the account the lanes are
 		// told to reuse.
-		writeErr(w, http.StatusBadRequest, "emel ini dilindungi: ia tidak boleh ditanda sebagai akaun ujian")
+		writeErr(w, http.StatusBadRequest, "this email is protected: it cannot be marked as a test account")
 		return
 	}
 	if req.Password != "" && len(req.Password) < 10 {
-		writeErr(w, http.StatusBadRequest, "kata laluan mesti sekurang-kurangnya 10 aksara")
+		writeErr(w, http.StatusBadRequest, "the password must be at least 10 characters")
 		return
 	}
 	if req.Password == "" {
@@ -322,7 +322,7 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if a.MXChecker != nil {
 		domain := auth.EmailDomain(req.Email)
 		if domain == "" {
-			writeErr(w, http.StatusBadRequest, "email tidak sah")
+			writeErr(w, http.StatusBadRequest, "invalid email")
 			return
 		}
 		ok, err := a.MXChecker.Check(r.Context(), domain)
@@ -330,11 +330,11 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 			// Conservative: fail closed — if we can't verify the domain accepts
 			// mail, reject rather than risk a reputation-harming bounce.
 			slog.Warn("register_mx_check_failed", "err", err, "email", obfuscateEmail(req.Email))
-			writeErr(w, http.StatusBadRequest, "domain emel tidak menerima emel")
+			writeErr(w, http.StatusBadRequest, "the email domain does not accept email")
 			return
 		}
 		if !ok {
-			writeErr(w, http.StatusBadRequest, "domain emel tidak menerima emel")
+			writeErr(w, http.StatusBadRequest, "the email domain does not accept email")
 			return
 		}
 	}
@@ -362,13 +362,13 @@ func (a *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 	user, err := a.Users.CreateWithTestMarker(r.Context(), req.Email, hash, isTest)
 	if err != nil {
 		if errors.Is(err, dbstore.ErrEmailTaken) {
-			writeErr(w, http.StatusConflict, "email sudah didaftarkan")
+			writeErr(w, http.StatusConflict, "email already registered")
 			return
 		}
 		if errors.Is(err, dbstore.ErrProtectedAccount) {
 			// Defence in depth: the store refuses to mark a protected address
 			// even if a future caller skips the check above.
-			writeErr(w, http.StatusBadRequest, "emel ini dilindungi: ia tidak boleh ditanda sebagai akaun ujian")
+			writeErr(w, http.StatusBadRequest, "this email is protected: it cannot be marked as a test account")
 			return
 		}
 		slog.Error("register_failed", "err", err, "email", req.Email)
@@ -483,7 +483,7 @@ func (a *AuthHandlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// Deliberately NOT recorded as a failed password attempt — the
 		// credential was correct; the user just hasn't confirmed their email.
 		recordAuthFailure("unverified")
-		writeErr(w, http.StatusForbidden, "sila sahkan email anda sebelum log masuk (semak peti masuk untuk pautan pengesahan)")
+		writeErr(w, http.StatusForbidden, "please verify your email before signing in (check your inbox for the verification link)")
 		return
 	}
 
@@ -639,7 +639,7 @@ func (a *AuthHandlers) failLogin(w http.ResponseWriter, r *http.Request, ip stri
 	// Uniform 401, identical body for both cases → no enumeration either from
 	// the message or from the status code.
 	recordAuthFailure("bad_credentials")
-	writeErr(w, http.StatusUnauthorized, "maklumat log masuk tidak sah")
+	writeErr(w, http.StatusUnauthorized, "invalid login details")
 }
 
 func (a *AuthHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -659,7 +659,7 @@ func (a *AuthHandlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (a *AuthHandlers) handleMe(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
-		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		writeErr(w, http.StatusUnauthorized, "not signed in")
 		return
 	}
 	// Issue #164: surface the user's default workspace so the frontend knows
@@ -683,7 +683,7 @@ func (a *AuthHandlers) handleMe(w http.ResponseWriter, r *http.Request) {
 func (a *AuthHandlers) handle2FASetup(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
-		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		writeErr(w, http.StatusUnauthorized, "not signed in")
 		return
 	}
 	secret, url, err := auth.GenerateTOTPSecret(user.Email)
@@ -705,20 +705,20 @@ func (a *AuthHandlers) handle2FASetup(w http.ResponseWriter, r *http.Request) {
 func (a *AuthHandlers) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
-		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		writeErr(w, http.StatusUnauthorized, "not signed in")
 		return
 	}
 	var req struct {
 		Code string `json:"code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" {
-		writeErr(w, http.StatusBadRequest, "kod diperlukan")
+		writeErr(w, http.StatusBadRequest, "code is required")
 		return
 	}
 	pending, err := a.pendingTOTP().Get(r.Context(), user.ID)
 	if err != nil || pending == "" {
 		// No pending secret (never set up, expired, or already consumed).
-		writeErr(w, http.StatusBadRequest, "2fa belum di-setup atau ralat")
+		writeErr(w, http.StatusBadRequest, "2FA is not set up yet or an error occurred")
 		return
 	}
 	// Issue #528: verify the code against the PENDING secret (that is what is
@@ -727,7 +727,7 @@ func (a *AuthHandlers) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 	// code seen at the confirmation screen cannot be reused at the next login.
 	step, ok := auth.ValidateTOTPSecretStep(pending, req.Code)
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "kod tidak sah")
+		writeErr(w, http.StatusUnauthorized, "invalid code")
 		return
 	}
 	if consumed, cerr := a.Users.ConsumeTOTPStep(r.Context(), user.ID, step); cerr != nil {
@@ -737,7 +737,7 @@ func (a *AuthHandlers) handle2FAEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if !consumed {
 		slog.Warn("totp_replay_rejected", "user", user.ID, "step", step)
-		writeErr(w, http.StatusUnauthorized, "kod tidak sah")
+		writeErr(w, http.StatusUnauthorized, "invalid code")
 		return
 	}
 	if err := a.Users.EnableTOTP(r.Context(), user.ID, pending); err != nil {
@@ -812,7 +812,7 @@ func (a *AuthHandlers) pendingTOTP() *auth.PendingTOTP {
 func (a *AuthHandlers) handle2FADisable(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
-		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		writeErr(w, http.StatusUnauthorized, "not signed in")
 		return
 	}
 	var req struct {
@@ -834,7 +834,7 @@ func (a *AuthHandlers) handle2FADisable(w http.ResponseWriter, r *http.Request) 
 	case req.TOTPCode != "":
 		// The code is both the second factor and the action's proof.
 		if !checkAndConsumeTOTP(r.Context(), a.Users, user, req.TOTPCode) {
-			writeErr(w, http.StatusUnauthorized, "kod 2FA tidak sah")
+			writeErr(w, http.StatusUnauthorized, "invalid 2FA code")
 			return
 		}
 	case magicStepUp && !a.stepUpGranted(r, user):
@@ -846,7 +846,7 @@ func (a *AuthHandlers) handle2FADisable(w http.ResponseWriter, r *http.Request) 
 		// Established session: the account password confirms the action.
 		ok, err := auth.VerifyPassword(req.Password, user.PasswordHash)
 		if err != nil || !ok {
-			writeErr(w, http.StatusUnauthorized, "kata laluan tidak sah")
+			writeErr(w, http.StatusUnauthorized, "invalid password")
 			return
 		}
 		// case magicStepUp && granted: falls through — a fresh second factor

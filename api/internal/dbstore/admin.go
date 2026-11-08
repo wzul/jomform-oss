@@ -28,11 +28,26 @@ type WorkspaceWithCounts struct {
 
 // ListAllWithCounts returns every workspace with owner email + form/product
 // counts, newest first. Super-admin only (issue #386).
+//
+// A workspace's products are counted THROUGH ITS ACCOUNTS, not through
+// products.workspace_id. products is an account-scoped table — every product
+// read in this package is by account_id (or a set of them) — and the app never
+// writes products.workspace_id: ProductStore.Create's INSERT omits it, no
+// trigger maintains it, and the only statements that ever set it are the
+// one-off 000012 backfill and the account-link sync in CreateForAccount. So
+// counting that column answered 0 for every workspace whose products were
+// created after its account was already linked, i.e. all of the ordinary ones.
+// Joining through accounts cannot drift: linking an account puts its products
+// in the workspace with no second write to the product, which is also how
+// WorkspaceStore.emptyCheckSQL and MediaStore.UsageByWorkspace count a
+// workspace's rows.
 func (s *WorkspaceStore) ListAllWithCounts(ctx context.Context) ([]WorkspaceWithCounts, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT sp.id, sp.name, sp.slug, sp.owner_user_id, COALESCE(u.email,''), sp.created_at,
 		       (SELECT COUNT(*) FROM forms f WHERE f.workspace_id = sp.id),
-		       (SELECT COUNT(*) FROM products p WHERE p.workspace_id = sp.id)
+		       (SELECT COUNT(*) FROM products p
+		         JOIN accounts a ON a.id = p.account_id
+		        WHERE a.workspace_id = sp.id)
 		FROM workspaces sp
 		LEFT JOIN users u ON u.id = sp.owner_user_id
 		WHERE sp.deleted_at IS NULL

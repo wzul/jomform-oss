@@ -24,11 +24,14 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	goredis "github.com/redis/go-redis/v9"
 )
 
 // probeStore opens a store on the shared test Valkey under a namespace unique to
@@ -41,7 +44,11 @@ func probeStore(t *testing.T, suffix string, opts ...SessionOption) *Sessions {
 		t.Skip("JOMFORM_TEST_VALKEY_URL not set; skipping namespace test")
 	}
 	ns := "jftest:p" + strconv.Itoa(os.Getpid()) + ":nsprobe-" + suffix
-	s, err := NewSessions(url, append([]SessionOption{WithKeyNamespace(ns)}, opts...)...)
+	s, err := NewSessions(url, append([]SessionOption{
+		WithKeyNamespace(ns),
+		WithDefaultTTL(valkeyTestSessionTTL),
+		WithTrustTTL(valkeyTestTrustTTL),
+	}, opts...)...)
 	if err != nil {
 		t.Fatalf("valkey sessions: %v", err)
 	}
@@ -127,9 +134,11 @@ func TestDefaultTTLIsOnlyAShortcutForTestStores(t *testing.T) {
 	}
 }
 
-// TestCreateHonoursTheShortTestTTL is the Valkey-backed half of the above: the
-// key really does carry minutes, so a run KILLED before its namespace sweep
-// leaves keys that expire instead of week-long ones.
+// TestCreateHonoursTheShortTestTTL is the Valkey-backed half of the above: a key
+// minted through Create really does carry minutes. That is the whole of the
+// guarantee — a login handler passes its own TTL and ignores this default, so a
+// killed run's handler-minted keys drain by expiry (24h, or 14d for a remember
+// login) rather than in minutes (card t_39e2b840).
 func TestCreateHonoursTheShortTestTTL(t *testing.T) {
 	s := probeStore(t, "ttl", WithDefaultTTL(time.Minute))
 	ctx := context.Background()
@@ -147,36 +156,33 @@ func TestCreateHonoursTheShortTestTTL(t *testing.T) {
 }
 
 // TestDeleteNamespaceKeysSweepsOnlyItsOwnNamespace is the decisive test: the
-// sweep removes this store's keys and NEITHER a peer namespace's key NOR a
-// production-layout key. Deleting the latter is what a whole-prefix sweep would
-// do, and it is how a test fixture signs a live API's users out.
+// sweep removes this store's keys and NONE of a peer namespace's.
+//
+// The third arm used to be a PRODUCTION-layout store that minted a
+// `jf:session:<hash>` key and asserted the sweep spared it. That mint is exactly
+// the residue this package must never write: a run killed between the mint and
+// the cleanup leaves a production-layout key behind, and nothing can tell it from
+// a live login (card t_d08b36c2). The reach of the sweep is asserted from the
+// commands it actually issues instead — the SCAN patterns and the DEL arguments —
+// so the production layout is never written to find out.
 func TestDeleteNamespaceKeysSweepsOnlyItsOwnNamespace(t *testing.T) {
 	mine := probeStore(t, "mine")
 	peer := probeStore(t, "peer")
 	ctx := context.Background()
-
-	// A production-layout store, i.e. exactly what a running API holds: no
-	// namespace, keys named `jf:session:<hash>`.
-	url := os.Getenv("JOMFORM_TEST_VALKEY_URL")
-	prod, err := NewSessions(url)
-	if err != nil {
-		t.Fatalf("production-layout store: %v", err)
-	}
-	t.Cleanup(func() { _ = prod.Close() })
 
 	type minted struct {
 		store *Sessions
 		token string
 	}
 	sessions := map[string]minted{}
-	for label, s := range map[string]*Sessions{"mine": mine, "peer": peer, "prod": prod} {
+	for label, s := range map[string]*Sessions{"mine": mine, "peer": peer} {
 		tok, err := s.Create(ctx, "probe-"+label+"-user")
 		if err != nil {
 			t.Fatalf("create %s session: %v", label, err)
 		}
 		sessions[label] = minted{store: s, token: tok}
 		t.Cleanup(func() {
-			// peer/prod are not swept by the sweep under test; mine already is.
+			// peer is not swept below; mine already is.
 			_ = s.Destroy(ctx, tok)
 		})
 	}
@@ -189,6 +195,9 @@ func TestDeleteNamespaceKeysSweepsOnlyItsOwnNamespace(t *testing.T) {
 		}
 	}
 
+	rec := &sweepCommands{}
+	mine.rdb.AddHook(rec)
+
 	deleted, err := mine.DeleteNamespaceKeys(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
@@ -196,13 +205,104 @@ func TestDeleteNamespaceKeysSweepsOnlyItsOwnNamespace(t *testing.T) {
 	if deleted != 1 {
 		t.Errorf("sweep deleted %d key(s), want exactly the 1 this namespace owned", deleted)
 	}
+
+	// The sweep may only SCAN its own namespace and may only DEL keys inside it.
+	if len(rec.patterns) == 0 {
+		t.Fatal("the sweep issued no SCAN — the reach assertions below would be vacuous")
+	}
+	// Sessions hands out SEVEN key families and DeleteNamespaceKeys sweeps all
+	// seven (card t_6004c826): the session keys plus every derived store —
+	// pending TOTP, step-up, password reset, magic link, the emailed 2FA code and
+	// its pending flag. The roots are named HERE rather than read off the sweep,
+	// and the comparison is a SET in both directions:
+	//   - a pattern outside these seven means the sweep left its namespace; and
+	//   - a missing one means a family this store still writes is no longer
+	//     reclaimed, i.e. it leaks onto the shared test Valkey again — the exact
+	//     residue t_6004c826 exists to stop, so it must red, not narrow.
+	// SCAN is cursor-iterated, so the same pattern may be issued more than once;
+	// what must hold is the set of DISTINCT patterns.
+	ns := mine.KeyNamespace()
+	wantPatterns := []string{
+		namespacePrefix(sessionKeyPrefix, ns) + "*",
+		namespacePrefix(PendingTOTPKeyPrefix, ns) + "*",
+		namespacePrefix(StepUpKeyPrefix, ns) + "*",
+		namespacePrefix(PasswordResetKeyPrefix, ns) + "*",
+		namespacePrefix(MagicLinkKeyPrefix, ns) + "*",
+		namespacePrefix(Email2FACodeKeyPrefix, ns) + "*",
+		namespacePrefix(Email2FAPendingPrefix, ns) + "*",
+	}
+	want := make(map[string]bool, len(wantPatterns))
+	for _, p := range wantPatterns {
+		want[p] = true
+	}
+	seen := map[string]bool{}
+	for _, pattern := range rec.patterns {
+		seen[pattern] = true
+		if !want[pattern] {
+			t.Errorf("sweep scanned %q, which is not one of this namespace's seven family patterns %v — the sweep must never leave its namespace", pattern, wantPatterns)
+		}
+	}
+	for _, p := range wantPatterns {
+		if !seen[p] {
+			t.Errorf("the sweep never scanned %q — one of the seven key families this store writes is no longer reclaimed (want all of %v, saw %v)", p, wantPatterns, seen)
+		}
+	}
+	if want := mine.sessionKey(sessions["mine"].token); len(rec.deleted) != 1 || rec.deleted[0] != want {
+		t.Errorf("sweep DELeted %v, want exactly its own key %q", rec.deleted, want)
+	}
+	for _, name := range rec.other {
+		switch name {
+		case "flushdb", "flushall", "keys":
+			t.Errorf("the sweep issued %q — it must only SCAN/DEL its own namespace", name)
+		}
+	}
+	// The property the deleted arm used to demonstrate at the server: a
+	// production-layout key name is not inside this store's sweep root, so no
+	// SCAN pattern above can match it.
+	productionKey := sessionKeyPrefix + hashOf("a-production-layout-session")
+	if strings.HasPrefix(productionKey, mine.keyPrefix()) {
+		t.Errorf("production key %q starts with the sweep root %q — the sweep could reach a live login", productionKey, mine.keyPrefix())
+	}
+
 	if n, _ := mine.Client().Exists(ctx, mine.sessionKey(sessions["mine"].token)).Result(); n != 0 {
 		t.Errorf("this namespace's session key survived its own sweep (exists=%d)", n)
 	}
 	if n, _ := peer.Client().Exists(ctx, peer.sessionKey(sessions["peer"].token)).Result(); n != 1 {
 		t.Errorf("a PEER namespace's session key was swept (exists=%d) — a test must never delete a key it did not write", n)
 	}
-	if n, _ := prod.Client().Exists(ctx, prod.sessionKey(sessions["prod"].token)).Result(); n != 1 {
-		t.Errorf("a PRODUCTION-layout session key was swept (exists=%d) — that is a live API's login", n)
+}
+
+// sweepCommands records the keyspace commands a sweep issues, so a test can
+// assert its REACH without writing a production-layout key to find out.
+type sweepCommands struct {
+	patterns []string
+	deleted  []string
+	other    []string
+}
+
+func (h *sweepCommands) DialHook(next goredis.DialHook) goredis.DialHook { return next }
+
+func (h *sweepCommands) ProcessPipelineHook(next goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
+	return next
+}
+
+func (h *sweepCommands) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+	return func(ctx context.Context, cmd goredis.Cmder) error {
+		args := cmd.Args()
+		switch strings.ToLower(cmd.Name()) {
+		case "scan":
+			for i := 1; i+1 < len(args); i++ {
+				if strings.EqualFold(fmt.Sprint(args[i]), "match") {
+					h.patterns = append(h.patterns, fmt.Sprint(args[i+1]))
+				}
+			}
+		case "del":
+			for _, a := range args[1:] {
+				h.deleted = append(h.deleted, fmt.Sprint(a))
+			}
+		default:
+			h.other = append(h.other, strings.ToLower(cmd.Name()))
+		}
+		return next(ctx, cmd)
 	}
 }

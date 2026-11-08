@@ -46,6 +46,12 @@ func TestTemplateCRUDIsOwnerScoped(t *testing.T) {
 	pool := bundleTestPool(t)
 	accA, _ := bundleFixture(t, ctx, pool)
 	accB, _ := bundleFixture(t, ctx, pool)
+	// Card t_d07c8fbb: cloning a template mints a form, which an account with no
+	// workspace cannot do (409). Both accounts clone here — A for the control,
+	// B to prove another tenant's template is a 404 rather than the workspace
+	// refusal.
+	bundleLinkWorkspace(t, ctx, pool, accA)
+	bundleLinkWorkspace(t, ctx, pool, accB)
 	keyA := bundleAPIKey(t, ctx, pool, accA)
 	keyB := bundleAPIKey(t, ctx, pool, accB)
 	h := newBundleHandlers(pool)

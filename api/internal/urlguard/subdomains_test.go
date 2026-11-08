@@ -1065,13 +1065,13 @@ func TestIsServingReservedIsTheOnePredicate(t *testing.T) {
 // --- the foreign-host declaration (card t_3f44c437) -------------------------
 
 // TestForeignRoutedHostsAreDeclaredAndNarrow is the other half of the fix the
-// Traefik guard needed: `halo.example.com` is a real merchant custom
+// Traefik guard needed: `halo.wanzul-hosting.com` is a real merchant custom
 // domain in the live table, so it is declared rather than waved through.
 //
 // The declaration is an EXCEPTION list, which is exactly the kind of thing that
 // rots — so it is held to the same standard as reservedSubdomains: every entry
 // says WHY it is allowed, the match is exact (not a suffix, or
-// `halo.example.com.evil.tld` would read as the declared host), and an
+// `halo.wanzul-hosting.com.evil.tld` would read as the declared host), and an
 // entry that belongs to the LABEL path (anything under jomform.com) is refused
 // here, because declaring one would be a hole in the claim guard rather than a
 // documented exception.
@@ -1099,15 +1099,15 @@ func TestForeignRoutedHostsAreDeclaredAndNarrow(t *testing.T) {
 	// The predicate normalises the way the rest of this package does, and it is
 	// an EXACT match: a host that merely ends with a declared one is not it.
 	for _, host := range []string{
-		"halo.example.com", " HALO.example.com ", "halo.example.com	",
+		"halo.wanzul-hosting.com", " HALO.Wanzul-Hosting.com ", "halo.wanzul-hosting.com	",
 	} {
 		if !isForeignRoutedHost(host) {
 			t.Errorf("isForeignRoutedHost(%q) = false, want true", host)
 		}
 	}
 	for _, host := range []string{
-		"", "jomform.com", "www.jomform.com", "example.com",
-		"halo.example.com.evil.example", "evil.example.com",
+		"", "jomform.com", "www.jomform.com", "wanzul-hosting.com",
+		"halo.wanzul-hosting.com.evil.example", "evil.example.com",
 	} {
 		if isForeignRoutedHost(host) {
 			t.Errorf("isForeignRoutedHost(%q) = true, want false — the declaration "+

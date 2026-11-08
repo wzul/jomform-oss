@@ -9,7 +9,7 @@ import (
 
 // getEmailSettingsIn resolves the workspace whose email settings to read.
 type getEmailSettingsIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
 }
 
 // getEmailSettings reads a workspace's receipt/notification email settings.
@@ -52,13 +52,13 @@ type dbstoreEmailSettingsOut struct {
 // setEmailSettingsIn updates a workspace's email settings. Omitted fields keep
 // their current value (read-modify-write, matching set_workspace_settings).
 type setEmailSettingsIn struct {
-	WorkspaceID         string  `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	ReceiptSubject      *string `json:"receipt_subject,omitempty" jsonschema:"Subjek resit (placeholder {{ref_code}} dll; omit = kekal)"`
-	ReceiptBody         *string `json:"receipt_body,omitempty" jsonschema:"Badan resit (placeholder {{ref_code}}, {{amount}}, {{items}}, {{form_url}}, {{buyer_name}}, {{date}}; omit = kekal)"`
-	ReceiptEnabled      *bool   `json:"receipt_enabled,omitempty" jsonschema:"Hantar resit kepada pembeli (true/false; omit = kekal)"`
-	NotifyMerchant      *bool   `json:"notify_merchant,omitempty" jsonschema:"Hantar salinan/notifikasi jualan kepada merchant (true/false; omit = kekal)"`
-	MerchantNotifyEmail *string `json:"merchant_notify_email,omitempty" jsonschema:"Emel merchant untuk notifikasi (kosong = guna emel akaun; omit = kekal)"`
-	HTML                *bool   `json:"html,omitempty" jsonschema:"Badan HTML (auto-escape, tiada XSS; true/false; omit = kekal)"`
+	WorkspaceID         string  `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	ReceiptSubject      *string `json:"receipt_subject,omitempty" jsonschema:"Receipt subject (placeholders {{ref_code}} etc.; omit = keep)"`
+	ReceiptBody         *string `json:"receipt_body,omitempty" jsonschema:"Receipt body (placeholder {{ref_code}}, {{amount}}, {{items}}, {{form_url}}, {{buyer_name}}, {{date}}; omit = keep existing)"`
+	ReceiptEnabled      *bool   `json:"receipt_enabled,omitempty" jsonschema:"Send the receipt to the buyer (true/false; omit = keep)"`
+	NotifyMerchant      *bool   `json:"notify_merchant,omitempty" jsonschema:"Send a copy/sale notification to the merchant (true/false; omit = keep)"`
+	MerchantNotifyEmail *string `json:"merchant_notify_email,omitempty" jsonschema:"Merchant email for notifications (empty = use the account email; omit = keep)"`
+	HTML                *bool   `json:"html,omitempty" jsonschema:"HTML body (auto-escaped, no XSS; true/false; omit = keep)"`
 }
 
 func (s *Server) setEmailSettings(

@@ -33,16 +33,16 @@ var (
 	// ErrConnectNoCredentials: the deployment has no usable credential for this
 	// provider (production Lalamove keys are Wan's to obtain; EasyParcel's OAuth
 	// app may be unconfigured).
-	ErrConnectNoCredentials = errors.New("kredensial pembekal ini belum dikonfigurasi pada pelayan")
+	ErrConnectNoCredentials = errors.New("this provider's credential is not configured on the server")
 	// ErrConnectOriginRequired: a point-based provider (Lalamove) needs the
 	// PICKUP point; without it every quote would fall back, so connecting without
 	// one would create a connection that can never be used.
-	ErrConnectOriginRequired = errors.New("latitud/longitud tempat ambil diperlukan untuk pembekal ini")
+	ErrConnectOriginRequired = errors.New("this provider needs the pickup location's latitude/longitude")
 	// ErrConnectNoRedirect: an OAuth provider has no registered callback URL for
 	// this deployment (the redirect_uri must match the Developer Hub exactly).
-	ErrConnectNoRedirect = errors.New("redirect_uri pembekal ini belum didaftarkan")
+	ErrConnectNoRedirect = errors.New("this provider's redirect_uri is not registered")
 	// ErrConnectUnavailable: the store cannot persist the connection.
-	ErrConnectUnavailable = errors.New("sambungan pembekal penghantaran tidak tersedia")
+	ErrConnectUnavailable = errors.New("the shipping provider connection store is unavailable")
 )
 
 // ConnectRequest is what a connect supplies: WHERE THE PARCEL SHIPS FROM plus the

@@ -33,8 +33,8 @@ type spamSaleOut struct {
 }
 
 type listSpamIn struct {
-	Page  int `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
-	Limit int `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
+	Page  int `json:"page,omitempty" jsonschema:"Optional — page (starting at 1)"`
+	Limit int `json:"limit,omitempty" jsonschema:"Optional — limit per page (1-100, default 20)"`
 }
 
 // listSpamSubmissions returns one page of spam-flagged response submissions,
@@ -46,7 +46,7 @@ func (s *Server) listSpamSubmissions(ctx context.Context, _ *mcp.CallToolRequest
 		return nil, nil, err
 	}
 	if s.deps.Submissions == nil {
-		return nil, nil, fmt.Errorf("submissions tidak tersedia")
+		return nil, nil, fmt.Errorf("submissions not available")
 	}
 	page, limit := in.Page, in.Limit
 	if page < 1 {
@@ -79,7 +79,7 @@ func (s *Server) listSpamSubmissions(ctx context.Context, _ *mcp.CallToolRequest
 }
 
 type unspamSubmissionIn struct {
-	ID string `json:"id" jsonschema:"ID submission (dari list_spam_submissions)"`
+	ID string `json:"id" jsonschema:"Submission ID (from list_spam_submissions)"`
 }
 
 // unspamSubmission clears the spam flag on a false-positive submission.
@@ -87,10 +87,10 @@ type unspamSubmissionIn struct {
 // of the user's workspaces (up to the caller's role per workspace).
 func (s *Server) unspamSubmission(ctx context.Context, _ *mcp.CallToolRequest, in unspamSubmissionIn) (*mcp.CallToolResult, map[string]any, error) {
 	if s.deps.Submissions == nil {
-		return nil, nil, fmt.Errorf("submissions tidak tersedia")
+		return nil, nil, fmt.Errorf("submissions not available")
 	}
 	if in.ID == "" {
-		return nil, nil, fmt.Errorf("id wajib")
+		return nil, nil, fmt.Errorf("id is required")
 	}
 	acc, err := s.resolveEntityAccount(ctx, func(acc string) error {
 		sub, err := s.deps.Submissions.ByID(ctx, in.ID)
@@ -122,7 +122,7 @@ func (s *Server) listSpamSales(ctx context.Context, _ *mcp.CallToolRequest, in l
 		return nil, nil, err
 	}
 	if s.deps.Sales == nil {
-		return nil, nil, fmt.Errorf("sales tidak tersedia")
+		return nil, nil, fmt.Errorf("sales not available")
 	}
 	page, limit := in.Page, in.Limit
 	if page < 1 {
@@ -156,17 +156,17 @@ func (s *Server) listSpamSales(ctx context.Context, _ *mcp.CallToolRequest, in l
 }
 
 type unspamSaleIn struct {
-	RefCode string `json:"ref_code" jsonschema:"Rujukan jualan (dari list_spam_sales)"`
+	RefCode string `json:"ref_code" jsonschema:"Sale reference (from list_spam_sales)"`
 }
 
 // unspamSale clears the spam flag on a false-positive sale. Write tool
 // (manage/admin role). Issue #307: the sale may live in any of the user's workspaces.
 func (s *Server) unspamSale(ctx context.Context, _ *mcp.CallToolRequest, in unspamSaleIn) (*mcp.CallToolResult, map[string]any, error) {
 	if s.deps.Sales == nil {
-		return nil, nil, fmt.Errorf("sales tidak tersedia")
+		return nil, nil, fmt.Errorf("sales not available")
 	}
 	if in.RefCode == "" {
-		return nil, nil, fmt.Errorf("ref_code wajib")
+		return nil, nil, fmt.Errorf("ref_code is required")
 	}
 	acc, err := s.requireSaleWrite(ctx, in.RefCode)
 	if err != nil {
@@ -174,7 +174,7 @@ func (s *Server) unspamSale(ctx context.Context, _ *mcp.CallToolRequest, in unsp
 	}
 	sale, err := s.deps.Sales.ByRefCode(ctx, in.RefCode)
 	if err != nil || sale.AccountID != acc {
-		return nil, nil, fmt.Errorf("jualan tidak dijumpai")
+		return nil, nil, fmt.Errorf("sale not found")
 	}
 	if err := s.deps.Sales.UnSpam(ctx, sale.ID); err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)

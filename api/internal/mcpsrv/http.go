@@ -35,7 +35,7 @@ func (s *Server) HTTPHandler() http.Handler {
 			// telling the client where to authenticate.
 			w.Header().Set("WWW-Authenticate", oauthmeta.Challenge(
 				oauthmeta.HostOrDefault(r), strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ")))
-			http.Error(w, `{"error":"token tidak sah"}`, http.StatusUnauthorized)
+			http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 			return
 		}
 		// Per-request server bound to the authenticated account via context.

@@ -27,17 +27,17 @@ import (
 func (h *RESTHandlers) requireWorkspaceAdmin(w http.ResponseWriter, r *http.Request) (string, bool) {
 	sID := r.PathValue("id")
 	if _, perr := uuid.Parse(sID); perr != nil {
-		writeErr(w, http.StatusBadRequest, "id tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid id")
 		return "", false
 	}
 	userID := h.sessionOwnerID(r)
 	if userID == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return "", false
 	}
 	sp, err := h.Workspaces.ByID(r.Context(), sID)
 	if err != nil || sp == nil {
-		writeErr(w, http.StatusNotFound, "workspace tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "workspace not found")
 		return "", false
 	}
 	// Owner is always an admin (stored as an admin member row). Check both
@@ -51,7 +51,7 @@ func (h *RESTHandlers) requireWorkspaceAdmin(w http.ResponseWriter, r *http.Requ
 			return sID, true
 		}
 	}
-	writeErr(w, http.StatusForbidden, "perlu admin workspace")
+	writeErr(w, http.StatusForbidden, "you need the workspace admin role")
 	return "", false
 }
 
@@ -83,12 +83,12 @@ func (h *RESTHandlers) createInvite(w http.ResponseWriter, r *http.Request, actx
 		Role  string `json:"role"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	if email == "" {
-		writeErr(w, http.StatusBadRequest, "emel wajib")
+		writeErr(w, http.StatusBadRequest, "email is required")
 		return
 	}
 	role := in.Role
@@ -96,7 +96,7 @@ func (h *RESTHandlers) createInvite(w http.ResponseWriter, r *http.Request, actx
 		role = dbstore.RoleReadOnly
 	}
 	if !dbstore.ValidWorkspaceRole(role) {
-		writeErr(w, http.StatusBadRequest, "role mesti read_only|manage|admin")
+		writeErr(w, http.StatusBadRequest, "role must be read_only|manage|admin")
 		return
 	}
 	if h.WorkspaceMembers == nil {
@@ -225,7 +225,7 @@ func (h *RESTHandlers) deleteInvite(w http.ResponseWriter, r *http.Request, actx
 	}
 	inviteID := r.PathValue("inviteId")
 	if _, perr := uuid.Parse(inviteID); perr != nil {
-		writeErr(w, http.StatusBadRequest, "id tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
 	if h.WorkspaceMembers == nil {
@@ -234,7 +234,7 @@ func (h *RESTHandlers) deleteInvite(w http.ResponseWriter, r *http.Request, actx
 	}
 	if err := h.WorkspaceMembers.DeleteInvite(r.Context(), sID, inviteID); err != nil {
 		if errors.Is(err, dbstore.ErrNotWorkspaceMember) {
-			writeErr(w, http.StatusNotFound, "jemputan tidak dijumpai")
+			writeErr(w, http.StatusNotFound, "invitation not found")
 			return
 		}
 		respondErr(w, r, err)
@@ -281,18 +281,18 @@ func (h *RESTHandlers) updateMemberRole(w http.ResponseWriter, r *http.Request, 
 	}
 	userID := r.PathValue("userId")
 	if _, perr := uuid.Parse(userID); perr != nil {
-		writeErr(w, http.StatusBadRequest, "id tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
 	var in struct {
 		Role string `json:"role"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	if !dbstore.ValidWorkspaceRole(in.Role) {
-		writeErr(w, http.StatusBadRequest, "role mesti read_only|manage|admin")
+		writeErr(w, http.StatusBadRequest, "role must be read_only|manage|admin")
 		return
 	}
 	if h.WorkspaceMembers == nil {
@@ -301,7 +301,7 @@ func (h *RESTHandlers) updateMemberRole(w http.ResponseWriter, r *http.Request, 
 	}
 	if err := h.WorkspaceMembers.UpdateRole(r.Context(), sID, userID, in.Role); err != nil {
 		if errors.Is(err, dbstore.ErrNotWorkspaceMember) {
-			writeErr(w, http.StatusNotFound, "ahli tidak dijumpai")
+			writeErr(w, http.StatusNotFound, "member not found")
 			return
 		}
 		respondErr(w, r, err)
@@ -318,12 +318,12 @@ func (h *RESTHandlers) removeMember(w http.ResponseWriter, r *http.Request, actx
 	}
 	userID := r.PathValue("userId")
 	if _, perr := uuid.Parse(userID); perr != nil {
-		writeErr(w, http.StatusBadRequest, "id tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
 	// Prevent removing the last admin / the owner.
 	if sp, serr := h.Workspaces.ByID(r.Context(), sID); serr == nil && sp != nil && sp.Owner == userID {
-		writeErr(w, http.StatusBadRequest, "pemilik workspace tidak boleh dibuang")
+		writeErr(w, http.StatusBadRequest, "the workspace owner cannot be removed")
 		return
 	}
 	if h.WorkspaceMembers == nil {
@@ -332,7 +332,7 @@ func (h *RESTHandlers) removeMember(w http.ResponseWriter, r *http.Request, actx
 	}
 	if err := h.WorkspaceMembers.RemoveMember(r.Context(), sID, userID); err != nil {
 		if errors.Is(err, dbstore.ErrNotWorkspaceMember) {
-			writeErr(w, http.StatusNotFound, "ahli tidak dijumpai")
+			writeErr(w, http.StatusNotFound, "member not found")
 			return
 		}
 		respondErr(w, r, err)

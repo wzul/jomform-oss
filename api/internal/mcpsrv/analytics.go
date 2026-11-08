@@ -5,6 +5,8 @@ import (
 	"context"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 type formStatsOut struct {
@@ -19,19 +21,62 @@ type formStatsOut struct {
 	ConfirmedCount int64  `json:"confirmed_count"`
 	FailedCount    int64  `json:"failed_count"`
 	PendingCount   int64  `json:"pending_count"`
-	// Issue #518: refundedCount + refundedRM surface refunds, and revenueRM is
+	// Issue #518: refundedCount + refundedSen surface refunds, and revenueSen is
 	// NET of refunds (a partial refund reduces reported revenue).
-	RefundedCount int64   `json:"refunded_count"`
-	RefundedRM    float64 `json:"refunded_rm"`
-	RevenueRM     float64 `json:"revenue_rm"`
+	//
+	// Issue #185 (card t_93844723): money leaves this tool in integer MINOR
+	// units in the currency each sale was RECORDED in — never a float under an
+	// `_rm` name, which asserted ringgit over a figure that can be US dollars.
+	// revenueSen and refundedSen are sums ACROSS currencies (the tool spans all
+	// of the caller's workspaces), so they carry no single label and an agent
+	// must not put one symbol over them; the per-currency maps hold the same
+	// figures keyed by ISO code (e.g. {"USD": 2490}). A workspace that switched
+	// currency keeps each sale in the money it was paid in, which is why one
+	// form can hold more than one entry.
+	RefundedCount      int64            `json:"refunded_count"`
+	RevenueSen         int64            `json:"revenue_sen"`
+	RefundedSen        int64            `json:"refunded_sen"`
+	RevenueByCurrency  map[string]int64 `json:"revenue_by_currency,omitempty"`
+	RefundedByCurrency map[string]int64 `json:"refunded_by_currency,omitempty"`
 }
 
 type productStatsOut struct {
-	Name          string  `json:"name"`
-	UnitsSold     int64   `json:"units_sold"`
-	PaidUnits     int64   `json:"paid_units"`
-	RevenueRM     float64 `json:"revenue_rm"`
-	PaidRevenueRM float64 `json:"paid_revenue_rm"`
+	Name      string `json:"name"`
+	UnitsSold int64  `json:"units_sold"`
+	PaidUnits int64  `json:"paid_units"`
+	// Same money rule as formStatsOut (issue #185): integer minor units, split
+	// by the currency each sale was recorded in. revenueSen is the GROSS line
+	// value of every sale the product appears in (any status) and paidRevenueSen
+	// is the paid/confirmed total NET of refunds — the two figures the dashboard
+	// and GET /v1/rest/analytics/products report.
+	RevenueSen            int64            `json:"revenue_sen"`
+	PaidRevenueSen        int64            `json:"paid_revenue_sen"`
+	RevenueByCurrency     map[string]int64 `json:"revenue_by_currency,omitempty"`
+	PaidRevenueByCurrency map[string]int64 `json:"paid_revenue_by_currency,omitempty"`
+}
+
+// formStatsOutFrom maps the store's rollup onto the wire shape. Pure, so the
+// payload an agent receives can be pinned by a test without a server or a DB.
+func formStatsOutFrom(f dbstore.FormStats) formStatsOut {
+	return formStatsOut{
+		Title: f.Title, Slug: f.Slug, Mode: f.Mode,
+		Submissions: f.Submissions, PaidCount: f.PaidCount,
+		ConfirmedCount: f.ConfirmedCnt, FailedCount: f.FailedCount,
+		PendingCount: f.PendingCount, RefundedCount: f.RefundedCount,
+		RevenueSen: f.RevenueSen, RefundedSen: f.RefundedSen,
+		RevenueByCurrency:  f.RevenueByCurrency,
+		RefundedByCurrency: f.RefundedByCurrency,
+	}
+}
+
+// productStatsOutFrom is formStatsOutFrom for the per-product rollup.
+func productStatsOutFrom(p dbstore.ProductStats) productStatsOut {
+	return productStatsOut{
+		Name: p.Name, UnitsSold: p.UnitsSold, PaidUnits: p.PaidUnits,
+		RevenueSen: p.RevenueSen, PaidRevenueSen: p.PaidRevenue,
+		RevenueByCurrency:     p.RevenueByCurrency,
+		PaidRevenueByCurrency: p.PaidRevenueByCurrency,
+	}
 }
 
 func (s *Server) formAnalytics(
@@ -49,13 +94,7 @@ func (s *Server) formAnalytics(
 			return nil, nil, err
 		}
 		for _, f := range stats {
-			out = append(out, formStatsOut{
-				Title: f.Title, Slug: f.Slug, Mode: f.Mode,
-				Submissions: f.Submissions, PaidCount: f.PaidCount,
-				ConfirmedCount: f.ConfirmedCnt, FailedCount: f.FailedCount,
-				PendingCount: f.PendingCount, RefundedCount: f.RefundedCount,
-				RefundedRM: float64(f.RefundedSen) / 100, RevenueRM: float64(f.RevenueSen) / 100,
-			})
+			out = append(out, formStatsOutFrom(f))
 		}
 	}
 	return nil, newListOut(out), nil
@@ -76,10 +115,7 @@ func (s *Server) productAnalytics(
 			return nil, nil, err
 		}
 		for _, p := range stats {
-			out = append(out, productStatsOut{
-				Name: p.Name, UnitsSold: p.UnitsSold, PaidUnits: p.PaidUnits,
-				RevenueRM: float64(p.RevenueSen) / 100, PaidRevenueRM: float64(p.PaidRevenue) / 100,
-			})
+			out = append(out, productStatsOutFrom(p))
 		}
 	}
 	return nil, newListOut(out), nil

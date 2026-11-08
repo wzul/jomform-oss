@@ -228,7 +228,7 @@ test("an over-long name is reported as the NAME's problem, never as a bad addres
       status: 400,
       contentType: "application/json",
       body: JSON.stringify({
-        error: "nama workspace maksimum 120 aksara",
+        error: "workspace name maximum 120 aksara",
         code: "workspace.nameTooLong",
       }),
     });

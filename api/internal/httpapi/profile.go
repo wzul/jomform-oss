@@ -35,12 +35,12 @@ func (a *AuthHandlers) profileUserID(r *http.Request) string {
 func (a *AuthHandlers) handleProfile(w http.ResponseWriter, r *http.Request) {
 	uid := a.profileUserID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	u, err := a.Users.ByID(r.Context(), uid)
 	if err != nil || u == nil {
-		writeErr(w, http.StatusNotFound, "pengguna tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "user not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -76,7 +76,7 @@ func (a *AuthHandlers) handleUpdateName(w http.ResponseWriter, r *http.Request) 
 	}
 	uid := a.profileUserID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	name := textutil.Truncate(strings.TrimSpace(req.Name), profileNameMaxChars)
@@ -101,7 +101,7 @@ func (a *AuthHandlers) handleUpdatePhone(w http.ResponseWriter, r *http.Request)
 	}
 	uid := a.profileUserID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	phone := strings.TrimSpace(req.Phone)
@@ -114,12 +114,12 @@ func (a *AuthHandlers) handleUpdatePhone(w http.ResponseWriter, r *http.Request)
 			case c == '+' || c == ' ' || c == '-' || c == '(' || c == ')':
 				// allowed separators
 			default:
-				writeErr(w, http.StatusBadRequest, "nombor telefon tidak sah")
+				writeErr(w, http.StatusBadRequest, "invalid phone number")
 				return
 			}
 		}
 		if digits < 8 || digits > 15 {
-			writeErr(w, http.StatusBadRequest, "nombor telefon tidak sah")
+			writeErr(w, http.StatusBadRequest, "invalid phone number")
 			return
 		}
 	}
@@ -144,13 +144,13 @@ func (a *AuthHandlers) handleUpdateTimezone(w http.ResponseWriter, r *http.Reque
 	}
 	uid := a.profileUserID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	tz := strings.TrimSpace(req.Timezone)
 	if tz != "" {
 		if _, err := time.LoadLocation(tz); err != nil {
-			writeErr(w, http.StatusBadRequest, "zona waktu tidak sah")
+			writeErr(w, http.StatusBadRequest, "invalid timezone")
 			return
 		}
 	}
@@ -176,12 +176,12 @@ func (a *AuthHandlers) handleUpdateLang(w http.ResponseWriter, r *http.Request) 
 	}
 	uid := a.profileUserID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	lang := strings.TrimSpace(req.Lang)
 	if !dbstore.ValidProfileLang(lang) {
-		writeErr(w, http.StatusBadRequest, "bahasa tidak disokong")
+		writeErr(w, http.StatusBadRequest, "unsupported language")
 		return
 	}
 	if err := a.Users.UpdateLang(r.Context(), uid, lang); err != nil {
@@ -203,25 +203,25 @@ func (a *AuthHandlers) handleUpdateEmail(w http.ResponseWriter, r *http.Request)
 	}
 	uid := a.profileUserID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if !auth.ValidEmail(email) {
-		writeErr(w, http.StatusBadRequest, "email tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid email")
 		return
 	}
 	u, err := a.Users.ByID(r.Context(), uid)
 	if err != nil || u == nil {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	if ok, _ := auth.VerifyPassword(req.Password, u.PasswordHash); !ok {
-		writeErr(w, http.StatusForbidden, "kata laluan salah")
+		writeErr(w, http.StatusForbidden, "wrong password")
 		return
 	}
 	if existing, e2 := a.Users.ByEmail(r.Context(), email); e2 == nil && existing != nil && existing.ID != uid {
-		writeErr(w, http.StatusConflict, "email sudah digunakan")
+		writeErr(w, http.StatusConflict, "email already in use")
 		return
 	}
 	if err := a.Users.UpdateEmail(r.Context(), uid, email); err != nil {
@@ -237,7 +237,7 @@ func (a *AuthHandlers) handleUpdateEmail(w http.ResponseWriter, r *http.Request)
 func (a *AuthHandlers) handleSetDefaultWorkspace(w http.ResponseWriter, r *http.Request) {
 	uid := a.profileUserID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	var req struct {
@@ -266,7 +266,7 @@ func (a *AuthHandlers) handleSetDefaultWorkspace(w http.ResponseWriter, r *http.
 	}
 	sp, err := a.Workspaces.ByID(r.Context(), workspaceID)
 	if err != nil || sp == nil || sp.Owner != uid {
-		writeErr(w, http.StatusForbidden, "workspace bukan milik anda")
+		writeErr(w, http.StatusForbidden, "workspace does not belong to you")
 		return
 	}
 	if err := a.Users.SetDefaultWorkspace(r.Context(), uid, workspaceID); err != nil {

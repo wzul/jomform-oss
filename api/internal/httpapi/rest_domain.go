@@ -21,7 +21,7 @@ func (h *RESTHandlers) setCustomDomain(w http.ResponseWriter, r *http.Request, a
 		Domain string `json:"domain"`
 	}
 	if err := decodeJSON(r, &in); err != nil || in.Domain == "" {
-		writeErr(w, http.StatusBadRequest, "domain diperlukan")
+		writeErr(w, http.StatusBadRequest, "domain is required")
 		return
 	}
 	domain := strings.ToLower(strings.TrimSpace(in.Domain))
@@ -29,7 +29,7 @@ func (h *RESTHandlers) setCustomDomain(w http.ResponseWriter, r *http.Request, a
 	domain = strings.TrimPrefix(domain, "http://")
 	domain = strings.TrimSuffix(domain, "/")
 	if domain == "" || !strings.Contains(domain, ".") || strings.HasSuffix(domain, "jomform.com") {
-		writeErr(w, http.StatusBadRequest, "domain tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid domain")
 		return
 	}
 	if err := h.Accounts.SetCustomDomain(r.Context(), actx.Account.ID, domain); err != nil {
@@ -41,7 +41,7 @@ func (h *RESTHandlers) setCustomDomain(w http.ResponseWriter, r *http.Request, a
 	respond(w, http.StatusOK, map[string]any{
 		"status": "pending_dns",
 		"domain": domain,
-		"steps":  []string{"CNAME " + domain + " -> jomform.com", "Tunggu DNS propagate, kemudian call verify"},
+		"steps":  []string{"CNAME " + domain + " -> jomform.com", "Wait for DNS to propagate, then call verify"},
 	})
 }
 

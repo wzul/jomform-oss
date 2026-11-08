@@ -40,17 +40,45 @@ package httpapi
 //   - non-Go callers, and behaviour (what the query actually reads at runtime).
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 )
+
+// internalGoSource is the walk AND the read of internal/'s non-test Go files,
+// taken once per test process. Every tree-walking guard below is driven by
+// internalGoFiles, and each of them used to re-walk the tree and re-read all
+// ~300 files (~4.7 MB) on every call — five guards, five passes over the same
+// bytes, under the race detector. The tree does not change during a run, so the
+// snapshot is memoised; the scans, the floors and the allowlists are not.
+var internalGoSource struct {
+	once  sync.Once
+	paths []string
+	src   map[string]string
+	err   error
+}
 
 // internalGoFiles returns every non-test Go file under internal/, relative to the
 // httpapi package directory. Every tree-walking guard below is driven by it.
 func internalGoFiles(t *testing.T) []string {
 	t.Helper()
+	c := &internalGoSource
+	c.once.Do(func() { c.paths, c.src, c.err = readInternalGoSource() })
+	if c.err != nil {
+		t.Fatal(c.err)
+	}
+	if len(c.paths) < 50 {
+		t.Fatalf("class guard walked only %d non-test Go files under internal/ — the scan is not "+
+			"looking at the tree, so it would pass vacuously", len(c.paths))
+	}
+	return c.paths
+}
+
+func readInternalGoSource() ([]string, map[string]string, error) {
 	root := filepath.Join("..", "..", "internal")
 	var out []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -64,13 +92,17 @@ func internalGoFiles(t *testing.T) []string {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("class guard could not walk internal/: %v", err)
+		return nil, nil, fmt.Errorf("class guard could not walk internal/: %w", err)
 	}
-	if len(out) < 50 {
-		t.Fatalf("class guard walked only %d non-test Go files under internal/ — the scan is not "+
-			"looking at the tree, so it would pass vacuously", len(out))
+	src := make(map[string]string, len(out))
+	for _, path := range out {
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil, nil, fmt.Errorf("class guard cannot read %s: %w (the guard cannot pass vacuously)", path, rerr)
+		}
+		src[path] = string(b)
 	}
-	return out
+	return out, src, nil
 }
 
 // relInternal renders a walk result as the path the allowlists are keyed on
@@ -87,14 +119,17 @@ func relInternal(path string) string {
 }
 
 // readWalked reads one file the walk returned (its path is already relative to
-// this package directory). It fails the test rather than returning empty source.
+// this package directory). It fails the test rather than returning empty source,
+// and it reads only what the one walk above already read: a path the walk did not
+// see is a broken walker, not a file to fall back on.
 func readWalked(t *testing.T, path string) string {
 	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("class guard cannot read %s: %v (the guard cannot pass vacuously)", path, err)
+	internalGoFiles(t) // builds the snapshot on first use, and keeps its floor
+	src, ok := internalGoSource.src[path]
+	if !ok {
+		t.Fatalf("class guard cannot read %s: the internal/ walk did not return it (the guard cannot pass vacuously)", path)
 	}
-	return string(b)
+	return src
 }
 
 func readRepoFile(t *testing.T, rel string) string {
@@ -374,10 +409,39 @@ var (
 		`|(?i)\bMerged(Page|All|Count)\s*\(`)
 )
 
+// mayDeriveMode is a NECESSARY condition of modeDerivation, and exists only to
+// keep the regexp engine off the functions that cannot possibly match.
+//
+// The scan below is applied to every top-level function of api/internal (308
+// files, ~4.7 MB, 2754 functions on the tree this was measured on) and this is
+// its first gate, so the pattern used to be evaluated against every byte of the
+// tree — twice per function, because the guard also counted the deriving
+// functions before calling tableChoiceHits, which re-evaluated the same pattern.
+// Under the race detector that per-byte backtracking was the largest cost in the
+// package's source-guard set (pprof of TestNoReaderPicksTheTableFromAMode before
+// this change: regexp.(*Regexp).backtrack 2.05s cum, tryBacktrack 1.93s, on top
+// of the tsan frames the same memory traffic drags in; 18 of those 2754
+// functions derive a mode and the rest were scanned for nothing).
+// strings.Contains is a SIMD byte search, so a function that cannot match costs
+// three memchr passes instead of a backtracking run. MEASURED on one tree, back
+// to back, -race -count=1 -v: TestNoReaderPicksTheTableFromAMode 11.04s → 1.70s
+// and TestTheModeRuleHasOneDefinition 5.37s → 1.00s (host load 18 → 16.5).
+//
+// It must stay a SUPERSET of the pattern: each alternative spells one of these
+// three case-sensitive substrings (`IsResponseForm(`, `FormMode(`,
+// `formMode(`, `FormModeResponse`). Tightening this so it skips a shape the
+// pattern matches would make the guard pass vacuously, which is the one thing
+// these guards exist to prevent — TestTheTableChoiceScanDiscriminates asserts
+// the prefilter against every case the control requires the scan to refuse.
+func mayDeriveMode(s string) bool {
+	return strings.Contains(s, "FormMode") || strings.Contains(s, "formMode") ||
+		strings.Contains(s, "IsResponseForm")
+}
+
 // tableChoiceHits reports why a function picks the record table from a mode
 // instead of using the one decision, or "" when it does not do so.
 func tableChoiceHits(fn string) string {
-	if !modeDerivation.MatchString(fn) {
+	if !mayDeriveMode(fn) || !modeDerivation.MatchString(fn) {
 		return ""
 	}
 	var why string
@@ -450,6 +514,14 @@ func TestTheTableChoiceScanDiscriminates(t *testing.T) {
 }`},
 	}
 	for _, c := range refuses {
+		// The tree scan gates every function on the prefilter first, so a
+		// prefilter that rejects a case the scan must refuse would make the
+		// guard pass vacuously on exactly this shape. Assert the gate against
+		// the control, not only the scan.
+		if !mayDeriveMode(c.src) {
+			t.Errorf("the mode-derivation prefilter skips %q, which the scan must refuse — the "+
+				"class guard would ship that shape green", c.name)
+		}
 		if tableChoiceHits(c.src) == "" {
 			t.Errorf("the invariant scan does NOT refuse %q — a fifth reader of that shape would ship green", c.name)
 		}
@@ -636,9 +708,15 @@ func TestNoReaderPicksTheTableFromAMode(t *testing.T) {
 		src := readWalked(t, path)
 		for _, fn := range goFunctions(src) {
 			scanned++
-			if modeDerivation.MatchString(fn) {
-				modeDerived++
+			// Gate once per function: the prefilter is a memchr pass that
+			// skips almost every function, and only one the pattern actually
+			// matches is worth the rest of tableChoiceHits (which re-checks
+			// the same gate). `scanned` is still incremented for EVERY split
+			// function, so the floor below cannot be shrunk by this.
+			if !mayDeriveMode(fn) || !modeDerivation.MatchString(fn) {
+				continue
 			}
+			modeDerived++
 			if hits := tableChoiceHits(fn); hits != "" {
 				t.Errorf("%s: a function %s. That is the shape that made an unfiltered read fall "+
 					"back to sales-only — it can be reached with no `formID == \"\"` at all, which is why "+
@@ -782,6 +860,29 @@ func TestMCPReaderUsesTheOneDecision(t *testing.T) {
 // discriminating in BOTH directions.
 var modeLiteralShape = regexp.MustCompile(`==\s*"response"|[^=<>!&|+\-*/%]\s*=\s*FormModeResponse`)
 
+// mayHoldModeLiteral is a NECESSARY condition of modeLiteralShape: the first
+// alternative cannot match without the quoted literal `"response"`, and the
+// second cannot match without `FormModeResponse`. It exists so the guard can
+// skip a file with one memchr pass instead of running the pattern over every
+// byte of it: the scan covers all 308 non-test files under internal/ (~4.7 MB)
+// and the pattern matches NONE of them on a healthy tree (the two files that
+// legitimately hold the literal are allowlisted before the scan), so the whole
+// pass used to be a full backtracking run over the corpus for zero hits.
+// MEASURED on one tree, back to back, -race -count=1 -v:
+// TestTheModeRuleHasOneDefinition 5.37s → 1.00s (host load 18 → 16.5).
+//
+// Both substrings are load-bearing and neither is a lower-cased "response":
+// `FormModeResponse` does NOT contain the lower-case `response`, so a prefilter
+// of `strings.Contains(src, "response")` alone — measured — leaves the guard
+// GREEN on a planted `mode = FormModeResponse` and the control red. It must stay
+// a SUPERSET of the pattern: a prefilter that skips a shape the pattern matches
+// turns this guard green on the defect it exists for, so
+// TestTheModeLiteralPatternDiscriminates asserts every matching case against it
+// and the tree scan is bitten on the real corpus.
+func mayHoldModeLiteral(src string) bool {
+	return strings.Contains(src, `"response"`) || strings.Contains(src, "FormModeResponse")
+}
+
 // TestTheModeLiteralPatternDiscriminates is the case table the pattern was
 // narrowed against. It is a control INSIDE the suite: it fails if the pattern is
 // re-broadened (which re-introduces the false positive that made main red) or
@@ -806,6 +907,14 @@ func TestTheModeLiteralPatternDiscriminates(t *testing.T) {
 	for _, c := range cases {
 		if got := modeLiteralShape.MatchString(c.src); got != c.match {
 			t.Errorf("%s: pattern match = %v, want %v (source: %s)", c.name, got, c.match, c.src)
+		}
+		// The tree scan below skips a file the prefilter rejects, so every case
+		// the pattern matches must survive it. A prefilter that is not a
+		// superset makes the guard pass vacuously, which is exactly the failure
+		// this control exists to make loud.
+		if c.match && !mayHoldModeLiteral(c.src) {
+			t.Errorf("%s: the necessary-condition prefilter rejects a source the pattern matches "+
+				"(source: %s) — the tree scan would skip the file and pass vacuously", c.name, c.src)
 		}
 	}
 }
@@ -842,7 +951,14 @@ func TestTheModeRuleHasOneDefinition(t *testing.T) {
 		// a file that also calls the helper: records.go does call IsResponseForm
 		// in its other branch, and an escape hatch on that presence let a
 		// hand-rolled comparison in the SAME file pass.
-		if modeLiteralShape.MatchString(readWalked(t, path)) {
+		//
+		// The read happens before the prefilter so a path the snapshot lost is
+		// still a loud failure, not a skipped file.
+		src := readWalked(t, path)
+		if !mayHoldModeLiteral(src) {
+			continue
+		}
+		if modeLiteralShape.MatchString(src) {
 			t.Errorf("%s compares a form mode to a literal — the mode rule must be asked, not "+
 				"re-derived (dbstore.FormMode / IsResponseForm / formMode), and the literal belongs "+
 				"only in an allowlisted file. This is how the mode rule grew a second definition before", rel)

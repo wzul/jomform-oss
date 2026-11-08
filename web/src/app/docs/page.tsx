@@ -1,15 +1,16 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../lib/docsMetadata";
 import Link from "next/link";
 
 import type { Key } from "../../components/i18n";
 import { T } from "./docsChrome";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "JomForm Docs — Overview & features",
   description:
     "Every JomForm feature in one line, grouped by category: start here, sales & payments, forms & fields, storefront, email, growth, security and developer guides.",
-  alternates: { canonical: "https://jomform.com/docs" },
-};
+  path: "/docs",
+});
 
 // The knowledge base is grouped by category (t_d768342e). Each feature entry is
 // a one-sentence summary; the full walk-through lives on the guide page named by
@@ -246,6 +247,14 @@ const GROUPS: Group[] = [
         title: "Shipping by zone",
         href: "/docs/shipping",
         body: "Charge a delivery fee by zone — state, district or postcode — with a rate per weight band and a free-shipping threshold, or a courier quotes it at checkout, falling back to these rates.",
+      },
+      {
+        // Card t_135c3c72: the buyer-borne processing fee. The summary is short;
+        // the walk-through (gross-up table, disclosure, snapshot, refund rule)
+        // lives on the guide, which also names both MCP tools.
+        title: "Processing fees paid by the buyer",
+        href: "/docs/payment-fees",
+        body: "Let the buyer pay the CHIP processing fee: one rate per payment method, grossed up so you receive the full price.",
       },
     ],
   },
@@ -497,7 +506,19 @@ export default function DocsIndexPage() {
           f.q !== undefined ? (
             <section key={f.q}>
               <h3 className="text-sm font-semibold text-slate-900">{f.q}</h3>
-              <p className="mt-1 text-sm leading-relaxed text-slate-600">{f.a}</p>
+              {/* `[overflow-wrap:anywhere]` (card t_68456ead): an FAQ answer is
+                  prose that carries tokens — the MCP answer has a bare
+                  https://mcp.jomform.com/mcp — and a URL has no whitespace to
+                  break at. At a 24px browser root on a 320px viewport that one
+                  token painted to right 344.95 and panned the whole page 25px
+                  (no element rect exceeded the viewport: it was text-node INK
+                  overflow). `anywhere` — not `break-word` — because it also
+                  drops the token's min-content width, so the answer can shrink
+                  inside the column. It only opens a break when the line would
+                  otherwise overflow, so at 100% text size the layout is
+                  unchanged (measured: pan 0 at 16px both before and after).
+                  Pinned by src/lib/docsFaqProseWrap.test.ts. */}
+              <p className="mt-1 text-sm leading-relaxed text-slate-600 [overflow-wrap:anywhere]">{f.a}</p>
             </section>
           ) : (
             <section key={f.title} id={f.slug} className="scroll-mt-24">

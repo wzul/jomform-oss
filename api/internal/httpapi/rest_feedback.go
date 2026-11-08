@@ -204,17 +204,17 @@ type createFeedbackIn struct {
 // applying, so this handler owns only the HTTP mapping.
 func (h *RESTHandlers) handleCreateFeedback(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if h.Feedback == nil {
-		writeErr(w, http.StatusServiceUnavailable, "sistem maklum balas tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the feedback system is not configured")
 		return
 	}
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	var in createFeedbackIn
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "badan permintaan tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	th, err := h.feedbackService().CreateThread(r.Context(), uid, in.Subject, in.Body)
@@ -243,12 +243,12 @@ func (h *RESTHandlers) feedbackService() *feedbacksvc.Service {
 // threads, newest activity first.
 func (h *RESTHandlers) handleListFeedback(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if h.Feedback == nil {
-		writeErr(w, http.StatusServiceUnavailable, "sistem maklum balas tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the feedback system is not configured")
 		return
 	}
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	page, limit := parsePageLimit(r)
@@ -256,13 +256,13 @@ func (h *RESTHandlers) handleListFeedback(w http.ResponseWriter, r *http.Request
 	// "resolved" separately. It is scoped by the same user predicate either way.
 	statusOf := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
 	if statusOf != "" && !dbstore.ValidFeedbackStatus(statusOf) {
-		writeErr(w, http.StatusBadRequest, "status tidak sah (open|in_progress|resolved|closed)")
+		writeErr(w, http.StatusBadRequest, "invalid status (open|in_progress|resolved|closed)")
 		return
 	}
 	threads, total, err := h.Feedback.ListFilteredPage(r.Context(),
 		dbstore.FeedbackUserScope(uid), statusOf, page, limit)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "gagal membaca maklum balas")
+		writeErr(w, http.StatusInternalServerError, "failed to read the feedback")
 		return
 	}
 	out := make([]feedbackThreadOut, 0, len(threads))
@@ -278,12 +278,12 @@ func (h *RESTHandlers) handleListFeedback(w http.ResponseWriter, r *http.Request
 // scoped to the caller.
 func (h *RESTHandlers) handleGetFeedback(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if h.Feedback == nil {
-		writeErr(w, http.StatusServiceUnavailable, "sistem maklum balas tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the feedback system is not configured")
 		return
 	}
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	sc := dbstore.FeedbackUserScope(uid)
@@ -309,12 +309,12 @@ type replyFeedbackIn struct {
 // message to their own thread.
 func (h *RESTHandlers) handleReplyFeedback(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if h.Feedback == nil {
-		writeErr(w, http.StatusServiceUnavailable, "sistem maklum balas tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the feedback system is not configured")
 		return
 	}
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	body, ok := h.readFeedbackBody(w, r)
@@ -342,24 +342,24 @@ func (h *RESTHandlers) handleReplyFeedback(w http.ResponseWriter, r *http.Reques
 // thread, for triage. Super-admin only, audited.
 func (h *RESTHandlers) handleAdminListFeedback(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if !h.requireSuperAdmin(r) {
-		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		writeErr(w, http.StatusForbidden, "super-admin is required for this action")
 		return
 	}
 	h.auditSuperAdminAccess(r, "admin.feedback.list")
 	if h.Feedback == nil {
-		writeErr(w, http.StatusServiceUnavailable, "sistem maklum balas tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the feedback system is not configured")
 		return
 	}
 	page, limit := parsePageLimit(r)
 	statusOf := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
 	if statusOf != "" && !dbstore.ValidFeedbackStatus(statusOf) {
-		writeErr(w, http.StatusBadRequest, "status tidak sah (open|in_progress|resolved|closed)")
+		writeErr(w, http.StatusBadRequest, "invalid status (open|in_progress|resolved|closed)")
 		return
 	}
 	threads, total, err := h.Feedback.ListFilteredPage(r.Context(),
 		dbstore.FeedbackAdminScope(), statusOf, page, limit)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "gagal membaca maklum balas")
+		writeErr(w, http.StatusInternalServerError, "failed to read the feedback")
 		return
 	}
 	counts, err := h.Feedback.CountByStatus(r.Context())
@@ -381,12 +381,12 @@ func (h *RESTHandlers) handleAdminListFeedback(w http.ResponseWriter, r *http.Re
 // Super-admin only, audited.
 func (h *RESTHandlers) handleAdminGetFeedback(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if !h.requireSuperAdmin(r) {
-		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		writeErr(w, http.StatusForbidden, "super-admin is required for this action")
 		return
 	}
 	h.auditSuperAdminAccess(r, "admin.feedback.get")
 	if h.Feedback == nil {
-		writeErr(w, http.StatusServiceUnavailable, "sistem maklum balas tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the feedback system is not configured")
 		return
 	}
 	th, msgs, ok := h.readFeedbackThread(w, r, dbstore.FeedbackAdminScope(), r.PathValue("id"))
@@ -410,12 +410,12 @@ func (h *RESTHandlers) handleAdminGetFeedback(w http.ResponseWriter, r *http.Req
 // SetStatus is how they change the status, not the reply.
 func (h *RESTHandlers) handleAdminReplyFeedback(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if !h.requireSuperAdmin(r) {
-		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		writeErr(w, http.StatusForbidden, "super-admin is required for this action")
 		return
 	}
 	h.auditSuperAdminAccess(r, "admin.feedback.reply")
 	if h.Feedback == nil {
-		writeErr(w, http.StatusServiceUnavailable, "sistem maklum balas tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the feedback system is not configured")
 		return
 	}
 	body, ok := h.readFeedbackBody(w, r)
@@ -460,12 +460,12 @@ func (h *RESTHandlers) handleAdminReplyFeedback(w http.ResponseWriter, r *http.R
 // delivery path as the original send, so a retry cannot invent a second channel.
 func (h *RESTHandlers) handleAdminRetryFeedbackNotify(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if !h.requireSuperAdmin(r) {
-		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		writeErr(w, http.StatusForbidden, "super-admin is required for this action")
 		return
 	}
 	h.auditSuperAdminAccess(r, "admin.feedback.retry_notify")
 	if h.Feedback == nil {
-		writeErr(w, http.StatusServiceUnavailable, "sistem maklum balas tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the feedback system is not configured")
 		return
 	}
 	id := r.PathValue("id")
@@ -492,22 +492,22 @@ type setFeedbackStatusIn struct {
 // a 500.
 func (h *RESTHandlers) handleAdminSetFeedbackStatus(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	if !h.requireSuperAdmin(r) {
-		writeErr(w, http.StatusForbidden, "perlu super-admin untuk tindakan ini")
+		writeErr(w, http.StatusForbidden, "super-admin is required for this action")
 		return
 	}
 	h.auditSuperAdminAccess(r, "admin.feedback.set_status")
 	if h.Feedback == nil {
-		writeErr(w, http.StatusServiceUnavailable, "sistem maklum balas tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "the feedback system is not configured")
 		return
 	}
 	var in setFeedbackStatusIn
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "badan permintaan tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	status := strings.ToLower(strings.TrimSpace(in.Status))
 	if !dbstore.ValidFeedbackStatus(status) {
-		writeErr(w, http.StatusBadRequest, "status tidak sah (open|in_progress|resolved|closed)")
+		writeErr(w, http.StatusBadRequest, "invalid status (open|in_progress|resolved|closed)")
 		return
 	}
 	id := r.PathValue("id")
@@ -543,26 +543,26 @@ func (h *RESTHandlers) readFeedbackThread(w http.ResponseWriter, r *http.Request
 // two would tell a caller that another user's thread id exists.
 func (h *RESTHandlers) writeFeedbackError(w http.ResponseWriter, err error) {
 	if errors.Is(err, dbstore.ErrFeedbackNotFound) {
-		writeErr(w, http.StatusNotFound, "thread maklum balas tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "feedback thread not found")
 		return
 	}
-	writeErr(w, http.StatusInternalServerError, "gagal memproses maklum balas")
+	writeErr(w, http.StatusInternalServerError, "failed to process the feedback")
 }
 
 // readFeedbackBody decodes + validates a message body for either surface.
 func (h *RESTHandlers) readFeedbackBody(w http.ResponseWriter, r *http.Request) (string, bool) {
 	var in replyFeedbackIn
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "badan permintaan tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return "", false
 	}
 	body := strings.TrimSpace(in.Body)
 	if len(body) < feedbackBodyMin {
-		writeErr(w, http.StatusBadRequest, "sila tulis sekurang-kurangnya 10 aksara")
+		writeErr(w, http.StatusBadRequest, "please write at least 10 characters")
 		return "", false
 	}
 	if len(body) > feedbackBodyMax {
-		writeErr(w, http.StatusBadRequest, "mesej terlalu panjang (maksimum 5000 aksara)")
+		writeErr(w, http.StatusBadRequest, "message too long (maximum 5000 characters)")
 		return "", false
 	}
 	return body, true
@@ -885,7 +885,7 @@ func (h *RESTHandlers) sendFeedbackMail(to, subject, body, lang string) (string,
 // re-implementing the decision: one logic, two interfaces.
 func (h *RESTHandlers) RetryFeedbackNotify(ctx context.Context, threadID string) (string, error) {
 	if h.Feedback == nil {
-		return feedbackNotifyFailed, errors.New("sistem maklum balas tidak dikonfigurasi")
+		return feedbackNotifyFailed, errors.New("the feedback system is not configured")
 	}
 	sc := dbstore.FeedbackAdminScope()
 	th, err := h.Feedback.Thread(ctx, sc, threadID)

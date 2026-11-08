@@ -34,7 +34,7 @@ func (s *Server) listTemplatesMCP(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
 ) (*mcp.CallToolResult, *listOutput[templateOut], error) {
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	forms, err := s.deps.Forms.ListTemplates(ctx)
 	if err != nil {
@@ -65,9 +65,9 @@ func (s *Server) listTemplatesMCP(
 }
 
 type useTemplateIn struct {
-	Slug       string `json:"slug,omitempty" jsonschema:"Slug template (dari list_templates)"`
-	TemplateID string `json:"template_id,omitempty" jsonschema:"ID template anda sendiri (dari list_own_templates) — alternatif kepada slug"`
-	Name       string `json:"name,omitempty" jsonschema:"Nama borang baharu (optional; lalai = tajuk template)"`
+	Slug       string `json:"slug,omitempty" jsonschema:"Template slug (from list_templates)"`
+	TemplateID string `json:"template_id,omitempty" jsonschema:"Your own template ID (from list_own_templates) — an alternative to slug"`
+	Name       string `json:"name,omitempty" jsonschema:"New form name (optional; default = template title)"`
 }
 
 // refuseBlockedCustomJS answers the same sentence (`custom_js ditolak:
@@ -110,10 +110,21 @@ func (s *Server) useTemplateMCP(
 		return nil, nil, err
 	}
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	if in.Slug == "" && in.TemplateID == "" {
-		return nil, nil, errors.New("slug atau template_id wajib")
+		return nil, nil, errors.New("slug or template_id is required")
+	}
+	// Card t_7546eda5: this clone MINTS a real form row (draft, and publishable —
+	// served at /f/<slug> like any other), so it is the second MCP door into the
+	// orphan-form defect: with no workspace linked, the forms_sync_workspace_id
+	// trigger (000045) copies NULL onto the row and the cloned form is then 404
+	// at every address, forever, with no error here. Refused with the REST
+	// form-create refusal (`workspace.required`) BEFORE the template is resolved:
+	// the account's state cannot carry the call, so the answer must not depend on
+	// which template was named.
+	if err := s.requireLiveWorkspace(ctx, acc); err != nil {
+		return nil, nil, err
 	}
 	var tpl *dbstore.Form
 	if in.TemplateID != "" {
@@ -122,7 +133,7 @@ func (s *Server) useTemplateMCP(
 		tpl, err = s.deps.Forms.TemplateBySlug(ctx, in.Slug)
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("template tidak dijumpai")
+		return nil, nil, fmt.Errorf("template not found")
 	}
 	// Card t_ef3b0573: the clone below copies tpl.Theme verbatim onto a new
 	// form, whose buyer page serves theme.custom_js as live code. The write
@@ -187,7 +198,7 @@ func (s *Server) listOwnTemplatesMCP(
 		return nil, nil, err
 	}
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	rows, err := s.deps.Forms.ListTemplatesByAccount(ctx, acc)
 	if err != nil {
@@ -205,10 +216,10 @@ func (s *Server) listOwnTemplatesMCP(
 }
 
 type createTemplateIn struct {
-	FormID string         `json:"form_id,omitempty" jsonschema:"ID borang sedia ada untuk disimpan sebagai template (dari list_forms)"`
-	Title  string         `json:"title,omitempty" jsonschema:"Tajuk template (wajib bila tiada form_id)"`
-	Config map[string]any `json:"config,omitempty" jsonschema:"Block config template (pilihan; guna bila tiada form_id)"`
-	Theme  map[string]any `json:"theme,omitempty" jsonschema:"Gaya/branding template (pilihan)"`
+	FormID string         `json:"form_id,omitempty" jsonschema:"Existing form ID to save as a template (from list_forms)"`
+	Title  string         `json:"title,omitempty" jsonschema:"Template title (required when there is no form_id)"`
+	Config map[string]any `json:"config,omitempty" jsonschema:"Template block config (optional; use when there is no form_id)"`
+	Theme  map[string]any `json:"theme,omitempty" jsonschema:"Template style/branding (optional)"`
 }
 
 // createTemplateMCP saves an existing form (form_id) — or a fresh config — as
@@ -221,14 +232,14 @@ func (s *Server) createTemplateMCP(
 		return nil, nil, err
 	}
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	title := strings.TrimSpace(in.Title)
 	config, theme := in.Config, in.Theme
 	if in.FormID != "" {
 		src, gerr := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 		if gerr != nil {
-			return nil, nil, errors.New("borang tidak dijumpai")
+			return nil, nil, errors.New("form not found")
 		}
 		config, theme = src.Config, src.Theme
 		if title == "" {
@@ -236,7 +247,7 @@ func (s *Server) createTemplateMCP(
 		}
 	}
 	if title == "" {
-		return nil, nil, errors.New("title atau form_id wajib")
+		return nil, nil, errors.New("title or form_id is required")
 	}
 	// Card t_ef3b0573: a template's theme is cloned onto a real form by
 	// use_template and the buyer page serves theme.custom_js verbatim, so a
@@ -295,10 +306,10 @@ func (s *Server) createTemplateMCP(
 }
 
 type updateTemplateIn struct {
-	TemplateID string         `json:"template_id" jsonschema:"ID template anda (dari list_own_templates)"`
-	Title      string         `json:"title,omitempty" jsonschema:"Tajuk baharu (optional)"`
-	Config     map[string]any `json:"config,omitempty" jsonschema:"Block config baharu (optional; omit = tak berubah)"`
-	Theme      map[string]any `json:"theme,omitempty" jsonschema:"Gaya/branding baharu (optional; omit = tak berubah)"`
+	TemplateID string         `json:"template_id" jsonschema:"Your template ID (from list_own_templates)"`
+	Title      string         `json:"title,omitempty" jsonschema:"New title (optional)"`
+	Config     map[string]any `json:"config,omitempty" jsonschema:"New block config (optional; omit = unchanged)"`
+	Theme      map[string]any `json:"theme,omitempty" jsonschema:"New style/branding (optional; omit = unchanged)"`
 }
 
 // updateTemplateMCP edits one of the caller's own templates (issue #457).
@@ -310,14 +321,14 @@ func (s *Server) updateTemplateMCP(
 		return nil, nil, err
 	}
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	if in.TemplateID == "" {
-		return nil, nil, errors.New("template_id wajib")
+		return nil, nil, errors.New("template_id is required")
 	}
 	existing, gerr := s.deps.Forms.TemplateByIDForAccount(ctx, acc, in.TemplateID)
 	if gerr != nil {
-		return nil, nil, errors.New("template tidak dijumpai")
+		return nil, nil, errors.New("template not found")
 	}
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
@@ -362,7 +373,7 @@ func (s *Server) updateTemplateMCP(
 }
 
 type templateIDIn struct {
-	TemplateID string `json:"template_id" jsonschema:"ID template anda (dari list_own_templates)"`
+	TemplateID string `json:"template_id" jsonschema:"Your template ID (from list_own_templates)"`
 }
 
 // deleteTemplateMCP soft-deletes one of the caller's own templates (#457).
@@ -374,13 +385,13 @@ func (s *Server) deleteTemplateMCP(
 		return nil, nil, err
 	}
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	if in.TemplateID == "" {
-		return nil, nil, errors.New("template_id wajib")
+		return nil, nil, errors.New("template_id is required")
 	}
 	if err := s.deps.Forms.SoftDeleteTemplate(ctx, acc, in.TemplateID); err != nil {
-		return nil, nil, errors.New("template tidak dijumpai")
+		return nil, nil, errors.New("template not found")
 	}
 	return nil, map[string]string{"status": "deleted", "template_id": in.TemplateID}, nil
 }

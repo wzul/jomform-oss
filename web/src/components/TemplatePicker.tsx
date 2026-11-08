@@ -4,6 +4,14 @@
 // Gravity Forms' "Explore Form Templates": a Blank Form card plus the system
 // template gallery. Picking a template clones it into a new draft via
 // POST /v1/templates/use and opens the builder with the cloned draft.
+//
+// THE PANEL ENTERS (card t_ea568318). The "New form" click used to swap the
+// gallery in with no acknowledgement at all — the jump the owner reported as
+// "no motion effect". The panel now carries `.jf-enter` (fade + 4px rise,
+// 180ms), which the browser runs when the element is MOUNTED — i.e. exactly
+// when `open` flips — and never on a re-render of the loaded gallery. The
+// backdrop is deliberately static: it is the fixed positioner, and a transform
+// there would become the containing block for the panel it carries.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -150,7 +158,7 @@ export default function TemplatePicker({
       aria-label={t("tpl.title")}
     >
       <div
-        className="jf-card flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden border-[var(--jf-border)]"
+        className="jf-enter jf-card flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden border-[var(--jf-border)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-[var(--jf-border)] px-5 py-4">

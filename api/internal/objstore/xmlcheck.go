@@ -22,12 +22,12 @@ import (
 
 // ErrNoRootElement is the message a body with no XML root element answers.
 var (
-	ErrNoRootElement      = errors.New("tiada elemen akar")
-	ErrTextBeforeRoot     = errors.New("teks sebelum elemen akar (banner /* */ bukan XML)")
-	ErrTextAfterRoot      = errors.New("teks selepas elemen akar")
-	ErrMultipleRoots      = errors.New("lebih daripada satu elemen akar")
-	ErrDeclarationNotTop  = errors.New("pengisytiharan XML mesti di awal dokumen")
-	ErrDirectiveAfterRoot = errors.New("arahan DOCTYPE selepas elemen akar")
+	ErrNoRootElement      = errors.New("no root element")
+	ErrTextBeforeRoot     = errors.New("text before the root element (a /* */ banner is not XML)")
+	ErrTextAfterRoot      = errors.New("text after the root element")
+	ErrMultipleRoots      = errors.New("more than one root element")
+	ErrDeclarationNotTop  = errors.New("the XML declaration must be at the start of the document")
+	ErrDirectiveAfterRoot = errors.New("DOCTYPE directive after the root element")
 )
 
 // SVGNotXMLMessageLeadIn is the fixed lead-in of the message a non-well-formed
@@ -35,7 +35,7 @@ var (
 // it — the two REST upload handlers and the MCP upload_media asset path — and
 // because errcode.go keys the machine code on it (prefix table), so the wire
 // wording, the tool error and the dashboard's code mapping cannot drift apart.
-const SVGNotXMLMessageLeadIn = "fail SVG bukan XML yang sah"
+const SVGNotXMLMessageLeadIn = "the SVG file is not valid XML"
 
 // SVGNotXMLError returns the refusal message for merchant bytes that are not a
 // well-formed XML document — the bar a browser's XML parser holds an

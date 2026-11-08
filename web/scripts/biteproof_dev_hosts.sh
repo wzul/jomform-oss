@@ -266,7 +266,7 @@ echo "case 4: bake the staging hostname in as a literal default (the per-env dri
 python3 - "$CFG" <<'PY'
 import sys
 p=sys.argv[1]; s=open(p).read()
-s=s.replace('(process.env.JOMFORM_DEV_HOSTS || "")','(process.env.JOMFORM_DEV_HOSTS || "jomform-staging.example.com")')
+s=s.replace('(process.env.JOMFORM_DEV_HOSTS || "")','(process.env.JOMFORM_DEV_HOSTS || "jomform-staging.wanzul-hosting.com")')
 open(p,'w').write(s)
 PY
 out=$(run_guard); expect_red "baked-in literal" "$out"; restore

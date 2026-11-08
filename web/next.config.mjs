@@ -69,7 +69,7 @@
 // uncommitted patch the first time. Empty by default, so a plain `npm run dev`
 // on localhost behaves as it always did.
 //
-//   JOMFORM_DEV_HOSTS=jomform-staging.example.com npm run dev
+//   JOMFORM_DEV_HOSTS=jomform-staging.wanzul-hosting.com npm run dev
 //   JOMFORM_DEV_HOSTS="a.example.com,b.example.com"           # comma-separated
 //
 // A bad value fails LOUDLY at config load rather than silently reverting to the
@@ -87,7 +87,7 @@ for (const host of DEV_HOSTS) {
   if (!/^[a-z0-9.-]+$/.test(host)) {
     throw new Error(
       `JOMFORM_DEV_HOSTS entry ${JSON.stringify(host)} is not a bare hostname. ` +
-        `Use e.g. "jomform-staging.example.com" — no scheme, no port, no path, no "*".`,
+        `Use e.g. "jomform-staging.wanzul-hosting.com" — no scheme, no port, no path, no "*".`,
     );
   }
 }

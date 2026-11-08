@@ -39,6 +39,8 @@ const APEX_PAGES = [
   // builder's shipping block both link at, and the /docs index carries an entry
   // for it (sitemapCoverage.test.ts pins this list against the pages on disk).
   "/docs/shipping",
+  // Card t_135c3c72: the buyer-borne processing fee guide.
+  "/docs/payment-fees",
   // The per-workspace AI spam-detection toggle is documented here
   // and the Settings switch deep-links into it.
   "/docs/spam-detection",

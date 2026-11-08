@@ -105,19 +105,19 @@ func (h *PaymentsHandlers) handleChipCallback(w http.ResponseWriter, r *http.Req
 	}
 	sig := r.Header.Get("X-Signature")
 	if sig == "" {
-		writeErr(w, http.StatusUnauthorized, "signature hilang")
+		writeErr(w, http.StatusUnauthorized, "signature is missing")
 		return
 	}
 	if err := chip.VerifySignature(key, raw, sig); err != nil {
 		slog.Warn("chip_callback_bad_signature", "err", err)
-		writeErr(w, http.StatusUnauthorized, "signature tidak sah")
+		writeErr(w, http.StatusUnauthorized, "invalid signature")
 		return
 	}
 
 	// 2. Parse the Purchase payload.
 	var p chip.Purchase
 	if err := json.Unmarshal(raw, &p); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 
@@ -141,7 +141,7 @@ func (h *PaymentsHandlers) handleChipCallback(w http.ResponseWriter, r *http.Req
 		_ = h.Events.MarkFailed(r.Context(), dedupKey)
 		slog.Error("chip_callback_process", "err", err, "purchase", p.ID, "event", p.EventType,
 			"dedup_key", dedupKey, "redelivery_will_retry", true)
-		writeErr(w, http.StatusInternalServerError, "process gagal")
+		writeErr(w, http.StatusInternalServerError, "process failed")
 		return
 	}
 	if !claimed {

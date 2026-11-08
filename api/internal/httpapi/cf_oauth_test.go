@@ -83,7 +83,7 @@ func TestCFUnsealLegacyBlobDefaultsToOAuth(t *testing.T) {
 
 // TestCFCallbackSurfacesOAuthError verifies issue #315: when Cloudflare
 // redirects back with error/error_description (e.g. invalid_scope), cfCallback
-// surfaces the real cause instead of the misleading "code hilang".
+// surfaces the real cause instead of the misleading "code is missing".
 func TestCFCallbackSurfacesOAuthError(t *testing.T) {
 	os.Setenv("JF_CF_OAUTH_CLIENT_ID", "test-client-id")
 	t.Cleanup(func() { os.Unsetenv("JF_CF_OAUTH_CLIENT_ID") })
@@ -102,16 +102,16 @@ func TestCFCallbackSurfacesOAuthError(t *testing.T) {
 		t.Fatalf("status: got %d want 400", rec.Code)
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, "code hilang") {
-		t.Errorf("response still shows misleading 'code hilang': %s", body)
+	if strings.Contains(body, "code is missing") {
+		t.Errorf("response still shows misleading 'code is missing': %s", body)
 	}
-	if !strings.Contains(body, "Cloudflare OAuth ditolak") || !strings.Contains(body, "invalid") {
+	if !strings.Contains(body, "Cloudflare OAuth was rejected") || !strings.Contains(body, "invalid") {
 		t.Errorf("response does not surface the OAuth error: %s", body)
 	}
 }
 
 // TestCFCallbackMissingCodeStill400 verifies the fallback stays intact: with
-// neither code nor error params, cfCallback still returns 400 "code hilang".
+// neither code nor error params, cfCallback still returns 400 "code is missing".
 func TestCFCallbackMissingCodeStill400(t *testing.T) {
 	os.Setenv("JF_CF_OAUTH_CLIENT_ID", "test-client-id")
 	t.Cleanup(func() { os.Unsetenv("JF_CF_OAUTH_CLIENT_ID") })
@@ -127,8 +127,8 @@ func TestCFCallbackMissingCodeStill400(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d want 400", rec.Code)
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "code hilang") {
-		t.Errorf("expected 'code hilang' fallback, got: %s", body)
+	if body := rec.Body.String(); !strings.Contains(body, "code is missing") {
+		t.Errorf("expected 'code is missing' fallback, got: %s", body)
 	}
 }
 

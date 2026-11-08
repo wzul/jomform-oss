@@ -22,7 +22,7 @@
 // SCOPE. Workspace-scoped: every fetch carries `?workspace=<slug>` through the
 // shared helper (lib/workspace.workspaceQuery), and the server resolves that
 // slug against the caller's own workspaces (resolveAccountScope). A slug that is
-// not the caller's is refused 403 "workspace tidak dijumpai" rather than falling
+// not the caller's is refused 403 "workspace not found" rather than falling
 // back to their first account — so this page can never read another tenant's
 // trail. No new endpoint: the read path is the one verified working on prod.
 

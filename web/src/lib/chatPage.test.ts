@@ -1421,14 +1421,14 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
 
   // ── 3. the 429 bodies ────────────────────────────────────────────────────
   // The third prose copy, and the one that used to be a literal: phase 1's
-  // refusal said "(60 mesej sejam)" as text, so it would have kept telling a user
+  // refusal said "60 messages per hour" as text, so it would have kept telling a user
   // 60 after the constant moved. Every sentence that quotes a bucket has to be
   // BUILT from the constant, which is what the two assertions below measure.
-  const chatLines = goRest.split("\n").filter((l) => l.includes("mesej sejam"));
+  const chatLines = goRest.split("\n").filter((l) => l.includes("chat limit reached ("));
   assert.equal(
     chatLines.length,
     1,
-    "rest_chat.go no longer answers a rate-limited MESSAGE with one 'mesej sejam' sentence — " +
+    "rest_chat.go no longer answers a rate-limited MESSAGE with one 'messages per hour' sentence — " +
       "retarget this guard at whatever replaced it",
   );
   assert.ok(
@@ -1438,12 +1438,12 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
   );
   assert.doesNotMatch(
     chatLines[0],
-    /\(\s*\d+\s*mesej sejam/,
+    /\(\s*\d+\s*messages per hour/,
     `the message 429 body restates the number as text (${chatLines[0].trim()}) — build it from ` +
       `chatRatePerHour instead`,
   );
 
-  const confirmLines = goRest.split("\n").filter((l) => l.includes("had pengesahan dicapai"));
+  const confirmLines = goRest.split("\n").filter((l) => l.includes("verification limit reached ("));
   assert.equal(
     confirmLines.length,
     2,
@@ -1458,7 +1458,7 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
   }
   assert.doesNotMatch(
     goRest,
-    /\(\s*\d+\s*sejam/,
+    /\(\s*\d+\s*per hour/,
     "a 429 body restates the confirmation number as text — build it from chatConfirmPerHour " +
       "(fmt.Sprintf) instead",
   );
@@ -4762,7 +4762,7 @@ test("every chat dictionary key defines all five locales", () => {
 // from this route is NOT necessarily a workspace-scope refusal:
 // chatConfirmStatusFor maps everything it does not recognise to 400, and one such
 // class arrives AFTER the token is claimed (rest_chat.go's default arm over
-// chat/proposal.go's "server menolak: %s"). A read_only member confirming a
+// chat/proposal.go's "server refused: %s"). A read_only member confirming a
 // prepared change got "Choose a workspace first" — advice they cannot act on,
 // since the request carried their workspace, and the refusal they needed to read
 // was the role. So the decision now branches on the API's machine CODE

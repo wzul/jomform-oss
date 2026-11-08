@@ -131,7 +131,7 @@ func cfOidcEndpoints(clientID string) (auth, token, user string, err error) {
 	issuer := strings.TrimRight(cfOidcIssuer(), "/")
 	base := issuer + "/cdn-cgi/access/sso/oidc/" + clientID
 	if issuer == "" || clientID == "" {
-		return "", "", "", fmt.Errorf("JF_CF_OIDC_ISSUER/client id belum di set")
+		return "", "", "", fmt.Errorf("JF_CF_OIDC_ISSUER/client id is not set")
 	}
 	return base + "/authorization", base + "/token", base + "/userinfo", nil
 }
@@ -160,7 +160,7 @@ func (a *AuthHandlers) socialStart(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
 	p, ok := oidcProviders[provider]
 	if !ok || !providerConfigured(provider, p) {
-		writeErr(w, http.StatusNotFound, "provider tidak tersedia")
+		writeErr(w, http.StatusNotFound, "provider not available")
 		return
 	}
 	p, err := resolveProvider(p)
@@ -185,7 +185,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
 	p, ok := oidcProviders[provider]
 	if !ok {
-		writeErr(w, http.StatusNotFound, "provider tidak dikenali")
+		writeErr(w, http.StatusNotFound, "unknown provider")
 		return
 	}
 	p, rerr := resolveProvider(p)
@@ -195,19 +195,19 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	cs, err := r.Cookie("oauth_state")
 	if err != nil || cs.Value == "" || cs.Value != r.URL.Query().Get("state") {
-		writeErr(w, http.StatusBadRequest, "state tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid state")
 		return
 	}
 	code := r.URL.Query().Get("code")
 
 	tok, err := exchangeCode(p, a.BaseURL+"/api/auth/callback/"+provider, code)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "token exchange gagal: "+err.Error())
+		writeErr(w, http.StatusBadGateway, "token exchange failed: "+err.Error())
 		return
 	}
 	up, err := fetchUserInfo(p, tok)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "userinfo gagal: "+err.Error())
+		writeErr(w, http.StatusBadGateway, "userinfo failed: "+err.Error())
 		return
 	}
 
@@ -294,7 +294,7 @@ func (a *AuthHandlers) socialCallback(w http.ResponseWriter, r *http.Request) {
 	// like a password signup.
 	newID, err := a.Users.CreateFromSocial(r.Context(), up.Email, up.Name, provider, up.UID, up.Picture, up.EmailVerified)
 	if err != nil {
-		writeErr(w, http.StatusConflict, "tidak boleh cipta akaun: "+err.Error())
+		writeErr(w, http.StatusConflict, "cannot create the account: "+err.Error())
 		return
 	}
 	// Auto-provision the default account so a brand-new social user can reach
@@ -376,7 +376,7 @@ func (a *AuthHandlers) unlinkSocial(w http.ResponseWriter, r *http.Request) {
 func (a *AuthHandlers) listSocial(w http.ResponseWriter, r *http.Request) {
 	userID := a.currentUserID(r)
 	if userID == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	links, err := a.Users.ListIdentities(r.Context(), userID)
@@ -427,16 +427,16 @@ func (a *AuthHandlers) socialConnect(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(r, &req); err != nil || req.Token == "" {
 		// Own wording for THIS surface (issue #6177 follow-up) — see
 		// CodeConnectTokenMissing in errcode.go.
-		writeErr(w, http.StatusBadRequest, "token penghubung diperlukan")
+		writeErr(w, http.StatusBadRequest, "connect token is required")
 		return
 	}
 	provider, uid, email, err := auth.VerifyConnectToken(a.VerifyKey, req.Token)
 	if err != nil {
 		if errors.Is(err, auth.ErrConnectTokenExpired) {
-			writeErr(w, http.StatusBadRequest, "pautan penghubung telah tamat tempoh")
+			writeErr(w, http.StatusBadRequest, "the connect link has expired")
 			return
 		}
-		writeErr(w, http.StatusBadRequest, "pautan penghubung tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid connect link")
 		return
 	}
 	// The email must still belong to an existing account, and the provider+
@@ -448,11 +448,11 @@ func (a *AuthHandlers) socialConnect(w http.ResponseWriter, r *http.Request) {
 	// their wire contract too (see errCodeByMessage in errcode.go).
 	existing, eerr := a.Users.ByEmail(r.Context(), email)
 	if eerr != nil || existing == nil {
-		writeErr(w, http.StatusBadRequest, "akaun untuk alamat ini tidak dijumpai lagi")
+		writeErr(w, http.StatusBadRequest, "an account for this address no longer exists")
 		return
 	}
 	if linkedTo, ferr := a.Users.FindIdentity(r.Context(), provider, uid); ferr == nil && linkedTo != "" && linkedTo != existing.ID {
-		writeErr(w, http.StatusConflict, "identiti sudah dipautkan ke akaun lain")
+		writeErr(w, http.StatusConflict, "identity is already linked to another account")
 		return
 	}
 	if err := a.Users.LinkIdentity(r.Context(), existing.ID, provider, uid, email, "", ""); err != nil {

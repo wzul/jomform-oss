@@ -2,7 +2,7 @@
 //
 // THE DEFECT. `jf_workspace` can name a workspace that was renamed or deleted
 // while it was selected. Every scoped fetch then carries that slug, the server
-// answers 403 "workspace tidak dijumpai" (a TENANCY refusal: `resolveAccountScope`
+// answers 403 "workspace not found" (a TENANCY refusal: `resolveAccountScope`
 // -> `scopeOr403`), and `web/src/lib/wsfetch.ts` read 401/403 as "the session is
 // gone" and navigated to /login. Measured on prod (v1.17.0): `/chat` with
 // `jf_workspace = ws-gone` ended on https://jomform.com/login.
@@ -21,7 +21,7 @@
 //
 // HOW THE SERVER IS REPRODUCED WITHOUT A BACKEND. The stub answers exactly what
 // `resolveAccountScope` -> `scopeOr403` answers. A `?workspace=` the session does
-// not have gets `403 {"error":"workspace tidak dijumpai","code":"workspace.notFound"}`
+// not have gets `403 {"error":"workspace not found","code":"workspace.notFound"}`
 // — the body `writeErr` builds from `errCodeByMessage` in
 // api/internal/httpapi/errcode.go, which this file READS rather than restating.
 // An unscoped request is served normally, and its bundle carries the real list.
@@ -72,7 +72,7 @@ const EN = {
  */
 const errcodeGo = readFileSync(join(__dirname, "../../api/internal/httpapi/errcode.go"), "utf8");
 const NOT_FOUND_CODE = (errcodeGo.match(/\bCodeWorkspaceNotFound\s*=\s*"([^"]+)"/) ?? [])[1] ?? "";
-const NOT_FOUND_PROSE = "workspace tidak dijumpai";
+const NOT_FOUND_PROSE = "workspace not found";
 
 /** The slug the browser holds from a workspace that no longer exists. */
 const STALE = "ws-gone";
@@ -274,10 +274,10 @@ test.describe("a stale jf_workspace slug does not sign the user out", () => {
     });
     await page.route(/(.*)\/api\/.*$/, (route) => route.fulfill(json({})));
     await page.route(/(.*)\/api\/rest\/chat(\?.*)?$/, (r) =>
-      r.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "auth diperlukan" }) }),
+      r.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "authentication required" }) }),
     );
     await page.route(/(.*)\/api\/rest\/dashboard-bundle(\?.*)?$/, (r) =>
-      r.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "auth diperlukan" }) }),
+      r.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "authentication required" }) }),
     );
 
     await page.goto(`${baseURL}/chat`, { waitUntil: "domcontentloaded" });

@@ -38,9 +38,9 @@ func (s *Server) getCurrencyRates(
 // ── convert_currency ─────────────────────────────────────────────────────────
 
 type convertCurrencyIn struct {
-	From        string `json:"from" jsonschema:"Kod ISO 4217 mata wang asal (cth JPY, USD, MYR)"`
-	To          string `json:"to" jsonschema:"Kod ISO 4217 mata wang sasaran (cth MYR, USD)"`
-	AmountMinor int64  `json:"amount_minor" jsonschema:"Amaun dalam unit terkecil (ratusan) mata wang asal: 10000 = 100.00. Integer, bukan perpuluhan."`
+	From        string `json:"from" jsonschema:"ISO 4217 code of the source currency (e.g. JPY, USD, MYR)"`
+	To          string `json:"to" jsonschema:"ISO 4217 code of the target currency (e.g. MYR, USD)"`
+	AmountMinor int64  `json:"amount_minor" jsonschema:"Amount in the currency's smallest unit (hundredths): 10000 = 100.00. Integer, not a decimal."`
 }
 
 // normalizeCurrencyCode upper-cases an ISO 4217 code and rejects anything that is
@@ -76,17 +76,17 @@ func (s *Server) convertCurrency(
 ) (*mcp.CallToolResult, map[string]any, error) {
 	from, to := normalizeCurrencyCode(in.From), normalizeCurrencyCode(in.To)
 	if from == "" {
-		return nil, nil, errors.New("from mesti kod mata wang ISO 4217 tiga huruf (cth JPY, USD, MYR)")
+		return nil, nil, errors.New("from must be a three-letter ISO 4217 currency code (e.g. JPY, USD, MYR)")
 	}
 	if to == "" {
-		return nil, nil, errors.New("to mesti kod mata wang ISO 4217 tiga huruf (cth MYR, USD)")
+		return nil, nil, errors.New("to must be a three-letter ISO 4217 currency code (e.g. MYR, USD)")
 	}
 	if s.deps.Currency == nil {
-		return nil, nil, errors.New("kadar mata wang tidak tersedia: cache BNM tidak disambung")
+		return nil, nil, errors.New("currency rates not available: BNM cache not connected")
 	}
 	converted, ok := s.deps.Currency.ConvertMinor(ctx, from, to, in.AmountMinor)
 	if !ok {
-		return nil, nil, fmt.Errorf("kadar %s → %s tiada dalam cache BNM — guna get_currency_rates untuk senarai kod yang ada", from, to)
+		return nil, nil, fmt.Errorf("rate %s → %s is not in the BNM cache — use get_currency_rates for the list of available codes", from, to)
 	}
 	return nil, map[string]any{
 		"from":            from,
@@ -99,8 +99,8 @@ func (s *Server) convertCurrency(
 // ── set_workspace_currency ──────────────────────────────────────────────────────
 
 type setWorkspaceCurrencyIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	Currency    string `json:"currency" jsonschema:"Kod mata wang, cth MYR, USD, SGD (default MYR)"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	Currency    string `json:"currency" jsonschema:"Currency code, e.g. MYR, USD, SGD (default MYR)"`
 }
 
 // setWorkspaceCurrency sets a workspace's settlement currency. The change applies to
@@ -114,7 +114,7 @@ func (s *Server) setWorkspaceCurrency(
 		return nil, nil, err
 	}
 	if !dbstore.IsSupportedCurrency(in.Currency) {
-		return nil, nil, errors.New("mata wang tidak disokong")
+		return nil, nil, errors.New("currency not supported")
 	}
 	sp, err := s.workspacesStore()
 	if err != nil {

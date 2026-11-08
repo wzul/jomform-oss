@@ -16,6 +16,13 @@ import (
 const (
 	SaleTypeOneTime      = "one_time"
 	SaleTypeSubscription = "subscription"
+	// SaleTypeCustomAmount is a pay-what-you-want purchase: the buyer chose the
+	// amount, the server validated it against the product's limits and recorded
+	// that amount as the line item's price. It is used both as a products.type
+	// (the product is priced by the buyer) and as a sales.sale_type (how this
+	// sale was priced), which is why the same constant serves both columns —
+	// every CHECK that admits one must admit the other.
+	SaleTypeCustomAmount = "custom_amount"
 
 	SalePending   = "pending"
 	SalePaid      = "paid"
@@ -71,11 +78,11 @@ func (s *Sale) OutstandingSen() int64 {
 // the rejection reason rather than a bare error.
 var (
 	// ErrRefundAmountInvalid: amount_sen must be a positive integer.
-	ErrRefundAmountInvalid = errors.New("amount_sen mesti positif")
+	ErrRefundAmountInvalid = errors.New("amount_sen must be positive")
 	// ErrRefundExceedsBalance: refunded_sen + amount_sen > total_sen.
-	ErrRefundExceedsBalance = errors.New("jumlah refund melebihi baki yang boleh dipulangkan")
+	ErrRefundExceedsBalance = errors.New("the refund amount exceeds the refundable balance")
 	// ErrRefundNoOutstanding: nothing is left to refund on this sale.
-	ErrRefundNoOutstanding = errors.New("jualan ini tiada baki untuk dipulangkan")
+	ErrRefundNoOutstanding = errors.New("this sale has no refundable balance left")
 )
 
 // SaleClient is the buyer info JSON blob. It mirrors the CHIP client fields
@@ -119,7 +126,19 @@ type Sale struct {
 	SubtotalSen int64
 	ShippingSen int64
 	DiscountSen int64
-	TotalSen    int64
+	// TotalSen is what the buyer was charged: subtotal + shipping - discount
+	// + FeeSen. The processing fee is a component of the total, never folded
+	// into an item price.
+	TotalSen int64
+	// FeeSen is the processing fee the buyer bore on this sale, in integer sen
+	// (card t_135c3c72). It is a SNAPSHOT: FeeMethod/FeeFixedSen/FeePercentBp
+	// record the rate in force at purchase time, so a merchant who changes
+	// their MDR later cannot rewrite what a past buyer was charged, and a
+	// refund can never recompute the charge.
+	FeeSen       int64
+	FeeMethod    string
+	FeeFixedSen  int64
+	FeePercentBp int64
 	// RefundedSen is the running total already refunded against this sale, in
 	// integer sen, never greater than TotalSen (issue #518). 0 = nothing
 	// refunded; 0 < RefundedSen < TotalSen = a partial refund (the sale keeps
@@ -227,7 +246,8 @@ func (s *Sale) CurrencyOrMYR() string {
 func NewSaleStore(pool *pgxpool.Pool) *SaleStore { return &SaleStore{pool: pool} }
 
 const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code, client, items,
-	subtotal_sen, shipping_sen, discount_sen, total_sen, refunded_sen, currency, sale_type, payment_method, status,
+	subtotal_sen, shipping_sen, discount_sen, total_sen, fee_sen, fee_method, fee_fixed_sen, fee_percent_bp,
+	refunded_sen, currency, sale_type, payment_method, status,
 	COALESCE(chip_purchase_id,''), COALESCE(chip_checkout_url,''), COALESCE(invoice_no,''),
 	skip_capture, authorized, captured_at, COALESCE(receipt_message_id,''),
 	is_spam, spam_reason, COALESCE(table_number,''), COALESCE(affiliate_code,''), created_at, updated_at,
@@ -238,7 +258,9 @@ const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code,
 func scanSale(row pgx.Row) (*Sale, error) {
 	s := &Sale{}
 	err := row.Scan(&s.ID, &s.AccountID, &s.FormID, &s.RefCode, &s.Client, &s.Items,
-		&s.SubtotalSen, &s.ShippingSen, &s.DiscountSen, &s.TotalSen, &s.RefundedSen, &s.Currency, &s.SaleType, &s.PaymentMethod, &s.Status,
+		&s.SubtotalSen, &s.ShippingSen, &s.DiscountSen, &s.TotalSen,
+		&s.FeeSen, &s.FeeMethod, &s.FeeFixedSen, &s.FeePercentBp,
+		&s.RefundedSen, &s.Currency, &s.SaleType, &s.PaymentMethod, &s.Status,
 		&s.ChipPurchaseID, &s.ChipCheckoutURL, &s.InvoiceNo,
 		&s.SkipCapture, &s.Authorized, &s.CapturedAt, &s.ReceiptMessageID,
 		&s.IsSpam, &s.SpamReason, &s.TableNumber, &s.AffiliateCode, &s.CreatedAt, &s.UpdatedAt,
@@ -256,13 +278,15 @@ func (s *SaleStore) Create(ctx context.Context, sale *Sale) error {
 	}
 	return s.pool.QueryRow(ctx,
 		`INSERT INTO sales (account_id, form_id, ref_code, client, items, subtotal_sen, shipping_sen,
-		   discount_sen, total_sen, currency, sale_type, payment_method, status, skip_capture, table_number, affiliate_code,
+		   discount_sen, total_sen, fee_sen, fee_method, fee_fixed_sen, fee_percent_bp,
+		   currency, sale_type, payment_method, status, skip_capture, table_number, affiliate_code,
 		   subscription_product_id, subscription_amount_sen, subscription_period, subscription_variation_id, shipping_detail)
-		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULLIF($15,''), NULLIF($16,''),
-		    NULLIF($17,'')::uuid, NULLIF($18,0), NULLIF($19,''), NULLIF($20,'')::uuid, $21::jsonb)
+		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NULLIF($19,''), NULLIF($20,''),
+		    NULLIF($21,'')::uuid, NULLIF($22,0), NULLIF($23,''), NULLIF($24,'')::uuid, $25::jsonb)
 		 RETURNING id, created_at, updated_at`,
 		sale.AccountID, sale.FormID, sale.RefCode, sale.Client, sale.Items,
 		sale.SubtotalSen, sale.ShippingSen, sale.DiscountSen, sale.TotalSen,
+		sale.FeeSen, sale.FeeMethod, sale.FeeFixedSen, sale.FeePercentBp,
 		orDefault(sale.Currency, "MYR"),
 		sale.SaleType, sale.PaymentMethod, sale.Status, sale.SkipCapture, sale.TableNumber, sale.AffiliateCode,
 		sale.SubscriptionProductID, sale.SubscriptionAmountSen, sale.SubscriptionPeriod, sale.SubscriptionVariationID,

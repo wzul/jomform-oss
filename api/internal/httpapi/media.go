@@ -102,7 +102,7 @@ func (h *RESTHandlers) listMedia(w http.ResponseWriter, r *http.Request, actx *A
 	formID := r.URL.Query().Get("form")
 	source := r.URL.Query().Get("source")
 	if source != "" && source != dbstore.MediaSourceMerchant && source != dbstore.MediaSourceCustomer {
-		writeErr(w, http.StatusBadRequest, "source mesti merchant|customer")
+		writeErr(w, http.StatusBadRequest, "source must be merchant|customer")
 		return
 	}
 	items, total, err := h.Media.ListPage(r.Context(), accountID, formID, source, page, limit)
@@ -276,7 +276,7 @@ func (h *RESTHandlers) deleteMedia(w http.ResponseWriter, r *http.Request, actx 
 		return
 	}
 	if h.Media == nil {
-		writeErr(w, http.StatusServiceUnavailable, "media tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "media is not configured")
 		return
 	}
 	key, _, ok, err := h.Media.SoftDelete(r.Context(), actx.Account.ID, r.PathValue("id"))
@@ -286,7 +286,7 @@ func (h *RESTHandlers) deleteMedia(w http.ResponseWriter, r *http.Request, actx 
 		return
 	}
 	if !ok {
-		writeErr(w, http.StatusNotFound, "media tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "media not found")
 		return
 	}
 	// Issue #92: audit media delete.
@@ -387,7 +387,7 @@ func (h *RESTHandlers) restoreMedia(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 	if h.Media == nil {
-		writeErr(w, http.StatusServiceUnavailable, "media tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "media is not configured")
 		return
 	}
 	id := r.PathValue("id")
@@ -400,25 +400,25 @@ func (h *RESTHandlers) restoreMedia(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 	if row == nil {
-		writeErr(w, http.StatusNotFound, "media tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "media not found")
 		return
 	}
 	// The bytes must still be there. ObjectExists answers (false, nil) for
 	// "gone" and an error for "could not tell" — both refuse, because promising
 	// a URL we have not seen is the failure this check exists to prevent.
 	if storeUnavailable(h.Store) {
-		writeErr(w, http.StatusServiceUnavailable, "media storage tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "media storage is not configured")
 		return
 	}
 	present, perr := h.Store.ObjectExists(r.Context(), row.Key)
 	if perr != nil {
 		slog.Error("media_restore_head", "err", perr, "key", row.Key)
-		writeErr(w, http.StatusServiceUnavailable, "storan tidak dapat disemak")
+		writeErr(w, http.StatusServiceUnavailable, "storage could not be checked")
 		return
 	}
 	if !present {
 		writeErr(w, http.StatusConflict,
-			"fail media ini sudah tiada dalam storan — ia tidak boleh dipulihkan")
+			"this media file is no longer in storage — it cannot be restored")
 		return
 	}
 	m, ok, err := h.Media.Restore(r.Context(), actx.Account.ID, id)
@@ -428,7 +428,7 @@ func (h *RESTHandlers) restoreMedia(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 	if !ok {
-		writeErr(w, http.StatusNotFound, "media tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "media not found")
 		return
 	}
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "media.restored", map[string]any{"media_id": id, "key": m.Key})
@@ -458,7 +458,7 @@ func (h *RESTHandlers) purgeMedia(w http.ResponseWriter, r *http.Request, actx *
 		return
 	}
 	if h.Media == nil {
-		writeErr(w, http.StatusServiceUnavailable, "media tidak dikonfigurasi")
+		writeErr(w, http.StatusServiceUnavailable, "media is not configured")
 		return
 	}
 	id := r.PathValue("id")
@@ -469,7 +469,7 @@ func (h *RESTHandlers) purgeMedia(w http.ResponseWriter, r *http.Request, actx *
 		return
 	}
 	if !ok {
-		writeErr(w, http.StatusNotFound, "media tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "media not found")
 		return
 	}
 	// Remove the object and every derived variant (sized images + PDF preview)

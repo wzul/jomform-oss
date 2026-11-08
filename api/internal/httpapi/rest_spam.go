@@ -22,10 +22,16 @@ type restSpamSubmission struct {
 }
 
 // restSpamSale is the REST JSON shape of one spam-flagged sale.
+//
+// Currency is the currency the sale was RECORDED in (card t_d5f359c7): the spam
+// queue lists real sales, so their totals are labelled per row like every other
+// sale surface — never with the workspace's current setting, which would
+// relabel history after a currency switch (issue #185).
 type restSpamSale struct {
 	RefCode    string `json:"ref_code"`
 	Status     string `json:"status"`
 	TotalSen   int64  `json:"total_sen"`
+	Currency   string `json:"currency"`
 	Buyer      string `json:"buyer"`
 	BuyerEmail string `json:"buyer_email,omitempty"`
 	FormID     string `json:"form_id,omitempty"`
@@ -71,7 +77,7 @@ func (h *RESTHandlers) unspamSubmission(w http.ResponseWriter, r *http.Request, 
 	id := r.PathValue("id")
 	sub, err := h.Submissions.ByID(r.Context(), id)
 	if err != nil || sub.AccountID != actx.Account.ID {
-		writeErr(w, http.StatusNotFound, "submission tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "submission not found")
 		return
 	}
 	if err := h.Submissions.UnSpam(r.Context(), id); err != nil {
@@ -102,7 +108,8 @@ func (h *RESTHandlers) listSpamSales(w http.ResponseWriter, r *http.Request, act
 		}
 		out = append(out, restSpamSale{
 			RefCode: s.RefCode, Status: s.Status, TotalSen: s.TotalSen,
-			Buyer: s.Client.FullName, BuyerEmail: s.Client.Email, FormID: s.FormID,
+			Currency: s.CurrencyOrMYR(),
+			Buyer:    s.Client.FullName, BuyerEmail: s.Client.Email, FormID: s.FormID,
 			SpamReason: reason, CreatedAt: s.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
@@ -120,7 +127,7 @@ func (h *RESTHandlers) unspamSale(w http.ResponseWriter, r *http.Request, actx *
 	ref := r.PathValue("ref")
 	sale, err := h.Sales.ByRefCode(r.Context(), ref)
 	if err != nil || sale.AccountID != actx.Account.ID {
-		writeErr(w, http.StatusNotFound, "jualan tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "sale not found")
 		return
 	}
 	if err := h.Sales.UnSpam(r.Context(), sale.ID); err != nil {

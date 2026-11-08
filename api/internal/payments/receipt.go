@@ -53,9 +53,15 @@ type SaleRef struct {
 	ItemsSummary string
 	FormURL      string
 	WorkspaceID  string // resolves per-workspace email settings (issue #107)
-	FormID       string // resolves per-form email settings override (issue #177)
-	TIN          string // LHDN e-invoicing (optional)
-	MSIC         string
+	// AccountID is the sale's owning ACCOUNT (not the workspace). It exists so
+	// a receipt that could not even be enqueued can be recorded in
+	// email_delivery_events, which is account-scoped (card t_1c4a3f54). The
+	// enqueued job keeps carrying WorkspaceID in its AccountID field, which is
+	// what the worker has always logged; the two are deliberately separate.
+	AccountID string
+	FormID    string // resolves per-form email settings override (issue #177)
+	TIN       string // LHDN e-invoicing (optional)
+	MSIC      string
 
 	// FormLang / WorkspaceLang are the BUYER-facing language inputs (language
 	// consistency): the form's own `config.lang` override and the workspace's
@@ -69,6 +75,29 @@ type SaleRef struct {
 	// them.
 	FormLang      string
 	WorkspaceLang string
+
+	// Card t_135c3c72: the processing fee the buyer bore, and the rate that was
+	// in force when they paid. These are a SNAPSHOT read from the sale row, so a
+	// later rate change cannot rewrite a past receipt. FeeSen == 0 means no fee
+	// line is rendered at all.
+	FeeSen       int64
+	FeeMethod    string
+	FeeFixedSen  int64
+	FeePercentBp int64
+}
+
+// FeeLine is the receipt's processing-fee line, e.g.
+// "Processing fee — Card 2.00%: RM 10.10". Empty when the buyer bore no fee, so
+// a receipt for a sale without one is byte-identical to before the feature.
+//
+// The wording comes from the FROZEN snapshot (FeeMethod/FeeFixedSen/
+// FeePercentBp), never from the merchant's current settings.
+func (r SaleRef) FeeLine() string {
+	if r.FeeSen <= 0 {
+		return ""
+	}
+	return "Processing fee — " + FeeRateLabel(r.FeeMethod, r.FeeFixedSen, r.FeePercentBp) +
+		": RM " + formatSen(r.FeeSen)
 }
 
 // receiptData is the placeholder context rendered into a receipt template.
@@ -108,7 +137,7 @@ func renderReceipt(ref SaleRef, subject, body, lang string, html bool) (subj, re
 	data := receiptData{
 		RefCode:   ref.RefCode,
 		Amount:    fmt.Sprintf("%.2f", float64(ref.AmountSen)/100),
-		Items:     ref.ItemsSummary,
+		Items:     receiptItems(ref),
 		FormURL:   ref.FormURL,
 		BuyerName: ref.BuyerName,
 		Date:      time.Now().Format("2006-01-02"),
@@ -116,6 +145,21 @@ func renderReceipt(ref SaleRef, subject, body, lang string, html bool) (subj, re
 	subj = renderTemplate(subject, data, html)
 	rendered = renderTemplate(body, data, html)
 	return subj, rendered
+}
+
+// receiptItems is the {{items}} value for a receipt: the item summary, plus the
+// processing fee as its OWN line when the buyer bore one (card t_135c3c72). The
+// fee is never folded into an item's price — a buyer who reads the receipt must
+// be able to see what the goods cost and what the charge for paying was.
+func receiptItems(ref SaleRef) string {
+	items := ref.ItemsSummary
+	if line := ref.FeeLine(); line != "" {
+		if items == "" {
+			return line
+		}
+		return items + "\n" + line
+	}
+	return items
 }
 
 // renderTemplate executes a single template string against the receipt data.
@@ -153,6 +197,71 @@ func renderTemplate(src string, data receiptData, html bool) string {
 		return src
 	}
 	return b.String()
+}
+
+// sendReceiptBackgroundTimeout bounds the receipt work that runs after the HTTP
+// response (card t_1c4a3f54): rendering the PDF, resolving the workspace
+// settings and offering the jobs to the queue. A detached context has no
+// deadline of its own, so without this a hung DB or render would leak the
+// goroutine forever.
+const sendReceiptBackgroundTimeout = 2 * time.Minute
+
+// Enqueue ladder for the receipt + merchant jobs (card t_1c4a3f54). A queue that
+// is briefly unreachable (Valkey restart, network blip) must not cost a paying
+// buyer their receipt, so the offer is retried before it is declared failed.
+const (
+	enqueueAttempts = 4
+	// enqueueBackoff is multiplied by the attempt number: 250ms, 500ms, 750ms.
+	enqueueBackoff = 250 * time.Millisecond
+)
+
+// enqueueEmailJob offers one job to the email queue and retries a transient
+// failure. When every attempt fails it records a durable `enqueue_failed`
+// delivery event (account-scoped, correlated to the sale) and returns the last
+// error, so the caller can log it.
+//
+// Why the record matters: an ENQUEUE failure is invisible to the queue's own
+// retry ladder (delayed set → dead letter), because that ladder only ever sees
+// jobs that reached Valkey. A job that could not be enqueued is gone, and before
+// this the only trace was a `slog.Warn` — which is how the buyer receipt for sale
+// JF-374daeb0ce61 disappeared in production with the seller never finding out.
+//
+// The queue write itself runs on a context that carries the caller's values but
+// NOT its cancellation: a job must never be dropped because the request that
+// produced it finished first.
+func (s *Service) enqueueEmailJob(ctx context.Context, accountID string, job emailqueue.Job) error {
+	queueCtx := context.WithoutCancel(ctx)
+	var lastErr error
+	tried := 0
+	for attempt := 1; attempt <= enqueueAttempts; attempt++ {
+		tried = attempt
+		if lastErr = s.EmailQueue.Enqueue(queueCtx, job); lastErr == nil {
+			return nil
+		}
+		if attempt == enqueueAttempts || ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			// The caller's context is gone; stop waiting, but still record the
+			// failure below rather than returning silently.
+		case <-time.After(enqueueBackoff * time.Duration(attempt)):
+		}
+	}
+	if s.EmailEvents != nil {
+		detail := map[string]any{
+			"job_type": job.Type,
+			"subject":  job.Subject,
+			"attempts": tried,
+			"error":    lastErr.Error(),
+		}
+		if rerr := s.EmailEvents.Record(queueCtx, accountID, job.To,
+			dbstore.EmailEventEnqueueFailed, "", job.SaleRef, detail); rerr != nil {
+			slog.Error("email_enqueue_failure_unrecorded",
+				"type", job.Type, "ref", job.SaleRef, "err", rerr)
+		}
+	}
+	return lastErr
 }
 
 // SendSaleReceipt emails the buyer a receipt rendered from the workspace's email
@@ -222,26 +331,28 @@ func (s *Service) SendSaleReceipt(ctx context.Context, ref SaleRef) {
 			if p, err := s.ReceiptPDF(ref); err == nil && len(p) > 0 {
 				pdf = p
 			}
-			if err := s.EmailQueue.Enqueue(ctx, emailqueue.Job{
+			if err := s.enqueueEmailJob(ctx, ref.AccountID, emailqueue.Job{
 				Type: "receipt", To: ref.BuyerEmail,
 				Subject: subj, Body: rendered, Lang: lang,
 				AccountID: ref.WorkspaceID, SaleRef: ref.RefCode, SaleID: ref.SaleID,
-				PDFFilename: "resit-" + ref.RefCode + ".pdf", PDFData: pdf,
+				PDFFilename: receiptAttachmentName(ref.RefCode), PDFData: pdf,
 			}); err != nil {
-				slog.Warn("receipt_enqueue_failed", "ref", ref.RefCode, "err", err)
+				slog.Error("receipt_enqueue_failed", "ref", ref.RefCode, "to", ref.BuyerEmail,
+					"err", err, "attempts", enqueueAttempts, "recorded", s.EmailEvents != nil)
 			}
 		}
 		if notifyMerchant {
 			to := s.resolveMerchantEmail(ctx, ref, merchantEmail)
 			if to == "" {
 				slog.Warn("receipt_merchant_notify_no_recipient", "ref", ref.RefCode)
-			} else if err := s.EmailQueue.Enqueue(ctx, emailqueue.Job{
+			} else if err := s.enqueueEmailJob(ctx, ref.AccountID, emailqueue.Job{
 				Type: "merchant_notify", To: to,
 				Subject: emailtext.Phrase(lang, emailtext.PhraseMerchantPrefix) + subj,
 				Body:    rendered, Lang: lang,
 				AccountID: ref.WorkspaceID, SaleRef: ref.RefCode,
 			}); err != nil {
-				slog.Warn("receipt_merchant_notify_enqueue_failed", "ref", ref.RefCode, "err", err)
+				slog.Error("receipt_merchant_notify_enqueue_failed", "ref", ref.RefCode, "to", to,
+					"err", err, "attempts", enqueueAttempts, "recorded", s.EmailEvents != nil)
 			}
 		}
 		return
@@ -286,6 +397,16 @@ func (s *Service) resolveMerchantEmail(ctx context.Context, ref SaleRef, merchan
 	return to
 }
 
+// receiptAttachmentName is the file name of the receipt PDF in the buyer's mail
+// client. It is a token rather than prose, but it is ENGLISH like the document
+// it names ("receipt-", not "resit-"): the file name is the part of the receipt
+// a buyer sees before opening anything, and a reader who does not know Malay
+// reads "resit-JF-1234.pdf" as an unknown word at exactly the moment they are
+// looking for their payment proof. Card t_129664c9.
+func receiptAttachmentName(refCode string) string {
+	return "receipt-" + refCode + ".pdf"
+}
+
 // sendReceipt delivers the buyer receipt (with PDF attachment when available).
 //
 // The recipient was already checked at (*email.Sender).SendReceipt — the
@@ -295,7 +416,7 @@ func (s *Service) resolveMerchantEmail(ctx context.Context, ref SaleRef, merchan
 func (s *Service) sendReceipt(ctx context.Context, ref SaleRef, lang, subject, body string, html bool, persistReceiptMessageID func(string)) {
 	if pdf, err := s.ReceiptPDF(ref); err == nil && len(pdf) > 0 {
 		messageID, err := s.Receipts.Sender.SendReceiptWithAttachment(ref.BuyerEmail, subject, body, lang,
-			"resit-"+ref.RefCode+".pdf", pdf)
+			receiptAttachmentName(ref.RefCode), pdf)
 		if err != nil {
 			if errors.Is(err, email.ErrSuppressed) {
 				slog.Warn("receipt_suppressed_skipped", "ref", ref.RefCode, "to", ref.BuyerEmail)

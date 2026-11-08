@@ -153,7 +153,7 @@ func (a *AuthHandlers) handleVerify(w http.ResponseWriter, r *http.Request) {
 	if token == "" {
 		// Own wording for THIS surface (issue #6177 follow-up) — see
 		// CodeVerifyTokenMissing in errcode.go.
-		a.verifyFail(w, r, lang, http.StatusBadRequest, verifyFailMissing, "token pengesahan diperlukan")
+		a.verifyFail(w, r, lang, http.StatusBadRequest, verifyFailMissing, "verification token is required")
 		return
 	}
 	if len(a.VerifyKey) != 32 {
@@ -170,12 +170,12 @@ func (a *AuthHandlers) handleVerify(w http.ResponseWriter, r *http.Request) {
 	email, err := auth.VerifyToken(a.VerifyKey, token)
 	if err != nil {
 		slog.Warn("verify_token_invalid", "err", err, "ip", middleware.ClientIP(r))
-		a.verifyFail(w, r, lang, http.StatusBadRequest, verifyFailExpired, "pautan pengesahan tidak sah atau telah tamat tempoh")
+		a.verifyFail(w, r, lang, http.StatusBadRequest, verifyFailExpired, "the verification link is invalid or has expired")
 		return
 	}
 	user, uerr := a.Users.ByEmail(r.Context(), email)
 	if uerr != nil || user == nil {
-		a.verifyFail(w, r, lang, http.StatusBadRequest, verifyFailUnknown, "pautan pengesahan tidak sah")
+		a.verifyFail(w, r, lang, http.StatusBadRequest, verifyFailUnknown, "invalid verification link")
 		return
 	}
 	if user.Verified {

@@ -12,7 +12,7 @@ import (
 
 // getFormOGImageIn is the input for get_form_og_image.
 type getFormOGImageIn struct {
-	FormID string `json:"form_id" jsonschema:"ID borang"`
+	FormID string `json:"form_id" jsonschema:"Form ID"`
 }
 
 // getFormOGImage reads a form's custom Open Graph image (issue #411). When
@@ -21,7 +21,7 @@ func (s *Server) getFormOGImage(
 	ctx context.Context, _ *mcp.CallToolRequest, in getFormOGImageIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	acc, err := s.resolveFormAccount(ctx, in.FormID)
 	if err != nil {
@@ -29,7 +29,7 @@ func (s *Server) getFormOGImage(
 	}
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	return nil, map[string]string{
 		"form_id":  f.ID,
@@ -39,10 +39,10 @@ func (s *Server) getFormOGImage(
 
 // setFormOGImageIn is the input for set_form_og_image.
 type setFormOGImageIn struct {
-	FormID string `json:"form_id" jsonschema:"ID borang"`
+	FormID string `json:"form_id" jsonschema:"Form ID"`
 	// ImageURL is the custom Open Graph image (must be https://). Empty =
 	// clear the custom image and fall back to the generated default.
-	ImageURL string `json:"image_url" jsonschema:"URL imej OG tersuai (mesti https://). Kosong = guna lalai janaan."`
+	ImageURL string `json:"image_url" jsonschema:"Custom OG image URL (must be https://). Empty = use generated default."`
 }
 
 // setFormOGImage saves a form's custom Open Graph image (issue #411). The
@@ -52,10 +52,10 @@ func (s *Server) setFormOGImage(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormOGImageIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	if in.FormID == "" {
-		return nil, nil, errors.New("form_id wajib")
+		return nil, nil, errors.New("form_id is required")
 	}
 	// Issue #501: the og:image is stored as the form's logo_url, which also
 	// renders into the buyer-facing `<img src>`, so it goes through the ONE
@@ -68,14 +68,14 @@ func (s *Server) setFormOGImage(
 		return nil, nil, err
 	}
 	if _, err := s.deps.Forms.GetByID(ctx, acc, in.FormID); err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	// The custom og:image is stored as the form's logo_url (the same field
 	// the dashboard's form-settings logo uses). UpdateSettings preserves the
 	// other settings by reading them first.
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	if err := s.deps.Forms.UpdateSettings(ctx, acc, in.FormID,
 		f.RedirectSuccess, f.RedirectFailure, f.AllowEmbed, in.ImageURL, f.FailureMessage); err != nil {

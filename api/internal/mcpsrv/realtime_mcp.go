@@ -36,7 +36,7 @@ func (s *Server) getRealtimeStatus(
 		"stream_url":    "/v1/rest/events/stream",
 		"events":        []string{"sale.paid", "sale.failed", "response.submitted", "subscription.charged", "sale.refunded"},
 		"sound_enabled": st.SoundEnabled,
-		"note":          "Sambungkan ke stream_url (SSE, autentikasi sesi/API key) untuk menerima peristiwa jualan/respon secara langsung. sound_enabled mengawal bunyi beep pada dashboard.",
+		"note":          "Connect to stream_url (SSE, session/API key auth) to receive sale/response events live. sound_enabled controls the beep on the dashboard.",
 	}, nil
 }
 
@@ -65,6 +65,6 @@ func (s *Server) setRealtimeSound(
 }
 
 type setRealtimeSoundIn struct {
-	WorkspaceID string `json:"workspace_id" jsonschema:"ID workspace (dari list_workspaces)"`
-	Enabled     bool   `json:"enabled" jsonschema:"true = mainkan bunyi beep pada dashboard bila jualan/respon baharu tiba; false = senyap"`
+	WorkspaceID string `json:"workspace_id" jsonschema:"Workspace ID (from list_workspaces)"`
+	Enabled     bool   `json:"enabled" jsonschema:"true = play a beep on the dashboard when a new sale/response arrives; false = silent"`
 }

@@ -33,11 +33,7 @@ func newSubmitInput(fields map[string]string) *submitInput {
 			RegistrationNum string `json:"registration_number"`
 			TaxNumber       string `json:"tax_number"`
 		}{Email: "buyer@example.com"},
-		Items: []struct {
-			ProductID   string `json:"product_id"`
-			VariationID string `json:"variation_id"`
-			Quantity    int64  `json:"quantity"`
-		}{{ProductID: "p1", Quantity: 1}},
+		Items:         []submitItem{{ProductID: "p1", Quantity: 1}},
 		PaymentMethod: "chip",
 		Fields:        fields,
 	}

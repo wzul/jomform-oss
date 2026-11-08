@@ -80,7 +80,7 @@ function serverSpecificCodes(): string[] {
  * constants are the shape/scope codes and pretending otherwise would put the
  * token in a table that never returns it.
  */
-const NOT_A_ERRCODE_CONSTANT = new Set(["reserved_subdomain"]);
+const NOT_A_ERRCODE_CONSTANT = new Set(["reserved_subdomain", "form.slugReserved"]);
 
 function undeclaredMappings(keys: string[]): string[] {
   const declared = new Set(serverSpecificCodes());
@@ -1382,7 +1382,7 @@ test("a failure body is never rendered without going through apiErr/translateApi
 test("the reported case renders ENGLISH on lang=en, not the server prose", () => {
   // The exact payload from api/internal/httpapi/rest_scope.go:69 — the request
   // that produced Wan's report.
-  const body = { error: "workspace tidak dijumpai", code: "workspace.notFound" };
+  const body = { error: "workspace not found", code: "workspace.notFound" };
   assert.ok(hasServerProse(body), "the fixture must really carry server prose");
 
   // DICT entries carry an extra `icon` field on some rows, so the cast is to
@@ -1397,7 +1397,7 @@ test("the reported case renders ENGLISH on lang=en, not the server prose", () =>
   for (const lang of LANGS) {
     const rendered = apiErr(body, "FALLBACK", tIn(lang));
     assert.ok(
-      !rendered.includes("workspace tidak dijumpai"),
+      !rendered.includes("workspace not found"),
       `lang=${lang} rendered the server's Malay prose: ${JSON.stringify(rendered)}`,
     );
     assert.notEqual(rendered, "FALLBACK", `lang=${lang} did not translate a KNOWN code`);
@@ -1421,7 +1421,7 @@ test("an UNKNOWN code falls back to the caller's localized message, never the pr
   // A code the server adds later, or a body from an older build: the page's own
   // sentence must win. If this ever fell back to `body.error`, the whole fix
   // would be defeated by any code the dictionary has not caught up with.
-  const unknown = { error: "workspace tidak dijumpai", code: "future.code.notInThisBuild" };
+  const unknown = { error: "workspace not found", code: "future.code.notInThisBuild" };
   assert.equal(apiErrorKey(unknown), "");
   assert.equal(apiErr(unknown, "Localized fallback.", () => "T"), "Localized fallback.");
   assert.equal(translateApiErr(unknown, () => "T"), "");

@@ -43,8 +43,8 @@ import (
 )
 
 type submitFeedbackIn struct {
-	Subject string `json:"subject,omitempty" jsonschema:"Tajuk ringkas (maksimum 200 aksara). Kosong dibenarkan — thread tanpa tajuk dipaparkan dengan petikan isinya."`
-	Body    string `json:"body" jsonschema:"Isi maklum balas atau permintaan ciri (minimum 10 aksara, maksimum 5000). Tulis apa yang pengguna laporkan."`
+	Subject string `json:"subject,omitempty" jsonschema:"Short title (maximum 200 characters). Empty is allowed — a thread without a title is displayed with a quote of its content."`
+	Body    string `json:"body" jsonschema:"Feedback content or feature request (minimum 10 characters, maximum 5000). Write what the user reported."`
 }
 
 type submitFeedbackOut struct {
@@ -64,12 +64,12 @@ func (s *Server) submitFeedback(ctx context.Context, _ *mcp.CallToolRequest, in 
 	// misconfiguration cannot mask the authorization decision (see listFeedback).
 	id := IdentityFromContext(ctx)
 	if id == nil {
-		return nil, submitFeedbackOut{}, errors.New("token tiada atau tidak sah")
+		return nil, submitFeedbackOut{}, errors.New("token missing or invalid")
 	}
 	if id.UserID == "" {
 		return nil, submitFeedbackOut{}, errors.New(
-			"maklum balas ialah data peribadi pengguna — API key tidak boleh memfailkannya. " +
-				"Guna token OAuth (terikat pada pengguna) atau hantar melalui papan pemuka /feedback.")
+			"feedback is users' personal data — an API key cannot file it. " +
+				"Use an OAuth token (bound to a user) or submit through the /feedback dashboard.")
 	}
 	// Gate 2: the credential's write scope.
 	if err := s.requireWriteScope(ctx); err != nil {

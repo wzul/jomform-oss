@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "Trusted devices (2FA) — JomForm Docs",
   description:
     "How a trusted device skips the 2FA code for 30 days, how to see every trusted device, and why revoking one is immediate.",
-  alternates: { canonical: "https://jomform.com/docs/security" },
-};
+  path: "/docs/security",
+});
 
 // The full text behind the "Trusted devices (2FA)" summary on /docs
 // (t_d768342e). /docs links to #trusted-devices.

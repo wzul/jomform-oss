@@ -24,7 +24,7 @@ func (h *RESTHandlers) putEinvoicing(w http.ResponseWriter, r *http.Request, act
 		MSIC string `json:"msic"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	if err := h.Accounts.SetEinvoice(r.Context(), actx.Account.ID, strings.TrimSpace(in.TIN), strings.TrimSpace(in.MSIC)); err != nil {
@@ -78,7 +78,7 @@ func (h *RESTHandlers) createWebhook(w http.ResponseWriter, r *http.Request, act
 		FormID string `json:"form_id"`
 	}
 	if err := decodeJSON(r, &in); err != nil || !strings.HasPrefix(in.URL, "http") || len(in.Secret) < 8 {
-		writeErr(w, http.StatusBadRequest, "url http(s) dan secret (min 8 char) wajib")
+		writeErr(w, http.StatusBadRequest, "url http(s) and secret (min 8 char) are required")
 		return
 	}
 	// Issue #366 (SSRF): reject webhook URLs that resolve to private,
@@ -86,7 +86,7 @@ func (h *RESTHandlers) createWebhook(w http.ResponseWriter, r *http.Request, act
 	// merchant cannot register an endpoint that makes the server reach into
 	// its own network. (Delivery-time is guarded again in the dispatcher.)
 	if _, err := ssrfguard.ValidateURL(r.Context(), in.URL); err != nil {
-		writeErr(w, http.StatusBadRequest, "url webhook tidak sah (menunjuk ke host peribadi/loopback)")
+		writeErr(w, http.StatusBadRequest, "invalid webhook url (points to a private/loopback host)")
 		return
 	}
 	if len(in.Events) == 0 {
@@ -95,7 +95,7 @@ func (h *RESTHandlers) createWebhook(w http.ResponseWriter, r *http.Request, act
 	// Issue #196: a form-scoped webhook must reference a form the account owns.
 	if in.FormID != "" {
 		if _, err := h.Forms.GetByID(r.Context(), actx.Account.ID, in.FormID); err != nil {
-			writeErr(w, http.StatusBadRequest, "borang tidak dijumpai")
+			writeErr(w, http.StatusBadRequest, "form not found")
 			return
 		}
 	}
@@ -132,19 +132,19 @@ func (h *RESTHandlers) updateWebhook(w http.ResponseWriter, r *http.Request, act
 		Events []string `json:"events"`
 	}
 	if err := decodeJSON(r, &in); err != nil || !strings.HasPrefix(in.URL, "http") {
-		writeErr(w, http.StatusBadRequest, "url http(s) wajib")
+		writeErr(w, http.StatusBadRequest, "url http(s) is required")
 		return
 	}
 	// Issue #366 (SSRF): same create-time guard on update so an endpoint
 	// cannot be re-pointed at a private/loopback/metadata address.
 	if _, err := ssrfguard.ValidateURL(r.Context(), in.URL); err != nil {
-		writeErr(w, http.StatusBadRequest, "url webhook tidak sah (menunjuk ke host peribadi/loopback)")
+		writeErr(w, http.StatusBadRequest, "invalid webhook url (points to a private/loopback host)")
 		return
 	}
 	// Secret is optional on update: a blank value keeps the existing secret;
 	// a supplied non-blank secret must meet the 8-char minimum.
 	if in.Secret != "" && len(in.Secret) < 8 {
-		writeErr(w, http.StatusBadRequest, "secret (min 8 char) wajib")
+		writeErr(w, http.StatusBadRequest, "secret (min 8 char) is required")
 		return
 	}
 	if len(in.Events) == 0 {
@@ -211,7 +211,7 @@ func (h *RESTHandlers) retryWebhookDelivery(w http.ResponseWriter, r *http.Reque
 	delivery, err := h.Webhooks.GetDelivery(r.Context(), actx.Account.ID, r.PathValue("deliveryId"))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, "penghantaran tidak dijumpai")
+			writeErr(w, http.StatusNotFound, "delivery not found")
 			return
 		}
 		respondErr(w, r, err)
@@ -220,14 +220,14 @@ func (h *RESTHandlers) retryWebhookDelivery(w http.ResponseWriter, r *http.Reque
 	// The delivery must belong to the webhook named in the path — otherwise the
 	// caller is trying to retry its own delivery against someone else's webhook.
 	if owned, _ := delivery["webhook_id"].(string); owned != webhookID {
-		writeErr(w, http.StatusNotFound, "tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
 	event, _ := delivery["event"].(string)
 	payload, _ := delivery["payload"].(string)
 	if err := h.Webhooks.EnqueueRetry(r.Context(), actx.Account.ID, webhookID, event, payload, 1, time.Now()); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, "tidak dijumpai")
+			writeErr(w, http.StatusNotFound, "not found")
 			return
 		}
 		respondErr(w, r, err)
@@ -247,7 +247,7 @@ func (h *RESTHandlers) retryDeadLettered(w http.ResponseWriter, r *http.Request,
 	}
 	if err := h.Webhooks.RetryNow(r.Context(), actx.Account.ID, r.PathValue("retryId")); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeErr(w, http.StatusNotFound, "retry tidak dijumpai")
+			writeErr(w, http.StatusNotFound, "retry not found")
 			return
 		}
 		respondErr(w, r, err)

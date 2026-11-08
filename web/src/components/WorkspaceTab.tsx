@@ -40,6 +40,8 @@ import { useRouter } from "next/navigation";
 import { useI18n } from "./i18n";
 import { apiErr, translateApiErr } from "../lib/apiErr";
 import { useSession } from "./session";
+import { workspaceURL } from "../lib/deployment";
+import { useDeployment } from "./useDeployment";
 import { WORKSPACE_NAME_MAX_CHARS } from "../lib/workspaceIdentity";
 import { fetchJson, runLoad } from "../lib/wsfetch";
 import { enterWorkspace, dropCurrentWorkspaceScope } from "../lib/workspace";
@@ -87,6 +89,7 @@ type DeletionCheck = {
 export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
   const { t } = useI18n();
   const { user, workspaces } = useSession();
+  const deployment = useDeployment();
   const router = useRouter();
 
   const [check, setCheck] = useState<DeletionCheck | null>(null);
@@ -229,6 +232,11 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
   const nameDirty = check != null && nameDraft.trim() !== check.name;
   const slugDirty = check != null && slugDraft.trim() !== check.slug;
   const slugWellFormed = /^[a-z0-9-]{3,40}$/.test(slugDraft.trim()) && !slugDraft.trim().endsWith("jomform");
+  // The address this deployment would publish for the draft slug (card
+  // t_48a93084): `https://<draft>.jomform.com` on the hosted product, the
+  // install's own origin on a self-hosted one (where the slug is not part of
+  // the address at all). "" until /api/meta answers — never a guess.
+  const renameAddressLabel = workspaceURL(slugDraft.trim() || check?.slug || "", deployment);
   const canRename =
     check != null &&
     !renaming &&
@@ -484,9 +492,17 @@ export default function WorkspaceTab({ workspaceId }: { workspaceId: string }) {
               onChange={(e) => setSlugDraft(e.target.value)}
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-sm read-only:bg-slate-50 read-only:text-slate-600 disabled:opacity-60"
             />
-            <p id="ws-rename-slug-help" className="mt-1 text-xs text-[var(--jf-muted)]">
-              https://{slugDraft.trim() || check.slug}.jomform.com
-            </p>
+            {/* Card t_48a93084: the preview names the address this deployment
+                actually publishes. On the hosted product that is
+                https://<draft>.jomform.com; on a self-hosted install one origin
+                serves every workspace, so the slug does not appear in it at all —
+                and the line is hidden until /api/meta answers rather than
+                previewing a host the install does not have. */}
+            {renameAddressLabel && (
+              <p id="ws-rename-slug-help" className="mt-1 text-xs text-[var(--jf-muted)]">
+                {renameAddressLabel}
+              </p>
+            )}
           </div>
         </div>
 

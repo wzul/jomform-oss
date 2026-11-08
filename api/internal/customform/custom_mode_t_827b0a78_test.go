@@ -98,7 +98,7 @@ func TestValidateAndNormalizeConfigIsTheWriteEntryPoint(t *testing.T) {
 	if err == nil {
 		t.Fatalf("ValidateAndNormalizeConfig accepted an unsatisfiable contract")
 	}
-	if !strings.Contains(err.Error(), "medan wajib tiada dalam HTML") {
+	if !strings.Contains(err.Error(), "required field missing from the HTML") {
 		t.Errorf("refusal = %q, want the missing-control message", err)
 	}
 	if got, _ := bad["mode"].(string); got != "payment" {

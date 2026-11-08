@@ -110,13 +110,13 @@ func TestUnsupportedBlockMessageNamesTheTypeAndTheReason(t *testing.T) {
 	if !strings.Contains(msg, "file") {
 		t.Errorf("the message does not name the block type: %q", msg)
 	}
-	if !strings.Contains(msg, "tidak disokong") {
+	if !strings.Contains(msg, "is not supported") {
 		t.Errorf("the message does not say the block is unsupported: %q", msg)
 	}
-	if !strings.Contains(msg, "lampiran") {
+	if !strings.Contains(msg, "attachments") {
 		t.Errorf("the message does not say why (no attachment path): %q", msg)
 	}
-	if !strings.Contains(msg, "padam blok") {
+	if !strings.Contains(msg, "delete that block") {
 		t.Errorf("the message does not tell the merchant what to do: %q", msg)
 	}
 	if got := UnsupportedBlockMessage(""); got != "" {

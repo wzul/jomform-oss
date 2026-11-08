@@ -3,7 +3,7 @@
 // dashboard with no workspace at all.
 //
 // THE REPORTED BUG (Wan, 2026-09-20). Fresh register → try to create a form →
-// "workspace tidak dijumpai". The sequence from prod:
+// "workspace not found". The sequence from prod:
 //
 //   login                 -> 200
 //   GET  /v1/workspaces   -> 200     (the list answered fine: zero workspaces)
@@ -194,7 +194,7 @@ test("a foreign slug is dropped when the caller has NO workspace, and never sent
     result,
     "",
     "clearUnknownWorkspaceScope kept a slug that is not in the workspace list — " +
-      "that slug is what the API rejects with 403 \"workspace tidak dijumpai\"",
+      "that slug is what the API rejects with 403 \"workspace not found\"",
   );
   assert.equal(
     store.get("jf_workspace"),
@@ -738,7 +738,7 @@ test("the ask's create path is the endpoint the Go side serves, with the same st
   );
   // The statuses the client maps are the statuses the handler writes.
   assert.ok(
-    goRestWorkspaces.includes('writeErr(w, http.StatusConflict, "slug sudah digunakan")'),
+    goRestWorkspaces.includes('writeErr(w, http.StatusConflict, "slug already in use")'),
     "the handler no longer answers 409 for a taken slug — the client's slugTaken branch is dead",
   );
   // The handler still answers 400 for a bad slug — written from the package's
@@ -757,7 +757,7 @@ test("the ask's create path is the endpoint the Go side serves, with the same st
   // declaration, or a re-word would silently drop the code and the dashboard
   // would fall back to its generic 400 sentence (#6177).
   assert.ok(
-    goRestErrors.includes('workspaceSlugLengthMessage = "slug 3-40 aksara"'),
+    goRestErrors.includes('workspaceSlugLengthMessage = "slug 3-40 characters"'),
     "the slug-length literal moved or changed — the message→code table in errcode.go keys on this " +
       "exact string, so a rename silently drops the code and the dashboard falls back to its " +
       "generic 400 sentence",
@@ -841,7 +841,7 @@ test("createWorkspace maps each real response to the right key, and normalises t
 
 // ── 9. i18n + docs parity ───────────────────────────────────────────────────
 
-test("the ask's strings exist in all five locales and are actually rendered", () => {
+test("the ask's and the picker's strings exist in all five locales and are actually rendered", () => {
   const keys = [
     "workspace.askPageTitle",
     "workspace.askPageSubtitle",
@@ -849,6 +849,12 @@ test("the ask's strings exist in all five locales and are actually rendered", ()
     "workspace.askBody",
     "workspace.askHost",
     "workspace.docs",
+    // The picker's list subtitle is selected by the ROW COUNT, so all three
+    // sentences must exist in every locale: a missing one renders the raw key
+    // above a list of real workspaces.
+    "workspace.pickerSubtitle",
+    "workspace.pickerSingleSubtitle",
+    "workspace.pickerNeutralSubtitle",
   ] as const;
   for (const key of keys) {
     const entry = DICT[key] as Record<string, unknown> | undefined;
@@ -869,16 +875,50 @@ test("the ask's strings exist in all five locales and are actually rendered", ()
   // pickerCopyKeys, so the copy is selected from the SAME mode as the body. What
   // must still hold is that the ask-first mode resolves to these two keys and the
   // page renders them.
-  assert.deepEqual(pickerCopyKeys("ask"), {
+  assert.deepEqual(pickerCopyKeys("ask", 0), {
     title: "workspace.askPageTitle",
     subtitle: "workspace.askPageSubtitle",
   });
   assert.ok(picker.includes("t(copy.title as Key)"), "the ask heading is not rendered from pickerCopyKeys(mode)");
   assert.ok(picker.includes("t(copy.subtitle as Key)"), "the ask subtitle is not rendered from pickerCopyKeys(mode)");
-  // The host hint carries the slug placeholder in every locale, not just en.
+  // The page must hand the ROW COUNT to the copy selector. Measured defect: a
+  // user with exactly one workspace read "You have multiple workspaces. Pick
+  // which one to enter." above the single row.
+  assert.ok(
+    picker.includes("pickerCopyKeys(mode, workspaces.length)"),
+    "the picker page selects its subtitle without the row count — one workspace would " +
+      "again be told it has multiple",
+  );
+  // The branch itself, executed: one row is its own sentence, two rows keeps
+  // the "multiple" wording the card requires, and an unread list claims neither.
+  assert.equal(
+    pickerCopyKeys("list", 1).subtitle,
+    "workspace.pickerSingleSubtitle",
+    "a one-workspace list still renders the multiple-workspaces sentence",
+  );
+  assert.equal(pickerCopyKeys("list", 2).subtitle, "workspace.pickerSubtitle");
+  assert.equal(pickerCopyKeys("loading", 0).subtitle, "workspace.pickerNeutralSubtitle");
+  assert.equal(pickerCopyKeys("loadError", 0).subtitle, "workspace.pickerNeutralSubtitle");
+  // And the English sentences say different things, so the swap above is real
+  // copy and not two keys pointing at one string.
+  const en = (k: "workspace.pickerSingleSubtitle" | "workspace.pickerSubtitle") =>
+    (DICT[k] as Record<string, string>).en;
+  assert.notEqual(en("workspace.pickerSingleSubtitle"), en("workspace.pickerSubtitle"));
+  assert.ok(
+    !/multiple/i.test(en("workspace.pickerSingleSubtitle")),
+    "the one-workspace subtitle still claims multiple workspaces",
+  );
+  // The host hint carries the address placeholder in every locale, not just en.
+  // Card t_48a93084: it is {host}, not {slug}, because the address a workspace
+  // is published at depends on the DEPLOYMENT (lib/deployment.ts) — a
+  // self-hosted install has no per-workspace host to substitute a slug into.
   const host = DICT["workspace.askHost"] as Record<string, string>;
   for (const lang of LANGS) {
-    assert.ok(host[lang].includes("{slug}"), `workspace.askHost.${lang} dropped the {slug} placeholder`);
+    assert.ok(host[lang].includes("{host}"), `workspace.askHost.${lang} dropped the {host} placeholder`);
+    assert.ok(
+      !host[lang].includes("jomform.com"),
+      `workspace.askHost.${lang} still hardcodes a hosted address — a self-hosted install would print a host it does not have`,
+    );
   }
 });
 

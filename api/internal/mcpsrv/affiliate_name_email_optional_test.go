@@ -118,7 +118,7 @@ func TestCreateAffiliateSchemaDoesNotRequireNameOrEmail(t *testing.T) {
 	for _, name := range []string{"name", "email"} {
 		prop, _ := props[name].(map[string]any)
 		desc, _ := prop["description"].(string)
-		if !strings.Contains(desc, "pilihan") {
+		if !strings.Contains(desc, "optional") {
 			t.Errorf("the inputSchema's own `%s` description does not read as optional: %q — if the "+
 				"field has really become mandatory the schema must say so too (and this test becomes "+
 				"the wrong place to assert it), but the two surfaces must not disagree", name, desc)

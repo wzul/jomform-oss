@@ -23,8 +23,9 @@
 // THE FIX IS ONE LIST. The visible name now comes from the dictionary, keyed on
 // the stable `kind` code (`ws.blocker.<kind>` — see ../lib/workspaceBlockerLabel.ts
 // for why the key is DERIVED rather than mapped through a hand-written table).
-// The API's `label` is still sent and still Malay; it survives only as the
-// fallback for a kind this build does not know.
+// The API's `label` is still sent (English now, after the REST door's text was
+// translated — cards t_5244358b / t_47403fc3); it survives only as the fallback
+// for a kind this build does not know.
 //
 // WHAT IS PINNED HERE, and why each assertion can fail
 //
@@ -53,8 +54,9 @@
 // WHAT IT DOES NOT COVER (stated honestly)
 //   * TRANSLATION QUALITY — whether the Tamil actually says "custom domains". A
 //     fluent review is the only thing that can judge that.
-//   * The API's own `label` strings. They are still Malay on every locale; this
-//     card makes the DASHBOARD stop depending on them, not the API multilingual.
+//   * The API's own `label` strings. They are ENGLISH now (translated with the
+//     rest of the door), and assertion 4 keeps them that way; this card is about
+//     the DASHBOARD not depending on them, not about multilingual API text.
 //     The MCP census tool reports the same `label` to agent clients, which is a
 //     separate (non-user-facing) question.
 //   * Rendered output. The label path is exercised in the browser on the card's
@@ -101,7 +103,7 @@ function unreachedKinds(kinds: ServerKind[], dict: DictShape): string[] {
     const key = `${BLOCKER_LABEL_PREFIX}${kind}`;
     const entry = dict[key];
     if (!entry) {
-      bad.push(`${kind}: no dictionary entry "${key}", so an English page would fall back to the API's Malay label`);
+      bad.push(`${kind}: no dictionary entry "${key}", so the page would fall back to the API's label`);
       continue;
     }
     for (const lang of LANGS) {
@@ -150,17 +152,32 @@ test("every ws.blocker.* entry names a kind the server can still emit", () => {
   assert.equal(blockerLabelKeys().length, SERVER_KINDS.length);
 });
 
-// 4. The visible string is the English one, not the API's Malay label.
-test("the en label a user sees is not the API's Malay label", () => {
+// 4. The API's label is English too, so the fallback cannot put Malay on an
+//    English page. This assertion used to require the dictionary's `en` string
+//    to DIFFER from the server's label, because the server's label was hardcoded
+//    Malay (card t_088521a4). Since the REST door's text was translated (cards
+//    t_5244358b / t_47403fc3) the two are the same string by design: the check
+//    that still has teeth is that the SERVER side is English, i.e. a build whose
+//    dictionary lacks a kind falls back to an English label rather than the
+//    Malay the original defect measured.
+test("the server's blocker labels are English, so the fallback cannot show Malay", () => {
+  // Function words and category vocabulary an English label cannot contain;
+  // homographs shared with English/machine tokens are deliberately absent.
+  const MALAY = new Set(
+    ("borang produk jualan langganan domain tersuai kunci webhook sejarah bil " +
+      "termasuk yang dalam tong sampah dan atau untuk").split(/\s+/),
+  );
   for (const { kind, label } of SERVER_KINDS) {
-    const key = `${BLOCKER_LABEL_PREFIX}${kind}` as keyof typeof DICT;
-    const en = DICT[key].en as string;
-    assert.notEqual(
-      en,
-      label,
-      `"${key}".en is byte-identical to the server's label ("${label}") — the dictionary copied the ` +
-        "hardcoded Malay string instead of naming the category in English",
+    const words = label.toLowerCase().split(/[^a-z]+/).filter(Boolean);
+    const malay = words.filter((w) => MALAY.has(w));
+    assert.deepEqual(
+      malay,
+      [],
+      `the server's label for "${kind}" still carries Malay (${malay.join(", ")}): ${JSON.stringify(label)} — ` +
+        "a build with no dictionary entry would render it on an English page",
     );
+    const key = `${BLOCKER_LABEL_PREFIX}${kind}` as keyof typeof DICT;
+    assert.ok((DICT[key].en as string).trim().length > 0, `${key}.en is blank`);
   }
 });
 
@@ -207,7 +224,7 @@ test("BITE: an entry with a blank locale and an entry that vanished are reported
   const bad = unreachedKinds(SERVER_KINDS, clone);
   assert.deepEqual(bad, [
     'sales: "ws.blocker.sales".ta is missing or blank',
-    'domains: no dictionary entry "ws.blocker.domains", so an English page would fall back to the API\'s Malay label',
+    'domains: no dictionary entry "ws.blocker.domains", so the page would fall back to the API\'s label',
   ]);
 });
 

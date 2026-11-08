@@ -50,18 +50,20 @@ import { test, expect, type Page } from "@playwright/test";
 import { DICT } from "../src/components/i18nDict";
 import { OPERATOR_KEY, operatorParts } from "../src/lib/operator";
 
-// The two English-only prose trees, as the routes a reader really lands on.
+// The three English-only prose trees, as the routes a reader really lands on.
 // /docs/embed and /legal/privacy are the two the card measured; /docs (the
 // index, whose chrome LABELS are translated but whose prose is English) and
-// /legal/terms are the rest of the shape. The second field is the English text
-// that must be ON the page before its declaration is judged — on /docs it is the
-// translated-in-arabic chrome label's ENGLISH value, which only appears once the
-// page has hydrated.
+// /legal/terms are the rest of that shape; /brand is the public brand-assets
+// page card t_4d3691b9 measured declaring the visitor's locale over English
+// prose. The second field is the English text that must be ON the page before
+// its declaration is judged — on /docs it is the translated-in-arabic chrome
+// label's ENGLISH value, which only appears once the page has hydrated.
 const PROSE_ROUTES: { path: string; english: string }[] = [
   { path: "/docs", english: DICT["docs.title"].en },
   { path: "/docs/embed", english: "Embed a form on your site" },
   { path: "/legal/privacy", english: "Privacy Policy" },
   { path: "/legal/terms", english: "Terms of Service" },
+  { path: "/brand", english: "Brand assets" },
 ];
 
 // A translated surface that needs no session: the landing page the docs tree
@@ -153,6 +155,18 @@ test.describe("the document declaration matches the prose (WCAG 3.1.1)", () => {
 
     await page.goto("/legal/terms", { waitUntil: "networkidle" });
     await expectEnglishProse(page, "/legal/terms", "Terms of Service");
+
+    // The brand-assets page (card t_4d3691b9): its prose is English and its
+    // headings stay English in every locale, so the document must be declared
+    // English even though the reader's dashboard locale is Arabic. `dir` is
+    // written only by the provider's effect after hydration, so asserting it is
+    // also what proves this page really ran the effect.
+    await page.goto("/brand", { waitUntil: "networkidle" });
+    await expectEnglishProse(page, "/brand", "Brand assets");
+    await expect(
+      page.getByRole("heading", { name: "Logo mark" }),
+      "/brand renders its English section headings in every locale",
+    ).toBeVisible();
 
     // The index is the interesting one: its chrome LABELS really are translated,
     // so the head proves the locale WAS applied (and the page hydrated) while
@@ -253,16 +267,25 @@ test.describe("the document declaration matches the prose (WCAG 3.1.1)", () => {
 // Before the fix every one of them resolved to the document's "en", so the sweep
 // is RED on the pre-fix build. The non-vacuity count below is what stops this
 // passing for free on a page that rendered no Arabic at all.
-/** Every element whose OWN text is Arabic but whose nearest `lang` is not Arabic.
+/** Every element whose OWN text — or image ALT — is Arabic but whose nearest `lang`
+ *  is not Arabic.
  *
  *  Non-rendered containers are skipped deliberately: Next's RSC payload lives in
  *  `<script>` tags inside <body>, and a static English page that merely MENTIONS
  *  Arabic (the language-name lists in the guides) would otherwise be reported as
- *  a passage with an undeclared language. */
+ *  a passage with an undeclared language.
+ *
+ *  AN IMAGE'S ALT IS TEXT TOO (card t_e35a44f5). It is spoken by a screen reader
+ *  but it is an ATTRIBUTE, so `body *` own-text reading above cannot see it: /brand
+ *  carried `alt="شعار JomForm"` inside a document declared English with NOTHING
+ *  declaring Arabic, and this sweep was green. An alt is judged exactly like own
+ *  text — the nearest declaration (the image's own `lang` first) must be Arabic. */
 async function mislabelledArabic(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const arabic = /[\u0600-\u06FF]/;
     const out: string[] = [];
+    const nearestLang = (el: Element) =>
+      (el.closest("[lang]")?.getAttribute("lang") ?? "").toLowerCase();
     for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
       if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(el.tagName)) continue;
       const own = Array.from(el.childNodes)
@@ -271,12 +294,22 @@ async function mislabelledArabic(page: Page): Promise<string[]> {
         .join("")
         .trim();
       if (!own || !arabic.test(own)) continue;
-      const declared = (el.closest("[lang]")?.getAttribute("lang") ?? "").toLowerCase();
+      const declared = nearestLang(el);
       if (declared === "ar" || declared.startsWith("ar-")) continue;
       // The NEAREST declaration is what announces this text — printed with it, so a
       // failure names both the passage and the language it is being read in.
       out.push(
         `<${el.tagName.toLowerCase()}> ${JSON.stringify(own.slice(0, 40))} — nearest lang=${declared ? `"${declared}"` : "(none)"}`,
+      );
+    }
+    for (const img of Array.from(document.querySelectorAll<HTMLImageElement>("img[alt]"))) {
+      const alt = (img.getAttribute("alt") ?? "").trim();
+      if (!alt || !arabic.test(alt)) continue;
+      const declared = nearestLang(img);
+      if (declared === "ar" || declared.startsWith("ar-")) continue;
+      const src = (img.getAttribute("src") ?? "").slice(0, 40);
+      out.push(
+        `<img alt=${JSON.stringify(alt.slice(0, 40))} src=${JSON.stringify(src)}> — nearest lang=${declared ? `"${declared}"` : "(none)"}`,
       );
     }
     return out;
@@ -364,6 +397,129 @@ test.describe("a translated label declares its own language (WCAG 3.1.2)", () =>
       ).toEqual(heading.map(() => null));
     });
   }
+});
+
+// ══ a localised IMAGE ALT declares its own language (card t_e35a44f5) ═══════
+//
+// THE DEFECT, measured on a production build of PR #1604's tree with
+// `jf_lang=ar` and a fresh browser state:
+//
+//   document.documentElement.lang  → "en"       (this page's prose IS English)
+//   <img alt="شعار JomForm">       → no lang     nearest [lang] → "en"
+//   <img alt="لافتة JomForm">      → no lang     nearest [lang] → "en"
+//
+// PR #1602 turned /brand's two ALTs into dictionary lookups (`brand.logoAlt`,
+// `brand.bannerAlt`, five locales) and PR #1604 declared the page English. Put
+// together, an Arabic-preferring reader gets Arabic ALTs inside an English
+// document with nothing declaring Arabic, so a screen reader speaks them with an
+// English voice — WCAG 3.1.2 (Language of Parts), the class the /docs chrome
+// labels above were fixed for.
+//
+// WHY THESE ARMS EXIST ON TOP OF THE SWEEP. `mislabelledArabic` reads an
+// element's OWN TEXT and an alt is an ATTRIBUTE: the sweep was GREEN on this very
+// page while every alt was Arabic and undeclared. It now reads `img[alt]` too (so
+// every other page it judges gets the same rule for free); the arms below judge
+// /brand in both directions and replay the pre-fix DOM live.
+//
+// The fix is `ownLangProps(lang)` spread onto each image: the RESOLVED locale
+// from `useI18n()`, and `{}` for English — the document's own language adds
+// nothing. Its source half is `src/lib/ownLang.test.ts`.
+
+/** /brand's two images: the alt a screen reader speaks, and the language it is read in. */
+async function brandImages(page: Page) {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLImageElement>("main img")).map((i) => ({
+      alt: i.getAttribute("alt") ?? "",
+      lang: i.getAttribute("lang"),
+      nearest: (i.closest("[lang]")?.getAttribute("lang") ?? "").toLowerCase(),
+    })),
+  );
+}
+
+test.describe("a localised image alt declares its own language (WCAG 3.1.2)", () => {
+  test("with jf_lang=ar /brand's Arabic alts declare Arabic inside the English document", async ({
+    page,
+  }) => {
+    await freshState(page, "ar");
+    await page.goto("/brand", { waitUntil: "networkidle" });
+
+    // The document must be the ENGLISH one: without PR #1604's declaration the
+    // alt's nearest language is Arabic already and this arm proves nothing.
+    await expectEnglishProse(page, "/brand", "Brand assets");
+
+    // Reachability: the locale really reached the page — both ALTs are the
+    // Arabic dictionary values, so there IS another language to declare here.
+    const imgs = await brandImages(page);
+    expect(
+      imgs.map((i) => i.alt),
+      "/brand did not render the Arabic image alts PR #1602 added — this case would pass for free",
+    ).toEqual([DICT["brand.logoAlt"].ar, DICT["brand.bannerAlt"].ar]);
+
+    // The whole page first, so a revert fails naming the IMAGE (alt + src) and the
+    // language it is being read in, not just an attribute count.
+    const wrong = await mislabelledArabic(page);
+    expect(
+      wrong,
+      `these passages on /brand are in Arabic inside the English document but nothing declares Arabic — ` +
+        `WCAG 3.1.2 (Language of Parts), a screen reader reads them with an English voice:\n  ${wrong.join("\n  ")}`,
+    ).toEqual([]);
+
+    // …then the fix itself, per element: the declaration is on the element that
+    // holds the text. Named by its ALT (the only human-meaningful handle these
+    // images have — Next rewrites the logo's `src` to /_next/image).
+    expect(
+      imgs.map((i) => ({ alt: i.alt, lang: i.lang, nearest: i.nearest })),
+      "each /brand image must declare the language of its own alt — WCAG 3.1.2",
+    ).toEqual([
+      { alt: DICT["brand.logoAlt"].ar, lang: "ar", nearest: "ar" },
+      { alt: DICT["brand.bannerAlt"].ar, lang: "ar", nearest: "ar" },
+    ]);
+
+    // …and the document declaration this fix must NOT have moved: it is a
+    // language of PARTS, the page is still English and still LTR.
+    expect(await declaration(page)).toEqual({ lang: "en", dir: "ltr", direction: "ltr" });
+  });
+
+  test("in English /brand's alts add no language at all", async ({ page }) => {
+    for (const lang of ["en", null] as const) {
+      await freshState(page, lang);
+      await page.goto("/brand", { waitUntil: "networkidle" });
+      await expectEnglishProse(page, "/brand", "Brand assets");
+
+      const imgs = await brandImages(page);
+      expect(
+        imgs.map((i) => i.alt),
+        `/brand did not render its English alts with jf_lang=${lang}`,
+      ).toEqual([DICT["brand.logoAlt"].en, DICT["brand.bannerAlt"].en]);
+      expect(
+        imgs.map((i) => i.lang),
+        `an English alt must add no lang of its own with jf_lang=${lang} — the document already declares English`,
+      ).toEqual([null, null]);
+    }
+  });
+
+  test("the sweep names an image whose alt has no declaration (the pre-fix shape)", async ({
+    page,
+  }) => {
+    await freshState(page, "ar");
+    await page.goto("/brand", { waitUntil: "networkidle" });
+    await expectEnglishProse(page, "/brand", "Brand assets");
+
+    // Replay the pre-fix DOM on the SHIPPED page: strip the declaration the fix
+    // adds. If the sweep cannot see an alt, this arm passes and the one above is
+    // the only thing that would ever go red.
+    const stripped = await page.evaluate(() => {
+      const imgs = Array.from(document.querySelectorAll<HTMLImageElement>("main img"));
+      for (const i of imgs) i.removeAttribute("lang");
+      return imgs.length;
+    });
+    expect(stripped, "/brand did not render its two images").toBe(2);
+
+    const wrong = await mislabelledArabic(page);
+    expect(wrong.length, `the alt sweep did not report the stripped images:\n  ${wrong.join("\n  ")}`).toBe(2);
+    expect(wrong.join("\n")).toContain("<img alt=");
+    expect(wrong.join("\n")).toContain('nearest lang="en"');
+  });
 });
 
 // ══ the operator sentence declares its own language (card t_b13ee0cc) ══════

@@ -13,7 +13,7 @@ func (h *RESTHandlers) putTracking(w http.ResponseWriter, r *http.Request, actx 
 		Head string `json:"head"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	if err := h.Accounts.SetTracking(r.Context(), actx.Account.ID, sanitizeTracking(in.Head)); err != nil {
@@ -40,7 +40,7 @@ func (h *RESTHandlers) putFormTracking(w http.ResponseWriter, r *http.Request, a
 		Head string `json:"head"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	if err := h.Forms.SetTracking(r.Context(), actx.Account.ID, r.PathValue("id"), sanitizeTracking(in.Head)); err != nil {

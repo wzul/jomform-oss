@@ -724,7 +724,7 @@ func TestEasyParcelCallbackRequiresAnIssuedState(t *testing.T) {
 		Accounts: dbstore.NewAccountStore(pool),
 		Couriers: courierBundle(pool, &stubCourierProvider{name: shipping.ProviderEasyParcel,
 			env: shipping.EasyParcelEnvironment, available: true}),
-		BaseURL: "https://jomform-staging.example.com",
+		BaseURL: "https://jomform-staging.wanzul-hosting.com",
 	}
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -758,7 +758,7 @@ func TestEasyParcelCallbackRequiresAnIssuedState(t *testing.T) {
 	// (tokenExchangeFailed), never a vendor message and never a code.
 	store := dbstore.NewCourierStore(pool, testSecretsKey())
 	state, err := store.IssueState(ctx, acc, shipping.ProviderEasyParcel,
-		"https://jomform-staging.example.com/api/shipping/easyparcel/callback", "")
+		"https://jomform-staging.wanzul-hosting.com/api/shipping/easyparcel/callback", "")
 	if err != nil {
 		t.Fatalf("issue state: %v", err)
 	}

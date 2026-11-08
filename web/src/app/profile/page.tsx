@@ -1099,7 +1099,7 @@ export default function ProfilePage() {
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={qrDataUrl}
-                  alt="QR code"
+                  alt={t("prof.qrAlt")}
                   width={220}
                   height={220}
                   className="mx-auto mt-3 rounded border border-slate-200"

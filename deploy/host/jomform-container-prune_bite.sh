@@ -14,8 +14,9 @@
 # three committed files are sha256-checked before and after the run.
 #
 # It is ON DEMAND, not a preflight gate: each case costs a whole decoy suite
-# (a private dockerd per case), measured ~24s, so the nine cases below are ~4
-# minutes — the same reason deploy/backup/jomform-backup_bite.sh is not wired in.
+# (a private dockerd per case), measured ~24s per case earlier, so the fourteen
+# cases below are several minutes of suite time — the same reason
+# deploy/backup/jomform-backup_bite.sh is not wired in.
 # The SUITE is the per-merge gate (`prunehost`); this is the instrument that
 # proves the suite's assertions can fail.
 #
@@ -108,11 +109,34 @@ sab_installer_idem() { sub 'if [ "${have:-0}" -gt 0 ]; then' 'if false; then'; }
 # did remove a host container.
 #
 # FOREIGN: the destroy-event lookup is replaced by "never found", so the probe a peer
-# removes mid-run becomes UNATTRIBUTABLE and the suite must go RED naming it. That is
-# the arm this suite runs on every invocation, so the case proves the live arm can
-# fail — the false red cannot come back without a red here first.
+# removes mid-run is no longer attributed. Until card `t_d243986f` that made the loss a
+# FAILURE; now a loss with no event from either source PASSES with a reason (because
+# "this run removed nothing it did not create" is a property of the file), so the
+# instrument that must go RED is the arm requiring the peer probe to be FOREIGN **and
+# NAMED** — which is what pins the attribution itself, and the false red cannot come
+# back without a red here first.
 sab_attribute_foreign() {
   sub '$3=="destroy" && $4==id' '0'
+}
+
+# THE LIVE EVENT WINDOW (card `t_d243986f`): the subscriber is neutered to a no-op, so
+# the window falls back to the daemon's 256-event replay alone — exactly the pre-fix
+# instrument. On a quiet run the replay still holds the peer probe's destroy, so nothing
+# else changes: the arm that must go RED is the one asserting the event was captured as
+# it was published, which is the property that survives a competing lane.
+sab_live_window() {
+  sub 'host_events_live_start() {' 'host_events_live_start() { return 0'
+}
+
+# THE LIVE WINDOW'S LOCK DISCIPLINE (card `t_1dd033e7`). The supervisor's closure of the
+# descriptors this suite inherited is removed, so it keeps this run's lock fixture —
+# the same shape that let an orphaned subscriber hold the MERGE lock, and a preflight
+# slot, for 40 minutes after its run had ended (flock is open-file-description scoped).
+# The arm that must go RED is the one asserting the child holds NO descriptor of the
+# run's lock; it is what makes "a probe must not hold a lock it never took" measured
+# rather than hoped for.
+sab_fd_inheritance() {
+  sub '    host_events_close_inherited_fds' '    : # sabotage: the inherited descriptors are kept'
 }
 
 # OURS: this run's own removal log is no longer consulted, so a container this run
@@ -215,6 +239,11 @@ reset_work
 out="$(bash "$WORK/$SUITE_FILE" 2>&1)"; rc=$?
 printf '%s\n' "$out" | tail -3 | sed 's/^/  /'
 if [ "$rc" -ne 0 ]; then
+  # The tail above is not enough to tell a tree red from a host-state red: the FAIL
+  # line names the arm, and the count says how many. Under a competing lane this is
+  # the difference between "fix the suite" and "the host was busy" (card `t_d243986f`).
+  say "  the baseline's failures:"
+  printf '%s\n' "$out" | grep -E '^  FAIL' | head -10 | sed 's/^/    /'
   say "ABORT: the baseline suite is RED on the unmutated copy, so a red below could be the tree, not the sabotage"
   exit 2
 fi
@@ -264,8 +293,18 @@ bite "the INSTALLER's idempotency (the cron entry is added even when present)" \
 
 bite "the SHARED-DAEMON attribution, FOREIGN half (a peer's removal no longer attributed, so it becomes the old bare count)" \
      "$SUITE_FILE" \
-     "removal CANNOT be attributed" \
+     "is attributed FOREIGN and NAMED" \
      sab_attribute_foreign
+
+bite "the LIVE event window (the subscriber neutered, so the window is the daemon's bounded 256-event replay alone — the pre-fix instrument)" \
+     "$SUITE_FILE" \
+     "the LIVE window captured the peer probe's destroy" \
+     sab_live_window
+
+bite "the LIVE window's LOCK DISCIPLINE (the inherited descriptors are no longer closed, so the subscriber holds the merge lock)" \
+     "$SUITE_FILE" \
+     "the LIVE subscriber INHERITED this run's lock" \
+     sab_fd_inheritance
 
 bite "the SHARED-DAEMON attribution, OURS half (this run's own removals no longer recognised, so a real one would be excused)" \
      "$SUITE_FILE" \

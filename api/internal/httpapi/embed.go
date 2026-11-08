@@ -18,18 +18,18 @@ import (
 func (h *PublicHandlers) embedForm(w http.ResponseWriter, r *http.Request) {
 	f := h.embedFormBySlug(r.Context(), r.PathValue("wsslug"), r.PathValue("slug"))
 	if f == nil {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "form not found")
 		return
 	}
 	// This route's own rules, applied to the RESOLVED form: a draft is never
 	// served, and a form that forbids embedding is refused — an embed URL cannot
 	// become a way around either.
 	if f.Status == dbstore.FormStatusDraft {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "form not found")
 		return
 	}
 	if !f.AllowEmbed {
-		writeErr(w, http.StatusForbidden, "embed dinyahaktifkan")
+		writeErr(w, http.StatusForbidden, "embed is disabled")
 		return
 	}
 	// The BODY is rendered by the same path the canonical form URL uses, so the
@@ -168,13 +168,13 @@ func forceEmbedFraming(h http.Header) {
 func (h *PublicHandlers) embedSubmit(w http.ResponseWriter, r *http.Request) {
 	f := h.embedFormBySlug(r.Context(), r.PathValue("wsslug"), r.PathValue("slug"))
 	if f == nil {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "form not found")
 		return
 	}
 	// Mirrors the GET's own rule: embedding switched off must not leave a live
 	// submit endpoint behind the 403 page.
 	if !f.AllowEmbed {
-		writeErr(w, http.StatusForbidden, "embed dinyahaktifkan")
+		writeErr(w, http.StatusForbidden, "embed is disabled")
 		return
 	}
 	h.submitResolvedForm(w, r, f)
@@ -208,11 +208,11 @@ func (h *PublicHandlers) embedSubmit(w http.ResponseWriter, r *http.Request) {
 func (h *PublicHandlers) embedUnlock(w http.ResponseWriter, r *http.Request) {
 	f := h.embedFormBySlug(r.Context(), r.PathValue("wsslug"), r.PathValue("slug"))
 	if f == nil {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "form not found")
 		return
 	}
 	if !f.AllowEmbed {
-		writeErr(w, http.StatusForbidden, "embed dinyahaktifkan")
+		writeErr(w, http.StatusForbidden, "embed is disabled")
 		return
 	}
 	h.unlockResolvedForm(w, r, f)

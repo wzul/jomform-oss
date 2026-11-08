@@ -11,8 +11,10 @@
 // (categories[].product_ids: string[], best_seller: string) is unchanged and
 // no backend/migration change is needed.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "./i18n";
+import { useSession } from "./session";
+import { formatPrice } from "../lib/money";
 import { workspaceQuery } from "../lib/workspace";
 
 export type PickerProduct = {
@@ -22,9 +24,6 @@ export type PickerProduct = {
   images?: string[];
   active: boolean;
 };
-
-const money = (sen: number) =>
-  `RM${(sen / 100).toLocaleString("en-MY", { minimumFractionDigits: 2 })}`;
 
 export default function ProductPicker({
   open,
@@ -48,10 +47,27 @@ export default function ProductPicker({
   onlyIds?: string[];
 }) {
   const { t } = useI18n();
+  // Card t_d5f359c7: a product price is charged in the WORKSPACE's currency
+  // (#185) — the picker is rendered inside the dashboard session, so it reads
+  // that currency from the session bundle rather than guessing RM. "—" until
+  // the bundle resolves.
+  const { currency } = useSession();
   const [items, setItems] = useState<PickerProduct[]>([]);
   const [loading, setLoading] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
   const [q, setQ] = useState("");
+
+  // Card t_d5f359c7 (defect found while fixing this page's prices): `load`
+  // below is a useCallback with NO dependencies, so it captured `onlyIds` from
+  // the FIRST render — and the first render happens while the form-settings
+  // page is still loading, when the form's product list is empty. Every later
+  // open therefore filtered the fetched products against `[]` and the picker
+  // always said "No active products in this workspace yet", so its price never
+  // rendered at all. Reading the prop through a ref keeps `load`'s identity
+  // stable (the effect below re-runs only on open) while making it see the
+  // CURRENT scope.
+  const onlyIdsRef = useRef(onlyIds);
+  onlyIdsRef.current = onlyIds;
 
   // Same workspace-scoped products endpoint the products page uses, so the
   // picker always shows the ACTIVE workspace's active products.
@@ -63,9 +79,10 @@ export default function ProductPicker({
       let list: PickerProduct[] = Array.isArray(d) ? d.filter((p: PickerProduct) => p.active !== false) : [];
       // Issue #497: when the caller scopes the picker (a menu form's products),
       // keep only the allowed IDs and preserve that order.
-      if (onlyIds) {
+      const scope = onlyIdsRef.current;
+      if (scope) {
         const byId = new Map(list.map((p) => [p.id, p]));
-        list = onlyIds.map((id) => byId.get(id)).filter((p): p is PickerProduct => !!p);
+        list = scope.map((id) => byId.get(id)).filter((p): p is PickerProduct => !!p);
       }
       setItems(list);
     } catch {
@@ -187,7 +204,7 @@ export default function ProductPicker({
                             {p.name}
                           </span>
                           <span className="block text-xs font-semibold text-[var(--jf-muted)]">
-                            {money(p.price_sen)}
+                            {formatPrice(p.price_sen, currency)}
                           </span>
                         </span>
                       </button>

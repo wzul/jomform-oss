@@ -233,7 +233,7 @@ func TestOAuth507ServerErrorLogsUnderlyingError(t *testing.T) {
 	if strings.Contains(rec.Body.String(), errOAuth507Sentinel.Error()) {
 		t.Errorf("underlying error leaked to client: %s", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "gagal menyimpan authorization code") {
+	if !strings.Contains(rec.Body.String(), "failed to store the authorization code") {
 		t.Errorf("generic message missing: %s", rec.Body.String())
 	}
 	// Server log must carry the sentinel + the handler tag.
@@ -275,14 +275,14 @@ func TestOAuth507ServerErrorAlwaysLogs(t *testing.T) {
 
 	// 5xx, no props → must log.
 	rec := httptest.NewRecorder()
-	oauthErr(rec, http.StatusInternalServerError, "server_error", "gagal menyimpan authorization code")
+	oauthErr(rec, http.StatusInternalServerError, "server_error", "failed to store the authorization code")
 	if !strings.Contains(buf.String(), "server_error") {
 		t.Errorf("5xx with no props was not logged: %q", buf.String())
 	}
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "gagal menyimpan authorization code") {
+	if !strings.Contains(rec.Body.String(), "failed to store the authorization code") {
 		t.Errorf("client body = %s", rec.Body.String())
 	}
 

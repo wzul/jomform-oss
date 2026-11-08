@@ -232,7 +232,7 @@ test("a REAL assertion rejection still says the passkey was invalid (the control
   const text = await clickThroughToFinish(page, {
     status: 401,
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ error: "passkey tidak sah", code: "auth.required" }),
+    body: JSON.stringify({ error: "invalid passkey", code: "auth.required" }),
   });
 
   // The one case the sentence is true for, and the reason it stays in the

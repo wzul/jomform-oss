@@ -140,7 +140,7 @@ func EasyParcelAuthorizeURL(cfg EasyParcelConfig, state, redirectURI string) (st
 		return "", ErrProviderUnavailable
 	}
 	if strings.TrimSpace(state) == "" || strings.TrimSpace(redirectURI) == "" {
-		return "", errors.New("redirect_uri dan state diperlukan untuk pautan kebenaran")
+		return "", errors.New("redirect_uri and state are required for the authorization link")
 	}
 	u, err := url.Parse(cfg.AuthorizeEndpoint())
 	if err != nil {

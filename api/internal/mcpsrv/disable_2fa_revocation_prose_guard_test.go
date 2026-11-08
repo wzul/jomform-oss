@@ -60,11 +60,11 @@ import (
 // disable2faRevocationClause is the CLAIM half of the #713 disclosure: disabling
 // 2FA cancels every trusted device of the account.
 //
-// It pins the claim ("membatalkan SEMUA peranti dipercayai akaun"), not a prefix
-// such as "Mematikan 2FA juga …", so rewording the lead-in is not a false red —
-// while a sentence that flips the meaning (a device kept exempt, or "tiada kesan
-// sampingan") cannot pass by keeping the subject around.
-const disable2faRevocationClause = "membatalkan SEMUA peranti dipercayai akaun"
+// It pins the claim ("revokes EVERY trusted device on the account"), not a prefix
+// such as "Turning off 2FA also …", so rewording the lead-in is not a false red —
+// while a sentence that flips the meaning (a device kept exempt, or "no side
+// effects") cannot pass by keeping the subject around.
+const disable2faRevocationClause = "revokes EVERY trusted device on the account"
 
 // disable2faRevocationPointer is the second half of the disclosure: the tool an
 // agent must call to see which devices, if any, are left.

@@ -27,6 +27,14 @@
 #      own definition is not this script's business, and the filename it uses is
 #      unchanged).
 #
+# WHEN A PROOF FAILS, IT SAYS WHY (card t_1483975b). A proof log is ~220 lines and
+# the failing check can be anywhere in it; this installer used to print a fixed
+# `tail -20` and delete the log, so the `prunesync` gate reddened three times on
+# `212 passed, 1 failed` (and once on `210 passed, 3 failed`) with no failing check
+# named and no evidence left. A failure now prints the failing check line(s) from
+# the log, still prints the tail (a missing suite has no per-check FAIL line), and
+# KEEPS the log, naming its path in the error.
+#
 # Usage:
 #   deploy/worktrees/install-prune-kanban-worktrees.sh [--dry-run] [--no-cron-check]
 #                                                      [--hermes-home PATH] [--skip-proof]
@@ -86,14 +94,43 @@ info() { printf '%s\n' "$*"; }
 # about bytes it never proved. (Same class the container-prune guard's suite records for
 # its own host-global temp names.)
 TMP_PATHS=()
+PROOF_LOGS_KEPT=()
 cleanup_tmp() {
-  local p
+  local p keep k
   for p in ${TMP_PATHS+"${TMP_PATHS[@]}"}; do
     [ -n "$p" ] || continue
+    keep=0
+    for k in ${PROOF_LOGS_KEPT+"${PROOF_LOGS_KEPT[@]}"}; do
+      [ "$k" = "$p" ] && keep=1
+    done
+    [ "$keep" = 1 ] && continue
     rm -rf "$p"
   done
 }
 trap cleanup_tmp EXIT
+
+# ── how a RED explains itself ─────────────────────────────────────────────────
+# A proof log is ~220 lines and the failing check can be ANYWHERE in it. The
+# `prunesync` gate has reddened twice on `212 passed, 1 failed` with the failing
+# check above the installer's fixed `tail -20`, which left the lane holding a count
+# and no cause (cards t_2244109a, t_16d159f5) — and the log that would have named it
+# was deleted with the run. So a failure now prints the failing check lines BY NAME,
+# still prints the tail for the failures that are not a per-check FAIL (a missing
+# suite, a fatal error), and KEEPS the log, naming its path in the error.
+proof_failed() { # <log> <what was being proven>
+  local log="$1" what="$2" fails
+  fails="$(grep -E '^[[:space:]]*(FAIL|✘|not ok)' "$log" || true)"
+  if [ -n "$fails" ]; then
+    printf -- '--- failing check(s) in the %s self-test ---\n' "$what" >&2
+    printf '%s\n' "$fails" >&2
+  else
+    printf -- '--- the %s self-test printed no per-check FAIL line: it did not reach the checks ---\n' "$what" >&2
+  fi
+  printf -- '--- last 20 lines of that log ---\n' >&2
+  tail -20 "$log" >&2
+  PROOF_LOGS_KEPT+=("$log")
+  printf -- 'proof log kept: %s\n' "$log" >&2
+}
 
 # The source path to install a target FROM. Paired with TARGET_NAMES so the install
 # loop, the printed list and the proof step cannot disagree about what goes where.
@@ -174,8 +211,8 @@ else
   PROOF_LOG="$(mktemp "${TMPDIR:-/tmp}/jf-prune-install-proof.XXXXXX")"
   TMP_PATHS+=("$PROOF_LOG")
   if ! JF_PRUNE_SCRIPT="$SRC" bash "$SUITE" >"$PROOF_LOG" 2>&1; then
-    tail -20 "$PROOF_LOG" >&2
-    die "the self-test FAILED on $SRC — refusing to install a pruner that has not proven itself"
+    proof_failed "$PROOF_LOG" source
+    die "the self-test FAILED on $SRC — refusing to install a pruner that has not proven itself (failing check(s) above, log kept at $PROOF_LOG)"
   fi
   info "  source verified: $(tail -1 "$PROOF_LOG")"
 fi
@@ -208,8 +245,8 @@ if [ "$SKIP_PROOF" = 0 ]; then
     TMP_PATHS+=("$INSTALLED_LOG")
     if ! JF_PRUNE_SCRIPT="$DEST_DIR/$SRC_NAME" bash "$DEST_DIR/$SUITE_NAME" \
          >"$INSTALLED_LOG" 2>&1; then
-      tail -20 "$INSTALLED_LOG" >&2
-      die "the INSTALLED copy failed its self-test — the host is now running an unverified pruner at $DEST_DIR/$SRC_NAME"
+      proof_failed "$INSTALLED_LOG" installed
+      die "the INSTALLED copy failed its self-test — the host is now running an unverified pruner at $DEST_DIR/$SRC_NAME (failing check(s) above, log kept at $INSTALLED_LOG)"
     fi
     info "  installed copy verified: $(tail -1 "$INSTALLED_LOG")"
   fi

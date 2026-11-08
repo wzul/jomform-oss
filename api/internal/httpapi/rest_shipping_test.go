@@ -155,7 +155,7 @@ func TestShippingRESTRefusals(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("zone with no rate = %d, want 400 (body %s)", code, raw)
 	}
-	if !strings.Contains(string(raw), "West") || !strings.Contains(string(raw), "kadar") {
+	if !strings.Contains(string(raw), "West") || !strings.Contains(string(raw), "rate") {
 		t.Errorf("refusal should name the zone and the missing rate, got %s", raw)
 	}
 	// The refusal must carry the machine code the dashboard translates (card

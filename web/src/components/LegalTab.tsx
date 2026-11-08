@@ -8,6 +8,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useI18n, type Key } from "./i18n";
 import { apiErr } from "../lib/apiErr";
+import { legalPageURL } from "../lib/deployment";
+import { useDeployment } from "./useDeployment";
 
 type LegalPage = { workspace_id: string; page_type: string; mode: string; content: string };
 type LegalMap = Record<string, LegalPage>;
@@ -23,6 +25,11 @@ const PAGE_TITLE_KEY: Record<PageType, Key> = {
 
 export function LegalTab({ workspaceId, workspaceSlug }: { workspaceId: string; workspaceSlug: string }) {
   const { t } = useI18n();
+  // Card t_48a93084: the hosted legal pages are served from a WORKSPACE
+  // SUBDOMAIN, and a self-hosted install has none — the route answers 404
+  // there. legalPageURL() returns "" in that case and the link is not drawn,
+  // so the merchant is never handed a dead "view" action.
+  const deployment = useDeployment();
   const [pages, setPages] = useState<LegalMap>({});
   const [mode, setMode] = useState<Record<PageType, "auto" | "manual">>({
     privacy: "manual",
@@ -127,7 +134,17 @@ export function LegalTab({ workspaceId, workspaceSlug }: { workspaceId: string; 
     <section className="jf-card mt-6 p-6">
       <h2 className="text-lg font-semibold">{t("set.legalTitle")}</h2>
       <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
-        {t("set.legalHelp", { workspace: workspaceSlug || "your-workspace" })}
+        {deployment &&
+          t(deployment.selfHosted ? "set.legalHelpSelf" : "set.legalHelp", {
+            workspace: workspaceSlug || "your-workspace",
+          })}
+      </p>
+      {/* Card t_e8b4f7da: names the LINK half of this feature. Saving page text
+          here does nothing on its own — the footer link comes from the legal URL
+          in Storefront, and a saved URL the public route cannot serve is refused
+          a link (with a reason, under the field). */}
+      <p className="mt-1 max-w-xl text-xs text-slate-500">
+        {t("set.legalFooterPointer", { slug: workspaceSlug || "your-workspace" })}
       </p>
 
       {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{msg}</p>}
@@ -192,9 +209,9 @@ export function LegalTab({ workspaceId, workspaceSlug }: { workspaceId: string; 
                       {t("set.legalNotSet")}
                     </span>
                   )}
-                  {isSet && workspaceSlug && (
+                  {isSet && workspaceSlug && legalPageURL(workspaceSlug, pt, deployment) && (
                     <a
-                      href={`https://${workspaceSlug}.jomform.com/${pt}`}
+                      href={legalPageURL(workspaceSlug, pt, deployment)}
                       target="_blank"
                       rel="noreferrer"
                       className="text-[var(--jf-primary)] hover:underline"

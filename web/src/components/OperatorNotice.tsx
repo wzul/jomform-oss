@@ -78,18 +78,30 @@ export default function OperatorNotice({ className }: { className?: string }) {
     // adds the base direction for an RTL locale, and nothing for the rest.
     <p className={className} lang={lang === "en" ? undefined : lang} {...operatorDirProps(lang)}>
       {lead.trim()}
-      {/* `whitespace-nowrap`: the registration clause is ONE unit, never two
-          lines. The sentence is ~706px wide in a 720px legal-page paragraph, so
-          a line break only fits inside the clause — and the browser takes it at
-          the hyphen: measured in Chromium, `201403298654 (سابقًا PC0012291-`
-          ends line 1 and `H).` starts line 2, three glyphs stranded at the
-          paragraph's edge. Only 14px of slack separates a clean line from that
-          orphan, so it arrives whenever the font is a little wider (another
-          platform's Arabic fallback, a larger browser default size) or a locale
-          reads longer. Measured at a 692px paragraph: exactly that split. With
-          nowrap the whole clause moves to the next line instead (card
-          t_bdcee56f); it still fits at 320px (the clause is ~210px). */}
-      {regClause ? <> <bdi dir="ltr" className="whitespace-nowrap">{regClause}</bdi></> : null}
+      {/* THE CLAUSE IS ATOMIC AND SHRINKABLE (card t_68456ead)
+          `whitespace-nowrap` alone made this an unbreakable run as wide as its
+          glyphs: 347.6px at a 24px browser root in the landing footer's 248px
+          paragraph (383.6px right edge in a 320px viewport — the 64px page pan),
+          and 441.5px on /legal/privacy. `inline-block` + `max-w-full` keeps the
+          two behaviours the two cards need at once:
+            * the line breaker treats the box as ONE atomic unit, so the hyphen
+              inside PC0012291-H is never a break opportunity the surrounding
+              paragraph can use — the clause moves to the next line whole, which
+              is what card t_bdcee56f measured (`H).` stranded at the 692px
+              paragraph) and what a11y-docs-lang.spec.ts pins;
+            * the box shrink-to-fits, so when the clause is WIDER than the
+              paragraph (raised text) it takes the paragraph's width and wraps
+              its own words inside it — instead of overflowing the page.
+          `[line-height:normal]` keeps the inline-block's own box exactly the
+          height of the text it holds (17px on the legal page, matching the
+          plain inline box before this change), so the surrounding line box and
+          the paragraph are pixel-identical at 100% text size — measured: same
+          <p> height, same <bdi> top and left, all four a11y viewports (320,
+          390, 740, 1280) still one line box.
+          `[overflow-wrap:anywhere]` is the last resort for a single word wider
+          than the paragraph at an extreme text size; the wrap it enables only
+          opens when the clause cannot fit. */}
+      {regClause ? <> <bdi dir="ltr" className="inline-block max-w-full whitespace-normal [line-height:normal] [overflow-wrap:anywhere]">{regClause}</bdi></> : null}
     </p>
   );
 }

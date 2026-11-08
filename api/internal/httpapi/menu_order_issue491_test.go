@@ -196,7 +196,7 @@ func TestIssue491MenuOrderResolvesLivePriceAndSumsQuantity(t *testing.T) {
 	// path reads the products table rather than any cached snapshot.
 	price := int64(1800)
 	if err := h.Products.Update(context.Background(), accountID, prodID,
-		nil, nil, &price, nil, nil, nil, nil, nil, nil, nil, nil); err != nil {
+		nil, nil, &price, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("re-price product: %v", err)
 	}
 

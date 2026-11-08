@@ -110,7 +110,7 @@ func TestAdminSuppressionAddValidatesInput(t *testing.T) {
 			t.Errorf("issue #601: admin_add_suppression accepted %s", tc.name)
 			continue
 		}
-		if err.Error() == "senarai suppression tidak dikonfigurasi" {
+		if err.Error() == "suppression list not configured" {
 			t.Errorf("issue #601: %s reached the store instead of being rejected by validation", tc.name)
 		}
 	}

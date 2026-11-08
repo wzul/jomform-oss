@@ -7,7 +7,7 @@
 //
 // The fallback `t(...)` is localized; `d.error` — the branch that actually
 // fires on a real server failure — was whatever Malay sentence the API sent. A
-// user on `lang=en` therefore read "workspace tidak dijumpai".
+// user on `lang=en` therefore read "workspace not found".
 //
 // THE RULE, IN ONE PLACE. No component may render the server's `error` prose.
 // It goes through the API's machine `code` (see
@@ -32,7 +32,7 @@ import type { Key } from "../components/i18n";
 /**
  * The error envelope the API sends on every failure (issue #6177):
  *
- *   { "error": "workspace tidak dijumpai", "code": "workspace.notFound" }
+ *   { "error": "workspace not found", "code": "workspace.notFound" }
  *
  * `error` is the human wire prose (never rendered by the dashboard), `code` the
  * stable machine key. Older/other endpoints can answer without `code` (a proxy
@@ -150,6 +150,13 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   // different slug for THIS form, and each sentence has to give its own remedy.
   "form.slugInUse": "apiErr.formSlugInUse",
   "form.slugInvalid": "apiErr.formSlugInvalid",
+  // The reserved-name refusal for a form slug (card t_f76f81eb). Like
+  // `reserved_subdomain` above it is NOT a `Code*` constant in errcode.go: the
+  // token lives in urlguard (FormSlugReservedCode, mirrored by lib/formSlug.ts)
+  // and both form write paths carry it verbatim, because the wire message NAMES
+  // the refused label and so can never be a key in the message→code table it is
+  // a POLICY answer, not a shape one.
+  "form.slugReserved": "apiErr.formSlugReserved",
   // The custom_js scan refusal (#388) — card t_2717ba30. The server assembles
   // this 400 around the scan's own reason ("custom_js ditolak: active code
   // execution marker: eval("), so before this code existed it shipped as
@@ -329,7 +336,7 @@ export function translateApiErr(body: unknown, t: (k: Key) => string): string {
  * WHY THIS LIST EXISTS (card t_da4b2031). The server answers a `?workspace=`
  * slug the session cannot resolve with **403** and the code below
  * (api/internal/httpapi/rest_scope.go's scopeOr403 →
- * "workspace tidak dijumpai"). web/src/lib/wsfetch.ts reads 401/403 as "the
+ * "workspace not found"). web/src/lib/wsfetch.ts reads 401/403 as "the
  * session is no longer valid" and navigates to /login, so a slug sitting in
  * `localStorage` from a workspace that was since renamed or deleted could log a
  * perfectly signed-in merchant out. Measured on prod (v1.17.0): `/chat` with

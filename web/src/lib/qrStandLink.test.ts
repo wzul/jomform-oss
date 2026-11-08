@@ -22,7 +22,7 @@
 //   (rest.go resolve, issue #158) — so a merchant with more than one workspace
 //   opened a stand link for a form in another workspace and got the API's own 404
 //   body in the tab. Measured against a two-account session: bare path -> 404
-//   `{"code":"request.notFound","error":"tidak dijumpai"}`, workspaceUrl(path) ->
+//   `{"code":"request.notFound","error":"not found"}`, workspaceUrl(path) ->
 //   the stand, title and Table badge rendered.
 //
 // WHAT THIS TEST CAN AND CANNOT SEE

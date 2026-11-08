@@ -62,7 +62,7 @@ func TestCreateFormRefusesAnUnpricedPricingBlock(t *testing.T) {
 			code, raw)
 	}
 	body := string(raw)
-	if !strings.Contains(body, "option") || !strings.Contains(body, "harga") {
+	if !strings.Contains(body, "option") || !strings.Contains(body, "price") {
 		t.Errorf("400 body = %s, want it to name the option block and the missing price", body)
 	}
 	// A refused write leaves nothing behind.

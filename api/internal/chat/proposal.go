@@ -106,26 +106,26 @@ const (
 // ErrProposalArgsChanged is exported because the REST layer maps it; the rest are
 // internal to the lane and are surfaced through ProposeRefusalKind.
 var (
-	errProposalsNotConfigured = errors.New("pengesahan tindakan tidak dikonfigurasi pada pelayan ini")
-	errNoUserIdentity         = errors.New("pengguna tidak dikenali")
-	errNoAccountIdentity      = errors.New("akaun tidak dikenali")
-	errProposalTokenRequired  = errors.New("token cadangan diperlukan")
-	ErrProposalArgsChanged    = errors.New("argumen cadangan berubah — sahkan semula cadangan asal")
-	errProposalRunLimit       = errors.New("terlalu banyak cadangan dalam satu jawapan")
-	errProposalUnrenderable   = errors.New("cadangan tanpa penerangan kad tidak dibenarkan")
+	errProposalsNotConfigured = errors.New("action confirmation is not configured on this server")
+	errNoUserIdentity         = errors.New("no user identity")
+	errNoAccountIdentity      = errors.New("no account identity")
+	errProposalTokenRequired  = errors.New("proposal token required")
+	ErrProposalArgsChanged    = errors.New("proposal arguments changed — confirm the original proposal again")
+	errProposalRunLimit       = errors.New("too many proposals in one answer")
+	errProposalUnrenderable   = errors.New("a proposal without a card description is not allowed")
 	// ErrProposalArgsInvalid is the CONFIRM-side refusal for a stored proposal
 	// whose arguments the target tool would never accept. Such a card can never
 	// be carried out, so it is refused BEFORE the token is claimed: the token is
 	// not spent, and the user is told to have the assistant prepare a fresh card
 	// rather than to "try again" on one that cannot work. Exported because the
 	// REST layer maps it.
-	ErrProposalArgsInvalid = errors.New("cadangan itu tidak boleh dilaksanakan kerana hujahnya " +
-		"tidak diterima oleh alat itu — minta pembantu menyediakan kad baharu")
+	ErrProposalArgsInvalid = errors.New("the proposal cannot be carried out because the tool " +
+		"does not accept its arguments — ask the assistant to prepare a new card")
 	// ErrProposalRoleRefused is the CONFIRM-side refusal for a confirmed write the
 	// WORKSPACE ROLE gate declined after the token was claimed (card t_1900adef).
 	//
 	// It exists so the specific cause survives the lane. A refused tool result is
-	// plain TEXT (`server menolak: %s` below), and the REST edge can only turn a
+	// plain TEXT (`server refused: %s` below), and the REST edge can only turn a
 	// refusal into a machine code if it can tell WHICH refusal it was — without
 	// this, every post-claim refusal collapsed into one generic sentence with no
 	// code, so a read_only member whose confirm was refused by their role read
@@ -135,17 +135,40 @@ var (
 	// Exported because the REST layer maps it to a status, a wire message and the
 	// code `role.manageRequired`; the match itself is against the gate's OWN
 	// declared wording (mcpsrv.RoleManageRequiredLeadIn), never a second copy.
-	ErrProposalRoleRefused = errors.New("peranan anda dalam workspace ini tidak membenarkan perubahan itu")
+	ErrProposalRoleRefused = errors.New("your role in this workspace does not allow that change")
+	// ErrProposalWorkspaceRequired is the CONFIRM-side refusal for a confirmed form
+	// creation the WORKSPACE gate declined because the account has no workspace at
+	// all (card t_bf4feea2).
+	//
+	// WHY IT NEEDS A NAME OF ITS OWN. mcpsrv.requireLiveWorkspace refuses a form
+	// MINTING write ("this account has no workspace yet — create a workspace before
+	// creating a form", mcpsrv.WorkspaceRequiredMessage) and that refusal arrives
+	// AFTER the token is claimed, like the role one. The lane could only answer it
+	// as `server refused: %s`, which the REST edge maps to its `default:` arm — a
+	// 400 carrying the untranslatable class code — so the dashboard printed
+	// "The change could not be applied. Please try again." for a card whose token
+	// was already spent and whose cause it could not name. Measured on staging: the
+	// test account was created by a magic link and never had a workspace
+	// (accounts.workspace_id NULL), so EVERY form-creation card it confirmed died
+	// here with no server-side trace.
+	//
+	// It is matched against the gate's OWN declared sentence (mcpsrv's constant, not
+	// a second copy), so re-wording the gate is a compile-visible change rather than
+	// a silent loss of this classification.
+	//
+	// Exported because the REST layer maps it to a status, the gate's own wire
+	// sentence and the shared `workspace.required` code.
+	ErrProposalWorkspaceRequired = errors.New("this account has no workspace yet — the confirmed change needs one")
 	// errProposalArgsRejected is the PROPOSE-side form of the same verdict. It is
 	// returned with the SPECIFIC detail attached (which required key is absent,
 	// which key is not recognised) because the model is the one who can correct
 	// the call, and it is classified separately in the audit log.
-	errProposalArgsRejected = errors.New("hujah cadangan tidak diterima oleh alat itu")
+	errProposalArgsRejected = errors.New("the tool does not accept the proposal's arguments")
 	// errNoToolSchemaSource means the tool's own input schema could not be read:
 	// the caller is not a live MCP session, so there is no contract to check the
 	// arguments against. Refusing is deliberate — recording a proposal whose
 	// arguments nothing verified is the defect this check exists to close.
-	errNoToolSchemaSource = errors.New("sesi alat tiada — kontrak alat tidak dapat dibaca")
+	errNoToolSchemaSource = errors.New("no tool session — the tool contract cannot be read")
 )
 
 // ProposeRefusalKind classifies a proposal-lane error as a short STABLE token for
@@ -174,6 +197,8 @@ func ProposeRefusalKind(err error) string {
 		return "args_unacceptable"
 	case errors.Is(err, ErrProposalRoleRefused):
 		return "role_refused"
+	case errors.Is(err, ErrProposalWorkspaceRequired):
+		return "workspace_required"
 	case errors.Is(err, errProposalArgsRejected):
 		return "args_rejected"
 	case errors.Is(err, errNoToolSchemaSource):
@@ -996,17 +1021,17 @@ func (r *Runner) validateProposalArgs(ctx context.Context, caller toolCaller, to
 	}
 	raw, found, err := src.toolInputSchema(ctx, tool)
 	if err != nil {
-		return fmt.Errorf("baca skema alat %s: %w", tool, err)
+		return fmt.Errorf("read tool schema %s: %w", tool, err)
 	}
 	if !found {
-		return fmt.Errorf("alat %q tiada dalam pendaftaran — kontraknya tidak dapat disahkan", tool)
+		return fmt.Errorf("tool %q is not in the registry — its contract cannot be validated", tool)
 	}
 	// The TOOL NAME is put in front of the schema's own message so the refusal is
 	// self-contained for the model: propose_write's arguments carry the tool, but a
 	// refusal the model can act on should name the contract it violated rather than
 	// require it to remember which call it just made.
 	if verr := validateAgainstToolSchema(tool, raw, args); verr != nil {
-		return fmt.Errorf("alat %s: %w", tool, verr)
+		return fmt.Errorf("tool %s: %w", tool, verr)
 	}
 	return nil
 }
@@ -1023,15 +1048,15 @@ func (r *Runner) validateProposalArgs(ctx context.Context, caller toolCaller, to
 func validateAgainstToolSchema(tool string, rawSchema any, args map[string]any) error {
 	b, err := json.Marshal(rawSchema)
 	if err != nil {
-		return fmt.Errorf("%w: skema alat %s tidak boleh dibaca (%v)", errProposalArgsRejected, tool, err)
+		return fmt.Errorf("%w: tool schema %s cannot be read (%v)", errProposalArgsRejected, tool, err)
 	}
 	var sch jsonschema.Schema
 	if err := json.Unmarshal(b, &sch); err != nil {
-		return fmt.Errorf("%w: skema alat %s tidak boleh dibaca (%v)", errProposalArgsRejected, tool, err)
+		return fmt.Errorf("%w: tool schema %s cannot be read (%v)", errProposalArgsRejected, tool, err)
 	}
 	resolved, err := sch.Resolve(&jsonschema.ResolveOptions{})
 	if err != nil || resolved == nil {
-		return fmt.Errorf("%w: skema alat %s tidak boleh diselesaikan (%v)", errProposalArgsRejected, tool, err)
+		return fmt.Errorf("%w: tool schema %s cannot be resolved (%v)", errProposalArgsRejected, tool, err)
 	}
 	// MISSING REQUIRED KEYS FIRST, and reported as their own sentence.
 	//
@@ -1053,7 +1078,7 @@ func validateAgainstToolSchema(tool string, rawSchema any, args map[string]any) 
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		return fmt.Errorf("%w: medan wajib tiada: %s", errProposalArgsRejected, strings.Join(missing, ", "))
+		return fmt.Errorf("%w: missing required fields: %s", errProposalArgsRejected, strings.Join(missing, ", "))
 	}
 	cp := make(map[string]any, len(args))
 	for k, v := range args {
@@ -1103,18 +1128,18 @@ type ProposeArgs struct {
 func (r *Runner) proposeFromArgs(ctx context.Context, caller toolCaller, argsJSON string) (*ProposalCard, error) {
 	var in ProposeArgs
 	if err := json.Unmarshal([]byte(argsJSON), &in); err != nil {
-		return nil, fmt.Errorf("argumen tidak sah: alat dan argumen diperlukan")
+		return nil, fmt.Errorf("invalid arguments: tool and arguments are required")
 	}
 	in.Tool = strings.TrimSpace(in.Tool)
 	if in.Tool == "" {
-		return nil, errors.New("medan 'tool' diperlukan untuk mencadangkan tindakan")
+		return nil, errors.New("the 'tool' field is required to propose an action")
 	}
 	if !mcpsrv.ChatToolIsProposable(in.Tool) {
 		// The refusal names the reason, so the model can tell the user why it
 		// will not even OFFER this one instead of silently doing nothing.
-		return nil, fmt.Errorf("alat %q tidak boleh dicadangkan dalam chat ini — "+
-			"tindakan pemusnah, wang, kelayakan akses dan penghantaran emel dikecualikan; "+
-			"cuba salah satu daripada: %s", in.Tool, strings.Join(mcpsrv.ChatProposableTools(), ", "))
+		return nil, fmt.Errorf("tool %q cannot be proposed in this chat — "+
+			"destructive actions, money, access permissions and email delivery are excluded; "+
+			"try one of: %s", in.Tool, strings.Join(mcpsrv.ChatProposableTools(), ", "))
 	}
 	if in.Arguments == nil {
 		in.Arguments = map[string]any{}
@@ -1145,10 +1170,10 @@ func (r *Runner) proposeFromArgs(ctx context.Context, caller toolCaller, argsJSO
 	}
 	canon, err := dbstore.CanonicalArgs(in.Arguments)
 	if err != nil {
-		return nil, fmt.Errorf("argumen tidak sah: %w", err)
+		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	if len(canon) > MaxProposalArgsChars {
-		return nil, fmt.Errorf("argumen cadangan terlalu besar (maksimum %d aksara)", MaxProposalArgsChars)
+		return nil, fmt.Errorf("proposal arguments are too large (maximum %d characters)", MaxProposalArgsChars)
 	}
 	if r.proposals == nil {
 		return nil, errProposalsNotConfigured
@@ -1188,7 +1213,7 @@ func (r *Runner) proposeFromArgs(ctx context.Context, caller toolCaller, argsJSO
 		ExpiresAt:  time.Now().UTC().Add(ProposalTTL),
 	}
 	if err := r.proposals.Create(ctx, p); err != nil {
-		return nil, fmt.Errorf("simpan cadangan: %w", err)
+		return nil, fmt.Errorf("store proposal: %w", err)
 	}
 	return &ProposalCard{
 		Token:      raw,
@@ -1227,6 +1252,48 @@ type Confirmed struct {
 	ProposalID string
 }
 
+// ConfirmFailure is a failed confirmation, carrying WHICH tool the card named and
+// WHERE the lane stopped, so the REST edge can log one actionable line and file an
+// audit row that names the cause.
+//
+// THE DEFECT THIS CLOSES (card t_bf4feea2). A failed confirm left this on the
+// server:
+//
+//	INFO http_request method=POST path=/v1/rest/chat/confirm status=400 duration_ms=113
+//
+// and nothing else — no tool, no reason, no error. The token was already SPENT at
+// that point (the refusal happened after the claim), so the only record that could
+// explain the failure was the proposal row, and nothing tied the request to it.
+// Every user report therefore became a forensic reading of the database. With this
+// type the edge can write
+//
+//	WARN chat_confirm_failed request_id=… tool=upsert_form reason=workspace_required stage=refused err=…
+//
+// instead. Stage is a short stable token, never prose, so a log query can group
+// failures by where they stopped without parsing error text.
+//
+// Wrapped errors keep their identity — Unwrap hands back the inner error — so
+// errors.Is(err, ErrProposalWorkspaceRequired) and the store sentinels still work
+// through it.
+type ConfirmFailure struct {
+	// Tool is the proposal's tool, or "" when the failure happened before the row
+	// was read (an unknown token, an unconfigured lane).
+	Tool string
+	// Stage names the step that failed: "not_configured", "no_user",
+	// "token_required", "lookup", "consumed", "expired", "args_changed",
+	// "not_proposable", "args_invalid", "unrenderable", "claim",
+	// "token_mismatch", "args_read", "session", "dispatch" or "refused".
+	Stage string
+	// Err is the underlying failure.
+	Err error
+}
+
+func (e *ConfirmFailure) Error() string { return e.Err.Error() }
+
+// Unwrap exposes the underlying failure, so callers keep using errors.Is on the
+// lane's sentinels exactly as before this wrapper existed.
+func (e *ConfirmFailure) Unwrap() error { return e.Err }
+
 // Confirm executes a proposal the USER confirmed, and returns what the tool said.
 //
 // ORDER MATTERS, and it is:
@@ -1246,39 +1313,49 @@ type Confirmed struct {
 // HUMAN's identity and the WRITE scope: the human's click is the authorisation,
 // the tool's own workspace-role and ownership gates still apply unchanged, and the
 // scope is granted for THIS bound proposal rather than opened for the conversation.
+//
+// EVERY failure is returned wrapped in *ConfirmFailure (see its doc): the tool and
+// the failing stage are what turn a bare "status=400" into a diagnosable line.
 func (r *Runner) Confirm(ctx context.Context, writeCtx context.Context, userID, token, argsHash string) (*Confirmed, error) {
+	// tool is filled in once the row is read; before that a failure genuinely
+	// cannot name one and the wrapper says so with "".
+	tool := ""
+	fail := func(stage string, err error) (*Confirmed, error) {
+		return nil, &ConfirmFailure{Tool: tool, Stage: stage, Err: err}
+	}
 	if r.proposals == nil {
-		return nil, errProposalsNotConfigured
+		return fail("not_configured", errProposalsNotConfigured)
 	}
 	if userID == "" {
-		return nil, errNoUserIdentity
+		return fail("no_user", errNoUserIdentity)
 	}
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return nil, errProposalTokenRequired
+		return fail("token_required", errProposalTokenRequired)
 	}
 	hash := dbstore.HashProposalToken(token)
 
 	p, err := r.proposals.ByToken(ctx, userID, hash)
 	if err != nil {
-		return nil, err
+		return fail("lookup", err)
 	}
+	tool = p.Tool
 	if p.IsSpent() {
-		return nil, dbstore.ErrChatProposalConsumed
+		return fail("consumed", dbstore.ErrChatProposalConsumed)
 	}
 	if !p.ExpiresAt.After(time.Now().UTC()) {
-		return nil, dbstore.ErrChatProposalExpired
+		return fail("expired", dbstore.ErrChatProposalExpired)
 	}
 	if !p.ArgsHashMatches(argsHash) {
 		// THE BINDING. A client that submits a different argument set, or no hash
 		// at all, is refused HERE — before the token is spent — and the stored
 		// arguments remain the only thing that could ever execute.
-		return nil, ErrProposalArgsChanged
+		return fail("args_changed", ErrProposalArgsChanged)
 	}
 	if !mcpsrv.ChatToolIsProposable(p.Tool) {
 		// The proposable set is a product decision that can shrink; a row written
 		// under an older set must not execute under a newer one.
-		return nil, fmt.Errorf("alat %q tidak lagi boleh dilaksanakan melalui chat", p.Tool)
+		return fail("not_proposable", fmt.Errorf("tool %q can no longer be carried out through chat", p.Tool))
 	}
 	// THE STORED ARGUMENTS MUST BE ONE THE TOOL ACCEPTS, and this is checked
 	// BEFORE the claim for the same reason the args-hash check is (t_623676d1): a
@@ -1294,61 +1371,71 @@ func (r *Runner) Confirm(ctx context.Context, writeCtx context.Context, userID, 
 	// not the one that only says no card could be drawn.
 	schemaCaller, err := r.newSession(ctx)
 	if err != nil {
-		return nil, err
+		return fail("session", err)
 	}
 	verr := r.validateProposalArgs(ctx, schemaCaller, p.Tool, p.Args)
 	_ = schemaCaller.close()
 	if verr != nil {
-		return nil, fmt.Errorf("%w", ErrProposalArgsInvalid)
+		return fail("args_invalid", fmt.Errorf("%w", ErrProposalArgsInvalid))
 	}
 	if _, _, _, ok := Describe(p.Tool, p.Args, nil); !ok {
-		return nil, errProposalUnrenderable
+		return fail("unrenderable", errProposalUnrenderable)
 	}
 
 	claimed, err := r.proposals.Claim(ctx, userID, hash)
 	if err != nil {
-		return nil, err
+		return fail("claim", err)
 	}
 	if claimed.ID != p.ID {
 		// A different proposal answered the same token hash. Cannot happen with a
 		// UNIQUE token_hash; refused loudly rather than executed.
-		return nil, errors.New("token cadangan tidak sepadan dengan rekod")
+		return fail("token_mismatch", errors.New("proposal token does not match the record"))
 	}
 
 	// The STORED arguments, re-serialised as the tool's own JSON input. This —
 	// never the request — is what runs.
 	argsJSON, err := dbstore.CanonicalArgs(claimed.Args)
 	if err != nil {
-		return nil, fmt.Errorf("argumen cadangan tidak boleh dibaca: %w", err)
+		return fail("args_read", fmt.Errorf("proposal arguments cannot be read: %w", err))
 	}
 
 	caller, err := r.newSession(writeCtx)
 	if err != nil {
-		return nil, err
+		return fail("session", err)
 	}
 	defer caller.close()
 	out, refused, err := caller.call(writeCtx, claimed.Tool, string(argsJSON))
 	if err != nil {
-		return nil, err
+		return fail("dispatch", err)
 	}
 	if refused {
-		// The server's own gates refused it (workspace role, ownership, or a
-		// validation the card could not have predicted). The token is spent — see
-		// the file header on why a failed execution does not release it.
+		// The server's own gates refused it (workspace role, workspace state,
+		// ownership, or a validation the card could not have predicted). The token
+		// is spent — see the file header on why a failed execution does not
+		// release it.
 		//
-		// THE ROLE REFUSAL IS THE ONE THIS LANE CAN NAME (card t_1900adef). It is
-		// the only post-claim refusal measured on this route, the one whose remedy
-		// the user cannot guess (another role, not another click), and the one the
-		// REST edge already has a code and a sentence for. It is matched against
-		// the gate's OWN declared wording so a re-wording in mcpsrv cannot leave
-		// the classification matching a sentence nobody writes any more. Anything
-		// else keeps the generic wrap: a cause this lane cannot classify must not
-		// be guessed at, or the page would name a reason the server never gave.
+		// ONLY THE REFUSALS THIS LANE CAN NAME ARE CLASSIFIED, and each is matched
+		// against the gate's OWN declared wording so a re-wording in mcpsrv cannot
+		// leave the classification matching a sentence nobody writes any more:
+		//
+		//   - the workspace ROLE refusal (card t_1900adef): the remedy the user
+		//     cannot guess (another role, not another click);
+		//   - the NO-WORKSPACE refusal (card t_bf4feea2): measured on staging — a
+		//     magic-link account with no workspace confirmed a form-creation card,
+		//     the token was spent, and the wire answered a bare 400 because this arm
+		//     could only produce "server refused: %s".
+		//
+		// Anything else keeps the generic wrap: a cause this lane cannot classify
+		// must not be guessed at, or the page would name a reason the server never
+		// gave.
 		detail := strings.TrimSpace(bound(out, 300))
-		if strings.Contains(detail, mcpsrv.RoleManageRequiredLeadIn) {
-			return nil, fmt.Errorf("%w: %s", ErrProposalRoleRefused, detail)
+		switch {
+		case strings.Contains(detail, mcpsrv.RoleManageRequiredLeadIn):
+			return fail("refused", fmt.Errorf("%w: %s", ErrProposalRoleRefused, detail))
+		case strings.Contains(detail, mcpsrv.WorkspaceRequiredMessage):
+			return fail("refused", fmt.Errorf("%w: %s", ErrProposalWorkspaceRequired, detail))
 		}
-		return nil, fmt.Errorf("server menolak: %s", detail)
+		return fail("refused", fmt.Errorf("server refused: %s", detail))
 	}
 	return &Confirmed{Tool: claimed.Tool, Result: bound(out, MaxToolResultChars), ProposalID: claimed.ID}, nil
 }

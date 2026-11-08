@@ -52,7 +52,7 @@ func assertTemplateMiss(t *testing.T, h *RESTHandlers, key, method, path, body, 
 		t.Errorf("%s %s (%s) = %d, want 404 (body=%s)", method, path, what, code, raw)
 		return
 	}
-	if got := tplLookupBody(t, raw)["error"]; got != "tidak dijumpai" {
+	if got := tplLookupBody(t, raw)["error"]; got != "not found" {
 		t.Errorf("%s %s (%s) error = %v, want \"tidak dijumpai\" (body=%s)", method, path, what, got, raw)
 	}
 }
@@ -65,6 +65,13 @@ func TestTemplateRoutesAnswer404ForUnseenTemplateIDs(t *testing.T) {
 	pool := bundleTestPool(t)
 	accA, _ := bundleFixture(t, ctx, pool)
 	accB, _ := bundleFixture(t, ctx, pool)
+	// Card t_d07c8fbb: the /use route MINTS a form, so a workspace-less account
+	// is refused 409 before the template is even resolved. This test is about
+	// the LOOKUP status on that route, so both accounts must be able to complete
+	// a clone — otherwise every "want 404" case below would be answered by the
+	// workspace gate instead, and the test would pass without checking a lookup.
+	bundleLinkWorkspace(t, ctx, pool, accA)
+	bundleLinkWorkspace(t, ctx, pool, accB)
 	keyA := bundleAPIKey(t, ctx, pool, accA)
 	h := newBundleHandlers(pool)
 	forms := dbstore.NewFormStore(pool)

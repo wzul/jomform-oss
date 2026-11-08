@@ -125,3 +125,104 @@ export function settledLine(what: string, s: Settled): string {
     `navLinks=${s.navLinks} hasMain=${s.hasMain} bodyText=${s.bodyText}`
   );
 }
+
+/**
+ * The ceiling for the ANIMATION settle below. A CEILING, not a target: the app's
+ * longest entrance is 280ms (`--jf-dur-slow`, the skeleton's single pulse) and the
+ * route entrance is 180ms (`--jf-dur-base`), so a healthy page returns on the first
+ * poll and only a genuinely stuck or very long animation pays this.
+ */
+export const ANIMATION_SETTLE_TIMEOUT_MS = 3_000;
+
+export type AnimationsSettled = {
+  /** Finite animations still running when the wait started. */
+  running: number;
+  /** Of those, how many the ceiling had to force to their end state. */
+  forced: number;
+  /** Animations with no finite end (an infinite pulse); never waited on. */
+  infinite: number;
+  /** How long the wait ran before it returned. */
+  waitedMs: number;
+};
+
+/**
+ * The body of the animation settle, as ONE source of truth: the scan string in
+ * `a11y-singlechar-text.spec.ts` runs this INSIDE its own evaluate, and
+ * `settleAnimations()` below runs the same text through its own. Two copies would
+ * drift, and a drift here is a measurement bug rather than a style one.
+ *
+ * It waits (bounded) for every animation WITH A FINITE END to finish, then forces
+ * whatever is left to its end state, and never waits on or forces an infinite one.
+ */
+export function animationSettleScript(timeoutMs: number): string {
+  return `(async () => {
+    const deadline = Date.now() + ${timeoutMs};
+    const started = Date.now();
+    const finite = (a) => {
+      try {
+        const t = a.effect && a.effect.getComputedTiming();
+        return !!t && Number.isFinite(t.endTime);
+      } catch (e) {
+        return false;
+      }
+    };
+    const all = () => document.getAnimations();
+    const running = () => all().filter((a) => finite(a) && a.playState !== "finished");
+    const runningAtStart = running().length;
+    while (Date.now() < deadline && running().length > 0) {
+      await new Promise((r) => setTimeout(r, 16));
+    }
+    const left = running();
+    for (const a of left) {
+      try {
+        a.finish();
+      } catch (e) {
+        /* an animation with no finite end cannot be finished — already filtered */
+      }
+    }
+    return {
+      running: runningAtStart,
+      forced: left.length,
+      infinite: all().filter((a) => !finite(a)).length,
+      waitedMs: Date.now() - started,
+    };
+  })()`;
+}
+
+/**
+ * Set the page's RUNNING animations to their settled state before a visual
+ * measurement, and report what it did (card t_a4adf2f1).
+ *
+ * WHY THIS EXISTS. `.jf-enter` paints the dashboard's route container with
+ * `animation: jf-rise-in 180ms … both`, i.e. an `opacity` fade from 0. A contrast
+ * scan that multiplies the ancestor `opacity` chain into the ink — which is exactly
+ * what `a11y-singlechar-text.spec.ts` must do, because a STATIC `opacity-70` was
+ * the defect that file exists for — then measures a FRAME of that fade if it
+ * happens to sample while the animation is still finishing. Measured on the built
+ * app, frame by frame: the `/sales` help glyph is 4.544:1 settled and every frame of
+ * the entrance but the last ~30ms is under the 4.5 floor (t=90ms reads 4.415:1 at
+ * `op=0.982518` — the shape of the reported `op=0.989814 / 4.42`). A gate whose
+ * verdict depends on where in that fade the harness lands is non-deterministic by
+ * construction, which is exactly what the card reports.
+ *
+ * THE RULE. WCAG 1.4.3 is about the text as presented at rest; a transient entrance
+ * frame is not a paint. Note the direction of the error: compositing ink toward its
+ * own surface can only move a ratio TOWARD 1, so a mid-animation sample can only
+ * UNDERSTATE contrast. Folding one in can therefore produce a false red but never a
+ * false green — which is why the caller treats "still animating" as a diagnosis and
+ * not as a contrast verdict.
+ */
+export async function settleAnimations(
+  page: Page,
+  opts: { timeoutMs?: number } = {},
+): Promise<AnimationsSettled> {
+  return (await page.evaluate(animationSettleScript(opts.timeoutMs ?? ANIMATION_SETTLE_TIMEOUT_MS))) as AnimationsSettled;
+}
+
+/** One line for the run log, so a red can say whether the settle had work to do. */
+export function animationsLine(what: string, s: AnimationsSettled): string {
+  return (
+    `[animations] ${what} running=${s.running} forcedAtCeiling=${s.forced} ` +
+    `infinite=${s.infinite} waited=${s.waitedMs}ms`
+  );
+}

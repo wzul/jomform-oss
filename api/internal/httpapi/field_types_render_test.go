@@ -23,8 +23,14 @@ func TestBlockFormRendersNewFieldTypes(t *testing.T) {
 		PriceSen             int64
 		Required             bool
 		HasPrice             bool
-		CondJSON             string
-		Image                string
+		// Card t_06851d88: pay-what-you-want product blocks.
+		CustomAmount     bool
+		AmountMinSen     int64
+		AmountMaxSen     int64
+		AmountSuggestSen int64
+		AmountHint       string
+		CondJSON         string
+		Image            string
 		// Issue #471: product image size + layout + full-size fallback URL.
 		ImgSize      string
 		ImgTop       bool

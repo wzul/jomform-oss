@@ -7,7 +7,7 @@ package httpapi
 // mismatch at WRITE time, so a form could be saved with
 // fields:[{field_id:"nama", required:true}] and no name="nama" control — and it
 // was then permanently unsubmittable: every submit from the page answers
-// 400 `medan wajib tidak diisi: Nama`, and the buyer can do nothing about it.
+// 400 `Nama is required`, and the buyer can do nothing about it.
 //
 // These tests pin the two REST write paths (POST creates, PATCH rewrites the
 // config) to the same refusal the shared customform rule gives, and reproduce
@@ -97,10 +97,10 @@ func TestCreateFormRefusesUnsubmittableCustomForm(t *testing.T) {
 		customFormConfigBody(t, "Trap", slug, `<div><label>Emel</label><input type="email" name="emel"></div>`, requiredNama()))
 	if code != http.StatusBadRequest {
 		t.Fatalf("POST /v1/rest/forms with an unsatisfiable custom form = %d, want 400 (body %s).\n"+
-			"Storing it is the carded defect: the form answers 400 `medan wajib tidak diisi: Nama` "+
+			"Storing it is the carded defect: the form answers 400 `Nama is required` "+
 			"on every submit and no buyer can ever satisfy it.", code, raw)
 	}
-	if body := string(raw); !strings.Contains(body, "medan wajib tiada dalam HTML") ||
+	if body := string(raw); !strings.Contains(body, "required field missing from the HTML") ||
 		!strings.Contains(body, `name=\"nama\"`) {
 		t.Errorf("400 body = %s, want it to name the missing control (name=\"nama\")", body)
 	}
@@ -231,7 +231,7 @@ func TestTemplateWritesRefuseUnsubmittableCustomForm(t *testing.T) {
 		t.Fatalf("POST /v1/rest/templates with an unsatisfiable custom form = %d, want 400 (body %s)",
 			code, raw)
 	}
-	if body := string(raw); !strings.Contains(body, "medan wajib tiada dalam HTML") {
+	if body := string(raw); !strings.Contains(body, "required field missing from the HTML") {
 		t.Errorf("400 body = %s, want the customform refusal", body)
 	}
 	// Nothing was stored by the refused create.
@@ -354,9 +354,9 @@ func TestStoredUnsubmittableCustomFormIsATrap(t *testing.T) {
 			"A 201 would mean the trap is not real; the 400 is the reported symptom that the "+
 			"write-time refusal prevents.", rec.Code, rec.Body.String())
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "medan wajib tidak diisi") ||
+	if body := rec.Body.String(); !strings.Contains(body, "Name is required") ||
 		!strings.Contains(body, "Name") {
-		t.Errorf("400 body = %s, want `medan wajib tidak diisi: Name` — the server enforces the "+
+		t.Errorf("400 body = %s, want `Name is required` — the server enforces the "+
 			"registered required field the page cannot supply", body)
 	}
 	if got := customFormSubmissions(t, formSlug); got != before {

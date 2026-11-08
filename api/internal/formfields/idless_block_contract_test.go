@@ -72,13 +72,13 @@ func TestContractCarriesAnIdlessRequiredBlock(t *testing.T) {
 	}
 
 	err := Validate(cfg, nil)
-	if err == nil || !strings.Contains(err.Error(), "medan wajib tidak diisi: Nama Penuh") {
+	if err == nil || !strings.Contains(err.Error(), "Nama Penuh is required") {
 		t.Fatalf("Validate(no fields) = %v, want a refusal naming the id-less block's label", err)
 	}
 	// Partial: exactly the reported bypass shape — the first required block
 	// answered, the second left empty.
 	err = Validate(cfg, map[string]string{"_block_1": "Ali"})
-	if err == nil || !strings.Contains(err.Error(), "medan wajib tidak diisi: Emel") {
+	if err == nil || !strings.Contains(err.Error(), "Emel is required") {
 		t.Fatalf("Validate(one answer) = %v, want a refusal for the second id-less required block", err)
 	}
 	// Fully answered under the same keys: accepted, so the fix does not turn a
@@ -100,7 +100,7 @@ func TestContractCarriesAnIdlessOptionalBlock(t *testing.T) {
 		t.Fatalf("Contract = %+v, want one optional _block_0 field", contract)
 	}
 	if err := Validate(cfg, map[string]string{"_block_0": "not-an-email"}); err == nil ||
-		!strings.Contains(err.Error(), "emel tidak sah") {
+		!strings.Contains(err.Error(), "Invalid email") {
 		t.Fatalf("Validate(invalid email) = %v, want the type refusal", err)
 	}
 }

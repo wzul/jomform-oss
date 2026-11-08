@@ -20,7 +20,7 @@ func (s *Server) runDueCharges(
 		return nil, emptyOut{}, err
 	}
 	if s.pay == nil {
-		return nil, emptyOut{}, errors.New("payments tidak aktif")
+		return nil, emptyOut{}, errors.New("payments not active")
 	}
 	if err := s.pay.RunDueCharges(ctx); err != nil && err.Error() != "no due subscriptions" {
 		return nil, emptyOut{}, err
@@ -33,7 +33,7 @@ func (s *Server) runDueCharges(
 // checkout_url the merchant should send to the customer. The old token is
 // retained in CHIP (Wan rule) but no longer used once the new card is paid.
 type updateSubCardIn struct {
-	Email string `json:"email" jsonschema:"emel pelanggan yang ada langganan"`
+	Email string `json:"email" jsonschema:"email of the customer who has a subscription"`
 }
 
 func (s *Server) updateSubscriptionCard(
@@ -44,17 +44,17 @@ func (s *Server) updateSubscriptionCard(
 		return nil, nil, err
 	}
 	if in.Email == "" {
-		return nil, nil, errors.New("email wajib")
+		return nil, nil, errors.New("email is required")
 	}
 	if s.pay == nil {
-		return nil, nil, errors.New("payments tidak aktif")
+		return nil, nil, errors.New("payments not active")
 	}
 	sub, err := s.deps.Subs.ByEmail(ctx, accountID, in.Email)
 	if err != nil {
-		return nil, nil, errors.New("langganan tidak dijumpai")
+		return nil, nil, errors.New("subscription not found")
 	}
 	if sub.Status == dbstore.SubCanceled {
-		return nil, nil, errors.New("langganan telah dibatalkan")
+		return nil, nil, errors.New("subscription has been cancelled")
 	}
 	p, err := s.pay.CreateUpdateCardPurchase(ctx, sub)
 	if err != nil {
@@ -71,8 +71,8 @@ func (s *Server) updateSubscriptionCard(
 // retrySubscriptionIn identifies the subscription to revive by email (the same
 // addressing update_subscription_card uses) or by id.
 type retrySubscriptionIn struct {
-	SubscriptionID string `json:"subscription_id,omitempty" jsonschema:"ID langganan (pilihan; guna email kalau kosong)"`
-	Email          string `json:"email,omitempty" jsonschema:"Emel pelanggan yang ada langganan (pilihan)"`
+	SubscriptionID string `json:"subscription_id,omitempty" jsonschema:"Subscription ID (optional; use email if empty)"`
+	Email          string `json:"email,omitempty" jsonschema:"Email of the customer who has a subscription (optional)"`
 }
 
 // retrySubscription revives a past_due subscription so the recurring engine
@@ -86,7 +86,7 @@ func (s *Server) retrySubscription(
 		return nil, nil, err
 	}
 	if in.SubscriptionID == "" && in.Email == "" {
-		return nil, nil, errors.New("subscription_id atau email wajib")
+		return nil, nil, errors.New("subscription_id or email is required")
 	}
 	var sub *dbstore.Subscription
 	if in.SubscriptionID != "" {
@@ -95,12 +95,12 @@ func (s *Server) retrySubscription(
 		sub, err = s.deps.Subs.ByEmail(ctx, accountID, in.Email)
 	}
 	if err != nil || sub == nil {
-		return nil, nil, errors.New("langganan tidak dijumpai")
+		return nil, nil, errors.New("subscription not found")
 	}
 	was := sub.Status
 	if err := s.deps.Subs.Reactivate(ctx, accountID, sub.ID); err != nil {
 		if err == dbstore.ErrNotPastDue {
-			return nil, nil, errors.New("hanya langganan past_due boleh dicuba semula (status: " + was + ")")
+			return nil, nil, errors.New("only past_due subscriptions can be retried (status: " + was + ")")
 		}
 		return nil, nil, err
 	}

@@ -44,6 +44,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/emailqueue"
+	"github.com/wzul/jomform/api/internal/emailtext"
 	"github.com/wzul/jomform/api/internal/payments"
 	"github.com/wzul/jomform/api/internal/testdb"
 )
@@ -379,25 +380,39 @@ func TestEnsureDefaultIsModeAwareAtTheStoreLevel(t *testing.T) {
 // above asserts against the one definition in dbstore, so the fixture, the
 // migration and EnsureDefault cannot drift into three copies of the same rule.
 func TestResponseFormDefaultRuleMatchesWhatTheStoreCreates(t *testing.T) {
-	name, event, subject, body := dbstore.DefaultNotification(dbstore.FormModeResponse)
+	name, event, storedSubject, storedBody := dbstore.DefaultNotification(dbstore.FormModeResponse)
 	if event != dbstore.NotifyEventResponseSubmitted {
 		t.Fatalf("response-mode default event = %q, want %q", event, dbstore.NotifyEventResponseSubmitted)
 	}
 	if name != "Admin Notification" {
 		t.Errorf("response-mode default name = %q", name)
 	}
+	// The rule stores no text (card t_1768cb11): the event picks the dictionary
+	// kind, and that kind is rendered in the form's language at send time.
+	if storedSubject != "" || storedBody != "" {
+		t.Errorf("the response default rule stores a template: subject=%q body=%q",
+			storedSubject, storedBody)
+	}
+	response := emailtext.Text(emailtext.En, emailtext.NotificationResponse, nil)
 	for _, bad := range []string{"{{ref_code}}", "{{amount}}", "{{items}}", "{{buyer_name}}"} {
-		if strings.Contains(subject, bad) || strings.Contains(body, bad) {
+		if strings.Contains(response.Subject, bad) || strings.Contains(response.Body, bad) {
 			t.Errorf("the response default template uses %s, which has no value on a response:\n"+
-				"subject=%q\nbody=%q", bad, subject, body)
+				"subject=%q\nbody=%q", bad, response.Subject, response.Body)
 		}
 	}
-	// The payment default must be untouched by this change.
-	_, payEvent, paySubject, payBody := dbstore.DefaultNotification(dbstore.FormModePayment)
+	// The payment default must be untouched by this change: it still renders the
+	// dictionary's sale template, placeholders included.
+	_, payEvent, payStoredSubject, payStoredBody := dbstore.DefaultNotification(dbstore.FormModePayment)
 	if payEvent != dbstore.NotifyEventSalePaid {
 		t.Errorf("payment-mode default event = %q, want %q", payEvent, dbstore.NotifyEventSalePaid)
 	}
-	if !strings.Contains(paySubject, "{{ref_code}}") || !strings.Contains(payBody, "RM {{amount}}") {
-		t.Errorf("the payment default lost its sale placeholders:\nsubject=%q\nbody=%q", paySubject, payBody)
+	if payStoredSubject != "" || payStoredBody != "" {
+		t.Errorf("the payment default rule stores a template: subject=%q body=%q",
+			payStoredSubject, payStoredBody)
+	}
+	sale := emailtext.Text(emailtext.En, emailtext.NotificationSale, nil)
+	if !strings.Contains(sale.Subject, "{{ref_code}}") || !strings.Contains(sale.Body, "RM {{amount}}") {
+		t.Errorf("the payment default lost its sale placeholders:\nsubject=%q\nbody=%q",
+			sale.Subject, sale.Body)
 	}
 }

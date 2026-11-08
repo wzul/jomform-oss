@@ -22,6 +22,11 @@ Parity checklist (dashboard → MCP):
   `update_product`, `archive_product`
   (`archive_product` is "not on sale", NOT the bin — it stays in the list as
   Archived).
+  Card t_06851d88: create_product and update_product also accept the
+  pay-what-you-want limits of a custom_amount product — min_price_sen,
+  max_price_sen and suggested_price_sen, all integer sen — and validate them
+  with the same rule the dashboard uses, so an agent can create a donation
+  product the checkout will actually price.
 - Product trash (soft delete → restore or permanent purge) → `delete_product`,
   `list_deleted_products`, `restore_product`, `purge_product`.
   `delete_product` moves a product to the bin (a DIFFERENT state from
@@ -78,6 +83,17 @@ Parity checklist (dashboard → MCP):
   `POST /v1/rest/shipping/couriers/{provider}/disconnect`; the PUBLIC OAuth return
   is `GET /v1/shipping/easyparcel/callback` (registered with EasyParcel as
   `https://<host>/api/shipping/easyparcel/callback`, the web app's proxy path).
+- Buyer-borne processing fee (Settings → Payment fees: one MDR rate per CHIP
+  payment method — fixed sen and/or basis points, 100 = 1%) → `get_payment_fees`,
+  `set_payment_fees`. `set_payment_fees` REPLACES the whole set: a method the
+  payload omits is deleted. Enabling a method REQUIRES `acknowledged=true` — the
+  merchant's acceptance of the pass-on disclosure sentence — and the tool records
+  who accepted it and when; without that acknowledgement the checkout charges no
+  fee at all, whatever the stored rates say. The buyer picks the method on the
+  JomForm page, the server grosses the fee up so the merchant is at most one sen
+  short, and the CHIP purchase is restricted to that one method.
+  REST: `GET /v1/rest/settings/payment-fees`, `PUT /v1/rest/settings/payment-fees`;
+  the per-form switch-off is `GET`/`PUT /v1/rest/forms/{id}/fee-override`.
 - Currency & exchange rates (Settings → Currency: the workspace's settlement
   currency plus the daily-cached BNM rate table) → `get_currency_rates`,
   `convert_currency`, `set_workspace_currency`.
@@ -93,6 +109,12 @@ Parity checklist (dashboard → MCP):
   `run_due_charges`, `update_subscription_card`, `retry_subscription`
   (revive a past_due subscription so the engine retries it — round 13c)
 - Analytics → `get_form_analytics`, `get_product_analytics`
+  Money is reported in integer minor units, in the currency each sale was
+  recorded in — never a float under an `_rm` name — and each tool splits the
+  figures per ISO currency (revenue_sen with revenue_by_currency, and the
+  matching refunded / paid pairs), because the rollup spans every workspace and
+  one form's history can hold more than one currency. Same contract as the
+  dashboard bundle and the CSV export (#185).
 - CHIP per-form override → `set_form_chip_override`, `clear_form_chip_override`
 - e-Invoice settings → `set_einvoice_settings`, `get_einvoice_settings`
 - Webhooks → `create_webhook`, `list_webhooks`, `update_webhook`,

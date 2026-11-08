@@ -86,7 +86,7 @@ func (s *Server) adminMediaUsage(ctx context.Context, _ *mcp.CallToolRequest, _ 
 		return nil, nil, err
 	}
 	if s.deps.Media == nil {
-		return nil, nil, errors.New("media tidak tersedia")
+		return nil, nil, errors.New("media not available")
 	}
 	rows, err := s.deps.Media.UsageByWorkspace(ctx)
 	if err != nil {
@@ -105,12 +105,12 @@ func (s *Server) adminMediaUsage(ctx context.Context, _ *mcp.CallToolRequest, _ 
 // ── admin_list_sales ────────────────────────────────────────────────────────
 
 type adminListSalesIn struct {
-	DateFrom    string `json:"date_from,omitempty" jsonschema:"Optional — tarikh mula (YYYY-MM-DD, inklusif)"`
-	DateTo      string `json:"date_to,omitempty" jsonschema:"Optional — tarikh tamat (YYYY-MM-DD, inklusif)"`
-	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"Optional — hadkan kepada satu workspace (id dari admin_list_workspaces)"`
+	DateFrom    string `json:"date_from,omitempty" jsonschema:"Optional — start date (YYYY-MM-DD, inclusive)"`
+	DateTo      string `json:"date_to,omitempty" jsonschema:"Optional — end date (YYYY-MM-DD, inclusive)"`
+	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"Optional — limit to a single workspace (id from admin_list_workspaces)"`
 	Status      string `json:"status,omitempty" jsonschema:"Optional — pending|paid|confirmed|failed|cancelled"`
-	Page        int    `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
-	Limit       int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
+	Page        int    `json:"page,omitempty" jsonschema:"Optional — page (starting at 1)"`
+	Limit       int    `json:"limit,omitempty" jsonschema:"Optional — per-page limit (1-100, default 20)"`
 }
 
 type adminSaleOut struct {
@@ -134,7 +134,7 @@ func (s *Server) adminListSales(ctx context.Context, _ *mcp.CallToolRequest, in 
 		return nil, nil, err
 	}
 	if s.deps.Sales == nil {
-		return nil, nil, errors.New("sales tidak tersedia")
+		return nil, nil, errors.New("sales not available")
 	}
 	page, limit := in.Page, in.Limit
 	if page < 1 {
@@ -158,11 +158,11 @@ func (s *Server) adminListSales(ctx context.Context, _ *mcp.CallToolRequest, in 
 	var err error
 	if in.WorkspaceID != "" {
 		if s.deps.Accounts == nil {
-			return nil, nil, errors.New("accounts tidak tersedia")
+			return nil, nil, errors.New("accounts not available")
 		}
 		a, aerr := s.deps.Accounts.ByWorkspaceID(ctx, in.WorkspaceID)
 		if aerr != nil || a == nil {
-			return nil, nil, errors.New("workspace tidak dijumpai")
+			return nil, nil, errors.New("workspace not found")
 		}
 		rows, total, err = s.deps.Sales.ListFilteredPage(ctx, []string{a.ID}, f, page, limit)
 	} else {
@@ -187,8 +187,8 @@ func (s *Server) adminListSales(ctx context.Context, _ *mcp.CallToolRequest, in 
 // ── admin_spam_queue ────────────────────────────────────────────────────────
 
 type adminSpamQueueIn struct {
-	Page  int `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
-	Limit int `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
+	Page  int `json:"page,omitempty" jsonschema:"Optional — page (starting at 1)"`
+	Limit int `json:"limit,omitempty" jsonschema:"Optional — per-page limit (1-100, default 20)"`
 }
 
 type adminSpamItem struct {
@@ -275,11 +275,11 @@ func (s *Server) adminSpamQueue(ctx context.Context, _ *mcp.CallToolRequest, in 
 // ── admin_email_deliveries ──────────────────────────────────────────────────
 
 type adminEmailDeliveriesIn struct {
-	SaleRef   string `json:"sale_ref,omitempty" jsonschema:"Optional — hadkan kepada satu jualan (ref_code)"`
+	SaleRef   string `json:"sale_ref,omitempty" jsonschema:"Optional — limit to a single sale (ref_code)"`
 	EventType string `json:"event_type,omitempty" jsonschema:"Optional — delivered | bounce | complaint | open | click"`
-	FormID    string `json:"form_id,omitempty" jsonschema:"Optional — hadkan kepada jualan satu borang"`
-	Page      int    `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
-	Limit     int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
+	FormID    string `json:"form_id,omitempty" jsonschema:"Optional — limit to sales of one form"`
+	Page      int    `json:"page,omitempty" jsonschema:"Optional — page (starting at 1)"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"Optional — per-page limit (1-100, default 20)"`
 }
 
 // adminEmailDeliveries lists email delivery status across all workspaces.
@@ -289,7 +289,7 @@ func (s *Server) adminEmailDeliveries(ctx context.Context, _ *mcp.CallToolReques
 		return nil, nil, err
 	}
 	if s.deps.EmailDeliveryEvents == nil {
-		return nil, nil, errors.New("store penghantaran emel tidak dikonfigurasi")
+		return nil, nil, errors.New("email delivery store not configured")
 	}
 	f := dbstore.DeliveryFilter{
 		SaleRef:   in.SaleRef,
@@ -340,7 +340,7 @@ func (s *Server) adminSystemHealth(ctx context.Context, _ *mcp.CallToolRequest, 
 			out.QueueDepth = n
 		}
 	} else {
-		out.QueueNote = "queue tidak dikonfigurasi (dev)"
+		out.QueueNote = "queue not configured (dev)"
 	}
 	return nil, out, nil
 }
@@ -348,7 +348,7 @@ func (s *Server) adminSystemHealth(ctx context.Context, _ *mcp.CallToolRequest, 
 // ── admin_dead_letter_events / admin_requeue_dead_letter_event (issue #574) ──
 
 type adminDeadLetterEventsIn struct {
-	Limit int `json:"limit,omitempty" jsonschema:"Optional — had (1-500, lalai 100)"`
+	Limit int `json:"limit,omitempty" jsonschema:"Optional — limit (1-500, default 100)"`
 }
 
 type adminDeadLetterEventOut struct {
@@ -373,7 +373,7 @@ func (s *Server) adminDeadLetterEvents(ctx context.Context, _ *mcp.CallToolReque
 		return nil, nil, err
 	}
 	if s.deps.WebhookEvents == nil {
-		return nil, nil, errors.New("store peristiwa webhook tidak dikonfigurasi")
+		return nil, nil, errors.New("webhook event store not configured")
 	}
 	events, err := s.deps.WebhookEvents.ListDead(ctx, in.Limit)
 	if err != nil {
@@ -396,7 +396,7 @@ func (s *Server) adminDeadLetterEvents(ctx context.Context, _ *mcp.CallToolReque
 }
 
 type adminRequeueDeadLetterEventIn struct {
-	DedupKey string `json:"dedup_key" jsonschema:"Wajib — dedup_key peristiwa dari admin_dead_letter_events"`
+	DedupKey string `json:"dedup_key" jsonschema:"Required — event dedup_key from admin_dead_letter_events"`
 }
 
 // adminRequeueDeadLetterEvent revives a parked event so the replay retries it.
@@ -414,21 +414,21 @@ func (s *Server) adminRequeueDeadLetterEvent(ctx context.Context, _ *mcp.CallToo
 		return nil, nil, err
 	}
 	if s.deps.WebhookEvents == nil {
-		return nil, nil, errors.New("store peristiwa webhook tidak dikonfigurasi")
+		return nil, nil, errors.New("webhook event store not configured")
 	}
 	if strings.TrimSpace(in.DedupKey) == "" {
-		return nil, nil, errors.New("dedup_key wajib diisi")
+		return nil, nil, errors.New("dedup_key is required")
 	}
 	ok, err := s.deps.WebhookEvents.RequeueDead(ctx, in.DedupKey)
 	if err != nil {
 		return nil, nil, err
 	}
 	if !ok {
-		return nil, nil, errors.New("peristiwa tidak dijumpai atau bukan dalam keadaan dead")
+		return nil, nil, errors.New("event not found or not in a dead state")
 	}
 	return nil, map[string]any{
 		"requeued":  true,
 		"dedup_key": in.DedupKey,
-		"note":      "peristiwa akan dicuba semula oleh sweep replay",
+		"note":      "the event will be retried by the replay sweep",
 	}, nil
 }

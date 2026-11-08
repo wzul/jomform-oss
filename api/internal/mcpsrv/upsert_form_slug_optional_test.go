@@ -117,7 +117,7 @@ func TestUpsertFormSchemaDoesNotRequireSlug(t *testing.T) {
 	// promised, so it and the schema must not disagree; and the slug property's
 	// own description must read as optional too (that is the text a client shows
 	// beside the field).
-	if !strings.Contains(tool.Description, "slug (pilihan)") {
+	if !strings.Contains(tool.Description, "slug (optional)") {
 		t.Errorf("upsert_form Description no longer says `slug (pilihan)`: %q — if slug has really "+
 			"become mandatory the schema must say so too (and this test becomes the wrong place to "+
 			"assert it), but a silent change of one side is the drift this test exists to catch",
@@ -125,7 +125,7 @@ func TestUpsertFormSchemaDoesNotRequireSlug(t *testing.T) {
 	}
 	slugProp, _ := props["slug"].(map[string]any)
 	slugDesc, _ := slugProp["description"].(string)
-	if !strings.Contains(slugDesc, "pilihan") {
+	if !strings.Contains(slugDesc, "optional") {
 		t.Errorf("the inputSchema's own `slug` description does not read as optional: %q", slugDesc)
 	}
 }

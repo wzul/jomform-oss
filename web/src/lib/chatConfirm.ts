@@ -11,7 +11,7 @@
 // api/internal/httpapi/rest_chat.go's chatConfirmStatusFor maps everything it
 // does not recognise to 400, and one reachable class happens AFTER the token is
 // claimed — a tool the server refuses to execute (chat/proposal.go's
-// "server menolak: %s"). A read_only workspace member confirming a prepared
+// "server refused: %s"). A read_only workspace member confirming a prepared
 // change hit exactly that: the request carried ?workspace=<their workspace>, and
 // the page told them "Choose a workspace first — the assistant answers for one
 // workspace at a time." The advice was unusable (they already had one selected)
@@ -105,6 +105,26 @@ export const PROPOSAL_ARGS_INVALID_CODE = "chat.proposalArgsInvalid";
  */
 export const ROLE_MANAGE_REQUIRED_CODE = "role.manageRequired";
 
+/**
+ * Mirrors `CodeWorkspaceRequired` in api/internal/httpapi/errcode.go (t_bf4feea2).
+ *
+ * The CONFIRM-side refusal for a card whose write the WORKSPACE gate declined
+ * because the ACCOUNT has no workspace at all — `accounts.workspace_id` NULL, the
+ * shape a magic-link signup leaves behind. It is not new: the form-CREATE door has
+ * answered this state with 409 + this code for a long time. What was new is that
+ * the chat lane could not produce it: the refusal arrives AFTER the token is
+ * claimed, the lane could only wrap it as `server refused: …`, and the REST edge
+ * mapped that to its `default:` arm — a 400 carrying `request.badRequest`, which
+ * the page does not translate, so it printed "The change could not be applied.
+ * Please try again." for a card that was already spent and for a cause it could
+ * not name.
+ *
+ * Read by src/lib/chatConfirm.test.ts out of the Go source, so a rename on the
+ * server fails the web suite rather than silently sending this refusal back to the
+ * generic path.
+ */
+export const WORKSPACE_REQUIRED_CODE = "workspace.required";
+
 /** The card outcome for one decision response. */
 export type ConfirmDecision =
   // A missing/unusable workspace scope. The card says what it NEEDS.
@@ -120,7 +140,17 @@ export type ConfirmDecision =
   // The token is SPENT — the refusal happens after the claim — so the card cannot
   // be reused and the copy must not offer a retry (t_1900adef).
   | "roleDenied"
-  // The change itself did not go through.
+  // The confirmed write was refused because the ACCOUNT has no workspace at all
+  // (t_bf4feea2). The token is SPENT, the change did not run, and the remedy is
+  // two steps in that order: create a workspace, then ask for a fresh card.
+  | "workspaceRequired"
+  // The server answered and refused, but this build cannot classify why: a 4xx
+  // that carries a machine code it does not know. The change did not run and the
+  // card's token is spent, so the copy may not offer a retry (t_bf4feea2).
+  | "refused"
+  // The failure could not be attributed to a server decision at all — no readable
+  // body (a proxy error page), a 5xx, or a transport error. The token may still be
+  // live, so this is the one outcome whose copy may suggest another attempt.
   | "failed"
   // Confirmed (or cancelled) — the route answers 200.
   | "done";
@@ -135,11 +165,10 @@ export type ConfirmDecision =
 export function confirmDecisionFor(status: number, body: unknown): ConfirmDecision {
   if (status === 429) return "rateLimited";
   if (status === 400) {
-    // THE branch on the code. A 400 that names a different refusal is a failure of
-    // the change, NOT a workspace-scope problem — and it must never be reported as
-    // one.
+    // THE branch on the code. A 400 that names a different refusal is NOT a
+    // workspace-scope problem — and it must never be reported as one.
     //
-    // TWO codes are named on this status now, and they are opposite conditions:
+    // TWO codes are named on this status, and they are opposite conditions:
     // the scope refusal (nothing was attempted, the token is live) and the ROLE
     // refusal (the write ran and was refused, the token is spent). They share the
     // 400 deliberately — the status is a MISSING PARAMETER and a permission answer
@@ -148,14 +177,28 @@ export function confirmDecisionFor(status: number, body: unknown): ConfirmDecisi
     const code = apiErrorCode(body);
     if (code === WORKSPACE_SCOPE_REQUIRED_CODE) return "scopeRequired";
     if (code === ROLE_MANAGE_REQUIRED_CODE) return "roleDenied";
-    return "failed";
+    // ANY OTHER CODE means the SERVER answered and classified the request: this
+    // route's `default:` arm writes the class code (`request.badRequest`) for a
+    // tool it refused AFTER claiming the token (t_bf4feea2). Nothing was applied,
+    // the card cannot be used again, and the user needs a new one — so this is
+    // "refused", whose copy says exactly that.
+    //
+    // NO CODE AT ALL is a different situation: a proxy error page, an empty body, a
+    // truncated response. Nothing there proves the token was spent, so it stays
+    // "failed" — the one outcome whose copy may suggest another attempt.
+    return code ? "refused" : "failed";
   }
   if (status === 409) {
-    // TWO 409s, and the code separates them. The default is the spent/expired
-    // token (unchanged behaviour); a card the tool would never accept carries its
-    // own code and gets its own outcome, because its token is UNSPENT and its
-    // remedy is a fresh card rather than "it expired" (t_623676d1).
-    return apiErrorCode(body) === PROPOSAL_ARGS_INVALID_CODE ? "unexecutable" : "stale";
+    // MORE THAN ONE 409, and the code separates them. The default is the
+    // spent/expired token (unchanged behaviour); a card the tool would never accept
+    // carries its own code and gets its own outcome, because its token is UNSPENT
+    // and its remedy is a fresh card rather than "it expired" (t_623676d1); and a
+    // card refused because the account has no workspace at all gets one that names
+    // that cause and its two-step remedy (t_bf4feea2).
+    const code = apiErrorCode(body);
+    if (code === PROPOSAL_ARGS_INVALID_CODE) return "unexecutable";
+    if (code === WORKSPACE_REQUIRED_CODE) return "workspaceRequired";
+    return "stale";
   }
   // A 403 carrying the TENANCY refusal (t_da4b2031). The page's 401/403 branch
   // used to send this to /login: the request's `?workspace=` is a slug the

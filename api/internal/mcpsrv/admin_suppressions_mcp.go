@@ -35,7 +35,7 @@ import (
 // was built without a database (bare-mode tests, or SES unconfigured).
 func (s *Server) suppressionsStore() (*dbstore.SuppressionStore, error) {
 	if s.deps == nil || s.deps.Suppressions == nil {
-		return nil, errors.New("senarai suppression tidak dikonfigurasi")
+		return nil, errors.New("suppression list not configured")
 	}
 	return s.deps.Suppressions, nil
 }
@@ -43,9 +43,9 @@ func (s *Server) suppressionsStore() (*dbstore.SuppressionStore, error) {
 // ── admin_list_suppressions ─────────────────────────────────────────────────
 
 type adminListSuppressionsIn struct {
-	Q     string `json:"q,omitempty" jsonschema:"Optional — cari dalam emel atau nota (tak sensitif huruf besar/kecil)"`
-	Page  int    `json:"page,omitempty" jsonschema:"Optional — muka surat (mulai 1)"`
-	Limit int    `json:"limit,omitempty" jsonschema:"Optional — had setiap muka (1-100, lalai 20)"`
+	Q     string `json:"q,omitempty" jsonschema:"Optional — search in email or note (case-insensitive)"`
+	Page  int    `json:"page,omitempty" jsonschema:"Optional — page (starting at 1)"`
+	Limit int    `json:"limit,omitempty" jsonschema:"Optional — per-page limit (1-100, default 20)"`
 }
 
 type adminSuppressionOut struct {
@@ -93,9 +93,9 @@ func (s *Server) adminListSuppressions(ctx context.Context, _ *mcp.CallToolReque
 // ── admin_add_suppression ───────────────────────────────────────────────────
 
 type adminAddSuppressionIn struct {
-	Email  string `json:"email" jsonschema:"Wajib — alamat emel untuk disekat"`
-	Reason string `json:"reason,omitempty" jsonschema:"Optional — hard_bounce | complaint | manual (lalai manual)"`
-	Note   string `json:"note,omitempty" jsonschema:"Optional — nota bebas untuk rujukan operator"`
+	Email  string `json:"email" jsonschema:"Required — email address to block"`
+	Reason string `json:"reason,omitempty" jsonschema:"Optional — hard_bounce | complaint | manual (default manual)"`
+	Note   string `json:"note,omitempty" jsonschema:"Optional — free-form note for operator reference"`
 }
 
 // adminAddSuppression adds an address to the suppression list by hand so no
@@ -118,14 +118,14 @@ func (s *Server) adminAddSuppression(ctx context.Context, _ *mcp.CallToolRequest
 	}
 	addr := strings.ToLower(strings.TrimSpace(in.Email))
 	if !auth.ValidEmail(addr) {
-		return nil, nil, errors.New("emel tidak sah")
+		return nil, nil, errors.New("invalid email")
 	}
 	reason := strings.ToLower(strings.TrimSpace(in.Reason))
 	if reason == "" {
 		reason = dbstore.SuppressionReasonManual
 	}
 	if !dbstore.IsCanonicalReason(reason) {
-		return nil, nil, errors.New("sebab tidak sah (hard_bounce | complaint | manual)")
+		return nil, nil, errors.New("invalid reason (hard_bounce | complaint | manual)")
 	}
 	created, err := store.Add(ctx, addr, reason, dbstore.SuppressionSourceManual,
 		strings.TrimSpace(in.Note), s.userIDFor(ctx))
@@ -140,7 +140,7 @@ func (s *Server) adminAddSuppression(ctx context.Context, _ *mcp.CallToolRequest
 // ── admin_remove_suppression ────────────────────────────────────────────────
 
 type adminRemoveSuppressionIn struct {
-	Email string `json:"email" jsonschema:"Wajib — alamat emel untuk dibuang dari senarai"`
+	Email string `json:"email" jsonschema:"Required — email address to remove from the list"`
 }
 
 // adminRemoveSuppression removes an address from the suppression list so mail
@@ -159,18 +159,18 @@ func (s *Server) adminRemoveSuppression(ctx context.Context, _ *mcp.CallToolRequ
 	}
 	addr := strings.ToLower(strings.TrimSpace(in.Email))
 	if addr == "" {
-		return nil, nil, errors.New("emel wajib diisi")
+		return nil, nil, errors.New("email is required")
 	}
 	removed, err := store.RemoveIfPresent(ctx, addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	if !removed {
-		return nil, nil, errors.New("tiada dalam senarai")
+		return nil, nil, errors.New("not in the list")
 	}
 	return nil, map[string]any{
 		"status": "removed", "email": addr,
-		"note": "emel ke alamat ini akan dihantar semula",
+		"note": "email to this address will be sent again",
 	}, nil
 }
 

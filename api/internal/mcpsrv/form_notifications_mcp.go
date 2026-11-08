@@ -34,7 +34,7 @@ func toNotificationOut(n *dbstore.FormNotification) notificationOut {
 
 // getFormNotificationsIn is the input for get_form_notifications.
 type getFormNotificationsIn struct {
-	FormID string `json:"form_id" jsonschema:"ID borang"`
+	FormID string `json:"form_id" jsonschema:"Form ID"`
 }
 
 // getFormNotifications lists a form's notification rules (issue #193).
@@ -42,14 +42,14 @@ func (s *Server) getFormNotifications(
 	ctx context.Context, _ *mcp.CallToolRequest, in getFormNotificationsIn,
 ) (*mcp.CallToolResult, *listOutput[notificationOut], error) {
 	if s.deps.Forms == nil || s.deps.Notifications == nil {
-		return nil, nil, errors.New("notifications tidak tersedia")
+		return nil, nil, errors.New("notifications not available")
 	}
 	acc, err := s.resolveFormAccount(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if _, err := s.deps.Forms.GetByID(ctx, acc, in.FormID); err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	list, err := s.deps.Notifications.ListByForm(ctx, in.FormID)
 	if err != nil {
@@ -64,20 +64,20 @@ func (s *Server) getFormNotifications(
 
 // notificationIn is one notification rule in set_form_notifications.
 type notificationIn struct {
-	ID        string                         `json:"id,omitempty" jsonschema:"ID sedia ada (kosong = baharu)"`
-	Name      string                         `json:"name" jsonschema:"Nama notifikasi"`
+	ID        string                         `json:"id,omitempty" jsonschema:"Existing ID (empty = new)"`
+	Name      string                         `json:"name" jsonschema:"Notification name"`
 	Event     string                         `json:"event" jsonschema:"sale.paid|sale.failed|response.submitted|subscription.charged"`
-	ToEmail   string                         `json:"to_email" jsonschema:"Emel penerima, {admin_email}, atau {field_id}"`
-	Subject   string                         `json:"subject" jsonschema:"Subjek (placeholder {{ref_code}}, {{amount}}, {{field_id}})"`
-	Body      string                         `json:"body" jsonschema:"Badan (placeholder {{ref_code}}, {{amount}}, {{field_id}})"`
-	Condition *dbstore.NotificationCondition `json:"condition,omitempty" jsonschema:"Logik bersyarat {field_id, op, value} | null"`
-	Enabled   *bool                          `json:"enabled,omitempty" jsonschema:"Aktif (lalai true)"`
+	ToEmail   string                         `json:"to_email" jsonschema:"Recipient email, {admin_email}, or {field_id}"`
+	Subject   string                         `json:"subject" jsonschema:"Subject (placeholder {{ref_code}}, {{amount}}, {{field_id}})"`
+	Body      string                         `json:"body" jsonschema:"Body (placeholder {{ref_code}}, {{amount}}, {{field_id}})"`
+	Condition *dbstore.NotificationCondition `json:"condition,omitempty" jsonschema:"Conditional logic {field_id, op, value} | null"`
+	Enabled   *bool                          `json:"enabled,omitempty" jsonschema:"Enabled (default true)"`
 }
 
 // setFormNotificationsIn replaces a form's notification rules wholesale.
 type setFormNotificationsIn struct {
-	FormID        string           `json:"form_id" jsonschema:"ID borang"`
-	Notifications []notificationIn `json:"notifications" jsonschema:"Senarai penuh peraturan notifikasi (ganti semua)"`
+	FormID        string           `json:"form_id" jsonschema:"Form ID"`
+	Notifications []notificationIn `json:"notifications" jsonschema:"Full list of notification rules (replaces all)"`
 }
 
 // setFormNotifications replaces a form's notification rules (issue #193).
@@ -88,22 +88,22 @@ func (s *Server) setFormNotifications(
 	ctx context.Context, _ *mcp.CallToolRequest, in setFormNotificationsIn,
 ) (*mcp.CallToolResult, map[string]string, error) {
 	if s.deps.Forms == nil || s.deps.Notifications == nil {
-		return nil, nil, errors.New("notifications tidak tersedia")
+		return nil, nil, errors.New("notifications not available")
 	}
 	if in.FormID == "" {
-		return nil, nil, errors.New("form_id wajib")
+		return nil, nil, errors.New("form_id is required")
 	}
 	acc, err := s.requireFormWrite(ctx, in.FormID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if _, err := s.deps.Forms.GetByID(ctx, acc, in.FormID); err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	// Validate events up front.
 	for _, n := range in.Notifications {
 		if !validNotificationEvent(n.Event) {
-			return nil, nil, errors.New("event tidak sah: " + n.Event)
+			return nil, nil, errors.New("invalid event: " + n.Event)
 		}
 	}
 	// Read the current rules to know which to delete.

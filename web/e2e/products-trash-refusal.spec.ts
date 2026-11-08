@@ -76,12 +76,12 @@ const TRASHED = {
 
 // Verbatim wire prose from api/internal/httpapi/rest_handlers.go, deliberately NOT
 // used by the page: Malay is what the dashboard must never print. The restore one
-// is the prose the 404 refusal actually carries ("tidak dijumpai").
+// is the prose the 404 refusal actually carries ("not found").
 const PURGE_PROSE =
-  "produk ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan dengan memadam produk. Ia kekal dalam tong sampah.";
-const RESTORE_PROSE = "tidak dijumpai";
+  "this product has sales — sales history cannot be destroyed by deleting the product. It stays in the bin.";
+const RESTORE_PROSE = "not found";
 const RESTORE_SUB_PROSE =
-  "produk ini masih ada langganan — batalkan langganan itu dahulu. Ia kekal dalam tong sampah.";
+  "this product still has subscriptions — cancel that subscription first. It stays in the bin.";
 
 const EN_HAS_SALES =
   "This product has sales, so it can't be deleted for good — sales history must not be destroyed with the product. It stays in the trash.";
@@ -135,7 +135,7 @@ async function stubAPI(page: Page, trashed: typeof TRASHED = TRASHED): Promise<C
     return r.fulfill(json(200, [trashed]));
   });
   // The RESTORE refusal as the shipped handler really answers it: the row is not
-  // in the bin any more → respondErr → 404 "tidak dijumpai" → class code
+  // in the bin any more → respondErr → 404 "not found" → class code
   // request.notFound, which the dictionary maps nowhere on purpose.
   await page.route(/(.*)\/api\/rest\/products\/[^/?]+\/restore(\?.*)?$/, (r) =>
     r.fulfill(json(404, { error: RESTORE_PROSE, code: "request.notFound" })),
@@ -302,7 +302,7 @@ test("a restore refused with the 404 the handler really answers renders the page
   expect(shown).toContain(EN_RESTORE_FALLBACK);
   // The wire prose is never rendered, whatever it says (issue #6177).
   expect(shown).not.toContain(RESTORE_PROSE);
-  expect(shown).not.toContain("tidak dijumpai");
+  expect(shown).not.toContain("not found");
 
   await expect(row, "the row being refused stays on screen with the reason").toBeVisible();
 

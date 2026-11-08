@@ -71,7 +71,7 @@ func (a *AuthHandlers) handleForgotPassword(w http.ResponseWriter, r *http.Reque
 func (a *AuthHandlers) replyForgotPasswordOK(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":  "ok",
-		"message": "Jika emel tersebut berdaftar dan disahkan, pautan set semula kata laluan telah dihantar ke peti masuk anda.",
+		"message": "If that email is registered and verified, a password reset link has been sent to your inbox.",
 	})
 }
 
@@ -136,18 +136,18 @@ func (a *AuthHandlers) handleResetPassword(w http.ResponseWriter, r *http.Reques
 		// "token diperlukan" is shared by four handlers, so a machine code keyed
 		// on it could not tell the dashboard WHICH link the user has to reopen.
 		// See CodeResetTokenMissing in errcode.go.
-		writeErr(w, http.StatusBadRequest, "token set semula diperlukan")
+		writeErr(w, http.StatusBadRequest, "reset token is required")
 		return
 	}
 	if len(req.NewPassword) < 10 {
-		writeErr(w, http.StatusBadRequest, "kata laluan baharu mesti sekurang-kurangnya 10 aksara")
+		writeErr(w, http.StatusBadRequest, "the new password must be at least 10 characters")
 		return
 	}
 
 	userID, err := a.Sessions.PasswordReset().Consume(r.Context(), req.Token)
 	if err != nil {
 		if errors.Is(err, auth.ErrResetTokenInvalid) {
-			writeErr(w, http.StatusBadRequest, "pautan set semula tidak sah atau telah tamat tempoh")
+			writeErr(w, http.StatusBadRequest, "the reset link is invalid or has expired")
 			return
 		}
 		slog.Error("pwreset_consume", "err", err)
@@ -157,7 +157,7 @@ func (a *AuthHandlers) handleResetPassword(w http.ResponseWriter, r *http.Reques
 
 	user, err := a.Users.ByID(r.Context(), userID)
 	if err != nil || user == nil {
-		writeErr(w, http.StatusBadRequest, "akaun tidak dijumpai")
+		writeErr(w, http.StatusBadRequest, "account not found")
 		return
 	}
 
@@ -256,7 +256,7 @@ type trustStatusResponse struct {
 func (a *AuthHandlers) handleTrustStatus(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
-		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		writeErr(w, http.StatusUnauthorized, "not signed in")
 		return
 	}
 	ts := a.trustStore()
@@ -278,7 +278,7 @@ func (a *AuthHandlers) handleTrustStatus(w http.ResponseWriter, r *http.Request)
 func (a *AuthHandlers) handleTrustForget(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
-		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		writeErr(w, http.StatusUnauthorized, "not signed in")
 		return
 	}
 	if ts := a.trustStore(); ts != nil {
@@ -293,7 +293,7 @@ func (a *AuthHandlers) handleTrustForget(w http.ResponseWriter, r *http.Request)
 func (a *AuthHandlers) handleTrustForgetAll(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
-		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		writeErr(w, http.StatusUnauthorized, "not signed in")
 		return
 	}
 	if ts := a.trustStore(); ts != nil {
@@ -331,7 +331,7 @@ type trustDeviceOut struct {
 func (a *AuthHandlers) handleTrustDevices(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
-		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		writeErr(w, http.StatusUnauthorized, "not signed in")
 		return
 	}
 	ts := a.trustStore()
@@ -361,17 +361,17 @@ func (a *AuthHandlers) handleTrustDevices(w http.ResponseWriter, r *http.Request
 func (a *AuthHandlers) handleTrustRevokeOne(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
-		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		writeErr(w, http.StatusUnauthorized, "not signed in")
 		return
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
 	if id == "" {
-		writeErr(w, http.StatusBadRequest, "id peranti diperlukan")
+		writeErr(w, http.StatusBadRequest, "device id is required")
 		return
 	}
 	ts := a.trustStore()
 	if ts == nil {
-		writeErr(w, http.StatusServiceUnavailable, "perkhidmatan tidak tersedia")
+		writeErr(w, http.StatusServiceUnavailable, "service unavailable")
 		return
 	}
 	// RevokeHash only acts on a hash present in THIS user's trust set, so one
@@ -393,7 +393,7 @@ func (a *AuthHandlers) handleTrustRevokeOne(w http.ResponseWriter, r *http.Reque
 func (a *AuthHandlers) handleTrustRevokeAll(w http.ResponseWriter, r *http.Request) {
 	user := a.currentUser(r)
 	if user == nil {
-		writeErr(w, http.StatusUnauthorized, "tidak log masuk")
+		writeErr(w, http.StatusUnauthorized, "not signed in")
 		return
 	}
 	if ts := a.trustStore(); ts != nil {

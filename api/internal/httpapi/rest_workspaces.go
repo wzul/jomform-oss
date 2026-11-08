@@ -13,8 +13,67 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/installurl"
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
+
+// workspaceURL is the ONE place a REST workspace payload asks what address this
+// deployment publishes for a workspace (card t_48a93084). Every payload —
+// list, create, rename — calls it, so the three cannot answer differently, and
+// the self-hosted branch is decided by the deployment flag (installurl).
+func (h *RESTHandlers) workspaceURL(slug string) string {
+	return installurl.Workspace(h.BaseURL, h.SelfHosted, slug)
+}
+
+// cnameHost is where a merchant points a custom domain on THIS deployment
+// (card t_48a93084): the install's own host when self-hosted, the product's
+// target when hosted. Empty only when a self-hosted install has no usable
+// APP_BASE_URL; the copy then says "asal pemasangan anda" rather than
+// printing a bare arrow.
+func (h *RESTHandlers) cnameHost() string {
+	if host := installurl.CNAMEHost(h.BaseURL, h.SelfHosted); host != "" {
+		return host
+	}
+	return "your installation origin"
+}
+
+// workspaceCreatedBody is the POST /v1/workspaces answer. BOTH create branches
+// (the ask-first onboarding reuse and the normal create) write through it, so a
+// new signup's first workspace and a second workspace cannot answer with
+// different addresses — the same "one writer" rule the slug validation follows.
+func (h *RESTHandlers) workspaceCreatedBody(sp *dbstore.Workspace) map[string]string {
+	return map[string]string{
+		"id": sp.ID, "name": sp.Name, "slug": sp.Slug,
+		"url": h.workspaceURL(sp.Slug),
+	}
+}
+
+// workspaceRenamedBody is the PATCH /v1/workspaces/{id} answer.
+//
+// previous_url/previous_url_redirects are emitted only when the address really
+// MOVED. On a self-hosted install the workspace address is the install's own
+// origin and carries no slug (card t_48a93084), so a slug rename leaves it in
+// place — answering "the previous url redirects" and printing the same string
+// twice would be a false statement, and the dashboard would show an
+// "address moved" note for a merchant whose address never changed.
+func (h *RESTHandlers) workspaceRenamedBody(res *dbstore.WorkspaceRenameResult) map[string]any {
+	url := h.workspaceURL(res.Workspace.Slug)
+	out := map[string]any{
+		"status": "saved", "id": res.Workspace.ID,
+		"name": res.Workspace.Name, "slug": res.Workspace.Slug,
+		"url":           url,
+		"name_changed":  res.NameChanged,
+		"slug_changed":  res.SlugChanged,
+		"previous_slug": res.OldSlug,
+	}
+	if prev := h.workspaceURL(res.OldSlug); res.SlugChanged && prev != "" && prev != url {
+		// The former address stays alive; say so, because that is the promise
+		// the merchant needs to hear (their printed QR stand still works).
+		out["previous_url"] = prev
+		out["previous_url_redirects"] = true
+	}
+	return out
+}
 
 // listWorkspaces: GET /v1/workspaces — workspaces owned by OR a member of the current
 // user (issue #162). Each row carries the caller's role so the frontend can
@@ -22,7 +81,7 @@ import (
 func (h *RESTHandlers) listWorkspaces(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	userID := h.sessionOwnerID(r)
 	if userID == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	workspaces, err := h.Workspaces.ByMember(r.Context(), userID)
@@ -34,11 +93,17 @@ func (h *RESTHandlers) listWorkspaces(w http.ResponseWriter, r *http.Request, ac
 		ID   string `json:"id"`
 		Name string `json:"name"`
 		Slug string `json:"slug"`
+		// URL is the address this deployment publishes for the workspace
+		// (card t_48a93084): `<slug>.jomform.com` on the hosted product, the
+		// install's own origin on a self-hosted one. It is built HERE rather
+		// than by the client, so the dashboard never has to know which
+		// deployment it is talking to. Omitted when it cannot be built.
+		URL  string `json:"url,omitempty"`
 		Role string `json:"role"`
 	}
 	out := make([]row, 0, len(workspaces))
 	for _, s := range workspaces {
-		out = append(out, row{ID: s.WorkspaceID, Name: s.Name, Slug: s.Slug, Role: s.Role})
+		out = append(out, row{ID: s.WorkspaceID, Name: s.Name, Slug: s.Slug, URL: h.workspaceURL(s.Slug), Role: s.Role})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -70,7 +135,7 @@ func writeWorkspaceSlugReserved(w http.ResponseWriter, verr error) {
 func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	userID := h.sessionOwnerID(r)
 	if userID == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	var in struct {
@@ -78,7 +143,7 @@ func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, a
 		Slug string `json:"slug"`
 	}
 	if err := decodeJSON(r, &in); err != nil || in.Name == "" || in.Slug == "" {
-		writeErr(w, http.StatusBadRequest, "name dan slug wajib")
+		writeErr(w, http.StatusBadRequest, "name and slug are required")
 		return
 	}
 	// ONE shared rule (dbstore.ValidateWorkspaceName) — the rename path calls the
@@ -97,7 +162,7 @@ func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, a
 	}
 	if name == "" {
 		// A whitespace-only name is still a missing one.
-		writeErr(w, http.StatusBadRequest, "name dan slug wajib")
+		writeErr(w, http.StatusBadRequest, "name and slug are required")
 		return
 	}
 	// ONE shared rule (dbstore.ValidateWorkspaceSlug) — the rename path and both
@@ -171,16 +236,13 @@ func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, a
 			if err != nil {
 				var pgErr *pgconn.PgError
 				if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-					writeErr(w, http.StatusConflict, "slug sudah digunakan")
+					writeErr(w, http.StatusConflict, "slug already in use")
 					return
 				}
 				respondErr(w, r, err)
 				return
 			}
-			writeJSON(w, http.StatusCreated, map[string]string{
-				"id": sp.ID, "name": sp.Name, "slug": sp.Slug,
-				"url": "https://" + sp.Slug + ".jomform.com",
-			})
+			writeJSON(w, http.StatusCreated, h.workspaceCreatedBody(sp))
 			return
 		}
 	}
@@ -193,16 +255,13 @@ func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, a
 		var pgErr *pgconn.PgError
 		if errors.Is(err, dbstore.ErrWorkspaceSlugTaken) ||
 			(errors.As(err, &pgErr) && pgErr.Code == "23505") {
-			writeErr(w, http.StatusConflict, "slug sudah digunakan")
+			writeErr(w, http.StatusConflict, "slug already in use")
 			return
 		}
 		respondErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{
-		"id": sp.ID, "name": sp.Name, "slug": sp.Slug,
-		"url": "https://" + sp.Slug + ".jomform.com",
-	})
+	writeJSON(w, http.StatusCreated, h.workspaceCreatedBody(sp))
 }
 
 // renameWorkspace: PATCH /v1/workspaces/{id} {"name": ..., "slug": ...}
@@ -215,11 +274,14 @@ func (h *RESTHandlers) createWorkspace(w http.ResponseWriter, r *http.Request, a
 //
 //	NAME  — any member with manage-or-admin role. It is a label the merchant's
 //	        own colleagues read; there is no external consequence.
-//	SLUG  — the OWNER only. The slug is the tenant's public host
-//	        ({slug}.jomform.com), printed on QR stands, embedded in iframe
-//	        snippets and handed to affiliates (?aff=CODE). Changing it moves
-//	        every one of those addresses, so the person who owns the workspace —
-//	        and carries the consequences — makes that call.
+//	SLUG  — the OWNER only. The slug is the tenant's public host on the HOSTED
+//	        product ({slug}.jomform.com), printed on QR stands, embedded in
+//	        iframe snippets and handed to affiliates (?aff=CODE). Changing it
+//	        moves every one of those addresses, so the person who owns the
+//	        workspace — and carries the consequences — makes that call. On a
+//	        self-hosted install one origin serves every workspace (card
+//	        t_48a93084), so the slug is still the tenant's identity but not an
+//	        address: renaming it moves nothing.
 //
 // A slug change is ADDITIVE: the old slug is remembered as an alias and keeps
 // resolving to this workspace (a permanent redirect to the new host), so the
@@ -234,11 +296,11 @@ func (h *RESTHandlers) renameWorkspace(w http.ResponseWriter, r *http.Request, a
 		Slug *string `json:"slug"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	if in.Name == nil && in.Slug == nil {
-		writeErr(w, http.StatusBadRequest, "name atau slug diperlukan")
+		writeErr(w, http.StatusBadRequest, "name or slug is required")
 		return
 	}
 	s, role, ok := h.workspaceAccessByID(w, r)
@@ -246,7 +308,7 @@ func (h *RESTHandlers) renameWorkspace(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	if !roleAtLeast(role, dbstore.RoleManage) {
-		writeErr(w, http.StatusForbidden, "perlu peranan manage atau admin")
+		writeErr(w, http.StatusForbidden, "you need the manage or admin role")
 		return
 	}
 	userID := h.sessionOwnerID(r)
@@ -269,11 +331,11 @@ func (h *RESTHandlers) renameWorkspace(w http.ResponseWriter, r *http.Request, a
 		switch {
 		case errors.Is(err, dbstore.ErrWorkspaceSlugNotOwned):
 			writeErr(w, http.StatusForbidden,
-				"hanya pemilik workspace boleh menukar slug — slug ialah alamat awam workspace")
+				"only the workspace owner can change the slug — the slug is the workspace's public address")
 			return
 		case errors.Is(err, dbstore.ErrWorkspaceSlugTaken),
 			errors.As(err, &pgErr) && pgErr.Code == "23505":
-			writeErr(w, http.StatusConflict, "slug sudah digunakan")
+			writeErr(w, http.StatusConflict, "slug already in use")
 			return
 		case errors.Is(err, dbstore.ErrWorkspaceNameLength):
 			// The name-cap message IS dbstore.ErrWorkspaceNameLength's text, so
@@ -304,10 +366,10 @@ func (h *RESTHandlers) renameWorkspace(w http.ResponseWriter, r *http.Request, a
 			writeWorkspaceSlugReserved(w, err)
 			return
 		case errors.Is(err, dbstore.ErrWorkspaceNoChange):
-			writeErr(w, http.StatusBadRequest, "tiada perubahan")
+			writeErr(w, http.StatusBadRequest, "no changes")
 			return
 		case errors.Is(err, dbstore.ErrWorkspaceNotFound):
-			writeErr(w, http.StatusNotFound, "workspace tidak dijumpai")
+			writeErr(w, http.StatusNotFound, "workspace not found")
 			return
 		}
 		respondErr(w, r, err)
@@ -322,21 +384,7 @@ func (h *RESTHandlers) renameWorkspace(w http.ResponseWriter, r *http.Request, a
 		"old_slug": res.OldSlug, "slug": res.Workspace.Slug,
 		"slug_changed": res.SlugChanged, "name_changed": res.NameChanged,
 	})
-	out := map[string]any{
-		"status": "saved", "id": res.Workspace.ID,
-		"name": res.Workspace.Name, "slug": res.Workspace.Slug,
-		"url":           "https://" + res.Workspace.Slug + ".jomform.com",
-		"name_changed":  res.NameChanged,
-		"slug_changed":  res.SlugChanged,
-		"previous_slug": res.OldSlug,
-	}
-	if res.SlugChanged {
-		// The former address stays alive; say so, because that is the promise
-		// the merchant needs to hear (their printed QR stand still works).
-		out["previous_url"] = "https://" + res.OldSlug + ".jomform.com"
-		out["previous_url_redirects"] = true
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, h.workspaceRenamedBody(res))
 }
 
 // workspaceAccessByID resolves a workspace by id and verifies the caller is the owner
@@ -344,22 +392,22 @@ func (h *RESTHandlers) renameWorkspace(w http.ResponseWriter, r *http.Request, a
 func (h *RESTHandlers) workspaceAccessByID(w http.ResponseWriter, r *http.Request) (*dbstore.Workspace, string, bool) {
 	sID := r.PathValue("id")
 	if _, perr := uuid.Parse(sID); perr != nil {
-		writeErr(w, http.StatusBadRequest, "id tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid id")
 		return nil, "", false
 	}
 	userID := h.sessionOwnerID(r)
 	if userID == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return nil, "", false
 	}
 	s, err := h.Workspaces.ByID(r.Context(), sID)
 	if err != nil || s == nil {
-		writeErr(w, http.StatusNotFound, "workspace tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "workspace not found")
 		return nil, "", false
 	}
 	acc, ok, err := h.Workspaces.AccessByID(r.Context(), sID, userID)
 	if err != nil || !ok {
-		writeErr(w, http.StatusForbidden, "bukan workspace anda")
+		writeErr(w, http.StatusForbidden, "not your workspace")
 		return nil, "", false
 	}
 	return s, acc.Role, true
@@ -400,12 +448,12 @@ func (h *RESTHandlers) deleteWorkspace(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	if role != dbstore.RoleAdmin {
-		writeErr(w, http.StatusForbidden, "hanya pemilik workspace boleh memadamnya")
+		writeErr(w, http.StatusForbidden, "only the workspace owner can delete it")
 		return
 	}
 	userID := h.sessionOwnerID(r)
 	if userID == "" || s.Owner != userID {
-		writeErr(w, http.StatusForbidden, "hanya pemilik workspace boleh memadamnya")
+		writeErr(w, http.StatusForbidden, "only the workspace owner can delete it")
 		return
 	}
 	// Typed confirmation: {"confirm_slug":"<slug>"}. A missing or mismatching
@@ -414,12 +462,12 @@ func (h *RESTHandlers) deleteWorkspace(w http.ResponseWriter, r *http.Request, a
 		ConfirmSlug string `json:"confirm_slug"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	if strings.TrimSpace(in.ConfirmSlug) != s.Slug {
 		writeErr(w, http.StatusBadRequest,
-			"taip slug workspace ("+s.Slug+") untuk sahkan pemadaman")
+			"type the workspace slug ("+s.Slug+") to confirm the deletion")
 		return
 	}
 	trashed, err := h.Workspaces.Delete(r.Context(), s.ID, userID, actx.KeyID)
@@ -429,14 +477,14 @@ func (h *RESTHandlers) deleteWorkspace(w http.ResponseWriter, r *http.Request, a
 			switch de.Reason {
 			case "last_workspace":
 				writeErr(w, http.StatusBadRequest,
-					"anda perlu sekurang-kurangnya satu workspace — cipta workspace baharu dahulu")
+					"you need at least one workspace — create a new workspace first")
 			default:
-				writeErr(w, http.StatusForbidden, "hanya pemilik workspace boleh memadamnya")
+				writeErr(w, http.StatusForbidden, "only the workspace owner can delete it")
 			}
 			return
 		}
 		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
-			writeErr(w, http.StatusNotFound, "workspace tidak dijumpai")
+			writeErr(w, http.StatusNotFound, "workspace not found")
 			return
 		}
 		respondErr(w, r, err)
@@ -641,6 +689,11 @@ func (h *RESTHandlers) isLastWorkspace(r *http.Request, workspaceID, userID stri
 }
 
 // getWorkspaceSettings GET/PUT for the storefront builder.
+//
+// The GET also carries `legal_link_status`: the footer's own verdict on each
+// stored legal URL (see legalLinkStatuses below). A merchant who saved a link the
+// public route cannot serve BEFORE this existed would otherwise never learn it
+// is missing, because nothing on this page mentions it until the next save.
 func (h *RESTHandlers) getWorkspaceSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	s, _, ok := h.workspaceAccessByID(w, r)
 	if !ok {
@@ -651,7 +704,46 @@ func (h *RESTHandlers) getWorkspaceSettings(w http.ResponseWriter, r *http.Reque
 		respondErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, set)
+	// The embedded struct keeps every existing top-level field byte-for-byte
+	// (the dashboard reads them flat) and adds the one new key.
+	writeJSON(w, http.StatusOK, struct {
+		*dbstore.WorkspaceSettings
+		LegalLinkStatus map[string]legalLinkState `json:"legal_link_status"`
+	}{set, h.legalLinkStatuses(r.Context(), set, s.Slug)})
+}
+
+// legalLinkStatuses returns, for each legal-URL field, whether the public footer
+// will publish that link and — when it will not — why (card t_e8b4f7da).
+//
+// The verdict comes from the footer's OWN functions (legalLinkStateFor →
+// rewriteHostedLegalURL + servableHostedLegalLink), never from a second copy of
+// the host/path rule: the two must not be able to disagree.
+func (h *RESTHandlers) legalLinkStatuses(ctx context.Context, st *dbstore.WorkspaceSettings, workspaceSlug string) map[string]legalLinkState {
+	if legalLinkJudgedCount(st, workspaceSlug) == 0 {
+		// No link is judged by the footer's page-content rule, so the content
+		// lookup would not change a single verdict (and is the common case: an
+		// external footer).
+		return legalLinkStatesForSettings(st, workspaceSlug, nil)
+	}
+	pages, err := h.Workspaces.LegalPages(ctx, st.WorkspaceID)
+	if err != nil {
+		// The SAME database answers the public legal route, so a failed lookup is
+		// an outage to fix, not evidence that the page is missing: workspaceFooter
+		// keeps every link in that case, and the dashboard must not accuse the
+		// merchant of a link that is in fact published.
+		out := make(map[string]legalLinkState, 3)
+		for field, raw := range map[string]string{
+			"privacy_url": st.PrivacyURL,
+			"terms_url":   st.TermsURL,
+			"refund_url":  st.RefundURL,
+		} {
+			if strings.TrimSpace(raw) != "" {
+				out[field] = legalLinkState{Shown: true}
+			}
+		}
+		return out
+	}
+	return legalLinkStatesForSettings(st, workspaceSlug, pages)
 }
 
 // saveWorkspaceSettings: PUT /v1/workspaces/{id}/settings
@@ -683,7 +775,7 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 		SpamJudgeEnabled *bool `json:"spam_judge_enabled"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	// Issue #501: ONE shared scheme rule for every caller-supplied URL field
@@ -715,7 +807,7 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 	// Issue #185: currency must be a supported code (default MYR). Empty is
 	// treated as "keep current" by the read-modify-write below.
 	if in.Currency != "" && !dbstore.IsSupportedCurrency(in.Currency) {
-		writeErr(w, http.StatusBadRequest, "mata wang tidak disokong")
+		writeErr(w, http.StatusBadRequest, "unsupported currency")
 		return
 	}
 	// Language placement: the workspace's buyer-facing default language must be
@@ -724,7 +816,7 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 	// silently persisted (a stored "fr" would leave the storefront on a language
 	// the renderer has no strings for).
 	if in.DefaultLang != "" && !dbstore.ValidProfileLang(in.DefaultLang) {
-		writeErr(w, http.StatusBadRequest, "bahasa tidak disokong")
+		writeErr(w, http.StatusBadRequest, "unsupported language")
 		return
 	}
 	s, role, ok := h.workspaceAccessByID(w, r)
@@ -732,7 +824,7 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if !roleAtLeast(role, dbstore.RoleManage) {
-		writeErr(w, http.StatusForbidden, "perlu peranan manage atau admin")
+		writeErr(w, http.StatusForbidden, "you need the manage or admin role")
 		return
 	}
 	// Read-modify-write: omitted fields keep their current value (issue #185
@@ -803,7 +895,14 @@ func (h *RESTHandlers) saveWorkspaceSettings(w http.ResponseWriter, r *http.Requ
 		respondErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+	// Card t_e8b4f7da: the save SUCCEEDED, but a legal URL the public footer will
+	// not publish must not be confirmed without saying so — that is exactly the
+	// "Footer saved ✓" + empty footer + no reason the card was filed for. The
+	// verdicts are computed from the row just written, by the footer's own rule.
+	writeJSON(w, http.StatusOK, struct {
+		Status          string                    `json:"status"`
+		LegalLinkStatus map[string]legalLinkState `json:"legal_link_status"`
+	}{"saved", h.legalLinkStatuses(r.Context(), st, s.Slug)})
 }
 
 // ── Per-workspace email settings (issue #107) ────────────────────────────────────
@@ -833,7 +932,7 @@ func (h *RESTHandlers) saveWorkspaceEmailSettings(w http.ResponseWriter, r *http
 		HTML                *bool  `json:"html"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	s, role, ok := h.workspaceAccessByID(w, r)
@@ -841,7 +940,7 @@ func (h *RESTHandlers) saveWorkspaceEmailSettings(w http.ResponseWriter, r *http
 		return
 	}
 	if !roleAtLeast(role, dbstore.RoleManage) {
-		writeErr(w, http.StatusForbidden, "perlu peranan manage atau admin")
+		writeErr(w, http.StatusForbidden, "you need the manage or admin role")
 		return
 	}
 	// Read-modify-write: omitted fields keep their current value.
@@ -884,7 +983,7 @@ func (h *RESTHandlers) saveWorkspaceEmailSettings(w http.ResponseWriter, r *http
 func (h *RESTHandlers) listTrashedWorkspaces(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	userID := h.sessionOwnerID(r)
 	if userID == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	list, err := h.Workspaces.ListTrashed(r.Context(), userID)
@@ -931,19 +1030,19 @@ func (h *RESTHandlers) listTrashedWorkspaces(w http.ResponseWriter, r *http.Requ
 func (h *RESTHandlers) restoreWorkspace(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	userID := h.sessionOwnerID(r)
 	if userID == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	workspaceID := r.PathValue("id")
 	if err := h.Workspaces.Restore(r.Context(), workspaceID, userID); err != nil {
 		if errors.Is(err, dbstore.ErrWorkspaceSlugTaken) {
 			writeErr(w, http.StatusConflict,
-				"tidak boleh dipulihkan: slug workspace ini telah diambil workspace lain — "+
-					"tukar slug workspace itu dahulu, kemudian cuba pulihkan semula")
+				"cannot be restored: this workspace's slug has been taken by another workspace — "+
+					"change that workspace's slug first, then try restoring again")
 			return
 		}
 		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
-			writeErr(w, http.StatusNotFound, "workspace tidak dijumpai dalam tong sampah")
+			writeErr(w, http.StatusNotFound, "workspace not found in the bin")
 			return
 		}
 		respondErr(w, r, err)
@@ -999,7 +1098,7 @@ func (h *RESTHandlers) restoreWorkspace(w http.ResponseWriter, r *http.Request, 
 func (h *RESTHandlers) purgeWorkspace(w http.ResponseWriter, r *http.Request, _ *AccountCtx) {
 	userID := h.sessionOwnerID(r)
 	if userID == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	workspaceID := r.PathValue("id")
@@ -1007,7 +1106,7 @@ func (h *RESTHandlers) purgeWorkspace(w http.ResponseWriter, r *http.Request, _ 
 		ConfirmSlug string `json:"confirm_slug"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	// Read the BINNED workspace to compare the confirmation slug. TrashedByID is
@@ -1015,7 +1114,7 @@ func (h *RESTHandlers) purgeWorkspace(w http.ResponseWriter, r *http.Request, _ 
 	s, err := h.Workspaces.TrashedByID(r.Context(), workspaceID)
 	if err != nil {
 		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
-			writeErr(w, http.StatusNotFound, "workspace tidak dijumpai dalam tong sampah")
+			writeErr(w, http.StatusNotFound, "workspace not found in the bin")
 			return
 		}
 		respondErr(w, r, err)
@@ -1023,12 +1122,12 @@ func (h *RESTHandlers) purgeWorkspace(w http.ResponseWriter, r *http.Request, _ 
 	}
 	// Owner-only, matching who may bin and restore it.
 	if s.Owner != userID {
-		writeErr(w, http.StatusForbidden, "hanya pemilik workspace boleh memadamnya")
+		writeErr(w, http.StatusForbidden, "only the workspace owner can delete it")
 		return
 	}
 	if strings.TrimSpace(in.ConfirmSlug) != s.Slug {
 		writeErr(w, http.StatusBadRequest,
-			"taip slug workspace ("+s.Slug+") untuk sahkan pemadaman kekal")
+			"type the workspace slug ("+s.Slug+") to confirm the permanent deletion")
 		return
 	}
 	purged, err := h.Workspaces.Purge(r.Context(), workspaceID, userID)
@@ -1039,15 +1138,15 @@ func (h *RESTHandlers) purgeWorkspace(w http.ResponseWriter, r *http.Request, _ 
 				sales = counts["sales"]
 			}
 			writeJSON(w, http.StatusConflict, map[string]any{
-				"error": "workspace ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan " +
-					"dengan memadam workspace. Ia kekal dalam tong sampah.",
+				"error": "this workspace has sales — sales history cannot be destroyed " +
+					"by deleting the workspace. It stays in the bin.",
 				"code":        CodeWorkspaceHasSales,
 				"sales_count": sales,
 			})
 			return
 		}
 		if errors.Is(err, dbstore.ErrWorkspaceNotFound) {
-			writeErr(w, http.StatusNotFound, "workspace tidak dijumpai dalam tong sampah")
+			writeErr(w, http.StatusNotFound, "workspace not found in the bin")
 			return
 		}
 		respondErr(w, r, err)

@@ -60,7 +60,7 @@ var errSuperAdminRequired = &superAdminError{}
 
 type superAdminError struct{}
 
-func (*superAdminError) Error() string { return "perlu super-admin untuk tindakan ini" }
+func (*superAdminError) Error() string { return "super-admin is required for this action" }
 
 // auditSuperAdminAction records a super-admin action to the audit log
 // (issue #385, acceptance: every super-admin action is audited). It records

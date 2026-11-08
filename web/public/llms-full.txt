@@ -48,6 +48,10 @@ prices, sales, refunds, analytics — without opening a dashboard.
   forms: states/districts/postcode ranges, weight bands, a free-shipping threshold, how an
   address outside every zone is handled, and the courier providers (Lalamove, EasyParcel) that
   quote a block live at checkout with those zone rates as the fallback.
+- [Processing fees paid by the buyer](https://jomform.com/docs/payment-fees) — one acquirer rate
+  per CHIP payment method (fixed sen and/or basis points), grossed up so you receive the full
+  asking amount (at most 1 sen short), the buyer's pre-payment disclosure, the method lock at the
+  CHIP page, the per-form switch-off, and why a refund never returns the fee.
 - [Customize](https://jomform.com/docs/customize) — design → AI agent → MCP flow, the restaurant
   menu and its basket, product images, templates, the brand colour on the public form, custom
   domains, language and affiliate marketing.

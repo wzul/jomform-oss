@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
@@ -72,6 +73,14 @@ type langStrings struct {
 	// Issue #173: pricing/choice field strings.
 	SelectOption   string
 	SelectShipping string
+	// Card t_135c3c72: the buyer-facing processing-fee breakdown. The price the
+	// buyer sees must be the price they pay (Consumer Protection Act 1999), so
+	// the fee gets its own labelled row above the total — never folded into an
+	// item price and never revealed only on the CHIP page.
+	FeeSubtotal string // "Subtotal" — the goods + shipping, before the fee
+	FeeLine     string // "Processing fee"
+	FeeChoose   string // chooser heading when more than one method is active
+	FeeIncl     string // suffix on the fee row: the method + frozen rate
 	// Shipping by zone (managed rate source). ShipFallback is the suffix of the
 	// catch-all zone's option ("Others" / "lain-lain"); ShipFreeOver carries
 	// "{amount}" and is the note on an option whose rate makes shipping free
@@ -86,6 +95,13 @@ type langStrings struct {
 	ShipQuotedAtCheckout string
 	// Issue #249: per-product quantity selector label.
 	Quantity string
+	// Card t_06851d88: pay-what-you-want product block. The label above the
+	// amount input, the two range sentences (one with an upper bound, one
+	// without), and the client-side alert when a checked product has no amount.
+	AmountLabel         string // "Amount"
+	AmountHintFrom      string // "Any amount from {amount}"
+	AmountHintRange     string // "Any amount between {min} and {max}"
+	AmountRequiredAlert string // "Please enter an amount"
 	// Issue #183: optional public-form footer link labels.
 	PrivacyLabel string
 	TermsLabel   string
@@ -154,6 +170,8 @@ var formLangs = map[string]langStrings{
 	"en": {
 		Lang: "en", EmailLabel: "Email",
 		Total: "Total", Submit: "Proceed to Payment", ErrorAlert: "Error",
+		FeeSubtotal: "Subtotal", FeeLine: "Processing fee",
+		FeeChoose: "How would you like to pay?", FeeIncl: "incl.",
 		NoProductAlert:  "Please select at least one product",
 		SelectVariation: "Select an option", SelectVariationAlert: "Please choose a variation for each product", InStock: "in stock",
 		SubmitResponse: "Submit", ThankYou: "Thank you!", ResponseReceived: "Your response has been received.",
@@ -170,6 +188,10 @@ var formLangs = map[string]langStrings{
 		ShipFallback: "Others", ShipFreeOver: "Free over {amount}",
 		ShipQuotedAtCheckout: "Estimate — final delivery fee is quoted at checkout",
 		Quantity:             "Quantity",
+		AmountLabel:          "Amount",
+		AmountHintFrom:       "Any amount from {amount}",
+		AmountHintRange:      "Any amount between {min} and {max}",
+		AmountRequiredAlert:  "Please enter an amount",
 		PrivacyLabel:         "Privacy Policy", TermsLabel: "Terms of Service", RefundLabel: "Refund Policy",
 		PendingMessage: "This form is not open yet. Please check back later.",
 		ExpiredMessage: "This form has closed. Thank you for your interest.",
@@ -212,6 +234,8 @@ var formLangs = map[string]langStrings{
 	"ms": {
 		Lang: "ms", EmailLabel: "Emel",
 		Total: "Jumlah", Submit: "Teruskan ke Pembayaran", ErrorAlert: "Ralat",
+		FeeSubtotal: "Jumlah kecil", FeeLine: "Caj pemprosesan",
+		FeeChoose: "Bagaimana anda mahu bayar?", FeeIncl: "termasuk",
 		NoProductAlert:  "Pilih sekurang-kurangnya satu produk",
 		SelectVariation: "Pilih variasi", SelectVariationAlert: "Sila pilih variasi untuk setiap produk", InStock: "stok",
 		SubmitResponse: "Hantar", ThankYou: "Terima kasih!", ResponseReceived: "Respons anda telah diterima.",
@@ -227,6 +251,10 @@ var formLangs = map[string]langStrings{
 		ShipFallback: "Lain-lain", ShipFreeOver: "Percuma melebihi {amount}",
 		ShipQuotedAtCheckout: "Anggaran — kadar penghantaran akhir disebut semasa bayar",
 		Quantity:             "Kuantiti",
+		AmountLabel:          "Jumlah",
+		AmountHintFrom:       "Sebarang jumlah dari {amount}",
+		AmountHintRange:      "Sebarang jumlah antara {min} dan {max}",
+		AmountRequiredAlert:  "Sila masukkan jumlah",
 		PrivacyLabel:         "Polisi Privasi", TermsLabel: "Terma & Syarat", RefundLabel: "Polisi Bayaran Balik",
 		PendingMessage: "Borang ini belum dibuka lagi. Sila kembali semula kemudian.",
 		ExpiredMessage: "Borang ini telah ditutup. Terima kasih atas minat anda.",
@@ -269,6 +297,8 @@ var formLangs = map[string]langStrings{
 	"zh": {
 		Lang: "zh", EmailLabel: "电子邮件",
 		Total: "总计", Submit: "前往付款", ErrorAlert: "错误",
+		FeeSubtotal: "小计", FeeLine: "手续费",
+		FeeChoose: "您想如何付款？", FeeIncl: "包含",
 		NoProductAlert:  "请至少选择一种商品",
 		SelectVariation: "请选择规格", SelectVariationAlert: "请为每件商品选择规格", InStock: "有货",
 		SubmitResponse: "提交", ThankYou: "谢谢！", ResponseReceived: "您的回复已收到。",
@@ -281,6 +311,10 @@ var formLangs = map[string]langStrings{
 		ShipFallback: "其他", ShipFreeOver: "{amount} 以上免运费",
 		ShipQuotedAtCheckout: "预估 — 最终运费在结账时报价",
 		Quantity:             "数量",
+		AmountLabel:          "金额",
+		AmountHintFrom:       "任意金额，从 {amount} 起",
+		AmountHintRange:      "{min} 至 {max} 之间的任意金额",
+		AmountRequiredAlert:  "请输入金额",
 		PrivacyLabel:         "隐私政策", TermsLabel: "服务条款", RefundLabel: "退款政策",
 		PendingMessage: "此表单尚未开放，请稍后再来。",
 		ExpiredMessage: "此表单已关闭，感谢您的关注。",
@@ -323,6 +357,8 @@ var formLangs = map[string]langStrings{
 	"ta": {
 		Lang: "ta", EmailLabel: "மின்னஞ்சல்",
 		Total: "மொத்தம்", Submit: "கட்டணத்திற்குச் செல்லவும்", ErrorAlert: "பிழை",
+		FeeSubtotal: "துணை மொத்தம்", FeeLine: "செயலாக்கக் கட்டணம்",
+		FeeChoose: "எப்படிப் பணம் செலுத்த விரும்புகிறீர்கள்?", FeeIncl: "உள்ளடங்கும்",
 		NoProductAlert:  "குறைந்தது ஒரு பொருளையாவது தேர்ந்தெடுக்கவும்",
 		SelectVariation: "மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", SelectVariationAlert: "ஒவ்வொரு பொருளுக்கும் மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", InStock: "கையிருப்பு",
 		SubmitResponse: "சமர்ப்பி", ThankYou: "நன்றி!", ResponseReceived: "உங்கள் பதில் பெறப்பட்டது.",
@@ -335,6 +371,10 @@ var formLangs = map[string]langStrings{
 		ShipFallback: "மற்றவை", ShipFreeOver: "{amount}க்கு மேல் இலவசம்",
 		ShipQuotedAtCheckout: "மதிப்பீடு — இறுதி ஷிப்பிங் கட்டணம் பணம் செலுத்தும்போது கணக்கிடப்படும்",
 		Quantity:             "அளவு",
+		AmountLabel:          "தொகை",
+		AmountHintFrom:       "{amount} முதல் எந்தத் தொகையும்",
+		AmountHintRange:      "{min} மற்றும் {max} இடையே எந்தத் தொகையும்",
+		AmountRequiredAlert:  "தயவுசெய்து ஒரு தொகையை உள்ளிடவும்",
 		PrivacyLabel:         "தனியுரிமைக் கொள்கை", TermsLabel: "சேவை விதிமுறைகள்", RefundLabel: "பணத்திருப்புக் கொள்கை",
 		PendingMessage: "இந்த படிவம் இன்னும் திறக்கப்படவில்லை. பின்னர் மீண்டும் வரவும்.",
 		ExpiredMessage: "இந்த படிவம் மூடப்பட்டது. உங்கள் ஆர்வத்திற்கு நன்றி.",
@@ -377,6 +417,8 @@ var formLangs = map[string]langStrings{
 	"ar": {
 		Lang: "ar", EmailLabel: "البريد الإلكتروني",
 		Total: "المجموع", Submit: "الانتقال إلى الدفع", ErrorAlert: "خطأ",
+		FeeSubtotal: "المجموع الفرعي", FeeLine: "رسوم المعالجة",
+		FeeChoose: "كيف تريد أن تدفع؟", FeeIncl: "شامل",
 		NoProductAlert:  "يرجى اختيار منتج واحد على الأقل",
 		SelectVariation: "اختر خيارًا", SelectVariationAlert: "يرجى اختيار خيار لكل منتج", InStock: "متوفر",
 		SubmitResponse: "إرسال", ThankYou: "شكراً لك!", ResponseReceived: "تم استلام ردك.",
@@ -389,6 +431,10 @@ var formLangs = map[string]langStrings{
 		ShipFallback: "أخرى", ShipFreeOver: "مجاني أكثر من {amount}",
 		ShipQuotedAtCheckout: "تقدير — تُحتسب رسوم الشحن النهائية عند الدفع",
 		Quantity:             "الكمية",
+		AmountLabel:          "المبلغ",
+		AmountHintFrom:       "أي مبلغ ابتداءً من {amount}",
+		AmountHintRange:      "أي مبلغ بين {min} و {max}",
+		AmountRequiredAlert:  "يرجى إدخال المبلغ",
 		PrivacyLabel:         "سياسة الخصوصية", TermsLabel: "شروط الخدمة", RefundLabel: "سياسة الاسترداد",
 		PendingMessage: "هذا النموذج غير مفتوح بعد. يرجى العودة لاحقاً.",
 		ExpiredMessage: "تم إغلاق هذا النموذج. شكراً لاهتمامك.",
@@ -444,18 +490,66 @@ func (h *PublicHandlers) resolveWorkspaceLang(ctx context.Context, f *dbstore.Fo
 // (and therefore an account) but not necessarily a resolvable form — the
 // thank-you page is the case that needs it (language placement).
 func (h *PublicHandlers) resolveWorkspaceLangByAccount(ctx context.Context, accountID string) string {
-	if h.Workspaces == nil || accountID == "" {
+	return workspaceLangByAccount(ctx, h.Workspaces, accountID)
+}
+
+// workspaceLangByAccount is the account→workspace-default resolution, over an
+// explicitly-passed store. It is package-level so the REST media route (which is
+// not a PublicHandlers) can resolve the same language for the same buyer.
+func workspaceLangByAccount(ctx context.Context, ws *dbstore.WorkspaceStore, accountID string) string {
+	if ws == nil || accountID == "" {
 		return "en"
 	}
-	workspaceID, err := h.Workspaces.WorkspaceIDByAccount(ctx, accountID)
+	workspaceID, err := ws.WorkspaceIDByAccount(ctx, accountID)
 	if err != nil || workspaceID == "" {
 		return "en"
 	}
-	st, err := h.Workspaces.Settings(ctx, workspaceID)
+	st, err := ws.Settings(ctx, workspaceID)
 	if err != nil {
 		return "en"
 	}
 	return st.WorkspaceLang()
+}
+
+// buyerLangByAccountStore is buyerLang for a handler that is not a
+// PublicHandlers (the public /media route is on RESTHandlers): the workspace
+// default for the key's account, else English.
+func buyerLangByAccountStore(ctx context.Context, ws *dbstore.WorkspaceStore, accountID string) string {
+	lang := workspaceLangByAccount(ctx, ws, accountID)
+	if !validFormLang(lang) {
+		return "en"
+	}
+	return lang
+}
+
+// buyerLang resolves the language a buyer-facing REFUSAL on a target is written
+// in. It is the same chain the page chrome uses (form.config.lang ?? workspace
+// default ?? "en"), asked in the shape a refusing handler has: a form when one
+// resolved, otherwise the account whose workspace default applies. Refusals fire
+// before the page exists, so they cannot read a langStrings the renderer built —
+// this is the one place that resolution is reused off the render path.
+func (h *PublicHandlers) buyerLang(ctx context.Context, f *dbstore.Form, accountID string) string {
+	if f != nil {
+		return h.effectiveLangStrings(ctx, f).Lang
+	}
+	if accountID != "" {
+		if st, ok := formLangs[h.resolveWorkspaceLangByAccount(ctx, accountID)]; ok {
+			return st.Lang
+		}
+	}
+	return "en"
+}
+
+// buyerLangForHost is buyerLang for a route that has only the request's Host to
+// go on (the 404s, whose form did not resolve). A host naming no workspace — the
+// bare apex, an unclaimed subdomain — has no language to honour and answers
+// English.
+func (h *PublicHandlers) buyerLangForHost(ctx context.Context, r *http.Request) string {
+	acc, _, ok := h.resolveWorkspaceAccount(r)
+	if !ok || acc == nil {
+		return "en"
+	}
+	return h.buyerLang(ctx, nil, acc.ID)
 }
 
 // effectiveLangStringsByAccount resolves the buyer-facing dictionary for an

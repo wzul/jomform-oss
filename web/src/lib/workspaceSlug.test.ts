@@ -152,7 +152,7 @@ test("isReservedSlugRefusal matches the token, never the prose", () => {
     null,
     undefined,
     {},
-    { error: "slug sudah digunakan" },
+    { error: "slug already in use" },
     { code: "no_products" },
     { code: "reserved_subdomain_extra" },
     { code: RESERVED_SUBDOMAIN_CODE.toUpperCase() },
@@ -260,7 +260,7 @@ test("createWorkspace maps a token-carrying 400 to the reserved key, not slugInv
 
     // A plain malformed slug must still get the malformed message: over-matching
     // the token would make the length rule unreachable for every 400.
-    globalThis.fetch = stub(400, { error: "slug 3-40 aksara" });
+    globalThis.fetch = stub(400, { error: "slug 3-40 characters" });
     assert.deepEqual(await createWorkspace({ name: "x", slug: "ab" }), {
       ok: false,
       errorKey: "workspace.slugInvalid",

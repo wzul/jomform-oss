@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import Dashboard from "./dashboard-client";
 import Landing from "./landing/page";
 import { SITE_NAME, websiteJsonLdScript } from "../lib/siteName";
+import { OG_IMAGE, OG_IMAGE_URL } from "../lib/ogImage";
 import { SESSION_COOKIE } from "../lib/sessionCookie";
 
 // Issue #276: per-page meta for the landing/marketing page. The dashboard is
@@ -21,14 +22,16 @@ export const metadata: Metadata = {
     siteName: SITE_NAME,
     type: "website",
     // Issue #411: brand og:image so sharing the landing shows a preview.
-    images: [{ url: "https://jomform.com/og-default.png", width: 1200, height: 630, alt: "JomForm" }],
+    // t_ae566270: the URL is content-versioned (og-default-<hash>.png) so a
+    // client that cached a previous card is forced to the new file.
+    images: [OG_IMAGE],
   },
   twitter: {
     card: "summary_large_image",
     title: "JomForm — Order forms, agent payments & sales for everyone",
     description:
       "Build beautiful order forms, accept CHIP payments, manage sales. Open source (MIT) & free forever.",
-    images: ["https://jomform.com/og-default.png"],
+    images: [OG_IMAGE_URL],
   },
 };
 

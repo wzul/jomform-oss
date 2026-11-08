@@ -220,14 +220,14 @@ func (s *Server) handleSESNotification(w http.ResponseWriter, r *http.Request) {
 	//    SNS signs the full envelope; a missing/invalid signature is rejected.
 	if err := email.VerifySNSNotification(raw, nil); err != nil {
 		slog.Warn("ses_sns_signature_rejected", "err", err)
-		writeErr(w, http.StatusUnauthorized, "sns signature tidak sah")
+		writeErr(w, http.StatusUnauthorized, "invalid sns signature")
 		return
 	}
 
 	// 2. Extract the inner Message payload.
 	var env email.SNSNotification
 	if err := json.Unmarshal(raw, &env); err != nil {
-		writeErr(w, http.StatusBadRequest, "sns payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid sns payload")
 		return
 	}
 	// Auto-confirm SNS HTTPS subscriptions (issue #76): SNS POSTs a
@@ -239,7 +239,7 @@ func (s *Server) handleSESNotification(w http.ResponseWriter, r *http.Request) {
 			resp, err := http.Get(env.SubscribeURL)
 			if err != nil {
 				slog.Warn("ses_sns_subscribe_confirm_failed", "err", err)
-				writeErr(w, http.StatusBadGateway, "sns subscribe confirm gagal")
+				writeErr(w, http.StatusBadGateway, "sns subscribe confirm failed")
 				return
 			}
 			resp.Body.Close()

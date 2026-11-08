@@ -14,12 +14,12 @@ import (
 // updateProfileAvatar: PUT /v1/rest/profile/avatar
 func (h *RESTHandlers) updateProfileAvatar(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if h.Users == nil {
-		writeErr(w, http.StatusServiceUnavailable, "perkhidmatan tidak tersedia")
+		writeErr(w, http.StatusServiceUnavailable, "service unavailable")
 		return
 	}
 	userID := h.sessionOwnerID(r)
 	if userID == "" {
-		writeErr(w, http.StatusUnauthorized, "auth diperlukan")
+		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 
@@ -34,7 +34,7 @@ func (h *RESTHandlers) updateProfileAvatar(w http.ResponseWriter, r *http.Reques
 
 	// Empty clears the avatar (fallback to the initial-letter circle).
 	if url != "" && !jomformMediaURL(url) {
-		writeErr(w, http.StatusBadRequest, "URL avatar tidak sah (imej daripada pelayan JomForm diperlukan)")
+		writeErr(w, http.StatusBadRequest, "invalid avatar URL (an image from the JomForm server is required)")
 		return
 	}
 

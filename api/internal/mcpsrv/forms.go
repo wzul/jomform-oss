@@ -58,7 +58,7 @@ func (s *Server) listForms(
 		return nil, nil, err
 	}
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	// Issue #307: a user-level agent lists forms across all of the user's
 	// accessible workspaces (ownership enforced per store query).
@@ -93,10 +93,10 @@ func (s *Server) getForm(
 	ctx context.Context, _ *mcp.CallToolRequest, in formRefIn,
 ) (*mcp.CallToolResult, *formDetailOut, error) {
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	if in.FormID == "" {
-		return nil, nil, errors.New("form_id wajib")
+		return nil, nil, errors.New("form_id is required")
 	}
 	// Issue #307: the form may live in any of the user's workspaces; resolve the
 	// owning account (RBAC via resolveFormAccount scope).
@@ -108,7 +108,7 @@ func (s *Server) getForm(
 	// the form being present in a list read.
 	f, err := s.deps.Forms.GetByID(ctx, acc, in.FormID)
 	if err != nil {
-		return nil, nil, errors.New("borang tidak dijumpai")
+		return nil, nil, errors.New("form not found")
 	}
 	out := &formDetailOut{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
@@ -150,7 +150,7 @@ func (s *Server) listDeletedForms(
 	ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn,
 ) (*mcp.CallToolResult, *listOutput[trashedFormOut], error) {
 	if s.deps.Forms == nil {
-		return nil, nil, errors.New("forms tidak tersedia")
+		return nil, nil, errors.New("forms not available")
 	}
 	accs, err := s.accountScopes(ctx, false)
 	if err != nil {
@@ -203,8 +203,8 @@ func (s *Server) restoreFormMCP(
 		if errors.Is(err, dbstore.ErrFormSlugTaken) {
 			return nil, map[string]any{
 				"status": "refused",
-				"error": "slug borang ini telah diambil borang lain semasa ia dalam tong sampah — " +
-					"tukar slug borang itu dahulu, kemudian pulihkan semula. Tiada apa-apa dinamakan semula secara automatik.",
+				"error": "this form's slug was taken by another form while it was in the Trash — " +
+					"change that form's slug first, then restore again. Nothing is renamed automatically.",
 				"form_id": in.FormID,
 			}, nil
 		}
@@ -237,8 +237,8 @@ func (s *Server) purgeFormMCP(
 	if strings.TrimSpace(in.ConfirmSlug) != f.Slug {
 		return nil, map[string]any{
 			"status": "refused",
-			"error": "taip slug borang untuk sahkan pemadaman kekal (borang: " + f.Slug + "). " +
-				"Pemadaman kekal tidak boleh dibatalkan.",
+			"error": "type the form slug to confirm the permanent deletion (form: " + f.Slug + "). " +
+				"Permanent deletion cannot be undone.",
 			"form_id": in.FormID, "slug": f.Slug,
 		}, nil
 	}
@@ -247,8 +247,8 @@ func (s *Server) purgeFormMCP(
 			n, _ := s.deps.Forms.CountSalesByForm(ctx, acc, in.FormID)
 			return nil, map[string]any{
 				"status": "refused",
-				"error": "borang ini mempunyai jualan — sejarah jualan tidak boleh dimusnahkan " +
-					"dengan memadam borang. Ia kekal dalam tong sampah.",
+				"error": "this form has sales — sales history cannot be destroyed " +
+					"by deleting the form. It stays in the Trash.",
 				"form_id": in.FormID, "sales_count": n,
 			}, nil
 		}

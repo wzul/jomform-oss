@@ -292,7 +292,15 @@ export default function FeedbackPage() {
               {formErr && (
                 <p role="alert" className="text-xs text-red-700">{formErr}</p>
               )}
-              {formMsg && <p className="text-xs text-[var(--jf-primary)]">{formMsg}</p>}
+              {formMsg && (
+                /* Card t_ea568318: the submit → success state of the ONE
+                   submit form in the dashboard. It used to appear as a bare
+                   text swap; `.jf-ok-in` is the layer's "the success block
+                   fades in on the same card" pattern (opacity only, 120ms), so
+                   the class is applied where the layer was designed for it
+                   rather than being declared and used nowhere. */
+                <p className="jf-ok-in text-xs text-[var(--jf-primary)]">{formMsg}</p>
+              )}
               <button
                 type="submit"
                 disabled={sending}

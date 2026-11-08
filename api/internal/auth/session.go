@@ -37,10 +37,20 @@ type Sessions struct {
 	namespace string
 
 	// defaultTTL is what Create (the no-argument-TTL constructor) uses. Zero
-	// means SessionTTL — production never sets it; a test harness sets minutes
-	// so that even a run KILLED before its namespace sweep leaves keys that
-	// expire, not week-long ones. See WithDefaultTTL.
+	// means SessionTTL — production never sets it; a test harness sets minutes so
+	// that the keys it mints through Create expire, not week-long ones. It does
+	// NOT reach a session a login handler minted: those pass an explicit TTL to
+	// CreateSession (24h for an unticked remember box, 14d for a ticked one), so a
+	// killed test run can still leave those behind to drain by expiry — the
+	// namespace, not the TTL, is what keeps them from colliding with anyone
+	// (card t_39e2b840). See WithDefaultTTL.
 	defaultTTL time.Duration
+
+	// trustTTL is what a NEW trusted-device entry lives for. Zero means
+	// TrustTTL (30 days) — production never sets it; a test harness sets
+	// minutes so a run KILLED before its namespace sweep leaves trust keys that
+	// expire in minutes instead of a month. See WithTrustTTL.
+	trustTTL time.Duration
 }
 
 // SessionOption configures a store that rides on the session Valkey client.
@@ -77,11 +87,21 @@ func WithKeyNamespace(ns string) SessionOption {
 	return func(s *Sessions) { s.namespace = ns }
 }
 
-// WithDefaultTTL overrides the TTL Create (and CreateWithTTL's callers that pass
-// SessionTTL explicitly do not) applies to a new session. Zero — the production
-// setting — keeps SessionTTL.
+// WithDefaultTTL sets the TTL Create applies to a new session. It is NOT a cap:
+// a session minted with an explicit TTL (CreateWithTTL, CreateRememberedWithTTL,
+// CreateMagicWithTTL, CreateSession) keeps that TTL — and those are the login
+// handlers' paths, which is where production's 24h/14d come from. Zero — the
+// production setting — keeps SessionTTL.
 func WithDefaultTTL(ttl time.Duration) SessionOption {
 	return func(s *Sessions) { s.defaultTTL = ttl }
+}
+
+// WithTrustTTL overrides TrustTTL for the trusted-device store this Sessions
+// hands out (TrustedDevices). Zero — the production setting — keeps TrustTTL
+// (30 days). It exists for the same reason WithDefaultTTL does: the shared test
+// Valkey must not accumulate month-long keys a killed run cannot sweep.
+func WithTrustTTL(ttl time.Duration) SessionOption {
+	return func(s *Sessions) { s.trustTTL = ttl }
 }
 
 // validKeyNamespace reports whether ns can be used as one component of a session
@@ -141,61 +161,90 @@ func NewSessions(valkeyURL string, opts ...SessionOption) (*Sessions, error) {
 // on a shared DB; production's layout is the bare `jf:session:<hash>`.
 const sessionKeyPrefix = "jf:session:"
 
-// keyPrefix is this store's session key root, e.g. "jf:session:" in production
-// or "jf:session:jftest:p48213:" for a namespaced test store.
-func (s *Sessions) keyPrefix() string {
-	if s.namespace == "" {
-		return sessionKeyPrefix
+// namespacePrefix inserts a store's namespace after a key family's ROOT:
+// `jf:magic:<ns>:` for a namespaced store, the bare root in production
+// (ns == ""). Every store that hangs off Sessions builds its keys through it,
+// which is what keeps the production layout byte-identical while a namespaced
+// test store owns every family it writes (card t_6004c826).
+func namespacePrefix(root, ns string) string {
+	if ns == "" {
+		return root
 	}
-	return sessionKeyPrefix + s.namespace + ":"
+	return root + ns + ":"
 }
 
-// KeyNamespace reports the namespace this store writes its session keys under,
+// keyPrefix is this store's session key root, e.g. "jf:session:" in production
+// or "jf:session:jftest:p48213:" for a namespaced test store.
+func (s *Sessions) keyPrefix() string { return namespacePrefix(sessionKeyPrefix, s.namespace) }
+
+// KeyNamespace reports the namespace this store writes every key family under,
 // or "" for the production layout. A test harness uses it to say which slice of
 // a shared DB it owns (and to quote it in a failure message) without repeating
 // the key layout.
 func (s *Sessions) KeyNamespace() string { return s.namespace }
 
-// DeleteNamespaceKeys deletes every session key in this store's namespace and
-// returns how many it removed. It is the exit sweep a test harness calls from
-// TestMain, and it is only safe because the namespace is this process's own:
-// the SCAN pattern is built from it, so the keys of a concurrent checkout (a
-// different namespace) and every production-layout key are out of reach.
+// DeleteNamespaceKeys deletes every key this store minted under its namespace —
+// sessions, pending-2FA, step-up grants, password resets, magic links and the
+// emailed 2FA code/pending flags — and returns how many it removed. It is the
+// exit sweep a test harness calls from TestMain, and it is only safe because
+// the namespace is this process's own: every SCAN pattern is built from it, so
+// the keys of a concurrent checkout (a different namespace) and every
+// production-layout key are out of reach.
 //
-// It REFUSES to run on an unscoped store — namespace "" would make the pattern
-// `jf:session:*`, i.e. a sweep of the whole session keyspace including live
-// sessions of anything else sharing the DB. That refusal is the property that
-// keeps this from becoming the FlushDB the test suite spent several cards
+// It REFUSES to run on an unscoped store — namespace "" would make the patterns
+// `jf:session:*`, `jf:magic:*`, `jf:totp_pending:*`, … i.e. a sweep of live
+// credentials of anything else sharing the DB. That refusal is the property
+// that keeps this from becoming the FlushDB the test suite spent several cards
 // removing.
+//
+// The derived stores (PendingTOTP, StepUp, PasswordReset, MagicLink, Email2FA)
+// inherit the namespace, so this ONE call covers every family a process can
+// write; before t_6004c826 they ignored it and minted production-layout keys
+// the sweep could not see. TrustedDevices keeps its own sweep because its three
+// families are a separate store with a separate TTL.
 //
 // SCAN, not KEYS: the shared test DB is being served while this runs.
 func (s *Sessions) DeleteNamespaceKeys(ctx context.Context) (int, error) {
 	if s.namespace == "" {
 		return 0, errors.New("auth: DeleteNamespaceKeys needs a key namespace; an unscoped store would sweep the whole session keyspace")
 	}
-	pattern := s.keyPrefix() + "*"
-	if !strings.HasPrefix(pattern, sessionKeyPrefix+s.namespace+":") {
-		return 0, fmt.Errorf("auth: refusing to sweep %q: not scoped to namespace %q", pattern, s.namespace)
+	families := []struct{ family, root string }{
+		{"session", sessionKeyPrefix},
+		{"totp_pending", PendingTOTPKeyPrefix},
+		{"stepup", StepUpKeyPrefix},
+		{"pwreset", PasswordResetKeyPrefix},
+		{"magic", MagicLinkKeyPrefix},
+		{"2faemail", Email2FACodeKeyPrefix},
+		{"2fa_pending", Email2FAPendingPrefix},
 	}
 	deleted := 0
-	var cursor uint64
-	for {
-		keys, next, err := s.rdb.Scan(ctx, cursor, pattern, 500).Result()
-		if err != nil {
-			return deleted, fmt.Errorf("scan %q: %w", pattern, err)
+	for _, fam := range families {
+		pattern := namespacePrefix(fam.root, s.namespace) + "*"
+		// Defensive: the pattern must still be scoped to this namespace after
+		// the string building above, whatever the family.
+		if !strings.HasPrefix(pattern, fam.root+s.namespace+":") {
+			return deleted, fmt.Errorf("auth: refusing to sweep %q: not scoped to namespace %q", pattern, s.namespace)
 		}
-		if len(keys) > 0 {
-			n, err := s.rdb.Del(ctx, keys...).Result()
-			deleted += int(n)
+		var cursor uint64
+		for {
+			keys, next, err := s.rdb.Scan(ctx, cursor, pattern, 500).Result()
 			if err != nil {
-				return deleted, fmt.Errorf("delete %d key(s) under %q: %w", len(keys), pattern, err)
+				return deleted, fmt.Errorf("scan %s keys %q: %w", fam.family, pattern, err)
+			}
+			if len(keys) > 0 {
+				n, err := s.rdb.Del(ctx, keys...).Result()
+				deleted += int(n)
+				if err != nil {
+					return deleted, fmt.Errorf("delete %d %s key(s) under %q: %w", len(keys), fam.family, pattern, err)
+				}
+			}
+			cursor = next
+			if cursor == 0 {
+				break
 			}
 		}
-		cursor = next
-		if cursor == 0 {
-			return deleted, nil
-		}
 	}
+	return deleted, nil
 }
 
 // sessionKey namespaces a session by the SHA-256 of its token.
@@ -494,28 +543,37 @@ const (
 	PendingTOTPTTL       = 10 * time.Minute
 )
 
-func pendingTOTPKey(userID string) string { return PendingTOTPKeyPrefix + userID }
+func (s *PendingTOTP) key(userID string) string {
+	return namespacePrefix(PendingTOTPKeyPrefix, s.namespace) + userID
+}
 
-// PendingTOTP exposes a pending-2FA store sharing the session client.
-func (s *Sessions) PendingTOTP() *PendingTOTP { return &PendingTOTP{rdb: s.rdb} }
+// PendingTOTP exposes a pending-2FA store sharing the session client. It
+// inherits the store's key namespace, so a namespaced test store writes
+// `jf:totp_pending:<ns>:<userID>` and the exit sweep can reclaim it.
+func (s *Sessions) PendingTOTP() *PendingTOTP {
+	return &PendingTOTP{rdb: s.rdb, namespace: s.namespace}
+}
 
 type PendingTOTP struct {
 	rdb *goredis.Client
+	// namespace scopes this store's keys under `jf:totp_pending:<ns>:`. Empty
+	// in production. See Sessions.WithKeyNamespace.
+	namespace string
 }
 
 // Set stores the pending secret with a short TTL.
 func (p *PendingTOTP) Set(ctx context.Context, userID, secret string) error {
-	return p.rdb.Set(ctx, pendingTOTPKey(userID), secret, PendingTOTPTTL).Err()
+	return p.rdb.Set(ctx, p.key(userID), secret, PendingTOTPTTL).Err()
 }
 
 // Get returns the pending secret (redis.Nil when none or expired).
 func (p *PendingTOTP) Get(ctx context.Context, userID string) (string, error) {
-	return p.rdb.Get(ctx, pendingTOTPKey(userID)).Result()
+	return p.rdb.Get(ctx, p.key(userID)).Result()
 }
 
 // Delete removes the pending secret (used after successful enable).
 func (p *PendingTOTP) Delete(ctx context.Context, userID string) error {
-	return p.rdb.Del(ctx, pendingTOTPKey(userID)).Err()
+	return p.rdb.Del(ctx, p.key(userID)).Err()
 }
 
 // ─── step-up grants (issue #458) ────────────────────────────────────────────
@@ -533,13 +591,20 @@ const (
 	StepUpTTL       = 5 * time.Minute
 )
 
-func stepUpKey(sessionToken string) string { return StepUpKeyPrefix + hashOf(sessionToken) }
+func (s *StepUp) key(sessionToken string) string {
+	return namespacePrefix(StepUpKeyPrefix, s.namespace) + hashOf(sessionToken)
+}
 
-// StepUp exposes the short-lived step-up grant store sharing the session client.
-func (s *Sessions) StepUp() *StepUp { return &StepUp{rdb: s.rdb} }
+// StepUp exposes the short-lived step-up grant store sharing the session
+// client. It inherits the store's key namespace, so a namespaced test store's
+// grants are swept with its sessions.
+func (s *Sessions) StepUp() *StepUp { return &StepUp{rdb: s.rdb, namespace: s.namespace} }
 
 type StepUp struct {
 	rdb *goredis.Client
+	// namespace scopes this store's keys under `jf:stepup:<ns>:`. Empty in
+	// production. See Sessions.WithKeyNamespace.
+	namespace string
 }
 
 // Grant records a fresh step-up for the session token (TTL StepUpTTL).
@@ -547,7 +612,7 @@ func (s *StepUp) Grant(ctx context.Context, sessionToken, userID string) error {
 	if sessionToken == "" {
 		return errors.New("stepup: empty session token")
 	}
-	return s.rdb.Set(ctx, stepUpKey(sessionToken), userID, StepUpTTL).Err()
+	return s.rdb.Set(ctx, s.key(sessionToken), userID, StepUpTTL).Err()
 }
 
 // Granted reports whether the session token carries a live step-up grant for
@@ -556,7 +621,7 @@ func (s *StepUp) Granted(ctx context.Context, sessionToken, userID string) bool 
 	if sessionToken == "" || userID == "" {
 		return false
 	}
-	v, err := s.rdb.Get(ctx, stepUpKey(sessionToken)).Result()
+	v, err := s.rdb.Get(ctx, s.key(sessionToken)).Result()
 	if err != nil {
 		return false
 	}
@@ -569,7 +634,7 @@ func (s *StepUp) Consume(ctx context.Context, sessionToken string) error {
 	if sessionToken == "" {
 		return nil
 	}
-	return s.rdb.Del(ctx, stepUpKey(sessionToken)).Err()
+	return s.rdb.Del(ctx, s.key(sessionToken)).Err()
 }
 
 // ─── shared helpers ──────────────────────────────────────────────────────────
@@ -602,14 +667,22 @@ const (
 	PasswordResetTTL       = 30 * time.Minute
 )
 
-func passwordResetKey(hash string) string { return PasswordResetKeyPrefix + hash }
+func (p *PasswordReset) key(hash string) string {
+	return namespacePrefix(PasswordResetKeyPrefix, p.namespace) + hash
+}
 
 // PasswordReset exposes a single-use, hashed, 30-min password-reset token
-// store backed by the shared Valkey client.
-func (s *Sessions) PasswordReset() *PasswordReset { return &PasswordReset{rdb: s.rdb} }
+// store backed by the shared Valkey client. It inherits the store's key
+// namespace, so a namespaced test store's reset tokens are swept with it.
+func (s *Sessions) PasswordReset() *PasswordReset {
+	return &PasswordReset{rdb: s.rdb, namespace: s.namespace}
+}
 
 type PasswordReset struct {
 	rdb *goredis.Client
+	// namespace scopes this store's keys under `jf:pwreset:<ns>:`. Empty in
+	// production. See Sessions.WithKeyNamespace.
+	namespace string
 }
 
 // Generate mints a fresh raw token, stores its hash→userID mapping and returns
@@ -619,7 +692,7 @@ func (p *PasswordReset) Generate(ctx context.Context, userID string) (string, er
 	if err != nil {
 		return "", err
 	}
-	if err := p.rdb.Set(ctx, passwordResetKey(hashOf(token)), userID, PasswordResetTTL).Err(); err != nil {
+	if err := p.rdb.Set(ctx, p.key(hashOf(token)), userID, PasswordResetTTL).Err(); err != nil {
 		return "", fmt.Errorf("pwreset set: %w", err)
 	}
 	return token, nil
@@ -635,7 +708,7 @@ func (p *PasswordReset) Consume(ctx context.Context, token string) (string, erro
 	if token == "" {
 		return "", ErrResetTokenInvalid
 	}
-	key := passwordResetKey(hashOf(token))
+	key := p.key(hashOf(token))
 	// GET before DEL so we only delete when the mapping actually existed
 	// (redis handles this atomically under a script, but the token hash is a
 	// unique key so GET→DEL is race-safe here: a second consumer would GET
@@ -680,9 +753,113 @@ const (
 	TrustTTL           = 30 * 24 * time.Hour
 )
 
-func trustKey(hash string) string       { return TrustKeyPrefix + hash }
-func trustSetKey(userID string) string  { return TrustSetKeyPrefix + userID }
-func trustMetaKey(userID string) string { return TrustMetaKeyPrefix + userID }
+// ─── trusted-device key layout ──────────────────────────────────────────────
+//
+// A trust entry is THREE keys, not one: the token key (hash → userID), the
+// user's SET of live hashes, and the user's metadata HASH. Their prefixes are
+// deliberately distinct from each other (note `jf:trust:` does not prefix
+// `jf:trustset:` — the character after "trust" is `s`, not `:`), which is what
+// lets a namespace sweep name each family separately and still cannot reach a
+// key it did not write.
+//
+// The namespace sits immediately after the family prefix, exactly as it does
+// for sessions: `jf:trust:jftest:p42:<hash>` in a test process, the bare
+// `jf:trust:<hash>` in production (namespace empty). See WithKeyNamespace and
+// TrustedDevices.DeleteNamespaceKeys.
+func (t *TrustedDevices) trustKeyPrefix() string {
+	if t.namespace == "" {
+		return TrustKeyPrefix
+	}
+	return TrustKeyPrefix + t.namespace + ":"
+}
+
+func (t *TrustedDevices) trustSetPrefix() string {
+	if t.namespace == "" {
+		return TrustSetKeyPrefix
+	}
+	return TrustSetKeyPrefix + t.namespace + ":"
+}
+
+func (t *TrustedDevices) trustMetaPrefix() string {
+	if t.namespace == "" {
+		return TrustMetaKeyPrefix
+	}
+	return TrustMetaKeyPrefix + t.namespace + ":"
+}
+
+// trustKey namespaces one entry by the SHA-256 of its raw token.
+func (t *TrustedDevices) trustKey(hash string) string { return t.trustKeyPrefix() + hash }
+
+// trustSetKey is the SET holding the user's live device hashes. It carries the
+// same TTL as the entries so it cannot outlive them as an empty set.
+func (t *TrustedDevices) trustSetKey(userID string) string { return t.trustSetPrefix() + userID }
+
+// trustMetaKey is the HASH of device metadata, one field per device hash.
+func (t *TrustedDevices) trustMetaKey(userID string) string { return t.trustMetaPrefix() + userID }
+
+// trustTTL is the lifetime a NEW trust entry gets: the store's WithTrustTTL
+// when a test harness set one, TrustTTL (30 days) in production.
+func (t *TrustedDevices) trustTTL() time.Duration {
+	if t.ttl <= 0 {
+		return TrustTTL
+	}
+	return t.ttl
+}
+
+// DeleteNamespaceKeys deletes every trust key this store minted — the token
+// keys, the per-user sets AND the per-user metadata hashes — and returns how
+// many it removed. It is the exit sweep a test harness calls from TestMain, and
+// it is only safe because the namespace is the process's own: each SCAN pattern
+// is built from it, so a concurrent checkout's keys (a different namespace) and
+// every production-layout key are out of reach.
+//
+// It refuses an unscoped store for the same reason Sessions.DeleteNamespaceKeys
+// does: namespace "" would make the patterns `jf:trust:*`, `jf:trustset:*` and
+// `jf:trustmeta:*` — a sweep of every trusted device a live API is serving,
+// i.e. the FlushDB this suite spent several cards removing.
+//
+// The SET is deleted as a whole (not just its members), so it cannot linger as
+// an empty set after its member token keys are gone.
+//
+// SCAN, not KEYS: the shared test DB is being served while this runs.
+func (t *TrustedDevices) DeleteNamespaceKeys(ctx context.Context) (int, error) {
+	if t.namespace == "" {
+		return 0, errors.New("auth: TrustedDevices.DeleteNamespaceKeys needs a key namespace; an unscoped store would sweep every live trusted device")
+	}
+	roots := []struct{ family, prefix, root string }{
+		{"token", t.trustKeyPrefix(), TrustKeyPrefix},
+		{"set", t.trustSetPrefix(), TrustSetKeyPrefix},
+		{"meta", t.trustMetaPrefix(), TrustMetaKeyPrefix},
+	}
+	deleted := 0
+	for _, fam := range roots {
+		pattern := fam.prefix + "*"
+		// Defensive: the pattern must still be scoped to this namespace after
+		// the string building above, whatever the family.
+		if !strings.HasPrefix(pattern, fam.root+t.namespace+":") {
+			return deleted, fmt.Errorf("auth: refusing to sweep %q: not scoped to namespace %q", pattern, t.namespace)
+		}
+		var cursor uint64
+		for {
+			keys, next, err := t.rdb.Scan(ctx, cursor, pattern, 500).Result()
+			if err != nil {
+				return deleted, fmt.Errorf("scan %s keys %q: %w", fam.family, pattern, err)
+			}
+			if len(keys) > 0 {
+				n, err := t.rdb.Del(ctx, keys...).Result()
+				deleted += int(n)
+				if err != nil {
+					return deleted, fmt.Errorf("delete %d %s key(s) under %q: %w", len(keys), fam.family, pattern, err)
+				}
+			}
+			cursor = next
+			if cursor == 0 {
+				break
+			}
+		}
+	}
+	return deleted, nil
+}
 
 // TrustDevice is one trusted device as shown in Profile → Security.
 type TrustDevice struct {
@@ -772,10 +949,25 @@ func DeviceLabel(ua string) string {
 }
 
 // TrustedDevices exposes the trust-cookie store sharing the session client.
-func (s *Sessions) TrustedDevices() *TrustedDevices { return &TrustedDevices{rdb: s.rdb} }
+//
+// It inherits the store's key namespace and trusted-device TTL, so a test store
+// built WithKeyNamespace writes `jf:trust:<ns>:<hash>` (and the matching
+// trustset/trustmeta keys) and can delete exactly that slice on exit — the
+// production layout is unchanged because the namespace is empty there.
+func (s *Sessions) TrustedDevices() *TrustedDevices {
+	return &TrustedDevices{rdb: s.rdb, namespace: s.namespace, ttl: s.trustTTL}
+}
 
 type TrustedDevices struct {
 	rdb *goredis.Client
+
+	// namespace scopes this store's THREE trust key families under
+	// `jf:trust:<ns>:`, `jf:trustset:<ns>:` and `jf:trustmeta:<ns>:`. Empty in
+	// production. See Sessions.WithKeyNamespace.
+	namespace string
+
+	// ttl overrides TrustTTL for entries this store mints. Zero means TrustTTL.
+	ttl time.Duration
 }
 
 // Issue mints a fresh trust token, stores hash→userID (TTL 30d), adds it to
@@ -798,12 +990,13 @@ func (t *TrustedDevices) IssueDevice(ctx context.Context, userID, ua, ip string)
 		FirstSeen: time.Now().UTC().Format(time.RFC3339),
 	})
 	pipe := t.rdb.TxPipeline()
-	pipe.Set(ctx, trustKey(h), userID, TrustTTL)
-	pipe.SAdd(ctx, trustSetKey(userID), h)
-	pipe.Expire(ctx, trustSetKey(userID), TrustTTL)
+	ttl := t.trustTTL()
+	pipe.Set(ctx, t.trustKey(h), userID, ttl)
+	pipe.SAdd(ctx, t.trustSetKey(userID), h)
+	pipe.Expire(ctx, t.trustSetKey(userID), ttl)
 	if merr == nil {
-		pipe.HSet(ctx, trustMetaKey(userID), h, string(meta))
-		pipe.Expire(ctx, trustMetaKey(userID), TrustTTL)
+		pipe.HSet(ctx, t.trustMetaKey(userID), h, string(meta))
+		pipe.Expire(ctx, t.trustMetaKey(userID), ttl)
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		return "", fmt.Errorf("trust issue: %w", err)
@@ -816,7 +1009,7 @@ func (t *TrustedDevices) UserIDFor(ctx context.Context, token string) string {
 	if token == "" {
 		return ""
 	}
-	userID, err := t.rdb.Get(ctx, trustKey(hashOf(token))).Result()
+	userID, err := t.rdb.Get(ctx, t.trustKey(hashOf(token))).Result()
 	if err != nil {
 		return ""
 	}
@@ -838,7 +1031,7 @@ func (t *TrustedDevices) Expiry(ctx context.Context, token string) time.Time {
 	if token == "" {
 		return time.Time{}
 	}
-	ttl, err := t.rdb.TTL(ctx, trustKey(hashOf(token))).Result()
+	ttl, err := t.rdb.TTL(ctx, t.trustKey(hashOf(token))).Result()
 	if err != nil || ttl <= 0 {
 		return time.Time{}
 	}
@@ -850,7 +1043,7 @@ func (t *TrustedDevices) Expiry(ctx context.Context, token string) time.Time {
 // so the UI never shows a device that can no longer skip TOTP. currentHash (if
 // non-empty) marks the requesting device.
 func (t *TrustedDevices) List(ctx context.Context, userID, currentHash string) ([]TrustDevice, error) {
-	members, err := t.rdb.SMembers(ctx, trustSetKey(userID)).Result()
+	members, err := t.rdb.SMembers(ctx, t.trustSetKey(userID)).Result()
 	if err != nil {
 		if errors.Is(err, goredis.Nil) {
 			return nil, nil
@@ -861,11 +1054,11 @@ func (t *TrustedDevices) List(ctx context.Context, userID, currentHash string) (
 		return nil, nil
 	}
 	// Best-effort metadata for all members in one round-trip.
-	metas, _ := t.rdb.HGetAll(ctx, trustMetaKey(userID)).Result()
+	metas, _ := t.rdb.HGetAll(ctx, t.trustMetaKey(userID)).Result()
 	pipe := t.rdb.Pipeline()
 	ttlCmds := make(map[string]*goredis.DurationCmd, len(members))
 	for _, h := range members {
-		ttlCmds[h] = pipe.TTL(ctx, trustKey(h))
+		ttlCmds[h] = pipe.TTL(ctx, t.trustKey(h))
 	}
 	_, _ = pipe.Exec(ctx)
 
@@ -898,8 +1091,8 @@ func (t *TrustedDevices) List(ctx context.Context, userID, currentHash string) (
 			args = append(args, h)
 		}
 		pipe2 := t.rdb.TxPipeline()
-		pipe2.SRem(ctx, trustSetKey(userID), args...)
-		pipe2.HDel(ctx, trustMetaKey(userID), stale...)
+		pipe2.SRem(ctx, t.trustSetKey(userID), args...)
+		pipe2.HDel(ctx, t.trustMetaKey(userID), stale...)
 		_, _ = pipe2.Exec(ctx)
 	}
 	// Sort by expiry ascending (soonest to expire first) for a stable UI.
@@ -915,7 +1108,7 @@ func (t *TrustedDevices) RevokeHash(ctx context.Context, userID, hash string) er
 		return nil
 	}
 	// Only revoke a device that actually belongs to this user's set.
-	ok, err := t.rdb.SIsMember(ctx, trustSetKey(userID), hash).Result()
+	ok, err := t.rdb.SIsMember(ctx, t.trustSetKey(userID), hash).Result()
 	if err != nil {
 		return err
 	}
@@ -923,9 +1116,9 @@ func (t *TrustedDevices) RevokeHash(ctx context.Context, userID, hash string) er
 		return nil
 	}
 	pipe := t.rdb.TxPipeline()
-	pipe.Del(ctx, trustKey(hash))
-	pipe.SRem(ctx, trustSetKey(userID), hash)
-	pipe.HDel(ctx, trustMetaKey(userID), hash)
+	pipe.Del(ctx, t.trustKey(hash))
+	pipe.SRem(ctx, t.trustSetKey(userID), hash)
+	pipe.HDel(ctx, t.trustMetaKey(userID), hash)
 	_, err = pipe.Exec(ctx)
 	return err
 }
@@ -935,9 +1128,9 @@ func (t *TrustedDevices) RevokeHash(ctx context.Context, userID, hash string) er
 func (t *TrustedDevices) Revoke(ctx context.Context, userID, token string) error {
 	h := hashOf(token)
 	pipe := t.rdb.TxPipeline()
-	pipe.Del(ctx, trustKey(h))
-	pipe.SRem(ctx, trustSetKey(userID), h)
-	pipe.HDel(ctx, trustMetaKey(userID), h)
+	pipe.Del(ctx, t.trustKey(h))
+	pipe.SRem(ctx, t.trustSetKey(userID), h)
+	pipe.HDel(ctx, t.trustMetaKey(userID), h)
 	_, err := pipe.Exec(ctx)
 	return err
 }
@@ -945,25 +1138,25 @@ func (t *TrustedDevices) Revoke(ctx context.Context, userID, token string) error
 // RevokeAll deletes every trust entry for a user — called on password reset
 // and 2FA disable.
 func (t *TrustedDevices) RevokeAll(ctx context.Context, userID string) error {
-	members, err := t.rdb.SMembers(ctx, trustSetKey(userID)).Result()
+	members, err := t.rdb.SMembers(ctx, t.trustSetKey(userID)).Result()
 	if err != nil {
 		return err
 	}
 	if len(members) == 0 {
 		pipe := t.rdb.TxPipeline()
-		pipe.Del(ctx, trustSetKey(userID))
-		pipe.Del(ctx, trustMetaKey(userID))
+		pipe.Del(ctx, t.trustSetKey(userID))
+		pipe.Del(ctx, t.trustMetaKey(userID))
 		_, err := pipe.Exec(ctx)
 		return err
 	}
 	keys := make([]string, 0, len(members)+1)
 	for _, h := range members {
-		keys = append(keys, trustKey(h))
+		keys = append(keys, t.trustKey(h))
 	}
-	keys = append(keys, trustSetKey(userID))
+	keys = append(keys, t.trustSetKey(userID))
 	pipe := t.rdb.TxPipeline()
 	pipe.Del(ctx, keys...)
-	pipe.Del(ctx, trustMetaKey(userID))
+	pipe.Del(ctx, t.trustMetaKey(userID))
 	_, err = pipe.Exec(ctx)
 	return err
 }

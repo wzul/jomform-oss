@@ -95,7 +95,7 @@ func TestValidateFieldsWebsiteAcceptsWhatTheBrowserAccepts(t *testing.T) {
 	if err == nil {
 		t.Fatal("scheme-less value passed a website field")
 	}
-	if !strings.Contains(err.Error(), "URL tidak sah") || !strings.Contains(err.Error(), "Website") {
+	if !strings.Contains(err.Error(), "Invalid URL") || !strings.Contains(err.Error(), "Website") {
 		t.Errorf("error = %q, want it to name the field", err.Error())
 	}
 	if err := ValidateFields(regs, map[string]string{"site": "javascript:alert(1)"}); err == nil {

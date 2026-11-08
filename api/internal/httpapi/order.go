@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/wzul/jomform/api/internal/buyertext"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/formfields"
 	"github.com/wzul/jomform/api/internal/payments"
@@ -82,13 +83,23 @@ type orderTarget struct {
 // Behaviour for an existing form target is byte-for-byte the old handleSubmit:
 // same validation, same anti-spam layers, same sale.form_id.
 func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt orderTarget) {
+	// One refusal language for the whole core: the form's own config.lang when
+	// the target carries one (a menu order does), else the workspace default of
+	// its account. Every refusal below is rendered in it, because the page's JS
+	// prints the server's `message` and before this the prose was Malay on every
+	// locale (t_874021eb).
+	langForm := tgt.Form
+	if langForm == nil {
+		langForm = tgt.FieldsForm
+	}
+	lang := h.buyerLang(r.Context(), langForm, tgt.AccountID)
 	var in submitInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderIncomplete)
 		return
 	}
 	if len(in.Items) == 0 {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderIncomplete)
 		return
 	}
 	// Issue #254: server-side re-validation of the form's field contract. Agent
@@ -133,16 +144,16 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	// fallback email, which is the path that exists for "buyer gave none".
 	if tgt.RequireName {
 		if strings.TrimSpace(in.Client.FullName) == "" || strings.TrimSpace(in.Client.Email) == "" {
-			writeErr(w, http.StatusBadRequest, "nama dan emel wajib")
+			buyerErr(w, lang, http.StatusBadRequest, errOrderNameEmailRequired)
 			return
 		}
 	} else if in.Client.Email == "" && !hiddenIdentity(regs, hidden, formfields.IdentityEmail) {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderIncomplete)
 		return
 	}
 	if tgt.FieldsForm != nil {
 		if err := formfields.ValidateFields(regs, in.Fields); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+			buyerErrOf(w, lang, http.StatusBadRequest, err)
 			return
 		}
 		// Card t_f9e2f855: a required `option`/`shipping` block is a real
@@ -165,7 +176,7 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		// same rule here, which is what stops the route demanding an answer the
 		// buyer was never shown.
 		if err := formfields.ValidateFields(formfields.PricingContract(tgt.FieldsForm.Config), in.Fields); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+			buyerErrOf(w, lang, http.StatusBadRequest, err)
 			return
 		}
 	} else if len(tgt.FieldsContract) > 0 {
@@ -185,7 +196,7 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	owner := tgt.OwnerSkip
 	// Layer 1 — honeypot: a filled hidden field marks a bot.
 	if h.antiSpamCheckHoneypot(r, &in) {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderIncomplete)
 		return
 	}
 	// Layer 5 — email/domain validation (format + MX). Only when there is one:
@@ -193,17 +204,17 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	// legitimately has no buyer email, and an empty string is not an invalid
 	// address. The response route guards it the same way.
 	if in.Client.Email != "" && h.antiSpamCheckEmail(r, in.Client.Email) {
-		writeErr(w, http.StatusBadRequest, "emel tidak sah")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderEmailInvalid)
 		return
 	}
 	// Layer 2 — per-target rate limit (15/target/IP/hour), skipped for owner.
 	if !owner && h.antiSpamCheckRateLimitKey(r, tgt.RateKey) {
-		writeErr(w, http.StatusTooManyRequests, "terlalu banyak cubaan. Cuba lagi kemudian.")
+		buyerErr(w, lang, http.StatusTooManyRequests, errOrderRateLimited)
 		return
 	}
 	// Layer 3 — time-based check (reject too-fast submits), skipped for owner.
 	if !owner && h.antiSpamCheckTime(r, &in) {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderIncomplete)
 		return
 	}
 	// The layers above consumed the renderer's hidden controls
@@ -213,7 +224,7 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	dropAntiSpamBookkeeping(in.Fields)
 	method := in.PaymentMethod
 	if method != "chip" && method != "bank_direct" {
-		writeErr(w, http.StatusBadRequest, "kaedah pembayaran tidak sah")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderPaymentMethodBad)
 		return
 	}
 
@@ -291,6 +302,10 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	// Issue #560: the resolution of the subscription product for this order (nil
 	// when no line item is a subscription). See subItems below.
 	var product *dbstore.Product
+	// Card t_06851d88: at least one line item was priced from a buyer-chosen
+	// amount (a custom_amount product). Recorded as the sale's type below so
+	// reports and exports see how the sale was priced.
+	var sawCustomAmount bool
 	// Issue #623: the variation bought of that subscription product, when the
 	// buyer chose one. It carries the subscription cycle the sale bills on.
 	var subVariation *dbstore.ProductVariation
@@ -313,15 +328,57 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		// under the block's own id, which is also its product_id.
 		name, price, perr := h.lookupProduct(r.Context(), tgt.AccountID, tgt.Form, it.ProductID, in.Fields[it.ProductID])
 		if perr != nil {
-			writeErr(w, http.StatusBadRequest, perr.Error())
+			buyerErrOf(w, lang, http.StatusBadRequest, perr)
 			return
 		}
+		// Card t_06851d88: resolve THIS line's product row once. It is both the
+		// price authority for a custom_amount product and the subscription
+		// resolution below, so the two can never read different rows.
+		var row *dbstore.Product
+		// Card t_06851d88: THIS line's price came from the buyer's validated
+		// amount, so its quantity is pinned to 1. Per LINE, not per cart — a
+		// mixed order must still multiply its ordinary items.
+		var customPriced bool
+		if h.Products != nil && tgt.AccountID != "" {
+			if pr, gerr := h.Products.Get(r.Context(), tgt.AccountID, it.ProductID); gerr == nil {
+				row = pr
+			}
+		}
+		// A custom_amount (pay-what-you-want) product has no asking price of
+		// its own: the buyer's amount, VALIDATED against this product's stored
+		// limits, replaces the row price. The client's number is a claim; it is
+		// never charged before customAmountSen has accepted it.
+		if row != nil && row.Type == dbstore.SaleTypeCustomAmount {
+			if it.VariationID != "" {
+				// A variation carries its own fixed price, which contradicts a
+				// buyer-chosen amount. Write paths refuse such a product, so
+				// this only catches a hand-made or stale request.
+				buyerErr(w, lang, http.StatusBadRequest, buyertext.New(buyertext.CodeOrderVariationInvalid,
+					map[string]string{"id": it.VariationID}))
+				return
+			}
+			amount, aerr := customAmountSen(row, it.AmountSen)
+			if aerr != nil {
+				buyerErrOf(w, lang, http.StatusBadRequest, aerr)
+				return
+			}
+			price = amount
+			sawCustomAmount = true
+			customPriced = true
+		}
 		if price <= 0 && name == "" {
-			writeErr(w, http.StatusBadRequest, "produk tidak sah: "+it.ProductID)
+			buyerErr(w, lang, http.StatusBadRequest, buyertext.New(buyertext.CodeOrderProductInvalid,
+				map[string]string{"id": it.ProductID}))
 			return
 		}
 		qty := it.Quantity
 		if qty < 1 {
+			qty = 1
+		}
+		// A buyer-chosen amount IS the gift, not a unit price: a hand-made or
+		// replayed request must not multiply it, and the page renders no
+		// quantity selector for such a product.
+		if customPriced {
 			qty = 1
 		}
 		item := dbstore.SaleItem{ProductID: it.ProductID, Name: name, PriceSen: price, Qty: qty}
@@ -334,7 +391,8 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		if it.VariationID == "" && h.ProductVariations != nil &&
 			h.isProductRow(r.Context(), tgt.AccountID, it.ProductID) {
 			if vs, verr := h.ProductVariations.ListByProduct(r.Context(), it.ProductID); verr == nil && len(vs) > 0 {
-				writeErr(w, http.StatusBadRequest, "pilih variasi untuk "+name)
+				buyerErr(w, lang, http.StatusBadRequest, buyertext.New(buyertext.CodeOrderVariationRequired,
+					map[string]string{"name": name}))
 				return
 			}
 		}
@@ -342,10 +400,10 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		// subscription. The products table is the authority (same source as the
 		// price above); a pricing/add-on block is not a product row and is
 		// therefore never a subscription.
-		if h.Products != nil && product == nil {
-			if pr, perr := h.Products.Get(r.Context(), tgt.AccountID, it.ProductID); perr == nil && pr != nil {
-				product = pr
-			}
+		//
+		// Card t_06851d88: `row` is that same lookup, done once per item above.
+		if row != nil && product == nil {
+			product = row
 		}
 		// Issue #153: when the buyer chose a variation, validate it belongs to
 		// the product, use the variation's price, and decrement the variation's
@@ -353,13 +411,15 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		// sale so the receipt/merchant view shows which variation was bought.
 		if it.VariationID != "" {
 			if h.ProductVariations == nil {
-				writeErr(w, http.StatusBadRequest, "variasi tidak sah: "+it.VariationID)
+				buyerErr(w, lang, http.StatusBadRequest, buyertext.New(buyertext.CodeOrderVariationInvalid,
+					map[string]string{"id": it.VariationID}))
 				return
 			}
 			v, verr := h.ProductVariations.GetByProduct(r.Context(), it.ProductID, it.VariationID)
 			if verr != nil {
 				if verr == dbstore.ErrVariationNotFound {
-					writeErr(w, http.StatusBadRequest, "variasi tidak sah: "+it.VariationID)
+					buyerErr(w, lang, http.StatusBadRequest, buyertext.New(buyertext.CodeOrderVariationInvalid,
+						map[string]string{"id": it.VariationID}))
 					return
 				}
 				respondErr(w, r, verr)
@@ -378,7 +438,8 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 			// Inventory: limited-stock variations decrement atomically; SOLD OUT rejects.
 			if err := h.ProductVariations.DecrementStock(r.Context(), v.ID, int(qty)); err != nil {
 				if err == dbstore.ErrOutOfStock {
-					writeErr(w, http.StatusConflict, "stok habis untuk "+name+" ("+v.Name+")")
+					buyerErr(w, lang, http.StatusConflict, buyertext.New(buyertext.CodeOrderOutOfStockVariant,
+						map[string]string{"name": name, "variant": v.Name}))
 					return
 				}
 				respondErr(w, r, err)
@@ -391,7 +452,8 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 			// #461; before, the non-uuid block id blew up the stock query).
 			if err := h.Products.DecrementStock(r.Context(), it.ProductID, int(qty)); err != nil {
 				if err == dbstore.ErrOutOfStock {
-					writeErr(w, http.StatusConflict, "stok habis untuk "+name)
+					buyerErr(w, lang, http.StatusConflict, buyertext.New(buyertext.CodeOrderOutOfStock,
+						map[string]string{"name": name}))
 					return
 				}
 				respondErr(w, r, err)
@@ -416,7 +478,7 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	// the subscription/shipping resolution so a doomed order never makes a live
 	// courier quotation and never records a sale.
 	if len(sale.Items) == 0 {
-		writeErr(w, http.StatusBadRequest, "tiada produk untuk dibayar")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderNothingToPay)
 		return
 	}
 	// Issue #560: a subscription order is one where a PURCHASED PRODUCT is
@@ -445,6 +507,11 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 			sale.SubscriptionVariationID = subVariation.ID
 		}
 	}
+	// Card t_06851d88: a sale priced from a buyer-chosen amount records that
+	// type, so reports/exports can tell a donation from a fixed-price sale. A
+	// subscription sale keeps its recurring terms — a mixed cart bills the
+	// donation once, inside the first payment.
+	sale.SaleType = saleRecordsCustomAmount(sale.SaleType, sawCustomAmount)
 	// Shipping: resolved AFTER the cart, because the free-shipping threshold
 	// compares against the ITEMS subtotal above, and the fee itself must never be
 	// part of it. Both managed sources run through one resolver so the sale
@@ -454,8 +521,8 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	if len(zoneSpecs) > 0 || len(courierSpecs) > 0 {
 		fee, detail, serr := h.resolveShipping(r.Context(), tgt, zoneSpecs, courierSpecs, &in, subtotal)
 		if serr != nil {
-			if _, bad := serr.(*shippingError); bad {
-				writeErr(w, http.StatusBadRequest, serr.Error())
+			if buyertext.As(serr) != nil {
+				buyerErrOf(w, lang, http.StatusBadRequest, serr)
 				return
 			}
 			respondErr(w, r, serr)
@@ -470,7 +537,49 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	// subtotal, unchanged); a zone-sourced block contributes shipping_sen and
 	// nothing to subtotal. The formula is centralized in payments.SumItems so
 	// the invariant is enforced and unit-tested in one place.
-	sale.TotalSen = payments.SumItems(subtotal, sale.ShippingSen, 0)
+	askTotal := payments.SumItems(subtotal, sale.ShippingSen, 0)
+	if askTotal < 0 {
+		// A discount larger than the cart is not a negative charge; refuse it
+		// rather than pricing a fee on a negative amount.
+		buyerErr(w, lang, http.StatusBadRequest, errOrderDiscountTooLarge)
+		return
+	}
+	if askTotal > payments.MaxAmountSen {
+		buyerErr(w, lang, http.StatusBadRequest, errTotalTooLarge)
+		return
+	}
+	// Card t_135c3c72: the buyer bears the CHIP processing fee for the method
+	// they chose. Resolved HERE, on the server, from the merchant's own stored
+	// rates — the client's method is a claim to be checked, never an input to
+	// trust. A method that is not active, or a total the page did not display,
+	// is refused (400) instead of silently corrected: a corrected amount is a
+	// charge the buyer never agreed to.
+	//
+	// The fee applies to CHIP purchases only. A bank-direct order has no
+	// acquirer charge, so it keeps the plain total.
+	opts := h.feeOptions(r.Context(), tgt.AccountID, sale.FormID)
+	chosenFee, ferr := pickFeeOption(opts, in.FeeMethod)
+	if ferr != nil {
+		buyerErrOf(w, lang, http.StatusBadRequest, ferr)
+		return
+	}
+	if method == "chip" && chosenFee.Method != "" {
+		total, fee := payments.GrossUp(askTotal, chosenFee.FixedSen, chosenFee.PercentBP)
+		sale.FeeSen = fee
+		sale.FeeMethod = chosenFee.Method
+		sale.FeeFixedSen = chosenFee.FixedSen
+		sale.FeePercentBp = chosenFee.PercentBP
+		sale.TotalSen = total
+	} else {
+		sale.TotalSen = askTotal
+	}
+	// The page echoed the total it displayed. A disagreement means the price
+	// moved under the buyer (a product edited, a rate changed): refuse rather
+	// than charge an amount that was never on screen.
+	if in.ExpectedTotalSen != 0 && in.ExpectedTotalSen != sale.TotalSen {
+		buyerErr(w, lang, http.StatusBadRequest, errFeeTotalMismatch)
+		return
+	}
 
 	if err := h.Sales.Create(r.Context(), sale); err != nil {
 		respondErr(w, r, err)
@@ -554,30 +663,35 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 func (h *PublicHandlers) handleMenuOrder(w http.ResponseWriter, r *http.Request) {
 	acc, _, ok := h.resolveWorkspaceAccount(r)
 	if !ok {
-		writeErr(w, http.StatusNotFound, "kedai tidak dijumpai")
+		// No workspace on this host, so there is no language to honour: the
+		// refusal answers in the wire language.
+		buyerErr(w, "en", http.StatusNotFound, errOrderShopNotFound)
 		return
 	}
+	// The shim resolves its form further down; until then the workspace default
+	// is the buyer's language.
+	lang := h.buyerLang(r.Context(), nil, acc.ID)
 	// Buffer the body once: we must read form_slug to resolve the target and
 	// then hand the SAME bytes to the shared order core.
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxSubmitBodyBytes))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderIncomplete)
 		return
 	}
 	var probe struct {
 		FormSlug string `json:"form_slug"`
 	}
 	if jerr := json.Unmarshal(body, &probe); jerr != nil {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderIncomplete)
 		return
 	}
 	slug := strings.TrimSpace(probe.FormSlug)
 	if slug == "" {
-		writeErr(w, http.StatusBadRequest, "form_slug diperlukan")
+		buyerErr(w, lang, http.StatusBadRequest, errOrderFormSlugRequired)
 		return
 	}
 	if h.Forms == nil {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		buyerErr(w, lang, http.StatusNotFound, errFormNotFound)
 		return
 	}
 	f, ferr := h.Forms.PublishedByAccountSlug(r.Context(), acc.Slug, slug)
@@ -591,12 +705,12 @@ func (h *PublicHandlers) handleMenuOrder(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if f == nil {
-		writeErr(w, http.StatusNotFound, "borang tidak dijumpai")
+		buyerErr(w, lang, http.StatusNotFound, errFormNotFound)
 		return
 	}
 	menu := dbstore.MenuFromConfig(f.Config)
 	if menu == nil || !menu.Enabled {
-		writeErr(w, http.StatusNotFound, "menu tidak dijumpai")
+		buyerErr(w, lang, http.StatusNotFound, errOrderMenuNotFound)
 		return
 	}
 	// Replay the buffered body for the shared core (anti-spam layer 3 reads the

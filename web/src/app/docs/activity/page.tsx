@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { docsMetadata } from "../../../lib/docsMetadata";
 
 // Activity — the docs page the Activity page's inline "?" link points at
 // (AGENTS.md DOCUMENTATION PARITY rule 4).
@@ -10,12 +11,12 @@ import type { Metadata } from "next";
 // is that surface; this page says what it shows, what it deliberately does NOT
 // show, and how it relates to the two API surfaces that read the same table.
 
-export const metadata: Metadata = {
+export const metadata: Metadata = docsMetadata({
   title: "Activity log — JomForm Docs",
   description:
     "The per-workspace audit trail: every recorded action in your workspace, newest first, filterable by event type and date. What it records, what it never records, how long rows are kept, and how the same data is read over the REST API and MCP.",
-  alternates: { canonical: "https://jomform.com/docs/activity" },
-};
+  path: "/docs/activity",
+});
 
 type Section = { id: string; title: string; body: string[] };
 

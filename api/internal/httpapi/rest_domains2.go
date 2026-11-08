@@ -31,12 +31,12 @@ func (h *RESTHandlers) addCustomDomain(w http.ResponseWriter, r *http.Request, a
 		Domain string `json:"domain"`
 	}
 	if err := decodeJSON(r, &in); err != nil || in.Domain == "" {
-		writeErr(w, http.StatusBadRequest, "domain wajib")
+		writeErr(w, http.StatusBadRequest, "domain is required")
 		return
 	}
 	domain := normalizeDomain(in.Domain)
 	if domain == "" || strings.HasSuffix(domain, "jomform.com") {
-		writeErr(w, http.StatusBadRequest, "domain tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid domain")
 		return
 	}
 	d, err := h.Domains.AddDomain(r.Context(), actx.Account.ID, domain, "cname")
@@ -65,7 +65,10 @@ func (h *RESTHandlers) addCustomDomain(w http.ResponseWriter, r *http.Request, a
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "settings.domain_added", map[string]any{"domain": domain})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": d.ID, "domain": domain, "status": "pending_dns",
-		"hint":       "CNAME " + domain + " → custom.jomform.com (atau A ke origin), kemudian Verify",
+		// Card t_48a93084: this hint is the server twin of the settings copy —
+		// on a self-hosted install the domain has to point at THIS install, not
+		// at the hosted product's target.
+		"hint":       "CNAME " + domain + " → " + h.cnameHost() + " (or A to origin), then Verify",
 		"cloudflare": cfNote(autoCNAME),
 		"auto_cname": autoCNAME,
 	})
@@ -131,7 +134,7 @@ func (h *RESTHandlers) autoCreateCNAMEForDomain(w http.ResponseWriter, r *http.R
 	}
 	d, err := h.Domains.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "domain tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "domain not found")
 		return
 	}
 	if !cfOAuthConfigured() {
@@ -153,7 +156,7 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 	}
 	d, err := h.Domains.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "domain tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "domain not found")
 		return
 	}
 	// Issue #237: probeServesJomForm is the AUTHORITATIVE check. A domain is
@@ -167,7 +170,7 @@ func (h *RESTHandlers) verifyCustomDomainByID(w http.ResponseWriter, r *http.Req
 		// dumping the domain's resolved IPs. Those are Cloudflare edge IPs
 		// (104.21.x, 172.67.x, 2606:4700:...) and dumping them misleadingly
 		// implies the merchant should set an A Record to them — which is wrong.
-		// The correct setup is a CNAME to custom.jomform.com (or Cloudflare
+		// The correct setup is a CNAME to this deployment's target (or Cloudflare
 		// proxy), so the message says exactly that.
 		writeJSON(w, http.StatusOK, map[string]any{"verified": false,
 			"detail": verifyFailDetail})
@@ -217,7 +220,7 @@ func (h *RESTHandlers) deleteCustomDomainByID(w http.ResponseWriter, r *http.Req
 	}
 	d, err := h.Domains.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
 	if err := h.Domains.RemoveDomain(r.Context(), actx.Account.ID, d.ID); err != nil {
@@ -243,19 +246,19 @@ func (h *RESTHandlers) setDomainTLSMode(w http.ResponseWriter, r *http.Request, 
 	}
 	d, err := h.Domains.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "domain tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "domain not found")
 		return
 	}
 	var in struct {
 		Mode string `json:"mode"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "mode wajib")
+		writeErr(w, http.StatusBadRequest, "mode is required")
 		return
 	}
 	mode := strings.ToLower(strings.TrimSpace(in.Mode))
 	if mode != "auto" && mode != "custom" {
-		writeErr(w, http.StatusBadRequest, "mode tidak sah (auto|custom)")
+		writeErr(w, http.StatusBadRequest, "invalid mode (auto|custom)")
 		return
 	}
 	if err := h.Domains.SetTLSMode(r.Context(), actx.Account.ID, d.Domain, mode); err != nil {
@@ -292,19 +295,19 @@ func (h *RESTHandlers) setDomainTLSEmail(w http.ResponseWriter, r *http.Request,
 	}
 	d, err := h.Domains.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "domain tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "domain not found")
 		return
 	}
 	var in struct {
 		Email string `json:"email"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "email wajib")
+		writeErr(w, http.StatusBadRequest, "email is required")
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	if email != "" && !strings.Contains(email, "@") {
-		writeErr(w, http.StatusBadRequest, "email tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid email")
 		return
 	}
 	if err := h.Domains.SetTLSEmail(r.Context(), actx.Account.ID, d.Domain, email); err != nil {
@@ -331,7 +334,7 @@ func (h *RESTHandlers) uploadCustomCert(w http.ResponseWriter, r *http.Request, 
 	}
 	d, err := h.Domains.GetByID(r.Context(), actx.Account.ID, r.PathValue("id"))
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "domain tidak dijumpai")
+		writeErr(w, http.StatusNotFound, "domain not found")
 		return
 	}
 	var in struct {
@@ -339,24 +342,24 @@ func (h *RESTHandlers) uploadCustomCert(w http.ResponseWriter, r *http.Request, 
 		Key  string `json:"key"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "cert dan key wajib")
+		writeErr(w, http.StatusBadRequest, "cert and key are required")
 		return
 	}
 	certPEM := strings.TrimSpace(in.Cert)
 	keyPEM := strings.TrimSpace(in.Key)
 	if certPEM == "" || keyPEM == "" {
-		writeErr(w, http.StatusBadRequest, "cert dan key wajib")
+		writeErr(w, http.StatusBadRequest, "cert and key are required")
 		return
 	}
 	// Validate the pair before persisting: parse the cert chain + key and
 	// confirm the key matches the leaf certificate.
 	cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "cert/key tidak sah — semak format PEM dan padanan kunci")
+		writeErr(w, http.StatusBadRequest, "invalid cert/key — check the PEM format and that the key matches")
 		return
 	}
 	if len(cert.Certificate) == 0 {
-		writeErr(w, http.StatusBadRequest, "cert tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid certificate")
 		return
 	}
 	// Seal the PEM blocks with the account encryption key.

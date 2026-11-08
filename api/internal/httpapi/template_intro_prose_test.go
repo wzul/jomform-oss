@@ -401,6 +401,10 @@ func TestFormCreatedFromATemplateCarriesTheIntroAsProse(t *testing.T) {
 	ctx := context.Background()
 	pool := bundleTestPool(t)
 	accountID, _ := bundleFixture(t, ctx, pool)
+	// Card t_d07c8fbb: POST /v1/templates/use mints a form, so an account with no
+	// workspace is refused 409 (workspace.required). This test is about the
+	// clone's CONFIG, so the account must be able to complete the clone.
+	bundleLinkWorkspace(t, ctx, pool, accountID)
 	key := bundleAPIKey(t, ctx, pool, accountID)
 	h := newBundleHandlers(pool)
 

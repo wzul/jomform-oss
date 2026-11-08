@@ -287,7 +287,7 @@ func (h *RESTHandlers) postShippingCourierConnect(w http.ResponseWriter, r *http
 	}
 	var in connectShippingCourierRequest
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "butiran tidak lengkap")
+		writeErr(w, http.StatusBadRequest, "incomplete details")
 		return
 	}
 	provider := shipping.Normalize(r.PathValue("provider"))
@@ -425,7 +425,7 @@ func (h *PublicHandlers) redirectAfterConnect(w http.ResponseWriter, r *http.Req
 	}
 	u, err := url.Parse(target)
 	if err != nil {
-		http.Error(w, "redirect tidak sah", http.StatusInternalServerError)
+		http.Error(w, "invalid redirect", http.StatusInternalServerError)
 		return
 	}
 	q := u.Query()

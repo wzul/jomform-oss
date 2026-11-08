@@ -152,11 +152,15 @@ function readPageTabIds(): string[] {
 // The tabs the PAGE's own role filter hides from a member (`visibleTabs`): CHIP
 // credentials and member management (#163), and — since card t_0ef9709c — the
 // Workspace tab, whose PANEL is `isAdmin`-gated, so a member's strip offered a
-// tab that painted an EMPTY pane when it was clicked. This list IS the page's
-// admin-only list; it is the one place the member tab set is derived, so if the
-// page's filter moves, the arms below move with it (and their failure messages
-// carry the tab list that moved).
-const ADMIN_ONLY = ["chip", "members", "workspace"];
+// tab that painted an EMPTY pane when it was clicked. Card t_135c3c72 adds
+// `fees` here for the same reason it sits with `chip`: the processing-fee rates
+// decide what a BUYER is charged, so they are admin/owner-only exactly like the
+// CHIP credentials that collect the money (settings-tabs.spec.ts marks it
+// `adminOnly: true` too, and the page's ADMIN_ONLY_TABS carries it).
+// This list IS the page's admin-only list; it is the one place the member tab
+// set is derived, so if the page's filter moves, the arms below move with it
+// (and their failure messages carry the tab list that moved).
+const ADMIN_ONLY = ["chip", "fees", "members", "workspace"];
 const MEMBER_TAB_IDS = PAGE_TAB_IDS.filter((id) => !ADMIN_ONLY.includes(id));
 // The tab the first run has to land on: the first one the strip can render.
 const LANDING_TAB = MEMBER_TAB_IDS[0];
@@ -173,6 +177,7 @@ const PANEL_TITLE: Record<string, keyof typeof DICT> = {
   domains: "set.domainsTitle",
   tracking: "set.trackingTitle",
   einvoice: "set.einvoiceTitle",
+  fees: "set.feesTitle",
   webhooks: "set.webhooksTitle",
   emel: "set.emelTitle",
   storefront: "set.sfTitle",

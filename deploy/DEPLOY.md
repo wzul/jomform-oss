@@ -523,10 +523,10 @@ entry), optionally purges through the app's own route, and decides:
 
 ```bash
 scripts/media-purge-probe.sh \
-  --origin https://halo.example.com \
+  --origin https://halo.wanzul-hosting.com \
   --edge   https://jomform.com \
   --path   /media/u/<account>/<uuid>.png \
-  --purge  <trashed-media-id> --api https://halo.example.com --token "$JOMFORM_API_TOKEN"
+  --purge  <trashed-media-id> --api https://halo.wanzul-hosting.com --token "$JOMFORM_API_TOKEN"
 ```
 
 - **PASS** — origin 404 and the edge is 404 (bare and with a query), **or** every

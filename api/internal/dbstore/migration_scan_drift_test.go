@@ -251,6 +251,12 @@ var intentionallyUnselected = map[string]map[string]bool{
 		"chip_email_fallback":   true, // FormStore.ChipOverrideFor
 		"chip_method_whitelist": true, // FormStore.ChipOverrideFor
 		"access_password":       true, // FormStore.AccessPassword (dedicated accessor, issue #176)
+		// Card t_135c3c72: the per-form processing-fee override is read by
+		// FormStore.FeeOverrideFor and resolved with the workspace's rates by
+		// PaymentFeeStore.ForForm — never as part of the form row, because the
+		// checkout asks "is the fee active for THIS form?" and not "what is the
+		// form's raw override".
+		"fee_override": true,
 	},
 	"products": {
 		"workspace_id": true, // denormalised

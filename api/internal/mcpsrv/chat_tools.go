@@ -88,6 +88,22 @@ var chatReadTools = []string{
 	"list_own_templates",
 	"list_feedback",
 	"get_feedback_thread",
+	// The SETTINGS reads (card t_1e3af6b8). The chat now answers questions
+	// about how the product is configured as well as about the merchant's
+	// records, and the half that makes that answer true is reading what THIS
+	// merchant set: which processing-fee rates are enabled and acknowledged,
+	// which shipping zone sets and courier connections exist, and the
+	// workspace's own settings. Without them the assistant can only explain the
+	// feature in general — open Settings → Payment fees — and cannot answer a
+	// follow-up about the rates this merchant configured.
+	//
+	// All four reach no store write (the read-allowlist guard proves it over the
+	// call graph, like every other name here), and none exposes a secret: the
+	// courier read reports whether credentials exist, never their value.
+	"get_workspace_settings",
+	"get_payment_fees",
+	"get_shipping_rates",
+	"get_shipping_couriers",
 }
 
 // chatProposableTools is the set of WRITE tools the model may PROPOSE. Started

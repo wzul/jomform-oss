@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { OG_IMAGE, OG_IMAGE_URL } from "../../lib/ogImage";
 
 // Issue #395: shared layout for the JomForm knowledge base (/docs).
 // A left sidebar lists the doc sections; content renders on the right.
@@ -47,6 +48,9 @@ const NAV_GROUPS: Group[] = [
       // use. The index carries the entry that links here, so a reader can reach
       // it from both surfaces (docsIndex.test.ts checks both directions).
       { href: "/docs/shipping", label: "Shipping by zone" },
+      // Card t_135c3c72: the buyer-borne processing fee — one MDR rate per CHIP
+      // payment method, grossed up, disclosed to the buyer before they pay.
+      { href: "/docs/payment-fees", label: "Processing fees paid by the buyer" },
     ],
   },
   {
@@ -101,6 +105,13 @@ const NAV_SECTIONS = [
   { href: "/docs#workspaces", label: "Workspaces guide" },
 ];
 
+// t_e21f6147: this block is the SECTION default only. Next merges metadata
+// shallowly, so every child page that did not define `openGraph` inherited it
+// whole — og:url stayed https://jomform.com/docs for /docs/customize and every
+// sibling. Each page under this layout now builds its own block from the title,
+// description and route it passes to lib/docsMetadata.ts; this object remains
+// the /docs index/section default and the fallback. Keep the card here as
+// OG_IMAGE — ogImage.test.ts asserts this file publishes it.
 export const metadata: Metadata = {
   title: "JomForm Docs — knowledge base",
   description:
@@ -113,15 +124,17 @@ export const metadata: Metadata = {
     url: "https://jomform.com/docs",
     siteName: "JomForm",
     type: "website",
-    // Issue #411: brand og:image so sharing shows a preview.
-    images: [{ url: "https://jomform.com/og-default.png", width: 1200, height: 630, alt: "JomForm" }],
+    // Issue #411: brand og:image so sharing shows a preview. Content-versioned
+    // URL (og-default-<hash>.png) so a client that cached an older card is
+    // forced to the new file.
+    images: [OG_IMAGE],
   },
   twitter: {
     card: "summary_large_image",
     title: "JomForm Docs — knowledge base",
     description:
       "Documentation for JomForm: every feature, every MCP tool, and all dynamic placeholders.",
-    images: ["https://jomform.com/og-default.png"],
+    images: [OG_IMAGE_URL],
   },
 };
 

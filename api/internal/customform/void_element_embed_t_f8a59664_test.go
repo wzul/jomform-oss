@@ -13,7 +13,7 @@ package customform
 //
 // A merchant who put one embed (video, PDF, anything) above their form lost
 // every control below it while the page was served 200. Since #1360 the same
-// bytes are refused at write time with `medan wajib tiada dalam HTML
+// bytes are refused at write time with `required field missing from the HTML
 // (name="…")` — a message naming the wrong cause, because the control IS in the
 // HTML the merchant wrote.
 //
@@ -114,7 +114,7 @@ func TestValidateStillRefusesMissingControlAfterEmbed(t *testing.T) {
 	if err == nil {
 		t.Fatal("a contract with no control for the required field was accepted")
 	}
-	if !strings.Contains(err.Error(), `medan wajib tiada dalam HTML (name="email")`) {
+	if !strings.Contains(err.Error(), `required field missing from the HTML (name="email")`) {
 		t.Fatalf("refusal does not name the missing field: %v", err)
 	}
 }

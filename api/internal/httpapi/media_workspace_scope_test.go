@@ -119,7 +119,7 @@ func TestMediaListRefusesAnUnknownWorkspaceAndServesTheSelectedOne(t *testing.T)
 		t.Fatalf("?workspace=<unknown> = %d, want 403 (body %s) — a slug that cannot be resolved "+
 			"must be refused, not answered with the caller's first owned account", rec.Code, rec.Body.String())
 	}
-	if got := rec.Body.String(); !strings.Contains(got, "workspace tidak dijumpai") {
+	if got := rec.Body.String(); !strings.Contains(got, "workspace not found") {
 		t.Fatalf("refusal body = %s, want the shared \"workspace tidak dijumpai\" message every "+
 			"dashboard page already handles", got)
 	}

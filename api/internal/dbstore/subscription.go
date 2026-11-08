@@ -38,7 +38,7 @@ var ErrNoDueSubs = errors.New("no due subscriptions")
 // ErrNotPastDue is returned by Reactivate when the subscription is not in the
 // past_due state, so there is nothing to revive (round 13c). Cancelled and
 // completed subscriptions are deliberately not resurrectable.
-var ErrNotPastDue = errors.New("langganan bukan dalam keadaan past_due")
+var ErrNotPastDue = errors.New("the subscription is not in the past_due state")
 
 // Subscription models the subscriptions table.
 type Subscription struct {

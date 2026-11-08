@@ -316,7 +316,7 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 	// for a resource we do not serve).
 	if !resourceAllowed(q.Get("resource"), r.Host) {
 		oauthErr(w, http.StatusBadRequest, "invalid_target",
-			"parameter resource tidak menunjuk kepada endpoint MCP ini")
+			"the resource parameter does not point to this MCP endpoint")
 		return
 	}
 
@@ -324,12 +324,12 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Unknown/unpersisted client: cannot safely validate its redirect_uri,
 		// so do not redirect (avoids open redirect). Render the generic error.
-		oauthErr(w, http.StatusBadRequest, "invalid_client", "client_id tidak dikenal pasti")
+		oauthErr(w, http.StatusBadRequest, "invalid_client", "client_id not identified")
 		return
 	}
 	if !redirectURIAllowed(client, redirectURI) {
 		// RFC 6749: when redirect_uri is invalid we must NOT redirect the user.
-		oauthErr(w, http.StatusBadRequest, "invalid_request", "redirect_uri tidak didaftarkan untuk client ini")
+		oauthErr(w, http.StatusBadRequest, "invalid_request", "redirect_uri is not registered for this client")
 		return
 	}
 	// The requested scope, refused per RFC 6749 §4.1.2.1. Now that the client and
@@ -339,26 +339,26 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 	// server does not advertise must never be silently granted readwrite.
 	if !scopeOK {
 		o.redirectErr(w, r, client, redirectURI, state, "invalid_scope",
-			"scope tidak disokong (guna 'read' atau 'readwrite')")
+			"unsupported scope (use 'read' or 'readwrite')")
 		return
 	}
 	if responseType != "code" {
-		o.redirectErr(w, r, client, redirectURI, state, "unsupported_response_type", "response_type hanya 'code' disokong")
+		o.redirectErr(w, r, client, redirectURI, state, "unsupported_response_type", "only response_type 'code' is supported")
 		return
 	}
 	if codeChallenge == "" {
-		o.redirectErr(w, r, client, redirectURI, state, "invalid_request", "code_challenge (PKCE) wajib")
+		o.redirectErr(w, r, client, redirectURI, state, "invalid_request", "code_challenge (PKCE) is required")
 		return
 	}
 	if challengeMethod == "" {
 		challengeMethod = "plain" // RFC 7636 default; we still accept both
 	}
 	if challengeMethod != "S256" && challengeMethod != "plain" {
-		o.redirectErr(w, r, client, redirectURI, state, "invalid_request", "code_challenge_method hanya 'S256' (atau 'plain' dev) disokong")
+		o.redirectErr(w, r, client, redirectURI, state, "invalid_request", "code_challenge_method only supports 'S256' (or 'plain' in dev)")
 		return
 	}
 	if state == "" {
-		o.redirectErr(w, r, client, redirectURI, state, "invalid_request", "state wajib")
+		o.redirectErr(w, r, client, redirectURI, state, "invalid_request", "state is required")
 		return
 	}
 
@@ -399,7 +399,7 @@ func (o *OAuthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 		Scope: scope, ExpiresAt: time.Now().UTC().Add(o.CodeTTL),
 	}
 	if err := o.Store.StoreAuthCode(r.Context(), hashToken(code), ac); err != nil {
-		oauthErr(w, http.StatusInternalServerError, "server_error", "gagal menyimpan authorization code",
+		oauthErr(w, http.StatusInternalServerError, "server_error", "failed to store the authorization code",
 			"err", err, "client_id", clientID, "user_id", user.ID)
 		return
 	}
@@ -451,7 +451,7 @@ func (o *OAuthHandlers) currentUser(r *http.Request) *dbstore.User {
 
 func (o *OAuthHandlers) token(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		oauthErr(w, http.StatusBadRequest, "invalid_request", "bentuk form tidak sah")
+		oauthErr(w, http.StatusBadRequest, "invalid_request", "invalid form encoding")
 		return
 	}
 	// Issue #509: the RFC 8707 `resource` parameter is validated on the token
@@ -460,7 +460,7 @@ func (o *OAuthHandlers) token(w http.ResponseWriter, r *http.Request) {
 	// resourceAllowed): empty = fine, a value must name the /mcp endpoint.
 	if !resourceAllowed(r.Form.Get("resource"), r.Host) {
 		oauthErr(w, http.StatusBadRequest, "invalid_target",
-			"parameter resource tidak menunjuk kepada endpoint MCP ini")
+			"the resource parameter does not point to this MCP endpoint")
 		return
 	}
 	grantType := r.Form.Get("grant_type")
@@ -470,7 +470,7 @@ func (o *OAuthHandlers) token(w http.ResponseWriter, r *http.Request) {
 	case "refresh_token":
 		o.tokenRefresh(w, r)
 	default:
-		oauthErr(w, http.StatusBadRequest, "unsupported_grant_type", "grant_type tidak disokong")
+		oauthErr(w, http.StatusBadRequest, "unsupported_grant_type", "unsupported grant_type")
 	}
 }
 
@@ -483,11 +483,11 @@ func (o *OAuthHandlers) tokenAuthCode(w http.ResponseWriter, r *http.Request) {
 
 	ac, err := o.Store.ConsumeAuthCode(r.Context(), hashToken(code))
 	if err != nil {
-		oauthErr(w, http.StatusBadRequest, "invalid_grant", "authorization code tidak sah, luput, atau sudah digunakan")
+		oauthErr(w, http.StatusBadRequest, "invalid_grant", "authorization code is invalid, expired, or already used")
 		return
 	}
 	if ac.ClientID != clientID {
-		oauthErr(w, http.StatusBadRequest, "invalid_grant", "client_id tidak padan dengan code")
+		oauthErr(w, http.StatusBadRequest, "invalid_grant", "client_id does not match the code")
 		return
 	}
 	// Second check on redirect_uri (PKCE is the primary protection; this is the
@@ -507,12 +507,12 @@ func (o *OAuthHandlers) tokenAuthCode(w http.ResponseWriter, r *http.Request) {
 	// bypasses no primary protection. Tightening it is separate hardening, not
 	// part of this bug fix.
 	if redirectURI != "" && !redirectURIMatches(ac.RedirectURI, redirectURI) {
-		oauthErr(w, http.StatusBadRequest, "invalid_grant", "redirect_uri tidak padan dengan yang digunakan semasa authorize")
+		oauthErr(w, http.StatusBadRequest, "invalid_grant", "redirect_uri does not match the one used during authorize")
 		return
 	}
 	// PKCE: verify the code_verifier against the stored S256 (or plain) challenge.
 	if !verifyPKCE(ac.CodeChallenge, verifier) {
-		oauthErr(w, http.StatusBadRequest, "invalid_grant", "code_verifier tidak sah (PKCE)")
+		oauthErr(w, http.StatusBadRequest, "invalid_grant", "invalid code_verifier (PKCE)")
 		return
 	}
 	o.issueTokenPair(w, r, ac.ClientID, ac.UserID, ac.AccountID, ac.Scope)
@@ -522,7 +522,7 @@ func (o *OAuthHandlers) tokenAuthCode(w http.ResponseWriter, r *http.Request) {
 func (o *OAuthHandlers) tokenRefresh(w http.ResponseWriter, r *http.Request) {
 	refresh := r.Form.Get("refresh_token")
 	if refresh == "" {
-		oauthErr(w, http.StatusBadRequest, "invalid_request", "refresh_token wajib")
+		oauthErr(w, http.StatusBadRequest, "invalid_request", "refresh_token is required")
 		return
 	}
 	clientID := r.Form.Get("client_id")
@@ -533,11 +533,11 @@ func (o *OAuthHandlers) tokenRefresh(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	nt, err := o.Store.RefreshGrant(r.Context(), hashToken(refresh), hashToken(newAccess), hashToken(newRefresh), now.Add(o.AccessTokenTTL), now.Add(o.RefreshTokenTTL))
 	if err != nil {
-		oauthErr(w, http.StatusBadRequest, "invalid_grant", "refresh token tidak sah atau telah digunakan")
+		oauthErr(w, http.StatusBadRequest, "invalid_grant", "the refresh token is invalid or has already been used")
 		return
 	}
 	if clientID != "" && nt.ClientID != clientID {
-		oauthErr(w, http.StatusBadRequest, "invalid_grant", "client_id tidak padan")
+		oauthErr(w, http.StatusBadRequest, "invalid_grant", "client_id does not match")
 		return
 	}
 	// The rotated pair carries the SAME granted scope as the pair it replaces
@@ -560,7 +560,7 @@ func (o *OAuthHandlers) issueTokenPair(w http.ResponseWriter, r *http.Request, c
 		AccessExpiresAt: now.Add(o.AccessTokenTTL), RefreshExpiresAt: &refreshExp,
 	}
 	if err := o.Store.CreateToken(r.Context(), t); err != nil {
-		oauthErr(w, http.StatusInternalServerError, "server_error", "gagal menyimpan token",
+		oauthErr(w, http.StatusInternalServerError, "server_error", "failed to store the token",
 			"err", err, "client_id", clientID, "user_id", userID)
 		return
 	}
@@ -611,12 +611,12 @@ func writeTokenResponse(w http.ResponseWriter, access, refresh string, ttl time.
 
 func (o *OAuthHandlers) revoke(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		oauthErr(w, http.StatusBadRequest, "invalid_request", "bentuk form tidak sah")
+		oauthErr(w, http.StatusBadRequest, "invalid_request", "invalid form encoding")
 		return
 	}
 	token := r.Form.Get("token")
 	if token == "" {
-		oauthErr(w, http.StatusBadRequest, "invalid_request", "token wajib")
+		oauthErr(w, http.StatusBadRequest, "invalid_request", "token is required")
 		return
 	}
 	hint := r.Form.Get("token_type_hint")
@@ -634,7 +634,7 @@ func (o *OAuthHandlers) revoke(w http.ResponseWriter, r *http.Request) {
 
 func (o *OAuthHandlers) register(w http.ResponseWriter, r *http.Request) {
 	if o.Store == nil {
-		oauthErr(w, http.StatusServiceUnavailable, "temporarily_unavailable", "pendaftaran client belum aktif")
+		oauthErr(w, http.StatusServiceUnavailable, "temporarily_unavailable", "client registration is not active yet")
 		return
 	}
 	var in struct {
@@ -642,16 +642,16 @@ func (o *OAuthHandlers) register(w http.ResponseWriter, r *http.Request) {
 		RedirectURIs []string `json:"redirect_uris"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		oauthErr(w, http.StatusBadRequest, "invalid_client_metadata", "JSON tidak sah")
+		oauthErr(w, http.StatusBadRequest, "invalid_client_metadata", "invalid JSON")
 		return
 	}
 	if len(in.RedirectURIs) == 0 {
-		oauthErr(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uris wajib")
+		oauthErr(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uris is required")
 		return
 	}
 	for _, u := range in.RedirectURIs {
 		if !validHTTPSRedirect(u) {
-			oauthErr(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uri mesti https; http dibenar hanya untuk loopback (127.0.0.1, [::1], localhost)")
+			oauthErr(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uri must be https; http is allowed only for loopback (127.0.0.1, [::1], localhost)")
 			return
 		}
 	}
@@ -662,7 +662,7 @@ func (o *OAuthHandlers) register(w http.ResponseWriter, r *http.Request) {
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
 	}
 	if err := o.Store.CreateClient(r.Context(), c); err != nil {
-		oauthErr(w, http.StatusInternalServerError, "server_error", "gagal menyimpan client", "err", err)
+		oauthErr(w, http.StatusInternalServerError, "server_error", "failed to store the client", "err", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{

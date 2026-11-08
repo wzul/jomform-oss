@@ -12,7 +12,7 @@
 // resolution the REST edge performs for ?workspace= (issue #158).
 // The WRITE does not — it gates through requireWorkspaceWriteRole, which needs an
 // EXPLICIT workspace because the manage-or-admin role it checks is a role IN a
-// workspace, so an empty id is refused ("workspace tidak dijumpai") before
+// workspace, so an empty id is refused ("workspace not found") before
 // accountAndScope is ever reached. Both input schemas used to promise "Kosong =
 // akaun anda sendiri"; that was true only of the read, so the promise now lives
 // only on the read. A write tool here must not advertise a fallback it does not
@@ -33,47 +33,47 @@ import (
 // errShippingUnavailable is returned when the shipping store is not wired (a
 // bare-mode deployment). Refusing loudly is deliberate: a missing store must
 // never look like "no rates", which on the submit path would be free shipping.
-var errShippingUnavailable = errors.New("kadar penghantaran tidak tersedia")
+var errShippingUnavailable = errors.New("shipping rates not available")
 
 // shippingRateIn is one rate row of a zone: a price, an optional weight band and
 // an optional free-shipping threshold. Money is integer SEN.
 type shippingRateIn struct {
-	Label string `json:"label,omitempty" jsonschema:"Nama kadar yang dilihat pembeli (cth: Standard, Express). Kosong = tanpa nama"`
+	Label string `json:"label,omitempty" jsonschema:"Rate name shown to the buyer (e.g.: Standard, Express). Empty = no name"`
 	// PriceSen is the fee in sen (RM1.00 = 100). Never a decimal string.
-	PriceSen int64 `json:"price_sen" jsonschema:"Harga kadar dalam SEN (RM8.00 = 800)"`
+	PriceSen int64 `json:"price_sen" jsonschema:"Rate price in SEN (RM8.00 = 800)"`
 	// MinWeightG / MaxWeightG are the weight band in grams; 0 = no bound.
-	MinWeightG  int   `json:"min_weight_g,omitempty" jsonschema:"Berat minimum (gram). 0 = tiada had bawah"`
-	MaxWeightG  int   `json:"max_weight_g,omitempty" jsonschema:"Berat maksimum (gram). 0 = tiada had atas"`
-	FreeOverSen int64 `json:"free_over_sen,omitempty" jsonschema:"Penghantaran percuma bila subtotal barang >= nilai ini (SEN). 0 = tiada ambang"`
-	Sort        int   `json:"sort,omitempty" jsonschema:"Susunan kadar (kecil dahulu). Kadar pertama yang dipilih"`
+	MinWeightG  int   `json:"min_weight_g,omitempty" jsonschema:"Minimum weight (grams). 0 = no lower limit"`
+	MaxWeightG  int   `json:"max_weight_g,omitempty" jsonschema:"Maximum weight (grams). 0 = no upper limit"`
+	FreeOverSen int64 `json:"free_over_sen,omitempty" jsonschema:"Free shipping when the item subtotal >= this value (SEN). 0 = no threshold"`
+	Sort        int   `json:"sort,omitempty" jsonschema:"Rate ordering (smallest first). The first matching rate is chosen"`
 }
 
 // shippingZoneIn is one zone: its match rules (any ONE match is enough) and its
 // rates.
 type shippingZoneIn struct {
-	ID           string   `json:"id,omitempty" jsonschema:"ID zon (kosong = baharu; ID lama diganti pada setiap simpan)"`
-	Name         string   `json:"name" jsonschema:"Nama zon (cth: Semenanjung, Sabah & Sarawak)"`
-	States       []string `json:"states,omitempty" jsonschema:"Negeri yang diliputi. Nama negeri Malaysia (Johor, Penang/Pulau Pinang, KL...) atau token wilayah: peninsular, east_malaysia"`
-	Districts    []string `json:"districts,omitempty" jsonschema:"Daerah/bandar yang diliputi (padanan tepat, tidak sensitif huruf besar)"`
-	PostcodeFrom string   `json:"postcode_from,omitempty" jsonschema:"Poskod mula (inklusif). Boleh dipakai tanpa negeri"`
-	PostcodeTo   string   `json:"postcode_to,omitempty" jsonschema:"Poskod akhir (inklusif). Kosong = satu nilai sahaja"`
-	Priority     int      `json:"priority,omitempty" jsonschema:"Keutamaan penilaian (kecil dahulu); zon pengecualian di atas zon negeri"`
-	Fallback     bool     `json:"is_fallback,omitempty" jsonschema:"Zon lalai: dipakai HANYA bila tiada zon lain padan (bila on_no_match=default pada blok penghantaran)"`
+	ID           string   `json:"id,omitempty" jsonschema:"Zone ID (empty = new; the old ID is replaced on every save)"`
+	Name         string   `json:"name" jsonschema:"Zone name (e.g.: Peninsular, Sabah & Sarawak)"`
+	States       []string `json:"states,omitempty" jsonschema:"States covered. Malaysian state names (Johor, Penang/Pulau Pinang, KL...) or region tokens: peninsular, east_malaysia"`
+	Districts    []string `json:"districts,omitempty" jsonschema:"District/city covered (exact match, case-insensitive)"`
+	PostcodeFrom string   `json:"postcode_from,omitempty" jsonschema:"Start postcode (inclusive). Can be used without a state"`
+	PostcodeTo   string   `json:"postcode_to,omitempty" jsonschema:"End postcode (inclusive). Empty = a single value only"`
+	Priority     int      `json:"priority,omitempty" jsonschema:"Evaluation priority (smallest first); exclusion zones rank above state zones"`
+	Fallback     bool     `json:"is_fallback,omitempty" jsonschema:"Default zone: applied ONLY when no other zone matches (when on_no_match=default on the shipping block)"`
 	// Lat / Lng (phase 2): the zone's own point, which is where a POINT-BASED
 	// courier (lalamove) is quoted TO. Optional — a zone without a point simply
 	// cannot be courier-quoted and its own rate applies instead. Give BOTH or
 	// neither.
-	Lat   string           `json:"lat,omitempty" jsonschema:"Latitud titik zon (perpuluhan). Untuk pembekal penghantaran berasaskan titik (lalamove). Beri bersama lng"`
-	Lng   string           `json:"lng,omitempty" jsonschema:"Longitud titik zon (perpuluhan). Beri bersama lat"`
-	Rates []shippingRateIn `json:"rates" jsonschema:"Kadar untuk zon ini. Sekurang-kurangnya satu diperlukan"`
+	Lat   string           `json:"lat,omitempty" jsonschema:"Zone point latitude (decimal). For point-based shipping providers (lalamove). Provide together with lng"`
+	Lng   string           `json:"lng,omitempty" jsonschema:"Zone point longitude (decimal). Supply together with lat"`
+	Rates []shippingRateIn `json:"rates" jsonschema:"Rates for this zone. At least one is required"`
 }
 
 // shippingSetIn is one named set of zones.
 type shippingSetIn struct {
-	ID        string           `json:"id,omitempty" jsonschema:"ID set zon (kosong = baharu). ID ini yang dirujuk oleh blok penghantaran borang"`
-	Name      string           `json:"name" jsonschema:"Nama set zon"`
-	IsDefault bool             `json:"is_default,omitempty" jsonschema:"Set lalai untuk workspace ini"`
-	Zones     []shippingZoneIn `json:"zones" jsonschema:"Zon dalam set ini"`
+	ID        string           `json:"id,omitempty" jsonschema:"Zone set ID (empty = new). This is the ID referenced by the form's shipping block"`
+	Name      string           `json:"name" jsonschema:"Zone set name"`
+	IsDefault bool             `json:"is_default,omitempty" jsonschema:"Default set for this workspace"`
+	Zones     []shippingZoneIn `json:"zones" jsonschema:"Zones in this set"`
 }
 
 // shippingRateOut / shippingZoneOut / shippingSetOut / shippingRatesOut are the
@@ -121,7 +121,7 @@ type shippingRatesOut struct {
 // optional reserved arguments (workspace_id/account_id), handled by the call
 // scope plumbing rather than by a field here.
 type getShippingRatesIn struct {
-	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"ID workspace (dari list_workspaces). Kosong = akaun anda sendiri"`
+	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"Workspace ID (from list_workspaces). Empty = your own account"`
 }
 
 // getShippingRates reads the managed zone sets of one account.
@@ -145,8 +145,8 @@ func (s *Server) getShippingRates(
 // setShippingRatesIn replaces the WHOLE configuration: a set omitted from `sets`
 // is DELETED (refused when a form still points at it).
 type setShippingRatesIn struct {
-	WorkspaceID string          `json:"workspace_id,omitempty" jsonschema:"ID workspace (dari list_workspaces). WAJIB: tool tulis ini menolak workspace_id kosong — panggil list_workspaces dahulu"`
-	Sets        []shippingSetIn `json:"sets" jsonschema:"SEMUA set zon yang dikehendaki. Set yang tiada di sini akan DIPADAM (ditolak jika ada borang yang masih merujuknya)"`
+	WorkspaceID string          `json:"workspace_id,omitempty" jsonschema:"Workspace ID (from list_workspaces). Required: this write tool rejects an empty workspace_id — call list_workspaces first"`
+	Sets        []shippingSetIn `json:"sets" jsonschema:"ALL zone sets that are wanted. Sets absent here will be DELETED (rejected if any form still references them)"`
 }
 
 // setShippingRates replaces the account's zone sets, rates and match rules.

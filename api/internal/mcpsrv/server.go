@@ -65,6 +65,11 @@ type Deps struct {
 	// rather than reporting an empty configuration (an empty set list would
 	// read as "free shipping everywhere" to a caller).
 	Shipping *dbstore.ShippingStore
+	// Card t_135c3c72: per-method processing-fee rates + the merchant's
+	// pass-on acknowledgement (get/set_payment_fees). Nil → those tools report
+	// the store as unavailable rather than "no fee", which would hide a charge
+	// the merchant configured.
+	PaymentFees *dbstore.PaymentFeeStore
 	// Couriers is the phase-2 courier wiring (the provider registry, the
 	// connection store and the runtime credentials), shared with the dashboard's
 	// REST edge as ONE bundle so both use the same connect rules and readiness
@@ -91,6 +96,13 @@ type Deps struct {
 	Domains *dbstore.DomainStore
 	// Issue #396: platform system settings (get/set). Nil → the tools error.
 	SystemSettings *dbstore.SystemSettingStore
+	// Card t_48a93084: what address a workspace tool prints. SelfHosted comes
+	// from JOMFORM_SELF_HOSTED and AppBaseURL from APP_BASE_URL; the workspace
+	// address is the install's own origin on a self-hosted deployment and
+	// `<slug>.jomform.com` on the hosted product. Wired from config in main.go,
+	// never inferred from the URL's host (issue #77).
+	SelfHosted bool
+	AppBaseURL string
 	// Issue #396: passkey credentials (list/delete). Nil → the tools error.
 	Passkeys *dbstore.PasskeyStore
 	// Issue #396: session store backing the 2FA pending-TOTP flow. Nil → the

@@ -835,10 +835,17 @@ function SalesPageInner() {
                 glyph. Taking either side wholesale loses the other: the
                 branch's pre-#738 text-slate-500 is 4.48:1 on --jf-bg (axe
                 serious), and main's /docs#realtime-notifications anchor is a
-                summary, not the guide the switch is meant to open. */}
+                summary, not the guide the switch is meant to open.
+                t_a4adf2f1: #738's --jf-muted is 4.5438:1 on --jf-bg — a PASS
+                with 0.37% of opacity headroom, which is why the a11y arm read
+                4.42:1 for it on the last frame of the route entrance. The
+                glyph is 10px/600 (NOT large text), so it needs the floor on
+                its own merit; --jf-muted-on-tint (#5b6472) is the token this
+                app already uses for a muted line that must clear AA on every
+                surface, and it measures 5.6221:1 here / 5.9817:1 on white. */}
             <a
               href="/docs/sales#realtime-notifications"
-              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-jf-3xs font-semibold text-[var(--jf-muted)] hover:bg-slate-50"
+              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-jf-3xs font-semibold text-[var(--jf-muted-on-tint)] hover:bg-slate-50"
               aria-label={t("sales.soundDocs")}
               title={t("sales.soundDocs")}
             >

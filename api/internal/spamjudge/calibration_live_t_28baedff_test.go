@@ -8,7 +8,7 @@ package spamjudge
 // router or the judge prompt changes.
 //
 //   JOMFORM_LIVE_SPAM_CALIBRATION=1 \
-//   LLM_BASE_URL=https://router.example.com/v1 \
+//   LLM_BASE_URL=https://router.wanzul-hosting.com/v1 \
 //   OLLAMA_API_KEY=... go test ./internal/spamjudge/ -run TestLiveSpamJudgeCalibration -v
 //
 // WHY IT EXISTS: the unit tests prove the judged state carries only the

@@ -186,8 +186,8 @@ func TestUndecodableResponseConfigIsTerminal500(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("undecodable response config: serveForm status = %d, want 500 (a response form must never reach the payment template); body: %s", rec.Code, body)
 	}
-	if !strings.Contains(body, "Borang tidak dapat dipaparkan") {
-		t.Errorf("500 body does not carry the operator-facing message %q; body: %q", "Borang tidak dapat dipaparkan", body)
+	if !strings.Contains(body, "This form could not be displayed") {
+		t.Errorf("500 body does not carry the operator-facing message %q; body: %q", "This form could not be displayed", body)
 	}
 	for _, banned := range []string{"Proceed to Payment", "Please select at least one product"} {
 		if strings.Contains(body, banned) {

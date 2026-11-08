@@ -194,7 +194,7 @@ test("a refused save names the reason instead of only 'Failed to save shipping r
   // code is what the page translates; the prose must never reach the screen.
   const refusal = {
     code: "shipping.invalid",
-    error: "kadar penghantaran tidak sah — zon \"West Malaysia\" belum ada kadar",
+    error: "invalid shipping rates — zone \"West Malaysia\" has no rates",
   };
   const state = await stubAPI(page, { refusePut: refusal });
   await openShipping(page);
@@ -207,7 +207,7 @@ test("a refused save names the reason instead of only 'Failed to save shipping r
   // The reason, not the generic sentence, and never the server's Malay prose.
   await expect(banner).toHaveText(EN("apiErr.shipInvalid"));
   await expect(banner).not.toHaveText(EN("fs.shipSaveFail"));
-  await expect(banner).not.toContainText("kadar penghantaran tidak sah");
+  await expect(banner).not.toContainText("invalid shipping rates");
 
   // Nothing was lost from the draft: the set is still on screen to fix and re-save.
   await expect(page.getByLabel(EN("fs.shipZoneName"))).toHaveValue("West Malaysia");

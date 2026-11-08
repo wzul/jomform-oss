@@ -172,7 +172,7 @@ var reservedSubdomains = map[string]string{
 // until this list existed, anything else was a bare `t.Errorf("… Extend the
 // guard.")`. PR #1167 replaced that file with a byte-for-byte copy of what the
 // host runs, and the host runs a real merchant CUSTOM domain
-// (`halo.example.com`, router jf-custom-cert-halo, its own Let's Encrypt
+// (`halo.wanzul-hosting.com`, router jf-custom-cert-halo, its own Let's Encrypt
 // certificate). A guard that reds on the file the host actually loads is worse
 // than no guard at all: it is the `test` gate, so it stops every lane on the
 // board — measured 2026-10-12 on pristine main 27444a64.
@@ -185,7 +185,7 @@ var reservedSubdomains = map[string]string{
 //     the claim guard — a test refuses an entry that is under jomform.com;
 //   - a host this edge does not route: the list describes this file's table.
 var foreignRoutedHosts = map[string]string{
-	"halo.example.com": "a merchant custom domain, not a JomForm subdomain: router jf-custom-cert-halo serves it from the API and obtains its own Let's Encrypt certificate for it (deploy/vps/traefik-jomform.yml, the byte-for-byte copy of the file the host loads)",
+	"halo.wanzul-hosting.com": "a merchant custom domain, not a JomForm subdomain: router jf-custom-cert-halo serves it from the API and obtains its own Let's Encrypt certificate for it (deploy/vps/traefik-jomform.yml, the byte-for-byte copy of the file the host loads)",
 }
 
 // ReservedSubdomain reports whether label may NOT be claimed as a workspace
@@ -231,7 +231,7 @@ func IsServingReserved(label string) bool {
 // isForeignRoutedHost reports whether host is one JomForm's edge is DECLARED to
 // route although it is not under jomform.com (see foreignRoutedHosts). The
 // comparison is an exact match after trimming and lower-casing — deliberately not
-// a suffix rule: a suffix rule would let `halo.example.com.evil.tld` read
+// a suffix rule: a suffix rule would let `halo.wanzul-hosting.com.evil.tld` read
 // as the declared host, which is the shape of an impersonation.
 //
 // It is package-private because its only consumer is the Traefik guard in

@@ -71,9 +71,31 @@ export function pickerMode(f: PickerFacts): PickerMode {
  * pickerMode so the copy cannot be selected from a different flag than the
  * surface (the pre-fix page selected the heading from `error`, while the body
  * was selected from `error` too — one flag, two meanings).
+ *
+ * The LIST subtitle is decided by the ROW COUNT, and that count is a required
+ * parameter: the picker is reachable with exactly one workspace (no default
+ * set), where "You have multiple workspaces. Pick which one to enter." is
+ * false — there is nothing to pick. Counting in this function is what keeps
+ * the heading and the rows it heads from contradicting each other, and a call
+ * site that forgets the count is a compile error rather than a silent fallback
+ * to the wrong sentence.
+ *
+ * While the list is loading or unreadable the count is UNKNOWN, so the neutral
+ * line is used: neither the single nor the multiple claim is true.
  */
-export function pickerCopyKeys(mode: PickerMode): { title: string; subtitle: string } {
-  return mode === "ask"
-    ? { title: "workspace.askPageTitle", subtitle: "workspace.askPageSubtitle" }
-    : { title: "workspace.pickerTitle", subtitle: "workspace.pickerSubtitle" };
+export function pickerCopyKeys(
+  mode: PickerMode,
+  workspaceCount: number,
+): { title: string; subtitle: string } {
+  if (mode === "ask") {
+    return { title: "workspace.askPageTitle", subtitle: "workspace.askPageSubtitle" };
+  }
+  if (mode !== "list") {
+    return { title: "workspace.pickerTitle", subtitle: "workspace.pickerNeutralSubtitle" };
+  }
+  return {
+    title: "workspace.pickerTitle",
+    subtitle:
+      workspaceCount === 1 ? "workspace.pickerSingleSubtitle" : "workspace.pickerSubtitle",
+  };
 }

@@ -103,27 +103,21 @@ func (s *Service) sendNotification(ctx context.Context, ref NotificationRef, n *
 	}
 	lang := ref.Lang()
 	// A rule still carrying the SYSTEM default template is not merchant copy: it
-	// must follow the buyer-facing language, exactly as the receipt does. The
-	// default is stored per row by EnsureDefault (and by the 000062 repair), so
-	// without this a never-edited rule mailed Malay regardless of the form's
-	// language. A merchant-authored subject/body is passed through untouched.
+	// must follow the buyer-facing language, exactly as the receipt does. Since
+	// 000084 a never-customised rule stores an EMPTY subject and body (its text
+	// had no business being pinned to one language in a field the dashboard
+	// renders verbatim), and a row written by an older release still stores the
+	// Malay literal; both are the system's text, so notificationMessage resolves
+	// each of them in the form's language.
 	//
 	// Each half is re-rendered ON ITS OWN. The rule editor loads both stored
 	// values and posts both back, so a merchant who edits only the body sends the
 	// untouched system subject back verbatim; a pair-wise test then classifies
 	// the whole rule as his own words and the Malay default subject goes out to a
 	// buyer whose form is English. Per field, only a half that is still a
-	// built-in template is replaced — a half he wrote is never translated.
-	subject, body := n.Subject, n.Body
-	if kind, ok := systemDefaultKind(n.Event); ok {
-		def := emailtext.Text(lang, kind, nil)
-		if emailtext.SubjectIsSystemDefault(kind, subject) {
-			subject = def.Subject
-		}
-		if emailtext.BodyIsSystemDefault(kind, body) {
-			body = def.Body
-		}
-	}
+	// built-in template (or empty) is replaced — a half he wrote is never
+	// translated.
+	subject, body := notificationMessage(n.Event, lang, n.Subject, n.Body)
 	subj, rendered := renderNotification(subject, body, ref)
 	if s.EmailQueue != nil {
 		if err := s.EmailQueue.Enqueue(ctx, emailqueue.Job{
@@ -149,19 +143,37 @@ func (s *Service) sendNotification(ctx context.Context, ref NotificationRef, n *
 	}
 }
 
-// systemDefaultKind maps a notification event onto the dictionary kind whose
-// BUILT-IN template the system installs for it, so a rule that still holds that
-// template can be re-rendered in the buyer's language. An event with no default
-// (sale.failed, subscription.charged) has no kind: the system never wrote a
-// template for it, so whatever the row holds is the merchant's own.
-func systemDefaultKind(event string) (emailtext.Kind, bool) {
-	switch event {
-	case dbstore.NotifyEventSalePaid:
-		return emailtext.NotificationSale, true
-	case dbstore.NotifyEventResponseSubmitted:
-		return emailtext.NotificationResponse, true
+// notificationMessage resolves one rule's subject and body for the language the
+// notification is written in.
+//
+// Each half is classified on its own, and three shapes are the SYSTEM's text:
+//
+//   - an EMPTY half — how 000084 writes a never-customised rule, so the row
+//     holds no language at all;
+//   - a half that still equals the pre-language literal the database used to
+//     store (a row written by an older release, or restored from a pre-000084
+//     backup), which emailtext.IsSystemDefault* still recognises;
+//   - a half that equals a built-in template in any of the five locales.
+//
+// A half in any of those shapes is re-rendered from the dictionary in the
+// buyer-facing language. Everything else is the merchant's own words and is
+// passed through byte for byte — never translated, never trimmed.
+//
+// An event with no built-in template (sale.failed, subscription.charged) has no
+// system text at all: an empty half there stays empty, exactly as it did before.
+func notificationMessage(event, lang, subject, body string) (string, string) {
+	kind, ok := dbstore.NotificationKind(event)
+	if !ok {
+		return subject, body
 	}
-	return "", false
+	def := emailtext.Text(lang, kind, nil)
+	if subject == "" || emailtext.SubjectIsSystemDefault(kind, subject) {
+		subject = def.Subject
+	}
+	if body == "" || emailtext.BodyIsSystemDefault(kind, body) {
+		body = def.Body
+	}
+	return subject, body
 }
 
 // resolveNotificationRecipient resolves a rule's to_email: a literal address,

@@ -125,7 +125,7 @@ done
 ln -sf "$WORK/bin/id" "$WORK/nodock/id"
 
 # A complete env file, generated FROM the compose (so it cannot rot).
-grep -oE '\$\{[A-Z_]+' "$COMPOSE" | tr -d '${' | sort -u | sed 's/$/=stub/' > "$WORK/good.env"
+grep -oE '\$\{[A-Z0-9_]+' "$COMPOSE" | tr -d '${' | sort -u | sed 's/$/=stub/' > "$WORK/good.env"
 chmod 600 "$WORK/good.env"
 KEY_COUNT="$(grep -c '=' "$WORK/good.env")"
 
@@ -147,9 +147,9 @@ run_exclusive() { # run_exclusive <dir> <args...> — PATH is ONLY <dir>
 
 # ── deriving the env contract in the OTHER direction: compose → API source ────
 # api_env_keys <compose> — the env keys the `api` SERVICE sets, one per line.
-# Scoped to that ONE service block on purpose: postgres, valkey, minio and
-# minio-init legitimately carry env the Go process never sees
-# (POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD), so a whole-file grep would demand the
+# Scoped to that ONE service block on purpose: postgres, valkey and s3
+# legitimately carry env the Go process never sees (POSTGRES_PASSWORD,
+# AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY), so a whole-file grep would demand the
 # API read keys it cannot.
 api_env_keys() {
   awk '
@@ -450,8 +450,8 @@ else
   fi
 
   echo "case: the template's key set EQUALS the compose's, in BOTH directions"
-  EXAMPLE_KEYS="$(grep -oE '^[A-Z_]+=' "$EXAMPLE" | tr -d '=' | sort -u)"
-  COMPOSE_KEYS="$(grep -oE '\$\{[A-Z_]+' "$COMPOSE" | tr -d '${' | sort -u)"
+  EXAMPLE_KEYS="$(grep -oE '^[A-Z0-9_]+=' "$EXAMPLE" | tr -d '=' | sort -u)"
+  COMPOSE_KEYS="$(grep -oE '\$\{[A-Z0-9_]+' "$COMPOSE" | tr -d '${' | sort -u)"
   MISSING_FROM_EXAMPLE="$(comm -23 <(echo "$COMPOSE_KEYS") <(echo "$EXAMPLE_KEYS"))"
   STALE_IN_EXAMPLE="$(comm -13 <(echo "$COMPOSE_KEYS") <(echo "$EXAMPLE_KEYS"))"
   [ -z "$MISSING_FROM_EXAMPLE" ] && ok "no key the compose reads is missing from the example" \
@@ -468,6 +468,125 @@ else
   has "$OUT" "env contract: all $KEY_COUNT keys" \
     && ok "and reports the derived key count ($KEY_COUNT)" \
     || bad "did not report the derived key count"
+fi
+
+# ── the object store: what a FRESH host has to be able to pull ───────────────
+# The defect this guards (card t_75bd9aaf): the prod compose named
+# `minio/minio:latest` and, for its one-shot init, `minio/mc:latest` — and BOTH
+# have been withdrawn from Docker Hub (measured 2026-11-03: `docker manifest
+# inspect` answers "denied: requested access to the resource is denied", and
+# quay.io has no such manifest for :latest). `docker compose up` on a fresh host
+# therefore aborts at the PULL, before anything starts: the whole stack, not just
+# media. A static assertion is the right shape for the gate — a live pullability
+# probe would need the network, and a gate that needs Docker Hub reds when the
+# registry does.
+echo "case: the prod compose names no withdrawn image"
+WITHDRAWN="$(grep -nE '^[[:space:]]*image:[[:space:]]*(minio/|quay\.io/minio/)' "$COMPOSE" || true)"
+[ -z "$WITHDRAWN" ] && ok "no minio/minio or minio/mc image anywhere in the prod compose" \
+  || bad "the prod compose still names a WITHDRAWN MinIO image (it cannot be pulled): $WITHDRAWN"
+WITHDRAWN_INIT="$(grep -nE '^  minio-init:' "$COMPOSE" || true)"
+[ -z "$WITHDRAWN_INIT" ] && ok "the minio-init one-shot (which needed minio/mc) is gone" \
+  || bad "the prod compose still defines minio-init, whose only image is minio/mc: $WITHDRAWN_INIT"
+
+S3_IMAGE="$(awk '/^  s3:/{f=1;next} f&&/^    image:/{print $2; exit}' "$COMPOSE")"
+case "$S3_IMAGE" in
+  chrislusf/seaweedfs:*) ok "the object store is the same SeaweedFS image the self-host stack uses ($S3_IMAGE)" ;;
+  "")                    bad "the prod compose has no s3 service — the api's S3_ENDPOINT would point at nothing" ;;
+  *)                     bad "the object store image is '$S3_IMAGE' — expected chrislusf/seaweedfs:<pinned tag>" ;;
+esac
+case "$S3_IMAGE" in
+  *:latest|"") : ;;
+  *) ok "that image tag is PINNED, not floating (:latest is what made the old one silently unpullable)" ;;
+esac
+
+echo "case: that assertion BITES — a planted withdrawn image is found"
+sed 's|^    image: chrislusf/seaweedfs:.*$|    image: minio/minio:latest|' "$COMPOSE" > "$WORK/compose.withdrawn.yml"
+PLANTED_WITHDRAWN="$(grep -nE '^[[:space:]]*image:[[:space:]]*(minio/|quay\.io/minio/)' "$WORK/compose.withdrawn.yml" || true)"
+[ -n "$PLANTED_WITHDRAWN" ] \
+  && ok "a planted minio/minio image IS named by the check ($PLANTED_WITHDRAWN)" \
+  || bad "the mutation did not apply — the assertion above would pass vacuously"
+
+echo "case: the api waits for the object store it provisions its bucket on"
+API_BLOCK="$(awk '/^  [A-Za-z0-9_.-]+:[[:space:]]*$/ {svc=$1; sub(/:$/,"",svc); in_svc=(svc=="api"); next} in_svc {print}' "$COMPOSE")"
+if [ -z "$API_BLOCK" ]; then
+  bad "could not find the api service block in the prod compose"
+else
+  S3_DEP_NEXT="$(awk '/^      s3:$/ {getline; print; exit}' <<<"$API_BLOCK")"
+  [ "$S3_DEP_NEXT" = "        condition: service_healthy" ] \
+    && ok "api depends_on s3 with service_healthy (a failed EnsureBucket disables uploads for the process's life)" \
+    || bad "api does not wait for a healthy s3 (found: '${S3_DEP_NEXT:-no s3 dependency}')"
+fi
+
+echo "case: docker compose ACCEPTS the prod compose with a generated env, with no warning and no null value"
+# The compose is installed on a host by copy, so a YAML/interpolation error here
+# is not caught by anything else until `up` fails on the live host. This runs the
+# real binary — no daemon is contacted.
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  set +e
+  docker compose -f "$COMPOSE" --env-file "$WORK/good.env" config >"$WORK/cfg.out" 2>"$WORK/cfg.err"
+  CFG_RC=$?
+  set -e
+  if [ "$CFG_RC" -eq 0 ] && [ ! -s "$WORK/cfg.err" ]; then
+    ok "docker compose config accepts it with no warning"
+  else
+    bad "docker compose config failed or warned (rc=$CFG_RC): $(tr '\n' ' ' <"$WORK/cfg.err")"
+  fi
+  CFG_NULL="$(awk '/^    environment:/{f=1;next} f&&/^    [a-z]/{f=0} f&&/null/{print}' <"$WORK/cfg.out")"
+  [ -z "$CFG_NULL" ] && ok "no environment value interpolates to null" \
+    || bad "environment value(s) interpolate to null (an unset \${VAR} is not a value): $CFG_NULL"
+else
+  bad "docker/compose is not available on this host — the prod compose cannot be validated, and an unvalidated compose is not shippable"
+fi
+
+echo "case: env names with DIGITS are part of the contract (S3_* used to derive as 'S')"
+COMPOSE_KEYS_NOW="$(grep -oE '\$\{[A-Z0-9_]+' "$COMPOSE" | tr -d '${' | sort -u)"
+has_line "$COMPOSE_KEYS_NOW" "S3_ACCESS_KEY" && ok "S3_ACCESS_KEY is derived from the compose" \
+  || bad "S3_ACCESS_KEY is NOT derived — the env contract is blind to it"
+has_line "$COMPOSE_KEYS_NOW" "S3_SECRET_KEY" && ok "S3_SECRET_KEY is derived from the compose" \
+  || bad "S3_SECRET_KEY is NOT derived — the env contract is blind to it"
+LEGACY_KEYS="$(grep -oE '\$\{[A-Z_]+' "$COMPOSE" | tr -d '${' | sort -u)"
+has_line "$LEGACY_KEYS" "S3_ACCESS_KEY" \
+  && bad "the legacy [A-Z_]+ pattern sees S3_ACCESS_KEY — then this case proves nothing" \
+  || ok "the legacy [A-Z_]+ pattern CANNOT see S3_ACCESS_KEY (it derived a key literally named 'S')"
+grep -qF 'A-Z0-9_]' "$HERE/bootstrap-host.sh" \
+  && ok "bootstrap-host.sh derives names with digits" \
+  || bad "bootstrap-host.sh is back to [A-Z_]+ — it would refuse a correct env file for missing 'S'"
+
+echo "case: BITE — a digit-bearing key planted in a COPY of the compose is named exactly"
+sed 's/^      APP_ENV: prod$/      APP_ENV: prod\n      PLANTED_9KEY: ${PLANTED_9KEY}/' "$COMPOSE" > "$WORK/compose.digit.yml"
+grep -q 'PLANTED_9KEY' "$WORK/compose.digit.yml" && ok "the mutation applied" || bad "the mutation did not apply"
+run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/good.env" --compose-src "$WORK/compose.digit.yml"
+[ "$RC" -ne 0 ] && ok "exit code (exit=$RC)" || bad "a digit-bearing key no env file can supply was NOT refused"
+has "$OUT" "PLANTED_9KEY" && ok "the message names PLANTED_9KEY exactly (not a truncated PLANTED_)" \
+  || bad "the refusal did not name PLANTED_9KEY — the derivation is still truncating at the digit"
+
+echo "case: the backup's object-store label names a service the prod compose DEFINES"
+# The nightly backup archives the object store's /data volume by resolving the
+# container from a compose LABEL. Rename the service (minio → s3) without
+# updating that label and the 02:17 job fails every night.
+BACKUP_SCRIPT="$HERE/../backup/jomform-backup.sh"
+if [ ! -s "$BACKUP_SCRIPT" ]; then
+  bad "deploy/backup/jomform-backup.sh is missing — the media archive cannot be checked"
+else
+  LABELS_LINE="$(grep -m1 '^S3_SERVICE_LABELS=(' "$BACKUP_SCRIPT" || true)"
+  if [ -z "$LABELS_LINE" ]; then
+    bad "jomform-backup.sh has no S3_SERVICE_LABELS — the media archive has no container to resolve"
+  else
+    SERVICES="$(grep -oE '^  [a-z0-9_-]+:$' "$COMPOSE" | tr -d ' :')"
+    LABEL_SERVICES="$(printf '%s\n' "$LABELS_LINE" | grep -oE 'service=[a-z0-9_-]+' | sed 's/^service=//' | sort -u)"
+    MATCHED=0
+    while IFS= read -r svc; do
+      [ -n "$svc" ] || continue
+      if has_line "$SERVICES" "$svc"; then
+        ok "the backup label '$svc' is a service this compose defines"
+        MATCHED=1
+      fi
+    done <<<"$LABEL_SERVICES"
+    [ "$MATCHED" -eq 1 ] || bad "no label in S3_SERVICE_LABELS names a service the prod compose defines (labels: $(printf '%s' "$LABEL_SERVICES" | tr '\n' ' '))"
+    has_line "$SERVICES" "minio" \
+      && bad "the prod compose still defines a 'minio' service — the label fallback cannot be proven to bite" \
+      || ok "the old 'minio' label is no longer a service here, so the label check bites on that regression"
+  fi
 fi
 
 echo "case: every deploy/ path named in the runbook exists in the repo"

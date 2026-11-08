@@ -129,11 +129,11 @@ test("the guard is looking at the real config (it cannot pass vacuously)", () =>
 
 test("a valid JOMFORM_DEV_HOSTS entry reaches allowedDevOrigins", async () => {
   await withConfig(
-    { JOMFORM_DEV_HOSTS: "jomform-staging.example.com" },
+    { JOMFORM_DEV_HOSTS: "jomform-staging.wanzul-hosting.com" },
     (cfg) =>
       assert.deepEqual(
         cfg.allowedDevOrigins,
-        ["jomform-staging.example.com"],
+        ["jomform-staging.wanzul-hosting.com"],
         "web/next.config.mjs must pass JOMFORM_DEV_HOSTS through to allowedDevOrigins. Without " +
           "it, Next 16 blocks its own /_next/* chunks as cross-site whenever dev sits behind a " +
           "proxy on a real hostname (localhost and **.localhost are its built-in defaults), so " +
@@ -172,10 +172,10 @@ test("a malformed JOMFORM_DEV_HOSTS entry fails LOUDLY at config load", async ()
   // Each of these is accepted by a naive `split(",")` and then never matches a
   // request, which is exactly the silent dead-page regression to design against.
   for (const bad of [
-    "https://jomform-staging.example.com", // scheme
-    "jomform-staging.example.com:443", // port
-    "jomform-staging.example.com/x", // path
-    "*.example.com", // wildcard
+    "https://jomform-staging.wanzul-hosting.com", // scheme
+    "jomform-staging.wanzul-hosting.com:443", // port
+    "jomform-staging.wanzul-hosting.com/x", // path
+    "*.wanzul-hosting.com", // wildcard
   ]) {
     await assert.rejects(
       () => withConfig({ JOMFORM_DEV_HOSTS: bad }, () => undefined),

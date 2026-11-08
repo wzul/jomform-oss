@@ -127,7 +127,7 @@ type cfTokenPair struct {
 func (h *RESTHandlers) cfStart(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if !cfOAuthConfigured() {
 		writeErr(w, http.StatusNotImplemented,
-			"Cloudflare auto-setup belum dikonfigur (JF_CF_OAUTH_CLIENT_ID/SECRET). Tambah CNAME manual sementara.")
+			"Cloudflare auto-setup is not configured (JF_CF_OAUTH_CLIENT_ID/SECRET). Add the CNAME manually for now.")
 		return
 	}
 	// WHICH ACCOUNT THIS LINK WILL LAND ON (card t_88485157). `/cf/callback`
@@ -142,7 +142,7 @@ func (h *RESTHandlers) cfStart(w http.ResponseWriter, r *http.Request, actx *Acc
 			// the caller cannot reach (resolveSessionAccount). Carrying that
 			// fallback into the callback is the defect, so the flow refuses here
 			// instead of linking an account the caller did not ask for.
-			writeErr(w, http.StatusForbidden, "workspace tidak dijumpai")
+			writeErr(w, http.StatusForbidden, "workspace not found")
 			return
 		}
 		http.SetCookie(w, &http.Cookie{Name: cfOAuthWSCookie, Value: slug, Path: "/", HttpOnly: true, Secure: true, MaxAge: 600})
@@ -182,12 +182,12 @@ func (h *RESTHandlers) cfCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	cs, err := r.Cookie("cf_oauth_state")
 	if err != nil || cs.Value == "" || cs.Value != r.URL.Query().Get("state") {
-		writeErr(w, http.StatusBadRequest, "state tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid state")
 		return
 	}
 	verifierCookie, verr := r.Cookie("cf_pkce_v")
 	if verr != nil || verifierCookie.Value == "" {
-		writeErr(w, http.StatusBadRequest, "pkce verifier hilang")
+		writeErr(w, http.StatusBadRequest, "pkce verifier is missing")
 		return
 	}
 	// On a failed OAuth flow Cloudflare redirects back with error /
@@ -198,19 +198,19 @@ func (h *RESTHandlers) cfCallback(w http.ResponseWriter, r *http.Request) {
 		if desc == "" {
 			desc = oauthErr
 		}
-		writeErr(w, http.StatusBadRequest, "Cloudflare OAuth ditolak: "+desc)
+		writeErr(w, http.StatusBadRequest, "Cloudflare OAuth was rejected: "+desc)
 		return
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		writeErr(w, http.StatusBadRequest, "code hilang")
+		writeErr(w, http.StatusBadRequest, "code is missing")
 		return
 	}
 
 	tok, err := cfExchangeCode(r.Context(), code, verifierCookie.Value)
 	if err != nil {
 		slog.Error("cf_callback_exchange", "err", err)
-		writeErr(w, http.StatusBadGateway, "token exchange gagal")
+		writeErr(w, http.StatusBadGateway, "token exchange failed")
 		return
 	}
 	if tok.Access == "" {
@@ -218,7 +218,7 @@ func (h *RESTHandlers) cfCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := cfVerifyToken(r.Context(), tok.Access); err != nil {
-		writeErr(w, http.StatusForbidden, "token tidak aktif")
+		writeErr(w, http.StatusForbidden, "token is not active")
 		return
 	}
 
@@ -228,7 +228,7 @@ func (h *RESTHandlers) cfCallback(w http.ResponseWriter, r *http.Request) {
 	// to seal the token against the first-owned account.
 	uid := h.sessionOwnerID(r)
 	if uid == "" {
-		writeErr(w, http.StatusUnauthorized, "login dahulu")
+		writeErr(w, http.StatusUnauthorized, "sign in first")
 		return
 	}
 	target, why := h.cfLinkTarget(r, uid)
@@ -305,22 +305,22 @@ func (h *RESTHandlers) cfLinkTarget(r *http.Request, userID string) (*dbstore.Ac
 	}
 	if slug != "" {
 		if h.Workspaces == nil {
-			return nil, "workspace tidak dijumpai"
+			return nil, "workspace not found"
 		}
 		ws, ok, err := h.Workspaces.AccessBySlug(r.Context(), slug, userID)
 		if err != nil || !ok {
-			return nil, "workspace tidak dijumpai"
+			return nil, "workspace not found"
 		}
 		for _, id := range ws.Accounts {
 			if a, e := h.Accounts.ByID(r.Context(), id); e == nil && a != nil {
 				return a, ""
 			}
 		}
-		return nil, "tiada akaun vendor"
+		return nil, "no vendor account"
 	}
 	accs, err := h.Accounts.ByOwner(r.Context(), userID)
 	if err != nil || len(accs) == 0 {
-		return nil, "tiada akaun vendor"
+		return nil, "no vendor account"
 	}
 	return accs[0], ""
 }
@@ -365,17 +365,17 @@ func (h *RESTHandlers) cfConnectAPIToken(w http.ResponseWriter, r *http.Request,
 		AccountName  string `json:"account_name"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	in.AccountEmail = strings.TrimSpace(in.AccountEmail)
 	in.APIToken = strings.TrimSpace(in.APIToken)
 	if in.AccountEmail == "" || in.APIToken == "" {
-		writeErr(w, http.StatusBadRequest, "account email dan API token wajib")
+		writeErr(w, http.StatusBadRequest, "account email and API token are required")
 		return
 	}
 	if err := cfVerifyAPIToken(r.Context(), in.APIToken); err != nil {
-		writeErr(w, http.StatusBadRequest, "API token tidak sah atau tamat tempoh: "+err.Error())
+		writeErr(w, http.StatusBadRequest, "API token invalid or expired: "+err.Error())
 		return
 	}
 	blob, _ := json.Marshal(cfCred{Kind: cfKindAPIToken, Access: in.APIToken, AccountEmail: in.AccountEmail, AccountName: in.AccountName})
@@ -405,17 +405,17 @@ func (h *RESTHandlers) cfConnectGlobalKey(w http.ResponseWriter, r *http.Request
 		AccountName  string `json:"account_name"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, "payload tidak sah")
+		writeErr(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 	in.AccountEmail = strings.TrimSpace(in.AccountEmail)
 	in.APIKey = strings.TrimSpace(in.APIKey)
 	if in.AccountEmail == "" || in.APIKey == "" {
-		writeErr(w, http.StatusBadRequest, "account email dan global API key wajib")
+		writeErr(w, http.StatusBadRequest, "account email and global API key are required")
 		return
 	}
 	if err := cfVerifyGlobalKey(r.Context(), in.AccountEmail, in.APIKey); err != nil {
-		writeErr(w, http.StatusBadRequest, "global API key tidak sah: "+err.Error())
+		writeErr(w, http.StatusBadRequest, "invalid global API key: "+err.Error())
 		return
 	}
 	blob, _ := json.Marshal(cfCred{Kind: cfKindGlobalKey, Access: in.APIKey, AccountEmail: in.AccountEmail, AccountName: in.AccountName})
@@ -443,14 +443,14 @@ func cfVerifyAPIToken(ctx context.Context, token string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("token ditolak oleh Cloudflare")
+		return fmt.Errorf("token was rejected by Cloudflare")
 	}
 	var vr struct {
 		Success bool `json:"success"`
 	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&vr)
 	if !vr.Success {
-		return fmt.Errorf("token tidak sah")
+		return fmt.Errorf("invalid token")
 	}
 	return nil
 }
@@ -467,14 +467,14 @@ func cfVerifyGlobalKey(ctx context.Context, email, key string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("email atau key ditolak oleh Cloudflare")
+		return fmt.Errorf("email or key was rejected by Cloudflare")
 	}
 	var ur struct {
 		Success bool `json:"success"`
 	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ur)
 	if !ur.Success {
-		return fmt.Errorf("email atau key tidak sah")
+		return fmt.Errorf("invalid email or key")
 	}
 	return nil
 }
@@ -572,7 +572,7 @@ func cfVerifyToken(ctx context.Context, accessToken string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("token ditolak oleh Cloudflare")
+		return fmt.Errorf("token was rejected by Cloudflare")
 	}
 	var vr struct {
 		Success bool `json:"success"`

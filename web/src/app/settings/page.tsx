@@ -20,9 +20,12 @@ import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { Toast } from "../../components/Toast";
 import { SaveButton } from "../../components/SaveButton";
 import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
-
-// Issue #323: the CNAME target is consistent across all custom-domain copy.
-const CNAME_TARGET = "custom.jomform.com";
+// Card t_e8b4f7da: the API's per-field verdict on a saved legal URL, and the
+// dictionary keys that say why the public footer will not show it. The RULE
+// (host / path / content) stays server-side; this only renders its verdict.
+import { legalLinkWarningLines, type LegalLinkField, type LegalLinkStatusMap } from "../../lib/legalLinkWarning";
+import { cnameTarget, workspaceAddressLabel } from "../../lib/deployment";
+import { useDeployment } from "../../components/useDeployment";
 
 type ChipStatus = { configured: boolean; verified?: boolean; mode?: string; secret_key_masked?: string };
 
@@ -56,13 +59,35 @@ type DomainStatus = { domain: string; verified: boolean } | null;
 //  issue #301: they are user-level, not per-workspace. The MCP / connected-agents
 //  tab moved to Profile too, issue #307: an OAuth agent is a user-level
 //  credential bound to the user, not to a single workspace.)
-type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "webhooks" | "emel" | "members" | "storefront" | "legal" | "currency" | "affiliates" | "workspace";
+type SettingsTab = "chip" | "domains" | "tracking" | "einvoice" | "fees" | "webhooks" | "emel" | "members" | "storefront" | "legal" | "currency" | "affiliates" | "workspace";
 
-const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "webhooks", "emel", "members", "storefront", "legal", "currency", "affiliates", "workspace"];
+const TAB_IDS: SettingsTab[] = ["chip", "domains", "tracking", "einvoice", "fees", "webhooks", "emel", "members", "storefront", "legal", "currency", "affiliates", "workspace"];
 
 function isSettingsTab(v: string | null): v is SettingsTab {
-  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "webhooks" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency" || v === "affiliates" || v === "workspace";
+  return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "fees" || v === "webhooks" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency" || v === "affiliates" || v === "workspace";
 }
+
+// FeeRateRow is one CHIP payment method's processing-fee rate as the API stores
+// it (card t_135c3c72). Amounts are integer SEN and the percentage is BASIS
+// POINTS: 100 = 1%. `rate_label` is the server's wording ("Card 2.00%") so the
+// dashboard cannot drift from the receipt.
+type FeeRateRow = {
+  method: string;
+  fee_enabled: boolean;
+  fee_fixed_sen: number;
+  fee_percent_bp: number;
+  rate_label?: string;
+  updated_by?: string;
+};
+
+// FEE_METHOD_NAMES are the buyer-facing names of the four storable methods. The
+// keys are the API's, never displayed raw to a merchant.
+const FEE_METHOD_NAMES: Record<string, string> = {
+  fpx: "FPX",
+  card: "Card",
+  ewallet: "e-Wallet",
+  duitnow_qr: "DuitNow QR",
+};
 
 // The tab the URL names, if any — `/settings#webhooks` (the hash) or
 // `/settings?tab=domains` (issue #68). Readable during the CLIENT's FIRST
@@ -163,6 +188,13 @@ const DEFAULT_LP_BACKGROUND = "#ffffff"; // design-tokens-exempt: a persisted co
 
 export default function Settings() {
   const { t } = useI18n();
+  // Card t_48a93084: the custom-domain target and the workspace address the
+  // copy names are DEPLOYMENT facts — `custom.jomform.com` and
+  // `<slug>.jomform.com` exist on the hosted product only. null until
+  // /api/meta answers, and the copy below prints nothing until then rather
+  // than a host this install does not have.
+  const deployment = useDeployment();
+  const cnameTargetHost = cnameTarget(deployment);
   const router = useRouter();
   // The tab the URL names wins over the stored one, and it is resolved in the
   // INITIALIZER (not only in the mount effect below) so the client's first paint
@@ -293,6 +325,13 @@ export default function Settings() {
   const [sfRefundUrl, setSfRefundUrl] = useState("");
   const [sfFooterText, setSfFooterText] = useState("");
   const [sfWorkspaceId, setSfWorkspaceId] = useState("");
+  // Card t_e8b4f7da: the API's own verdict on each saved legal URL — whether the
+  // PUBLIC FOOTER will publish it, and when it will not, why. The rule itself
+  // lives in the API (it is the footer's rule: rewriteHostedLegalURL +
+  // servableHostedLegalLink); this page only renders the sentence, so the two
+  // cannot drift into two different answers. Before this the merchant got
+  // "Footer saved ✓" for a URL the footer silently dropped.
+  const [sfLegalStatus, setSfLegalStatus] = useState<LegalLinkStatusMap>({});
   // Issue #276: per-workspace SEO indexing toggle (Storefront tab).
   const [sfIndexing, setSfIndexing] = useState(true);
   // The Save-footer PUT's in-flight state (card t_b73eee21). Presentation only:
@@ -304,6 +343,12 @@ export default function Settings() {
   // a ref rather than state so a re-render cannot orphan it.
   // Issue #447: per-workspace realtime notification sound toggle (Storefront tab).
   const [sfSoundEnabled, setSfSoundEnabled] = useState(false);
+  // Card t_135c3c72: per-method processing-fee rates (Settings -> Payment fees).
+  // Money is integer SEN, the percentage is BASIS POINTS (100 = 1%) — the same
+  // units the API takes, so nothing is converted in the browser.
+  const [feeRates, setFeeRates] = useState<FeeRateRow[]>([]);
+  const [feeAck, setFeeAck] = useState(false);
+  const [feeAckBy, setFeeAckBy] = useState("");
   // Per-workspace AI spam-judge toggle (Storefront tab). Default
   // true — the judge runs unless the merchant explicitly turns it off.
   const [sfSpamJudgeEnabled, setSfSpamJudgeEnabled] = useState(true);
@@ -377,8 +422,14 @@ export default function Settings() {
   // (chip, keys, domains, webhooks, einvoice) on mount.
   // Issue #29: routed through the shared session cache — the first page of
   // the session fetches the bundle once; later pages (dashboard, forms,
-  // products, profile) reuse it. Saves call reloadSession() to re-fetch.
-  const { bundle, anon, reload: reloadSession, role, user, workspace } = useSession();
+  // products, profile) reuse it.
+  // THE RULE AFTER A WRITE (card t_818349ab): call `reload()` (the wrapper
+  // below), NEVER `load()`. `load` APPLIES the bundle this render closed over,
+  // which after a successful write is the PRE-write payload — re-applying it is
+  // what left the CHIP status badge reading NOT SET, and a just-added webhook
+  // missing, until the page was reloaded. `reload()` drops the cache and
+  // re-fetches, so `load` then runs against a fresh payload.
+  const { bundle, bundleScope, anon, reload: reloadSession, role, user, workspace } = useSession();
   // Phone tab strip: the settings tab strip is one scrolling row, not a wrapped
   // block (see the tab bar below). This ref points at it.
   const tabStripRef = useRef<HTMLDivElement | null>(null);
@@ -387,6 +438,17 @@ export default function Settings() {
     // the next load() re-fetches fresh data (and other pages inherit it).
     reloadSession();
   }, [reloadSession]);
+  // THE BUNDLE ON SCREEN MUST BE THE ACTIVE WORKSPACE'S (card t_de220c75).
+  // `bundle` is workspace-scoped (chip status, keys, domains, webhooks, einvoice)
+  // and a switch publishes the new scope one commit BEFORE the new payload can
+  // arrive, so for that window this page holds the PREVIOUS workspace's payload.
+  // Applying it is what painted `wan`'s two verified domains under the `abc`
+  // chip — one switch behind, in both directions, measured on prod v1.22.91,
+  // each row carrying a live Remove button for a domain that workspace does not
+  // own. So the apply is gated on the payload's OWN scope (`bundleScope`, the
+  // slug the session fetched it for), and while the page holds another
+  // workspace's payload the LISTS it fills are emptied rather than left
+  // describing a workspace nobody is looking at.
   const load = useCallback(() => {
     const apply = (b: NonNullable<ReturnType<typeof useSession>["bundle"]>) => {
       if (!b) return;
@@ -414,23 +476,73 @@ export default function Settings() {
       }
       setKeys(Array.isArray(k) ? k : []);
     };
-    if (bundle) { apply(bundle); return Promise.resolve(); }
+    if (bundle && bundleScope === workspace) { apply(bundle); return Promise.resolve(); }
+    if (bundle) {
+      // Another workspace's payload: the rows it carried are not this
+      // workspace's rows, and every one of these lists renders a destructive
+      // control against the row (`Remove` a domain, delete a webhook, revoke a
+      // key). Empty is the only honest thing to paint until the active scope's
+      // payload lands.
+      setDomains([]);
+      setWebhooks([]);
+      setKeys([]);
+      return Promise.resolve();
+    }
     // Issue #48: when the bundle resolved as null (anonymous) there is
     // nothing to load here — the anon redirect below bounces to /landing.
     if (bundle === null) return Promise.resolve();
-    return fetch(`/api/rest/dashboard-bundle${workspaceQuery()}`)
+    // The no-bundle fallback fetches for the scope in force NOW, and drops the
+    // answer if the scope moved while it was in flight — the same stale-apply
+    // this card is about, one layer down.
+    const q = workspaceQuery();
+    return fetch(`/api/rest/dashboard-bundle${q}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then(apply);
-  }, [bundle]);
+      .then((b) => {
+        if (!b) return;
+        if (workspaceQuery() !== q) return;
+        apply(b);
+      });
+  }, [bundle, bundleScope, workspace]);
+
+  // Card t_135c3c72: load the stored fee rates + acknowledgement for the
+  // Payment fees tab. Read directly from the REST endpoint rather than the
+  // bundle. The ACKNOWLEDGEMENT SENTENCE is not read from here: the endpoint
+  // serves it in English (api/internal/payments/fee.go) because a JSON call
+  // carries no caller language (issue #6177), so the checkbox renders the
+  // dashboard's own arm — t("set.feesAck") — for the same disclosure (t_541a31d5).
+  const refreshFees = useCallback(() => {
+    const q = workspaceQuery();
+    return fetch(`/api/rest/settings/payment-fees${q}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => {
+        // An answer for a workspace the merchant has since left must not land.
+        if (workspaceQuery() !== q) return;
+        if (!b || !Array.isArray(b.rates)) return;
+        setFeeRates(b.rates as FeeRateRow[]);
+        setFeeAck(b.acknowledged === true);
+        setFeeAckBy(typeof b.acknowledged_by === "string" ? b.acknowledged_by : "");
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (bundle === null) return;
+    refreshFees();
+  }, [bundle, bundleScope, workspace, refreshFees]);
 
   // Issue #242: re-fetch the custom-domain list directly from the REST
   // endpoint. load() reads bundle.domains from the closure's stale bundle
   // value, so a freshly added domain wouldn't appear until reloadSession()
   // re-renders. Fetching the list here makes new domains show immediately.
   const refreshDomains = useCallback(() => {
-    return fetch(`/api/rest/domains${workspaceQuery()}`)
+    // The URL is built once and compared after the read, so an answer for a
+    // scope the merchant has since left cannot land in `domains` (card
+    // t_de220c75 — this is the one path that also CLEARS the list to `[]`).
+    const q = workspaceQuery();
+    return fetch(`/api/rest/domains${q}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((list) => {
+        if (workspaceQuery() !== q) return;
         if (Array.isArray(list)) setDomains(list);
       });
   }, []);
@@ -559,6 +671,10 @@ export default function Settings() {
         setSfSpamJudgeEnabled(d.spam_judge_enabled !== false);
         // Language placement: workspace default language for PUBLIC forms.
         setSfDefaultLang(d.default_lang || "en");
+        // Card t_e8b4f7da: the footer's verdict on the STORED legal URLs. Loaded
+        // with the settings so a merchant who saved a dropped URL before this
+        // shipped still gets told — without having to press Save again.
+        setSfLegalStatus((d.legal_link_status || {}) as LegalLinkStatusMap);
         if (d.currency) setCurrency(d.currency);
         // Issue #360: per-space customizable landing page.
         const lp = d.landing_page || {};
@@ -601,6 +717,12 @@ export default function Settings() {
     });
     if (r.ok) {
       showMsgOk(t("set.currencySaved"));
+      // Card t_d5f359c7: every PRICE surface (products, subscriptions, builder,
+      // shipping rates, the menu picker) labels its amount in the workspace's
+      // currency, which rides in the session bundle. Dropping the bundle makes
+      // the rest of the app read the NEW symbol instead of the one it cached
+      // when this page was opened.
+      reload();
     } else {
       const d = await r.json().catch(() => ({}));
       setErr(apiErr(d, t("set.failedSave"), t));
@@ -811,12 +933,30 @@ export default function Settings() {
       // API check passed. Trust that value — never assume success.
       const d = await r.json().catch(() => ({}));
       setVerified(d.verified === true);
+      // Card t_818349ab: the status badge and the "✓ API credentials verified"
+      // marks are rendered from THIS state, and this branch used to end with
+      // `await load()` — which APPLIES `bundle`, the payload this render closed
+      // over, i.e. the pre-save one. It wrote the old `chip_status` back over
+      // the fresh answer, so the badge stayed NOT SET until the merchant
+      // reloaded the page (the reported bug; reproduced in
+      // `web/e2e/settings-save-reflects-status.spec.ts`). The write's own answer
+      // is authoritative for the fields it carries…
+      const configured = typeof d.status === "string" ? d.status === "configured" : true;
+      setStatus((prev) => ({
+        ...(prev || { configured }),
+        configured,
+        verified: d.verified === true,
+        mode: typeof d.mode === "string" ? d.mode : prev?.mode,
+      }));
       // A save that reached the API but whose CHIP check could not be confirmed
       // is NOT a clean success. It is shown on the failure tone so the merchant
       // reads the caveat on the same chrome as its meaning (the sentence itself
       // already says the check was not confirmed).
       (d.verified === true ? showMsgOk : showMsgFail)(t(d.verified === true ? "set.savedCreds" : "set.savedCredsUnverified"));
-      await load();
+      // …and the fields it does not echo (brand id, the masked key tail, the
+      // method whitelist) come from a FRESH bundle: `reload()` drops the shared
+      // session cache and re-fetches, where `load()` only re-read the cached one.
+      reload();
     } else {
       const d = await r.json().catch(() => ({}));
       setVerified(false);
@@ -825,9 +965,24 @@ export default function Settings() {
   }
 
   async function clearCreds() {
-    await fetch(`/api/rest/settings/chip${workspaceQuery()}`, { method: "DELETE" });
+    setMsg("");
+    setErr("");
+    const r = await fetch(`/api/rest/settings/chip${workspaceQuery()}`, { method: "DELETE" });
+    if (!r.ok) {
+      // A refused DELETE used to be painted as a successful Disconnect.
+      const d = await r.json().catch(() => ({}));
+      setErr(apiErr(d, t("set.failedSave"), t));
+      return;
+    }
     showMsgOk(t("set.credsCleared"));
-    await load();
+    // Card t_818349ab: the same root cause as `save()` above. `load()` re-applies
+    // the bundle this render closed over — still "configured" — so a successful
+    // Disconnect left the badge reading ACTIVE · TEST. Publish the cleared state
+    // from the answer, then refresh the bundle for everything else.
+    setStatus((prev) => ({ ...(prev || { configured: false }), configured: false, verified: false, mode: "" }));
+    setVerified(false);
+    setSecretMasked("");
+    reload();
   }
 
   async function addWebhook(e: React.FormEvent) {
@@ -839,7 +994,10 @@ export default function Settings() {
     });
     if (r.ok) {
       setWhUrl(""); setWhSecret(""); setWhEvents([...WEBHOOK_EVENTS]);
-      load();
+      // Card t_818349ab: `webhooks` is bundle-backed, and `load()` re-applies
+      // the bundle this render closed over — the list from BEFORE the POST — so
+      // the new hook only appeared after a page reload. `reload()` re-fetches.
+      reload();
     } else {
       // Issue #128: show the backend's error inline instead of swallowing it.
       const d = await r.json().catch(() => ({}));
@@ -859,7 +1017,8 @@ export default function Settings() {
     if (r.ok) {
       showMsgOk(t("set.whUpdated"));
       setEditId(null); setEditUrl(""); setEditSecret(""); setEditEvents([]);
-      load();
+      // Card t_818349ab: same stale re-apply as `addWebhook` above.
+      reload();
     } else {
       const d = await r.json().catch(() => ({}));
       setErr(t("set.whUpdateFail", { error: apiErr(d, t("set.failedSave"), t) }));
@@ -953,7 +1112,7 @@ export default function Settings() {
       } else if (d.auto_cname === "failed") {
         setDomainMsg(t("set.autoCnameFailed", { error: d.cloudflare || "" }));
       } else {
-        setDomainMsg(t("set.domainAdded", { domain: d.domain }));
+        setDomainMsg(t("set.domainAdded", { domain: d.domain, target: cnameTargetHost }));
       }
       await refreshDomains();
       // Issue #324: auto-poll the freshly added domain so the merchant doesn't
@@ -1130,6 +1289,13 @@ export default function Settings() {
         }),
       });
       if (r.ok) {
+        // Card t_e8b4f7da: the save succeeded, but a legal URL the footer will
+        // DROP must not be confirmed silently — that was the reported bug
+        // ("Footer saved ✓" + an empty footer + no reason). The API answers with
+        // its own verdict per field; keep it so the fields can say why. A body
+        // that cannot be read must NOT cost the confirmation: the save DID land.
+        const d = await r.json().catch(() => ({}));
+        setSfLegalStatus(((d as { legal_link_status?: LegalLinkStatusMap })?.legal_link_status || {}) as LegalLinkStatusMap);
         showMsgOk(t("set.sfSaved"));
         return true;
       } else {
@@ -1141,6 +1307,32 @@ export default function Settings() {
     }
     // A failure must NOT confirm on the button.
     return false;
+  }
+
+  // Card t_e8b4f7da: what a legal-URL field says when the PUBLIC FOOTER will not
+  // publish that link. The verdict is the API's (the footer's own rule) and the
+  // wording comes from lib/legalLinkWarning — this only draws it, so no host or
+  // path test is re-implemented here.
+  //
+  // The two `t()` calls are a literal ternary rather than `t(l.key, …)`: a
+  // computed key lands in i18nKeys.ts's unresolved remainder, and the dictionary
+  // entry for these two strings is what makes the warning readable at all — a raw
+  // `set.sfLegalLinkNotServed` rendered to the merchant is the same class of bug
+  // as showing no warning.
+  function legalUrlWarning(field: LegalLinkField) {
+    const lines = legalLinkWarningLines(sfLegalStatus[field]);
+    if (!lines.length) return null;
+    return (
+      <>
+        {lines.map((l) => (
+          <p key={l.key} className="text-xs font-medium text-amber-800">
+            {l.key === "set.sfLegalLinkNotServed"
+              ? t("set.sfLegalLinkNotServed", l.vars)
+              : t("set.sfLegalLinkNoContent", l.vars)}
+          </p>
+        ))}
+      </>
+    );
   }
 
   // Issue #360: save the per-space customizable landing page (Storefront tab).
@@ -1246,7 +1438,7 @@ export default function Settings() {
   // panel have to agree on WHICH TABS EXIST, which is the same contract the
   // `activeTab` derivation below enforces from the other side (an intent the
   // strip cannot render falls back to one it can). Card t_0ef9709c.
-  const ADMIN_ONLY_TABS: readonly SettingsTab[] = ["chip", "members", "workspace"];
+  const ADMIN_ONLY_TABS: readonly SettingsTab[] = ["chip", "fees", "members", "workspace"];
   const isAdmin = role === "admin" || role === "owner";
   const isReadOnly = role === "read_only";
   const visibleTabs: SettingsTab[] = isReadOnly
@@ -1434,6 +1626,7 @@ export default function Settings() {
               <h2 className="text-lg font-semibold">{t("set.chipTitle")}</h2>
               {status && (
                 <span
+                  data-testid="chip-status-badge"
                   className={`rounded-full px-3 py-1 text-xs font-semibold ${
                     status.configured
                       ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -1602,7 +1795,7 @@ export default function Settings() {
                             {polling[d.id] && (
                               <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
                             )}
-                            {polling[d.id] ? t("set.checkingDns") : t("set.pendingDns")}
+                            {polling[d.id] ? t("set.checkingDns") : t("set.pendingDns", { target: cnameTargetHost })}
                           </p>
                         )}
                         {/* Issue #322: per-domain auto-CNAME status. */}
@@ -1670,11 +1863,11 @@ export default function Settings() {
                           <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">CNAME</span>
                           <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">{d.domain}</span>
                           <span className="text-[var(--jf-muted-on-tint)]">→</span>
-                          <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">{CNAME_TARGET}</span>
+                          <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">{cnameTargetHost}</span>
                           <button
                             type="button"
                             onClick={() => {
-                              navigator.clipboard?.writeText(`CNAME ${d.domain} → ${CNAME_TARGET}`);
+                              navigator.clipboard?.writeText(`CNAME ${d.domain} → ${cnameTargetHost}`);
                               setDomainMsg(t("set.copy"));
                             }}
                             className="ml-1 text-jf-2xs text-[var(--jf-primary)] hover:underline"
@@ -2004,6 +2197,132 @@ export default function Settings() {
           </section>
         )}
 
+        {/* ── Payment fees tab: buyer-borne CHIP processing fee (card t_135c3c72) ── */}
+        {activeTab === "fees" && (
+          <section
+            className="jf-card mt-6 p-6"
+            role="tabpanel"
+            id={panelDomId("set", "fees")}
+            aria-labelledby={tabDomId("set", "fees")}
+            data-testid="settings-fees"
+          >
+            <h2 className="text-lg font-semibold">{t("set.feesTitle")}</h2>
+            <p className="mt-1 max-w-2xl text-sm text-[var(--jf-muted)]">{t("set.feesHelp")}</p>
+            <p className="mt-2 max-w-2xl text-xs text-[var(--jf-muted)]">{t("set.feesExample")}</p>
+
+            <div className="mt-4 space-y-3">
+              {feeRates.map((row, i) => (
+                <div
+                  key={row.method}
+                  data-testid={`fee-rate-${row.method}`}
+                  className="grid grid-cols-1 items-end gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-4"
+                >
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
+                    <input
+                      type="checkbox"
+                      data-testid={`fee-enabled-${row.method}`}
+                      checked={row.fee_enabled}
+                      onChange={(e) => {
+                        const next = [...feeRates];
+                        next[i] = { ...row, fee_enabled: e.target.checked };
+                        setFeeRates(next);
+                      }}
+                    />
+                    {FEE_METHOD_NAMES[row.method] || row.method}
+                  </label>
+                  <div>
+                    <label className="text-xs text-slate-500">{t("set.feesFixed")}</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      data-testid={`fee-fixed-${row.method}`}
+                      value={row.fee_fixed_sen}
+                      onChange={(e) => {
+                        const next = [...feeRates];
+                        next[i] = { ...row, fee_fixed_sen: Math.max(0, Math.trunc(Number(e.target.value) || 0)) };
+                        setFeeRates(next);
+                      }}
+                      className="jf-input mt-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500">{t("set.feesPercent")}</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={9999}
+                      step={1}
+                      data-testid={`fee-bp-${row.method}`}
+                      value={row.fee_percent_bp}
+                      onChange={(e) => {
+                        const next = [...feeRates];
+                        // Clamp to the schema's bound (99.99%): at 100% the fee
+                        // grows as fast as the amount and no total satisfies the
+                        // gross-up, so the store refuses it.
+                        next[i] = { ...row, fee_percent_bp: Math.min(9999, Math.max(0, Math.trunc(Number(e.target.value) || 0))) };
+                        setFeeRates(next);
+                      }}
+                      className="jf-input mt-1"
+                    />
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    {row.rate_label ? <span data-testid={`fee-label-${row.method}`}>{row.rate_label}</span> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <label className="mt-4 flex max-w-2xl items-start gap-2 text-sm text-slate-800">
+              <input
+                type="checkbox"
+                data-testid="fee-ack"
+                checked={feeAck}
+                onChange={(e) => setFeeAck(e.target.checked)}
+                className="mt-1"
+              />
+              <span>{t("set.feesAck")}</span>
+            </label>
+            {feeAckBy ? (
+              <p className="mt-1 text-xs text-[var(--jf-muted)]" data-testid="fee-ack-by">
+                {feeAckBy}
+              </p>
+            ) : null}
+
+            <button
+              data-testid="fee-save"
+              onClick={async () => {
+                // Enabling a fee requires the acknowledgement. The server
+                // refuses it too (the API is not a UI); saying so here avoids a
+                // round trip that only returns "tick the acknowledgement".
+                const enabling = feeRates.some((r) => r.fee_enabled && (r.fee_fixed_sen > 0 || r.fee_percent_bp > 0));
+                if (enabling && !feeAck) {
+                  showMsgFail(t("set.feesNeedAck"));
+                  return;
+                }
+                const r = await fetch(`/api/rest/settings/payment-fees${workspaceQuery()}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    acknowledged: feeAck,
+                    rates: feeRates.map((x) => ({
+                      method: x.method,
+                      fee_enabled: x.fee_enabled,
+                      fee_fixed_sen: x.fee_fixed_sen,
+                      fee_percent_bp: x.fee_percent_bp,
+                    })),
+                  }),
+                });
+                (r.ok ? showMsgOk : showMsgFail)(t(r.ok ? "set.feesSaved" : "set.failedSave"));
+                if (r.ok) await refreshFees();
+              }}
+              className="jf-btn-primary mt-3"
+            >
+              {t("set.feesSave")}
+            </button>
+          </section>
+        )}
+
         {/* ── Webhooks tab: outbound webhooks ── */}
         {activeTab === "webhooks" && (
           <section
@@ -2096,7 +2415,10 @@ export default function Settings() {
                           }} className="shrink-0 text-xs text-slate-500 hover:text-slate-800">
                             {open ? t("wh.hideHistory") : t("wh.showHistory")}
                           </button>
-                          <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}${workspaceQuery()}`, { method: "DELETE" }); load(); }}
+                          {/* Card t_818349ab: `load()` here re-applied the
+                              pre-delete bundle, so the removed hook survived
+                              until a page reload. */}
+                          <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}${workspaceQuery()}`, { method: "DELETE" }); reload(); }}
                             className="shrink-0 text-xs text-slate-500 hover:text-red-700">✕</button>
                         </div>
                       </div>
@@ -2241,7 +2563,7 @@ export default function Settings() {
                   value={emelSubject}
                   onChange={(e) => setEmelSubject(e.target.value)}
                   className="jf-input mt-1 max-w-xl"
-                  placeholder="Resit pembayaran — {{ref_code}}"
+                  placeholder={t("set.emelSubjectPh")}
                 />
               </div>
               <div>
@@ -2358,35 +2680,61 @@ export default function Settings() {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-500">{t("set.sfPrivacyUrl")}</label>
+                <label className="text-xs text-slate-500" htmlFor="sf-privacy-url">{t("set.sfPrivacyUrl")}</label>
                 <input
+                  id="sf-privacy-url"
+                  aria-describedby="sf-privacy-url-status"
                   value={sfPrivacyUrl}
                   onChange={(e) => setSfPrivacyUrl(e.target.value)}
                   type="url"
                   className="jf-input mt-1 max-w-xl"
                   placeholder="https://…/privacy"
                 />
+                {/* Card t_e8b4f7da: after Save, say why this link will not appear. */}
+                <div id="sf-privacy-url-status">{legalUrlWarning("privacy_url")}</div>
               </div>
               <div>
-                <label className="text-xs text-slate-500">{t("set.sfTermsUrl")}</label>
+                <label className="text-xs text-slate-500" htmlFor="sf-terms-url">{t("set.sfTermsUrl")}</label>
                 <input
+                  id="sf-terms-url"
+                  aria-describedby="sf-terms-url-status"
                   value={sfTermsUrl}
                   onChange={(e) => setSfTermsUrl(e.target.value)}
                   type="url"
                   className="jf-input mt-1 max-w-xl"
                   placeholder="https://…/terms"
                 />
+                <div id="sf-terms-url-status">{legalUrlWarning("terms_url")}</div>
               </div>
               <div>
-                <label className="text-xs text-slate-500">{t("set.sfRefundUrl")}</label>
+                <label className="text-xs text-slate-500" htmlFor="sf-refund-url">{t("set.sfRefundUrl")}</label>
                 <input
+                  id="sf-refund-url"
+                  aria-describedby="sf-refund-url-status"
                   value={sfRefundUrl}
                   onChange={(e) => setSfRefundUrl(e.target.value)}
                   type="url"
                   className="jf-input mt-1 max-w-xl"
                   placeholder="https://…/refund"
                 />
+                <div id="sf-refund-url-status">{legalUrlWarning("refund_url")}</div>
               </div>
+              {/* AGENTS.md documentation-parity step 4: an inline "?" beside the
+                  fields that decide the footer's links, pointing at the page that
+                  states the rule (card t_e8b4f7da). */}
+              <p className="flex max-w-xl items-center gap-1.5 text-xs text-slate-500">
+                {t("set.sfLegalLinkDocs")}
+                <a
+                  href="/docs/workspaces#footer-legal-links"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={t("set.sfLegalLinkDocs")}
+                  aria-label={t("set.sfLegalLinkDocs")}
+                  className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                >
+                  ?
+                </a>
+              </p>
               <div>
                 <label className="text-xs text-slate-500">{t("set.sfFooterText")}</label>
                 <textarea
@@ -2425,7 +2773,9 @@ export default function Settings() {
               <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
                 <div>
                   <p className="text-sm font-medium">{t("set.sfIndexingTitle")}</p>
-                  <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.sfIndexingHelp")}</p>
+                  <p className="mt-0.5 max-w-md text-xs text-slate-500">
+                    {deployment && t(deployment.selfHosted ? "set.sfIndexingHelpSelf" : "set.sfIndexingHelp")}
+                  </p>
                 </div>
                 {/* Shared switch (web/src/components/Switch.tsx, card t_b73eee21):
                     this markup used to be a hand-rolled pill here, in
@@ -2496,7 +2846,8 @@ export default function Settings() {
           <section className="jf-card mt-6 p-6">
             <h2 className="text-lg font-semibold">{t("set.lpTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted)]">
-              {t("set.lpHelp")}
+              {workspaceAddressLabel(activeWorkspaceSlug, deployment) &&
+                t("set.lpHelp", { host: workspaceAddressLabel(activeWorkspaceSlug, deployment) })}
             </p>
             <div className="mt-4 space-y-3">
               {/* Landing page enable toggle. */}
@@ -2519,7 +2870,7 @@ export default function Settings() {
                       value={lpHero}
                       onChange={(e) => setLpHero(e.target.value)}
                       className="jf-input mt-1 max-w-xl"
-                      placeholder="Selamat datang ke kedai kami"
+                      placeholder={t("set.lpHeroPh")}
                     />
                   </div>
                   <div>
@@ -2528,7 +2879,7 @@ export default function Settings() {
                       value={lpSubtitle}
                       onChange={(e) => setLpSubtitle(e.target.value)}
                       className="jf-input mt-1 max-w-xl"
-                      placeholder="Barang-barang istimewa untuk anda"
+                      placeholder={t("set.lpSubtitlePh")}
                     />
                   </div>
                   <div>

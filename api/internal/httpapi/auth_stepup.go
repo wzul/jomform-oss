@@ -110,7 +110,7 @@ func writeStepUpRequired(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error":     "pengesahan 2FA diperlukan untuk tindakan ini",
+		"error":     "2FA confirmation is required for this action",
 		"code":      CodeStepUpRequired,
 		"next_step": stepUpNextStep,
 	})

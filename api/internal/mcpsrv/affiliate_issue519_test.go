@@ -111,7 +111,7 @@ func TestIssue519MCPCrossTenantCommissionRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("cross-tenant set_affiliate_commission was ACCEPTED — the IDOR is back")
 	}
-	if !strings.Contains(err.Error(), "affiliate tidak dijumpai") {
+	if !strings.Contains(err.Error(), "affiliate not found") {
 		t.Errorf("refusal error = %v, want the not-found message (no info leak)", err)
 	}
 	if after := st.commission519(t, st.affA.ID); after != before {
@@ -156,7 +156,7 @@ func TestIssue519MCPGetAffiliateSalesStaysScoped(t *testing.T) {
 	if err == nil {
 		t.Fatal("get_affiliate_sales accepted another workspace's affiliate id")
 	}
-	if !strings.Contains(err.Error(), "affiliate tidak dijumpai") {
+	if !strings.Contains(err.Error(), "affiliate not found") {
 		t.Errorf("get_affiliate_sales refusal = %v, want not-found", err)
 	}
 }

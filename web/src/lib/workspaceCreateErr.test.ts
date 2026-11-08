@@ -7,7 +7,7 @@
 //     else if (res.status === 400) msg = t("workspace.slugInvalid");
 //
 // That is the shape the card calls out: the server already answers
-// `{"error":"slug sudah digunakan","code":"workspace.slugTaken"}`, so a status
+// `{"error":"slug already in use","code":"workspace.slugTaken"}`, so a status
 // branch is both redundant AND fragile — reword a message, or move the refusal
 // to a different status, and the page silently degrades to "Failed to create
 // workspace." while the API still names the exact reason.
@@ -64,8 +64,8 @@ function tIn(lang: string) {
 
 /** The exact refusal envelopes the live API answers (verified against a running
  *  build: POST /v1/workspaces with a taken slug → 409 + this body). */
-const TAKEN = { error: "slug sudah digunakan", code: "workspace.slugTaken" };
-const INVALID = { error: "slug 3-40 aksara", code: "workspace.slugInvalid" };
+const TAKEN = { error: "slug already in use", code: "workspace.slugTaken" };
+const INVALID = { error: "slug 3-40 characters", code: "workspace.slugInvalid" };
 
 /** A fake fetch answering one status with one body, recording the request.
  *
@@ -111,7 +111,7 @@ test("a 409 duplicate slug renders the slug-taken sentence (from the CODE, not t
     const rendered = t(key);
     assert.equal(rendered, t("workspace.slugTaken"), `lang=${lang}`);
     assert.notEqual(rendered, t("workspace.createFail"), `lang=${lang} degraded to the generic line`);
-    assert.ok(!rendered.includes("slug sudah digunakan"), `lang=${lang} rendered the server prose`);
+    assert.ok(!rendered.includes("slug already in use"), `lang=${lang} rendered the server prose`);
   }
 });
 
@@ -126,7 +126,7 @@ test("a 400 bad slug renders the slug-invalid sentence (from the CODE, not the s
     const rendered = t(key);
     assert.equal(rendered, t("workspace.slugInvalid"), `lang=${lang}`);
     assert.notEqual(rendered, t("workspace.createFail"), `lang=${lang}`);
-    assert.ok(!rendered.includes("slug 3-40 aksara"), `lang=${lang} rendered the server prose`);
+    assert.ok(!rendered.includes("slug 3-40 characters"), `lang=${lang} rendered the server prose`);
   }
 });
 
@@ -135,7 +135,7 @@ test("the CODE wins when the code and the status DISAGREE (the precedence itself
   // implementation answers workspace.slugTaken here, so this is the assertion
   // that actually distinguishes the two implementations.
   assert.deepEqual(
-    await createAgainst(409, { error: "slug 3-40 aksara", code: "workspace.slugInvalid" }),
+    await createAgainst(409, { error: "slug 3-40 characters", code: "workspace.slugInvalid" }),
     { ok: false, errorKey: "apiErr.workspaceSlugInvalid" },
     "a 409 carrying workspace.slugInvalid was answered from the STATUS — the code is not read first",
   );
@@ -152,18 +152,18 @@ test("a body with NO code still falls back to the status branch (the fallback su
   // Simulates a response from an older build (or a proxy) that carries prose
   // only. The status branch is what answers — the property that must NOT have
   // been deleted along with the branch.
-  assert.deepEqual(await createAgainst(409, { error: "slug sudah digunakan" }), {
+  assert.deepEqual(await createAgainst(409, { error: "slug already in use" }), {
     ok: false,
     errorKey: "workspace.slugTaken",
   });
-  assert.deepEqual(await createAgainst(400, { error: "slug 3-40 aksara" }), {
+  assert.deepEqual(await createAgainst(400, { error: "slug 3-40 characters" }), {
     ok: false,
     errorKey: "workspace.slugInvalid",
   });
   // A code this build does not know is that same case: the page's own sentence,
   // never the prose.
   assert.deepEqual(
-    await createAgainst(409, { error: "slug sudah digunakan", code: "future.code.notInThisBuild" }),
+    await createAgainst(409, { error: "slug already in use", code: "future.code.notInThisBuild" }),
     { ok: false, errorKey: "workspace.slugTaken" },
   );
   // No body at all (a proxy error page, an empty 500).
