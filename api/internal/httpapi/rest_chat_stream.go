@@ -40,8 +40,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/wzul/jomform/api/internal/chat"
 	"github.com/wzul/jomform/api/internal/llm"
@@ -99,15 +101,22 @@ func (h *RESTHandlers) streamChat(
 	sessionID string,
 	sessionWorkspaceID string,
 ) {
-	fl, ok := w.(http.Flusher)
-	if !ok {
-		// No flush capability means every event would sit in a buffer until the
-		// handler returned — a "stream" that arrives all at once, which is the
-		// defect this feature exists to remove. Answer the one-shot way instead
-		// of pretending.
-		h.chatJSONAnswer(w, r, actx, ctx, uid, history, msg, sessionID, sessionWorkspaceID)
-		return
-	}
+	// DO NOT assert `w.(http.Flusher)` here. Under the real server chain the
+	// response passes through middleware.Logger's statusRecorderMiddleware, which
+	// embeds http.ResponseWriter and therefore promotes ONLY that interface's
+	// methods — the wrapper is not a http.Flusher even though the writer
+	// underneath is. That is deliberate: a forwarding Flush() on the wrapper would
+	// make it ALWAYS satisfy the interface and hide a chain that cannot flush (see
+	// the long comment in middleware/logging.go). The consequence here was that
+	// the assertion failed on EVERY production request and this handler fell
+	// quietly into chatJSONAnswer — the same issue-#615 shape, one level lower: a
+	// dead feature with a green test suite, because the unit test's
+	// httptest.ResponseRecorder is itself an http.Flusher.
+	//
+	// http.NewResponseController walks Unwrap() to the real writer and answers
+	// honestly: nil when something in the chain can flush, ErrNotSupported when
+	// nothing can. realtime.go solves the other SSE route the same way.
+	rc := http.NewResponseController(w)
 
 	head := w.Header()
 	head.Set("Content-Type", "text/event-stream")
@@ -117,11 +126,46 @@ func (h *RESTHandlers) streamChat(
 	head.Set("Cache-Control", "no-cache, no-store")
 	head.Set("X-Accel-Buffering", "no")
 	head.Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	fl.Flush()
+
+	// Headers BEFORE the flush probe: a flush commits the status line and the
+	// headers set at that moment (realtime.go carries the same note). On a chain
+	// that cannot flush nothing has been committed, so the fallback below still
+	// answers with its own status and Content-Type.
+	//
+	// No WriteHeader here: the probe itself commits 200, and an explicit call
+	// after it would make net/http log "superfluous WriteHeader" on every stream.
+	if err := rc.Flush(); err != nil {
+		if errors.Is(err, http.ErrNotSupported) {
+			// No flush capability means every event would sit in a buffer until
+			// the handler returned — a "stream" that arrives all at once, which
+			// is the defect this feature exists to remove. Answer the one-shot
+			// way instead of pretending. Nothing was committed by the failed
+			// probe, so dropping the SSE headers keeps this response what the
+			// non-streaming POST answers.
+			head.Del("Content-Type")
+			head.Del("Cache-Control")
+			head.Del("X-Accel-Buffering")
+			head.Del("Connection")
+			h.chatJSONAnswer(w, r, actx, ctx, uid, history, msg, sessionID, sessionWorkspaceID)
+			return
+		}
+		// Any other error came from the connection while committing the header:
+		// the client is gone and there is nobody left to read either shape.
+		return
+	}
+
+	// A long answer is not a broken connection. The server sets WriteTimeout:
+	// 60s (cmd/jomform-api/main.go), an absolute per-connection deadline that a
+	// model taking longer than a minute would hit mid-stream — "fixed" would mean
+	// "streams for a minute". Clear it for this connection; a chain that cannot
+	// set deadlines is not fatal, it just inherits the timeout (issue #615's
+	// second half, as in realtime.go).
+	if err := rc.SetWriteDeadline(time.Time{}); err != nil {
+		slog.Debug("chat_stream_no_write_deadline", "err", err)
+	}
 
 	emit := func(ev chat.Event) error {
-		return writeChatFrame(w, fl, chatStreamEvent{
+		return writeChatFrame(w, rc, chatStreamEvent{
 			Type: ev.Type, Tool: ev.Tool, Text: ev.Text,
 		})
 	}
@@ -134,12 +178,12 @@ func (h *RESTHandlers) streamChat(
 			return
 		}
 		logStreamFailure(r, err)
-		_ = writeChatFrame(w, fl, chatStreamEvent{Type: "error", Code: "unavailable"})
+		_ = writeChatFrame(w, rc, chatStreamEvent{Type: "error", Code: "unavailable"})
 		return
 	}
 
 	out := h.chatAnswer(r, actx, uid, sessionWorkspaceID, sessionID, msg, res)
-	_ = writeChatFrame(w, fl, chatStreamEvent{Type: "done", Result: &out})
+	_ = writeChatFrame(w, rc, chatStreamEvent{Type: "done", Result: &out})
 }
 
 // chatJSONAnswer is the one-shot answer, factored out so the no-flush fallback in
@@ -159,7 +203,12 @@ func (h *RESTHandlers) chatJSONAnswer(w http.ResponseWriter, r *http.Request, ac
 // reaches the runner and cancels the model work behind it. A frame that cannot
 // be encoded is a programming error and is returned the same way — the caller
 // stops the exchange rather than emitting a partial stream.
-func writeChatFrame(w http.ResponseWriter, fl http.Flusher, ev chatStreamEvent) error {
+//
+// The flush goes through the ResponseController, not a stored http.Flusher: the
+// controller is what knows how to reach the real writer through the middleware
+// layers (see the note in streamChat). A flush error is returned like a write
+// error — the client is gone and the runner should stop.
+func writeChatFrame(w http.ResponseWriter, rc *http.ResponseController, ev chatStreamEvent) error {
 	b, err := json.Marshal(ev)
 	if err != nil {
 		return err
@@ -167,8 +216,7 @@ func writeChatFrame(w http.ResponseWriter, fl http.Flusher, ev chatStreamEvent) 
 	if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
 		return err
 	}
-	fl.Flush()
-	return nil
+	return rc.Flush()
 }
 
 // logStreamFailure keeps the operator's half of a mid-stream failure distinct

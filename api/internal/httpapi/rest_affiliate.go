@@ -13,6 +13,40 @@ import (
 	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
+// affiliateView is the REST shape of an affiliate.
+//
+// The keys are snake_case and referral_url is derived, exactly like the MCP
+// tool's affiliateOut (mcpsrv/affiliate_mcp.go). The dashboard reads
+// code / name / commission_pct / referral_url (settings/page.tsx,
+// `AffiliateRow`); the handler used to marshal the dbstore struct straight out,
+// whose keys are PascalCase and which has no referral_url at all — so every row
+// on Settings → Affiliates rendered as an empty "%" and the referral link, the
+// whole point of the tab, was never shown.
+type affiliateView struct {
+	ID            string  `json:"id"`
+	WorkspaceID   string  `json:"workspace_id"`
+	Code          string  `json:"code"`
+	Name          string  `json:"name"`
+	Email         string  `json:"email"`
+	CommissionPct float64 `json:"commission_pct"`
+	ReferralURL   string  `json:"referral_url"`
+}
+
+// affiliateViewOf builds the view + the link an affiliate hands out. The host is
+// the workspace's own storefront, so the code travels with whatever page the
+// merchant sent the affiliate to.
+func affiliateViewOf(slug string, a *dbstore.Affiliate) affiliateView {
+	return affiliateView{
+		ID:            a.ID,
+		WorkspaceID:   a.WorkspaceID,
+		Code:          a.Code,
+		Name:          a.Name,
+		Email:         a.Email,
+		CommissionPct: a.CommissionPct,
+		ReferralURL:   "https://" + slug + ".jomform.com/?aff=" + a.Code,
+	}
+}
+
 // listAffiliates GET /v1/workspaces/{id}/affiliates — list a workspace's affiliates.
 func (h *RESTHandlers) listAffiliates(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	s, _, ok := h.workspaceAccessByID(w, r)
@@ -24,7 +58,11 @@ func (h *RESTHandlers) listAffiliates(w http.ResponseWriter, r *http.Request, ac
 		writeErr(w, http.StatusInternalServerError, "error")
 		return
 	}
-	writeJSON(w, http.StatusOK, affs)
+	out := make([]affiliateView, 0, len(affs))
+	for _, a := range affs {
+		out = append(out, affiliateViewOf(s.Slug, a))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // createAffiliate POST /v1/workspaces/{id}/affiliates — create an affiliate link.
@@ -69,7 +107,7 @@ func (h *RESTHandlers) createAffiliate(w http.ResponseWriter, r *http.Request, a
 		writeErr(w, http.StatusInternalServerError, "error")
 		return
 	}
-	writeJSON(w, http.StatusCreated, a)
+	writeJSON(w, http.StatusCreated, affiliateViewOf(s.Slug, a))
 }
 
 // setAffiliateCommission PUT /v1/workspaces/{id}/affiliates/{affid}/commission.
