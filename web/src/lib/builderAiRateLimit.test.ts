@@ -116,7 +116,7 @@ test("the AI-generate 429 names the server's 12-minute window, in every locale",
 
   // Asserted in words as well as by key: a translation that dropped "minutes"
   // would still contain "12".
-  assert.equal(rateLimitErr(429, "720", {}, tIn("en")), "Too many attempts — try again in 12 minutes.");
+  assert.equal(rateLimitErr(429, "720", {}, tIn("en")), "Too many attempts. Try again in 12 minutes.");
 });
 
 test("a one-second window stays the generic sentence — the <= 1 s answer, not every refusal", () => {

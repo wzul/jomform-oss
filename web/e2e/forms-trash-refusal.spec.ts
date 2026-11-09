@@ -76,7 +76,7 @@ const RESTORE_PROSE =
   "cannot be restored: this form's slug has been taken by another form — change that form's slug first, then try restoring again";
 
 const EN_HAS_SALES =
-  "This form has sales, so it can't be deleted for good — sales history must not be destroyed with the form. It stays in the trash.";
+  "This form has sales, so it cannot be deleted for good. Sales history must not be destroyed with the form. It stays in the trash.";
 const EN_SLUG_TAKEN =
   "This form can't be restored: another form has taken its slug. Change that form's slug first, then restore this one.";
 // The page's OWN sentence, which both trash actions fall back to when the
@@ -265,7 +265,7 @@ test("a purge refused for sales shows the ENGLISH reason, keeps the list, and is
   await dialog.getByRole("button", { name: "Delete for good", exact: true }).click();
 
   // The refusal lands in the trash view's own alert, beside the reason.
-  const line = refusalLine(page, /can't be deleted for good/);
+  const line = refusalLine(page, /cannot be deleted for good/);
   await expect(line, "the purge refusal must render a message at all").toBeVisible({ timeout: 20_000 });
   const shown = await settleAndReadRefusal(line, "the purge refusal must render a message at all");
   expect(shown).toContain(EN_HAS_SALES);

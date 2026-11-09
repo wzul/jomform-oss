@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 import { GuideArticle } from "../../../../components/GuideArticle";
-import { docsMetadata } from "../../../../lib/docsMetadata";
+import { docsMetadata, guideTabTitle } from "../../../../lib/docsMetadata";
 import { guideBySlug } from "../../../../lib/guides.gen";
 
 // Source: docs/guides/club-membership/README.md + its screenshots, materialised by
@@ -10,7 +10,7 @@ import { guideBySlug } from "../../../../lib/guides.gen";
 const guide = guideBySlug("club-membership");
 
 export const metadata: Metadata = docsMetadata({
-  title: "Club membership — screenshot guide — JomForm Docs",
+  title: guideTabTitle(guide.title),
   description: guide.summary,
   path: "/docs/guides/club-membership",
 });

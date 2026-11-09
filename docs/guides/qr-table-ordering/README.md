@@ -1,4 +1,4 @@
-# QR table ordering — setup guide
+# QR table ordering: setup guide
 
 A QR code on the table, a menu that opens in the diner's browser, and the order arrives with the
 table number attached. Every screenshot below was captured from the running product; the red box
@@ -14,24 +14,24 @@ table it came from.
 ![Products page with a dish filled in and the Add product button boxed](01-add-dish.png)
 
 Products → fill **Product name**, **Price (RM)** and press **Add product**. Leave **Stock** blank
-for ∞ (unlimited) and keep **Type** on *One-time*. Repeat once per dish — one product per line item
-on the menu.
+for ∞ (unlimited) and keep **Type** on *One-time*. Repeat once per dish, one product per line item on
+the menu.
 
 ## 2. Check the catalogue
 
 ![Products list with four dishes and the Price column boxed](02-dish-catalogue.png)
 
-The list is now the source of truth for the menu: Nasi Lemak RM12.00, Char Kway Teow RM14.00,
-Teh Tarik RM3.50 and Roti Bakar RM5.00. The **PRICE (RM)** column is exactly what the diner pays,
-so fix a price here rather than in the form.
+The list is now the source of truth for the menu: Nasi Lemak RM12.00, Char Kway Teow RM14.00, Teh
+Tarik RM3.50 and Roti Bakar RM5.00. The **PRICE (RM)** column is exactly what the diner pays, so fix
+a price here rather than in the form.
 
 ## 3. Start from the F&B template
 
 ![Template gallery with the F&B Order + Payment card's Use template button boxed](03-fnb-template.png)
 
 Forms → **New form** → **F&B Order + Payment** → **Use template**. The template arrives as a payment
-form (a Section intro, one Product block, then Name / Email / Phone / Special instructions), which
-is the shape a menu checkout needs.
+form (a Section intro, one Product block, then Name / Email / Phone / Special instructions), which is
+the shape a menu checkout needs.
 
 ## 4. One Product block per dish
 
@@ -39,7 +39,7 @@ is the shape a menu checkout needs.
 
 In the builder, click **Product** under *PRICING FIELDS* once per dish. With a Product block
 selected, **BLOCK SETTINGS → Product** is the dropdown that binds the block to the dish, and
-**Text / label** is the name the diner sees. Four dishes → four Product blocks.
+**Text / label** is the name the diner sees. Four dishes means four Product blocks.
 
 ## 5. Turn the form into a menu
 
@@ -56,9 +56,9 @@ fields, and a **Menu preview** that counts the items (4 here). Press **Save**.
 ![General tab with the QR code (table ordering) section open and the generated QR boxed](06-table-qr.png)
 
 **Form Settings → General → QR code (table ordering)**: type the table number, press **Generate QR**,
-and the panel shows the code plus the URL it encodes —
-`…/f/f-b-order-payment?table=7`. One code per table; print it, or download it and put it on the
-table card. Nothing else has to change between tables.
+and the panel shows the code plus the URL it encodes, `…/f/f-b-order-payment?table=7`. One code per
+table: print it, or download it and put it on the table card. Nothing else has to change between
+tables.
 
 ## 7. What the diner scans into
 
@@ -72,7 +72,7 @@ link, not from the diner, so the order that follows is already tied to the table
 
 - **The form has to be published.** The menu is the published form's public page; a draft shows the
   normal form (or nothing) instead.
-- **Changing a price is a Products change, not a form change.** The menu reads the live product, so
-  a price fix in Products shows up on the next page load — no republish needed for the price itself.
-- **A dish with no Product block never appears.** The menu is built from the blocks, so a product
-  that exists in the catalogue but has no block is simply not on the menu.
+- **Changing a price is a Products change, not a form change.** The menu reads the live product, so a
+  price fix in Products shows up on the next page load. No republish is needed for the price itself.
+- **A dish with no Product block never appears.** The menu is built from the blocks, so a product that
+  exists in the catalogue but has no block is simply not on the menu.

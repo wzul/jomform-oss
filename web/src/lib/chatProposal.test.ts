@@ -241,7 +241,7 @@ test("a count of ONE has its own entry, and English reads \"1 field\", not \"1 f
     [{ label_key: "chat.proposal.label.subscriptionCharges", value_key: "chat.proposal.value.chargeCountOne" }, "1 time"],
     [
       { label_key: "chat.proposal.label.variations", value_key: "chat.proposal.value.variationSetOne" },
-      "1 row — the full list, replacing the existing one",
+      "1 row, the full list, replacing the existing one",
     ],
   ];
   for (const [row, wantEn] of oneRows) {

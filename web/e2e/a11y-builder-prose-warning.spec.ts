@@ -41,7 +41,7 @@ test.beforeEach(async ({ page, baseURL }) => {
 const FORM_ID = "form_a11y_text_prose_warning";
 const PROSE = "Register for our event — cuma rsvp ja";
 const ACTION = "Treat as intro line";
-const UNDO = "Undo — make it a field again";
+const UNDO = "Undo. Make it a field again";
 
 const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
 

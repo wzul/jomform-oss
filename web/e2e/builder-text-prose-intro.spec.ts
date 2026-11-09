@@ -68,7 +68,7 @@ const SHORT_LABEL_BLOCKS = [{ id: "nm", type: "text", value: "Abc" }];
 
 const WARN_COPY = "This reads like an introduction";
 const ACTION = "Treat as intro line";
-const UNDO = "Undo — make it a field again";
+const UNDO = "Undo. Make it a field again";
 
 type Patch = { method: string; path: string; body: string };
 

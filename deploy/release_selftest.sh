@@ -21,28 +21,72 @@
 #   Q8. control: a verified ship does reach the mirror
 #   R. build-and-ship performs the server half and PROVES it (or refuses before building);
 #      a build-only run still works and never claims a ship
+#   O3/O4/O5/P/R5/T. the caller's RELEASE ENVIRONMENT (VERSION_OVERRIDE, SSH_HOST,
+#      REMOTE_BUILD_HOST, REQUIRE_SHIP, IMAGE, CONTEXT, DOCKERFILE, SERVICE, SSH_USER, SSH_PORT,
+#      SSH_PATH) is dropped at the call site, inside this file, and in every sandbox helper — and
+#      the whole suite scores all-pass while it is exported (measured 189/21 without the drop,
+#      210/0 with it)
+#   R2b/R6. the scp assertion matches the port as a WHOLE TOKEN, so an inherited SSH_PORT cannot
+#      hide behind `scp -P 2222` containing `scp -P 22`
 #
 # Everything runs in throwaway repos: no network, no real remote, no docker, no ship.
 set -o pipefail
 
-# THE CALLER'S VERSION_OVERRIDE IS DROPPED. Every case below that needs an override sets its own
-# (`VERSION_OVERRIDE=v1.0.0 bash "$RRT"`, `ship VERSION_OVERRIDE=v1.0.0`), so an inherited value
-# does not describe these fixtures — it rewrites the cases that assert an UNTAGGED tree, a
-# CONTRADICTING override, or the positional form. That is not theoretical: deploy/build-and-ship.sh
-# exports VERSION_OVERRIDE for require-release-tag and then runs this suite, and deploy/cut-release.sh
-# ships with exactly that override, so the release path could not ship. Measured on this tree,
-# same bytes: `VERSION_OVERRIDE=v9.9.9 bash deploy/release_selftest.sh` -> 72 passed / 7 failed,
-# `env -u VERSION_OVERRIDE bash deploy/release_selftest.sh` -> 79 passed / 0 failed.
-# build-and-ship.sh drops it at the call site too (`env -u`); this line makes the suite hermetic
-# however it is invoked, including by hand. Section P re-executes this file with an override set
-# and requires it to be gone, so deleting this line turns the suite RED.
-unset VERSION_OVERRIDE
+# THE CALLER'S RELEASE ENVIRONMENT IS DROPPED. This suite describes FIXTURES; the settings a
+# release exports for its own ship do not describe them, they rewrite them. Every case that
+# needs one of these sets its own (`SSH_HOST=stub-deploy-host`, `IMAGE=jomform-web`, ...), so an
+# inherited value only makes a case measure the caller instead of the rule.
+#
+#   VERSION_OVERRIDE — deploy/build-and-ship.sh exports it for require-release-tag and then runs
+#   this suite, and deploy/cut-release.sh ships with exactly that override. Measured on this
+#   tree, same bytes: `VERSION_OVERRIDE=v9.9.9 bash deploy/release_selftest.sh` -> 72 passed /
+#   7 failed, `env -u VERSION_OVERRIDE ...` -> 79/0. The release path could not ship (#1633).
+#
+#   SSH_HOST / REMOTE_BUILD_HOST / REQUIRE_SHIP / IMAGE / CONTEXT / DOCKERFILE / SERVICE — the
+#   ship plumbing added afterwards (#1650, #1653) leaked the same way and stopped every cut
+#   again: REQUIRE_SHIP=1 made the sandbox's build-and-ship refuse for a missing ship_proof.sh
+#   (O/O2), an inherited SSH_HOST let R1 "ship" with the server it is supposed to lack, inherited
+#   REQUIRE_SHIP made R4's build-only control print SHIPPED, and inherited IMAGE/CONTEXT/
+#   DOCKERFILE sent R2-R4 at web/Dockerfile ("no tarball"). Measured on v1.28.0's bytes:
+#   `SSH_HOST=<host> REQUIRE_SHIP=1 IMAGE=jomform-web CONTEXT=. DOCKERFILE=web/Dockerfile
+#   bash deploy/release_selftest.sh` -> 189 passed / 21 failed; the same bytes with the set
+#   unset -> 210 passed / 0 failed, rc 0, twice.
+#
+#   SSH_USER / SSH_PORT / SSH_PATH — the same group and the same leak, and it stayed invisible
+#   because the one assertion that would have noticed could not: R2 was `grep -q 'scp -P 22'`,
+#   and `scp -P 2222 …` CONTAINS it. An inherited SSH_PORT therefore made the sandbox copy to
+#   port 2222 while R2 reported "the tarball is scp'd" (reproduced on this tree: with
+#   SSH_PORT=2222 the log read `scp -P 2222 … root@stub-deploy-host:/tmp/` and the suite still
+#   scored all-pass). SSH_USER rewrites `root@` and SSH_PATH rewrites the destination dir the
+#   same way. R2 now matches the port as a whole token, R2b pins that exactness, and R6 exports
+#   all three and requires the sandbox to have used 22 / root / /tmp.
+#
+# build-and-ship.sh drops the same set at its call site too (`env -u`); the two are INDEPENDENT,
+# so neither call shape can leak it. The sandbox helpers below scrub it a third time, so a case
+# that re-exports one of these measures the sandbox, not the caller. Section P re-executes this
+# file with the whole set and requires it to be gone; section T runs the WHOLE suite under it
+# and requires all-pass — deleting this unset turns both RED.
+RELEASE_ENV_VARS="VERSION_OVERRIDE SSH_HOST REMOTE_BUILD_HOST REQUIRE_SHIP IMAGE CONTEXT DOCKERFILE SERVICE SSH_USER SSH_PORT SSH_PATH"
+for _leaky in $RELEASE_ENV_VARS; do unset "$_leaky"; done
+unset _leaky
 
 # Hermeticity probe for section P only: report the environment this process was handed, after the
 # drop above, and exit before any fixture is built.
+#
+# The list below is HARDCODED on purpose, and is the ORACLE for RELEASE_ENV_VARS: a probe that
+# iterated that variable would go blind the moment a name was removed from it — removing a name
+# would delete both the scrub and the check that notices, so section P would stay green on a
+# suite that leaks. Keeping the oracle separate is what makes deleting a name turn P (and the
+# nested run in section T) RED.
 if [ "${RELEASE_SELFTEST_PROBE:-0}" = 1 ]; then
-  if [ -z "${VERSION_OVERRIDE:-}" ]; then echo "clean"; exit 0; fi
-  echo "inherited VERSION_OVERRIDE=$VERSION_OVERRIDE"
+  leaked=""
+  for _v in VERSION_OVERRIDE SSH_HOST REMOTE_BUILD_HOST REQUIRE_SHIP IMAGE CONTEXT DOCKERFILE \
+            SERVICE SSH_USER SSH_PORT SSH_PATH; do
+    eval "_val=\${$_v:-}"
+    [ -n "$_val" ] && leaked="$leaked $_v=$_val"
+  done
+  if [ -z "$leaked" ]; then echo "clean"; exit 0; fi
+  echo "inherited$leaked"
   exit 1
 fi
 
@@ -473,20 +517,29 @@ OUT=$(due_open); RC=$?
 
 echo "== O. build-and-ship cannot be told a version that contradicts the tag"
 BS="$S/ship"; mkdir -p "$BS/deploy" "$BS/api"
-cp "$HERE/build-and-ship.sh" "$HERE/require-release-tag.sh" "$BS/deploy/"
+# ship_proof.sh ships too: O3 gives the sandbox a REQUIRE_SHIP=1 run, and build-and-ship refuses
+# that up front when it cannot find the shared proof library (the check is before the selftest).
+cp "$HERE/build-and-ship.sh" "$HERE/require-release-tag.sh" "$HERE/ship_proof.sh" "$BS/deploy/"
 : > "$BS/api/Dockerfile"
-# A WITNESS in place of the release selftest, for case O2 below: build-and-ship runs
-# deploy/release_selftest.sh before the gate, and the real suite sets its own VERSION_OVERRIDE
-# per case — so a value inherited from the caller is the defect O2 pins. This witness fails when
-# it sees one and passes otherwise. Inert for every case above, which pass SKIP_RELEASE_SELFTEST=1.
+# A WITNESS in place of the release selftest, for cases O2 and O3 below: build-and-ship runs
+# deploy/release_selftest.sh before the gate, and the real suite sets its OWN settings per case —
+# so a value inherited from the caller is the defect those cases pin. This witness fails when it
+# sees ANY of the release settings and passes otherwise. Inert for every case above, which pass
+# SKIP_RELEASE_SELFTEST=1.
 cat > "$BS/deploy/release_selftest.sh" <<'WITNESS'
 #!/usr/bin/env bash
 # Witness, not a test suite: a value inherited from the caller is exactly what must not arrive.
-if [ -n "${VERSION_OVERRIDE:-}" ]; then
-  echo "witness: VERSION_OVERRIDE=$VERSION_OVERRIDE was inherited by the release selftest" >&2
-  exit 1
-fi
-echo "  ok   the release selftest started with no VERSION_OVERRIDE of its own"
+rc=0
+for v in VERSION_OVERRIDE SSH_HOST REMOTE_BUILD_HOST REQUIRE_SHIP IMAGE CONTEXT DOCKERFILE SERVICE \
+         SSH_USER SSH_PORT SSH_PATH; do
+  eval "val=\${$v:-}"
+  if [ -n "$val" ]; then
+    echo "witness: $v=$val was inherited by the release selftest" >&2
+    rc=1
+  fi
+done
+[ "$rc" -eq 0 ] || exit 1
+echo "  ok   the release selftest started with no release environment of its own"
 echo "release selftest: 1 passed, 0 failed"
 WITNESS
 chmod +x "$BS/deploy/release_selftest.sh"
@@ -494,7 +547,15 @@ chmod +x "$BS/deploy/release_selftest.sh"
     && git add -A && git commit -q -m "ship sandbox" && git tag -a v9.9.9 -m "Release v9.9.9" ) >/dev/null
 # DOCKERFILE=nope stops the run right after the version step, so these cases never reach the
 # gate or docker; SKIP_RELEASE_SELFTEST keeps it from recursing into this file.
-ship() { ( cd "$BS" && env "$@" LOCK_FILE="$S/ship.lock" OUT_DIR="$S/out" DOCKERFILE=nope \
+# The RELEASE environment is scrubbed here as well as at the top of this file: a case that
+# re-exports one of those settings (O4 does) must still run the sandbox, not the caller.
+# SHIP_DIR lets O5 point the same helper at a copy whose build-and-ship is a DUMPER, so the
+# helper's own scrub can be observed (the real sandbox script scrubs the same set again and
+# would hide it).
+ship() { ( cd "${SHIP_DIR:-$BS}" && env -u VERSION_OVERRIDE -u SSH_HOST -u REMOTE_BUILD_HOST \
+             -u REQUIRE_SHIP -u IMAGE -u CONTEXT -u DOCKERFILE -u SERVICE \
+             -u SSH_USER -u SSH_PORT -u SSH_PATH \
+             "$@" LOCK_FILE="$S/ship.lock" OUT_DIR="$S/out" DOCKERFILE=nope \
              SKIP_RELEASE_SELFTEST=1 bash deploy/build-and-ship.sh 2>&1 ); }
 OUT=$(ship VERSION_OVERRIDE=v1.0.0); RC=$?
 printf '%s\n' "$OUT" | sed 's/^/    /'
@@ -538,14 +599,80 @@ grep -q 'release rules selftest: passed' <<<"$OUT" \
   && ok "…so an inherited override can no longer refuse the ship" \
   || bad "the release selftest refused the ship: the caller's override leaked into it"
 
-echo "== P. the suite itself does not inherit the caller's VERSION_OVERRIDE"
-# The same class from the other side: this file re-executes ITSELF with an override in the
-# environment. Deleting the `unset VERSION_OVERRIDE` at the top turns this RED.
-OUT=$(VERSION_OVERRIDE=v9.9.9 RELEASE_SELFTEST_PROBE=1 bash "$HERE/release_selftest.sh" 2>&1); RC=$?
+echo "== O3. the CALL SITE hands the selftest a clean environment (the v1.28.0 defect)"
+# cut-release ships with REQUIRE_SHIP=1 VERSION_OVERRIDE=<tag>, and its web half adds
+# IMAGE=jomform-web CONTEXT=. DOCKERFILE=web/Dockerfile (#1653). Those describe the CALLER's
+# release, not the fixtures the real suite builds; inherited they were measured at 189 passed /
+# 21 failed on v1.28.0's bytes and refused every cut. The witness above fails on ANY of the
+# eight settings, and it is reached here because SKIP_RELEASE_SELFTEST is NOT set. The SSH
+# group is exported too, so the call-site scrub is proven for it as well.
+OUT=$( ( cd "$BS" && env VERSION_OVERRIDE=v9.9.9 SSH_HOST=stub-deploy-host REQUIRE_SHIP=1 \
+           IMAGE=jomform-web CONTEXT=. DOCKERFILE=web/Dockerfile SERVICE=web \
+           SSH_USER=deploy SSH_PORT=2222 SSH_PATH=/srv/jomform SKIP_TESTS=1 \
+           LOCK_FILE="$S/ship4.lock" OUT_DIR="$S/out" \
+           bash deploy/build-and-ship.sh 2>&1 ) ); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+grep -q 'release rules selftest: passed' <<<"$OUT" \
+  && ok "O3 the cut-release + web-image shape reaches the selftest and passes it" \
+  || bad "O3 the ship never got past the selftest (rc=$RC)"
+! grep -q 'was inherited by the release selftest' <<<"$OUT" \
+  && ok "O3 …and none of the caller's release settings reached it" \
+  || bad "O3 the caller's release environment leaked into the release selftest"
+
+echo "== O4. the section-O helper scrubs the release environment too"
+# The sandbox helper is the suite's own boundary: a case that exports the release environment
+# ITSELF must still measure the sandbox. Without the helper's scrub, REQUIRE_SHIP=1 turns this
+# build-only call into a ship — build-and-ship resolves a ship target before it does anything.
+OUT=$( ( export SSH_HOST=stub-deploy-host REQUIRE_SHIP=1 IMAGE=jomform-web CONTEXT=. \
+            DOCKERFILE=web/Dockerfile SERVICE=web \
+            SSH_USER=deploy SSH_PORT=2222 SSH_PATH=/srv/jomform
+          ship ) ); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+! grep -q 'ship target:' <<<"$OUT" \
+  && ok "O4 a re-exported REQUIRE_SHIP does not make a build-only sandbox run a ship" \
+  || bad "O4 REQUIRE_SHIP/SSH_HOST leaked through the section-O helper"
+grep -q 'stamps: version=v9.9.9' <<<"$OUT" && ok "O4 …it still reaches the version step" \
+  || bad "O4 the sandbox run never reached the version step (rc=$RC)"
+
+echo "== O5. the section-O helper scrubs SSH_USER/SSH_PORT/SSH_PATH as well"
+# The helper's own boundary for the SSH group, which cannot be observed through the witness: the
+# sandbox's build-and-ship scrubs the SAME set at ITS call site, so the two layers hide each
+# other (and the O sandbox dies at DOCKERFILE=nope before it ever scp's). This case replaces
+# build-and-ship with a DUMPER in a copy of the sandbox and asserts what the helper HANDED the
+# child — which is exactly what the helper's `env -u` owns. Removing those three from ship()
+# turns this RED.
+O5D="$S/ship-o5"; cp -a "$BS" "$O5D"
+cat > "$O5D/deploy/build-and-ship.sh" <<'DUMPER'
+#!/usr/bin/env bash
+for v in SSH_USER SSH_PORT SSH_PATH; do
+  eval "val=\${$v:-}"
+  printf 'HANDED %s=%s\n' "$v" "${val:-unset}"
+done
+DUMPER
+chmod +x "$O5D/deploy/build-and-ship.sh"
+OUT=$( ( export SSH_USER=deploy SSH_PORT=2222 SSH_PATH=/srv/jomform
+          SHIP_DIR="$O5D" ship ) ); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+grep -q 'HANDED SSH_PORT=unset' <<<"$OUT" \
+  && ok "O5 the section-O helper hands the sandbox no SSH_PORT" \
+  || bad "O5 SSH_PORT leaked through the section-O helper (rc=$RC)"
+grep -q 'HANDED SSH_USER=unset' <<<"$OUT" && grep -q 'HANDED SSH_PATH=unset' <<<"$OUT" \
+  && ok "O5 …and no SSH_USER / SSH_PATH either" \
+  || bad "O5 SSH_USER/SSH_PATH leaked through the section-O helper"
+
+echo "== P. the suite itself does not inherit the caller's release environment"
+# The same class from the other side: this file re-executes ITSELF with the whole set in the
+# environment (including the SSH group). The probe's oracle is a HARDCODED list (not
+# RELEASE_ENV_VARS itself), so deleting a name from RELEASE_ENV_VARS above turns this RED instead
+# of silently narrowing the check as well.
+OUT=$(env VERSION_OVERRIDE=v9.9.9 SSH_HOST=stub-deploy-host REQUIRE_SHIP=1 IMAGE=jomform-web \
+         CONTEXT=. DOCKERFILE=web/Dockerfile SERVICE=web \
+         SSH_USER=deploy SSH_PORT=2222 SSH_PATH=/srv/jomform \
+         RELEASE_SELFTEST_PROBE=1 bash "$HERE/release_selftest.sh" 2>&1); RC=$?
 printf '%s\n' "$OUT" | sed 's/^/    /'
 [ "$RC" -eq 0 ] && [ "$OUT" = "clean" ] \
-  && ok "a caller's VERSION_OVERRIDE is dropped before any case runs" \
-  || bad "the suite inherited its caller's VERSION_OVERRIDE (rc=$RC)"
+  && ok "the caller's release environment is dropped before any case runs" \
+  || bad "the suite inherited its caller's release environment (rc=$RC)"
 
 echo "== Q. the tag-pinned release tree is SEEDED before it ships"
 # THE DEFECT (measured on v1.27.0): cut-release ships from a DETACHED worktree pinned to
@@ -913,11 +1040,16 @@ fi
 #   R1  --ship with no reachable server -> exit 7 BEFORE the gate and BEFORE any build.
 #   R2  --ship with a server -> it performs load + tag :latest + recreate ITSELF and exits 0,
 #       saying the running container carries the tag.
+#   R2b the scp assertion matches the port as a WHOLE TOKEN: `grep -q 'scp -P 22'` also accepted
+#       `scp -P 2222`, which is how an inherited SSH_PORT stayed invisible.
 #   R3  the recreate leaves the OLD image running -> exit 7 and it names what prod runs.
 #       This is the assertion biting: without it, R2's "success" is just a command that ran.
 #   R4  control: WITHOUT --ship the same tree still builds and exits 0, and never tags or
 #       recreates anything — a build-only run must stay possible and must never look like a
 #       ship (this is what DEPLOY.md's documented usage relies on).
+#   R5  a release environment exported in THIS shell does not change the sandbox run.
+#   R6  an exported SSH_USER/SSH_PORT/SSH_PATH does not rewrite the sandbox's scp destination:
+#       the copy still goes to root@<stub>:22:/tmp, not deploy@<stub>:2222:/srv/jomform.
 # ============================================================================
 echo "== R. build-and-ship: a ship is performed and PROVEN (or refused)"
 RWS="$S/shipws"
@@ -1018,7 +1150,12 @@ rship() {   # <logfile> <args for build-and-ship> <extra env assignments...>
   local sargs=$1; shift
   : > "$log"
   # shellcheck disable=SC2086  # sargs is a literal we control ("--ship" or "")
-  ( cd "$RWS" && env PATH="$RBIN:$PATH" \
+  # The RELEASE environment is scrubbed here as well as at the top of this file, so a case that
+  # exports one of those settings itself (R5, R6) still measures the sandbox.
+  ( cd "$RWS" && env -u VERSION_OVERRIDE -u SSH_HOST -u REMOTE_BUILD_HOST -u REQUIRE_SHIP \
+      -u IMAGE -u CONTEXT -u DOCKERFILE -u SERVICE \
+      -u SSH_USER -u SSH_PORT -u SSH_PATH \
+      PATH="$RBIN:$PATH" \
       DOCKER_STUB_LOG="$log" DOCKER_STUB_STATE="$S/shipws-state" \
       LOCK_FILE="$S/shipws.lock" OUT_DIR="$S/shipws-out" \
       REMOTE_COMPOSE_DIR="$RWS/compose" \
@@ -1038,11 +1175,16 @@ grep -q 'nothing can reach a server' <<<"$OUT" && ok "R1 says the server is unre
   || bad "R1 it gated/built first and only then noticed it could not ship"
 
 # R2 — a reachable server: the server half runs here, and the proof passes.
+# The scp assertion is a FUNCTION, not an inline grep, so its exactness can itself be tested
+# (R2b). `grep -q 'scp -P 22'` also matches `scp -P 2222`, which is exactly how an inherited
+# SSH_PORT stayed invisible: the sandbox really copied to 2222 while R2 said "the tarball is
+# scp'd". Matching the port as a whole token is the fix; R2b fails if it is ever loosened.
+scp_used_port_22() { grep -Eq 'scp -P 22( |$)' "$1"; }
 RLOG="$S/r2.docker.log"
 OUT=$(rship "$RLOG" "--ship" SSH_HOST=stub-deploy-host); RC=$?
 printf '%s\n' "$OUT" | sed 's/^/    /'
 [ "$RC" -eq 0 ] && ok "R2 a shipped run exits 0" || bad "R2 expected exit 0, got $RC"
-grep -q 'scp -P 22' "$RLOG" && ok "R2 the tarball is scp'd" || bad "R2 nothing was scp'd"
+scp_used_port_22 "$RLOG" && ok "R2 the tarball is scp'd" || bad "R2 nothing was scp'd"
 grep -q 'docker load -i' "$RLOG" && ok "R2 the image is loaded on the server" || bad "R2 not loaded"
 grep -q 'docker tag jomform-api:v1.0.0 jomform-api:latest' "$RLOG" \
   && ok "R2 :latest is re-pointed at the release tag" || bad "R2 :latest was not tagged"
@@ -1052,6 +1194,18 @@ grep -q 'SHIPPED jomform-api:v1.0.0' <<<"$OUT" && ok "R2 reports the ship only a
   || bad "R2 does not report a verified ship"
 ! grep -q 'run manually' <<<"$OUT" && ok "R2 leaves no hand-run steps behind" \
   || bad "R2 still tells the operator to finish by hand"
+
+# R2b — the ASSERTION itself (the v1.28.x defect's blind spot). A prefix match accepts the very
+# line that proved the leak — `scp -P 2222 …` — so the port is matched as a whole token. Both
+# directions are pinned: the wrong line must be rejected AND a genuine -P 22 line accepted.
+printf 'scp -P 2222 /tmp/t.tar.gz root@stub-deploy-host:/tmp/\n' > "$S/r2b.bad.log"
+printf 'scp -P 22 /tmp/t.tar.gz root@stub-deploy-host:/tmp/\n' > "$S/r2b.good.log"
+! scp_used_port_22 "$S/r2b.bad.log" \
+  && ok "R2b 'scp -P 2222' is NOT accepted as port 22 (no prefix match)" \
+  || bad "R2b the port assertion is a prefix match: -P 2222 counts as -P 22"
+scp_used_port_22 "$S/r2b.good.log" \
+  && ok "R2b …and a real port-22 scp is still accepted" \
+  || bad "R2b the assertion rejects a genuine port-22 scp"
 
 # R3 — the recreate returns 0 and the OLD image is still what runs.
 # This is the assertion, not the command: without it R2's success means "the commands ran".
@@ -1081,6 +1235,45 @@ grep -q 'Remaining steps ON THE SERVER' <<<"$OUT" && ok "R4 prints the server st
   && ok "R4 a build-only run never loads, tags or recreates anything" \
   || bad "R4 a build-only run touched the running stack"
 ! grep -q 'SHIPPED ' <<<"$OUT" && ok "R4 never claims a ship" || bad "R4 a build-only run claimed a ship"
+
+# R5 — the HARNESS is self-contained: the caller's release environment must not reach the
+# sandbox even when it is exported in THIS shell. rship() scrubs the same set, so re-exporting
+# it here must change nothing; without that scrub this is exit 1, "no tarball", because the
+# sandbox inherits IMAGE=jomform-web + DOCKERFILE=web/Dockerfile.
+RLOG="$S/r5.docker.log"
+rm -rf "$S/shipws-state"; mkdir -p "$S/shipws-state"
+OUT=$( ( export SSH_HOST=stub-deploy-host REQUIRE_SHIP=1 IMAGE=jomform-web CONTEXT=. \
+            DOCKERFILE=web/Dockerfile SERVICE=web
+          rship "$RLOG" "" ) ); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 0 ] && ok "R5 an exported release environment does not change the sandbox run" \
+  || bad "R5 the sandbox inherited the caller's release environment (rc=$RC)"
+grep -q 'docker save' "$RLOG" && ok "R5 …the tarball is still produced" || bad "R5 no tarball"
+! grep -q 'SHIPPED ' <<<"$OUT" && ok "R5 …and a build-only case still never claims a ship" \
+  || bad "R5 REQUIRE_SHIP leaked: the build-only case SHIPPED"
+
+# R6 — the caller's SSH_USER/SSH_PORT/SSH_PATH describe the CALLER's server; the fixtures live
+# on root@${SSH_HOST}:22:/tmp. Exported into the sandbox they rewrite the scp destination, and
+# the old prefix-matching R2 could not see it (SSH_PORT=2222 still contains 'scp -P 22'). This
+# is the case that pins the scrub for the whole SSH group on a REAL shipped run.
+RLOG="$S/r6.docker.log"
+rm -rf "$S/shipws-state"; mkdir -p "$S/shipws-state"
+OUT=$( ( export SSH_USER=deploy SSH_PORT=2222 SSH_PATH=/srv/jomform
+          rship "$RLOG" "--ship" SSH_HOST=stub-deploy-host ) ); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 0 ] && ok "R6 a shipped run exits 0 with the caller's SSH_* exported" \
+  || bad "R6 expected exit 0, got $RC"
+scp_used_port_22 "$RLOG" \
+  && ok "R6 the sandbox scp'd on port 22, not the caller's 2222" \
+  || bad "R6 SSH_PORT leaked: the sandbox scp'd on the caller's port"
+! grep -q 'scp -P 2222' "$RLOG" && ok "R6 …nothing was copied on 2222" \
+  || bad "R6 the caller's SSH_PORT reached scp"
+grep -q 'root@stub-deploy-host:/tmp/' "$RLOG" \
+  && ok "R6 …to the default user and path" \
+  || bad "R6 SSH_USER/SSH_PATH leaked into the scp destination"
+! grep -Eq 'deploy@|/srv/jomform' "$RLOG" \
+  && ok "R6 …and the caller's user/path never appear" \
+  || bad "R6 the caller's SSH_USER/SSH_PATH reached scp"
 
 # Q9 — --no-ship with the mirror is a contradiction, and it is refused rather than "released".
 # The header has always said "nothing public points at a tree that did not ship"; this is the
@@ -1265,6 +1458,31 @@ if (
     || bad "S6 the guide is not grouped as Documentation"
 else
   bad "section S fixture could not be built"
+fi
+
+echo "== T. the WHOLE suite under the documented release environment"
+# The acceptance, end to end: the environment a real cut carries (cut-release's REQUIRE_SHIP=1
+# and VERSION_OVERRIDE, the web half's IMAGE/CONTEXT/DOCKERFILE, plus SSH_HOST) must not change a
+# single case. This is the shape that scored 189/21 on v1.28.0's bytes. A nested run is used
+# because the point is the SUITE as a caller runs it, not one helper; RELEASE_SELFTEST_NESTED
+# stops the recursion one level down.
+if [ "${RELEASE_SELFTEST_NESTED:-0}" = 1 ]; then
+  echo "  (skipped: this IS the nested run — RELEASE_SELFTEST_NESTED=1)"
+else
+  NLOG="$S/nested.log"
+  env VERSION_OVERRIDE=v9.9.9 SSH_HOST=stub-deploy-host REQUIRE_SHIP=1 IMAGE=jomform-web \
+      CONTEXT=. DOCKERFILE=web/Dockerfile SERVICE=web REMOTE_BUILD_HOST= \
+      SSH_USER=deploy SSH_PORT=2222 SSH_PATH=/srv/jomform \
+      RELEASE_SELFTEST_NESTED=1 bash "$HERE/release_selftest.sh" >"$NLOG" 2>&1
+  NRC=$?
+  grep -E '^  FAIL' "$NLOG" | head -5 | sed 's/^/    /'
+  tail -2 "$NLOG" | sed 's/^/    /'
+  [ "$NRC" -eq 0 ] && ok "T the release environment still scores all-pass (rc=0)" \
+    || bad "T the suite failed under the documented release environment (rc=$NRC)"
+  grep -q ' 0 failed$' "$NLOG" && ok "T …with no failing case at all" \
+    || bad "T some cases failed under the release environment"
+  [ "$(grep -c '^  ok' "$NLOG")" -gt 200 ] && ok "T …on the full case count, not a truncated run" \
+    || bad "T the nested run did not execute the full suite"
 fi
 
 printf '\nrelease selftest: %d passed, %d failed\n' "$pass" "$fail"

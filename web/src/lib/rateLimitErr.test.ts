@@ -144,7 +144,7 @@ test("a locked-out 429 names the window the server chose — 900s reads 15 minut
   // translation that drops "minutes" would still contain "15".
   assert.equal(
     rateLimitErr(429, "900", body, tIn("en")),
-    "Too many attempts — try again in 15 minutes.",
+    "Too many attempts. Try again in 15 minutes.",
   );
 });
 
@@ -153,16 +153,16 @@ test("the unit stays honest: seconds below two minutes, whole minutes rounded UP
   const body = { code: TOO_MANY_REQUESTS_CODE };
 
   // The per-IP throttle's 30s.
-  assert.equal(rateLimitErr(429, "30", body, t), "Too many attempts — try again in 30 seconds.");
+  assert.equal(rateLimitErr(429, "30", body, t), "Too many attempts. Try again in 30 seconds.");
   // 75s is not "1 minute": rounding it down would tell the visitor to try again
   // 15 seconds before the window clears.
-  assert.equal(rateLimitErr(429, "75", body, t), "Too many attempts — try again in 75 seconds.");
+  assert.equal(rateLimitErr(429, "75", body, t), "Too many attempts. Try again in 75 seconds.");
   // 150s rounds UP to 3, never down to 2.
-  assert.equal(rateLimitErr(429, "150", body, t), "Too many attempts — try again in 3 minutes.");
+  assert.equal(rateLimitErr(429, "150", body, t), "Too many attempts. Try again in 3 minutes.");
   // The boundary, and the singular that must never render: 119s stays seconds,
   // 120s is the first minute count and is already plural.
-  assert.equal(rateLimitErr(429, "119", body, t), "Too many attempts — try again in 119 seconds.");
-  assert.equal(rateLimitErr(429, "120", body, t), "Too many attempts — try again in 2 minutes.");
+  assert.equal(rateLimitErr(429, "119", body, t), "Too many attempts. Try again in 119 seconds.");
+  assert.equal(rateLimitErr(429, "120", body, t), "Too many attempts. Try again in 2 minutes.");
   for (const secs of ["60", "61", "90", "119", "120", "121"]) {
     assert.doesNotMatch(rateLimitErr(429, secs, body, t), /\b1 minutes\b/, `Retry-After: ${secs} rendered a singular/plural fault`);
   }
@@ -184,7 +184,7 @@ test("a one-second window says it in words, never as \"1 seconds\"", () => {
   assert.doesNotMatch(rateLimitErr(429, "1", body, tIn("en")), /\b1 seconds?\b/, "a one-second window rendered its number as a plural");
   // The control: the next second up IS phrased with its number, so the fallback
   // above is the one-second case and not a blanket loss of the window.
-  assert.equal(rateLimitErr(429, "2", body, tIn("en")), "Too many attempts — try again in 2 seconds.");
+  assert.equal(rateLimitErr(429, "2", body, tIn("en")), "Too many attempts. Try again in 2 seconds.");
 });
 
 test("a 429 that names no window still says too many attempts (the existing row, not a new sentence)", () => {
@@ -231,10 +231,10 @@ test("the body is read for its machine code only — the server's prose never re
   assert.doesNotMatch(rateLimitErr(429, null, { code: TOO_MANY_REQUESTS_CODE, error: prose }, t), /percubaan/i);
   // A body that carries the code but not the status (the hop or an intermediate
   // proxy rewriting the status) is still recognised as a throttle refusal.
-  assert.equal(rateLimitErr(500, "900", { code: TOO_MANY_REQUESTS_CODE }, t), "Too many attempts — try again in 15 minutes.");
+  assert.equal(rateLimitErr(500, "900", { code: TOO_MANY_REQUESTS_CODE }, t), "Too many attempts. Try again in 15 minutes.");
   // ...and a body with neither is not this helper's business.
   assert.equal(rateLimitErr(500, "900", { code: "internal" }, t), "");
-  assert.equal(rateLimitErr(429, "900", { code: "internal" }, t), "Too many attempts — try again in 15 minutes.", "the status half alone must be enough");
+  assert.equal(rateLimitErr(429, "900", { code: "internal" }, t), "Too many attempts. Try again in 15 minutes.", "the status half alone must be enough");
 });
 
 test("the window keys are real, translated, and keep their placeholder", () => {

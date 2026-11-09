@@ -84,9 +84,9 @@ const RESTORE_SUB_PROSE =
   "this product still has subscriptions — cancel that subscription first. It stays in the bin.";
 
 const EN_HAS_SALES =
-  "This product has sales, so it can't be deleted for good — sales history must not be destroyed with the product. It stays in the trash.";
+  "This product has sales, so it cannot be deleted for good. Sales history must not be destroyed with the product. It stays in the trash.";
 const EN_HAS_SUBS =
-  "This product still has subscriptions, so it can't be deleted for good — cancel them first. It stays in the trash.";
+  "This product still has subscriptions, so it cannot be deleted for good. Cancel them first. It stays in the trash.";
 const EN_RESTORE_FALLBACK = "We couldn't restore this product. Please try again.";
 const EN_PURGE_FALLBACK = "We couldn't delete this product. Please try again.";
 
@@ -247,7 +247,7 @@ test("a purge refused for sales shows the ENGLISH reason, keeps the list, and is
   await dialog.getByRole("button", { name: "Delete for good", exact: true }).click();
 
   // The refusal lands in the trash view's own line, beside the rows it is about.
-  const line = refusalLine(page, /can't be deleted for good/);
+  const line = refusalLine(page, /cannot be deleted for good/);
   await settlePastTheReload(page);
   await expect(line, "the purge refusal must render a message at all").toBeVisible({ timeout: 20_000 });
   const shown = await readLine(line);

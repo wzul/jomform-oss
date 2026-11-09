@@ -328,17 +328,43 @@ info "stamps: version=$VERSION commit=$COMMIT date=$BUILD_DATE"
 # Hermetic — throwaway git repos, no network, no docker — so it cannot be the reason a release
 # waits on a resource. SKIP_RELEASE_SELFTEST=1 is for a machine with no git binary at all.
 #
-# VERSION_OVERRIDE is DROPPED from the child's environment (`env -u`). This script exports it
-# for require-release-tag.sh above, but the selftest sets its OWN override per case; handing it
-# the caller's value does not describe those fixtures, it rewrites them. Measured before this
-# existed, on a v9.9.9 tree: the cut-release shape (`VERSION_OVERRIDE=v9.9.9
-# ./deploy/build-and-ship.sh`, exactly what deploy/cut-release.sh runs) scored the suite at
-# 72 passed / 7 failed and refused to build, while the same bytes with the variable unset
-# scored 79/0 — so the documented release path could not ship at all. deploy/release_selftest.sh
-# drops the variable itself as well; the two are independent so neither call shape can leak it.
+# THE RELEASE ENVIRONMENT IS DROPPED from the child's environment (`env -u`), because this
+# script EXPORTS the knobs of the release it is performing, and the suite tests FIXTURES — a
+# caller's release does not describe them, it rewrites them. This defect has now shipped twice:
+#
+#   VERSION_OVERRIDE — exported here for require-release-tag.sh above (cut-release passes it),
+#   while the selftest sets its OWN override per case. Measured on a v9.9.9 tree:
+#   `VERSION_OVERRIDE=v9.9.9 ./deploy/build-and-ship.sh`, exactly what deploy/cut-release.sh
+#   runs, scored 72 passed / 7 failed and refused to build; the same bytes with the variable
+#   unset scored 79/0 — so the documented release path could not ship at all (#1633).
+#
+#   SSH_HOST / REMOTE_BUILD_HOST / REQUIRE_SHIP / IMAGE / CONTEXT / DOCKERFILE / SERVICE — the
+#   ship plumbing added afterwards (#1650, #1653) leaked the CALLER's release into the sandbox
+#   fixtures: REQUIRE_SHIP=1 made the sandbox's own build-and-ship refuse for a missing
+#   ship_proof.sh (O/O2 exit 7 instead of 5/4), an inherited SSH_HOST made R1 "ship" with a
+#   server that case does not give it, inherited REQUIRE_SHIP made R4's build-only control
+#   print SHIPPED, and inherited IMAGE/CONTEXT/DOCKERFILE made R2-R4 look for web/Dockerfile
+#   and report "no tarball". Measured on v1.28.0's bytes, `SSH_HOST=<host> REQUIRE_SHIP=1
+#   IMAGE=jomform-web CONTEXT=. DOCKERFILE=web/Dockerfile bash deploy/release_selftest.sh`
+#   scored 189 passed / 21 failed; the same bytes with that set unset scored 210 passed /
+#   0 failed, rc 0. A release could not ship until the operator scrubbed the environment by
+#   hand — the gate that guards every release was being failed by the release itself.
+#
+# deploy/release_selftest.sh drops the same set itself as well. The two are INDEPENDENT, so
+# neither call shape (this script's environment, or a human's shell) can leak it.
+#
+#   SSH_USER / SSH_PORT / SSH_PATH — the same group: this script scp's to
+#   "$SSH_USER@$SSH_HOST:$SSH_PATH/" on port "$SSH_PORT", so a caller who ships to sshd on 2222
+#   rewrote the sandbox's fixtures. It was invisible because R2 asserted `scp -P 22`, which
+#   `scp -P 2222 …` satisfies. The suite now matches the port as a whole token (R2b) and proves
+#   the sandbox used 22 / root / /tmp (R6); these three are scrubbed here for the same reason as
+#   the eight above.
 if [ -x "$REPO_ROOT/deploy/release_selftest.sh" ] && [ "${SKIP_RELEASE_SELFTEST:-0}" != 1 ]; then
   selftest_log="${TMPDIR:-/tmp}/release-selftest.$$.log"
-  if env -u VERSION_OVERRIDE bash "$REPO_ROOT/deploy/release_selftest.sh" >"$selftest_log" 2>&1; then
+  if env -u VERSION_OVERRIDE -u SSH_HOST -u REMOTE_BUILD_HOST -u REQUIRE_SHIP \
+         -u IMAGE -u CONTEXT -u DOCKERFILE -u SERVICE \
+         -u SSH_USER -u SSH_PORT -u SSH_PATH \
+         bash "$REPO_ROOT/deploy/release_selftest.sh" >"$selftest_log" 2>&1; then
     info "release rules selftest: passed ($(grep -c '^  ok' "$selftest_log" 2>/dev/null || echo '?') checks)"
     rm -f "$selftest_log"
   else

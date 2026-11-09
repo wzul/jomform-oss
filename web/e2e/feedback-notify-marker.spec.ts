@@ -398,7 +398,7 @@ test.describe("admin feedback: the notification-failure marker", () => {
     await panel.getByRole("button", { name: "Send the notification again" }).click();
 
     // The confirmation is shown…
-    await expect(page.getByText(/Re-sent — but the thread still records a failure/)).toBeVisible();
+    await expect(page.getByText(/Re-sent, but the thread still records a failure/)).toBeVisible();
     // …and it does NOT claim the notification was delivered.
     await expect(page.getByText("Notification sent again.")).toHaveCount(0);
     // …and the banner that says the opposite is still there, as it must be: the

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 import { GuideArticle } from "../../../../components/GuideArticle";
-import { docsMetadata } from "../../../../lib/docsMetadata";
+import { docsMetadata, guideTabTitle } from "../../../../lib/docsMetadata";
 import { guideBySlug } from "../../../../lib/guides.gen";
 
 // Source: docs/guides/payment-fees/README.md + its 6 screenshots, materialised by
@@ -10,7 +10,7 @@ import { guideBySlug } from "../../../../lib/guides.gen";
 const guide = guideBySlug("payment-fees");
 
 export const metadata: Metadata = docsMetadata({
-  title: "Payment fees — screenshot guide — JomForm Docs",
+  title: guideTabTitle(guide.title),
   description: guide.summary,
   path: "/docs/guides/payment-fees",
 });

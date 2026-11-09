@@ -39,7 +39,7 @@ export function GuideArticle({ guide }: { guide: Guide }) {
       <h1 className="mt-3 text-2xl font-bold text-slate-900 sm:text-3xl">{guide.title}</h1>
       <p className="mt-2 text-sm text-slate-600">{guide.summary}</p>
       <p className="mt-3 text-xs text-slate-600">
-        {guide.shots.length} screenshots — one per step, captured from the running product. The red
+        {guide.shots.length} screenshots, one per step, captured from the running product. The red
         box marks the control you touch at that step.
       </p>
 

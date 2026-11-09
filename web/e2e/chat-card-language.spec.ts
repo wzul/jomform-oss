@@ -380,7 +380,7 @@ test.describe("the confirmation card's own words follow the dashboard language",
       if (lang === "en") {
         // The English sentences, in the dashboard's DEFAULT language — the one the
         // defect was measured in ("1 rows — …" / "1 times" were the pre-fix copy).
-        expect(rows[1][1], "the English card still counts rows in the plural").toMatch(/^1 row — /);
+        expect(rows[1][1], "the English card still counts rows in the plural").toMatch(/^1 row, /);
         expect(rows[2][1], "the English card still counts charges in the plural").toBe("1 time");
       }
     }

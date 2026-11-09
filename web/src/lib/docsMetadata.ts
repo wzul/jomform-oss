@@ -82,3 +82,41 @@ export function docsMetadata({ title, description, path }: DocsMetadataInput): M
     },
   };
 }
+
+/**
+ * The `<title>` of a screenshot guide (`/docs/guides/<slug>`).
+ *
+ * WHY THIS EXISTS (card t_31ee7580)
+ *   Each guide page hand-wrote `"<subject> — screenshot guide — JomForm Docs"`, so its tab
+ *   read TWO em dashes of the same kind ("Collect donations — screenshot guide — JomForm
+ *   Docs") while the other 22 /docs pages carry exactly one. Nothing failed: a title is a
+ *   plain string, it type-checks, and no guard looked at it. The tab is one string with one
+ *   dash, the shape every sibling page already uses: `"<subject> — JomForm Docs"`.
+ *
+ * The subject is the guide's own README `# …` line (through `guides.gen.ts`), with its
+ * descriptor dropped rather than separated by a second dash. Both authored forms are
+ * accepted — `"<subject> — setup guide"` and `"<subject>: setup guide"` — so editing the
+ * guide's prose cannot leave the tab behind with a stale subject.
+ *
+ * It THROWS when the subject itself carries an em dash: the result would be the very
+ * double-dash this function exists to prevent, so it fails at build time rather than
+ * shipping a tab the reader sees as two separators.
+ */
+export function guideTabTitle(guideTitle: string): string {
+  // The descriptor is the LAST "<sep> … setup guide" run, and only when that run carries
+  // no separator of its own — so a subject that legitimately contains a dash is left whole
+  // (and then refused below) instead of being silently truncated at its first dash.
+  const subject =
+    guideTitle.replace(/\s*(?:—|:)\s+(?:(?![—:]).)*\b(?:setup|screenshot)\s+guide\s*$/i, "").trim() ||
+    guideTitle.trim();
+  const title = `${subject} — JomForm Docs`;
+
+  if (title.split(" — ").length !== 2) {
+    throw new Error(
+      `guideTabTitle: ${JSON.stringify(guideTitle)} still carries an em dash after its setup-guide ` +
+        `descriptor is removed, so the tab would read two of them. Rename the guide's subject ` +
+        `(docs/guides/<slug>/README.md, its \`# …\` line) or use a different word than "—".`,
+    );
+  }
+  return title;
+}

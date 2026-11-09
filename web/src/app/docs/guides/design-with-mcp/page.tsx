@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 import { GuideArticle } from "../../../../components/GuideArticle";
-import { docsMetadata } from "../../../../lib/docsMetadata";
+import { docsMetadata, guideTabTitle } from "../../../../lib/docsMetadata";
 import { guideBySlug } from "../../../../lib/guides.gen";
 
 // Source: docs/guides/design-with-mcp/README.md + its screenshots, materialised by
@@ -10,7 +10,7 @@ import { guideBySlug } from "../../../../lib/guides.gen";
 const guide = guideBySlug("design-with-mcp");
 
 export const metadata: Metadata = docsMetadata({
-  title: "Design with an AI agent (MCP) — screenshot guide — JomForm Docs",
+  title: guideTabTitle(guide.title),
   description: guide.summary,
   path: "/docs/guides/design-with-mcp",
 });

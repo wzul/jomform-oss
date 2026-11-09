@@ -115,7 +115,7 @@ test("a locked-out submit names the 15-minute window the server chose", async ({
   await expect(alert).toBeVisible();
   // THE BITE: with the pre-fix page this reads "Failed. Please try again." and
   // every assertion below fails, in every locale.
-  await expect(alert).toHaveText("Too many attempts — try again in 15 minutes.");
+  await expect(alert).toHaveText("Too many attempts. Try again in 15 minutes.");
   // It is a dictionary sentence, not the server's Malay prose (which the card
   // forbids rendering on an English page).
   await expect(alert).not.toContainText(LOCKOUT_PROSE);
@@ -153,7 +153,7 @@ test("the per-IP throttle's 30 seconds is counted in seconds, not rounded into m
   await openPasswordForm(page, "en");
   await submitPassword(page);
 
-  await expect(page.locator(ALERT)).toHaveText("Too many attempts — try again in 30 seconds.");
+  await expect(page.locator(ALERT)).toHaveText("Too many attempts. Try again in 30 seconds.");
 });
 
 test("a 429 with no usable Retry-After still says too many attempts", async ({ page }) => {
