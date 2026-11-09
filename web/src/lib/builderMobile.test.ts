@@ -40,6 +40,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { DICT } from "../components/i18nDict.ts";
+// The builder guide renders through the shared prose renderer (`SECTIONS` in
+// app/docs/builder/page.tsx). Its claims are read as rendered prose, not JSX:
+// the `<strong>` that used to carry "← Canvas" is Markdown emphasis now.
+import { pageProse } from "./docsProseReader.ts";
 
 const builder = readFileSync(
   fileURLToPath(new URL("../app/builder/page.tsx", import.meta.url)),
@@ -419,10 +423,10 @@ test("(6) the new menu label exists in all five locales", () => {
 test("(7) the builder guide exists, is in the docs nav, and is linked from the builder", () => {
   // The guide describes the flow this change created. The inline "?" (rule 4)
   // is what makes it reachable from the feature itself.
-  const guide = readFileSync(
-    fileURLToPath(new URL("../app/docs/builder/page.tsx", import.meta.url)),
-    "utf8",
-  );
+  const guide = pageProse(
+    readFileSync(fileURLToPath(new URL("../app/docs/builder/page.tsx", import.meta.url)), "utf8"),
+    "../app/docs/builder/page.tsx",
+  ).replace(/\*\*/g, "");
   const nav = readFileSync(fileURLToPath(new URL("../app/docs/layout.tsx", import.meta.url)), "utf8");
   assert.match(nav, /href: "\/docs\/builder"/, "the builder guide is not in the docs sidebar");
   assert.match(
@@ -431,6 +435,7 @@ test("(7) the builder guide exists, is in the docs nav, and is linked from the b
     'the builder has no inline "?" doc link to the builder guide (AGENTS.md DOCUMENTATION PARITY rule 4)',
   );
   // The flow it must state, because the old flow is what was reported as broken.
-  assert.match(guide, /<strong>← Canvas<\/strong>/, "the guide does not name the panel's exit control");
+  // The control's NAME is the claim; how the renderer emphasises it is not.
+  assert.match(guide, /← Canvas/, "the guide does not name the panel's exit control");
   assert.match(guide, /no separate settings tab/i, "the guide does not state that the settings tab is gone");
 });

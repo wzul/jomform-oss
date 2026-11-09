@@ -31,6 +31,9 @@ import { fileURLToPath } from "node:url";
 
 import { DICT, LANGS } from "../components/i18nDict.ts";
 import { codeOnly, jsxTags, tintStates, tintedSurfaceFindings } from "./jsxSource.ts";
+// The /docs/customize page renders through the shared prose renderer: a section id
+// is a `id: "…"` entry of `const SECTIONS: Section[]`, not an `<h2 id="…">`.
+import { sectionsOf } from "./docsProseReader.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
@@ -279,7 +282,17 @@ test("the docs no longer send a reader looking for a Profile nav row", () => {
   // AGENTS.md documentation parity: the row is gone, so a sentence that says
   // "go to Profile" without saying how to get there is now a dead instruction.
   // Both docs mentions that name the destination must name the account block.
-  const customize = docsCustomize.slice(docsCustomize.indexOf('id="language"'));
+  // The language section, found by its SECTIONS id rather than by JSX markup. A
+  // missing section fails through the assert rather than silently slicing to the
+  // last character of the file (which is what `indexOf` returning -1 did).
+  const language = sectionsOf(docsCustomize, "../app/docs/customize/page.tsx").find(
+    (s) => s.id === "language",
+  );
+  assert.ok(
+    language,
+    "the customize docs no longer have the #language section — re-anchor this guard",
+  );
+  const customize = [language.title, ...language.strings].join("\n");
   assert.match(
     customize,
     /account block/,

@@ -76,6 +76,25 @@
 //     sibling files named above; a run inside <pre> scrolls by design and is
 //     skipped here on purpose.
 //
+// WHAT CHANGED AFTER THIS FILE WAS WRITTEN (and why it is not a weakening)
+//   Nineteen /docs pages now render through src/app/docs/docsProse. Their prose
+//   is `const SECTIONS: Section[]` data and the renderer emits the elements, so
+//   the tree's literal long-run <span> count fell to zero and the measured
+//   pages' tokens are `code` markers rendered as Inline's chip (or, for a bare
+//   URL, plain text inside the block's <p>/<ul>/<ol>). The guard was re-pointed,
+//   not relaxed:
+//     * the measured tokens are still asserted IN FULL against the page's prose
+//       (a shortened path fails), and each is proved to be one code token;
+//     * the ELEMENT that decides whether each can break is now the renderer's
+//       chip or one of its prose containers, and those are asserted to carry the
+//       same `[overflow-wrap:anywhere]` (the containers matter because
+//       overflow-wrap inherits and an unmarked run has no element of its own);
+//     * the tree-wide <span> rule still runs over every hand-written page and is
+//       proved non-vacuous against the chip surface plus the extractor probe;
+//     * the non-span measurements (the tool-name <h3>, the `{s.body}` paragraph,
+//       the text-3xl <h1>) are kept with their numbers and their pages — only the
+//       element that prints them moved into the renderer.
+//
 // Run with:
 //   npm run test:unit
 //   (node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/*.test.ts)
@@ -88,6 +107,8 @@ import ts from "typescript";
 // The recursive `app/docs` walk shared with docsProseConvention.test.ts,
 // llmsFullCoverage.test.ts and sitemapCoverage.test.ts (card t_3a5aa9b5).
 import { filesUnder } from "./docsRoutes.ts";
+import { pageProse, usesDocsProse } from "./docsProseReader.ts";
+import { parseInline } from "../app/docs/docsProseText.ts";
 
 const DOCS_DIR = fileURLToPath(new URL("../app/docs", import.meta.url));
 
@@ -258,6 +279,65 @@ const describe = (s: Site) =>
   `${rel(s.file)}:${s.line}  className=${JSON.stringify(s.className)}  run=${s.longest}  ` +
   JSON.stringify(s.runs.reduce((a, b) => (b.length > a.length ? b : a), ""));
 
+// ── the surface the measured sites MOVED TO (the prose renderer) ──────────────
+//
+// Nineteen /docs pages render through src/app/docs/docsProse now. Their inline
+// runs are no longer hand-written <span>s: a backticked token becomes Inline's
+// <code> chip, and an UNMARKED run (customize's bare MCP URL) is a plain text
+// node inside the block's <p>/<ul>/<ol>. So the element that decides whether the
+// run can break is the renderer's chip or its prose container, and that is where
+// this guard has to look for a converted page. The page half stays: the token
+// itself must still be there, in full (asserted below per measured site).
+const RENDERER_FILE = fileURLToPath(new URL("../app/docs/docsProse.tsx", import.meta.url));
+const RENDERER_SRC = readFileSync(RENDERER_FILE, "utf8");
+
+/**
+ * The renderer's SOURCE WITH COMMENTS STRIPPED. The tag scans below must not read
+ * a tag a comment names — docsProse.tsx documents the very elements this guard is
+ * about (`<p>/<ul>/<ol>`, `<pre>`, `<code>`), and a comment is text no reader ever
+ * gets. The strip is deliberately the simple one used elsewhere in this suite: the
+ * file holds no string literal containing `//` or a block-comment opener.
+ */
+const RENDERER_CODE = RENDERER_SRC.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^[ \t]*\/\/.*$/gm, " ");
+
+/** The Inline function: the ONE place a prose marker becomes a chip. */
+const INLINE_AT = RENDERER_CODE.indexOf("export function Inline(");
+const INLINE_END = INLINE_AT === -1 ? -1 : RENDERER_CODE.indexOf("function Tip(", INLINE_AT);
+const INLINE = INLINE_AT === -1 || INLINE_END === -1 ? "" : RENDERER_CODE.slice(INLINE_AT, INLINE_END);
+
+const tagClass = (tag: string) => tag.match(/className="([^"]*)"/)?.[1] ?? "";
+
+/** The renderer's inline <code> chips (one tag; every `code` marker goes through it). */
+const CHIP_TAGS = [...INLINE.matchAll(/<code\b[^>]*>/g)].map((m) => m[0]);
+
+/**
+ * The renderer tags that RENDER prose text: a paragraph, a bullet/numbered list,
+ * the block sub-heading and the page heading. `overflow-wrap` inherits, so the
+ * token on one of these covers every descendant run — including a plain text
+ * Fragment, which has no element of its own to guard. A table cell is NOT here:
+ * a table sits inside an `overflow-x-auto` region (docsProse.tsx), so a long cell
+ * scrolls inside its box instead of panning the document — the same exemption
+ * EXEMPT_BOX makes for a hand-written page.
+ */
+const PROSE_CONTAINERS = ["p", "ul", "ol", "h1", "h3"] as const;
+const PROSE_TAGS = PROSE_CONTAINERS.flatMap((name) => [
+  ...RENDERER_CODE.matchAll(new RegExp(`<${name}\\b[^>]*>`, "g")),
+]).map((m) => m[0]);
+
+/** A long inline-code marker in a converted page's prose, and its longest run. */
+type ChipSite = { file: string; text: string; longest: number };
+
+function chipSitesIn(src: string, file: string): ChipSite[] {
+  if (!usesDocsProse(src)) return [];
+  const prose = pageProse(src, file);
+  return [...prose.matchAll(/`([^`]+)`/g)]
+    .map((m) => ({ file, text: m[1], longest: Math.max(0, ...m[1].split(/\s+/).map((r) => r.length)) }))
+    .filter((c) => c.longest >= MIN_RUN);
+}
+
+const CHIP_SITES: ChipSite[] = FILES.flatMap((f) => chipSitesIn(readFileSync(f, "utf8"), f));
+const describeChip = (c: ChipSite) => `${rel(c.file)}  chip=${JSON.stringify(c.text)}  run=${c.longest}`;
+
 /**
  * The tokens this card was filed on, in full. Kept as the rendered text, so a
  * shortened path fails the assertion below instead of quietly fitting.
@@ -309,87 +389,149 @@ const rendered = (s: Site) => s.runs.reduce((a, b) => (b.length > a.length ? b :
  * This leg is an explicit measured list rather than a tree-wide rule: "every
  * element with a long word" would red pages this card never measured, and the
  * honest statement is which sites were measured and why.
+ *
+ * THE ELEMENTS MOVED, THE TOKENS DID NOT. Both pages render through docsProse
+ * now, so there is no `<h3>{t.name}</h3>` and no `<p>{s.body}</p>` to read: the
+ * tool name is a `code` chip in a table cell, and the URL sits in a prose
+ * list/paragraph. `carrier` says which of the renderer's two guarded shapes the
+ * token goes through today — a marker (the Inline chip) or plain text (the
+ * block's prose container). The page half is the CONTENT: the token must still be
+ * there, in full, or the "fix" was shortening it.
  */
 const NON_SPAN_SITES = [
   {
     page: "/docs/shipping/page.tsx",
-    tag: "h3",
-    body: "{t.name}",
+    token: "disconnect_shipping_courier",
+    carrier: "chip",
     why:
-      "it renders the tool names in mono at 21px under a 24px root font: " +
+      "it is the tool name in mono at 21px under a 24px root font: " +
       '"disconnect_shipping_courier" (27 chars) measured 340px wide in the 288px prose column at a ' +
       "320px viewport, which panned /docs/shipping 16px at 360px and 56px at 320px",
   },
   {
     page: "/docs/customize/page.tsx",
-    tag: "p",
-    body: "{s.body}",
+    token: "https://mcp.jomform.com/mcp.",
+    carrier: "prose",
     why:
-      "it renders the STEPS and CART bodies, which carry the bare URL " +
-      '"https://mcp.jomform.com/mcp." (28 chars, 309px measured) and "set_workspace_landing_page" ' +
-      "(26 chars, 292px measured) under a 24px root font, which panned /docs/customize 25px at a " +
-      "320px viewport",
+      "it is the bare URL the STEPS body carries " +
+      '("https://mcp.jomform.com/mcp.", 28 chars, 309px measured) under a 24px root font, which ' +
+      "panned /docs/customize 25px at a 320px viewport",
   },
-];
+] as const;
 
 test("the non-span sites this card measured carry the guard too (they floored the same pages)", () => {
   for (const site of NON_SPAN_SITES) {
     const page = FILES.find((f) => f.endsWith(site.page));
     assert.ok(page, `${site.page} is missing from the walked docs tree`);
     const src = readFileSync(page!, "utf8");
-    const field = site.body.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const els = [...src.matchAll(new RegExp(`<${site.tag}\\b([^>]*)>${field}</${site.tag}>`, "g"))];
+    // Page half: the token is still rendered, in full.
     assert.ok(
-      els.length >= 1,
-      `${site.page} no longer renders ${site.body} on a <${site.tag}> — the element this card measured ` +
-        `has moved; re-measure before deleting this pin`,
+      pageProse(src, page!).includes(site.token),
+      `${site.page} no longer renders ${JSON.stringify(site.token)} — the element this card measured has ` +
+        `moved or the token was trimmed; re-measure before deleting this pin`,
     );
-    for (const [i, m] of els.entries()) {
+    // Carrier half: which renderer shape it goes through, and that shape carries
+    // the guard (asserted once, for every chip and container, in the test below).
+    if (site.carrier === "chip") {
       assert.ok(
-        BREAK_GUARD.test(m[1]),
-        `${site.page}: <${site.tag}> ${i + 1} of ${els.length} rendering ${site.body} has no break guard ` +
-          `(className ${JSON.stringify(m[1].replace(/\s+/g, " ").trim().slice(0, 120))}). It needs ` +
-          `[overflow-wrap:anywhere] because ${site.why}.`,
+        src.includes("`" + site.token + "`"),
+        `${site.page}: ${JSON.stringify(site.token)} is no longer written as a code marker, so it does not ` +
+          `go through the renderer's guarded chip — it needs a break guard on whatever element prints it, ` +
+          `because ${site.why}`,
+      );
+    } else {
+      assert.ok(
+        !src.includes("`" + site.token + "`"),
+        `${site.page}: ${JSON.stringify(site.token)} is a code marker now, not plain prose — this pin says its ` +
+          `carrier is the prose container; re-point it if the token was deliberately marked`,
       );
     }
   }
 
   // The heading the 320px measurement found: a normal English word at text-3xl
   // (45px under a 24px root font) is wider than the 288px prose column, so the
-  // <h1> carries the same guard. It is a static element, so it is pinned
-  // directly rather than through the field extractor above.
+  // page's <h1> carries the same guard. The <h1> is the renderer's now (the page
+  // passes `title`), so the page half is the word it prints and the element half
+  // is the renderer's heading.
   const custPage = FILES.find((f) => f.endsWith("/docs/customize/page.tsx"))!;
   const cust = readFileSync(custPage, "utf8");
-  const h1 = cust.match(/<h1\b([^>]*)>([\s\S]*?)<\/h1>/);
-  assert.ok(h1, "docs/customize/page.tsx has no <h1> — this pin is reading the wrong element");
+  const title = cust.match(/\btitle="([^"]*)"/)?.[1] ?? "";
   assert.ok(
-    BREAK_GUARD.test(h1![1]),
-    "docs/customize/page.tsx's <h1> has no break guard. Its longest word (\"customization\", 13 chars) " +
-      "measured 298px wide at a 24px root font — 10px wider than the 288px prose column at a 320px " +
-      "viewport, where the page panned 25px. Add [overflow-wrap:anywhere].",
+    title.includes("customization"),
+    "docs/customize/page.tsx no longer passes a title containing the word that was measured out of bounds " +
+      "(\"customization\", 298px at a 24px root font) — re-measure before deleting this guard",
   );
+  const h1Tags = PROSE_TAGS.filter((t) => /^<h1\b/.test(t));
   assert.ok(
-    h1![2].includes("customization"),
-    "the <h1> no longer contains the word that was measured out of bounds — re-measure before " +
-      "deleting this guard",
+    h1Tags.length >= 1,
+    "the renderer emits no <h1> — docs/customize's heading is rendered somewhere this guard cannot see",
   );
+  for (const tag of h1Tags) {
+    assert.ok(
+      BREAK_GUARD.test(tagClass(tag)),
+      "the renderer's <h1> has no break guard. Its longest word (\"customization\", 13 chars) measured " +
+        "298px wide at a 24px root font — 10px wider than the 288px prose column at a 320px viewport, where " +
+        "docs/customize panned 25px. Add [overflow-wrap:anywhere].",
+    );
+  }
 
   // Load-bearing, in both directions: the runs that need the guard are still in
   // the data. Deleting the sentence that carries a long URL is not the fix this
   // card asked for.
   const ship = readFileSync(FILES.find((f) => f.endsWith("/docs/shipping/page.tsx"))!, "utf8");
   assert.ok(
-    /name: "disconnect_shipping_courier"/.test(ship),
+    pageProse(ship, "shipping").includes("disconnect_shipping_courier"),
     'docs/shipping no longer documents a tool named "disconnect_shipping_courier" (27 chars) — that ' +
       "name is what measured 340px wide; if it was renamed, re-measure the new one",
   );
   for (const token of ["https://mcp.jomform.com/mcp.", "set_workspace_landing_page"]) {
     assert.ok(
-      cust.includes(token),
+      pageProse(cust, "customize").includes(token),
       `docs/customize no longer contains ${JSON.stringify(token)} — the docs lost the sentence this ` +
         "card measured instead of letting it wrap",
     );
   }
+});
+
+test("the renderer's inline chip and prose containers carry the break guard (where the runs moved)", () => {
+  // Non-vacuity first: the surfaces this leg is about must be READ, not assumed.
+  assert.ok(
+    INLINE.includes("export function Inline"),
+    "docsProse.tsx no longer declares the Inline function — the chip every converted page's prose token " +
+      "renders through is not the code this guard is reading",
+  );
+  assert.ok(
+    CHIP_TAGS.length >= 1,
+    "the Inline slice of docsProse.tsx holds no <code> tag — a backticked token would render as bare text",
+  );
+  assert.ok(
+    PROSE_TAGS.length >= 5,
+    `found only ${PROSE_TAGS.length} prose container tag(s) (${PROSE_CONTAINERS.join("/")}) in docsProse.tsx — ` +
+      "the tags that render an UNMARKED run are not being read, so a bare URL there would be invisible",
+  );
+
+  const unguarded = [...CHIP_TAGS, ...PROSE_TAGS].filter((t) => !BREAK_GUARD.test(tagClass(t)));
+  assert.deepEqual(
+    unguarded.map((t) => `${t.slice(0, 60)}…  className=${JSON.stringify(tagClass(t))}`),
+    [],
+    `the renderer emits ${unguarded.length} prose element(s) with no break guard. This is the defect the card ` +
+      `measured, on the element that renders it now: at a 24px root font a REST path or host is ONE ` +
+      `whitespace-free run wider than the 288px column, and at 320px it floored /docs/shipping by 241px and ` +
+      `/docs/customize by 25px. The inline chip guards the marked tokens; the prose containers guard the ` +
+      `unmarked ones (overflow-wrap inherits, and a plain text node has no element of its own). Use ` +
+      `[overflow-wrap:anywhere] — not break-word — because it also drops the min-content width to one ` +
+      `character so the run shrinks INTO the column.`,
+  );
+
+  // And the tree really carries long runs on that surface, so the assertions
+  // above are guarding something: the chips found by the same MIN_RUN the span
+  // rule uses.
+  assert.ok(
+    CHIP_SITES.length >= 3,
+    `found only ${CHIP_SITES.length} ${MIN_RUN}+ character inline-code run(s) in the converted pages' prose ` +
+      `(${CHIP_SITES.map(describeChip).join("; ")}) — the runs this card measured are markers on that ` +
+      `surface, so a count this low means the guard is no longer looking at them`,
+  );
 });
 
 test("the extractor reads the real docs tree and finds the measured spans (it cannot pass vacuously)", () => {
@@ -404,21 +546,35 @@ test("the extractor reads the real docs tree and finds the measured spans (it ca
     );
   }
 
-  // The exact spans this card was filed on must be found, with their full run.
+  // The exact tokens this card was filed on must still be found, in full, and
+  // each must be the `code` marker whose chip the renderer guards. Before the
+  // conversion this looked for a <span>; the token's element is the chip now, and
+  // the run length is measured on the token so a trimmed path still fails.
   for (const m of MEASURED) {
-    const site = SITES.find((s) => rel(s.file).endsWith(m.page) && rendered(s) === m.run);
+    const page = FILES.find((f) => rel(f).endsWith(m.page));
+    assert.ok(page, `${m.page} is not in the walked set — the page this card measured is not being read`);
+    const prose = pageProse(readFileSync(page!, "utf8"), page!);
     assert.ok(
-      site,
-      `the span rendering ${JSON.stringify(m.full)} on ${m.page} was not found among the ` +
-        `${SITES.length} long-run span(s) this extractor read (${JSON.stringify(SITES.map(describe))}) — ` +
-        "the walk or the text resolution is broken, so an unguarded path would be invisible to this guard",
+      prose.includes(m.full),
+      `the token ${JSON.stringify(m.full)} is no longer rendered in full on ${m.page} — either the path was ` +
+        "shortened (the reader must still get the full address) or it moved out of the prose this guard can " +
+        "see; re-measure before relaxing this pin",
     );
+    const longest = Math.max(...m.full.split(/\s+/).map((r) => r.length));
     assert.equal(
-      site!.longest,
+      longest,
       m.longest,
-      `${m.page}'s ${JSON.stringify(m.run)} now resolves to a ${site!.longest}-character run, not ` +
-        `${m.longest} — the extractor is reading a different token than the one measured`,
+      `${m.page}'s ${JSON.stringify(m.run)} now resolves to a ${longest}-character run, not ${m.longest} — ` +
+        "the token measured is not the token being read",
     );
+    const tokens = parseInline("`" + m.full + "`");
+    assert.deepEqual(
+      tokens.map((t) => t.kind),
+      ["code"],
+      `${m.page}'s ${JSON.stringify(m.full)} is not read by the renderer as one code token — the chip ` +
+        "assertion would be guarding an element this page's prose never reaches",
+    );
+    assert.equal(tokens[0].text, m.full, `${m.page}: the chip would print a shortened token`);
   }
 
   // The three SKIPS are real, proved on a probe source: the docs tree happens to
@@ -457,6 +613,17 @@ test("the extractor reads the real docs tree and finds the measured spans (it ca
 });
 
 test("no /docs prose <span> renders an unbreakable run without a break guard", () => {
+  // The subject must EXIST in one of the two shapes, or this rule proves nothing:
+  // a hand-written long-run span (what remains of the original surface — 0 today,
+  // because nineteen pages moved to the renderer) or a long inline-code run on the
+  // renderer's chip surface. A tree with neither would pass the deepEqual below
+  // while rendering nothing this guard cares about.
+  assert.ok(
+    SITES.length + CHIP_SITES.length > 0,
+    `found no ${MIN_RUN}+ character run at all — neither a prose <span> nor an inline code marker in a ` +
+      `converted page's prose. The runs this card measured are still in the docs (as chips), so the scan is ` +
+      `looking at the wrong surface and the rule below would pass vacuously`,
+  );
   const unguarded = SITES.filter((s) => !s.classKnown || !BREAK_GUARD.test(s.className));
   assert.deepEqual(
     unguarded.map((s) => `${rel(s.file)}:${s.line}  className=${JSON.stringify(s.className)}  ${rendered(s)}`),
@@ -470,7 +637,10 @@ test("no /docs prose <span> renders an unbreakable run without a break guard", (
       "width to one character so the token shrinks INTO the column instead of widening it. Do NOT " +
       "shorten the path or host: the reader must still be able to read and copy it. A computed " +
       "className cannot be certified by this guard and is reported here too; write the class out " +
-      `as a literal string. Findings:\n  ${SITES.map(describe).join("\n  ")}`,
+      `as a literal string. Findings:\n  ${SITES.map(describe).join("\n  ")}` +
+      `\n\nThe renderer-backed pages carry the same kind of run as inline-code chips; their guard is ` +
+      `asserted against docsProse.tsx in the test above (${CHIP_SITES.length} long chip run(s) found ` +
+      `now: ${CHIP_SITES.map(describeChip).join("; ") || "none"}).`,
   );
 });
 
@@ -479,20 +649,24 @@ test("the measured paths are still rendered in full and carry the guard (shorten
     const page = FILES.find((f) => f.endsWith(m.page));
     assert.ok(page, `${m.page} is missing from the walked docs tree`);
     const src = readFileSync(page!, "utf8");
-    const spans = [...src.matchAll(/<span\b([^>]*)>([\s\S]*?)<\/span>/g)].map((x) => ({ attrs: x[1], body: x[2] }));
-    const holders = spans.filter((s) => decode(s.body).replace(/\s+/g, " ").trim() === m.full);
+    const markers = [...pageProse(src, page!).matchAll(/`([^`]+)`/g)].map((x) => x[1]);
+    const holders = markers.filter((token) => token === m.full);
     assert.equal(
       holders.length,
       1,
-      `${m.page} renders ${JSON.stringify(m.full)} in ${holders.length} <span>(s), not 1 — either the ` +
-        "path was shortened (the reader must still get the full address) or it moved out of a span " +
+      `${m.page} renders ${JSON.stringify(m.full)} in ${holders.length} code chip(s), not 1 — either the ` +
+        "path was shortened (the reader must still get the full address) or it moved out of a code marker " +
         "this guard can see; re-measure before relaxing this pin",
     );
-    assert.ok(
-      BREAK_GUARD.test(holders[0].attrs),
-      `${m.page}'s span ${JSON.stringify(m.full)} has no break guard in className ` +
-        `(${JSON.stringify(holders[0].attrs.replace(/\s+/g, " ").trim().slice(0, 120))}). This is the ` +
-        "exact token the card measured out of bounds; it must carry [overflow-wrap:anywhere].",
-    );
+    // The chip is the element that prints it now; the guard it must carry is the
+    // renderer's, asserted globally but named here against this exact token.
+    for (const tag of CHIP_TAGS) {
+      assert.ok(
+        BREAK_GUARD.test(tagClass(tag)),
+        `${m.page}'s ${JSON.stringify(m.full)} is rendered by the renderer's inline chip, whose className ` +
+          `(${JSON.stringify(tagClass(tag))}) has no break guard. This is the exact token the card measured ` +
+          "out of bounds; it must carry [overflow-wrap:anywhere].",
+      );
+    }
   }
 });

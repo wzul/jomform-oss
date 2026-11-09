@@ -68,7 +68,7 @@ const NEXT_CONFIG = fileURLToPath(new URL("../../next.config.mjs", import.meta.u
 
 type NextConfigLike = {
   allowedDevOrigins?: unknown;
-  headers?: () => Promise<Array<{ headers: Array<{ key: string; value: string }> }>>;
+  headers?: () => Promise<Array<{ source: string; headers: Array<{ key: string; value: string }> }>>;
 };
 
 /**
@@ -116,7 +116,18 @@ async function staticCacheHeader(
     assert.ok(typeof headers === "function", "web/next.config.mjs no longer exports headers()");
     const rules = await headers!();
     assert.ok(rules.length > 0, "headers() returned no rules — the static-asset header is gone");
-    return rules[0].headers.find((h) => h.key === "Cache-Control")?.value;
+    // Find the /_next/static rule BY ITS SOURCE, not by position: the config
+    // also carries a catch-all security-header rule (card t_1a491389), and
+    // indexing [0] made this guard read the wrong rule the moment that block was
+    // added. A positional read would silently assert an unrelated header the next
+    // time the order changes.
+    const staticRule = rules.find((r) => r.source === "/_next/static/:path*");
+    assert.ok(
+      staticRule,
+      `no headers() rule has source "/_next/static/:path*" — the immutable Cache-Control is gone ` +
+        `(rules: ${rules.map((r) => r.source).join(", ")})`,
+    );
+    return staticRule!.headers.find((h) => h.key === "Cache-Control")?.value;
   });
 }
 

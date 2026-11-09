@@ -55,6 +55,12 @@ import { DICT, LANGS } from "../components/i18nDict.ts";
 // Imported rather than re-implemented — the copy this replaces had a defect that
 // only surfaced on a page neither guard had seen yet.
 import { codeOnly } from "./jsxSource.ts";
+// The /docs/chat page renders through the shared prose renderer now, so its
+// claims are read from SECTIONS (pageProse) rather than from JSX. `codeOnly`
+// still reads the page's COMMENTS away, but it also keeps every string literal
+// in the file — including the non-rendered metadata description — so a content
+// claim read through it could be satisfied by text no reader sees.
+import { pageProse } from "./docsProseReader.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
@@ -128,6 +134,39 @@ const page = codeOnly(read(CHAT_PAGE));
 const shell = read("../components/Shell.tsx");
 const docsNav = read("../app/docs/layout.tsx");
 const DOCS_PAGE = "../app/docs/chat/page.tsx";
+
+/**
+ * The /docs/chat page's RENDERED prose — its SECTIONS titles and strings, and
+ * nothing else — with the Markdown emphasis markers taken out.
+ *
+ * The page declares its copy as a `Section[]` literal now (lib/docsProseReader),
+ * so `read`/`codeOnly` would see the shape of the source, not the sentences: a
+ * sentence is a STRING in SECTIONS, and the title/body markup that used to carry
+ * `id="…"` is gone. `pageProse` keeps the claim and drops the markup it never
+ * cared about. `**` is emphasis, not text — a reader does not see the asterisks,
+ * so "60 messages per hour, in bursts of 10" has to be matched with them
+ * removed, or every bolded number reads as a missing sentence.
+ *
+ * The fallback in `pageProse` (raw source when a page has no SECTIONS) is why
+ * this is safe to call on a hand-written page too.
+ */
+function docsProseOf(src: string): string {
+  return pageProse(src, DOCS_PAGE).replace(/\*\*/g, "");
+}
+
+/**
+ * A minimal page source whose rendered prose is `prose`, plus `extra` raw file
+ * text OUTSIDE `SECTIONS` (a comment, a metadata string). Used by the bite proofs
+ * to show that `pageProse` reads the render and not the file: the same sentence
+ * left in `extra` must not satisfy a claim.
+ */
+function pageSourceWithProse(prose: string, extra = ""): string {
+  return (
+    `${extra}\nconst SECTIONS: Section[] = [{ id: "limits", title: "Limits and cost", ` +
+    `icon: "📊", body: [${JSON.stringify(prose)}] }];\n`
+  );
+}
+
 
 // The Go side of the same claim, read cross-language on purpose (the idiom of
 // salesRows.test.ts / spamJudgeToggle.test.ts): "read-only" is one property
@@ -1318,18 +1357,13 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
   // The phase-1 pair is in here too: the 60/hour test above pins the constant,
   // but it never made the docs page, the dictionary, or the 429 body follow it.
   //
-  // THE DOCS HALF READS RENDERED TEXT, NOT RAW SOURCE (t_4912a9bd). `read`
-  // returns the page's BYTES, and a sentence can live in those bytes without
-  // reaching a reader: `// One answer can put at most 3 proposals in front of
-  // you` is the sentence this guard looks for, in text no user ever sees.
-  // Measured on the merged tree: the guarded sentence moved into a comment near
-  // the imports, with the RENDERED prose given a wrong number ("at most NINE
-  // proposals"), left this guard GREEN (0 fail) — the deletion control (the
-  // sentence removed from the source entirely) was the only mutation that redded
-  // it, so the green was not a dead instrument. `codeOnly` is this repo's shared,
-  // JSX-text-aware blanker: a comment cannot satisfy a sentence, while a string
-  // literal — where this page's copy actually lives — is left untouched.
-  const docs = codeOnly(read(DOCS_PAGE));
+  // THE DOCS HALF READS RENDERED TEXT, NOT RAW SOURCE (t_4912a9bd, re-pointed
+  // onto the prose renderer). The page declares its copy in `SECTIONS`; a claim
+  // read off the file could be satisfied by a `//` line or by the metadata
+  // description, neither of which the reader sees. `docsProseOf` is the
+  // reader-visible text of SECTIONS with Markdown emphasis removed — the
+  // sentences bold their numbers, and the asterisks are not prose.
+  const docs = docsProseOf(read(DOCS_PAGE));
   const msgPerHour = goConstNumber(goRest, "chatRatePerHour");
   const burst = goConstNumber(goRest, "chatBurst");
   const confirmPerHour = goConstNumber(goRest, "chatConfirmPerHour");
@@ -1499,7 +1533,7 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
 //     as the length of their own message — which is 2000. The figure bites only a
 //     hand-built client replaying a huge transcript, which is the reader the docs
 //     page is not written for. So the CLAIM this cap backs is pinned instead — "not
-//     for holding a long document": a pasted document IS one turn, and the per-turn
+//     a long document": a pasted document IS one turn, and the per-turn
 //     bound is what makes that sentence true. Note also that the 4000 of "The
 //     assistant's own answer is capped at 4000 characters" is MaxReplyChars and NOT
 //     this constant: pinning that sentence to both would red a page that is still
@@ -1516,22 +1550,22 @@ test("the phase-2 caps the docs quote are read from the constants, so prose and 
 // WORD — so both forms are accepted, because a copyedit that writes "up to 5" is
 // not a defect.
 //
-// WHY codeOnly AND NOT THE RAW SOURCE. The sentences below are matched against the
-// page with its COMMENTS blanked (lib/jsxSource.ts, the repo's shared blanker): a
-// comment quoting a number is not what the user reads, and it must not stand in for
-// the sentence. The test above reads the page through `codeOnly` too (that is card
-// t_4912a9bd itself), so a comment cannot satisfy its pins either, and this guard
-// neither changes that nor depends on it. The page's prose lives in string
-// literals, which the blanker keeps byte for byte, so every pin below still reads
-// what the page renders.
+// WHY RENDERED PROSE AND NOT THE RAW SOURCE. The sentences below are matched
+// against what the page renders (`docsProseOf`, over lib/docsProseReader): a
+// comment quoting a number is not what the user reads, and it must not stand in
+// for the sentence. The test above reads the page the same way (that is card
+// t_4912a9bd itself), so a comment cannot satisfy its pins either. The renderer
+// stores the copy as strings in `SECTIONS`, which is exactly the reader-visible
+// text this guard needs — no JSX slice, no markup position to drift.
 //
-// THE CONST IS READ THROUGH codeOnly ITSELF (t_629da97d), not only inside
-// capProseProblems: the two claims this module makes about the page OUTSIDE that
-// function — the vacuity check in the test below, and the `turnPin` the comment
-// control is derived from — are positive prose claims too, and a `//` line could
-// have satisfied them. capProseProblems then blanks an already-blanked source, which
-// is a no-op: every byte offset, and every newline, is preserved.
-const docsPage = codeOnly(read(DOCS_PAGE));
+// THE PAGE IS READ AS RENDERED PROSE (re-pointed onto lib/docsProseReader). The
+// prose renderer moved this page's copy into a `const SECTIONS: Section[]`
+// literal, so the sentences are strings inside that array; the JSX the guards
+// used to slice is gone. `docsProseOf` is the reader-visible text of those
+// sections with Markdown emphasis removed, and it cannot be satisfied by a `//`
+// line or by the non-rendered metadata description — the two holes `codeOnly`
+// (which this replaced) still left open.
+const docsPage = docsProseOf(read(DOCS_PAGE));
 
 /** The word a small count is written as in prose, for the one sentence that spells its number. */
 const COUNT_WORDS = [
@@ -1569,7 +1603,7 @@ const CAP_NAMES = [
  */
 const NUMBERLESS_CLAIMS: Array<{ want: string; what: string; cap: string; why: string }> = [
   {
-    want: "not for holding a long document",
+    want: "not a long document",
     what: "the bound on one turn's text",
     cap: "MaxTurnChars",
     why:
@@ -1589,7 +1623,7 @@ const NUMBERLESS_CLAIMS: Array<{ want: string; what: string; cap: string; why: s
  */
 function capProseProblems(docsSrc: string, chatSrc: string): string[] {
   const out: string[] = [];
-  const docs = codeOnly(docsSrc);
+  const docs = docsProseOf(docsSrc);
   // Every constant the section's prose stands on. A name that is gone, or is no
   // longer a numeric literal, THROWS here (goConstNumber) rather than handing the
   // comparisons `undefined` — which is a substring of nothing, so every check below
@@ -1617,7 +1651,7 @@ function capProseProblems(docsSrc: string, chatSrc: string): string[] {
     },
     {
       what: `the message cap (MaxMessageChars = ${caps.MaxMessageChars})`,
-      want: [`and ${caps.MaxMessageChars} characters for your message`],
+      want: [`still capped at ${caps.MaxMessageChars} characters`],
     },
     {
       what: `the answer cap (MaxReplyChars = ${caps.MaxReplyChars})`,
@@ -1665,7 +1699,7 @@ test("the runner caps the chat docs quote are read from the constants, so the li
   // and a sentence only it carries) and the real Go source BEFORE any comparison
   // below is believed.
   assert.ok(
-    docsPage.includes("Limits and cost") && docsPage.includes("at least one AI model call"),
+    docsPage.includes("Limits and cost") && docsPage.includes("at least one model call"),
     `${DOCS_PAGE} is not the chat docs page this guard means to judge`,
   );
   assert.ok(
@@ -1702,9 +1736,13 @@ test("the caps-prose guard bites: a moved constant or a reworded sentence is RED
   // (a hard-coded "the last 16 turns" would become a no-op that reds a correct tree).
   const turnPin = /bounded to the last \d+ turns/.exec(docsPage);
   assert.ok(turnPin, "the section no longer states the turn cap — retarget this control");
-  const commented = docsPage
-    .replace(turnPin[0], "bounded to the last few turns")
-    .concat(`\n// The conversation you send is ${turnPin[0]}.\n`);
+  // The comment control takes the RENDERED prose, removes the sentence from it,
+  // and puts the sentence in a `//` line OUTSIDE SECTIONS — the shape a raw/JSX
+  // reader would still be satisfied by while the user reads something else.
+  const commented = pageSourceWithProse(
+    docsPage.replace(turnPin[0], "bounded to the last few turns"),
+    `// The conversation you send is ${turnPin[0]}.`,
+  );
 
   /**
    * `src` with the integer literal `name` is declared with moved by `by`, and the
@@ -1826,9 +1864,10 @@ test("the caps-prose guard bites: a moved constant or a reworded sentence is RED
 // refusal must still MATCH, so this test cannot pass by making the reader refuse
 // everything.
 test("BITES: the caps guard reads rendered docs text, and only a bounded number", () => {
-  // Through `codeOnly` like the guard it proves (t_629da97d): the anchor must be text
-  // the page RENDERS, or a `//` line could anchor a mutation as well as satisfy a pin.
-  const shippedDocs = codeOnly(read(DOCS_PAGE));
+  // Through `docsProseOf` like the guard it proves: the anchor must be text the
+  // page RENDERS, or a `//` line could anchor a mutation as well as satisfy a pin.
+  const shippedSource = read(DOCS_PAGE);
+  const shippedDocs = docsProseOf(shippedSource);
   const want = `${goConstNumber(goRest, "chatRatePerHour")} messages per hour, in bursts of ${goConstNumber(goRest, "chatBurst")}`;
   // Vacuity: the anchor must be on the page, or every mutation below lands
   // nowhere and this proof asserts nothing.
@@ -1838,21 +1877,24 @@ test("BITES: the caps guard reads rendered docs text, and only a bounded number"
       `re-anchor the proof rather than letting it mutate nothing`,
   );
   assert.ok(
-    quotesExactly(want).test(codeOnly(shippedDocs)),
+    quotesExactly(want).test(shippedDocs),
     "the unmutated docs page does not satisfy the shipped reader — a red below could not be " +
       "attributed to the mutation",
   );
 
   // HOLE 1 — the sentence in a `//` comment, the rendered prose given a WRONG
-  // number. The pre-fix raw read is shown to be satisfied first (`includes`),
-  // so the hole is demonstrated rather than asserted.
-  const commented = `// ${want}\n${shippedDocs.replace(want, "NINE messages per hour, in bursts of NINE")}`;
+  // number. The raw source is shown to be satisfied first (`includes`), so the
+  // hole is demonstrated rather than asserted.
+  const commented = pageSourceWithProse(
+    shippedDocs.replace(want, "NINE messages per hour, in bursts of NINE"),
+    `// ${want}`,
+  );
   assert.ok(
-    commented.includes(want) && commented !== shippedDocs,
+    commented.includes(want) && commented !== shippedSource,
     "the comment mutation did not land, so this case proves nothing",
   );
   assert.ok(
-    !quotesExactly(want).test(codeOnly(commented)),
+    !quotesExactly(want).test(docsProseOf(commented)),
     "a sentence inside a `//` COMMENT satisfies the caps guard again: the reader has gone back to " +
       "raw source, and a page can state a cap in text no user ever sees (t_4912a9bd)",
   );
@@ -1864,7 +1906,7 @@ test("BITES: the caps guard reads rendered docs text, and only a bounded number"
     "the longer-number mutation did not land, so this case proves nothing",
   );
   assert.ok(
-    !quotesExactly(want).test(codeOnly(widened)),
+    !quotesExactly(want).test(widened),
     `"1${want}" satisfies the caps guard again: a substring read lets a page quote a DIFFERENT ` +
       `number (160 where the server enforces 60) while the guard reports it quotes the enforced one`,
   );
@@ -3183,7 +3225,11 @@ function unrender(src: string, name: string, replacement: string): string {
 function docLinkProblems(pageSrc: string, docsSrc: string): string[] {
   const out: string[] = [];
   const page = codeOnly(pageSrc);
-  const docs = codeOnly(docsSrc);
+  // RENDERED PROSE, not the file (re-pointed onto lib/docsProseReader): `/docs/chat`
+  // declares its copy in SECTIONS, and every claim below is about what a reader
+  // sees. The metadata description and the page's own comments name tools too, so
+  // a raw/JSX read can be satisfied by text that never renders.
+  const docs = pageProse(docsSrc, DOCS_PAGE);
   if (!page.includes('href="/docs/chat"')) {
     out.push('the assistant has no inline "?" doc link (AGENTS.md DOCUMENTATION PARITY step 4)');
   }
@@ -3240,14 +3286,21 @@ test('BITES: the "?" doc-link claims read RENDERED prose — a name left in a co
       "not be attributed to the mutation",
   );
 
-  const buried = unrender(
-    unrender(docsSrc, "submit_feedback", "the report tool"),
-    "propose_write",
-    "the proposal lane",
-  );
-  // THE MUTATION'S SHAPE, asserted rather than assumed: the raw read is still satisfied
-  // (the page's own comments name both tools) while nothing the page renders does. That
-  // is the state measured GREEN on this file before t_629da97d.
+  // The rendered names are removed from SECTIONS; the RAW source keeps them in a
+  // comment appended for this proof. The page's own header no longer names the two
+  // tools (the prose renderer's header does not either), so the proof supplies the
+  // comment — otherwise it would measure a DELETION rather than the "satisfied by a
+  // comment" hole it exists to refuse.
+  const buried =
+    unrender(
+      unrender(docsSrc, "submit_feedback", "the report tool"),
+      "propose_write",
+      "the proposal lane",
+    ) +
+    `\n// submit_feedback is the one write the assistant runs over MCP; propose_write is in-app.\n`;
+  // THE MUTATION'S SHAPE, asserted rather than assumed: the RAW source is still
+  // satisfied (the comment appended above names both tools) while nothing the page
+  // renders does. That is the state measured GREEN on this file before t_629da97d.
   for (const name of ["submit_feedback", "propose_write"]) {
     assert.ok(
       buried.includes(name),
@@ -3302,9 +3355,9 @@ test('BITES: the "?" doc-link claims read RENDERED prose — a name left in a co
  * the day the sentence is legitimately reworded and this list is updated with it.
  */
 const UPSERT_CREATE_SENTENCE =
-  "The fourth creates: upsert_form is proposable, and a confirmed card CREATES a new form when it names none, or UPDATES the one it names.";
+  "The fourth creates: upsert_form is proposable. A confirmed card creates a new form when it names none, or updates the one it names.";
 const PURGE_HUMAN_ONLY_SENTENCE =
-  "The one step with no inverse is deleting a form for good, purge_form: it destroys the form and everything attached to it, and no restore brings it back. It is human-only and the assistant can never propose it";
+  "The one step with no inverse is **purge_form**: it destroys the form and everything attached, and no restore brings it back. It is human-only and never proposable.";
 
 /**
  * `src` with the string-literal body `sentence` moved onto a `//` line immediately
@@ -3349,7 +3402,11 @@ function sentenceInAComment(src: string, sentence: string, replacement: string):
  */
 function creationDocsProblems(docsSrc: string): string[] {
   const out: string[] = [];
-  const docs = codeOnly(docsSrc);
+  // RENDERED PROSE, not the file (re-pointed onto lib/docsProseReader): every claim
+  // here is about prose the user reads, and this page's metadata description and
+  // comments name tools too. `pageProse` reads SECTIONS, so a name that is not in
+  // the render cannot satisfy a pin.
+  const docs = pageProse(docsSrc, DOCS_PAGE);
 
   // Vacuity, in the file's idiom: prove this is the page that carries the section
   // before either claim is believed.
@@ -3403,7 +3460,7 @@ function creationDocsProblems(docsSrc: string): string[] {
   // Wan's decision was "the assistant may take it as far as the bin; only a person
   // purges". A page that allowed the creation but never mentioned the bin would leave
   // the user without the recovery path the decision rests on.
-  if (!/(to the trash|the trash|from the trash)/i.test(docs)) {
+  if (!/\b(bin|bins|binned|binning|trash|trashes|trashed|trashing)\b/i.test(docs)) {
     out.push(
       "the docs page allows a created form but never names the trash/bin — the recoverability of " +
         "a mistaken creation is the entire justification for letting the assistant create one " +
@@ -3418,7 +3475,7 @@ function creationDocsProblems(docsSrc: string): string[] {
         "confirming a created form most needs to be told about",
     );
   }
-  if (!/purge_form[\s\S]{0,200}(never propose|cannot propose|never be proposed|is not proposable)/i.test(docs)) {
+  if (!/purge_form[\s\S]{0,200}(never propose|cannot propose|never be proposed|is not proposable|never proposable)/i.test(docs)) {
     out.push(
       "the docs page names purge_form but does not say the assistant can never propose it — a " +
         "reader would be left believing a permanent delete is one click away in the chat, which is " +
@@ -3450,7 +3507,7 @@ function creationDocsProblems(docsSrc: string): string[] {
   // false sentence would pass a negative-only guard while leaving the reader with no idea
   // who bins the form.
   if (
-    !/bin belongs to (you|the person|the owner)|not the assistant[\s\S]{0,60}(forms page|trash)|you[\s\S]{0,40}move[s]? it to the trash/i.test(
+    !/bin belongs to (you|the person|the owner)|not the assistant[\s\S]{0,60}(forms page|trash)|you[\s\S]{0,40}move[s]? it to the trash|you must do it yourself|deleting a form[\s\S]{0,60}is yours to do/i.test(
       docs,
     )
   ) {
@@ -3563,7 +3620,7 @@ test('BITES: the creation guard reads RENDERED docs prose — a tool named only 
       "upsert_form",
       /upsert_form[\s\S]{0,200}(CREATES a new form|creates a new form)[\s\S]{0,120}(UPDATES|updates)/,
     ],
-    ["purge_form", /purge_form[\s\S]{0,200}(never propose|cannot propose|never be proposed|is not proposable)/i],
+    ["purge_form", /purge_form[\s\S]{0,200}(never propose|cannot propose|never be proposed|is not proposable|never proposable)/i],
   ];
   // THE MUTATION'S SHAPE, asserted rather than assumed: the RAW source still satisfies
   // both pins, and nothing the page RENDERS carries either name.
@@ -3614,11 +3671,11 @@ test('BITES: the creation guard reads RENDERED docs prose — a tool named only 
 // shipped defect sentence it did catch. Nothing on disk is written: the mutation is
 // in memory, on the real page source read at module load.
 test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the passive, the bare verb, the perfect, the future, the relative clause, both genitive orders, the gerund, both appositive variants, the it-cleft, the periphrastic passive, the nominal, the light verb + gerund, the copular predication, the topicalised cleft, the reversed nominal, the non-restrictive relative, the pro-verb across a clause boundary, the claim reported inside an information verb's clause, the bin gerund such a verb reports and a claim behind an auxiliary chain inside the reported clause", () => {
-  // Through `codeOnly` like the creation guard this proves (t_629da97d): the anchor the
-  // injections land on has to be text the page RENDERS, or the proof would be measuring
-  // the raw bytes while the guard reads the prose.
-  const shipped = codeOnly(read(DOCS_PAGE));
-  const anchor = "A creation is the one shape the field-edit rule does not cover,";
+  // Through `docsProseOf` like the creation guard this proves: the anchor the
+  // injections land on has to be text the page RENDERS, or the proof would be
+  // measuring the raw bytes while the guard reads the prose.
+  const shipped = docsProseOf(read(DOCS_PAGE));
+  const anchor = "A creation is allowed because a form is binned, not destroyed.";
   // Vacuity: if the anchor is gone the injections below land nowhere and this
   // proof would pass while testing nothing.
   assert.ok(
@@ -3875,7 +3932,7 @@ test("BITES: the assistant-credits-the-bin prose arm catches the infinitive, the
   const missed: string[] = [];
   for (const [name, sentence] of Object.entries(shapes)) {
     // A string pattern replaces only the first occurrence; the anchor is unique.
-    const mutated = shipped.replace(anchor, `"${sentence} ${anchor}`);
+    const mutated = shipped.replace(anchor, `${sentence} ${anchor}`);
     // Prove the mutation landed, or the shape is judged against the pristine page.
     assert.ok(
       mutated.includes(sentence),

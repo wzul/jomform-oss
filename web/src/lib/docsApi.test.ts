@@ -24,12 +24,20 @@
 // WHAT IT DOES NOT COVER (stated honestly)
 //   * It does not execute the React tree, so it cannot see the rendered layout,
 //     the table wrapping or the anchor scrolling — only the declared data and the
-//     source of the page. The rendered result is checked in a browser.
+//     prose/JSX the page and its renderer declare. The rendered result is checked
+//     in a browser.
 //   * It does not judge the prose quality, only that the two load-bearing
 //     statements are still there and that the numbers the page states about
 //     itself agree with the contract (the throttled count and the total).
 //   * The OpenAPI document's own validity and route parity are proven in Go
 //     (api/internal/httpapi/openapi_parity_test.go), not here.
+//
+// SINCE THE PROSE RENDERER
+//   The page is a `const SECTIONS: Section[]` literal rendered by
+//   src/app/docs/docsProse. Content is read through docsProseReader.pageProse();
+//   the markup those strings become (<pre>, table scroll region, <a>, the
+//   section anchor) exists once, in the renderer, so this file asserts the page
+//   ROUTES through it and the renderer's own guards pin the markup.
 //
 // Run with:  npm run test:unit
 import { test } from "node:test";
@@ -53,6 +61,11 @@ import {
 import { OPENAPI_SPEC } from "./openapiSpec.gen.ts";
 import { API_EXAMPLES } from "./apiExamples.gen.ts";
 import { SITE_URL } from "./siteName.ts";
+// The page renders through src/app/docs/docsProse now, so its prose is the
+// `const SECTIONS` literal rather than JSX. These three read that shape; the
+// markup it renders (code samples, table scroll regions, links) is pinned in
+// docsProse.tsx by the sibling guards.
+import { pageProse, sectionsOf, usesDocsProse } from "./docsProseReader.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
@@ -72,23 +85,27 @@ function resolveModuleSpecifier(spec: string, fromFile: string): string {
 }
 
 /**
- * The page's SOURCE with JSX text wrapping collapsed and comments dropped.
+ * The page's PROSE, whitespace-collapsed and lowercased.
  *
- * Both matter and both are why a naive `src.includes(...)` is useless here:
- *   * JSX wraps prose across lines, so "do not design a client around a uniform
- *     quota" is four lines apart in the source and NOT a substring of it. A
- *     text assertion that does not normalise whitespace silently checks nothing.
- *   * The page's header comment quotes `openapiSpec.gen.ts` while explaining why
- *     the page must NOT import it — so a raw `includes` check reads a comment as
- *     code. Comment lines are stripped, like buildContext.test.ts does.
+ * The page renders through src/app/docs/docsProse, so what it SAYS now lives in
+ * the `const SECTIONS` literal, not in JSX. docsProseReader's pageProse() gives
+ * the reader-visible text of that shape (and the raw source of a page that is
+ * still hand-written), which is the question every assertion below is asking.
+ *
+ * Two consequences of reading prose this way, both deliberate:
+ *   * the old comment-stripping pass is gone with the JSX that motivated it —
+ *     for a converted page the reader never returns a comment or an import path,
+ *     so a phrase quoted in the header comment cannot satisfy an assertion;
+ *   * nothing may be dropped by first character. A prose line here is a string,
+ *     and `**400**: …` (bold) starts with `*` — the old heuristic would have
+ *     eaten it.
+ *
+ * The interpolation sites (`${total}`, `${e.path}`) are NOT prose: the reader
+ * collects string literals, so a template with a substitution is read as a
+ * render site and is asserted against the page source below.
  */
 function normalized(src: string): string {
-  return src
-    .split("\n")
-    .filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/*"))
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .toLowerCase();
+  return src.replace(/\s+/g, " ").toLowerCase();
 }
 
 /**
@@ -200,7 +217,11 @@ function anchorAttributes(src: string): string[] {
 const PAGE = "../app/docs/api/page.tsx";
 const pageRaw = read(PAGE);
 const pageSrc = pageRaw;
-const pageText = normalized(pageRaw);
+/** The page's reader-visible prose (the SECTIONS strings) and its section anchors. */
+const pageProseText = pageProse(pageRaw, PAGE);
+const pageText = normalized(pageProseText);
+const pageSections = sectionsOf(pageRaw, PAGE);
+const sectionIds = pageSections.map((s) => s.id);
 const LAYOUT = "../app/docs/layout.tsx";
 const LANDING = "../app/landing/page.tsx";
 const SITEMAP = "../app/sitemap.ts";
@@ -214,6 +235,47 @@ test("the guard is looking at the real page and the real contract", () => {
   assert.ok(
     pageSrc.includes("export default function ApiDocsPage"),
     `${PAGE} is not the API docs page — the guard's anchor moved`,
+  );
+  // The page renders through the shared prose renderer. Everything below either
+  // reads its SECTIONS literal (through docsProseReader) or the one renderer
+  // module; a page that stopped using the renderer would make the prose reader
+  // fall back to raw source and this guard silently weaker.
+  assert.ok(
+    usesDocsProse(pageRaw),
+    `${PAGE} no longer renders through src/app/docs/docsProse — this guard reads its SECTIONS ` +
+      "prose, so re-point the reader before trusting any assertion below",
+  );
+  // The anchors are a contract with /docs and the dashboard's inline "?" links
+  // (the page's own header comment says so). Read them from SECTIONS: the page
+  // has no `<section id="…">` of its own any more, the renderer emits it.
+  const ANCHOR_CONTRACT = [
+    "quickstart",
+    "auth",
+    "scopes",
+    "errors",
+    "limits",
+    "cors",
+    "endpoints",
+    "versioning",
+    "testing",
+  ];
+  assert.ok(
+    pageSections.length >= 8,
+    `parsed only ${pageSections.length} section(s) out of ${PAGE} — the SECTIONS literal is not ` +
+      "what this guard is reading",
+  );
+  for (const id of ANCHOR_CONTRACT) {
+    assert.ok(
+      sectionIds.includes(id),
+      `the "${id}" anchor is gone from ${PAGE}'s SECTIONS — it is linked from /docs and from the ` +
+        "dashboard, so a reader following one lands nowhere",
+    );
+  }
+  assert.equal(
+    new Set(sectionIds).size,
+    sectionIds.length,
+    `two sections in ${PAGE} share an id (${JSON.stringify(sectionIds)}) — one of them is ` +
+      "unreachable by its anchor",
   );
   assert.ok(
     endpointCount() > 50,
@@ -241,17 +303,28 @@ test("the endpoint reference is generated from the contract", () => {
     `${PAGE} does not render its endpoint reference through endpointsByTag() — it is not ` +
       "generated from the contract",
   );
-  assert.ok(
-    pageSrc.includes("{group.endpoints.map"),
+  // The rows are built from the grouped endpoints (a `flatMap` that emits one
+  // heading + one table per tag). The old spelling was a JSX `{group.endpoints.map(`
+  // inside the table body; the prose renderer moved that expression out of JSX,
+  // so the brace is gone and the iteration is what is asserted.
+  assert.match(
+    pageSrc,
+    /group\.endpoints\.map\(/,
     `${PAGE} does not iterate the grouped endpoints — the reference would render nothing`,
   );
+  assert.ok(
+    pageSrc.includes("head: [\"Method\", \"Path\", \"Access\", \"What it does\"]"),
+    `${PAGE} no longer builds the four-column endpoint table — a reader loses the access gate ` +
+      "or the summary",
+  );
 
-  // EVERY /v1/rest/ path the page mentions must be a real operation. Prose is
-  // allowed to name the base path or a specific endpoint (a quickstart step has
-  // to say which route to call), but it may not invent one: a path in that prose
-  // that is not in the contract is documentation for an endpoint that 404s.
+  // EVERY /v1/rest/ path the page's PROSE mentions must be a real operation.
+  // Prose is allowed to name the base path or a specific endpoint (a quickstart
+  // step has to say which route to call), but it may not invent one: a path in
+  // that prose that is not in the contract is documentation for an endpoint
+  // that 404s. Read the prose, not the JSX wrappers around it.
   const contractPaths = new Set(specEndpoints().map((e) => e.path));
-  const mentioned = [...pageRaw.matchAll(/\/v1\/rest\/[A-Za-z0-9/{}_.-]*/g)].map((m) => m[0]);
+  const mentioned = [...pageProseText.matchAll(/\/v1\/rest\/[A-Za-z0-9/{}_.-]*/g)].map((m) => m[0]);
   assert.ok(mentioned.length > 0, "the page never names a /v1/rest path at all — it cannot be a REST API page");
   const invented = [...new Set(mentioned)].filter((p) => {
     // A trailing fragment (`/v1/rest/*`, a paragraph-final punctuation) is not a
@@ -302,26 +375,27 @@ test("the page states the true size of the API, not a rounded claim", () => {
 
 // ── the two load-bearing statements ─────────────────────────────────────────
 test("the page states that the API sends no CORS headers", () => {
-  const hasCorsSection = pageSrc.includes('id="cors"');
-  assert.ok(hasCorsSection, `${PAGE} lost the CORS section — the API's browser behaviour is the ` +
-    "single most expensive thing to leave undocumented");
-
-  const lower = pageSrc.toLowerCase();
   assert.ok(
-    lower.includes("no cors") || lower.includes("no cors headers at all"),
+    sectionIds.includes("cors"),
+    `${PAGE} lost the CORS section — the API's browser behaviour is the ` +
+      "single most expensive thing to leave undocumented",
+  );
+
+  assert.ok(
+    pageText.includes("no cors") || pageText.includes("no cors headers at all"),
     "the page no longer says there is no CORS",
   );
   assert.ok(
-    pageSrc.includes("Access-Control-Allow-Origin"),
+    pageProseText.includes("Access-Control-Allow-Origin"),
     "the page no longer names the header it does not send",
   );
   assert.ok(
-    lower.includes("server-to-server"),
+    pageText.includes("server-to-server"),
     "the page no longer frames the API as server-to-server",
   );
-  // And it must not promise the opposite anywhere.
+  // And it must not promise the opposite anywhere in its prose.
   assert.ok(
-    !/adds? (the )?(cors|Access-Control-Allow)/i.test(pageSrc),
+    !/adds? (the )?(cors|Access-Control-Allow)/i.test(pageProseText),
     "the page suggests CORS headers are sent, which contradicts the API",
   );
 });
@@ -330,33 +404,67 @@ test("the in-page nav covers every section, and every link lands on one", () => 
   // The hand-written nav listed 7 of the 9 sections, so two headings were
   // reachable only by scrolling. Both directions are checked: a section with no
   // nav entry (unfindable) and a nav entry with no section (a dead anchor).
-  const sectionIds = [...pageRaw.matchAll(/<section id="([^"]+)"/g)].map((m) => m[1]);
-  assert.ok(sectionIds.length >= 8, `parsed only ${sectionIds.length} sections from ${PAGE}`);
-
-  const navIds = [...pageRaw.matchAll(/\{ id: "([^"]+)", title: /g)].map((m) => m[1]);
-  assert.ok(navIds.length > 0, "the page no longer declares PAGE_SECTIONS — the nav is hand-written again");
-
-  const missingFromNav = sectionIds.filter((id) => !navIds.includes(id));
-  assert.deepEqual(
-    missingFromNav,
-    [],
-    `these sections are rendered but missing from the in-page nav (reachable only by scrolling):\n  ` +
-      missingFromNav.join("\n  "),
+  //
+  // The in-page nav is no longer a per-page list at all: /docs/layout renders
+  // <DocsToc> around every page, and DocsToc builds the trail from the h2/h3
+  // elements that ACTUALLY RENDERED, reusing the `section[id]` they sit in. So the
+  // 7-of-9 defect cannot recur by editing a nav list — the nav has no list.
+  //
+  // What still has to be true, and is asserted here: the page passes its sections
+  // to the renderer, every section id is unique, and the renderer emits one
+  // <section id={s.id}> with an <h2> for each. DocsToc reads exactly that shape.
+  const ids = sectionsOf(pageSrc, PAGE).map((s) => s.id);
+  assert.equal(
+    new Set(ids).size,
+    ids.length,
+    `${PAGE} declares a duplicate section id — DocsToc would render two identical in-page links`,
   );
-  const dangling = navIds.filter((id) => !sectionIds.includes(id));
-  assert.deepEqual(
-    dangling,
-    [],
-    `the in-page nav links to anchors that no section declares (a dead click):\n  ${dangling.join("\n  ")}`,
+  assert.ok(ids.length >= 9, `${PAGE} declares only ${ids.length} section(s)`);
+  const proseRenderer = readFileSync(new URL("../app/docs/docsProse.tsx", import.meta.url), "utf8");
+  assert.ok(
+    /<section[^>]*id=\{s\.id\}/.test(proseRenderer) && /<h2/.test(proseRenderer),
+    "the renderer no longer emits <section id={s.id}> with an <h2> — DocsToc builds the " +
+      "in-page nav from those elements, so the page would have no nav at all",
   );
   assert.ok(
-    pageSrc.includes("{PAGE_SECTIONS.map"),
-    "the nav no longer renders from PAGE_SECTIONS — the two lists would drift apart",
+    pageSrc.includes("sections={SECTIONS}"),
+    `${PAGE} no longer renders the same SECTIONS list it builds the nav from — the two lists ` +
+      "can drift again",
+  );
+  assert.ok(
+    !/\{ id: "[a-z-]+", title: /.test(pageSrc),
+    `${PAGE} declares nav entries by hand again (an inline { id, title } literal) — they must ` +
+      "come from SECTIONS",
+  );
+
+  // The nav must land on an anchor that exists: the renderer emits `id={s.id}` on
+  // the section and `href={`#${s.id}`}` on the nav link, from the same object.
+  const renderer = read("../app/docs/docsProse.tsx");
+  assert.ok(
+    renderer.includes("<section key={s.id} id={s.id}"),
+    "docsProse.tsx no longer puts the section's own id on the <section> — every nav link on " +
+      "every /docs page would be a dead click",
+  );
+  // The nav LINK is built by DocsToc from the rendered heading (it reads the
+  // `section[id]` a heading sits in), so the renderer owes the heading + the
+  // anchor, not a link of its own. Assert that binding instead of a href the
+  // renderer no longer writes.
+  assert.ok(
+    /<section[^>]*id=\{s\.id\}[^>]*>[\s\S]{0,400}?<h2/.test(renderer),
+    "docsProse.tsx no longer emits an <h2> inside <section id={s.id}> — DocsToc builds each " +
+      "in-page link from that heading, so a section would drop out of the nav",
+  );
+  // And every section this page declares is unique, so a nav entry identifies
+  // exactly one target.
+  assert.deepEqual(
+    sectionIds.filter((id, i) => sectionIds.indexOf(id) !== i),
+    [],
+    `two sections in ${PAGE} declare the same anchor:`,
   );
 });
 
 test("the page states that most routes are NOT rate limited", () => {
-  assert.ok(pageSrc.includes('id="limits"'), `${PAGE} lost the rate-limit section`);
+  assert.ok(sectionIds.includes("limits"), `${PAGE} lost the rate-limit section`);
 
   assert.ok(
     pageText.includes("most of this api has no rate limit"),
@@ -367,10 +475,18 @@ test("the page states that most routes are NOT rate limited", () => {
     "the page no longer warns against assuming a uniform quota",
   );
   // The page must list ONLY the throttled routes, and the list must come from the
-  // contract rather than a hand-typed enumeration.
+  // contract rather than a hand-typed enumeration. The list BLOCK is the render
+  // site: `{ list: THROTTLED_ROUTES }` is built from `limited`, which is
+  // rateLimitedEndpoints() — so the rows and the sentence agree by construction.
   assert.ok(
     pageSrc.includes("rateLimitedEndpoints"),
     `${PAGE} does not derive its throttled-route list from the contract`,
+  );
+  assert.ok(
+    pageSrc.includes("const THROTTLED_ROUTES: string[] = limited.map(") &&
+      pageSrc.includes("{ list: THROTTLED_ROUTES }"),
+    `${PAGE} builds a throttled list that is not rendered from ` +
+      "`limited` — the prose would describe a set the list below does not show",
   );
   const limited = rateLimitedEndpoints();
   assert.ok(limited.length > 0, "the contract now declares no rate limits at all — re-check the page's claim");
@@ -390,12 +506,22 @@ test("the page's throttle list is exactly the contract's throttled set", () => {
     .filter((e) => e.rateLimit !== "")
     .map((e) => `${e.method} ${e.path}`);
   assert.deepEqual(fromPage, fromSpec);
-  // And the access vocabulary the page explains is the vocabulary in use.
+  // And the access vocabulary the page explains is the vocabulary in use. The
+  // legend is now built (`ACCESS_LEGEND = accessLevels().map(…)`), so "the page
+  // explains it" means the level has a label entry the map can read — a bare
+  // `read:` in a comment no longer satisfies this.
   const levels = accessLevels();
+  assert.ok(
+    pageSrc.includes("const ACCESS_LEGEND: string[] = accessLevels().map("),
+    `${PAGE} no longer builds its access legend from accessLevels() — a level the contract ` +
+      "uses could reach a row with no definition",
+  );
   for (const level of levels) {
-    assert.ok(
-      pageSrc.includes(`${level}:`),
-      `the contract uses access "${level}" but the page never explains it`,
+    assert.match(
+      pageSrc,
+      new RegExp(`\\b${level}:\\s*"[^"]+"`),
+      `the contract uses access "${level}" but the page's ACCESS_LABELS has no label for it — ` +
+        "the legend row would render empty",
     );
   }
 });
@@ -429,6 +555,12 @@ test("the page's write-gated-read list comes from the contract, not from prose",
     `${PAGE} does not state the size of the list from the contract; a typed number drifts`,
   );
   assert.ok(
+    pageSrc.includes("const WRITE_GATED_READS: string[] = writeGatedReads().map(") &&
+      pageSrc.includes("{ list: WRITE_GATED_READS }"),
+    `${PAGE} computes the write-gated set but no longer renders it as the list under the ` +
+      "sentence — the reader is told a number with no routes behind it",
+  );
+  assert.ok(
     !/\b(one|two|three|four|five)\b[^.]{0,40}(email-settings|notification)/i.test(pageSrc),
     `${PAGE} still spells the write-gated-read set out in words (e.g. "the three routes..."), ` +
       "which is a count the contract cannot keep true",
@@ -451,9 +583,20 @@ test("the page's write-gated-read list comes from the contract, not from prose",
 // ── the examples are the tested ones ────────────────────────────────────────
 test("the examples rendered on the page are the ones the api suite executes", () => {
   assert.ok(apiExamples.length >= 6, `only ${apiExamples.length} examples — the walk-through shrank`);
-  assert.ok(
-    pageSrc.includes("apiExamples.map"),
+  // The examples are the generated data, walked into prose blocks. The old
+  // spelling was `apiExamples.map(` in JSX; the page now `flatMap`s each example
+  // into a heading + a `{ code: e.curl }` block + its why/note, so either
+  // iteration is accepted — but it must be one of them.
+  assert.match(
+    pageSrc,
+    /apiExamples\.(?:flatMap|map)\(/,
     `${PAGE} does not render the examples from the generated data`,
+  );
+  assert.ok(
+    pageSrc.includes("const EXAMPLE_BLOCKS: Section[\"body\"] = apiExamples.") &&
+      pageSrc.includes("code: `${e.curl}`"),
+    `${PAGE} no longer renders each example's curl command as a code sample — the walk-through ` +
+      "would show prose about a command it never prints",
   );
   // Each rendered example carries the status it is expected to return, and the
   // body fragment it must contain — the same fields the Go test asserts on.
@@ -604,19 +747,48 @@ test("the contract link is a URL the page's audience can actually fetch", () => 
     `OPENAPI_PUBLIC_URL is a github.com URL (${OPENAPI_PUBLIC_URL}) — the repository is ` +
       "private and an anonymous reader gets a 404",
   );
-  // 2. The page's anchors must POINT AT that constant. Asserting only that the
-  //    identifier appears in the file is satisfied by the identifier left in the
-  //    anchor's link TEXT — both anchors print the URL as their visible label —
-  //    so a typed href pointing anywhere at all still passed. The href is the
-  //    half a reader follows, so the href attributes are what is read here.
+  // 2. The page's contract links must POINT AT that constant. Asserting only
+  //    that the identifier appears in the file was satisfied by the identifier
+  //    left in an anchor's link TEXT, so a typed href pointing anywhere at all
+  //    still passed. The DESTINATION is the half a reader follows.
   //
-  //    First: no anchor may take its destination from a JSX SPREAD. A spread is
-  //    applied AFTER the literal attributes, so `{...{ href: "https://…" }}`
-  //    replaces the href written above it — and `anchorHrefs` matches `href=`, so
-  //    the spread's `href:` is never read: the checks below would certify a
-  //    destination the browser never uses. A spread is refused rather than
-  //    judged, because attributes the guard cannot resolve are attributes it
-  //    cannot certify. (t_2285b2ef, shape 2.)
+  //    The page renders through the shared prose renderer now, so its contract
+  //    link is a MARKDOWN LINK in a SECTIONS string —
+  //    `[openapi.json](${OPENAPI_PUBLIC_URL})` — and the renderer turns the
+  //    parsed token into `<a href={t.href}>`. Both halves are pinned: the link
+  //    is written against the constant, and the renderer takes the anchor's
+  //    destination from that token rather than from anything of its own.
+  const contractLinks = [...pageRaw.matchAll(/\]\(\$\{OPENAPI_PUBLIC_URL\}\)/g)].length;
+  assert.ok(
+    contractLinks >= 1,
+    `${PAGE} has no prose link to the contract through OPENAPI_PUBLIC_URL — a reader must be ` +
+      "able to open the machine-readable document, and the destination has to be the constant " +
+      "this test reads (a typed URL would be a second definition nothing here judges)",
+  );
+  const renderer = read("../app/docs/docsProse.tsx");
+  assert.ok(
+    renderer.includes('if (t.kind === "link")') && renderer.includes("href={t.href}"),
+    "docsProse.tsx no longer renders a parsed link token as <a href={t.href}> — the page's " +
+      "contract link would either not render or take a destination the page never wrote",
+  );
+  // And no absolute URL may be TYPED into a link destination anywhere on the
+  // page, prose or JSX: the page's one absolute destination is the contract, and
+  // it must come from OPENAPI_PUBLIC_URL so the host, path and byte checks below
+  // judge one definition.
+  const typedProseURLs = [...pageRaw.matchAll(/\]\(([^)\s]+)\)/g)]
+    .map((m) => m[1])
+    .filter((h) => /^https?:\/\//i.test(h));
+  assert.deepEqual(
+    typedProseURLs,
+    [],
+    `${PAGE} types an absolute URL into a prose link (${JSON.stringify(typedProseURLs)}) — the ` +
+      "page's one absolute destination is the contract, and it must come from " +
+      "OPENAPI_PUBLIC_URL",
+  );
+  // If the page ever hand-writes an <a> again, the same rules apply to it: no
+  // JSX spread may replace the href this test reads (a spread is applied AFTER
+  // the literal attributes, so `{...{ href: "https://…" }}` wins and `href=`
+  // never sees it), and no literal URL may sit in an href. (t_2285b2ef.)
   const spreadAnchors = anchorAttributes(pageRaw)
     .filter((a) => a.includes("..."))
     .map((a) => a.replace(/\s+/g, " ").trim());
@@ -629,19 +801,16 @@ test("the contract link is a URL the page's audience can actually fetch", () => 
       "attributes out so the href on the page is the href checked here.",
   );
   const hrefs = anchorHrefs(pageRaw);
-  const toContract = hrefs.filter((h) => h === "OPENAPI_PUBLIC_URL");
-  assert.ok(
-    toContract.length >= 2,
-    `${PAGE} must point BOTH of its contract anchors at href={OPENAPI_PUBLIC_URL} — ` +
-      `${toContract.length} of the page's ${hrefs.length} hrefs do ` +
-      `(${JSON.stringify(hrefs)}). The link text still names the constant, so only the ` +
-      "anchor itself says where a reader is sent.",
+  // Every href the page writes is one of three things: an in-page fragment, a
+  // site path, or the contract constant. Anything else is a destination the
+  // checks below do not judge.
+  assert.deepEqual(
+    hrefs.filter((h) => h !== "OPENAPI_PUBLIC_URL" && !h.startsWith("#") && !h.startsWith("/")),
+    [],
+    `${PAGE} writes an href that is neither an in-page anchor, a site path, nor ` +
+      `href={OPENAPI_PUBLIC_URL} (${JSON.stringify(hrefs)}) — a reader following it lands ` +
+      "somewhere this test has not checked",
   );
-  // And a URL typed into an href is the same defect one step from the hole above:
-  // a destination defined in the page instead of in the guarded constant, where
-  // neither this test nor the fetcher on the other end can judge it. The page's
-  // one absolute destination is the contract; its other hrefs are in-page
-  // fragments and site-relative paths.
   const typedURLs = hrefs.filter((h) => /https?:\/\//i.test(h));
   assert.deepEqual(
     typedURLs,
@@ -732,14 +901,13 @@ test("the contract link is a URL the page's audience can actually fetch", () => 
 });
 
 test("the page does not advertise a sandbox or a separate test key", () => {
-  const lower = pageSrc.toLowerCase();
   assert.ok(
-    lower.includes("no separate sandbox or test key"),
+    pageText.includes("no separate sandbox or test key"),
     "the page must state that there is no sandbox/test key — the card decided against one, and " +
       "an unstated absence is a support ticket",
   );
   assert.ok(
-    !/sandbox key|test api key/i.test(pageSrc),
+    !/sandbox key|test api key/i.test(pageProseText),
     "the page offers a sandbox/test key that does not exist",
   );
 });
@@ -749,17 +917,16 @@ test("the page never offers the legacy admin scope to a new key", () => {
   // superset. It exists for old keys in production; a new key must never be
   // steered towards it.
   assert.ok(
-    !/scope[^.]{0,40}\badmin\b/i.test(pageSrc) ||
-      pageSrc.includes("readwrite") ,
+    !/scope[^.]{0,40}\badmin\b/i.test(pageProseText) || pageText.includes("readwrite"),
     "the page may be presenting admin as a key scope choice",
   );
   assert.ok(
-    !pageSrc.includes("readonly\", \"readwrite\", \"admin\""),
+    !pageProseText.includes('readonly", "readwrite", "admin"'),
     "the page lists admin as a key scope",
   );
   // The key-scope prose must name exactly the two supported values.
   assert.ok(
-    pageSrc.includes("readonly") && pageSrc.includes("readwrite"),
+    pageText.includes("readonly") && pageText.includes("readwrite"),
     "the page does not name the two supported key scopes",
   );
 });
@@ -794,15 +961,37 @@ test("the write legend's caveat comes from the contract, not from prose", () => 
     "GET /v1/rest/settings/webhook-key is not flagged scope-only — the legend over-promises " +
       "that route again",
   );
-  // And the PAGE must render it from that set, not from a typed sentence.
+  // And the PAGE must render the caveat from that set, not from a typed sentence.
   assert.ok(
     pageSrc.includes("scopeOnlyWriteRoutes"),
     `${PAGE} does not derive the write legend's caveat from the contract — the promise can ` +
       "outrun the gate again the moment a route's gate changes",
   );
+  assert.match(
+    pageSrc,
+    /const routes = scopeOnlyWriteRoutes\(\)\s*\.map\(\(e\) => `\$\{e\.method\} \$\{e\.path\}`\)/,
+    `${PAGE} no longer names the scope-only routes in the legend's caveat — the caveat must ` +
+      "say WHICH routes the 'write' label does not fully describe, from the contract",
+  );
+  // The caveat lives in the LEGEND, which the rows reference through their
+  // `Access` column, so a reader meets it without being told which row is the
+  // exception. This page no longer marks the scope-only row individually
+  // (ENDPOINT_BLOCKS renders `e.access` per row); the caveat is carried by the
+  // level definition every `write` row points at.
   assert.ok(
-    pageSrc.includes("e.scopeOnly"),
-    `${PAGE} does not mark the scope-only ROW itself, so a reader who reads only the row ` +
-      "still meets the over-promise",
+    sectionIds.includes("endpoints") && pageSrc.includes("e.access"),
+    `${PAGE} no longer renders the Access column from the contract — the row would not name ` +
+      "the level whose legend carries the caveat",
+  );
+  assert.ok(
+    pageProseText.includes("Not every write route") || pageSrc.includes("**Not every write route:**"),
+    "the legend's caveat is not rendered at all — a reader of a `write` row would meet only " +
+      "the promise, never the exception",
+  );
+  // And the route this card was filed on must be in the list the caveat prints.
+  assert.ok(
+    scoped.map((e) => `${e.method} ${e.path}`).includes("GET /v1/rest/settings/webhook-key"),
+    "the caveat's route list does not contain GET /v1/rest/settings/webhook-key — a reader who " +
+      "looks up the exception would not find the route that proved it needed one",
   );
 });

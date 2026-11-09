@@ -47,6 +47,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { DICT, LANGS } from "../components/i18nDict.ts";
+import { usesDocsProse } from "./docsProseReader.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
@@ -155,18 +156,27 @@ test("the docs page exists, is linked from the field, and documents the real eff
       "(AGENTS.md DOCUMENTATION PARITY step 4)",
   );
   // The anchor the link targets must actually exist on the page AND must reach
-  // the DOM as an HTML id. This page declares its sections as data and renders
-  // `id={s.id}`, so both halves are asserted — checking only the literal
-  // `id="per-workspace-toggle"` would fail on a page that is actually correct,
-  // and checking only the data would pass on a page that never renders an id.
+  // the DOM as an HTML id. The page renders through src/app/docs/docsProse since
+  // the prose rewrite: its section is DATA (`id: "per-workspace-toggle"`) and the
+  // shared renderer turns that into `<section id={s.id}>`. So both halves are
+  // asserted — the declaration on the page, and the render site in the renderer.
+  // Checking only the literal `id="per-workspace-toggle"` would now fail on a
+  // page that is actually correct, and checking only the data would pass on a
+  // renderer that never emits the id.
   assert.ok(
     docs.includes('id: "per-workspace-toggle"'),
     `the docs link points at #per-workspace-toggle but ${DOCS_PAGE} declares no section with that id`,
   );
   assert.ok(
-    docs.includes("id={s.id}"),
-    `the docs link points at #per-workspace-toggle but ${DOCS_PAGE} does not render the section ` +
-      `ids into the DOM, so the anchor would not scroll`,
+    usesDocsProse(docs),
+    `${DOCS_PAGE} no longer renders through src/app/docs/docsProse — the section id would ` +
+      `have no element to reach the DOM through`,
+  );
+  assert.match(
+    read("../app/docs/docsProse.tsx"),
+    /<section\b[^>]*\bid=\{s\.id\}/,
+    `the docs link points at #per-workspace-toggle but the prose renderer does not put a ` +
+      `section's id into the DOM, so the anchor would not scroll`,
   );
 
   // The page must state the consequences a merchant needs, not just that a

@@ -77,6 +77,8 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { DICT } from "../components/i18nDict.ts";
+import { sectionsOf } from "./docsProseReader.ts";
+import { parseInline } from "../app/docs/docsProseText.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
@@ -420,7 +422,7 @@ function readerVisible(src: string): string {
 
 // The destination's reader-visible text.
 //
-// Scope is the whole page, deliberately. Section scope was tried first and
+// SCOPE is the whole page, deliberately. Section scope was tried first and
 // rejected: on the data-driven docs pages the prose is declared in a `const`
 // array above the JSX and the section only renders `{SECTIONS.map(...)}`, so
 // slicing from an anchor to the next anchor loses the text and flags a CORRECT
@@ -429,8 +431,51 @@ function readerVisible(src: string): string {
 // drifted into a NEIGHBOURING section of the same guide still passes —
 // page-existence is what is checked here, and the anchor itself is checked
 // separately by the link test above.
+//
+// SHAPE is whichever of the two a page is in (docsProseReader's header states the
+// two). A page that renders through src/app/docs/docsProse keeps its prose in
+// `const SECTIONS`, so the raw source a tag strip used to read now contains only
+// imports and a `<DocsPage …/>` call — a fact that IS on the page was reported
+// missing (the /docs/custom-forms storage facts, t_f55ecdea's half, were the one
+// reported miss). For that shape the text is the SECTIONS strings, run through the
+// SAME inline grammar the renderer runs (`parseInline`), so `**bold**`,
+// `` `code` `` and `[label](href)` arrive as the reader sees them: a fact phrased
+// "full_name, email and phone" is true of prose spelled with backticks, and the
+// guard is supposed to check CONTENT, not markup. A page that still hand-writes
+// its JSX keeps the tag/entity strip it has always had.
+//
+// What this deliberately does not do is read the BUILT HTML — that is
+// web/scripts/docsFacts.mjs's job, and the note above explains why.
+function sectionsRegion(source: string): string {
+  const start = source.indexOf("const SECTIONS");
+  if (start === -1) return "";
+  const end = source.indexOf("\n];", start);
+  return source.slice(start, end === -1 ? source.length : end);
+}
+
 function destinationText(file: string): string {
-  return readerVisible(read(file));
+  const source = read(file);
+  const sections = sectionsOf(source, file);
+  if (sections.length === 0) return readerVisible(source);
+  const visible = (text: string) => parseInline(text).map((t) => t.text).join("");
+  const prose = sections.map((s) => [s.title, ...s.strings].map(visible).join("\n")).join("\n\n");
+  // Two shapes the Section literal reader cannot see, both of which a reader does.
+  //  * A template literal WITH substitutions is a rendered body string too (the API
+  //    reference's `All ${total} operations, from the **OpenAPI 3.1** contract`),
+  //    and `sectionsOf` collects only literal strings. The literal parts are read
+  //    from the same SECTIONS region, with each `${…}` elided — a computed value is
+  //    not text this guard can judge, but the sentence around it is.
+  //  * The <DocsPage> header (title, lead) is prose the page renders above the
+  //    sections; the prose-conversion moved it out of the body, and a fact stated
+  //    only there would be reported missing without this. Only `="…"` attributes
+  //    are read: an expression prop renders a value, not a literal this can judge.
+  const region = stripUnrendered(sectionsRegion(source));
+  const templates = [...region.matchAll(/`([^`]*)`/g)].map((m) =>
+    visible(m[1].replace(/\$\{[^}]*\}/g, " ")),
+  );
+  const header = /<DocsPage\b([\s\S]*?)\n\s*\/>/.exec(source)?.[1] ?? "";
+  const headerText = [...header.matchAll(/="([^"]*)"/g)].map((m) => visible(m[1]));
+  return [prose, ...templates, ...headerText].join("\n");
 }
 
 // Every `href="/docs..."` in the app's own JSX (the inline "?" doc links), read
@@ -911,7 +956,8 @@ test("every cut entry's facts are readable at the destination (not just its anch
       missing.push(`${e.title} → ${e.href} (no such page)`);
       continue;
     }
-    const lower = destinationText(file).toLowerCase();
+    // Markers are styling, not words: a **bold** fact still states the fact.
+    const lower = destinationText(file).replace(/\*\*/g, "").toLowerCase();
     for (const fact of facts) {
       if (!lower.includes(fact.toLowerCase())) missing.push(`${e.title} → ${e.href}: "${fact}"`);
     }

@@ -64,8 +64,27 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { pageProse } from "./docsProseReader.ts";
+import { parseInline } from "../app/docs/docsProseText.ts";
+
 const PAGE = "../app/docs/mcp/page.tsx";
 const page = readFileSync(fileURLToPath(new URL(PAGE, import.meta.url)), "utf8");
+
+/**
+ * The prose half of the page, read through the renderer's own reader: a converted
+ * page carries its inline code as `code` MARKERS in SECTIONS, and the renderer's
+ * Inline emits the chip. Before the conversion the tokens were literal <code>
+ * markup in this page; the tokens are the same, the surface is not.
+ */
+const PROSE = pageProse(page, PAGE);
+const CHIPS = [...PROSE.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+
+/** The renderer, and the Inline function that turns a marker into a chip. */
+const RENDERER = "../app/docs/docsProse.tsx";
+const rendererSrc = readFileSync(fileURLToPath(new URL(RENDERER, import.meta.url)), "utf8");
+const INLINE_AT = rendererSrc.indexOf("export function Inline(");
+const INLINE_END = INLINE_AT === -1 ? -1 : rendererSrc.indexOf("function Tip(", INLINE_AT);
+const INLINE = INLINE_AT === -1 || INLINE_END === -1 ? "" : rendererSrc.slice(INLINE_AT, INLINE_END);
 
 /** A class name that permits a break inside an unbreakable run. */
 const BREAK_GUARD = /\[overflow-wrap:(?:anywhere|break-word)\]|\bbreak-words\b|\bbreak-all\b/;
@@ -121,21 +140,32 @@ test("the guard is looking at real render sites (it cannot pass vacuously)", () 
 
   // The inline-code scan is the second half of the guard: at a raised default
   // font size a prose <code> is the thing that overflows, and it is invisible to
-  // the data-field extractor above. A page that stops rendering <code> tokens
-  // (or a refactor that renames the tag) must fail here rather than pass the
-  // loop below over an empty list.
+  // the data-field extractor above.
+  //
+  // RE-POINTED, not relaxed. The ~42 inline <code> tokens this page used to
+  // write as literal markup are `code` MARKERS in its SECTIONS now, and the
+  // renderer's Inline emits the chip — so the count is taken from the page's
+  // PROSE (43 measured) and the same assertion still says the token surface is
+  // there. The literal <code> scan stays for the one token the page still writes
+  // by hand (a TOOL_GROUPS name in the tool rows), and a page that stopped
+  // rendering chips must fail here rather than pass the loop below over nothing.
   assert.ok(
-    CODES.length >= 30,
-    `found only ${CODES.length} inline <code> token(s) in ${PAGE} — the page renders ~42 and ` +
-      "the scan has drifted; the break-guard assertion below would be passing over almost nothing",
+    CHIPS.length >= 30,
+    `found only ${CHIPS.length} inline-code marker(s) in the prose of ${PAGE} — the page carried ~42 ` +
+      "tokens before the conversion and 43 after it, and they are the `code` markers SECTIONS holds now; " +
+      "the scan has drifted, so the break-guard assertion below would be passing over almost nothing",
   );
-  const urls = CODES.filter((c) => c.body.trim() === OVERFLOWING_URL);
+  assert.ok(
+    CODES.length >= 1,
+    `found no literal <code> token in ${PAGE} — the tool rows still write a tool name by hand, and a refactor ` +
+      "that renamed the tag would hide it from the guard below",
+  );
+  const urls = CHIPS.filter((c) => c === OVERFLOWING_URL);
   assert.ok(
     urls.length >= 3,
-    `found ${urls.length} <code>${OVERFLOWING_URL}</code> token(s) — the page carries it in the ` +
-      "intro paragraph and both OAuth-discovery list items, and those are the runs that " +
-      "measured 352px inside a 268px column at root 24px; if they moved, aim the guard at the " +
-      "new site",
+    `found ${urls.length} inline-code marker for ${OVERFLOWING_URL} in the prose of ${PAGE} — the page carries ` +
+      "it in the intro paragraph and both OAuth-discovery list items, and those are the runs that measured " +
+      "352px inside a 268px column at root 24px; if they moved, aim the guard at the new site",
   );
 });
 
@@ -167,6 +197,40 @@ test("every inline <code> token and every data-driven prose element lets an unbr
     `${unguarded.length} render site(s) on ${PAGE} carry an unbreakable run with no break guard:\n` +
       unguarded.map((u) => `  - ${u}`).join("\n"),
   );
+
+  // The renderer half. Every chip the prose markers become is emitted by ONE
+  // element — Inline's <code> — so the guard is asserted there, and the marker is
+  // proved to be the shape Inline handles (a `code` token), not a stray backtick
+  // that would reach the reader literally. The page half above keeps the content;
+  // this half is what makes the content break.
+  assert.ok(
+    INLINE.includes("export function Inline"),
+    `${RENDERER} no longer declares the Inline function — the chip this page's prose tokens render through is ` +
+      "not the code this guard is reading",
+  );
+  const chipTags = [...INLINE.matchAll(/<code\b[^>]*>/g)].map((m) => m[0]);
+  assert.ok(
+    chipTags.length >= 1,
+    `the Inline slice of ${RENDERER} holds no <code> tag — the inline chip every prose marker becomes is gone, ` +
+      "so the tokens this page writes would render as bare text",
+  );
+  for (const tag of chipTags) {
+    const cls = tag.match(/className="([^"]*)"/)?.[1] ?? "";
+    assert.ok(
+      BREAK_GUARD.test(cls),
+      `the renderer's inline <code> chip has className "${cls}" with no break guard — every ` +
+        `\`code\` token on a converted page (${OVERFLOWING_URL} included) would be unbreakable again: ` +
+        "measured 352px inside a 268px column at root 24px",
+    );
+  }
+  const token = parseInline(`\`${OVERFLOWING_URL}\``);
+  assert.deepEqual(
+    token.map((t) => t.kind),
+    ["code"],
+    `the renderer's parser does not read ${OVERFLOWING_URL} wrapped in markers as a code token — the chip ` +
+      "assertion above would be guarding an element this page's prose never reaches",
+  );
+  assert.equal(token[0].text, OVERFLOWING_URL, "the chip would print a shortened URL — the reader must get it in full");
 });
 
 test("the contract text still contains a run that needs the guard", () => {

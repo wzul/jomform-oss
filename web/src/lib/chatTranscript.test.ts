@@ -46,6 +46,10 @@ import { fileURLToPath } from "node:url";
 import { CHAT_TRANSCRIPT_PREFIX, clearChatTranscripts } from "./chatTranscript.ts";
 import { clearPerUserStorage } from "./workspace.ts";
 import { DICT, LANGS } from "../components/i18nDict.ts";
+// The /docs/chat page renders through the shared prose renderer now: its copy is
+// a `const SECTIONS: Section[]` literal, so content claims are read as prose and
+// the section id is read structurally.
+import { pageProse, sectionsOf } from "./docsProseReader.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
@@ -256,11 +260,15 @@ test("the history labels exist in all five locales", () => {
 test("the docs page says where the conversation lives and that signing out keeps it", () => {
   // AGENTS.md DOCUMENTATION PARITY: the panel's "?" link points here, and the
   // page must not describe the browser-only behaviour the code no longer has.
-  const docs = read("../app/docs/chat/page.tsx");
-  assert.match(
-    docs,
-    /id: "remembering"/,
-    "the docs page has no section for stored conversations",
+  const DOCS_CHAT = "../app/docs/chat/page.tsx";
+  const docsSrc = read(DOCS_CHAT);
+  // RENDERED prose, not the file: the page declares its copy in SECTIONS, and the
+  // metadata description is not something the reader sees.
+  const docs = pageProse(docsSrc, DOCS_CHAT);
+  assert.ok(
+    sectionsOf(docsSrc, DOCS_CHAT).some((s) => s.id === "remembering"),
+    "the docs page has no section for stored conversations — its SECTIONS entry " +
+      'with id "remembering" is gone',
   );
   assert.match(
     docs,
@@ -270,10 +278,17 @@ test("the docs page says where the conversation lives and that signing out keeps
   assert.match(
     docs,
     /sign out and sign back in|signing out (?:does not|keeps)/i,
-    "the docs do not say that signing out keeps the conversation",
+    "the docs do not say that signing out keeps the conversation — the page now says the " +
+      "conversation survives 'a refresh, a new tab or another device' but no longer mentions " +
+      "signing out. The claim is still TRUE of the server store; restore it in the #remembering " +
+      "section rather than deleting this arm",
   );
   assert.match(docs, /history sidebar/i, "the docs do not name the sidebar");
-  assert.match(docs, /New conversation/, "the docs do not name the control that starts a new conversation");
+  assert.match(
+    docs,
+    /new conversation/i,
+    "the docs do not name the control that starts a new conversation",
+  );
   assert.doesNotMatch(
     docs,
     /kept in this browser|Nothing of the conversation is stored on the server/i,

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -499,19 +500,30 @@ func TestDocsEmbedParagraphPinsReadOnlyRenderedText(t *testing.T) {
 
 	// The clause under test in the two forms the probe needs: as a reader reads it,
 	// and as the page's source lays it out (split across a line break).
-	const (
-		clauseRendered = "while a second page of your own site that embeds the same form does not ask for the password again"
-		clauseSource   = "while a second page of your own site\n        that embeds the same form does not ask for the password again."
-	)
-	const (
-		anchorLeadingComment = "// Issue #456: iframe embed docs. Follow-up from #60 (embed payment flow) and\n"
-		anchorImport         = "import type { Metadata } from \"next\";\n"
-		anchorRootDiv        = "    <div className=\"max-w-3xl\">\n"
-	)
+	const clauseRendered = "while a second page of your own site that embeds the same form does not ask for the password again"
+
+	// The clause may be laid out on one line or wrapped across two; both are the
+	// same prose to the reader. The span is FOUND rather than typed, so a reflow of
+	// the copy cannot break the deletion probe below — which is what the old
+	// hand-written `clauseSource` constant did (it died the moment the page moved
+	// its prose into the shared renderer).
+	clauseRe := regexp.MustCompile(`while a second page of your own site\s+that embeds the same form does not ask for the password again[,.]`)
+	loc := clauseRe.FindStringIndex(src)
+	if loc == nil {
+		t.Fatalf("the clause is not in %s at all, so the deletion probe has nothing to delete", docsEmbedPagePath(t))
+	}
+	clauseSource := src[loc[0]:loc[1]]
+
+	// Structural anchors: two lines that must exist EXACTLY once, so the mutation
+	// below cannot hit a lookalike. They are the page's shape now (data + renderer),
+	// not the hand-written JSX the guard was written against.
+	anchorImport := "import type { Metadata } from \"next\";\n"
+	anchorSections := "const SECTIONS: Section[] = ["
+	anchorRender := "sections={SECTIONS}"
 	for _, a := range []struct{ what, anchor string }{
-		{"the module's leading comment block", anchorLeadingComment},
 		{"the module's import line", anchorImport},
-		{"the root element", anchorRootDiv},
+		{"the SECTIONS array", anchorSections},
+		{"the renderer call", anchorRender},
 		{"the clause itself", clauseSource},
 	} {
 		if n := strings.Count(src, a.anchor); n != 1 {
@@ -535,18 +547,20 @@ func TestDocsEmbedParagraphPinsReadOnlyRenderedText(t *testing.T) {
 		t.Fatalf("deleting the clause did not red its own pin — the pin below is not the thing doing the work")
 	}
 
-	// 2. Deleted from the JSX and planted in each COMMENT shape: the pin still
-	// reds, because no reader is served a comment.
+	// 2. Deleted from the rendered copy and planted in each COMMENT shape: the pin
+	// still reds, because no reader is served a comment. The three shapes are the
+	// three places a comment can hide in the page's CURRENT shape (a data module
+	// plus one renderer call), which is what the anchors above exist to find.
 	for _, tc := range []struct{ shape, mutant string }{
 		{
-			shape: "a `//` line in the module's leading comment block",
-			mutant: strings.Replace(deleted, anchorLeadingComment,
-				anchorLeadingComment+"// "+clauseRendered+"\n", 1),
+			shape: "a `//` line above the SECTIONS array",
+			mutant: strings.Replace(deleted, anchorSections,
+				"// "+clauseRendered+"\n"+anchorSections, 1),
 		},
 		{
-			shape: "a `{/* … */}` comment in the element's children",
-			mutant: strings.Replace(deleted, anchorRootDiv,
-				anchorRootDiv+"      {/* "+clauseRendered+" */}\n", 1),
+			shape: "a `{/* … */}` comment inside the renderer call",
+			mutant: strings.Replace(deleted, anchorRender,
+				"<DocsPage {/* "+clauseRendered+" */} "+anchorRender, 1),
 		},
 		{
 			shape: "a module-scope `/* … */` block comment",
@@ -565,11 +579,11 @@ func TestDocsEmbedParagraphPinsReadOnlyRenderedText(t *testing.T) {
 		}
 	}
 
-	// 3. The same words as rendered JSX stay green. Put the clause back as an
-	// element's own text (not a comment, not a string) and the pin is satisfied
-	// again — so the fix is a reader, not a blanket ban on the sentence.
-	rendered := strings.Replace(deleted, anchorRootDiv,
-		anchorRootDiv+"      <p>\n        "+clauseRendered+"\n      </p>\n", 1)
+	// 3. The same words as SERVED prose stay green: put the clause back as a body
+	// string of a real section and the pin is satisfied again — so the fix is a
+	// reader, not a blanket ban on the sentence.
+	rendered := strings.Replace(deleted, anchorSections,
+		anchorSections+"\n  { id: \"probe\", title: \"probe\", icon: \"🔓\", body: [\""+clauseRendered+"\"] },", 1)
 	if missing := docsEmbedParagraphPinsMissing(rendered); len(missing) != 0 {
 		t.Errorf("the clause rendered as JSX text no longer satisfies %v — the reader is now blanking text "+
 			"a reader IS served", docsEmbedPinNames(missing))

@@ -379,6 +379,20 @@ const START_STEPS = [
   "Track sales, subscriptions and email delivery from the dashboard.",
 ];
 
+// One emoji per group, because a reader scrolling /docs scans for a shape before
+// they read a label. Keyed on the group id, so a new group gets an explicit one
+// rather than silently rendering none.
+const GROUP_EMOJI: Record<string, string> = {
+  "account": "🏢",
+  "sales-payments": "💰",
+  "forms-fields": "🧾",
+  "storefront": "🛍️",
+  "email": "✉️",
+  "growth": "📈",
+  "security": "🔒",
+  "developers": "🧑‍💻",
+};
+
 const QUICK_LINKS: { href: string; labelKey: Key; primary?: boolean }[] = [
   { href: "/docs/customize", labelKey: "docs.linkDesign", primary: true },
   { href: "/docs/placeholders", labelKey: "docs.linkPlaceholders" },
@@ -463,24 +477,31 @@ export default function DocsIndexPage() {
 
       {GROUPS.map((g) => (
         <section key={g.id} id={g.id} className="mt-8 scroll-mt-24">
-          <h3 className="text-base font-semibold uppercase tracking-wide text-[var(--jf-primary)]">
+          <h3 className="flex items-center gap-2 text-base font-semibold uppercase tracking-wide text-[var(--jf-primary-strong)]">
+            <span aria-hidden="true" className="text-lg normal-case">
+              {GROUP_EMOJI[g.id] ?? "📄"}
+            </span>
             <T k={g.labelKey} />
           </h3>
           <div className="mt-3 space-y-4">
             {g.entries.map((f) => (
-              <div key={f.title} id={f.slug} className="scroll-mt-24">
-                <h4 className="text-sm font-semibold text-slate-900">{f.title}</h4>
-                <p className="mt-1 text-sm leading-relaxed text-slate-600">
+              <div
+                key={f.title}
+                id={f.slug}
+                className="scroll-mt-24 rounded-xl border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-4 py-3"
+              >
+                <h4 className="text-base font-semibold text-[var(--jf-text)]">{f.title}</h4>
+                <p className="mt-1 text-base leading-7 text-[var(--jf-text-secondary)]">
                   {f.body}
-                  {f.href ? (
-                    <>
-                      {" "}
-                      <Link href={f.href} className="text-[var(--jf-primary)] underline underline-offset-2">
-                        <T k="docs.next" />
-                      </Link>
-                    </>
-                  ) : null}
                 </p>
+                {f.href ? (
+                  <Link
+                    href={f.href}
+                    className="mt-2 inline-block text-sm font-medium text-[var(--jf-primary-strong)] underline underline-offset-2"
+                  >
+                    <T k="docs.next" />
+                  </Link>
+                ) : null}
               </div>
             ))}
           </div>
@@ -489,7 +510,7 @@ export default function DocsIndexPage() {
               {g.more.map((m, i) => (
                 <span key={m.href}>
                   {i > 0 ? " · " : null}
-                  <Link href={m.href} className="text-[var(--jf-primary)] underline underline-offset-2">
+                  <Link href={m.href} className="text-[var(--jf-primary-strong)] underline underline-offset-2">
                     {m.label}
                   </Link>
                 </span>

@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { docsMetadata } from "../../../lib/docsMetadata";
-
-import { Endonym } from "../../../components/Endonym";
+import { DocsPage, type Section } from "../docsProse";
 
 export const metadata: Metadata = docsMetadata({
   title: "Design → AI agent → MCP customization — JomForm Docs",
@@ -10,774 +9,506 @@ export const metadata: Metadata = docsMetadata({
   path: "/docs/customize",
 });
 
-// Issue #440: first-class documentation of the "design-tool → AI agent → MCP
-// → customize" flow. A merchant designs their interface in a tool like Canva,
-// then uses an AI agent (e.g. Claude) connected to the JomForm MCP to apply
-// that design and further customize the form / landing page.
-const STEPS: { title: string; body: string }[] = [
+// SHORT ON PURPOSE. Every tool name, field name and route survives, because
+// /docs is what a developer greps. Every section id below is a contract with
+// /docs, the docs sidebar and the dashboard's inline "?" links (#598, #447).
+// The page was split where one idea needed more than eight blocks, and every
+// new id is additive: no id that existed before was renamed or dropped.
+const SECTIONS: Section[] = [
   {
-    title: "1. Design your interface in a design tool",
-    body: "Sketch your form or landing page in any design tool (Canva, Figma, etc.). Export the assets you need — a logo, a hero image, brand colours, and a font. JomForm keeps authority over prices and the payment flow, so you design the look and feel, not the checkout logic.",
+    id: "the-flow",
+    title: "The flow",
+    icon: "🎨",
+    body: [
+      "Design the interface in a tool like **Canva**, then let an AI agent apply it over the JomForm MCP.",
+      {
+        steps: [
+          "Design the form or landing page: logo, hero image, brand colours and a font.",
+          "Connect an MCP client such as Claude or Cursor to https://mcp.jomform.com/mcp. It registers itself via OAuth 2.1, with no API keys.",
+          "Upload the assets with `upload_media`.",
+          "Apply the theme and the landing page with `set_form_theme` and `set_workspace_landing_page`.",
+          "Set `product_image_size` and `product_image_layout` for the product photo.",
+          "Add `custom_css` and `custom_js` for anything the theme controls do not cover.",
+        ],
+      },
+      { tip: "JomForm keeps authority over prices and the payment flow. You design the look, and the agent applies it." },
+    ],
   },
   {
-    title: "2. Connect an AI agent to the JomForm MCP",
-    body: "Point any MCP client (Claude, Cursor, etc.) at the server URL https://mcp.jomform.com/mcp. It registers itself via OAuth 2.1 — no API keys needed. The agent can then read and change your workspace through the MCP tools.",
+    id: "media",
+    title: "Media and custom code",
+    icon: "🧰",
+    body: [
+      "Upload images and code assets (css, js, html, svg and woff2) with `upload_media`.",
+      "Images are optimised and served straight away. Code assets are scanned before they are served.",
+      "An **SVG** must be a well-formed XML document: a browser renders it as XML, so text before the `<svg>` tag is refused, not stored as a broken image.",
+      "For full control, set `custom_css` for styling and layout and `custom_js` for form behaviour, both through `set_form_theme`.",
+      "Custom JS is **owner-gated** and scanned for malicious code before it goes live. In a custom HTML form it runs on the outer page, and the HTML body stays inert.",
+      "A blocked script is not saved: the save is refused and names the **Custom JS** field.",
+      "The message says which kind of pattern caused it: code execution, obfuscation or beacon code, or an external URL. Remove that part and save again.",
+    ],
   },
   {
-    title: "3. Upload your media",
-    body: "Use upload_media to upload your design assets (logo, hero image, and code assets like css/js/html/svg/woff2). Images are optimised and served immediately; code assets are scanned before being served. An SVG must be a well-formed XML document: a browser renders it as XML, so a file with text before the <svg> tag (for example a /* */ banner) is refused rather than stored as a broken image.",
+    id: "menu",
+    title: "The restaurant menu (QR ordering)",
+    icon: "🍽️",
+    body: [
+      "Turn a form into a clean **restaurant menu**. The menu is a per-form setting, so it takes a `form_id`.",
+      "Add Product blocks for the items it sells. The menu lists **only the products the form references**, so unrelated account products never appear.",
+      "Set `enabled`, `categories` ([{name, product_ids}]) and `best_seller_ids`, the list shown as the Best Seller section.",
+      "The menu is served at that form's own URL. The workspace home page stays your normal landing page and form listing.",
+      "Use a **separate menu form** per outlet or menu, such as lunch and dinner or two brands. They coexist independently in one workspace.",
+      "Configure it over MCP with `set_menu_page` and `get_menu_page`. Both take a `form_id`.",
+      "Pair it with `generate_qr` to print a per-table QR stand. The `?table=N` it encodes is read by the menu page and shown in the header as \"Table 8\".",
+      { tip: "The table number travels with the order, so the order reaches you with the **table number**." },
+    ],
   },
   {
-    title: "4. Apply the theme and landing page",
-    body: "Use set_form_theme to apply your brand colours (primary, background, text, card_background), font, logo, layout and spacing to a form. Use product_image_size (small|medium|large|hidden) and product_image_layout (thumbnail-left|image-top) to control the product photo on the form — image-top gives a restaurant menu-card look with the photo above the name. Use set_workspace_landing_page to customise your workspace storefront with a hero, subtitle, body, image, theme colours, logo and call-to-action buttons.",
+    id: "menu-checkout",
+    title: "Menu checkout and the order form",
+    icon: "🧾",
+    body: [
+      "The menu checks out through the form's own order route. The buyer's name and email are required for CHIP, and the server charges the product's live price.",
+      "To collect more per order, set `order_form_slug` to a published **order form**.",
+      "Its own fields render in the checkout step with their labels and required flags. The fields are the form's builder blocks, or its `registered_fields` when set.",
+      "The server validates those fields and stores them on the sale. There is no second field editor: you create and edit the fields in the normal form builder.",
+      "Name and email stay mandatory regardless of the attached form. With no form attached, the checkout collects name and email only.",
+      "The menu is server-rendered and mobile-first. The header shows the table number, cafe name and location with an info panel.",
+      "A category filter and search narrow the menu. Best-sellers render as two-column square-image cards, and each category as list rows, text left and thumbnail right, with a separator between rows.",
+      "Items without a photo render cleanly with no empty image slot. All labels follow the workspace default language (en, ms, zh, ta, ar).",
+    ],
   },
   {
-    title: "5. Add a restaurant menu (QR ordering)",
-    body: "Use set_menu_page (issue #497: the menu is a PER-FORM setting, so it takes a form_id) to turn a form into a clean restaurant menu. Add Product blocks to the form for the items the menu sells — the menu lists ONLY the products the form references, so unrelated account products can never appear — then set enabled, categories ([{name, product_ids}]), and best_seller_ids (a list of product IDs shown as the Best Seller section). The menu is served at that form's own URL; the workspace home page is never affected and stays your normal landing page / form listing. Use a separate menu form per outlet or menu (lunch vs dinner, two brands) — they coexist independently in one workspace. Pair it with generate_qr to print a per-table QR stand — the ?table=N it encodes is read by the menu page, shown in the header (\"Table 8\") and carried onto the order as the table number. The menu checks out through the form's own order route: the buyer's name and email are required for CHIP, and the server charges the product's live price. If you want to collect extra info per order, set order_form_slug to a published form — the form's own fields (its builder blocks, or its registered_fields when set) render in the menu checkout step with their labels and required flags, are validated on the server, and are stored on the sale; there is no second field editor, so you create and edit those fields in the normal form builder. Name + email stay mandatory regardless of the attached form, and with no form attached the checkout collects name + email only. The menu is server-rendered and mobile-first: the header shows the table number, cafe name and location with an info panel; a category filter and search let a diner narrow the menu; best-sellers render as two-column square-image cards, and each category as list rows (text left, thumbnail right) with a separator between rows. Items without a photo render cleanly with no empty image slot. All labels follow the workspace default language (en/ms/zh/ta/ar). A diner never has to order a single item: the menu carries a basket (add-to-cart on every item, quantities, a sticky basket bar, checkout) — see the menu-basket section below for the full behaviour.",
+    id: "menu-basket",
+    title: "The menu basket (multi-item ordering)",
+    icon: "🧺",
+    body: [
+      "A restaurant menu is not a one-item form. The page carries a full basket, so a diner can order a whole table's food in one payment.",
+      "Nothing to configure: the basket is part of **every menu form**.",
+      "Every menu card and list row is the **add-to-cart** button. A tap adds one of that item, with no page load and no navigation to a form.",
+      "A small + badge shows how many of that item are in the basket. Tapping again adds another, so a diner can build a multi-item order.",
+      "The sticky basket bar appears across the bottom as soon as the basket is not empty. It shows the live item count and running total, and opens the basket panel.",
+      {
+        list: [
+          "Each line has a minus and plus **quantity stepper**, and taking a line to zero removes it.",
+          "Each line has its own **Remove** button, and the panel has a **Clear basket** button for the whole order.",
+          "The panel shows the Subtotal and, when a table number is present, the table it applies to.",
+        ],
+      },
+      "The total on screen is display-only. The server re-reads every price from the products table when the order is placed, so the buyer is charged the live price.",
+      "The basket survives filtering, searching and a **reload**, and it is still there after the page is closed and opened again.",
+    ],
   },
   {
-    title: "6. Customize with CSS and JS",
-    body: "For full control, set custom_css (styling/layout) and custom_js (form behaviour) on a form via set_form_theme. Custom JS is owner-gated and scanned for malicious code before it goes live, so it is safe to run on every buyer's page — including a custom HTML form, where it runs on the outer page and the HTML body itself stays inert (see Custom HTML forms). A script the scan blocks is not saved: the save is refused and tells you the Custom JS field is the one that was rejected, and which kind of pattern caused it (code execution, obfuscation/beacon code, or a reference to an external URL) — remove that part and save again. JomForm keeps authority over prices and payment.",
-  },
-];
-
-// Issue #513: the docs site is English-only today (the /docs pages are static
-// server-rendered English, like the legal pages). The dashboard is translated
-// (en/ms/zh/ta/ar), but the knowledge base is not — so this page, and every
-// page it links to, stays in English. Do not half-translate a docs page.
-const CART: { title: string; body: string }[] = [
-  {
-    title: "Tap an item to add it",
-    body: "Every menu card and list row is the add button. Tapping it adds one of that item to the basket — no page load, no navigation to a form — and a small + badge on the item shows how many of it are in the basket. Tapping again adds another, so a diner can build up a multi-item order in one go.",
-  },
-  {
-    title: "Set quantities in the basket",
-    body: "The sticky basket bar appears across the bottom of the screen as soon as the basket is non-empty. It shows the live item count and running total, and opens the basket panel. Each basket line has a − / + quantity stepper (taking a line to zero removes it), a per-line Remove button, and a Clear basket button for the whole order. The panel also shows the Subtotal and — when a table number is present — the table it applies to. The total shown on screen is display-only: the server re-reads every price from the products table when the order is placed, so the buyer is always charged the live price.",
+    id: "menu-basket-checkout",
+    title: "Basket checkout, stock and the sale",
+    icon: "💳",
+    body: [
+      "The basket is stored in the buyer's own browser, keyed to the menu form, so two menus keep **separate baskets**. It clears once an order is placed.",
+      "Checkout is part of the same panel, and name and email are both mandatory because CHIP needs them to create a purchase.",
+      "Submitting posts the basket to the form's own order route and redirects to the CHIP page. If it fails, an error shows and the basket is kept.",
+      "Stock is re-read live. A dish that sells out cannot be added, and the message names it as sold out, whether it has variations or not.",
+      "A basket line whose dish sold out is dropped when the page opens again, with a notice naming the dish.",
+      "If the live check cannot answer, the page keeps the state it was served with, so the menu still works offline.",
+      "The order becomes a normal sale: one line per item (product, quantity, live price), the buyer's name and email, the total and the extra fields you asked for.",
+      "A QR order carries its **table number**, and an affiliate link (`?aff=CODE`) stores its code on the sale for commission.",
+    ],
   },
   {
-    title: "The basket survives filtering, searching and reloads",
-    body: "A diner can narrow the menu by category or search, and the basket is untouched — the same after closing and reopening the page. The basket is stored in the buyer's own browser, keyed to the menu form, so two different menu forms in one workspace (two outlets, lunch vs dinner) keep separate baskets. The basket is cleared once an order is successfully placed.",
+    id: "product-images",
+    title: "Product images on forms",
+    icon: "🖼️",
+    body: [
+      "Choose how each product photo appears on your form: **size** and **layout**.",
+      {
+        list: [
+          "Size: small 52px, medium 96px, large 160px, or hidden.",
+          "Layout: thumbnail-left (the default) or **image-top**, a menu-card look with a full-width photo above the name.",
+        ],
+      },
+      "The renderer serves the matching optimised media variant for the chosen size.",
+      "Set it in Form Settings → General, with a live preview, or over MCP with `set_form_theme` and `product_image_size` / `product_image_layout`.",
+    ],
   },
   {
-    title: "Checkout: name, email, then CHIP",
-    body: "Checkout is part of the same basket panel: the diner's name and email are both mandatory (CHIP needs a name and an email to create a purchase), plus any extra fields you attached through order_form_slug. Submitting posts the basket to the form's own order route and redirects the diner to the CHIP checkout page to pay. If the order cannot be placed, an error is shown and the basket is kept so the diner can retry — nothing is lost.",
+    id: "brand-colour",
+    title: "Your brand colour on the public form",
+    icon: "🎯",
+    body: [
+      "The colour you pick under Form Settings → General (**Theme colour**) paints the public form's own chrome.",
+      {
+        list: [
+          "The submit button, with its hover and pressed states.",
+          "The checkbox and radio accent, and the product price text.",
+          "The footer and confirmation links.",
+        ],
+      },
+      "It does not override anything you set in `custom_css`, and an embedded image or video keeps its own colours.",
+      "The button label colour is chosen for you: a dark brand colour gets white text and a light one gets dark text.",
+      "The hover and pressed shades are derived from your colour, not from a fixed indigo, so a green or amber button reads as one button in three states.",
+      "Each state is measured against the WCAG AA 4.5:1 floor before it is used.",
+      "Set it in Form Settings → General and the button previews it at once. Over MCP the field is `theme.primary` through `set_form_theme`.",
+      { note: "Leave it unset and the form uses the default indigo, the same colour the dashboard uses." },
+    ],
   },
   {
-    title: "A sold-out dish cannot be added, and a stale basket line is dropped",
-    body: "Stock is re-read live, not frozen when the page was served. A menu page stays open while a diner reads it, so a dish can sell out in between: tapping it then adds nothing and tells the diner the dish is sold out (naming it) rather than letting them carry it to checkout. That holds for a dish with variations and for a plain one — a sold-out plain dish is served the same button as an in-stock one, so the tap asks the server before it adds. A basket line whose dish sold out while the basket sat there is dropped when the page is opened again, with a notice naming the dish, so nothing is carried to checkout only to be rejected there. If the live check cannot answer, the page keeps the state it was served with, so the menu still works when the connection does not.",
+    id: "builder",
+    title: "Building an order form",
+    icon: "🧱",
+    body: [
+      "Build order forms with a **drag-and-drop builder**.",
+      "Add fields (name, email, phone, textarea, text, number, select, radio, checkbox, date, time, website, address, consent, hidden, list, repeater, image-choice, captcha).",
+      "Attach **products** and publish to your workspace URL or a **custom domain**.",
+      "A form is a **payment form** or a **response-only** one. The mode decides what it collects and what its entries are called, and it is set in the builder.",
+      "An agent can build the same form: `upsert_form` creates or updates it, and `register_form_fields` sets its input fields under a strict contract.",
+      "`publish_form` then takes it live.",
+    ],
   },
   {
-    title: "What lands on the sale",
-    body: "The order becomes a normal JomForm sale: one line per basket item (product, quantity, live price), the buyer's name and email, the total, and the extra fields you asked for. A QR order also carries its table number, so the merchant sees which table to serve; and if the diner arrived through an affiliate link (?aff=CODE), the affiliate code is stored on the sale for commission.",
+    id: "publishing",
+    title: "Publishing a form",
+    icon: "🚀",
+    body: [
+      "Publishing puts your form on the internet at its own URL, the link a buyer opens or the address you embed.",
+      "Press **Publish** in the builder and JomForm confirms it at once: a panel names the form as live, shows the public URL, and offers **Open form** and **Copy link**.",
+      "If the URL cannot be resolved yet, for example because the workspace subdomain is not set up, the panel says so rather than showing a dead link.",
+      "A **response-mode** form may always go live: collecting answers is its whole job, and having no products is normal.",
+      "A **payment form** needs **something to sell**. Publishing one with no products is refused once with a clear message, because such a form can never take money.",
+      "You can confirm and publish it anyway, but its page then tells buyers it is not accepting orders instead of showing a checkout that cannot start.",
+      "It starts selling once you add a product: a product block, a priced option, a shipping choice or an enabled restaurant menu.",
+      "A form built without blocks sells its product snapshot. Adding a product at any time removes the question.",
+    ],
   },
-];
-
-const TOOLS: { name: string; purpose: string }[] = [
-  { name: "set_form_theme", purpose: "Apply brand colours, font, logo, layout, spacing, product_image_size, product_image_layout, custom_css and custom_js to a form." },
-  { name: "set_workspace_landing_page", purpose: "Customise the workspace storefront: hero, subtitle, body, image, theme colours, logo and CTAs." },
-  { name: "upload_media", purpose: "Upload images and code assets (css/js/html/svg/woff2) for the landing page and forms." },
-  { name: "upsert_form", purpose: "Create or update a form, including its optional theme." },
-  { name: "generate_form", purpose: "Draft a validated form config (blocks + styling) from a natural-language prompt." },
-  { name: "set_form_confirmations", purpose: "Set the confirmation message buyers see after submitting." },
-  { name: "set_menu_page", purpose: "Turn a form into a restaurant menu (per-form: it takes a form_id) and set its categories, best-sellers and optional order form." },
-  { name: "get_menu_page", purpose: "Read a form's restaurant-menu configuration." },
-  { name: "generate_qr", purpose: "Generate a QR code (optionally per table) for a published form." },
-  // Issue #513: affiliate marketing (#444) — documented here so the tools are
-  // discoverable alongside the feature, not only in the MCP reference.
-  { name: "create_affiliate", purpose: "Create an affiliate link (code + name + commission %) for a workspace. Returns the referral URL." },
-  { name: "list_affiliates", purpose: "List a workspace's affiliates with their codes, commission and referral URLs." },
-  { name: "get_affiliate_sales", purpose: "Read the sales attributed to one affiliate (read-only)." },
-  { name: "set_affiliate_commission", purpose: "Change an affiliate's commission rate." },
+  {
+    id: "publishing-paths",
+    title: "Every path that publishes",
+    icon: "🔁",
+    body: [
+      "The same rule covers every way a form goes live: the **Publish** button, the status control in **Form Settings**, and publishing several forms from the **Forms** list.",
+      "It covers AI agents too: `publish_form` and `bulk_forms` both accept `acknowledge`, so an agent is told the same thing you are.",
+      "A form that is already live is never asked about again.",
+    ],
+  },
+  {
+    id: "share-preview",
+    title: "The link preview card",
+    icon: "🔗",
+    body: [
+      "Every live form has its own share card at `/og/your-form-slug.png`: its title, workspace and address, drawn as a 1200×630 image.",
+      "That is what a chat app or social site shows when the link is pasted.",
+      "A **draft** is not served at all. Its card answers 404, exactly as its page does, so its title never becomes public through the preview URL.",
+      "A **private** form's card is served only to a browser that has already entered the password, and it is never handed to a shared cache.",
+      "An **unlisted** form is live, so its card is served like a published one's.",
+      "The card is dropped from the cache the moment a form stops being live: set back to draft, switched to private, or moved to the trash.",
+      "Cards are cached for five minutes at a time rather than a day, so a deployment that cannot clear that cache stops showing a stale one within minutes.",
+    ],
+  },
+  {
+    id: "qr-stand",
+    title: "The printable QR stand",
+    icon: "📱",
+    body: [
+      "The QR stand follows the page rule too. It prints the form's title and a QR of its public URL, so a **draft**'s stand answers 404.",
+      "A **private** form's stand is served only to a browser that has already entered the password.",
+      "Printing is not taken away from you: **Print stand** in Form Settings opens your own signed-in copy of the same stand, which works even on a draft.",
+      "The QR image behind the stand (`/qr/your-form-slug.png`) follows the same rule and the same cache promise.",
+      "It encodes your form's address, which tells anyone who fetches it that a form exists at that slug, so a form that is not live answers 404 there.",
+      "A private form's image is served only to a browser that has entered the password, and the image leaves the cache when a form stops being live.",
+      "It is cached five minutes at a time rather than a day, so a stale one stops within minutes even without a cache purge.",
+    ],
+  },
+  {
+    id: "form-url-slug",
+    title: "Form URLs and slugs (rename a form)",
+    icon: "✏️",
+    body: [
+      "Every form is served at the slug you gave it: `your-workspace.jomform.com/your-form-slug`, or the same path on a verified custom domain.",
+      "The slug is editable. Change it in **Form Settings → General** and the form moves to the new URL immediately.",
+      "A slug is **1–40 characters** of `a-z`, `0-9` and dashes. Uppercase and spaces are normalised.",
+      "It must be free within your workspace. A rename onto a slug another of your forms already serves is **refused with an error** rather than overwriting either form's URL.",
+      "A name JomForm keeps for itself is refused as well, on both creating and renaming a form: `login`, `api`, `docs`, and the paths it already serves, `privacy`, `terms` and `refund`.",
+      "The refusal names the rule, so pick a different slug. Nothing is stored when a slug is refused.",
+    ],
+  },
+  {
+    id: "slug-redirect",
+    title: "Renaming keeps the old URL working",
+    icon: "🔀",
+    body: [
+      "Renaming never orphans the URL you already handed out: the old slug keeps working through a **temporary redirect (HTTP 301)** to the new one.",
+      "A printed QR stand, an embedded iframe, a menu's attached order form and a link already shared in a campaign all keep resolving.",
+      "The redirect is temporary, not a permanent alias. If another form later claims the freed slug, that **live form** wins and the old URL serves it.",
+      "Slugs cannot be renamed on templates, because a template has no public URL.",
+      "AI agents do the same thing with the `slug` parameter on `upsert_form`, which returns the slug the form now owns.",
+    ],
+  },
+  {
+    id: "domains",
+    title: "Custom domains",
+    icon: "🌐",
+    body: [
+      "Put your forms on your own domain, for example `shop.yourname.com`.",
+      "Add the domain, point a CNAME to `custom.jomform.com`, and verify.",
+      "With Cloudflare linked, JomForm can **auto-create the CNAME** for you.",
+      "Auto-TLS (**Let's Encrypt**) uses your account email as the ACME contact by default. You can change it per domain in Settings → Domains.",
+    ],
+  },
+  {
+    id: "affiliate-marketing",
+    title: "Affiliate marketing (referral links and commission)",
+    icon: "💸",
+    body: [
+      "An **affiliate** is a promoter you pay for sales they bring. You give each one a short **code**, and their link is your storefront URL with `?aff=CODE` appended.",
+      "For example, `https://your-workspace.jomform.com/?aff=ALI`.",
+      "When a buyer arrives through that link and completes an order, the code is stored on the sale, so the sale is attributed to that affiliate.",
+      "You can then see what they earned. Attribution works on menu orders too, because the code is carried to the basket checkout.",
+      "The form or menu page reads `?aff=CODE` and carries it into the order it submits.",
+      "There is no cookie and no redirect chain: the code on the URL the buyer used is what attributes the sale.",
+      { note: "A buyer with no `?aff=` produces an unattributed sale." },
+    ],
+  },
+  {
+    id: "affiliate-create",
+    title: "Create an affiliate link",
+    icon: "🪪",
+    body: [
+      "In the dashboard, open **Settings → Affiliates** and add a code, an optional name and a commission percentage.",
+      "The new affiliate appears in the list with its code, its commission and its ready-to-share referral URL.",
+      "Over MCP, call `create_affiliate` with the `workspace_id`, a `code`, an optional `name` and `email`, and `commission_pct` (10 = 10%).",
+      "It returns the affiliate, including the `referral_url`.",
+      "A code must be unique within the workspace, and creating or changing an affiliate needs the `manage` or `admin` role.",
+    ],
+  },
+  {
+    id: "affiliate-commission",
+    title: "Set the commission",
+    icon: "📈",
+    body: [
+      "**Commission** is a percentage stored per affiliate. Change it with `set_affiliate_commission`, which takes `affiliate_id` and the new `commission_pct`.",
+      "The rate used is the one stored on the affiliate, so a change applies to sales attributed from then on.",
+      "It is not written back onto sales that already happened.",
+    ],
+  },
+  {
+    id: "affiliate-sales",
+    title: "Read an affiliate's sales",
+    icon: "📋",
+    body: [
+      "Use `list_affiliates` to get the affiliate ids, then `get_affiliate_sales` with the `affiliate_id`. It is read-only.",
+      "Each row gives the sale reference, status, total, currency and date.",
+      "**Attribution** is recorded on every sale that came in with the code. The commission percentage is the affiliate's current rate.",
+      { note: "The figures are returned, not a pre-computed payout ledger." },
+      { heading: "REST endpoints" },
+      "The same surface is available over the REST API, authenticated as the workspace:",
+      {
+        table: {
+          label: "Affiliate REST endpoints",
+          head: ["Method and path", "Purpose"],
+          rows: [
+            ["GET /v1/workspaces/{id}/affiliates", "List the workspace's affiliates."],
+            ["POST /v1/workspaces/{id}/affiliates", "Create an affiliate (`code`, `name`, `email`, `commission_pct`)."],
+            ["PUT /v1/workspaces/{id}/affiliates/{affid}/commission", "Set the affiliate's commission percentage."],
+            ["GET /v1/workspaces/{id}/affiliates/{affid}/sales", "Read the sales attributed to that affiliate."],
+          ],
+        },
+      },
+    ],
+  },
+  {
+    id: "templates",
+    title: "Templates (save a form and reuse it)",
+    icon: "🗂️",
+    body: [
+      "A **template** is a saved form you can start new forms from.",
+      "It is private to your workspace: it never appears in another merchant's gallery, and it has no draft or published state. Build one either way:",
+      {
+        list: [
+          "**Save form as template** in the builder, or on the Templates page after picking a form. Its fields and design are copied into a template.",
+          "**New template** on the Templates page, an empty template ready to fill in.",
+        ],
+      },
+      "The built-in **gallery** covers order forms, booking, donation, contact, survey and more. Cloning one copies it into your workspace as a new draft.",
+      "The **Templates** page lists your templates with **Edit**, **Use template**, **Rename** and **Delete**.",
+      "**Edit** opens the template in the same builder you use for forms, so you change its fields, blocks and design, then **Save**.",
+      "The builder knows it is editing a template: there is no slug, no Publish and no Form Settings, because a template is not published and has no public URL.",
+      "**Editing a template does not change forms already created from it.** Cloning copies the fields and design at that moment, so the two are independent afterwards.",
+    ],
+  },
+  {
+    id: "template-gallery-card",
+    title: "A template card, and editing by MCP or REST",
+    icon: "🏷️",
+    body: [
+      "Over MCP the edit is `update_template`, with `template_id` from `list_own_templates`. The REST equivalent is `PUT /v1/rest/templates/{id}` with `title`, `config` or `theme`; an omitted field is unchanged.",
+      { heading: "A template never lands in another merchant's gallery by accident" },
+      "Your templates and the public gallery are **two separate lists**, and template mode keeps them that way: saving a template writes only its fields and design, never a publish.",
+      "Publishing into the shared gallery is a deliberate, separate act that requires a category and a short description line.",
+      "Every gallery card is rendered from two fields of the template's own config: the **category** is `config.category`.",
+      "The **description**, the card's subtitle, is the template's **intro line**, the value of its **first Section block**.",
+      "A Text block also counts, because older templates kept their intro there. A Text block is a single-line answer field now, so its value is a field label.",
+      "A new template should **put a short intro line in a section block**.",
+    ],
+  },
+  {
+    id: "template-publish",
+    title: "Publishing a template into the gallery",
+    icon: "⚠️",
+    body: [
+      "Publishing is therefore checked. A template missing either field is **refused with a clear message**.",
+      "The same holds for one carrying only spaces where either field belongs, so it never appears as a **bare title**.",
+      "The gallery trims both the category and the intro line before rendering, so an older template shows its category without surrounding spaces.",
+      "It shows no category chip at all rather than a chip holding only spaces.",
+      "Publishing several forms at once behaves differently on purpose: a **bulk publish skips such a template** while still publishing the other forms you selected.",
+      "That way one unfinished template cannot block a whole batch. The skipped ids are reported back, by the REST bulk endpoint and by the `bulk_forms` tool.",
+      "Both return those ids with a reason and count only the forms that really changed, so the skip is never silent.",
+    ],
+  },
+  {
+    id: "language",
+    title: "Language: dashboard vs your forms",
+    icon: "🗣️",
+    body: [
+      "JomForm has **two separate language settings**, and they are deliberately not the same one.",
+      "The supported languages are [[en|English]], [[ms|Bahasa Melayu]], [[zh|中文]], [[ta|தமிழ்]] and [[ar|العربية]]; Arabic also switches the dashboard to right-to-left.",
+      "**Dashboard language** is the one you see when signed in. It is a **per-user** setting.",
+      "Change it on **Profile** (Dashboard language), reached by clicking your **account block**, your name and email at the bottom of the sidebar or the menu on a phone.",
+      "It follows you into any browser you sign in from, on any machine. It never changes what a buyer sees.",
+      "The knowledge base and the legal pages are the exception: they are written in English only, so a guide or policy stays English even when your dashboard is in Arabic.",
+      "Only the labels on the docs index are translated.",
+      { note: "Until you pick one, the dashboard uses the language last used in that browser, and English if there is none." },
+    ],
+  },
+  {
+    id: "language-forms",
+    title: "Choosing your customers' language",
+    icon: "🌍",
+    body: [
+      "**Form language** is the language your customers see on a public form, the menu, the thank-you page and the password gate.",
+      "It is set per form or per workspace, never per browser and never from your dashboard choice.",
+      "Resolution is **form → workspace → English**: a per-form language wins when set. Otherwise the form uses its workspace's **Default form language** (Settings → Storefront), and otherwise English.",
+      "Set the workspace default once and every form you publish inherits it, so a Malay storefront does not need the language set on each form.",
+      "Over MCP the workspace default is `set_workspace_settings` with `default_lang`, and the per-form language is `config.lang` on `upsert_form`. An unsupported code is rejected.",
+      "The translation covers the buyer-facing chrome: field labels, the total, the submit button, error messages, the menu and the footer links (Privacy, Terms, Refund).",
+      "Your own field labels, product names, prices and descriptions are shown exactly as you typed them. JomForm does not machine-translate your content.",
+    ],
+  },
+  {
+    id: "language-emails",
+    title: "Which language your emails use",
+    icon: "✉️",
+    body: [
+      "Every email JomForm sends follows the same two-axis rule: the language of the **recipient**, not of whoever triggered it.",
+      {
+        list: [
+          "**Emails to you and your team** (verify your address, sign-in link, password reset, 2FA codes, connecting a social login, a workspace invitation, a feedback reply) use the recipient's **dashboard language**.",
+          "**Emails to your customers** (a payment receipt, the new sale and new response alerts) use the **form language**, resolved form → workspace → English.",
+        ],
+      },
+      "A guest who pays without an account still gets the language your form is set to, because there is no profile to ask.",
+      "A never-edited notification rule is translated too. You get your own wording back only once you edit that rule.",
+      "An unset or unsupported language falls back to **English**, never to Malay. Arabic emails are right-to-left and declare their own language.",
+      "The **subject** and the **body** are judged separately, so editing one does not pin the other. Only the half you typed is treated as yours.",
+    ],
+  },
+  {
+    id: "language-email-defaults",
+    title: "Empty receipt and notification fields",
+    icon: "📝",
+    body: [
+      "A new workspace's receipt subject and body start **empty**.",
+      "An empty field is not a missing subject: it means JomForm's own receipt, written in the language your form is set to.",
+      "There is nothing for you to fill in, which is why the fields show a grey example instead of text to delete.",
+      "A form's default **notification rule** works the same way.",
+      "Related: [the placeholder reference](/docs/placeholders) lists every `{{token}}` you can use in a subject or body.",
+    ],
+  },
+  {
+    id: "workspace-address",
+    title: "Your workspace address, and names that are reserved",
+    icon: "🏠",
+    body: [
+      "A workspace slug becomes your public address: a workspace called `acme` is served at `acme.jomform.com`, and your forms live under it.",
+      "A slug is 3–40 characters of `a-z`, `0-9` and dashes. It cannot end in `jomform`, and it must not be a name **reserved for JomForm**.",
+      "Reserved names are the addresses JomForm owns or has to protect. They fall into three groups.",
+      {
+        list: [
+          "Infrastructure: `www`, `api`, `app`, `mail`, `s3`.",
+          "Product and edge addresses already routed: `docs`, `mcp`, `templates`, `custom`.",
+          "Sensitive names that read as JomForm's own business or support channel: `support`, `help`, `status`, `billing`, `admin`, `account`, `login`, `payments`, `checkout`.",
+        ],
+      },
+      "The reason is impersonation: `billing.jomform.com` would let a buyer be asked for card or invoice details under JomForm's name, so a workspace cannot hold it.",
+      "If you try one, JomForm says the name is reserved, not that your slug was malformed, and asks you to pick another.",
+      "The same rule applies in the dashboard, over REST (`POST /v1/workspaces`, code `reserved_subdomain`) and through the `create_workspace` MCP tool.",
+      "Renaming is covered too. Changing an address in Settings → Workspace, over REST (`PATCH /v1/workspaces/{id}`) or with `update_workspace`, is refused with `reserved_subdomain`. The workspace keeps the address it had.",
+    ],
+  },
+  {
+    id: "image-urls",
+    title: "Image URLs must be https://",
+    icon: "🔒",
+    body: [
+      "Every image or URL you set must be an **absolute** `https://` URL.",
+      "That covers the form logo (`set_form_theme`), the landing-page hero and logo (`set_workspace_landing_page` or Settings → Storefront) and a form's image block.",
+      "Product images (`create_product` and `update_product`, or the Products editor) follow the same rule.",
+      "Uploaded media already qualifies: `upload_media` returns an absolute https URL on your own media host, which is accepted everywhere.",
+      "Any other scheme (`data:`, `http:`, `javascript:`, or a relative path) is rejected when you save it, with a clear message, on both the dashboard and the MCP.",
+      "This is deliberate. The page renders the value into an `<img src>` for your buyers, and a browser will not load an unsafe scheme.",
+      "Rejecting it at entry means you see the problem immediately instead of getting a silently missing image on the live page.",
+      { note: "Leaving an image field empty is always allowed. It means no image, or when updating, keep the current one." },
+    ],
+  },
+  {
+    id: "mcp-tools",
+    title: "MCP tools used",
+    icon: "🛠️",
+    body: [
+      "These are the **MCP tools** this flow uses. The full list is in [the MCP tool reference](/docs/mcp).",
+      {
+        table: {
+          label: "MCP tools used",
+          head: ["Tool", "Purpose"],
+          rows: [
+            ["set_form_theme", "Apply brand colours, font, logo, layout, spacing, product_image_size, product_image_layout, custom_css and custom_js to a form."],
+            ["set_workspace_landing_page", "Customise the workspace storefront: hero, subtitle, body, image, theme colours, logo and CTAs."],
+            ["upload_media", "Upload images and code assets (css, js, html, svg, woff2) for the landing page and forms."],
+            ["upsert_form", "Create or update a form, including its optional theme."],
+            ["generate_form", "Draft a validated form config (blocks and styling) from a natural-language prompt."],
+            ["set_form_confirmations", "Set the confirmation message buyers see after submitting."],
+            ["set_menu_page", "Turn a form into a restaurant menu (per-form: it takes a form_id) and set its categories, best-sellers and optional order form."],
+            ["get_menu_page", "Read a form's restaurant-menu configuration."],
+            ["generate_qr", "Generate a QR code (optionally per table) for a published form."],
+            ["create_affiliate", "Create an affiliate link (code, name and commission %) for a workspace. Returns the referral URL."],
+            ["list_affiliates", "List a workspace's affiliates with their codes, commission and referral URLs."],
+            ["get_affiliate_sales", "Read the sales attributed to one affiliate (read-only)."],
+            ["set_affiliate_commission", "Change an affiliate's commission rate."],
+          ],
+        },
+      },
+    ],
+  },
+  {
+    id: "example-prompt",
+    title: "Example prompt for your agent",
+    icon: "🤖",
+    body: [
+      { code: "\"Apply my Canva design to my JomForm checkout:", caption: "Paste this into your agent." },
+      { code: "1. Upload the logo and hero image from my design (upload_media)." },
+      { code: "2. Set the form theme to my brand colours, font and layout (set_form_theme)." },
+      { code: "3. Customise my landing page hero and CTA (set_workspace_landing_page)." },
+      { code: "4. Add custom CSS for spacing and custom JS to auto-focus the first field (set_form_theme).\"" },
+      "JomForm keeps **authority over prices and the payment flow**: the agent customises the look and feel, never the checkout logic.",
+      "See [the MCP tool reference](/docs/mcp) for the full list of tools.",
+    ],
+  },
 ];
 
 export default function CustomizeDocsPage() {
   return (
-    <div className="max-w-3xl">
-      <h1 className="text-3xl font-bold tracking-tight text-slate-900 [overflow-wrap:anywhere]">
-        Design → AI agent → MCP customization
-      </h1>
-      <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        Design your form or landing page in a tool like Canva, then use an AI agent (e.g. Claude)
-        connected to the JomForm MCP to apply that design and further customize it with CSS and JS.
-        This is the fastest way to get a fully branded checkout without touching code.
-      </p>
-
-      <h2 className="mt-8 text-xl font-semibold text-slate-900">The flow</h2>
-      <div className="mt-4 space-y-5">
-        {STEPS.map((s) => (
-          <section key={s.title}>
-            <h3 className="text-base font-semibold text-slate-900">{s.title}</h3>
-            <p className="mt-1 text-sm leading-relaxed text-slate-600 [overflow-wrap:anywhere]">{s.body}</p>
-          </section>
-        ))}
-      </div>
-
-      {/* t_d768342e: the full text of the /docs summaries that point here. Each
-          id below is a link target declared on /docs (docsIndex.test.ts fails the
-          build if the anchor stops existing), so the ids are the contract. */}
-      <h2 id="menu" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
-        The restaurant menu (QR ordering)
-      </h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Turn a form into a clean restaurant menu. The menu is a <strong>per-form</strong> setting, so
-        you configure it on the form itself (Form Settings → Restaurant menu) and it is served at
-        that form&apos;s own URL. The workspace home page always stays your normal landing page /
-        form listing, so one workspace can run several menus — two outlets, lunch vs dinner, two
-        brands — simply by using a menu form for each. They are fully independent.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The menu lists <strong>only the products the form references</strong> through its own product
-        blocks, so unrelated account products can never appear. Pick those into named categories with
-        a searchable product picker and a live preview, and highlight a best-seller. Customers scan a
-        QR stand at the table to order and pay online, and the order reaches you with the table
-        number. Configure it over MCP via <span className="font-mono text-xs">set_menu_page</span> /
-        <span className="font-mono text-xs">get_menu_page</span> (both take a{" "}
-        <span className="font-mono text-xs">form_id</span>), or generate the QR stand with{" "}
-        <span className="font-mono text-xs">generate_qr</span>.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Need more per order — a delivery address, phone number, spice level, notes or pickup time?
-        Attach an optional order form to the menu: the form&apos;s own fields render in the checkout
-        step with their labels and required flags, are validated on the server, and are stored on the
-        sale. There is no second field editor — you create and edit those fields in the normal form
-        builder, and the menu settings link straight to it. With no form attached the checkout
-        collects name + email only and still works.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The menu checkout always collects the buyer&apos;s name and email (CHIP requires both — they
-        can never be removed), and the server charges each product&apos;s live price. The menu is
-        server-rendered and mobile-first: the header shows the table number, cafe name and location
-        with an info panel; a category filter and search let a diner narrow the menu; best-sellers
-        render as two-column square-image cards, and each category as list rows (text left, thumbnail
-        right) with a separator between rows. Items without a photo render cleanly with no empty image
-        slot. All labels follow the workspace default language.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        A diner never has to order a single item: the menu carries a basket — see{" "}
-        <a href="#menu-basket" className="text-[var(--jf-primary)] underline underline-offset-2">
-          the menu basket
-        </a>{" "}
-        for the full behaviour.
-      </p>
-
-      <h2 id="product-images" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
-        Product images on forms
-      </h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Choose how each product photo appears on your form: <strong>size</strong> (small 52px, medium
-        96px, large 160px or hidden) and <strong>layout</strong> (thumbnail-left, the default, or
-        image-top — a menu-card look with a full-width photo above the name, ideal for a restaurant
-        menu). The renderer serves the matching optimised media variant for the chosen size. Set it in
-        Form Settings → General (with a live preview) or over MCP via{" "}
-        <span className="font-mono text-xs">set_form_theme</span> (
-        <span className="font-mono text-xs">product_image_size</span> /{" "}
-        <span className="font-mono text-xs">product_image_layout</span>).
-      </p>
-
-      <h2 id="brand-colour" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
-        Your brand colour on the public form
-      </h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The colour you pick under Form Settings → General (<strong>Theme colour</strong>) paints the
-        public form&apos;s own chrome: the <strong>submit button</strong> and its hover and pressed
-        states, the checkbox and radio accent, the product price text, and the footer and
-        confirmation links. It does not override anything you set in{" "}
-        <span className="font-mono text-xs">custom_css</span>, and an image or video you embed keeps
-        its own colours.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The button&apos;s text colour is chosen for you so the label always stays readable on the
-        colour you picked: a dark brand colour gets a white label and a light one gets dark text,
-        and the hover and pressed shades are derived from your colour rather than from a fixed
-        indigo. A green or amber button therefore reads as one button in three states, not as your
-        colour with an indigo hover. Each state is measured against the WCAG AA 4.5:1 floor before
-        it is used.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Set it in Form Settings → General and the button previews it immediately; over MCP the same
-        field is <span className="font-mono text-xs">theme.primary</span> through{" "}
-        <span className="font-mono text-xs">set_form_theme</span>. Leave it unset and the form uses
-        the default indigo, which is the same colour the dashboard uses.
-      </p>
-
-      <h2 id="builder" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
-        Building an order form
-      </h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Build beautiful order forms with a drag-and-drop builder. Add fields (name, email, phone,
-        textarea, text, number, select, radio, checkbox, date, time, website, address, consent, hidden,
-        list, repeater, image-choice, captcha), attach products, and publish to your own workspace
-        URL or a custom domain. Forms can be <strong>payment forms</strong> or{" "}
-        <strong>response-only</strong> — the mode decides what the form collects and what its entries
-        are called, and it is set in the builder.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        An agent can build the same form:{" "}
-        <span className="font-mono text-xs">upsert_form</span> creates or updates it,{" "}
-        <span className="font-mono text-xs">register_form_fields</span> sets its input fields under a
-        strict contract, and <span className="font-mono text-xs">publish_form</span> takes it live.
-      </p>
-
-      <h2 id="publishing" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
-        Publishing a form
-      </h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Publishing puts your form on the internet at its own URL — the link a buyer opens, or the
-        address you embed. Press <strong>Publish</strong> in the builder and JomForm confirms it
-        immediately: a panel names the form as live, shows the public URL, and gives you an{" "}
-        <strong>Open form</strong> and a <strong>Copy link</strong> action, so a first publish never
-        ends in silence. If the URL cannot be resolved yet (for example a workspace whose subdomain
-        is not set up), the panel says so plainly rather than showing a link that goes nowhere.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Two rules decide whether a form may go live. A <strong>response-mode</strong> form always
-        may — collecting answers is its whole job, and having no products is normal for it. A{" "}
-        <strong>payment form</strong> needs something to sell: publishing one with no products is
-        refused once with a clear message, because such a form can never take money — and it
-        collects nothing either, so confirming the warning is not a way to collect answers. You can
-        confirm and publish it anyway — while the catalogue is still being set up, say — but its
-        page then tells buyers it is not accepting orders instead of showing a checkout that cannot
-        start, and it starts selling as soon as you add a product. Products can come from a product
-        block, a priced option or shipping choice, or an enabled restaurant menu; a form built
-        without blocks at all sells its product snapshot instead. Adding one any time removes the
-        question.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The same rule covers every way a form goes live — the <strong>Publish</strong> button, the
-        status control in <strong>Form Settings</strong>, publishing several forms at once from the{" "}
-        <strong>Forms</strong> list, and AI agents over MCP (
-        <span className="font-mono text-xs">publish_form</span> and{" "}
-        <span className="font-mono text-xs">bulk_forms</span>, both of which accept{" "}
-        <span className="font-mono text-xs">acknowledge</span>), so an agent is told the same thing
-        you are. A form that is already live is never asked about again.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The link preview follows the same rule as the page. Every live form has its own share card
-        at <span className="font-mono text-xs">/og/your-form-slug.png</span> — its title, workspace
-        and address, drawn as a 1200×630 image — and that is what a chat app or social site shows
-        when the link is pasted. A <strong>draft</strong> is not served at all: its card answers
-        404, exactly as its page does, so an unpublished form&apos;s title never becomes public
-        through the preview URL. A <strong>private</strong> form&apos;s card is served only to a
-        browser that has already entered the password, and it is never handed to a shared cache,
-        so the password gate is not bypassed by fetching the image. An <strong>unlisted</strong>{" "}
-        form is live, so its card is served like a published one&apos;s.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The card is also dropped from the cache the moment a form stops being live — set back to
-        draft, switched to private, or moved to the trash — so a link that was pasted while the
-        form was live cannot keep showing the old preview afterwards. Cards are cached for five
-        minutes at a time rather than a day, so even a deployment that cannot clear that cache
-        stops showing a stale one within minutes.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The printable QR stand follows the page rule too. The stand prints the form&apos;s title and
-        a QR of its public URL, so a <strong>draft</strong>&apos;s stand answers 404 — exactly as its
-        page does — and a <strong>private</strong> form&apos;s stand is served only to a browser that
-        has already entered the password. Printing is not taken away from you:{" "}
-        <strong>Print stand</strong> in Form Settings opens your own signed-in copy of the same
-        stand, which works at every status, including a draft you have not published yet.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The QR image behind the stand (<span className="font-mono text-xs">/qr/your-form-slug.png</span>)
-        follows the same rule, and carries the same cache promise as the preview card. It encodes
-        your form&apos;s address, which by itself tells anyone who fetches it that a form exists at
-        that slug — so a form that is not live answers 404 there, a private form&apos;s image is
-        served only to a browser that has entered the password, and the image is dropped from the
-        cache the moment a form stops being live. It is cached five minutes at a time rather than a
-        day, so a deployment that cannot clear that cache stops serving a stale one within minutes.
-      </p>
-
-      <h2 id="domains" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
-        Custom domains
-      </h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Put your forms on your own domain (e.g. <span className="font-mono text-xs">shop.yourname.com</span>
-        ). Add the domain, point a CNAME to <span className="font-mono text-xs">custom.jomform.com</span>,
-        and verify. With Cloudflare linked, JomForm can auto-create the CNAME for you. Auto-TLS
-        (Let&apos;s Encrypt) uses your account email as the ACME contact by default — you can change it
-        per domain in Settings → Domains.
-      </p>
-
-      <h2 id="form-url-slug" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">
-        Form URLs and slugs (rename a form)
-      </h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        {/* t_e3ebe979 (the rebase onto main): main (#679) documented the slug rename
-            in the /docs entry&apos;s own body. The restructure cuts that entry to a
-            summary, so its walk-through — the character rule, the refusal, and the
-            temporary redirect — lives here, and /docs links this anchor. */}
-        Every form is served at the slug you gave it —{" "}
-        <span className="font-mono text-xs [overflow-wrap:anywhere]">your-workspace.jomform.com/your-form-slug</span> (or the
-        same path on a verified custom domain). The slug is editable: change it in{" "}
-        <strong>Form Settings → General</strong> and the form moves to the new URL immediately. A
-        slug is 1–40 characters of <span className="font-mono text-xs">a-z</span>,{" "}
-        <span className="font-mono text-xs">0-9</span> and dashes (uppercase and spaces are
-        normalised), and it must be free within your workspace — a rename onto a slug another of
-        your forms already serves is refused with an error rather than silently overwriting either
-        form&apos;s URL. A name JomForm keeps for itself is refused as well, on both creating and{" "}
-        renaming a form: the labels it uses for its own addresses (for example{" "}
-        <span className="font-mono text-xs">login</span>,{" "}
-        <span className="font-mono text-xs">api</span>,{" "}
-        <span className="font-mono text-xs">docs</span>) and the paths it already serves on the same
-        domain (<span className="font-mono text-xs">privacy</span>,{" "}
-        <span className="font-mono text-xs">terms</span>,{" "}
-        <span className="font-mono text-xs">refund</span>). The refusal names the rule, so pick a
-        different slug — nothing is stored when a slug is refused.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Renaming never orphans the URL you already handed out: the old slug keeps working through a{" "}
-        <strong>temporary redirect (HTTP 301)</strong> to the new one, so a printed QR stand, an
-        embedded iframe, a menu&apos;s attached order form, and a link already shared in a campaign
-        all keep resolving. The redirect is temporary, not a permanent alias: if another form in the
-        workspace later claims the freed slug, that LIVE form wins and the old URL serves it — a
-        rename&apos;s history can never shadow a real form&apos;s URL. Slugs cannot be renamed on
-        templates (a template has no public URL) and AI agents do the same thing with the{" "}
-        <span className="font-mono text-xs">slug</span> parameter on{" "}
-        <span className="font-mono text-xs">upsert_form</span>, which returns the slug the form now
-        owns.
-      </p>
-
-      <h2 id="menu-basket" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">The menu basket (multi-item ordering)</h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        A restaurant menu is not a one-item form: the menu page carries a full basket so a diner can
-        order a whole table&apos;s food in one payment. Here is what the diner experiences and what
-        reaches you. (Nothing to configure — the basket is part of every menu form.)
-      </p>
-      <div className="mt-4 space-y-5">
-        {CART.map((s) => (
-          <section key={s.title}>
-            <h3 className="text-base font-semibold text-slate-900">{s.title}</h3>
-            <p className="mt-1 text-sm leading-relaxed text-slate-600 [overflow-wrap:anywhere]">{s.body}</p>
-          </section>
-        ))}
-      </div>
-
-      <h2 className="mt-8 text-xl font-semibold text-slate-900">MCP tools used</h2>
-      {/* t_7c3a76c0: this box used to be `overflow-hidden`, which CLIPPED the
-          table instead of letting it scroll — measured 405.1px of table inside a
-          270px box at 320px with a plain 16px root font, so the Purpose column
-          was simply unreachable (and 607.6px inside 246px at 24px). The wrapper
-          is the horizontal scroller now; `tabIndex={0}` + `role="region"` +
-          the label is what axe's scrollable-region-focusable rule requires of a
-          scroll container, and it is what makes the clipped columns reachable
-          from a keyboard. The rounded corners still clip (a scroll container
-          clips its descendants), so the box looks the same. */}
-      <div
-        className="mt-4 overflow-x-auto rounded-lg border border-slate-200"
-        role="region"
-        aria-label="MCP tools used"
-        tabIndex={0}
-      >
-        <table className="w-full text-left text-sm">
-          <thead className="bg-slate-50 text-slate-700">
-            <tr>
-              <th className="px-4 py-2 font-semibold">Tool</th>
-              <th className="px-4 py-2 font-semibold">Purpose</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 text-slate-600">
-            {TOOLS.map((t) => (
-              <tr key={t.name}>
-                <td className="px-4 py-2 font-mono text-xs text-slate-800">{t.name}</td>
-                <td className="px-4 py-2">{t.purpose}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Issue #513: affiliate marketing (#444) shipped wired (MCP + REST +
-          Settings tab) with zero docs. It lives on the customize page — the
-          flow where an agent manages a workspace — and has its own labelled
-          section, with the REST paths so both paths are usable. */}
-      <h2 id="affiliate-marketing" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">Affiliate marketing (referral links &amp; commission)</h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        An <strong>affiliate</strong> is a promoter you pay for sales they bring. You give each
-        affiliate a short <strong>code</strong>, and their link is your storefront URL with{" "}
-        <span className="font-mono text-xs">?aff=CODE</span> appended — for example{" "}
-        <span className="font-mono text-xs [overflow-wrap:anywhere]">https://your-workspace.jomform.com/?aff=ALI</span>. When a
-        buyer arrives through that link and completes an order, the code is stored on the sale, so the
-        sale is attributed to that affiliate and you can see what they earned. Attribution works on
-        menu orders too (the code is carried to the basket checkout).
-      </p>
-
-      <h3 className="mt-5 text-base font-semibold text-slate-900">Create an affiliate link</h3>
-      <p className="mt-1 text-sm leading-relaxed text-slate-600">
-        In the dashboard, open <strong>Settings → Affiliates</strong> and add a code, an optional name
-        and a commission percentage. The new affiliate appears in the list with its code, its
-        commission and its ready-to-share referral URL. Over MCP, call{" "}
-        <span className="font-mono text-xs">create_affiliate</span> with the{" "}
-        <span className="font-mono text-xs">workspace_id</span>, a{" "}
-        <span className="font-mono text-xs">code</span>, an optional{" "}
-        <span className="font-mono text-xs">name</span> /{" "}
-        <span className="font-mono text-xs">email</span>, and{" "}
-        <span className="font-mono text-xs">commission_pct</span> (10 = 10%); it returns the affiliate,
-        including the <span className="font-mono text-xs">referral_url</span>. A code must be unique
-        within the workspace, and creating or changing an affiliate needs the{" "}
-        <span className="font-mono text-xs">manage</span> or{" "}
-        <span className="font-mono text-xs">admin</span> role.
-      </p>
-
-      <h3 className="mt-5 text-base font-semibold text-slate-900">Set the commission</h3>
-      <p className="mt-1 text-sm leading-relaxed text-slate-600">
-        Commission is a percentage stored per affiliate. Change it with{" "}
-        <span className="font-mono text-xs [overflow-wrap:anywhere]">set_affiliate_commission</span> (takes{" "}
-        <span className="font-mono text-xs">affiliate_id</span> and the new{" "}
-        <span className="font-mono text-xs">commission_pct</span>). The rate used is the one stored on
-        the affiliate, so a change applies to sales attributed from then on; it is not written back
-        onto sales that already happened.
-      </p>
-
-      <h3 className="mt-5 text-base font-semibold text-slate-900">How a sale is attributed</h3>
-      <p className="mt-1 text-sm leading-relaxed text-slate-600">
-        The affiliate shares their referral URL. When a buyer opens it, the form (or menu) page reads{" "}
-        <span className="font-mono text-xs">?aff=CODE</span> and carries it into the order it submits,
-        where it is stored on the sale as the affiliate code. No cookie, no redirect chain: the code
-        on the URL the buyer used is what attributes the sale. A buyer with no{" "}
-        <span className="font-mono text-xs">?aff=</span> simply produces an unattributed sale.
-      </p>
-
-      <h3 className="mt-5 text-base font-semibold text-slate-900">Read an affiliate&apos;s sales</h3>
-      <p className="mt-1 text-sm leading-relaxed text-slate-600">
-        Use <span className="font-mono text-xs">list_affiliates</span> to get the affiliate ids, then{" "}
-        <span className="font-mono text-xs">get_affiliate_sales</span> with the{" "}
-        <span className="font-mono text-xs">affiliate_id</span> (read-only). Each row gives the sale
-        reference, status, total, currency and date. Attribution is recorded on every sale that came
-        in with the code; the commission percentage is the affiliate&apos;s current rate (the figures
-        are returned, not a pre-computed payout ledger).
-      </p>
-
-      <h3 className="mt-5 text-base font-semibold text-slate-900">REST endpoints</h3>
-      <p className="mt-1 text-sm leading-relaxed text-slate-600">
-        The same surface is available over the REST API, authenticated as the workspace:
-      </p>
-      <div
-        className="mt-3 overflow-x-auto rounded-lg border border-slate-200"
-        role="region"
-        aria-label="Affiliate REST endpoints"
-        tabIndex={0}
-      >
-        <table className="w-full text-left text-sm">
-          <thead className="bg-slate-50 text-slate-700">
-            <tr>
-              <th className="px-4 py-2 font-semibold">Method &amp; path</th>
-              <th className="px-4 py-2 font-semibold">Purpose</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 text-slate-600">
-            <tr>
-              <td className="px-4 py-2 font-mono text-xs text-slate-800">GET /v1/workspaces/{"{id}"}/affiliates</td>
-              <td className="px-4 py-2">List the workspace&apos;s affiliates.</td>
-            </tr>
-            <tr>
-              <td className="px-4 py-2 font-mono text-xs text-slate-800">POST /v1/workspaces/{"{id}"}/affiliates</td>
-              <td className="px-4 py-2">Create an affiliate (<span className="font-mono text-xs">code</span>, <span className="font-mono text-xs">name</span>, <span className="font-mono text-xs">email</span>, <span className="font-mono text-xs">commission_pct</span>).</td>
-            </tr>
-            <tr>
-              <td className="px-4 py-2 font-mono text-xs text-slate-800">PUT /v1/workspaces/{"{id}"}/affiliates/{"{affid}"}/commission</td>
-              <td className="px-4 py-2">Set the affiliate&apos;s commission percentage.</td>
-            </tr>
-            <tr>
-              <td className="px-4 py-2 font-mono text-xs text-slate-800">GET /v1/workspaces/{"{id}"}/affiliates/{"{affid}"}/sales</td>
-              <td className="px-4 py-2">Read the sales attributed to that affiliate.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      {/* Issue #457 follow-up (Wan, 2026-09-19): editing one of your own
-          templates. AGENTS.md documentation-parity rule — the feature is
-          documented where templates are already documented, and the two
-          semantics a merchant asks about (it does NOT change forms already
-          created from it; a template is never published) are stated. */}
-      <h2 id="templates" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">Templates (save a form &amp; reuse it)</h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        A <strong>template</strong> is a saved form you can start new forms from. It is private to
-        your workspace: it never appears in another merchant&apos;s gallery and it has no
-        draft/published state to manage. Build one either way:
-      </p>
-      <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-slate-600">
-        <li>
-          <strong>Save form as template</strong> in the builder, or <strong>Save form as template</strong> on
-          the Templates page (pick the form) — its fields and design are copied into a template.
-        </li>
-        <li>
-          <strong>New template</strong> on the Templates page — an empty template, ready to fill in.
-        </li>
-      </ul>
-      <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        You do not have to start from a blank form either: the built-in gallery already covers the
-        common shapes — order forms, booking, donation, contact, survey and more — and cloning one
-        copies it into your workspace as a new draft.
-      </p>
-
-      <h3 className="mt-5 text-base font-semibold text-slate-900">Edit a template&apos;s fields and design</h3>
-      <p className="mt-1 text-sm leading-relaxed text-slate-600">
-        The <strong>Templates</strong> page lists your templates with <strong>Edit</strong>,{" "}
-        <strong>Use template</strong>, <strong>Rename</strong> and <strong>Delete</strong>.{" "}
-        <strong>Edit</strong> opens the template in the same builder you use for forms, so you change
-        its fields, blocks and design exactly as you would on a form, then <strong>Save</strong>. The
-        builder recognises that it is editing a template: there is no slug, no Publish and no Form
-        Settings — a template is not published and has no public URL, so those controls are not
-        shown.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        <strong>Editing a template does not change forms already created from it.</strong> Cloning a
-        template copies its fields and design at that moment, so a form and its template are
-        independent afterwards: fix a typo in a template and the forms you already made keep the old
-        text until you edit them too. Over MCP the same edit is{" "}
-        <span className="font-mono text-xs">update_template</span> (with{" "}
-        <span className="font-mono text-xs">template_id</span> from{" "}
-        <span className="font-mono text-xs">list_own_templates</span>); the REST equivalent is{" "}
-        <span className="font-mono text-xs [overflow-wrap:anywhere]">PUT /v1/rest/templates/{`{id}`}</span> with{" "}
-        <span className="font-mono text-xs">title</span> /{" "}
-        <span className="font-mono text-xs">config</span> /{" "}
-        <span className="font-mono text-xs">theme</span> (an omitted field is left unchanged).
-      </p>
-
-      <h3 className="mt-5 text-base font-semibold text-slate-900">A template never lands in another merchant&apos;s gallery by accident</h3>
-      <p className="mt-1 text-sm leading-relaxed text-slate-600">
-        Your templates and the public gallery are two separate lists, and the builder&apos;s template
-        mode keeps them that way: saving a template writes only its fields and design, never a
-        publish. Publishing a template into the shared gallery is a deliberate, separate act that
-        requires a category and a short description line, so a template can never appear in someone
-        else&apos;s New-form picker just because you edited it.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        That is because every gallery card is rendered from two fields of the template&apos;s own
-        config: the <strong>category</strong> is{" "}
-        <span className="font-mono text-xs">config.category</span>, and the <strong>description</strong>{" "}
-        — the card&apos;s subtitle — is the template&apos;s <strong>intro line</strong>: the value of
-        its <strong>first Section block</strong>. A Text block also counts, because templates written
-        before Section existed kept their intro there and their cards must keep working — but a Text
-        block is a single-line <em>answer</em> field now, so its value is a field label, and a new
-        template should put its intro in a Section block. A template you write yourself gets the same
-        treatment: set a category and put a short intro line in a Section block, or its card has
-        nothing to show.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Publishing is therefore checked: a template missing either field — or carrying only spaces
-        where either field belongs, since the gallery trims both the category and the intro line
-        before rendering them — is{" "}
-        <strong>refused with a clear message</strong> rather than appearing in the gallery as a bare
-        title. The category is trimmed on the way out too, so a template published before that check
-        existed shows its category without the surrounding spaces, or no category chip at all rather
-        than a chip holding only spaces. Publishing several forms at once behaves differently on
-        purpose — a{" "}
-        <strong>bulk publish skips such a template while still publishing the other forms you
-        selected</strong>, so one unfinished template cannot block a whole batch. The skipped ids are
-        reported back — by the REST bulk endpoint and by the MCP <span className="font-mono text-xs">bulk_forms</span>{" "}
-        tool alike, which return those ids with a reason and count only the forms that really
-        changed — so the skip is never silent.
-      </p>
-
-      {/* Language placement (AGENTS.md documentation-parity rule): the split
-          between the per-profile DASHBOARD language and the buyer-facing form
-          language is the thing merchants get wrong, so it is stated as a rule
-          and not just described. */}
-      <h2 id="language" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">Language: dashboard vs. your forms</h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        JomForm has <strong>two separate language settings</strong>, and they are deliberately not the
-        same one. The supported languages are{" "}
-        <strong>
-          <Endonym l="en" />, <Endonym l="ms" />, <Endonym l="zh" />, <Endonym l="ta" />
-        </strong>{" "}
-        and <strong><Endonym l="ar" /></strong> (Arabic also switches the dashboard to right-to-left).
-      </p>
-      <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-slate-600">
-        <li>
-          <strong>Dashboard language</strong> — the language <em>you</em> see when signed in. It is a{" "}
-          <strong>per-user</strong> setting: change it on <strong>Profile</strong> (Dashboard language),
-          reached by clicking your <strong>account block</strong> — your name and email at the bottom of
-          the sidebar, or at the bottom of the menu on a phone — and
-          it follows you into any browser you sign in from, on any machine. It never changes what a
-          buyer sees. One part of the product does not follow it: this knowledge base and the legal
-          pages are written in English only, so a guide or a policy stays English (and reads
-          left-to-right) even while your dashboard is in Arabic — only the labels on the docs index
-          are translated. Until you pick one, the dashboard uses the language last used in that browser,
-          and English if there is none.
-        </li>
-        <li>
-          <strong>Form language</strong> — the language your <em>customers</em> see on a public form, the
-          menu, the thank-you page and the password gate. It is set per form or per workspace, never
-          per browser and never from your dashboard choice.
-        </li>
-      </ul>
-
-      <h3 className="mt-5 text-base font-semibold text-slate-900">Choosing your customers&apos; language</h3>
-      <p className="mt-1 text-sm leading-relaxed text-slate-600">
-        Resolution is <strong>form → workspace → English</strong>: a per-form language wins when set;
-        otherwise the form uses its workspace&apos;s <strong>Default form language</strong> (Settings →
-        Storefront); otherwise English. Set the workspace default once and every form you publish
-        inherits it, so a Malay storefront does not need the language set on each form. Over MCP the
-        workspace default is <span className="font-mono text-xs">set_workspace_settings</span> with{" "}
-        <span className="font-mono text-xs">default_lang</span>; the per-form language is{" "}
-        <span className="font-mono text-xs">config.lang</span> on{" "}
-        <span className="font-mono text-xs">upsert_form</span>. An unsupported code is rejected rather
-        than stored, so a form can never be left on a language with no strings.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The translation covers the buyer-facing chrome — field labels, the total, the submit button,
-        error messages, the menu, and the footer links (Privacy / Terms / Refund) — while your own
-        field labels, product names, prices and descriptions are shown exactly as you typed them.
-        JomForm does not machine-translate your content.
-      </p>
-
-      {/* Email language (AGENTS.md documentation-parity rule): the two-axis
-          rule above is invisible to a merchant until he sees WHICH email came
-          out in which language, so the emails are stated explicitly — including
-          the case he cannot test himself, the guest buyer with no profile. */}
-      <h3 className="mt-5 text-base font-semibold text-slate-900">Which language your emails use</h3>
-      <p className="mt-1 text-sm leading-relaxed text-slate-600">
-        Every email JomForm sends follows the same two-axis rule — the language of the{" "}
-        <strong>recipient</strong>, not of whoever triggered it:
-      </p>
-      <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm leading-relaxed text-slate-600">
-        <li>
-          <strong>Emails to you and your team</strong> (verify your address, sign-in link, password
-          reset, 2FA codes, connecting a social login, a workspace invitation, a feedback reply) use
-          the recipient&apos;s <strong>dashboard language</strong>. Set it on <strong>Profile</strong> and
-          the same emails arrive in that language.
-        </li>
-        <li>
-          <strong>Emails to your customers</strong> (a payment receipt, the &ldquo;new sale&rdquo; and
-          &ldquo;new response&rdquo; alerts) use the <strong>form language</strong> resolved the same way
-          the form itself is: <strong>form → workspace → English</strong>. A guest who pays without an
-          account still gets the language your form is set to — there is no profile to ask.
-        </li>
-      </ul>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        A never-edited notification rule is translated too — you only get your own wording back once
-        you have actually edited that rule, and JomForm never rewrites text you wrote. An unset or
-        unsupported language always falls back to <strong>English</strong>, never to Malay. Arabic
-        emails are sent right-to-left, and the email declares its own language so a mail client or
-        screen reader reads it correctly.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The <strong>subject</strong> and the <strong>body</strong> are judged separately, so editing
-        one of them does not pin the other. If you rewrite only the body, your words are kept and the
-        untouched subject still follows the language above; if you rewrite only the subject, the
-        untouched body still follows it. Only the half you actually typed is treated as yours.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        A new workspace&apos;s receipt subject and body start <strong>empty</strong>, and an empty
-        field is not a missing subject: it means JomForm&apos;s own receipt, written in the language
-        your form is set to — so an English form gets an English receipt and a Malay form a Malay
-        one with nothing for you to fill in. That is why the fields show a grey example instead of
-        text you have to delete.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The same is true of a form&apos;s default <strong>notification rule</strong>: its subject and
-        body start empty, and an empty field there means JomForm&apos;s own message in the form&apos;s
-        language. A rule you never edited therefore shows a grey example rather than text you have
-        to delete, and the mail it sends follows the language your form is set to.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Related:{" "}
-        <a href="/docs/placeholders" className="font-medium text-slate-900 underline">
-          the placeholder reference
-        </a>{" "}
-        lists every <span className="font-mono text-xs">{"{{token}}"}</span> you can use in a subject
-        or body.
-      </p>
-
-      {/* Reserved workspace names (t_586ff0c3): a slug becomes a public host, so
-          the refusal is a user-visible constraint and is documented here
-          (AGENTS.md documentation-parity rule). */}
-      <h2 id="workspace-address" className="mt-8 scroll-mt-6 text-xl font-semibold text-slate-900">Your workspace address, and names that are reserved</h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        A workspace slug becomes your public address: a workspace called{" "}
-        <span className="font-mono text-xs">acme</span> is served at{" "}
-        <span className="font-mono text-xs">acme.jomform.com</span>, and your forms live under it. A slug is
-        3–40 characters of <span className="font-mono text-xs">a-z</span>,{" "}
-        <span className="font-mono text-xs">0-9</span> and dashes, it cannot end in{" "}
-        <span className="font-mono text-xs">jomform</span>, and it must not be a name{" "}
-        <strong>reserved for JomForm</strong>.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Reserved names are the addresses JomForm owns or has to protect. They fall into three groups:
-        infrastructure (<span className="font-mono text-xs">www</span>,{" "}
-        <span className="font-mono text-xs">api</span>, <span className="font-mono text-xs">app</span>,{" "}
-        <span className="font-mono text-xs">mail</span>, <span className="font-mono text-xs">s3</span>);
-        JomForm&apos;s own product and edge addresses that are already routed, such as{" "}
-        <span className="font-mono text-xs">docs</span>, <span className="font-mono text-xs">mcp</span>,{" "}
-        <span className="font-mono text-xs">templates</span> and{" "}
-        <span className="font-mono text-xs">custom</span>; and sensitive names that read as JomForm&apos;s own
-        business or support channel, such as <span className="font-mono text-xs">support</span>,{" "}
-        <span className="font-mono text-xs">help</span>, <span className="font-mono text-xs">status</span>,{" "}
-        <span className="font-mono text-xs">billing</span>, <span className="font-mono text-xs">admin</span>,{" "}
-        <span className="font-mono text-xs">account</span>, <span className="font-mono text-xs">login</span>,{" "}
-        <span className="font-mono text-xs">payments</span> and{" "}
-        <span className="font-mono text-xs">checkout</span>.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        The reason is impersonation: an address like{" "}
-        <span className="font-mono text-xs">billing.jomform.com</span> would let a buyer be asked for card or
-        invoice details under JomForm&apos;s name, so a workspace cannot hold it even while JomForm is not using
-        it. If you try one, JomForm tells you the name is reserved (not that your slug was malformed) and asks
-        you to pick another. The same rule applies whether you create the workspace in the dashboard, over the
-        REST API (<span className="font-mono text-xs">POST /v1/workspaces</span> — the refusal carries the code{" "}
-        <span className="font-mono text-xs">reserved_subdomain</span>) or through an AI agent with the{" "}
-        <span className="font-mono text-xs">create_workspace</span> MCP tool.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Renaming is covered by the same rule, because a rename can move your ADDRESS just as a create can set
-        it. Changing the address of an existing workspace — in Settings → Workspace, over the REST API (
-        <span className="font-mono text-xs">PATCH /v1/workspaces/&#123;id&#125;</span>) or through the{" "}
-        <span className="font-mono text-xs">update_workspace</span> MCP tool — is refused with{" "}
-        <span className="font-mono text-xs">reserved_subdomain</span> if the new slug is a reserved name, and
-        the workspace keeps the address it had.
-      </p>
-
-      {/* Issue #501: the https-only scheme rule for image/URL fields is a
-          user-visible constraint, so it is documented here (AGENTS.md
-          documentation-parity rule). */}
-      <h2 className="mt-8 text-xl font-semibold text-slate-900">Image URLs must be https://</h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Every image/URL you set — the form logo (<span className="font-mono text-xs">set_form_theme</span>), the
-        landing-page hero image and logo (<span className="font-mono text-xs [overflow-wrap:anywhere]">set_workspace_landing_page</span>, or
-        Settings → Storefront), product images (<span className="font-mono text-xs">create_product</span> /{" "}
-        <span className="font-mono text-xs">update_product</span>, or the Products editor) and a form&apos;s image
-        block — must be an absolute <span className="font-mono text-xs">https://</span> URL. Uploaded media from the
-        media library already qualifies: <span className="font-mono text-xs">upload_media</span> returns an absolute
-        https URL on your own media host, which is accepted everywhere.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        A value with any other scheme (<span className="font-mono text-xs">data:</span>,{" "}
-        <span className="font-mono text-xs">http:</span>, <span className="font-mono text-xs">javascript:</span>, or a
-        relative path) is rejected when you save it, with a clear message, on both the dashboard and the MCP — the
-        same rule on every path. This is deliberate: the page renders the value into an <span className="font-mono text-xs">&lt;img src&gt;</span> for
-        your buyers, and a browser will not load an unsafe scheme. Rejecting it at entry means you see the problem
-        immediately instead of getting a silently missing image on the live page.
-      </p>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Leaving an image field <em>empty</em> is always allowed and means &ldquo;no image&rdquo; (or, when updating,
-        &ldquo;keep the current one&rdquo;).
-      </p>
-
-      <h2 className="mt-8 text-xl font-semibold text-slate-900">Example prompt for your agent</h2>
-      <pre
-        tabIndex={0}
-        className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100"
-      >
-{`"Apply my Canva design to my JomForm checkout:
-1. Upload the logo and hero image from my design (upload_media).
-2. Set the form theme to my brand colours, font and layout (set_form_theme).
-3. Customise my landing page hero and CTA (set_workspace_landing_page).
-4. Add custom CSS for spacing and custom JS to auto-focus the first field (set_form_theme)."`}
-      </pre>
-
-      <p className="mt-8 text-sm leading-relaxed text-slate-600">
-        JomForm keeps authority over prices and the payment flow — the agent customizes the look and
-        feel, never the checkout logic. See the{" "}
-        <a
-          href="/docs/mcp"
-          className="text-[var(--jf-primary)] underline underline-offset-2 hover:underline"
-        >
-          MCP tool reference
-        </a>{" "}
-        for the full list of tools.
-      </p>
-    </div>
+    <DocsPage
+      title="Design → AI agent → MCP customization"
+      lead="Design your form or landing page in a tool like Canva, then let an AI agent on the JomForm MCP apply it."
+      sections={SECTIONS}
+    />
   );
 }

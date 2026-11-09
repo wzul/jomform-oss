@@ -155,6 +155,7 @@ import ts from "typescript";
 // The recursive `app/docs` walk, shared with llmsFullCoverage.test.ts and
 // sitemapCoverage.test.ts — see that file for why ONE walk (card t_3a5aa9b5).
 import { filesUnder } from "./docsRoutes.ts";
+import { usesDocsProse } from "./docsProseReader.ts";
 import { apiExamples, endpointsByTag, specEndpoints } from "./openapi.ts";
 // The /docs index's chrome labels. `docs.*` values reach the reader through the
 // `T` island as plain text nodes, so this is the third surface (card t_cd81632d);
@@ -235,9 +236,9 @@ function markerIn(node: ts.Node): { kind: string; text: string } | null {
   return null;
 }
 
-// Every marker in one page, in source order.
-function backtickMarkers(file: string): Finding[] {
-  const src = readFileSync(file, "utf8");
+// Every marker in one parsed source, in source order. The source is a parameter
+// (not a path) so the probe below can drive the walk without writing a file.
+function markersIn(src: string, file: string): Finding[] {
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const found: Finding[] = [];
   const visit = (node: ts.Node) => {
@@ -252,8 +253,13 @@ function backtickMarkers(file: string): Finding[] {
   return found;
 }
 
+function backtickMarkers(file: string): Finding[] {
+  return markersIn(readFileSync(file, "utf8"), file);
+}
+
 const FILES = docsFiles();
 const FINDINGS: Finding[] = FILES.flatMap(backtickMarkers);
+const SOURCE_OF = new Map(FILES.map((f) => [f, readFileSync(f, "utf8")]));
 
 test("the guard is reading the real docs tree (it cannot pass vacuously)", () => {
   // The walk must find the pages AND their prose: a parse that collected nothing
@@ -272,19 +278,19 @@ test("the guard is reading the real docs tree (it cannot pass vacuously)", () =>
   // Prove the AST walk really visits prose strings rather than stopping at the
   // module scope: assert a known prose body is among the visited literals.
   const bodies: string[] = [];
-  // The three node kinds the walk was widened to (cards t_8580357e and
-  // t_8b3a508b) are counted too, so an emptied JsxText / template-literal /
-  // TemplateExpression branch cannot pass this test vacuously while the
-  // string-literal count stays green.
+  // The node kinds the walk was widened to (cards t_8580357e and t_8b3a508b) are
+  // counted too, so an emptied JsxText / TemplateExpression branch cannot pass
+  // this test vacuously while the string-literal count stays green. (The
+  // code-sample collection that used to sit here has no tree-wide case left — the
+  // samples are data blocks now — so it is proved on a probe below AND the block
+  // surface is counted, rather than asserting an empty list.)
   const jsxTexts: string[] = [];
-  const codeSamples: string[] = [];
   const templateExpressions: string[] = [];
   const collect = (file: string) => {
     const sf = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const visit = (n: ts.Node) => {
       if (ts.isStringLiteral(n)) bodies.push(n.text);
       if (ts.isJsxText(n)) jsxTexts.push(n.text);
-      if (ts.isNoSubstitutionTemplateLiteral(n) && insideCodeSample(n)) codeSamples.push(n.text);
       if (ts.isTemplateExpression(n)) {
         const text = [n.head.text, ...n.templateSpans.map((s) => s.literal.text)].join("");
         templateExpressions.push(text);
@@ -304,23 +310,56 @@ test("the guard is reading the real docs tree (it cannot pass vacuously)", () =>
     "the docs/chat prose body is not among the visited literals — the walk is not reaching the section bodies",
   );
   // Raw JSX text is the FIRST hole this guard missed (card t_8580357e): if the
-  // walk stops collecting `ts.JsxText`, shape 2 goes invisible again.
+  // walk stops collecting `ts.JsxText`, shape 2 goes invisible again. The floor
+  // is 200, not 500, because nineteen pages now carry their prose as SECTIONS
+  // data instead of JSX: the raw JSX that REMAINS is the /docs index and its
+  // chrome, the guides index and the api/mcp page chrome — 252 nodes measured.
+  // The floor still sits below the measured count on purpose (a deleted
+  // paragraph is a content change, not a walk failure) and stays far above zero,
+  // so a walk that stops descending into pages fails here.
   assert.ok(
-    jsxTexts.length >= 500,
+    jsxTexts.length >= 200,
     `collected only ${jsxTexts.length} raw JSX text nodes from the docs tree — a marker written into raw JSX prose ` +
-      `would be invisible to this guard (the hole card t_8580357e filed)`,
+      `would be invisible to this guard (the hole card t_8580357e filed). After the prose-renderer conversion the ` +
+      `tree still hand-writes the guides index and the docs chrome in JSX (252 measured); this count says the walk ` +
+      `is no longer reaching them`,
   );
   assert.ok(
-    jsxTexts.some((t) => t.replace(/\s+/g, " ").trim().startsWith("A machine-readable OpenAPI 3.1 contract")),
-    "a known raw JSX text node (docs/api) is not among the visited nodes — the walk is not reaching JSX prose",
+    jsxTexts.some((t) =>
+      t.replace(/\s+/g, " ").trim().startsWith("Each guide below walks one setup from the settings page"),
+    ),
+    "a known raw JSX text node (docs/guides) is not among the visited nodes — the walk is not reaching JSX prose",
   );
-  // A code sample shown through a template literal is the SUPPORTED shape, and
-  // the guard must be able to tell it apart from prose: if this collection
-  // empties, `insideCodeSample` is broken and every sample would be reported.
+  // CODE SAMPLES moved with the prose. A sample is a `{ code: "…" }` block now
+  // (docsProse renders it inside <pre><code>), so there is no template literal
+  // inside a <code>/<pre> element left to collect — the old count of 3 is
+  // legitimately 0, not a broken exclusion. Two things keep the arm honest:
+  // the SAMPLE SURFACE is counted from the blocks the pages declare, and the
+  // exclusion itself is proved on a probe (a marker inside a <code> sample is
+  // skipped; the same template literal in prose is reported). Without the probe
+  // the `insideCodeSample` branch would be untested code after this migration.
+  const codeBlocks = FILES.reduce(
+    (n, f) => n + ((SOURCE_OF.get(f) ?? "").match(/\{\s*code:/g) ?? []).length,
+    0,
+  );
   assert.ok(
-    codeSamples.length >= 3,
-    `collected only ${codeSamples.length} code-sample template literals from the docs tree — the ` +
-      `code/pre element exclusion is what keeps the supported way of showing code from being reported`,
+    codeBlocks >= 5,
+    `found only ${codeBlocks} { code: … } sample block(s) in the docs tree — the samples this exclusion exists ` +
+      `for are data blocks now (10 measured: api's two bodies, customize's five agent commands, embed's three ` +
+      `snippets), so a count this low means the sample surface moved and this arm stopped covering it`,
+  );
+  const SAMPLE = "<pre><code>{`curl -d 'x=\\`y\\`'`}</code></pre>";
+  assert.deepEqual(
+    markersIn(SAMPLE, "sample-probe.tsx"),
+    [],
+    "a marker inside a <code> sample is reported — the supported way of SHOWING code on /docs would fail the rule",
+  );
+  const PROSE_SAMPLE = "<p>{`curl -d 'x=\\`y\\`'`}</p>";
+  assert.equal(
+    markersIn(PROSE_SAMPLE, "prose-probe.tsx").length,
+    1,
+    "the same template literal OUTSIDE <code>/<pre> is not reported — the exclusion has widened to all prose, " +
+      "and a marker a page prints would pass this guard",
   );
   // A template literal WITH a substitution (`ts.TemplateExpression`) is the
   // FOURTH shape whose static parts reach the reader (card t_8b3a508b): if the
@@ -343,12 +382,50 @@ test("the guard is reading the real docs tree (it cannot pass vacuously)", () =>
 });
 
 test("no /docs prose carries a backtick marker (these pages render plain text)", () => {
-  const lines = FINDINGS.map(
+  // A page that renders through src/app/docs/docsProse DOES have a markdown
+  // renderer: it turns a backtick into a <code> chip and a double asterisk into
+  // <strong>. docsProseRender.test.ts proves that parse consumes the markers, so
+  // the marker is allowed there and only there. Every other docs page still
+  // prints its prose as a plain text node, and the rule is unchanged for it.
+  //
+  // The exemption is keyed on the page's IMPORT (the one thing that says its
+  // markers are consumed), read through the shared reader so the two sides cannot
+  // drift: usesDocsProse() is the same test the content guards route on.
+  const rendererBacked = (file: string) => usesDocsProse(SOURCE_OF.get(file) ?? "");
+  const allowed = FINDINGS.filter((f) => rendererBacked(f.file));
+  const findings = FINDINGS.filter((f) => !rendererBacked(f.file));
+  assert.ok(
+    allowed.length > 0,
+    "no /docs page renders through docsProse, so this exemption is dead weight — remove it",
+  );
+  // AND THE RULE STILL BITES where the exemption does not reach: the same probe
+  // source is reported when it is a plain page and exempt once it imports the
+  // renderer. Without this, an exemption that accidentally matched every page
+  // would leave the assertion below empty and green.
+  const PROBE = "export default function P() { return <p>see `upsert_form` here</p>; }";
+  const probeFindings = markersIn(PROBE, "probe.tsx");
+  assert.equal(
+    probeFindings.length,
+    1,
+    "the rule no longer reports a marker on a page that does NOT use the renderer — its findings stopped biting",
+  );
+  assert.equal(probeFindings[0].kind, "raw JSX text", "the probe is not being read as raw JSX prose");
+  assert.equal(
+    rendererBacked("probe.tsx"),
+    false,
+    "a page with no docsProse import is treated as renderer-backed — every finding would be exempted",
+  );
+  assert.equal(
+    usesDocsProse(`import { DocsPage } from "../docsProse";\n${PROBE}`),
+    true,
+    "a page importing docsProse is not recognised as renderer-backed — its consumed markers would be reported",
+  );
+  const lines = findings.map(
     (f) =>
       `${f.file.replace(DOCS_DIR, "src/app/docs")}:${f.line}  [${f.kind}]  ${JSON.stringify(f.text.slice(0, 120))}`,
   );
   assert.deepEqual(
-    FINDINGS,
+    findings,
     [],
     // The message must not itself carry a literal backtick: this file is parsed
     // by the widened walk, so a marker written into THIS message would be

@@ -42,6 +42,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { docsRoutesOnDisk, routesOnDisk } from "./docsRoutes.ts";
+import { pageProse } from "./docsProseReader.ts";
 import { isEnglishOnlyProsePath, ENGLISH_ONLY_PROSE_PREFIXES } from "./proseSurfaces.ts";
 
 const pathOf = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
@@ -93,6 +94,15 @@ const DOCS: { route: string; file: string }[] = docsRoutesOnDisk(DOCS_DIR)
   .sort((a, b) => a.route.localeCompare(b.route));
 
 const LAYOUT_FILE = pathOf("../app/docs/layout.tsx");
+
+/**
+ * The shared prose renderer (src/app/docs/docsProse.tsx). Every converted docs
+ * page emits its code samples and its in-prose links THROUGH this file, so the
+ * two rules below are asserted against it as well as against any page that still
+ * hand-writes the markup. The rules did not move off the pages; the markup did.
+ */
+const RENDERER_FILE = pathOf("../app/docs/docsProse.tsx");
+const RENDERER_SRC = readFileSync(RENDERER_FILE, "utf8");
 
 // Paths the scan visits, read out of the real spec file.
 const scannedPaths = [...SPEC.matchAll(/path:\s*"([^"]+)"/g)].map((m) => m[1]);
@@ -173,6 +183,31 @@ test("every sideways-scrolling docs <pre> is keyboard reachable (axe scrollable-
       );
     }
   }
+  // The code SAMPLE's <pre> is the renderer's now: a converted page carries its
+  // sample as a `{ code: "…" }` block, and docsProse emits the one scrollable
+  // <pre> that renders it. The page loop above cannot see that tag, so the same
+  // rule is asserted against the file that writes it — with the sample's own
+  // <code> child checked too, so this is provably the code block and not a
+  // stray <pre> somewhere else in the renderer.
+  const rendererPres = tags(RENDERER_SRC, "pre").filter((t) => hasClass(t, "overflow-x-auto"));
+  assert.ok(
+    rendererPres.length >= 1,
+    "app/docs/docsProse.tsx emits no overflow-x-auto <pre> — the code-sample block every converted page's " +
+      "samples render through is gone, so this rule would be asserting nothing",
+  );
+  for (const tag of rendererPres) {
+    checked++;
+    assert.ok(
+      /\btabIndex=/.test(tag),
+      "app/docs/docsProse.tsx: the code sample's scrollable <pre> has no tabIndex — every converted page's code " +
+        "block would fail axe scrollable-region-focusable (serious), measured on the scrollable <pre> the gate flags",
+    );
+  }
+  assert.ok(
+    /<pre\b[\s\S]{0,400}?<code>/.test(RENDERER_SRC),
+    "app/docs/docsProse.tsx: the scrollable <pre> is not followed by the sample's <code> child — this rule is " +
+      "reading the wrong element",
+  );
   assert.ok(checked > 0, "no overflow-x-auto <pre> was found, so this rule proved nothing");
 });
 
@@ -193,6 +228,37 @@ test("every in-prose docs cross-page link carries a permanent underline (axe lin
       );
     }
   }
+  // A converted page writes its cross-page link as `[label](/docs/…)` in a body
+  // string, and the renderer's Inline <a> is what emits it. The anchor is one tag
+  // for every such link, so one assertion covers them all — and it is the SAME
+  // bare `underline` token the page rule above demands.
+  const rendererAnchors = tags(RENDERER_SRC, "a");
+  assert.ok(
+    rendererAnchors.length >= 1,
+    "app/docs/docsProse.tsx emits no <a> — the in-prose link every converted page declares would render as " +
+      "plain text, and this rule would be asserting nothing",
+  );
+  for (const tag of rendererAnchors) {
+    checked++;
+    assert.ok(
+      hasClass(tag, "underline"),
+      "app/docs/docsProse.tsx: the Inline <a> has no bare `underline` class — every cross-page link on a " +
+        "converted page would fail axe link-in-text-block (serious); hover:underline is not enough",
+    );
+  }
+  // The page half: the links still have to be DECLARED. A tree that stopped
+  // writing cross-page links would satisfy both loops above while linking
+  // nothing, so the markdown sites are counted from the prose the pages render.
+  const declared: string[] = [];
+  for (const d of DOCS) {
+    const prose = pageProse(readFileSync(d.file, "utf8"), d.file);
+    for (const m of prose.matchAll(/\[[^\]]+\]\((\/docs[^)]*)\)/g)) declared.push(`${d.route} -> ${m[1]}`);
+  }
+  assert.ok(
+    declared.length >= 10,
+    `found only ${declared.length} in-prose cross-page docs link(s) across the docs tree — the markdown link ` +
+      `sites the renderer emits are the subject of this rule, so the guard is looking at the wrong prose`,
+  );
   assert.ok(checked > 0, "no in-prose cross-page docs link was found, so this rule proved nothing");
 });
 

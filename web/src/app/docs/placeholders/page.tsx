@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { docsMetadata } from "../../../lib/docsMetadata";
+import { DocsPage, type Section } from "../docsProse";
 
 export const metadata: Metadata = docsMetadata({
   title: "Placeholders reference — JomForm Docs",
@@ -10,164 +11,102 @@ export const metadata: Metadata = docsMetadata({
 
 // Single source of truth for the placeholder reference. Kept in sync with
 // api/internal/payments/receipt.go and api/internal/payments/notifications.go.
-const RECIPIENT_PLACEHOLDERS: { token: string; meaning: string }[] = [
+const SECTIONS: Section[] = [
   {
-    token: "{admin_email}",
-    meaning:
-      "The merchant's account email. Used as a notification recipient — the email is resolved at send time.",
+    id: "recipient-placeholders",
+    title: "Recipient placeholders",
+    icon: "📧",
+    body: [
+      "Used in the **Send to** field of a notification rule. A recipient is a literal email address, `{admin_email}`, or a submitted field value.",
+      {
+        table: {
+          label: "Recipient placeholders",
+          head: ["Placeholder", "Meaning"],
+          rows: [
+            [
+              "`{admin_email}`",
+              "The merchant's account email, used as a notification recipient. The address is resolved at send time.",
+            ],
+            [
+              "`{field_id}`",
+              "The submitted value of a form field, used as a recipient (a buyer's email field, for example). Replace field_id with the field's block id.",
+            ],
+          ],
+        },
+      },
+      {
+        note: "A recipient can also be a literal address: the Send to field takes one exactly as you type it.",
+      },
+    ],
   },
   {
-    token: "{field_id}",
-    meaning:
-      "The submitted value of a form field, used as a notification recipient (e.g. a buyer's email field). Replace field_id with the actual block id of the field.",
-  },
-];
-
-const BODY_PLACEHOLDERS: { token: string; meaning: string }[] = [
-  {
-    token: "{{ref_code}}",
-    meaning: "The sale's reference code (e.g. the code shown to the buyer and used to look up the sale). Empty on a response form — a response has no sale.",
-  },
-  {
-    token: "{{amount}}",
-    meaning: "The formatted sale amount (e.g. 123.45 in the workspace's currency). Empty on a response form.",
-  },
-  {
-    token: "{{items}}",
-    meaning: "A summary of the purchased items (product names and quantities). Empty on a response form.",
-  },
-  {
-    token: "{{buyer_name}}",
-    meaning: "The buyer's name as submitted on the form. On a response form this is the responder's name.",
-  },
-  {
-    token: "{{full_name}}",
-    meaning: "The name of the person who submitted (the buyer, or the responder on a response form). Always defined — empty when the submission carried no name.",
-  },
-  {
-    token: "{{email}}",
-    meaning: "The email of the person who submitted. Always defined — empty when the submission carried no email.",
-  },
-  {
-    token: "{{form_url}}",
-    meaning: "The public URL of the form that was purchased.",
-  },
-  {
-    token: "{{date}}",
-    meaning: "The date the email is sent.",
-  },
-  {
-    token: "{{table_number}}",
-    meaning:
-      "The table number a QR-ordering customer scanned (the ?table=N on the order form URL). Empty for a regular online order with no table.",
-  },
-  {
-    token: "{{field_id}}",
-    meaning:
-      "Any submitted form field value. Replace field_id with the actual block id of the field (e.g. {{email}} for a field whose id is email).",
+    id: "body-placeholders",
+    title: "Subject and body placeholders",
+    icon: "📨",
+    body: [
+      "Used in the **subject and body** of receipt emails and notification rules. Each token is replaced with the real value for that sale or submission.",
+      {
+        table: {
+          label: "Subject and body placeholders",
+          head: ["Placeholder", "Meaning"],
+          rows: [
+            [
+              "`{{ref_code}}`",
+              "The sale's **reference code**, shown to the buyer and used to look up the sale. Empty on a response form: a response has no sale.",
+            ],
+            [
+              "`{{amount}}`",
+              "The formatted sale amount (123.45, in the workspace's currency). Empty on a response form.",
+            ],
+            [
+              "`{{items}}`",
+              "A summary of the purchased items (product names and quantities). Empty on a response form.",
+            ],
+            [
+              "`{{buyer_name}}`",
+              "The buyer's name as submitted on the form. On a response form this is the responder's name.",
+            ],
+            [
+              "`{{full_name}}`",
+              "The name of the person who submitted, buyer or responder. Always defined: empty when the submission carried no name.",
+            ],
+            [
+              "`{{email}}`",
+              "The email of the person who submitted. Always defined: empty when the submission carried no email.",
+            ],
+            ["`{{form_url}}`", "The public URL of the form that was purchased."],
+            ["`{{date}}`", "The date the email is sent."],
+            [
+              "`{{table_number}}`",
+              "The table number a QR-ordering customer scanned (the ?table=N on the order form URL). Empty for a regular online order.",
+            ],
+            [
+              "`{{field_id}}`",
+              "Any submitted form field value. Replace field_id with the field's block id: a field with id email is written `{{email}}`.",
+            ],
+          ],
+        },
+      },
+      { heading: "Example" },
+      {
+        code: "Subject: New sale {{ref_code}}\nBody:\n  New sale received!\n\n  Reference : {{ref_code}}\n  Amount    : RM {{amount}}\n  Item      : {{items}}\n  Buyer     : {{buyer_name}}\n  Form      : {{form_url}}",
+      },
+      {
+        note: "A **response form** gets a different default notification, because a response has no sale: its rule fires on `response.submitted` and uses only placeholders with a value.",
+      },
+      {
+        note: "A placeholder with no value is sent as an empty string, so check the table above before using a sale token on a response form.",
+      },
+    ],
   },
 ];
 
 export default function PlaceholdersPage() {
   return (
-    <div className="max-w-3xl">
-      <h1 className="text-3xl font-bold tracking-tight text-slate-900">Placeholders reference</h1>
-      <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        JomForm emails and notifications support dynamic placeholders. When an email is sent, each
-        placeholder is replaced with the real value for that sale or submission. There are two
-        kinds: <code className="rounded bg-slate-100 px-1">{"{...}"}</code> tokens used as{" "}
-        <em>recipients</em>, and <code className="rounded bg-slate-100 px-1">{"{{...}}"}</code>{" "}
-        tokens used inside the subject and body.
-      </p>
-
-      <h2 className="mt-8 text-xl font-semibold text-slate-900">Recipient placeholders</h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Used in the <em>Send to</em> field of a notification rule. A recipient is either a literal
-        email address, <code className="rounded bg-slate-100 px-1">{"{admin_email}"}</code>, or a
-        submitted field value.
-      </p>
-      <div
-        className="mt-4 overflow-x-auto rounded-lg border border-slate-200"
-        role="region"
-        aria-label="Recipient placeholders"
-        tabIndex={0}
-      >
-        <table className="w-full text-left text-sm">
-          <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
-            <tr>
-              <th className="px-4 py-2 font-medium">Placeholder</th>
-              <th className="px-4 py-2 font-medium">Meaning</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {RECIPIENT_PLACEHOLDERS.map((p) => (
-              <tr key={p.token}>
-                <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--jf-primary)]">
-                  {p.token}
-                </td>
-                <td className="px-4 py-3 leading-relaxed text-slate-600">{p.meaning}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <h2 className="mt-8 text-xl font-semibold text-slate-900">Subject & body placeholders</h2>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">
-        Used in the subject and body of receipt emails and notification rules.
-      </p>
-      <div
-        className="mt-4 overflow-x-auto rounded-lg border border-slate-200"
-        role="region"
-        aria-label="Subject and body placeholders"
-        tabIndex={0}
-      >
-        <table className="w-full text-left text-sm">
-          <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
-            <tr>
-              <th className="px-4 py-2 font-medium">Placeholder</th>
-              <th className="px-4 py-2 font-medium">Meaning</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {BODY_PLACEHOLDERS.map((p) => (
-              <tr key={p.token}>
-                <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--jf-primary)]">
-                  {p.token}
-                </td>
-                <td className="px-4 py-3 leading-relaxed text-slate-600">{p.meaning}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <h2 className="mt-8 text-xl font-semibold text-slate-900">Example</h2>
-      <pre
-        tabIndex={0}
-        className="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100"
-      >
-{`Subject: New sale — {{ref_code}}
-Body:
-  New sale received!
-
-  Reference : {{ref_code}}
-  Amount    : RM {{amount}}
-  Item      : {{items}}
-  Buyer     : {{buyer_name}}
-  Form      : {{form_url}}`}
-      </pre>
-      <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        A <strong>response form</strong> gets a different default notification, because a response
-        has no sale: its rule fires on <code className="rounded bg-slate-100 px-1">response.submitted</code>{" "}
-        and uses only placeholders that carry a value for a submission —
-        <code className="rounded bg-slate-100 px-1">{"{{full_name}}"}</code>,{" "}
-        <code className="rounded bg-slate-100 px-1">{"{{email}}"}</code>,{" "}
-        <code className="rounded bg-slate-100 px-1">{"{{form_url}}"}</code> and{" "}
-        <code className="rounded bg-slate-100 px-1">{"{{date}}"}</code>. A placeholder with no value
-        is sent as an empty string, so check the reference above before using a sale placeholder in
-        a notification that runs on a response form.
-      </p>
-    </div>
+    <DocsPage
+      title="Placeholders reference"
+      lead="Every dynamic placeholder in JomForm emails and notifications, and the value each one carries for a sale or a submission."
+      sections={SECTIONS}
+    />
   );
 }

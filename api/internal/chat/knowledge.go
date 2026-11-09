@@ -93,7 +93,7 @@ var productFacts = []productFact{
 			"the merchant's own CHIP credentials.",
 		Sources: []factSource{
 			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "FPX, Card, e-Wallet and DuitNow QR"},
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "100 = 1%"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "100 basis points is 1%"},
 			{File: "web/src/app/docs/page.tsx", Anchor: "CHIP payment credentials"},
 		},
 	},
@@ -118,8 +118,8 @@ var productFacts = []productFact{
 			"a fee of RM10.10). The buyer sees the method, the fee and the final total before paying, and the " +
 			"payment is restricted to the method they chose.",
 		Sources: []factSource{
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "The total is grossed up, not added to"},
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "before the Proceed to Payment button"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "smallest total where, after the fee is taken"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "before Proceed to Payment"},
 		},
 	},
 	{
@@ -129,7 +129,7 @@ var productFacts = []productFact{
 			"fee included; a partial refund returns the amount the merchant chooses; and the sale keeps the fee the " +
 			"merchant bore at the rate in force when the buyer paid.",
 		Sources: []factSource{
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "Refunds never recalculate the fee"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "a refund is never recalculated"},
 			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "does not return the processing fee"},
 		},
 	},
@@ -197,7 +197,7 @@ var productFacts = []productFact{
 			"card-based, so the card is saved at checkout.",
 		Sources: []factSource{
 			{File: "web/src/app/docs/subscriptions/page.tsx", Anchor: "The first payment is charge 1"},
-			{File: "web/src/app/docs/subscriptions/page.tsx", Anchor: "Recurring billing is card-based"},
+			{File: "web/src/app/docs/subscriptions/page.tsx", Anchor: "The card is saved at checkout"},
 		},
 	},
 	{
@@ -222,7 +222,7 @@ var productFacts = []productFact{
 			"rows, resolved from the buyer's address at checkout. An address that matches no zone is either refused " +
 			"or priced by the zone marked as fallback — a zone fee is never silently zero.",
 		Sources: []factSource{
-			{File: "web/src/app/docs/shipping/page.tsx", Anchor: "resolved from the address they submitted"},
+			{File: "web/src/app/docs/shipping/page.tsx", Anchor: "The zone comes from the submitted address"},
 			{File: "web/src/app/docs/shipping/page.tsx", Anchor: "never silently zero"},
 		},
 	},
@@ -236,7 +236,7 @@ var productFacts = []productFact{
 		Sources: []factSource{
 			{File: "web/src/app/docs/shipping/page.tsx", Anchor: "Courier quote"},
 			{File: "web/src/app/docs/shipping/page.tsx", Anchor: "EasyParcel"},
-			{File: "web/src/app/docs/shipping/page.tsx", Anchor: "fallback is never a silent zero"},
+			{File: "web/src/app/docs/shipping/page.tsx", Anchor: "never a silent zero"},
 		},
 	},
 
@@ -259,7 +259,7 @@ var productFacts = []productFact{
 			"the responses, because a status is a payment question.",
 		Sources: []factSource{
 			{File: "web/src/app/docs/sales/page.tsx", Anchor: "response-only form"},
-			{File: "web/src/app/docs/sales/page.tsx", Anchor: "the status filter is a payment question"},
+			{File: "web/src/app/docs/sales/page.tsx", Anchor: "the status filter does not appear"},
 		},
 	},
 	{
@@ -271,7 +271,7 @@ var productFacts = []productFact{
 			"sound.",
 		Sources: []factSource{
 			{File: "web/src/app/docs/sales/page.tsx", Anchor: "Live pill"},
-			{File: "web/src/app/docs/sales/page.tsx", Anchor: "buyers are never played a sound"},
+			{File: "web/src/app/docs/sales/page.tsx", Anchor: "only the dashboard plays a sound"},
 		},
 	},
 

@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 
 import { DICT } from "../components/i18nDict.ts";
 import { apiErrorKey } from "./apiErr.ts";
+import { sectionsOf } from "./docsProseReader.ts";
 import {
   RESERVED_SUBDOMAIN_CODE,
   RESERVED_SUBDOMAIN_KEY,
@@ -390,11 +391,22 @@ test("both Go transports carry the token for a RENAME, not only for a create", (
 test("the docs page documents the reserved-name rule, and the nav reaches it", () => {
   // AGENTS.md documentation parity: the refusal is a shipped behaviour, so it is
   // documented and the docs nav can reach the section.
+  //
+  // The customize page renders through src/app/docs/docsProse since the prose
+  // rewrite: `#workspace-address` is a section `id` in its SECTIONS table, and the
+  // shared renderer turns that into `<section id={s.id}>`. Both halves are still
+  // asserted — the anchor is DECLARED by the page (read structurally, so a
+  // commented-out id cannot satisfy it) and the renderer emits it into the DOM.
   const anchor = "/docs/customize#workspace-address";
+  const ids = sectionsOf(docsPage).map((s) => s.id);
+  assert.ok(
+    ids.includes("workspace-address"),
+    `the customize docs page has no #workspace-address section for the rule (sections: ${ids.join(", ")})`,
+  );
   assert.match(
-    docsPage,
-    /id="workspace-address"/,
-    "the customize docs page has no #workspace-address section for the rule",
+    read("../app/docs/docsProse.tsx"),
+    /<section\b[^>]*\bid=\{s\.id\}/,
+    "the prose renderer does not put a section id into the DOM, so #workspace-address would not scroll",
   );
   assert.match(
     docsPage,

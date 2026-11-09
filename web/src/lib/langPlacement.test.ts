@@ -74,6 +74,9 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { LANGS } from "../components/i18nDict.ts";
+// The /docs/customize page renders through the shared prose renderer now: a
+// section id lives in `const SECTIONS: Section[]`, not in an `<h2 id="…">`.
+import { sectionsOf } from "./docsProseReader.ts";
 // The write-order contract's executable half (card t_04b728a9): the queue the
 // provider writes through is exercised below, not just pattern-matched.
 import { orderedWriter } from "./langWriteQueue.ts";
@@ -386,10 +389,14 @@ test("the field's inline \"?\" link points at a docs page and anchor that exist"
       "AGENTS.md documentation parity requires one next to the field",
   );
   const docs = read(DOCS_PAGE);
-  assert.match(
-    docs,
-    /id="language"/,
-    `the docs page ${DOCS_PAGE} no longer has the #language anchor the link targets`,
+  // The anchor is the section's SECTIONS id now (the renderer derives the
+  // `#language` heading anchor from it), so the guard asks the page's structure
+  // for it directly and still fails if the section is gone.
+  const languageSection = sectionsOf(docs, DOCS_PAGE).find((s) => s.id === "language");
+  assert.ok(
+    languageSection,
+    `the docs page ${DOCS_PAGE} no longer has the #language anchor the link targets — its ` +
+      `SECTIONS entry with id "language" is gone`,
   );
   const layout = read(DOCS_LAYOUT);
   assert.ok(

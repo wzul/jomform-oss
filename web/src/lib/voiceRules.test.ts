@@ -25,19 +25,50 @@ const source = readFileSync(DICT_PATH, "utf8");
 // `chat.proposal.value.variationSet`). An earlier audit used a lowercase-only
 // key pattern and under-counted the dashed strings by 4x, so the class here is
 // explicit and the count is asserted below.
-function englishStrings(): Array<{ key: string; text: string }> {
-  const out: Array<{ key: string; text: string }> = [];
+//
+// Each key's window ENDS where the next key begins. It used to be a fixed 4,000
+// characters, which reached into the following entries: when the `en` pattern
+// could not read a value (it only understood double quotes) the extractor
+// returned the NEXT key's English and attributed it to this one. That is worse
+// than skipping it. The next key was counted twice, the real value never
+// reached a rule, and four strings passed every check while the pages rendered
+// them: land.mcpbody ("… RM25 —") and the em dashes in set.domainsHelp and
+// set.pendingDns.
+function keyWindows(source: string): Array<{ key: string; window: string }> {
   const key = /"([A-Za-z0-9._]+)"\s*:\s*\{/g;
+  const starts: Array<{ key: string; at: number }> = [];
   let m: RegExpExecArray | null;
   while ((m = key.exec(source)) !== null) {
-    const window = source.slice(m.index + m[0].length, m.index + m[0].length + 4000);
-    const en = /\ben\s*:\s*"((?:[^"\\]|\\.)*)"/s.exec(window);
-    if (en) out.push({ key: m[1], text: en[1] });
+    starts.push({ key: m[1], at: m.index + m[0].length });
+  }
+  return starts.map((entry, i) => ({
+    key: entry.key,
+    window: source.slice(entry.at, i + 1 < starts.length ? starts[i + 1].at : source.length),
+  }));
+}
+
+// A value is double-quoted, single-quoted (what a string containing `\"` uses)
+// or backticked (what a string spanning lines uses). The opening quote is
+// captured once and required again by the backreference, so an apostrophe
+// inside a single-quoted value ("we'll") cannot end it early, and `\\.` steps
+// over an escaped quote.
+const EN_VALUE = /\ben\b\s*:\s*(?<open>['"`])(?<value>(?:[^\\]|\\.)*?)\k<open>/s;
+
+// Whether an entry defines English at all, independent of whether the extractor
+// could read it. The coverage test compares the two counts, so a quote style
+// the pattern stops understanding fails instead of quietly vanishing.
+const DEFINES_EN = /\ben\b\s*:/;
+
+function englishStrings(source: string): Array<{ key: string; text: string }> {
+  const out: Array<{ key: string; text: string }> = [];
+  for (const { key, window } of keyWindows(source)) {
+    const en = EN_VALUE.exec(window);
+    if (en) out.push({ key, text: en.groups!.value });
   }
   return out;
 }
 
-const strings = englishStrings();
+const strings = englishStrings(source);
 
 // A string that IS code, not prose: the CSS placeholder shows `color:#e11d48`.
 const CODE_KEYS = new Set(["bld.inlineStylePh"]);
@@ -50,6 +81,37 @@ test("the harness sees the whole dictionary", () => {
     strings.length > 2000,
     `expected the extractor to find every English string, found ${strings.length}`,
   );
+  // The floor above cannot tell "2,170 strings" from "2,170 strings, four of
+  // them a later key's". This can: every entry that defines `en` must yield a
+  // value, so an unread quote style fails loudly instead of shifting the next
+  // key's text into this key's rules.
+  const windows = keyWindows(source);
+  const defining = windows.filter(({ window }) => DEFINES_EN.test(window)).length;
+  assert.equal(
+    strings.length,
+    defining,
+    `${defining} keys define an English value but the extractor read ${strings.length}: ` +
+      windows
+        .filter(({ window }) => DEFINES_EN.test(window) && !EN_VALUE.exec(window))
+        .map(({ key }) => key)
+        .join(", "),
+  );
+});
+
+test("a value in any quote style is read, not borrowed from the next key", () => {
+  // Written the way the dictionary writes them. The old extractor returned the
+  // NEXT key's English for the first two, so the rules never saw them.
+  const tick = "`";
+  const sample = [
+    '  "sample.single": { en: \'Say \\"hello\\" then stop\', ms: "x" },',
+    `  "sample.backtick": { en: ${tick}{domain} added${tick}, ms: "y" },`,
+    '  "sample.double": { en: "Dashboard", ms: "z" },',
+  ].join("\n");
+  assert.deepEqual(englishStrings(sample), [
+    { key: "sample.single", text: 'Say \\"hello\\" then stop' },
+    { key: "sample.backtick", text: "{domain} added" },
+    { key: "sample.double", text: "Dashboard" },
+  ]);
 });
 
 test("no English string carries an em dash", () => {

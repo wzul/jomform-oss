@@ -113,16 +113,107 @@ const devCacheHeader =
     ? "public, max-age=31536000, immutable"
     : "no-store, must-revalidate";
 
+// ── baseline security headers for EVERY response ─────────────────────────────
+//
+// THE DEFECT (card t_1a491389, measured on prod v1.29.0 on 2026-11-09):
+//
+//   $ curl -sSI https://jomform.com/
+//   cache-control: private, no-cache, no-store, max-age=0, must-revalidate
+//   x-powered-by: Next.js            ← the ONLY security-relevant line
+//
+// The Go API on the same product answers /healthz with X-Content-Type-Options,
+// Strict-Transport-Security, Referrer-Policy and X-Frame-Options
+// (api/internal/httpapi/middleware/secure.go) — but every HTML page a person
+// actually opens (/, /docs, /login, the dashboard) comes from THIS app and
+// carried none of them, so the product's public surface was protected and its
+// front door was not. `poweredByHeader` was also left at Next's default (`true`),
+// which is free reconnaissance: the banner names the framework and its major
+// version to any scanner picking a known CVE.
+//
+// WHY ONE CATCH-ALL RULE AND NOT PER-ROUTE. The headers belong to every
+// response the app emits: a page added tomorrow is covered without anyone
+// remembering to add its route here, and the failure mode of a per-route list is
+// silent (the new page simply has no headers, and nothing errors). The static
+// rule below is a SECOND entry, not a replacement — Next applies every matching
+// rule, so `/_next/static/*` keeps its immutable Cache-Control and gains the
+// security headers too.
+//
+// X-Frame-Options: SAMEORIGIN, and why that does not break embeds.
+//   The form embed is `/embed/f/{workspace}/{slug}`, served by the GO API, never
+//   by this app: Caddy routes `@api path … /embed/*`
+//   (deploy/selfhost/Caddyfile) and Traefik's `jf-api` rule carries
+//   `PathPrefix(`/embed/`)` (deploy/vps/traefik-jomform.yml). That route sets its
+//   own permissive framing (`X-Frame-Options: ALLOWALL` + `frame-ancestors *`),
+//   pinned in Go by `api/internal/httpapi/embed_docs_snippet_test.go`. Nothing in
+//   this app frames a Next page either (no `<iframe>` in web/src/app or
+//   web/src/components — the only iframe the dashboard renders is a form on the
+//   workspace host, i.e. the API). So SAMEORIGIN costs no functionality, and it
+//   matches the value the API's own public pages use. It is intentionally NOT
+//   `DENY`: a same-origin frame is the one case a future dashboard feature (an
+//   in-app preview) may legitimately need, and SAMEORIGIN already refuses every
+//   cross-origin framer, which is the clickjacking threat.
+//
+// CSP: frame-ancestors ONLY, and why no nonce-based script policy.
+//   `Content-Security-Policy: frame-ancestors 'self'` is the modern equivalent of
+//   the X-Frame-Options line above (browsers prefer CSP where both are present);
+//   it constrains FRAMING and cannot affect scripts, styles or network calls, so
+//   it cannot break anything. A full script CSP was evaluated and rejected on
+//   measured grounds, not taste:
+//     * the built HTML contains inline scripts that MUST execute — Next's RSC
+//       bootstrap `(self.__next_f=self.__next_f||[]).push([0])`, the Turbopack
+//       chunk registry, and our own JSON-LD on `/` (3 on `/`, 2 on `/docs`,
+//       measured on the prod v1.29.0 HTML);
+//     * a nonce would have to be minted per response and threaded into every one
+//       of those tags by Next, which means middleware and `'strict-dynamic'` —
+//       and `headers()` here is STATIC (one value per build), so the nonce cannot
+//       be produced at this layer at all;
+//     * Cloudflare sits in front of prod and can inject its own scripts (Rocket
+//       Loader, Web Analytics) from the zone's dashboard with no repo change.
+//       Those cannot carry our nonce, so a strict script-src would break the zone
+//       silently, in prod, after a settings change nobody reviewed here.
+//   Shipping `script-src 'unsafe-inline'` to make that work would be theatre. So
+//   this CSP carries the one directive this layer can honestly assert, and the
+//   guard test reds if a script/style directive is ever added to it.
+//
+// Permissions-Policy denies only features the app never requests.
+//   camera / geolocation / microphone / usb — no call site uses any of them.
+//   `clipboard-write` is deliberately NOT denied: 8 call sites use
+//   navigator.clipboard.writeText (Copy link / Copy code on /builder, /media,
+//   /chat, /mcp, /brand, /profile). `payment` is left at the browser default too:
+//   nothing in this app calls the Payment Request API, but blocking a payment
+//   capability is a product decision, not a header tidy-up.
+//
+// HSTS mirrors the API's value in middleware/secure.go. It is inert over plain
+// http (browsers ignore it), so a `http://localhost` self-host instance is
+// unaffected, and it closes the one-response http window before the first
+// redirect on a real hostname.
+//
+// Guards: `web/src/lib/securityHeaders.test.ts` (the config Next loads) and
+// `web/e2e/security-headers.spec.ts` (real responses from the built app).
+const SECURITY_HEADERS = [
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "X-Frame-Options", value: "SAMEORIGIN" },
+  { key: "Content-Security-Policy", value: "frame-ancestors 'self'" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "Permissions-Policy", value: "camera=(), geolocation=(), microphone=(), usb=()" },
+  { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+];
+
 const nextConfig = {
   output: "standalone",
   agentRules: false,
+  // Removes `x-powered-by: Next.js` from every response. See the block above.
+  poweredByHeader: false,
   allowedDevOrigins: DEV_HOSTS,
   async headers() {
     const staticHeaders =
       process.env.NODE_ENV === "development"
         ? [{ key: "Cache-Control", value: devCacheHeader }]
         : [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }];
-    return [{ source: "/_next/static/:path*", headers: staticHeaders }];
+    return [
+      { source: "/:path*", headers: SECURITY_HEADERS },
+      { source: "/_next/static/:path*", headers: staticHeaders },
+    ];
   },
 };
 

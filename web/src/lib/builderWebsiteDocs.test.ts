@@ -45,31 +45,31 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+// The guide renders through the shared prose renderer: a section is an entry of
+// `const SECTIONS: Section[]` keyed by `id: "…"`, not an `<h2 id="…">` in JSX.
+// `sectionsOf` gives the anchor to this guard directly, so the section can be
+// found by ITS id while the prose around it is read as text.
+import { sectionsOf } from "./docsProseReader.ts";
+
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
 const PAGE = read("../app/docs/builder/page.tsx");
 const GO_RULE = read("../../../api/internal/formfields/formfields.go");
 const GO_TEST = read("../../../api/internal/formfields/website_url_t_27709300_test.go");
 
-/** The prose of one docs section, as the reader gets it: tags stripped, entities
- *  decoded, whitespace collapsed. Keyed on the section's heading id so a
- *  reordering of the page cannot silently hand this test another paragraph. */
+/** The prose of one docs section, as the reader gets it: the section's title and
+ *  body strings, whitespace collapsed. Keyed on the section's `id` in SECTIONS so
+ *  a reordering of the page cannot silently hand this test another paragraph, and
+ *  so a renamed/removed anchor still fails loudly. */
 function sectionText(src: string, id: string): string {
-  const start = src.indexOf(`id="${id}"`);
-  assert.ok(start >= 0, `web/src/app/docs/builder/page.tsx has no section with id="${id}"`);
-  const afterHeading = src.indexOf("</h2>", start);
-  assert.ok(afterHeading > start, `the id="${id}" heading is not closed by </h2>`);
-  const nextHeading = src.indexOf("<h2", afterHeading);
-  const body = src.slice(afterHeading + "</h2>".length, nextHeading > 0 ? nextHeading : undefined);
-  return body
-    .replace(/<[^>]+>/g, " ")
-    // JSX's explicit-space containers (`{" "}`) are not prose the reader sees.
-    .replace(/\{\s*"\s*"\s*\}/g, " ")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&ldquo;/g, '"')
-    .replace(/&rdquo;/g, '"')
-    .replace(/&amp;/g, "&")
+  const section = sectionsOf(src, "page.tsx").find((s) => s.id === id);
+  assert.ok(
+    section,
+    `web/src/app/docs/builder/page.tsx has no SECTIONS entry with id="${id}" — the anchor this ` +
+      `guard reads its prose from is gone`,
+  );
+  return [section.title, ...section.strings]
+    .join(" ")
     .replace(/\s+/g, " ")
     .trim();
 }

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { docsMetadata } from "../../../lib/docsMetadata";
+import { DocsPage, type Section } from "../docsProse";
 
 export const metadata: Metadata = docsMetadata({
   title: "MCP tool reference — JomForm Docs",
@@ -8,10 +9,11 @@ export const metadata: Metadata = docsMetadata({
   path: "/docs/mcp",
 });
 
-// Mirrors the tool registry in the api/internal/mcpsrv package (issue #395). It
-// is NOT auto-generated:
+// This page has two halves: the prose a client has to read, then the tool rows.
+// The tool rows mirror the registry in the api/internal/mcpsrv package
+// (issue #395) and are NOT auto-generated:
 // this list is edited by hand, which is exactly how it fell ten tools behind the
-// registry. Keep it in step when tools are added or changed — and
+// registry. Keep it in step when tools are added or changed, because
 // src/lib/mcpToolInventory.test.ts fails the build if you forget.
 //
 // Every row here must be a REGISTERED tool, and this page lists the registry in
@@ -24,8 +26,9 @@ export const metadata: Metadata = docsMetadata({
 // NOTE for anyone editing these comments: src/lib/docsToolClaims.test.ts scans
 // this file for a name presented as a tool, so a SNAKE_CASE identifier in brackets
 // a few words after the word "tool"/"tools" is read as a claim and must be a
-// registered tool. Ordinary prose and a card id in brackets there are fine — that
-// shape is strict, and it skips this repo's card-id spelling (card t_3926a5dd).
+// registered tool. Ordinary prose and a card id in brackets there are fine, since
+// that shape is strict and it skips this repo's card-id spelling (t_3926a5dd).
+
 const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: string }[] }[] = [
   {
     group: "Forms",
@@ -408,209 +411,148 @@ const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: 
   },
 ];
 
+// SHORT ON PURPOSE. Every tool name, field name and asserted behaviour survives,
+// because /docs is what a developer greps. The section ids are link targets from
+// /docs and from the dashboard's inline "?" links.
+const SECTIONS: Section[] = [
+  {
+    id: "connect",
+    title: "Connect an agent",
+    icon: "🔌",
+    body: [
+      "JomForm speaks the **Model Context Protocol**. Point any MCP client at `https://mcp.jomform.com/mcp` and it discovers the tools on its own.",
+      "This page is the **whole registry**: the `api/internal/mcpsrv` package at this release.",
+      "A guard fails the build if the page and the registry drift apart in either direction.",
+      {
+        note: "The connector authenticates with **OAuth 2.1** using an authorization code and PKCE. There are no API keys to copy or rotate.",
+      },
+    ],
+  },
+  {
+    id: "oauth-discovery",
+    title: "OAuth discovery",
+    icon: "🔐",
+    body: [
+      "A client discovers how to authenticate from the server itself. Every step below is a document or a challenge it can read.",
+      {
+        steps: [
+          "An unauthenticated call to `https://mcp.jomform.com/mcp` is refused with `401` and `WWW-Authenticate: Bearer resource_metadata=\"…\"`.",
+          "That header names the **protected-resource metadata** URL.",
+          "The client fetches `/.well-known/oauth-protected-resource`, defined by RFC 9728.",
+          "The document names the resource, the authorization server, the scopes and the token header.",
+          "It then fetches `/.well-known/oauth-authorization-server`, RFC 8414, for the authorize, token, revoke and registration endpoints.",
+          "It registers itself dynamically and opens the authorize URL in the browser, where you sign in and grant access.",
+          "It exchanges the code for an access token, sending the `resource` parameter on both requests.",
+          "JomForm rejects a `resource` that is not this MCP endpoint, and issues no token.",
+          "Every later call to `/mcp` carries the token as a Bearer credential.",
+        ],
+      },
+      "The resource is `https://mcp.jomform.com/mcp`. The authorization server is `https://mcp.jomform.com`, and the scopes are `read` and `readwrite`.",
+    ],
+  },
+  {
+    id: "structured-output",
+    title: "Structured output",
+    icon: "📦",
+    body: [
+      "Tool results come back as **structured content**. Every tool declares the shape of that result in its `outputSchema`.",
+      "All tools declare an **object** schema. That is what keeps the server usable by a client that validates `tools/list` strictly.",
+      "Every listing tool wraps its array in an object: the records sit under `items`.",
+      "A paginated listing also carries `page`, `limit` and `total`.",
+      "So `list_products` returns `{\"items\": [...]}`, not a bare array.",
+      "Batch tools report their summary beside the per-item outcomes. `capture_all_pending_sales` returns `{\"requested\", \"captured\", \"failed\", \"results\": [...]}`.",
+      "Single-record tools return their fields at the top level of the object.",
+    ],
+  },
+  {
+    id: "connector-scopes",
+    title: "OAuth connector scopes",
+    icon: "🎫",
+    body: [
+      "A connector's grant carries one of two **scopes**. The MCP client asks for the one it wants on the authorize request.",
+      "The request carries `?scope=…`, space-delimited. JomForm grants exactly what was asked for and records it on the token.",
+      "Both scopes are advertised in the protected-resource and authorization-server metadata, beside the other fields a client needs.",
+      {
+        list: [
+          "`read`: read-only. Every listing and getter works. Every tool that creates, updates, deletes, archives, cancels, refunds or generates a stored key is refused with a scope error.",
+          "A `read` grant cannot upgrade itself. `create_api_key` is a write, so a read-only connector can never mint a wider credential.",
+          "`readwrite`: read and write. A request that omits `scope` defaults to readwrite, so an existing client is never silently downgraded.",
+        ],
+      },
+      "The scope is **fixed for the life of the connection**. Refreshing an access token returns the same grant, so a read grant never widens.",
+      "A request that names a scope the server does not advertise is refused with `invalid_scope`.",
+      "It is never silently widened to readwrite, or narrowed to read.",
+      "The token response echoes the **issued grant**, not the advertised list, so a client can read back what it holds.",
+    ],
+  },
+  {
+    id: "api-key-scopes",
+    title: "API-key scopes",
+    icon: "🔑",
+    body: [
+      "An API key carries a **scope**, which says what that credential may do at all.",
+      {
+        list: [
+          "`readonly`: read tools only. Every read works.",
+          "Every tool that creates, updates, deletes, archives, cancels, revokes or generates a stored key is refused with a scope error.",
+          "A readonly key cannot mint another key, so it cannot escalate itself to readwrite.",
+          "`readwrite`: read and write. It is the default grant for an OAuth connector unless the client asks for `read`.",
+          "`admin`: kept for existing keys. It satisfies every scope, so it behaves as readwrite.",
+        ],
+      },
+      "Scope is a separate **axis** from your workspace role: `read_only`, `manage` or `admin`.",
+      "A write has to satisfy both. A `readwrite` key held by a `read_only` member is still refused, and so is a `readonly` key held by the owner.",
+      "Reading never requires the write scope.",
+      "One tool looks wider than it is. `get_webhook_signing_key` needs `readwrite` only when it must create the account's keypair on first use.",
+      "Reading an existing key does not.",
+    ],
+  },
+];
+
+
 export default function McpReferencePage() {
   return (
-    <div className="max-w-3xl">
-      <h1 className="text-3xl font-bold tracking-tight text-slate-900">MCP tool reference</h1>
-      <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        Every tool JomForm exposes to connected AI agents via the Model Context Protocol. Connect any MCP client to <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">https://mcp.jomform.com/mcp</code> and agents discover these tools automatically. This page lists the whole registry — the <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">api/internal/mcpsrv</code> package at this release — and a guard fails the build if the two drift apart in either direction.
-      </p>
-      <p className="mt-2 text-sm text-[var(--jf-muted)]">
-        {TOOL_GROUPS.reduce((n, g) => n + g.tools.length, 0)} tools across {TOOL_GROUPS.filter((g) => g.tools.length > 0).length} categories.
-      </p>
+    <div className="max-w-[36rem]">
+      <DocsPage
+        title="MCP tool reference"
+        lead="Every tool JomForm exposes to a connected agent, with the OAuth discovery and scope rules a client has to follow."
+        sections={SECTIONS}
+      />
 
-      {/* Issue #509: the OAuth discovery surface. Every MCP client is required
-          to discover the authorization server through the protected-resource
-          metadata, so the documents a client will fetch (and the 401 challenge
-          that points at them) are documented here rather than left implicit. */}
-      <section className="mt-8">
-        <h2 className="text-lg font-semibold text-slate-900">OAuth discovery</h2>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">
-          The connector authenticates with OAuth 2.1 (authorization code + PKCE, no API keys). A client
-          discovers how to authenticate from the server itself:
+      <section id="tools" className="mt-10 scroll-mt-24">
+        <h2 className="flex items-center gap-2 text-lg font-semibold text-[var(--jf-text)]">
+          <span aria-hidden="true" className="text-base">
+            🧰
+          </span>
+          Tool reference
+        </h2>
+        <p className="mt-2 text-base leading-7 text-[var(--jf-text-secondary)]">
+          {TOOL_GROUPS.reduce((n, g) => n + g.tools.length, 0)} tools across{" "}
+          {TOOL_GROUPS.filter((g) => g.tools.length > 0).length} categories. Every row below is a tool the registry
+          registers.
         </p>
-        <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
-          <li>
-            An unauthenticated request to <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">https://mcp.jomform.com/mcp</code>{" "}
-            is refused with <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">401</code> and a{" "}
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">WWW-Authenticate: Bearer resource_metadata=&quot;…&quot;</code>{" "}
-            header naming the protected-resource metadata URL.
-          </li>
-          <li>
-            The client fetches <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">/.well-known/oauth-protected-resource</code>{" "}
-            (RFC 9728). It names the protected resource (<code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">https://mcp.jomform.com/mcp</code>),
-            the authorization server (<code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">https://mcp.jomform.com</code>), the scopes{" "}
-            (<code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">read</code> and{" "}
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code>) and that the bearer token is presented in the{" "}
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">Authorization</code> header.
-          </li>
-          <li>
-            It then fetches the authorization-server metadata at{" "}
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">/.well-known/oauth-authorization-server</code> (RFC 8414) for the
-            authorize, token, revoke and registration endpoints.
-          </li>
-          <li>
-            It registers itself dynamically, opens the authorize URL in the browser (you log in and grant access), and
-            exchanges the code for an access token — sending the{" "}
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">resource</code> parameter on both the authorize and token
-            requests. JomForm validates it: a value that is not this MCP endpoint is rejected and no token is issued.
-          </li>
-          <li>Every later call to /mcp carries the access token as a Bearer credential.</li>
-        </ol>
-      </section>
 
-      {/* Every list tool returns the same object envelope. This is documented
-          because a client that validates tools/list rejects the WHOLE list
-          when one tool advertises a non-object output schema, so the shape is
-          a compatibility contract, not an implementation detail. */}
-      <section className="mt-8">
-        <h2 className="text-lg font-semibold text-slate-900">Structured output</h2>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">
-          Tool results are returned as structured content, and every tool declares the shape of that
-          result in its <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">outputSchema</code>. All tools
-          declare an <em>object</em> schema, which is what makes the server usable with a client that
-          validates <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">tools/list</code> strictly.
-        </p>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">
-          Every listing tool therefore wraps its array in an object: the records are under{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">items</code>, and paginated listings also carry{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">page</code>,{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">limit</code> and{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">total</code>. So{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">list_products</code> returns{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">{`{"items": [...]}`}</code>, not a bare array.
-        </p>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">
-          Batch tools report their summary next to the per-item outcomes:{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">capture_all_pending_sales</code> returns{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">
-            {`{"requested", "captured", "failed", "results": [...]}`}
-          </code>
-          . Single-record tools return their fields at the top level of the object.
-        </p>
-      </section>
-
-      {/* Issue #645: the scope model. Documented because the two axes are easy
-          to conflate, and conflating them is exactly what let a readonly key
-          write (the API-key scope was silently dropped from the write gate). */}
-      <section className="mt-8">
-        <h2 className="text-lg font-semibold text-slate-900">OAuth connector scopes</h2>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">
-          A connector authenticates with OAuth 2.1, and the grant it receives carries one of two
-          scopes. The MCP client asks for the scope it wants on the authorize request (
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">?scope=…</code>, space-delimited); JomForm
-          grants exactly what was asked for and records it on the token it issues. Both are
-          advertised in the protected-resource and authorization-server metadata, alongside the
-          other fields a client needs.
-        </p>
-        <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
-          <li>
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">read</code> — read-only. The agent can
-            call every listing and getter; every tool that creates, updates, deletes, archives,
-            cancels, refunds or generates a stored key is refused with a scope error. A read
-            grant also cannot upgrade itself: <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">create_api_key</code>{" "}
-            is a write, so a read-only connector can never mint a wider credential.
-          </li>
-          <li>
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code> — read and write. This is
-            the grant for a client that does not ask for a scope: the request omitting{" "}
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">scope</code> defaults to readwrite, so an
-            already-connected client is never silently downgraded.
-          </li>
-        </ul>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">
-          The scope is fixed for the life of the connection: refreshing an access token returns the
-          same grant as the token it replaces, so a read grant never widens. A request naming a
-          scope this server does not advertise is refused with{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">invalid_scope</code> — it is never silently
-          widened to readwrite or narrowed to read. The token response echoes the issued grant, not
-          the advertised list, so a client can read back what it actually holds.
-        </p>
-      </section>
-
-      <section className="mt-8">
-        <h2 className="text-lg font-semibold text-slate-900">API-key scopes</h2>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">
-          An API key carries a <em>scope</em>, which says what that credential may do at all. It is
-          one of:
-        </p>
-        <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-600">
-          <li>
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readonly</code> — read tools only. Every
-            read works; every tool that creates, updates, deletes, archives, cancels, revokes or
-            generates a stored key is refused with a scope error. A readonly key cannot mint another
-            key, so it cannot escalate itself to readwrite.
-          </li>
-          <li>
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code> — read and write. This is
-            the default grant for an OAuth connector, unless it asks for{" "}
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">read</code>.
-          </li>
-          <li>
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">admin</code> — kept for existing keys; it
-            satisfies every scope, so it behaves as readwrite.
-          </li>
-        </ul>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">
-          Scope is a separate axis from your <em>workspace role</em> (
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">read_only</code>,{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">manage</code>,{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">admin</code>). A write has to satisfy both: a{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code> key held by a{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">read_only</code> member is still refused, and
-          so is a <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readonly</code> key held by the owner.
-          Reading never requires the write scope.
-        </p>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">
-          A few tools are worth calling out because their name suggests otherwise:{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">get_webhook_signing_key</code> needs{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code> only when it has to{" "}
-          <em>create</em> the account&apos;s keypair on first use — reading an existing key does not.
-        </p>
-      </section>
-
-      {TOOL_GROUPS.map((g) => (
-        <section key={g.group} className="mt-8">
-          <h2 className="text-lg font-semibold text-slate-900">{g.group}</h2>
-          {g.note && (
-            /* A group note is prose we write, but it sits in the same data
-               array as the tool rows, so it gets the same break guard as the
-               descriptions below — one rule for every string this page renders
-               out of TOOL_GROUPS. */
-            <p className="mt-2 text-sm leading-relaxed text-slate-600 [overflow-wrap:anywhere]">{g.note}</p>
-          )}
-          <div className="mt-3 space-y-3">
-            {g.tools.map((t) => (
-              <div key={t.name} className="rounded-lg border border-slate-200 p-4">
-                {/* The tool name is a fixed identifier with no break opportunity
-                    of its own: `admin_requeue_dead_letter_event` measures ~260px
-                    at font-mono text-sm, which paints past the card's border
-                    once the content column drops below that (320px viewport).
-                    `break-all` only breaks when it has to, so the name still
-                    renders on one line wherever it fits. */}
-                <code className="font-mono text-sm font-semibold text-[var(--jf-primary)] break-all">{t.name}</code>
-                {/* A description is DATA, not prose we control. Several carry a
-                    long unbreakable run: register_form_fields publishes its
-                    whole type alternation as one 138-character token
-                    (`name|email|…|captcha`), and others carry
-                    `sale.paid|sale.failed|subscription.charged|*` or
-                    `(privacy|terms|refund)`. Ordinary word wrapping has no
-                    break opportunity inside such a run, so this paragraph
-                    measured 898px wide in a 308px card at a 390px viewport and
-                    the whole page panned sideways 549px — /docs/mcp was the
-                    only /docs page that did.
-
-                    `[overflow-wrap:anywhere]` breaks the run at the column
-                    edge and, unlike `break-word`, also drops the paragraph's
-                    min-content to one character so the card can shrink. It
-                    does not shorten anything: the alternation still reads in
-                    full, wrapped across lines. */}
-                <p className="mt-1 text-sm leading-relaxed text-slate-600 [overflow-wrap:anywhere]">{t.desc}</p>
-              </div>
-            ))}
+        {TOOL_GROUPS.map((g) => (
+          <div key={g.group} className="mt-8">
+            <h3 className="text-base font-semibold tracking-tight text-[var(--jf-text)]">{g.group}</h3>
+            {g.note && (
+              <p className="mt-2 text-base leading-7 text-[var(--jf-text-secondary)] [overflow-wrap:anywhere]">
+                {g.note}
+              </p>
+            )}
+            <div className="mt-3 space-y-3">
+              {g.tools.map((t) => (
+                <div key={t.name} className="rounded-xl border border-[var(--jf-border)] p-4">
+                  <code className="break-all font-mono text-sm font-semibold text-[var(--jf-primary-strong)]">{t.name}</code>
+                  <p className="mt-1 text-sm leading-6 text-[var(--jf-text-secondary)] [overflow-wrap:anywhere]">
+                    {t.desc}
+                  </p>
+                </div>
+              ))}
+            </div>
           </div>
-        </section>
-      ))}
+        ))}
+      </section>
     </div>
   );
 }

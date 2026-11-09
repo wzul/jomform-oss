@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { docsMetadata } from "../../../lib/docsMetadata";
-
+import { DocsPage, type Section } from "../docsProse";
 import {
   API_BASE,
   OPENAPI_PUBLIC_URL,
@@ -20,483 +20,248 @@ export const metadata: Metadata = docsMetadata({
   path: "/docs/api",
 });
 
-// The REST API reference (issue #395 docs structure).
+// The REST API reference, rewritten for the /docs prose renderer.
 //
-// EVERYTHING BELOW THAT NAMES AN ENDPOINT COMES FROM THE CONTRACT.
-//   The endpoint tables are rendered from lib/openapi.ts, which reads
-//   web/src/lib/openapiSpec.gen.ts — the generated copy of
-//   api/internal/httpapi/openapi_routes.go. The api test suite
-//   (openapi_parity_test.go) fails when that registry and the real route table in
-//   rest.go disagree in either direction, so this page cannot list an endpoint
-//   the API does not serve, and cannot silently miss one it does.
+// PROSE IS SHORT AND THE DATA IS THE CONTRACT. The operation count, the endpoint
+// rows, the access legend, the throttled list, the write-gated reads and the six
+// worked examples all come from lib/openapi.ts — the shaping layer over the
+// generated contract — so this page cannot list an operation the API does not
+// serve, and cannot silently miss one it does. The api suite pins the contract
+// to the real route table (openapi_parity_test.go) and executes every example
+// (openapi_examples_test.go).
 //
-//   The worked examples come from web/src/lib/apiExamples.gen.ts and each one is
-//   EXECUTED against a live server by openapi_examples_test.go. The page does not
-//   print an example nobody has run.
-//
-// THE PROSE IS THE PART THIS PAGE OWNS, and it is deliberately narrow: what the
-// API is for, how to authenticate, what the scopes mean, the error shape, and
-// the two facts a reader must not have to discover by experiment — there are no
-// CORS headers, and almost nothing is rate limited. Those two sentences are
-// asserted by web/src/lib/docsApi.test.ts, so a later edit cannot quietly drop
-// them.
+// THE SECTION IDS ARE A CONTRACT with /docs and with the dashboard's inline "?"
+// links, so the nine anchors are unchanged: quickstart, auth, scopes, errors,
+// limits, cors, endpoints, versioning, testing.
 
+const total = endpointCount();
+const limited = rateLimitedEndpoints();
+
+// The one-line definition of each access level, applied to every row carrying it.
 const ACCESS_LABELS: Record<string, string> = {
   read: "Any authenticated key (readonly or readwrite)",
   write: "readwrite key; manage/admin role inside a ?workspace= scope",
   admin: "readwrite key; admin role in the scoped workspace",
-  session: "Browser session only — an API key gets 401",
+  session: "Browser session only, and an API key gets 401",
 };
 
-// The in-page nav. It is a list rather than nine hand-written <li> elements so
-// that web/src/lib/docsApi.test.ts can require it to cover EVERY <section id> on
-// the page — the hand-written version silently listed 7 of the 9 sections
-// ("Versioning & changelog" and "Building and testing against the API" were
-// reachable only by scrolling).
-const PAGE_SECTIONS: { id: string; title: string }[] = [
-  { id: "quickstart", title: "Start in 5 minutes" },
-  { id: "auth", title: "Authentication" },
-  { id: "scopes", title: "Scopes" },
-  { id: "errors", title: "Errors" },
-  { id: "limits", title: "Rate limits" },
-  { id: "cors", title: "No CORS" },
-  { id: "endpoints", title: "Endpoint reference" },
-  { id: "versioning", title: "Versioning & changelog" },
-  { id: "testing", title: "Building and testing against the API" },
+// The legend is a DEFINITION OF THE LEVEL, so the caveat has to be rendered from
+// the contract too: GET /v1/rest/settings/webhook-key is gated by the key scope
+// alone, and the "write" label promises a ?workspace= role as well.
+const ACCESS_LEGEND: string[] = accessLevels().map((level) => {
+  const label = `**${level}**: ${ACCESS_LABELS[level] ?? ""}.`;
+  if (level !== "write" || scopeOnlyWriteRoutes().length === 0) return label;
+  const routes = scopeOnlyWriteRoutes()
+    .map((e) => `${e.method} ${e.path}`)
+    .join(", ");
+  return `${label} **Not every write route:** ${routes} applies the key scope only and reads no \`?workspace=\` role.`;
+});
+
+// The reads a readonly key is refused, straight from the contract.
+const WRITE_GATED_READS: string[] = writeGatedReads().map(
+  (e) => `**${e.method}** \`${e.path}\` — ${e.summary}`,
+);
+
+// Only the routes that are throttled, with the policy the contract declares.
+const THROTTLED_ROUTES: string[] = limited.map(
+  (e) => `**${e.method}** \`${e.path}\` — ${e.rateLimit} (${e.summary})`,
+);
+
+// One heading and one table per tag, so the reference stays scannable. The rows
+// are generated: a hand-typed row is the defect this page exists to prevent.
+const ENDPOINT_BLOCKS: Section["body"] = endpointsByTag().flatMap((group) => [
+  { heading: `${group.tag}` },
+  {
+    table: {
+      label: `Endpoints: ${group.tag}`,
+      head: ["Method", "Path", "Access", "What it does"],
+      rows: group.endpoints.map((e) => [
+        `${e.method}`,
+        `\`${e.path}\``,
+        `${e.access}`,
+        `${e.summary}${e.description ? ` ${e.description}` : ""}`,
+      ]),
+    },
+  },
+]);
+
+// The six worked examples. Each is executed against a live server by the api
+// suite, so the status and the body fragment below are the ones it asserts.
+const EXAMPLE_BLOCKS: Section["body"] = apiExamples.flatMap((e) => [
+  { heading: `${e.title}` },
+  {
+    code: `${e.curl}`,
+    caption: `${e.method} ${e.path}. Expect HTTP ${e.expectStatus}, with ${e.expectContains} in the body.`,
+  },
+  `${e.why}`,
+  `${e.note}`,
+]);
+
+const SECTIONS: Section[] = [
+  {
+    id: "quickstart",
+    title: "Start in 5 minutes",
+    icon: "🚀",
+    body: [
+      "Create a key in **Settings → API keys**. Choose **readwrite** to change anything, **readonly** to read.",
+      {
+        steps: [
+          "The raw key is shown **once**, so copy it when it appears. You can also mint one with `POST /v1/rest/keys`.",
+          "Export it in your shell. The API never takes a key in the query string.",
+          "Make your first call. Every example below is executed against a live server.",
+        ],
+      },
+      {
+        code: 'export JOMFORM_API_KEY="jfk_your_key_here"',
+        caption: "A placeholder. This page never prints a real key.",
+      },
+      "One run covers the flow: authenticate, create a form, publish it, read it back, read the records it made.",
+      ...EXAMPLE_BLOCKS,
+    ],
+  },
+  {
+    id: "auth",
+    title: "Authentication",
+    icon: "🔑",
+    body: [
+      `Send the key as a **bearer token** to \`${API_BASE}\` on every call.`,
+      { code: "Authorization: Bearer $JOMFORM_API_KEY" },
+      "A key belongs to a **workspace**, not a person. Everything it reads and writes is that workspace's data.",
+      "The dashboard also accepts a browser session cookie on these routes. A script should use a key.",
+      "**The same key drives the MCP server.** One credential covers `/v1/rest/*` and MCP, so see the [MCP tool reference](/docs/mcp).",
+      "A missing or revoked key gets **401** before any workspace is resolved, so a broken client fails loudly.",
+    ],
+  },
+  {
+    id: "scopes",
+    title: "Scopes",
+    icon: "🎫",
+    body: [
+      "A key carries a **scope**, independent of who created it. It decides what the key may do at all.",
+      {
+        list: [
+          "**readonly** is read only. Every write is refused with **403**.",
+          `It is also refused on the reads whose handler writes anyway: ${writeGatedReads().length} routes, listed next.`,
+          "**readwrite** reads and writes.",
+        ],
+      },
+      { list: WRITE_GATED_READS },
+      "Inside a `?workspace=<slug>` scope there is a second axis: your **role in that workspace**. A write needs both the key and the role.",
+      "The payment-credential routes need **admin**. Scope belongs to the credential; role belongs to the person.",
+      { note: "The endpoint reference states, per row, which gate applies." },
+    ],
+  },
+  {
+    id: "errors",
+    title: "Errors",
+    icon: "⚠️",
+    body: [
+      "Failures use the **HTTP status** for the class and a JSON body that says what went wrong.",
+      { code: '{ "error": "authentication required" }' },
+      {
+        list: [
+          "**400**: the request is invalid. The message is written for the caller and may change wording without a version bump.",
+          "**401**: missing, unknown or revoked credential.",
+          "**403**: not allowed. A readonly key on a write, or no role in the `?workspace=` you asked for. The body says why.",
+          "**404**: no such object in your workspace.",
+          "**409**: the request conflicts with the object's state. Publishing a payment form with no products returns 409.",
+          "**429**: rate limited (see below).",
+          "**500**: an internal error. The detail is logged server-side and never returned.",
+          "**503**: the feature needs something this deployment lacks. Retrying will not help.",
+        ],
+      },
+      'A publish **409** carries `requires_ack: true`, because that form could never take money. Send `{"acknowledge":true}` to publish it anyway.',
+      { note: "The body names the reason, and contains the word `scope` when a scope is the cause." },
+    ],
+  },
+  {
+    id: "limits",
+    title: "Rate limits",
+    icon: "🚦",
+    body: [
+      "**Most of this API has no rate limit.** Do not design a client around a uniform quota that does not exist.",
+      `Exactly ${limited.length} of the ${total} operations are throttled:`,
+      { list: THROTTLED_ROUTES },
+      "Uploads and the AI routes are limited per client IP. The in-app assistant is limited per user and is session-only.",
+      "A throttled answer is **429** and carries `Retry-After`, the seconds that client must wait for that route.",
+      "Every other route, including the writes, is unmetered. Apply your own backoff and treat a **5xx** as retryable.",
+      "Traffic reaches the API through **Cloudflare**, where edge protections live. No per-key quota is promised.",
+      {
+        warn: "Nothing meters a client that retries in a loop. Cap the retries and back off; the server will not protect you.",
+      },
+    ],
+  },
+  {
+    id: "cors",
+    title: "No CORS, server-to-server only",
+    icon: "🚫",
+    body: [
+      "This API is built for **server-to-server** calls. It sends **no CORS headers at all**.",
+      "There is no `Access-Control-Allow-Origin` and no `Access-Control-Allow-Methods`. A preflight `OPTIONS` is not answered with them.",
+      "A `fetch()` from another origin is blocked by the browser, and the request may not even be sent.",
+      "That is **deliberate**. Call the API from your own backend, where the key stays out of the browser.",
+      "An API key shipped in client-side JavaScript is a key you have published.",
+      { tip: "If your front end needs data, have it call your server, and let your server call JomForm." },
+    ],
+  },
+  {
+    id: "endpoints",
+    title: "Endpoint reference",
+    icon: "📚",
+    body: [
+      "**Every route** on this page is real: the rows are generated, never typed.",
+      `All ${total} operations, from the **OpenAPI 3.1** contract. The **Access** column is the gate the code enforces.`,
+      { list: ACCESS_LEGEND },
+      ...ENDPOINT_BLOCKS,
+      {
+        note: "Each table carries the route, its access gate and its summary. The published contract carries every request and response schema.",
+      },
+    ],
+  },
+  {
+    id: "versioning",
+    title: "Versioning & changelog",
+    icon: "🏷️",
+    body: [
+      "Everything lives under `/v1`, and **/v1 is stable**: paths, request fields and response field names do not change.",
+      "Additive changes may land at any time: a new endpoint, a new optional field, a new event type. Tolerate unknown fields.",
+      "A change that breaks an integration means a new prefix, `/v2`, with the old one kept running.",
+      "Error message **wording** is not covered. Match the status code, and the stable `code` field where one is returned.",
+      "The stable fields include `requires_ack`, so match that rather than the sentence around it.",
+      `Watch the published [openapi.json](${OPENAPI_PUBLIC_URL}), regenerated with every route change, and the release notes for each tag.`,
+      "`GET /version` answers over HTTP. On a host you operate, `jomform-api --version` prints `version=<version> commit=<commit>` and exits.",
+      {
+        note: "`--version` and `--help` answer before startup: no database, cache, migration, worker or port. Safe on a live instance, including in its own container.",
+      },
+    ],
+  },
+  {
+    id: "testing",
+    title: "Building and testing against the API",
+    icon: "🧪",
+    body: [
+      "There is **no separate sandbox or test key**. A key acts on your real workspace.",
+      "An integration test against production data is a test that may email a customer.",
+      {
+        steps: [
+          "Create a throwaway workspace. The workspace switcher does it in a click, or `POST /v1/workspaces`.",
+          "Point its CHIP credentials at CHIP's own sandbox if you exercise payments.",
+          "Create a key scoped to that workspace.",
+          "Delete the workspace when you are done.",
+        ],
+      },
+      "A throwaway workspace you can delete is what makes testing without a sandbox safe.",
+      { tip: "Use `readonly` for anything that only reads. It cannot damage real data even if your harness has a bug." },
+    ],
+  },
 ];
 
 export default function ApiDocsPage() {
-  const groups = endpointsByTag();
-  const total = endpointCount();
-  const limited = rateLimitedEndpoints();
-
   return (
-    <div className="max-w-3xl">
-      <h1 className="text-3xl font-bold tracking-tight text-slate-900">REST API</h1>
-      <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        The JomForm REST API lets your own server create forms, read sales and responses, manage
-        products, subscriptions, webhooks and domains. It is served from{" "}
-        <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">{API_BASE}</code> and currently exposes{" "}
-        <strong>{total} operations</strong>, every one of them listed on this page.
-      </p>
-      <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        A machine-readable OpenAPI 3.1 contract for the same surface is published at{" "}
-        {/*
-          [overflow-wrap:anywhere] on the VISIBLE URL: unlike the versioning
-          anchor below (which prints the words "openapi.json"), this one prints
-          the whole absolute URL, one whitespace-free run. At a 360px viewport
-          with the browser default font size raised to 24px it measured 337px
-          wide against a ~296px column, so it floored the column and panned the
-          page 19px (373 vs 360); at 320px the same run panned 59px. "anywhere"
-          (not "break-word") also drops the min-content width to one character,
-          so the link shrinks INTO the column instead of widening it. The URL
-          itself is NOT shortened. Guard: src/lib/docsProseLinkWrap.test.ts.
-        */}
-        <a
-          href={OPENAPI_PUBLIC_URL}
-          className="text-[var(--jf-primary)] underline underline-offset-2 [overflow-wrap:anywhere]"
-        >
-          {OPENAPI_PUBLIC_URL}
-        </a>
-        . It is generated from the API&apos;s own route table and checked against it on every test
-        run, so it cannot drift from the endpoints you actually have.
-      </p>
-
-      <nav className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
-        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">On this page</div>
-        <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-          {/*
-            text-sky-700, not the --jf-primary token: on this nav's bg-slate-50
-            background #5e6ad2 measures 4.49:1 against the 4.5:1 WCAG AA floor,
-            which the axe gate reports as a serious violation. sky-700 is the
-            colour every other /docs page's "On this page" nav already uses.
-          */}
-          {PAGE_SECTIONS.map((s) => (
-            <li key={s.id}>
-              <a href={`#${s.id}`} className="text-sky-700 hover:underline">
-                {s.title}
-              </a>
-            </li>
-          ))}
-        </ul>
-      </nav>
-
-      {/* ── Start here ─────────────────────────────────────────────────────── */}
-      <section id="quickstart" className="mt-10 scroll-mt-24">
-        <h2 className="text-lg font-semibold text-slate-900">Start in 5 minutes</h2>
-        <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-6 text-slate-600">
-          <li>
-            Sign in and open <strong>Settings → API keys</strong>, then create a key. Choose{" "}
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code> if it needs to create or
-            change anything. The raw key is shown <strong>once</strong>; copy it then. You can also
-            create one over the API itself with <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">POST /v1/rest/keys</code>
-            .
-          </li>
-          <li>
-            Export it in your shell — the API never takes a key in the query string, and this page
-            never prints a real one:
-            <pre tabIndex={0} className="mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs leading-5 text-slate-100">
-              <code>{`export JOMFORM_API_KEY="jfk_your_key_here"`}</code>
-            </pre>
-          </li>
-          <li>
-            Make your first call. Every example on this page is executed against a live server by
-            the test suite, so these commands are known to work.
-          </li>
-        </ol>
-
-        <div className="mt-6 space-y-8">
-          {apiExamples.map((e) => (
-            <div key={e.id} id={`example-${e.id}`} className="scroll-mt-24">
-              <h3 className="text-sm font-semibold text-slate-900">{e.title}</h3>
-              <p className="mt-1 text-sm leading-relaxed text-slate-600">{e.why}</p>
-              <pre tabIndex={0} className="mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs leading-5 text-slate-100">
-                <code>{e.curl}</code>
-              </pre>
-              <p className="mt-2 text-xs leading-5 text-slate-600">
-                Expect HTTP <strong>{e.expectStatus}</strong>, and a body containing{" "}
-                <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">{e.expectContains}</code>. {e.note}
-              </p>
-            </div>
-          ))}
-        </div>
-        <p className="mt-4 text-sm leading-relaxed text-slate-600">
-          That run is the whole flow: authenticate, create a form, publish it, read it back, read the
-          records it produced.
-        </p>
-      </section>
-
-      {/* ── Authentication ─────────────────────────────────────────────────── */}
-      <section id="auth" className="mt-10 scroll-mt-24">
-        <h2 className="text-lg font-semibold text-slate-900">Authentication</h2>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Send the key as a bearer token:
-        </p>
-        <pre tabIndex={0} className="mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs leading-5 text-slate-100">
-          <code>{`Authorization: Bearer $JOMFORM_API_KEY`}</code>
-        </pre>
-        <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600">
-          <li>
-            A key belongs to a <strong>workspace</strong> (account), not to a person. Everything it
-            reads and writes is that workspace&apos;s data.
-          </li>
-          <li>
-            The dashboard also accepts a browser session cookie on these same routes. A script should
-            use a key.
-          </li>
-          <li>
-            <strong>The same key drives the MCP server.</strong> There is one credential for both
-            surfaces — create it once and use it for <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">/v1/rest/*</code>{" "}
-            and for MCP (see the{" "}
-            <a href="/docs/mcp" className="text-[var(--jf-primary)] underline underline-offset-2">
-              MCP tool reference
-            </a>
-            ).
-          </li>
-          <li>
-            A missing or revoked key is answered with <strong>401</strong> before any workspace is
-            resolved, so a broken client fails loudly rather than reading data it should not.
-          </li>
-        </ul>
-      </section>
-
-      {/* ── Scopes ─────────────────────────────────────────────────────────── */}
-      <section id="scopes" className="mt-10 scroll-mt-24">
-        <h2 className="text-lg font-semibold text-slate-900">Scopes</h2>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          A key carries a scope that decides what it may do at all, independently of who created it:
-        </p>
-        <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600">
-          <li>
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readonly</code> — read only. It is{" "}
-            <strong>refused on every write with 403</strong>, and also on the reads whose handler
-            writes anyway — an editor flow that saves through a write gate, or a value minted on
-            first use. Those are the {writeGatedReads().length} routes below; the list comes from
-            the contract, so it cannot go stale:
-            <ul className="mt-2 list-disc space-y-1 pl-5">
-              {writeGatedReads().map((e) => (
-                <li key={`${e.method} ${e.path}`}>
-                  <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">
-                    {e.method} {e.path}
-                  </code>
-                  <span className="text-slate-500"> — {e.summary}</span>
-                </li>
-              ))}
-            </ul>
-          </li>
-          <li>
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readwrite</code> — read and write.
-          </li>
-        </ul>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Inside a <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">?workspace=&lt;slug&gt;</code> scope
-          there is a second, independent axis: your <strong>role in that workspace</strong>. A write
-          needs both a readwrite key and the manage-or-admin role, and the payment-credential routes
-          need admin. Scope is a property of the credential; role is a property of the person. The
-          reference below states, per endpoint, which gate applies.
-        </p>
-      </section>
-
-      {/* ── Errors ─────────────────────────────────────────────────────────── */}
-      <section id="errors" className="mt-10 scroll-mt-24">
-        <h2 className="text-lg font-semibold text-slate-900">Errors</h2>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Failures use the HTTP status for the class and a JSON body that says what went wrong:
-        </p>
-        <pre tabIndex={0} className="mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs leading-5 text-slate-100">
-          <code>{`{ "error": "authentication required" }`}</code>
-        </pre>
-        <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600">
-          <li>
-            <strong>400</strong> — the request is invalid. The message is written for the caller
-            (&ldquo;name and price_sen are required&rdquo;, &ldquo;not found&rdquo;) rather than being a
-            fixed catalogue, so it may change wording without a version bump.
-          </li>
-          <li>
-            <strong>401</strong> — missing, unknown or revoked credential.
-          </li>
-          <li>
-            <strong>403</strong> — the credential is not allowed to do this: a readonly key on a
-            write, or no role in the <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">?workspace=</code>{" "}
-            you asked for. The body names the reason, and it always contains the word{" "}
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">scope</code> when a scope is the cause.
-          </li>
-          <li>
-            <strong>404</strong> — no such object <em>in your workspace</em>.
-          </li>
-          <li>
-            <strong>409</strong> — the request conflicts with the object&apos;s state. Publishing a
-            payment form that has no products returns 409 with{" "}
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">requires_ack: true</code>, because that form
-            could never take money. Send{" "}
-            <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">{`{"acknowledge":true}`}</code> to publish it
-            anyway.
-          </li>
-          <li>
-            <strong>429</strong> — rate limited (see below).
-          </li>
-          <li>
-            <strong>500</strong> — an internal error, with the detail logged server-side and never
-            returned to you.
-          </li>
-          <li>
-            <strong>503</strong> — the feature needs something this deployment does not have (no
-            language model configured, no media storage, and so on). Retrying will not help.
-          </li>
-        </ul>
-      </section>
-
-      {/* ── Rate limits ────────────────────────────────────────────────────── */}
-      <section id="limits" className="mt-10 scroll-mt-24">
-        <h2 className="text-lg font-semibold text-slate-900">Rate limits</h2>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          <strong>Most of this API has no rate limit.</strong> Do not design a client around a
-          uniform quota that does not exist. Exactly {limited.length} of the {total} operations are
-          throttled, and they are:
-        </p>
-        <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600">
-          {limited.map((e) => (
-            <li key={`${e.method} ${e.path}`}>
-              <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">
-                {e.method} {e.path}
-              </code>{" "}
-              — {e.rateLimit} ({e.summary})
-            </li>
-          ))}
-        </ul>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          The upload and AI routes are limited per client IP. The in-app assistant is limited per
-          user, counted inside the handler, and it is session-only. A throttled response is{" "}
-          <strong>429</strong>; every throttled answer also carries{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">Retry-After</code>, the number of seconds
-          that client must wait before it is admitted again — read from the limiter&apos;s own bucket,
-          so it is the real window for that route rather than one fixed number. Every other route —
-          including the ones that write — is currently unmetered, so apply your own backoff and treat
-          a 5xx as retryable rather than assuming the server will protect you from a runaway loop.
-        </p>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Traffic reaches the API through Cloudflare, which is where edge protections live. Any
-          per-key quota would be a separate, deliberate addition; none is promised here.
-        </p>
-      </section>
-
-      {/* ── No CORS ────────────────────────────────────────────────────────── */}
-      <section id="cors" className="mt-10 scroll-mt-24">
-        <h2 className="text-lg font-semibold text-slate-900">No CORS — server-to-server only</h2>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          This API is built for <strong>server-to-server</strong> calls. It sends{" "}
-          <strong>no CORS headers at all</strong>: there is no{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">Access-Control-Allow-Origin</code> and no{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">Access-Control-Allow-Methods</code>, and a
-          browser&apos;s preflight <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">OPTIONS</code> request
-          is not answered with them. A <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">fetch()</code> from
-          a page on another origin will therefore be blocked by the browser, and the request may not
-          even be sent.
-        </p>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          That is deliberate, not an oversight. Call the API from your own backend, where you can keep
-          the key out of the browser: that is the only place it is safe, because an API key shipped
-          in client-side JavaScript is a key you have published. If your front end needs data, have
-          it call your server, and have your server call JomForm.
-        </p>
-      </section>
-
-      {/* ── Endpoint reference ─────────────────────────────────────────────── */}
-      <section id="endpoints" className="mt-10 scroll-mt-24">
-        <h2 className="text-lg font-semibold text-slate-900">Endpoint reference</h2>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          All {total} operations, generated from the OpenAPI contract. The <em>Access</em> column is
-          the gate the API&apos;s code enforces:
-        </p>
-        {/* The rows below MUST be able to shrink and break. A flex item's
-            min-width is `auto` (its min-content size), so the "write" row — the
-            label plus the "Not every write route:" caveat rendered from the
-            contract — floored itself wider than the viewport at a raised text
-            size and panned the page 11px at 320px (measured: <dd> right 331 in a
-            320px viewport at root 24px, right 326 for the <strong> inside it).
-            min-w-0 lets the <dd> shrink; overflow-wrap:anywhere lets a run with
-            no whitespace in it break, and also lowers its min-content width.
-            Guarded by src/lib/docsApiAccessLegendWrap.test.ts. */}
-        <dl className="mt-3 space-y-1 text-xs leading-5 text-slate-600">
-          {accessLevels().map((level) => (
-            <div key={level} className="flex gap-2">
-              <dt className="shrink-0 font-mono font-semibold text-slate-900">{level}</dt>
-              <dd className="min-w-0 [overflow-wrap:anywhere]">
-                {ACCESS_LABELS[level] ?? ""}
-                {/* THE LEGEND IS A DEFINITION OF THE LEVEL, applied to every route
-                    carrying it — so it is only honest while EVERY write-labelled
-                    route applies both axes. The contract says otherwise for some
-                    routes, and this renders that caveat FROM THE CONTRACT rather
-                    than leaving the promise to outrun the gate (card t_4abd052a). */}
-                {level === "write" && scopeOnlyWriteRoutes().length > 0 ? (
-                  <>
-                    {" "}
-                    <strong>Not every write route:</strong>{" "}
-                    {scopeOnlyWriteRoutes()
-                      .map((e) => `${e.method} ${e.path}`)
-                      .join(", ")}{" "}
-                    applies the key scope only and reads no{" "}
-                    <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">?workspace=</code> role. Its row
-                    says so below.
-                  </>
-                ) : null}
-              </dd>
-            </div>
-          ))}
-        </dl>
-
-        {groups.map((group) => (
-          <div key={group.tag} id={`endpoints-${group.tag.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`} className="mt-8 scroll-mt-24">
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--jf-primary)]">
-              {group.tag}
-            </h3>
-            <div className="mt-3 space-y-4">
-              {group.endpoints.map((e) => (
-                <div key={`${e.method} ${e.path}`}>
-                  <div className="flex flex-wrap items-baseline gap-2">
-                    <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-jf-2xs font-semibold text-slate-700">
-                      {e.method}
-                    </span>
-                    <code className="break-all font-mono text-xs text-slate-900">{e.path}</code>
-                    <span className="text-jf-2xs uppercase tracking-wide text-slate-500">
-                      {e.access}
-                      {e.scopeOnly ? (
-                        <span className="normal-case">
-                          {" "}
-                          (key scope only — no <code className="font-mono [overflow-wrap:anywhere]">?workspace=</code> role)
-                        </span>
-                      ) : null}
-                    </span>
-                    {e.rateLimit ? (
-                      <span className="text-jf-2xs text-slate-500">rate limited: {e.rateLimit}</span>
-                    ) : null}
-                  </div>
-                  <p className="mt-1 text-sm leading-relaxed text-slate-600">{e.summary}</p>
-                  {e.description ? (
-                    <p className="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">
-                      {e.description}
-                    </p>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </section>
-
-      {/* ── Versioning ─────────────────────────────────────────────────────── */}
-      <section id="versioning" className="mt-10 scroll-mt-24">
-        <h2 className="text-lg font-semibold text-slate-900">Versioning &amp; changelog</h2>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Everything here lives under <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">/v1</code>, and{" "}
-          <strong>/v1 is stable</strong>: existing endpoints keep their paths, their request fields
-          and their response field names. Additive changes — a new endpoint, a new optional field, a
-          new event type — may land under <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">/v1</code> at
-          any time, so tolerate unknown fields rather than rejecting a response that has grown one.
-          A change that would break an existing integration means a new prefix (
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">/v2</code>), with the old one kept running
-          alongside it.
-        </p>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Error message <em>wording</em> is not covered by that promise — match on the status code
-          (and on the stable <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">code</code> field where one
-          is returned, such as{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">requires_ack</code>), not on the text.
-        </p>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Changes to this contract show up in two places you can watch: the published{" "}
-          {/*
-            This anchor prints the WORDS "openapi.json", not the URL, so it does
-            not need the break guard for layout today — but it points at the same
-            contract as the intro anchor (which does print the URL) and the two
-            have already differed once, which is how the intro one panned at
-            360px. Both contract anchors carry the guard so the page cannot pan
-            again merely because a later edit swaps this label back to the URL.
-            Guard: src/lib/docsProseLinkWrap.test.ts.
-          */}
-          <a
-            href={OPENAPI_PUBLIC_URL}
-            className="text-[var(--jf-primary)] underline underline-offset-2 [overflow-wrap:anywhere]"
-          >
-            openapi.json
-          </a>{" "}
-          (which is regenerated with every route change, and fails the test suite when it is out of
-          date) and the release notes for each version tag.
-        </p>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Two ways to read the release you are talking to.{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">GET /version</code> answers the release tag,
-          the commit and the build date over HTTP. On a host you operate, the server binary
-          answers the same pair by itself:{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">jomform-api --version</code> prints{" "}
-          <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">version=&lt;version&gt; commit=&lt;commit&gt;</code>{" "}
-          and exits, and <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">jomform-api --help</code>{" "}
-          prints the usage. Running either against a live instance is safe — including inside its
-          own container — because the flag is answered before startup: no database or cache
-          connection, no migration, no background worker and no port is opened.
-        </p>
-      </section>
-
-      {/* ── Testing against your own workspace ─────────────────────────────── */}
-      <section id="testing" className="mt-10 scroll-mt-24">
-        <h2 className="text-lg font-semibold text-slate-900">Building and testing against the API</h2>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          There is <strong>no separate sandbox or test key</strong>. A key acts on your real
-          workspace, so an integration test that runs against production data is an integration test
-          that may email a customer. Instead, build against a workspace you are willing to throw
-          away: create one for the integration (the dashboard&apos;s workspace switcher does this in
-          a click, or <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">POST /v1/workspaces</code>), point
-          its CHIP credentials at CHIP&apos;s own sandbox if you are exercising payments, and create
-          a key scoped to that workspace. When you are done, delete the workspace rather than leaving
-          it to rot — a throwaway workspace you can delete is what makes testing without a sandbox
-          safe.
-        </p>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Use <code className="rounded bg-slate-100 px-1 [overflow-wrap:anywhere]">readonly</code> for anything that only
-          reads. It is the cheapest safety net in this API: a readonly key cannot damage real data
-          even if your test harness has a bug.
-        </p>
-      </section>
-    </div>
+    <DocsPage
+      title="REST API"
+      lead={`Create a key, make your first call, then look up all ${total} operations. Server-to-server only.`}
+      sections={SECTIONS}
+    />
   );
 }

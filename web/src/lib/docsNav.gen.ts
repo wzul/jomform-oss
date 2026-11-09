@@ -37,8 +37,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Start here",
     "order": 0,
     "kind": "product",
-    "updated": "2026-11-08",
-    "digest": "9b92e3928c46a900",
+    "updated": "2026-11-09",
+    "digest": "03c0c5b366e8fd4d",
     "guides": []
   },
   {
@@ -48,8 +48,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Start here",
     "order": 1,
     "kind": "product",
-    "updated": "2026-11-05",
-    "digest": "974cdaa49b669a46",
+    "updated": "2026-11-09",
+    "digest": "37d8af7f0dac2302",
     "guides": [
       "/docs/guides/qr-table-ordering",
       "/docs/guides/tuition-class",
@@ -64,7 +64,7 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "order": 2,
     "kind": "product",
     "updated": "2026-11-08",
-    "digest": "1424055ef9b0f1a6",
+    "digest": "5201c0708a2a3017",
     "guides": []
   },
   {
@@ -162,8 +162,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Workspaces",
     "order": 11,
     "kind": "product",
-    "updated": "2026-11-05",
-    "digest": "7347ca5010962cbf",
+    "updated": "2026-11-09",
+    "digest": "026faa26f73e3a11",
     "guides": []
   },
   {
@@ -173,8 +173,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Workspaces",
     "order": 12,
     "kind": "product",
-    "updated": "2026-11-05",
-    "digest": "b61e051b05701eec",
+    "updated": "2026-11-09",
+    "digest": "c3bc74e03cc0cb06",
     "guides": []
   },
   {
@@ -184,8 +184,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Sales & payments",
     "order": 13,
     "kind": "product",
-    "updated": "2026-11-08",
-    "digest": "7ca408fc529d53c9",
+    "updated": "2026-11-09",
+    "digest": "5b981f115469b397",
     "guides": [
       "/docs/guides/qr-table-ordering",
       "/docs/guides/donations",
@@ -200,8 +200,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Sales & payments",
     "order": 14,
     "kind": "product",
-    "updated": "2026-11-08",
-    "digest": "67bf0fa1bf298b86",
+    "updated": "2026-11-09",
+    "digest": "a5857f7ef6083505",
     "guides": [
       "/docs/guides/club-membership",
       "/docs/guides/tuition-class"
@@ -214,8 +214,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Sales & payments",
     "order": 15,
     "kind": "product",
-    "updated": "2026-11-05",
-    "digest": "66c54c8ca427e754",
+    "updated": "2026-11-09",
+    "digest": "9011bda593a49569",
     "guides": []
   },
   {
@@ -225,8 +225,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Sales & payments",
     "order": 16,
     "kind": "product",
-    "updated": "2026-11-08",
-    "digest": "61004d352f1c91af",
+    "updated": "2026-11-09",
+    "digest": "5980cf532ebe10df",
     "guides": [
       "/docs/guides/payment-fees"
     ]
@@ -238,8 +238,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Forms & fields",
     "order": 17,
     "kind": "product",
-    "updated": "2026-11-08",
-    "digest": "e3db90fdbcb01365",
+    "updated": "2026-11-09",
+    "digest": "fb461f0d5a420214",
     "guides": [
       "/docs/guides/affiliate-programme",
       "/docs/guides/qr-table-ordering",
@@ -253,8 +253,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Forms & fields",
     "order": 18,
     "kind": "product",
-    "updated": "2026-11-07",
-    "digest": "4d0492d224cfc318",
+    "updated": "2026-11-09",
+    "digest": "24234ac28a50073b",
     "guides": []
   },
   {
@@ -264,8 +264,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Forms & fields",
     "order": 19,
     "kind": "product",
-    "updated": "2026-11-05",
-    "digest": "b021f5f6f04547b4",
+    "updated": "2026-11-09",
+    "digest": "49ab090a6a06b921",
     "guides": []
   },
   {
@@ -275,8 +275,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Storefront & pages",
     "order": 20,
     "kind": "product",
-    "updated": "2026-11-06",
-    "digest": "326feb83cdcd5797",
+    "updated": "2026-11-09",
+    "digest": "89b270f43ef52784",
     "guides": [
       "/docs/guides/donations",
       "/docs/guides/wedding-rsvp"
@@ -289,8 +289,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Email",
     "order": 21,
     "kind": "product",
-    "updated": "2026-11-08",
-    "digest": "225c0552bc0a1512",
+    "updated": "2026-11-09",
+    "digest": "7af30ece25f95cc2",
     "guides": []
   },
   {
@@ -300,8 +300,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Email",
     "order": 22,
     "kind": "product",
-    "updated": "2026-11-07",
-    "digest": "f51361fdf3990127",
+    "updated": "2026-11-09",
+    "digest": "85783b5f2f1eda48",
     "guides": []
   },
   {
@@ -311,8 +311,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Email",
     "order": 23,
     "kind": "product",
-    "updated": "2026-11-08",
-    "digest": "f2ca13830c964f1f",
+    "updated": "2026-11-09",
+    "digest": "dedd2c52c9bb122c",
     "guides": []
   },
   {
@@ -322,8 +322,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Security",
     "order": 24,
     "kind": "product",
-    "updated": "2026-11-05",
-    "digest": "373fc4581feeac5b",
+    "updated": "2026-11-09",
+    "digest": "6b8fdf5736bff2a9",
     "guides": []
   },
   {
@@ -333,8 +333,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Security",
     "order": 25,
     "kind": "product",
-    "updated": "2026-11-05",
-    "digest": "3c07c71dae8ecbf4",
+    "updated": "2026-11-09",
+    "digest": "bb0a2682e272fb83",
     "guides": []
   },
   {
@@ -344,8 +344,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "In-app & support",
     "order": 26,
     "kind": "product",
-    "updated": "2026-11-08",
-    "digest": "c84287c9cd10acf4",
+    "updated": "2026-11-09",
+    "digest": "3327c3a9e4670dbf",
     "guides": [
       "/docs/guides/design-with-mcp"
     ]
@@ -357,8 +357,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "In-app & support",
     "order": 27,
     "kind": "product",
-    "updated": "2026-11-08",
-    "digest": "b01ae870b85c8e8b",
+    "updated": "2026-11-09",
+    "digest": "c09d6ce9d8127f22",
     "guides": []
   },
   {
@@ -368,8 +368,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Reference",
     "order": 28,
     "kind": "product",
-    "updated": "2026-11-07",
-    "digest": "be3155ff5354fc08",
+    "updated": "2026-11-09",
+    "digest": "418885b038b7dd20",
     "guides": [
       "/docs/guides/design-with-mcp"
     ]
@@ -382,7 +382,7 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "order": 29,
     "kind": "product",
     "updated": "2026-11-09",
-    "digest": "38c4c8d420147644",
+    "digest": "b0c16e59c4238c36",
     "guides": [
       "/docs/guides/design-with-mcp"
     ]

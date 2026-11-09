@@ -35,7 +35,7 @@ export default function GuidesIndexPage() {
             <h2 className="text-lg font-semibold text-slate-900">
               <Link
                 href={`/docs/guides/${g.slug}`}
-                className="underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)]"
+                className="underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary-strong)]"
               >
                 {g.title}
               </Link>

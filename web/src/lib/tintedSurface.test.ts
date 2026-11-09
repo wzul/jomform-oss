@@ -705,8 +705,15 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
   // so count what the reader RESOLVED. A reader that stopped following a shape
   // (a template, a helper call, a ternary) would leave every rule judging fewer
   // elements than this file claims, which is the failure card t_10266084 exists
-  // to make impossible. Measured on the tree this was written against:
-  // 3228 resolved of 3233 className attributes.
+  // to make impossible.
+  //
+  // Measured twice, on purpose:
+  //   3228 resolved of 3233 className attributes before the /docs prose rewrite
+  //   2998 after it, because 19 docs pages stopped hand-writing their markup and
+  //        now render through app/docs/docsProse (one component, counted once).
+  // The floor follows the tree: it is the post-rewrite measurement rounded down,
+  // not a loosened one — a reader that stops following a shape still drops far
+  // below it, and the tinted-files floor above still proves the walk found the app.
   let resolved = 0;
   for (const rel of FILES) {
     const code = codeOnly(readFileSync(`${SRC}${rel}`, "utf8"));
@@ -715,7 +722,7 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
     }
   }
   assert.ok(
-    resolved >= 3000,
+    resolved >= 2950,
     `the reader resolved only ${resolved} className attributes under web/src — a shape it ` +
       `used to follow is no longer followed, and every rule above is judging fewer elements ` +
       `than it claims (a skipped element is not a cleared one)`,

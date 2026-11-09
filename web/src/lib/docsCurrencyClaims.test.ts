@@ -97,7 +97,8 @@ test("the /docs/sales per-form counter description keeps both facts and asserts 
   const end = code.indexOf('id: "refunds"');
   assert.ok(start > 0, 'sales/page.tsx declares no section `id: "analytics"` — the per-form counter section moved');
   assert.ok(end > start, "the analytics section has no following `id: \"refunds\"` section to bound it");
-  const section = code.slice(start, end);
+  // Markers are styling, not words: a **bold** figure still states the fact.
+  const section = code.slice(start, end).replace(/\*\*/g, "");
   // Non-vacuity: the slice really is the per-form counter section.
   assert.ok(
     section.includes("Paid+Confirmed"),
@@ -129,7 +130,7 @@ test("the sales guide still shows the USD/MYR example pair, so the claim scan is
   const sales = pages.find((p) => p.rel === "sales/page.tsx");
   if (!sales) throw new Error("sales/page.tsx is missing from the docs tree");
   assert.ok(
-    /US\$24\.90 for a USD sale, RM24\.90 for an MYR one/.test(codeOnly(sales.src)),
+    /US\$24\.90 for a USD sale, RM24\.90 for an MYR one/.test(codeOnly(sales.src).replace(/\*\*/g, "")),
     "sales/page.tsx no longer shows the 'US$24.90 for a USD sale, RM24.90 for an MYR one' example pair — the " +
       "currency explanation was stripped rather than corrected, which passes the claim scan above for the wrong reason",
   );

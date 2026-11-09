@@ -57,10 +57,27 @@ const SERVER_APP = join(webRoot, ".next/server/app");
 // is deliberately NOT applied: there are no comments in built HTML, and running a
 // source-shaped filter over output would only hide text.
 function readerVisibleHtml(html) {
+  // BLOCK tags become a space; INLINE tags become nothing at all.
+  //
+  // This distinction was measured, not assumed. Stripping every tag to a space made
+  // a bolded fact unreadable to this check: the built page renders
+  // "A status is <strong>pending</strong>, <strong>confirmed</strong>…" and the
+  // space left behind by each inline tag produced "pending , confirmed , failed",
+  // which no longer contains "pending, confirmed, failed or refunded" — so the fact
+  // looked missing while it was on the page, in bold, in front of the reader. An
+  // inline element is formatting; a block element is where text really breaks.
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]*>/g, " ")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(
+      /<\/?(p|div|li|ul|ol|tr|td|th|h[1-6]|section|article|pre|figure|figcaption|table|thead|tbody|blockquote|nav|header|footer|aside|main)\b[^>]*>/gi,
+      (tag) => (/^<\//.test(tag) || /^(<br)/i.test(tag) ? " " : ""),
+    )
+    // Everything left is an INLINE element (strong, em, code, span, a, b, i …):
+    // formatting around words, not a place text breaks. Removing the tag without
+    // leaving a space is what keeps "pending, confirmed" contiguous.
+    .replace(/<[^>]*>/g, "")
     .replace(/&quot;/g, '"')
     .replace(/&#x27;|&apos;/g, "'")
     .replace(/&amp;/g, "&")

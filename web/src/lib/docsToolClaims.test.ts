@@ -687,16 +687,35 @@ test("the parenthetical shape is strict, and the spelling is what keeps it off p
     "the measured asides no longer reproduce the false positive under the loose spelling, so " +
       "they no longer show what keeps this guard off asides that are not claims",
   );
-  // The other half, and the reason this is a narrowing rather than a deletion: the shape
-  // still catches the phrasing it exists for on the REAL corpus. /docs/activity renders
-  // "the MCP tool reference (list_events)", and a walk of every docs page found exactly
-  // this one parenthetical site — so it is the shape's live coverage, not a hypothetical.
+  // MEASURED AFTER THE PROSE REWRITE: the LIVE-CORPUS site this leg was written for
+  // is gone. /docs/activity used to spell the parenthetical form — "the MCP tool
+  // reference (list_events)" — but the converted page says "Related: [the MCP tool
+  // reference](/docs/mcp)" and names the tool in its own sentence ("Over MCP,
+  // `list_events` is the same read …"). No docs page spells the parenthetical form
+  // today (measured: 0 sites across the tree), so an assertion that the real corpus
+  // carries one cannot be kept true — recorded here rather than deleted quietly,
+  // and the claim it was standing in for is still asserted below.
+  //
+  // What keeps the shape load-bearing against the REAL registry: every registered
+  // name, spelled in the form the shape narrows for, is read as a claim. A capture
+  // that stopped matching snake_case, a window too short for the phrase, or a skip
+  // rule that swallowed names fails here on a tool the product really has — not on
+  // a synthetic one.
   const activity = read(ACTIVITY_DOCS_PAGE);
   assert.ok(
-    namesClaimedByShape("parenthetical/strict", activity).includes("list_events"),
-    '/docs/activity no longer has its parenthetical claim ("the MCP tool reference ' +
-      '(list_events)") read as a claim — the strict shape has gone blind to the one ' +
-      "parenthetical site the shipped docs corpus has",
+    activity.includes("list_events"),
+    "/docs/activity no longer names list_events at all — the tool-reference aside this leg " +
+      "was rewritten around has been cut, not merely reworded",
+  );
+  const unreadRegistered = [...REGISTERED].filter(
+    (n) => !namesClaimedByShape("parenthetical/strict", `an MCP tool aside (${n})`).includes(n),
+  );
+  assert.deepEqual(
+    unreadRegistered,
+    [],
+    `the parenthetical shape no longer reads registered tool(s) ${JSON.stringify(unreadRegistered)} ` +
+      `in "… tool … (<name>)" — the strict spelling or its 60-char window has drifted from the ` +
+      "registry, so a parenthetical claim of that tool would be invisible",
   );
   // And the strict spelling is compatible with the registry by construction: every
   // registered name is snake_case, so no registered tool is unreachable from this shape.
@@ -951,10 +970,27 @@ test("the loose shapes' footprint on ordinary English is a CLOSED class, not a h
       "class nor the stoplist excludes it — the shapes now read shipped English as a claimed " +
       "tool name (or the capture widened over the tree)",
   );
+  // MEASURED AFTER THE PROSE REWRITE: the shipped corpus no longer puts a REGISTERED
+  // name in the loose slot. /docs/chat used to say "exists over MCP as the
+  // submit_feedback tool"; the converted page says "names submit_feedback as the one
+  // tool of its own", and "one" is the PROSE_WORDS entry that absorbs it. So the old
+  // `some(registered)` over the tree is false for a reason about the CORPUS, not
+  // about the shapes — stated here rather than deleted quietly. Two assertions keep
+  // this leg honest in that state: the shapes still reach shipped prose at all (so
+  // this is measuring a corpus, not an empty haystack), and every REGISTERED name,
+  // spelled in the loose slot, is still reached — which is the property the vanished
+  // corpus hit was standing in for.
   assert.ok(
-    [...REGISTERED].some((n) => treeHits.includes(n)),
-    "the loose shapes reach no registered tool name anywhere in /docs — they have gone blind, " +
-      "so this leg proves nothing about what they catch on the real corpus",
+    treeHits.length > 0,
+    "the loose shapes reach nothing in the shipped /docs tree — the corpus or the capture has moved",
+  );
+  const unreached = [...REGISTERED].filter((n) => !unruledHits(`as the ${n} tool`).includes(n));
+  assert.deepEqual(
+    unreached,
+    [],
+    `the loose shapes no longer reach registered tool(s) ${JSON.stringify(unreached)} in ` +
+      `"as the <name> tool" — BARE_NAME has narrowed past a name the registry really has, so ` +
+      "a doc calling that tool a tool would be invisible",
   );
 
   // LEG 5 — the class is CLOSED, auditable by eye, and cannot hide a real tool. The same

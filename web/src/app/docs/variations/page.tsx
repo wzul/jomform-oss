@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { docsMetadata } from "../../../lib/docsMetadata";
+import { DocsPage, type Section } from "../docsProse";
 
 export const metadata: Metadata = docsMetadata({
   title: "Variation products — JomForm Docs",
@@ -8,76 +9,111 @@ export const metadata: Metadata = docsMetadata({
   path: "/docs/variations",
 });
 
-type Section = { id: string; title: string; body: string[] };
-
+// Every field name, MCP tool name and behaviour survives. The section ids are a
+// contract with /docs and with the dashboard's inline "?" links.
 const SECTIONS: Section[] = [
   {
     id: "what-is-a-variation",
     title: "What a variation is",
+    icon: "🧩",
     body: [
-      "A product is simple when it has no variations: it uses its own price, stock and images. A product is variable when it has one or more variations, and each variation then carries its own name, price, stock and image. Selling one T-shirt in sizes S, M and L, or in several colours, is a variable product with one variation per option.",
-      "A variation is a real row attached to its product, not a field inside it — the same shape WooCommerce uses. That is why editing the product replaces the whole list of variations at once: whatever is in the editor when you save is the authoritative set. Removing a variation removes it; the last variation removed turns the product back into a simple product.",
-      "Variations are discrete rows, not an attribute grid. There is no size × colour generator: you create each combination you actually sell as its own line, which also means each combination gets its own price, stock and image.",
+      "A **simple** product has no variations and uses its own price, stock and images.",
+      "A **variable** product has one or more variations, and each variation carries its own name, price, stock and image.",
+      "One T-shirt in sizes S, M and L, or in several colours, is a variable product with **one variation per option**.",
+      "A variation is a **real row** attached to its product, not a field inside it. It keeps the same shape WooCommerce uses.",
+      "Editing the product replaces the whole list at once, so whatever is in the editor when you save is the authoritative set.",
+      "Removing a variation removes it. Removing the last one turns the product back into a **simple** product.",
+      {
+        note: "Variations are **discrete rows**, not an attribute grid. There is no size by colour generator: you create each combination you sell as its own line.",
+      },
     ],
   },
   {
     id: "price-stock",
     title: "Price, stock and image",
+    icon: "🏷️",
     body: [
-      "For a variable product the variation's price is what the buyer pays — the product-level price is ignored. The same applies to stock: set a quantity on the variation to limit it, or leave it blank for unlimited. A variation that reaches zero stock shows as sold out on the form and is rejected at checkout, so it can never be oversold.",
-      "The first image on a variation is its cover in the buyer's option list. The variation's own image is shown next to the option the buyer picks.",
+      "For a **variable** product the variation's price is what the buyer pays. The product-level price is ignored.",
+      "Set a quantity on the variation to limit stock, or leave it **blank for unlimited**.",
+      "A variation that reaches zero shows as **sold out** on the form and is rejected at checkout, so it can never be oversold.",
+      "The first image on a variation is its **cover** in the buyer's option list.",
+      "The variation's own image is shown next to the option the buyer picks.",
     ],
   },
   {
     id: "subscription-cycle",
     title: "A subscription cycle on a variation",
+    icon: "🔁",
     body: [
-      "A subscription product can also be variable. Each variation may carry its own subscription cycle — the billing period (monthly or yearly), the trial days and the number of charges — which lets you sell \"Size M, monthly\" and \"Size L, yearly\" from a single product and have each one billed on its own terms.",
-      "A field you leave empty inherits the product's value for that field. This is a real distinction, not a convenience: \u201cnot set\u201d and \u201cset to the same value as the product\u201d are different states. A variation with no cycle of its own keeps following the product, so changing the product's period later still reaches it. A variation with its own period is fixed and does not follow the product.",
-      "In the editor each field starts empty with the product's value shown as a hint, and every field can be reset back to empty to start inheriting again. Nothing is pre-filled, precisely so a product-level change keeps applying to the variations that never set their own.",
+      "A **subscription** product can also be variable. Each variation may carry its own billing period (monthly or yearly), trial days and number of charges.",
+      "That lets you sell **Size M, monthly** and **Size L, yearly** from one product, each billed on its own terms.",
+      "A field you leave empty **inherits** the product's value for that field. This is a real distinction, not a convenience.",
+      "**Not set** and **set to the same value as the product** are different states.",
+      "A variation with no cycle of its own keeps following the product, so a later change to the product's period still reaches it.",
+      "A variation with its own period is **fixed** and does not follow the product.",
+      "In the editor each field starts empty with the product's value shown as a hint, and any field can be reset to empty.",
+      {
+        tip: "Nothing is pre-filled, precisely so a product-level change keeps applying to the variations that never set their own.",
+      },
     ],
   },
   {
     id: "checkout",
     title: "What happens at checkout",
+    icon: "🛒",
     body: [
-      "The buyer sees the option list for each variable product and picks one. The variation's price is charged, the variation's stock is reduced, and the subscription — when the product is a subscription — is created with the cycle of the variation the buyer chose, falling back to the product's for any field the variation does not set.",
-      "The restaurant menu works the same way: a variable dish shows its options on the card with each option's own price, a sold-out option cannot be picked, and the buyer cannot add the dish to the basket until they have chosen. The card's tap adds the chosen option at that option's price, so a dish is never ordered at a price the buyer did not choose.",
-      "Stock on the menu is re-read live, not frozen at page load. A menu page stays open while people read it, so a dish that sells out in the meantime is refused when it is picked — the tap asks the server what is buyable now rather than trusting the page it was served. That holds for a variable dish and for a simple one: a sold-out simple dish is served the same button as an in-stock one, so the tap checks before it adds and tells the buyer the dish sold out, and a basket line that sold out while it sat there is dropped on return with a notice naming the dish. Nothing is oversold and a line is never carried to checkout only to be rejected there. If the live check cannot answer, the page keeps the state it was rendered with, so a menu still works when the connection does not.",
-      "A product that has variations must be ordered with one. It is not possible to buy the product-level price while variations exist — not from the form, not from the menu, and not by crafting the checkout request by hand.",
-      "The terms are recorded on the sale at checkout, so a later change to the product or the variation never alters an existing subscription's schedule. The same rule is applied by the recurring engine on every later charge, so a variation's charge count is honoured for the whole plan and not just the first payment.",
-      "One purchase makes one subscription. A cart that mixes a subscription variation with one-time items bills the subscription on its own terms and charges the one-time items once.",
+      "A product that has variations must be ordered with one. You cannot buy the **product-level price** while variations exist.",
+      "That holds for the form, for the menu, and for a checkout request crafted by hand.",
+      "The buyer picks one option, the **variation's price** is charged, and the variation's stock is reduced.",
+      "When the product is a subscription, it is created with the **cycle of the chosen variation**, falling back to the product's for any field the variation does not set.",
+      "The terms are recorded on the sale at checkout, so a later change to the product or the variation never alters an existing subscription's schedule.",
+      "The recurring engine applies the same rule on every later charge, so a variation's **charge count** is honoured for the whole plan, not only the first payment.",
+      "One purchase makes one subscription. A cart that mixes a subscription variation with one-time items bills each on its own terms.",
+    ],
+  },
+  {
+    id: "menu",
+    title: "On the restaurant menu",
+    icon: "🍽️",
+    body: [
+      "A variable dish shows its options on the card, each with its own price. A **sold-out option** cannot be picked.",
+      "The buyer cannot add the dish to the basket until they have chosen. The tap adds the chosen option at that option's price.",
+      "A dish is never ordered at a price the buyer did not choose.",
+      "Stock on the menu is **re-read live**, not frozen at page load, so a dish that sells out while the page is open is refused when it is picked.",
+      "The tap asks the server what is buyable now rather than trusting the page it was served.",
+      "A sold-out simple dish gets the same button as an in-stock one, so the tap checks first and tells the buyer the dish sold out.",
+      "A basket line that sold out while it sat there is dropped on return with a notice naming the dish. Nothing is oversold.",
+      {
+        note: "If the live check cannot answer, the page keeps the state it was rendered with, so a menu still works when the connection does not.",
+      },
     ],
   },
   {
     id: "mcp",
     title: "Managing variations from an AI agent",
+    icon: "🤖",
     body: [
-      "Every variation action is available over MCP: list_product_variations reads a product's variations, create_product_variation adds one, update_product_variation edits one, and delete_product_variation removes one. The product tools (create_product, update_product) also accept a full variations list when you want to set the whole set at once.",
-      "In a tool result, a variation's billing_period, trial_days and subscription_charges are present only when the variation sets them itself. Absent means it inherits the product — so an agent can always tell the two states apart. To go back to inheriting, clear the field (clear_billing_period, clear_trial_days, clear_subscription_charges) rather than setting it to the product's current value.",
+      "Every variation action is available over **MCP**.",
+      {
+        list: [
+          "`list_product_variations` reads a product's variations.",
+          "`create_product_variation` adds one, `update_product_variation` edits one, and `delete_product_variation` removes one.",
+          "`create_product` and `update_product` accept a full **variations** list when you want to set the whole set at once.",
+        ],
+      },
+      "In a tool result, **billing_period**, **trial_days** and **subscription_charges** appear only when the variation sets them itself.",
+      "Absent means it inherits the product, so an agent can always tell the two states apart.",
+      "To go back to inheriting, clear the field with `clear_billing_period`, `clear_trial_days` or `clear_subscription_charges` rather than setting the product's current value.",
     ],
   },
 ];
 
 export default function VariationsDocsPage() {
   return (
-    <div className="max-w-3xl">
-      <h1 className="text-3xl font-bold tracking-tight text-slate-900">Variation products</h1>
-      <p className="mt-3 text-sm leading-relaxed text-slate-600">
-        Sell one product in several options — sizes, colours, formats — each with its own price,
-        stock and image, and each able to carry its own subscription cycle.
-      </p>
-
-      {SECTIONS.map((s) => (
-        <section key={s.id} id={s.id} className="mt-8">
-          <h2 className="text-xl font-semibold text-slate-900">{s.title}</h2>
-          {s.body.map((p, i) => (
-            <p key={i} className="mt-3 text-sm leading-relaxed text-slate-600">
-              {p}
-            </p>
-          ))}
-        </section>
-      ))}
-    </div>
+    <DocsPage
+      title="Variation products"
+      lead="Sell one product in several options, each with its own price, stock and image, and each able to carry its own subscription cycle."
+      sections={SECTIONS}
+    />
   );
 }

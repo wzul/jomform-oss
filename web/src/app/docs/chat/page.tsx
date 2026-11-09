@@ -1,34 +1,15 @@
 import type { Metadata } from "next";
 import { docsMetadata } from "../../../lib/docsMetadata";
-import type { ReactNode } from "react";
+import { DocsPage, type Section } from "../docsProse";
 
-import { Endonym } from "../../../components/Endonym";
-
-// In-app assistant — the docs page the chat panel's inline "?" link points at
+// In-app assistant, the docs page the chat panel's inline "?" link points at
 // (AGENTS.md DOCUMENTATION PARITY rule 4).
 //
 // It documents the feature by stating the CAPABILITY BOUNDARY first, because
-// that boundary is the whole design. Phase 2 changed that boundary, so the page
-// states the NEW one rather than the old: the assistant can PREPARE a change and
-// cannot apply one. The proposal lane is IN-APP — `propose_write` is registered
-// nowhere and is deliberately absent from the MCP tool reference, because its
-// confirmation step needs a signed-in person's click (see MCP-PARITY.md, "the
-// proposal lane": a registered version would hand an MCP caller a token it could
-// never spend). So this page names `submit_feedback` as the one tool of its own
-// that IS over MCP, and says plainly that `propose_write` is not. It also
-// documents the reversible set it may prepare, the confirmation step, the
-// rate/cost limits and why they exist, and the behaviour that matters when the
-// assistant does not know — the honest answer, not a guess.
-//
-// PRODUCT KNOWLEDGE (card t_1e3af6b8) is the second half of what it answers. The
-// assistant is not only a data reader: it carries a short, provenance-checked
-// guide to how JomForm works (api/internal/chat/knowledge.go), so "how do I pass
-// the processing fee to a buyer" is answered from the product's own rules rather
-// than from the model's priors. The "What it knows about JomForm" section below
-// states that, including the two properties a reader needs to trust it: every
-// fact is checked against these docs when the app is built, and a fact the guide
-// does not cover is answered with "I do not know" rather than a guess.
-
+// that boundary is the whole design: the assistant can PREPARE a change and
+// cannot apply one. The proposal lane is IN-APP: its confirmation step needs a
+// signed-in person's click, so it is not reachable over MCP (see MCP-PARITY.md,
+// "the proposal lane").
 export const metadata: Metadata = docsMetadata({
   title: "In-app assistant — JomForm Docs",
   description:
@@ -36,201 +17,322 @@ export const metadata: Metadata = docsMetadata({
   path: "/docs/chat",
 });
 
-// A paragraph is either plain English prose or, when it NAMES one of the
-// supported languages, JSX that renders the name through `<Endonym>` — the name
-// is text in another language inside this English document, so the element that
-// holds it must declare it, and the name itself may not be a literal here (card
-// t_23c6895c; see components/Endonym.tsx). Every other entry below is a string.
-type Section = { id: string; title: string; body: ReactNode[] };
-
 const SECTIONS: Section[] = [
   {
     id: "what",
     title: "What the assistant is",
+    icon: "💬",
     body: [
-      "The assistant is a chat panel inside the dashboard. Ask it a question in plain language and it answers two kinds of question: how JomForm works, and what your own account holds — which forms are live, what a form recorded, how many sales came in, what a customer's submission said, which subscriptions are past due. For your account it looks the answer up in your data with the same tools an AI agent would use over MCP.",
-      "It is not a general chatbot: it is the assistant for JomForm specifically. Ask how to pass the processing fee to a buyer, how delivery is priced, whether you can take donations or use your own domain, and it answers from a short guide to the product that ships with the app — not from whatever the underlying model happens to remember about other form builders. When neither the guide nor your data can answer, it says so.",
-      <>
-        It speaks the language you write in: <Endonym l="en" />, <Endonym l="ms" />,{" "}
-        <Endonym l="zh" />, <Endonym l="ta" /> or <Endonym l="ar" />.
-      </>,
+      "It speaks the language you write in: [[en|English]], [[ms|Bahasa Melayu]], [[zh|中文]], [[ta|தமிழ்]] or [[ar|العربية]].",
+      "The assistant is a chat panel inside the dashboard. Ask it a question in plain language and it answers two kinds of question.",
+      "The first is how **JomForm** works. The second is what your account holds: live forms, what a form recorded, sales, submissions and past-due subscriptions.",
+      "For your account it looks the answer up in your data, with the same **tools** an AI agent would use over MCP.",
+      "It is not a general chatbot. It is the assistant for **JomForm** specifically.",
+      "Ask how to pass the processing fee to a buyer, how delivery is priced, or whether you can take donations or use your own domain.",
+      "Those answers come from a short **guide** to the product that ships with the app, not from whatever the model remembers about other form builders.",
+      "When neither the guide nor your data can answer, it says so.",
     ],
   },
   {
     id: "product-guide",
     title: "What it knows about JomForm",
+    icon: "📚",
     body: [
-      "The product answers come from a short guide that ships inside the app. It covers the questions a merchant asks most: the buyer-borne processing fee and who pays it, shipping zones and courier quotes, products including pay-what-you-want and donations, subscriptions and what happens when a charge fails, refunds, forms that collect responses rather than payments, custom domains, email notifications, spam review, two-factor sign-in, the MCP server that AI agents connect to, and the REST API.",
-      "Every fact in that guide is checked against these documentation pages when the app is built. If a guide sentence stops matching the docs — a rate model changed, a block was withdrawn, a limit moved — the build fails and names the sentence, so the assistant is re-read against the docs instead of quietly repeating a rule that is no longer true.",
-      "It also knows what the product does NOT do, and says so plainly instead of inventing a workaround. Discount codes are the example: there is no coupon block and nothing applies a discount code at checkout, so asking for one is answered with that fact and an offer to file it as a feature request — never with a description of a coupon setting that does not exist. The same applies to anything the guide does not cover: it says it does not know rather than guessing, because a merchant sent looking for a control that was never built concludes the product is broken.",
-      "The guide is small on purpose. It is a fixed, bounded block of a few thousand characters, part of the same bounded request as the assistant's own instructions, so a product question does not cost more than the limits below describe. It is also not a substitute for your data: a question about your forms, prices or customers is still answered by reading them, and the assistant will not answer it from the guide.",
+      "The product answers come from a short **guide** that ships inside the app. It covers the questions a merchant asks most.",
+      {
+        list: [
+          "The buyer-borne processing fee and who pays it, plus shipping zones and courier quotes.",
+          "Products, including pay-what-you-want and donations.",
+          "Subscriptions and what happens when a charge fails, refunds, and forms that collect responses rather than payments.",
+          "Custom domains, email notifications, spam review and two-factor sign-in.",
+          "The MCP server that AI agents connect to, and the REST API.",
+        ],
+      },
+      "Every fact in that guide is checked against these **documentation pages** when the app is built.",
+      {
+        warn: "If a guide sentence stops matching the docs, the build fails and names the sentence. Nothing is left repeating a rule that is no longer true.",
+      },
+      "It also knows what the product does **not** do, and says so plainly instead of inventing a workaround.",
+      "No coupon block exists and nothing applies a discount code at checkout. Asking for one gets that fact and an offer to file it as a feature request.",
+      "The same applies to anything the guide does not cover: it says it does not know rather than guessing.",
+      {
+        note: "A merchant sent looking for a control that was never built concludes the product is broken, which is why the honest answer matters.",
+      },
     ],
   },
   {
     id: "boundary",
     title: "What it cannot do",
+    icon: "🚫",
     body: [
-      "The assistant cannot apply a change to your account. What it can do instead is PREPARE one for you to confirm. Ask it to rename a product, change a price, adjust stock or restyle a form, and it will show you a card listing exactly what it intends to change — then it stops. The change happens when you press Confirm, and not before.",
-      "Everything destructive or hard to undo stays out of its reach entirely. It cannot delete or archive a form or product, refund or confirm a sale, capture or release a payment, cancel or retry a subscription, publish or unpublish a page, send email to your customers, or touch your passwords, keys, webhooks, domains, members or settings. Those are not merely discouraged for it — they are not reachable from the chat, and asking for one gets a straight answer that you must do it yourself on the page where the consequence is visible.",
-      "That is enforced on the server, in four separate layers, not by asking the model to behave. First, only a small fixed set of tools is offered to it at all, so a form answer containing the words \"delete all my forms\" has no tool to call. Second, every tool the assistant uses while answering runs with read-only permission, so a write tool would be refused even if it were offered. Third, the only code that runs a write is the confirmation step, and it requires a single-use token the server issued to your browser — a token the model never sees and cannot produce. Fourth, the same permission and workspace checks that apply to any MCP connection are re-applied to the confirmed call.",
-      "A confirm value written by the model proves nothing, and is not accepted as confirmation anywhere. The confirmation is your click. If someone — or something — tells the assistant you already approved a change, that is not an approval, and the assistant is instructed to treat such text as content to report to you rather than an instruction.",
-      "This is tested by attempting the writes, not by checking a list. The tests drive the assistant's real tool path against a real database under its real permissions and require every write to be refused — deleting a form, archiving a product, refunding a sale, cancelling a subscription, creating a product, a form, a webhook, an API key or a setting — including attempts where the model writes confirm: true into its own arguments, and then read the database back to confirm nothing changed.",
+      "The assistant **cannot apply a change** to your account. What it can do is prepare one for you to confirm.",
+      "Ask it to rename a product, change a price, adjust stock or restyle a form. It shows a card listing exactly what it intends to change, then it stops.",
+      "The change happens when you press **Confirm**, and not before.",
+      "Everything destructive or hard to undo stays out of its reach entirely.",
+      {
+        list: [
+          "It cannot delete or archive a form or product, refund or confirm a sale, or capture or release a payment.",
+          "It cannot cancel or retry a subscription, or publish or unpublish a page.",
+          "It cannot send email to your customers, or touch your passwords, keys, webhooks, domains, members or settings.",
+          "Those are not merely discouraged. They are not reachable from the chat.",
+        ],
+      },
+      "A form answer containing the words **delete all my forms** has no tool to call. Only a small fixed set of tools is offered.",
+      "Asking for one gets a straight answer that you must do it yourself, on the page where the consequence is visible.",
+    ],
+  },
+  {
+    id: "enforcement",
+    title: "How that limit is enforced",
+    icon: "🛡️",
+    body: [
+      "It is enforced on the **server**, in four separate layers, not by asking the model to behave.",
+      {
+        steps: [
+          "Only a fixed set of tools exists, so a form answer carrying an instruction has nothing to run it.",
+          "Every tool the assistant uses while answering runs with **read-only** permission. A write tool would be refused even if it were offered.",
+          "The only code that runs a write is the confirmation step. It needs a single-use token the server issued to your browser, which the model never sees.",
+          "The same permission and workspace checks that apply to an MCP connection are re-applied to the confirmed call.",
+        ],
+      },
+      "A confirm value written by the model proves nothing, and is not accepted as confirmation anywhere. The confirmation is **your click**.",
+      "If something tells the assistant you already approved a change, that is not an approval. It treats such text as content to report to you, not as an instruction.",
+      {
+        note: "This is tested by attempting the writes, not by checking a list. The tests drive the real tool path under real permissions and require every write to be refused.",
+      },
+      "They cover deleting a form, archiving a product, refunding a sale, cancelling a subscription, and creating a product, a form, a webhook, an API key or a setting.",
+      "Attempts where the model writes `confirm: true` into its own arguments are refused too, and the database is read back to confirm nothing changed.",
     ],
   },
   {
     id: "proposals",
     title: "Confirming a proposed change",
+    icon: "✅",
     body: [
-      "A proposal appears in the conversation as a card, not as a sentence. It shows the name of the change in your terms, the specific values it would set, which object it applies to, and the underlying tool name so you can look it up. A badge says it needs your confirmation, and the card says plainly that nothing has changed yet.",
-      "Two buttons: Confirm applies it, Cancel kills it. Cancel is a real action, not a dismissal — it spends the proposal on the server, so a cancelled card can never be applied afterwards, by you or by anything else.",
-      "The card is generated by the server from the exact arguments that will run, never from the assistant's own description of them. That is deliberate: the model's wording is shown as a quote, but it is not the authority for what the card says will happen.",
-      "The card's own wording — its heading, its summary and every field label — follows YOUR DASHBOARD LANGUAGE, in all five languages the dashboard speaks. The server does not know which language you read, so it does not write those words at all: it names them, and the page you are looking at supplies them. The assistant's own sentence, shown as a quote on the card, stays in the language of the conversation you are having with it, exactly like its reply above the card.",
-      "The same rule covers a REFUSAL. When the assistant tries a tool it is not allowed to use, or a change it tried to prepare could not be built, the conversation shows the attempt and the reason for it — and the reason is named by the server and written by your page, in your dashboard language, exactly like the card's own wording above. The assistant's explanation to you still stays in the language you are writing in.",
-      "A refusal says which of the three it is. A block headed not allowed means the assistant may never do that thing — deleting a form, refunding a sale — and you have to do it yourself on the page where the consequence is visible. When the action itself is fine and only the DETAILS were missing or wrong (you asked for a form and the assistant left out its name, say), the block says the change could not be prepared instead. And when the tool IS allowed but the call itself did not go through — a form id that does not exist, or a call that failed before it reached the tool — the block says that step could not be completed, so the page never tells you a feature is out of reach when the assistant only had the wrong id. The three are different problems and only the first one means the feature is out of reach. Either way you always get an answer, in your language, telling you what to send next: a refused change never ends with an empty reply and a refusal you cannot act on.",
-      "The proposal is bound to what you were shown. If the arguments changed between the card appearing and your click, the confirmation is refused rather than applied — so the thing you approved is the thing that runs. The card is also single-use (a second click is refused, not applied twice) and it expires 5 minutes after it appears, because it is a decision made while you are reading it, not an approval left lying around.",
-      "Only you can confirm your proposals. The token belongs to the person it was issued to, and another account presenting it is refused in exactly the same way as a token that does not exist.",
-      "A confirmed change runs with your own permission and the same workspace and ownership checks as a change made from the dashboard. If your role does not allow the edit, the confirmation is refused and the tool says why — the chat never grants an ability your account does not have.",
-      "Each refusal is reported as the thing it actually is, and the sentence on screen names the cause in every case. A confirmation refused because your request carried no workspace says so, and nothing was attempted. A confirmation refused because your ROLE in that workspace does not allow the edit says so, and names the role you would need. A confirmation refused because your ACCOUNT has no workspace at all — the shape a brand-new sign-in can have — says that, and tells you to create a workspace first and then ask for the card again; creating a form without one would leave a form nobody can reach. Any other refusal by the server is reported as a change that was not carried out, together with the fact that the card cannot be used again.",
-      "A refused confirmation is never told to try again. The server spends the proposal the moment it decides to run it, so a refusal that arrives afterwards leaves the card finished: asking you to press Confirm once more would be advice that cannot work, over a token that is already gone. The remedy is always a fresh card — and where the cause is something you can fix, such as a missing workspace, the sentence says that first.",
-      "A proposal whose arguments the tool would never accept is refused before your token is touched, and it says so. This is the case where the assistant built a card from an id keyed the wrong way — the assistant's read tools return an object's id under one name and the write tool wants it under another, so it can get this wrong. When it does, the confirmation is refused with the token still unused: nothing was attempted and nothing was used up, and the fix is to ask the assistant to prepare the card again rather than to retry the same one. The card never claims a change went through, and it never claims the proposal expired when it did not.",
-      "The confirmation writes in THE WORKSPACE THE CALL BELONGED TO — the workspace you have selected, not your first account. This matters if you belong to more than one: a chat call carries the selected workspace with it, and if that workspace cannot be resolved the request is refused outright rather than quietly answered from another one. A refusal is a plain \"workspace not found\" or \"choose a workspace first\" answer, not a silent edit somewhere you were not looking.",
-      "The proposal lane is in-app, not an MCP tool. There is no propose_write over MCP: a proposal is prepared by the assistant inside the dashboard and confirmed by the signed-in person, so the confirmation is a click and is deliberately not something an API call can supply. An agent that wants a change over MCP calls that change's own tool itself — its own client is the human's confirmation channel.",
+      "A proposal appears as a **card**, not as a sentence. It shows the change in your terms, the values it would set and the object it applies to.",
+      "A badge says it needs your confirmation, and the card names the underlying **tool** so you can look it up. It says plainly that nothing has changed yet.",
+      "Two buttons: **Confirm** applies it and **Cancel** kills it. Cancel is a real action: it spends the proposal on the server, so a cancelled card can never be applied afterwards.",
+      "The card is generated by the server from the exact arguments that will run, never from the assistant's own description. Its sentence is shown as a **quote**, not as authority.",
+      "The card's heading, summary and field labels follow **your dashboard language**, in all five languages the dashboard speaks.",
+      "The server chooses those words and the browser supplies the translation. The assistant's own sentence stays in the language of your conversation.",
+      "The proposal is bound to what you were shown. If the arguments changed before your click, the confirmation is refused, so the thing you approved is the thing that runs.",
+      "The card is single-use and it expires **5 minutes** after it appears. Only you can confirm your proposals: another account presenting the token is refused.",
+    ],
+  },
+  {
+    id: "refusals",
+    title: "When a confirmation is refused",
+    icon: "⛔",
+    body: [
+      "A refusal names its cause in **your language**, exactly like the card, and says which of three problems it is.",
+      {
+        list: [
+          "**Not allowed** means the assistant may never do that thing. Deleting a form or refunding a sale is yours to do, on the page where the consequence is visible.",
+          "**Could not be prepared** means the action was fine and only its details were missing or wrong, such as a form asked for without its name.",
+          "**Could not be completed** means the tool was allowed and the call itself failed, such as a form id that does not exist.",
+        ],
+      },
+      "The three are different problems. Only the first means a feature is out of reach, so a missing id is never reported as one the assistant may not touch.",
+      "You always get an answer telling you what to send next. A refused change never ends with an empty reply.",
+      {
+        list: [
+          "**No workspace** in the request: it says so, and nothing was attempted.",
+          "**Your role** in that workspace does not allow the edit: it says so and names the role you would need.",
+          "**An account with no workspace at all** is told to create one first and ask for the card again.",
+          "**Any other refusal** says the change was not carried out and the card cannot be used again.",
+        ],
+      },
+      "A refused confirmation is never told to **try again**. The server spends the proposal the moment it decides to run it, so the remedy is always a fresh card.",
+      "A proposal whose arguments the tool would never accept is refused **before your token is touched**, so nothing is used up.",
+      "That happens when the assistant keys an id the wrong way: the read tools return it under one name, the write tool wants another. Ask for a fresh card.",
+    ],
+  },
+  {
+    id: "workspace",
+    title: "The workspace the change lands in",
+    icon: "🏢",
+    body: [
+      "The confirmation writes in the **workspace the call belonged to**: the workspace you have selected, not your first account.",
+      "That matters if you belong to more than one. A chat call carries the selected workspace with it.",
+      "If that workspace cannot be resolved, the request is refused outright rather than answered from another one.",
+      {
+        note: "A refusal is a plain **workspace not found** or **choose a workspace first** answer, not a silent edit somewhere you were not looking.",
+      },
+      "A confirmed change runs with **your own permission** and the same workspace and ownership checks as a dashboard edit. The chat never grants an ability your account does not have.",
+      "The proposal lane is **in-app, not an MCP tool**. There is no propose_write over MCP: a proposal is prepared inside the dashboard and confirmed by the signed-in person.",
+      "The confirmation is a click, and it is deliberately not something an API call can supply.",
+      "An agent that wants a change over MCP calls that change's own tool itself. Its own client is the human's confirmation channel.",
     ],
   },
   {
     id: "what-can-change",
     title: "What it may propose",
+    icon: "🛠️",
     body: [
-      "The set is deliberately small and reversible. Three of its tools are field edits on something you already own — editing a product's fields (name, description, price, stock, active state, images, billing cycle), editing one product variation's fields, and changing a form's theme and branding (colours, fonts, spacing, custom CSS) — and each can be put back by proposing the opposite edit.",
-      "The fourth creates: upsert_form is proposable, and a confirmed card CREATES a new form when it names none, or UPDATES the one it names. A creation is the one shape the field-edit rule does not cover, so it is allowed for its own reason rather than as an exception to it: a form is binned rather than destroyed, so a mistaken creation is recoverable. The bin belongs to you, not the assistant — deleting a form from the forms page moves it to the trash, and restoring it from the trash brings it back with its address intact.",
-      "Excluded by class, not by example: anything that destroys, archives, revokes or purges; anything that moves money; anything that cancels or re-runs a customer's billing; anything touching credentials, access or members; anything that sends email out of the building; anything that changes what the public can reach; and any bulk operation. A wrong confirm on those is either irreversible or lands on somebody else, and the confirmation card is too thin a preview for that.",
-      "The one step with no inverse is deleting a form for good, purge_form: it destroys the form and everything attached to it, and no restore brings it back. It is human-only and the assistant can never propose it — that is yours to do, deliberately, on the forms page. Creating is inside the set precisely because permanent destruction is not: the assistant stops at creating and updating a form, and binning is how a form leaves the active set, never destruction.",
-      "If you need one of those, the assistant will say so and point you to the page where you can do it, rather than pretending it did.",
+      "The set is deliberately small and **reversible**: three field edits you can put back by proposing the opposite edit.",
+      {
+        list: [
+          "Editing a **product's fields**: name, description, price, stock, active state, images and billing cycle.",
+          "Editing one **product variation's** fields.",
+          "Changing a form's **theme and branding**: colours, fonts, spacing and custom CSS.",
+        ],
+      },
+      "The fourth creates: upsert_form is proposable. A confirmed card creates a new form when it names none, or updates the one it names.",
+      "A creation is allowed because a form is **binned**, not destroyed. Deleting one from the forms page trashes it, and restoring brings it back with its address intact.",
+      "Everything outside that set is excluded **by class**, not by example:",
+      {
+        list: [
+          "Anything that **destroys, archives, revokes or purges**.",
+          "Anything that **moves money**, or cancels or re-runs a customer's billing.",
+          "Anything touching **credentials, access or members**.",
+          "Anything that sends email out of the building, or changes what the public can reach.",
+          "Any **bulk operation**.",
+        ],
+      },
+      "A wrong confirm on those is either irreversible or lands on somebody else.",
+      {
+        warn: "The one step with no inverse is **purge_form**: it destroys the form and everything attached, and no restore brings it back. It is human-only and never proposable.",
+      },
     ],
   },
   {
     id: "feedback",
     title: "Filing feedback from the conversation",
+    icon: "📮",
     body: [
-      "The assistant can file what you tell it as a feedback report or feature request. This is the same act as sending from the Feedback page: it creates a thread you own, the JomForm team is emailed, and the reply arrives in the same thread at /feedback.",
-      "Filing is visible, never silent. When the assistant files something, the chat shows a note saying it filed a report, with the subject — so you are never surprised later by a thread you did not know existed. If you did not want it filed, you can read it and add to it from the Feedback page.",
-      "The same limits apply as on the Feedback page: at least 10 characters, at most 5000, and at most 10 reports per user per day. Filing too many is answered with a rate limit rather than a judgement about whether your report is genuine — a complaint is never filtered by a classifier here.",
-      "The same capability exists over MCP as the submit_feedback tool, so an agent can file a report from a conversation exactly as the in-app assistant does.",
+      "The assistant can file what you tell it as a **feedback report** or feature request. This is the same act as sending from the Feedback page.",
+      "It creates a thread you own, the JomForm team is emailed, and the reply arrives in the same thread at **/feedback**.",
+      "Filing is **visible, never silent**. The chat shows a note saying it filed a report, with the subject, so no thread appears without you knowing.",
+      "The same limits apply as on the Feedback page: at least **10 characters**, at most **5000**, and at most **10 reports per user per day**.",
+      "Filing too many gets a rate limit, not a judgement about whether your report is genuine. A complaint is never filtered by a classifier here.",
+      "If you did not want it filed, you can read it and add to it from the Feedback page.",
+      "This page names submit_feedback as the one tool of its own that runs over MCP. An agent can file a report from a conversation exactly as the in-app assistant does.",
     ],
   },
   {
     id: "formatting",
     title: "Formatting in the answer",
+    icon: "🎨",
     body: [
-      "Answers are rendered, not printed. When the assistant writes bold text, a list, a piece of code or a link, you see bold text, a list, code in a monospace chip or a real link — not the markers it typed. Before this, an answer that said **this** showed the asterisks.",
-      "What is rendered: bold, italic, inline code, fenced code blocks (which scroll sideways instead of stretching the card), bulleted and numbered lists, links, and paragraph breaks. What is not: tables, images, headings and raw HTML — a table would arrive as a row of pipe characters and raw HTML as text, because the assistant's text is never inserted into the page as code. The assistant is told which subset it may use, so it produces lists where a table would have been.",
-      "An underscore only means italic when it is written AROUND a word, as in _condong_. Inside a word it is an ordinary character, so a setting, a column or a status that the assistant names keeps its underscores exactly as written: jf_2fa_pending and form_answers_value appear that way, not with the underscores swallowed as emphasis. (Asterisks are the other way round — foo*bar*baz is italic, because an asterisk inside a word is unusual enough to be deliberate. This is the rule the Markdown standard uses, for the reason it gives: underscores turn up too often inside names and file names.)",
-      "The same rendering applies to a feedback thread you file from the chat, and to the reply you read on the Feedback page: a report's body is rendered the same way in your own threads and in the team's triage view.",
-      "The stored text is exactly what was written. Nothing is stripped on the way in or out, so a report is never altered by how it happens to be displayed.",
+      "Answers are **rendered**, not printed. Bold text, a list, a piece of code or a link arrives as that, not as the markers it was typed with.",
+      "What is rendered: bold, italic, inline code, fenced code blocks that scroll sideways instead of stretching the card, bulleted and numbered lists, links and paragraph breaks.",
+      {
+        list: [
+          "What is not rendered: tables, images, headings and raw HTML.",
+          "A table would arrive as a row of pipe characters, and raw HTML as text.",
+          "The assistant's text is never inserted into the page as code, so it is told which subset it may use and writes lists where a table would have been.",
+        ],
+      },
+      "An underscore means italic only when it is written **around** a word, as in `_condong_`. Inside a word it is an ordinary character.",
+      "So a setting, a column or a status keeps its underscores exactly as written: `jf_2fa_pending` and `form_answers_value` appear that way.",
+      "Asterisks are the other way round: foo*bar*baz is italic, because an asterisk inside a word is unusual enough to be deliberate. That is the Markdown standard's rule.",
+      "The same rendering applies to a feedback thread you file from the chat and to the reply you read on the **Feedback page**.",
+      "The stored text is exactly what was written. Nothing is stripped on the way in or out, so a report is never altered by how it is displayed.",
     ],
   },
   {
     id: "while-it-answers",
     title: "While it is answering",
+    icon: "⏳",
     body: [
-      "The answer arrives as it is written, not all at once at the end. You see the words appear in the bubble — with a block cursor at the end while the assistant is still writing — and the answer is finished when the cursor goes. Before this, the panel sat on one sentence for the several seconds the model took, and then the whole answer appeared in a single jump, which made a working assistant look like a hung page.",
-      "Under the composer, a status line says what is happening: that it is thinking, or which of your records it is reading — your forms, your sales, your form responses, your products, your feedback. A read that ran is also listed under the answer afterwards, so you can see what the answer was built from instead of having to trust it. The status line and the button are separate: the Send button always says Send, and Stop sits beside it.",
-      "Stop really stops. Press it while an answer is being written and the request is cancelled — the browser closes the connection, the server stops the work behind it rather than finishing an answer nobody is waiting for, and no further model calls are made for it. What had already been written stays in the conversation, marked as incomplete, because a partial answer you can read is worth more than an empty bubble. That partial answer and the question you asked are both saved with the conversation, so coming back to it later — after a reload, a new tab, or signing in again — still shows the question you stopped and exactly how far the answer had got. Everything after that point is gone: the answer is not resumed, so ask again if you want the rest.",
-      "While the conversation is empty, the panel offers a few example questions. Clicking one sends it — it does not merely fill the composer — so a first question costs one click rather than a sentence you have to invent. They are ordinary questions; you can edit the result by asking a follow-up.",
-      "Every answer has a Copy button. It puts the answer's own words on your clipboard, not the page's formatting, so you can paste it into an email or a report. The button says Copied for a moment so you can see it worked.",
-      "The message box grows as you type, up to about eight lines, and then scrolls inside itself — so a long question stays readable while you write it. Enter sends; Shift+Enter starts a new line. It is still capped at 2000 characters, and the counter of what is left is the cap itself.",
-      "The conversation follows the answer only while you are at the bottom of it. Scroll up to re-read something earlier and it stays where you put it — new text no longer pulls you back down — and a Jump to latest control appears so you can return when you are ready.",
-      "If you use a screen reader, the answer is announced as it is written but the conversation is not. Only the latest answer is a live region, and it is marked busy while it streams, so assistive technology waits for the end of the answer instead of reading a fragment at a time; the earlier turns are not re-announced. The status line is announced politely, which is how you hear that the assistant is reading your forms rather than sitting silent.",
+      "The answer arrives as it is written, not at the end. A **block cursor** sits at the end of the bubble while the assistant is still writing.",
+      "A single sentence used to sit on screen for several seconds, and then the whole answer appeared in one jump. It looked like a hung page.",
+      "Under the composer, a status line says what is happening: that it is thinking, or which of your records it is reading.",
+      "Those records are your forms, your sales, your form responses, your products and your feedback. A read that ran is listed under the answer afterwards.",
+      "The status line and the button are separate. The **Send** button always says Send, and **Stop** sits beside it.",
+      "**Stop** really stops. The browser closes the connection, the server stops the work behind it, and no further model calls are made.",
+      "What was already written stays in the conversation, marked as incomplete. The question and that partial answer are saved, so a reload still shows how far it got.",
+      "The answer is not resumed, so ask again for the rest. For a screen reader, only the latest answer is a live region, marked busy while it streams.",
+    ],
+  },
+  {
+    id: "the-composer",
+    title: "The composer and the transcript",
+    icon: "📝",
+    body: [
+      "Every answer has a **Copy** button. It puts the answer's own words on your clipboard, not the page's formatting.",
+      "The button says **Copied** for a moment so you can see it worked. Paste the words into an email or a report.",
+      "The message box grows as you type, up to about **eight lines**, then scrolls inside itself. **Enter** sends and **Shift+Enter** starts a new line.",
+      "It is still capped at **2000 characters**, and the counter shows what is left of that cap.",
+      "The conversation follows the answer only while you are at the bottom. Scroll up to re-read something earlier and it stays where you put it.",
+      "A **Jump to latest** control appears so you can return when you are ready.",
+      "While the conversation is empty, the panel offers a few **example questions**. Clicking one sends it, so a first question costs one click, not an invented sentence.",
+      "Each is sent as your own message. For a screen reader, the status line is announced politely, so you hear which of your forms it is reading.",
     ],
   },
   {
     id: "limits",
     title: "Limits and cost",
+    icon: "📊",
     body: [
-      "Every message you send is at least one AI model call, and up to five if the assistant has to look several things up. Each lookup's result is trimmed to 6000 characters before the assistant reads it, and the answer is bounded too, so one question cannot become an unbounded bill.",
-      "A single user can send 60 messages per hour, in bursts of 10. That is a real conversation's pace with room to spare; if you hit it, wait a moment rather than switching to a second account, because the limit exists to keep the feature affordable for everyone.",
-      "Confirmations are limited separately, at 30 per hour in bursts of 5. Confirming costs no model call — that limit is about pace, not spend: it keeps a person deciding each card deliberately instead of clicking through a stack of them.",
-      "One answer can put at most 3 proposals in front of you, so a single reply cannot become a wall of confirmations to click through.",
-      "The conversation you send is bounded to the last 16 turns and 2000 characters for your message. Older turns are dropped from what the model sees: the assistant is built for a conversation about a recent question, not for holding a long document.",
-      "The assistant's own answer is capped at 4000 characters, and it will not paste your entire sales list into the chat when you asked for a count.",
+      "Every message you send is at least one **model call**, and up to five if the assistant has to look several things up.",
+      "Each lookup's result is trimmed to **6000 characters** before the assistant reads it, and the answer is bounded too, so one question cannot become an unbounded bill.",
+      "A single user can send **60 messages per hour**, in bursts of 10.",
+      "If you hit that limit, wait a moment rather than switching to a second account. The limit exists to keep the feature affordable for everyone.",
+      "Confirmations are limited separately, at **30 per hour** in bursts of 5. Confirming costs no model call, so that limit is about pace, not spend.",
+      "One answer can put at most **3 proposals** in front of you, so a single reply cannot become a wall of confirmations to click through.",
+      "The conversation is bounded to the last **16 turns**. Older turns are dropped from what the model sees, so it suits a recent question, not a long document.",
+      "The assistant's own answer is capped at **4000 characters**, and it will not paste your entire sales list into the chat when you asked for a count.",
     ],
   },
   {
     id: "trust",
     title: "Your data in the conversation",
+    icon: "🔒",
     body: [
-      "The assistant reads only your own account. It cannot see another merchant's forms, sales or feedback, and it cannot read another person's feedback thread.",
-      "Your data is treated as data. Product names, form answers and customer messages are handed to the model inside an explicit boundary that tells it, before and after the content, that this is information to read rather than instructions to follow. If a customer types something into a form that is addressed at the assistant — a fake instruction, a claim that you approved something, a demand to propose a destructive change — it is treated as content and can be reported to you, never obeyed. Because the assistant can now prepare changes, that boundary matters more rather than less: text that talked it into proposing a harmful edit would still have to get past the reversible-only set above and then past you reading a card the server rendered from the arguments.",
-      "The audit log records that a chat exchange happened, how many lookups it made, and that a proposal was confirmed — which tool and whether it succeeded. It never records your messages, the replies, or the values of a confirmed change.",
+      "The assistant reads **only your own account**. It cannot see another merchant's forms, sales or feedback, and cannot read another person's feedback thread.",
+      "Your data is treated as **data**. Product names, form answers and customer messages are handed to the model inside an explicit boundary.",
+      "That boundary says, before and after the content, that this is information to read rather than instructions to follow.",
+      "A customer who types a fake instruction, a claim that you approved something, or a demand for a destructive change is treated as content. It is reported, never obeyed.",
+      "Because the assistant can prepare changes, that boundary matters more rather than less.",
+      "Text that talked it into proposing a harmful edit would still have to clear the reversible-only set. Then you would have to confirm it.",
+      "The **audit log** records that a chat exchange happened, how many lookups it made, and that a proposal was confirmed, with which tool and whether it succeeded.",
+      "It never records your messages, the replies, or the values of a confirmed change.",
     ],
   },
   {
     id: "remembering",
-    title: "Your conversations are kept, and signing out does not delete them",
+    title: "Your conversations are kept",
+    icon: "🗂️",
     body: [
-      "Every conversation you have with the assistant is saved to your JomForm account, for the signed-in user and for the workspace that was selected when you had it. Refresh the page, close the tab, sign out and sign back in, or open the assistant on another device: the conversation is still there. Before this, the transcript lived only in the browser and signing out deleted it, so a new login started from nothing.",
-      "The history sidebar, to the left of the transcript, lists your saved conversations in this workspace, most recently used first. Each row is named after the first question you asked, and you can rename it. Click a row to continue that conversation; the assistant receives its recent turns as context, so \"and how many this week?\" still means what it meant yesterday. New conversation starts a second conversation and leaves the first one in the list — it does not clear anything.",
-      "Two workspaces do not share a conversation. If you belong to more than one, each keeps its own thread and its own sidebar; switching workspace shows that workspace's conversations rather than the previous one's.",
-      "Only the words are stored: your questions, the assistant's answers, and the record of which lookups produced an answer. A confirmation card is deliberately not restored — its Confirm button is a single-use permission with five minutes of life, so bringing the card back after a reload or a login would offer a button that cannot work. Anything you want to change, ask the assistant to prepare again.",
-      "Each conversation keeps its most recent turns — the same window the assistant is given when it answers — so a very long conversation stays useful without growing without limit. You can delete a conversation from the sidebar at any time; deleting removes its messages permanently, which is why the page asks first. Deleting a conversation does not affect your forms, sales or other data.",
-      "If the saved history cannot be read — a database blip, a deployment mid-upgrade — the page says so and you can still ask a new question. Nothing is shown half-restored, and no conversation is displayed under the wrong account or workspace.",
+      "Every conversation is **saved to your JomForm account**, for the signed-in user and the selected workspace: a refresh, a new tab, another device or signing out does not lose it.",
+      "The **history sidebar**, to the left of the transcript, lists your saved conversations in this workspace, most recently used first.",
+      "Each row is named after the first question you asked, and you can rename it. Click a row to continue that conversation.",
+      "The assistant sees its recent turns as context, so **and how many this week?** still means what it meant yesterday. A new conversation leaves the first in the list.",
+      "Two workspaces do not share a conversation. Each keeps its own thread and its own sidebar, and switching workspace shows that workspace's conversations.",
+      "Only the words are stored: your questions, the answers, and which lookups produced an answer. A **confirmation card** is deliberately not restored.",
+      {
+        note: "Its Confirm button is a single-use permission with five minutes of life, so a restored card would offer a button that cannot work. Ask the assistant to prepare it again.",
+      },
+      "Deleting a conversation from the sidebar removes its messages permanently, which is why the page asks first. It does not affect your forms, sales or other data.",
     ],
   },
   {
     id: "when-stuck",
     title: "When it does not know",
+    icon: "🤔",
     body: [
-      "If the assistant cannot answer from your data or from its guide to the product, it says so and offers to file it as feedback. It is not allowed to guess about your money, your customers or your settings, and it will not invent a number or a feature to look helpful.",
-      "If it tells you it found nothing, that is a statement about the lookup that ran, not about your account — and saying which form or period it looked at is a fair question to ask.",
-      "For anything about a payment that went wrong, a payout, or an account you cannot access, file it from the Feedback page or reply in the assistant's thread: a conversation with a person is the right channel, and the chat will say so rather than pretend otherwise.",
+      "If the assistant cannot answer from your data or from its guide to the product, it **says so** and offers to file it as feedback.",
+      "It is not allowed to guess about your money, your customers or your settings, and it will not invent a number or a feature to look helpful.",
+      "If it tells you it found nothing, that is a statement about the lookup that ran, not about your account.",
+      "Saying which form or period it looked at is a fair question to ask.",
+      "For a payment that went wrong, a payout, or an account you cannot access, file it from the [Feedback page](/docs/feedback) or reply in the assistant's thread.",
+      {
+        tip: "A conversation with a person is the right channel for those, and the chat will say so rather than pretend otherwise.",
+      },
+      {
+        note: "Related: [in-app feedback](/docs/feedback) and [the MCP tool reference](/docs/mcp). **submit_feedback** is in that reference. **propose_write** is not, because its confirmation is a signed-in person's click.",
+      },
     ],
   },
 ];
 
 export default function ChatDocsPage() {
   return (
-    <article className="mx-auto w-full max-w-3xl px-6 py-12">
-      <p className="text-xs font-medium uppercase tracking-wider text-[var(--jf-muted)]">
-        JomForm Docs
-      </p>
-      <h1 className="mt-2 text-2xl font-semibold tracking-tight">In-app assistant</h1>
-      <p className="mt-3 text-sm text-[var(--jf-muted)]">
-        The built-in chat: it answers questions about how JomForm works and about your own data, it files
-        feedback for you, and it can prepare a small reversible change for you to confirm. It cannot apply a
-        change by itself — by design, and enforced on the server.
-      </p>
-      <nav className="mt-6 flex flex-wrap gap-2">
-        {SECTIONS.map((s) => (
-          <a
-            key={s.id}
-            href={`#${s.id}`}
-            className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-700 hover:bg-[var(--jf-primary)] hover:text-white"
-          >
-            {s.title}
-          </a>
-        ))}
-      </nav>
-      <div className="mt-8 space-y-8">
-        {SECTIONS.map((s) => (
-          <section key={s.id} id={s.id} className="scroll-mt-20">
-            <h2 className="text-lg font-semibold tracking-tight">{s.title}</h2>
-            <div className="mt-2 space-y-3">
-              {s.body.map((p, i) => (
-                <p key={i} className="text-sm leading-relaxed text-[var(--jf-text)]">
-                  {p}
-                </p>
-              ))}
-            </div>
-          </section>
-        ))}
-      </div>
-      <p className="mt-10 text-xs text-[var(--jf-muted)]">
-        Related: <a className="underline decoration-dotted underline-offset-2" href="/docs/feedback">in-app feedback</a>{" "}
-        and <a className="underline decoration-dotted underline-offset-2" href="/docs/mcp">the MCP tool reference</a>{" "}
-        (submit_feedback, the tool that files a report). The proposal lane
-        (propose_write) is not an MCP tool and is not in that reference — it runs in-app and
-        its confirmation is a signed-in person&apos;s click.
-      </p>
-    </article>
+    <DocsPage
+      title="In-app assistant"
+      lead="The built-in chat: it answers questions about JomForm and about your own data, files feedback, and can prepare a change for you to confirm."
+      sections={SECTIONS}
+    />
   );
 }

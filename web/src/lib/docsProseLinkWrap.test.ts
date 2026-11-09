@@ -11,7 +11,7 @@
 //       — right edge 373, width 337, computed overflow-wrap: normal
 //     /docs/api at a 320px viewport: scrollWidth 379 vs clientWidth 320 (59px pan)
 //
-//   The intro paragraph prints the ABSOLUTE URL of the OpenAPI contract as the
+//   The intro paragraph printed the ABSOLUTE URL of the OpenAPI contract as the
 //   anchor's own text (`{OPENAPI_PUBLIC_URL}`, api/page.tsx). That value is
 //   `https://jomform.com/openapi.json` — 32 characters, ONE whitespace-free run.
 //   With no break opportunity the anchor is as wide as its glyphs (337px at a
@@ -30,35 +30,49 @@
 //   /docs/mcp prose <code> tokens, src/lib/docsApiProseWrap.test.ts for the
 //   /docs/api ones). `anywhere` rather than `break-word` because it also drops
 //   the element's min-content width to one character, so the link can shrink
-//   INSIDE the column instead of flooring it. The URL is NOT shortened: the link
-//   still reads https://jomform.com/openapi.json in full, wrapped over lines.
+//   INSIDE the column instead of flooring it. The URL is NOT shortened: a link
+//   to the contract still points at https://jomform.com/openapi.json in full.
 //
 // WHAT THIS FILE PINS, AND WHY IT IS A SOURCE CONTRACT TEST
 //   The repo has no DOM/JSX unit runner (no vitest/jest) and the Playwright a11y
 //   gate cannot measure layout deformation, so the pixel numbers above were
 //   measured in a real browser against a production build and are re-checked in
-//   the PR. What a unit test can pin is the class that carries the behaviour and
+//   the PR. What a unit test can pin is the shape that carries the behaviour and
 //   the fact that the URL that needed it is still the full URL:
 //
-//     1. the AST extractor really reads the docs tree and really finds the one
-//        prose anchor that renders a URL (it cannot pass vacuously), and it
-//        really skips a code sample (proved on a probe source, because the real
-//        tree has no <a> inside <pre> to exercise the skip on);
+//     1. the extractors really read the docs tree and really find the one prose
+//        anchor that prints a URL (it cannot pass vacuously), and they really
+//        skip a code sample (proved on a probe source, because the real tree has
+//        no <a> inside <pre> to exercise the skip on);
 //     2. EVERY prose anchor in the docs tree whose rendered text is one
 //        whitespace-free absolute URL carries a break guard — a new unguarded
 //        URL link fails here, not in a browser 200px from now;
 //     3. the constant is still a whitespace-free https URL of at least the
 //        measured length, so shortening the URL to fit the column is not a green
-//        path (the page prints the constant, so a shortened literal would have
-//        to replace `{OPENAPI_PUBLIC_URL}` and that fails assertion 2's own
-//        extractor: the text would no longer resolve to the URL);
-//     4. BOTH anchors that point at the contract carry the guard. This one is a
-//        CONVENTION pin, not a measured requirement: the versioning anchor
-//        prints the words "openapi.json" (12 characters, cannot pan), but the
-//        two contract anchors have already diverged once — that divergence is
-//        exactly how the intro one ended up printing the raw URL — so the page
-//        cannot start panning again merely because a later edit swaps the
-//        versioning label back to the URL.
+//        path;
+//     4. the /docs/api contract link is still a link to the constant, and its
+//        LABEL is not the URL. This one is a CONVENTION pin: the versioning line
+//        already prints the words "openapi.json" (12 characters, cannot pan),
+//        and the intro anchor that printed the raw URL is gone — but the two have
+//        diverged once, and that divergence is exactly how the page ended up
+//        printing a 32-character run in an anchor, so the page cannot drift back
+//        without going red.
+//
+// SINCE THE PROSE RENDERER
+//   The /docs pages are `const SECTIONS` literals rendered by
+//   src/app/docs/docsProse, so a prose link is now a MARKDOWN LINK in a string —
+//   `[label](href)` — and the <a> exists exactly ONCE, in the renderer. The
+//   defect class therefore has two shapes and this file judges both:
+//
+//     * a hand-written JSX anchor whose text is a URL (the original shape; the
+//       tree currently has none, and the extractor is proved on a probe);
+//     * a prose link whose LABEL is a URL (the new shape — the anchor's rendered
+//       text is the label, so a 32-character label is a 32-character unbreakable
+//       run, and its wrapping then depends on whatever container it lands in).
+//
+//   The renderer's anchor is pinned as the single render site: its href comes
+//   from the parsed token, its className is a literal, and its text is the
+//   token's label — so a page cannot smuggle in a destination or a class.
 //
 // WHAT IT DOES NOT COVER (stated honestly)
 //   * It reads the source, not the served HTML. Whether the class really
@@ -86,17 +100,27 @@ import ts from "typescript";
 // The recursive `app/docs` walk shared with docsProseConvention.test.ts,
 // llmsFullCoverage.test.ts and sitemapCoverage.test.ts (card t_3a5aa9b5).
 import { filesUnder } from "./docsRoutes.ts";
-// The value the page prints. Imported rather than re-typed: the anchor's text is
-// `{OPENAPI_PUBLIC_URL}`, so this is the string a reader sees.
+// Who renders a converted page's prose, and whether THIS page is converted.
+import { usesDocsProse } from "./docsProseReader.ts";
+// The value the page links to. Imported rather than re-typed: the page's link is
+// `[openapi.json](${OPENAPI_PUBLIC_URL})`, so this is the destination a reader
+// follows.
 import * as openapi from "./openapi.ts";
 
 const DOCS_DIR = fileURLToPath(new URL("../app/docs", import.meta.url));
+const RENDERER = `${DOCS_DIR}/docsProse.tsx`;
 
 /** A class name that permits a break inside an unbreakable run. */
 const BREAK_GUARD = /\[overflow-wrap:(?:anywhere|break-word)\]|\bbreak-words\b|\bbreak-all\b/;
 
 /** A prose anchor's rendered text is ONE absolute URL and nothing else. */
 const URL_RUN = /^https?:\/\/\S+$/;
+
+/** A prose link: `[label](href)` — the shape a converted page writes. */
+const PROSE_LINK = /\[([^\]\n]+)\]\(([^)\s]*)\)/g;
+
+/** The label of a prose link that is a bare URL is as wide as the URL itself. */
+const MIN_URL_LABEL = 28;
 
 /**
  * Resolve a JSX expression identifier to the string the page would print.
@@ -171,13 +195,31 @@ function textOf(el: ts.JsxElement): string | null {
       }
       return null;
     }
-    return null; // a nested element or fragment: not one plain text run
+    return null; // a nested element, a fragment or a spread: not one plain run
   }
   return parts.join("").replace(/\s+/g, " ").trim();
 }
 
-/** One prose anchor found in the docs tree. */
-type Site = { file: string; line: number; className: string; classKnown: boolean; text: string };
+/**
+ * One prose anchor found in the docs tree.
+ *
+ * `kind` says which shape it is:
+ *   jsx   — a hand-written `<a>`; its class is on the element and is judged.
+ *   label — a `[label](href)` prose link in a converted page; the page cannot
+ *           put a class on it, the renderer's <a> is the element a reader sees.
+ */
+type Site = {
+  kind: "jsx" | "label";
+  file: string;
+  line: number;
+  className: string;
+  classKnown: boolean;
+  text: string;
+};
+
+function lineOf(src: string, index: number): number {
+  return src.slice(0, index).split("\n").length;
+}
 
 /**
  * Every prose anchor in `src` whose rendered text is one absolute URL run.
@@ -195,7 +237,7 @@ function urlTextAnchors(src: string, file: string): Site[] {
       if (text !== null && URL_RUN.test(text) && !insideCodeSample(node)) {
         const cls = classAttr(node.openingElement);
         const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-        found.push({ file, line: line + 1, className: cls.value, classKnown: cls.known, text });
+        found.push({ kind: "jsx", file, line: line + 1, className: cls.value, classKnown: cls.known, text });
       }
     }
     ts.forEachChild(node, visit);
@@ -204,10 +246,46 @@ function urlTextAnchors(src: string, file: string): Site[] {
   return found;
 }
 
+/**
+ * Every prose link in `src` whose LABEL is one absolute URL run.
+ *
+ * This is the converted-page shape of the same defect: the label is the anchor's
+ * rendered text, so `[https://…](https://…)` prints a 32-character unbreakable
+ * run — and the renderer's <a> has no break guard of its own.
+ */
+function urlLabelLinks(src: string, file: string): Site[] {
+  const found: Site[] = [];
+  for (const m of src.matchAll(PROSE_LINK)) {
+    const label = m[1].replace(/\s+/g, " ").trim();
+    if (!URL_RUN.test(label)) continue;
+    found.push({
+      kind: "label",
+      file,
+      line: lineOf(src, m.index ?? 0),
+      className: "",
+      classKnown: false,
+      text: label,
+    });
+  }
+  return found;
+}
+
 const FILES = filesUnder(DOCS_DIR).filter((f) => f.endsWith(".tsx") && !f.endsWith(".d.ts"));
-const SITES: Site[] = FILES.flatMap((f) => urlTextAnchors(readFileSync(f, "utf8"), f));
+const SITES: Site[] = FILES.flatMap((f) => {
+  const src = readFileSync(f, "utf8");
+  return [...urlTextAnchors(src, f), ...urlLabelLinks(src, f)];
+});
+/** Every prose link in the tree, URL-labelled or not — the label scan's own body. */
+const LINKS = FILES.flatMap((f) =>
+  [...readFileSync(f, "utf8").matchAll(PROSE_LINK)].map((m) => ({
+    file: f,
+    label: m[1].trim(),
+    href: m[2],
+  })),
+);
 const rel = (f: string) => f.replace(DOCS_DIR, "src/app/docs");
-const describe = (s: Site) => `${rel(s.file)}:${s.line}  ${JSON.stringify(s.text.slice(0, 80))}`;
+const describe = (s: Site) =>
+  `${rel(s.file)}:${s.line}  ${s.kind === "label" ? "link label " : ""}${JSON.stringify(s.text.slice(0, 80))}`;
 
 test("the extractor reads the real docs tree and finds the URL anchor (it cannot pass vacuously)", () => {
   // The walk must really cover the pages: a glob that matched nothing would let
@@ -219,23 +297,50 @@ test("the extractor reads the real docs tree and finds the URL anchor (it cannot
   const apiPage = FILES.find((f) => f.endsWith("/docs/api/page.tsx"));
   assert.ok(apiPage, "docs/api/page.tsx is not in the walked set — the page this card is about is not being read");
 
-  // And it must really find the site this card is about, resolved through the
-  // identifier map: the anchor prints `{OPENAPI_PUBLIC_URL}`, so the extractor
-  // resolving that expression to the URL is the whole mechanism under test.
-  assert.ok(
-    SITES.some((s) => s.file === apiPage && s.text === openapi.OPENAPI_PUBLIC_URL),
-    `the /docs/api intro anchor rendering {OPENAPI_PUBLIC_URL} was not found among the ` +
-      `${SITES.length} URL-text anchors this extractor read ` +
-      `(${JSON.stringify(SITES.map(describe))}) — the identifier resolution or the walk is broken, ` +
-      "so an unguarded URL link would be invisible to this guard",
-  );
-
-  // The page really prints the constant (not a shortened literal), so the site
-  // above is the one a reader sees.
+  // The site this card is about MOVED: the intro anchor that printed the raw URL
+  // is gone (its line now prints the short label "openapi.json"), and the page
+  // renders through the prose renderer, so the contract link is a markdown link
+  // whose destination is the constant. Prove that new shape is really there: if
+  // the link moves again, this arm must fail rather than certify a page that no
+  // longer links the contract at all.
   const apiSrc = readFileSync(apiPage!, "utf8");
   assert.ok(
-    apiSrc.includes("{OPENAPI_PUBLIC_URL}"),
-    "docs/api/page.tsx no longer renders {OPENAPI_PUBLIC_URL} as text — this guard's known site moved",
+    usesDocsProse(apiSrc),
+    "docs/api/page.tsx no longer renders through src/app/docs/docsProse — its links are no " +
+      "longer markdown links in a prose string, so this guard's known site moved",
+  );
+  const contractLink = [...apiSrc.matchAll(PROSE_LINK)].filter(
+    (m) => m[2] === "${OPENAPI_PUBLIC_URL}",
+  );
+  assert.ok(
+    contractLink.length >= 1,
+    `docs/api/page.tsx has no prose link to \${OPENAPI_PUBLIC_URL} — the page's contract ` +
+      "destination moved and this guard is reading a page it no longer knows",
+  );
+  assert.ok(
+    !URL_RUN.test(contractLink[0][1].trim()),
+    `docs/api/page.tsx labels the contract link with the URL itself ` +
+      `(${JSON.stringify(contractLink[0][1])}) — that is the 337px anchor this card is about, ` +
+      "reintroduced in the prose shape",
+  );
+
+  // The renderer's <a> is the ONE render site for a page's prose link. Its href
+  // must come from the parsed token (so the destination is the one the page
+  // wrote), it must render the token's label as its text, and its className must
+  // be a literal — a computed class cannot be certified by the extractor above.
+  const rendererSrc = readFileSync(RENDERER, "utf8");
+  assert.ok(
+    rendererSrc.includes('if (t.kind === "link")') &&
+      rendererSrc.includes("href={t.href}") &&
+      rendererSrc.includes("{t.text}"),
+    "docsProse.tsx no longer renders a parsed link token as <a href={t.href}>{t.text}</a> — a " +
+      "page's prose link would lose its destination or its label",
+  );
+  assert.match(
+    rendererSrc,
+    /<a\b[^>]*className="[^"]+"/,
+    "docsProse.tsx's prose <a> has no literal className — the extractor above cannot certify a " +
+      "computed class, and a link's wrap behaviour would be invisible to this guard",
   );
 
   // The <code>/<pre> skip is REAL, proved on a probe source: the docs tree has
@@ -255,25 +360,61 @@ test("the extractor reads the real docs tree and finds the URL anchor (it cannot
       "sample scrolls by design). Findings: " +
       JSON.stringify(probeSites.map((s) => s.text)),
   );
+
+  // And the LABEL extractor is proved the same way: it must see a URL-labelled
+  // prose link and must not see one whose label is words.
+  const labelProbe = [
+    "const SECTIONS = [",
+    '  "See [openapi.json](${OPENAPI_PUBLIC_URL}) for the schema.",',
+    '  "Mirror: [https://example.com/a-long-absolute-url](https://example.com/a-long-absolute-url)",',
+    "]",
+  ].join("\n");
+  assert.deepEqual(
+    urlLabelLinks(labelProbe, "probe.tsx").map((s) => s.text),
+    ["https://example.com/a-long-absolute-url"],
+    "the prose-link label extractor did not read the probe as designed — it must flag a link " +
+      "whose LABEL is a URL and leave a worded label alone",
+  );
+
+  // The label scan must be looking at a real set of links, not an empty tree.
+  assert.ok(
+    LINKS.length >= 10,
+    `found only ${LINKS.length} prose link(s) across the docs tree — the label scan would be ` +
+      "passing over almost nothing",
+  );
 });
 
 test("no /docs prose anchor renders an unbreakable URL without a break guard", () => {
-  const unguarded = SITES.filter((s) => !s.classKnown || !BREAK_GUARD.test(s.className));
+  const unguarded = SITES.filter((s) =>
+    s.kind === "label" ? true : !s.classKnown || !BREAK_GUARD.test(s.className),
+  );
   assert.deepEqual(
-    unguarded.map((s) => `${rel(s.file)}:${s.line}  className=${JSON.stringify(s.className)}  ${s.text}`),
+    unguarded.map((s) => `${describe(s)}  href/class=${JSON.stringify(s.className)}`),
     [],
     `these /docs anchors render an absolute URL as their own text, one whitespace-free run, with no ` +
       `break guard. Measured on a production build at Chromium 390x844 dsf2 with the browser default ` +
       `font size raised to 24px: /docs/api printed https://jomform.com/openapi.json in exactly this ` +
       `shape (337px wide at a 360px viewport, computed overflow-wrap: normal), which floored the ~296px ` +
-      `prose column and panned the page 19px (373 vs 360); at 320px the same run panned 59px. Add ` +
-      `[overflow-wrap:anywhere] to the anchor's className — "anywhere", not "break-word", because it ` +
-      `also drops the element's min-content width to one character so the link shrinks INTO the column ` +
-      `instead of widening it. Do NOT shorten the URL: the reader must still be able to read and copy ` +
-      `the address. A computed className cannot be certified by this guard and is reported here too; ` +
+      `prose column and panned the page 19px (373 vs 360); at 320px the same run panned 59px. ` +
+      `A hand-written <a> needs [overflow-wrap:anywhere] on its className — "anywhere", not ` +
+      `"break-word", because it also drops the element's min-content width to one character so the ` +
+      `link shrinks INTO the column instead of widening it. A PROSE link cannot carry a class: ` +
+      `give it a short label (the words, not the URL) — a URL label is only held inside the ` +
+      `column by the break guard on whatever container it lands in, and a table cell (which ` +
+      `scrolls instead) or a new container is one edit away from not having one. ` +
+      `Do NOT shorten the URL itself: the reader must still be able to read and copy the ` +
+      `address. A computed className cannot be certified by this guard and is reported here too; ` +
       `write the class out as a literal string. ` +
-      `Findings:\n  ${SITES.map(describe).join("\n  ")}`,
+      `Findings:\n  ${SITES.map(describe).join("\n  ") || "(none)"}`,
   );
+  // A URL-labelled prose link is reported by its KIND, not by a class it cannot
+  // have; assert the report names it so the message above is actionable.
+  for (const s of SITES) {
+    assert.ok(
+      s.kind === "label" || s.classKnown,
+      `${describe(s)}: an anchor whose class is an expression is reported, never skipped`,
+    );
+  }
 });
 
 test("the contract URL is still the full URL that needed the guard (shortening it is not a fix)", () => {
@@ -288,47 +429,79 @@ test("the contract URL is still the full URL that needed the guard (shortening i
   // column at 360px/24px is the 32-character contract URL; anything at least this
   // long is the unbreakable shape this card is about. A shortened URL (e.g. a
   // bare host, or a path-only fragment) fails here rather than quietly making the
-  // anchor fit.
+  // link fit.
   assert.ok(
-    url.length >= 28,
+    url.length >= MIN_URL_LABEL,
     `OPENAPI_PUBLIC_URL is only ${url.length} characters (${JSON.stringify(url)}) — the URL was ` +
       "shortened. The anchor measured 337px at a 24px root font and that length is what the break " +
       "guard is for; shortening the published contract URL to fit the column would break readers' " +
       "copies of it.",
   );
-  // And the page's anchor text is that URL, printed in full — the measurement's
-  // premise, asserted rather than assumed.
-  const site = SITES.find((s) => s.text === url);
-  assert.ok(site, `no docs anchor renders ${url} any more — re-measure before deleting this guard`);
+
+  // And the docs still LINK it, in full: the page's contract link points at the
+  // constant, and that constant is the URL asserted above. (Before the prose
+  // renderer this was an anchor printing the URL; the destination is the fact
+  // that matters, and it is read from the link the page writes.)
+  const apiPage = FILES.find((f) => f.endsWith("/docs/api/page.tsx"))!;
+  const apiSrc = readFileSync(apiPage, "utf8");
+  const toConstant = [...apiSrc.matchAll(PROSE_LINK)].filter((m) => m[2] === "${OPENAPI_PUBLIC_URL}");
+  assert.ok(
+    toConstant.length > 0,
+    `no docs link targets \${OPENAPI_PUBLIC_URL} any more — re-measure before deleting this guard`,
+  );
+  // The token resolves to the imported constant, so the destination a reader
+  // follows is the full URL this test measured.
   assert.equal(
-    site!.text,
+    openapi.OPENAPI_PUBLIC_URL,
     url,
-    "the anchor's rendered text is not the full contract URL — the guard is protecting a shorter run",
+    "the anchor's destination is not the full contract URL — the guard is protecting a shorter run",
+  );
+  assert.ok(
+    ![...apiSrc.matchAll(PROSE_LINK)]
+      .map((m) => m[2])
+      .some((h) => /^https?:\/\//.test(h)),
+    "docs/api/page.tsx types an absolute URL as a link destination instead of the constant — " +
+      "the destination this guard measured would be a second, unguarded definition",
   );
 });
 
-test("both contract anchors carry the break guard (convention pin, so the label can swap back)", () => {
+test("every contract link is short-labelled and points at the pinned constant (convention pin, so the label cannot swap back)", () => {
   const apiPage = FILES.find((f) => f.endsWith("/docs/api/page.tsx"))!;
   const src = readFileSync(apiPage, "utf8");
-  // An anchor whose href is the contract constant. Both attributes are read from
-  // the source, which is what docsApi.test.ts already pins as the page's only two
-  // absolute destinations.
-  const anchors = [...src.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map((m) => ({ attrs: m[1], body: m[2] }));
-  const contract = anchors.filter((a) => /href=\{OPENAPI_PUBLIC_URL\}/.test(a.attrs));
-  assert.equal(
-    contract.length,
-    2,
-    `docs/api/page.tsx has ${contract.length} anchors pointing at the contract, not 2 — this pin is ` +
-      "reading the wrong set of anchors (docsApi.test.ts pins the same two)",
+  // A link whose destination is the contract constant. Both the label and the
+  // destination are read from the source, which is what docsApi.test.ts already
+  // pins as the page's only absolute destination.
+  const contract = [...src.matchAll(PROSE_LINK)].filter((m) => m[2] === "${OPENAPI_PUBLIC_URL}");
+  assert.ok(
+    contract.length >= 1,
+    "docs/api/page.tsx has no link to the contract — this pin is reading the wrong set of links " +
+      "(docsApi.test.ts pins the same destination)",
   );
-  for (const [i, a] of contract.entries()) {
+  // EVERY link to the contract, not just the first: a second one is exactly how
+  // the two diverged the first time.
+  for (const [, rawLabel, href] of contract) {
+    const label = rawLabel.replace(/\s+/g, " ").trim();
     assert.ok(
-      BREAK_GUARD.test(a.attrs),
-      `contract anchor ${i + 1} of 2 in docs/api/page.tsx has no break guard in its className ` +
-        `(${JSON.stringify(a.attrs.replace(/\s+/g, " ").trim().slice(0, 120))}). The intro anchor prints ` +
-        "the URL itself and needs it; the versioning anchor prints the words \"openapi.json\" and does " +
-        "not need it for layout today — it carries it so that swapping its label back to the URL cannot " +
-        "reintroduce the 360px pan. Keep both.",
+      !URL_RUN.test(label),
+      `a contract link's label is the URL itself (${JSON.stringify(label)}). The intro anchor ` +
+        `used to print it and measured 337px at a 360px viewport / 24px root font; in prose the ` +
+        `label is the anchor's rendered text, so it is a 32-character unbreakable run whose ` +
+        `wrapping depends on the container rather than on anything the link controls. Label the ` +
+        `link with words ("openapi.json") and keep the URL as the destination.`,
+    );
+    assert.ok(
+      label.length < MIN_URL_LABEL,
+      `a contract link's label is ${label.length} characters (${JSON.stringify(label)}) — that is ` +
+        "the unbreakable-run length the break guard exists for; the label must be short words, " +
+        "with the full URL kept as the destination",
+    );
+    // Keep the destination: a short label must not have replaced the link with
+    // plain text.
+    assert.equal(
+      href,
+      "${OPENAPI_PUBLIC_URL}",
+      "a contract link's destination is no longer the constant — a short label is not a licence " +
+        "to drop the machine-readable document",
     );
   }
 });

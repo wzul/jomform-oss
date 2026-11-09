@@ -269,10 +269,36 @@ test("the guard is looking at real files (it cannot pass vacuously)", () => {
     staticRoutes.size >= 20,
     `only ${staticRoutes.size} static routes were found under src/app — the walk is broken`,
   );
+  // The count floor, RE-DERIVED from the tree after the /docs prose rewrite (it was
+  // 5). The carriers that left were five /docs routes — api, custom-forms, customize,
+  // embed and placeholders — whose hand-written JSX painted a code sample
+  // `bg-slate-900`; the shared prose renderer paints a code block with the theme's
+  // own tokens, so those routes no longer put text on a solid dark slab and no
+  // longer need the browser to composite a surface. A floor is only as good as the
+  // walk that meets it, so the two remaining carriers are NAMED below as well: a
+  // walk that found two files but lost either of them fails with the file in the
+  // message instead of passing on the count.
+  // RE-DERIVED again after merging main: landing/page.tsx was replaced by the
+  // product-led landing (#1654), whose dark surfaces are painted through the
+  // design primitives instead of a `bg-slate-900` class, so it is no longer a
+  // carrier this source scan can see. History of this floor, measured each time:
+  //   5  before the /docs prose rewrite (api, custom-forms, customize, embed, placeholders)
+  //   2  after it, with the landing slab still hand-written
+  //   1  after #1654 landed on main
+  // One carrier is still enough to prove the rule runs over a real file, and the
+  // per-route rule below it is what catches a NEW carrier on a route the a11y list
+  // omits — the count is not what protects that.
   assert.ok(
-    carriers.length >= 5,
-    `only ${carriers.length} route source(s) paint a dark slab, so this rule proved nothing`,
+    carriers.length >= 1,
+    `no route source paints a dark slab, so this rule proved nothing`,
   );
+  for (const rel of ["app/mcp/mcp-client.tsx"]) {
+    assert.ok(
+      carriers.some((c) => c.rel === rel),
+      `the walk no longer finds the dark slab in ${rel} — the route derivation or the file moved, ` +
+        `and the count above can stay green on the remaining one`,
+    );
+  }
   // The walk must reach a route's CLIENT component, not only its `page.tsx`: the
   // slab this guard was written for is on `app/mcp/mcp-client.tsx`, and a walk
   // narrowed to `page.tsx` would report a clean zero over it.

@@ -12,7 +12,7 @@
     "text-3xl font-bold tracking-tight text-slate-900 docs.title",
     "text-xl font-semibold text-slate-900 docs.gsTitle",
     "mt-12 text-xl font-semibold text-slate-900 docs.featuresTitle",
-    "text-base font-semibold uppercase tracking-wide text-[var(--jf-primary)]",
+    "flex items-center gap-2 text-base font-semibold uppercase tracking-wide text-[var(--jf-primary-strong)] true text-lg normal-case",
     "mt-12 text-xl font-semibold text-slate-900 docs.faqTitle",
     "text-sm font-semibold text-slate-900",
     "text-sm font-semibold text-slate-900"
@@ -26,20 +26,8 @@
    "layer": "Learn",
    "section": "Start here",
    "order": 1,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 The form builder",
-    "mt-8 text-xl font-semibold text-slate-900 The three areas",
-    "mt-8 text-xl font-semibold text-slate-900 Adding a field",
-    "mt-8 text-xl font-semibold text-slate-900 Editing a block&apos;s settings",
-    "mt-8 text-xl font-semibold text-slate-900 What each setting does",
-    "mt-8 text-xl font-semibold text-slate-900 When a text block holds a sentence",
-    "mt-8 text-xl font-semibold text-slate-900 When a rule&apos;s field no longer exists",
-    "url-fields mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 What a website field accepts",
-    "mt-8 text-xl font-semibold text-slate-900 Reordering, duplicating, removing",
-    "mt-8 text-xl font-semibold text-slate-900 The canvas preview is drawn, not interactive",
-    "mt-8 text-xl font-semibold text-slate-900 Form mode and everything else"
-   ],
-   "text": "JomForm Docs — the form builder How the JomForm form builder works: the field palette, the canvas, editing a block's settings on desktop and on a phone, and the per-block actions. The form builder The builder is where a form&apos;s fields are laid out. It is the same surface for a form and for one of your own templates (see templates ). mt-8 text-xl font-semibold text-slate-900 The three areas The three areas On a desktop (≥768px) the builder is three columns: the field palette on the left (every field type, grouped Standard / Advanced / Pricing), the canvas in the middle (the fields in the order a buyer sees them), and the panel on the right, which edits whichever block is selected. mt-8 text-xl font-semibold text-slate-900 Adding a field Adding a field Drag a palette item onto the canvas, or tap it — tapping appends the field to the end. On a phone the palette lives behind the Add tab; adding a field returns you to the canvas with the new block highlighted, so you can add several fields in a row without leaving the canvas. mt-8 text-xl font-semibold text-slate-900 Editing a block&apos;s settings Editing a block&apos;s settings Every block has settings: its label/text, description, placeholder, CSS class, inline style, whether it is required, its validation message, and — for the field types that need one — a choices editor, a product picker or a conditional-logic rule. Which settings appear depends on the field type. On a desktop , tap a block on the canvas and its settings appear in the right-hand panel. On a phone , tap a block on the canvas and the settings panel replaces the canvas. The row at the top of the panel — ← Canvas next to the block&apos;s type — returns you to the canvas. The block stays highlighted after you close the panel, so you can see where you were, and tapping it again reopens its settings. The mobile tab bar has two tabs, and Canvas . There is no separate settings tab: editing a block is a tap on the block itself. mt-8 text-xl font-semibold text-slate-900 What each setting does What each setting does Every one of these reaches the published form. Where a setting appears depends on the field type, and each one shows up like this: Label / text — the field&apos;s own label. The text block is a single-line answer field: its label is the text you type, and it is the palette&apos;s only short-answer field. Description — helper text printe"
+   "headings": [],
+   "text": "JomForm Docs — the form builder How the JomForm form builder works: the field palette, the canvas, editing a block's settings on desktop and on a phone, and the per-block actions. The three areas Adding a field Editing a block's settings What each setting does When a text block holds a sentence When a rule's field no longer exists What a website field accepts Reordering, duplicating, removing The canvas preview is drawn, not interactive Form mode and everything else"
   },
   {
    "path": "/docs/guides",
@@ -50,7 +38,7 @@
    "order": 2,
    "headings": [
     "text-2xl font-bold text-slate-900 sm:text-3xl Screenshot guides",
-    "text-lg font-semibold text-slate-900 underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)]"
+    "text-lg font-semibold text-slate-900 underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary-strong)]"
    ],
    "text": "Screenshot guides — JomForm Docs Step-by-step setup guides for JomForm. Every step has its own screenshot from the running product, with the control you touch at that step boxed in red. Screenshot guides Each guide below walks one setup from the settings page to the live form. Every step has its own screenshot, captured from the running product, with the control you touch at that step marked in red — so you can follow it beside your own dashboard. screenshots — one per step ← Back to the docs index"
   },
@@ -206,11 +194,8 @@
    "layer": "Product docs",
    "section": "Workspaces",
    "order": 11,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 Workspaces",
-    "text-lg font-semibold text-slate-900"
-   ],
-   "text": "Workspaces — JomForm Docs What a workspace owns, its public address, its currency and exchange rates, how you create one, and what moving one to the Trash (and deleting it for good) requires. What a workspace is Renaming a workspace Deleting a workspace The storefront footer and its legal links Workspace currency & exchange rates Workspaces A workspace is the tenant everything you build lives in. This page covers what it owns, its public address, its currency and exchange rates, how you get one, and exactly what moving one to the Trash — or deleting it for good — requires. See the reserved workspace names for the addresses you cannot claim, and the sales guide for the history a delete refuses to discard."
+   "headings": [],
+   "text": "Workspaces — JomForm Docs What a workspace owns, its public address, its currency and exchange rates, how you create one, and what moving one to the Trash (and deleting it for good) requires. What a workspace is Renaming a workspace Deleting a workspace The storefront footer and its legal links Workspace currency & exchange rates"
   },
   {
    "path": "/docs/activity",
@@ -219,11 +204,8 @@
    "layer": "Product docs",
    "section": "Workspaces",
    "order": 12,
-   "headings": [
-    "mt-2 text-2xl font-semibold tracking-tight Activity log",
-    "text-lg font-semibold tracking-tight"
-   ],
-   "text": "Activity log — JomForm Docs The per-workspace audit trail: every recorded action in your workspace, newest first, filterable by event type and date. What it records, what it never records, how long rows are kept, and how the same data is read over the REST API and MCP. What the activity log is Reading and filtering it What it does not record How long rows are kept The same data over the REST API and MCP JomForm Docs mt-2 text-2xl font-semibold tracking-tight Activity log Activity log Every action recorded in the workspace you have selected — including the destructive ones — newest first, filterable by event type and date. Append-only, and readable over REST and MCP as well as here. Related: the MCP tool reference (list_events) and the REST API reference (GET /v1/rest/events)."
+   "headings": [],
+   "text": "Activity log — JomForm Docs The per-workspace audit trail: every recorded action in your workspace, newest first, filterable by event type and date. What it records, what it never records, how long rows are kept, and how the same data is read over the REST API and MCP. What the activity log is Reading and filtering it What it does not record How long rows are kept The same data over the REST API and MCP"
   },
   {
    "path": "/docs/sales",
@@ -232,11 +214,8 @@
    "layer": "Product docs",
    "section": "Sales & payments",
    "order": 13,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 Sales, responses &amp; analytics",
-    "text-lg font-semibold text-slate-900"
-   ],
-   "text": "Sales, responses & analytics — JomForm Docs The Sales page: every sale and every response in one list, per-form counts, partial refunds, and the realtime notifications and order-screen beep. Sales One list for sales and responses Responses (response-only forms) Form analytics (the per-form counter) Partial refunds Realtime notifications & the order screen beep Sales, responses &amp; analytics What the Sales page shows, how a response-only form fits into it, what the per-form counter counts, how a partial refund behaves, and how the realtime stream and the order-screen beep work."
+   "headings": [],
+   "text": "Sales, responses & analytics — JomForm Docs The Sales page: every sale and every response in one list, per-form counts, partial refunds, and the realtime notifications and order-screen beep. Sales One list for sales and responses Responses (response-only forms) Form analytics (the per-form counter) Partial refunds Realtime and the order-screen beep"
   },
   {
    "path": "/docs/subscriptions",
@@ -245,12 +224,8 @@
    "layer": "Product docs",
    "section": "Sales & payments",
    "order": 14,
-   "headings": [
-    "text-2xl font-semibold text-slate-900 Subscriptions &amp; recurring billing",
-    "text-lg font-semibold text-slate-900",
-    "text-sm font-semibold text-amber-900 What recurring billing requires"
-   ],
-   "text": "Subscriptions & recurring billing — JomForm Docs How JomForm recurring billing works: billing periods, a fixed number of charges, the next-charge schedule modes, the retry ladder, failed-card recovery, and the notifications a merchant receives. How a subscription is created Billing period A fixed number of charges Next charge date — what happens when a payment is late When a charge fails Recovering a failed subscription What you are told Managing subscriptions Subscriptions &amp; recurring billing Charge customers automatically on a schedule — monthly or yearly, for as long as the plan runs or for a fixed number of payments. This page covers the billing period, how a fixed-term plan ends, what happens when a payment is late or fails, and how a subscription recovers. What recurring billing requires A card that can be charged again later. The card is saved at checkout; without that there is nothing to charge on the next period. Your gateway account configured with valid credentials — recurring charges use the same credentials as the first payment."
+   "headings": [],
+   "text": "Subscriptions & recurring billing — JomForm Docs How JomForm recurring billing works: billing periods, a fixed number of charges, the next-charge schedule modes, the retry ladder, failed-card recovery, and the notifications a merchant receives. How a subscription is created Billing period A fixed number of charges Next charge date and a late payment schedule mode comparison When a charge fails Recovering a failed subscription What you are told Managing subscriptions"
   },
   {
    "path": "/docs/shipping",
@@ -259,22 +234,8 @@
    "layer": "Product docs",
    "section": "Sales & payments",
    "order": 15,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 Shipping by zone",
-    "mt-8 text-xl font-semibold text-slate-900 Setting it up",
-    "text-base font-semibold text-slate-900",
-    "zones mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Zones and rate sources",
-    "no-match mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 An address outside every zone",
-    "weights mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Weight bands and the free-shipping threshold",
-    "what-lands-on-the-sale mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 What lands on the sale",
-    "text-base font-semibold text-slate-900",
-    "mcp mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Managing it with an agent (MCP)",
-    "font-mono text-sm font-semibold text-slate-900 [overflow-wrap:anywhere]",
-    "couriers mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Courier quotes (Lalamove, EasyParcel)",
-    "courier-mcp mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Connecting a courier with an agent (MCP)",
-    "font-mono text-sm font-semibold text-slate-900 [overflow-wrap:anywhere]"
-   ],
-   "text": "Shipping by zone — JomForm Docs Charge a delivery fee per delivery zone: workspace-managed zones (state, district or postcode range) with rate rows, weight bands and a free-shipping threshold, resolved from the buyer's address at checkout into sales.shipping_sen. 1. Create a zone set Open Form Settings → Shipping. A zone set is a named group of delivery zones; a form's shipping block points at one set, so several forms can share the same rates instead of retyping them. Give it a name and tick Default if it is the set you want offered first. To remove a set you no longer want, press Delete on it and save: a set a form's shipping block still points at is refused with the name of that form, so re-point the block first. Removing your LAST set is allowed — the account simply charges no managed rates until you add one again, which is the empty state the tab shows. 2. Add your zones A zone is a region with a name and at least one match rule: a list of states, a postcode range, or a list of districts (a city). A state entry can be any Malaysian state in any spelling — Johor, Pulau Pinang, Penang, KL, Melaka, Malacca — or the region tokens peninsular / east_malaysia, which expand to the whole group so you do not have to list thirteen states. Any ONE rule matching is enough. Give a narrow zone a LOWER priority number so a postcode exception is tested before the broad state zone it sits inside. The zone ticked as the fallback is used only when nothing else matches (see step 5). 3. Price each zone Every zone needs at least one rate row: a price in ringgit (stored as integer sen), an optional name (Standard, Express) and an optional weight band in grams. Rows are tried in order (Sort, then cheapest), so with no weight the first row is the fee. Leave the band empty and the rate applies to every parcel; give a band and a declared parcel weight picks the row whose band contains it — a weight outside every band refuses the order rather than charging an unrelated price. 4. Point a form's shipping block at the set In the form builder, select the shipping block and set its rate source to Managed zones, then pick the zone set. Map the buyer's address: choose which of the form's own blocks carries the state, the district/city and the postcode (add a select or text block for the state if the form has none). With no mapping the submission's client envelope is used, which is what an"
+   "headings": [],
+   "text": "Shipping by zone — JomForm Docs Charge a delivery fee per delivery zone: workspace-managed zones (state, district or postcode range) with rate rows, weight bands and a free-shipping threshold, resolved from the buyer's address at checkout into sales.shipping_sen. Setting it up Zones and rate sources An address outside every zone Weight bands and the free-shipping threshold What lands on the sale Managing it with an agent (MCP) Shipping rate MCP tools Courier quotes (Lalamove, EasyParcel) Connecting a courier with an agent (MCP) Courier MCP tools"
   },
   {
    "path": "/docs/payment-fees",
@@ -283,17 +244,8 @@
    "layer": "Product docs",
    "section": "Sales & payments",
    "order": 16,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 Processing fees paid by the buyer",
-    "mt-8 text-xl font-semibold text-slate-900 Setting it up",
-    "text-base font-semibold text-slate-900",
-    "gross-up mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Why the total is not &ldquo;price plus percentage&rdquo;",
-    "what-lands-on-the-sale mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 What lands on the sale",
-    "text-base font-semibold text-slate-900",
-    "mcp mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Managing it with an agent (MCP)",
-    "font-mono text-sm font-semibold text-slate-900"
-   ],
-   "text": "Processing fees paid by the buyer — JomForm Docs Set your own acquirer rate per CHIP payment method (fixed sen and/or basis points). The fee is grossed up so you receive the full asking amount, and the buyer sees the method, the fee and the final total before paying. 1. Decide whether you may pass the fee on Passing a card surcharge to the buyer is restricted by card-network and acquirer rules, and by consumer law in Malaysia the price shown must be the price paid. That is your call as the merchant: JomForm does not block the feature, it makes the disclosure explicit. The acknowledgement below is the record that you took that decision. 2. Type your own rate per payment method Open Settings → Payment fees. Every CHIP payment method has its own row: FPX, Card, e-Wallet and DuitNow QR. Each accepts a fixed amount in sen (RM1.00 = 100) and/or a percentage in basis points (100 = 1%, 140 = 1.4%, 200 = 2%). Both are optional and can be combined: RM1 fixed plus 1.4% is a valid rate. The rate is the one YOUR acquirer charges you — JomForm does not guess it, and nothing is filled in for you. 3. Tick the acknowledgement \"I understand this processing fee is passed on to the buyer and is subject to acquirer/card-issuer rules.\" The sentence is served by the API and recorded with your account, the time, and who accepted it. Until it is ticked, no fee reaches a buyer even if the rates are saved — the checkout simply charges the plain price. 4. Pick which forms carry the fee A workspace-wide rate applies to every published payment form. A single form can opt out: set its fee override to off (Form Settings, or PUT /v1/rest/forms/{id}/fee-override), and that form charges no fee while the rest of the workspace keeps its rates. The override is per form, not per buyer, so the same form behaves the same way for everyone. 5. Watch what the buyer sees On the checkout page the buyer chooses the payment method. The page shows the items subtotal, a separate processing-fee row naming the method and its rate, and the final total — before the Proceed to Payment button. If only one method carries a rate it is preselected, so there is no extra click. With more than one, the buyer must choose, and an order that names none is refused rather than priced with a guess. The total is grossed up, not added to CHIP charges its fee on the amount the buyer actually pays, not on your price. Adding \"pri"
+   "headings": [],
+   "text": "Processing fees paid by the buyer — JomForm Docs Set your own acquirer rate per CHIP payment method (fixed sen and/or basis points). The fee is grossed up so you receive the full asking amount, and the buyer sees the method, the fee and the final total before paying. Setting it up Why the total is not price plus percentage Gross-up worked example at RM1,000 and 1% What lands on the sale e-Invoice Managing it with an agent (MCP) Payment fee MCP tools"
   },
   {
    "path": "/docs/customize",
@@ -302,37 +254,8 @@
    "layer": "Product docs",
    "section": "Forms & fields",
    "order": 17,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 [overflow-wrap:anywhere] Design → AI agent → MCP customization",
-    "mt-8 text-xl font-semibold text-slate-900 The flow",
-    "text-base font-semibold text-slate-900",
-    "menu mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 The restaurant menu (QR ordering)",
-    "product-images mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Product images on forms",
-    "brand-colour mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Your brand colour on the public form",
-    "builder mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Building an order form",
-    "publishing mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Publishing a form",
-    "domains mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Custom domains",
-    "form-url-slug mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Form URLs and slugs (rename a form)",
-    "menu-basket mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 The menu basket (multi-item ordering)",
-    "text-base font-semibold text-slate-900",
-    "mt-8 text-xl font-semibold text-slate-900 MCP tools used",
-    "affiliate-marketing mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Affiliate marketing (referral links &amp; commission)",
-    "mt-5 text-base font-semibold text-slate-900 Create an affiliate link",
-    "mt-5 text-base font-semibold text-slate-900 Set the commission",
-    "mt-5 text-base font-semibold text-slate-900 How a sale is attributed",
-    "mt-5 text-base font-semibold text-slate-900 Read an affiliate&apos;s sales",
-    "mt-5 text-base font-semibold text-slate-900 REST endpoints",
-    "templates mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Templates (save a form &amp; reuse it)",
-    "mt-5 text-base font-semibold text-slate-900 Edit a template&apos;s fields and design",
-    "mt-5 text-base font-semibold text-slate-900 A template never lands in another merchant&apos;s gallery by accident",
-    "language mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Language: dashboard vs. your forms",
-    "mt-5 text-base font-semibold text-slate-900 Choosing your customers&apos; language",
-    "mt-5 text-base font-semibold text-slate-900 Which language your emails use",
-    "workspace-address mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Your workspace address, and names that are reserved",
-    "mt-8 text-xl font-semibold text-slate-900 Image URLs must be https://",
-    "mt-8 text-xl font-semibold text-slate-900 Example prompt for your agent"
-   ],
-   "text": "Design → AI agent → MCP customization — JomForm Docs Design your form or landing page in a tool like Canva, then use an AI agent (e.g. Claude) connected to the JomForm MCP to apply that design and customize it with CSS and JS. 1. Design your interface in a design tool Sketch your form or landing page in any design tool (Canva, Figma, etc.). Export the assets you need — a logo, a hero image, brand colours, and a font. JomForm keeps authority over prices and the payment flow, so you design the look and feel, not the checkout logic. 2. Connect an AI agent to the JomForm MCP Point any MCP client (Claude, Cursor, etc.) at the server URL https://mcp.jomform.com/mcp. It registers itself via OAuth 2.1 — no API keys needed. The agent can then read and change your workspace through the MCP tools. 3. Upload your media Use upload_media to upload your design assets (logo, hero image, and code assets like css/js/html/svg/woff2). Images are optimised and served immediately; code assets are scanned before being served. An SVG must be a well-formed XML document: a browser renders it as XML, so a file with text before the <svg> tag (for example a /* */ banner) is refused rather than stored as a broken image. 4. Apply the theme and landing page Use set_form_theme to apply your brand colours (primary, background, text, card_background), font, logo, layout and spacing to a form. Use product_image_size (small|medium|large|hidden) and product_image_layout (thumbnail-left|image-top) to control the product photo on the form — image-top gives a restaurant menu-card look with the photo above the name. Use set_workspace_landing_page to customise your workspace storefront with a hero, subtitle, body, image, theme colours, logo and call-to-action buttons. 5. Add a restaurant menu (QR ordering) Use set_menu_page (issue #497: the menu is a PER-FORM setting, so it takes a form_id) to turn a form into a clean restaurant menu. Add Product blocks to the form for the items the menu sells — the menu lists ONLY the products the form references, so unrelated account products can never appear — then set enabled, categories ([{name, product_ids}]), and best_seller_ids (a list of product IDs shown as the Best Seller section). The menu is served at that form's own URL; the workspace home page is never affected and stays your normal landing page / form listing. Use a separate menu form per outlet or me"
+   "headings": [],
+   "text": "Design → AI agent → MCP customization — JomForm Docs Design your form or landing page in a tool like Canva, then use an AI agent (e.g. Claude) connected to the JomForm MCP to apply that design and customize it with CSS and JS. The flow Media and custom code The restaurant menu (QR ordering) Menu checkout and the order form The menu basket (multi-item ordering) Basket checkout, stock and the sale Product images on forms Your brand colour on the public form Building an order form Publishing a form Every path that publishes The link preview card The printable QR stand Form URLs and slugs (rename a form) Renaming keeps the old URL working Custom domains Affiliate marketing (referral links and commission) Create an affiliate link Set the commission Read an affiliate's sales Affiliate REST endpoints Templates (save a form and reuse it) A template card, and editing by MCP or REST Publishing a template into the gallery Language: dashboard vs your forms Choosing your customers' language Which language your emails use Empty receipt and notification fields Your workspace address, and names that are reserved Image URLs must be https:// MCP tools used Example prompt for your agent"
   },
   {
    "path": "/docs/custom-forms",
@@ -341,17 +264,8 @@
    "layer": "Product docs",
    "section": "Forms & fields",
    "order": 18,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 Custom HTML forms",
-    "mt-8 text-xl font-semibold text-slate-900 A custom form is a response form",
-    "mt-8 text-xl font-semibold text-slate-900 What happens to the HTML",
-    "mt-8 text-xl font-semibold text-slate-900 Register the fields",
-    "mt-8 text-xl font-semibold text-slate-900 Field types",
-    "mt-8 text-xl font-semibold text-slate-900 Submit, storage and what the buyer sees",
-    "mt-8 text-xl font-semibold text-slate-900 Clearing a custom form",
-    "mt-8 text-xl font-semibold text-slate-900 Where to read next"
-   ],
-   "text": "JomForm Docs — custom HTML forms The fully-custom HTML response form: what the sanitizer keeps, how the field-registration contract works, the field types and what the server enforces on submit. Custom HTML forms A custom HTML form is a response-only form whose body is HTML supplied by an AI agent or by you, instead of the blocks the builder lays out. It is the custom_html section of the form&apos;s config: html is the markup and fields is the field-registration contract. The MCP tool upsert_form takes the two as top-level arguments (custom_html, custom_fields) and is the practical way to write one; a REST create or update can carry the same section inside a raw config map. There is no dashboard editor for this form type today, so the write surfaces are the only way in, and a form with no html in its custom_html section renders through the block renderer as usual. The dashboard&apos;s forms list still offers Edit on a custom form and opens the block editor, but that editor cannot change or remove the body: its save carries the custom_html section forward untouched, and the blocks it writes back are not rendered while the section carries html. mt-8 text-xl font-semibold text-slate-900 A custom form is a response form A custom form is a response form The custom_html section and the form&apos;s mode are two statements of one fact, so you only have to write one of them. A form that carries an enabled section is a response-only form — it collects answers, it never takes payment — and the write surfaces store mode: &quot;response&quot; beside the section for you. That holds for upsert_form&apos;s custom_html and custom_fields arguments and for a raw config map on a REST create or update alike, so a raw config whose custom_html has a body and no mode key is stored as a response form rather than as a payment form: the buyer gets your markup, not the builder or payment layout. Writing mode: &quot;payment&quot; next to an enabled section does not win — the section is the form&apos;s body, and the payment renderer cannot paint it, so the stored mode becomes response. The reverse direction is unaffected: a config with no section, or with an empty html, is stored exactly as you sent it, so setting mode is the only thing that makes an ordinary form a response form. A form already stored with an enabled section and no mode key (written before this rule, or cloned from an o"
+   "headings": [],
+   "text": "JomForm Docs — custom HTML forms The fully-custom HTML response form: what the sanitizer keeps, how the field-registration contract works, the field types and what the server enforces on submit. What a custom HTML form is A custom form is a response form What happens to the HTML Your own custom_js still runs Register the fields The custom_fields contract Submit, storage and what the buyer sees The buyer's identity Field types Clearing a custom form Where to read next"
   },
   {
    "path": "/docs/variations",
@@ -360,11 +274,8 @@
    "layer": "Product docs",
    "section": "Forms & fields",
    "order": 19,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 Variation products",
-    "text-xl font-semibold text-slate-900"
-   ],
-   "text": "Variation products — JomForm Docs Sell one product in several options: per-variation price, stock and image, plus a per-variation subscription cycle (monthly/yearly, trial days, charge count) that falls back to the product's. What a variation is Price, stock and image A subscription cycle on a variation What happens at checkout Managing variations from an AI agent Variation products Sell one product in several options — sizes, colours, formats — each with its own price, stock and image, and each able to carry its own subscription cycle."
+   "headings": [],
+   "text": "Variation products — JomForm Docs Sell one product in several options: per-variation price, stock and image, plus a per-variation subscription cycle (monthly/yearly, trial days, charge count) that falls back to the product's. What a variation is Price, stock and image A subscription cycle on a variation What happens at checkout On the restaurant menu Managing variations from an AI agent"
   },
   {
    "path": "/docs/embed",
@@ -373,17 +284,8 @@
    "layer": "Product docs",
    "section": "Storefront & pages",
    "order": 20,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 Embed a form on your site",
-    "mt-8 text-xl font-semibold text-slate-900 1. Paste the embed snippet",
-    "mt-8 text-xl font-semibold text-slate-900 2. Auto-height (recommended)",
-    "mt-8 text-xl font-semibold text-slate-900 The message contract",
-    "mt-8 text-xl font-semibold text-slate-900 Sandboxed iframes",
-    "mt-8 text-xl font-semibold text-slate-900 CORS",
-    "mt-8 text-xl font-semibold text-slate-900 Private forms and cookies",
-    "mt-8 text-xl font-semibold text-slate-900 Why not the plain form URL?"
-   ],
-   "text": "Embed a form on your site — JomForm Docs Embed a JomForm form on any website with an iframe. Auto-height via postMessage, the merchant listener snippet, and the 640px fallback. Embed a form on your site Drop a JomForm form into any website with an iframe . The embed renders the full form (fields, validation and payment) and submits straight into your form&apos;s submissions and sales. The buyer is taken to the top frame for CHIP checkout and the thank-you page — so payment works inside the embed. Use the embed URL below — not the form&apos;s ordinary public URL. The public URL is same-origin only: it answers X-Frame-Options: SAMEORIGIN , so a browser refuses to frame it on your site and shows an empty or broken frame. The embed URL is the one that is allowed to be framed from your domain. mt-8 text-xl font-semibold text-slate-900 1. Paste the embed snippet 1. Paste the embed snippet Turn on Allow embedding (iframe) in the form&apos;s settings, then paste this on your page. Replace your-workspace and your-form-slug with your workspace slug and the form&apos;s slug. With embedding switched off, that address answers 403 instead of rendering the form — the setting is what makes the iframe work, so turn it on before you paste. mt-8 text-xl font-semibold text-slate-900 2. Auto-height (recommended) 2. Auto-height (recommended) A fixed height causes inner scrollbars on longer forms. The embedded form posts its height to your page on load, on resize and whenever its content changes (conditional fields, product selection, the confirmation message after submit). Add this 3-line listener so the iframe grows and shrinks with the form — no inner scrollbars: Without the listener nothing breaks: the iframe keeps whatever height you set in CSS ( 640px in the snippet above), and longer forms scroll inside the frame. mt-8 text-xl font-semibold text-slate-900 The message contract The message contract Field Meaning The form only posts when it is actually inside a frame — a direct visit to the form URL is unaffected. mt-8 text-xl font-semibold text-slate-900 Sandboxed iframes Sandboxed iframes Plain iframes like the snippet above work as-is. If you add a sandbox attribute, include allow-forms allow-scripts allow-same-origin allow-top-navigation so the form can submit and the buyer can reach CHIP checkout in the top frame. mt-8 text-xl font-semibold text-slate-900 CORS CORS No COR"
+   "headings": [],
+   "text": "Embed a form on your site — JomForm Docs Embed a JomForm form on any website with an iframe. Auto-height via postMessage, the merchant listener snippet, and the 640px fallback. Embed a form 1. Paste the embed snippet 2. Auto-height (recommended) The message contract postMessage fields Sandboxed iframes CORS Private forms and cookies Why not the plain form URL?"
   },
   {
    "path": "/docs/email",
@@ -392,11 +294,8 @@
    "layer": "Product docs",
    "section": "Email",
    "order": 21,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 Email &amp; notifications",
-    "text-lg font-semibold text-slate-900"
-   ],
-   "text": "Email & notifications — JomForm Docs Receipt emails and per-form notification rules: how a form overrides the workspace, the default notification every new form starts with, dynamic placeholders, and delivery tracking. Receipt emails and notification rules Dynamic placeholders Delivery tracking Email &amp; notifications Receipts and notifications: how a form overrides the workspace&apos;s email settings, what a new form starts with, the placeholders you can use, and how delivery is tracked. Related: the placeholders reference , the email suppression list and the MCP tool reference for the email settings tools."
+   "headings": [],
+   "text": "Email & notifications — JomForm Docs Receipt emails and per-form notification rules: how a form overrides the workspace, the default notification every new form starts with, dynamic placeholders, and delivery tracking. Receipt emails and notification rules Dynamic placeholders Delivery tracking"
   },
   {
    "path": "/docs/placeholders",
@@ -405,13 +304,8 @@
    "layer": "Product docs",
    "section": "Email",
    "order": 22,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 Placeholders reference",
-    "mt-8 text-xl font-semibold text-slate-900 Recipient placeholders",
-    "mt-8 text-xl font-semibold text-slate-900 Subject & body placeholders",
-    "mt-8 text-xl font-semibold text-slate-900 Example"
-   ],
-   "text": "Placeholders reference — JomForm Docs Every dynamic placeholder you can use in JomForm emails and notifications: {admin_email}, {{ref_code}}, {{amount}}, {{items}}, {{buyer_name}}, {{form_url}}, {{date}}, {{table_number}} and any {{field_id}}. Placeholders reference JomForm emails and notifications support dynamic placeholders. When an email is sent, each placeholder is replaced with the real value for that sale or submission. There are two kinds: tokens used as recipients , and tokens used inside the subject and body. mt-8 text-xl font-semibold text-slate-900 Recipient placeholders Recipient placeholders Used in the Send to field of a notification rule. A recipient is either a literal email address, , or a submitted field value. Placeholder Meaning mt-8 text-xl font-semibold text-slate-900 Subject & body placeholders Subject & body placeholders Used in the subject and body of receipt emails and notification rules. mt-8 text-xl font-semibold text-slate-900 Example Example response form gets a different default notification, because a response has no sale: its rule fires on response.submitted and uses only placeholders that carry a value for a submission — and . A placeholder with no value is sent as an empty string, so check the reference above before using a sale placeholder in a notification that runs on a response form."
+   "headings": [],
+   "text": "Placeholders reference — JomForm Docs Every dynamic placeholder you can use in JomForm emails and notifications: {admin_email}, {{ref_code}}, {{amount}}, {{items}}, {{buyer_name}}, {{form_url}}, {{date}}, {{table_number}} and any {{field_id}}. Recipient placeholders Subject and body placeholders"
   },
   {
    "path": "/docs/ses-reputation",
@@ -420,11 +314,8 @@
    "layer": "Product docs",
    "section": "Email",
    "order": 23,
-   "headings": [
-    "text-2xl font-semibold text-slate-900 Email suppression list",
-    "text-lg font-semibold text-slate-900"
-   ],
-   "text": "Email suppression list — JomForm Docs How JomForm's email suppression list works: which addresses are never mailed, why each one was added, and how to remove a false positive. What the suppression list is What gets added automatically What the reason codes mean Removing an address Addresses that can never receive mail Related protections Email suppression list Every address JomForm will not send email to, why it was added, and how to take one off the list. This is what protects the sending identity that every receipt, notification and login link on the platform relies on."
+   "headings": [],
+   "text": "Email suppression list — JomForm Docs How JomForm's email suppression list works: which addresses are never mailed, why each one was added, and how to remove a false positive. What the suppression list is What gets added automatically What the reason codes mean Removing an address Addresses that can never receive mail Related protections"
   },
   {
    "path": "/docs/spam-detection",
@@ -433,11 +324,8 @@
    "layer": "Product docs",
    "section": "Security",
    "order": 24,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 AI spam detection",
-    "text-xl font-semibold text-slate-900"
-   ],
-   "text": "AI spam detection — JomForm Docs How JomForm's AI spam detection works, what happens to a flagged entry, and how to turn it off for one workspace from the dashboard or over MCP. How AI spam detection works What a flagged entry actually means Turning AI spam detection off (per workspace) Configuring it over MCP Reviewing and clearing flagged entries AI spam detection JomForm reviews form entries for spam with an AI judge running in the background. This page explains what the judge does, what a flagged entry means for your data, and how to turn the judge off for a workspace — from the dashboard or over MCP. See also the MCP tool reference for the exact tool signatures, and the Settings page in your dashboard for the switch itself."
+   "headings": [],
+   "text": "AI spam detection — JomForm Docs How JomForm's AI spam detection works, what happens to a flagged entry, and how to turn it off for one workspace from the dashboard or over MCP. How AI spam detection works What a flagged entry actually means Turning AI spam detection off (per workspace) Configuring it over MCP Reviewing and clearing flagged entries"
   },
   {
    "path": "/docs/security",
@@ -446,11 +334,8 @@
    "layer": "Product docs",
    "section": "Security",
    "order": 25,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 Trusted devices &amp; 2FA",
-    "text-lg font-semibold text-slate-900"
-   ],
-   "text": "Trusted devices (2FA) — JomForm Docs How a trusted device skips the 2FA code for 30 days, how to see every trusted device, and why revoking one is immediate. Two-factor authentication (2FA) Trusted devices Sessions that need a fresh code Passkeys (sign in without a password) Trusted devices &amp; 2FA What a trusted device is, how long it lasts, how to see and revoke every one of them, and which sessions still need a fresh code. See the MCP tool reference for the exact tool signatures, and Profile → Security in the dashboard for the list itself."
+   "headings": [],
+   "text": "Trusted devices (2FA) — JomForm Docs How a trusted device skips the 2FA code for 30 days, how to see every trusted device, and why revoking one is immediate. Two-factor authentication (2FA) Trusted devices Sessions that need a fresh code Passkeys (sign in without a password)"
   },
   {
    "path": "/docs/chat",
@@ -459,11 +344,8 @@
    "layer": "Product docs",
    "section": "In-app & support",
    "order": 26,
-   "headings": [
-    "mt-2 text-2xl font-semibold tracking-tight In-app assistant",
-    "text-lg font-semibold tracking-tight"
-   ],
-   "text": "In-app assistant — JomForm Docs What JomForm's built-in chat assistant can and cannot do: it answers questions about how JomForm works and about your own forms, sales and products, it can file a feedback report, and it can prepare a small reversible change for you to confirm — it can never apply a change by itself. What the assistant is It speaks the language you write in: or What it knows about JomForm What it cannot do Confirming a proposed change What it may propose Filing feedback from the conversation Formatting in the answer While it is answering Limits and cost Your data in the conversation Your conversations are kept, and signing out does not delete them When it does not know JomForm Docs mt-2 text-2xl font-semibold tracking-tight In-app assistant In-app assistant The built-in chat: it answers questions about how JomForm works and about your own data, it files feedback for you, and it can prepare a small reversible change for you to confirm. It cannot apply a change by itself — by design, and enforced on the server. Related: in-app feedback and the MCP tool reference (submit_feedback, the tool that files a report). The proposal lane (propose_write) is not an MCP tool and is not in that reference — it runs in-app and its confirmation is a signed-in person&apos;s click."
+   "headings": [],
+   "text": "In-app assistant — JomForm Docs What JomForm's built-in chat assistant can and cannot do: it answers questions about how JomForm works and about your own forms, sales and products, it can file a feedback report, and it can prepare a small reversible change for you to confirm — it can never apply a change by itself. What the assistant is What it knows about JomForm What it cannot do How that limit is enforced Confirming a proposed change When a confirmation is refused The workspace the change lands in What it may propose Filing feedback from the conversation Formatting in the answer While it is answering The composer and the transcript Limits and cost Your data in the conversation Your conversations are kept When it does not know"
   },
   {
    "path": "/docs/feedback",
@@ -472,11 +354,8 @@
    "layer": "Product docs",
    "section": "In-app & support",
    "order": 27,
-   "headings": [
-    "text-2xl font-semibold text-slate-900 In-app feedback",
-    "text-lg font-semibold text-slate-900"
-   ],
-   "text": "In-app feedback — JomForm Docs How JomForm's in-app feedback works: file a report or feature request from the dashboard, follow the conversation in the thread, and triage the queue as a platform admin. What in-app feedback is Where a thread lives What the statuses mean How you hear about a reply Rate limits and what protects the queue Formatting in a thread For platform admins: triage In-app feedback A direct line to the JomForm team from inside the dashboard: file a bug or a feature request, follow the reply in the same thread, and — for platform admins — triage the whole queue."
+   "headings": [],
+   "text": "In-app feedback — JomForm Docs How JomForm's in-app feedback works: file a report or feature request from the dashboard, follow the conversation in the thread, and triage the queue as a platform admin. What in-app feedback is Where a thread lives What the statuses mean How you hear about a reply Rate limits and what protects the queue Formatting in a thread For platform admins: triage Retry notification outcomes"
   },
   {
    "path": "/docs/api",
@@ -485,21 +364,8 @@
    "layer": "Reference",
    "section": "Reference",
    "order": 28,
-   "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 REST API",
-    "text-lg font-semibold text-slate-900 Start in 5 minutes",
-    "text-sm font-semibold text-slate-900",
-    "text-lg font-semibold text-slate-900 Authentication",
-    "text-lg font-semibold text-slate-900 Scopes",
-    "text-lg font-semibold text-slate-900 Errors",
-    "text-lg font-semibold text-slate-900 Rate limits",
-    "text-lg font-semibold text-slate-900 No CORS — server-to-server only",
-    "text-lg font-semibold text-slate-900 Endpoint reference",
-    "text-sm font-semibold uppercase tracking-wide text-[var(--jf-primary)]",
-    "text-lg font-semibold text-slate-900 Versioning &amp; changelog",
-    "text-lg font-semibold text-slate-900 Building and testing against the API"
-   ],
-   "text": "REST API reference — JomForm Docs The JomForm REST API: create a key, make your first call, and the full endpoint reference. Server-to-server only — the API sends no CORS headers and does not answer browser preflight requests. Start in 5 minutes Authentication Scopes Errors Rate limits No CORS Endpoint reference Versioning & changelog Building and testing against the API REST API The JomForm REST API lets your own server create forms, read sales and responses, manage products, subscriptions, webhooks and domains. It is served from and currently exposes operations , every one of them listed on this page. A machine-readable OpenAPI 3.1 contract for the same surface is published at . It is generated from the API&apos;s own route table and checked against it on every test run, so it cannot drift from the endpoints you actually have. On this page Sign in and open Settings → API keys , then create a key. Choose readwrite if it needs to create or change anything. The raw key is shown once ; copy it then. You can also create one over the API itself with POST /v1/rest/keys Export it in your shell — the API never takes a key in the query string, and this page never prints a real one: Make your first call. Every example on this page is executed against a live server by the test suite, so these commands are known to work. Expect HTTP , and a body containing That run is the whole flow: authenticate, create a form, publish it, read it back, read the records it produced. Send the key as a bearer token: A key belongs to a workspace (account), not to a person. Everything it reads and writes is that workspace&apos;s data. The dashboard also accepts a browser session cookie on these same routes. A script should use a key. The same key drives the MCP server. There is one credential for both surfaces — create it once and use it for /v1/rest/* and for MCP (see the MCP tool reference ). A missing or revoked key is answered with 401 before any workspace is resolved, so a broken client fails loudly rather than reading data it should not. A key carries a scope that decides what it may do at all, independently of who created it: readonly — read only. It is refused on every write with 403 , and also on the reads whose handler writes anyway — an editor flow that saves through a write gate, or a value minted on first use. Those are the routes below; the list comes from the contract, so i"
+   "headings": [],
+   "text": "REST API reference — JomForm Docs The JomForm REST API: create a key, make your first call, and the full endpoint reference. Server-to-server only — the API sends no CORS headers and does not answer browser preflight requests. Endpoints: Start in 5 minutes Authentication Scopes Errors Rate limits No CORS, server-to-server only Endpoint reference Versioning & changelog Building and testing against the API"
   },
   {
    "path": "/docs/mcp",
@@ -509,14 +375,10 @@
    "section": "Reference",
    "order": 29,
    "headings": [
-    "text-3xl font-bold tracking-tight text-slate-900 MCP tool reference",
-    "text-lg font-semibold text-slate-900 OAuth discovery",
-    "text-lg font-semibold text-slate-900 Structured output",
-    "text-lg font-semibold text-slate-900 OAuth connector scopes",
-    "text-lg font-semibold text-slate-900 API-key scopes",
-    "text-lg font-semibold text-slate-900"
+    "flex items-center gap-2 text-lg font-semibold text-[var(--jf-text)] true text-base 🧰 Tool reference",
+    "text-base font-semibold tracking-tight text-[var(--jf-text)]"
    ],
-   "text": "MCP tool reference — JomForm Docs Every MCP tool JomForm exposes to AI agents: name, purpose, inputs and outputs. Kept in sync with the tool registry in the api/internal/mcpsrv package. MCP tool reference Every tool JomForm exposes to connected AI agents via the Model Context Protocol. Connect any MCP client to https://mcp.jomform.com/mcp and agents discover these tools automatically. This page lists the whole registry — the api/internal/mcpsrv package at this release — and a guard fails the build if the two drift apart in either direction. tools across categories. OAuth discovery The connector authenticates with OAuth 2.1 (authorization code + PKCE, no API keys). A client discovers how to authenticate from the server itself: An unauthenticated request to is refused with 401 and a WWW-Authenticate: Bearer resource_metadata=&quot;…&quot; header naming the protected-resource metadata URL. The client fetches /.well-known/oauth-protected-resource (RFC 9728). It names the protected resource ( ), the authorization server ( https://mcp.jomform.com ), the scopes read and readwrite ) and that the bearer token is presented in the Authorization header. It then fetches the authorization-server metadata at /.well-known/oauth-authorization-server (RFC 8414) for the authorize, token, revoke and registration endpoints. It registers itself dynamically, opens the authorize URL in the browser (you log in and grant access), and exchanges the code for an access token — sending the resource parameter on both the authorize and token requests. JomForm validates it: a value that is not this MCP endpoint is rejected and no token is issued. Every later call to /mcp carries the access token as a Bearer credential. Structured output Tool results are returned as structured content, and every tool declares the shape of that result in its outputSchema . All tools declare an object schema, which is what makes the server usable with a client that validates tools/list strictly. Every listing tool therefore wraps its array in an object: the records are under items , and paginated listings also carry page limit total . So list_products returns , not a bare array. Batch tools report their summary next to the per-item outcomes: capture_all_pending_sales . Single-record tools return their fields at the top level of the object. OAuth connector scopes A connector authenticates with OAuth 2.1, and th"
+   "text": "MCP tool reference — JomForm Docs Every MCP tool JomForm exposes to AI agents: name, purpose, inputs and outputs. Kept in sync with the tool registry in the api/internal/mcpsrv package. Connect an agent OAuth discovery Structured output OAuth connector scopes API-key scopes 🧰 Tool reference tools across categories. Every row below is a tool the registry registers."
   }
  ]
 }
